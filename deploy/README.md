@@ -216,7 +216,9 @@ neuen Dienstnamen nicht und würde den alten Container neben dem neuen starten),
 
 Alle Einstellungen des Dashboards heißen jetzt `NODVARD_DECK_<NAME>` (früher
 `LATTICE_<NAME>`), zum Beispiel `NODVARD_DECK_ENV`, `NODVARD_DECK_LOG_JSON`,
-`NODVARD_DECK_DATA_DIR` und `NODVARD_DECK_DNS_1`/`_2` (nur Compose).
+`NODVARD_DECK_DATA_DIR` und `NODVARD_DECK_DNS_1`/`_2` (nur Compose). `NODVARD_DECK_API_DOCS=1` schaltet die
+API-Doku (`/docs`, `/redoc`, `/openapi.json`) auch außerhalb des Entwicklungsmodus ohne Anmeldung frei;
+standardmäßig ist sie aus, angemeldete Admins bekommen das Dokument über `GET /api/v1/system/openapi.json`.
 
 - **Die alten Namen gelten weiter.** Eine vorhandene `.env`, eine eigene Compose-Datei oder
   ein `docker run -e LATTICE_…` laufen unverändert. Beim Start steht einmalig eine Warnung
