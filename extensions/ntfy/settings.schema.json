@@ -1,0 +1,39 @@
+{
+  "type": "object",
+  "properties": {
+    "server_url": {
+      "type": "string",
+      "title": "ntfy-Server",
+      "description": "z. B. https://ntfy.sh oder dein eigener Server.",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    },
+    "topic": {
+      "type": "string",
+      "title": "Thema (Topic)",
+      "description": "Name des Kanals, den du in der ntfy-App abonnierst. Bei ntfy.sh schwer erratbar wählen.",
+      "pattern": "^[A-Za-z0-9_-]{1,64}$",
+      "x-pattern-message": "Nur Buchstaben, Zahlen, Bindestrich und Unterstrich, höchstens 64 Zeichen."
+    },
+    "dashboard_url": {
+      "type": "string",
+      "title": "Adresse des Dashboards (optional)",
+      "description": "z. B. http://192.168.2.31:8080 – dann öffnet ein Tipp auf eine Nachricht direkt die passende Seite im Dashboard.",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    }
+  },
+  "required": [
+    "server_url",
+    "topic"
+  ],
+  "x-secrets": [
+    {
+      "label": "ntfy-token",
+      "title": "Zugriffstoken (optional)",
+      "description": "Nur nötig, wenn dein ntfy-Server eine Anmeldung verlangt.",
+      "optional": true
+    }
+  ],
+  "x-test-message": true
+}

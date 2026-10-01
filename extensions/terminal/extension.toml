@@ -1,0 +1,17 @@
+[extension]
+id          = "terminal"
+name        = "Terminal"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Web-Terminal und Dateizugriff per SSH direkt im Browser, mit mehreren Sitzungen gleichzeitig."
+icon        = "terminal"
+category    = "servers"
+sort_order  = 20
+enable_on   = ["host_credential"]  # schaltet sich ein, sobald ein Server einen SSH-Zugang bekommt
+entrypoint  = "nodvard_deck_ext_terminal:Extension"
+
+permissions = [
+  "hosts.read",
+  "hosts.execute",
+]

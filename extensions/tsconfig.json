@@ -1,0 +1,34 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "baseUrl": ".",
+    "paths": {
+      "react": ["../frontend/node_modules/@types/react"],
+      "react/jsx-runtime": ["../frontend/node_modules/@types/react/jsx-runtime"],
+      "react-dom": ["../frontend/node_modules/@types/react-dom"],
+      "react-dom/*": ["../frontend/node_modules/@types/react-dom/*"],
+      "react-router-dom": ["../frontend/node_modules/react-router-dom"],
+      "@testing-library/react": ["../frontend/node_modules/@testing-library/react"],
+      "vitest": ["../frontend/node_modules/vitest"]
+    }
+  },
+  "include": [
+    "*/frontend/src/**/*.ts",
+    "*/frontend/src/**/*.tsx",
+    "../frontend/src/global.d.ts",
+    "../frontend/src/test/setup.ts"
+  ]
+}

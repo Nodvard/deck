@@ -1,0 +1,43 @@
+version = "0.5.0"
+date = "2026-09-30"
+title = "Updates einspielen und viele Korrekturen"
+
+[[entries]]
+kind = "neu"
+text = "In der Service-Matrix gibt es bei Containern mit neuer Version den Knopf „Einspielen“. Vorher zeigt Nodvard Deck genau, was passiert; danach lädt es das neue Image, erstellt den Container neu und prüft, ob er wieder läuft."
+
+[[entries]]
+kind = "neu"
+text = "Das alte Image bleibt als Sicherung erhalten, und der Weg zurück steht in der Übersicht. Es geht bei Docker-Compose-Diensten; bei Portainer-Stacks, einzeln gestarteten Containern und Nodvard Deck selbst steht stattdessen ein Hinweis, wie man sie aktualisiert."
+
+[[entries]]
+kind = "neu"
+text = "Fällt im Wartungsfenster etwas aus und ist es danach noch so, kommt nach dem Fenster genau ein Push („seit dem Wartungsfenster“); auch der neue Gameserver-Join-Code kommt nach dem Fenster."
+
+[[entries]]
+kind = "behoben"
+text = "Update-Meldungen, die nach einem Neustart des Dashboards oder nach einem sehr langen Lauf kommen, gehören jetzt zum richtigen Server und werden im Wartungsfenster stummgeschaltet."
+
+[[entries]]
+kind = "behoben"
+text = "Der Echtzeit-Wächter mit clamdscan wiederholt den Scan mit clamscan, wenn nach einem Fund die Verbindung zu clamd abbricht, und ein Neustart des Dashboards nach einem gescheiterten Update-Start hängt nicht mehr lange in „läuft“."
+
+[[entries]]
+kind = "behoben"
+text = "Der Neustart-Knopf für Docker bleibt auch dort weg, wo sich nicht feststellen lässt, ob das Dashboard läuft, und eine Erweiterung, die beim Starten abstürzt, hinterlässt keine doppelten Anmeldungen mehr."
+
+[[entries]]
+kind = "behoben"
+text = "Ist die Platte des Servers voll oder gibt es einen anderen Serverfehler, nennt das Dashboard wieder den Grund, statt „Server nicht erreichbar“ zu zeigen."
+
+[[entries]]
+kind = "behoben"
+text = "Update-Zentrale: Ist bei Proxmox „Alle Updates als dist-upgrade“ eingeschaltet, sagt die Rückfrage das jetzt deutlich (dabei können Pakete entfernt werden), und die Freigabe richtet sich nach der echten Risikostufe."
+
+[[entries]]
+kind = "behoben"
+text = "Kleine Korrekturen: Das Handy-Menü schließt sich auch beim Antippen der schon offenen Seite, nach dem erneuten Anmelden landet man im richtigen Reiter, ein später Fehlschlag auf der Aktionen-Seite geht nicht mehr unter, eine offene Rückfrage löst nach einem Serverwechsel nichts mehr aus, Proxmox-Snapshots behalten je eine Meldung, und eine Erweiterung im Fehlerstatus lässt sich ausschalten."
+
+[[entries]]
+kind = "behoben"
+text = "Zeitpläne mit Wochentag liefen einen Tag zu spät (zum Beispiel der Tiefenscan „sonntags“ erst montags, Wartungsfenster verschoben) – jetzt stimmen die Tage."

@@ -1,0 +1,23 @@
+[extension]
+id          = "service-matrix"
+name        = "Service-Matrix"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen und neu starten. Auf Wunsch zeigt sie, für welche Container es neuere Images gibt – und spielt sie bei Compose-Diensten auf Knopfdruck ein."
+icon        = "layout-grid"
+category    = "servers"
+sort_order  = 30
+entrypoint  = "nodvard_deck_ext_service_matrix:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "hosts.read",
+  "hosts.execute",
+  "schedule.register",
+  "notify.send",
+  "audit.write",
+]
+
+[settings]
+schema = "settings.schema.json"

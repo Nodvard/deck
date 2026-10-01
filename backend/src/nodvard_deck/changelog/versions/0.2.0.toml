@@ -1,0 +1,111 @@
+version = "0.2.0"
+date = "2026-09-29"
+title = "Große Durchsicht"
+
+[[entries]]
+kind = "sicherheit"
+text = "Kritische Lücke in Nodvard Shield geschlossen: Beim Sperren einer IP konnte ein eingeschleuster Befehl als root laufen, jetzt werden IP und Fail2ban-Regel streng geprüft."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield führt keinen übergebenen Befehl mehr als root aus, sondern baut ihn selbst aus geprüften Angaben zusammen, und die Server-Seite nimmt nur noch Aktionen an, die dafür gedacht sind; alte offene Vorschläge müssen neu ausgelöst werden."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Quarantäne folgt keinen Verknüpfungen (Links auf andere Dateien) mehr, und ein vom Angreifer gewählter Benutzername im SSH-Log kann keine Adressen oder Anmeldungen mehr vortäuschen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Login-Schutz: Nach 10 Fehlversuchen in 5 Minuten wird die Anmeldung kurz gesperrt (mit Hinweis auf der Anmeldeseite), und ein Zwei-Faktor-Schritt ist nach 5 falschen Codes verbraucht."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein Passwortwechsel meldet alle anderen Sitzungen ab, ein Passwort-Reset durch den Admin alle Sitzungen des Nutzers."
+
+[[entries]]
+kind = "behoben"
+text = "Auf dem Pi bleibt man über http nach einem Neuladen angemeldet."
+
+[[entries]]
+kind = "behoben"
+text = "Benachrichtigungen blockieren die Datenbank nicht mehr, dadurch gibt es beim Bestätigen kein „database is locked“ mehr und Push-Nachrichten mit ntfy-Token kommen an."
+
+[[entries]]
+kind = "behoben"
+text = "Aktionen bleiben nach einem Neustart nicht mehr ewig auf „Läuft“ stehen, ihr Ergebnis wird sicher gespeichert, und ein abgelaufener Vorschlag verschwindet wirklich aus „Wartet“."
+
+[[entries]]
+kind = "behoben"
+text = "Wartungsfenster gelten jetzt in deutscher Ortszeit, so wie der Zeitplan-Wähler sie anzeigt."
+
+[[entries]]
+kind = "behoben"
+text = "Ein nicht erreichbarer Server bremst die anderen nicht mehr, tote SSH-Verbindungen werden nach etwa 45 Sekunden erkannt, der Server-Status zeigt „down“ statt HTTP 500, und das Wieder-Aktivieren eines Jobs blockiert sich nicht mehr selbst."
+
+[[entries]]
+kind = "behoben"
+text = "Die Aktionen-Seite zeigt nach dem Bestätigen das echte Ergebnis mit Grund, bekommt einen Filter „Läuft“, und Widget-Knöpfe und Server-Seite melden Fehlschläge und Sperren verständlich statt still oder als „[object Object]“."
+
+[[entries]]
+kind = "behoben"
+text = "Die Anmeldung wird im sichtbaren Tab kurz vor Ablauf erneuert, damit auf Erweiterungsseiten, bei Upload, Download und Export nach 15 Minuten kein „Nicht authentifiziert“ mehr kommt."
+
+[[entries]]
+kind = "behoben"
+text = "Die Anmeldung hängt nicht mehr bei „Bitte warten …“, wenn der Server gerade neu startet, und ntfy-Links führen nach dem Login zur richtigen Seite und zum richtigen Reiter."
+
+[[entries]]
+kind = "behoben"
+text = "Die Terminal-Knöpfe auf Übersicht, Server-Seite und in der Befehlspalette sind wieder da, defekte Erweiterungen werden als „Fehler“ angezeigt, und die Befehlspalette zeigt nur noch Einträge, für die du die Berechtigung hast."
+
+[[entries]]
+kind = "verbessert"
+text = "Auf dem Handy passen Aktionen, Dateien und Terminal jetzt auf schmale Bildschirme."
+
+[[entries]]
+kind = "behoben"
+text = "Backups: Beim Bearbeiten eines Jobs wird die Aufbewahrung richtig gelesen und bleibt bei Änderungen erhalten, „Erneut versuchen“ klappt bei Sammel-Jobs, und eine tote Verbindung versteckt nicht mehr alle Jobs, sondern erscheint als eigene Zeile „nicht erreichbar“."
+
+[[entries]]
+kind = "behoben"
+text = "Proxmox: Ist eine Verbindung oder ein Knoten nicht erreichbar, werden die anderen trotzdem eingelesen, RAM verkleinern klappt auch bei VMs ohne dynamischen Speicher, der Knopf heißt jetzt „Hart ausschalten“ und warnt vor Datenverlust, und nicht erreichbare Verbindungen erscheinen in den Kacheln als rote Zeile."
+
+[[entries]]
+kind = "behoben"
+text = "Gameserver-Aktionen melden Fehler und prüfen danach den Dienst, die System-Seite erkennt „Neustart nötig“ auch bei einem neueren Kernel derselben Art, und die Kachel „Server-Zustand“ nennt den schlimmsten Befund."
+
+[[entries]]
+kind = "behoben"
+text = "Skripte auf „Alle Server“ oder einer Gruppe überspringen Server ohne SSH-Zugang, Windows-Server und nicht verwaltete Server und nennen den Grund; eine Gruppe ohne Auswahl läuft nicht mehr auf allen Servern, und ein neues Skript überschreibt kein bestehendes mit gleicher Kennung mehr."
+
+[[entries]]
+kind = "behoben"
+text = "Inventar-Fotos werden wieder angezeigt, Dokument-Vorschau und Download klappen auch mit Sonderzeichen im Dateinamen, Nextcloud-Ordner mit Leerzeichen oder Umlaut erscheinen nicht mehr in sich selbst, und ein toter Link macht im Dateimanager den Ordner nicht mehr unlesbar."
+
+[[entries]]
+kind = "verbessert"
+text = "Ein Shell-Befehl von der Server-Seite darf bis zu 15 Minuten laufen statt 60 Sekunden, „Jetzt ausführen“ zeigt ehrlich ausgeführt, fehlgeschlagen und übersprungen, und beim Zeitplan steht, dass geplante Skript-Läufe unter „Aktionen“ freigegeben werden müssen."
+
+[[entries]]
+kind = "behoben"
+text = "Der Echtzeit-Wächter von Nodvard Shield startet auf ruhigen Servern nicht mehr alle 10 Minuten einen Scan, ignoriert die ständig neu geschriebenen Proxmox-Dateien, und pro Server läuft nur noch ein großer Scan gleichzeitig."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield erkennt abgeschaltete Signatur-Updates, überschreibt den Lynis-Bericht nicht mehr bei der Statusabfrage und sagt ohne root ehrlich „nicht lesbar“, statt „SSH sicher eingestellt“ zu melden oder täglich Fail2ban-Fehlalarm zu geben."
+
+[[entries]]
+kind = "behoben"
+text = "Hängengebliebene Scans und Update-Läufe werden nach einem Neustart des Dashboards als abgebrochen markiert, nach „Neu starten“ prüft die Update-Zentrale den Stand von selbst nach, und die Prüfung stürzt auf einem Pi 5 nicht mehr ab."
+
+[[entries]]
+kind = "neu"
+text = "Neue Erweiterung „Netzwerk“ für Pi-hole und Nginx Proxy Manager: Anfragen und Sperrliste ansehen, die Blockierung für 5, 15 oder 60 Minuten pausieren, Proxy-Hosts ein- und ausschalten und vor ablaufenden Zertifikaten warnen (auch als tägliche Push-Nachricht); Änderungen laufen über die Freigabe, und die Erweiterung ist nach dem Update erst ausgeschaltet."
+
+[[entries]]
+kind = "neu"
+text = "Neue Anleitungen für einen Proxmox-Zugang mit möglichst wenigen Rechten und für die Erst-Einrichtung Schritt für Schritt."
+
+[[entries]]
+kind = "verbessert"
+text = "Deploy: Das Image für den Raspberry Pi wird auf dem PC gebaut und fertig auf den Pi kopiert, mit Gesundheitsprüfung und automatischem Zurückrollen bei Fehlern; die Sicherungsskripte laufen nicht mehr durch die Datenbank-Migration und starten den Dienst auch nach einem Fehler wieder."

@@ -1,0 +1,94 @@
+{
+ "heads": [
+  "9f1e2d3c4b5a",
+  "a1b2c3d4e5f6",
+  "b8c9d0e1f2a3",
+  "d4b7a2c91e63"
+ ],
+ "revisionen": {
+  "2bba465be0ad": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/2bba465be0ad_wp6_job_ext_key.py",
+   "down_revision": "88ae66606d3b"
+  },
+  "53b6fedfa84e": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/53b6fedfa84e_wp12_host_tag_managed_by_ext_id.py",
+   "down_revision": "2bba465be0ad"
+  },
+  "5637ec0a6a73": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/5637ec0a6a73_initial_schema.py",
+   "down_revision": null
+  },
+  "88ae66606d3b": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/88ae66606d3b_wp1_totp_confirmed_at.py",
+   "down_revision": "5637ec0a6a73"
+  },
+  "9f1e2d3c4b5a": {
+   "branch_labels": [
+    "documents"
+   ],
+   "datei": "extensions/documents/migrations/versions/9f1e2d3c4b5a_create_documents_tables.py",
+   "down_revision": null
+  },
+  "a1b2c3d4e5f6": {
+   "branch_labels": [
+    "inventory"
+   ],
+   "datei": "extensions/inventory/migrations/versions/a1b2c3d4e5f6_create_inventory_tables.py",
+   "down_revision": null
+  },
+  "a7b8c9d0e1f2": {
+   "branch_labels": [
+    "nexus-soc"
+   ],
+   "datei": "extensions/nexus-soc/migrations/versions/a7b8c9d0e1f2_nexus_soc_update_remote_id.py",
+   "down_revision": "f6a7b8c9d0e1"
+  },
+  "b8c9d0e1f2a3": {
+   "branch_labels": [
+    "nexus-soc"
+   ],
+   "datei": "extensions/nexus-soc/migrations/versions/b8c9d0e1f2a3_nexus_soc_incident_queue.py",
+   "down_revision": "a7b8c9d0e1f2"
+  },
+  "c3f1a7d92b64": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/c3f1a7d92b64_refresh_token_replaced_by.py",
+   "down_revision": "53b6fedfa84e"
+  },
+  "c4d5e6f7a8b9": {
+   "branch_labels": [
+    "nexus-soc"
+   ],
+   "datei": "extensions/nexus-soc/migrations/versions/c4d5e6f7a8b9_create_nexus_soc_incidents.py",
+   "down_revision": null
+  },
+  "d4b7a2c91e63": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/d4b7a2c91e63_custom_apps.py",
+   "down_revision": "e7a1c4b93d52"
+  },
+  "e5f6a7b8c9d0": {
+   "branch_labels": [
+    "nexus-soc"
+   ],
+   "datei": "extensions/nexus-soc/migrations/versions/e5f6a7b8c9d0_nexus_soc_antivirus.py",
+   "down_revision": "c4d5e6f7a8b9"
+  },
+  "e7a1c4b93d52": {
+   "branch_labels": [],
+   "datei": "backend/migrations/versions/e7a1c4b93d52_recovery_codes.py",
+   "down_revision": "c3f1a7d92b64"
+  },
+  "f6a7b8c9d0e1": {
+   "branch_labels": [
+    "nexus-soc"
+   ],
+   "datei": "extensions/nexus-soc/migrations/versions/f6a7b8c9d0e1_nexus_soc_updates_guard.py",
+   "down_revision": "e5f6a7b8c9d0"
+  }
+ }
+}

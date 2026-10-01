@@ -1,0 +1,71 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodvard-deck"
+version = "0.6.0"
+description = "Nodvard Deck — generischer Kern einer modularen Self-Hosting-Plattform."
+requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
+authors = [{ name = "Nico Benks" }]
+dependencies = [
+    "nodvard-sdk",
+    "fastapi>=0.121",  # Depends(..., scope="function"), siehe api/deps.py
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.7",
+    "pydantic-settings>=2.4",
+    # [asyncio] zieht greenlet -- ab SQLAlchemy 2.1 nicht mehr automatisch dabei (live
+    # gefunden: der Pi-Build zog 2.1.0, Lattice startete nicht). 2.1 erst nach eigenem Test.
+    "sqlalchemy[asyncio]>=2.0.30,<2.1",
+    "aiosqlite>=0.20",
+    "alembic>=1.13",
+    "asyncssh>=2.14",
+    "cryptography>=43",
+    "argon2-cffi>=23.1",
+    # Sicherungen im age-Format (core/backup/crypto.py). MIT; das Rust-`rage` darin ist
+    # MIT/Apache-2.0. Wheels (abi3) fuer linux x86_64 und aarch64.
+    "pyrage>=1.4,<2",
+    "pyotp>=2.9",
+    "apscheduler>=3.10,<4",  # 4.x ist eine andere API
+    "structlog>=24.1",
+    "httpx>=0.27",
+    "websockets>=13",
+    "python-multipart>=0.0.9",
+    "pyjwt>=2.9",
+    "dulwich>=1.2",
+    "pytesseract>=0.3.10",
+    "Pillow>=10.4",
+    # documents-Extension (ocr.py). Extensions werden per Verzeichnis gescannt und haben
+    # keine eigene Paketdatei -- ihre Python-Abhaengigkeiten stehen deshalb hier im Kern.
+    # pypdfium2 (Apache-2.0/BSD) statt PyMuPDF (AGPL), damit die kommerzielle Lizenz moeglich bleibt.
+    "pypdfium2>=4.30",
+    # Zeitzonen-Datenbank (Einstellung `system.timezone`, core/timezone.py): zoneinfo liest sonst
+    # die Systemdateien, die das schlanke Image nicht hat (unter Windows nie). Apache-2.0.
+    "tzdata>=2024.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+]
+
+# `nodvard_deck` ist der Kern. `lattice` ist der alte Name als winziges Alias-Paket (alte `import lattice...`,
+# `uvicorn lattice.main:app`, `python -m lattice.migrate` von Dritten laufen weiter; Mechanik in
+# lattice/__init__.py und sdk/python/_nodvard_alias.py). Gleiche Distribution, damit der Installationsbefehl
+# `pip install -e sdk/python -e "backend[dev]"` unveraendert bleibt.
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["nodvard_deck*", "lattice*"]
+
+# Aenderungsprotokoll: die TOML-Dateien muessen ins Wheel, sonst fehlen sie im
+# Docker-Image (`pip install ./backend` ist NICHT editierbar). `versions/` und
+# `unreleased/` sind keine Python-Pakete, deshalb hier per Muster.
+[tool.setuptools.package-data]
+"nodvard_deck.changelog" = ["versions/*.toml", "unreleased/*.toml"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

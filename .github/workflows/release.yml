@@ -1,0 +1,126 @@
+# Veroeffentlicht das Docker-Image, sobald ein Versions-Tag (v0.6.0, v1.0.0 ...) gepusht wird:
+#
+#   git tag v0.6.0 && git push origin v0.6.0
+#
+# Reihenfolge fuer eine fertige Version (v0.6.0): zuerst `python scripts/release.py <version>` (hebt version.py
+# an) mergen, dann taggen. Eine Vorabversion (v0.6.0-rc1, v0.6.0-rc2 ...) wird dagegen vorher getaggen, ohne
+# release.py: Ihre Zahl vor dem "-" darf groesser sein als version.py (der rc einer kommenden Version) oder
+# gleich, nie kleiner. Aenderungen zwischen rc1 und der fertigen Version landen so ganz normal in unreleased/ und
+# damit in der fertigen Version. Passt das Tag nicht, bricht der Lauf vor dem Bauen ab (Schritt "Tag passt zu
+# version.py").
+#
+# Das Image entsteht fuer linux/amd64 (normale PCs/NAS) und linux/arm64 (Raspberry Pi) und
+# landet in der GitHub-Container-Registry. Nutzer ziehen es mit der Datei
+# deploy/compose.standalone.yml, ohne das Repository zu kennen.
+#
+# Die Actions sind auf eine Commit-SHA festgelegt (Version als Kommentar), damit ein verschobenes Tag
+# keinen fremden Code in den Lauf mit Schreibrecht auf die Registry bringt.
+#
+# Kein Deploy und keine eigenen Geheimnisse: angemeldet wird nur mit dem GITHUB_TOKEN, den
+# GitHub fuer jeden Lauf selbst vergibt. Damit das Paket unter dem Namen IMAGE_NAME erscheint,
+# muss die GitHub-Organisation "nodvard" existieren und das Repository dort liegen (oder
+# IMAGE_NAME unten auf den echten Besitzer zeigen).
+name: Release
+
+on:
+  push:
+    # Nur echte Versionsnummern (v1.2.3, v1.2.3-rc1); ein Tag wie "vtest" startet nichts und ueberschreibt `latest` nie.
+    tags: ["v[0-9]+.[0-9]+.[0-9]+*"]
+
+env:
+  # Name des Images. An EINER Stelle aendern, wenn die Organisation anders heisst.
+  IMAGE_NAME: ghcr.io/nodvard/deck
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      # Version fuer das Label ohne fuehrendes "v" (v0.6.0 -> 0.6.0). Ueber eine Umgebungs-
+      # variable uebergeben, nicht in die Shell eingesetzt.
+      - name: Version aus dem Tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # Das Tag muss zur Version im Code passen, sonst meldete das fertige Image im Dashboard dauerhaft
+      # "Update verfuegbar" auf sich selbst. Eine fertige Version (v0.6.0) muss genau __version__ sein. Bei einer
+      # Vorabversion (v0.6.0-rc1) zaehlt der Teil vor dem "-": er darf groesser sein als __version__ (der rc kommt
+      # vor `scripts/release.py`) oder gleich, nie kleiner; der ganze Wert muss eine Version sein, die auch die
+      # Update-Suche versteht (kein "+build", kein "_"). Das Image kennt seine genaue Version aus der Datei
+      # /app/image-info.json, die Update-Suche braucht also kein passendes __version__.
+      # VERSION kommt als Umgebungsvariable (aus dem Schritt davor), nichts wird in den Befehl eingesetzt.
+      - name: Tag passt zu version.py
+        run: |
+          code="$(python3 -c 'import runpy; print(runpy.run_path("backend/src/nodvard_deck/version.py")["__version__"])')"
+          base="${VERSION%%-*}"
+          if [ "$base" = "$VERSION" ]; then
+            [ "$VERSION" = "$code" ] && ok=1 || ok=0
+          else
+            python3 -c 'import re, sys
+          def key(v):
+              m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", v)
+              return tuple(map(int, m.groups())) if m else None
+          num = r"(0|[1-9][0-9]{0,8})"
+          pre = num + r"\." + num + r"\." + num + r"-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*"
+          full_ok = re.fullmatch(pre, sys.argv[3], re.ASCII) is not None
+          base, code = key(sys.argv[1]), key(sys.argv[2])
+          sys.exit(0 if full_ok and base and code and base >= code else 1)' "$base" "$code" "$VERSION" && ok=1 || ok=0
+          fi
+          if [ "$ok" != 1 ]; then
+            echo "Tag v$VERSION passt nicht zu __version__ = $code in backend/src/nodvard_deck/version.py." >&2
+            echo "Fertige Version: zuerst python scripts/release.py <version> mergen, dann taggen. Vorabversion: Zahl vor dem - mindestens $code." >&2
+            exit 1
+          fi
+          echo "Tag v$VERSION passt zu version.py ($code)."
+
+      # QEMU, damit der x86-Runner auch das arm64-Image bauen kann.
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags und Labels festlegen
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # latest nie automatisch: nur fuer fertige Versionen, nicht fuer Vorabversionen (v1.2.3-rc1).
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0
+            org.opencontainers.image.version=${{ env.VERSION }}
+
+      - name: Bauen und veroeffentlichen
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # Herkunft und Version fuer "Nach Updates suchen" im Dashboard: landen als Datei /app/image-info.json im
+          # Image (deploy/Dockerfile, nodvard_deck.image_info), nicht als Umgebungsvariable.
+          build-args: |
+            VERSION=${{ env.VERSION }}
+            IMAGE=${{ env.IMAGE_NAME }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

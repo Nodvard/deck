@@ -1,0 +1,25 @@
+[extension]
+id          = "proxmox"
+name        = "Proxmox VE"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Liest deine Proxmox-Server mit allen VMs und Containern in Nodvard Deck ein: Auslastung, Start/Stopp/Neustart, Snapshots, Konsole und Speicher-Übersicht."
+icon        = "server"
+category    = "servers"
+sort_order  = 40
+entrypoint  = "nodvard_deck_ext_proxmox:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:proxmox-*",
+  "hosts.read",
+  "hosts.write",
+  "schedule.register",
+  "notify.send",
+]
+
+[settings]
+schema = "settings.schema.json"

@@ -1,0 +1,371 @@
+version = "0.6.0"
+date = "2026-10-01"
+title = "Nodvard Deck – erste öffentliche Beta"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Sicherheits-Erweiterung heißt jetzt Nodvard Shield. Die KI-Funktionen heißen Nodvard KI (zum Beispiel in den Einstellungen für den KI-Server, bei der KI-Container-Wache und in ihren Meldungen). An Einstellungen und gespeicherten Daten ändert sich nichts."
+
+[[entries]]
+kind = "neu"
+text = "Unter Einstellungen, Über Nodvard Deck stehen jetzt der Link zum Quellcode, ein Hinweis zur Lizenz und ein Hinweis zu den genannten Marken."
+
+[[entries]]
+kind = "verbessert"
+text = "Lizenzen aufgeräumt: Die PDF-Erkennung in den Dokumenten nutzt jetzt pypdfium2 statt PyMuPDF (AGPL), Verhalten und Auflösung bleiben gleich. Die Datei THIRD_PARTY_LICENSES liegt im Projekt und im Image (/app) und nennt alle mitgelieferten Fremdkomponenten mit Lizenztext; ein Prüfskript (scripts/check_licenses.py) lässt keine GPL-, AGPL-, LGPL- oder SSPL-Abhängigkeit mehr durch."
+
+[[entries]]
+kind = "verbessert"
+text = "Deploy: Zielrechner und DNS-Server des Containers stehen nicht mehr fest im Repository, sondern werden lokal eingestellt (Anleitung in deploy/README.md)."
+
+[[entries]]
+kind = "neu"
+text = "Service-Matrix: „Alle Updates vorschlagen“ legt für jeden Container mit neuer Version einen Vorschlag an, freigegeben wird gesammelt unter Aktionen."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Schnittstelle zur App und zu den Erweiterungen ist jetzt geschützt: Automatische Tests schlagen an, wenn etwas entfernt oder umbenannt wird, das die App braucht."
+
+[[entries]]
+kind = "behoben"
+text = "Das API-Dokument (openapi.json) lässt sich wieder abrufen, wenn die Service-Matrix aktiv ist."
+
+[[entries]]
+kind = "neu"
+text = "Der Einrichtungsassistent führt jetzt in sechs Schritten durch: Konto, Zeitzone (mit der Zone deines Geräts vorausgewählt), Module per Klick einschalten, Zwei-Faktor-Anmeldung mit QR-Code und Wiederherstellungs-Codes, Aussehen und Fertig. Alles außer dem Konto lässt sich überspringen, und nach einem Neuladen geht es an derselben Stelle weiter."
+
+[[entries]]
+kind = "neu"
+text = "Mein Konto zeigt beim Einrichten der Zwei-Faktor-Anmeldung einen QR-Code zum Scannen mit der Authenticator-App. Er wird im Browser erzeugt, nichts geht an einen fremden Dienst."
+
+[[entries]]
+kind = "verbessert"
+text = "Module haben im Manifest eine Gruppe und eine Reihenfolge (category, sort_order); die Auswahl im Assistenten ordnet sich danach, Server-nahe Module stehen oben."
+
+[[entries]]
+kind = "neu"
+text = "Im Cockpit zeigt der Bereich „Infrastruktur“ jetzt auch für deine Linux-Server eine Karte mit CPU, Arbeitsspeicher und Platte, so wie bei den Proxmox-Knoten. Die Zahlen kommen aus der Messung, die ohnehin alle 30 Sekunden läuft, das Cockpit baut dafür keine neuen Verbindungen zu den Servern auf."
+
+[[entries]]
+kind = "neu"
+text = "Ist die letzte Messung älter als zwei Minuten, steht „veraltet“ mit dem Alter dabei. Ein Server, der nicht erreichbar ist, zeigt keine alten Werte mehr als aktuell. Server ohne Messwerte bleiben eine Zeile und sagen, woran es liegt (kein SSH-Zugang, Modul „System“ aus)."
+
+[[entries]]
+kind = "neu"
+text = "Auf einer frischen Installation ohne Server gibt es den Knopf „Mit Beispieldaten ansehen“ (im Cockpit, bei „Erste Schritte“ und unter Server & Zugänge). Ein Klick füllt das Dashboard mit ausgedachten Servern und Meldungen, damit du siehst, wie es später aussieht."
+
+[[entries]]
+kind = "neu"
+text = "Solange Beispieldaten da sind, steht oben ein Band „Du siehst Beispieldaten“. „Beispieldaten löschen“ entfernt nach einer Rückfrage genau diese Daten wieder und lässt alles Echte unberührt."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Demo-Modus legt beim Start dieselben Beispieldaten an wie der Knopf, mit Adressen aus dem Dokumentationsbereich, die nie im echten Netz angefragt werden."
+
+[[entries]]
+kind = "neu"
+text = "Die Aktionen-Seite zeigt, wer eine Aktion freigegeben oder abgelehnt hat."
+
+[[entries]]
+kind = "neu"
+text = "Im Cockpit kannst du unter „Apps“ mit „+ App hinzufügen“ eigene Kacheln anlegen, zum Beispiel für deinen Router, die NAS-Oberfläche oder Pi-hole: mit Name, Adresse, Symbol, Farbe und Gruppe, ganz ohne Container-Erkennung."
+
+[[entries]]
+kind = "neu"
+text = "Eigene Kacheln lassen sich über das Menü an der Kachel bearbeiten, verschieben und löschen, und über die Gruppen-Knöpfe filtern. Das dürfen Inhaber und Administratoren; alle anderen sehen die Kacheln nur."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Beispieldaten bringen jetzt auch drei Beispiel-Apps mit, die beim Löschen der Beispieldaten wieder verschwinden."
+
+[[entries]]
+kind = "neu"
+text = "Von Hand angelegte Server werden jetzt alle 2 Minuten geprüft, ohne dass du etwas tun musst: Antwortet der SSH-Port zweimal hintereinander nicht, steht der Server auf „nicht erreichbar“, und du bekommst eine Meldung (auch als Push) mit Link zur Server-Seite. Kommt er zurück, gibt es eine zweite Meldung. Im Cockpit erscheint er unter „Braucht Aufmerksamkeit“."
+
+[[entries]]
+kind = "neu"
+text = "Unter Einstellungen → Server & Zugänge schaltest du die Erreichbarkeitsprüfung ab oder stellst ein, wie oft sie läuft (jede Minute bis jede Stunde). Im Wartungsfenster gibt es keinen Push, Beispiel-Server und von Modulen eingelesene Server werden nicht geprüft."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Startseite führt eine Karte „Erste Schritte“ mit Häkchen und Knöpfen durch die Einrichtung: Server anlegen, Zugang hinterlegen, Verbindung prüfen, Module und Push-Nachrichten einrichten. Sie verschwindet von selbst, wenn alles erledigt ist, und lässt sich ausblenden."
+
+[[entries]]
+kind = "neu"
+text = "Das Modul Terminal schaltet sich von selbst ein, sobald ein Server seinen ersten SSH-Zugang bekommt – außer du hast es selbst ausgeschaltet."
+
+[[entries]]
+kind = "verbessert"
+text = "Leere Seiten sagen jetzt, was zu tun ist, und bieten einen Knopf zum nächsten Schritt an. Ohne Server zeigt die Startseite nicht mehr „Alles läuft rund“."
+
+[[entries]]
+kind = "neu"
+text = "Die Glocke oben rechts öffnet jetzt ein kleines Fenster mit den neuesten Meldungen – ungelesene sind hervorgehoben, ein Klick springt direkt zur passenden Seite."
+
+[[entries]]
+kind = "verbessert"
+text = "Beim Ausliefern auf einen Raspberry Pi mit dem Deploy-Skript heißen Image, Dienst und Container jetzt nodvard-deck. Der alte Container wird zuerst nur angehalten und erst gelöscht, wenn der neue läuft, die Daten da sind und alles geprüft ist. Klappt etwas nicht, schaltet das Skript zurück und prüft, dass der alte Stand wieder antwortet. Die Daten bleiben unverändert im selben Speicher."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Service-Matrix und die Systemseite erkennen das Dashboard auch unter dem neuen Namen und bieten dafür kein Einspielen und keinen Neustart an."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Hinweise zum Einrichtungscode und zum Notfall-Befehl nennen jetzt den neuen Dienstnamen nodvard-deck."
+
+[[entries]]
+kind = "verbessert"
+text = "Startet das Dashboard während eines Image-Updates neu, macht es danach weiter und meldet das Ergebnis."
+
+[[entries]]
+kind = "neu"
+text = "Installieren ohne das Repository: Eine einzige Compose-Datei (compose.standalone.yml) zieht das fertige Image für PC und Raspberry Pi. Bei jeder neuen Version baut GitHub das Image automatisch."
+
+[[entries]]
+kind = "neu"
+text = "Die Einrichtung erklärt, wo der Einrichtungscode steht (Befehlszeile, Docker Desktop, Portainer, Synology, Unraid). Im Protokoll steht er zusätzlich groß und allein in einer Zeile. Ein dritter Schritt zeigt, wie man Zwei-Faktor und Wiederherstellungs-Codes einrichtet, und nennt den Notfall-Befehl."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Anmeldeseite erklärt „Passwort vergessen?“, wie man mit einem Wiederherstellungs-Code hineinkommt, wer das Passwort zurücksetzen kann und welcher Befehl auf dem Server hilft. Ein Ordner auf dem NAS mit fremden Rechten funktioniert jetzt ohne Handarbeit: Der Container setzt die Besitzrechte beim Start selbst."
+
+[[entries]]
+kind = "neu"
+text = "Alte Job-Läufe und ihre Protokolldateien werden jetzt jede Nacht aufgeräumt, damit sich auf dem Raspberry Pi über Monate nichts ansammelt. Die letzten 20 Läufe jedes Jobs bleiben immer erhalten, laufende Läufe sowieso."
+
+[[entries]]
+kind = "neu"
+text = "Unter Einstellungen, System gibt es das Feld „Job-Verlauf aufbewahren (Tage)“ (Vorgabe 30 Tage), direkt neben der Aufbewahrung des Protokolls."
+
+[[entries]]
+kind = "neu"
+text = "Vor jedem Update, das die Datenbank umbaut, legt Nodvard Deck automatisch eine Kopie an (die letzten drei bleiben) und migriert nie ohne sie. Klappt die Migration nicht oder bricht sie mittendrin ab (Strom weg, Neustart), geht die Datenbank von selbst auf den Stand davor zurück. Unter Einstellungen, System stehen die letzten Kopien."
+
+[[entries]]
+kind = "neu"
+text = "Notseite: Scheitert der Start, läuft statt Nodvard Deck eine kleine Seite, die auch ohne alle Zusatzpakete startet und Grund und Ausweg zeigt. Mit dem Notfallcode aus dem Protokoll lässt sich neu versuchen oder der Stand vor dem Update wiederherstellen. Der Container startet nicht mehr endlos neu."
+
+[[entries]]
+kind = "verbessert"
+text = "Geht man nach einem Update auf die alte Version zurück, spielt sie die Kopie von selbst ein, solange die neue nie erfolgreich gestartet ist; das gelingt erst ab einer Version mit dieser Funktion. Eine Datenbank, die dabei ersetzt wird, wird nie gelöscht: Sie liegt 30 Tage unter restore/replaced-… und wird dann automatisch entfernt, genau wie der alte Stand einer Wiederherstellung."
+
+[[entries]]
+kind = "verbessert"
+text = "Bricht die Migration einer gerade eingespielten Sicherung ab, kommt beim nächsten Start der alte Stand vollständig zurück, samt passenden Schlüsseln. Bricht die allererste Migration einer neuen Installation ab, startet der nächste Versuch auf einer frischen Datenbank statt auf der Notseite zu enden."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Notseite beendet jede Verbindung nach 10 Sekunden und nimmt von einem Rechner höchstens 8 gleichzeitig an, damit sie für den Admin erreichbar bleibt. Steuerzeichen aus Anfragen erscheinen im Protokoll nur noch maskiert. Ohne erkennbare Adresse im Startbefehl lauscht sie nur lokal, wie die Anwendung selbst."
+
+[[entries]]
+kind = "neu"
+text = "Bei jeder Erweiterung gibt es jetzt den Knopf „Verbindung testen“. Er sagt in einfachem Deutsch, ob es klappt oder was nicht stimmt, zum Beispiel falsche Zugangsdaten oder eine nicht erreichbare Adresse. Bei ntfy kommt dazu „Testnachricht senden“."
+
+[[entries]]
+kind = "neu"
+text = "In der Liste der Erweiterungen steht „Einrichtung nötig“, wenn noch Angaben oder Zugangsdaten fehlen oder der letzte Test fehlgeschlagen ist – mit Link direkt zur Einstellungsseite. Zugangsdaten lassen sich dort auch ersetzen oder entfernen."
+
+[[entries]]
+kind = "verbessert"
+text = "Einstellungen haben Auswahllisten für Server, Markierungen und das KI-Modell und prüfen Adressen und Namen schon beim Eintippen. Das Token bei Proxmox und Backups lässt sich jetzt auch ein zweites Mal setzen, ohne Fehlermeldung."
+
+[[entries]]
+kind = "verbessert"
+text = "Umbenennung zu Nodvard Deck abgeschlossen: Auch in Nodvard Shield und Dokumenten heißt es jetzt überall Nodvard Deck (Hinweise, Neustart-Meldung auf den Servern, Update-Einheiten, Autor der Erweiterungen)."
+
+[[entries]]
+kind = "verbessert"
+text = "Das Dashboard heißt jetzt Nodvard Deck (früher Lattice). Ein selbst gesetzter Name unter Aussehen bleibt erhalten."
+
+[[entries]]
+kind = "verbessert"
+text = "Neue Authenticator-Einträge für die Zwei-Faktor-Anmeldung heißen jetzt „Nodvard Deck“. Bereits eingerichtete Codes funktionieren unverändert weiter."
+
+[[entries]]
+kind = "neu"
+text = "Neue Seite „Server & Zugänge“ unter Einstellungen: Server anlegen und bearbeiten, mit einem Klick einen SSH-Schlüssel erzeugen, den Befehl für den Server kopieren (auch ohne https), die Verbindung prüfen, Server-Schlüssel bestätigen oder vergessen und Gruppen verwalten – alles auch am Handy."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Server-Seite hat jetzt „Bearbeiten“, „Löschen“ und eine Karte „Zugang“ mit „Verbindung prüfen“. Protokoll und Anleitung zur Erst-Einrichtung beschreiben den neuen Weg."
+
+[[entries]]
+kind = "behoben"
+text = "Die Hinweise im Terminal und in Nodvard Shield führen jetzt zur Seite „Server & Zugänge“ statt zu „Einstellungen → Hosts“, die es nicht gab."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Löschen eines Servers werden auch seine gespeicherten Zugangsdaten gelöscht, und offene Verbindungen zu ihm werden geschlossen. Alle Änderungen an Servern, Zugängen, Server-Schlüsseln und Gruppen stehen jetzt im Protokoll."
+
+[[entries]]
+kind = "behoben"
+text = "Server, Zugänge und Gruppen prüfen ihre Eingaben jetzt (Kurzname, Adresse, Port, Schlüssel) und sagen auf Deutsch, was nicht stimmt. Ein Server lässt sich nicht mehr löschen, solange auf ihm eine Aktion läuft, und Gruppen lassen sich umbenennen und löschen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Einrichtung einer frischen Installation ist jetzt durch einen Einrichtungscode geschützt. Er steht im Protokoll des Containers, sodass nicht mehr jeder, der die Seite zuerst öffnet, das erste Konto bekommt."
+
+[[entries]]
+kind = "neu"
+text = "Zwei-Faktor-Anmeldung hat jetzt zehn einmalige Wiederherstellungs-Codes für den Fall, dass das Handy weg ist. Sie lassen sich unter Mein Konto jederzeit mit dem Passwort neu erzeugen, und die Zwei-Faktor-Anmeldung lässt sich nur noch mit dem Passwort abschalten."
+
+[[entries]]
+kind = "neu"
+text = "Wer Benutzer verwalten darf, kann die Zwei-Faktor-Anmeldung eines anderen Benutzers zurücksetzen (der Inhaber ausgenommen, und nur mit dem eigenen Passwort). Das eigene Passwort und das des Inhabers lassen sich in der Benutzerverwaltung nicht mehr setzen. Für den Notfall gibt es außerdem einen Befehl auf dem Server, mit dem man ein Passwort zurücksetzen oder die Zwei-Faktor-Anmeldung abschalten kann."
+
+[[entries]]
+kind = "neu"
+text = "Sicherung in der Oberfläche (Einstellungen, System): Ein Sicherungspasswort verschlüsselt alle Daten, Nodvard Deck selbst speichert es nicht. Dazu gibt es einmalig einen Wiederherstellungsschlüssel zum Aufbewahren."
+
+[[entries]]
+kind = "neu"
+text = "Automatische Sicherungen nach Zeitplan, ohne den Dienst anzuhalten: Wie viele bleiben, legen Sie fest, ältere werden gelöscht. Jede Sicherung lässt sich prüfen, herunterladen und löschen; schlägt eine fehl, kommt eine Meldung. Dateien, die nicht mitgesichert werden können (Verknüpfungen), stehen als Hinweis in der Karte."
+
+[[entries]]
+kind = "neu"
+text = "„Sicherung herunterladen“ erstellt sofort eine frische, verschlüsselte Sicherung – mit dem Sicherungspasswort oder einem eigenen Einmal-Passwort. Herunterladen und Löschen gehen nur für den Inhaber und nur mit dem Anmeldepasswort; ebenso, wenn jemand weniger Sicherungen behalten, die automatische Sicherung ausschalten oder den Ordner ändern will. Die Download-Adresse landet nicht im Protokoll des Servers."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Deck kann jetzt einen eigenen SSH-Schlüssel nur für einen Server erzeugen. Der geheime Teil bleibt im Tresor, und zum Einrichten gibt es einen fertigen Befehl zum Einfügen auf dem Server (auf Wunsch mit Root-Rechten ohne Passwort und der Gruppe „docker“)."
+
+[[entries]]
+kind = "neu"
+text = "Ein neuer Schlüssel lässt sich erst prüfen und dann zum Standard-Zugang machen; der alte Zugang kann dabei gleich mit seinem Geheimnis gelöscht werden."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungen können melden, was sie auf einem Server brauchen (Root-Rechte, eine Gruppe). Service-Matrix, Nodvard Shield und System tun das, sodass der Einrichtungsbefehl nur anbietet, was wirklich gebraucht wird."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Browser merkt sich die Anmeldung jetzt unter dem neuen Namen Nodvard Deck. Beim Update bleibt man angemeldet, und auch wer danach zur vorherigen Version zurückgeht, wird nicht abgemeldet. Beim Abmelden werden beide Einträge im Browser entfernt."
+
+[[entries]]
+kind = "verbessert"
+text = "Intern tragen jetzt auch die mitgelieferten Erweiterungen (Proxmox, Backups, Nodvard Shield und alle anderen) den neuen Namen Nodvard Deck. Daten, Datenbank und Einstellungen bleiben unverändert, es gibt keine neue Datenbank-Änderung."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungen von Dritten, die noch das frühere Namensschema für ihr Programmpaket benutzen, laden unverändert weiter. Für neue Erweiterungen gilt das neue Schema, die Anleitung für Entwickler ist angepasst."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Oberfläche und ihre Erweiterungen sprechen jetzt unter neuen Nodvard-Deck-Namen miteinander. Die alten Namen funktionieren weiter, auch für Erweiterungen von Dritten und für einen Browser-Tab, der schon vor dem Update offen war."
+
+[[entries]]
+kind = "verbessert"
+text = "Was sich dein Browser merkt (zum Beispiel, ob du das Änderungsprotokoll schon gesehen hast, und das Tastatur-Layout der Konsole), wird beim ersten Öffnen nach dem Update übernommen und geht nicht verloren."
+
+[[entries]]
+kind = "verbessert"
+text = "Intern heißt das Dashboard jetzt überall Nodvard Deck: Die Programmteile, die Protokoll-Namen und die Start-Befehle im Container tragen den neuen Namen. Daten, Datenbank, Anmeldung und Einstellungen bleiben unverändert."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungen von Dritten und alte Befehle mit dem früheren Namen (zum Beispiel für Notfall-Zugang oder Datenbank-Update) laufen unverändert weiter. Sie bekommen nur einen Hinweis, dass der neue Name gilt; Erweiterungen dürfen sich auch unter dem neuen Namen eintragen."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Einstellungen per Umgebungsvariable heißen jetzt NODVARD_DECK_… statt LATTICE_…. Die alten Namen funktionieren weiter, beim Start steht nur ein Hinweis im Protokoll, welche noch benutzt werden."
+
+[[entries]]
+kind = "neu"
+text = "„Verbindung prüfen“ testet Schritt für Schritt, ob sich Nodvard Deck mit einem Server verbinden kann (erreichbar, Server-Schlüssel, Anmeldung, Root-Rechte, was die Erweiterungen brauchen) und sagt auf Deutsch, was fehlt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Prüfen gehen Passwort oder Schlüssel erst an den Server, wenn sein Server-Schlüssel von dir bestätigt wurde. Den Fingerabdruck bestätigst du bewusst selbst, ein geänderter Schlüssel wird nie zum Bestätigen angeboten. Einen alten Zugang beim Wechsel mitzulöschen geht erst nach einer erfolgreichen Prüfung des neuen."
+
+[[entries]]
+kind = "neu"
+text = "Neue Einstellung NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS (Standard aus): Ist sie an, merkt sich Nodvard Deck neue Server-Schlüssel nicht mehr stillschweigend im Hintergrund, sondern nur noch nach deiner Bestätigung."
+
+[[entries]]
+kind = "neu"
+text = "Warnung bei voller Platte und zu hoher Temperatur: Alle Linux-Server werden alle 10 Minuten geprüft, ab 85 % Belegung oder 75 °C kommt eine Meldung aufs Handy (einmal, nicht dauernd). Schwellen, Schalter und Prüfabstand stehen in den Einstellungen von „System“."
+
+[[entries]]
+kind = "neu"
+text = "Sicherung einspielen: In den Einstellungen unter System, Wiederherstellen (und auf einer frischen Installation im Einrichtungsassistenten) lässt sich eine Sicherungsdatei hochladen, mit Passwort oder Wiederherstellungsschlüssel öffnen und nach einer Zusammenfassung einspielen. Das ersetzt alles, auch die Konten; Nodvard Deck startet dafür neu und führt danach zur Anmeldung."
+
+[[entries]]
+kind = "sicherheit"
+text = "Eine hochgeladene Sicherung wird nur in einem getrennten Zwischenordner geöffnet und streng geprüft (nur erlaubte Dateien, Größengrenzen, Datenbank nur lesend). Gespeichert und eingespielt wird erst nach Bestätigung mit dem Passwort, im Assistenten nur mit dem Einrichtungscode; scheitert etwas, auch mitten im Einspielen, kommt der alte Stand zurück."
+
+[[entries]]
+kind = "verbessert"
+text = "Sicherungen lassen sich auch ohne Oberfläche vormerken (restore.sh mit einer .ndbak-Datei). Der alte Stand bleibt nach dem Einspielen liegen und lässt sich mit dem Passwort löschen."
+
+[[entries]]
+kind = "neu"
+text = "Neuer Bereich „System“ unter Einstellungen: Dort lässt sich die Zeitzone einstellen, in der Zeitpläne und Wartungsfenster ihre Uhrzeit meinen (zum Beispiel das Morgen-Briefing um 7 Uhr), und wie viele Tage das Protokoll aufbewahrt wird. Beim Wechsel der Zone ziehen alle Zeitpläne sofort mit."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Zeitplan-Wähler rechnet „nächster Lauf“ in der eingestellten Zeitzone und weist darauf hin, wenn das Gerät in einer anderen steht."
+
+[[entries]]
+kind = "behoben"
+text = "Auch die Erweiterungsseiten nennen bei einem echten Serverfehler (z. B. Platte voll) den Grund statt „nicht erreichbar“."
+
+[[entries]]
+kind = "behoben"
+text = "Service-Matrix: Entfernte oder umgetaggte Server zählen nicht mehr in der Image-Update-Zeile mit, und mit Server-Filter gilt die Zeile nur für diesen Server."
+
+[[entries]]
+kind = "verbessert"
+text = "Bei abgestürzten Containern steht die Ursache (Absturz, Speichermangel, von außen beendet) jetzt fest vom System ermittelt in der Meldung und unter Aktionen – die KI kann sie nicht mehr falsch beschreiben."
+
+[[entries]]
+kind = "behoben"
+text = "Die KI-Container-Wache verliert einen erkannten Vorfall nicht mehr, wenn das Dashboard innerhalb der Sammelzeit neu startet: Er wird sofort gespeichert und nach dem Start gemeldet (mit Hinweis im Bericht)."
+
+[[entries]]
+kind = "behoben"
+text = "Die KI-Container-Wache merkt sich den letzten Stand der Container auch über einen Neustart hinweg. Ein Container, der abgestürzt ist, während das Dashboard aus war, wird jetzt gemeldet."
+
+[[entries]]
+kind = "behoben"
+text = "Stürzt ein Container ab und startet sich sofort von selbst wieder, merkt die KI-Container-Wache das jetzt auch, wenn es zwischen zwei Prüfungen passiert."
+
+[[entries]]
+kind = "verbessert"
+text = "Die KI-Container-Wache sammelt Vorfälle jetzt 60 statt 300 Sekunden, bevor sie meldet (schon eingestellte Werte bleiben). Ein Fehler beim Erstellen des Berichts stoppt die Wache nicht mehr, und fällt die KI aus, kommt der Bericht trotzdem."
+
+[[entries]]
+kind = "behoben"
+text = "Scheitert die Auswertung eines Vorfalls, versucht die KI-Container-Wache es nach fünf Minuten erneut (höchstens dreimal, ohne zweiten Vorschlag) und meldet sonst, dass es nicht geklappt hat. Alte offene Vorfälle werden beim Start nicht mehr mitgeschleppt."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Logdatei des Dashboards wächst nicht mehr unbegrenzt, und wiederholte Fehler der Container-Wache füllen sie nicht mehr mit Wiederholungen. Der gemerkte Container-Stand vergisst entfernte Container."
+
+[[entries]]
+kind = "behoben"
+text = "Die KI-Container-Wache schaut vor der Einschätzung nach, ob ein Container wirklich wegen Speichermangel beendet wurde. Ein von außen beendeter Container (zum Beispiel per docker kill) wird nicht mehr als Ressourcenproblem gedeutet."
+
+[[entries]]
+kind = "verbessert"
+text = "Schlägt die KI nur vor, einen gerade abgestürzten Container einfach neu zu starten, gilt das als mittleres statt hohes Risiko. Alles andere bleibt hoch, und die Sperrliste gilt wie bisher."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Einstufung als mittleres Risiko gilt jetzt nur für echte Abstürze: Ein von Hand gestoppter oder per kill beendeter Container wird nie automatisch neu gestartet. Nach einem Neustart oder bei Wiederholungen bleibt es beim hohen Risiko, und ein Vorschlag wird nie doppelt angelegt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Noch strenger beim mittleren Risiko: Pausierte Container gelten nie als Absturz, und ohne Prüfdaten, bei sauberem Ende, bei Beendigung durch ein Signal ohne Speichermangel oder wenn der Container wieder läuft, bleibt es beim hohen Risiko."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Deck ist auch ohne Proxmox rund: Von Hand angelegte Server stehen als „noch nicht geprüft“ da statt unter „Alles läuft rund“, die Dienste-Kachel zeigt „–“ statt 0/0, die Server-Seite erklärt, was für Auslastung und Verlauf fehlt, und die Texte setzen Proxmox nicht mehr voraus."
+
+[[entries]]
+kind = "behoben"
+text = "Gameserver, die du von Hand angelegt hast, werden jetzt abgefragt und überwacht. Vorher blieben sie auf „unbekannt“, solange niemand „Verbindung prüfen“ gedrückt hatte, und es kamen keine Meldungen."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Ohne KI-Server steht nicht mehr bei jedem Vorfall „KI nicht erreichbar“, und ein NAS ohne bekannte Paketverwaltung gilt in der Update-Zentrale als „nicht unterstützt“ statt jeden Tag als Fehler."

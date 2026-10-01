@@ -1,0 +1,9375 @@
+{
+ "endpoints": {
+  "DELETE /api/v1/apps/{app_id}": {
+   "params": {
+    "path:app_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/auth/bootstrap/restore/pending": {
+   "params": {
+    "header:x-setup-code": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/demo": {
+   "responses": {
+    "200": {
+     "fields": {
+      "kept_apps": {
+       "type": "integer"
+      },
+      "kept_hosts": {
+       "type": "integer"
+      },
+      "layout_restored": {
+       "type": "boolean"
+      },
+      "removed_apps": {
+       "type": "integer"
+      },
+      "removed_hosts": {
+       "type": "integer"
+      },
+      "removed_notifications": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "DELETE /api/v1/ext/backups/connections/{name}": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/backups/unprotected/{connection}/{vmid}/acknowledged": {
+   "params": {
+    "path:connection": {
+     "required": true,
+     "type": "string"
+    },
+    "path:vmid": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/documents/documents/{document_id}": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/documents/documents/{document_id}/tags/{tag_id}": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:tag_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/documents/tags/{tag_id}": {
+   "params": {
+    "path:tag_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/inventory/categories/{category_id}": {
+   "params": {
+    "path:category_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/inventory/items/{item_id}": {
+   "params": {
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/inventory/items/{item_id}/images/{image_id}": {
+   "params": {
+    "path:image_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/inventory/locations/{location_id}": {
+   "params": {
+    "path:location_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/proxmox/connections/{name}": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/scripts/scripts/{script_id}": {
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/extensions/{ext_id}/secrets": {
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:label": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/host-groups/{group_id}": {
+   "params": {
+    "path:group_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/host-groups/{group_id}/members/{host_id}": {
+   "params": {
+    "path:group_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/hosts/{host_id}": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/hosts/{host_id}/credentials/{credential_id}": {
+   "params": {
+    "path:credential_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/hosts/{host_id}/known-hosts/{key_type}": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:key_type": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/jobs/{job_id}": {
+   "params": {
+    "path:job_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/me/totp": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/secrets/{secret_id}": {
+   "params": {
+    "path:secret_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/system/backups/{name}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/system/restore/pending": {
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/system/restore/replaced": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/users/{user_id}": {
+   "params": {
+    "path:user_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "GET /api/v1/actions": {
+   "params": {
+    "query:action_type": {
+     "type": "null|string"
+    },
+    "query:host_id": {
+     "type": "null|string"
+    },
+    "query:limit": {
+     "type": "integer"
+    },
+    "query:offset": {
+     "type": "integer"
+    },
+    "query:status_": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "action_type": {
+        "type": "string"
+       },
+       "approved_at": {
+        "type": "null|string"
+       },
+       "approved_by_label": {
+        "type": "null|string"
+       },
+       "approved_by_user_id": {
+        "type": "null|string"
+       },
+       "correlation_id": {
+        "type": "null|string"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "executed_at": {
+        "type": "null|string"
+       },
+       "expires_at": {
+        "type": "null|string"
+       },
+       "ext_id": {
+        "type": "string"
+       },
+       "finished_at": {
+        "type": "null|string"
+       },
+       "gate_decision": {
+        "type": "object"
+       },
+       "host_id": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "idempotency_key": {
+        "type": "null|string"
+       },
+       "payload": {
+        "type": "object"
+       },
+       "proposed_by_id": {
+        "type": "string"
+       },
+       "proposed_by_label": {
+        "type": "string"
+       },
+       "proposed_by_type": {
+        "type": "string"
+       },
+       "reason": {
+        "type": "string"
+       },
+       "result": {
+        "type": "object"
+       },
+       "risk": {
+        "type": "string"
+       },
+       "status": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/actions/{action_id}": {
+   "params": {
+    "path:action_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "action_type": {
+       "type": "string"
+      },
+      "approved_at": {
+       "type": "null|string"
+      },
+      "approved_by_label": {
+       "type": "null|string"
+      },
+      "approved_by_user_id": {
+       "type": "null|string"
+      },
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "executed_at": {
+       "type": "null|string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      },
+      "ext_id": {
+       "type": "string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "gate_decision": {
+       "type": "object"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "idempotency_key": {
+       "type": "null|string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "proposed_by_id": {
+       "type": "string"
+      },
+      "proposed_by_label": {
+       "type": "string"
+      },
+      "proposed_by_type": {
+       "type": "string"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "result": {
+       "type": "object"
+      },
+      "risk": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/app/changelog": {
+   "responses": {
+    "200": {
+     "fields": {
+      "build": {
+       "type": "null|string"
+      },
+      "current": {
+       "type": "string"
+      },
+      "unreleased": {
+       "items": {
+        "fields": {
+         "kind": {
+          "enum": [
+           "behoben",
+           "neu",
+           "sicherheit",
+           "verbessert"
+          ],
+          "type": "string"
+         },
+         "prs": {
+          "items": {
+           "type": "integer"
+          },
+          "type": "array"
+         },
+         "text": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "versions": {
+       "items": {
+        "fields": {
+         "date": {
+          "type": "string"
+         },
+         "entries": {
+          "items": {
+           "fields": {
+            "kind": {
+             "enum": [
+              "behoben",
+              "neu",
+              "sicherheit",
+              "verbessert"
+             ],
+             "type": "string"
+            },
+            "prs": {
+             "items": {
+              "type": "integer"
+             },
+             "type": "array"
+            },
+            "text": {
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "title": {
+          "type": "null|string"
+         },
+         "version": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/app/icon-{name}.png": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/app/manifest.webmanifest": {
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/apps": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "color": {
+        "type": "null|string"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "group": {
+        "type": "null|string"
+       },
+       "host": {
+        "type": "null|string"
+       },
+       "host_id": {
+        "type": "null|string"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "open_in_new_tab": {
+        "type": "boolean"
+       },
+       "sort_order": {
+        "type": "integer"
+       },
+       "updated_at": {
+        "type": "string"
+       },
+       "url": {
+        "type": "null|string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/audit": {
+   "params": {
+    "query:action": {
+     "type": "null|string"
+    },
+    "query:actor_type": {
+     "type": "null|string"
+    },
+    "query:correlation_id": {
+     "type": "null|string"
+    },
+    "query:exclude_action": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "query:limit": {
+     "type": "integer"
+    },
+    "query:offset": {
+     "type": "integer"
+    },
+    "query:outcome": {
+     "type": "null|string"
+    },
+    "query:since": {
+     "type": "null|string"
+    },
+    "query:target_id": {
+     "type": "null|string"
+    },
+    "query:target_type": {
+     "type": "null|string"
+    },
+    "query:until": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "action": {
+        "type": "string"
+       },
+       "actor_id": {
+        "type": "string"
+       },
+       "actor_type": {
+        "type": "string"
+       },
+       "correlation_id": {
+        "type": "null|string"
+       },
+       "detail": {
+        "type": "object"
+       },
+       "id": {
+        "type": "string"
+       },
+       "ip": {
+        "type": "null|string"
+       },
+       "outcome": {
+        "type": "string"
+       },
+       "reason": {
+        "type": "null|string"
+       },
+       "target_id": {
+        "type": "null|string"
+       },
+       "target_type": {
+        "type": "null|string"
+       },
+       "ts": {
+        "type": "string"
+       },
+       "user_agent": {
+        "type": "null|string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/audit/export": {
+   "params": {
+    "query:action": {
+     "type": "null|string"
+    },
+    "query:actor_type": {
+     "type": "null|string"
+    },
+    "query:outcome": {
+     "type": "null|string"
+    },
+    "query:since": {
+     "type": "null|string"
+    },
+    "query:until": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/auth/bootstrap": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/branding": {
+   "responses": {
+    "200": {
+     "fields": {
+      "colors": {
+       "fields": {
+        "accent": {
+         "type": "string"
+        },
+        "accent_strong": {
+         "type": "string"
+        },
+        "background": {
+         "type": "string"
+        },
+        "surface": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "favicon_url": {
+       "type": "null|string"
+      },
+      "login_subtitle": {
+       "type": "null|string"
+      },
+      "logo_url": {
+       "type": "null|string"
+      },
+      "product_name": {
+       "type": "string"
+      },
+      "short_name": {
+       "type": "string"
+      },
+      "support_url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/branding/logo": {
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/capabilities": {
+   "responses": {
+    "200": {
+     "fields": {
+      "api_version": {
+       "type": "string"
+      },
+      "extensions": {
+       "items": {
+        "fields": {
+         "icon": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "version": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "feature_flags": {
+       "type": "object"
+      },
+      "view_types": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/console/hosts": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/dashboard/layouts": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "is_default": {
+        "type": "boolean"
+       },
+       "items": {
+        "items": {
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "name": {
+        "type": "string"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/dashboard/layouts/{layout_id}": {
+   "params": {
+    "path:layout_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_default": {
+       "type": "boolean"
+      },
+      "items": {
+       "items": {
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "name": {
+       "type": "string"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/demo": {
+   "responses": {
+    "200": {
+     "fields": {
+      "active": {
+       "type": "boolean"
+      },
+      "apps": {
+       "type": "integer"
+      },
+      "hosts": {
+       "type": "integer"
+      },
+      "hosts_with_access": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "layout_replaced": {
+       "type": "boolean"
+      },
+      "notifications": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/connections": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "base_url": {
+        "type": "string"
+       },
+       "enabled": {
+        "type": "boolean"
+       },
+       "has_token": {
+        "type": "boolean"
+       },
+       "name": {
+        "type": "string"
+       },
+       "tls_insecure_skip_verify": {
+        "type": "boolean"
+       },
+       "token_id": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/inventory": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/jobs": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/jobs/{job_ref}/config": {
+   "params": {
+    "path:job_ref": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/jobs/{job_ref}/history": {
+   "params": {
+    "path:job_ref": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/unprotected": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/widgets/summary": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/documents/documents": {
+   "params": {
+    "query:q": {
+     "type": "null|string"
+    },
+    "query:tag_id": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "content_type": {
+        "type": "string"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "ocr_error": {
+        "type": "null|string"
+       },
+       "ocr_status": {
+        "type": "string"
+       },
+       "ocr_text": {
+        "type": "null|string"
+       },
+       "original_filename": {
+        "type": "string"
+       },
+       "page_count": {
+        "type": "integer|null"
+       },
+       "size_bytes": {
+        "type": "integer"
+       },
+       "tags": {
+        "items": {
+         "fields": {
+          "created_at": {
+           "type": "string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "match_keyword": {
+           "type": "null|string"
+          },
+          "name": {
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/documents/documents/{document_id}": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "content_type": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "ocr_error": {
+       "type": "null|string"
+      },
+      "ocr_status": {
+       "type": "string"
+      },
+      "ocr_text": {
+       "type": "null|string"
+      },
+      "original_filename": {
+       "type": "string"
+      },
+      "page_count": {
+       "type": "integer|null"
+      },
+      "size_bytes": {
+       "type": "integer"
+      },
+      "tags": {
+       "items": {
+        "fields": {
+         "created_at": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "match_keyword": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/documents/documents/{document_id}/download": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/ext/documents/tags": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "match_keyword": {
+        "type": "null|string"
+       },
+       "name": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/documents/widgets/untagged": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/gameserver/profiles": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/gameserver/servers": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/gameserver/servers/{host_id}": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/gameserver/servers/{host_id}/details": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:fresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/gameserver/widgets/servers": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/hello-world/protected-widget": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/hello-world/widgets/hello": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/categories": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/items": {
+   "params": {
+    "query:category_id": {
+     "type": "null|string"
+    },
+    "query:location_id": {
+     "type": "null|string"
+    },
+    "query:q": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "category_id": {
+        "type": "null|string"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "description": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "images": {
+        "items": {
+         "fields": {
+          "content_type": {
+           "type": "string"
+          },
+          "created_at": {
+           "type": "string"
+          },
+          "filename": {
+           "type": "string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "size_bytes": {
+           "type": "integer"
+          },
+          "url": {
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "location_id": {
+        "type": "null|string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "notes": {
+        "type": "null|string"
+       },
+       "purchase_date": {
+        "type": "null|string"
+       },
+       "purchase_price_cents": {
+        "type": "integer|null"
+       },
+       "quantity": {
+        "type": "integer"
+       },
+       "updated_at": {
+        "type": "string"
+       },
+       "warranty_until": {
+        "type": "null|string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/items/{item_id}": {
+   "params": {
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "category_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "images": {
+       "items": {
+        "fields": {
+         "content_type": {
+          "type": "string"
+         },
+         "created_at": {
+          "type": "string"
+         },
+         "filename": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "size_bytes": {
+          "type": "integer"
+         },
+         "url": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      },
+      "purchase_date": {
+       "type": "null|string"
+      },
+      "purchase_price_cents": {
+       "type": "integer|null"
+      },
+      "quantity": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      },
+      "warranty_until": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/items/{item_id}/images/{image_id}": {
+   "params": {
+    "path:image_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/locations": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "parent_id": {
+        "type": "null|string"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/widgets/warranty": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/network/npm": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/network/pihole": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/network/widgets/certificates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/network/widgets/pihole": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/ai/models": {
+   "params": {
+    "query:which": {
+     "enum": [
+      "failover",
+      "primary"
+     ],
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/audits": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/events": {
+   "params": {
+    "query:all": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/findings": {
+   "params": {
+    "query:status_filter": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/guard": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/scans": {
+   "params": {
+    "query:host": {
+     "type": "null|string"
+    },
+    "query:include_watch": {
+     "type": "boolean"
+    },
+    "query:limit": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/widgets/protection": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/defender/widgets/security": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/history": {
+   "params": {
+    "query:host": {
+     "type": "null|string"
+    },
+    "query:limit": {
+     "type": "integer"
+    },
+    "query:offset": {
+     "type": "integer"
+    },
+    "query:q": {
+     "type": "null|string"
+    },
+    "query:since": {
+     "type": "null|string"
+    },
+    "query:status": {
+     "type": "null|string"
+    },
+    "query:until": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/incidents": {
+   "params": {
+    "query:status_filter": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/stats": {
+   "responses": {
+    "200": {
+     "fields": {
+      "ai_configured": {
+       "type": "boolean"
+      },
+      "ai_healthy": {
+       "type": "boolean"
+      },
+      "ai_message": {
+       "type": "null|string"
+      },
+      "by_status": {
+       "type": "object"
+      },
+      "pending_batch": {
+       "type": "integer"
+      },
+      "watched_hosts": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nexus-soc/widgets/incidents": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/connections": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "base_url": {
+        "type": "string"
+       },
+       "enabled": {
+        "type": "boolean"
+       },
+       "has_token": {
+        "type": "boolean"
+       },
+       "name": {
+        "type": "string"
+       },
+       "tls_insecure_skip_verify": {
+        "type": "boolean"
+       },
+       "token_id": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/guests/{host_id}/details": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/guests/{host_id}/snapshots": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/nodes/{host_id}/health": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/storage": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/tasks": {
+   "params": {
+    "query:include_console": {
+     "type": "boolean"
+    },
+    "query:limit": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/tasks/{connection}/{node}/log": {
+   "params": {
+    "path:connection": {
+     "required": true,
+     "type": "string"
+    },
+    "path:node": {
+     "required": true,
+     "type": "string"
+    },
+    "query:upid": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/widgets/disks": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/widgets/node-load": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/widgets/overview": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/widgets/storage": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/widgets/updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/scripts/scripts": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "content": {
+        "type": "string"
+       },
+       "description": {
+        "type": "string"
+       },
+       "enabled": {
+        "type": "boolean"
+       },
+       "id": {
+        "type": "string"
+       },
+       "job_id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "params_schema": {
+        "type": "object"
+       },
+       "schedule": {
+        "type": "null|string"
+       },
+       "target": {
+        "type": "object"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/scripts/scripts/{script_id}": {
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "content": {
+       "type": "string"
+      },
+      "description": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "id": {
+       "type": "string"
+      },
+      "job_id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "params_schema": {
+       "type": "object"
+      },
+      "schedule": {
+       "type": "null|string"
+      },
+      "target": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/scripts/scripts/{script_id}/history": {
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:limit": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/scripts/scripts/{script_id}/runs": {
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:limit": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/scripts/widgets/overview": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/containers/{host_id}/{container}/image-update/plan": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/containers/{host_id}/{container}/inspect": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/containers/{host_id}/{container}/logs": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:follow": {
+     "type": "boolean"
+    },
+    "query:tail": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/docker": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/image-updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/stats": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/widgets/matrix": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/system/hosts/{host_id}/info": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/system/hosts/{host_id}/live": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/system/widgets/health": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/extensions": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "api_version": {
+        "type": "string"
+       },
+       "category": {
+        "type": "null|string"
+       },
+       "description": {
+        "type": "null|string"
+       },
+       "granted_permissions": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "has_settings": {
+        "type": "boolean"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "last_error": {
+        "type": "null|string"
+       },
+       "last_test": {
+        "type": "null|object"
+       },
+       "name": {
+        "type": "null|string"
+       },
+       "needs_setup": {
+        "type": "boolean"
+       },
+       "setup_reasons": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "sort_order": {
+        "type": "integer"
+       },
+       "source": {
+        "type": "string"
+       },
+       "state": {
+        "type": "string"
+       },
+       "version": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/extensions/{ext_id}": {
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "api_version": {
+       "type": "string"
+      },
+      "category": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "granted_permissions": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "has_settings": {
+       "type": "boolean"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "last_error": {
+       "type": "null|string"
+      },
+      "last_test": {
+       "type": "null|object"
+      },
+      "name": {
+       "type": "null|string"
+      },
+      "needs_setup": {
+       "type": "boolean"
+      },
+      "setup_reasons": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "sort_order": {
+       "type": "integer"
+      },
+      "source": {
+       "type": "string"
+      },
+      "state": {
+       "type": "string"
+      },
+      "version": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/extensions/{ext_id}/frontend/index.js": {
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/extensions/{ext_id}/settings": {
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "schema": {
+       "type": "null|object"
+      },
+      "secrets": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "null|string"
+         },
+         "is_set": {
+          "type": "boolean"
+         },
+         "item": {
+          "type": "null|string"
+         },
+         "label": {
+          "type": "string"
+         },
+         "optional": {
+          "type": "boolean"
+         },
+         "title": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "values": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/files/search": {
+   "params": {
+    "query:q": {
+     "required": true,
+     "type": "string"
+    },
+    "query:sources": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "entry": {
+        "fields": {
+         "is_dir": {
+          "type": "boolean"
+         },
+         "metadata": {
+          "type": "object"
+         },
+         "mime": {
+          "type": "null|string"
+         },
+         "modified_at": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "path": {
+          "type": "string"
+         },
+         "size": {
+          "type": "integer|null"
+         },
+         "sync_status": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "source_id": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/files/sources": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "caps": {
+        "fields": {
+         "mkdir": {
+          "type": "boolean"
+         },
+         "quota": {
+          "type": "boolean"
+         },
+         "range_read": {
+          "type": "boolean"
+         },
+         "remove": {
+          "type": "boolean"
+         },
+         "rename": {
+          "type": "boolean"
+         },
+         "search": {
+          "type": "boolean"
+         },
+         "sync_status": {
+          "type": "boolean"
+         },
+         "trash": {
+          "type": "boolean"
+         },
+         "write": {
+          "type": "boolean"
+         }
+        },
+        "type": "object"
+       },
+       "icon": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "source_id": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/files/{source_id}/download": {
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:path": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/files/{source_id}/info": {
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "deep_link": {
+       "type": "null|string"
+      },
+      "details": {
+       "type": "object"
+      },
+      "healthy": {
+       "type": "boolean"
+      },
+      "message": {
+       "type": "null|string"
+      },
+      "total_bytes": {
+       "type": "integer|null"
+      },
+      "used_bytes": {
+       "type": "integer|null"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/files/{source_id}/list": {
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:cursor": {
+     "type": "null|string"
+    },
+    "query:path": {
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/files/{source_id}/stat": {
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:path": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "is_dir": {
+       "type": "boolean"
+      },
+      "metadata": {
+       "type": "object"
+      },
+      "mime": {
+       "type": "null|string"
+      },
+      "modified_at": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "path": {
+       "type": "string"
+      },
+      "size": {
+       "type": "integer|null"
+      },
+      "sync_status": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/health": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/host-groups": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "description": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/hosts": {
+   "params": {
+    "query:group": {
+     "type": "null|string"
+    },
+    "query:status_": {
+     "type": "null|string"
+    },
+    "query:tag": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "address": {
+        "type": "string"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "credential": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "kind": {
+          "type": "string"
+         },
+         "port": {
+          "type": "integer"
+         },
+         "username": {
+          "type": "string"
+         }
+        },
+        "type": "null|object"
+       },
+       "display_name": {
+        "type": "string"
+       },
+       "enabled": {
+        "type": "boolean"
+       },
+       "id": {
+        "type": "string"
+       },
+       "is_managed": {
+        "type": "boolean"
+       },
+       "kind": {
+        "type": "null|string"
+       },
+       "last_seen_at": {
+        "type": "null|string"
+       },
+       "managed_tags": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "name": {
+        "type": "string"
+       },
+       "os_family": {
+        "type": "string"
+       },
+       "provider_ext_id": {
+        "type": "null|string"
+       },
+       "provider_ref": {
+        "type": "null|string"
+       },
+       "status": {
+        "type": "string"
+       },
+       "tags": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/hosts/metrics/latest": {
+   "responses": {
+    "200": {
+     "fields": {
+      "hosts": {
+       "type": "object"
+      },
+      "stale_after_s": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "address": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "credential": {
+       "fields": {
+        "id": {
+         "type": "string"
+        },
+        "kind": {
+         "type": "string"
+        },
+        "port": {
+         "type": "integer"
+        },
+        "username": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_managed": {
+       "type": "boolean"
+      },
+      "kind": {
+       "type": "null|string"
+      },
+      "last_seen_at": {
+       "type": "null|string"
+      },
+      "managed_tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "name": {
+       "type": "string"
+      },
+      "os_family": {
+       "type": "string"
+      },
+      "provider_ext_id": {
+       "type": "null|string"
+      },
+      "provider_ref": {
+       "type": "null|string"
+      },
+      "status": {
+       "type": "string"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/actions": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "action_type": {
+        "type": "string"
+       },
+       "command_field": {
+        "type": "null|string"
+       },
+       "confirm_text": {
+        "type": "null|string"
+       },
+       "default_risk": {
+        "type": "string"
+       },
+       "description": {
+        "type": "null|string"
+       },
+       "host_bound": {
+        "type": "boolean"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "params_schema": {
+        "type": "null|object"
+       },
+       "permissions": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "source": {
+        "enum": [
+         "global",
+         "host"
+        ],
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/credentials": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "host_id": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "is_default": {
+        "type": "boolean"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "port": {
+        "type": "integer"
+       },
+       "username": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/credentials/{credential_id}/setup": {
+   "params": {
+    "path:credential_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:groups": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array|null"
+    },
+    "query:sudo": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "fingerprint": {
+       "type": "string"
+      },
+      "groups": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "notes": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "one_liner": {
+       "type": "string"
+      },
+      "public_key": {
+       "type": "string"
+      },
+      "script": {
+       "type": "string"
+      },
+      "sudo": {
+       "type": "boolean"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/known-hosts": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "accepted_by_label": {
+        "type": "null|string"
+       },
+       "accepted_by_user_id": {
+        "type": "null|string"
+       },
+       "fingerprint": {
+        "type": "string"
+       },
+       "first_seen_at": {
+        "type": "string"
+       },
+       "key_type": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/metrics": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "sampled_at": {
+       "type": "string"
+      },
+      "values": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/metrics/history": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:range": {
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "max": {
+       "type": "object"
+      },
+      "range": {
+       "type": "string"
+      },
+      "series": {
+       "type": "object"
+      },
+      "source": {
+       "enum": [
+        "lattice",
+        "provider"
+       ],
+       "type": "string"
+      },
+      "step_s": {
+       "type": "integer"
+      },
+      "timestamps": {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/requirements": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "check_command": {
+        "type": "null|string"
+       },
+       "ext_id": {
+        "type": "string"
+       },
+       "fail_hint": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "needs_root": {
+        "type": "boolean"
+       },
+       "ok_text": {
+        "type": "string"
+       },
+       "order": {
+        "type": "integer"
+       },
+       "root_reason": {
+        "type": "null|string"
+       },
+       "unix_group": {
+        "type": "null|string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/status": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "checked_live": {
+       "type": "boolean"
+      },
+      "detail": {
+       "type": "null|string"
+      },
+      "last_seen_at": {
+       "type": "null|string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/hosts/{host_id}/tools": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "category": {
+        "type": "string"
+       },
+       "description": {
+        "type": "null|string"
+       },
+       "ext_id": {
+        "type": "string"
+       },
+       "href": {
+        "type": "string"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "order": {
+        "type": "integer"
+       },
+       "title": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/jobs": {
+   "params": {
+    "query:enabled": {
+     "type": "boolean|null"
+    },
+    "query:ext_id": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "enabled": {
+        "type": "boolean"
+       },
+       "ext_id": {
+        "type": "null|string"
+       },
+       "ext_job_key": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "next_run_at": {
+        "type": "null|string"
+       },
+       "params": {
+        "type": "object"
+       },
+       "schedule": {
+        "type": "string"
+       },
+       "target": {
+        "type": "object"
+       },
+       "timezone": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/jobs/{job_id}": {
+   "params": {
+    "path:job_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "ext_id": {
+       "type": "null|string"
+      },
+      "ext_job_key": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "kind": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "next_run_at": {
+       "type": "null|string"
+      },
+      "params": {
+       "type": "object"
+      },
+      "schedule": {
+       "type": "string"
+      },
+      "target": {
+       "type": "object"
+      },
+      "timezone": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/jobs/{job_id}/runs": {
+   "params": {
+    "path:job_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:limit": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "correlation_id": {
+        "type": "null|string"
+       },
+       "error": {
+        "type": "null|string"
+       },
+       "exit_code": {
+        "type": "integer|null"
+       },
+       "ext_id": {
+        "type": "null|string"
+       },
+       "finished_at": {
+        "type": "null|string"
+       },
+       "host_id": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "job_id": {
+        "type": "null|string"
+       },
+       "started_at": {
+        "type": "string"
+       },
+       "status": {
+        "type": "string"
+       },
+       "trigger": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/me": {
+   "responses": {
+    "200": {
+     "fields": {
+      "display_name": {
+       "type": "string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_owner": {
+       "type": "boolean"
+      },
+      "locale": {
+       "type": "string"
+      },
+      "permissions": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "recovery_codes_remaining": {
+       "type": "integer"
+      },
+      "timezone": {
+       "type": "string"
+      },
+      "totp_enabled": {
+       "type": "boolean"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/me/preferences": {
+   "responses": {
+    "200": {
+     "fields": {
+      "first_steps_dismissed": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/notifications": {
+   "params": {
+    "query:limit": {
+     "type": "integer"
+    },
+    "query:offset": {
+     "type": "integer"
+    },
+    "query:unread": {
+     "type": "boolean|null"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "body": {
+        "type": "string"
+       },
+       "correlation_id": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "payload": {
+        "type": "object"
+       },
+       "read_at": {
+        "type": "null|string"
+       },
+       "severity": {
+        "type": "string"
+       },
+       "source_ext_id": {
+        "type": "null|string"
+       },
+       "title": {
+        "type": "string"
+       },
+       "ts": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/notifications/unread-count": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/notifications/{notification_id}": {
+   "params": {
+    "path:notification_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "body": {
+       "type": "string"
+      },
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "read_at": {
+       "type": "null|string"
+      },
+      "severity": {
+       "type": "string"
+      },
+      "source_ext_id": {
+       "type": "null|string"
+      },
+      "title": {
+       "type": "string"
+      },
+      "ts": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/overview": {
+   "responses": {
+    "200": {
+     "fields": {
+      "apps": {
+       "items": {
+        "fields": {
+         "color": {
+          "type": "null|string"
+         },
+         "group": {
+          "type": "null|string"
+         },
+         "host": {
+          "type": "null|string"
+         },
+         "host_id": {
+          "type": "null|string"
+         },
+         "icon": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "image": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "open_in_new_tab": {
+          "type": "boolean"
+         },
+         "sort_order": {
+          "type": "integer|null"
+         },
+         "source": {
+          "type": "string"
+         },
+         "state": {
+          "type": "null|string"
+         },
+         "tone": {
+          "type": "null|string"
+         },
+         "url": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "attention": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "severity": {
+          "type": "string"
+         },
+         "source_ext_id": {
+          "type": "null|string"
+         },
+         "title": {
+          "type": "string"
+         },
+         "ts": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "backups": {
+       "fields": {
+        "failed": {
+         "type": "integer"
+        },
+        "failed_names": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "ok": {
+         "type": "integer"
+        },
+        "running": {
+         "type": "integer"
+        },
+        "total": {
+         "type": "integer"
+        },
+        "unknown": {
+         "type": "integer"
+        },
+        "unreachable_names": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "type": "null|object"
+      },
+      "errors": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "generated_at": {
+       "type": "number"
+      },
+      "pending_actions": {
+       "type": "integer"
+      },
+      "services": {
+       "items": {
+        "fields": {
+         "host": {
+          "type": "null|string"
+         },
+         "host_id": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "image": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "state": {
+          "type": "null|string"
+         },
+         "tone": {
+          "type": "null|string"
+         },
+         "url": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "services_running": {
+       "type": "integer"
+      },
+      "unread_notifications": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/pages": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "component": {
+        "type": "string"
+       },
+       "ext_id": {
+        "type": "string"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "mobile": {
+        "enum": [
+         "hidden",
+         "webview",
+         "widgets"
+        ],
+        "type": "string"
+       },
+       "nav_order": {
+        "type": "integer"
+       },
+       "nav_section": {
+        "type": "null|string"
+       },
+       "path": {
+        "type": "string"
+       },
+       "permissions": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "show_in_nav": {
+        "type": "boolean"
+       },
+       "title": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/roles": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "description": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "is_builtin": {
+        "type": "boolean"
+       },
+       "name": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/runs/{run_id}": {
+   "params": {
+    "path:run_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "error": {
+       "type": "null|string"
+      },
+      "exit_code": {
+       "type": "integer|null"
+      },
+      "ext_id": {
+       "type": "null|string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "job_id": {
+       "type": "null|string"
+      },
+      "started_at": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      },
+      "trigger": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/runs/{run_id}/output": {
+   "params": {
+    "path:run_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/secrets": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "created_by_user_id": {
+        "type": "null|string"
+       },
+       "description": {
+        "type": "string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "key_version": {
+        "type": "integer"
+       },
+       "kind": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "last_used_at": {
+        "type": "null|string"
+       },
+       "owner_ext_id": {
+        "type": "null|string"
+       },
+       "rotated_at": {
+        "type": "null|string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/settings": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "key": {
+        "type": "string"
+       },
+       "value": {
+        "type": "any"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/system/backups": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/system/backups/download-jobs/{job_id}": {
+   "params": {
+    "path:job_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/system/backups/download/{ticket}": {
+   "params": {
+    "path:ticket": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/system/backups/download/{ticket}/status": {
+   "params": {
+    "path:ticket": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/system/info": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/system/openapi.json": {
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/system/restore/status": {
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/system/updates": {
+   "responses": {
+    "200": {
+     "fields": {
+      "attempted_at": {
+       "type": "null|string"
+      },
+      "available": {
+       "type": "boolean"
+      },
+      "channel": {
+       "enum": [
+        "beta",
+        "stable"
+       ],
+       "type": "string"
+      },
+      "checked_at": {
+       "type": "null|string"
+      },
+      "current": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "error": {
+       "type": "null|string"
+      },
+      "helper": {
+       "type": "boolean"
+      },
+      "image": {
+       "type": "null|string"
+      },
+      "latest": {
+       "type": "null|string"
+      },
+      "latest_digest": {
+       "type": "null|string"
+      },
+      "official_image": {
+       "type": "boolean"
+      },
+      "official_image_name": {
+       "type": "string"
+      },
+      "release_notes_url": {
+       "type": "null|string"
+      },
+      "source": {
+       "enum": [
+        "cache",
+        "live",
+        "offline"
+       ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/terminal/hosts": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/users": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "display_name": {
+        "type": "string"
+       },
+       "email": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "is_active": {
+        "type": "boolean"
+       },
+       "is_owner": {
+        "type": "boolean"
+       },
+       "last_login_at": {
+        "type": "null|string"
+       },
+       "locale": {
+        "type": "string"
+       },
+       "roles": {
+        "items": {
+         "fields": {
+          "description": {
+           "type": "string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "is_builtin": {
+           "type": "boolean"
+          },
+          "name": {
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "totp_enabled": {
+        "type": "boolean"
+       },
+       "username": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/users/{user_id}": {
+   "params": {
+    "path:user_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_active": {
+       "type": "boolean"
+      },
+      "is_owner": {
+       "type": "boolean"
+      },
+      "last_login_at": {
+       "type": "null|string"
+      },
+      "locale": {
+       "type": "string"
+      },
+      "roles": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "is_builtin": {
+          "type": "boolean"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "totp_enabled": {
+       "type": "boolean"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/widgets": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "component": {
+        "type": "null|string"
+       },
+       "data_endpoint": {
+        "type": "string"
+       },
+       "default_enabled": {
+        "type": "boolean"
+       },
+       "description": {
+        "type": "null|string"
+       },
+       "ext_id": {
+        "type": "string"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "permissions": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "refresh": {
+        "fields": {
+         "interval_s": {
+          "type": "integer|null"
+         },
+         "ws_channel": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "size": {
+        "fields": {
+         "h": {
+          "type": "integer"
+         },
+         "min_h": {
+          "type": "integer"
+         },
+         "min_w": {
+          "type": "integer"
+         },
+         "w": {
+          "type": "integer"
+         }
+        },
+        "type": "object"
+       },
+       "title": {
+        "type": "string"
+       },
+       "view": {
+        "fields": {
+         "actions": {
+          "items": {
+           "fields": {
+            "body": {
+             "type": "null|object"
+            },
+            "confirm": {
+             "type": "boolean"
+            },
+            "confirm_text": {
+             "type": "null|string"
+            },
+            "endpoint": {
+             "type": "string"
+            },
+            "id": {
+             "type": "string"
+            },
+            "label": {
+             "type": "string"
+            },
+            "method": {
+             "enum": [
+              "DELETE",
+              "POST",
+              "PUT"
+             ],
+             "type": "string"
+            },
+            "permissions": {
+             "type": "array"
+            },
+            "show_if": {
+             "type": "null|string"
+            },
+            "style": {
+             "enum": [
+              "danger",
+              "primary",
+              "secondary"
+             ],
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "chart": {
+          "enum": [
+           "area",
+           "bar",
+           "line"
+          ],
+          "type": "string"
+         },
+         "columns": {
+          "items": {
+           "fields": {
+            "align": {
+             "enum": [
+              "center",
+              "left",
+              "right"
+             ],
+             "type": "string"
+            },
+            "field": {
+             "type": "string"
+            },
+            "label": {
+             "type": "string"
+            },
+            "template": {
+             "type": "null|string"
+            },
+            "width": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "content_field": {
+          "type": "string"
+         },
+         "delta": {
+          "type": "null|string"
+         },
+         "empty_text": {
+          "type": "string"
+         },
+         "follow": {
+          "type": "boolean"
+         },
+         "item": {
+          "fields": {
+           "actions": {
+            "items": {
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "badge": {
+            "type": "null|object"
+           },
+           "icon": {
+            "type": "null|string"
+           },
+           "subtitle": {
+            "type": "null|string"
+           },
+           "title": {
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "kind": {
+          "enum": [
+           "stat"
+          ],
+          "type": "string"
+         },
+         "label": {
+          "type": "null|string"
+         },
+         "lines_field": {
+          "type": "string"
+         },
+         "max_field": {
+          "type": "null|string"
+         },
+         "max_items": {
+          "type": "integer|null"
+         },
+         "max_lines": {
+          "type": "integer"
+         },
+         "max_value": {
+          "type": "number"
+         },
+         "row_actions": {
+          "items": {
+           "fields": {
+            "body": {
+             "type": "null|object"
+            },
+            "confirm": {
+             "type": "boolean"
+            },
+            "confirm_text": {
+             "type": "null|string"
+            },
+            "endpoint": {
+             "type": "string"
+            },
+            "id": {
+             "type": "string"
+            },
+            "label": {
+             "type": "string"
+            },
+            "method": {
+             "enum": [
+              "DELETE",
+              "POST",
+              "PUT"
+             ],
+             "type": "string"
+            },
+            "permissions": {
+             "type": "array"
+            },
+            "show_if": {
+             "type": "null|string"
+            },
+            "style": {
+             "enum": [
+              "danger",
+              "primary",
+              "secondary"
+             ],
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "series": {
+          "items": {
+           "fields": {
+            "field": {
+             "type": "string"
+            },
+            "label": {
+             "type": "string"
+            },
+            "tone": {
+             "enum": [
+              "accent",
+              "danger",
+              "good",
+              "neutral",
+              "warn"
+             ],
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "sparkline_field": {
+          "type": "null|string"
+         },
+         "tile_icon": {
+          "type": "null|string"
+         },
+         "tile_link": {
+          "type": "null|string"
+         },
+         "tile_subtitle": {
+          "type": "null|string"
+         },
+         "tile_title": {
+          "type": "string"
+         },
+         "tile_tone": {
+          "enum": [
+           "accent",
+           "danger",
+           "good",
+           "neutral",
+           "warn"
+          ],
+          "type": "string"
+         },
+         "tone": {
+          "enum": [
+           "accent",
+           "danger",
+           "good",
+           "neutral",
+           "warn"
+          ],
+          "type": "string"
+         },
+         "value": {
+          "type": "string"
+         },
+         "value_field": {
+          "type": "string"
+         },
+         "x_field": {
+          "type": "string"
+         },
+         "y_max": {
+          "type": "null|number"
+         },
+         "y_unit": {
+          "enum": [
+           "bytes",
+           "duration",
+           "number",
+           "percent"
+          ],
+          "type": "string"
+         }
+        },
+        "type": "object"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "PATCH /api/v1/apps/{app_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "color": {
+       "type": "null|string"
+      },
+      "group": {
+       "type": "null|string"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "null|string"
+      },
+      "open_in_new_tab": {
+       "type": "boolean|null"
+      },
+      "sort_order": {
+       "type": "integer|null"
+      },
+      "url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:app_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "color": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "group": {
+       "type": "null|string"
+      },
+      "host": {
+       "type": "null|string"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "open_in_new_tab": {
+       "type": "boolean"
+      },
+      "sort_order": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      },
+      "url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/ext/documents/documents/{document_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "original_filename": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "content_type": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "ocr_error": {
+       "type": "null|string"
+      },
+      "ocr_status": {
+       "type": "string"
+      },
+      "ocr_text": {
+       "type": "null|string"
+      },
+      "original_filename": {
+       "type": "string"
+      },
+      "page_count": {
+       "type": "integer|null"
+      },
+      "size_bytes": {
+       "type": "integer"
+      },
+      "tags": {
+       "items": {
+        "fields": {
+         "created_at": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "match_keyword": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/host-groups/{group_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "description": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:group_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "description": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/hosts/{host_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "address": {
+       "type": "null|string"
+      },
+      "display_name": {
+       "type": "null|string"
+      },
+      "enabled": {
+       "type": "boolean|null"
+      },
+      "is_managed": {
+       "type": "boolean|null"
+      },
+      "kind": {
+       "type": "null|string"
+      },
+      "os_family": {
+       "type": "null|string"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "address": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "credential": {
+       "fields": {
+        "id": {
+         "type": "string"
+        },
+        "kind": {
+         "type": "string"
+        },
+        "port": {
+         "type": "integer"
+        },
+        "username": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_managed": {
+       "type": "boolean"
+      },
+      "kind": {
+       "type": "null|string"
+      },
+      "last_seen_at": {
+       "type": "null|string"
+      },
+      "managed_tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "name": {
+       "type": "string"
+      },
+      "os_family": {
+       "type": "string"
+      },
+      "provider_ext_id": {
+       "type": "null|string"
+      },
+      "provider_ref": {
+       "type": "null|string"
+      },
+      "status": {
+       "type": "string"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/jobs/{job_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "enabled": {
+       "type": "boolean|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:job_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "ext_id": {
+       "type": "null|string"
+      },
+      "ext_job_key": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "kind": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "next_run_at": {
+       "type": "null|string"
+      },
+      "params": {
+       "type": "object"
+      },
+      "schedule": {
+       "type": "string"
+      },
+      "target": {
+       "type": "object"
+      },
+      "timezone": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/me": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "display_name": {
+       "type": "null|string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "locale": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "display_name": {
+       "type": "string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_owner": {
+       "type": "boolean"
+      },
+      "locale": {
+       "type": "string"
+      },
+      "permissions": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "recovery_codes_remaining": {
+       "type": "integer"
+      },
+      "timezone": {
+       "type": "string"
+      },
+      "totp_enabled": {
+       "type": "boolean"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/me/preferences": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "first_steps_dismissed": {
+       "type": "boolean|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "first_steps_dismissed": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PATCH /api/v1/users/{user_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "display_name": {
+       "type": "null|string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "is_active": {
+       "type": "boolean|null"
+      },
+      "password": {
+       "type": "null|string"
+      },
+      "role_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:user_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_active": {
+       "type": "boolean"
+      },
+      "is_owner": {
+       "type": "boolean"
+      },
+      "last_login_at": {
+       "type": "null|string"
+      },
+      "locale": {
+       "type": "string"
+      },
+      "roles": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "is_builtin": {
+          "type": "boolean"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "totp_enabled": {
+       "type": "boolean"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/actions/{action_id}/approve": {
+   "params": {
+    "path:action_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:wait": {
+     "type": "null|number"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "action_type": {
+       "type": "string"
+      },
+      "approved_at": {
+       "type": "null|string"
+      },
+      "approved_by_label": {
+       "type": "null|string"
+      },
+      "approved_by_user_id": {
+       "type": "null|string"
+      },
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "executed_at": {
+       "type": "null|string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      },
+      "ext_id": {
+       "type": "string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "gate_decision": {
+       "type": "object"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "idempotency_key": {
+       "type": "null|string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "proposed_by_id": {
+       "type": "string"
+      },
+      "proposed_by_label": {
+       "type": "string"
+      },
+      "proposed_by_type": {
+       "type": "string"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "result": {
+       "type": "object"
+      },
+      "risk": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/actions/{action_id}/dismiss": {
+   "params": {
+    "path:action_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "action_type": {
+       "type": "string"
+      },
+      "approved_at": {
+       "type": "null|string"
+      },
+      "approved_by_label": {
+       "type": "null|string"
+      },
+      "approved_by_user_id": {
+       "type": "null|string"
+      },
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "executed_at": {
+       "type": "null|string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      },
+      "ext_id": {
+       "type": "string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "gate_decision": {
+       "type": "object"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "idempotency_key": {
+       "type": "null|string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "proposed_by_id": {
+       "type": "string"
+      },
+      "proposed_by_label": {
+       "type": "string"
+      },
+      "proposed_by_type": {
+       "type": "string"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "result": {
+       "type": "object"
+      },
+      "risk": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/actions/{action_id}/reject": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "reason": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:action_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "action_type": {
+       "type": "string"
+      },
+      "approved_at": {
+       "type": "null|string"
+      },
+      "approved_by_label": {
+       "type": "null|string"
+      },
+      "approved_by_user_id": {
+       "type": "null|string"
+      },
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "executed_at": {
+       "type": "null|string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      },
+      "ext_id": {
+       "type": "string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "gate_decision": {
+       "type": "object"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "idempotency_key": {
+       "type": "null|string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "proposed_by_id": {
+       "type": "string"
+      },
+      "proposed_by_label": {
+       "type": "string"
+      },
+      "proposed_by_type": {
+       "type": "string"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "result": {
+       "type": "object"
+      },
+      "risk": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/apps": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "color": {
+       "type": "null|string"
+      },
+      "group": {
+       "type": "null|string"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "open_in_new_tab": {
+       "type": "boolean"
+      },
+      "sort_order": {
+       "type": "integer|null"
+      },
+      "url": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "color": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "group": {
+       "type": "null|string"
+      },
+      "host": {
+       "type": "null|string"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "open_in_new_tab": {
+       "type": "boolean"
+      },
+      "sort_order": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      },
+      "url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/auth/bootstrap": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "password": {
+       "required": true,
+       "type": "string"
+      },
+      "setup_code": {
+       "type": "string"
+      },
+      "username": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/auth/bootstrap/restart": {
+   "params": {
+    "header:x-setup-code": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/auth/bootstrap/restore/{restore_id}/inspect": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "password": {
+       "type": "null|string"
+      },
+      "recovery_key": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "header:x-setup-code": {
+     "type": "null|string"
+    },
+    "path:restore_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/auth/bootstrap/restore/{restore_id}/schedule": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "sign_out_all": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "header:x-setup-code": {
+     "type": "null|string"
+    },
+    "path:restore_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/auth/login": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "client_type": {
+       "enum": [
+        "android",
+        "cli",
+        "web"
+       ],
+       "type": "string"
+      },
+      "password": {
+       "required": true,
+       "type": "string"
+      },
+      "username": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/auth/logout": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "refresh_token": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/auth/mfa": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "code": {
+       "required": true,
+       "type": "string"
+      },
+      "mfa_token": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/auth/refresh": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "refresh_token": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/branding/logo": {
+   "responses": {
+    "200": {
+     "fields": {
+      "colors": {
+       "fields": {
+        "accent": {
+         "type": "string"
+        },
+        "accent_strong": {
+         "type": "string"
+        },
+        "background": {
+         "type": "string"
+        },
+        "surface": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "favicon_url": {
+       "type": "null|string"
+      },
+      "login_subtitle": {
+       "type": "null|string"
+      },
+      "logo_url": {
+       "type": "null|string"
+      },
+      "product_name": {
+       "type": "string"
+      },
+      "short_name": {
+       "type": "string"
+      },
+      "support_url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/console/sessions": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "password": {
+       "type": "null|string"
+      },
+      "protocol": {
+       "type": "string"
+      },
+      "session_id": {
+       "type": "string"
+      },
+      "ws_url": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/demo/seed": {
+   "responses": {
+    "200": {
+     "fields": {
+      "active": {
+       "type": "boolean"
+      },
+      "apps": {
+       "type": "integer"
+      },
+      "created": {
+       "type": "boolean"
+      },
+      "hosts": {
+       "type": "integer"
+      },
+      "hosts_with_access": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "layout_replaced": {
+       "type": "boolean"
+      },
+      "notifications": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/backups/connections": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "base_url": {
+       "required": true,
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean"
+      },
+      "token_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "base_url": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "has_token": {
+       "type": "boolean"
+      },
+      "name": {
+       "type": "string"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean"
+      },
+      "token_id": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/backups/connections/{name}/token": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/ext/backups/jobs/{job_ref}/edit": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "changes": {
+       "required": true,
+       "type": "object"
+      },
+      "ignore_space": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:job_ref": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/ext/backups/jobs/{job_ref}/retry": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "ignore_space": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:job_ref": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/ext/backups/unprotected/{connection}/{vmid}/job": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "ignore_space": {
+       "type": "boolean"
+      },
+      "values": {
+       "required": true,
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:connection": {
+     "required": true,
+     "type": "string"
+    },
+    "path:vmid": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/ext/documents/documents": {
+   "params": {
+    "query:filename": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "content_type": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "ocr_error": {
+       "type": "null|string"
+      },
+      "ocr_status": {
+       "type": "string"
+      },
+      "ocr_text": {
+       "type": "null|string"
+      },
+      "original_filename": {
+       "type": "string"
+      },
+      "page_count": {
+       "type": "integer|null"
+      },
+      "size_bytes": {
+       "type": "integer"
+      },
+      "tags": {
+       "items": {
+        "fields": {
+         "created_at": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "match_keyword": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/documents/documents/{document_id}/tags/{tag_id}": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:tag_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/ext/documents/tags": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "match_keyword": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "match_keyword": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/gameserver/servers/{host_id}/backup": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/gameserver/servers/{host_id}/restart": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/gameserver/servers/{host_id}/start": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/gameserver/servers/{host_id}/stop": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/hello-world/notify-test": {
+   "params": {
+    "query:host_id": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/hello-world/vault-use-and-fail": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/inventory/categories": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "name": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/inventory/items": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "category_id": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      },
+      "purchase_date": {
+       "type": "null|string"
+      },
+      "purchase_price_cents": {
+       "type": "integer|null"
+      },
+      "quantity": {
+       "type": "integer"
+      },
+      "warranty_until": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "category_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "images": {
+       "items": {
+        "fields": {
+         "content_type": {
+          "type": "string"
+         },
+         "created_at": {
+          "type": "string"
+         },
+         "filename": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "size_bytes": {
+          "type": "integer"
+         },
+         "url": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      },
+      "purchase_date": {
+       "type": "null|string"
+      },
+      "purchase_price_cents": {
+       "type": "integer|null"
+      },
+      "quantity": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      },
+      "warranty_until": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/inventory/items/{item_id}/images": {
+   "params": {
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "content_type": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "filename": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "size_bytes": {
+       "type": "integer"
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/inventory/locations": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "parent_id": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "parent_id": {
+       "type": "null|string"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/network/npm/hosts/{host_id}/disable": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/network/npm/hosts/{host_id}/enable": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/network/pihole/pause": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "minutes": {
+       "required": true,
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/network/pihole/resume": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nextcloud/token": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/chat": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "message": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/audits": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/briefing": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/events/acknowledge-all": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/events/{event_id}/acknowledge": {
+   "params": {
+    "path:event_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/findings/{finding_id}/ignore": {
+   "params": {
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/findings/{finding_id}/quarantine": {
+   "params": {
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/findings/{finding_id}/{action}": {
+   "params": {
+    "path:action": {
+     "enum": [
+      "delete",
+      "restore"
+     ],
+     "required": true,
+     "type": "string"
+    },
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/guard/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/hosts/{host_id}/ban": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "ip": {
+       "required": true,
+       "type": "string"
+      },
+      "jail": {
+       "type": "string"
+      },
+      "unban": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/hosts/{host_id}/install": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "package": {
+       "enum": [
+        "clamav",
+        "fail2ban",
+        "lynis",
+        "signatures",
+        "unattended"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/hosts/{host_id}/upgrade": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "mode": {
+       "enum": [
+        "all",
+        "cleanup",
+        "reboot",
+        "security"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/scans": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      },
+      "kind": {
+       "enum": [
+        "custom",
+        "deep",
+        "quick"
+       ],
+       "type": "string"
+      },
+      "paths": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/defender/updates/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/incidents/{incident_id}/confirm": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/incidents/{incident_id}/dismiss": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/incidents/{incident_id}/reopen": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/incidents/{incident_id}/resolve": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/nexus-soc/token": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/ext/ntfy/token": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/ext/proxmox/connections": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "base_url": {
+       "required": true,
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean"
+      },
+      "token_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "base_url": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "has_token": {
+       "type": "boolean"
+      },
+      "name": {
+       "type": "string"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean"
+      },
+      "token_id": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/proxmox/connections/{name}/token": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/ext/scripts/scripts/{script_id}/run": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "param_overrides": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/containers/{host_id}/{container}/image-update": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "plan_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/service-matrix/image-updates/check": {
+   "params": {
+    "query:force": {
+     "type": "boolean"
+    },
+    "query:host_id": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/system/hosts/{host_id}/services/restart": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "unit": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/extensions/{ext_id}/disable": {
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "api_version": {
+       "type": "string"
+      },
+      "category": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "granted_permissions": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "has_settings": {
+       "type": "boolean"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "last_error": {
+       "type": "null|string"
+      },
+      "last_test": {
+       "type": "null|object"
+      },
+      "name": {
+       "type": "null|string"
+      },
+      "needs_setup": {
+       "type": "boolean"
+      },
+      "setup_reasons": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "sort_order": {
+       "type": "integer"
+      },
+      "source": {
+       "type": "string"
+      },
+      "state": {
+       "type": "string"
+      },
+      "version": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/extensions/{ext_id}/enable": {
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "api_version": {
+       "type": "string"
+      },
+      "category": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "granted_permissions": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "has_settings": {
+       "type": "boolean"
+      },
+      "icon": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "last_error": {
+       "type": "null|string"
+      },
+      "last_test": {
+       "type": "null|object"
+      },
+      "name": {
+       "type": "null|string"
+      },
+      "needs_setup": {
+       "type": "boolean"
+      },
+      "setup_reasons": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "sort_order": {
+       "type": "integer"
+      },
+      "source": {
+       "type": "string"
+      },
+      "state": {
+       "type": "string"
+      },
+      "version": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/extensions/{ext_id}/test": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "mode": {
+       "enum": [
+        "connection",
+        "message"
+       ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "details": {
+       "items": {
+        "fields": {
+         "message": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "ok": {
+          "type": "boolean"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
+      "message": {
+       "type": "string"
+      },
+      "ok": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/files/transfer": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "from": {
+       "fields": {
+        "path": {
+         "required": true,
+         "type": "string"
+        },
+        "source": {
+         "required": true,
+         "type": "string"
+        }
+       },
+       "required": true,
+       "type": "object"
+      },
+      "to": {
+       "fields": {
+        "path": {
+         "required": true,
+         "type": "string"
+        },
+        "source": {
+         "required": true,
+         "type": "string"
+        }
+       },
+       "required": true,
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "run_id": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/files/{source_id}/mkdir": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "is_dir": {
+       "type": "boolean"
+      },
+      "metadata": {
+       "type": "object"
+      },
+      "mime": {
+       "type": "null|string"
+      },
+      "modified_at": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "path": {
+       "type": "string"
+      },
+      "size": {
+       "type": "integer|null"
+      },
+      "sync_status": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/files/{source_id}/remove": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "path": {
+       "required": true,
+       "type": "string"
+      },
+      "recursive": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/files/{source_id}/rename": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "dst": {
+       "required": true,
+       "type": "string"
+      },
+      "src": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "is_dir": {
+       "type": "boolean"
+      },
+      "metadata": {
+       "type": "object"
+      },
+      "mime": {
+       "type": "null|string"
+      },
+      "modified_at": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "path": {
+       "type": "string"
+      },
+      "size": {
+       "type": "integer|null"
+      },
+      "sync_status": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/files/{source_id}/upload": {
+   "params": {
+    "path:source_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:path": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "is_dir": {
+       "type": "boolean"
+      },
+      "metadata": {
+       "type": "object"
+      },
+      "mime": {
+       "type": "null|string"
+      },
+      "modified_at": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "path": {
+       "type": "string"
+      },
+      "size": {
+       "type": "integer|null"
+      },
+      "sync_status": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/host-groups": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "description": {
+       "type": "string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "description": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/host-groups/{group_id}/members/{host_id}": {
+   "params": {
+    "path:group_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/hosts": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "address": {
+       "required": true,
+       "type": "string"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "kind": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "os_family": {
+       "type": "string"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "address": {
+       "type": "string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "credential": {
+       "fields": {
+        "id": {
+         "type": "string"
+        },
+        "kind": {
+         "type": "string"
+        },
+        "port": {
+         "type": "integer"
+        },
+        "username": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_managed": {
+       "type": "boolean"
+      },
+      "kind": {
+       "type": "null|string"
+      },
+      "last_seen_at": {
+       "type": "null|string"
+      },
+      "managed_tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "name": {
+       "type": "string"
+      },
+      "os_family": {
+       "type": "string"
+      },
+      "provider_ext_id": {
+       "type": "null|string"
+      },
+      "provider_ref": {
+       "type": "null|string"
+      },
+      "status": {
+       "type": "string"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/actions/{action_type}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "reason": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:action_type": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:wait": {
+     "type": "null|number"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "action_type": {
+       "type": "string"
+      },
+      "approved_at": {
+       "type": "null|string"
+      },
+      "approved_by_label": {
+       "type": "null|string"
+      },
+      "approved_by_user_id": {
+       "type": "null|string"
+      },
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "executed_at": {
+       "type": "null|string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      },
+      "ext_id": {
+       "type": "string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "gate_decision": {
+       "type": "object"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "idempotency_key": {
+       "type": "null|string"
+      },
+      "payload": {
+       "type": "object"
+      },
+      "proposed_by_id": {
+       "type": "string"
+      },
+      "proposed_by_label": {
+       "type": "string"
+      },
+      "proposed_by_type": {
+       "type": "string"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "result": {
+       "type": "object"
+      },
+      "risk": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "credential_id": {
+       "type": "null|string"
+      }
+     },
+     "type": "null|object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "checked_at": {
+       "type": "string"
+      },
+      "credential_id": {
+       "type": "null|string"
+      },
+      "host_key": {
+       "fields": {
+        "expected": {
+         "type": "null|string"
+        },
+        "fingerprint": {
+         "type": "string"
+        },
+        "key_type": {
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "changed",
+          "known",
+          "new"
+         ],
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "items": {
+       "items": {
+        "fields": {
+         "detail": {
+          "type": "string"
+         },
+         "hint": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "label": {
+          "type": "string"
+         },
+         "status": {
+          "enum": [
+           "confirm",
+           "fail",
+           "ok",
+           "skipped",
+           "warn"
+          ],
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "ok": {
+       "type": "boolean"
+      },
+      "os": {
+       "fields": {
+        "arch": {
+         "type": "null|string"
+        },
+        "model": {
+         "type": "null|string"
+        },
+        "pretty_name": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/credentials": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "is_default": {
+       "type": "boolean"
+      },
+      "kind": {
+       "enum": [
+        "api_token",
+        "ssh_key",
+        "ssh_password"
+       ],
+       "required": true,
+       "type": "string"
+      },
+      "port": {
+       "type": "integer"
+      },
+      "secret_value": {
+       "required": true,
+       "type": "string"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "host_id": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_default": {
+       "type": "boolean"
+      },
+      "kind": {
+       "type": "string"
+      },
+      "port": {
+       "type": "integer"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/credentials/generate-key": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "port": {
+       "type": "integer"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "credential": {
+       "fields": {
+        "created_at": {
+         "type": "string"
+        },
+        "host_id": {
+         "type": "string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "is_default": {
+         "type": "boolean"
+        },
+        "kind": {
+         "type": "string"
+        },
+        "port": {
+         "type": "integer"
+        },
+        "username": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "fingerprint": {
+       "type": "string"
+      },
+      "public_key": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/credentials/{credential_id}/make-default": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "delete_previous": {
+       "type": "boolean"
+      }
+     },
+     "type": "null|object"
+    }
+   },
+   "params": {
+    "path:credential_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "host_id": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_default": {
+       "type": "boolean"
+      },
+      "kind": {
+       "type": "string"
+      },
+      "notice": {
+       "type": "null|string"
+      },
+      "port": {
+       "type": "integer"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/hosts/{host_id}/known-hosts": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "fingerprint": {
+       "required": true,
+       "type": "string"
+      },
+      "key_type": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "accepted_by_label": {
+       "type": "null|string"
+      },
+      "accepted_by_user_id": {
+       "type": "null|string"
+      },
+      "fingerprint": {
+       "type": "string"
+      },
+      "first_seen_at": {
+       "type": "string"
+      },
+      "key_type": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/jobs/{job_id}/run": {
+   "params": {
+    "path:job_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "correlation_id": {
+       "type": "null|string"
+      },
+      "error": {
+       "type": "null|string"
+      },
+      "exit_code": {
+       "type": "integer|null"
+      },
+      "ext_id": {
+       "type": "null|string"
+      },
+      "finished_at": {
+       "type": "null|string"
+      },
+      "host_id": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "job_id": {
+       "type": "null|string"
+      },
+      "started_at": {
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      },
+      "trigger": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/me/password": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "required": true,
+       "type": "string"
+      },
+      "new_password": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "POST /api/v1/me/recovery-codes": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "recovery_codes": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/me/totp/confirm": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "code": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "recovery_codes": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/me/totp/setup": {
+   "responses": {
+    "200": {
+     "fields": {
+      "otpauth_uri": {
+       "type": "string"
+      },
+      "secret": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/notifications/read": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "ids": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/notifications/read-all": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/runs/{run_id}/cancel": {
+   "params": {
+    "path:run_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/secrets": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "description": {
+       "type": "string"
+      },
+      "kind": {
+       "enum": [
+        "api_token",
+        "generic",
+        "password",
+        "ssh_private_key",
+        "totp"
+       ],
+       "required": true,
+       "type": "string"
+      },
+      "label": {
+       "required": true,
+       "type": "string"
+      },
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "created_by_user_id": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "key_version": {
+       "type": "integer"
+      },
+      "kind": {
+       "type": "string"
+      },
+      "label": {
+       "type": "string"
+      },
+      "last_used_at": {
+       "type": "null|string"
+      },
+      "owner_ext_id": {
+       "type": "null|string"
+      },
+      "rotated_at": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/system/backups/download": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "mode": {
+       "enum": [
+        "passwort",
+        "schluessel"
+       ],
+       "required": true,
+       "type": "string"
+      },
+      "password": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/system/backups/run": {
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/system/backups/{name}/ticket": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/system/backups/{name}/verify": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/system/restart": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/system/restore/{restore_id}/inspect": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "password": {
+       "type": "null|string"
+      },
+      "recovery_key": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:restore_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/system/restore/{restore_id}/schedule": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "sign_out_all": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:restore_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/system/updates/check": {
+   "responses": {
+    "200": {
+     "fields": {
+      "attempted_at": {
+       "type": "null|string"
+      },
+      "available": {
+       "type": "boolean"
+      },
+      "channel": {
+       "enum": [
+        "beta",
+        "stable"
+       ],
+       "type": "string"
+      },
+      "checked_at": {
+       "type": "null|string"
+      },
+      "current": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "error": {
+       "type": "null|string"
+      },
+      "helper": {
+       "type": "boolean"
+      },
+      "image": {
+       "type": "null|string"
+      },
+      "latest": {
+       "type": "null|string"
+      },
+      "latest_digest": {
+       "type": "null|string"
+      },
+      "official_image": {
+       "type": "boolean"
+      },
+      "official_image_name": {
+       "type": "string"
+      },
+      "release_notes_url": {
+       "type": "null|string"
+      },
+      "source": {
+       "enum": [
+        "cache",
+        "live",
+        "offline"
+       ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/terminal/sessions": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "cols": {
+       "type": "integer"
+      },
+      "host_id": {
+       "required": true,
+       "type": "string"
+      },
+      "rows": {
+       "type": "integer"
+      },
+      "user": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "session_id": {
+       "type": "string"
+      },
+      "ws_url": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/users": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "display_name": {
+       "type": "string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "password": {
+       "required": true,
+       "type": "string"
+      },
+      "role_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "username": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "display_name": {
+       "type": "string"
+      },
+      "email": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_active": {
+       "type": "boolean"
+      },
+      "is_owner": {
+       "type": "boolean"
+      },
+      "last_login_at": {
+       "type": "null|string"
+      },
+      "locale": {
+       "type": "string"
+      },
+      "roles": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "is_builtin": {
+          "type": "boolean"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "totp_enabled": {
+       "type": "boolean"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/users/{user_id}/reset-2fa": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:user_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "PUT /api/v1/apps/order": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "ids": {
+       "items": {
+        "type": "string"
+       },
+       "required": true,
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "color": {
+        "type": "null|string"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "group": {
+        "type": "null|string"
+       },
+       "host": {
+        "type": "null|string"
+       },
+       "host_id": {
+        "type": "null|string"
+       },
+       "icon": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "open_in_new_tab": {
+        "type": "boolean"
+       },
+       "sort_order": {
+        "type": "integer"
+       },
+       "updated_at": {
+        "type": "string"
+       },
+       "url": {
+        "type": "null|string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "PUT /api/v1/auth/bootstrap/restore/upload": {
+   "params": {
+    "header:x-setup-code": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "201": {
+     "type": "any"
+    }
+   }
+  },
+  "PUT /api/v1/branding": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "colors": {
+       "fields": {
+        "accent": {
+         "type": "string"
+        },
+        "accent_strong": {
+         "type": "string"
+        },
+        "background": {
+         "type": "string"
+        },
+        "surface": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "favicon_url": {
+       "type": "null|string"
+      },
+      "login_subtitle": {
+       "type": "null|string"
+      },
+      "logo_url": {
+       "type": "null|string"
+      },
+      "product_name": {
+       "required": true,
+       "type": "string"
+      },
+      "short_name": {
+       "required": true,
+       "type": "string"
+      },
+      "support_url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "colors": {
+       "fields": {
+        "accent": {
+         "type": "string"
+        },
+        "accent_strong": {
+         "type": "string"
+        },
+        "background": {
+         "type": "string"
+        },
+        "surface": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "favicon_url": {
+       "type": "null|string"
+      },
+      "login_subtitle": {
+       "type": "null|string"
+      },
+      "logo_url": {
+       "type": "null|string"
+      },
+      "product_name": {
+       "type": "string"
+      },
+      "short_name": {
+       "type": "string"
+      },
+      "support_url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/dashboard/layouts/{layout_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "items": {
+       "items": {
+        "type": "object"
+       },
+       "type": "array|null"
+      },
+      "name": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:layout_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "is_default": {
+       "type": "boolean"
+      },
+      "items": {
+       "items": {
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "name": {
+       "type": "string"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/backups/connections/{name}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "base_url": {
+       "type": "null|string"
+      },
+      "enabled": {
+       "type": "boolean|null"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean|null"
+      },
+      "token_id": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "base_url": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "has_token": {
+       "type": "boolean"
+      },
+      "name": {
+       "type": "string"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean"
+      },
+      "token_id": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/backups/unprotected/{connection}/{vmid}/acknowledged": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "note": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:connection": {
+     "required": true,
+     "type": "string"
+    },
+    "path:vmid": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "PUT /api/v1/ext/gameserver/servers/{host_id}/config": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "profile": {
+       "required": true,
+       "type": "string"
+      },
+      "values": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/inventory/items/{item_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "category_id": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      },
+      "purchase_date": {
+       "type": "null|string"
+      },
+      "purchase_price_cents": {
+       "type": "integer|null"
+      },
+      "quantity": {
+       "type": "integer"
+      },
+      "warranty_until": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "category_id": {
+       "type": "null|string"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "images": {
+       "items": {
+        "fields": {
+         "content_type": {
+          "type": "string"
+         },
+         "created_at": {
+          "type": "string"
+         },
+         "filename": {
+          "type": "string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "size_bytes": {
+          "type": "integer"
+         },
+         "url": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      },
+      "purchase_date": {
+       "type": "null|string"
+      },
+      "purchase_price_cents": {
+       "type": "integer|null"
+      },
+      "quantity": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      },
+      "warranty_until": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/proxmox/connections/{name}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "base_url": {
+       "type": "null|string"
+      },
+      "enabled": {
+       "type": "boolean|null"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean|null"
+      },
+      "token_id": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "base_url": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "has_token": {
+       "type": "boolean"
+      },
+      "name": {
+       "type": "string"
+      },
+      "tls_insecure_skip_verify": {
+       "type": "boolean"
+      },
+      "token_id": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/scripts/scripts/{script_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "content": {
+       "required": true,
+       "type": "string"
+      },
+      "description": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "params_schema": {
+       "type": "object"
+      },
+      "schedule": {
+       "type": "null|string"
+      },
+      "target": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:create": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "content": {
+       "type": "string"
+      },
+      "description": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "id": {
+       "type": "string"
+      },
+      "job_id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "params_schema": {
+       "type": "object"
+      },
+      "schedule": {
+       "type": "null|string"
+      },
+      "target": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/extensions/{ext_id}/secrets": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "label": {
+       "required": true,
+       "type": "string"
+      },
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "PUT /api/v1/extensions/{ext_id}/settings": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "values": {
+       "required": true,
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:ext_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "schema": {
+       "type": "null|object"
+      },
+      "secrets": {
+       "items": {
+        "fields": {
+         "description": {
+          "type": "null|string"
+         },
+         "is_set": {
+          "type": "boolean"
+         },
+         "item": {
+          "type": "null|string"
+         },
+         "label": {
+          "type": "string"
+         },
+         "optional": {
+          "type": "boolean"
+         },
+         "title": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "values": {
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/secrets/{secret_id}/value": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:secret_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "PUT /api/v1/settings/{key}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "any"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:key": {
+     "enum": [
+      "audit.retention_days",
+      "autonomy.max_risk",
+      "autonomy.mode",
+      "hosts.reachability.enabled",
+      "hosts.reachability.interval_minutes",
+      "jobs.run_retention_days",
+      "maintenance.windows",
+      "security.deny_patterns",
+      "system.timezone",
+      "system.update_check.channel",
+      "system.update_check.enabled"
+     ],
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "key": {
+       "type": "string"
+      },
+      "value": {
+       "type": "any"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/system/backups/config": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "dir": {
+       "type": "null|string"
+      },
+      "enabled": {
+       "required": true,
+       "type": "boolean"
+      },
+      "include_runs": {
+       "type": "boolean"
+      },
+      "keep": {
+       "required": true,
+       "type": "integer"
+      },
+      "schedule": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/system/backups/key": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "password": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "PUT /api/v1/system/restore/upload": {
+   "params": {
+    "header:x-confirm-password": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "201": {
+     "type": "any"
+    }
+   }
+  }
+ },
+ "format": 1
+}

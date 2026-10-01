@@ -1,0 +1,25 @@
+# Ausnahmeliste für Brüche der Abwärtskompatibilität (Nodvard Link, docs/04-API.md
+# "Kompatibilität"). Anfangs leer -- und das soll so bleiben. Ein Bruch ist nur in
+# Ausnahmefällen erlaubt und braucht hier einen Eintrag MIT Begründung:
+#
+# [[ausnahmen]]
+# pfad = "/api/v1/beispiel"          # API-Pfad, bei SDK-Brüchen der Name (nodvard_sdk.Name)
+# methode = "GET"                    # GET/POST/PUT/PATCH/DELETE, beim SDK "SDK"
+# art = "antwortfeld_entfernt"       # Schlüssel aus KINDS in contract_lib.py
+# ziel = "200.altes_feld"            # optional: nur genau dieses Feld/Parameter; leer = alle dieser Art
+# begruendung = "Warum der Bruch nötig ist und warum keine Übergangslösung geht."
+
+# --- PR #64 (Sicherheit & Rettung) --------------------------------------------------------
+
+[[ausnahmen]]
+pfad = "/api/v1/me/totp"
+methode = "DELETE"
+art = "body_pflicht"
+begruendung = "Bewusste Sicherheitsverschärfung (PR #64): Wer die Zwei-Faktor-Anmeldung abschaltet, muss sein aktuelles Passwort mitschicken ({current_password}), damit eine gestohlene Sitzung allein sie nicht abschalten kann. Ohne Body geht es nicht mehr; eine Übergangslösung würde genau die Lücke offen lassen. Die Web-Oberfläche schickt das Passwort bereits, die App gibt es noch nicht."
+
+[[ausnahmen]]
+pfad = "/api/v1/me/totp/confirm"
+methode = "POST"
+art = "antwortstatus_entfernt"
+ziel = "204"
+begruendung = "PR #64: Beim Scharfschalten der Zwei-Faktor-Anmeldung liefert die Antwort jetzt einmalig die ersten Wiederherstellungs-Codes und ist deshalb 200 mit Body statt 204 ohne Inhalt. Die Codes dürfen nur in genau dieser Antwort erscheinen, ein eigener Zusatz-Endpunkt wäre unsicherer. Clients, die nur auf 'erfolgreich' (2xx) prüfen, merken nichts."

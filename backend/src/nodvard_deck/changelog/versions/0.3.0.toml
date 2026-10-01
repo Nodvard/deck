@@ -1,0 +1,55 @@
+version = "0.3.0"
+date = "2026-09-30"
+title = "Aktionen im Hintergrund"
+
+[[entries]]
+kind = "neu"
+text = "Bestätigte Aktionen laufen im Hintergrund: Bestätigen wartet höchstens 20 Sekunden, danach steht „Läuft im Hintergrund“, und die Seite fragt selbst nach und zeigt am Ende das Ergebnis, statt mit „NetworkError“ abzubrechen."
+
+[[entries]]
+kind = "neu"
+text = "Hängt eine Aktion länger als 60 Minuten, endet sie als fehlgeschlagen; wird das Dashboard währenddessen neu gestartet, steht „Ausgang unbekannt, bitte auf dem Server prüfen“, und ein zweiter Klick auf eine schon laufende Aktion gibt keinen Fehler mehr."
+
+[[entries]]
+kind = "neu"
+text = "Updates laufen jetzt auf dem Server selbst weiter, auch wenn die Verbindung abreißt oder das Dashboard neu startet; das Dashboard fragt kurz nach, meldet das Ergebnis per Push und lehnt einen zweiten Lauf auf demselben Server ab."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Aktionen-Seite lassen sich mehrere wartende Aktionen auswählen und gemeinsam freigeben oder verwerfen, jede wird einzeln geprüft, und danach steht eine Zusammenfassung da."
+
+[[entries]]
+kind = "neu"
+text = "Geplante Skripte auf „Alle Server“ oder einer Gruppe melden übersprungene Server nur einmal per Push und danach nur noch, wenn ein Server dazukommt oder sich der Grund ändert."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox: Neue Aktion „Herunterfahren“ für VMs und Container fährt das Betriebssystem sauber herunter, „Hart ausschalten“ steht ganz hinten und ist rot, und läuft der Gast nach der Wartezeit noch, steht das ehrlich dabei."
+
+[[entries]]
+kind = "neu"
+text = "System: Dienste lassen sich über die Freigabe neu starten, bei fehlgeschlagenen Diensten und in einer einklappbaren Liste der laufenden Dienste; SSH, systemd, Netzwerk-Dienste und Nodvard Deck selbst sind dabei gesperrt."
+
+[[entries]]
+kind = "neu"
+text = "Markierungen (Tags) eines Servers lassen sich nachträglich ändern, damit auch aus Proxmox eingelesene VMs in Service-Matrix („docker“) und Gameserver („gameserver“) auftauchen."
+
+[[entries]]
+kind = "behoben"
+text = "Der Einbruchschutz meldet nach einem Neustart nicht mehr „Neuer offener Port“ für Dienste, die bei jedem Neustart einen anderen Port nehmen (zum Beispiel für Netzlaufwerke); welche Dienste das sind, ist unter „Erweitert“ einstellbar."
+
+[[entries]]
+kind = "behoben"
+text = "Erneuern zwei Tabs fast gleichzeitig ihre Anmeldung, wird der zweite nicht mehr abgemeldet."
+
+[[entries]]
+kind = "sicherheit"
+text = "Als geheim markierte Skript-Parameter (zum Beispiel API-Keys) stehen nicht mehr im Klartext in Aktionen, Läufen und Ereignissen, sondern werden erst beim Ausführen aus dem Tresor geholt."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungsseiten holen sich bei abgelaufener Anmeldung selbst eine neue, statt „Nicht authentifiziert“ zu zeigen, auch bei Download, Vorschau und Fotos."
+
+[[entries]]
+kind = "verbessert"
+text = "Alle Erweiterungsseiten (Proxmox, Backups, Service-Matrix, Gameserver, System, Skripte, Nodvard Shield, Netzwerk, Dokumente, Inventar) nutzen denselben Ablauf für Aktionen mit Nachfragen bei langer Laufzeit, und lange Skripte halten den Knopf nicht mehr fest."

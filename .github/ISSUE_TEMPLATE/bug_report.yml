@@ -1,0 +1,54 @@
+name: Bug report
+description: Something does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! Please **do not** post security issues here — see SECURITY.md.
+        Remove passwords, tokens and internal addresses from logs before posting.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Click ...
+        3. See error ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nodvard Deck version
+      description: The image tag you use, or the "version" field of /api/v1/health.
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Docker on Raspberry Pi (arm64)
+        - Docker on x86-64
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: extension
+    attributes:
+      label: Affected extension
+      placeholder: e.g. Proxmox VE, Service Matrix, core
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Output of `docker compose logs nodvard-deck` around the error.
+      render: text

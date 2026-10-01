@@ -1,0 +1,103 @@
+version = "0.4.0"
+date = "2026-09-30"
+title = "Image-Updates und Feinschliff"
+
+[[entries]]
+kind = "behoben"
+text = "Updates aus der Update-Zentrale werden nicht mehr nach etwa 10 Sekunden fälschlich als „abgebrochen“ gemeldet, obwohl sie auf dem Server weiterliefen."
+
+[[entries]]
+kind = "behoben"
+text = "Der Deploy vom PC bricht nach dem Werkzeug-Update nicht mehr ab, weil alte lokale Dateien vom PC in den Docker-Bau gerutscht sind."
+
+[[entries]]
+kind = "behoben"
+text = "Ein kurzer Serverausfall, zum Beispiel beim Deploy, meldet dich nicht mehr ab: Das Dashboard versucht es von selbst weiter und zeigt „Server nicht erreichbar – neuer Versuch …“ statt der Anmeldeseite."
+
+[[entries]]
+kind = "behoben"
+text = "Links mit ?tab= und ?host= auf Nodvard Shield wechseln jetzt auch auf der schon offenen Seite den Reiter und den Server-Filter, der Reiter bleibt in der Adresszeile (Neuladen und Zurück-Taste gehen), und ein Klick auf „Nodvard Shield“ im Menü setzt die Seite auf die Übersicht zurück."
+
+[[entries]]
+kind = "neu"
+text = "Service-Matrix zeigt in der neuen Spalte „Image-Update“, ob es für einen laufenden Container ein neueres Image gibt (aktuell, Update verfügbar oder nicht prüfbar mit Grund); geprüft wird nur lesend, nichts wird heruntergeladen oder neu gestartet."
+
+[[entries]]
+kind = "neu"
+text = "Auf Wunsch prüft ein Tagesjob (standardmäßig aus, 06:30) auf neue Image-Versionen und schickt genau eine Push-Nachricht, wenn etwas Neues dazukommt."
+
+[[entries]]
+kind = "neu"
+text = "Neue Option in Nodvard Shield (standardmäßig aus): Der Echtzeit-Wächter fragt den laufenden ClamAV-Dienst, statt jedes Mal die ganze Signaturdatenbank zu laden, und fällt ohne laufenden Dienst automatisch auf das bisherige Verfahren zurück."
+
+[[entries]]
+kind = "neu"
+text = "Neue Option in Nodvard Shield (standardmäßig aus): „Alle Updates“ läuft auf Proxmox-Servern so, dass auch die großen Proxmox-Updates eingespielt werden, die sonst liegen bleiben; die Aktion gilt dann als Risiko „Hoch“, und automatische Updates nehmen es nie."
+
+[[entries]]
+kind = "verbessert"
+text = "Nach einem Update zeigt die Zusammenfassung, welche Pakete zurückgehalten wurden."
+
+[[entries]]
+kind = "verbessert"
+text = "Auf der Aktionen-Seite steht bei „Vorgeschlagen von“ der Name (Benutzername, Erweiterung, System, Zeitplan oder KI) statt einer Kennung, Betrachter sehen die Namen anderer Nutzer aber weiterhin nicht."
+
+[[entries]]
+kind = "verbessert"
+text = "Wartungsfenster stellen jetzt auch Meldungen des Proxmox-Wächters und von Nodvard Shield stumm (sie stehen weiter im Meldungsverlauf), nur Schadsoftware-Funde, kritische Einbruchschutz-Ereignisse und das Morgen-Briefing kommen immer als Push."
+
+[[entries]]
+kind = "behoben"
+text = "Ein Passwortwechsel meldet die aktuelle Sitzung nicht mehr ab, wenn ein anderer Tab vorher die Anmeldung erneuert hat."
+
+[[entries]]
+kind = "behoben"
+text = "Ist ein Server bei einem Update nicht erreichbar, scheitert es nach 3 Minuten statt nach 45, und der Server bleibt danach nicht gesperrt."
+
+[[entries]]
+kind = "behoben"
+text = "„Jetzt ausführen“ eines Skripts auf mehreren Servern hängt nicht mehr für jeden Server 20 Sekunden, die Freigabe läuft ohne Wartezeit und die Ergebnisse kommen einzeln nach."
+
+[[entries]]
+kind = "behoben"
+text = "Auf dem Dashboard-Server gibt es für docker und containerd keinen „Neu starten“-Knopf mehr, weil der das Dashboard selbst beenden würde."
+
+[[entries]]
+kind = "behoben"
+text = "Proxmox: Jede Aktion sperrt nur noch ihren eigenen Knopf und behält ihre Meldung, auch wenn mehrere Gäste gleichzeitig herunterfahren, und Fehlermeldungen nennen den Server."
+
+[[entries]]
+kind = "behoben"
+text = "Fällt ntfy genau dann aus, wenn ein Skript neue übersprungene Server meldet, geht der Hinweis nicht mehr verloren, sondern wird beim nächsten Lauf erneut versucht (höchstens 3 Mal)."
+
+[[entries]]
+kind = "behoben"
+text = "Auf der Server-Seite bleiben beim Wechsel zu einem anderen Server keine Meldungen, gesperrten Knöpfe und laufenden Nachfragen des alten Servers hängen, späte Antworten überschreiben keine neueren Meldungen mehr, und nach dem Verlassen der Seite wird nicht mehr weiter nachgefragt."
+
+[[entries]]
+kind = "behoben"
+text = "Eine Erweiterung im Status „Fehler“ lässt sich durch erneutes Einschalten wieder sauber starten."
+
+[[entries]]
+kind = "behoben"
+text = "Im Dateimanager zeigen Links ein Link-Symbol, ein Link ins Leere ist markiert, und Umbenennen und Löschen von Links klappt jetzt (ein Link auf einen Ordner wird nur als Link entfernt, das Ziel bleibt)."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Übersicht zeigt eine nicht erreichbare Backup-Verbindung als gelbe Kachel mit „Verbindung nicht erreichbar“ und unter „Braucht Aufmerksamkeit“, statt sie als Job mit unbekanntem Stand zu zählen."
+
+[[entries]]
+kind = "neu"
+text = "Änderungsprotokoll mit Versionen: Unter Einstellungen, Über Nodvard Deck steht, was in welcher Version passiert ist."
+
+[[entries]]
+kind = "verbessert"
+text = "Selbst gebaute Images, zum Beispiel das Dashboard selbst, zeigt die Service-Matrix als „selbst gebaut“ statt als „nicht prüfbar“; das zählt nicht als Problem und löst keine Push-Nachricht aus."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungsseiten (Backups, Skripte, Service-Matrix, System, Gameserver, Proxmox-Knoten) folgen der Adresszeile: Ein Link auf die schon offene Seite wirkt, Zurück und Vor gehen, und die Server-Auswahl beziehungsweise offene Logs bleiben nach dem Neuladen erhalten."
+
+[[entries]]
+kind = "behoben"
+text = "Bei einem kurzen Serverausfall zeigen Erweiterungsseiten „Server gerade nicht erreichbar – bitte gleich noch einmal versuchen“ statt „Nicht authentifiziert“, und laufende Aktionen fragen danach weiter nach."

@@ -1,0 +1,22 @@
+[extension]
+id          = "system"
+name        = "System"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zustand eines Linux-Servers auf einer Seite: Auslastung live und im Verlauf, Temperaturen, Speicherplatz, Dienste (mit Neustart über die Freigabe), Updates und Prozesse. Warnt per Meldung, wenn eine Platte fast voll oder ein Server zu heiß wird."
+icon        = "cpu"
+category    = "servers"
+sort_order  = 10
+entrypoint  = "nodvard_deck_ext_system:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "hosts.read",
+  "hosts.execute",
+  "notify.send",
+  "schedule.register",
+]
+
+[settings]
+schema = "settings.schema.json"

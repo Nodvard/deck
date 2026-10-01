@@ -1,0 +1,33 @@
+{
+  "type": "object",
+  "properties": {
+    "docker_host_tag": {
+      "type": "string",
+      "default": "docker",
+      "title": "Server-Markierung",
+      "description": "Server mit dieser Markierung (Tag) werden nach Docker-Containern durchsucht."
+    },
+    "url_scheme": {
+      "type": "string",
+      "enum": [
+        "http",
+        "https"
+      ],
+      "default": "http",
+      "title": "Link-Schema der Kacheln",
+      "description": "Womit Kachel-Links auf die Container geöffnet werden."
+    },
+    "image_updates_enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Täglich auf neue Image-Versionen prüfen",
+      "description": "Fragt einmal am Tag bei den Registries nach, ob es für laufende Container neuere Images gibt, und schickt bei Neuigkeiten eine einzige Nachricht. Es wird nichts heruntergeladen oder neu gestartet."
+    },
+    "image_updates_cron": {
+      "type": "string",
+      "default": "30 6 * * *",
+      "title": "Zeitplan der Image-Prüfung",
+      "x-widget": "schedule"
+    }
+  }
+}

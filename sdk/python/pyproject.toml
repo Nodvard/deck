@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nodvard-sdk"
+version = "0.1.0"
+description = "Der stabile Vertrag zwischen dem Nodvard-Deck-Kern und Extensions."
+requires-python = ">=3.12"
+license = "PolyForm-Noncommercial-1.0.0"
+authors = [{ name = "Nico Benks" }]
+dependencies = [
+    "pydantic>=2.7",
+]
+
+# Eine Distribution, drei Importnamen: `nodvard_sdk` (der Vertrag), `lattice_sdk` (alter Name als Alias, siehe
+# lattice_sdk/__init__.py) und `_nodvard_alias` (der gemeinsame Unterbau der Alias-Pakete, nur Standardbibliothek;
+# der Kern-Alias `lattice` in der Distribution nodvard-deck nutzt ihn ebenfalls). Dadurch bleibt
+# `pip install -e sdk/python -e backend` der einzige Installationsbefehl.
+[tool.setuptools]
+py-modules = ["_nodvard_alias"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["nodvard_sdk*", "lattice_sdk*"]

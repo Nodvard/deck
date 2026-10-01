@@ -1,0 +1,20 @@
+[extension]
+id          = "scripts"
+name        = "Skripte"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Eigene Skripte zentral verwalten, versionieren und auf einem, mehreren oder allen Servern ausführen – sofort oder nach Zeitplan."
+icon        = "terminal-square"
+category    = "tools"
+sort_order  = 10
+entrypoint  = "nodvard_deck_ext_scripts:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "hosts.read",
+  "hosts.execute",
+  "secrets.read:scripts-*",
+  "schedule.register",
+  "notify.send",
+]

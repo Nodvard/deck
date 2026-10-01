@@ -1,0 +1,37 @@
+# Docker-Build-Kontext ist das Repository-Root (deploy/Dockerfile wird mit
+# `-f deploy/Dockerfile .` bzw. ueber deploy/docker-compose.yml gebaut) -- dieselbe
+# Logik wie .gitignore, plus alles, was der Build selbst weder braucht noch anfassen soll.
+
+.git/
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+# Reste alter `pip install ./backend` bzw. `./sdk/python` (setuptools kopierte sie sonst ins Wheel).
+**/build/
+**/*.egg-info/
+**/.mypy_cache/
+**/.ruff_cache/
+
+# `**/` ist noetig: ohne landet z. B. frontend/node_modules vom Entwickler-PC im
+# Build-Kontext und ueberschreibt nach `COPY frontend/ frontend/` die frisch per
+# `npm ci` installierten Pakete (live gefunden: esbuild "Host version 0.21.5 does not
+# match binary version 0.28.2" nach dem Vite-7-Upgrade).
+**/node_modules/
+frontend/dist/
+**/.vite/
+**/*.tsbuildinfo
+
+# Laufzeitdaten -- niemals ins Image backen (Master-Key/Secrets).
+data/
+*.db
+*.db-wal
+*.db-shm
+master.key
+.env
+.env.local
+
+reference/
+mobile/
+docs/

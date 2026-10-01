@@ -1,0 +1,69 @@
+# CI-Pipeline: baut und testet bei jeder Aenderung automatisch ALLE Extension-Frontend-
+# Bundles, statt sich auf einen manuellen `node build.mjs`-Lauf pro Extension zu
+# verlassen. Lokal deckt dasselbe der `.githooks/pre-commit`-Hook ab (siehe dort) --
+# dieser Workflow ist die serverseitige Gegenprobe.
+name: CI
+
+# Sparsam mit den Actions-Minuten: Push nur auf
+# main, Feature-Branches laufen einmal ueber ihren PR statt doppelt. Reine
+# Doku-Aenderungen starten keinen Lauf, und ein neuer Push bricht den alten ab.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**/*.md", "docs/**"]
+  pull_request:
+    paths-ignore: ["**/*.md", "docs/**"]
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Wie das Docker-Image: ohne tesseract scheitern die OCR-Tests der
+      # documents-Extension, ohne constraints testet CI andere Versionen als der Build.
+      - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-deu
+      - run: pip install -c deploy/constraints.txt -e sdk/python -e "backend[dev]"
+      - run: pytest sdk/python/tests backend/tests
+      # Update-Helfer (deploy/updater): nur Standardbibliothek, ohne Installation und ohne Backend-conftest -- eigener Aufruf.
+      - run: python -m pytest deploy/updater/tests
+      # Dieselben Tests noch einmal als root (der Runner hat sudo ohne Passwort): nur dann koennen Dateien einem anderen
+      # Besitzer gehoeren (Betriebsbild: Helfer uid 0, Dashboard uid 1000). Ohne das laufen genau diese Tests (Marker
+      # needs_root) in der CI nie. Kein Cache und kein Bytecode, damit nichts root-Eigenes im Checkout liegen bleibt.
+      - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider -m needs_root deploy/updater/tests
+      - run: python scripts/check_core_purity.py
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Wie das Docker-Image (node:22-slim) -- jsdom verlangt ^22.22.2, unter
+          # Node 20 bricht `npm test` mit "webidl.util.markAsUncloneable is not a function".
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run typecheck
+        working-directory: frontend
+      - run: npm run typecheck:extensions
+        working-directory: frontend
+      - run: npm test
+        working-directory: frontend
+      - run: npm run test:extensions
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+      # Baut jede Extension in ein Schattenverzeichnis und vergleicht gegen das
+      # committete `dist/index.js` -- schlaegt fehl, wenn eine Extension geaendert,
+      # aber nicht neu gebaut+committet wurde. Aendert das Arbeitsverzeichnis nicht
+      # (siehe Skript-Docstring).
+      - run: node scripts/build_extension_frontends.mjs --check

@@ -1,0 +1,59 @@
+{
+  "type": "object",
+  "properties": {
+    "connections": {
+      "type": "array",
+      "title": "Proxmox-Server für Backups",
+      "description": "Server, deren Backup-Jobs angezeigt und verwaltet werden. Meist dieselben wie unter „Proxmox VE“.",
+      "x-item-title": "Server",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „pve1“ oder „pve2“. Nach dem ersten Einlesen nicht mehr ändern.",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich – keine Leerzeichen."
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Adresse",
+            "description": "z. B. https://192.168.2.11:8006",
+            "pattern": "^https?://\\S+$",
+            "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+          },
+          "token_id": {
+            "type": "string",
+            "title": "API-Token-ID",
+            "description": "Format benutzer@realm!tokenname. Braucht mindestens Leserechte auf / und Backup-Rechte, um Jobs zu ändern.",
+            "pattern": "^\\S+@\\S+!\\S+$",
+            "x-pattern-message": "Das Format ist benutzer@realm!tokenname, z. B. root@pam!dashboard."
+          },
+          "tls_insecure_skip_verify": {
+            "type": "boolean",
+            "default": false,
+            "title": "Selbstsigniertes Zertifikat erlauben",
+            "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."
+          }
+        },
+        "required": [
+          "name",
+          "base_url",
+          "token_id"
+        ]
+      }
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "backups-token:{name}",
+      "per_item": "connections",
+      "title": "API-Token-Geheimnis",
+      "description": "Der geheime Wert des Proxmox-API-Tokens."
+    }
+  ],
+  "required": [
+    "connections"
+  ]
+}

@@ -1,0 +1,127 @@
+version = "0.1.0"
+date = "2026-09-26"
+title = "Nodvard Deck startet"
+
+[[entries]]
+kind = "neu"
+text = "Startseite als Cockpit mit Kacheln, neuem App-Rahmen und Suche per Strg+K."
+
+[[entries]]
+kind = "neu"
+text = "Für jeden Server gibt es eine eigene Seite, auf der alles zu ihm an einer Stelle steht."
+
+[[entries]]
+kind = "neu"
+text = "Sicherheit von Anfang an: Benutzer mit Rollen und Rechten, Zwei-Faktor-Anmeldung, ein verschlüsselter Tresor für Passwörter und ein Freigabe-System, bei dem Aktionen erst vorgeschlagen und dann bestätigt werden."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox: VMs und Container ansehen, starten, stoppen und neu starten, Snapshots verwalten und die Hardware ändern (Kerne, RAM, Autostart, Startreihenfolge)."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox: Gesundheit der Knoten (Hardware, Last, RAM, Festplatten mit Gesundheitswerten), Speicher-Übersicht, Paket-Updates je Knoten und ein Aufgabenverlauf mit Protokoll."
+
+[[entries]]
+kind = "neu"
+text = "Backups: Jobs ansehen und bearbeiten, Gäste ohne Backup-Job finden und direkt einen anlegen, nächsten Lauf und Aufbewahrung im Blick behalten und „Bewusst ohne Backup“ als eigene Entscheidung festhalten."
+
+[[entries]]
+kind = "neu"
+text = "Docker-Verwaltung wie in Portainer: Container mit Details, CPU und RAM, Image und zugehörigem Projekt, ganzen Stack neu starten und Docker-Speicher aufräumen."
+
+[[entries]]
+kind = "neu"
+text = "System-Seite für Linux-Server und die Kachel „Server-Zustand“."
+
+[[entries]]
+kind = "neu"
+text = "Gameserver mit Spiel-Profilen: Spieler anzeigen, Welt sichern, Neustart und Join-Code per Push-Nachricht."
+
+[[entries]]
+kind = "neu"
+text = "Meldungen-Seite und Wächter, die Probleme bei Proxmox und Backups von selbst melden."
+
+[[entries]]
+kind = "neu"
+text = "Weitere Werkzeuge: Skripte, Dokumente, Inventar, Nextcloud, Terminal und Push-Nachrichten über ntfy."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Deck läuft als Docker-Container, mit Einrichtungsassistent bei der ersten Installation und Skripten zum Sichern und Wiederherstellen."
+
+[[entries]]
+kind = "neu"
+text = "Neue Anmeldeseite mit „Passwort anzeigen“, Warnung bei Feststelltaste und eigenem Schritt für die Zwei-Faktor-Anmeldung."
+
+[[entries]]
+kind = "neu"
+text = "Einstellungen mit Seitenmenü: Mein Konto, Aussehen (Logo, Farben, Vorlagen, Anmeldeseite), Benutzer, Automatik & Sicherheit, Erweiterungen und Protokoll; Benutzernamen werden immer klein geschrieben."
+
+[[entries]]
+kind = "neu"
+text = "Jede Erweiterung lässt sich in den Einstellungen mit einem eigenen Formular einrichten, Zugangsdaten werden verschlüsselt gespeichert, und es gibt verständliche Beschreibungen."
+
+[[entries]]
+kind = "neu"
+text = "Server-Metriken: Live-Ansicht im System-Monitor (Kerne, Takt, RAM, Temperaturen, Platten, Netzwerk, Prozesse) und Verlaufsdiagramme von einer Stunde bis 30 Tage auf der Server-Seite."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield wird zum Virenschutz: ClamAV-Schnell- und Tiefenscan nach Zeitplan, Echtzeit-Wächter, automatische Quarantäne auf dem Server, Lynis-Härtungsaudits und Schutzwert je Server, ClamAV und Lynis lassen sich per Klick installieren."
+
+[[entries]]
+kind = "neu"
+text = "Update-Zentrale in Nodvard Shield: offene und Sicherheitsupdates je Server, Neustart-Bedarf, Einspielen und Neustart nach Freigabe, tägliche Prüfung und auf Wunsch automatische Updates (standardmäßig aus)."
+
+[[entries]]
+kind = "neu"
+text = "Einbruchschutz und Datei-Wächter: SSH-Fehlversuche, neue Login-Adressen, Fail2ban (sperren, entsperren, installieren), neue offene Ports, Prüfung der SSH-Einstellungen sowie Prüfsummen wichtiger Dateien und Programmdateien gegen die Paketlisten (Rootkit-Erkennung)."
+
+[[entries]]
+kind = "neu"
+text = "Morgen-Briefing als Push-Nachricht, Kacheln „Virenschutz“ und „Sicherheitslage“ auf der Übersicht und eine Kachel „Sicherheit“ auf jeder Server-Seite."
+
+[[entries]]
+kind = "neu"
+text = "Push-Nachrichten öffnen per Tipp die passende Dashboard-Seite und haben Symbole je Dringlichkeit; auch in den Meldungen gibt es einen Öffnen-Link."
+
+[[entries]]
+kind = "neu"
+text = "Handy-Ansicht mit ausklappbarem Menü und untereinander gestapelten Kacheln, nichts ragt mehr über den Rand, und das Dashboard lässt sich als App auf den Startbildschirm legen."
+
+[[entries]]
+kind = "neu"
+text = "Zeitpläne stellst du mit einem Wähler ein statt mit kryptischen Zeitangaben."
+
+[[entries]]
+kind = "neu"
+text = "Backups warnen, wenn ein Backup nicht auf den Zielspeicher passt (beim Anlegen, Bearbeiten und erneuten Versuchen)."
+
+[[entries]]
+kind = "verbessert"
+text = "Skripte, Dokumente und Inventar im neuen Stil und mit mehr Funktionen: Ausgabe der letzten Skript-Läufe, Dokument-Vorschau mit Umbenennen und Text kopieren sowie Inventar-Filter, Gesamtwert und CSV-Export."
+
+[[entries]]
+kind = "verbessert"
+text = "Aktionen aus Erweiterungen werden dem Nutzer zugeordnet, der geklickt hat, und abgelaufene Vorschläge stündlich als „abgelaufen“ markiert."
+
+[[entries]]
+kind = "verbessert"
+text = "Kleinigkeiten: Das Protokoll blendet automatische „Zugangsdaten verwendet“-Einträge standardmäßig aus, die Anmeldung hat kein hellblaues Autofill-Feld mehr, und der doppelte CPU-Temperatursensor beim Pi ist weg."
+
+[[entries]]
+kind = "behoben"
+text = "Ist die Platte des Servers voll, kommt eine verständliche Meldung statt „HTTP 500“, und ein fehlgeschlagenes Speichern wird nicht mehr als Erfolg angezeigt."
+
+[[entries]]
+kind = "behoben"
+text = "Automatik & Sicherheit stürzte nach gespeichertem Aussehen ab, Skripte dürfen bis 30 Minuten laufen und zeigen immer den Fehlergrund, Proxmox aktualisiert den Status direkt nach Start und Stopp, und die Gameserver-Seite hängt nicht mehr, wenn die VM aus ist."
+
+[[entries]]
+kind = "behoben"
+text = "Erweiterungsseiten laden nach einem Update die neue Version, vorher blieb zum Beispiel Nodvard Shield im Browser auf dem alten Stand."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield nutzt sudo, wenn das Dashboard auf einem Server nicht als root angemeldet ist, einzelne nicht lesbare Ordner machen einen Scan nicht mehr rot, und Fehlermeldungen sind rot statt grün."

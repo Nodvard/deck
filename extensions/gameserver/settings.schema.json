@@ -1,0 +1,49 @@
+{
+  "type": "object",
+  "properties": {
+    "servers": {
+      "type": "object",
+      "description": "Je Gameserver-Host (Schluessel: Host-ID) das Spiel-Profil und dessen Werte, z. B. {\"profile\": \"valheim-windows\", \"service_name\": \"ValheimServer\"}. Leere/fehlende Werte erkennt das Profil selbst. Pflege ueber die Gameserver-Seite (Einstellungen je Server).",
+      "additionalProperties": {
+        "type": "object"
+      },
+      "title": "Spiel-Profile je Server",
+      "x-hidden": true
+    },
+    "host_tag": {
+      "type": "string",
+      "description": "Server mit dieser Markierung (Tag) erscheinen als Gameserver. Standard: „gameserver“.",
+      "title": "Server-Markierung"
+    },
+    "log_command": {
+      "type": "string",
+      "description": "Wird per SSH auf dem Server ausgeführt und liefert die Log-Zeile mit dem Code. Pro Server besser direkt auf der Gameserver-Seite einstellen.",
+      "title": "Befehl zum Lesen des Join-Codes",
+      "x-advanced": true
+    },
+    "join_code_pattern": {
+      "type": "string",
+      "description": "Regulärer Ausdruck mit einer Gruppe, der den Code aus der Log-Zeile holt. Pro Server besser direkt auf der Gameserver-Seite einstellen.",
+      "title": "Muster für den Join-Code",
+      "x-advanced": true
+    },
+    "service_name": {
+      "type": "string",
+      "description": "Name des Windows-Dienstes, der gestartet und gestoppt wird (z. B. „valheim“). Pro Server besser direkt auf der Gameserver-Seite einstellen.",
+      "title": "Dienstname",
+      "x-advanced": true
+    },
+    "start_command": {
+      "type": "string",
+      "description": "SSH-Befehl zum Starten, mit Platzhalter {service_name}. Pro Server besser direkt auf der Gameserver-Seite einstellen.",
+      "title": "Startbefehl",
+      "x-advanced": true
+    },
+    "stop_command": {
+      "type": "string",
+      "description": "SSH-Befehl zum Stoppen, mit Platzhalter {service_name}. Pro Server besser direkt auf der Gameserver-Seite einstellen.",
+      "title": "Stoppbefehl",
+      "x-advanced": true
+    }
+  }
+}

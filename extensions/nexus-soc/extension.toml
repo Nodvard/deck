@@ -1,0 +1,25 @@
+[extension]
+id          = "nexus-soc"
+name        = "Nodvard Shield"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits – dazu die KI-Container-Wache (Nodvard KI), die abgestürzte Docker-Container erkennt und Lösungen vorschlägt."
+icon        = "shield-alert"
+category    = "security"
+sort_order  = 10
+entrypoint  = "nodvard_deck_ext_nexus_soc:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "net.outbound",
+  "hosts.read",
+  "hosts.execute",
+  "notify.send",
+  "audit.write",
+  "schedule.register",
+  "secrets.read:nexus-soc-*",
+]
+
+[settings]
+schema = "settings.schema.json"

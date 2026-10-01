@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Die Beschreibung der Schnittstelle (Adressen /docs, /redoc und /openapi.json) ist nicht mehr ohne Anmeldung abrufbar: Es gibt sie nur noch im Entwicklungsmodus, angemeldete Admins bekommen sie unter /api/v1/system/openapi.json."

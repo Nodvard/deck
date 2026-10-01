@@ -1,0 +1,14 @@
+[extension]
+id          = "documents"
+name        = "Dokumente"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Dokumentenarchiv mit Texterkennung: PDFs und Scans hochladen, automatisch verschlagworten lassen und per Volltextsuche wiederfinden."
+icon        = "file-text"
+category    = "tools"
+sort_order  = 20
+entrypoint  = "nodvard_deck_ext_documents:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = []

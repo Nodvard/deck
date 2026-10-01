@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <title>Nodvard Deck Terminal-Verifikation (WP-4, nicht Teil der Produkt-UI)</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css" />
+  <style>
+    body { background: #111; color: #eee; font-family: sans-serif; padding: 1rem; }
+    #status { margin-bottom: 1rem; white-space: pre-wrap; }
+    #term { width: 800px; height: 400px; }
+    input, button { font-size: 14px; padding: 4px 8px; margin-right: 4px; }
+  </style>
+</head>
+<body>
+  <h1>WP-4 Terminal-Verifikation (Standalone, kein Teil des Produkt-Frontends)</h1>
+  <p>Kein Login/Routing existiert im Frontend noch (das kommt erst mit WP-7) -- diese
+     Seite spricht die API direkt an, um die WS-Terminal-Strecke Ende-zu-Ende mit
+     echtem xterm.js in einem echten Browser zu beweisen.</p>
+  <div>
+    <input id="username" placeholder="username" value="admin" />
+    <input id="password" placeholder="password" type="password" value="correct-horse-battery" />
+    <input id="hostId" placeholder="host_id" style="width: 320px" />
+    <button id="connect">Verbinden</button>
+  </div>
+  <div id="status">Bereit.</div>
+  <div id="term"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+  <script>
+    const statusEl = document.getElementById("status");
+    const term = new Terminal({ cols: 80, rows: 24 });
+    term.open(document.getElementById("term"));
+    term.writeln("(noch nicht verbunden)");
+
+    function log(msg) {
+      statusEl.textContent += "\n" + msg;
+    }
+
+    document.getElementById("connect").addEventListener("click", async () => {
+      const username = document.getElementById("username").value;
+      const password = document.getElementById("password").value;
+      const hostId = document.getElementById("hostId").value;
+      statusEl.textContent = "Login...";
+
+      const loginResp = await fetch("/api/v1/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+      const loginData = await loginResp.json();
+      if (!loginResp.ok) {
+        log("Login fehlgeschlagen: " + JSON.stringify(loginData));
+        return;
+      }
+      const token = loginData.access_token;
+      log("Login ok.");
+
+      const sessResp = await fetch("/api/v1/terminal/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer " + token },
+        body: JSON.stringify({ host_id: hostId, cols: 80, rows: 24 }),
+      });
+      const sessData = await sessResp.json();
+      if (!sessResp.ok) {
+        log("Session-Erstellung fehlgeschlagen: " + JSON.stringify(sessData));
+        return;
+      }
+      log("Session erstellt: " + sessData.session_id);
+
+      const wsProto = location.protocol === "https:" ? "wss:" : "ws:";
+      const wsUrl = wsProto + "//" + location.host + sessData.ws_url;
+      const ws = new WebSocket(wsUrl);
+      ws.binaryType = "arraybuffer";
+
+      ws.onopen = () => log("WS verbunden.");
+      ws.onclose = (ev) => log("WS geschlossen: code=" + ev.code);
+      ws.onerror = () => log("WS-Fehler.");
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === "string") {
+          log("Kontrollnachricht: " + ev.data);
+        } else {
+          const bytes = new Uint8Array(ev.data);
+          term.write(bytes);
+        }
+      };
+
+      term.onData((data) => {
+        const bytes = new TextEncoder().encode(data);
+        ws.send(bytes);
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+[extension]
+id          = "network"
+name        = "Netzwerk"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blockierung, Proxy-Hosts und ablaufende Zertifikate. Blockierung pausieren und Proxy-Hosts ein- oder ausschalten – über die Freigabe."
+icon        = "activity"
+category    = "servers"
+sort_order  = 70
+entrypoint  = "nodvard_deck_ext_network:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "hosts.execute",
+  "secrets.read:network-*",
+  "schedule.register",
+  "notify.send",
+]
+
+[settings]
+schema = "settings.schema.json"

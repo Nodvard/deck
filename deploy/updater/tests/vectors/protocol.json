@@ -1,0 +1,75 @@
+{
+ "_doc": "Konstanten des Protokolls zwischen Dashboard und Helfer. Der Helfer prueft sie in tests/test_policy.py, das Dashboard spaeter in seinem Gleichlauf-Test. Muster gelten fuer den ganzen Text (re.fullmatch, ASCII).",
+ "proto": 1,
+ "request_versions": [
+  1
+ ],
+ "request_keys": [
+  "action",
+  "created_at",
+  "id",
+  "v",
+  "version"
+ ],
+ "actions": [
+  "update",
+  "rollback"
+ ],
+ "states": [
+  "idle",
+  "busy",
+  "unsafe",
+  "error"
+ ],
+ "outcomes": [
+  "applied",
+  "reverted",
+  "rolled_back",
+  "refused",
+  "aborted",
+  "failed_manual",
+  "external_change"
+ ],
+ "steps": [
+  "begin",
+  "pulled",
+  "protected",
+  "renamed",
+  "tagged",
+  "creating",
+  "created",
+  "old_stopped",
+  "started",
+  "committed"
+ ],
+ "codes": {
+  "setup": ["channel_unsafe", "channel_cluttered", "state_unsafe", "second_instance", "self_unknown", "not_compose", "engine_unreachable", "engine_unsupported", "api_too_old"],
+  "target": ["no_target", "multiple_targets", "target_not_running", "target_unhealthy", "no_healthcheck", "swarm", "foreign_image", "pinned_version", "not_from_registry", "no_version_label", "version_too_old", "image_config_missing", "auto_remove", "custom_entrypoint", "unsafe_target", "channel_missing_in_target", "dependent_containers", "macvlan", "network_unclear", "unknown_field", "name_taken"],
+  "request": ["bad_request", "expired", "replay", "busy", "rate_limited", "blocked_version", "not_newer", "tag_not_on_version", "platform_mismatch", "pull_failed", "no_previous", "previous_mismatch"],
+  "flow": ["create_failed", "clone_mismatch", "stop_failed", "start_failed", "exited", "restart_loop", "rescue_page", "timeout", "external_change", "rollback_failed"]
+ },
+ "code_pattern": "[a-z_]{1,40}",
+ "files": {
+  "status": "status.json",
+  "requests_dir": "requests",
+  "request_name_pattern": "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.json",
+  "dashboard_tmp_pattern": "\\.[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.tmp",
+  "requests_mode": "1777",
+  "status_mode": "0644",
+  "request_mode": "0644"
+ },
+ "limits": {
+  "request_max_bytes": 4096,
+  "request_max_age_s": 600,
+  "request_max_future_s": 60,
+  "status_max_bytes": 16384,
+  "results_max": 10,
+  "action_interval_s": 600,
+  "block_after_rollback_s": 86400,
+  "seen_ttl_s": 3600,
+  "slot_ttl_s": 604800
+ },
+ "repository": "ghcr.io/nodvard/deck",
+ "version_label": "org.opencontainers.image.version",
+ "min_version": "0.7.0"
+}

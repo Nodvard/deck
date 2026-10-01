@@ -1,0 +1,20 @@
+[extension]
+id          = "nextcloud"
+name        = "Nextcloud"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Bindet deine Nextcloud in den Dateimanager von Nodvard Deck ein: Dateien ansehen, hoch- und herunterladen und zwischen Servern kopieren."
+icon        = "cloud"
+category    = "connections"
+sort_order  = 20
+entrypoint  = "nodvard_deck_ext_nextcloud:Extension"
+
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:nextcloud-*",
+]
+
+[settings]
+schema = "settings.schema.json"

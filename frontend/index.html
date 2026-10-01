@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="de">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!--
+      Kein Produktname/Titel hier hartkodiert -- src/lib/branding.ts setzt document.title
+      zur Laufzeit aus GET /api/v1/branding (docs/01-ARCHITECTURE.md §6). Dieser
+      Platzhalter ist nur der Text, den ein Browser fuer den Sekundenbruchteil vor dem
+      ersten Branding-Fetch anzeigt.
+    -->
+    <title>Nodvard Deck</title>
+    <link rel="icon" id="favicon-link" href="/favicon.ico" />
+    <!-- Als App auf den Startbildschirm (Android/iPhone): Name, Farben und Symbol
+         kommen aus dem Branding (GET /api/v1/app/...). -->
+    <link rel="manifest" href="/api/v1/app/manifest.webmanifest" />
+    <link rel="apple-touch-icon" href="/api/v1/app/icon-180.png" />
+    <meta name="theme-color" content="#0b1220" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <!--
+      Import-Map-Shim (docs/02-EXTENSION-API.md §5): loest "react"/"react-dom"/
+      "react/jsx-runtime" fuer JEDES per import() nachgeladene Extension-Bundle auf
+      window.__nodvardDeck auf (alt: window.__lattice, dasselbe Objekt; siehe main.tsx +
+      public/lattice-shim/*.js). MUSS vor jedem <script type="module"> stehen --
+      Import-Maps gelten nur fuer danach geparste Modul-Graphen.
+
+      Der Pfad /lattice-shim/ bleibt bewusst unter seinem alten Namen: Bundles tragen ihn nicht
+      in sich (sie importieren "react" ueber diese Map), aber die Seite eines Tabs, der vor einem
+      Update geladen wurde, verweist darauf und holt die Dateien erst beim Nachladen einer
+      Erweiterung -- umbenannte Dateien waeren dort ein 404. Die Dateien lesen beide Namen des
+      globalen Objekts.
+    -->
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "/lattice-shim/react.js",
+          "react/jsx-runtime": "/lattice-shim/react-jsx-runtime.js",
+          "react-dom": "/lattice-shim/react-dom.js"
+        }
+      }
+    </script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

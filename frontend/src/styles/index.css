@@ -1,0 +1,196 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /*
+   * Fallback-Werte fuer den Sekundenbruchteil vor dem ersten erfolgreichen
+   * GET /api/v1/branding (src/lib/branding.ts::applyBranding ueberschreibt sie
+   * anschliessend). Identisch mit backend/src/nodvard_deck/branding.py::BrandingColors --
+   * bewusst dieselben Zahlen an zwei Stellen, nicht importiert: Backend-Python und
+   * Frontend-CSS teilen sich keine Build-Pipeline.
+   */
+  --color-accent: #0ea5e9;
+  --color-accent-strong: #0369a1;
+  --color-background: #0b1220;
+  --color-surface: #111a2b;
+  --color-text: #e6ebf5;
+}
+
+body {
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+/*
+ * MarkdownView.tsx rendert
+ * seit dem Umstieg auf markdown-it echte Listen/Codebloecke/Zitate/Tabellen -- ohne
+ * das Tailwind-Typography-Plugin (nicht installiert) braeuchten die sonst gar keine
+ * Gestaltung. Bewusst eine kleine, handgeschriebene Regelmenge statt einer neuen
+ * Abhaengigkeit, dieselbe Zurueckhaltung wie ChartView.tsx's handgerolltes SVG.
+ */
+.md-content :where(h3, h4, h5) {
+  margin: 0.6em 0 0.3em;
+  font-weight: 600;
+}
+.md-content p {
+  margin: 0.4em 0;
+}
+.md-content :where(ul, ol) {
+  margin: 0.4em 0;
+  padding-left: 1.5em;
+}
+.md-content ul {
+  list-style: disc;
+}
+.md-content ol {
+  list-style: decimal;
+}
+.md-content blockquote {
+  margin: 0.4em 0;
+  padding-left: 0.75em;
+  border-left: 2px solid var(--color-accent);
+  opacity: 0.85;
+}
+.md-content code {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 0.25em;
+  padding: 0.1em 0.35em;
+  font-size: 0.9em;
+}
+.md-content pre {
+  margin: 0.4em 0;
+  padding: 0.6em 0.75em;
+  border-radius: 0.375em;
+  background: var(--color-surface);
+  overflow-x: auto;
+}
+.md-content pre code {
+  background: none;
+  padding: 0;
+}
+.md-content table {
+  margin: 0.4em 0;
+  border-collapse: collapse;
+  font-size: 0.9em;
+}
+.md-content :where(th, td) {
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  padding: 0.3em 0.6em;
+  text-align: left;
+}
+.md-content th {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/*
+ * Startseite: eigene Bildsprache -- ein feines Gitter, das nach unten
+ * ausblendet, dazu ein weiches Leuchten in der Akzentfarbe.
+ * Alles ueber die Branding-Variablen, damit ein anderes Branding (D-03) sofort durchgreift.
+ */
+.nodvard-deck-glow {
+  background-image:
+    radial-gradient(900px 420px at 0% -20%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 65%),
+    radial-gradient(700px 380px at 100% -30%, color-mix(in srgb, var(--color-accent-strong) 20%, transparent), transparent 60%);
+}
+.nodvard-deck-grid {
+  background-image:
+    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
+  background-size: 32px 32px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 100% at 20% 0%, black 25%, transparent 80%);
+  mask-image: radial-gradient(ellipse 80% 100% at 20% 0%, black 25%, transparent 80%);
+}
+.panel {
+  background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 92%, white 3%), var(--color-surface));
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  border-radius: 0.9rem;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.7);
+}
+.panel-hover {
+  transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.panel-hover:hover {
+  transform: translateY(-1px);
+  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 36px -18px color-mix(in srgb, var(--color-accent) 45%, black);
+}
+.accent-gradient {
+  background-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
+}
+/* Die aufgeklappte Liste nativer Auswahlfelder ist im Browser-Standard hellgrau auf weiss
+   und kaum lesbar -- betrifft jedes <select> in Kern und Extensions. */
+select {
+  color-scheme: dark;
+}
+select option {
+  background-color: #0f172a;
+  color: #e2e8f0;
+}
+.accent-soft {
+  background-color: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: color-mix(in srgb, var(--color-accent) 80%, white);
+}
+/* Ziel eines Sprungs von der Server-Seite (`?host=`): Extensions markieren damit die
+   Zeile/Karte des Hosts, von dem der Nutzer kommt. Outline statt Rahmen, damit sich
+   die Tabellen-Geometrie nicht verschiebt.
+   `lattice-focus` ist der alte Name und Teil des Erweiterungs-Vertrags (docs/02-EXTENSION-API.md):
+   Bundles, die ihn noch setzen, bleiben markiert. Beide stehen bewusst in EINER Regel. */
+.nodvard-deck-focus,
+.lattice-focus {
+  background-color: color-mix(in srgb, var(--color-accent) 9%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  outline-offset: -1px;
+}
+.nav-active {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 85%);
+  box-shadow: inset 2px 0 0 var(--color-accent);
+}
+.status-dot {
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 9999px;
+  flex: none;
+}
+.status-dot.online { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15); }
+.status-dot.problem { background: #f87171; box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18); }
+.status-dot.stopped { background: rgba(255, 255, 255, 0.3); }
+.status-dot.unknown { background: #fbbf24; }
+@media (prefers-reduced-motion: no-preference) {
+  .status-dot.problem { animation: nodvard-deck-pulse 1.6s ease-in-out infinite; }
+}
+/* Glocken-Fenster: sanft einblenden (Deckkraft + leichtes Hochskalieren, 120 ms). */
+@media (prefers-reduced-motion: no-preference) {
+  .bell-popover { animation: bell-pop 120ms ease-out; transform-origin: top right; }
+}
+.bell-unread { background-color: color-mix(in srgb, var(--color-accent) 8%, transparent); }
+@keyframes bell-pop {
+  from { opacity: 0; transform: scale(0.97); }
+}
+@keyframes nodvard-deck-pulse {
+  50% { box-shadow: 0 0 0 6px rgba(248, 113, 113, 0.05); }
+}
+
+/* Widgets: Karten scrollen notfalls noch, aber ohne sichtbaren Balken -- dafuer
+   blendet der Inhalt unten weich aus, statt hart abgeschnitten zu wirken. */
+.widget-body {
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 18px), transparent);
+  mask-image: linear-gradient(to bottom, black calc(100% - 18px), transparent);
+}
+.widget-body::-webkit-scrollbar {
+  display: none;
+}
+
+/* Chrome faerbt automatisch ausgefuellte Felder hellblau -- auf dem dunklen
+   Anmeldeformular wirkte das wie ein Fremdkoerper. */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: #fff;
+  caret-color: #fff;
+  -webkit-box-shadow: 0 0 0 1000px rgb(0 0 0 / 0.3) inset;
+  box-shadow: 0 0 0 1000px color-mix(in srgb, var(--color-surface) 80%, black) inset;
+  transition: background-color 9999s ease-out 0s;
+}

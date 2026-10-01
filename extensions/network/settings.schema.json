@@ -1,0 +1,64 @@
+{
+  "type": "object",
+  "properties": {
+    "pihole": {
+      "type": "object",
+      "title": "Pi-hole",
+      "description": "Optional. Leer lassen, wenn du kein Pi-hole nutzt. Unterstützt wird Pi-hole ab Version 6.",
+      "properties": {
+        "url": {
+          "type": "string",
+          "title": "Adresse",
+          "description": "z. B. http://192.168.2.2 oder https://pi.hole (ohne /admin)."
+        },
+        "tls_insecure_skip_verify": {
+          "type": "boolean",
+          "default": false,
+          "title": "Selbstsigniertes Zertifikat erlauben",
+          "description": "Nur im eigenen Netz aktivieren. Nötig, wenn Pi-hole über https mit seinem eigenen Zertifikat erreichbar ist."
+        }
+      }
+    },
+    "npm": {
+      "type": "object",
+      "title": "Nginx Proxy Manager",
+      "description": "Optional. Leer lassen, wenn du keinen Nginx Proxy Manager nutzt.",
+      "properties": {
+        "url": {
+          "type": "string",
+          "title": "Adresse der Verwaltung",
+          "description": "Die Adresse der Verwaltungsoberfläche, meist Port 81, z. B. http://192.168.2.21:81"
+        },
+        "identity": {
+          "type": "string",
+          "title": "E-Mail-Adresse",
+          "description": "Das Konto, mit dem du dich im Nginx Proxy Manager anmeldest. Am besten ein eigenes Konto nur für das Dashboard, ohne Zwei-Faktor-Anmeldung."
+        },
+        "tls_insecure_skip_verify": {
+          "type": "boolean",
+          "default": false,
+          "title": "Selbstsigniertes Zertifikat erlauben",
+          "description": "Nur im eigenen Netz aktivieren."
+        },
+        "notify_expiring": {
+          "type": "boolean",
+          "default": true,
+          "title": "Vor ablaufenden Zertifikaten warnen",
+          "description": "Einmal am Tag eine Meldung, wenn ein Zertifikat in den nächsten 14 Tagen abläuft oder schon abgelaufen ist."
+        }
+      }
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "network-pihole-password",
+      "title": "Pi-hole: Passwort oder App-Passwort",
+      "description": "Am besten ein App-Passwort: in Pi-hole unter Einstellungen → Web-Oberfläche / API → „App-Passwort konfigurieren“. Das funktioniert auch mit Zwei-Faktor-Anmeldung."
+    },
+    {
+      "label": "network-npm-password",
+      "title": "Nginx Proxy Manager: Passwort",
+      "description": "Das Passwort des oben eingetragenen Kontos."
+    }
+  ]
+}

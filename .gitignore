@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# Ausnahme: Beispiel-Extensions haben keine eigene Build-Pipeline/CI (WP-7) -- ihr
+# gebautes ESM-Bundle ist ein committetes Fixture (Tests/Live-Demo brauchen es direkt
+# nach `git clone`, ohne Node-Build-Schritt), kein Wegwerf-Artefakt wie frontend/dist/.
+!extensions/*/frontend/dist/
+!extensions/*/frontend/dist/**
+
+# Laufzeitdaten — enthaelt Master-Key und alle Secrets. Niemals committen.
+data/
+*.db
+*.db-wal
+*.db-shm
+master.key
+
+.env
+.env.local
+
+# Nextcloud-Konfliktdateien (Arbeitskopie in einem Sync-Ordner)
+*conflicted copy*
+.~lock.*
+
+# Lokale Deploy-Einstellungen (Zielrechner, DNS) -- nie committen
+deploy/.env.deploy

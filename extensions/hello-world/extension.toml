@@ -1,0 +1,19 @@
+[extension]
+id          = "hello-world"
+name        = "Hello World"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Beispiel-Erweiterung für Nodvard Deck, gedacht für Entwickler. Zeigt, wie eigene Seiten, Kacheln und Aufgaben eingebunden werden – im Alltag nicht nötig."
+icon        = "sparkles"
+category    = "example"
+sort_order  = 10
+entrypoint  = "nodvard_deck_ext_hello_world:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "schedule.register",
+  "audit.write",
+  "secrets.read:hello-*",
+  "notify.send",
+]

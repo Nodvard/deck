@@ -1,0 +1,93 @@
+# docs/00-DECISIONS.md D-10: ein Container, ein benanntes Volume.
+# Start aus diesem Verzeichnis:
+#
+#   cd deploy && docker compose up -d
+#
+# Danach http://<host>:8080/ oeffnen -- eine frische Installation zeigt automatisch
+# den Erstinbetriebnahme-Assistenten (kein Nutzer existiert => /setup statt
+# /login). Siehe deploy/README.md fuer Backup/Restore und den Hardwarebedarf.
+
+# Projektname FEST, nicht vom Ordnernamen abhaengig: Er steckt im Namen des Volumes
+# des Containers (`deploy-nodvard-deck-1`). Das Volume ist zusaetzlich unten fest benannt.
+# Die Skripte in diesem Ordner rufen Compose immer mit `-p deploy` auf. Nicht aendern.
+name: deploy
+
+services:
+  nodvard-deck:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: nodvard-deck:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      NODVARD_DECK_ENV: prod
+      NODVARD_DECK_LOG_JSON: "true"
+      # Rueckfall fuer `audit.retention_days` (docs/03 §9): gilt, solange unter Einstellungen,
+      # System keine Aufbewahrungsdauer gesetzt ist. Die Zeitzone stellt man dort ebenfalls ein
+      # (Vorgabe: NODVARD_DECK_TIMEZONE, sonst TZ, sonst Europe/Berlin).
+      NODVARD_DECK_AUDIT_RETENTION_DAYS: "90"
+      # NODVARD_DECK_JWT_SECRET bewusst NICHT gesetzt: unbelegt wird beim allerersten
+      # Start ein Zufallswert unter /app/data/jwt_secret.key abgelegt (config.py::
+      # get_or_create_jwt_secret()), der das persistente Volume ueberlebt. Nur
+      # explizit setzen, wer den Container ohne das Volume neu erzeugen will, ohne
+      # bestehende Sitzungen zu invalidieren (Secret-Mount-Fall, D-06).
+      # D-10: dieselbe Image, Fake-Daten statt echter Connectoren fuers
+      # Selbst-Antesten. Unveraendert `false` lassen fuer einen echten Einsatz --
+      # siehe deploy/README.md fuer den aktuellen Umsetzungsstand dieses Schalters.
+      NODVARD_DECK_DEMO_MODE: "false"
+      # Optional, Standard aus: neue Server-Schluessel werden nicht mehr still im Hintergrund
+      # gemerkt, sondern nur nach Bestaetigung unter Einstellungen -> Server & Zugaenge
+      # ("Verbindung pruefen"). Bereits gemerkte Schluessel sind nie betroffen. Alter Name:
+      # LATTICE_SSH_CONFIRM_NEW_HOST_KEYS.
+      # NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: "true"
+    # DNS nur fuer DIESEN Container (Docker Compose `dns:`), nicht am Host geaendert.
+    # Hintergrund: ohne dieses Feld erbt der Container den Host-Resolver. Zeigt der auf
+    # einen Router, der die internen Namen des eigenen Netzes (z. B. `cloud.home.example`,
+    # aufgeloest von einem lokalen Pi-hole/AdGuard) nicht kennt, scheitern Quellen wie
+    # Nextcloud mit "Name or service not known". Standard: oeffentliche Resolver
+    # (Cloudflare). Wer einen lokalen Resolver braucht, legt neben dieser Datei eine
+    # `.env` an (git-ignoriert), zum Beispiel:
+    #
+    #   NODVARD_DECK_DNS_1=192.168.1.10   # lokaler Pi-hole/AdGuard
+    #   NODVARD_DECK_DNS_2=1.1.1.1        # Rueckfall fuer oeffentliche Namen
+    #
+    # Die alten Namen LATTICE_DNS_1/2 gelten weiter (verschachtelte Vorgabe: neu, sonst
+    # alt, sonst Standard). `scripts/deploy_pi.sh` schreibt beide Namen auf den Zielrechner,
+    # wenn DNS_1/2 lokal gesetzt sind (siehe deploy/README.md).
+    dns:
+      - ${NODVARD_DECK_DNS_1:-${LATTICE_DNS_1:-1.1.1.1}}
+      - ${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-1.0.0.1}}
+    # Log-Rotation: begrenzt die Docker-Logdatei des Dashboards (3 x 10 MB), damit sie auf
+    # dem Pi nicht ungebremst waechst (z. B. bei wiederholten Fehlern im Log).
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    volumes:
+      # Der Schluessel `lattice_data` bleibt aus Altersgruenden so (Volume `deploy_lattice_data`
+      # mit allen Daten). NICHT umbenennen, sonst startet das Dashboard leer.
+      - lattice_data:/app/data
+      # Optional: Ordner fuer die Sicherungen aus Einstellungen -> System -> Sicherung, AUSSERHALB
+      # des Datenvolumes (am besten ein anderes Laufwerk oder ein NAS). Zeile einkommentieren,
+      # Ordner anlegen und dem Nutzer 1000 geben (`mkdir sicherungen && sudo chown 1000:1000 sicherungen`),
+      # dann in der Oberflaeche als Ordner `/backups` waehlen. Nur `/backups` (und darunter) ist
+      # als Ziel erlaubt, neben dem Standard /app/data/backups.
+      # - ./sicherungen:/backups
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      # Vor dem Start laeuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`) -- bei einer grossen Datenbank auf einem Pi
+      # Minuten. Waehrend dieser Zeit zaehlen Fehlschlaege nicht. Die Notseite antwortet mit 503; der Check schlaegt dann an.
+      start_period: 300s
+      retries: 3
+
+volumes:
+  # Schluessel UND Name fest: `name:` haelt den echten Volume-Namen auch dann, wenn jemand den
+  # Projektnamen ueberstimmt (COMPOSE_PROJECT_NAME, `-p`). Sonst gaebe es ein neues, LEERES
+  # Volume (z. B. foo_lattice_data). Nicht aendern, siehe oben.
+  lattice_data:
+    name: deploy_lattice_data

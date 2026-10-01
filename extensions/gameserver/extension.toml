@@ -1,0 +1,22 @@
+[extension]
+id          = "gameserver"
+name        = "Gameserver"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Gameserver starten und stoppen und den aktuellen Beitritts-Code anzeigen (z. B. Valheim). Server werden über eine Markierung (Tag) erkannt."
+icon        = "gamepad-2"
+category    = "servers"
+sort_order  = 60
+entrypoint  = "nodvard_deck_ext_gameserver:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "hosts.read",
+  "hosts.execute",
+  "schedule.register",
+  "notify.send",
+]
+
+[settings]
+schema = "settings.schema.json"

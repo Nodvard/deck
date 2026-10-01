@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+# Baut und testet automatisch jede Extension, deren Frontend-Quellcode Teil dieses
+# Commits ist. Ohne den Hook muesste `node build.mjs` nach jeder Aenderung
+# manuell laufen, sonst dient der Live-Demo ein veraltetes Bundle. Mit dem Hook
+# gilt: ein Commit, der `extensions/*/
+# frontend/src/**` aendert, kann kein veraltetes `dist/index.js` mehr enthalten,
+# weil dieser Hook es vorher selbst neu baut und dem Commit hinzufuegt.
+#
+# Einmalige Einrichtung pro Klon (macht `git commit` NICHT automatisch scharf --
+# Git fuehrt Hooks nur aus .git/hooks/, nicht aus einem versionierten Ordner):
+#   git config core.hooksPath .githooks
+# (CONTRIBUTING.md dokumentiert das als Setup-Schritt.)
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+cd "$repo_root"
+
+staged_ext_frontend_files="$(git diff --cached --name-only --diff-filter=ACM -- 'extensions/*/frontend/src/*' || true)"
+
+if [ -z "$staged_ext_frontend_files" ]; then
+  exit 0
+fi
+
+# Betroffene Extension-Namen aus den Pfaden ableiten (extensions/<name>/frontend/src/...).
+mapfile -t changed_exts < <(printf '%s\n' "$staged_ext_frontend_files" | sed -E 's#^extensions/([^/]+)/frontend/src/.*#\1#' | sort -u)
+
+echo "pre-commit: Extension-Frontend-Quellcode geaendert (${changed_exts[*]}) -- baue Bundles neu ..."
+
+failed=0
+for ext in "${changed_exts[@]}"; do
+  build_script="extensions/$ext/frontend/build.mjs"
+  dist_file="extensions/$ext/frontend/dist/index.js"
+  if [ ! -f "$build_script" ]; then
+    continue
+  fi
+  if ! (cd "extensions/$ext/frontend" && node build.mjs); then
+    echo "pre-commit: FEHLER beim Bauen von '$ext' -- Commit abgebrochen." >&2
+    failed=1
+    continue
+  fi
+  git add "$dist_file"
+done
+
+if [ "$failed" -ne 0 ]; then
+  exit 1
+fi
+
+echo "pre-commit: Extension-Frontend-Tests (${changed_exts[*]}) ..."
+if ! (cd frontend && npx vitest run -c vitest.extensions.config.ts); then
+  echo "pre-commit: Extension-Frontend-Tests fehlgeschlagen -- Commit abgebrochen." >&2
+  exit 1
+fi
+
+echo "pre-commit: Extension-Frontend-Typecheck ..."
+if ! (cd frontend && npm run --silent typecheck:extensions); then
+  echo "pre-commit: Extension-Frontend-Typecheck fehlgeschlagen -- Commit abgebrochen." >&2
+  exit 1
+fi
+
+echo "pre-commit: OK -- frische Bundles fuer ${changed_exts[*]} sind Teil dieses Commits."

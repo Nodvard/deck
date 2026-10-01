@@ -1,0 +1,3765 @@
+{
+ "format": 1,
+ "names": {
+  "lattice_sdk.AIProvider": {
+   "art": "klasse",
+   "methoden": {
+    "complete": {
+     "prompt": true,
+     "system": false
+    },
+    "health": {},
+    "stream": {
+     "prompt": true,
+     "system": false
+    }
+   }
+  },
+  "lattice_sdk.ALL_CAPABILITIES": {
+   "art": "konstante"
+  },
+  "lattice_sdk.API_VERSION": {
+   "art": "konstante"
+  },
+  "lattice_sdk.ActionBlocked": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "rule": true
+   }
+  },
+  "lattice_sdk.ActionExecutor": {
+   "art": "klasse",
+   "methoden": {
+    "dry_run": {
+     "req": true
+    },
+    "execute": {
+     "req": true
+    }
+   }
+  },
+  "lattice_sdk.ActionRequest": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "correlation_id": false,
+    "expires_in_s": false,
+    "host_ref": false,
+    "idempotency_key": false,
+    "payload": false,
+    "proposed_by": true,
+    "reason": true,
+    "risk": false
+   }
+  },
+  "lattice_sdk.ActionResult": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "duration_ms": false,
+    "error": false,
+    "exit_code": false,
+    "output": false,
+    "success": true
+   }
+  },
+  "lattice_sdk.ActionSpec": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "command_field": false,
+    "confirm_text": false,
+    "default_risk": false,
+    "description": false,
+    "host_bound": false,
+    "host_tags": false,
+    "icon": false,
+    "label": true,
+    "params_schema": false,
+    "permissions": false
+   }
+  },
+  "lattice_sdk.ActionStatus": {
+   "art": "klasse"
+  },
+  "lattice_sdk.ActionsView": {
+   "art": "klasse",
+   "params": {
+    "actions": true,
+    "kind": false
+   }
+  },
+  "lattice_sdk.Actor": {
+   "art": "klasse",
+   "methoden": {
+    "ai": {
+     "model": true
+    },
+    "extension": {
+     "ext_id": true
+    },
+    "scheduler": {
+     "job_id": true
+    },
+    "user": {
+     "user_id": true,
+     "username": false
+    }
+   },
+   "params": {
+    "id": true,
+    "label": false,
+    "type": true
+   }
+  },
+  "lattice_sdk.ActorType": {
+   "art": "klasse"
+  },
+  "lattice_sdk.BackupProvider": {
+   "art": "klasse",
+   "methoden": {
+    "job_history": {
+     "job_ref": true
+    },
+    "list_jobs": {},
+    "retry": {
+     "job_ref": true
+    }
+   }
+  },
+  "lattice_sdk.Badge": {
+   "art": "klasse",
+   "params": {
+    "text": true,
+    "tone": false
+   }
+  },
+  "lattice_sdk.ChartView": {
+   "art": "klasse",
+   "params": {
+    "chart": false,
+    "kind": false,
+    "series": true,
+    "x_field": false,
+    "y_max": false,
+    "y_unit": false
+   }
+  },
+  "lattice_sdk.Column": {
+   "art": "klasse",
+   "params": {
+    "align": false,
+    "field": true,
+    "label": true,
+    "template": false,
+    "width": false
+   }
+  },
+  "lattice_sdk.CommandRunner": {
+   "art": "klasse",
+   "methoden": {
+    "run": {
+     "command": true,
+     "host": true,
+     "timeout_s": false,
+     "user": false
+    }
+   }
+  },
+  "lattice_sdk.ConnectorHealth": {
+   "art": "klasse",
+   "params": {
+    "latency_ms": false,
+    "message": false,
+    "ok": true
+   }
+  },
+  "lattice_sdk.ConnectorType": {
+   "art": "klasse",
+   "methoden": {
+    "build": {
+     "config": true
+    },
+    "test": {
+     "config": true
+    }
+   }
+  },
+  "lattice_sdk.ConsoleSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "lattice_sdk.ConsoleTarget": {
+   "art": "klasse",
+   "methoden": {
+    "console_available": {
+     "host": true
+    },
+    "open_console": {
+     "host": true
+    }
+   }
+  },
+  "lattice_sdk.DiscoveredHost": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "address_verified": false,
+    "display_name": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ref": true,
+    "status": false,
+    "tags": false
+   }
+  },
+  "lattice_sdk.DryRunReport": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "summary": true,
+    "would_change": true
+   }
+  },
+  "lattice_sdk.Event": {
+   "art": "klasse",
+   "params": {
+    "correlation_id": false,
+    "name": true,
+    "payload": false
+   }
+  },
+  "lattice_sdk.ExecResult": {
+   "art": "klasse",
+   "params": {
+    "duration_ms": true,
+    "exit_code": true,
+    "stderr": true,
+    "stdout": true,
+    "truncated": false
+   }
+  },
+  "lattice_sdk.ExtensionContext": {
+   "art": "klasse",
+   "methoden": {
+    "notify_sync": {
+     "body": true,
+     "severity": false,
+     "title": true
+    },
+    "spawn": {
+     "coro": true,
+     "name": true,
+     "restart": false,
+     "restart_delay_s": false
+    },
+    "vault_use": {
+     "handle": true
+    }
+   }
+  },
+  "lattice_sdk.ExtensionManifest": {
+   "art": "klasse",
+   "params": {
+    "api_version": true,
+    "author": false,
+    "category": false,
+    "description": false,
+    "enable_on": false,
+    "entrypoint": true,
+    "frontend": false,
+    "icon": false,
+    "id": true,
+    "name": true,
+    "permissions": false,
+    "requires": false,
+    "settings_schema": false,
+    "sort_order": false,
+    "source": false,
+    "version": true
+   }
+  },
+  "lattice_sdk.FileEntry": {
+   "art": "klasse",
+   "params": {
+    "is_dir": true,
+    "metadata": false,
+    "mime": false,
+    "modified_at": false,
+    "name": true,
+    "path": true,
+    "size": false,
+    "sync_status": false
+   }
+  },
+  "lattice_sdk.FileSource": {
+   "art": "klasse",
+   "methoden": {
+    "info": {},
+    "list_dir": {
+     "cursor": false,
+     "path": true
+    },
+    "mkdir": {
+     "path": true
+    },
+    "open_read": {
+     "offset": false,
+     "path": true
+    },
+    "open_write": {
+     "path": true,
+     "size": true,
+     "stream": true
+    },
+    "remove": {
+     "path": true,
+     "recursive": false
+    },
+    "rename": {
+     "dst": true,
+     "src": true
+    },
+    "search": {
+     "query": true,
+     "root": true
+    },
+    "stat": {
+     "path": true
+    }
+   }
+  },
+  "lattice_sdk.FileSourceCaps": {
+   "art": "klasse",
+   "params": {
+    "mkdir": false,
+    "quota": false,
+    "range_read": false,
+    "remove": false,
+    "rename": false,
+    "search": false,
+    "sync_status": false,
+    "trash": false,
+    "write": false
+   }
+  },
+  "lattice_sdk.FileSourceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "file_sources": {}
+   }
+  },
+  "lattice_sdk.GateDecision": {
+   "art": "klasse",
+   "params": {
+    "action_id": true,
+    "detail": false,
+    "expires_at": false,
+    "outcome": true,
+    "rule": false,
+    "status": true
+   }
+  },
+  "lattice_sdk.GateOutcome": {
+   "art": "klasse"
+  },
+  "lattice_sdk.GaugeView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "label": false,
+    "max_field": false,
+    "max_value": false,
+    "value_field": true
+   }
+  },
+  "lattice_sdk.GridSize": {
+   "art": "klasse",
+   "params": {
+    "h": false,
+    "min_h": false,
+    "min_w": false,
+    "w": false
+   }
+  },
+  "lattice_sdk.HealthReport": {
+   "art": "klasse",
+   "params": {
+    "details": false,
+    "healthy": true,
+    "message": false
+   }
+  },
+  "lattice_sdk.Host": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "display_name": true,
+    "has_credential": false,
+    "id": true,
+    "is_managed": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ext_id": false,
+    "provider_ref": false,
+    "status": false,
+    "tags": false
+   }
+  },
+  "lattice_sdk.HostProvider": {
+   "art": "klasse",
+   "methoden": {
+    "discover_hosts": {},
+    "host_actions": {
+     "provider_ref": true
+    },
+    "host_status": {
+     "provider_ref": true
+    }
+   }
+  },
+  "lattice_sdk.HostRequirementSpec": {
+   "art": "klasse",
+   "params": {
+    "check_command": false,
+    "fail_hint": false,
+    "id": true,
+    "label": true,
+    "needs_root": false,
+    "ok_text": false,
+    "order": false,
+    "os_families": false,
+    "root_reason": false,
+    "tags": false,
+    "unix_group": false
+   }
+  },
+  "lattice_sdk.HostStatus": {
+   "art": "klasse"
+  },
+  "lattice_sdk.HostToolSpec": {
+   "art": "klasse",
+   "params": {
+    "category": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "kinds": false,
+    "order": false,
+    "os_families": false,
+    "own_hosts_only": false,
+    "path": true,
+    "permissions": false,
+    "tags": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.HostUnreachable": {
+   "art": "klasse"
+  },
+  "lattice_sdk.IncompatibleExtension": {
+   "art": "klasse",
+   "params": {
+    "current": true,
+    "ext_id": true,
+    "required": true
+   }
+  },
+  "lattice_sdk.InvalidRegistration": {
+   "art": "klasse"
+  },
+  "lattice_sdk.JobSpec": {
+   "art": "klasse"
+  },
+  "lattice_sdk.KNOWN_PERMISSIONS": {
+   "art": "konstante"
+  },
+  "lattice_sdk.LatticeError": {
+   "art": "klasse"
+  },
+  "lattice_sdk.LatticeExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "lattice_sdk.ListItem": {
+   "art": "klasse",
+   "params": {
+    "actions": false,
+    "badge": false,
+    "icon": false,
+    "subtitle": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.ListView": {
+   "art": "klasse",
+   "params": {
+    "empty_text": false,
+    "item": true,
+    "kind": false,
+    "max_items": false
+   }
+  },
+  "lattice_sdk.LogView": {
+   "art": "klasse",
+   "params": {
+    "follow": false,
+    "kind": false,
+    "lines_field": false,
+    "max_lines": false
+   }
+  },
+  "lattice_sdk.MarkdownView": {
+   "art": "klasse",
+   "params": {
+    "content_field": false,
+    "kind": false
+   }
+  },
+  "lattice_sdk.MetricsProvider": {
+   "art": "klasse",
+   "methoden": {
+    "metric_names": {},
+    "sample": {
+     "host": true
+    }
+   }
+  },
+  "lattice_sdk.MobileFallback": {
+   "art": "klasse"
+  },
+  "lattice_sdk.NodvardError": {
+   "art": "klasse"
+  },
+  "lattice_sdk.NodvardExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "lattice_sdk.Notification": {
+   "art": "klasse",
+   "params": {
+    "body": true,
+    "correlation_id": false,
+    "payload": false,
+    "severity": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.NotificationChannel": {
+   "art": "klasse",
+   "methoden": {
+    "send": {
+     "notification": true
+    },
+    "test": {}
+   }
+  },
+  "lattice_sdk.NotificationNotDelivered": {
+   "art": "klasse",
+   "params": {
+    "failures": true
+   }
+  },
+  "lattice_sdk.NotifyResult": {
+   "art": "klasse",
+   "params": {
+    "notification_id": true,
+    "suppressed": false
+   }
+  },
+  "lattice_sdk.Page": {
+   "art": "klasse",
+   "params": {
+    "items": true,
+    "next_cursor": false
+   }
+  },
+  "lattice_sdk.PageSpec": {
+   "art": "klasse",
+   "params": {
+    "component": true,
+    "icon": false,
+    "id": true,
+    "mobile": false,
+    "nav_order": false,
+    "nav_section": false,
+    "path": true,
+    "permissions": false,
+    "show_in_nav": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.PermissionDenied": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "permission": true
+   }
+  },
+  "lattice_sdk.REQUEST_WAIT_S": {
+   "art": "konstante"
+  },
+  "lattice_sdk.Refresh": {
+   "art": "klasse",
+   "params": {
+    "interval_s": false,
+    "ws_channel": false
+   }
+  },
+  "lattice_sdk.Risk": {
+   "art": "klasse"
+  },
+  "lattice_sdk.SearchProvider": {
+   "art": "klasse",
+   "methoden": {
+    "search": {
+     "limit": false,
+     "query": true
+    }
+   }
+  },
+  "lattice_sdk.SecretHandleRef": {
+   "art": "klasse"
+  },
+  "lattice_sdk.SecretUnavailable": {
+   "art": "klasse"
+  },
+  "lattice_sdk.Series": {
+   "art": "klasse",
+   "params": {
+    "field": true,
+    "label": true,
+    "tone": false
+   }
+  },
+  "lattice_sdk.ServiceCatalog": {
+   "art": "klasse",
+   "methoden": {
+    "list_services": {}
+   }
+  },
+  "lattice_sdk.Severity": {
+   "art": "klasse"
+  },
+  "lattice_sdk.SourceInfo": {
+   "art": "klasse",
+   "params": {
+    "deep_link": false,
+    "details": false,
+    "healthy": false,
+    "message": false,
+    "total_bytes": false,
+    "used_bytes": false
+   }
+  },
+  "lattice_sdk.StatView": {
+   "art": "klasse",
+   "params": {
+    "delta": false,
+    "kind": false,
+    "label": false,
+    "sparkline_field": false,
+    "tone": false,
+    "value": true
+   }
+  },
+  "lattice_sdk.StatusGridView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "tile_icon": false,
+    "tile_link": false,
+    "tile_subtitle": false,
+    "tile_title": true,
+    "tile_tone": false
+   }
+  },
+  "lattice_sdk.TableView": {
+   "art": "klasse",
+   "params": {
+    "columns": true,
+    "empty_text": false,
+    "kind": false,
+    "row_actions": false
+   }
+  },
+  "lattice_sdk.TerminalSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "resize": {
+     "cols": true,
+     "rows": true
+    },
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "lattice_sdk.TerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open": {
+     "host": true
+    },
+    "open": {
+     "cols": true,
+     "host": true,
+     "rows": true,
+     "user": true
+    }
+   }
+  },
+  "lattice_sdk.Tone": {
+   "art": "klasse"
+  },
+  "lattice_sdk.WidgetAction": {
+   "art": "klasse",
+   "params": {
+    "body": false,
+    "confirm": false,
+    "confirm_text": false,
+    "endpoint": true,
+    "id": true,
+    "label": true,
+    "method": false,
+    "permissions": false,
+    "show_if": false,
+    "style": false
+   }
+  },
+  "lattice_sdk.WidgetSpec": {
+   "art": "klasse",
+   "params": {
+    "component": false,
+    "data_endpoint": true,
+    "default_enabled": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "permissions": false,
+    "refresh": false,
+    "size": false,
+    "title": true,
+    "view": true
+   }
+  },
+  "lattice_sdk.actions.ActionRequest": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "correlation_id": false,
+    "expires_in_s": false,
+    "host_ref": false,
+    "idempotency_key": false,
+    "payload": false,
+    "proposed_by": true,
+    "reason": true,
+    "risk": false
+   }
+  },
+  "lattice_sdk.actions.ActionResult": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "duration_ms": false,
+    "error": false,
+    "exit_code": false,
+    "output": false,
+    "success": true
+   }
+  },
+  "lattice_sdk.actions.ActionSpec": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "command_field": false,
+    "confirm_text": false,
+    "default_risk": false,
+    "description": false,
+    "host_bound": false,
+    "host_tags": false,
+    "icon": false,
+    "label": true,
+    "params_schema": false,
+    "permissions": false
+   }
+  },
+  "lattice_sdk.actions.ActionStatus": {
+   "art": "klasse"
+  },
+  "lattice_sdk.actions.DryRunReport": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "summary": true,
+    "would_change": true
+   }
+  },
+  "lattice_sdk.actions.GateDecision": {
+   "art": "klasse",
+   "params": {
+    "action_id": true,
+    "detail": false,
+    "expires_at": false,
+    "outcome": true,
+    "rule": false,
+    "status": true
+   }
+  },
+  "lattice_sdk.actions.GateOutcome": {
+   "art": "klasse"
+  },
+  "lattice_sdk.actions.REQUEST_WAIT_S": {
+   "art": "konstante"
+  },
+  "lattice_sdk.capabilities.AIProvider": {
+   "art": "klasse",
+   "methoden": {
+    "complete": {
+     "prompt": true,
+     "system": false
+    },
+    "health": {},
+    "stream": {
+     "prompt": true,
+     "system": false
+    }
+   }
+  },
+  "lattice_sdk.capabilities.ALL_CAPABILITIES": {
+   "art": "konstante"
+  },
+  "lattice_sdk.capabilities.ActionExecutor": {
+   "art": "klasse",
+   "methoden": {
+    "dry_run": {
+     "req": true
+    },
+    "execute": {
+     "req": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.BackupProvider": {
+   "art": "klasse",
+   "methoden": {
+    "job_history": {
+     "job_ref": true
+    },
+    "list_jobs": {},
+    "retry": {
+     "job_ref": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.CommandRunner": {
+   "art": "klasse",
+   "methoden": {
+    "run": {
+     "command": true,
+     "host": true,
+     "timeout_s": false,
+     "user": false
+    }
+   }
+  },
+  "lattice_sdk.capabilities.ConsoleSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.ConsoleTarget": {
+   "art": "klasse",
+   "methoden": {
+    "console_available": {
+     "host": true
+    },
+    "open_console": {
+     "host": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.FileSource": {
+   "art": "klasse",
+   "methoden": {
+    "info": {},
+    "list_dir": {
+     "cursor": false,
+     "path": true
+    },
+    "mkdir": {
+     "path": true
+    },
+    "open_read": {
+     "offset": false,
+     "path": true
+    },
+    "open_write": {
+     "path": true,
+     "size": true,
+     "stream": true
+    },
+    "remove": {
+     "path": true,
+     "recursive": false
+    },
+    "rename": {
+     "dst": true,
+     "src": true
+    },
+    "search": {
+     "query": true,
+     "root": true
+    },
+    "stat": {
+     "path": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.FileSourceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "file_sources": {}
+   }
+  },
+  "lattice_sdk.capabilities.HostProvider": {
+   "art": "klasse",
+   "methoden": {
+    "discover_hosts": {},
+    "host_actions": {
+     "provider_ref": true
+    },
+    "host_status": {
+     "provider_ref": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.MetricsProvider": {
+   "art": "klasse",
+   "methoden": {
+    "metric_names": {},
+    "sample": {
+     "host": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.NotificationChannel": {
+   "art": "klasse",
+   "methoden": {
+    "send": {
+     "notification": true
+    },
+    "test": {}
+   }
+  },
+  "lattice_sdk.capabilities.SearchProvider": {
+   "art": "klasse",
+   "methoden": {
+    "search": {
+     "limit": false,
+     "query": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.ServiceCatalog": {
+   "art": "klasse",
+   "methoden": {
+    "list_services": {}
+   }
+  },
+  "lattice_sdk.capabilities.TerminalSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "resize": {
+     "cols": true,
+     "rows": true
+    },
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.TerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open": {
+     "host": true
+    },
+    "open": {
+     "cols": true,
+     "host": true,
+     "rows": true,
+     "user": true
+    }
+   }
+  },
+  "lattice_sdk.context.ActionsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "list": {
+     "correlation_id": false,
+     "limit": false
+    },
+    "propose": {
+     "request": true,
+     "wait_s": false
+    },
+    "proposer_labels": {
+     "rows": true
+    },
+    "register": {
+     "spec": true
+    },
+    "result": {
+     "action_id": true
+    }
+   }
+  },
+  "lattice_sdk.context.ApiHandle": {
+   "art": "klasse",
+   "methoden": {
+    "include_router": {
+     "permission": false,
+     "prefix": false,
+     "router": true,
+     "tags": false
+    }
+   }
+  },
+  "lattice_sdk.context.AuditHandle": {
+   "art": "klasse",
+   "methoden": {
+    "log": {
+     "action": true,
+     "actor": false,
+     "correlation_id": false,
+     "detail": false,
+     "outcome": true,
+     "reason": false,
+     "target_id": false,
+     "target_type": false
+    }
+   }
+  },
+  "lattice_sdk.context.CapabilitiesHandle": {
+   "art": "klasse",
+   "methoden": {
+    "provide": {
+     "implementation": true
+    },
+    "query": {
+     "protocol": true
+    }
+   }
+  },
+  "lattice_sdk.context.ConnectorType": {
+   "art": "klasse",
+   "methoden": {
+    "build": {
+     "config": true
+    },
+    "test": {
+     "config": true
+    }
+   }
+  },
+  "lattice_sdk.context.ConnectorsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "get_client": {
+     "instance_id": true
+    },
+    "instances": {
+     "type_id": false
+    },
+    "register_type": {
+     "connector_type": true
+    }
+   }
+  },
+  "lattice_sdk.context.DbHandle": {
+   "art": "klasse",
+   "methoden": {
+    "session": {}
+   }
+  },
+  "lattice_sdk.context.EventsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "publish": {
+     "event": true
+    },
+    "subscribe": {
+     "handler": true,
+     "pattern": true
+    }
+   }
+  },
+  "lattice_sdk.context.ExecHandle": {
+   "art": "klasse",
+   "methoden": {
+    "open_shell": {
+     "cols": true,
+     "host": true,
+     "rows": true
+    },
+    "run": {
+     "command": true,
+     "host": true,
+     "log_command": false,
+     "timeout_s": false,
+     "user": false
+    },
+    "sftp": {
+     "host": true
+    },
+    "stream": {
+     "command": true,
+     "host": true
+    }
+   }
+  },
+  "lattice_sdk.context.ExtensionContext": {
+   "art": "klasse",
+   "methoden": {
+    "notify_sync": {
+     "body": true,
+     "severity": false,
+     "title": true
+    },
+    "spawn": {
+     "coro": true,
+     "name": true,
+     "restart": false,
+     "restart_delay_s": false
+    },
+    "vault_use": {
+     "handle": true
+    }
+   }
+  },
+  "lattice_sdk.context.HostsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "by_name": {
+     "name": true
+    },
+    "get": {
+     "host_id": true
+    },
+    "list": {
+     "group": false,
+     "tag": false
+    },
+    "upsert_discovered": {
+     "hosts": true
+    }
+   }
+  },
+  "lattice_sdk.context.HttpHandle": {
+   "art": "klasse",
+   "methoden": {
+    "get": {
+     "insecure_tls": false,
+     "url": true
+    },
+    "post": {
+     "insecure_tls": false,
+     "url": true
+    },
+    "request": {
+     "insecure_tls": false,
+     "method": true,
+     "url": true
+    },
+    "websocket": {
+     "headers": false,
+     "insecure_tls": false,
+     "open_timeout_s": false,
+     "subprotocols": false,
+     "url": true
+    }
+   }
+  },
+  "lattice_sdk.context.JobSpec": {
+   "art": "klasse"
+  },
+  "lattice_sdk.context.NotifyHandle": {
+   "art": "klasse",
+   "methoden": {
+    "send": {
+     "notification": true,
+     "raise_on_failure": false
+    },
+    "would_suppress": {
+     "host_id": false,
+     "host_ids": false
+    }
+   }
+  },
+  "lattice_sdk.context.SchedulerHandle": {
+   "art": "klasse",
+   "methoden": {
+    "register_job": {
+     "spec": true
+    },
+    "trigger": {
+     "job_id": true
+    }
+   }
+  },
+  "lattice_sdk.context.SecretHandleRef": {
+   "art": "klasse"
+  },
+  "lattice_sdk.context.SecretsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "create": {
+     "description": false,
+     "kind": true,
+     "label": true,
+     "value": true
+    },
+    "exists": {
+     "label": true
+    },
+    "get_handle": {
+     "label": true
+    }
+   }
+  },
+  "lattice_sdk.context.SettingsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "core": {
+     "key": true
+    },
+    "declare": {
+     "schema": true
+    },
+    "get": {},
+    "set": {
+     "values": true
+    }
+   }
+  },
+  "lattice_sdk.context.UiHandle": {
+   "art": "klasse",
+   "methoden": {
+    "register_host_requirement": {
+     "spec": true
+    },
+    "register_host_tool": {
+     "spec": true
+    },
+    "register_nav": {
+     "order": false,
+     "section": true
+    },
+    "register_page": {
+     "spec": true
+    },
+    "register_widget": {
+     "spec": true
+    }
+   }
+  },
+  "lattice_sdk.context.WebSocketConnection": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "recv": {},
+    "send": {
+     "data": true
+    }
+   }
+  },
+  "lattice_sdk.context.WsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "broadcast": {
+     "channel": true,
+     "payload": true
+    }
+   }
+  },
+  "lattice_sdk.errors.ActionBlocked": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "rule": true
+   }
+  },
+  "lattice_sdk.errors.HostUnreachable": {
+   "art": "klasse"
+  },
+  "lattice_sdk.errors.IncompatibleExtension": {
+   "art": "klasse",
+   "params": {
+    "current": true,
+    "ext_id": true,
+    "required": true
+   }
+  },
+  "lattice_sdk.errors.InvalidRegistration": {
+   "art": "klasse"
+  },
+  "lattice_sdk.errors.LatticeError": {
+   "art": "klasse"
+  },
+  "lattice_sdk.errors.NodvardError": {
+   "art": "klasse"
+  },
+  "lattice_sdk.errors.NotificationNotDelivered": {
+   "art": "klasse",
+   "params": {
+    "failures": true
+   }
+  },
+  "lattice_sdk.errors.PermissionDenied": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "permission": true
+   }
+  },
+  "lattice_sdk.errors.SecretUnavailable": {
+   "art": "klasse"
+  },
+  "lattice_sdk.extension.LatticeExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "lattice_sdk.extension.NodvardExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "lattice_sdk.is_compatible": {
+   "art": "funktion",
+   "params": {
+    "required": true
+   }
+  },
+  "lattice_sdk.load_manifest": {
+   "art": "funktion",
+   "params": {
+    "path": true
+   }
+  },
+  "lattice_sdk.manifest.ExtensionManifest": {
+   "art": "klasse",
+   "params": {
+    "api_version": true,
+    "author": false,
+    "category": false,
+    "description": false,
+    "enable_on": false,
+    "entrypoint": true,
+    "frontend": false,
+    "icon": false,
+    "id": true,
+    "name": true,
+    "permissions": false,
+    "requires": false,
+    "settings_schema": false,
+    "sort_order": false,
+    "source": false,
+    "version": true
+   }
+  },
+  "lattice_sdk.manifest.ID_RE": {
+   "art": "konstante"
+  },
+  "lattice_sdk.manifest.KNOWN_ENABLE_TRIGGERS": {
+   "art": "konstante"
+  },
+  "lattice_sdk.manifest.KNOWN_PERMISSIONS": {
+   "art": "konstante"
+  },
+  "lattice_sdk.manifest.load_manifest": {
+   "art": "funktion",
+   "params": {
+    "path": true
+   }
+  },
+  "lattice_sdk.types.Actor": {
+   "art": "klasse",
+   "methoden": {
+    "ai": {
+     "model": true
+    },
+    "extension": {
+     "ext_id": true
+    },
+    "scheduler": {
+     "job_id": true
+    },
+    "user": {
+     "user_id": true,
+     "username": false
+    }
+   },
+   "params": {
+    "id": true,
+    "label": false,
+    "type": true
+   }
+  },
+  "lattice_sdk.types.ActorType": {
+   "art": "klasse"
+  },
+  "lattice_sdk.types.ConnectorHealth": {
+   "art": "klasse",
+   "params": {
+    "latency_ms": false,
+    "message": false,
+    "ok": true
+   }
+  },
+  "lattice_sdk.types.DiscoveredHost": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "address_verified": false,
+    "display_name": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ref": true,
+    "status": false,
+    "tags": false
+   }
+  },
+  "lattice_sdk.types.Event": {
+   "art": "klasse",
+   "params": {
+    "correlation_id": false,
+    "name": true,
+    "payload": false
+   }
+  },
+  "lattice_sdk.types.ExecResult": {
+   "art": "klasse",
+   "params": {
+    "duration_ms": true,
+    "exit_code": true,
+    "stderr": true,
+    "stdout": true,
+    "truncated": false
+   }
+  },
+  "lattice_sdk.types.FileEntry": {
+   "art": "klasse",
+   "params": {
+    "is_dir": true,
+    "metadata": false,
+    "mime": false,
+    "modified_at": false,
+    "name": true,
+    "path": true,
+    "size": false,
+    "sync_status": false
+   }
+  },
+  "lattice_sdk.types.FileSourceCaps": {
+   "art": "klasse",
+   "params": {
+    "mkdir": false,
+    "quota": false,
+    "range_read": false,
+    "remove": false,
+    "rename": false,
+    "search": false,
+    "sync_status": false,
+    "trash": false,
+    "write": false
+   }
+  },
+  "lattice_sdk.types.HealthReport": {
+   "art": "klasse",
+   "params": {
+    "details": false,
+    "healthy": true,
+    "message": false
+   }
+  },
+  "lattice_sdk.types.Host": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "display_name": true,
+    "has_credential": false,
+    "id": true,
+    "is_managed": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ext_id": false,
+    "provider_ref": false,
+    "status": false,
+    "tags": false
+   }
+  },
+  "lattice_sdk.types.HostStatus": {
+   "art": "klasse"
+  },
+  "lattice_sdk.types.Notification": {
+   "art": "klasse",
+   "params": {
+    "body": true,
+    "correlation_id": false,
+    "payload": false,
+    "severity": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.types.NotifyResult": {
+   "art": "klasse",
+   "params": {
+    "notification_id": true,
+    "suppressed": false
+   }
+  },
+  "lattice_sdk.types.Page": {
+   "art": "klasse",
+   "params": {
+    "items": true,
+    "next_cursor": false
+   }
+  },
+  "lattice_sdk.types.Risk": {
+   "art": "klasse"
+  },
+  "lattice_sdk.types.Severity": {
+   "art": "klasse"
+  },
+  "lattice_sdk.types.SourceInfo": {
+   "art": "klasse",
+   "params": {
+    "deep_link": false,
+    "details": false,
+    "healthy": false,
+    "message": false,
+    "total_bytes": false,
+    "used_bytes": false
+   }
+  },
+  "lattice_sdk.types.T": {
+   "art": "konstante"
+  },
+  "lattice_sdk.version.API_VERSION": {
+   "art": "konstante"
+  },
+  "lattice_sdk.version.is_compatible": {
+   "art": "funktion",
+   "params": {
+    "required": true
+   }
+  },
+  "lattice_sdk.widgets.ALLOWED_FILTERS": {
+   "art": "konstante"
+  },
+  "lattice_sdk.widgets.ActionsView": {
+   "art": "klasse",
+   "params": {
+    "actions": true,
+    "kind": false
+   }
+  },
+  "lattice_sdk.widgets.Badge": {
+   "art": "klasse",
+   "params": {
+    "text": true,
+    "tone": false
+   }
+  },
+  "lattice_sdk.widgets.ChartView": {
+   "art": "klasse",
+   "params": {
+    "chart": false,
+    "kind": false,
+    "series": true,
+    "x_field": false,
+    "y_max": false,
+    "y_unit": false
+   }
+  },
+  "lattice_sdk.widgets.Column": {
+   "art": "klasse",
+   "params": {
+    "align": false,
+    "field": true,
+    "label": true,
+    "template": false,
+    "width": false
+   }
+  },
+  "lattice_sdk.widgets.GaugeView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "label": false,
+    "max_field": false,
+    "max_value": false,
+    "value_field": true
+   }
+  },
+  "lattice_sdk.widgets.GridSize": {
+   "art": "klasse",
+   "params": {
+    "h": false,
+    "min_h": false,
+    "min_w": false,
+    "w": false
+   }
+  },
+  "lattice_sdk.widgets.HostRequirementSpec": {
+   "art": "klasse",
+   "params": {
+    "check_command": false,
+    "fail_hint": false,
+    "id": true,
+    "label": true,
+    "needs_root": false,
+    "ok_text": false,
+    "order": false,
+    "os_families": false,
+    "root_reason": false,
+    "tags": false,
+    "unix_group": false
+   }
+  },
+  "lattice_sdk.widgets.HostToolSpec": {
+   "art": "klasse",
+   "params": {
+    "category": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "kinds": false,
+    "order": false,
+    "os_families": false,
+    "own_hosts_only": false,
+    "path": true,
+    "permissions": false,
+    "tags": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.widgets.ListItem": {
+   "art": "klasse",
+   "params": {
+    "actions": false,
+    "badge": false,
+    "icon": false,
+    "subtitle": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.widgets.ListView": {
+   "art": "klasse",
+   "params": {
+    "empty_text": false,
+    "item": true,
+    "kind": false,
+    "max_items": false
+   }
+  },
+  "lattice_sdk.widgets.LogView": {
+   "art": "klasse",
+   "params": {
+    "follow": false,
+    "kind": false,
+    "lines_field": false,
+    "max_lines": false
+   }
+  },
+  "lattice_sdk.widgets.MarkdownView": {
+   "art": "klasse",
+   "params": {
+    "content_field": false,
+    "kind": false
+   }
+  },
+  "lattice_sdk.widgets.MobileFallback": {
+   "art": "klasse"
+  },
+  "lattice_sdk.widgets.PageSpec": {
+   "art": "klasse",
+   "params": {
+    "component": true,
+    "icon": false,
+    "id": true,
+    "mobile": false,
+    "nav_order": false,
+    "nav_section": false,
+    "path": true,
+    "permissions": false,
+    "show_in_nav": false,
+    "title": true
+   }
+  },
+  "lattice_sdk.widgets.Refresh": {
+   "art": "klasse",
+   "params": {
+    "interval_s": false,
+    "ws_channel": false
+   }
+  },
+  "lattice_sdk.widgets.Series": {
+   "art": "klasse",
+   "params": {
+    "field": true,
+    "label": true,
+    "tone": false
+   }
+  },
+  "lattice_sdk.widgets.StatView": {
+   "art": "klasse",
+   "params": {
+    "delta": false,
+    "kind": false,
+    "label": false,
+    "sparkline_field": false,
+    "tone": false,
+    "value": true
+   }
+  },
+  "lattice_sdk.widgets.StatusGridView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "tile_icon": false,
+    "tile_link": false,
+    "tile_subtitle": false,
+    "tile_title": true,
+    "tile_tone": false
+   }
+  },
+  "lattice_sdk.widgets.TableView": {
+   "art": "klasse",
+   "params": {
+    "columns": true,
+    "empty_text": false,
+    "kind": false,
+    "row_actions": false
+   }
+  },
+  "lattice_sdk.widgets.Tone": {
+   "art": "klasse"
+  },
+  "lattice_sdk.widgets.WidgetAction": {
+   "art": "klasse",
+   "params": {
+    "body": false,
+    "confirm": false,
+    "confirm_text": false,
+    "endpoint": true,
+    "id": true,
+    "label": true,
+    "method": false,
+    "permissions": false,
+    "show_if": false,
+    "style": false
+   }
+  },
+  "lattice_sdk.widgets.WidgetSpec": {
+   "art": "klasse",
+   "params": {
+    "component": false,
+    "data_endpoint": true,
+    "default_enabled": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "permissions": false,
+    "refresh": false,
+    "size": false,
+    "title": true,
+    "view": true
+   }
+  },
+  "nodvard_sdk.AIProvider": {
+   "art": "klasse",
+   "methoden": {
+    "complete": {
+     "prompt": true,
+     "system": false
+    },
+    "health": {},
+    "stream": {
+     "prompt": true,
+     "system": false
+    }
+   }
+  },
+  "nodvard_sdk.ALL_CAPABILITIES": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.API_VERSION": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.ActionBlocked": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "rule": true
+   }
+  },
+  "nodvard_sdk.ActionExecutor": {
+   "art": "klasse",
+   "methoden": {
+    "dry_run": {
+     "req": true
+    },
+    "execute": {
+     "req": true
+    }
+   }
+  },
+  "nodvard_sdk.ActionRequest": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "correlation_id": false,
+    "expires_in_s": false,
+    "host_ref": false,
+    "idempotency_key": false,
+    "payload": false,
+    "proposed_by": true,
+    "reason": true,
+    "risk": false
+   }
+  },
+  "nodvard_sdk.ActionResult": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "duration_ms": false,
+    "error": false,
+    "exit_code": false,
+    "output": false,
+    "success": true
+   }
+  },
+  "nodvard_sdk.ActionSpec": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "command_field": false,
+    "confirm_text": false,
+    "default_risk": false,
+    "description": false,
+    "host_bound": false,
+    "host_tags": false,
+    "icon": false,
+    "label": true,
+    "params_schema": false,
+    "permissions": false
+   }
+  },
+  "nodvard_sdk.ActionStatus": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.ActionsView": {
+   "art": "klasse",
+   "params": {
+    "actions": true,
+    "kind": false
+   }
+  },
+  "nodvard_sdk.Actor": {
+   "art": "klasse",
+   "methoden": {
+    "ai": {
+     "model": true
+    },
+    "extension": {
+     "ext_id": true
+    },
+    "scheduler": {
+     "job_id": true
+    },
+    "user": {
+     "user_id": true,
+     "username": false
+    }
+   },
+   "params": {
+    "id": true,
+    "label": false,
+    "type": true
+   }
+  },
+  "nodvard_sdk.ActorType": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.BackupProvider": {
+   "art": "klasse",
+   "methoden": {
+    "job_history": {
+     "job_ref": true
+    },
+    "list_jobs": {},
+    "retry": {
+     "job_ref": true
+    }
+   }
+  },
+  "nodvard_sdk.Badge": {
+   "art": "klasse",
+   "params": {
+    "text": true,
+    "tone": false
+   }
+  },
+  "nodvard_sdk.ChartView": {
+   "art": "klasse",
+   "params": {
+    "chart": false,
+    "kind": false,
+    "series": true,
+    "x_field": false,
+    "y_max": false,
+    "y_unit": false
+   }
+  },
+  "nodvard_sdk.Column": {
+   "art": "klasse",
+   "params": {
+    "align": false,
+    "field": true,
+    "label": true,
+    "template": false,
+    "width": false
+   }
+  },
+  "nodvard_sdk.CommandRunner": {
+   "art": "klasse",
+   "methoden": {
+    "run": {
+     "command": true,
+     "host": true,
+     "timeout_s": false,
+     "user": false
+    }
+   }
+  },
+  "nodvard_sdk.ConnectorHealth": {
+   "art": "klasse",
+   "params": {
+    "latency_ms": false,
+    "message": false,
+    "ok": true
+   }
+  },
+  "nodvard_sdk.ConnectorType": {
+   "art": "klasse",
+   "methoden": {
+    "build": {
+     "config": true
+    },
+    "test": {
+     "config": true
+    }
+   }
+  },
+  "nodvard_sdk.ConsoleSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "nodvard_sdk.ConsoleTarget": {
+   "art": "klasse",
+   "methoden": {
+    "console_available": {
+     "host": true
+    },
+    "open_console": {
+     "host": true
+    }
+   }
+  },
+  "nodvard_sdk.DiscoveredHost": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "address_verified": false,
+    "display_name": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ref": true,
+    "status": false,
+    "tags": false
+   }
+  },
+  "nodvard_sdk.DryRunReport": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "summary": true,
+    "would_change": true
+   }
+  },
+  "nodvard_sdk.Event": {
+   "art": "klasse",
+   "params": {
+    "correlation_id": false,
+    "name": true,
+    "payload": false
+   }
+  },
+  "nodvard_sdk.ExecResult": {
+   "art": "klasse",
+   "params": {
+    "duration_ms": true,
+    "exit_code": true,
+    "stderr": true,
+    "stdout": true,
+    "truncated": false
+   }
+  },
+  "nodvard_sdk.ExtensionContext": {
+   "art": "klasse",
+   "methoden": {
+    "notify_sync": {
+     "body": true,
+     "severity": false,
+     "title": true
+    },
+    "spawn": {
+     "coro": true,
+     "name": true,
+     "restart": false,
+     "restart_delay_s": false
+    },
+    "vault_use": {
+     "handle": true
+    }
+   }
+  },
+  "nodvard_sdk.ExtensionManifest": {
+   "art": "klasse",
+   "params": {
+    "api_version": true,
+    "author": false,
+    "category": false,
+    "description": false,
+    "enable_on": false,
+    "entrypoint": true,
+    "frontend": false,
+    "icon": false,
+    "id": true,
+    "name": true,
+    "permissions": false,
+    "requires": false,
+    "settings_schema": false,
+    "sort_order": false,
+    "source": false,
+    "version": true
+   }
+  },
+  "nodvard_sdk.FileEntry": {
+   "art": "klasse",
+   "params": {
+    "is_dir": true,
+    "metadata": false,
+    "mime": false,
+    "modified_at": false,
+    "name": true,
+    "path": true,
+    "size": false,
+    "sync_status": false
+   }
+  },
+  "nodvard_sdk.FileSource": {
+   "art": "klasse",
+   "methoden": {
+    "info": {},
+    "list_dir": {
+     "cursor": false,
+     "path": true
+    },
+    "mkdir": {
+     "path": true
+    },
+    "open_read": {
+     "offset": false,
+     "path": true
+    },
+    "open_write": {
+     "path": true,
+     "size": true,
+     "stream": true
+    },
+    "remove": {
+     "path": true,
+     "recursive": false
+    },
+    "rename": {
+     "dst": true,
+     "src": true
+    },
+    "search": {
+     "query": true,
+     "root": true
+    },
+    "stat": {
+     "path": true
+    }
+   }
+  },
+  "nodvard_sdk.FileSourceCaps": {
+   "art": "klasse",
+   "params": {
+    "mkdir": false,
+    "quota": false,
+    "range_read": false,
+    "remove": false,
+    "rename": false,
+    "search": false,
+    "sync_status": false,
+    "trash": false,
+    "write": false
+   }
+  },
+  "nodvard_sdk.FileSourceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "file_sources": {}
+   }
+  },
+  "nodvard_sdk.GateDecision": {
+   "art": "klasse",
+   "params": {
+    "action_id": true,
+    "detail": false,
+    "expires_at": false,
+    "outcome": true,
+    "rule": false,
+    "status": true
+   }
+  },
+  "nodvard_sdk.GateOutcome": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.GaugeView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "label": false,
+    "max_field": false,
+    "max_value": false,
+    "value_field": true
+   }
+  },
+  "nodvard_sdk.GridSize": {
+   "art": "klasse",
+   "params": {
+    "h": false,
+    "min_h": false,
+    "min_w": false,
+    "w": false
+   }
+  },
+  "nodvard_sdk.HealthReport": {
+   "art": "klasse",
+   "params": {
+    "details": false,
+    "healthy": true,
+    "message": false
+   }
+  },
+  "nodvard_sdk.Host": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "display_name": true,
+    "has_credential": false,
+    "id": true,
+    "is_managed": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ext_id": false,
+    "provider_ref": false,
+    "status": false,
+    "tags": false
+   }
+  },
+  "nodvard_sdk.HostProvider": {
+   "art": "klasse",
+   "methoden": {
+    "discover_hosts": {},
+    "host_actions": {
+     "provider_ref": true
+    },
+    "host_status": {
+     "provider_ref": true
+    }
+   }
+  },
+  "nodvard_sdk.HostRequirementSpec": {
+   "art": "klasse",
+   "params": {
+    "check_command": false,
+    "fail_hint": false,
+    "id": true,
+    "label": true,
+    "needs_root": false,
+    "ok_text": false,
+    "order": false,
+    "os_families": false,
+    "root_reason": false,
+    "tags": false,
+    "unix_group": false
+   }
+  },
+  "nodvard_sdk.HostStatus": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.HostToolSpec": {
+   "art": "klasse",
+   "params": {
+    "category": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "kinds": false,
+    "order": false,
+    "os_families": false,
+    "own_hosts_only": false,
+    "path": true,
+    "permissions": false,
+    "tags": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.HostUnreachable": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.IncompatibleExtension": {
+   "art": "klasse",
+   "params": {
+    "current": true,
+    "ext_id": true,
+    "required": true
+   }
+  },
+  "nodvard_sdk.InvalidRegistration": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.JobSpec": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.KNOWN_PERMISSIONS": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.LatticeError": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.LatticeExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "nodvard_sdk.ListItem": {
+   "art": "klasse",
+   "params": {
+    "actions": false,
+    "badge": false,
+    "icon": false,
+    "subtitle": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.ListView": {
+   "art": "klasse",
+   "params": {
+    "empty_text": false,
+    "item": true,
+    "kind": false,
+    "max_items": false
+   }
+  },
+  "nodvard_sdk.LogView": {
+   "art": "klasse",
+   "params": {
+    "follow": false,
+    "kind": false,
+    "lines_field": false,
+    "max_lines": false
+   }
+  },
+  "nodvard_sdk.MarkdownView": {
+   "art": "klasse",
+   "params": {
+    "content_field": false,
+    "kind": false
+   }
+  },
+  "nodvard_sdk.MetricsProvider": {
+   "art": "klasse",
+   "methoden": {
+    "metric_names": {},
+    "sample": {
+     "host": true
+    }
+   }
+  },
+  "nodvard_sdk.MobileFallback": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.NodvardError": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.NodvardExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "nodvard_sdk.Notification": {
+   "art": "klasse",
+   "params": {
+    "body": true,
+    "correlation_id": false,
+    "payload": false,
+    "severity": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.NotificationChannel": {
+   "art": "klasse",
+   "methoden": {
+    "send": {
+     "notification": true
+    },
+    "test": {}
+   }
+  },
+  "nodvard_sdk.NotificationNotDelivered": {
+   "art": "klasse",
+   "params": {
+    "failures": true
+   }
+  },
+  "nodvard_sdk.NotifyResult": {
+   "art": "klasse",
+   "params": {
+    "notification_id": true,
+    "suppressed": false
+   }
+  },
+  "nodvard_sdk.Page": {
+   "art": "klasse",
+   "params": {
+    "items": true,
+    "next_cursor": false
+   }
+  },
+  "nodvard_sdk.PageSpec": {
+   "art": "klasse",
+   "params": {
+    "component": true,
+    "icon": false,
+    "id": true,
+    "mobile": false,
+    "nav_order": false,
+    "nav_section": false,
+    "path": true,
+    "permissions": false,
+    "show_in_nav": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.PermissionDenied": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "permission": true
+   }
+  },
+  "nodvard_sdk.REQUEST_WAIT_S": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.Refresh": {
+   "art": "klasse",
+   "params": {
+    "interval_s": false,
+    "ws_channel": false
+   }
+  },
+  "nodvard_sdk.Risk": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.SearchProvider": {
+   "art": "klasse",
+   "methoden": {
+    "search": {
+     "limit": false,
+     "query": true
+    }
+   }
+  },
+  "nodvard_sdk.SecretHandleRef": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.SecretUnavailable": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.Series": {
+   "art": "klasse",
+   "params": {
+    "field": true,
+    "label": true,
+    "tone": false
+   }
+  },
+  "nodvard_sdk.ServiceCatalog": {
+   "art": "klasse",
+   "methoden": {
+    "list_services": {}
+   }
+  },
+  "nodvard_sdk.Severity": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.SourceInfo": {
+   "art": "klasse",
+   "params": {
+    "deep_link": false,
+    "details": false,
+    "healthy": false,
+    "message": false,
+    "total_bytes": false,
+    "used_bytes": false
+   }
+  },
+  "nodvard_sdk.StatView": {
+   "art": "klasse",
+   "params": {
+    "delta": false,
+    "kind": false,
+    "label": false,
+    "sparkline_field": false,
+    "tone": false,
+    "value": true
+   }
+  },
+  "nodvard_sdk.StatusGridView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "tile_icon": false,
+    "tile_link": false,
+    "tile_subtitle": false,
+    "tile_title": true,
+    "tile_tone": false
+   }
+  },
+  "nodvard_sdk.TableView": {
+   "art": "klasse",
+   "params": {
+    "columns": true,
+    "empty_text": false,
+    "kind": false,
+    "row_actions": false
+   }
+  },
+  "nodvard_sdk.TerminalSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "resize": {
+     "cols": true,
+     "rows": true
+    },
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "nodvard_sdk.TerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open": {
+     "host": true
+    },
+    "open": {
+     "cols": true,
+     "host": true,
+     "rows": true,
+     "user": true
+    }
+   }
+  },
+  "nodvard_sdk.Tone": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.WidgetAction": {
+   "art": "klasse",
+   "params": {
+    "body": false,
+    "confirm": false,
+    "confirm_text": false,
+    "endpoint": true,
+    "id": true,
+    "label": true,
+    "method": false,
+    "permissions": false,
+    "show_if": false,
+    "style": false
+   }
+  },
+  "nodvard_sdk.WidgetSpec": {
+   "art": "klasse",
+   "params": {
+    "component": false,
+    "data_endpoint": true,
+    "default_enabled": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "permissions": false,
+    "refresh": false,
+    "size": false,
+    "title": true,
+    "view": true
+   }
+  },
+  "nodvard_sdk.actions.ActionRequest": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "correlation_id": false,
+    "expires_in_s": false,
+    "host_ref": false,
+    "idempotency_key": false,
+    "payload": false,
+    "proposed_by": true,
+    "reason": true,
+    "risk": false
+   }
+  },
+  "nodvard_sdk.actions.ActionResult": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "duration_ms": false,
+    "error": false,
+    "exit_code": false,
+    "output": false,
+    "success": true
+   }
+  },
+  "nodvard_sdk.actions.ActionSpec": {
+   "art": "klasse",
+   "params": {
+    "action_type": true,
+    "command_field": false,
+    "confirm_text": false,
+    "default_risk": false,
+    "description": false,
+    "host_bound": false,
+    "host_tags": false,
+    "icon": false,
+    "label": true,
+    "params_schema": false,
+    "permissions": false
+   }
+  },
+  "nodvard_sdk.actions.ActionStatus": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.actions.DryRunReport": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "summary": true,
+    "would_change": true
+   }
+  },
+  "nodvard_sdk.actions.GateDecision": {
+   "art": "klasse",
+   "params": {
+    "action_id": true,
+    "detail": false,
+    "expires_at": false,
+    "outcome": true,
+    "rule": false,
+    "status": true
+   }
+  },
+  "nodvard_sdk.actions.GateOutcome": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.actions.REQUEST_WAIT_S": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.capabilities.AIProvider": {
+   "art": "klasse",
+   "methoden": {
+    "complete": {
+     "prompt": true,
+     "system": false
+    },
+    "health": {},
+    "stream": {
+     "prompt": true,
+     "system": false
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.ALL_CAPABILITIES": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.capabilities.ActionExecutor": {
+   "art": "klasse",
+   "methoden": {
+    "dry_run": {
+     "req": true
+    },
+    "execute": {
+     "req": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.BackupProvider": {
+   "art": "klasse",
+   "methoden": {
+    "job_history": {
+     "job_ref": true
+    },
+    "list_jobs": {},
+    "retry": {
+     "job_ref": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.CommandRunner": {
+   "art": "klasse",
+   "methoden": {
+    "run": {
+     "command": true,
+     "host": true,
+     "timeout_s": false,
+     "user": false
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.ConsoleSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.ConsoleTarget": {
+   "art": "klasse",
+   "methoden": {
+    "console_available": {
+     "host": true
+    },
+    "open_console": {
+     "host": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.FileSource": {
+   "art": "klasse",
+   "methoden": {
+    "info": {},
+    "list_dir": {
+     "cursor": false,
+     "path": true
+    },
+    "mkdir": {
+     "path": true
+    },
+    "open_read": {
+     "offset": false,
+     "path": true
+    },
+    "open_write": {
+     "path": true,
+     "size": true,
+     "stream": true
+    },
+    "remove": {
+     "path": true,
+     "recursive": false
+    },
+    "rename": {
+     "dst": true,
+     "src": true
+    },
+    "search": {
+     "query": true,
+     "root": true
+    },
+    "stat": {
+     "path": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.FileSourceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "file_sources": {}
+   }
+  },
+  "nodvard_sdk.capabilities.HostProvider": {
+   "art": "klasse",
+   "methoden": {
+    "discover_hosts": {},
+    "host_actions": {
+     "provider_ref": true
+    },
+    "host_status": {
+     "provider_ref": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.MetricsProvider": {
+   "art": "klasse",
+   "methoden": {
+    "metric_names": {},
+    "sample": {
+     "host": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.NotificationChannel": {
+   "art": "klasse",
+   "methoden": {
+    "send": {
+     "notification": true
+    },
+    "test": {}
+   }
+  },
+  "nodvard_sdk.capabilities.SearchProvider": {
+   "art": "klasse",
+   "methoden": {
+    "search": {
+     "limit": false,
+     "query": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.ServiceCatalog": {
+   "art": "klasse",
+   "methoden": {
+    "list_services": {}
+   }
+  },
+  "nodvard_sdk.capabilities.TerminalSession": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "read": {},
+    "resize": {
+     "cols": true,
+     "rows": true
+    },
+    "write": {
+     "data": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.TerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open": {
+     "host": true
+    },
+    "open": {
+     "cols": true,
+     "host": true,
+     "rows": true,
+     "user": true
+    }
+   }
+  },
+  "nodvard_sdk.context.ActionsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "list": {
+     "correlation_id": false,
+     "limit": false
+    },
+    "propose": {
+     "request": true,
+     "wait_s": false
+    },
+    "proposer_labels": {
+     "rows": true
+    },
+    "register": {
+     "spec": true
+    },
+    "result": {
+     "action_id": true
+    }
+   }
+  },
+  "nodvard_sdk.context.ApiHandle": {
+   "art": "klasse",
+   "methoden": {
+    "include_router": {
+     "permission": false,
+     "prefix": false,
+     "router": true,
+     "tags": false
+    }
+   }
+  },
+  "nodvard_sdk.context.AuditHandle": {
+   "art": "klasse",
+   "methoden": {
+    "log": {
+     "action": true,
+     "actor": false,
+     "correlation_id": false,
+     "detail": false,
+     "outcome": true,
+     "reason": false,
+     "target_id": false,
+     "target_type": false
+    }
+   }
+  },
+  "nodvard_sdk.context.CapabilitiesHandle": {
+   "art": "klasse",
+   "methoden": {
+    "provide": {
+     "implementation": true
+    },
+    "query": {
+     "protocol": true
+    }
+   }
+  },
+  "nodvard_sdk.context.ConnectorType": {
+   "art": "klasse",
+   "methoden": {
+    "build": {
+     "config": true
+    },
+    "test": {
+     "config": true
+    }
+   }
+  },
+  "nodvard_sdk.context.ConnectorsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "get_client": {
+     "instance_id": true
+    },
+    "instances": {
+     "type_id": false
+    },
+    "register_type": {
+     "connector_type": true
+    }
+   }
+  },
+  "nodvard_sdk.context.DbHandle": {
+   "art": "klasse",
+   "methoden": {
+    "session": {}
+   }
+  },
+  "nodvard_sdk.context.EventsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "publish": {
+     "event": true
+    },
+    "subscribe": {
+     "handler": true,
+     "pattern": true
+    }
+   }
+  },
+  "nodvard_sdk.context.ExecHandle": {
+   "art": "klasse",
+   "methoden": {
+    "open_shell": {
+     "cols": true,
+     "host": true,
+     "rows": true
+    },
+    "run": {
+     "command": true,
+     "host": true,
+     "log_command": false,
+     "timeout_s": false,
+     "user": false
+    },
+    "sftp": {
+     "host": true
+    },
+    "stream": {
+     "command": true,
+     "host": true
+    }
+   }
+  },
+  "nodvard_sdk.context.ExtensionContext": {
+   "art": "klasse",
+   "methoden": {
+    "notify_sync": {
+     "body": true,
+     "severity": false,
+     "title": true
+    },
+    "spawn": {
+     "coro": true,
+     "name": true,
+     "restart": false,
+     "restart_delay_s": false
+    },
+    "vault_use": {
+     "handle": true
+    }
+   }
+  },
+  "nodvard_sdk.context.HostsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "by_name": {
+     "name": true
+    },
+    "get": {
+     "host_id": true
+    },
+    "list": {
+     "group": false,
+     "tag": false
+    },
+    "upsert_discovered": {
+     "hosts": true
+    }
+   }
+  },
+  "nodvard_sdk.context.HttpHandle": {
+   "art": "klasse",
+   "methoden": {
+    "get": {
+     "insecure_tls": false,
+     "url": true
+    },
+    "post": {
+     "insecure_tls": false,
+     "url": true
+    },
+    "request": {
+     "insecure_tls": false,
+     "method": true,
+     "url": true
+    },
+    "websocket": {
+     "headers": false,
+     "insecure_tls": false,
+     "open_timeout_s": false,
+     "subprotocols": false,
+     "url": true
+    }
+   }
+  },
+  "nodvard_sdk.context.JobSpec": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.context.NotifyHandle": {
+   "art": "klasse",
+   "methoden": {
+    "send": {
+     "notification": true,
+     "raise_on_failure": false
+    },
+    "would_suppress": {
+     "host_id": false,
+     "host_ids": false
+    }
+   }
+  },
+  "nodvard_sdk.context.SchedulerHandle": {
+   "art": "klasse",
+   "methoden": {
+    "register_job": {
+     "spec": true
+    },
+    "trigger": {
+     "job_id": true
+    }
+   }
+  },
+  "nodvard_sdk.context.SecretHandleRef": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.context.SecretsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "create": {
+     "description": false,
+     "kind": true,
+     "label": true,
+     "value": true
+    },
+    "exists": {
+     "label": true
+    },
+    "get_handle": {
+     "label": true
+    }
+   }
+  },
+  "nodvard_sdk.context.SettingsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "core": {
+     "key": true
+    },
+    "declare": {
+     "schema": true
+    },
+    "get": {},
+    "set": {
+     "values": true
+    }
+   }
+  },
+  "nodvard_sdk.context.UiHandle": {
+   "art": "klasse",
+   "methoden": {
+    "register_host_requirement": {
+     "spec": true
+    },
+    "register_host_tool": {
+     "spec": true
+    },
+    "register_nav": {
+     "order": false,
+     "section": true
+    },
+    "register_page": {
+     "spec": true
+    },
+    "register_widget": {
+     "spec": true
+    }
+   }
+  },
+  "nodvard_sdk.context.WebSocketConnection": {
+   "art": "klasse",
+   "methoden": {
+    "close": {},
+    "recv": {},
+    "send": {
+     "data": true
+    }
+   }
+  },
+  "nodvard_sdk.context.WsHandle": {
+   "art": "klasse",
+   "methoden": {
+    "broadcast": {
+     "channel": true,
+     "payload": true
+    }
+   }
+  },
+  "nodvard_sdk.errors.ActionBlocked": {
+   "art": "klasse",
+   "params": {
+    "detail": false,
+    "rule": true
+   }
+  },
+  "nodvard_sdk.errors.HostUnreachable": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.errors.IncompatibleExtension": {
+   "art": "klasse",
+   "params": {
+    "current": true,
+    "ext_id": true,
+    "required": true
+   }
+  },
+  "nodvard_sdk.errors.InvalidRegistration": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.errors.LatticeError": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.errors.NodvardError": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.errors.NotificationNotDelivered": {
+   "art": "klasse",
+   "params": {
+    "failures": true
+   }
+  },
+  "nodvard_sdk.errors.PermissionDenied": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "permission": true
+   }
+  },
+  "nodvard_sdk.errors.SecretUnavailable": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.extension.LatticeExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "nodvard_sdk.extension.NodvardExtension": {
+   "art": "klasse",
+   "methoden": {
+    "drop_data": {
+     "ctx": true
+    },
+    "health": {
+     "ctx": true
+    },
+    "on_settings_changed": {
+     "ctx": true,
+     "values": true
+    },
+    "on_start": {
+     "ctx": true
+    },
+    "on_stop": {
+     "ctx": true
+    },
+    "setup": {
+     "ctx": true
+    }
+   }
+  },
+  "nodvard_sdk.is_compatible": {
+   "art": "funktion",
+   "params": {
+    "required": true
+   }
+  },
+  "nodvard_sdk.load_manifest": {
+   "art": "funktion",
+   "params": {
+    "path": true
+   }
+  },
+  "nodvard_sdk.manifest.ExtensionManifest": {
+   "art": "klasse",
+   "params": {
+    "api_version": true,
+    "author": false,
+    "category": false,
+    "description": false,
+    "enable_on": false,
+    "entrypoint": true,
+    "frontend": false,
+    "icon": false,
+    "id": true,
+    "name": true,
+    "permissions": false,
+    "requires": false,
+    "settings_schema": false,
+    "sort_order": false,
+    "source": false,
+    "version": true
+   }
+  },
+  "nodvard_sdk.manifest.ID_RE": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.manifest.KNOWN_ENABLE_TRIGGERS": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.manifest.KNOWN_PERMISSIONS": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.manifest.load_manifest": {
+   "art": "funktion",
+   "params": {
+    "path": true
+   }
+  },
+  "nodvard_sdk.types.Actor": {
+   "art": "klasse",
+   "methoden": {
+    "ai": {
+     "model": true
+    },
+    "extension": {
+     "ext_id": true
+    },
+    "scheduler": {
+     "job_id": true
+    },
+    "user": {
+     "user_id": true,
+     "username": false
+    }
+   },
+   "params": {
+    "id": true,
+    "label": false,
+    "type": true
+   }
+  },
+  "nodvard_sdk.types.ActorType": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.types.ConnectorHealth": {
+   "art": "klasse",
+   "params": {
+    "latency_ms": false,
+    "message": false,
+    "ok": true
+   }
+  },
+  "nodvard_sdk.types.DiscoveredHost": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "address_verified": false,
+    "display_name": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ref": true,
+    "status": false,
+    "tags": false
+   }
+  },
+  "nodvard_sdk.types.Event": {
+   "art": "klasse",
+   "params": {
+    "correlation_id": false,
+    "name": true,
+    "payload": false
+   }
+  },
+  "nodvard_sdk.types.ExecResult": {
+   "art": "klasse",
+   "params": {
+    "duration_ms": true,
+    "exit_code": true,
+    "stderr": true,
+    "stdout": true,
+    "truncated": false
+   }
+  },
+  "nodvard_sdk.types.FileEntry": {
+   "art": "klasse",
+   "params": {
+    "is_dir": true,
+    "metadata": false,
+    "mime": false,
+    "modified_at": false,
+    "name": true,
+    "path": true,
+    "size": false,
+    "sync_status": false
+   }
+  },
+  "nodvard_sdk.types.FileSourceCaps": {
+   "art": "klasse",
+   "params": {
+    "mkdir": false,
+    "quota": false,
+    "range_read": false,
+    "remove": false,
+    "rename": false,
+    "search": false,
+    "sync_status": false,
+    "trash": false,
+    "write": false
+   }
+  },
+  "nodvard_sdk.types.HealthReport": {
+   "art": "klasse",
+   "params": {
+    "details": false,
+    "healthy": true,
+    "message": false
+   }
+  },
+  "nodvard_sdk.types.Host": {
+   "art": "klasse",
+   "params": {
+    "address": true,
+    "display_name": true,
+    "has_credential": false,
+    "id": true,
+    "is_managed": false,
+    "kind": false,
+    "metadata": false,
+    "name": true,
+    "os_family": false,
+    "provider_ext_id": false,
+    "provider_ref": false,
+    "status": false,
+    "tags": false
+   }
+  },
+  "nodvard_sdk.types.HostStatus": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.types.Notification": {
+   "art": "klasse",
+   "params": {
+    "body": true,
+    "correlation_id": false,
+    "payload": false,
+    "severity": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.types.NotifyResult": {
+   "art": "klasse",
+   "params": {
+    "notification_id": true,
+    "suppressed": false
+   }
+  },
+  "nodvard_sdk.types.Page": {
+   "art": "klasse",
+   "params": {
+    "items": true,
+    "next_cursor": false
+   }
+  },
+  "nodvard_sdk.types.Risk": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.types.Severity": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.types.SourceInfo": {
+   "art": "klasse",
+   "params": {
+    "deep_link": false,
+    "details": false,
+    "healthy": false,
+    "message": false,
+    "total_bytes": false,
+    "used_bytes": false
+   }
+  },
+  "nodvard_sdk.types.T": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.version.API_VERSION": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.version.is_compatible": {
+   "art": "funktion",
+   "params": {
+    "required": true
+   }
+  },
+  "nodvard_sdk.widgets.ALLOWED_FILTERS": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.widgets.ActionsView": {
+   "art": "klasse",
+   "params": {
+    "actions": true,
+    "kind": false
+   }
+  },
+  "nodvard_sdk.widgets.Badge": {
+   "art": "klasse",
+   "params": {
+    "text": true,
+    "tone": false
+   }
+  },
+  "nodvard_sdk.widgets.ChartView": {
+   "art": "klasse",
+   "params": {
+    "chart": false,
+    "kind": false,
+    "series": true,
+    "x_field": false,
+    "y_max": false,
+    "y_unit": false
+   }
+  },
+  "nodvard_sdk.widgets.Column": {
+   "art": "klasse",
+   "params": {
+    "align": false,
+    "field": true,
+    "label": true,
+    "template": false,
+    "width": false
+   }
+  },
+  "nodvard_sdk.widgets.GaugeView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "label": false,
+    "max_field": false,
+    "max_value": false,
+    "value_field": true
+   }
+  },
+  "nodvard_sdk.widgets.GridSize": {
+   "art": "klasse",
+   "params": {
+    "h": false,
+    "min_h": false,
+    "min_w": false,
+    "w": false
+   }
+  },
+  "nodvard_sdk.widgets.HostRequirementSpec": {
+   "art": "klasse",
+   "params": {
+    "check_command": false,
+    "fail_hint": false,
+    "id": true,
+    "label": true,
+    "needs_root": false,
+    "ok_text": false,
+    "order": false,
+    "os_families": false,
+    "root_reason": false,
+    "tags": false,
+    "unix_group": false
+   }
+  },
+  "nodvard_sdk.widgets.HostToolSpec": {
+   "art": "klasse",
+   "params": {
+    "category": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "kinds": false,
+    "order": false,
+    "os_families": false,
+    "own_hosts_only": false,
+    "path": true,
+    "permissions": false,
+    "tags": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.widgets.ListItem": {
+   "art": "klasse",
+   "params": {
+    "actions": false,
+    "badge": false,
+    "icon": false,
+    "subtitle": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.widgets.ListView": {
+   "art": "klasse",
+   "params": {
+    "empty_text": false,
+    "item": true,
+    "kind": false,
+    "max_items": false
+   }
+  },
+  "nodvard_sdk.widgets.LogView": {
+   "art": "klasse",
+   "params": {
+    "follow": false,
+    "kind": false,
+    "lines_field": false,
+    "max_lines": false
+   }
+  },
+  "nodvard_sdk.widgets.MarkdownView": {
+   "art": "klasse",
+   "params": {
+    "content_field": false,
+    "kind": false
+   }
+  },
+  "nodvard_sdk.widgets.MobileFallback": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.widgets.PageSpec": {
+   "art": "klasse",
+   "params": {
+    "component": true,
+    "icon": false,
+    "id": true,
+    "mobile": false,
+    "nav_order": false,
+    "nav_section": false,
+    "path": true,
+    "permissions": false,
+    "show_in_nav": false,
+    "title": true
+   }
+  },
+  "nodvard_sdk.widgets.Refresh": {
+   "art": "klasse",
+   "params": {
+    "interval_s": false,
+    "ws_channel": false
+   }
+  },
+  "nodvard_sdk.widgets.Series": {
+   "art": "klasse",
+   "params": {
+    "field": true,
+    "label": true,
+    "tone": false
+   }
+  },
+  "nodvard_sdk.widgets.StatView": {
+   "art": "klasse",
+   "params": {
+    "delta": false,
+    "kind": false,
+    "label": false,
+    "sparkline_field": false,
+    "tone": false,
+    "value": true
+   }
+  },
+  "nodvard_sdk.widgets.StatusGridView": {
+   "art": "klasse",
+   "params": {
+    "kind": false,
+    "tile_icon": false,
+    "tile_link": false,
+    "tile_subtitle": false,
+    "tile_title": true,
+    "tile_tone": false
+   }
+  },
+  "nodvard_sdk.widgets.TableView": {
+   "art": "klasse",
+   "params": {
+    "columns": true,
+    "empty_text": false,
+    "kind": false,
+    "row_actions": false
+   }
+  },
+  "nodvard_sdk.widgets.Tone": {
+   "art": "klasse"
+  },
+  "nodvard_sdk.widgets.WidgetAction": {
+   "art": "klasse",
+   "params": {
+    "body": false,
+    "confirm": false,
+    "confirm_text": false,
+    "endpoint": true,
+    "id": true,
+    "label": true,
+    "method": false,
+    "permissions": false,
+    "show_if": false,
+    "style": false
+   }
+  },
+  "nodvard_sdk.widgets.WidgetSpec": {
+   "art": "klasse",
+   "params": {
+    "component": false,
+    "data_endpoint": true,
+    "default_enabled": false,
+    "description": false,
+    "icon": false,
+    "id": true,
+    "permissions": false,
+    "refresh": false,
+    "size": false,
+    "title": true,
+    "view": true
+   }
+  }
+ }
+}

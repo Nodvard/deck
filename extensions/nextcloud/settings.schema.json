@@ -1,0 +1,34 @@
+{
+  "type": "object",
+  "properties": {
+    "base_url": {
+      "type": "string",
+      "title": "Nextcloud-Adresse",
+      "description": "z. B. https://cloud.example.com (ohne /remote.php …)",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    },
+    "username": {
+      "type": "string",
+      "title": "Benutzername",
+      "description": "Das Konto, dessen Dateien im Dateimanager erscheinen."
+    },
+    "tls_insecure_skip_verify": {
+      "type": "boolean",
+      "default": false,
+      "title": "Selbstsigniertes Zertifikat erlauben",
+      "description": "Nur im eigenen Netz aktivieren."
+    }
+  },
+  "required": [
+    "base_url",
+    "username"
+  ],
+  "x-secrets": [
+    {
+      "label": "nextcloud-app-password",
+      "title": "App-Passwort",
+      "description": "In Nextcloud unter Einstellungen → Sicherheit → „Neues App-Passwort erstellen“."
+    }
+  ]
+}

@@ -1,0 +1,54 @@
+# Nodvard Deck ohne das Repository installieren:
+#   1. Diese Datei als compose.yml in einen leeren Ordner laden:
+#        curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
+#   2. In diesem Ordner:  docker compose up -d
+#   3. Browser oeffnen: http://<Adresse-des-Rechners>:8080  und der Anleitung auf dem Bildschirm folgen.
+#      (Der Einrichtungscode steht im Protokoll: docker compose logs nodvard-deck)
+#
+# Aktualisieren: docker compose pull && docker compose up -d
+# (Unter anderem Dateinamen gespeichert? Dann ueberall -f <datei> ergaenzen.)
+# Anderer Port: Umgebungsvariable NODVARD_DECK_PORT setzen (z. B. in einer Datei .env neben dieser Datei).
+
+# Fester Projektname: Der Ordnername bestimmt sonst den Namen des Datenspeichers.
+name: nodvard-deck
+
+services:
+  nodvard-deck:
+    image: ghcr.io/nodvard/deck:latest
+    restart: unless-stopped
+    ports:
+      - "${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}:8080"
+    volumes:
+      # Alle Daten (Datenbank, Schluessel, Dokumente). Ein benannter Datenspeicher braucht keine
+      # Rechte-Einstellungen. Lieber einen Ordner? "./daten:/app/data" -- der Container setzt die
+      # Besitzrechte an diesem Ordner beim Start selbst.
+      - nodvard_deck_data:/app/data
+      # Optional: Ordner fuer die Sicherungen aus Einstellungen -> System -> Sicherung, AUSSERHALB
+      # des Datenspeichers (am besten ein anderes Laufwerk oder ein NAS). Zeile einkommentieren,
+      # Ordner anlegen und dem Nutzer 1000 geben (`mkdir sicherungen && sudo chown 1000:1000 sicherungen`),
+      # dann in der Oberflaeche als Ordner `/backups` waehlen. Nur `/backups` (und darunter) ist
+      # als Ziel erlaubt, neben dem Standard /app/data/backups.
+      # - ./sicherungen:/backups
+    # Eigener Namensserver nur fuer diesen Container. Noetig nur, wenn interne Namen des Heimnetzes
+    # (z. B. von einem Pi-hole) nicht gefunden werden. Zum Einschalten die Zeilen einkommentieren:
+    # dns:
+    #   - 192.168.1.10
+    #   - 1.1.1.1
+    # Begrenzt die Docker-Logdatei (3 x 10 MB), damit sie nicht ungebremst waechst.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      # Vor dem Start laeuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`) -- bei einer grossen Datenbank auf einem Pi
+      # Minuten. Waehrend dieser Zeit zaehlen Fehlschlaege nicht. Die Notseite antwortet mit 503; der Check schlaegt dann an.
+      start_period: 300s
+      retries: 3
+
+volumes:
+  nodvard_deck_data:
+    name: nodvard-deck-data
