@@ -1,0 +1,35 @@
+version = "0.6.1"
+date = "2026-10-02"
+title = "Nodvard Deck – Korrektur SSH-Verbindungen"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Oberfläche spricht dich jetzt überall mit „du“ an, auch in den Einstellungen, auf der Notfallseite und in den Hinweisen der Erweiterungen."
+
+[[entries]]
+kind = "neu"
+text = "Unter Einstellungen, System zeigt die Karte „Updates“, ob es eine neuere Version von Nodvard Deck gibt. Das Dashboard sieht einmal am Tag nach (abschaltbar; GitHub sieht dabei nur die IP-Adresse und den Zeitpunkt), mit „Jetzt suchen“ sofort. Ohne Internet bleibt der letzte bekannte Stand stehen."
+
+[[entries]]
+kind = "neu"
+text = "Die Karte erklärt Schritt für Schritt, wie man das Update einspielt und wieder zurückgeht (auch, was die Notseite dann bedeutet): für Docker Compose, Docker Desktop, Portainer, Synology, Unraid und das Pi-Skript. Ein selbst gebautes Dashboard erkennt sie und zeigt den passenden Weg."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Beschreibung der Schnittstelle (Adressen /docs, /redoc und /openapi.json) ist nicht mehr ohne Anmeldung abrufbar: Es gibt sie nur noch im Entwicklungsmodus, angemeldete Admins bekommen sie unter /api/v1/system/openapi.json."
+
+[[entries]]
+kind = "behoben"
+text = "Fehlt eine eingeschaltete Erweiterung nach einem Start (zum Beispiel nach dem Zurückgehen auf eine ältere Version), bleibt sie eingeschaltet und wird als „Fehler“ mit Grund angezeigt. Sobald sie wieder da ist, startet sie von allein, du musst sie nicht neu einschalten."
+
+[[entries]]
+kind = "behoben"
+text = "Im Docker-Image scheiterte jede SSH-Verbindung mit „Permission denied: '/root/.ssh/crt'“: Nodvard Deck lief als eigener Benutzer, aber noch mit dem Benutzerordner von root. Server-Seiten, Service-Matrix, Nodvard Shield und Dateien erreichen deine Server wieder."
+
+[[entries]]
+kind = "verbessert"
+text = "Unter Einstellungen, Über Nodvard Deck steht jetzt, wo du die Lizenzen der mitgelieferten Fremdsoftware findest, dazu ein Link auf den Quellcode der grafischen Konsole (noVNC). Die Lizenzliste nennt jetzt auch Bausteine, die in diesen Programmen selbst stecken."
+
+[[entries]]
+kind = "sicherheit"
+text = "Virenscan (Schnell- und Tiefenscan): Schaddateien können sich nicht mehr über ihren Dateinamen verstecken, und ein präparierter Dateiname kann keine fremde Datei mehr in die Quarantäne schicken."

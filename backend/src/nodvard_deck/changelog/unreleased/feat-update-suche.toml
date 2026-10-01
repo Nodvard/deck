@@ -1,7 +1,0 @@
-[[entries]]
-kind = "neu"
-text = "Unter Einstellungen, System zeigt die Karte „Updates“, ob es eine neuere Version von Nodvard Deck gibt. Das Dashboard sieht einmal am Tag nach (abschaltbar; GitHub sieht dabei nur die IP-Adresse und den Zeitpunkt), mit „Jetzt suchen“ sofort. Ohne Internet bleibt der letzte bekannte Stand stehen."
-
-[[entries]]
-kind = "neu"
-text = "Die Karte erklärt Schritt für Schritt, wie man das Update einspielt und wieder zurückgeht (auch, was die Notseite dann bedeutet): für Docker Compose, Docker Desktop, Portainer, Synology, Unraid und das Pi-Skript. Ein selbst gebautes Dashboard erkennt sie und zeigt den passenden Weg."

@@ -58,6 +58,12 @@ if [ "$(id -u)" = "0" ]; then
     echo "        (und dem Ordner /app/data selbst diesem Benutzer zuweisen)." >&2
     exit 1
   fi
+  # HOME passend zum neuen Benutzer: sonst erbt der Prozess HOME=/root, und Bibliotheken, die in ~ nachsehen
+  # (asyncssh prueft z. B. ~/.ssh/crt), scheitern als lattice am fehlenden Leserecht auf /root -- jede
+  # SSH-Verbindung brach dann mit "Permission denied: '/root/.ssh/crt'" ab. Ohne eigenes Verzeichnis: /app.
+  home="$(getent passwd "$uid" 2>/dev/null | cut -d: -f6)"
+  [ -n "$home" ] && [ -d "$home" ] || home=/app
+  export HOME="$home"
   export NODVARD_DECK_PRIV_DROPPED=1
   exec setpriv --reuid="$uid" --regid="$gid" --clear-groups --no-new-privs "$0" "$@"
 fi

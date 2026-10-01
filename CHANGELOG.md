@@ -10,6 +10,17 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.6.1] – 2026-10-02
+
+- **Fixed:** every SSH connection failed in the Docker image with "Permission denied: '/root/.ssh/crt'"
+  (the service ran as its own user but with root's home folder). Server pages, Service Matrix,
+  Nodvard Shield and the file manager reach your servers again.
+- **Security:** the antivirus scan can no longer be tricked by crafted file names.
+- **New:** update check under Settings → System → Updates (daily, can be switched off), with a
+  "What's new?" link to this changelog.
+- The whole interface now uses informal German ("du"); API documentation only for signed-in admins
+  or in development mode; a missing extension stays enabled; more complete third-party license notices.
+
 ## [0.6.0] – 2026-10-01
 
 First public beta.

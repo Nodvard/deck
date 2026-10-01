@@ -439,3 +439,14 @@ def test_dockerfile_healthcheck_waits_long_enough_for_a_slow_migration_but_not_f
     assert match, "HEALTHCHECK mit --start-period"
     assert 300 <= int(match.group(1)) <= 900, "eine lange Migration (Kopie + Umbau grosser Tabellen) darf nicht als 'unhealthy' gelten"
     assert "/api/v1/health" in code, "die Notseite antwortet dort mit 503: der Healthcheck schlaegt dann an"
+
+
+@needs_sh
+def test_after_the_switch_home_is_not_roots_home(setup):
+    # Als lattice mit HOME=/root scheiterte asyncssh an ~/.ssh/crt (kein Leserecht auf /root) -> jede SSH-Verbindung brach ab.
+    _executable(setup.bin / "app", 'echo "app home=$HOME" >> "$STUB_LOG.steps"\n')
+    result = setup.run(uid=0, HOME="/root")
+    assert result.returncode == 0, result.stderr
+    homes = [line for line in setup.lines("steps") if line.startswith("app home=")]
+    assert homes and homes[0] != "app home=/root", homes
+    assert homes[0] == "app home=/app" or homes[0].startswith("app home=/"), homes
