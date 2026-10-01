@@ -453,6 +453,12 @@ function OverviewTab({
   );
 }
 
+/** Blendet die technischen Marker-Zeilen aus der Scan-Ausgabe aus: den Rückgabecode `@@scan-rc-…=0`
+ *  und die alten `@@nexus-rc=…`-Reste in bereits gespeicherten Läufen. */
+function visibleScanOutput(tail: string): string {
+  return tail.split("\n").filter((line) => !line.startsWith("@@")).join("\n").trim();
+}
+
 function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage: boolean; onStarted: () => void }) {
   const [scans, setScans] = useState<ScanRow[] | null>(null);
   const [showWatch, setShowWatch] = useState(false);
@@ -535,6 +541,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
             {scans.map((s) => {
               const st = SCAN_STATUS[s.status] ?? { label: s.status, tone: "neutral" as Tone };
               const isOpen = open === s.id;
+              const output = s.output_tail ? visibleScanOutput(s.output_tail) : "";
               return (
                 <li key={s.id} className="px-5 py-3 text-sm">
                   <button type="button" onClick={() => setOpen(isOpen ? null : s.id)} className="flex w-full flex-wrap items-center gap-2 text-left">
@@ -550,7 +557,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
                   {isOpen && (
                     <div className="ml-6 mt-2 space-y-2">
                       <p className="text-xs text-white/45">Ordner: <span className="font-mono">{s.paths.join(", ")}</span>{s.finished_at ? ` · Dauer ${Math.max(1, Math.round((s.finished_at - s.started_at) / 60))} Min.` : ""}</p>
-                      {s.output_tail && <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-[11px] text-white/75">{s.output_tail}</pre>}
+                      {output && <pre className="max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-[11px] text-white/75">{output}</pre>}
                     </div>
                   )}
                 </li>
@@ -614,7 +621,7 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
       {msg && <Notice text={msg.text} kind={msg.kind} onClose={() => setMsg(null)} />}
       <Card
         title="Funde & Quarantäne"
-        description="Dateien in Quarantäne sind unlesbar und nicht ausführbar (Rechte 000) im Tresor /var/lib/nexus-quarantine auf dem jeweiligen Server."
+        description="Dateien in Quarantäne sind unlesbar und nicht ausführbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden."
         padded={false}
         actions={
           <select aria-label="Filter" value={filter} onChange={(e) => setFilter(e.target.value as typeof filter)} className={`${inputClass} w-auto py-1 text-xs`}>

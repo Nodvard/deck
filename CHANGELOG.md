@@ -30,7 +30,7 @@ First public beta.
 - **Renamed to Nodvard Deck:** packages `nodvard_deck`, SDK `nodvard_sdk`, extensions
   `nodvard_deck_ext_*`, environment variables `NODVARD_DECK_*`. Old names keep working.
 - Project documents for the public release: PolyForm Noncommercial 1.0.0 license (source available,
-  free for noncommercial use, commercial license on request), third-party licenses, README in
+  free for noncommercial use, commercial use only with permission), third-party licenses, README in
   German and English, contribution guide, security policy, code of conduct, English guides.
 
 ## [0.5.0] – 2026-09-30

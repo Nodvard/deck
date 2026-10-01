@@ -41,11 +41,24 @@ def _has_settings(ext_id: str) -> bool:
     return any(not p.get("x-hidden") for p in (schema.get("properties") or {}).values())
 
 
+def _effective_state(record: ExtensionRecord) -> str:
+    """Der Zustand, den die API meldet. Ein erfolgreiches Laden loescht `last_error`; steht bei
+    einer eingeschalteten Erweiterung trotzdem einer, wurde sie beim Start nicht gefunden (siehe
+    `services.extensions.enable_extension(..., at_boot=True)`) und ist nicht geladen -- also `error`.
+    Es gibt dafuer bewusst keinen neuen Zustandswert, bestehende Clients bleiben unberuehrt."""
+    if record.state == "enabled" and record.last_error:
+        return "error"
+    return record.state
+
+
 class ExtensionOut(BaseModel):
     id: str
     version: str
     api_version: str
     state: str
+    """`enabled`, `disabled`, `error` oder `incompatible`. Eine Erweiterung, die eingeschaltet
+    ist, aber gerade fehlt (Ordner oder Paket nicht da), steht in der Registry weiter auf `enabled`
+    und meldet hier `error` samt `last_error`; kommt sie zurueck, laedt sie beim naechsten Start wieder."""
     source: str
     name: str | None
     description: str | None
@@ -71,7 +84,7 @@ class ExtensionOut(BaseModel):
             id=record.id,
             version=record.version,
             api_version=record.api_version,
-            state=record.state,
+            state=_effective_state(record),
             source=record.source,
             name=manifest.get("name"),
             description=manifest.get("description"),
@@ -100,7 +113,7 @@ async def _with_setup(
         item = ExtensionOut.from_model(record)
         last = tests.get(record.id)
         item.last_test = last if (last is None or can_manage) else {"ok": last.get("ok"), "at": last.get("at")}
-        if record.state == "enabled":
+        if item.state == "enabled":
             reasons = extension_setup.setup_reasons(
                 schema_for(record.id), dict(record.settings or {}), labels, last, with_test_message=can_manage
             )

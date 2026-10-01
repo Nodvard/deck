@@ -8,6 +8,7 @@ haette den eigentlichen Code nie ausgefuehrt.
 
 from __future__ import annotations
 
+import shutil
 import sys
 from pathlib import Path
 
@@ -514,3 +515,220 @@ async def test_enable_extension_does_not_deadlock_with_caller_session_held_open(
     finally:
         await engine.dispose()
         reset_engine_cache()
+
+
+def _write_simple_extension(tmp_path: Path) -> Path:
+    """Kleinste lauffaehige Extension `gone-ext` -- fuer die Tests, in denen sie zwischen zwei
+    "Starts" verschwindet und wiederkommt."""
+    ext_dir = tmp_path / "extensions" / "gone-ext"
+    (ext_dir / "src" / "nodvard_deck_ext_gone").mkdir(parents=True)
+    (ext_dir / "extension.toml").write_text(
+        """
+        [extension]
+        id = "gone-ext"
+        name = "Gone"
+        version = "0.1.0"
+        api_version = "0.1"
+        entrypoint = "nodvard_deck_ext_gone:Extension"
+        """,
+        encoding="utf-8",
+    )
+    (ext_dir / "src" / "nodvard_deck_ext_gone" / "__init__.py").write_text(
+        "class Extension:\n"
+        "    async def setup(self, ctx):\n"
+        "        pass\n"
+        "    async def on_start(self, ctx):\n"
+        "        pass\n"
+        "    async def on_stop(self, ctx):\n"
+        "        pass\n",
+        encoding="utf-8",
+    )
+    return ext_dir
+
+
+async def _stored(db_session, ext_id: str) -> tuple[str, str | None]:
+    """`state` und `last_error` so, wie sie in der Datenbank stehen (nicht aus der Identity Map)."""
+    await db_session.commit()
+    row = (
+        await db_session.execute(
+            select(ExtensionRecord.state, ExtensionRecord.last_error).where(ExtensionRecord.id == ext_id)
+        )
+    ).one()
+    return row.state, row.last_error
+
+
+@pytest.mark.asyncio
+async def test_extension_missing_at_boot_stays_enabled_and_loads_again_when_back(tmp_path, db_session, test_settings):
+    """Rueckweg aufs alte Image oder noch nicht kopierter Ordner: fehlt eine eingeschaltete
+    Erweiterung beim Start, bleibt sie eingeschaltet (nur `last_error` sagt, warum sie nicht
+    laeuft). Kommt sie zurueck, laedt der naechste Start sie wieder -- ohne dass jemand sie von
+    Hand erneut einschaltet."""
+    ext_dir = _write_simple_extension(tmp_path)
+    settings = test_settings.model_copy(update={"extensions_dir": tmp_path / "extensions"})
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+
+    await extensions_service.discover_and_sync(db_session, settings)
+    await extensions_service.enable_extension(app, db_session, settings, "gone-ext")
+    assert await _stored(db_session, "gone-ext") == ("enabled", None)
+    assert "gone-ext" in get_extension_runtime().loaded
+
+    # Neuer Prozess, Ordner ist weg.
+    reset_extension_runtime()
+    away = tmp_path / "weg"
+    shutil.move(str(ext_dir), str(away))
+    await extensions_service.discover_and_sync(db_session, settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+
+    state, last_error = await _stored(db_session, "gone-ext")
+    assert state == "enabled"
+    assert last_error is not None and "nicht gefunden" in last_error
+    record = await db_session.get(ExtensionRecord, "gone-ext")
+    assert record.last_error_at is not None
+    assert "gone-ext" not in get_extension_runtime().loaded
+
+    # Ein weiterer Start ohne den Ordner aendert daran nichts.
+    reset_extension_runtime()
+    await extensions_service.discover_and_sync(db_session, settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+    assert (await _stored(db_session, "gone-ext"))[0] == "enabled"
+
+    # Ordner ist zurueck: der naechste Start laedt sie wieder und raeumt die Fehlermeldung weg.
+    shutil.move(str(away), str(ext_dir))
+    reset_extension_runtime()
+    await extensions_service.discover_and_sync(db_session, settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+
+    assert await _stored(db_session, "gone-ext") == ("enabled", None)
+    assert (await db_session.get(ExtensionRecord, "gone-ext")).last_error_at is None
+    assert "gone-ext" in get_extension_runtime().loaded
+
+    await extensions_service.disable_extension(app, db_session, "gone-ext")
+
+
+@pytest.mark.asyncio
+async def test_boot_with_missing_extension_does_not_stop_the_others(db_session, test_settings):
+    """Die fehlende Erweiterung bricht den Start der anderen nicht ab (Fehler-Isolation)."""
+    settings = _real_settings(test_settings)
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+
+    await extensions_service.discover_and_sync(db_session, settings)
+    db_session.add(
+        ExtensionRecord(
+            id="gone-ext", version="0.1.0", api_version="0.1", state="enabled", source="bundled", manifest={}
+        )
+    )
+    (await db_session.get(ExtensionRecord, "hello-world")).state = "enabled"
+    await db_session.commit()
+
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+
+    assert (await _stored(db_session, "hello-world")) == ("enabled", None)
+    assert "hello-world" in get_extension_runtime().loaded
+    state, last_error = await _stored(db_session, "gone-ext")
+    assert state == "enabled" and last_error
+
+    await extensions_service.disable_extension(app, db_session, "hello-world")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("state", ["disabled", "enabled", "error"])
+async def test_explicit_enable_of_missing_extension_raises_and_changes_nothing(db_session, test_settings, state):
+    """Wer eine fehlende Erweiterung ausdruecklich einschaltet, bekommt einen Fehler (die API
+    antwortet 404) -- `state` und `last_error` bleiben, wie sie waren."""
+    db_session.add(
+        ExtensionRecord(
+            id="gone-ext", version="0.1.0", api_version="0.1", state=state, source="bundled", manifest={},
+            last_error="alte Meldung" if state == "error" else None,
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(extensions_service.ExtensionLoadError, match="gone-ext"):
+        await extensions_service.enable_extension(FastAPI(), db_session, test_settings, "gone-ext")
+
+    assert await _stored(db_session, "gone-ext") == (state, "alte Meldung" if state == "error" else None)
+    assert (await db_session.get(ExtensionRecord, "gone-ext")).last_error_at is None
+
+
+@pytest.mark.asyncio
+async def test_auto_enable_skips_missing_extension_and_keeps_its_marker(db_session, test_settings):
+    """Eine fehlende, noch unberuehrte Erweiterung wird vom automatischen Einschalten
+    uebergangen: kein `error`, und der Anlass bleibt fuer spaeter vorgemerkt."""
+    from nodvard_deck.models import Setting
+    from nodvard_deck.services import settings as settings_service
+
+    db_session.add(
+        ExtensionRecord(
+            id="gone-ext", version="0.1.0", api_version="0.1", state="disabled", source="bundled",
+            manifest={"enable_on": ["host_credential"]},
+        )
+    )
+    await settings_service.set_global(db_session, extensions_service.UNTOUCHED_KEY_PREFIX + "gone-ext", True)
+    await db_session.commit()
+
+    enabled = await extensions_service.auto_enable_for(FastAPI(), db_session, test_settings, "host_credential")
+
+    assert enabled == []
+    assert await _stored(db_session, "gone-ext") == ("disabled", None)
+    assert await db_session.get(Setting, (extensions_service.UNTOUCHED_KEY_PREFIX + "gone-ext", "global", "")) is not None
+    assert (
+        await db_session.execute(select(AuditEntry).where(AuditEntry.action == "extension.auto_enabled"))
+    ).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_boot_keeps_intentionally_disabled_extensions_off(db_session, test_settings):
+    """Wer eine Erweiterung bewusst ausgeschaltet hat, bei der bleibt sie aus -- ob der Ordner da ist
+    oder fehlt. Der Start fasst `disabled` weder an noch merkt er sich einen Fehler."""
+    settings = _real_settings(test_settings)
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+
+    await extensions_service.discover_and_sync(db_session, settings)
+    await extensions_service.enable_extension(app, db_session, settings, "hello-world")
+    await extensions_service.disable_extension(app, db_session, "hello-world")  # bewusst ausgeschaltet
+    db_session.add(
+        ExtensionRecord(
+            id="gone-ext", version="0.1.0", api_version="0.1", state="disabled", source="bundled", manifest={}
+        )
+    )
+    await db_session.commit()
+
+    # Neuer Start: hello-world ist da, gone-ext fehlt.
+    reset_extension_runtime()
+    await extensions_service.discover_and_sync(db_session, settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+
+    assert await _stored(db_session, "hello-world") == ("disabled", None)
+    assert await _stored(db_session, "gone-ext") == ("disabled", None)
+    assert get_extension_runtime().loaded == {}
+    assert (await db_session.get(ExtensionRecord, "gone-ext")).last_error_at is None
+
+
+@pytest.mark.asyncio
+async def test_boot_reconciliation_twice_does_not_register_twice(db_session, test_settings):
+    """Wird die Boot-Abstimmung ein zweites Mal im selben Prozess aufgerufen, laedt sie nichts doppelt:
+    keine zweite Route, keine zweite Seite, kein zweiter Job."""
+    settings = _real_settings(test_settings)
+    app = FastAPI()
+    app.state.ext_mount_index = len(app.router.routes)
+
+    await extensions_service.discover_and_sync(db_session, settings)
+    (await db_session.get(ExtensionRecord, "hello-world")).state = "enabled"  # Entscheidung aus einem frueheren Lauf
+    await db_session.commit()
+
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+    routes_after_first = len(app.router.routes)
+    await extensions_service.load_enabled_from_registry(app, db_session, settings)
+
+    assert await _stored(db_session, "hello-world") == ("enabled", None)
+    assert len(app.router.routes) == routes_after_first
+    runtime = get_extension_runtime()
+    assert [p.id for _, p in runtime.ui.all_pages()] == ["hello"]
+    assert [w.id for _, w in runtime.ui.all_widgets()] == ["hello"]
+    jobs = (await db_session.execute(select(Job).where(Job.ext_id == "hello-world"))).scalars().all()
+    assert len(jobs) == 1
+
+    await extensions_service.disable_extension(app, db_session, "hello-world")

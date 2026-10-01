@@ -1693,6 +1693,9 @@ function OverviewTab({
     ] }) }) })
   ] });
 }
+function visibleScanOutput(tail) {
+  return tail.split("\n").filter((line) => !line.startsWith("@@")).join("\n").trim();
+}
 function ScansTab({ hosts, canManage, onStarted }) {
   const [scans, setScans] = useState6(null);
   const [showWatch, setShowWatch] = useState6(false);
@@ -1769,6 +1772,7 @@ function ScansTab({ hosts, canManage, onStarted }) {
         children: !scans ? /* @__PURE__ */ jsx7("p", { className: "px-5 py-4 text-sm text-white/50", children: "Lade \u2026" }) : scans.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "px-5 py-6 text-sm text-white/50", children: "Noch keine Scans." }) : /* @__PURE__ */ jsx7("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "scan-list", children: scans.map((s) => {
           const st = SCAN_STATUS[s.status] ?? { label: s.status, tone: "neutral" };
           const isOpen = open === s.id;
+          const output = s.output_tail ? visibleScanOutput(s.output_tail) : "";
           return /* @__PURE__ */ jsxs6("li", { className: "px-5 py-3 text-sm", children: [
             /* @__PURE__ */ jsxs6("button", { type: "button", onClick: () => setOpen(isOpen ? null : s.id), className: "flex w-full flex-wrap items-center gap-2 text-left", children: [
               /* @__PURE__ */ jsx7(Icon, { name: isOpen ? "chevron-down" : "chevron-right", size: 14, className: "text-white/40" }),
@@ -1796,7 +1800,7 @@ function ScansTab({ hosts, canManage, onStarted }) {
                 /* @__PURE__ */ jsx7("span", { className: "font-mono", children: s.paths.join(", ") }),
                 s.finished_at ? ` \xB7 Dauer ${Math.max(1, Math.round((s.finished_at - s.started_at) / 60))} Min.` : ""
               ] }),
-              s.output_tail && /* @__PURE__ */ jsx7("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-[11px] text-white/75", children: s.output_tail })
+              output && /* @__PURE__ */ jsx7("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-[11px] text-white/75", children: output })
             ] })
           ] }, s.id);
         }) })
@@ -1854,7 +1858,7 @@ function QuarantineTab({ canManage, onChanged }) {
       Card,
       {
         title: "Funde & Quarant\xE4ne",
-        description: "Dateien in Quarant\xE4ne sind unlesbar und nicht ausf\xFChrbar (Rechte 000) im Tresor /var/lib/nexus-quarantine auf dem jeweiligen Server.",
+        description: "Dateien in Quarant\xE4ne sind unlesbar und nicht ausf\xFChrbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden.",
         padded: false,
         actions: /* @__PURE__ */ jsxs6("select", { "aria-label": "Filter", value: filter, onChange: (e) => setFilter(e.target.value), className: `${inputClass} w-auto py-1 text-xs`, children: [
           /* @__PURE__ */ jsx7("option", { value: "active", children: "Offen & in Quarant\xE4ne" }),

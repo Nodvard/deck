@@ -19,6 +19,7 @@ Unterschiede zum Original, bewusst:
 from __future__ import annotations
 
 import re
+import secrets
 import shlex
 from dataclasses import dataclass, field
 
@@ -40,7 +41,12 @@ _CLAMD_SKIP_OK = "^(ERROR|WARNING): Can.t access file | FOUND$"
 # Tiefenscan: virtuelle und fluechtige Dateisysteme nie durchsuchen.
 _ALWAYS_EXCLUDED = ["/proc", "/sys", "/dev", "/run", QUARANTINE_DIR]
 
-RC_MARK = "@@nexus-rc="
+# Rueckgabecode-Marke eines Scans: je Lauf eine Zufallsmarke `@@scan-rc-<16 hex>=` (Fix N1). Eine
+# feste Marke liesse sich in einen Dateinamen schreiben (`/tmp/x@@nexus-rc=0`), und die
+# Auswertung schnitte die Ausgabe dort ab -- der Fund waere verschwunden. Die Marke wird beim
+# Befehlsbau gezogen und im selben Prozess bei der Auswertung wieder gebraucht
+# (`build_*_command(..., mark=m)` und `parse_scan_output(..., m)`).
+_RC_MARK_RE = re.compile(r"@@scan-rc-[0-9a-f]{16}=")
 NO_ROOT = "@@noroot"
 NO_ROOT_MESSAGE = (
     "Keine root-Rechte: Das Dashboard ist auf diesem Server nicht als root angemeldet und "
@@ -61,6 +67,20 @@ def as_root(command: str, *, required: bool = True) -> str:
     )
 
 
+def new_rc_mark() -> str:
+    """Frische Zufallsmarke fuer einen Scan-Lauf: `@@scan-rc-<16 hex>=`."""
+    return f"@@scan-rc-{secrets.token_hex(8)}="
+
+
+def _checked_mark(mark: str | None) -> str:
+    """Die Marke kommt in doppelte Anfuehrungszeichen der Shell: nur genau dieses Format."""
+    if mark is None:
+        return new_rc_mark()
+    if not _RC_MARK_RE.fullmatch(mark):
+        raise ValueError(f"Ungueltige Scan-Marke: {mark!r}")
+    return mark
+
+
 @dataclass
 class ScanResult:
     status: str  # clean | infected | error
@@ -68,27 +88,40 @@ class ScanResult:
     findings: list[tuple[str, str]] = field(default_factory=list)  # (Pfad, Signatur)
     errors: list[str] = field(default_factory=list)
     error: str | None = None
+    # Anzahl Funde: mindestens die gelesenen Fund-Zeilen, sonst die Zahl aus der ClamAV-Zusammenfassung
+    # oder 1, wenn ClamAV mit Code 1 endet, obwohl keine Fund-Zeile lesbar war.
+    infected: int = 0
+    # Die Fund-Zeilen sind nicht verlaesslich (Zeilenumbruch im Dateinamen, Zeilen die ClamAV nie
+    # ausgibt, Zahlen die nicht zusammenpassen, Marke fehlt): `findings` kann dann gefaelschte Pfade
+    # enthalten. Der Defender verschiebt in dem Fall nichts automatisch (er liefe als root).
+    unreliable: bool = False
 
 
 def _q(value: str) -> str:
     return shlex.quote(value)
 
 
-def build_scan_command(paths: list[str], *, max_filesize_mb: int = 50, exclude: list[str] | None = None) -> str:
+def build_scan_command(
+    paths: list[str], *, max_filesize_mb: int = 50, exclude: list[str] | None = None, mark: str | None = None,
+) -> str:
     """`clamscan` rekursiv, nur Funde ausgeben (-i), Zusammenfassung am Ende fuer die
-    Dateizahl. Rueckgabecode wird angehaengt, weil 1 hier "Fund" heisst, nicht Fehler."""
+    Dateizahl. Rueckgabecode wird angehaengt, weil 1 hier "Fund" heisst, nicht Fehler.
+
+    `mark`: die Zufallsmarke dieses Laufs (`new_rc_mark()`), dieselbe geht spaeter an
+    `parse_scan_output`. Ohne Angabe wird eine neue gezogen."""
+    mark = _checked_mark(mark)
     excluded = [*_ALWAYS_EXCLUDED, *(exclude or [])]
     parts = ["clamscan", "-r", "-i", "--stdout", "--cross-fs=no" if paths == ["/"] else "",
              f"--max-filesize={max_filesize_mb}M", f"--max-scansize={max_filesize_mb * 4}M"]
     parts += [f"--exclude-dir={_q('^' + p.replace('.', chr(92) + '.'))}" for p in excluded]
     parts += [_q(p) for p in paths]
     cmd = " ".join(p for p in parts if p)
-    return f"{cmd} 2>&1; echo \"{RC_MARK}$?\""
+    return f"{cmd} 2>&1; echo \"{mark}$?\""
 
 
 def build_watch_command(
     paths: list[str], *, minutes: int, max_filesize_mb: int = 50, exclude: list[str] | None = None,
-    use_clamd: bool = False,
+    use_clamd: bool = False, mark: str | None = None,
 ) -> str:
     """Nur Dateien, die in den letzten `minutes` Minuten neu oder geaendert wurden --
     der kurze Waechter-Lauf. Ohne Treffer wird clamscan gar nicht erst gestartet.
@@ -115,7 +148,10 @@ def build_watch_command(
     geprueft. Ein clamscan-Neustart (Datenbank laden, rund 20 s und 1 GB) waere genau das,
     was die Einstellung sparen soll. Jede andere Ausgabe mit Code 1 oder 2, auch eine leere,
     fuehrt zum Rueckfall (bei Code 1 plus Verbindungsfehler wuerden sonst die Dateien nach
-    dem Fund ungeprueft als "geprueft" zaehlen; clamscan findet den Fund erneut)."""
+    dem Fund ungeprueft als "geprueft" zaehlen; clamscan findet den Fund erneut).
+
+    `mark`: die Zufallsmarke dieses Laufs (`new_rc_mark()`), wie bei `build_scan_command`."""
+    mark = _checked_mark(mark)
     finds = " ".join(_q(p) for p in paths)
     skip = " ".join(f"-not -path {_q(p)}" for p in (WATCH_EXCLUDED if exclude is None else exclude))
     clamscan = 'clamscan -i --stdout --file-list="$L" 2>&1; R=$?'
@@ -141,43 +177,112 @@ def build_watch_command(
         f"find {finds} -xdev -type f -mmin -{int(minutes)} -size -{int(max_filesize_mb)}M "
         f"-not -path {_q(QUARANTINE_DIR + '/*')} {skip} -not -path \"$L\" 2>/dev/null | head -n 2000 > \"$L\"; "
         f"if [ -s \"$L\" ]; then {scan}; "
-        f"else echo 'Scanned files: 0'; R=0; fi; rm -f \"$L\"; echo \"{RC_MARK}$R\""
+        f"else echo 'Scanned files: 0'; R=0; fi; rm -f \"$L\"; echo \"{mark}$R\""
     )
 
 
 _FOUND_RE = re.compile(r"^(?P<path>/.*): (?P<sig>.+) FOUND$")
-_SCANNED_RE = re.compile(r"^Scanned files: (\d+)", re.M)
+_SCANNED_RE = re.compile(r"^Scanned files: ([0-9]+)")
+_INFECTED_RE = re.compile(r"^Infected files: ([0-9]+)")
+# Die Meldung der Shell selbst ("sh: 1: clamscan: not found", "bash: line 1: clamscan: command not found").
+_NOT_INSTALLED_RE = re.compile(r"^(?:/(?:usr/)?bin/)?(?:ba|da|a)?sh: (?:(?:line )?[0-9]+: )?clamscan: (?:command )?not found$")
+NOT_INSTALLED_MESSAGE = "ClamAV ist auf diesem Server nicht installiert."
 
 
-def parse_scan_output(output: str) -> ScanResult:
-    rc_match = re.search(re.escape(RC_MARK) + r"(\d+)", output)
+def parse_scan_output(output: str, mark: str | None = None) -> ScanResult:
+    """Wertet die Ausgabe von `build_scan_command` / `build_watch_command` aus.
+
+    Die Ausgabe enthaelt Dateinamen vom gescannten Server, und ClamAV schreibt sie unveraendert hin
+    (mit ClamAV 1.0.5 geprueft: Zeilenumbruch, Wagenruecklauf, Seitenvorschub und ESC im Namen kommen
+    roh an). Ein Name darf die Auswertung deshalb nie steuern:
+
+    - `mark` ist die Marke dieses Laufs. Es zaehlt der LETZTE Treffer am Zeilenanfang: Die echte Marke
+      steht als Allerletztes in der Ausgabe, ein Dateiname mit Marke darin (oder mit Zeilenumbruch
+      davor) steht immer davor und kann nichts verstecken. Alles nach der Marke fliegt raus, alles
+      davor wird ausgewertet. Ohne `mark` gilt jede Marke im Format `@@scan-rc-<16 hex>=`; die alte
+      feste Marke `@@nexus-rc=` zaehlt nie. Fehlt die Marke ganz, wurde der Lauf nicht ordentlich
+      beendet: Fehler, nie "sauber".
+    - Zeilen werden nur am Zeilenvorschub getrennt, nicht mit `str.splitlines()`: das trennt auch bei
+      Wagenruecklauf, Seitenvorschub, U+0085, U+2028 und mehr, und eine Fund-Zeile mit so einem
+      Zeichen im Namen fiele auseinander (der Fund wuerde unsichtbar, der Lauf "sauber").
+    - Mit Zeilenumbruch im Dateinamen zerfaellt ein Fund in mehrere Zeilen, und die letzte kann
+      wie ein Fund fuer einen ganz anderen Pfad aussehen (`/etc/passwd: Sig FOUND`). Solche Laeufe
+      sind `unreliable`: eine Zeile mit Pfad am Anfang, die kein Fund ist (der Anfang des zerrissenen
+      Namens, mit `-i` schreibt ClamAV Pfade nur in Fund-Zeilen), oder eine Zahl von Fund-Zeilen, die
+      nicht zu `Infected files:` passt (die Zusammenfassung steht nach allen Namen, ihr letzter
+      Treffer ist deshalb echt). Ein Fund bleibt trotzdem ein Fund.
+    - Endet ClamAV mit Code 1, ist es mindestens `infected`, auch wenn keine Zeile lesbar war;
+      die Meldung "ClamAV nicht installiert" gilt nur als ganze Zeile der Shell oder bei Code 127,
+      nie als Teilstueck eines Dateinamens."""
+    pattern = _RC_MARK_RE.pattern if mark is None else re.escape(_checked_mark(mark))
+    matches = list(re.finditer(r"^" + pattern + r"([0-9]+)[ \t\r]*$", output, re.MULTILINE))
+    rc_match = matches[-1] if matches else None
     rc = int(rc_match.group(1)) if rc_match else None
     body = output[: rc_match.start()] if rc_match else output
 
-    if rc == 127 or "clamscan: not found" in body or "clamscan: command not found" in body:
-        return ScanResult(status="error", error="ClamAV ist auf diesem Server nicht installiert.")
+    if rc == 127:
+        return ScanResult(status="error", error=NOT_INSTALLED_MESSAGE)
 
     findings: list[tuple[str, str]] = []
     errors: list[str] = []
-    for line in body.splitlines():
-        line = line.strip()
-        m = _FOUND_RE.match(line)
+    found_lines = 0  # Zeilen, die auf " FOUND" enden (auch unlesbare und eingeschmuggelte)
+    stray = 0  # Zeilen mit Pfad am Anfang, die kein Fund sind
+    files: int | None = None
+    summary_infected: int | None = None
+    shell_not_found = False
+    nonblank: list[str] = []
+    for raw in body.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+        nonblank.append(line)
+        is_found_line = line.endswith(" FOUND")
+        found_lines += int(is_found_line)
+        # Die Regex nur auf Zeilen, die wie ein Fund enden: auf langen Bruchstuecken mit vielen ": "
+        # (Dateiname mit Zeilenumbruch) wuerde sie sonst quadratisch zuruecksetzen und die Auswertung
+        # -- und damit das ganze Dashboard -- sekundenlang blockieren.
+        m = _FOUND_RE.match(line) if is_found_line else None
         if m:
             findings.append((m.group("path"), m.group("sig")))
+        elif line.startswith("/"):
+            # Mit `-i` schreibt ClamAV einen Pfad nur in Fund-Zeilen. Der Anfang eines Fundes mit
+            # Zeilenumbruch im Namen ("/tmp/q") beginnt immer mit dem Pfad des gescannten Ordners.
+            stray += 1
+            shell_not_found = shell_not_found or bool(_NOT_INSTALLED_RE.match(line))
         elif line.startswith(("ERROR:", "LibClamAV Error")):
             errors.append(line)
+        elif (summary := _SCANNED_RE.match(line)) is not None:
+            files = int(summary.group(1))  # der LETZTE Treffer gilt: die echte Zusammenfassung steht nach allen Namen
+        elif (summary := _INFECTED_RE.match(line)) is not None:
+            summary_infected = int(summary.group(1))
+        else:
+            shell_not_found = shell_not_found or bool(_NOT_INSTALLED_RE.match(line))
 
-    scanned_match = _SCANNED_RE.search(body)
-    files = int(scanned_match.group(1)) if scanned_match else None
+    infected_count = max(len(findings), summary_infected or 0, 1 if rc == 1 else 0)
+    if shell_not_found and not infected_count:
+        return ScanResult(status="error", error=NOT_INSTALLED_MESSAGE)
 
-    if findings:
-        return ScanResult(status="infected", files_scanned=files, findings=findings, errors=errors)
-    if rc in (0, 1) or (rc is None and files is not None):
+    if infected_count:
+        unreliable = (
+            rc is None or stray > 0 or len(findings) != found_lines
+            or (summary_infected is not None and summary_infected != found_lines)
+            or len(findings) < infected_count
+        )
+        return ScanResult(
+            status="infected", files_scanned=files, findings=findings, errors=errors,
+            infected=infected_count, unreliable=unreliable,
+        )
+    if rc == 0:
         return ScanResult(status="clean", files_scanned=files, errors=errors)
     if rc == 2 and files:
         # Einzelne Dateien/Ordner nicht lesbar (meist fehlende Rechte), der Rest ist sauber.
         return ScanResult(status="clean", files_scanned=files, errors=errors)
-    detail = errors[0] if errors else (body.strip().splitlines() or ["unbekannter Fehler"])[-1]
+    if rc is None:
+        return ScanResult(
+            status="error", files_scanned=files, errors=errors,
+            error="Scan fehlgeschlagen: Die Ausgabe ist unvollständig (der Lauf wurde nicht ordentlich beendet).",
+        )
+    detail = errors[0] if errors else (nonblank[-1] if nonblank else "unbekannter Fehler")
     return ScanResult(status="error", files_scanned=files, errors=errors, error=f"Scan fehlgeschlagen: {detail}")
 
 

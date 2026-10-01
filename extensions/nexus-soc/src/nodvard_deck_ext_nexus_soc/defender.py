@@ -32,6 +32,17 @@ MAX_PARALLEL = 3
 
 SOC_PATH = "/ext/nexus-soc/soc"
 
+# Ein Lauf, dessen Fund-Zeilen nicht verlaesslich lesbar waren (`ScanResult.unreliable`): Hinweis am Scan,
+# Notiz an jedem Fund und Text der Push-Meldung. Es wird nichts automatisch verschoben.
+UNRELIABLE_HINT = (
+    "Die Meldung von ClamAV ist nicht eindeutig lesbar (zum Beispiel ein Zeilenumbruch im Dateinamen). "
+    "Es wurde nichts automatisch verschoben – bitte auf dem Server nachsehen."
+)
+UNRELIABLE_NOTE = (
+    "Der Pfad ist nicht gesichert: Die Ausgabe von ClamAV war nicht eindeutig lesbar (zum Beispiel ein "
+    "Zeilenumbruch im Dateinamen). Bitte vor dem Verschieben auf dem Server nachsehen."
+)
+
 KIND_LABEL = {"quick": "Schnellscan", "deep": "Tiefenscan", "watch": "Echtzeit-Wächter", "custom": "Scan"}
 # Die "grossen" Scans: je Server laeuft hoechstens einer davon, und der Waechter wartet,
 # bis er fertig ist -- jeder clamscan laedt die ganze Datenbank (~1 GB RAM).
@@ -171,21 +182,25 @@ class Defender:
     async def _run_scan(self, host: Host, scan_id: str, kind: str, paths: list[str]) -> None:
         settings = await self._settings()
         max_mb = int(settings.get("max_filesize_mb") or 50)
+        # Zufallsmarke je Lauf (Fix N1): im Befehl und bei der Auswertung dieselbe, einem
+        # Dateinamen auf dem Server nicht vorhersagbar.
+        mark = av.new_rc_mark()
         if kind == "watch":
             minutes = int(settings.get("watch_interval_min") or 10) + 2
             # Einstellung "Echtzeit-Waechter mit clamdscan" (Standard aus): nur der
             # Waechter; Schnell- und Tiefenscan bleiben bei clamscan.
             command = av.build_watch_command(paths, minutes=minutes, max_filesize_mb=max_mb,
-                                             use_clamd=bool(settings.get("watch_use_clamdscan", False)))
+                                             use_clamd=bool(settings.get("watch_use_clamdscan", False)), mark=mark)
         else:
-            command = av.build_scan_command(paths, max_filesize_mb=max_mb, exclude=settings.get("exclude_paths") or [])
+            command = av.build_scan_command(paths, max_filesize_mb=max_mb, exclude=settings.get("exclude_paths") or [],
+                                            mark=mark)
         command = av.as_root(command, required=False)
         try:
             result = await self._ctx.exec.run(host, command, timeout_s=SCAN_TIMEOUTS.get(kind, 3600))
             output = (result.stdout or "") + (result.stderr or "")
-            parsed = av.parse_scan_output(output)
+            parsed = av.parse_scan_output(output, mark)
             if result.exit_code == 127:
-                parsed = av.ScanResult(status="error", error="ClamAV ist auf diesem Server nicht installiert.")
+                parsed = av.ScanResult(status="error", error=av.NOT_INSTALLED_MESSAGE)
         except Exception as exc:  # noqa: BLE001 - jeder Fehler landet sichtbar am Scan
             output = ""
             parsed = av.ScanResult(status="error", error=_describe(exc))
@@ -197,8 +212,10 @@ class Defender:
                 return
             scan.status = parsed.status
             scan.files_scanned = parsed.files_scanned
-            scan.infected = len(parsed.findings)
+            scan.infected = parsed.infected
             scan.error = parsed.error or ("; ".join(parsed.errors[:3]) if parsed.errors else None)
+            if parsed.unreliable and parsed.status == "infected":
+                scan.error = UNRELIABLE_HINT
             scan.output_tail = output[-4000:] if output else None
             scan.finished_at = _now()
             for path, sig in parsed.findings:
@@ -209,32 +226,45 @@ class Defender:
                 )).scalar_one_or_none()
                 if existing is not None:
                     existing.scan_id = scan_id
+                    if parsed.unreliable and not existing.note:
+                        existing.note = UNRELIABLE_NOTE
                     finding_ids.append(existing.id)
                     continue
                 fid = _new_id("f")
                 session.add(FindingRecord(
                     id=fid, scan_id=scan_id, host_id=host.id, host_name=host.display_name or host.name, path=path,
                     signature=sig[:255], status="detected", detected_at=_now(),
+                    note=UNRELIABLE_NOTE if parsed.unreliable else None,
                 ))
                 finding_ids.append(fid)
 
-        if parsed.findings:
+        if parsed.status == "infected":
             await self._ctx.audit.log(
                 action="nexus_soc.malware_found", outcome="success", target_type="host", target_id=host.id,
-                reason=f"{len(parsed.findings)} Fund(e) bei {KIND_LABEL.get(kind, kind)}",
-                detail={"scan_id": scan_id, "findings": [{"path": p, "signature": s} for p, s in parsed.findings[:20]]},
+                reason=f"{parsed.infected} Fund(e) bei {KIND_LABEL.get(kind, kind)}",
+                detail={"scan_id": scan_id, "findings": [{"path": p, "signature": s} for p, s in parsed.findings[:20]],
+                        "unreliable": parsed.unreliable},
                 correlation_id=scan_id,
             )
             quarantined = 0
-            if settings.get("auto_quarantine", True):
+            # Nie automatisch, wenn die Pfade nicht verlaesslich sind: Ein Dateiname mit Zeilenumbruch
+            # kann einen Fund fuer einen fremden Pfad vortaeuschen (`/etc/passwd: ... FOUND`), und die
+            # Quarantaene laeuft als root. Dann entscheidet der Mensch (die Funde tragen eine Notiz).
+            if settings.get("auto_quarantine", True) and not parsed.unreliable:
                 for fid in finding_ids:
                     ok, _msg = await self.quarantine(fid, actor=None)
                     quarantined += int(ok)
-            names = ", ".join(f"{p} ({s})" for p, s in parsed.findings[:3])
+            if parsed.unreliable:
+                body = f"ClamAV meldet {parsed.infected} Fund(e). {UNRELIABLE_HINT}"
+            else:
+                names = ", ".join(f"{p} ({s})" for p, s in parsed.findings[:3])
+                body = (
+                    f"{len(parsed.findings)} Fund(e): {names}"
+                    + (f"\n{quarantined} in Quarantäne verschoben." if quarantined else "\nNoch nicht in Quarantäne – bitte prüfen.")
+                )
             await self._ctx.notify.send(Notification(
                 title=f"Schadsoftware auf {host.display_name or host.name} gefunden",
-                body=f"{len(parsed.findings)} Fund(e): {names}"
-                + (f"\n{quarantined} in Quarantäne verschoben." if quarantined else "\nNoch nicht in Quarantäne – bitte prüfen."),
+                body=body,
                 severity=Severity.CRITICAL,
                 # Absichtlich ohne `host_id`: ein Fund ist nie Wartungslärm, ein Wartungsfenster
                 # (Tiefenscan sonntags 03:30!) darf ihn nicht stummschalten (hostscope.py).

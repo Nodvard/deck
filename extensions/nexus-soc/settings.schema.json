@@ -5,7 +5,7 @@
       "type": "boolean",
       "default": true,
       "title": "Funde automatisch in Quarantäne verschieben",
-      "description": "Gefundene Schadsoftware wird sofort unschädlich gemacht (umkehrbar). Aus: Funde warten auf Ihre Entscheidung."
+      "description": "Gefundene Schadsoftware wird sofort unschädlich gemacht (umkehrbar). Aus: Funde warten auf deine Entscheidung."
     },
     "realtime_enabled": {
       "type": "boolean",
@@ -23,7 +23,7 @@
       "type": "boolean",
       "default": false,
       "title": "Echtzeit-Wächter mit clamdscan (wenn clamd läuft)",
-      "description": "Der Wächter fragt den laufenden ClamAV-Dienst (clamd), statt bei jedem Lauf die ganze Signaturdatenbank neu zu laden (spart je Lauf rund 20 Sekunden CPU und 1 GB Arbeitsspeicher). Läuft clamd nicht oder ist clamdscan nicht installiert, nimmt der Wächter wie bisher clamscan. Beachten Sie: clamd hält die Datenbank dauerhaft im Speicher (rund 1 GB) – lohnt sich vor allem dort, wo der Dienst ohnehin läuft. Wichtig: Über clamd gelten dessen eigene Größengrenzen aus der clamd.conf (MaxFileSize, bei Debian/Proxmox 25 MB) – größere Dateien werden dann ohne Hinweis als sauber gewertet, auch wenn bei \"Maximale Dateigröße\" mehr eingestellt ist. Schnell- und Tiefenscan bleiben unverändert.",
+      "description": "Der Wächter fragt den laufenden ClamAV-Dienst (clamd), statt bei jedem Lauf die ganze Signaturdatenbank neu zu laden (spart je Lauf rund 20 Sekunden CPU und 1 GB Arbeitsspeicher). Läuft clamd nicht oder ist clamdscan nicht installiert, nimmt der Wächter wie bisher clamscan. Beachte: clamd hält die Datenbank dauerhaft im Speicher (rund 1 GB) – lohnt sich vor allem dort, wo der Dienst ohnehin läuft. Wichtig: Über clamd gelten dessen eigene Größengrenzen aus der clamd.conf (MaxFileSize, bei Debian/Proxmox 25 MB) – größere Dateien werden dann ohne Hinweis als sauber gewertet, auch wenn bei \"Maximale Dateigröße\" mehr eingestellt ist. Schnell- und Tiefenscan bleiben unverändert.",
       "x-advanced": true
     },
     "watch_paths": {
@@ -175,7 +175,7 @@
       "type": "boolean",
       "default": false,
       "title": "Proxmox: „Alle Updates“ als dist-upgrade",
-      "description": "Für „Alle Updates“, das Sie selbst auslösen und freigeben, auf Proxmox-Servern (erkannt am Programm pveversion): statt „apt-get upgrade“ läuft „apt-get dist-upgrade“, wie Proxmox es für Updates verlangt. Das schließt auch Updates ein, die andere Pakete ersetzen oder entfernen müssen – sonst bleiben diese Pakete „zurückgehalten“ und stehen dauerhaft als offen da. Auf allen anderen Servern ändert sich nichts. Automatische Updates nehmen weiterhin nur „upgrade“ (entfernt nie Pakete), auch wenn das hier an ist. Die Wahl steht im Freigabe-Vorschlag. Weil dist-upgrade Pakete entfernen kann, gilt die Aktion dann als „Hoch“ (wie ein Neustart): Auch bei „Selbstständig handeln“ (Einstellungen › Automatik) wartet sie auf Ihre Freigabe, solange dort nicht ausdrücklich bis „Hoch“ erlaubt ist.",
+      "description": "Für „Alle Updates“, das du selbst auslöst und freigibst, auf Proxmox-Servern (erkannt am Programm pveversion): statt „apt-get upgrade“ läuft „apt-get dist-upgrade“, wie Proxmox es für Updates verlangt. Das schließt auch Updates ein, die andere Pakete ersetzen oder entfernen müssen – sonst bleiben diese Pakete „zurückgehalten“ und stehen dauerhaft als offen da. Auf allen anderen Servern ändert sich nichts. Automatische Updates nehmen weiterhin nur „upgrade“ (entfernt nie Pakete), auch wenn das hier an ist. Die Wahl steht im Freigabe-Vorschlag. Weil dist-upgrade Pakete entfernen kann, gilt die Aktion dann als „Hoch“ (wie ein Neustart): Auch bei „Selbstständig handeln“ (Einstellungen › Automatik) wartet sie auf deine Freigabe, solange dort nicht ausdrücklich bis „Hoch“ erlaubt ist.",
       "x-advanced": true
     },
     "guard_enabled": {
@@ -260,7 +260,7 @@
     "ollama_url": {
       "type": "string",
       "title": "Nodvard KI: Server (Ollama)",
-      "description": "Adresse Ihres Ollama-Servers für Nodvard KI, z. B. http://192.168.2.42:11434",
+      "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.42:11434",
       "pattern": "^https?://\\S+$",
       "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
     },
@@ -335,7 +335,7 @@
         "nas"
       ],
       "title": "Schutzwörter",
-      "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänzen Sie hier die Namen Ihrer eigenen Server.",
+      "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.",
       "x-advanced": true
     }
   },
@@ -344,7 +344,7 @@
     {
       "label": "nexus-soc-ollama-key",
       "title": "Nodvard KI: API-Schlüssel des Servers (optional)",
-      "description": "Nur nötig, wenn Ihr Ollama-Server hinter einer Anmeldung liegt.",
+      "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt.",
       "optional": true
     }
   ]

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Lizenz-Wächter: keine (A)GPL-/LGPL-/SSPL-Abhängigkeit, keine unbekannte Lizenz.
 
-Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0 und wird zusätzlich
-kommerziell lizenziert. Das geht nur, wenn jede mitgelieferte Abhängigkeit selbst
+Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0; eine kommerzielle Nutzung
+soll später gesondert erlaubt werden können. Das geht nur, wenn jede mitgelieferte Abhängigkeit selbst
 freizügig lizenziert ist -- eine Copyleft-Abhängigkeit würde verlangen, das ganze
 Programm unter ihre Lizenz zu stellen. Geprüft werden (wie in `scripts/third_party_licenses.py`):
 
@@ -72,7 +72,8 @@ EXCEPTIONS: dict[tuple[str, str], Ausnahme] = {
             "Die Metadaten nennen keine Lizenz, die Lizenzdatei im Wheel (dist-info/licenses/LICENSE) und das "
             "README sagen MIT. Die einkompilierten Rust-Crates (rage/age u. a.) stehen laut mitgelieferter "
             "SBOM (dist-info/sboms/pyrage.cyclonedx.json) unter MIT, Apache-2.0, BSD, Unlicense-oder-MIT bzw. "
-            "Unicode-3.0; die eine Doppellizenz 'Apache-2.0 OR GPL-2.0-only' nutzen wir als Apache-2.0."
+            "Unicode-3.0; die eine Doppellizenz 'Apache-2.0 OR GPL-2.0-only' nutzen wir als Apache-2.0. Die Liste "
+            "der Crates mit Lizenz und Urheber steht in THIRD_PARTY_LICENSES."
         ),
     ),
     ("python", "pypdfium2"): Ausnahme(
@@ -332,7 +333,7 @@ def violation_message(finding: Finding) -> str:
     if finding.verdict.rank == COPYLEFT:
         return (
             f"{where}: steht unter '{finding.license}' (Copyleft: GPL/AGPL/LGPL/SSPL). Das verträgt sich nicht "
-            f"mit der Lizenz von Nodvard Deck (PolyForm Noncommercial + kommerziell).\n"
+            f"mit der Lizenz von Nodvard Deck (PolyForm Noncommercial, kommerzielle Erlaubnis später möglich).\n"
             f"    Was tun: Paket durch ein freizügig lizenziertes ersetzen oder entfernen. Bietet es "
             f"eine freizügige Option an (z. B. 'Apache-2.0 OR GPL'), diese in der Lizenzangabe des Pakets prüfen."
         )

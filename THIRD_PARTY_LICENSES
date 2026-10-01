@@ -3,7 +3,9 @@ THIRD_PARTY_LICENSES
 
 Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0 (siehe LICENSE).
 Diese Datei nennt die Fremdkomponenten, die im Docker-Image bzw. im ausgelieferten
-Frontend stecken, mit Version, Lizenz und vollem Lizenztext.
+Frontend stecken, mit Version, Lizenz und vollem Lizenztext. Bei den Paketen
+steht außerdem, was sie selbst mitbringen: einkompilierte Bestandteile laut SBOM
+(z. B. Rust-Crates), mitgelieferter Fremdcode und die Lizenzköpfe einzelner Dateien.
 
 Automatisch erzeugt mit `python scripts/third_party_licenses.py` -- nicht von Hand
 ändern. Erlaubt sind nur freizügige Lizenzen; `python scripts/check_licenses.py`
@@ -62,7 +64,7 @@ Inhalt
   watchfiles                         1.3.0          MIT
   websockets                         17.1           BSD-3-Clause
 
-[npm] 65 Pakete
+[npm] 66 Pakete
   @novnc/novnc                       1.7.0          MPL-2.0
   @radix-ui/primitive                1.1.7          MIT
   @radix-ui/react-compose-refs       1.1.5          MIT
@@ -123,6 +125,7 @@ Inhalt
   resize-observer-polyfill           1.5.1          MIT
   scheduler                          0.23.2         MIT
   set-cookie-parser                  2.7.2          MIT
+  tailwindcss                        3.4.19         MIT
   tslib                              2.8.1          0BSD
   uc.micro                           3.0.0          MIT
   use-callback-ref                   1.3.3          MIT
@@ -137,7 +140,14 @@ Python: Version in deploy/constraints.txt). Den Quelltext gibt es unter den folg
 und über das jeweilige Paketregister (npm bzw. PyPI) in genau dieser Version.
 
   certifi 2026.7.22 (python): https://github.com/certifi/python-certifi
+      Paket genau dieser Version: https://pypi.org/project/certifi/2026.7.22/
+      Im Image: Python-Paket unter site-packages/certifi, unverändert.
   @novnc/novnc 1.7.0 (npm): https://github.com/novnc/noVNC
+      Quelltext genau dieser Version: https://github.com/novnc/noVNC/tree/v1.7.0
+      Paket genau dieser Version: https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz
+      Im Image: Frontend-Bundle /app/frontend/dist/assets/rfb-*.js (die grafische Konsole). Darin
+      stecken die Dateien aus core/ und vendor/pako/ des Pakets: unverändert, nur gebündelt und
+      verkleinert.
 
 ==============================================================================
 Python-Pakete
@@ -955,6 +965,66 @@ LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
 ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+[dist-info/sboms/cryptography-rust.cyclonedx.json: 39 einkompilierte Bestandteile]
+
+Diese Bestandteile sind laut der SBOM, die das Wheel mitbringt (CycloneDX), in das Wheel
+einkompiliert (bei Rust-Erweiterungen die Crates; die Liste kann auch Crates enthalten, die nur
+beim Bauen oder nur für andere Betriebssysteme gebraucht werden). Name, Version, Lizenz und
+Urheber stammen aus ihr.
+Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spdx.org/licenses/
+(z. B. https://spdx.org/licenses/MIT.html); bei "A OR B" gilt eine der Lizenzen nach Wahl.
+
+  asn1 0.24.1                        BSD-3-Clause  (Urheber: Alex Gaynor)
+  asn1_derive 0.24.1                 BSD-3-Clause  (Urheber: Alex Gaynor)
+  base64 0.23.0                      MIT OR Apache-2.0  (Urheber: Marshall Pierce)
+  bitflags 2.13.1                    MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  cc 1.4.0                           MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  cfg-if 1.0.4                       MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  cryptography-cffi 0.50.1           Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  cryptography-crypto 0.50.1         Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  cryptography-keepalive 0.50.1      Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  cryptography-key-parsing 0.50.1    Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  cryptography-openssl 0.50.1        Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  cryptography-x509 0.50.1           Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  cryptography-x509-verification 0.50.1 Apache-2.0 OR BSD-3-Clause  (Urheber: The cryptography developers)
+  find-msvc-tools 0.1.9              MIT OR Apache-2.0
+  foreign-types 0.3.2                MIT OR Apache-2.0  (Urheber: Steven Fackler)
+  foreign-types-shared 0.1.1         MIT OR Apache-2.0  (Urheber: Steven Fackler)
+  heck 0.5.0                         MIT OR Apache-2.0
+  itoa 1.0.18                        MIT OR Apache-2.0  (Urheber: David Tolnay)
+  libc 0.2.189                       MIT OR Apache-2.0
+  once_cell 1.21.4                   MIT OR Apache-2.0  (Urheber: Aleksey Kladov)
+  openssl 0.10.81                    Apache-2.0  (Urheber: Steven Fackler)
+  openssl-macros 0.1.1               MIT OR Apache-2.0
+  openssl-sys 0.9.117                MIT  (Urheber: Alex Crichton, Steven Fackler)
+  pem 4.0.0                          MIT  (Urheber: Jonathan Creekmore)
+  pkg-config 0.3.33                  MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  portable-atomic 1.14.0             Apache-2.0 OR MIT
+  proc-macro2 1.0.107                MIT OR Apache-2.0  (Urheber: David Tolnay, Alex Crichton)
+  pyo3 0.29.0                        MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-build-config 0.29.0           MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-ffi 0.29.0                    MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros 0.29.0                 MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros-backend 0.29.0         MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  quote 1.0.47                       MIT OR Apache-2.0  (Urheber: David Tolnay)
+  self_cell 1.3.0                    Apache-2.0 OR GPL-2.0-only  (Urheber: Lukas Bergdoll)
+  shlex 2.0.1                        MIT OR Apache-2.0  (Urheber: comex, Fenhl, Adrian Taylor, Alex Touchet, Daniel Parks, Garrett Berg)
+  syn 2.0.119                        MIT OR Apache-2.0  (Urheber: David Tolnay)
+  target-lexicon 0.13.5              Apache-2.0 WITH LLVM-exception  (Urheber: Dan Gohman)
+  unicode-ident 1.0.24               (MIT OR Apache-2.0) AND Unicode-3.0  (Urheber: David Tolnay)
+  vcpkg 0.2.15                       MIT OR Apache-2.0  (Urheber: Jim McGrath)
+
+[dist-info/sboms/sbom.json: 1 einkompilierter Bestandteil]
+
+Diese Bestandteile sind laut der SBOM, die das Wheel mitbringt (CycloneDX), in das Wheel
+einkompiliert (bei Rust-Erweiterungen die Crates; die Liste kann auch Crates enthalten, die nur
+beim Bauen oder nur für andere Betriebssysteme gebraucht werden). Name, Version, Lizenz und
+Urheber stammen aus ihr.
+Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spdx.org/licenses/
+(z. B. https://spdx.org/licenses/MIT.html); bei "A OR B" gilt eine der Lizenzen nach Wahl.
+
+  openssl 4.0.2                      Apache-2.0 (OpenSSL ab Version 3.0; die SBOM nennt keine Lizenz)  (Quelle: https://github.com/openssl/openssl/releases/download/openssl-4.0.2/openssl-4.0.2.tar.gz)
 
 ------------------------------------------------------------------------------
 dulwich 1.2.15
@@ -3747,6 +3817,8 @@ SOFTWARE.
 pydantic_core 2.46.5
 Lizenz: MIT
 ------------------------------------------------------------------------------
+[LICENSE]
+
 The MIT License (MIT)
 
 Copyright (c) 2022 Samuel Colvin
@@ -3768,6 +3840,119 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+[dist-info/sboms/pydantic-core.cyclonedx.json: 103 einkompilierte Bestandteile]
+
+Diese Bestandteile sind laut der SBOM, die das Wheel mitbringt (CycloneDX), in das Wheel
+einkompiliert (bei Rust-Erweiterungen die Crates; die Liste kann auch Crates enthalten, die nur
+beim Bauen oder nur für andere Betriebssysteme gebraucht werden). Name, Version, Lizenz und
+Urheber stammen aus ihr.
+Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spdx.org/licenses/
+(z. B. https://spdx.org/licenses/MIT.html); bei "A OR B" gilt eine der Lizenzen nach Wahl.
+
+  ahash 0.8.12                       MIT OR Apache-2.0  (Urheber: Tom Kaitchuck)
+  aho-corasick 1.1.3                 Unlicense OR MIT  (Urheber: Andrew Gallant)
+  allocator-api2 0.2.21              MIT OR Apache-2.0  (Urheber: Zakarum)
+  autocfg 1.3.0                      Apache-2.0 OR MIT  (Urheber: Josh Stone)
+  base64 0.22.1                      MIT OR Apache-2.0  (Urheber: Marshall Pierce)
+  bitflags 2.9.1                     MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  bitvec 1.0.1                       MIT
+  bumpalo 3.19.0                     MIT OR Apache-2.0  (Urheber: Nick Fitzgerald)
+  cc 1.0.101                         MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  cfg-if 1.0.0                       MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  displaydoc 0.2.5                   MIT OR Apache-2.0  (Urheber: Jane Lusby)
+  enum_dispatch 0.3.13               MIT OR Apache-2.0  (Urheber: Anton Lazarev)
+  equivalent 1.0.2                   Apache-2.0 OR MIT
+  foldhash 0.2.0                     Zlib  (Urheber: Orson Peters)
+  form_urlencoded 1.2.2              MIT OR Apache-2.0  (Urheber: The rust-url developers)
+  funty 2.0.0                        MIT  (Urheber: myrrlyn)
+  getrandom 0.3.3                    MIT OR Apache-2.0  (Urheber: The Rand Project Developers)
+  hashbrown 0.16.1                   MIT OR Apache-2.0  (Urheber: Amanieu d'Antras)
+  heck 0.5.0                         MIT OR Apache-2.0
+  hex 0.4.3                          MIT OR Apache-2.0  (Urheber: KokaKiwi)
+  icu_collections 1.5.0              Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_locid 1.5.0                    Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_locid_transform 1.5.0          Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_locid_transform_data 1.5.0     Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_normalizer 1.5.0               Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_normalizer_data 1.5.0          Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_properties 1.5.1               Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_properties_data 1.5.0          Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_provider 1.5.0                 Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  icu_provider_macros 1.5.0          Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  idna 1.1.0                         MIT OR Apache-2.0  (Urheber: The rust-url developers)
+  idna_adapter 1.2.0                 Apache-2.0 OR MIT  (Urheber: The rust-url developers)
+  itoa 1.0.11                        MIT OR Apache-2.0  (Urheber: David Tolnay)
+  jiter 0.14.0                       MIT  (Urheber: Samuel Colvin)
+  js-sys 0.3.77                      MIT OR Apache-2.0  (Urheber: The wasm-bindgen Developers)
+  lexical-parse-float 1.0.5          MIT OR Apache-2.0  (Urheber: Alex Huszagh)
+  lexical-parse-integer 1.0.5        MIT OR Apache-2.0  (Urheber: Alex Huszagh)
+  lexical-util 1.0.6                 MIT OR Apache-2.0  (Urheber: Alex Huszagh)
+  libc 0.2.185                       MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  litemap 0.7.3                      Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  log 0.4.27                         MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  lru 0.16.3                         MIT  (Urheber: Jerome Froelich)
+  memchr 2.7.4                       Unlicense OR MIT  (Urheber: Andrew Gallant, bluss)
+  num-bigint 0.4.6                   MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  num-integer 0.1.46                 MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  num-traits 0.2.19                  MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  once_cell 1.21.3                   MIT OR Apache-2.0  (Urheber: Aleksey Kladov)
+  percent-encoding 2.3.2             MIT OR Apache-2.0  (Urheber: The rust-url developers)
+  portable-atomic 1.6.0              Apache-2.0 OR MIT
+  proc-macro2 1.0.86                 MIT OR Apache-2.0  (Urheber: David Tolnay, Alex Crichton)
+  pyo3 0.28.3                        MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-build-config 0.28.3           MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-ffi 0.28.3                    MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros 0.28.3                 MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros-backend 0.28.3         MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  python3-dll-a 0.2.14               MIT  (Urheber: Sergey Kvachonok, messense, Adam Reichold)
+  quote 1.0.44                       MIT OR Apache-2.0  (Urheber: David Tolnay)
+  r-efi 5.2.0                        MIT OR Apache-2.0 OR LGPL-2.1-or-later
+  radium 0.7.0                       MIT  (Urheber: Nika Layzell, myrrlyn)
+  regex 1.12.3                       MIT OR Apache-2.0  (Urheber: The Rust Project Developers, Andrew Gallant)
+  regex-automata 0.4.13              MIT OR Apache-2.0  (Urheber: The Rust Project Developers, Andrew Gallant)
+  regex-syntax 0.8.5                 MIT OR Apache-2.0  (Urheber: The Rust Project Developers, Andrew Gallant)
+  rustversion 1.0.17                 MIT OR Apache-2.0  (Urheber: David Tolnay)
+  serde 1.0.228                      MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  serde_core 1.0.228                 MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  serde_derive 1.0.228               MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  serde_json 1.0.149                 MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  smallvec 1.15.1                    MIT OR Apache-2.0  (Urheber: The Servo Project Developers)
+  speedate 0.17.0                    MIT  (Urheber: Samuel Colvin)
+  stable_deref_trait 1.2.0           MIT OR Apache-2.0  (Urheber: Robert Grosse)
+  static_assertions 1.1.0            MIT OR Apache-2.0  (Urheber: Nikolai Vazquez)
+  strum 0.27.2                       MIT  (Urheber: Peter Glotfelty)
+  strum_macros 0.27.2                MIT  (Urheber: Peter Glotfelty)
+  syn 2.0.82                         MIT OR Apache-2.0  (Urheber: David Tolnay)
+  synstructure 0.13.1                MIT  (Urheber: Nika Layzell)
+  tap 1.0.1                          MIT  (Urheber: Elliott Linder, myrrlyn)
+  target-lexicon 0.13.4              Apache-2.0 WITH LLVM-exception  (Urheber: Dan Gohman)
+  tinystr 0.7.6                      Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  unicode-ident 1.0.12               (MIT OR Apache-2.0) AND Unicode-DFS-2016  (Urheber: David Tolnay)
+  url 2.5.8                          MIT OR Apache-2.0  (Urheber: The rust-url developers)
+  utf16_iter 1.0.5                   Apache-2.0 OR MIT  (Urheber: Henri Sivonen)
+  utf8_iter 1.0.4                    Apache-2.0 OR MIT  (Urheber: Henri Sivonen)
+  uuid 1.23.0                        Apache-2.0 OR MIT  (Urheber: Ashley Mannix, Dylan DPC, Hunar Roop Kahlon)
+  version_check 0.9.5                MIT OR Apache-2.0  (Urheber: Sergio Benitez)
+  wasi 0.14.2+wasi-0.2.4             Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  (Urheber: The Cranelift Project Developers)
+  wasm-bindgen 0.2.100               MIT OR Apache-2.0  (Urheber: The wasm-bindgen Developers)
+  wasm-bindgen-backend 0.2.100       MIT OR Apache-2.0  (Urheber: The wasm-bindgen Developers)
+  wasm-bindgen-macro 0.2.100         MIT OR Apache-2.0  (Urheber: The wasm-bindgen Developers)
+  wasm-bindgen-macro-support 0.2.100 MIT OR Apache-2.0  (Urheber: The wasm-bindgen Developers)
+  wasm-bindgen-shared 0.2.100        MIT OR Apache-2.0  (Urheber: The wasm-bindgen Developers)
+  wit-bindgen-rt 0.39.0              Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+  write16 1.0.0                      Apache-2.0 OR MIT
+  writeable 0.5.5                    Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  wyz 0.5.1                          MIT  (Urheber: myrrlyn)
+  yoke 0.7.4                         Unicode-3.0  (Urheber: Manish Goregaokar)
+  yoke-derive 0.7.4                  Unicode-3.0  (Urheber: Manish Goregaokar)
+  zerocopy 0.8.25                    BSD-2-Clause OR Apache-2.0 OR MIT  (Urheber: Joshua Liebow-Feeser, Jack Wrenn)
+  zerocopy-derive 0.8.25             BSD-2-Clause OR Apache-2.0 OR MIT  (Urheber: Joshua Liebow-Feeser, Jack Wrenn)
+  zerofrom 0.1.4                     Unicode-3.0  (Urheber: Manish Goregaokar)
+  zerofrom-derive 0.1.4              Unicode-3.0  (Urheber: Manish Goregaokar)
+  zerovec 0.10.4                     Unicode-3.0  (Urheber: The ICU4X Project Developers)
+  zerovec-derive 0.10.3              Unicode-3.0  (Urheber: Manish Goregaokar)
+  zmij 1.0.6                         MIT  (Urheber: David Tolnay)
 
 ------------------------------------------------------------------------------
 PyJWT 2.15.0
@@ -4140,7 +4325,7 @@ Introduction
   encourage you to use the following text:
 
    """
-    Portions of this software are copyright � <year> The FreeType
+    Portions of this software are copyright © <year> The FreeType
     Project (www.freetype.org).  All rights reserved.
    """
 
@@ -6594,6 +6779,8 @@ Section 8 -- Interpretation.
 pyrage 1.4.0
 Lizenz: (keine Angabe)
 ------------------------------------------------------------------------------
+[LICENSE]
+
 The MIT License (MIT)
 
 Copyright (c) 2022 William Woodruff <william @ yossarian.net>
@@ -6615,6 +6802,255 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+[dist-info/sboms/pyrage.cyclonedx.json: 192 einkompilierte Bestandteile]
+
+Diese Bestandteile sind laut der SBOM, die das Wheel mitbringt (CycloneDX), in das Wheel
+einkompiliert (bei Rust-Erweiterungen die Crates; die Liste kann auch Crates enthalten, die nur
+beim Bauen oder nur für andere Betriebssysteme gebraucht werden). Name, Version, Lizenz und
+Urheber stammen aus ihr.
+Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spdx.org/licenses/
+(z. B. https://spdx.org/licenses/MIT.html); bei "A OR B" gilt eine der Lizenzen nach Wahl.
+
+  aead 0.5.2                         MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  aes 0.8.3                          MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  aes-gcm 0.10.3                     Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  age 0.12.1                         MIT OR Apache-2.0  (Urheber: Jack Grigg)
+  age-core 0.12.0                    MIT OR Apache-2.0  (Urheber: Jack Grigg)
+  arc-swap 1.6.0                     MIT OR Apache-2.0  (Urheber: Michal 'vorner' Vaner)
+  autocfg 1.1.0                      Apache-2.0 OR MIT  (Urheber: Josh Stone)
+  base16ct 0.2.0                     Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  base64 0.22.1                      MIT OR Apache-2.0  (Urheber: Marshall Pierce)
+  base64ct 1.6.0                     Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  basic-toml 0.1.9                   MIT OR Apache-2.0  (Urheber: Alex Crichton, David Tolnay)
+  bcrypt-pbkdf 0.10.0                MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  bech32 0.11.1                      MIT  (Urheber: Clark Moody, Andrew Poelstra, Tobin Harding)
+  bitflags 1.3.2                     MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  bitflags 2.5.0                     MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  block-buffer 0.10.4                MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  block-padding 0.3.3                MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  blowfish 0.9.1                     MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  bytecount 0.6.8                    Apache-2.0 OR MIT  (Urheber: Andre Bogus, Joshua Landau)
+  byteorder 1.5.0                    Unlicense OR MIT  (Urheber: Andrew Gallant)
+  camino 1.1.9                       MIT OR Apache-2.0  (Urheber: Without Boats, Ashley Williams, Steve Klabnik, Rain)
+  cargo-platform 0.1.9               MIT OR Apache-2.0
+  cargo_metadata 0.14.2              MIT  (Urheber: Oliver Schneider)
+  cbc 0.1.2                          MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  cfg-if 1.0.0                       MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  chacha20 0.9.1                     Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  chacha20poly1305 0.10.1            Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  cipher 0.4.4                       MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  const-oid 0.9.5                    Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  cookie-factory 0.3.2               MIT  (Urheber: Geoffroy Couprie, Pierre Chifflier)
+  cpufeatures 0.2.11                 MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  crypto-bigint 0.5.5                Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  crypto-common 0.1.6                MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  ctr 0.9.2                          MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  curve25519-dalek 4.1.1             BSD-3-Clause  (Urheber: Isis Lovecruft, Henry de Valence)
+  curve25519-dalek-derive 0.1.1      MIT OR Apache-2.0
+  der 0.7.8                          Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  digest 0.10.7                      MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  displaydoc 0.2.4                   MIT OR Apache-2.0  (Urheber: Jane Lusby)
+  elliptic-curve 0.13.8              Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  errno 0.3.8                        MIT OR Apache-2.0  (Urheber: Chris Wong)
+  error-chain 0.12.4                 MIT OR Apache-2.0  (Urheber: Brian Anderson, Paul Colomiets, Colin Kiegel, Yamakaky, Andrew Gauger)
+  fastrand 2.0.2                     Apache-2.0 OR MIT  (Urheber: Stjepan Glavina)
+  ff 0.13.1                          MIT OR Apache-2.0  (Urheber: Sean Bowe, Jack Grigg)
+  fiat-crypto 0.2.6                  MIT OR Apache-2.0 OR BSD-1-Clause  (Urheber: Fiat Crypto library authors)
+  find-crate 0.6.3                   Apache-2.0 OR MIT  (Urheber: Taiki Endo)
+  fluent 0.17.0                      Apache-2.0 OR MIT  (Urheber: Caleb Maclennan, Bruce Mitchener, Staś Małolepszy)
+  fluent-bundle 0.16.0               Apache-2.0 OR MIT  (Urheber: Caleb Maclennan, Bruce Mitchener, Staś Małolepszy)
+  fluent-langneg 0.13.0              Apache-2.0  (Urheber: Zibi Braniecki)
+  fluent-syntax 0.12.0               Apache-2.0 OR MIT  (Urheber: Caleb Maclennan, Bruce Mitchener, Staś Małolepszy)
+  generic-array 0.14.7               MIT  (Urheber: Bartłomiej Kamiński, Aaron Trent)
+  getrandom 0.2.11                   MIT OR Apache-2.0  (Urheber: The Rand Project Developers)
+  ghash 0.5.0                        Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  glob 0.3.2                         MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  group 0.13.0                       MIT OR Apache-2.0  (Urheber: Sean Bowe, Jack Grigg)
+  heck 0.5.0                         MIT OR Apache-2.0
+  hkdf 0.12.3                        MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  hmac 0.12.1                        MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  hpke 0.12.0                        MIT OR Apache-2.0  (Urheber: Michael Rosenberg)
+  hybrid-array 0.2.3                 MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  i18n-config 0.4.7                  MIT  (Urheber: Luke Frisken)
+  i18n-embed 0.16.0                  MIT  (Urheber: Luke Frisken)
+  i18n-embed-fl 0.10.1               MIT  (Urheber: Luke Frisken)
+  i18n-embed-impl 0.8.4              MIT  (Urheber: Luke Frisken)
+  indoc 2.0.4                        MIT OR Apache-2.0  (Urheber: David Tolnay)
+  inout 0.1.3                        MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  intl-memoizer 0.5.3                Apache-2.0 OR MIT  (Urheber: Caleb Maclennan, Bruce Mitchener, Staś Małolepszy)
+  intl_pluralrules 7.0.2             Apache-2.0 OR MIT  (Urheber: Kekoa Riggin, Zibi Braniecki)
+  io_tee 0.1.1                       MIT OR Apache-2.0
+  itoa 1.0.14                        MIT OR Apache-2.0  (Urheber: David Tolnay)
+  keccak 0.1.6                       Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  kem 0.3.0-pre.0                    Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  lazy_static 1.4.0                  MIT OR Apache-2.0  (Urheber: Marvin Löbel)
+  libc 0.2.150                       MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  libm 0.2.8                         MIT OR Apache-2.0  (Urheber: Jorge Aparicio)
+  linux-raw-sys 0.4.13               Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  (Urheber: Dan Gohman)
+  lock_api 0.4.11                    MIT OR Apache-2.0  (Urheber: Amanieu d'Antras)
+  log 0.4.20                         MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  memchr 2.6.4                       Unlicense OR MIT  (Urheber: Andrew Gallant, bluss)
+  memoffset 0.9.0                    MIT  (Urheber: Gilad Naaman)
+  ml-kem 0.2.3                       Apache-2.0 OR MIT
+  nom 8.0.0                          MIT  (Urheber: contact@geoffroycouprie.com)
+  num-bigint-dig 0.8.4               MIT OR Apache-2.0  (Urheber: dignifiedquire, The Rust Project Developers)
+  num-integer 0.1.45                 MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  num-iter 0.1.43                    MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  num-traits 0.2.17                  MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  once_cell 1.19.0                   MIT OR Apache-2.0  (Urheber: Aleksey Kladov)
+  opaque-debug 0.3.0                 MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  p256 0.13.2                        Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  parking_lot 0.12.1                 MIT OR Apache-2.0  (Urheber: Amanieu d'Antras)
+  parking_lot_core 0.9.9             MIT OR Apache-2.0  (Urheber: Amanieu d'Antras)
+  pbkdf2 0.12.2                      MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  pin-project 1.1.3                  Apache-2.0 OR MIT
+  pin-project-internal 1.1.3         Apache-2.0 OR MIT
+  pkcs1 0.7.5                        Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  pkcs8 0.10.2                       Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  platforms 3.3.0                    Apache-2.0 OR MIT  (Urheber: Tony Arcieri, Sergey "Shnatsel" Davidoff)
+  poly1305 0.8.0                     Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  polyval 0.6.1                      Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  portable-atomic 1.6.0              Apache-2.0 OR MIT
+  ppv-lite86 0.2.17                  MIT OR Apache-2.0  (Urheber: The CryptoCorrosion Contributors)
+  primeorder 0.13.6                  Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  proc-macro-error-attr3 3.1.0       MIT OR Apache-2.0  (Urheber: CreepySkeleton, GnomedDev, gamma0987)
+  proc-macro-error3 3.1.0            MIT OR Apache-2.0  (Urheber: CreepySkeleton, GnomedDev, gamma0987)
+  proc-macro2 1.0.107                MIT OR Apache-2.0  (Urheber: David Tolnay, Alex Crichton)
+  pulldown-cmark 0.9.6               MIT  (Urheber: Raph Levien, Marcus Klaas de Vries)
+  pyo3 0.24.2                        MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-build-config 0.24.2           MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-ffi 0.24.2                    MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-file 0.12.0                   MIT OR Apache-2.0  (Urheber: Omer Ben-Amram)
+  pyo3-macros 0.24.2                 MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros-backend 0.24.2         MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  quote 1.0.36                       MIT OR Apache-2.0  (Urheber: David Tolnay)
+  rand 0.8.5                         MIT OR Apache-2.0  (Urheber: The Rand Project Developers, The Rust Project Developers)
+  rand_chacha 0.3.1                  MIT OR Apache-2.0  (Urheber: The Rand Project Developers, The Rust Project Developers, The CryptoCorrosion Contributors)
+  rand_core 0.6.4                    MIT OR Apache-2.0  (Urheber: The Rand Project Developers, The Rust Project Developers)
+  redox_syscall 0.4.1                MIT  (Urheber: Jeremy Soller)
+  rsa 0.9.6                          MIT OR Apache-2.0  (Urheber: RustCrypto Developers, dignifiedquire)
+  rust-embed 8.2.0                   MIT  (Urheber: pyros2097)
+  rust-embed-impl 8.2.0              MIT  (Urheber: pyros2097)
+  rust-embed-utils 8.2.0             MIT  (Urheber: pyros2097)
+  rustc-hash 2.1.3                   Apache-2.0 OR MIT  (Urheber: The Rust Project Developers)
+  rustc_version 0.4.0                MIT OR Apache-2.0  (Urheber: Dirkjan Ochtman, Marvin Löbel)
+  rustix 0.38.28                     Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  (Urheber: Dan Gohman, Jakub Konka)
+  ryu 1.0.18                         Apache-2.0 OR BSL-1.0  (Urheber: David Tolnay)
+  salsa20 0.10.2                     MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  same-file 1.0.6                    Unlicense OR MIT  (Urheber: Andrew Gallant)
+  scopeguard 1.2.0                   MIT OR Apache-2.0  (Urheber: bluss)
+  scrypt 0.11.0                      MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  sec1 0.7.3                         Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  secrecy 0.10.3                     Apache-2.0 OR MIT  (Urheber: Tony Arcieri)
+  self_cell 1.3.0                    Apache-2.0 OR GPL-2.0-only  (Urheber: Lukas Bergdoll)
+  semver 1.0.21                      MIT OR Apache-2.0  (Urheber: David Tolnay)
+  serde 1.0.215                      MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  serde_derive 1.0.215               MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  serde_json 1.0.137                 MIT OR Apache-2.0  (Urheber: Erick Tryzelaar, David Tolnay)
+  sha2 0.10.8                        MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  sha3 0.10.9                        MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  signature 2.2.0                    Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  skeptic 0.13.7                     MIT OR Apache-2.0
+  smallvec 1.15.2                    MIT OR Apache-2.0  (Urheber: The Servo Project Developers)
+  spin 0.5.2                         MIT  (Urheber: Mathijs van de Nes, John Ericson)
+  spki 0.7.3                         Apache-2.0 OR MIT  (Urheber: RustCrypto Developers)
+  strsim 0.11.1                      MIT  (Urheber: Danny Guo, maxbachmann)
+  subtle 2.6.1                       BSD-3-Clause  (Urheber: Isis Lovecruft, Henry de Valence)
+  syn 2.0.87                         MIT OR Apache-2.0  (Urheber: David Tolnay)
+  syn 3.0.3                          MIT OR Apache-2.0  (Urheber: David Tolnay)
+  target-lexicon 0.13.2              Apache-2.0 WITH LLVM-exception  (Urheber: Dan Gohman)
+  tempfile 3.9.0                     MIT OR Apache-2.0  (Urheber: Steven Allen, The Rust Project Developers, Ashley Mannix, Jason White)
+  thiserror 1.0.50                   MIT OR Apache-2.0  (Urheber: David Tolnay)
+  thiserror 2.0.19                   MIT OR Apache-2.0  (Urheber: David Tolnay)
+  thiserror-impl 1.0.50              MIT OR Apache-2.0  (Urheber: David Tolnay)
+  thiserror-impl 2.0.19              MIT OR Apache-2.0  (Urheber: David Tolnay)
+  tinystr 0.7.5                      Lizenztext siehe unten  (Urheber: The ICU4X Project Developers)
+  toml 0.5.11                        MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  type-map 0.5.1                     MIT OR Apache-2.0  (Urheber: Jacob Brown)
+  typenum 1.17.0                     MIT OR Apache-2.0  (Urheber: Paho Lurie-Gregg, Andre Bogus)
+  unic-langid 0.9.3                  MIT OR Apache-2.0  (Urheber: Zibi Braniecki)
+  unic-langid-impl 0.9.3             MIT OR Apache-2.0  (Urheber: Zibi Braniecki)
+  unicase 2.8.1                      MIT OR Apache-2.0  (Urheber: Sean McArthur)
+  unicode-ident 1.0.12               (MIT OR Apache-2.0) AND Unicode-DFS-2016  (Urheber: David Tolnay)
+  unindent 0.2.3                     MIT OR Apache-2.0  (Urheber: David Tolnay)
+  universal-hash 0.5.1               MIT OR Apache-2.0  (Urheber: RustCrypto Developers)
+  version_check 0.9.4                MIT OR Apache-2.0  (Urheber: Sergio Benitez)
+  walkdir 2.4.0                      Unlicense OR MIT  (Urheber: Andrew Gallant)
+  wasi 0.11.0+wasi-snapshot-preview1 Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT  (Urheber: The Cranelift Project Developers)
+  which 8.0.5                        MIT  (Urheber: Harry Fei, Jacob Kiesel)
+  winapi 0.3.9                       MIT OR Apache-2.0  (Urheber: Peter Atashian)
+  winapi-i686-pc-windows-gnu 0.4.0   MIT OR Apache-2.0  (Urheber: Peter Atashian)
+  winapi-util 0.1.6                  Unlicense OR MIT  (Urheber: Andrew Gallant)
+  winapi-x86_64-pc-windows-gnu 0.4.0 MIT OR Apache-2.0  (Urheber: Peter Atashian)
+  windows-sys 0.52.0                 MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows-targets 0.48.5             MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows-targets 0.52.4             MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_aarch64_gnullvm 0.48.5     MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_aarch64_gnullvm 0.52.4     MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_aarch64_msvc 0.48.5        MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_aarch64_msvc 0.52.4        MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_i686_gnu 0.48.5            MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_i686_gnu 0.52.4            MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_i686_msvc 0.48.5           MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_i686_msvc 0.52.4           MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_x86_64_gnu 0.48.5          MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_x86_64_gnu 0.52.4          MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_x86_64_gnullvm 0.48.5      MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_x86_64_gnullvm 0.52.4      MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_x86_64_msvc 0.48.5         MIT OR Apache-2.0  (Urheber: Microsoft)
+  windows_x86_64_msvc 0.52.4         MIT OR Apache-2.0  (Urheber: Microsoft)
+  wsl 0.1.0                          MIT  (Urheber: Hannes Karppila)
+  x25519-dalek 2.0.0                 BSD-3-Clause  (Urheber: Isis Lovecruft, DebugSteven, Henry de Valence)
+  zeroize 1.7.0                      Apache-2.0 OR MIT  (Urheber: The RustCrypto Project Developers)
+  zeroize_derive 1.4.2               Apache-2.0 OR MIT  (Urheber: The RustCrypto Project Developers)
+
+[Lizenztext aus dist-info/sboms/pyrage.cyclonedx.json: tinystr 0.7.5]
+
+UNICODE LICENSE V3
+
+COPYRIGHT AND PERMISSION NOTICE
+
+Copyright © 2020-2023 Unicode, Inc.
+
+NOTICE TO USER: Carefully read the following legal agreement. BY
+DOWNLOADING, INSTALLING, COPYING OR OTHERWISE USING DATA FILES, AND/OR
+SOFTWARE, YOU UNEQUIVOCALLY ACCEPT, AND AGREE TO BE BOUND BY, ALL OF THE
+TERMS AND CONDITIONS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT
+DOWNLOAD, INSTALL, COPY, DISTRIBUTE OR USE THE DATA FILES OR SOFTWARE.
+
+Permission is hereby granted, free of charge, to any person obtaining a
+copy of data files and any associated documentation (the "Data Files") or
+software and any associated documentation (the "Software") to deal in the
+Data Files or Software without restriction, including without limitation
+the rights to use, copy, modify, merge, publish, distribute, and/or sell
+copies of the Data Files or Software, and to permit persons to whom the
+Data Files or Software are furnished to do so, provided that either (a)
+this copyright and permission notice appear with all copies of the Data
+Files or Software, or (b) this copyright and permission notice appear in
+associated Documentation.
+
+THE DATA FILES AND SOFTWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY
+KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF
+THIRD PARTY RIGHTS.
+
+IN NO EVENT SHALL THE COPYRIGHT HOLDER OR HOLDERS INCLUDED IN THIS NOTICE
+BE LIABLE FOR ANY CLAIM, OR ANY SPECIAL INDIRECT OR CONSEQUENTIAL DAMAGES,
+OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
+WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
+ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THE DATA
+FILES OR SOFTWARE.
+
+Except as contained in this notice, the name of a copyright holder shall
+not be used in advertising or otherwise to promote the sale, use or other
+dealings in these Data Files or Software without prior written
+authorization of the copyright holder.
+
+—
+
+Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
+ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
 ------------------------------------------------------------------------------
 pytesseract 0.3.13
@@ -8245,6 +8681,8 @@ THE SOFTWARE.
 watchfiles 1.3.0
 Lizenz: MIT
 ------------------------------------------------------------------------------
+[LICENSE]
+
 The MIT License (MIT)
 
 Copyright (c) 2017 to present Samuel Colvin
@@ -8266,6 +8704,42 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+[dist-info/sboms/watchfiles_rust_notify.cyclonedx.json: 26 einkompilierte Bestandteile]
+
+Diese Bestandteile sind laut der SBOM, die das Wheel mitbringt (CycloneDX), in das Wheel
+einkompiliert (bei Rust-Erweiterungen die Crates; die Liste kann auch Crates enthalten, die nur
+beim Bauen oder nur für andere Betriebssysteme gebraucht werden). Name, Version, Lizenz und
+Urheber stammen aus ihr.
+Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spdx.org/licenses/
+(z. B. https://spdx.org/licenses/MIT.html); bei "A OR B" gilt eine der Lizenzen nach Wahl.
+
+  bitflags 2.7.0                     MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  cfg-if 1.0.0                       MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  crossbeam-channel 0.5.15           MIT OR Apache-2.0
+  crossbeam-utils 0.8.19             MIT OR Apache-2.0
+  filetime 0.2.24                    MIT OR Apache-2.0  (Urheber: Alex Crichton)
+  heck 0.5.0                         MIT OR Apache-2.0
+  inotify 0.11.0                     ISC  (Urheber: Hanno Braun, Félix Saparelli, Cristian Kubis, Frank Denis)
+  inotify-sys 0.1.5                  ISC  (Urheber: Hanno Braun)
+  libc 0.2.169                       MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  log 0.4.22                         MIT OR Apache-2.0  (Urheber: The Rust Project Developers)
+  mio 1.0.3                          MIT  (Urheber: Carl Lerche, Thomas de Zeeuw, Tokio Contributors)
+  notify 8.0.0                       CC0-1.0  (Urheber: Félix Saparelli, Daniel Faust, Aron Heinecke)
+  notify-types 2.0.0                 MIT OR Apache-2.0  (Urheber: Daniel Faust)
+  once_cell 1.21.3                   MIT OR Apache-2.0  (Urheber: Aleksey Kladov)
+  proc-macro2 1.0.81                 MIT OR Apache-2.0  (Urheber: David Tolnay, Alex Crichton)
+  pyo3 0.29.0                        MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-build-config 0.29.0           MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-ffi 0.29.0                    MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros 0.29.0                 MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  pyo3-macros-backend 0.29.0         MIT OR Apache-2.0  (Urheber: PyO3 Project and Contributors)
+  quote 1.0.45                       MIT OR Apache-2.0  (Urheber: David Tolnay)
+  same-file 1.0.6                    Unlicense OR MIT  (Urheber: Andrew Gallant)
+  syn 2.0.60                         MIT OR Apache-2.0  (Urheber: David Tolnay)
+  target-lexicon 0.13.5              Apache-2.0 WITH LLVM-exception  (Urheber: Dan Gohman)
+  unicode-ident 1.0.12               (MIT OR Apache-2.0) AND Unicode-DFS-2016  (Urheber: David Tolnay)
+  walkdir 2.5.0                      Unlicense OR MIT  (Urheber: Andrew Gallant)
 
 ------------------------------------------------------------------------------
 websockets 17.1
@@ -8304,6 +8778,8 @@ npm-Pakete
 @novnc/novnc 1.7.0
 Lizenz: MPL-2.0
 ------------------------------------------------------------------------------
+[LICENSE.txt]
+
 noVNC is Copyright (C) 2022 The noVNC authors
 (./AUTHORS)
 
@@ -8366,6 +8842,643 @@ Or alternatively the license texts may be found here:
     http://scripts.sil.org/OFL
     http://en.wikipedia.org/wiki/BSD_licenses
     https://opensource.org/licenses/MIT
+
+[docs/LICENSE.BSD-2-Clause]
+
+Copyright (c) <year>, <copyright holder>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+[docs/LICENSE.BSD-3-Clause]
+
+Copyright (c) <year>, <copyright holder>
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+    * Redistributions of source code must retain the above copyright
+      notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above copyright
+      notice, this list of conditions and the following disclaimer in the
+      documentation and/or other materials provided with the distribution.
+    * Neither the name of the <organization> nor the
+      names of its contributors may be used to endorse or promote products
+      derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL <COPYRIGHT HOLDER> BE LIABLE FOR ANY
+DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND
+ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+[docs/LICENSE.MPL-2.0]
+
+Mozilla Public License Version 2.0
+==================================
+
+1. Definitions
+--------------
+
+1.1. "Contributor"
+    means each individual or legal entity that creates, contributes to
+    the creation of, or owns Covered Software.
+
+1.2. "Contributor Version"
+    means the combination of the Contributions of others (if any) used
+    by a Contributor and that particular Contributor's Contribution.
+
+1.3. "Contribution"
+    means Covered Software of a particular Contributor.
+
+1.4. "Covered Software"
+    means Source Code Form to which the initial Contributor has attached
+    the notice in Exhibit A, the Executable Form of such Source Code
+    Form, and Modifications of such Source Code Form, in each case
+    including portions thereof.
+
+1.5. "Incompatible With Secondary Licenses"
+    means
+
+    (a) that the initial Contributor has attached the notice described
+        in Exhibit B to the Covered Software; or
+
+    (b) that the Covered Software was made available under the terms of
+        version 1.1 or earlier of the License, but not also under the
+        terms of a Secondary License.
+
+1.6. "Executable Form"
+    means any form of the work other than Source Code Form.
+
+1.7. "Larger Work"
+    means a work that combines Covered Software with other material, in
+    a separate file or files, that is not Covered Software.
+
+1.8. "License"
+    means this document.
+
+1.9. "Licensable"
+    means having the right to grant, to the maximum extent possible,
+    whether at the time of the initial grant or subsequently, any and
+    all of the rights conveyed by this License.
+
+1.10. "Modifications"
+    means any of the following:
+
+    (a) any file in Source Code Form that results from an addition to,
+        deletion from, or modification of the contents of Covered
+        Software; or
+
+    (b) any new file in Source Code Form that contains any Covered
+        Software.
+
+1.11. "Patent Claims" of a Contributor
+    means any patent claim(s), including without limitation, method,
+    process, and apparatus claims, in any patent Licensable by such
+    Contributor that would be infringed, but for the grant of the
+    License, by the making, using, selling, offering for sale, having
+    made, import, or transfer of either its Contributions or its
+    Contributor Version.
+
+1.12. "Secondary License"
+    means either the GNU General Public License, Version 2.0, the GNU
+    Lesser General Public License, Version 2.1, the GNU Affero General
+    Public License, Version 3.0, or any later versions of those
+    licenses.
+
+1.13. "Source Code Form"
+    means the form of the work preferred for making modifications.
+
+1.14. "You" (or "Your")
+    means an individual or a legal entity exercising rights under this
+    License. For legal entities, "You" includes any entity that
+    controls, is controlled by, or is under common control with You. For
+    purposes of this definition, "control" means (a) the power, direct
+    or indirect, to cause the direction or management of such entity,
+    whether by contract or otherwise, or (b) ownership of more than
+    fifty percent (50%) of the outstanding shares or beneficial
+    ownership of such entity.
+
+2. License Grants and Conditions
+--------------------------------
+
+2.1. Grants
+
+Each Contributor hereby grants You a world-wide, royalty-free,
+non-exclusive license:
+
+(a) under intellectual property rights (other than patent or trademark)
+    Licensable by such Contributor to use, reproduce, make available,
+    modify, display, perform, distribute, and otherwise exploit its
+    Contributions, either on an unmodified basis, with Modifications, or
+    as part of a Larger Work; and
+
+(b) under Patent Claims of such Contributor to make, use, sell, offer
+    for sale, have made, import, and otherwise transfer either its
+    Contributions or its Contributor Version.
+
+2.2. Effective Date
+
+The licenses granted in Section 2.1 with respect to any Contribution
+become effective for each Contribution on the date the Contributor first
+distributes such Contribution.
+
+2.3. Limitations on Grant Scope
+
+The licenses granted in this Section 2 are the only rights granted under
+this License. No additional rights or licenses will be implied from the
+distribution or licensing of Covered Software under this License.
+Notwithstanding Section 2.1(b) above, no patent license is granted by a
+Contributor:
+
+(a) for any code that a Contributor has removed from Covered Software;
+    or
+
+(b) for infringements caused by: (i) Your and any other third party's
+    modifications of Covered Software, or (ii) the combination of its
+    Contributions with other software (except as part of its Contributor
+    Version); or
+
+(c) under Patent Claims infringed by Covered Software in the absence of
+    its Contributions.
+
+This License does not grant any rights in the trademarks, service marks,
+or logos of any Contributor (except as may be necessary to comply with
+the notice requirements in Section 3.4).
+
+2.4. Subsequent Licenses
+
+No Contributor makes additional grants as a result of Your choice to
+distribute the Covered Software under a subsequent version of this
+License (see Section 10.2) or under the terms of a Secondary License (if
+permitted under the terms of Section 3.3).
+
+2.5. Representation
+
+Each Contributor represents that the Contributor believes its
+Contributions are its original creation(s) or it has sufficient rights
+to grant the rights to its Contributions conveyed by this License.
+
+2.6. Fair Use
+
+This License is not intended to limit any rights You have under
+applicable copyright doctrines of fair use, fair dealing, or other
+equivalents.
+
+2.7. Conditions
+
+Sections 3.1, 3.2, 3.3, and 3.4 are conditions of the licenses granted
+in Section 2.1.
+
+3. Responsibilities
+-------------------
+
+3.1. Distribution of Source Form
+
+All distribution of Covered Software in Source Code Form, including any
+Modifications that You create or to which You contribute, must be under
+the terms of this License. You must inform recipients that the Source
+Code Form of the Covered Software is governed by the terms of this
+License, and how they can obtain a copy of this License. You may not
+attempt to alter or restrict the recipients' rights in the Source Code
+Form.
+
+3.2. Distribution of Executable Form
+
+If You distribute Covered Software in Executable Form then:
+
+(a) such Covered Software must also be made available in Source Code
+    Form, as described in Section 3.1, and You must inform recipients of
+    the Executable Form how they can obtain a copy of such Source Code
+    Form by reasonable means in a timely manner, at a charge no more
+    than the cost of distribution to the recipient; and
+
+(b) You may distribute such Executable Form under the terms of this
+    License, or sublicense it under different terms, provided that the
+    license for the Executable Form does not attempt to limit or alter
+    the recipients' rights in the Source Code Form under this License.
+
+3.3. Distribution of a Larger Work
+
+You may create and distribute a Larger Work under terms of Your choice,
+provided that You also comply with the requirements of this License for
+the Covered Software. If the Larger Work is a combination of Covered
+Software with a work governed by one or more Secondary Licenses, and the
+Covered Software is not Incompatible With Secondary Licenses, this
+License permits You to additionally distribute such Covered Software
+under the terms of such Secondary License(s), so that the recipient of
+the Larger Work may, at their option, further distribute the Covered
+Software under the terms of either this License or such Secondary
+License(s).
+
+3.4. Notices
+
+You may not remove or alter the substance of any license notices
+(including copyright notices, patent notices, disclaimers of warranty,
+or limitations of liability) contained within the Source Code Form of
+the Covered Software, except that You may alter any license notices to
+the extent required to remedy known factual inaccuracies.
+
+3.5. Application of Additional Terms
+
+You may choose to offer, and to charge a fee for, warranty, support,
+indemnity or liability obligations to one or more recipients of Covered
+Software. However, You may do so only on Your own behalf, and not on
+behalf of any Contributor. You must make it absolutely clear that any
+such warranty, support, indemnity, or liability obligation is offered by
+You alone, and You hereby agree to indemnify every Contributor for any
+liability incurred by such Contributor as a result of warranty, support,
+indemnity or liability terms You offer. You may include additional
+disclaimers of warranty and limitations of liability specific to any
+jurisdiction.
+
+4. Inability to Comply Due to Statute or Regulation
+---------------------------------------------------
+
+If it is impossible for You to comply with any of the terms of this
+License with respect to some or all of the Covered Software due to
+statute, judicial order, or regulation then You must: (a) comply with
+the terms of this License to the maximum extent possible; and (b)
+describe the limitations and the code they affect. Such description must
+be placed in a text file included with all distributions of the Covered
+Software under this License. Except to the extent prohibited by statute
+or regulation, such description must be sufficiently detailed for a
+recipient of ordinary skill to be able to understand it.
+
+5. Termination
+--------------
+
+5.1. The rights granted under this License will terminate automatically
+if You fail to comply with any of its terms. However, if You become
+compliant, then the rights granted under this License from a particular
+Contributor are reinstated (a) provisionally, unless and until such
+Contributor explicitly and finally terminates Your grants, and (b) on an
+ongoing basis, if such Contributor fails to notify You of the
+non-compliance by some reasonable means prior to 60 days after You have
+come back into compliance. Moreover, Your grants from a particular
+Contributor are reinstated on an ongoing basis if such Contributor
+notifies You of the non-compliance by some reasonable means, this is the
+first time You have received notice of non-compliance with this License
+from such Contributor, and You become compliant prior to 30 days after
+Your receipt of the notice.
+
+5.2. If You initiate litigation against any entity by asserting a patent
+infringement claim (excluding declaratory judgment actions,
+counter-claims, and cross-claims) alleging that a Contributor Version
+directly or indirectly infringes any patent, then the rights granted to
+You by any and all Contributors for the Covered Software under Section
+2.1 of this License shall terminate.
+
+5.3. In the event of termination under Sections 5.1 or 5.2 above, all
+end user license agreements (excluding distributors and resellers) which
+have been validly granted by You or Your distributors under this License
+prior to termination shall survive termination.
+
+************************************************************************
+*                                                                      *
+*  6. Disclaimer of Warranty                                           *
+*  -------------------------                                           *
+*                                                                      *
+*  Covered Software is provided under this License on an "as is"       *
+*  basis, without warranty of any kind, either expressed, implied, or  *
+*  statutory, including, without limitation, warranties that the       *
+*  Covered Software is free of defects, merchantable, fit for a        *
+*  particular purpose or non-infringing. The entire risk as to the     *
+*  quality and performance of the Covered Software is with You.        *
+*  Should any Covered Software prove defective in any respect, You     *
+*  (not any Contributor) assume the cost of any necessary servicing,   *
+*  repair, or correction. This disclaimer of warranty constitutes an   *
+*  essential part of this License. No use of any Covered Software is   *
+*  authorized under this License except under this disclaimer.         *
+*                                                                      *
+************************************************************************
+
+************************************************************************
+*                                                                      *
+*  7. Limitation of Liability                                          *
+*  --------------------------                                          *
+*                                                                      *
+*  Under no circumstances and under no legal theory, whether tort      *
+*  (including negligence), contract, or otherwise, shall any           *
+*  Contributor, or anyone who distributes Covered Software as          *
+*  permitted above, be liable to You for any direct, indirect,         *
+*  special, incidental, or consequential damages of any character      *
+*  including, without limitation, damages for lost profits, loss of    *
+*  goodwill, work stoppage, computer failure or malfunction, or any    *
+*  and all other commercial damages or losses, even if such party      *
+*  shall have been informed of the possibility of such damages. This   *
+*  limitation of liability shall not apply to liability for death or   *
+*  personal injury resulting from such party's negligence to the       *
+*  extent applicable law prohibits such limitation. Some               *
+*  jurisdictions do not allow the exclusion or limitation of           *
+*  incidental or consequential damages, so this exclusion and          *
+*  limitation may not apply to You.                                    *
+*                                                                      *
+************************************************************************
+
+8. Litigation
+-------------
+
+Any litigation relating to this License may be brought only in the
+courts of a jurisdiction where the defendant maintains its principal
+place of business and such litigation shall be governed by laws of that
+jurisdiction, without reference to its conflict-of-law provisions.
+Nothing in this Section shall prevent a party's ability to bring
+cross-claims or counter-claims.
+
+9. Miscellaneous
+----------------
+
+This License represents the complete agreement concerning the subject
+matter hereof. If any provision of this License is held to be
+unenforceable, such provision shall be reformed only to the extent
+necessary to make it enforceable. Any law or regulation which provides
+that the language of a contract shall be construed against the drafter
+shall not be used to construe this License against a Contributor.
+
+10. Versions of the License
+---------------------------
+
+10.1. New Versions
+
+Mozilla Foundation is the license steward. Except as provided in Section
+10.3, no one other than the license steward has the right to modify or
+publish new versions of this License. Each version will be given a
+distinguishing version number.
+
+10.2. Effect of New Versions
+
+You may distribute the Covered Software under the terms of the version
+of the License under which You originally received the Covered Software,
+or under the terms of any subsequent version published by the license
+steward.
+
+10.3. Modified Versions
+
+If you create software not governed by this License, and you want to
+create a new license for such software, you may create and use a
+modified version of this License if you rename the license and remove
+any references to the name of the license steward (except to note that
+such modified license differs from this License).
+
+10.4. Distributing Source Code Form that is Incompatible With Secondary
+Licenses
+
+If You choose to distribute Source Code Form that is Incompatible With
+Secondary Licenses under the terms of this version of the License, the
+notice described in Exhibit B of this License must be attached.
+
+Exhibit A - Source Code Form License Notice
+-------------------------------------------
+
+  This Source Code Form is subject to the terms of the Mozilla Public
+  License, v. 2.0. If a copy of the MPL was not distributed with this
+  file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+If it is not possible or desirable to put the notice in a particular
+file, then You may include the notice in a location (such as a LICENSE
+file in a relevant directory) where a recipient would be likely to look
+for such a notice.
+
+You may add additional accurate notices of copyright ownership.
+
+Exhibit B - "Incompatible With Secondary Licenses" Notice
+---------------------------------------------------------
+
+  This Source Code Form is "Incompatible With Secondary Licenses", as
+  defined by the Mozilla Public License, v. 2.0.
+
+[docs/LICENSE.OFL-1.1]
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+[vendor/pako/LICENSE]
+
+(The MIT License)
+
+Copyright (C) 2014-2016 by Vitaly Puzrin
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+
+[Lizenzkopf aus core/crypto/des.js]
+
+/*
+ * Ported from Flashlight VNC ActionScript implementation:
+ *     http://www.wizhelp.com/flashlight-vnc/
+ *
+ * Full attribution follows:
+ *
+ * -------------------------------------------------------------------------
+ *
+ * This DES class has been extracted from package Acme.Crypto for use in VNC.
+ * The unnecessary odd parity code has been removed.
+ *
+ * These changes are:
+ *  Copyright (C) 1999 AT&T Laboratories Cambridge.  All Rights Reserved.
+ *
+ * This software is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ *
+
+ * DesCipher - the DES encryption method
+ *
+ * The meat of this code is by Dave Zimmerman <dzimm@widget.com>, and is:
+ *
+ * Copyright (c) 1996 Widget Workshop, Inc. All Rights Reserved.
+ *
+ * Permission to use, copy, modify, and distribute this software
+ * and its documentation for NON-COMMERCIAL or COMMERCIAL purposes and
+ * without fee is hereby granted, provided that this copyright notice is kept
+ * intact.
+ *
+ * WIDGET WORKSHOP MAKES NO REPRESENTATIONS OR WARRANTIES ABOUT THE SUITABILITY
+ * OF THE SOFTWARE, EITHER EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+ * TO THE IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+ * PARTICULAR PURPOSE, OR NON-INFRINGEMENT. WIDGET WORKSHOP SHALL NOT BE LIABLE
+ * FOR ANY DAMAGES SUFFERED BY LICENSEE AS A RESULT OF USING, MODIFYING OR
+ * DISTRIBUTING THIS SOFTWARE OR ITS DERIVATIVES.
+ *
+ * THIS SOFTWARE IS NOT DESIGNED OR INTENDED FOR USE OR RESALE AS ON-LINE
+ * CONTROL EQUIPMENT IN HAZARDOUS ENVIRONMENTS REQUIRING FAIL-SAFE
+ * PERFORMANCE, SUCH AS IN THE OPERATION OF NUCLEAR FACILITIES, AIRCRAFT
+ * NAVIGATION OR COMMUNICATION SYSTEMS, AIR TRAFFIC CONTROL, DIRECT LIFE
+ * SUPPORT MACHINES, OR WEAPONS SYSTEMS, IN WHICH THE FAILURE OF THE
+ * SOFTWARE COULD LEAD DIRECTLY TO DEATH, PERSONAL INJURY, OR SEVERE
+ * PHYSICAL OR ENVIRONMENTAL DAMAGE ("HIGH RISK ACTIVITIES").  WIDGET WORKSHOP
+ * SPECIFICALLY DISCLAIMS ANY EXPRESS OR IMPLIED WARRANTY OF FITNESS FOR
+ * HIGH RISK ACTIVITIES.
+ *
+ *
+ * The rest is:
+ *
+ * Copyright (C) 1996 by Jef Poskanzer <jef@acme.com>.  All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+ * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ * OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ * HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ * LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ * OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ * SUCH DAMAGE.
+ *
+ * Visit the ACME Labs Java page for up-to-date versions of this and other
+ * fine Java utilities: http://www.acme.com/java/
+ */
+
+[Lizenzkopf aus core/decoders/tight.js]
+
+/*
+ * noVNC: HTML5 VNC client
+ * Copyright (C) 2019 The noVNC authors
+ * (c) 2012 Michael Tinglof, Joe Balaz, Les Piech (Mercuri.ca)
+ * Licensed under MPL 2.0 (see LICENSE.txt)
+ *
+ * See README.md for usage and integration instructions.
+ *
+ */
 
 ------------------------------------------------------------------------------
 @radix-ui/primitive 1.1.7
@@ -8995,6 +10108,8 @@ Lizenz: MIT
 @xterm/addon-fit 0.11.0
 Lizenz: MIT
 ------------------------------------------------------------------------------
+[LICENSE]
+
 Copyright (c) 2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
@@ -9015,10 +10130,31 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+[Lizenzkopf aus lib/addon-fit.mjs]
+
+/**
+ * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
+ * @license MIT
+ *
+ * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+ * @license MIT
+ *
+ * Originally forked from (with the author's permission):
+ *   Fabrice Bellard's javascript vt100 for jslinux:
+ *   http://bellard.org/jslinux/
+ *   Copyright (c) 2011 Fabrice Bellard
+ */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
 ------------------------------------------------------------------------------
 @xterm/xterm 6.0.0
 Lizenz: MIT
 ------------------------------------------------------------------------------
+[LICENSE]
+
 Copyright (c) 2017-2019, The xterm.js authors (https://github.com/xtermjs/xterm.js)
 Copyright (c) 2014-2016, SourceLair Private Company (https://www.sourcelair.com)
 Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
@@ -9040,6 +10176,25 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+[Lizenzkopf aus lib/xterm.mjs]
+
+/**
+ * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
+ * @license MIT
+ *
+ * Copyright (c) 2012-2013, Christopher Jeffrey (MIT License)
+ * @license MIT
+ *
+ * Originally forked from (with the author's permission):
+ *   Fabrice Bellard's javascript vt100 for jslinux:
+ *   http://bellard.org/jslinux/
+ *   Copyright (c) 2011 Fabrice Bellard
+ */
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
 
 ------------------------------------------------------------------------------
 argparse 3.0.2
@@ -9584,6 +10739,25 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
+[Lizenzkopf aus dist/qrcode.mjs]
+
+//---------------------------------------------------------------------
+//
+// QR Code Generator for JavaScript
+//
+// Copyright (c) 2009 Kazuhiko Arase
+//
+// URL: http://www.d-project.com/
+//
+// Licensed under the MIT license:
+//  http://www.opensource.org/licenses/mit-license.php
+//
+// The word 'QR Code' is registered trademark of
+// DENSO WAVE INCORPORATED
+//  http://www.denso-wave.com/qrcode/faqpatent-e.html
+//
+//---------------------------------------------------------------------
+
 ------------------------------------------------------------------------------
 react 18.3.1
 Lizenz: MIT
@@ -9614,6 +10788,8 @@ SOFTWARE.
 react-dom 18.3.1
 Lizenz: MIT
 ------------------------------------------------------------------------------
+[LICENSE]
+
 MIT License
 
 Copyright (c) Facebook, Inc. and its affiliates.
@@ -9635,6 +10811,21 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+[Lizenzkopf aus cjs/react-dom.production.min.js]
+
+/**
+ * @license React
+ * react-dom.production.min.js
+ *
+ * Copyright (c) Facebook, Inc. and its affiliates.
+ *
+ * This source code is licensed under the MIT license found in the
+ * LICENSE file in the root directory of this source tree.
+ */
+/*
+ Modernizr 3.0.0pre (Custom Build) | MIT
+*/
 
 ------------------------------------------------------------------------------
 react-draggable 4.7.1
@@ -9949,6 +11140,92 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+------------------------------------------------------------------------------
+tailwindcss 3.4.19
+Lizenz: MIT
+------------------------------------------------------------------------------
+Hinweis: Build-Werkzeug. Im ausgelieferten CSS stecken seine Grundstile (Preflight,
+`@tailwind base`, beruht auf modern-normalize: Lizenz unter lib/css/LICENSE); den
+Lizenzkommentar, den Tailwind dazuschreibt, entfernt das Verkleinern. Seine eigenen
+Abhängigkeiten werden nicht mitgeliefert.
+
+[LICENSE]
+
+MIT License
+
+Copyright (c) Tailwind Labs, Inc.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+[lib/css/LICENSE]
+
+MIT License
+
+Copyright (c) Nicolas Gallagher
+Copyright (c) Jonathan Neal
+Copyright (c) Sindre Sorhus <sindresorhus@gmail.com> (sindresorhus.com)
+Copyright (c) Adam Wathan
+Copyright (c) Jonathan Reinink
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+[lib/value-parser/LICENSE]
+
+Copyright (c) Bogdan Chadkin <trysound@yandex.ru>
+
+Permission is hereby granted, free of charge, to any person
+obtaining a copy of this software and associated documentation
+files (the "Software"), to deal in the Software without
+restriction, including without limitation the rights to use,
+copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the
+Software is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
 tslib 2.8.1

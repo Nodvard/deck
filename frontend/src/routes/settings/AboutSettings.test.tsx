@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SEEN_KEY, type Changelog } from "../../lib/changelog";
+import { NOVNC_VERSION } from "../../lib/thirdParty";
 import { useAuthStore } from "../../state/auth";
 import { AboutSettings } from "./AboutSettings";
 import { SettingsLayout } from "./SettingsLayout";
@@ -86,6 +87,24 @@ describe("Über Nodvard Deck", () => {
     expect(link).toHaveAttribute("rel", expect.stringContaining("noopener"));
     expect(screen.getByText(/Marken ihrer jeweiligen\s+Inhaber\. Nodvard Deck steht in keiner Verbindung zu ihnen\./)).toBeInTheDocument();
     expect(screen.getByText(/Pi-hole, Nginx Proxy Manager/)).toBeInTheDocument();
+    await screen.findByRole("alert");
+  });
+
+  it("verweist auf die Lizenzen der Fremdsoftware und auf den Quellcode von noVNC, auch wenn das Protokoll fehlt", async () => {
+    serve({ detail: "Nicht authentifiziert" }, 403);
+    renderPage();
+    const card = screen.getByRole("heading", { name: "Lizenz und Marken" }).closest("section")!;
+    const licenses = within(card).getByRole("link", { name: "THIRD_PARTY_LICENSES" });
+    expect(licenses).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/THIRD_PARTY_LICENSES");
+    expect(licenses).toHaveAttribute("target", "_blank");
+    expect(licenses).toHaveAttribute("rel", expect.stringContaining("noopener"));
+    expect(within(card).getByText("/app/THIRD_PARTY_LICENSES")).toBeInTheDocument();
+    expect(within(card).getByText(/findest du in der Datei/)).toBeInTheDocument(); // Oberfläche duzt
+
+    expect(card).toHaveTextContent(`Die grafische Konsole nutzt noVNC ${NOVNC_VERSION} (unverändert, Mozilla Public License 2.0).`);
+    const novnc = within(card).getByRole("link", { name: "github.com/novnc/noVNC" });
+    expect(novnc).toHaveAttribute("href", `https://github.com/novnc/noVNC/tree/v${NOVNC_VERSION}`);
+    expect(novnc).toHaveAttribute("rel", expect.stringContaining("noopener"));
     await screen.findByRole("alert");
   });
 

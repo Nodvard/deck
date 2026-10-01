@@ -14,8 +14,8 @@ very welcome.
 ## Code contributions
 
 Nodvard Deck is developed by its maintainer alone and **does not accept code contributions**
-(pull requests or patches) from outside. This keeps the licensing simple: the project is offered
-under the PolyForm Noncommercial License and, separately, under a commercial license. Please
+(pull requests or patches) from outside. This keeps the licensing simple: all code comes from one
+author and is licensed under the PolyForm Noncommercial License. Please
 describe problems and proposed fixes in words in an issue instead of sending code; pull requests
 will be closed without review.
 

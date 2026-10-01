@@ -78,6 +78,11 @@ async def auto_enable_for(
                 continue
             if await session.get(Setting, (UNTOUCHED_KEY_PREFIX + record.id, "global", "")) is None:
                 continue
+            found = get_extension_runtime().discovered.get(record.id)
+            if found is None or not found.ok:
+                # Fehlt gerade (z. B. nach einem Rueckweg aufs alte Image): nichts anfassen. Weder
+                # `state` noch die Markierung "unberuehrt" aendern sich -- der Anlass gilt spaeter wieder.
+                continue
             # Die Entscheidung gilt ab jetzt als getroffen -- auch wenn das Einschalten scheitert:
             # ein zweiter Versuch beim naechsten Zugang waere nur Laerm.
             await _clear_untouched(session, record.id)
@@ -140,13 +145,25 @@ async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[s
 async def load_enabled_from_registry(app: FastAPI, session: AsyncSession, settings: Settings) -> None:
     """Boot-Reconciliation: alles, was von einem frueheren Lauf noch `state=enabled`
     ist, jetzt tatsaechlich laden -- "Extension aktivieren" ist eine dauerhafte
-    Admin-Entscheidung, kein Prozess-Neustart soll sie stillschweigend vergessen."""
+    Admin-Entscheidung, kein Prozess-Neustart soll sie stillschweigend vergessen.
+
+    Das gilt auch, wenn eine Erweiterung gerade fehlt (zurueckgerolltes Image, noch nicht
+    kopierter Ordner): `at_boot=True` laesst ihren Zustand dann stehen und merkt sich nur
+    den Grund in `last_error`. Kommt sie zurueck, laedt der naechste Start sie wieder."""
     result = await session.execute(select(ExtensionRecord).where(ExtensionRecord.state == "enabled"))
     for record in result.scalars().all():
-        await enable_extension(app, session, settings, record.id)
+        await enable_extension(app, session, settings, record.id, at_boot=True)
 
 
-async def enable_extension(app: FastAPI, session: AsyncSession, settings: Settings, ext_id: str) -> None:
+async def enable_extension(
+    app: FastAPI, session: AsyncSession, settings: Settings, ext_id: str, *, at_boot: bool = False
+) -> None:
+    """Erweiterung laden und `state` auf das Ergebnis setzen.
+
+    `at_boot=True` nur aus `load_enabled_from_registry()`: Die Entscheidung "eingeschaltet" stammt
+    dann aus einem frueheren Lauf und gilt weiter, auch wenn die Erweiterung diesmal nicht
+    auffindbar ist. Ein ausdrueckliches Einschalten (Standard) einer nicht auffindbaren
+    Erweiterung wirft dagegen `ExtensionLoadError` (die API antwortet 404) und aendert nichts."""
     runtime = get_extension_runtime()
     if ext_id in runtime.loaded:
         existing = await session.get(ExtensionRecord, ext_id)
@@ -164,8 +181,22 @@ async def enable_extension(app: FastAPI, session: AsyncSession, settings: Settin
 
     discovered = runtime.discovered.get(ext_id)
     if discovered is None or not discovered.ok:
-        record.state = "error"
-        record.last_error = "Nicht (mehr) discoverbar -- Manifest fehlt oder ist ungültig."
+        if not at_boot:
+            # Ausdruecklich eingeschaltet, aber nicht da: nichts schreiben (auch `state` bleibt).
+            raise ExtensionLoadError(
+                f"Extension '{ext_id}' wurde nicht gefunden (Ordner oder Paket fehlt, oder das Manifest ist ungültig)."
+            )
+        # Beim Start fehlt die Erweiterung nur: `state` bleibt wie er war (ein Rueckweg aufs alte
+        # Image oder ein erneutes Update soll die Entscheidung "eingeschaltet" nicht loeschen), die
+        # API meldet solange "error" (siehe `ExtensionOut.from_model`).
+        log.warning(
+            "Erweiterung '%s' ist eingeschaltet, wurde beim Start aber nicht gefunden: sie bleibt "
+            "eingeschaltet und wird nicht geladen.", ext_id,
+        )
+        record.last_error = (
+            "Die Erweiterung wurde nicht gefunden (Ordner oder Paket fehlt, oder das Manifest ist ungültig). "
+            "Sie bleibt eingeschaltet und wird beim nächsten Start wieder geladen, sobald sie da ist."
+        )
         record.last_error_at = utcnow()
         return
 

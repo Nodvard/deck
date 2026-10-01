@@ -1,0 +1,3 @@
+[[entries]]
+kind = "behoben"
+text = "Fehlt eine eingeschaltete Erweiterung nach einem Start (zum Beispiel nach dem Zurückgehen auf eine ältere Version), bleibt sie eingeschaltet und wird als „Fehler“ mit Grund angezeigt. Sobald sie wieder da ist, startet sie von allein, du musst sie nicht neu einschalten."

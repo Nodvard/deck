@@ -295,4 +295,47 @@ describe("Nodvard Shield folgt der Adresszeile", () => {
     expect(window.location.search).toBe("?tab=scans");
     expect(screen.queryByTestId("host-filter")).toBeNull();
   });
+
+  it("Scan-Verlauf: Marker-Zeilen (neu und alt) bleiben unsichtbar, der Rest der Ausgabe nicht", async () => {
+    const scan = (id: string, tail: string | null) => ({
+      id, host_id: "h-pi", host_name: "Raspberry Pi", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "manual",
+      status: "infected", files_scanned: 12, infected: 1, error: null, output_tail: tail, started_at: 1758800000, finished_at: 1758800060,
+    });
+    const scans = [
+      scan("s-neu", "/tmp/eicar.com: Win.Test.EICAR_HC-1 FOUND\nScanned files: 12\n@@scan-rc-0123456789abcdef=1\n"),
+      scan("s-alt", "/tmp/alt.sh: Unix.Trojan.Mirai FOUND\n@@nexus-rc=1\n"),
+      scan("s-nur-marke", "@@scan-rc-fedcba9876543210=0\n"),
+    ];
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/scans") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(scans), { status: 200 });
+      return base(input, init);
+    }));
+    window.history.replaceState(null, "", "/ext/nexus-soc/soc?tab=scans");
+    render(<SocPage />);
+    await screen.findByTestId("scan-list");
+    const scanList = () => screen.getByTestId("scan-list");
+    const rows = () => within(scanList()).getAllByRole("button");
+    const output = () => scanList().querySelector("pre")?.textContent ?? null;
+
+    // Es ist immer nur ein Lauf aufgeklappt: einer nach dem anderen.
+    fireEvent.click(rows()[0]);
+    expect(output()).toBe("/tmp/eicar.com: Win.Test.EICAR_HC-1 FOUND\nScanned files: 12");
+    fireEvent.click(rows()[1]);
+    expect(output()).toBe("/tmp/alt.sh: Unix.Trojan.Mirai FOUND");
+    // Nur die Marke: gar kein leerer Ausgabekasten.
+    fireEvent.click(rows()[2]);
+    expect(scanList().querySelector("pre")).toBeNull();
+    expect(scanList().textContent).not.toContain("@@");
+  });
+
+  it("Quarantäne nennt den Tresor, aber keinen Serverpfad", async () => {
+    window.history.replaceState(null, "", "/ext/nexus-soc/soc?tab=quarantine");
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<SocPage />);
+    await screen.findByTestId("findings");
+    expect(screen.getByText(/im Tresor auf dem Server/)).toBeInTheDocument();
+    expect(screen.queryByText(/\/var\/lib\/nexus-quarantine/)).toBeNull();
+  });
 });

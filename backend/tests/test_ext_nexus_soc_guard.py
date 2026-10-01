@@ -283,6 +283,40 @@ def test_guard_command_tells_missing_rights_from_a_stopped_fail2ban(tmp_path, pi
         assert snap.jails == {}
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+def test_guard_command_ignores_section_markers_smuggled_in_via_a_process_name(tmp_path):
+    """Gleiche Fehlerart wie Fix N1 (Scan-Marke im Dateinamen): Der Prozessname in `ss -p` kommt vom
+    Programm selbst und darf Zeilenumbrueche enthalten ("a\\n@@ssh\\nb"). Ohne Filter fiele daraus eine Zeile
+    `@@ssh` in die Ausgabe, die Auswertung finge den Abschnitt neu an, und alle SSH-Fehlversuche
+    und Anmeldungen waeren weg (ebenso `@@f2b` fuer Fail2ban)."""
+    env = _f2b_stub(tmp_path, ping_output="", ping_rc=0)
+    bindir = tmp_path / "bin"
+    (bindir / "ss").write_text(
+        "#!/bin/sh\n"
+        "cat <<'EOF'\n"
+        'tcp LISTEN 0 128 0.0.0.0:4444 0.0.0.0:* users:(("a\n'
+        "@@ssh\n"
+        "@@f2b\n"
+        'b",pid=9,fd=3))\n'
+        'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))\n'
+        "EOF\n"
+    )
+    (bindir / "journalctl").write_text(
+        "#!/bin/sh\necho '1758800002.100000 pve2 sshd[101]: Failed password for root from 198.51.100.7 port 50000 ssh2'\n"
+    )
+    for name in ("ss", "journalctl"):
+        (bindir / name).chmod(0o755)
+    out = subprocess.run(["sh", "-c", ix.guard_command([])], cwd=tmp_path, env=env, capture_output=True, text=True,
+                         timeout=60, check=False)
+    assert out.returncode == 0, out.stderr
+    lines = out.stdout.splitlines()
+    assert lines.count("@@ssh") == 1 and lines.count("@@f2b") == 1  # nur die echten Abschnittsmarken
+    snap = ix.parse_guard(out.stdout)
+    assert set(snap.failures) == {"198.51.100.7"}  # die SSH-Fehlversuche sind noch da
+    assert (snap.fail2ban, snap.banned) == ("running", {"203.0.113.9"})  # ebenso Fail2ban
+    assert {p.port for p in snap.ports} == {4444, 22}  # der Port des Angreifers bleibt sichtbar
+
+
 def test_parse_guard_keeps_the_unreadable_fail2ban_state():
     assert ix.parse_guard(_output(f2b="noaccess")).fail2ban == "noaccess"
     assert ix.parse_guard(_output(f2b="stopped")).fail2ban == "stopped"
@@ -693,3 +727,12 @@ async def test_setting_extends_the_list_and_old_baselines_still_match():
     assert await guard2.acknowledge((await guard2.list_events())[0]["id"])
     assert (await guard2.inspect(ctx2._host))["events"] == 0  # anderer Zufallsport, derselbe Eintrag
     await engine.dispose()
+
+
+@pytest.mark.parametrize("sep", ["\u2028", "\u0085", "\x0c", "\u2029", "\x1c"])
+def test_sections_split_only_at_newline(sep):
+    """Ein Name mit einem Unicode-Zeilentrenner darf keine Abschnittsmarke vortaeuschen (grep trennt nur an \\n)."""
+    out = f"@@ports\ntcp LISTEN 0 0 0.0.0.0:22 users:((\"x{sep}@@ssh{sep}y\",pid=1))\n@@end\n"
+    sections = ix._sections(out)
+    assert "ssh" not in sections
+    assert any(":22" in line for line in sections["ports"])

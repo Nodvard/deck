@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "nex
 from nodvard_deck.core.deny_patterns import match_deny_patterns  # noqa: E402
 from nodvard_deck_ext_nexus_soc import antivirus as av  # noqa: E402
 
-CLAM_INFECTED = """/tmp/eicar.com: Win.Test.EICAR_HC-1 FOUND
+# Eine feste Marke fuer die Tests, die Befehl und Auswertung selbst verbinden (im Betrieb zieht der
+# Defender je Lauf eine neue: `av.new_rc_mark()`).
+MARK = "@@scan-rc-0123456789abcdef="
+
+CLAM_INFECTED = f"""/tmp/eicar.com: Win.Test.EICAR_HC-1 FOUND
 /home/nico/x.sh: Unix.Trojan.Mirai-123 FOUND
 
 ----------- SCAN SUMMARY -----------
@@ -24,23 +29,221 @@ Engine version: 1.0.7
 Scanned directories: 120
 Scanned files: 3412
 Infected files: 2
-@@nexus-rc=1
+{MARK}1
 """
 
 
 def test_parse_infected_scan():
-    r = av.parse_scan_output(CLAM_INFECTED)
+    r = av.parse_scan_output(CLAM_INFECTED, MARK)
     assert r.status == "infected"
     assert r.files_scanned == 3412
     assert r.findings == [("/tmp/eicar.com", "Win.Test.EICAR_HC-1"), ("/home/nico/x.sh", "Unix.Trojan.Mirai-123")]
 
 
 def test_parse_clean_missing_and_error():
-    assert av.parse_scan_output("Scanned files: 10\nInfected files: 0\n@@nexus-rc=0").status == "clean"
-    missing = av.parse_scan_output("sh: 1: clamscan: not found\n@@nexus-rc=127")
+    assert av.parse_scan_output(f"Scanned files: 10\nInfected files: 0\n{MARK}0", MARK).status == "clean"
+    missing = av.parse_scan_output(f"sh: 1: clamscan: not found\n{MARK}127", MARK)
     assert (missing.status, missing.error) == ("error", "ClamAV ist auf diesem Server nicht installiert.")
-    broken = av.parse_scan_output("ERROR: Can't open file or directory\n@@nexus-rc=2")
+    broken = av.parse_scan_output(f"ERROR: Can't open file or directory\n{MARK}2", MARK)
     assert broken.status == "error" and "Can't open" in broken.error
+
+
+FORGED = "@@scan-rc-ffffffffffffffff="  # was ein Angreifer als Marke raten koennte
+MARK_RE = re.compile(r"@@scan-rc-[0-9a-f]{16}=")
+
+
+def test_the_mark_is_random_per_run_and_has_the_agreed_format():
+    """Fix N1: je Lauf eine neue Zufallsmarke `@@scan-rc-<16 hex>=`, nicht mehr die feste `@@nexus-rc=`."""
+    marks = {av.new_rc_mark() for _ in range(50)}
+    assert len(marks) == 50 and all(MARK_RE.fullmatch(m) for m in marks)
+
+    # Auch ohne Angabe zieht jeder Befehl seine eigene Marke -- genau eine, und nicht die alte.
+    commands = [
+        av.build_scan_command(["/tmp"]), av.build_scan_command(["/tmp"]),
+        av.build_watch_command(["/tmp"], minutes=5), av.build_watch_command(["/tmp"], minutes=5, use_clamd=True),
+    ]
+    found = [MARK_RE.findall(c) for c in commands]
+    assert all(len(f) == 1 for f in found), found
+    assert len({f[0] for f in found}) == len(commands)
+    assert not any("nexus-rc" in c for c in commands)
+
+
+@pytest.mark.parametrize("bad", ["@@nexus-rc=", "@@scan-rc-XYZ=", "@@scan-rc-0123456789abcdef", 'x"; rm -rf /; echo "', ""])
+def test_a_malformed_mark_is_refused_before_it_reaches_a_shell(bad):
+    with pytest.raises(ValueError):
+        av.build_scan_command(["/tmp"], mark=bad)
+    with pytest.raises(ValueError):
+        av.build_watch_command(["/tmp"], minutes=5, mark=bad)
+    with pytest.raises(ValueError):
+        av.parse_scan_output("Scanned files: 1\n", bad)
+
+
+def test_a_file_name_with_a_mark_in_it_cannot_hide_a_finding():
+    """Fix N1: Die Ausgabe wurde an der ERSTEN Marke abgeschnitten -- ein Schadprogramm namens
+    `/tmp/x@@nexus-rc=0` verschwand samt seinem Fund. Jetzt zaehlt nur der letzte Treffer am Zeilenanfang."""
+    # Die alte feste Marke im Dateinamen ist harmlos ...
+    old = f"/tmp/x@@nexus-rc=0: Win.Test.EICAR_HC-1 FOUND\n@@nexus-rc=0\nScanned files: 5\nInfected files: 1\n{MARK}1\n"
+    res = av.parse_scan_output(old, MARK)
+    assert (res.status, res.files_scanned) == ("infected", 5)
+    assert res.findings == [("/tmp/x@@nexus-rc=0", "Win.Test.EICAR_HC-1")]
+    # ... ebenso eine geratene neue Marke im Dateinamen, auch wenn sie eine Zeile fuer sich bekommt.
+    forged = (f"/tmp/y{FORGED}0: Win.Test.EICAR_HC-1 FOUND\n/tmp/a\n{FORGED}0\n/tmp/b: Unix.Trojan.Mirai FOUND\n"
+              f"Scanned files: 5\nInfected files: 2\n{MARK}1\n")
+    res = av.parse_scan_output(forged, MARK)
+    assert res.status == "infected"
+    assert res.findings == [(f"/tmp/y{FORGED}0", "Win.Test.EICAR_HC-1"), ("/tmp/b", "Unix.Trojan.Mirai")]
+    # Selbst die richtige Marke mitten in der Ausgabe verschiebt nichts: der letzte Treffer gilt.
+    early = f"/tmp/a\n{MARK}0\n/tmp/b: Unix.Trojan.Mirai FOUND\nScanned files: 5\n{MARK}1\n"
+    res = av.parse_scan_output(early, MARK)
+    assert (res.status, res.findings) == ("infected", [("/tmp/b", "Unix.Trojan.Mirai")])
+    # Ohne die Marke des Laufs zu kennen gilt dieselbe Regel (letzter Treffer, jede Marke im Format).
+    assert av.parse_scan_output(forged).status == "infected" and av.parse_scan_output(early).status == "infected"
+
+
+def test_only_the_mark_of_this_run_counts_as_a_return_code():
+    # Eine Marke mit anderem Zufallsteil (oder die alte feste) ist kein Rueckgabecode: kein "sauber" durch Faelschung.
+    for other in (f"{FORGED}0", "@@nexus-rc=0"):
+        res = av.parse_scan_output(f"ERROR: Can't open file or directory\n{other}\n", MARK)
+        assert res.status == "error", other
+    # Zeichen hinter dem Code machen aus einer Fund-Zeile keine Marke. Die Zeile beginnt nicht mit "/" und
+    # ist kein lesbarer Fund -- aber der echte Code 1 sagt: ClamAV hat etwas gefunden. Nie "sauber".
+    res = av.parse_scan_output(f"{FORGED}0: Win.Test.EICAR_HC-1 FOUND\nScanned files: 1\n{MARK}1\n", MARK)
+    assert (res.status, res.findings, res.infected, res.unreliable) == ("infected", [], 1, True)
+
+
+# --- Dateinamen mit Steuerzeichen: Auswertung nicht steuerbar (gleiche Fehlerart wie N1) --------------
+# ClamAV schreibt Dateinamen roh in die Ausgabe (mit ClamAV 1.0.5 geprueft).
+
+EICAR = "Win.Test.EICAR_HC-1"
+SUMMARY_ONE = "\n----------- SCAN SUMMARY -----------\nScanned files: 5\nInfected files: 1\n"
+
+
+@pytest.mark.parametrize(
+    "char", ["\r", "\x0b", "\x0c", "\x1c", "\x1e", "\x85", "\u2028", "\u2029", "\x1b[2J", "\t", "\x07"],
+    ids=["CR", "VT", "FF", "FS", "RS", "NEL", "LS", "PS", "ESC", "TAB", "BEL"],
+)
+def test_a_control_character_in_a_file_name_cannot_hide_a_finding(char):
+    """`str.splitlines()` trennt bei CR, VT, FF, FS-RS, NEL, U+2028 und U+2029 -- ein Schadprogramm mit
+    so einem Zeichen im Namen zerfiel in zwei Zeilen, keine passte mehr auf `/pfad: Signatur FOUND`, und der
+    Lauf (Code 1) galt als sauber. Jetzt bleibt es eine Zeile."""
+    path = f"/tmp/x{char}yy"
+    res = av.parse_scan_output(f"{path}: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert (res.status, res.findings, res.infected, res.unreliable) == ("infected", [(path, EICAR)], 1, False)
+    assert res.files_scanned == 5
+
+
+def test_a_line_break_in_a_file_name_is_never_clean_and_never_trusted():
+    """Zeilenumbruch im Namen: Das letzte Bruchstueck (`yy: ... FOUND`) beginnt nicht mit "/" und gab keinen
+    Fund her -- der Lauf galt als sauber. Jetzt: Fund (Code 1), aber nicht verlaesslich."""
+    res = av.parse_scan_output(f"/tmp/x\nyy: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert (res.status, res.findings, res.infected, res.unreliable) == ("infected", [], 1, True)
+    # Auch ohne Zusammenfassung (Waechter ueber clamdscan) und ohne die Zahl daraus.
+    res = av.parse_scan_output(f"/tmp/x\nyy: {EICAR} FOUND\nScanned files: 5\n{MARK}1\n", MARK)
+    assert (res.status, res.infected, res.unreliable) == ("infected", 1, True)
+
+
+def test_a_line_break_in_a_file_name_cannot_forge_a_finding_for_another_path():
+    """Der Name `q<LF>/etc/passwd` (Ordner `q<LF>`, darin `etc/passwd`) ergibt die Zeilen `/tmp/q` und
+    `/etc/passwd: Sig FOUND`: Die zweite sah wie ein Fund fuer /etc/passwd aus, und die Quarantaene
+    haette ihn als root verschoben. Der Lauf ist nicht verlaesslich (Bruchstueck `/tmp/q`)."""
+    res = av.parse_scan_output(f"/tmp/q\n/etc/passwd: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert res.status == "infected" and res.unreliable is True
+    assert res.findings == [("/etc/passwd", EICAR)]  # bleibt sichtbar, aber mit Warnung
+
+    # Das erste Bruchstueck darf selbst wie ein Fund aussehen: dann stimmt die Zahl nicht mehr (2 Zeilen, 1 Fund).
+    res = av.parse_scan_output(f"/tmp/a: Fake.Sig FOUND\n/etc/passwd: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert res.status == "infected" and res.unreliable is True
+
+    # ... oder wie eine Fehlermeldung: "ERROR: ..." beginnt nie mit "/" und gehoert nicht in einen Namen am Anfang.
+    res = av.parse_scan_output(f"/tmp/a\nERROR: x\n/etc/passwd: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert res.unreliable is True
+
+
+def test_a_name_cannot_fake_the_summary_either():
+    """Name mit `Scanned files:` / `Infected files:` am Zeilenanfang: die echte Zusammenfassung steht
+    nach allen Namen, ihr letzter Treffer gilt."""
+    out = (f"/tmp/x\nScanned files: 9999\nInfected files: 0\n/tmp/real: {EICAR} FOUND\n"
+           f"\n----------- SCAN SUMMARY -----------\nScanned files: 7\nInfected files: 2\n{MARK}1\n")
+    res = av.parse_scan_output(out, MARK)
+    assert res.files_scanned == 7 and res.status == "infected" and res.unreliable is True
+    assert res.infected == 2  # laut ClamAV: zwei Funde, aber nur einer ist lesbar
+
+
+def test_a_normal_infected_run_is_reliable():
+    res = av.parse_scan_output(CLAM_INFECTED, MARK)
+    assert (res.status, res.infected, res.unreliable) == ("infected", 2, False)
+    # Meldungen von ClamAV (Warnungen, Fehler, fehlende Dateien) machen einen Lauf nicht unsicher.
+    noisy = (f"LibClamAV Warning: ***  The virus database is older than 7 days!  ***\nWARNING: x\n"
+             f"ERROR: Can't access file /tmp/gone\n/tmp/a: {EICAR} FOUND\n{SUMMARY_ONE}Total errors: 1\n{MARK}1\n")
+    res = av.parse_scan_output(noisy, MARK)
+    assert (res.status, res.unreliable, res.errors) == ("infected", False, ["ERROR: Can't access file /tmp/gone"])
+
+
+def test_clamav_ending_with_code_1_is_never_clean_whatever_the_output_says():
+    for out in (f"{MARK}1\n", f"Scanned files: 3\nInfected files: 0\n{MARK}1\n", f"Killed\n{MARK}1\n"):
+        res = av.parse_scan_output(out, MARK)
+        assert (res.status, res.findings, res.infected, res.unreliable) == ("infected", [], 1, True), out
+    # Die Zahl aus der Zusammenfassung zaehlt auch ohne Code (und ohne lesbare Zeile).
+    res = av.parse_scan_output(f"Scanned files: 3\nInfected files: 2\n{MARK}0\n", MARK)
+    assert (res.status, res.infected, res.unreliable) == ("infected", 2, True)
+
+
+def test_a_file_named_like_the_shell_error_cannot_fake_a_missing_clamav():
+    """`"clamscan: not found" in body` machte aus einem Fund in `/tmp/clamscan: not found` den Fehler
+    "ClamAV nicht installiert" -- der Fund war weg."""
+    res = av.parse_scan_output(f"/tmp/clamscan: not found: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert (res.status, res.findings) == ("infected", [("/tmp/clamscan: not found", EICAR)])
+    res = av.parse_scan_output(f"/tmp/x\nclamscan: not found: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert res.status == "infected"
+    # Auch ein Name, dessen Teilstueck wie die Shell-Meldung aussieht ("/tmp/sh: 1: clamscan: not found"),
+    # versteckt nichts -- der Rueckgabecode 1 und die Zusammenfassung sagen: es gab einen Fund.
+    res = av.parse_scan_output(f"/tmp/sh: 1: clamscan: not found\na: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", MARK)
+    assert (res.status, res.infected, res.unreliable) == ("infected", 1, True)
+    # Die echte Meldung der Shell bleibt erkannt (mit und ohne Rueckgabecode 127).
+    for shell in ("sh: 1: clamscan: not found", "bash: line 1: clamscan: command not found", "/bin/sh: clamscan: not found"):
+        assert av.parse_scan_output(f"{shell}\n{MARK}127\n", MARK).error == av.NOT_INSTALLED_MESSAGE
+        assert av.parse_scan_output(f"{shell}\n{MARK}2\n", MARK).error == av.NOT_INSTALLED_MESSAGE
+
+
+def test_random_file_names_never_hide_or_forge_a_finding():
+    """Zufallsnamen aus gefaehrlichen Bausteinen (Zeilenumbruch, Wagenruecklauf, `: ... FOUND`, Marken,
+    Shell-Meldung, Zusammenfassungszeilen ...): Der Lauf ist IMMER ein Fund (nie sauber, nie Fehler), und ist
+    er nicht `unreliable`, dann sind die gelesenen Funde genau die echten -- kein verstecktes, kein
+    vorgetaeuschtes Ergebnis. Feste Startzahl, damit ein Fehlschlag sich wiederholen laesst."""
+    import random
+
+    pieces = ["a", "b", "x y", "/", "/etc/passwd", "\n", "\n", "\r", "\x0c", "\u2028", ": ", ": Sig FOUND", " FOUND",
+              "ERROR: x", "Scanned files: 99", "Infected files: 0", "----------- SCAN SUMMARY -----------",
+              MARK + "0", FORGED + "1", "@@nexus-rc=0", "clamscan: not found", "sh: 1: clamscan: not found",
+              "  ", ".", "..", "LibClamAV Warning: x", "/tmp/z"]
+    rng = random.Random(20261001)
+    reliable = unreliable = 0
+    for _ in range(4000):
+        names = ["/tmp/" + "".join(rng.choice(pieces) for _ in range(rng.randint(1, 5))) for _ in range(rng.randint(1, 3))]
+        out = "".join(f"{n}: Test.Sig FOUND\n" for n in names)
+        out += rng.choice(["", "ERROR: Can't access file /tmp/gone\n", "LibClamAV Warning: old db\n"])
+        out += f"\n----------- SCAN SUMMARY -----------\nScanned files: 5\nInfected files: {len(names)}\n{MARK}1\n"
+        res = av.parse_scan_output(out, MARK)
+        assert res.status == "infected" and res.infected >= len(names), (names, res)
+        if res.unreliable:
+            unreliable += 1
+        else:
+            reliable += 1
+            assert res.findings == [(n, "Test.Sig") for n in names], (names, res)
+    assert reliable > 500 and unreliable > 500  # beide Zweige werden wirklich geprueft
+
+
+def test_a_run_without_its_mark_is_never_clean():
+    """Fehlt die Marke (Lauf abgebrochen, Ausgabe abgeschnitten), gilt der Lauf nicht als sauber, auch
+    wenn eine Zusammenfassung dasteht. Frueher: Zusammenfassung da, Marke weg = sauber."""
+    res = av.parse_scan_output("Scanned files: 3\nInfected files: 0\n", MARK)
+    assert res.status == "error" and "unvollständig" in res.error
+    assert av.parse_scan_output("", MARK).status == "error"
+    # Funde bleiben Funde, auch ohne Marke -- aber unsicher.
+    res = av.parse_scan_output(f"/tmp/a: {EICAR} FOUND\nScanned files: 3\n", MARK)
+    assert (res.status, res.findings, res.unreliable) == ("infected", [("/tmp/a", EICAR)], True)
+    # Eine falsche Marke (anderer Lauf, geraten) ersetzt sie nicht.
+    assert av.parse_scan_output(f"Scanned files: 3\n{FORGED}0\n", MARK).status == "error"
 
 
 def test_parse_status_and_lynis():
@@ -266,8 +469,130 @@ def test_restore_command_rejects_paths_without_a_file_name():
 
 
 def test_watch_command_runs_without_clamav_hits(tmp_path):
-    out = subprocess.run(["sh", "-c", av.build_watch_command([str(tmp_path)], minutes=5)], capture_output=True, text=True)
-    assert "Scanned files: 0" in out.stdout and "@@nexus-rc=0" in out.stdout
+    out = subprocess.run(["sh", "-c", av.build_watch_command([str(tmp_path)], minutes=5, mark=MARK)], capture_output=True, text=True)
+    assert "Scanned files: 0" in out.stdout and f"{MARK}0" in out.stdout
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+@pytest.mark.parametrize("kind", ["scan", "watch"])
+def test_malware_with_a_mark_in_its_file_name_is_found_in_a_real_shell(tmp_path, kind):
+    """Fix N1 mit echter Shell (Schnell-/Tiefenscan und Waechter): Dateien mit der alten festen
+    Marke und mit einer geratenen neuen Marke im Namen werden trotzdem als Fund gemeldet."""
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    old = watched / "evil@@nexus-rc=0"
+    forged = watched / f"evil2{FORGED}0"
+    for f in (old, forged):
+        f.write_text("x")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    # clamscan-Attrappe: meldet jede Datei (aus --file-list oder unter dem letzten Argument) als Fund.
+    (bin_dir / "clamscan").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do case "$a" in --file-list=*) list="${a#--file-list=}";; esac; last="$a"; done\n'
+        'if [ -n "$list" ]; then files=$(cat "$list"); else files=$(find "$last" -type f); fi\n'
+        'n=0; for f in $files; do echo "$f: Win.Test.EICAR_HC-1 FOUND"; n=$((n+1)); done\n'
+        'echo; echo "----------- SCAN SUMMARY -----------"; echo "Scanned files: $n"; echo "Infected files: $n"\n'
+        "exit 1\n"
+    )
+    (bin_dir / "clamscan").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    mark = av.new_rc_mark()
+    cmd = (av.build_scan_command([str(watched)], mark=mark) if kind == "scan"
+           else av.build_watch_command([str(watched)], minutes=5, mark=mark))
+    out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
+    assert out.stdout.rstrip().splitlines()[-1] == f"{mark}1", out.stdout + out.stderr
+    res = av.parse_scan_output(out.stdout, mark)
+    assert res.status == "infected" and res.files_scanned == 2, out.stdout + out.stderr
+    assert sorted(path for path, _sig in res.findings) == sorted([str(old), str(forged)])
+
+
+def _raw_name_clamscan(bin_dir: Path) -> None:
+    """clamscan-Attrappe wie das echte ClamAV: Fund-Zeilen mit dem Dateinamen UNVERAENDERT (auch mit
+    Zeilenumbruch, Wagenruecklauf, ...), aus `--file-list` (je Zeile ein Name) oder rekursiv unter dem
+    letzten Argument."""
+    bin_dir.mkdir(exist_ok=True)
+    (bin_dir / "clamscan").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do case "$a" in --file-list=*) list="${a#--file-list=}";; esac; last="$a"; done\n'
+        'if [ -n "$list" ]; then\n'
+        '  while IFS= read -r f; do printf \'%s: Win.Test.EICAR_HC-1 FOUND\\n\' "$f"; done < "$list"\n'
+        '  n=$(wc -l < "$list" | tr -d \' \')\n'
+        "else\n"
+        "  find \"$last\" -type f -exec sh -c 'printf \"%s: Win.Test.EICAR_HC-1 FOUND\\n\" \"$1\"' _ {} \\;\n"
+        "  n=$(find \"$last\" -type f -exec printf x \\; | wc -c)\n"
+        "fi\n"
+        'echo; echo "----------- SCAN SUMMARY -----------"; echo "Scanned files: $n"; echo "Infected files: $n"\n'
+        "exit 1\n"
+    )
+    (bin_dir / "clamscan").chmod(0o755)
+
+
+def _run_raw(tmp_path: Path, cmd: str) -> str:
+    env = {**os.environ, "PATH": f"{tmp_path / 'bin'}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, env=env, timeout=60, check=False)
+    return out.stdout.decode("utf-8", "replace")  # wie `core.ssh.run`: Bytes, kein Newline-Umbau
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+@pytest.mark.parametrize("kind", ["scan", "watch"])
+@pytest.mark.parametrize("char", ["\r", "\x0c", "\u2028", "\x85", "\x1b[2J"], ids=["CR", "FF", "LS", "NEL", "ESC"])
+def test_malware_with_a_control_character_in_its_name_is_found_in_a_real_shell(tmp_path, kind, char):
+    """Der Befund zu N1, zweiter Teil: Ein Schadprogramm mit Wagenruecklauf, Seitenvorschub, U+2028 oder
+    ESC im Namen galt frueher als sauber (`splitlines()` riss die Fund-Zeile entzwei)."""
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    evil = watched / f"evil{char}name"
+    evil.write_text("x")
+    _raw_name_clamscan(tmp_path / "bin")
+    mark = av.new_rc_mark()
+    cmd = (av.build_scan_command([str(watched)], mark=mark) if kind == "scan"
+           else av.build_watch_command([str(watched)], minutes=5, mark=mark))
+    out = _run_raw(tmp_path, cmd)
+    res = av.parse_scan_output(out, mark)
+    assert (res.status, res.unreliable, res.findings) == (
+        "infected", False, [(str(evil), "Win.Test.EICAR_HC-1")]), out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+def test_a_line_break_in_a_directory_name_cannot_forge_a_finding_in_a_real_shell(tmp_path):
+    """Ordner `q<LF>` mit darin `<Pfad der Opferdatei>`: In der Ausgabe steht dann eine Zeile
+    `<Opferdatei>: Sig FOUND`. Der Lauf ist `infected`, aber nicht verlaesslich."""
+    watched = tmp_path / "watched"
+    victim = tmp_path / "etc" / "victim.conf"
+    victim.parent.mkdir()
+    victim.write_text("wichtig")
+    trick = Path(f"{watched}/q\n{victim}")  # Ordner "q\n", darin der Pfad der Opferdatei
+    trick.parent.mkdir(parents=True)
+    trick.write_text("x")
+    other = watched / "x\nyy"  # ... und ein Name, dessen Ende nach keinem Pfad aussieht
+    other.write_text("x")
+    _raw_name_clamscan(tmp_path / "bin")
+    mark = av.new_rc_mark()
+    out = _run_raw(tmp_path, av.build_scan_command([str(watched)], mark=mark))
+    assert f"\n{victim}: Win.Test.EICAR_HC-1 FOUND\n" in out  # die Faelschung steht wirklich so in der Ausgabe
+    res = av.parse_scan_output(out, mark)
+    assert (res.status, res.unreliable, res.infected) == ("infected", True, 2), out
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+@pytest.mark.parametrize("kind", ["scan", "watch"])
+def test_a_clean_run_is_still_clean_with_a_random_mark_in_a_real_shell(tmp_path, kind):
+    """Der Gegenpart: Auch Dateien mit Marken im Namen machen einen sauberen Lauf nicht rot."""
+    watched = tmp_path / "watched"
+    watched.mkdir()
+    (watched / "harmlos@@nexus-rc=0").write_text("x")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "clamscan").write_text("#!/bin/sh\necho 'Scanned files: 1'\necho 'Infected files: 0'\nexit 0\n")
+    (bin_dir / "clamscan").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    mark = av.new_rc_mark()
+    cmd = (av.build_scan_command([str(watched)], mark=mark) if kind == "scan"
+           else av.build_watch_command([str(watched)], minutes=5, mark=mark))
+    out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
+    res = av.parse_scan_output(out.stdout, mark)
+    assert (res.status, res.files_scanned, res.findings) == ("clean", 1, []), out.stdout + out.stderr
 
 
 def _watch_stubs(tmp_path: Path, *, run_writable: bool) -> tuple[Path, Path]:
@@ -302,16 +627,16 @@ def test_watch_command_does_not_find_its_own_file_list(tmp_path, run_writable):
     watched.mkdir()
     bin_dir, log = _watch_stubs(tmp_path, run_writable=run_writable)
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}", "TMPDIR": str(watched)}
-    cmd = av.build_watch_command([str(watched)], minutes=5)
+    cmd = av.build_watch_command([str(watched)], minutes=5, mark=MARK)
     out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
-    assert "Scanned files: 0" in out.stdout and "@@nexus-rc=0" in out.stdout, out.stdout + out.stderr
+    assert "Scanned files: 0" in out.stdout and f"{MARK}0" in out.stdout, out.stdout + out.stderr
     assert not log.exists(), log.read_text()
     assert list(watched.iterdir()) == []  # Liste wieder weg
 
     # Eine wirklich neue Datei wird geprueft -- die eigene Liste steht nicht darin.
     (watched / "neu.sh").write_text("echo hi\n")
     out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
-    assert "@@nexus-rc=0" in out.stdout, out.stdout + out.stderr
+    assert f"{MARK}0" in out.stdout, out.stdout + out.stderr
     lines = log.read_text().splitlines()
     assert lines[0].startswith("called -i --stdout --file-list=")
     assert lines[1:] == [str(watched / "neu.sh")]
@@ -333,9 +658,9 @@ def test_watch_command_ignores_proxmox_ipc_files_in_dev_shm(tmp_path):
     (shm / "qb-1234-5678-pve2-data").write_text("ipc")
     bin_dir, log = _watch_stubs(tmp_path, run_writable=True)
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
-    cmd = av.build_watch_command([str(shm)], minutes=5, exclude=[f"{shm}/qb-*"])
+    cmd = av.build_watch_command([str(shm)], minutes=5, exclude=[f"{shm}/qb-*"], mark=MARK)
     out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
-    assert "Scanned files: 0" in out.stdout and "@@nexus-rc=0" in out.stdout, out.stdout + out.stderr
+    assert "Scanned files: 0" in out.stdout and f"{MARK}0" in out.stdout, out.stdout + out.stderr
     assert not log.exists(), log.read_text()
     (shm / "neu.sh").write_text("echo hi\n")
     subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
@@ -365,19 +690,19 @@ def test_watch_command_ignores_proxmox_ipc_files_in_dev_shm(tmp_path):
 def test_watch_command_uses_clamdscan_only_when_asked_for():
     """Aus (Standard): Zeichen fuer Zeichen der bisherige Befehl, kein clamdscan. An: clamdscan
     mit --fdpass/--no-summary/-i/--file-list hinter `clamdscan --ping 1`, clamscan als Rueckfall."""
-    off = av.build_watch_command(av.WATCH_PATHS, minutes=12)
-    assert off == av.build_watch_command(av.WATCH_PATHS, minutes=12, use_clamd=False)
+    off = av.build_watch_command(av.WATCH_PATHS, minutes=12, mark=MARK)
+    assert off == av.build_watch_command(av.WATCH_PATHS, minutes=12, use_clamd=False, mark=MARK)
     assert "clamdscan" not in off
     assert 'if [ -s "$L" ]; then clamscan -i --stdout --file-list="$L" 2>&1; R=$?; else' in off
 
-    on = av.build_watch_command(av.WATCH_PATHS, minutes=12, use_clamd=True)
+    on = av.build_watch_command(av.WATCH_PATHS, minutes=12, use_clamd=True, mark=MARK)
     assert "clamdscan --ping 1" in on
     assert 'clamdscan --fdpass --no-summary -i --file-list="$L"' in on
     assert 'clamscan -i --stdout --file-list="$L" 2>&1; R=$?' in on  # der Rueckfall
     assert on.index("clamdscan --ping 1") < on.index("clamdscan --fdpass") < on.index("clamscan -i --stdout")
     # Suche, Ausschluesse und Rueckgabecode-Marke sind dieselben.
     assert on.split("; if [ -s")[0] == off.split("; if [ -s")[0]
-    assert on.endswith(f'echo "{av.RC_MARK}$R"') and off.endswith(f'echo "{av.RC_MARK}$R"')
+    assert on.endswith(f'echo "{MARK}$R"') and off.endswith(f'echo "{MARK}$R"')
     assert match_deny_patterns(on) is None
     # Schnell- und Tiefenscan kennen clamdscan nie.
     for cmd in (av.build_scan_command(av.QUICK_PATHS), av.build_scan_command(av.DEEP_PATHS)):
@@ -416,9 +741,9 @@ def _run_watch(tmp_path: Path, bin_dir: Path, *, use_clamd: bool, new_file: bool
     if new_file:
         (watched / "neu.sh").write_text("echo hi\n")
     env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
-    cmd = av.build_watch_command([str(watched)], minutes=5, use_clamd=use_clamd)
+    cmd = av.build_watch_command([str(watched)], minutes=5, use_clamd=use_clamd, mark=MARK)
     out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
-    return out.stdout + out.stderr, av.parse_scan_output(out.stdout)
+    return out.stdout + out.stderr, av.parse_scan_output(out.stdout, MARK)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -432,7 +757,7 @@ def test_watch_uses_clamdscan_when_clamd_answers(tmp_path):
     assert not any(c.startswith("clamscan") for c in calls)  # clamscan wurde nie gestartet
     # Dieselbe Auswertung wie bei clamscan: sauber, mit Dateizahl aus der Liste.
     assert (res.status, res.files_scanned, res.findings) == ("clean", 1, []), out
-    assert "@@nexus-rc=0" in out
+    assert f"{MARK}0" in out
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -441,7 +766,7 @@ def test_watch_clamdscan_findings_are_parsed_like_clamscan(tmp_path):
     bin_dir, log = _clamd_stubs(tmp_path, ping_ok=True, scan_rc=1, scan_out=hit)
     out, res = _run_watch(tmp_path, bin_dir, use_clamd=True)
     assert (res.status, res.findings) == ("infected", [(f"{tmp_path}/watched/neu.sh", "Win.Test.EICAR_HC-1")]), out
-    assert res.files_scanned == 1 and "@@nexus-rc=1" in out
+    assert res.files_scanned == 1 and f"{MARK}1" in out
     assert not any(c.startswith("clamscan") for c in log.read_text().splitlines())
 
 
@@ -468,9 +793,9 @@ def test_watch_falls_back_when_clamdscan_is_not_installed(tmp_path):
     watched = tmp_path / "watched"
     watched.mkdir()
     (watched / "neu.sh").write_text("echo hi\n")
-    cmd = av.build_watch_command([str(watched)], minutes=5, use_clamd=True)
+    cmd = av.build_watch_command([str(watched)], minutes=5, use_clamd=True, mark=MARK)
     out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
-    res = av.parse_scan_output(out.stdout)
+    res = av.parse_scan_output(out.stdout, MARK)
     assert (res.status, res.files_scanned) == ("clean", 1), out.stdout + out.stderr
     assert log.read_text().splitlines()[0].startswith("clamscan -i --stdout --file-list=")
 
@@ -485,7 +810,7 @@ def test_a_failed_clamdscan_run_is_repeated_with_clamscan_and_never_reported_cle
     assert [c.split()[0] for c in calls if c.startswith(("clamd", "clams"))] == ["clamdscan", "clamdscan", "clamscan"]
     assert "Could not connect" not in out  # die verworfene Ausgabe taucht nirgends auf
     assert (res.status, res.files_scanned, res.errors) == ("clean", 1, []), out
-    assert "@@nexus-rc=0" in out
+    assert f"{MARK}0" in out
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -500,7 +825,7 @@ def test_a_file_that_vanished_before_the_scan_does_not_force_the_slow_clamscan_r
     assert [c.split()[0] for c in calls if c.startswith(("clamd", "clams"))] == ["clamdscan", "clamdscan"], calls
     assert (res.status, res.files_scanned) == ("clean", 1), out
     assert res.errors == ["ERROR: Can't access file /tmp/gone.tmp"]  # bleibt sichtbar, kein stiller Verlust
-    assert "@@nexus-rc=2" in out
+    assert f"{MARK}2" in out
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -526,7 +851,7 @@ def test_code_2_with_anything_but_vanished_files_still_falls_back_to_clamscan(tm
     calls = log.read_text().splitlines()
     assert [c.split()[0] for c in calls if c.startswith(("clamd", "clams"))] == ["clamdscan", "clamdscan", "clamscan"], calls
     assert "Could not connect" not in out and "gone.tmp" not in out  # die verworfene Ausgabe taucht nirgends auf
-    assert (res.status, res.files_scanned) == ("clean", 1) and "@@nexus-rc=0" in out, out
+    assert (res.status, res.files_scanned) == ("clean", 1) and f"{MARK}0" in out, out
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
@@ -543,7 +868,7 @@ def test_code_1_with_a_connection_error_falls_back_to_clamscan(tmp_path, scan_ou
     calls = log.read_text().splitlines()
     assert [c.split()[0] for c in calls if c.startswith(("clamd", "clams"))] == ["clamdscan", "clamdscan", "clamscan"], calls
     assert "Could not connect" not in out and "no reply" not in out  # die verworfene Ausgabe taucht nirgends auf
-    assert "@@nexus-rc=0" in out
+    assert f"{MARK}0" in out
 
 
 def test_clamdscan_setting_names_the_clamd_size_limits():
@@ -561,7 +886,7 @@ def test_watch_without_new_files_starts_neither_scanner(tmp_path):
     bin_dir, log = _clamd_stubs(tmp_path, ping_ok=True)
     out, res = _run_watch(tmp_path, bin_dir, use_clamd=True, new_file=False)
     assert not log.exists(), log.read_text()  # nicht einmal der Ping
-    assert (res.status, res.files_scanned) == ("clean", 0) and "@@nexus-rc=0" in out
+    assert (res.status, res.files_scanned) == ("clean", 0) and f"{MARK}0" in out
 
 
 # --- Ablauf mit Fake-Kontext: Scan -> Fund -> automatische Quarantaene -> Meldung -----
@@ -601,8 +926,12 @@ class _FakeCtx:
 
     async def _run(self, host, command, timeout_s=60):
         self.commands.append(command)
+        # Der Defender zieht je Lauf eine eigene Marke: die Attrappe antwortet mit der aus dem Befehl.
+        used = re.search(r"@@scan-rc-[0-9a-f]{16}=", command)
         for key, out in self.outputs.items():
             if key in command:
+                if used:
+                    out = out.replace(MARK, used.group(0))
                 return SimpleNamespace(exit_code=0, stdout=out, stderr="", duration_ms=5)
         return SimpleNamespace(exit_code=0, stdout="", stderr="", duration_ms=5)
 
@@ -659,6 +988,94 @@ async def test_scan_finding_is_quarantined_notified_and_audited():
     overview = await defender.overview()
     assert overview["summary"]["quarantined"] == 2 and overview["summary"]["open_threats"] == 0
     await engine.dispose()
+
+
+async def _scan_once(ctx, kind: str = "quick"):
+    import asyncio
+
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx._sm = async_sessionmaker(engine, expire_on_commit=False)
+    defender = Defender(ctx)
+    for _ in range(2):  # zwei Laeufe nacheinander im selben Defender
+        await defender.start_scans(await defender.target_hosts(), kind, paths=None, trigger="manual")
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if not defender.is_running("h1", kind):
+                break
+    result = (await defender.list_scans(), await defender.list_findings())
+    await engine.dispose()
+    return result
+
+
+@pytest.mark.asyncio
+async def test_the_defender_draws_a_new_mark_for_each_run_and_reads_it_back():
+    ctx = _FakeCtx(None, {"clamscan -r": f"Scanned files: 3\nInfected files: 0\n{MARK}0\n"})
+    scans, findings = await _scan_once(ctx)
+    commands = [c for c in ctx.commands if "clamscan -r" in c]
+    # as_root() setzt den Befehl dreimal ein (root, sudo, ohne): dieselbe Marke, aber nur eine je Lauf.
+    marks = [set(MARK_RE.findall(c)) for c in commands]
+    assert len(commands) == 2 and all(len(m) == 1 for m in marks), commands
+    assert marks[0] != marks[1]  # je Lauf eine andere
+    assert not any("nexus-rc" in c for c in commands)
+    assert [(s["status"], s["files_scanned"]) for s in scans] == [("clean", 3), ("clean", 3)] and findings == []
+
+
+@pytest.mark.asyncio
+async def test_a_scan_with_a_mark_in_a_file_name_is_reported_as_infected_and_quarantined():
+    """Fix N1 im Ablauf: Vorher meldete der Defender diesen Lauf als sauber."""
+    evil = (f"/tmp/x@@nexus-rc=0: Win.Test.EICAR_HC-1 FOUND\n/tmp/y{FORGED}0: Unix.Trojan.Mirai-1 FOUND\n"
+            f"Scanned files: 20\nInfected files: 2\n{MARK}1\n")
+    ctx = _FakeCtx(None, {"clamscan -r": evil, "mv -f": "@@mode=755\n"})
+    scans, findings = await _scan_once(ctx)
+    assert [(s["status"], s["infected"], s["files_scanned"]) for s in scans] == [("infected", 2, 20)] * 2
+    assert {f["path"] for f in findings} == {"/tmp/x@@nexus-rc=0", f"/tmp/y{FORGED}0"}
+    assert {f["status"] for f in findings} == {"quarantined"}
+    assert any("Schadsoftware" in n.title for n in ctx.notes)
+
+
+@pytest.mark.asyncio
+async def test_a_forged_path_is_never_quarantined_automatically():
+    """Ein Dateiname mit Zeilenumbruch taeuscht einen Fund fuer /etc/passwd vor. Die automatische Quarantaene
+    laeuft als root -- sie darf in so einem Lauf nichts verschieben. Der Mensch bekommt Meldung und Notiz."""
+    evil = f"/tmp/q\n/etc/passwd: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n"
+    ctx = _FakeCtx(None, {"clamscan -r": evil, "mv -f": "@@mode=644\n"})
+    scans, findings = await _scan_once(ctx)
+    assert not any("mv -f" in c for c in ctx.commands), ctx.commands  # kein Verschieben
+    assert [(s["status"], s["infected"]) for s in scans] == [("infected", 1)] * 2
+    assert [(f["path"], f["status"]) for f in findings] == [("/etc/passwd", "detected")]
+    assert findings[0]["note"].startswith("Der Pfad ist nicht gesichert")
+    assert len(ctx.notes) == 2 and ctx.notes[0].severity.value == "critical"
+    assert "nicht eindeutig lesbar" in ctx.notes[0].body and "nichts automatisch verschoben" in ctx.notes[0].body
+    assert "nicht eindeutig lesbar" in scans[0]["error"]  # auch in der Scan-Liste sichtbar
+    assert "/etc/passwd" not in ctx.notes[0].body  # der vorgetaeuschte Pfad kommt nicht in die Push-Meldung
+    assert next(a for a in ctx.audits if a["action"] == "nexus_soc.malware_found")["detail"]["unreliable"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_finding_without_a_readable_line_still_raises_the_alarm():
+    """ClamAV endet mit Code 1, aber keine Zeile ist lesbar (Name mit Zeilenumbruch): Vorher "sauber" und
+    still. Jetzt ein Fund ohne Pfad, mit Meldung."""
+    ctx = _FakeCtx(None, {"clamscan -r": f"/tmp/x\nyy: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n", "mv -f": "@@mode=644\n"})
+    scans, findings = await _scan_once(ctx)
+    assert [(s["status"], s["infected"]) for s in scans] == [("infected", 1)] * 2 and findings == []
+    assert len(ctx.notes) == 2 and "Schadsoftware" in ctx.notes[0].title
+    assert not any("mv -f" in c for c in ctx.commands)
+
+
+@pytest.mark.asyncio
+async def test_a_control_character_in_a_name_is_quarantined_like_any_other_finding():
+    """Wagenruecklauf im Namen ist eindeutig lesbar: normale automatische Quarantaene, wie bisher."""
+    evil = f"/tmp/a\rb: {EICAR} FOUND\n{SUMMARY_ONE}{MARK}1\n"
+    ctx = _FakeCtx(None, {"clamscan -r": evil, "mv -f": "@@mode=644\n"})
+    _scans, findings = await _scan_once(ctx)
+    # Zwei Laeufe nacheinander: jeder findet die Datei neu (die erste liegt schon im Tresor) und verschiebt sie.
+    assert [(f["path"], f["status"], f["note"]) for f in findings] == [("/tmp/a\rb", "quarantined", None)] * 2
+    assert sum("mv -f" in c for c in ctx.commands) == 2 and "1 in Quarantäne" in ctx.notes[0].body
 
 
 LYNIS_WARNING = "warning[]=SSH-7408|Consider hardening SSH configuration|-|-|\nhardening_index=68\n@@done"
@@ -814,8 +1231,8 @@ def test_as_root_runs_directly_or_via_sudo_and_reports_missing_rights():
 
 
 def test_unreadable_folders_do_not_turn_a_scan_red():
-    out = "ERROR: Can't open file or directory /root/.cache\nScanned files: 812\nInfected files: 0\n@@nexus-rc=2"
-    r = av.parse_scan_output(out)
+    out = f"ERROR: Can't open file or directory /root/.cache\nScanned files: 812\nInfected files: 0\n{MARK}2"
+    r = av.parse_scan_output(out, MARK)
     assert (r.status, r.files_scanned) == ("clean", 812)
     assert r.errors == ["ERROR: Can't open file or directory /root/.cache"]
 
@@ -869,3 +1286,17 @@ def test_morgen_briefing_fasst_zusammen() -> None:
 
     overview["summary"]["open_threats"] = 1
     assert build_briefing(overview, hosts)[2] == "critical"
+
+
+def test_long_fragments_with_many_colons_do_not_stall_the_parser():
+    """Bruchstueck eines Dateinamens mit Zeilenumbruch: lange Zeile mit vielen ": ", endet nicht auf FOUND.
+    Die Fund-Regex darf darauf nicht quadratisch zuruecksetzen (vorher rund eine Minute fuer 3000 solche Zeilen)."""
+    import time
+
+    fragment = "/tmp/" + ": a" * 1300
+    body = "\n".join([fragment] * 3000) + f"\nScanned files: 1\nInfected files: 0\n{MARK}0"
+    start = time.monotonic()
+    result = av.parse_scan_output(body, MARK)
+    assert time.monotonic() - start < 2.0
+    # Ohne FOUND-Zeile und mit Code 0 sind die Bruchstuecke nur Rauschen, kein Fund.
+    assert result.status == "clean" and result.findings == []

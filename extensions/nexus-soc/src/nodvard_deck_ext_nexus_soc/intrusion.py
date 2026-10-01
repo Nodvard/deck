@@ -68,7 +68,10 @@ def guard_command(watch_files: list[str] | None = None) -> str:
         "echo @@sshd; (sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null) | grep -E "
         "'^(port|permitrootlogin|passwordauthentication|permitemptypasswords|pubkeyauthentication|maxauthtries|x11forwarding|kbdinteractiveauthentication) '; "
         "echo @@range; cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null; "
-        "echo @@ports; (ss -H -tulnp 2>/dev/null || ss -tulnp 2>/dev/null | tail -n +2); "
+        # Der Prozessname in `users:(("name",...` stammt vom Programm selbst und darf Zeilenumbrueche
+        # enthalten ("a\n@@ssh\nb"). Nur Zeilen, die mit tcp/udp beginnen, kommen durch: sonst koennte ein
+        # Prozess hier eine Abschnittsmarke vortaeuschen und die SSH-/Fail2ban-Daten ueberschreiben.
+        "echo @@ports; (ss -H -tulnp 2>/dev/null || ss -tulnp 2>/dev/null | tail -n +2) | grep -E '^(tcp|udp)[[:space:]]'; "
         "echo @@files; for f in " + file_list + "; do [ -f \"$f\" ] || continue; "
         "echo \"$(sha256sum \"$f\" 2>/dev/null | cut -d' ' -f1) $(stat -c '%a %U %Y %s' \"$f\" 2>/dev/null) - $f\"; done; "
         "echo @@bins; for f in " + bin_list + "; do [ -f \"$f\" ] || continue; v=-; "
@@ -214,8 +217,11 @@ class GuardSnapshot:
 def _sections(output: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
-    for raw in output.splitlines():
-        line = raw.rstrip("\n")
+    # Nur am Zeilenvorschub trennen wie grep in den Befehlen: `splitlines()` trennt auch an U+2028,
+    # U+0085, Formularvorschub usw.; ein Prozess- oder Benutzername mit so einem Zeichen koennte sonst
+    # eine Abschnittsmarke `@@…` vortaeuschen.
+    for raw in output.split("\n"):
+        line = raw.rstrip("\r")
         stripped = line.strip()
         if re.fullmatch(r"@@[a-z0-9]+", stripped):
             current = stripped[2:]

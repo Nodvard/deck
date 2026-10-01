@@ -16,11 +16,20 @@ Was einbezogen wird
   Markern der installierten Pakete; solche Pakete gelten als "uebersprungen", nicht als
   fehlend. Weil die Datei dann nicht vollstaendig erzeugt werden kann, schreibt/druckt
   das Skript dort nichts (Exit-Code 2); `--check` prueft nur noch die Paketliste.
+  Bringt ein Wheel eine SBOM mit (`*.dist-info/sboms/*.json`, CycloneDX), werden die darin
+  genannten einkompilierten Bestandteile (Rust-Crates, statisch gelinktes OpenSSL ...) mit
+  Name, Version, Lizenz und Urheber angehaengt, samt Lizenztext, wenn die SBOM einen hat
+  (`_python_sbom_texts`, Ausnahmen in `_SBOM_SKIP`).
 * npm: die Production-Dependencies des Frontends samt allen transitiven
   Abhaengigkeiten (aus `frontend/package-lock.json`, keine devDependencies), dazu
   alles, was in die Extension-Bundles (`extensions/*/frontend/dist/index.js`)
-  einkompiliert ist oder von ihnen importiert wird. Lizenztexte kommen aus
-  `frontend/node_modules/<paket>/`.
+  einkompiliert ist oder von ihnen importiert wird, und Build-Werkzeuge, deren Code im
+  Ergebnis landet (`_NPM_BUILD_OUTPUT`, ohne deren Abhaengigkeiten). Lizenztexte kommen aus
+  `frontend/node_modules/<paket>/`: die Lizenzdateien im Paketordner, die in Unterordnern
+  (mitgelieferter Fremdcode, z. B. noVNC `vendor/pako/LICENSE`) und die Lizenzkoepfe der
+  Dateien aus `_NPM_FILE_NOTICES` (im verkleinerten Bundle fehlen diese Kommentare).
+
+Lizenzdateien, die kein gueltiges UTF-8 sind, werden als Latin-1 gelesen (`_read_text`).
 
 Die Ausgabe ist deterministisch (nach Oekosystem und Name sortiert, Zeilenenden und
 Leerraum normalisiert, keine Zeitstempel).
@@ -39,10 +48,13 @@ wegen plattformfremder Pakete hier nicht erzeugbar.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import importlib.metadata as importlib_metadata
 import json
 import re
 import sys
+import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -74,6 +86,8 @@ class Package:
     license_source: str  # woher die Angabe stammt (nur fuer Fehlermeldungen)
     texts: list[tuple[str, str]] = field(default_factory=list)  # (Beschriftung, Text)
     source_url: str = ""
+    download_url: str = ""  # genau diese Version im Paketregister (npm: "resolved" aus dem Lockfile)
+    note: str = ""  # warum das Paket hier steht, wenn das nicht offensichtlich ist (Build-Werkzeug)
     problems: list[str] = field(default_factory=list)  # Umgebung passt nicht (fehlt, andere Version)
     text_problems: list[str] = field(default_factory=list)  # Lizenztext nicht auffindbar
     skipped: str = ""  # Grund, warum das Paket auf dieser Plattform nicht installiert wird (dann kein Problem)
@@ -91,8 +105,18 @@ def normalize_text(text: str) -> str:
     return "\n".join(lines).strip("\n")
 
 
+def decode_text(raw: bytes) -> str:
+    """UTF-8, sonst Latin-1. Aeltere Lizenzdateien sind oft Latin-1 (pypdfium2:
+    FreeType-Zeile "copyright \\xa9 <year>"); mit `errors="replace"` stuende dort ein
+    Ersatzzeichen statt des (c)-Zeichens. Latin-1 kann jedes Byte lesen, scheitert also nie."""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return raw.decode("latin-1")
+
+
 def _read_text(path: Path) -> str:
-    return normalize_text(path.read_bytes().decode("utf-8", errors="replace"))
+    return normalize_text(decode_text(path.read_bytes()))
 
 
 def _dedupe(files: list[tuple[str, str]]) -> list[tuple[str, str]]:
@@ -174,6 +198,162 @@ def _python_license_files(dist) -> list[tuple[str, str]]:
     return _dedupe(files)
 
 
+# SBOMs, die NICHT beschreiben, was im Wheel steckt -- mit Begruendung, Schluessel: Paketname nach PEP 503.
+_SBOM_SKIP: dict[str, str] = {
+    "pillow": (
+        "Pillows eigene SBOM beschreibt die Quell-Optionen, auch nicht gebuendelte (libimagequant, FriBiDi), "
+        "die von auditwheel nur eine der gebuendelten Bibliotheken. Die Lizenztexte aller im Wheel gebuendelten "
+        "Bibliotheken stehen schon in Pillows LICENSE (dist-info/licenses/LICENSE)."
+    ),
+}
+
+# Fehlt einer Komponente in der SBOM die Lizenzangabe, aber sie ist eindeutig bekannt.
+# (Name klein, ab welcher Hauptversion) -> (Lizenz, Begruendung, die mit ausgegeben wird)
+_SBOM_KNOWN_LICENSES: dict[str, tuple[int, str, str]] = {
+    "openssl": (3, "Apache-2.0", "OpenSSL ab Version 3.0; die SBOM nennt keine Lizenz"),
+}
+
+_SBOM_NOTE = (
+    "Diese Bestandteile sind laut der SBOM, die das Wheel mitbringt (CycloneDX), in das Wheel\n"
+    "einkompiliert (bei Rust-Erweiterungen die Crates; die Liste kann auch Crates enthalten, die nur\n"
+    "beim Bauen oder nur für andere Betriebssysteme gebraucht werden). Name, Version, Lizenz und\n"
+    "Urheber stammen aus ihr.\n"
+    "Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spdx.org/licenses/\n"
+    "(z. B. https://spdx.org/licenses/MIT.html); bei \"A OR B\" gilt eine der Lizenzen nach Wahl."
+)
+
+
+def _version_major(version: str) -> int:
+    match = re.match(r"\d+", version or "")
+    return int(match.group(0)) if match else -1
+
+
+def _sbom_license(component: dict) -> tuple[str, list[str]]:
+    """(Lizenzangabe als ein Ausdruck, [Lizenztexte aus der SBOM]). Mehrere Eintraege gelten
+    gemeinsam (UND), so meint es CycloneDX (Pillow: libjpeg-turbo = IJG und BSD-3-Clause)."""
+    parts: list[str] = []
+    texts: list[str] = []
+    for entry in component.get("licenses") or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("expression"):
+            parts.append(str(entry["expression"]).strip())
+            continue
+        lic = entry.get("license") or {}
+        name = str(lic.get("id") or lic.get("name") or "").strip()
+        text = lic.get("text") or {}
+        content = text.get("content") if isinstance(text, dict) else None
+        if content:
+            raw = content.encode("utf-8")
+            if isinstance(text, dict) and str(text.get("encoding", "")).lower() == "base64":
+                try:
+                    raw = base64.b64decode(content, validate=True)
+                except (binascii.Error, ValueError) as exc:
+                    # Nicht still den Base64-Text als "Lizenztext" ausgeben: laut melden (_python_sbom_texts).
+                    raise ValueError(f"Lizenztext von {component.get('name', '?')} ist kein gültiges Base64") from exc
+            texts.append(normalize_text(decode_text(raw)))
+            if not name or name.lower() == "unknown":
+                name = "Lizenztext siehe unten"
+        if name:
+            parts.append(name)
+    if len(parts) > 1:
+        parts = [f"({part})" if re.search(r"\s(OR|AND)\s", part) else part for part in parts]
+    return " AND ".join(parts), texts
+
+
+def _sbom_author(component: dict) -> str:
+    """Urheber laut SBOM, ohne E-Mail-Adressen (die braucht ein Lizenzhinweis nicht)."""
+    author = component.get("author") or ""
+    if not author and isinstance(component.get("authors"), list):
+        author = ", ".join(str(a.get("name", "")) for a in component["authors"] if isinstance(a, dict))
+    author = re.sub(r"\s*<[^>]*>", "", str(author))
+    return re.sub(r"\s+", " ", author).strip(" ,")
+
+
+def _sbom_distribution_url(component: dict) -> str:
+    for ref in component.get("externalReferences") or []:
+        if isinstance(ref, dict) and ref.get("type") == "distribution" and ref.get("url"):
+            return str(ref["url"])
+    return ""
+
+
+def sbom_texts(sbom: dict, label: str) -> list[tuple[str, str]]:
+    """Ein SBOM-Dokument als Textbloecke: die Liste der Bestandteile, danach je Bestandteil mit
+    eigenem Lizenztext in der SBOM dieser Text. Deterministisch (sortiert, ohne Zeitstempel,
+    Build-Pfade und Architektur -- die stehen nur in Feldern, die hier nicht ausgegeben werden)."""
+    rows: dict[tuple[str, str], tuple[str, str]] = {}
+    extra: dict[tuple[str, str], list[str]] = {}
+    for component in sbom.get("components") or []:
+        if not isinstance(component, dict) or not component.get("name"):
+            continue
+        name, version = str(component["name"]).strip(), str(component.get("version") or "").strip()
+        license_, texts = _sbom_license(component)
+        if not license_:
+            known = _SBOM_KNOWN_LICENSES.get(name.lower())
+            if known and _version_major(version) >= known[0]:
+                license_ = f"{known[1]} ({known[2]})"
+            else:
+                license_ = "(keine Angabe in der SBOM)"
+        details = []
+        author = _sbom_author(component)
+        if author:
+            details.append(f"Urheber: {author}")
+        url = _sbom_distribution_url(component)
+        if url:
+            details.append(f"Quelle: {url}")
+        rows[(name, version)] = (license_, "; ".join(details))
+        if texts:
+            extra[(name, version)] = texts
+    if not rows:
+        return []
+    keys = sorted(rows, key=lambda key: (key[0].lower(), key[0], key[1]))
+    lines = [_SBOM_NOTE, ""]
+    for name, version in keys:
+        license_, details = rows[(name, version)]
+        line = f"  {(name + ' ' + version).strip():<34} {license_}"
+        lines.append(f"{line}  ({details})" if details else line)
+    count = "1 einkompilierter Bestandteil" if len(keys) == 1 else f"{len(keys)} einkompilierte Bestandteile"
+    out = [(f"{label}: {count}", "\n".join(lines))]
+    for key in keys:
+        for text in extra.get(key, []):
+            out.append((f"Lizenztext aus {label}: {key[0]} {key[1]}".rstrip(), text))
+    return out
+
+
+def _python_sbom_texts(dist, package_name: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """(Textbloecke, Probleme) fuer alle SBOMs in der dist-info des Pakets."""
+    if pep503(package_name) in _SBOM_SKIP:
+        return [], []
+    found: list[tuple[str, Path]] = []
+    for entry in dist.files or []:
+        parts = entry.parts
+        dist_info_index = next((i for i, part in enumerate(parts) if part.endswith(".dist-info")), None)
+        if dist_info_index is None:
+            continue
+        inside = parts[dist_info_index + 1 :]
+        if len(inside) < 2 or inside[0] != "sboms" or not inside[-1].lower().endswith(".json"):
+            continue
+        full = Path(dist.locate_file(entry))
+        if full.is_file():
+            found.append(("dist-info/" + "/".join(inside), full))
+    texts: list[tuple[str, str]] = []
+    problems: list[str] = []
+    for label, full in sorted(found):
+        try:
+            sbom = json.loads(decode_text(full.read_bytes()))
+        except (OSError, ValueError) as exc:
+            problems.append(f"SBOM {label} nicht lesbar: {exc}")
+            continue
+        if not isinstance(sbom, dict) or sbom.get("bomFormat") != "CycloneDX":
+            problems.append(f"SBOM {label} ist kein CycloneDX-Dokument")
+            continue
+        try:
+            texts += sbom_texts(sbom, label)
+        except ValueError as exc:
+            problems.append(f"SBOM {label}: {exc}")
+    return texts, problems
+
+
 def _python_source_url(meta) -> str:
     for entry in meta.get_all("Project-URL") or []:
         label, _, url = entry.partition(",")
@@ -244,6 +424,9 @@ def collect_python(pins: list[tuple[str, str]], environment: dict[str, str] | No
                 pkg.texts = [("License (Metadaten)", normalize_text(embedded))]
         if not pkg.texts:
             pkg.text_problems.append("keine Lizenzdatei in der dist-info gefunden")
+        sbom_blocks, sbom_problems = _python_sbom_texts(dist, name)
+        pkg.texts += sbom_blocks
+        pkg.text_problems += sbom_problems
         packages.append(pkg)
     return packages
 
@@ -357,6 +540,90 @@ def npm_root_names(repo: Path = REPO_ROOT) -> set[str]:
     return set(frontend_pkg.get("dependencies", {})) | bundle_npm_roots(repo)
 
 
+# Build-Werkzeuge (devDependencies), deren eigener Code im ausgelieferten Frontend landet. Nur das
+# Paket selbst, NICHT seine Abhaengigkeiten (die laufen nur beim Bauen). Wert: was davon im Bundle steckt.
+_NPM_BUILD_OUTPUT: dict[str, str] = {
+    "tailwindcss": (
+        "Build-Werkzeug. Im ausgelieferten CSS stecken seine Grundstile (Preflight, `@tailwind base`, "
+        "beruht auf modern-normalize: Lizenz unter lib/css/LICENSE); den Lizenzkommentar, den Tailwind "
+        "dazuschreibt, entfernt das Verkleinern. Seine eigenen Abhängigkeiten werden nicht mitgeliefert."
+    ),
+}
+
+# Dateien mit EIGENEM Lizenzkopf (fremder Code im Paket oder weitere Urheber), die im Bundle landen.
+# Das verkleinerte Bundle enthaelt keine Kommentare mehr, deshalb stehen die Koepfe hier. Ermittelt mit
+# einem Build mit Quellkarten (`npx vite build --sourcemap`, Liste `sources`): genau diese Dateien
+# werden gebuendelt. Fehlt eine Datei nach einem Update, meldet das Skript ein Problem.
+_NPM_FILE_NOTICES: dict[str, tuple[str, ...]] = {
+    # DES fuer die VNC-Anmeldung, aus Acme.Crypto/Flashlight-VNC uebernommen (BSD-artige Lizenzen).
+    "@novnc/novnc": ("core/crypto/des.js", "core/decoders/tight.js"),
+    # Teile aus jslinux (Fabrice Bellard) und aus VS Code (Microsoft, MIT).
+    "@xterm/xterm": ("lib/xterm.mjs",),
+    "@xterm/addon-fit": ("lib/addon-fit.mjs",),
+    # Liefert keine Lizenzdatei; der Kopf nennt Urheber und Lizenz (und den Markenhinweis "QR Code").
+    "qrcode-generator": ("dist/qrcode.mjs",),
+    # Enthaelt einen Ausschnitt aus Modernizr (MIT).
+    "react-dom": ("cjs/react-dom.production.min.js",),
+}
+
+# Diese Endungen sind Code, keine Lizenzdateien (lucide-react hat ein Symbol `icons/copyright.mjs`).
+_CODE_SUFFIXES = (".js", ".mjs", ".cjs", ".ts", ".mts", ".cts", ".jsx", ".tsx", ".map", ".json", ".css", ".scss")
+
+
+def leading_comments(source: str) -> str:
+    """Die Kommentare am Dateianfang bis zur ersten Leerzeile nach einem fertigen Kommentar oder
+    bis zum ersten Code -- dort steht bei JavaScript-Dateien der Lizenzkopf. Leer, wenn die Datei
+    nicht mit einem Kommentar beginnt."""
+    out: list[str] = []
+    in_block = False
+    for line in source.replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        if in_block:
+            out.append(line)
+            in_block = "*/" not in stripped
+            continue
+        if not stripped:
+            if out:
+                break
+            continue
+        if stripped.startswith("//"):
+            out.append(line)
+        elif stripped.startswith("/*"):
+            out.append(line)
+            in_block = "*/" not in stripped[2:]
+        else:
+            break
+    return normalize_text("\n".join(out))
+
+
+def _npm_nested_license_files(installed_dir: Path) -> list[tuple[str, str]]:
+    """Lizenzdateien in Unterordnern des Pakets (mitgelieferter Fremdcode wie noVNC `vendor/pako/`,
+    weitere Lizenztexte wie noVNC `docs/LICENSE.*`). Verschachtelte node_modules sind eigene Pakete."""
+    files = []
+    for child in sorted(installed_dir.rglob("*")):
+        rel = child.relative_to(installed_dir)
+        if len(rel.parts) < 2 or "node_modules" in rel.parts or not child.is_file():
+            continue
+        if _LICENSE_FILE_RE.match(child.name) and not child.name.lower().endswith(_CODE_SUFFIXES):
+            files.append((rel.as_posix(), _read_text(child)))
+    return _dedupe(files)
+
+
+def _npm_file_notices(name: str, installed_dir: Path) -> tuple[list[tuple[str, str]], list[str]]:
+    texts, problems = [], []
+    for rel in _NPM_FILE_NOTICES.get(name, ()):
+        path = installed_dir / rel
+        if not path.is_file():
+            problems.append(f"{rel} fehlt (Liste _NPM_FILE_NOTICES in scripts/third_party_licenses.py prüfen)")
+            continue
+        header = leading_comments(decode_text(path.read_bytes()))
+        if not header:
+            problems.append(f"{rel} beginnt nicht mit einem Lizenzkopf (Liste _NPM_FILE_NOTICES prüfen)")
+            continue
+        texts.append((f"Lizenzkopf aus {rel}", header))
+    return texts, problems
+
+
 def _npm_license_from_package_json(data: dict) -> str:
     value = data.get("license")
     if isinstance(value, dict):
@@ -379,6 +646,13 @@ def collect_npm(repo: Path = REPO_ROOT, node_modules: Path | None = None, with_t
     node_modules = node_modules or (repo / "frontend" / "node_modules")
     lock = load_lock(repo / "frontend" / "package-lock.json")
     paths, problems = npm_closure(lock, npm_root_names(repo))
+    for name in sorted(_NPM_BUILD_OUTPUT):
+        path = _resolve(lock, "", name)
+        if path is None:
+            problems.append(f"{name}: steht nicht in package-lock.json (Liste _NPM_BUILD_OUTPUT prüfen)")
+        elif path not in paths:
+            paths.append(path)
+    paths.sort(key=lambda p: (_package_name(p).lower(), p))
     packages = []
     for problem in problems:
         packages.append(Package("npm", "(Lockfile)", "", "", "", problems=[problem]))
@@ -386,6 +660,9 @@ def collect_npm(repo: Path = REPO_ROOT, node_modules: Path | None = None, with_t
         entry = lock[lock_path]
         name = _package_name(lock_path)
         pkg = Package("npm", name, entry.get("version", ""), (entry.get("license") or "").strip(), "package-lock.json")
+        pkg.download_url = (entry.get("resolved") or "").strip()
+        if lock_path == f"node_modules/{name}" and name in _NPM_BUILD_OUTPUT:
+            pkg.note = _NPM_BUILD_OUTPUT[name]
         installed_dir = node_modules / lock_path.removeprefix("node_modules/")
         manifest_file = installed_dir / "package.json"
         manifest = json.loads(manifest_file.read_text(encoding="utf-8")) if manifest_file.is_file() else {}
@@ -406,6 +683,13 @@ def collect_npm(repo: Path = REPO_ROOT, node_modules: Path | None = None, with_t
             pkg.texts = _dedupe(files) or _standard_text_fallback(pkg.license, manifest)
             if not pkg.texts:
                 pkg.text_problems.append("keine Lizenzdatei im Paketordner gefunden")
+            notices, notice_problems = _npm_file_notices(name, installed_dir)
+            seen = {text for _, text in pkg.texts}
+            for label, text in _npm_nested_license_files(installed_dir) + notices:
+                if text not in seen:
+                    seen.add(text)
+                    pkg.texts.append((label, text))
+            pkg.text_problems += notice_problems
         if not pkg.license:
             pkg.license_source = "keine Angabe"
         packages.append(pkg)
@@ -426,9 +710,44 @@ _MPL_NOTE = (
     "und über das jeweilige Paketregister (npm bzw. PyPI) in genau dieser Version."
 )
 
+# Je MPL-Komponente: Adresse des Quelltexts GENAU dieser Version (`{version}` wird ersetzt, leer =
+# keine bekannt) und wo die Dateien im Image stecken. MPL-2.0 Abschnitt 3.2: wer die ausfuehrbare
+# Form weitergibt (hier: gebuendelt und verkleinert), muss sagen, wie man an den Quelltext kommt.
+_MPL_DETAILS: dict[tuple[str, str], tuple[str, str]] = {
+    ("npm", "@novnc/novnc"): (
+        "https://github.com/novnc/noVNC/tree/v{version}",
+        (
+            "Frontend-Bundle /app/frontend/dist/assets/rfb-*.js (die grafische Konsole). Darin stecken die "
+            "Dateien aus core/ und vendor/pako/ des Pakets: unverändert, nur gebündelt und verkleinert."
+        ),
+    ),
+    ("python", "certifi"): (
+        "",
+        "Python-Paket unter site-packages/certifi, unverändert.",
+    ),
+}
+
 
 def _is_mpl(pkg: Package) -> bool:
     return bool(re.search(r"\bMPL\b|MPL-2|Mozilla Public", pkg.license, re.IGNORECASE))
+
+
+def _wrap(text: str, indent: str, width: int = 100) -> list[str]:
+    return textwrap.wrap(text, width=width, initial_indent=indent, subsequent_indent=indent, break_on_hyphens=False)
+
+
+def mpl_lines(pkg: Package) -> list[str]:
+    """Hinweiszeilen zu einer MPL-Komponente: Projekt, Quelltext und Paket genau dieser Version, Ort im Image."""
+    lines = [f"  {pkg.name} {pkg.version} ({pkg.ecosystem}): {pkg.source_url or 'Quelle über das Paketregister'}"]
+    tag_url, where = _MPL_DETAILS.get((pkg.ecosystem, pkg.name.lower() if pkg.ecosystem == "npm" else pep503(pkg.name)), ("", ""))
+    if tag_url:
+        lines.append(f"      Quelltext genau dieser Version: {tag_url.format(version=pkg.version)}")
+    download = pkg.download_url or (f"https://pypi.org/project/{pkg.name}/{pkg.version}/" if pkg.ecosystem == "python" else "")
+    if download:
+        lines.append(f"      Paket genau dieser Version: {download}")
+    if where:
+        lines += _wrap(f"Im Image: {where}", "      ")
+    return lines
 
 
 def sorted_packages(packages: list[Package]) -> list[Package]:
@@ -445,7 +764,9 @@ def render(python_packages: list[Package], npm_packages: list[Package]) -> str:
         "",
         "Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0 (siehe LICENSE).",
         "Diese Datei nennt die Fremdkomponenten, die im Docker-Image bzw. im ausgelieferten",
-        "Frontend stecken, mit Version, Lizenz und vollem Lizenztext.",
+        "Frontend stecken, mit Version, Lizenz und vollem Lizenztext. Bei den Paketen",
+        "steht außerdem, was sie selbst mitbringen: einkompilierte Bestandteile laut SBOM",
+        "(z. B. Rust-Crates), mitgelieferter Fremdcode und die Lizenzköpfe einzelner Dateien.",
         "",
         "Automatisch erzeugt mit `python scripts/third_party_licenses.py` -- nicht von Hand",
         "ändern. Erlaubt sind nur freizügige Lizenzen; `python scripts/check_licenses.py`",
@@ -461,12 +782,15 @@ def render(python_packages: list[Package], npm_packages: list[Package]) -> str:
     mpl = [p for p in python_sorted + npm_sorted if _is_mpl(p)]
     if mpl:
         out += ["Hinweis zu MPL-2.0-Komponenten", _THIN, _MPL_NOTE, ""]
-        out += [f"  {p.name} {p.version} ({p.ecosystem}): {p.source_url or 'Quelle über das Paketregister'}" for p in mpl]
+        for pkg in mpl:
+            out += mpl_lines(pkg)
         out.append("")
     for title, group in (("Python-Pakete", python_sorted), ("npm-Pakete", npm_sorted)):
         out += [_RULE, title, _RULE, ""]
         for pkg in group:
             out += [_THIN, f"{pkg.name} {pkg.version}", f"Lizenz: {pkg.license or '(keine Angabe)'}", _THIN]
+            if pkg.note:
+                out += _wrap(f"Hinweis: {pkg.note}", "", 90) + [""]
             for label, text in pkg.texts:
                 if len(pkg.texts) > 1 or label.startswith("Standardtext"):
                     out += [f"[{label}]", ""]

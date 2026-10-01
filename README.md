@@ -129,8 +129,8 @@ Hinweise zum Selbstbauen und Prüfen: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Für private und andere nicht-kommerzielle Zwecke ist Nodvard Deck kostenlos, der Quellcode ist
 einsehbar. Am meisten hilft es, wenn du Fehler meldest und Ideen einbringst – siehe
-[CONTRIBUTING.md](CONTRIBUTING.md). Code-Beiträge von außen nimmt das Projekt nicht an. Für die
-kommerzielle Nutzung gibt es eine eigene Lizenz: kontakt@nodvard.com.
+[CONTRIBUTING.md](CONTRIBUTING.md). Code-Beiträge von außen nimmt das Projekt nicht an. Nodvard Deck ist
+ein privates, nicht-kommerzielles Projekt.
 
 ## Sicherheit
 
@@ -140,9 +140,9 @@ Sicherheitslücken bitte **nicht** in öffentlichen Issues melden – siehe [SEC
 
 Nodvard Deck steht unter der **PolyForm Noncommercial License 1.0.0** – siehe [LICENSE](LICENSE).
 Kurz gesagt (verbindlich ist nur der Lizenztext): Du darfst Nodvard Deck für private und andere
-nicht-kommerzielle Zwecke nutzen, den Quellcode lesen und für dich anpassen. Jede kommerzielle
-Nutzung, zum Beispiel in einem Unternehmen oder als bezahlter Dienst, braucht eine kommerzielle
-Lizenz: **kontakt@nodvard.com**. Der Quellcode ist damit einsehbar, Nodvard Deck ist aber keine
+nicht-kommerzielle Zwecke nutzen, den Quellcode lesen und für dich anpassen. Kommerzielle
+Nutzung, zum Beispiel in einem Unternehmen oder als bezahlter Dienst, ist ohne gesonderte Erlaubnis
+nicht gestattet. Anfragen: **kontakt@nodvard.com**. Der Quellcode ist damit einsehbar, Nodvard Deck ist aber keine
 Open-Source-Software im engeren Sinn. Die Lizenzen der mitgelieferten Bibliotheken stehen in
 [THIRD_PARTY_LICENSES](THIRD_PARTY_LICENSES).
 

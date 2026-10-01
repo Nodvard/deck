@@ -18,6 +18,7 @@ import {
   type ChangelogEntry,
   type ChangelogVersion,
 } from "../../lib/changelog";
+import { NOVNC_SOURCE_URL, NOVNC_VERSION, THIRD_PARTY_LICENSES_IMAGE_PATH, THIRD_PARTY_LICENSES_URL } from "../../lib/thirdParty";
 import { Badge, Card, NoticeLine, PageHeader, errorText } from "./ui";
 
 const KIND_TONE: Record<ChangeKind, "good" | "accent" | "warn" | "bad"> = {
@@ -135,10 +136,25 @@ export function AboutSettings(): JSX.Element {
 
       <Card title="Lizenz und Marken">
         <p className="text-sm leading-relaxed text-white/80">
-          Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0: für private und andere nicht-kommerzielle Zwecke frei, kommerzielle Nutzung nur mit eigener Lizenz (kontakt@nodvard.com). Quellcode:{" "}
+          Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0: für private und andere nicht-kommerzielle Zwecke frei, kommerzielle Nutzung nur mit gesonderter Erlaubnis (Anfragen: kontakt@nodvard.com). Quellcode:{" "}
           <a href="https://github.com/nodvard/deck" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">
             github.com/nodvard/deck
           </a>
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-white/80">
+          Die mitgelieferte Fremdsoftware und ihre Lizenzen findest du in der Datei{" "}
+          <a href={THIRD_PARTY_LICENSES_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">
+            THIRD_PARTY_LICENSES
+          </a>{" "}
+          im Quellcode, im Image unter <code className="break-all text-white/90">{THIRD_PARTY_LICENSES_IMAGE_PATH}</code>.
+        </p>
+        <p className="mt-3 text-sm leading-relaxed text-white/80">
+          Die grafische Konsole nutzt noVNC {NOVNC_VERSION} (unverändert, Mozilla Public License 2.0). Den Quellcode genau dieser
+          Version findest du unter{" "}
+          <a href={NOVNC_SOURCE_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">
+            github.com/novnc/noVNC
+          </a>
+          .
         </p>
         <p className="mt-3 text-xs leading-relaxed text-white/50">
           Proxmox, Docker, Portainer, Synology, Unraid, Nextcloud, Pi-hole, Nginx Proxy Manager, ntfy, Ollama, ClamAV, Lynis, Fail2ban,

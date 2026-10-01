@@ -265,6 +265,99 @@ async def test_enable_unknown_extension_returns_404(client, db_session, test_set
 
 
 @pytest.mark.asyncio
+async def test_extension_missing_at_boot_reports_error_but_stays_enabled(client, db_session, test_settings):
+    """Eine eingeschaltete Erweiterung verschwindet (z. B. Rueckweg aufs alte Image): die API
+    meldet `error` samt Grund, die Registry behaelt `enabled`, ein ausdrueckliches Einschalten
+    gibt 404 und aendert nichts. Kommt die Erweiterung zurueck, laedt der naechste Start sie wieder."""
+    from sqlalchemy import select
+
+    from nodvard_deck.ext.runtime import reset_extension_runtime
+    from nodvard_deck.main import app
+    from nodvard_deck.models import ExtensionRecord
+
+    token = await _bootstrap_owner(client)
+    await _discover_real_hello_world(db_session, test_settings)
+    (await db_session.get(ExtensionRecord, "hello-world")).state = "enabled"  # Entscheidung aus einem frueheren Lauf
+    await db_session.commit()
+
+    async def stored() -> tuple[str, str | None]:
+        await db_session.commit()
+        row = (
+            await db_session.execute(
+                select(ExtensionRecord.state, ExtensionRecord.last_error).where(ExtensionRecord.id == "hello-world")
+            )
+        ).one()
+        return row.state, row.last_error
+
+    # Start ohne die Erweiterung: nichts gefunden, nichts geladen.
+    reset_extension_runtime()
+    test_settings.extensions_dir = Path(test_settings.data_dir) / "leer"
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, test_settings)
+    await db_session.commit()
+
+    state, last_error = await stored()
+    assert state == "enabled" and last_error
+
+    one = await client.get("/api/v1/extensions/hello-world", headers=_auth_header(token))
+    assert one.status_code == 200, one.text
+    assert one.json()["state"] == "error"
+    assert one.json()["last_error"] == last_error
+    assert one.json()["needs_setup"] is False
+    listed = await client.get("/api/v1/extensions", headers=_auth_header(token))
+    assert {e["id"]: e["state"] for e in listed.json()}["hello-world"] == "error"
+    assert (await client.get("/api/v1/pages", headers=_auth_header(token))).json() == []
+    assert (await client.get("/api/v1/ext/hello-world/widgets/hello")).status_code == 404
+
+    # Ausdruecklich einschalten: weiter 404, der gespeicherte Zustand bleibt.
+    again = await client.post("/api/v1/extensions/hello-world/enable", headers=_auth_header(token))
+    assert again.status_code == 404
+    assert await stored() == (state, last_error)
+    after = await client.get("/api/v1/extensions/hello-world", headers=_auth_header(token))
+    assert after.json()["state"] == "error"
+
+    # Die Erweiterung ist zurueck: der naechste Start laedt sie ohne Zutun.
+    reset_extension_runtime()
+    await _discover_real_hello_world(db_session, test_settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, test_settings)
+    await db_session.commit()
+
+    assert await stored() == ("enabled", None)
+    back = await client.get("/api/v1/extensions/hello-world", headers=_auth_header(token))
+    assert back.json()["state"] == "enabled" and back.json()["last_error"] is None
+    assert [p["id"] for p in (await client.get("/api/v1/pages", headers=_auth_header(token))).json()] == ["hello"]
+    assert (await client.get("/api/v1/ext/hello-world/widgets/hello")).status_code == 200
+
+    disabled = await client.post("/api/v1/extensions/hello-world/disable", headers=_auth_header(token))
+    assert disabled.json()["state"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_disabling_a_missing_extension_clears_the_error(client, db_session, test_settings):
+    """Wer eine fehlende Erweiterung bewusst ausschaltet, haelt sie damit sauber aus: `disabled`, kein Fehler."""
+    from nodvard_deck.ext.runtime import reset_extension_runtime
+    from nodvard_deck.main import app
+    from nodvard_deck.models import ExtensionRecord
+
+    token = await _bootstrap_owner(client)
+    await _discover_real_hello_world(db_session, test_settings)
+    (await db_session.get(ExtensionRecord, "hello-world")).state = "enabled"
+    await db_session.commit()
+    reset_extension_runtime()
+    test_settings.extensions_dir = Path(test_settings.data_dir) / "leer"
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    await extensions_service.load_enabled_from_registry(app, db_session, test_settings)
+    await db_session.commit()
+    assert (await client.get("/api/v1/extensions/hello-world", headers=_auth_header(token))).json()["state"] == "error"
+
+    disabled = await client.post("/api/v1/extensions/hello-world/disable", headers=_auth_header(token))
+
+    assert disabled.status_code == 200
+    assert disabled.json()["state"] == "disabled"
+    assert disabled.json()["last_error"] is None
+
+
+@pytest.mark.asyncio
 async def test_list_extensions_requires_authentication(client):
     r = await client.get("/api/v1/extensions")
     assert r.status_code == 401

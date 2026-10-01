@@ -16,7 +16,9 @@ Deshalb gilt:
 
 from __future__ import annotations
 
+import base64
 import email.message
+import json
 import re
 import sys
 from pathlib import Path
@@ -238,7 +240,16 @@ def test_npm_closure_reports_roots_missing_from_the_lock():
 def test_real_npm_set_has_production_packages_only():
     names = {p.name for p in tpl.collect_npm(REPO, with_texts=False)}
     assert {"react", "react-dom", "@novnc/novnc", "@xterm/xterm", "markdown-it", "lucide-react"} <= names
-    assert not names & {"vite", "vitest", "typescript", "tailwindcss", "esbuild", "jsdom", "postcss", "@vitejs/plugin-react"}
+    assert not names & {"vite", "vitest", "typescript", "esbuild", "jsdom", "postcss", "@vitejs/plugin-react"}
+
+
+def test_build_tools_whose_code_is_shipped_are_listed_without_their_dependencies():
+    """Tailwinds Grundstile stehen im ausgelieferten CSS -- Tailwind selbst gehoert in die Liste,
+    seine Abhaengigkeiten (postcss, chokidar ...) laufen nur beim Bauen und gehoeren nicht hinein."""
+    packages = {p.name: p for p in tpl.collect_npm(REPO, with_texts=False)}
+    assert "tailwindcss" in packages and "Preflight" in packages["tailwindcss"].note
+    assert not {"postcss", "chokidar", "sucrase", "jiti"} & set(packages)
+    assert all(not p.note for name, p in packages.items() if name not in tpl._NPM_BUILD_OUTPUT)
 
 
 def test_bundle_scan_finds_bare_imports_and_bundled_node_modules(tmp_path):
@@ -279,6 +290,217 @@ def test_normalize_text_makes_crlf_and_trailing_space_irrelevant():
 def test_dedupe_keeps_each_text_once():
     files = [("b/x.txt", "T"), ("a/x.txt", "T"), ("c.txt", "U")]
     assert tpl._dedupe(files) == [("a/x.txt", "T"), ("c.txt", "U")]
+
+
+# ---------------------------------------------------------------------------
+# Lizenztexte: Kodierung, SBOM, mitgelieferter Fremdcode
+# ---------------------------------------------------------------------------
+
+
+def test_license_files_that_are_not_utf8_are_read_as_latin1(tmp_path):
+    """pypdfium2 liefert die FreeType-Lizenz als Latin-1 ("copyright \\xa9 <year>") -- ohne
+    Rueckfall stuende dort ein Ersatzzeichen statt des (c)-Zeichens."""
+    path = tmp_path / "freetype.txt"
+    path.write_bytes(b"Portions of this software are copyright \xa9 <year> The FreeType\r\nProject.\r\n")
+    assert tpl._read_text(path) == "Portions of this software are copyright © <year> The FreeType\nProject."
+    assert tpl.decode_text("Grüße ©".encode()) == "Grüße ©"  # gueltiges UTF-8 bleibt UTF-8
+
+
+def test_leading_comments_take_the_license_header_only():
+    source = (
+        "/*\n * Copyright (C) 1996 by Jef Poskanzer.\n */\n"
+        "/*---\n * Copyright (c) Microsoft Corporation.\n *---*/\n"
+        "\n/* eslint-disable comma-spacing */\nconst x = 1;\n"
+    )
+    header = tpl.leading_comments(source)
+    assert header.startswith("/*\n * Copyright (C) 1996 by Jef Poskanzer.") and header.endswith(" *---*/")
+    assert "Microsoft" in header and "eslint" not in header and "const" not in header
+    assert tpl.leading_comments("// QR Code\n//\n// Copyright (c) 2009 Kazuhiko Arase\n\nexport {};") == (
+        "// QR Code\n//\n// Copyright (c) 2009 Kazuhiko Arase"
+    )
+    assert tpl.leading_comments("'use strict';\n/* spaeter */") == ""
+
+
+def _sbom(*components, **extra) -> dict:
+    return {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": list(components), **extra}
+
+
+def test_sbom_components_are_listed_sorted_with_license_and_author_without_emails():
+    unicode_text = base64.b64encode("UNICODE LICENSE V3\n\nCopyright © 2020-2023 Unicode, Inc.\n".encode()).decode()
+    sbom = _sbom(
+        {"name": "zeta", "version": "1.0", "author": "Jane Doe <jane@example.org>, Max <m@x.de>", "licenses": [{"expression": "MIT OR Apache-2.0"}]},
+        {"name": "Alpha", "version": "0.2.1", "licenses": [{"license": {"id": "IJG"}}, {"license": {"id": "BSD-3-Clause"}}]},
+        {"name": "tinystr", "version": "0.7.5", "licenses": [{"license": {"name": "Unknown", "text": {"encoding": "base64", "content": unicode_text}}}]},
+        {"name": "ohne", "version": "2"},
+        {"name": "openssl", "version": "4.0.2", "externalReferences": [{"type": "distribution", "url": "https://example.org/openssl-4.0.2.tar.gz"}]},
+        {"name": "openssl", "version": "1.1.1"},
+        metadata={"timestamp": "2026-08-25T18:07:43Z", "component": {"name": "self"}},
+    )
+    blocks = tpl.sbom_texts(sbom, "dist-info/sboms/demo.json")
+    (label, listing), (text_label, text) = blocks
+    assert label == "dist-info/sboms/demo.json: 6 einkompilierte Bestandteile"
+    rows = [line for line in listing.splitlines() if line.startswith("  ")]
+    assert [row.split()[0] for row in rows] == ["Alpha", "ohne", "openssl", "openssl", "tinystr", "zeta"]
+    assert "IJG AND BSD-3-Clause" in rows[0]
+    assert "(keine Angabe in der SBOM)" in rows[1]
+    assert "openssl 1.1.1" in rows[2] and "(keine Angabe in der SBOM)" in rows[2]  # alte Version: nicht raten
+    assert "openssl 4.0.2" in rows[3] and "Apache-2.0" in rows[3] and "Quelle: https://example.org/openssl-4.0.2.tar.gz" in rows[3]
+    assert "Lizenztext siehe unten" in rows[4]
+    assert "MIT OR Apache-2.0" in rows[5] and "Urheber: Jane Doe, Max" in rows[5] and "@" not in rows[5]
+    assert "2026-08-25" not in listing  # kein Zeitstempel: die Datei soll bei jedem Lauf gleich sein
+    assert text_label == "Lizenztext aus dist-info/sboms/demo.json: tinystr 0.7.5"
+    assert text.startswith("UNICODE LICENSE V3") and "Copyright © 2020-2023 Unicode" in text
+    assert tpl.sbom_texts(_sbom(), "leer.json") == []
+    assert tpl.sbom_texts(_sbom({"name": "x", "version": "1", "licenses": [{"expression": "MIT"}]}), "s.json")[0][0] == (
+        "s.json: 1 einkompilierter Bestandteil"
+    )
+
+
+def test_sbom_problems_are_reported_instead_of_writing_garbage(tmp_path):
+    """Kaputtes JSON, falsches Format oder ein Lizenztext, der kein Base64 ist: laut melden, nie still
+    etwas auslassen oder den Base64-Text als Lizenztext in die Datei schreiben."""
+    import importlib.metadata as md
+
+    info = tmp_path / "demo-1.0.dist-info"
+    (info / "sboms").mkdir(parents=True)
+    (info / "METADATA").write_text("Metadata-Version: 2.4\nName: demo\nVersion: 1.0\n", encoding="utf-8")
+    bad_text = {"license": {"name": "Custom", "text": {"encoding": "base64", "content": "!!kein base64!!"}}}
+    sboms = {
+        "a.json": '{"bomFormat": "CycloneDX", "components": [',
+        "b.json": '{"bomFormat": "SPDX"}',
+        "c.json": json.dumps(_sbom({"name": "x", "version": "1", "licenses": [bad_text]})),
+    }
+    for name, content in sboms.items():
+        (info / "sboms" / name).write_text(content, encoding="utf-8")
+    record = [f"demo-1.0.dist-info/{rel},," for rel in ("METADATA", *(f"sboms/{n}" for n in sboms), "RECORD")]
+    (info / "RECORD").write_text("\n".join(record) + "\n", encoding="utf-8")
+    texts, problems = tpl._python_sbom_texts(md.PathDistribution(info), "demo")
+    assert texts == []
+    assert [p.split(":")[0] for p in problems] == [
+        "SBOM dist-info/sboms/a.json nicht lesbar",
+        "SBOM dist-info/sboms/b.json ist kein CycloneDX-Dokument",
+        "SBOM dist-info/sboms/c.json",
+    ]
+    assert "kein gültiges Base64" in problems[2]
+
+
+def test_python_sbom_of_pyrage_lists_the_rust_crates():
+    import importlib.metadata as md
+
+    try:
+        version = md.version("pyrage")
+    except md.PackageNotFoundError:
+        pytest.skip("pyrage ist hier nicht installiert")
+    (pkg,) = tpl.collect_python([("pyrage", version)])
+    labels = [label for label, _ in pkg.texts]
+    sbom_blocks = [text for label, text in pkg.texts if "sboms/" in label and "einkompilierte" in label]
+    if not sbom_blocks:
+        pytest.skip("dieses pyrage-Wheel bringt keine SBOM mit")
+    assert labels[0] == "LICENSE" and not pkg.text_problems
+    listing = sbom_blocks[0]
+    assert re.search(r"^  age \S+\s+MIT OR Apache-2\.0", listing, re.MULTILINE)
+    assert re.search(r"^  age-core \S+", listing, re.MULTILINE)
+
+
+def test_pillow_sbom_is_skipped_because_its_license_file_covers_the_bundled_libraries():
+    import importlib.metadata as md
+
+    try:
+        version = md.version("pillow")
+    except md.PackageNotFoundError:
+        pytest.skip("Pillow ist hier nicht installiert")
+    (pkg,) = tpl.collect_python([("pillow", version)])
+    assert pkg.texts and not [label for label, _ in pkg.texts if "sboms/" in label]
+    assert not [label for label, text in pkg.texts if "libimagequant" in text]  # nur in Pillows SBOM, nicht im Wheel
+    assert set(tpl._SBOM_SKIP) <= {tpl.pep503(name) for name, _ in tpl.read_constraints()}
+
+
+def _fake_frontend(tmp_path: Path, files: dict[str, str]) -> Path:
+    """Minimales Repo: ein Frontend mit @novnc/novnc als Abhaengigkeit, dazu tailwindcss (Build-Werkzeug)."""
+    frontend = tmp_path / "frontend"
+    frontend.mkdir()
+    (tmp_path / "extensions").mkdir()
+    (frontend / "package.json").write_text('{"dependencies": {"@novnc/novnc": "^1"}}', encoding="utf-8")
+    lock = {
+        "packages": {
+            "": {"dependencies": {"@novnc/novnc": "^1"}},
+            "node_modules/@novnc/novnc": {
+                "version": "1.7.0", "license": "MPL-2.0",
+                "resolved": "https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz",
+            },
+            "node_modules/tailwindcss": {"version": "3.4.19", "license": "MIT", "dev": True, "dependencies": {"postcss": "^8"}},
+            "node_modules/postcss": {"version": "8.0.0", "license": "MIT", "dev": True},
+        }
+    }
+    (frontend / "package-lock.json").write_text(json.dumps(lock), encoding="utf-8")
+    for rel, content in files.items():
+        path = frontend / "node_modules" / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    return tmp_path
+
+
+def _novnc_files() -> dict[str, str]:
+    return {
+        "@novnc/novnc/package.json": '{"name": "@novnc/novnc", "version": "1.7.0", "repository": {"url": "git+https://github.com/novnc/noVNC.git"}}',
+        "@novnc/novnc/LICENSE.txt": "noVNC is Copyright (C) 2022 The noVNC authors",
+        "@novnc/novnc/docs/LICENSE.MPL-2.0": "Mozilla Public License Version 2.0",
+        "@novnc/novnc/docs/LICENSE.BSD-2-Clause": "BSD 2-Clause text",
+        "@novnc/novnc/vendor/pako/LICENSE": "(The MIT License)\n\nCopyright (C) 2014-2016 by Vitaly Puzrin",
+        "@novnc/novnc/vendor/pako/lib/zlib/inflate.js": "export default 1;",
+        "@novnc/novnc/core/icons/copyright.mjs": "export const copyright = 1;",  # Code, keine Lizenzdatei
+        "@novnc/novnc/core/crypto/des.js": "/*\n * Copyright (C) 1996 by Jef Poskanzer <jef@acme.com>.\n */\n\nconst PC2 = [];\n",
+        "@novnc/novnc/core/decoders/tight.js": "/*\n * (c) 2012 Michael Tinglof, Joe Balaz, Les Piech (Mercuri.ca)\n */\nexport {};\n",
+        "tailwindcss/package.json": '{"name": "tailwindcss", "version": "3.4.19"}',
+        "tailwindcss/LICENSE": "MIT License\n\nCopyright (c) Tailwind Labs, Inc.",
+        "tailwindcss/lib/css/LICENSE": "MIT License\n\nCopyright (c) Sindre Sorhus",
+    }
+
+
+def test_npm_vendored_license_files_and_file_headers_are_appended(tmp_path):
+    repo = _fake_frontend(tmp_path, _novnc_files())
+    packages = {p.name: p for p in tpl.collect_npm(repo)}
+    assert set(packages) == {"@novnc/novnc", "tailwindcss"}  # postcss nicht: Abhaengigkeit des Build-Werkzeugs
+    novnc = packages["@novnc/novnc"]
+    assert not novnc.problems and not novnc.text_problems
+    labels = [label for label, _ in novnc.texts]
+    assert labels == [
+        "LICENSE.txt",  # die Hauptlizenz zuerst
+        "docs/LICENSE.BSD-2-Clause",
+        "docs/LICENSE.MPL-2.0",
+        "vendor/pako/LICENSE",
+        "Lizenzkopf aus core/crypto/des.js",
+        "Lizenzkopf aus core/decoders/tight.js",
+    ]
+    texts = dict(novnc.texts)
+    assert "Vitaly Puzrin" in texts["vendor/pako/LICENSE"]
+    assert texts["Lizenzkopf aus core/crypto/des.js"] == "/*\n * Copyright (C) 1996 by Jef Poskanzer <jef@acme.com>.\n */"
+    assert novnc.download_url == "https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz"
+    tailwind = packages["tailwindcss"]
+    assert tailwind.note and [label for label, _ in tailwind.texts] == ["LICENSE", "lib/css/LICENSE"]
+
+
+def test_missing_file_with_license_header_is_a_loud_problem(tmp_path):
+    files = _novnc_files()
+    del files["@novnc/novnc/core/crypto/des.js"]
+    files["@novnc/novnc/core/decoders/tight.js"] = "export {};\n"  # Kopf fehlt
+    repo = _fake_frontend(tmp_path, files)
+    (novnc,) = [p for p in tpl.collect_npm(repo) if p.name == "@novnc/novnc"]
+    assert any("core/crypto/des.js fehlt" in problem for problem in novnc.text_problems)
+    assert any("core/decoders/tight.js beginnt nicht mit einem Lizenzkopf" in problem for problem in novnc.text_problems)
+
+
+def test_mpl_note_names_the_exact_source_version_and_where_it_is_shipped():
+    novnc = tpl.Package("npm", "@novnc/novnc", "1.7.0", "MPL-2.0", "t", source_url="https://github.com/novnc/noVNC",
+                        download_url="https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz")
+    certifi = tpl.Package("python", "certifi", "2026.7.22", "MPL-2.0", "t", source_url="https://github.com/certifi/python-certifi")
+    novnc_lines = "\n".join(tpl.mpl_lines(novnc))
+    assert novnc_lines.startswith("  @novnc/novnc 1.7.0 (npm): https://github.com/novnc/noVNC\n")
+    assert "Quelltext genau dieser Version: https://github.com/novnc/noVNC/tree/v1.7.0" in novnc_lines
+    assert "Paket genau dieser Version: https://registry.npmjs.org/@novnc/novnc/-/novnc-1.7.0.tgz" in novnc_lines
+    assert "rfb-*.js" in novnc_lines and "unverändert" in novnc_lines
+    certifi_lines = "\n".join(tpl.mpl_lines(certifi))
+    assert "https://pypi.org/project/certifi/2026.7.22/" in certifi_lines and "Quelltext genau" not in certifi_lines
 
 
 def test_license_files_of_an_installed_package_are_read():
@@ -388,7 +610,7 @@ def test_checked_in_file_has_a_license_text_section_for_every_package():
 def test_checked_in_file_is_clean_text():
     raw = LICENSES_FILE.read_bytes()
     assert b"\r" not in raw and raw.endswith(b"\n")
-    raw.decode("utf-8")
+    assert "\ufffd" not in raw.decode("utf-8"), "Ersatzzeichen: eine Lizenzdatei wurde mit falscher Kodierung gelesen"
 
 
 def test_checked_in_file_matches_a_fresh_full_run_when_the_environment_is_complete():
@@ -405,7 +627,37 @@ def test_checked_in_file_matches_a_fresh_full_run_when_the_environment_is_comple
 def test_mpl_components_are_listed_with_source_note():
     text = LICENSES_FILE.read_text(encoding="utf-8")
     assert "Hinweis zu MPL-2.0-Komponenten" in text
-    assert re.search(r"@novnc/novnc 1\.7\.0 \(npm\): https://github\.com/novnc/noVNC", text)
+    version = tpl.load_lock(REPO / "frontend" / "package-lock.json")["node_modules/@novnc/novnc"]["version"]
+    assert re.search(rf"@novnc/novnc {re.escape(version)} \(npm\): https://github\.com/novnc/noVNC\n", text)
+    assert f"Quelltext genau dieser Version: https://github.com/novnc/noVNC/tree/v{version}\n" in text
+    assert f"Paket genau dieser Version: https://registry.npmjs.org/@novnc/novnc/-/novnc-{version}.tgz\n" in text
+
+
+def _section(text: str, name: str) -> str:
+    """Der Abschnitt eines Pakets in THIRD_PARTY_LICENSES (bis zum naechsten Paket)."""
+    match = re.search(rf"^{re.escape(name)} \S+\nLizenz: .*?(?=^-{{78}}\n\S+ \S+\nLizenz: |^={{78}}|\Z)", text, re.MULTILINE | re.DOTALL)
+    assert match, f"{name}: kein Abschnitt in THIRD_PARTY_LICENSES"
+    return match.group(0)
+
+
+def test_checked_in_file_has_the_vendored_notices_of_the_bundles():
+    """Was die Pruefung des oeffentlichen Repos vermisst hat: noVNC bringt pako (MIT), DES mit eigenem
+    Kopf und weitere Lizenztexte mit; xterm enthaelt Code aus VS Code; pyrage enthaelt Rust-Crates."""
+    text = LICENSES_FILE.read_text(encoding="utf-8")
+    novnc = _section(text, "@novnc/novnc")
+    for label in ("[vendor/pako/LICENSE]", "[docs/LICENSE.MPL-2.0]", "[docs/LICENSE.BSD-2-Clause]", "[docs/LICENSE.BSD-3-Clause]",
+                  "[docs/LICENSE.OFL-1.1]", "[Lizenzkopf aus core/crypto/des.js]"):
+        assert label in novnc, label
+    assert "Copyright (C) 2014-2016 by Vitaly Puzrin" in novnc and "Jef Poskanzer" in novnc and "Widget Workshop" in novnc
+    assert "Copyright (c) Microsoft Corporation" in _section(text, "@xterm/xterm")
+    assert "Modernizr" in _section(text, "react-dom")
+    assert "Kazuhiko Arase" in _section(text, "qrcode-generator")
+    assert "Sindre Sorhus" in _section(text, "tailwindcss")
+    pyrage = _section(text, "pyrage")
+    assert "[dist-info/sboms/pyrage.cyclonedx.json:" in pyrage
+    assert re.search(r"^  age \S+\s+MIT OR Apache-2\.0", pyrage, re.MULTILINE)
+    assert "UNICODE LICENSE V3" in pyrage  # Lizenztext, den die SBOM selbst mitbringt
+    assert "pillow.cdx" not in text and "libimagequant" not in text
 
 
 def test_docker_image_ships_the_license_file():
