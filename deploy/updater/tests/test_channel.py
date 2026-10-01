@@ -520,9 +520,13 @@ def test_operating_profile_root_without_capabilities(root):
         os.chown(requests / f"{name}.json", 1000, 1000)
     os.mkfifo(requests / f"{rid(3)}.json")
     (requests / f"{rid(4)}.json").symlink_to("/etc/passwd")
+    # Kopie des Helfers neben den Kanal: root OHNE Capabilities darf fremde Ordner (z. B. den Checkout unter
+    # /home/runner auf einem CI-Runner, Modus 0750) nicht betreten; so testet der Lauf den Code, nicht die Rechte des Checkouts.
+    code_dir = root.parent / "updater-code"
+    shutil.copytree(UPDATER_DIR / "nodvard_deck_updater", code_dir / "nodvard_deck_updater")
     script = textwrap.dedent(f"""
         import json, sys
-        sys.path.insert(0, {str(UPDATER_DIR)!r})
+        sys.path.insert(0, {str(code_dir)!r})
         from nodvard_deck_updater.channel import Channel
         with Channel({str(root)!r}) as ch:
             ch.setup()
