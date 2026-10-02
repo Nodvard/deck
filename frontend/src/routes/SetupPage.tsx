@@ -3,7 +3,8 @@ import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
 import { apiFetch } from "../lib/api";
-import type { Branding } from "../lib/branding";
+import { SHORT_NAME_HINT, type Branding } from "../lib/branding";
+import { PASSWORD_HINT, USERNAME_HINT, passwordProblem, usernameProblem } from "../lib/credentials";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
 import { RestoreFlow } from "./settings/RestoreFlow";
@@ -159,6 +160,13 @@ export function SetupPage() {
       setError("Bitte den Einrichtungscode eingeben.");
       return;
     }
+    // Vorab im Browser pruefen (dieselben Regeln wie der Server): so steht gleich da, was nicht passt,
+    // statt erst nach dem Absenden.
+    const problem = usernameProblem(username) ?? passwordProblem(password);
+    if (problem) {
+      setError(problem);
+      return;
+    }
     if (password !== passwordConfirm) {
       setError("Passwörter stimmen nicht überein.");
       return;
@@ -281,27 +289,34 @@ export function SetupPage() {
                 onChange={(e) => setUsername(e.target.value.toLowerCase())}
                 className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2"
               />
-              <span className="mt-1 block text-xs opacity-60">Nur Kleinbuchstaben, z. B. „admin“. Großbuchstaben werden automatisch umgewandelt.</span>
+              <span className="mt-1 block text-xs opacity-60">{USERNAME_HINT}</span>
             </label>
-            <label className="text-sm">
-              Passwort
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2"
-              />
-            </label>
+            <div>
+              <label className="text-sm">
+                Passwort
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={password}
+                  aria-describedby="setup-password-hint"
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2"
+                />
+              </label>
+              {/* Neben dem Etikett statt darin: so bleibt der Name des Feldes „Passwort“. */}
+              <span id="setup-password-hint" className="mt-1 block text-xs opacity-60">{PASSWORD_HINT}</span>
+            </div>
             <label className="text-sm">
               Passwort bestätigen
               <input
                 type="password"
+                autoComplete="new-password"
                 value={passwordConfirm}
                 onChange={(e) => setPasswordConfirm(e.target.value)}
                 className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2"
               />
             </label>
-            {error && <p className="text-sm text-red-400">{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
             <Button type="submit" variant="primary" busy={pending} className="py-2">
               Konto anlegen
             </Button>
@@ -330,13 +345,15 @@ export function SetupPage() {
               />
             </label>
             <label className="text-sm">
-              Kurzname
+              Untertitel (kleine Zeile unter dem Namen)
               <input
                 value={shortName}
+                aria-describedby="setup-short-name-hint"
                 onChange={(e) => setShortName(e.target.value)}
                 className="mt-1 w-full rounded border border-white/20 bg-transparent px-3 py-2"
               />
             </label>
+            <span id="setup-short-name-hint" className="-mt-2 block text-xs opacity-60">{SHORT_NAME_HINT}</span>
             <label className="text-sm">
               Akzentfarbe
               <input
@@ -347,7 +364,7 @@ export function SetupPage() {
               />
             </label>
             <p className="text-xs opacity-50">Logo, weitere Farben und Support-Link lassen sich später in den Einstellungen anpassen.</p>
-            {error && <p className="text-sm text-red-400">{error}</p>}
+            {error && <p role="alert" className="text-sm text-red-400">{error}</p>}
             <StepNav onBack={() => goTo("totp")}>
               <Button onClick={() => goTo("done")}>Überspringen</Button>
               <Button type="submit" variant="primary" busy={pending}>Speichern</Button>

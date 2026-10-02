@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import ipaddress
+import logging
 import re
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
@@ -29,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ...core import gate as gate_service
 from ...core import ssh
+from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.metrics_history import resolve_metrics_provider
 from ...ext.runtime import get_extension_runtime
 from ...models import Action, Host, HostCredential, HostGroup, KnownHostKey, User
@@ -41,6 +43,7 @@ from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 from .actions import ActionOut, action_out, mark_running
 
 router = APIRouter(tags=["hosts"])
+logger = logging.getLogger("nodvard_deck.hosts")
 
 CredentialKind = Literal["ssh_key", "ssh_password", "api_token"]
 
@@ -117,15 +120,21 @@ class HostOut(BaseModel):
     enabled: bool
     status: str
     last_seen_at: datetime | None
+    """Wann der Server zuletzt geantwortet hat. Das sagt nur, dass der SSH-Port Verbindungen annimmt,
+    nicht, dass die Anmeldung klappt (dafür `login_ok_at`)."""
     provider_ext_id: str | None
     provider_ref: str | None
     created_at: datetime
     updated_at: datetime
+    login_ok_at: datetime | None = None
+    """Wann sich Nodvard Deck zuletzt wirklich mit dem Standard-Zugang angemeldet hat, `null`: noch nie
+    (oder der Zugang bzw. die Adresse wurde seitdem geändert, oder die letzte Anmeldung scheiterte)."""
 
     @classmethod
     def from_model(cls, host: Host) -> "HostOut":
         default = next((c for c in host.credentials if c.is_default), None)
         return cls(
+            login_ok_at=hosts_service.login_confirmed_at(host, default),
             managed_tags=[t.tag for t in host.tags if t.managed_by_ext_id is not None],
             credential=(
                 HostCredentialSummary(id=default.id, kind=default.kind, username=default.username, port=default.port)
@@ -303,7 +312,7 @@ _SSH_USER_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@\\ -]{0,63}")
 def validate_ssh_username(value: str) -> str:
     name = value.strip()
     if not _SSH_USER_RE.fullmatch(name):
-        raise ValueError("Benutzername: nur Buchstaben, Ziffern, _, -, ., @, \\ und Leerzeichen (höchstens 64 Zeichen).")
+        raise ValueError("Benutzername: Nur Buchstaben, Ziffern, _, -, ., @, \\ und Leerzeichen (höchstens 64 Zeichen).")
     return name
 
 
@@ -439,14 +448,19 @@ async def patch_host(host_id: str, payload: HostUpdate, session: SessionDep, use
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     old = {key: getattr(before, key) for key in ("display_name", "address", "os_family", "kind", "enabled", "is_managed")}
     old["tags"] = _manual_tags(before)
+    password_credentials = {c.id for c in before.credentials if c.kind == "ssh_password"}
     host = await hosts_service.update_host(session, host_id, **fields)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     new = {key: getattr(host, key) for key in ("display_name", "address", "os_family", "kind", "enabled", "is_managed")}
     new["tags"] = _manual_tags(host)
     changed = {key: {"from": old[key], "to": new[key]} for key in old if old[key] != new[key]}
+    removed = len(password_credentials - {c.id for c in host.credentials})
     if changed:
-        await _audit(session, user, "host.updated", target_id=host.id, detail={"changed": changed})
+        detail: dict[str, Any] = {"changed": changed}
+        if removed:
+            detail["password_credentials_removed"] = removed
+        await _audit(session, user, "host.updated", target_id=host.id, detail=detail)
     return HostOut.from_model(host)
 
 
@@ -540,6 +554,8 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
         )
         exit_code, _, _ = await ssh.run(conn, "true", timeout_s=5.0)
         host.status = "up" if exit_code == 0 else "down"
+        if exit_code == 0:
+            hosts_service.record_login_ok(host, credential)
         host.last_seen_at = utcnow()
         await session.flush()
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True)
@@ -547,6 +563,8 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
         # Geaenderter oder (bei `ssh_confirm_new_host_keys`) noch nicht bestaetigter Server-Schluessel:
         # weder "oben" noch "unten", sondern ein Fall fuer "Verbindung pruefen".
         host.status = "unknown"
+        if isinstance(exc, ssh.HostKeyMismatch):
+            hosts_service.clear_login_ok(host)  # die fruehere Anmeldung galt einem anderen Gegenueber
         await session.flush()
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True, detail=str(exc))
     except ssh.SshTargetChanged as exc:
@@ -557,6 +575,8 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
         # (ein OSError), ConnectionLost oder ChannelOpenError statt SshError -- das
         # heisst genauso "nicht erreichbar", kein Serverfehler.
         host.status = "down"
+        if isinstance(exc, ssh.SshAuthError):
+            hosts_service.clear_login_ok(host)  # Anmeldung abgelehnt: der fruehere Beleg gilt nicht mehr
         await session.flush()
         detail = str(exc) or "Der Server hat nicht rechtzeitig geantwortet."
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True, detail=detail)
@@ -580,7 +600,16 @@ async def get_host_metrics(host_id: str, session: SessionDep) -> HostMetricsOut:
 
     from ...db import utcnow
 
-    values = await provider.sample(sdk_host)
+    try:
+        values = await provider.sample(sdk_host)
+    except Exception as exc:  # noqa: BLE001 - nur "Server nicht erreichbar" wird zur sauberen Antwort, alles andere bleibt ein Fehler
+        if not is_expected_connection_error(exc):
+            raise
+        # Ausgeschalteter oder nicht erreichbarer Server: kein Fehler im Programm. Frueher ein 500 mit
+        # Traceback im Protokoll (`deploy_pi.sh` wertet "Traceback" als gescheiterten Start).
+        reason = describe_connection_error(exc, address=host.address)
+        logger.info("host_metrics_unreachable host=%s reason=%s", host_id, reason)
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=reason) from exc
     return HostMetricsOut(values=values, sampled_at=utcnow())
 
 

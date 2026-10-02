@@ -35,6 +35,7 @@ from nodvard_sdk import (
     PageSpec,
     Refresh,
     WidgetSpec,
+    max_body_bytes,
 )
 from pydantic import BaseModel
 from sqlalchemy import or_, select
@@ -76,6 +77,15 @@ class DocumentOut(BaseModel):
 
 def _tag_out(row: Tag) -> TagOut:
     return TagOut(id=row.id, name=row.name, match_keyword=row.match_keyword, created_at=row.created_at)
+
+
+# Die Dateien kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen
+# noch der Browser den Typ erraten. Die Vorschau im Dashboard lädt die Datei als Blob und ist
+# davon nicht betroffen.
+_UNTRUSTED_FILE_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+}
 
 
 def _sanitize_for_header(value: str) -> str:
@@ -196,6 +206,7 @@ class Extension(NodvardExtension):
                 return [await _document_out(session, r) for r in rows]
 
         @write_router.post("/documents", status_code=status.HTTP_201_CREATED)
+        @max_body_bytes(MAX_DOCUMENT_BYTES)
         async def upload_document(filename: str, request: Request) -> DocumentOut:
             """Rohkoerper-Upload wie `POST /branding/logo` bzw.
             `nodvard_deck_ext_inventory`s Bild-Upload -- derselbe Grund: keine
@@ -258,7 +269,10 @@ class Extension(NodvardExtension):
                     raise HTTPException(status_code=404, detail="Dokumentdatei fehlt auf der Platte.")
                 return Response(
                     content=path.read_bytes(), media_type=row.content_type,
-                    headers={"Content-Disposition": _content_disposition(row.original_filename)},
+                    headers={
+                        "Content-Disposition": _content_disposition(row.original_filename),
+                        **_UNTRUSTED_FILE_HEADERS,
+                    },
                 )
 
         @write_router.patch("/documents/{document_id}")

@@ -76,8 +76,8 @@ class UserCreate(BaseModel):
 
     @field_validator("username")
     @classmethod
-    def _lower(cls, value: str) -> str:
-        return auth_service.normalize_username(value)
+    def _check_username(cls, value: str) -> str:
+        return auth_service.validate_new_username(value)
 
 
 class ResetTwoFactorRequest(BaseModel):
@@ -147,7 +147,7 @@ async def create_user(payload: UserCreate, session: SessionDep) -> UserOut:
     roles = await _resolve_roles(session, payload.role_ids)
 
     user = User(
-        username=payload.username, password_hash=security.hash_password(payload.password),
+        username=payload.username, password_hash=await security.hash_password_async(payload.password, signed_in=True),
         display_name=payload.display_name, email=payload.email, is_active=True, is_owner=False,
     )
     # Brandneues, noch nicht der Session uebergebenes Objekt -- direkte
@@ -191,8 +191,13 @@ async def update_user(
         user.email = payload.email
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if payload.is_active is False:
+        # Alle Anmeldungen enden mit dem Deaktivieren. Sonst wuerden die alten Geraete (Cookie,
+        # App, Kommandozeile) nach dem Wieder-Aktivieren ohne neue Anmeldung weiterlaufen --
+        # auch dann, wenn das Konto wegen einer verlorenen oder gestohlenen Anmeldung gesperrt wurde.
+        await auth_service.revoke_refresh_tokens(session, user.id)
     if payload.password is not None:
-        user.password_hash = security.hash_password(payload.password)
+        user.password_hash = await security.hash_password_async(payload.password, signed_in=True)
         # Neues Passwort = alte Anmeldungen dieses Nutzers gelten nicht mehr.
         # (Das eigene Passwort geht hier nicht, siehe oben -- also immer ein anderer Nutzer.)
         await auth_service.revoke_refresh_tokens(session, user.id)

@@ -12,7 +12,7 @@ import { useEffect, useState, type FormEvent } from "react";
 
 import { api, ApiError } from "../../../lib/api";
 import {
-  CREDENTIAL_KIND_LABEL, fieldErrors, formatDate, isSshCredential, refreshHosts,
+  CREDENTIAL_KIND_LABEL, fieldErrors, formatDate, isSshCredential, loginOutcome, refreshHosts,
   type ConnectionCheck as CheckResult, type CredentialOut, type GeneratedKeyOut, type HostOut, type MakeDefaultOut,
 } from "../../../lib/hosts";
 import { confirmDialog } from "../../../state/dialogs";
@@ -22,6 +22,9 @@ import { FormField } from "./FormField";
 import { SetupCommand } from "./SetupCommand";
 
 type Mode = "generate" | "password" | "paste";
+
+/** Vorgabe für „Benutzer auf dem Server“, wenn Nodvard Deck den Schlüssel erzeugt. */
+export const DEFAULT_KEY_USER = "nodvard";
 
 const MODE_LABEL: Record<Mode, string> = {
   generate: "SSH-Schlüssel erzeugen",
@@ -46,8 +49,9 @@ function NewAccessForm({
   onCreated: (credential: CredentialOut, notice: string) => void;
   onCancel: () => void;
 }) {
-  // "lattice" bleibt der vorgeschlagene Benutzername: so heisst er auf den Servern bestehender Installationen.
-  const [username, setUsername] = useState(mode === "generate" ? "lattice" : "");
+  // Neue Zugaenge schlagen „nodvard“ vor. Bestehende Zugaenge behalten ihren Benutzer (frueher „lattice“),
+  // und der Standardwert der API bleibt „lattice“: das Formular schickt den Namen immer mit.
+  const [username, setUsername] = useState(mode === "generate" ? DEFAULT_KEY_USER : "");
   const [port, setPort] = useState("22");
   // Die Eingabe des Geheimnisses: Passwort oder privater Schluessel.
   const [secret, setSecret] = useState("");
@@ -101,12 +105,12 @@ function NewAccessForm({
           label={mode === "generate" ? "Benutzer auf dem Server" : "Benutzer"}
           hint={
             mode === "generate"
-              ? "Wird angelegt, falls es ihn noch nicht gibt. Bei Proxmox-Knoten „root“ nehmen."
+              ? "Ein eigener Benutzer nur für Nodvard Deck. Er wird angelegt, falls es ihn noch nicht gibt. Bei Proxmox-Knoten „root“ nehmen. Ältere Zugänge heißen vielleicht noch „lattice“ – sie laufen unverändert weiter."
               : "Ein Benutzer, der auf dem Server schon existiert."
           }
           error={errors.username}
         >
-          {(p) => <input {...p} className={inputClass} value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={mode === "generate" ? "lattice" : "root"} />}
+          {(p) => <input {...p} className={inputClass} value={username} onChange={(e) => setUsername(e.target.value)} autoCapitalize="none" autoCorrect="off" spellCheck={false} placeholder={mode === "generate" ? DEFAULT_KEY_USER : "root"} />}
         </FormField>
         <FormField label="SSH-Port" error={errors.port}>
           {(p) => <input {...p} className={inputClass} value={port} onChange={(e) => setPort(e.target.value)} inputMode="numeric" />}
@@ -158,11 +162,23 @@ function ModeButtons({ onPick }: { onPick: (mode: Mode) => void }) {
   );
 }
 
+/** Die Rückfrage vor „Neuen Zugang verwenden“: was mit dem bisherigen Zugang passiert, richtet sich nach seiner Art. */
+function newAccessQuestion(previous: CredentialOut | undefined): string {
+  const base = "Den neuen Zugang verwenden?";
+  if (!previous) return base;
+  if (previous.kind === "ssh_key") {
+    return `${base} Der bisherige Zugang wird in Nodvard Deck gelöscht. Sein Schlüssel bleibt auf dem Server eingetragen – dort bei Bedarf aus ~/.ssh/authorized_keys entfernen.`;
+  }
+  return `${base} Der bisherige Zugang (Passwort) wird in Nodvard Deck gelöscht. Auf dem Server ändert sich dadurch nichts.`;
+}
+
 function CredentialRow({
-  host, credential, expanded, verified, onToggleSetup, onChecked, onChanged, onNotice,
+  host, credential, previous, expanded, verified, onToggleSetup, onChecked, onChanged, onNotice,
 }: {
   host: HostOut;
   credential: CredentialOut;
+  /** Der bisherige Standard-Zugang, den „Neuen Zugang verwenden“ ablöst (nur für noch nicht verwendete Zugänge). */
+  previous: CredentialOut | undefined;
   expanded: boolean;
   verified: boolean;
   onToggleSetup: () => void;
@@ -173,8 +189,11 @@ function CredentialRow({
   const [busy, setBusy] = useState<"delete" | "default" | null>(null);
 
   async function remove() {
+    const left = credential.kind === "ssh_key"
+      ? "Auf dem Server bleibt der Schlüssel eingetragen – bei Bedarf dort aus ~/.ssh/authorized_keys entfernen."
+      : "Auf dem Server ändert sich dadurch nichts.";
     const ok = await confirmDialog(
-      `SSH-Zugang für „${host.display_name}“ löschen? Terminal, Updates und Überwachung erreichen den Server dann nicht mehr. Auf dem Server bleibt der Schlüssel eingetragen – bei Bedarf dort aus ~/.ssh/authorized_keys entfernen.`,
+      `SSH-Zugang für „${host.display_name}“ löschen? Terminal, Updates und Überwachung erreichen den Server dann nicht mehr. ${left}`,
       { danger: true, confirmLabel: "Löschen" },
     );
     if (!ok) return;
@@ -192,10 +211,7 @@ function CredentialRow({
   }
 
   async function makeDefault() {
-    const ok = await confirmDialog(
-      "Den neuen Zugang verwenden? Der bisherige Zugang wird in Nodvard Deck gelöscht. Sein Schlüssel bleibt auf dem Server eingetragen – dort bei Bedarf aus ~/.ssh/authorized_keys entfernen.",
-      { confirmLabel: "Neuen Zugang verwenden" },
-    );
+    const ok = await confirmDialog(newAccessQuestion(previous), { confirmLabel: "Neuen Zugang verwenden" });
     if (!ok) return;
     setBusy("default");
     onNotice(null);
@@ -230,7 +246,7 @@ function CredentialRow({
       </div>
 
       {expanded && credential.kind === "ssh_key" && (
-        <div className="mt-4 rounded-lg border border-white/[0.08] bg-black/10 p-4"><SetupCommand host={host} credential={credential} /></div>
+        <div id={`einrichtungsbefehl-${credential.id}`} className="mt-4 scroll-mt-20 rounded-lg border border-white/[0.08] bg-black/10 p-4"><SetupCommand host={host} credential={credential} /></div>
       )}
 
       {!credential.is_default && (
@@ -250,19 +266,25 @@ function CredentialRow({
 }
 
 export function AccessPanel({
-  host, credentials, autoOpen = false,
+  host, credentials, autoOpen = false, showCommand = false,
 }: {
   host: HostOut;
   credentials: CredentialOut[];
   /** Nach „Server anlegen“: das Formular zum Erzeugen gleich aufklappen. */
   autoOpen?: boolean;
+  /** „Befehl ansehen“ (Erste Schritte): den Einrichtungsbefehl des Schlüssels gleich aufklappen. */
+  showCommand?: boolean;
 }) {
   const queryClient = useQueryClient();
   const ssh = credentials.filter(isSshCredential);
   const hasDefault = ssh.some((c) => c.is_default);
   const [mode, setMode] = useState<Mode | null>(null);
   const [adding, setAdding] = useState(false);
-  const [setupFor, setSetupFor] = useState<string | null>(null);
+  const [setupFor, setSetupFor] = useState<string | null>(() => {
+    if (!showCommand || host.os_family !== "linux") return null;
+    const keys = ssh.filter((c) => c.kind === "ssh_key");
+    return (keys.find((c) => c.is_default) ?? keys[0])?.id ?? null;
+  });
   const [verified, setVerified] = useState<string[]>([]);
   const [notice, setNotice] = useState<Notice>(null);
 
@@ -272,6 +294,13 @@ export function AccessPanel({
     // nur beim ersten Mal -- danach entscheidet die Person
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoOpen]);
+
+  // Wer über „Befehl ansehen“ kommt, soll den aufgeklappten Befehl sehen, nicht erst danach suchen müssen.
+  useEffect(() => {
+    if (showCommand && setupFor) document.getElementById(`einrichtungsbefehl-${setupFor}`)?.scrollIntoView?.({ block: "center" });
+    // nur beim ersten Mal
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   async function changed() {
     await refreshHosts(queryClient);
@@ -304,12 +333,15 @@ export function AccessPanel({
         <ul className="divide-y divide-white/[0.06] rounded-lg border border-white/[0.08]">
           {ssh.map((c) => (
             <CredentialRow
-              key={c.id} host={host} credential={c} expanded={setupFor === c.id} verified={verified.includes(c.id)}
+              key={c.id} host={host} credential={c} previous={ssh.find((o) => o.is_default && o.id !== c.id)}
+              expanded={setupFor === c.id} verified={verified.includes(c.id)}
               onToggleSetup={() => setSetupFor(setupFor === c.id ? null : c.id)}
-              onChecked={(r) => setVerified((v) => {
-                const ok = r.items.some((i) => i.id === "login" && i.status === "ok");
-                return ok ? [...new Set([...v, c.id])] : v.filter((x) => x !== c.id);
-              })}
+              onChecked={(r) => {
+                const ok = loginOutcome(r) === "ok";
+                setVerified((v) => (ok ? [...new Set([...v, c.id])] : v.filter((x) => x !== c.id)));
+                // Der Hinweis „Zugang gespeichert. Prüfe jetzt die Verbindung.“ ist erledigt, sobald die Anmeldung klappt.
+                if (ok) setNotice((n) => (n?.kind === "ok" ? null : n));
+              }}
               onChanged={changed}
               onNotice={setNotice}
             />

@@ -1,0 +1,70 @@
+{
+ "_doc": "Erwarteter create-Body und connect-Liste fuer docker29-api154-stack.json (Golden-Test in test_clone.py; bei einer gewollten Aenderung von clone.py neu erzeugen und den Unterschied pruefen).",
+ "body": {
+  "AttachStderr": true,
+  "AttachStdout": true,
+  "Env": [
+   "NODVARD_DECK_AUDIT_RETENTION_DAYS=scrubbed-21"
+  ],
+  "ExposedPorts": {
+   "8080/tcp": {}
+  },
+  "HostConfig": {
+   "Binds": [
+    "u2stack_data:/app/data:rw",
+    "u2stack_updater:/app/updater:rw"
+   ],
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "IpcMode": "private",
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "NetworkMode": "u2stack_default",
+   "PortBindings": {
+    "8080/tcp": [
+     {
+      "HostIp": "",
+      "HostPort": "18092"
+     }
+    ]
+   },
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "always"
+   },
+   "Runtime": "runc",
+   "ShmSize": 67108864
+  },
+  "Image": "ghcr.io/nodvard/deck",
+  "Labels": {
+   "com.docker.compose.config-hash": "d8fcfbdaced3adf40d470cc6ca3f0ad79433b7a728ed89a9441f2183102871b2",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "u2stack",
+   "com.docker.compose.project.config_files": "/srv/data/compose/3/docker-compose.yml",
+   "com.docker.compose.project.working_dir": "/srv/data/compose/3",
+   "com.docker.compose.service": "nodvard-deck",
+   "com.docker.compose.version": "5.1.1"
+  },
+  "NetworkingConfig": {
+   "EndpointsConfig": {
+    "u2stack_default": {
+     "Aliases": [
+      "u2stack-nodvard-deck-1",
+      "nodvard-deck"
+     ]
+    }
+   }
+  }
+ },
+ "connects": [],
+ "name": "u2stack-nodvard-deck-1",
+ "new_image_id": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3"
+}

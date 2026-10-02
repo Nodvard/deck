@@ -23,6 +23,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
+from .job_edit import VZDUMP_JOB_KEYS, VZDUMP_RETENTION_KEYS
+
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
@@ -148,13 +150,26 @@ class ProxmoxBackupConnector:
         """Nur mit Parametern aus job_edit.build_job_update -- nie mit Nutzereingaben direkt."""
         return await self._request("PUT", f"/cluster/backup/{job_id}", json=params)
 
-    async def run_vzdump(self, node: str, vmid: str, *, storage: str | None = None) -> str:
+    async def run_vzdump(
+        self, node: str, vmid: str, *, storage: str | None = None, options: dict[str, Any] | None = None
+    ) -> str:
         """`POST /nodes/{node}/vzdump` -- startet einen sofortigen Backup-Lauf fuer
         EINE VMID. Gibt die UPID (Proxmox-Task-Kennung) zurueck. **Ehrlich
         abgegrenzt** (wie proxmoxs `qemu_action()`): wartet NICHT auf Abschluss des
         Tasks -- ein Erfolg hier heisst "Proxmox hat den Auftrag angenommen", nicht
-        "das Backup ist fertig"."""
+        "das Backup ist fertig".
+
+        `options` sind die Einstellungen des Jobs (nur die Schluessel aus job_edit). Eine
+        Aufbewahrung wird immer mitgeschickt: fehlt sie, gilt `keep-all=1`. Ohne sie raeumt
+        Proxmox nach der Regel des Speichers auf und kann Sicherungen loeschen, die der Job
+        behalten haette."""
         payload: dict[str, Any] = {"vmid": vmid}
-        if storage:
+        allowed = (*VZDUMP_JOB_KEYS, *VZDUMP_RETENTION_KEYS)
+        for key, value in (options or {}).items():
+            if key in allowed:
+                payload[key] = value
+        if storage and "storage" not in payload:
             payload["storage"] = storage
+        if "prune-backups" not in payload and "maxfiles" not in payload:
+            payload["prune-backups"] = "keep-all=1"
         return await self._request("POST", f"/nodes/{node}/vzdump", data=payload)

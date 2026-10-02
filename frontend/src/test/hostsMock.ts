@@ -51,7 +51,7 @@ export function hostFixture(over: Record<string, unknown> = {}) {
   return {
     id: "h1", name: "bastel-pi", display_name: "Bastel-Pi", address: "192.168.2.72", os_family: "linux", kind: null,
     tags: ["docker"], managed_tags: [], credential: null, is_managed: true, enabled: true, status: "up",
-    last_seen_at: null, provider_ext_id: null, provider_ref: null, created_at: "2026-09-01T10:00:00Z", updated_at: "2026-09-01T10:00:00Z",
+    last_seen_at: null, login_ok_at: null, provider_ext_id: null, provider_ref: null, created_at: "2026-09-01T10:00:00Z", updated_at: "2026-09-01T10:00:00Z",
     ...over,
   };
 }

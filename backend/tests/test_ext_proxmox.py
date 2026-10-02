@@ -32,7 +32,7 @@ from zoneinfo import ZoneInfo
 import pytest
 import pytest_asyncio
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Request, WebSocket
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response, WebSocket
 from nodvard_sdk.capabilities import NotificationChannel
 from sqlalchemy import select
 
@@ -414,6 +414,12 @@ def _build_mock_proxmox_app() -> tuple[FastAPI, dict]:
     async def vncwebsocket(websocket: WebSocket, node: str, kind: str, vmid: str, port: str, vncticket: str) -> None:
         """Wie pveproxy: Token-Header UND das (unveraendert angekommene) Ticket sind
         Pflicht, sonst wird der Handshake abgelehnt (close() vor accept() -> HTTP 403)."""
+        if state.pop("vnc_redirect_once", False):
+            # Ein Server (oder ein Proxy davor), der den Handshake mit einer Weiterleitung auf dieselbe
+            # Adresse beantwortet. Der zweite Versuch wuerde normal durchgehen.
+            state["vnc_ws"].append({"redirected": True})
+            await websocket.send_denial_response(Response(status_code=302, headers={"location": str(websocket.url)}))
+            return
         if websocket.headers.get("authorization") != _EXPECTED_AUTH or vncticket != _VNC_TICKET or port != "5901":
             state["vnc_ws"].append({"rejected": True, "vncticket": vncticket})
             await websocket.close(code=1008)
@@ -530,6 +536,87 @@ async def _run_discovery() -> dict:
     handler = get_extension_runtime().scheduler.get("proxmox", "discovery")
     assert handler is not None
     return await handler()
+
+
+def test_new_node_identifiers_are_lowercase_and_not_doubled():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path raeumt auf
+    from nodvard_deck_ext_proxmox.capabilities import guest_host_name, node_host_name
+
+    assert node_host_name("lab", "lab") == "pve-lab"
+    assert node_host_name("Lab", "lab") == "pve-lab"
+    assert node_host_name("primary", "Pve1") == "pve-primary-pve1"
+    assert node_host_name("lab 1", "node.a") == "pve-lab-1-node-a"
+    assert guest_host_name("Primary", "vm", "100") == "proxmox-primary-vm-100"
+
+
+@pytest.mark.asyncio
+async def test_discovery_names_new_nodes_uniformly_but_never_renames_known_ones(client, db_session, test_settings, mock_proxmox):
+    """Verbindung und Knoten heissen gleich: neu eingelesen `pve-pve1` statt `pve-pve1-pve1`.
+    Ein schon eingelesener Knoten behaelt seine Kennung (daran haengen Verlauf, Zugaenge ...),
+    und eine belegte Kennung loest keinen Fehler aus."""
+    base_url, _state = mock_proxmox
+    await _setup_proxmox_connections(client, db_session, test_settings, [{"name": "pve1", "base_url": base_url, "token_id": _TOKEN_ID}])
+
+    await _run_discovery()
+    names = {h.provider_ref: h.name for h in (await db_session.execute(select(Host).where(Host.provider_ext_id == "proxmox"))).scalars()}
+    assert names["pve1/node/pve1"] == "pve-pve1"
+    assert names["pve1/qemu/pve1/100"] == "proxmox-pve1-vm-100"
+
+    # Zweiter Lauf: nichts wird umbenannt oder doppelt angelegt.
+    await _run_discovery()
+    again = {h.provider_ref: h.name for h in (await db_session.execute(select(Host).where(Host.provider_ext_id == "proxmox"))).scalars()}
+    assert again == names
+
+    # Alter Bestand: der Knoten steht schon mit der alten Kennung in der Datenbank.
+    node = (await db_session.execute(select(Host).where(Host.provider_ref == "pve1/node/pve1"))).scalar_one()
+    node.name = "pve-pve1-pve1"
+    await db_session.commit()
+    await _run_discovery()
+    db_session.expire_all()
+    assert (await db_session.execute(select(Host.name).where(Host.provider_ref == "pve1/node/pve1"))).scalar_one() == "pve-pve1-pve1"
+
+
+@pytest.mark.asyncio
+async def test_discovery_falls_back_to_the_old_identifier_when_the_new_one_is_taken(client, db_session, test_settings, mock_proxmox):
+    base_url, _state = mock_proxmox
+    await _setup_proxmox_connections(client, db_session, test_settings, [{"name": "pve1", "base_url": base_url, "token_id": _TOKEN_ID}])
+    db_session.add(Host(name="pve-pve1", display_name="von Hand", address="10.0.0.9", kind="server"))
+    await db_session.commit()
+
+    result = await _run_discovery()
+    assert result == {"discovered": 3}
+    name = (await db_session.execute(select(Host.name).where(Host.provider_ref == "pve1/node/pve1"))).scalar_one()
+    assert name == "pve-pve1-pve1"
+
+
+@pytest.mark.asyncio
+async def test_discovery_adds_a_number_when_new_and_old_identifier_are_both_taken(client, db_session, test_settings, mock_proxmox):
+    """Beide Formen vergeben: eine Zahl dahinter statt eines Abbruchs des ganzen Abgleichs."""
+    base_url, _state = mock_proxmox
+    await _setup_proxmox_connections(client, db_session, test_settings, [{"name": "pve1", "base_url": base_url, "token_id": _TOKEN_ID}])
+    db_session.add(Host(name="pve-pve1", display_name="von Hand", address="10.0.0.9", kind="server"))
+    db_session.add(Host(name="pve-pve1-pve1", display_name="auch von Hand", address="10.0.0.10", kind="server"))
+    await db_session.commit()
+
+    assert await _run_discovery() == {"discovered": 3}
+    name = (await db_session.execute(select(Host.name).where(Host.provider_ref == "pve1/node/pve1"))).scalar_one()
+    assert name == "pve-pve1-pve1-2"
+
+
+@pytest.mark.asyncio
+async def test_discovery_ignores_a_matching_provider_ref_of_another_extension(client, db_session, test_settings, mock_proxmox):
+    """Nur eigene Hosts behalten ihre Kennung; ein fremder Host mit zufaellig gleichem
+    `provider_ref` darf seinen Namen nicht vererben (der waere ja schon belegt)."""
+    base_url, _state = mock_proxmox
+    await _setup_proxmox_connections(client, db_session, test_settings, [{"name": "pve1", "base_url": base_url, "token_id": _TOKEN_ID}])
+    db_session.add(Host(name="fremd", display_name="fremd", address="10.0.0.9", provider_ext_id="andere", provider_ref="pve1/node/pve1"))
+    await db_session.commit()
+
+    assert await _run_discovery() == {"discovered": 3}
+    name = (await db_session.execute(
+        select(Host.name).where(Host.provider_ext_id == "proxmox", Host.provider_ref == "pve1/node/pve1")
+    )).scalar_one()
+    assert name == "pve-pve1"
 
 
 @pytest.mark.asyncio
@@ -1502,6 +1589,31 @@ async def test_console_permission_error_from_proxmox_reaches_the_user(
 
 
 @pytest.mark.asyncio
+async def test_console_does_not_follow_a_redirect_of_the_vnc_websocket(
+    running_app, db_session, test_settings, mock_proxmox
+):
+    """Proxmox antwortet auf `vncwebsocket` normalerweise nie mit 3xx. Tut es der Server (oder ein Proxy
+    davor) doch, folgt `ctx.http.websocket` nicht: kein zweiter Verbindungsaufbau, die Meldung kommt als
+    verstaendlicher deutscher Satz beim Nutzer an."""
+    from httpx import AsyncClient
+
+    base_url, state = mock_proxmox
+    http_base, _ = running_app
+
+    async with AsyncClient(base_url=http_base) as ac:
+        token = await _setup_proxmox(ac, db_session, test_settings, base_url)
+        await _run_discovery()
+        vm = (await db_session.execute(select(Host).where(Host.name == "proxmox-primary-vm-100"))).scalar_one()
+        state["vnc_redirect_once"] = True
+        created = await ac.post("/api/v1/console/sessions", json={"host_id": vm.id}, headers=_auth_header(token))
+    assert created.status_code == 502, created.text
+    detail = created.json()["detail"]
+    assert "umgeleitet" in detail and "HTTP 302" in detail
+    # Nur der erste Versuch kam beim Server an -- die Weiterleitung wurde nicht verfolgt.
+    assert state["vnc_ws"] == [{"redirected": True}]
+
+
+@pytest.mark.asyncio
 async def test_overview_tiles_show_german_kind_labels(client, db_session, test_settings, mock_proxmox):
     """Die Proxmox-Uebersicht zeigte "hypervisor" als Untertitel --
     ein interner Wert, auf der Proxmox-Seite heisst dasselbe schon "Knoten"."""
@@ -1667,6 +1779,87 @@ async def test_updates_and_storage_tiles_show_an_unreachable_connection(client, 
     widgets = (await client.get("/api/v1/widgets", headers=headers)).json()
     spec = next(w for w in widgets if w["ext_id"] == "proxmox" and w["id"] == "storage")
     assert (spec["view"]["item"]["subtitle"], spec["view"]["item"]["badge"]["text"]) == ("{{ summary }}", "{{ badge }}")
+
+
+@pytest.mark.asyncio
+async def test_shared_storage_is_listed_once_with_the_nodes_it_is_available_on(client, db_session, test_settings, mock_proxmox):
+    """Ein NFS-Speicher steht in der Antwort jedes Knotens. Er darf nur einmal erscheinen,
+    mit Hinweis "geteilt" und den Knoten; Belegung und Groesse werden nicht addiert."""
+    base_url, state = mock_proxmox
+    state["nodes"] = {
+        "pve1": {"node": "pve1", "status": "online"},
+        "pve2": {"node": "pve2", "status": "online"},
+    }
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+
+    rows = (await client.get("/api/v1/ext/proxmox/widgets/storage", headers=headers)).json()["data"]
+    nfs = [r for r in rows if r["storage"] == "backup-pi"]
+    assert len(nfs) == 1
+    assert nfs[0]["nodes"] == ["pve1", "pve2"]
+    assert nfs[0]["summary"] == "geteilt, verfügbar auf pve1, pve2 · 100 B von 1000 B"
+    assert (nfs[0]["used"], nfs[0]["total"]) == (100, 1000)
+    # Nicht geteilte Speicher bleiben je Knoten.
+    assert len([r for r in rows if r["storage"] == "local"]) == 2
+
+    pools = (await client.get("/api/v1/ext/proxmox/storage", headers=headers)).json()["pools"]
+    assert len([p for p in pools if p["storage"] == "backup-pi"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_storage_is_merged_across_connections_in_the_tile_only(client, db_session, test_settings, mock_proxmox):
+    """Zwei eigenstaendige Proxmox-Server binden dieselbe Freigabe ein: die Kachel zeigt
+    sie einmal, die Seite (die nach Verbindung gruppiert) weiter je Verbindung. Auch ein
+    NFS-Speicher ohne `shared`-Markierung gilt als geteilt."""
+    base_url, state = mock_proxmox
+    state["storage"][2]["shared"] = 0
+    token = await _setup_proxmox_connections(
+        client, db_session, test_settings,
+        [
+            {"name": "pve-a", "base_url": base_url, "token_id": _TOKEN_ID},
+            {"name": "pve-b", "base_url": base_url, "token_id": _TOKEN_ID},
+        ],
+    )
+    headers = _auth_header(token)
+
+    rows = (await client.get("/api/v1/ext/proxmox/widgets/storage", headers=headers)).json()["data"]
+    nfs = [r for r in rows if r["storage"] == "backup-pi"]
+    assert len(nfs) == 1 and nfs[0]["shared"] is True
+    assert nfs[0]["connections"] == ["pve-a", "pve-b"]
+    assert len([r for r in rows if r["storage"] == "local"]) == 2
+
+    pools = (await client.get("/api/v1/ext/proxmox/storage", headers=headers)).json()["pools"]
+    assert sorted(p["connection"] for p in pools if p["storage"] == "backup-pi") == ["pve-a", "pve-b"]
+
+
+@pytest.mark.asyncio
+async def test_shared_storage_stays_one_row_when_a_later_node_reports_it_inactive(monkeypatch):
+    """Ueber Verbindungen zusammengefuehrt; meldet ein weiterer Knoten der zweiten Verbindung
+    den Speicher gerade inaktiv (Groesse 0), darf daraus keine zweite Zeile werden."""
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path raeumt auf
+    from nodvard_deck_ext_proxmox import storage as storage_mod
+
+    class FakeConnector:
+        def __init__(self, nodes: dict[str, int]) -> None:
+            self._nodes = nodes
+
+        async def list_nodes(self) -> list[dict]:
+            return [{"node": n, "status": "online"} for n in self._nodes]
+
+        async def node_storage(self, node: str) -> list[dict]:
+            total = self._nodes[node]
+            return [{"storage": "nfs-backup", "type": "nfs", "content": "backup", "shared": 1,
+                     "active": 1 if total else 0, "total": total, "used": 100 if total else 0}]
+
+    async def fake_connectors(_ctx):
+        return {"pve-a": FakeConnector({"a1": 1000, "a2": 1000}), "pve-b": FakeConnector({"b1": 1000, "b2": 0})}
+
+    monkeypatch.setattr(storage_mod, "build_connectors", fake_connectors)
+    overview = await storage_mod.collect_storage(None, details=False, merge_connections=True)
+    rows = [p for p in overview["pools"] if p["storage"] == "nfs-backup"]
+    assert len(rows) == 1
+    assert rows[0]["nodes"] == ["a1", "a2", "b1", "b2"]
+    assert rows[0]["connections"] == ["pve-a", "pve-b"]
 
 
 def test_storage_tile_formats_like_the_bytes_filter():
@@ -1891,7 +2084,8 @@ async def test_updates_show_waiting_packages_and_that_a_new_kernel_needs_a_reboo
     assert (node["pve_version"], node["running_kernel"], node["newest_kernel"]) == ("9.2.20", "7.0.14-16-pve", "7.0.14-16")
     assert node["summary"] == "3 Updates verfügbar, darunter ein neuer Kernel (danach Neustart nötig)"
     assert (node["badge"], node["tone"]) == ("3 Updates", "warn")
-    assert (node["last_check"], node["last_check_ok"]) == (900, True)
+    assert (node["last_check"], node["last_check_ok"], node["last_check_status"]) == (900, True, "OK")
+    assert node["last_check_stale"] is True and node["last_check_age_s"] > 36 * 3600  # der Test-Task stammt von 1970
     firewall = next(p for p in node["packages"] if p["package"] == "pve-firewall")
     assert (firewall["old_version"], firewall["version"], firewall["new_package"]) == ("6.0.5", "6.0.6", False)
     signed = next(p for p in node["packages"] if p["package"].endswith("-signed"))
@@ -1934,6 +2128,40 @@ async def test_updates_offline_node_is_reported_not_hidden(client, db_session, t
     assert (nodes["pve2"]["summary"], nodes["pve2"]["tone"]) == ("Knoten offline", "danger")
     assert nodes["pve1"]["count"] == 3
     assert (await client.get("/api/v1/ext/proxmox/updates")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_updates_show_why_the_nightly_check_failed_and_when_it_is_overdue(client, db_session, test_settings, mock_proxmox):
+    import time
+
+    base_url, state = mock_proxmox
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    now = int(time.time())
+    check = next(t for t in state["task_list"] if t["type"] == "aptupdate")
+    check.update(starttime=now - 3600, endtime=now - 3590, status="command 'apt-get update' failed: exit code 100")
+
+    (node,) = (await client.get("/api/v1/ext/proxmox/updates", headers=_auth_header(token))).json()["nodes"]
+    assert node["last_check_ok"] is False
+    assert node["last_check_status"] == "command 'apt-get update' failed: exit code 100"
+    assert node["last_check_stale"] is False and 3500 < node["last_check_age_s"] < 3700
+
+    # Noch laufend: kein Ergebnis, aber auch kein Fehler
+    check.pop("endtime"), check.pop("status")
+    (node,) = (await client.get("/api/v1/ext/proxmox/updates", headers=_auth_header(token))).json()["nodes"]
+    assert (node["last_check_ok"], node["last_check_status"]) == (None, None)
+
+
+def test_nightly_check_is_overdue_only_well_beyond_one_day():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path raeumt auf
+    from nodvard_deck_ext_proxmox.updates import check_age
+
+    now = 1_000_000.0
+    assert check_age(now - 600, now) == (600, False)
+    # Proxmox startet den Check mit zufaelliger Verzoegerung: 27 Stunden Abstand sind noch gesund
+    assert check_age(now - 27 * 3600, now) == (27 * 3600, False)
+    assert check_age(now - 37 * 3600, now) == (37 * 3600, True)
+    assert check_age(now + 50, now) == (0, False)  # Uhr des Knotens geht vor
+    assert check_age(None, now) == (None, False) and check_age("x", now) == (None, False) and check_age(True, now) == (None, False)
 
 
 def test_kernel_version_compare_is_numeric_not_lexical():

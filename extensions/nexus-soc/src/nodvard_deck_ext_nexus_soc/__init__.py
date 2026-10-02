@@ -11,9 +11,11 @@ teils AUSSERHALB der Sperrlisten-Pruefung). Jede Chat-Antwort UND jede Watcher-
 Zusammenfassung durchlaeuft denselben `parse_ai_response()` -> `ctx.actions.propose()`
 -Pfad, ausnahmslos.
 
-**Remediation nutzt `action_type="shell.exec"`** (das kanonische Beispiel in
-docs/02-EXTENSION-API.md §3 ist woertlich dieser Anwendungsfall), NICHT ein eigener
-`docker.restart`-Typ -- der ActionExecutor dafuer gehoert der `terminal`-Extension.
+**Aus KI-Text entsteht hoechstens ein Container-Neustart.** Er wird als `action_type="shell.exec"`
+vorgeschlagen (kein eigener `docker.restart`-Typ -- der ActionExecutor dafuer gehoert der
+`terminal`-Extension), aber Server, Befehl und Begruendung baut der Code selbst aus dem Vorfall
+(`_propose_from_response`); von der KI kommt nur der Wunsch. Jeder andere KI-Vorschlag wird nur als
+Text gemeldet. Container-Logs gehen als nicht vertrauenswuerdige Daten in den Prompt.
 **Ehrlich abgegrenzt:** ohne aktivierte `terminal`-Extension findet das Gate keinen
 Executor, der Vorschlag bleibt bis zum Ablauf `proposed`/schlaegt sichtbar mit "Kein
 ActionExecutor" fehl -- kein deklariertes `requires`, weil `core.gate.find_executor()`
@@ -68,14 +70,19 @@ from .models import Base as HistoryBase
 from .remediation import (
     cause_notice,
     cause_prompt_line,
+    build_restart_command,
     cause_tag_for_command,
     classify_exit_cause,
-    is_routine_restart,
+    contradiction_notice,
+    drop_contradictions,
+    facts_notice,
+    resolve_restart_target,
     restart_risk_eligible,
+    sanitize_untrusted,
 )
 from .ollama import OllamaConnectorType, OllamaProvider
 from .parsing import ParsedActionKind, parse_ai_response, strip_decision_block
-from .prompts import SYSTEM_PROMPT, build_chat_prompt, build_incident_prompt
+from .prompts import MAX_INSPECT_TEXT_CHARS, MAX_LOG_CHARS, SYSTEM_PROMPT, build_chat_prompt, build_incident_prompt
 from .watcher import (
     BaselineStateStore,
     ContainerTransition,
@@ -86,6 +93,11 @@ from .watcher import (
 
 RETRY_BACKOFF_S = 300.0
 """Wartezeit, bis ein fehlgeschlagener Batch erneut versucht wird."""
+INCIDENT_MERGE_WINDOW_S = 24 * 3600.0
+"""Ein neuer Absturz desselben Containers zaehlt bis so lange nach dem ERSTEN Auftreten am
+noch unbearbeiteten Vorfall mit; danach beginnt ein neuer Vorfall (und eine neue Meldung).
+Hoechstens eine Meldung je Container und Tag, aber nie dauerhaft still."""
+_WAITING_ACTION_STATUSES = frozenset({"proposed", "approved", "executing"})
 
 
 def _flush_backoff_s(failures: int) -> float:
@@ -182,7 +194,9 @@ class Extension(NodvardExtension):
             hosts_summary = "\n".join(f"- {h.display_name}: {h.status.value}" for h in hosts) or "(keine bekannt)"
             prompt = build_chat_prompt(user_message=payload.message, hosts_summary=hosts_summary)
             reply = await self._ai.complete(prompt, system=SYSTEM_PROMPT)
-            proposals, _outcome, _action_id = await self._propose_from_response(ctx, reply, correlation_id=None)
+            proposals, _outcome, _action_id = await self._propose_from_response(
+                ctx, reply, correlation_id=None, show_unchecked_command=True
+            )
             display = strip_decision_block(reply)
             return {"reply": display or reply, "proposals": proposals}
 
@@ -192,7 +206,7 @@ class Extension(NodvardExtension):
             rows = [
                 {
                     "id": r["id"],
-                    "title": r["message"],
+                    "title": r["message"] if r["occurrences"] <= 1 else f"{r['message']} ({r['occurrences']}x)",
                     "host": r["host_name"],
                     "target": r["target"],
                     "ts": r["created_at"],
@@ -434,6 +448,8 @@ class Extension(NodvardExtension):
         ctx.spawn(self._batch_flush_loop(ctx), name="nexus-soc-batch-flush")
 
     async def on_stop(self, ctx: ExtensionContext) -> None:
+        if self._updates is not None:
+            self._updates.cancel_catch_up()
         for task in list(self._retry_tasks):
             task.cancel()
         self._retry_tasks.clear()
@@ -449,6 +465,30 @@ class Extension(NodvardExtension):
 
     async def _on_transition(self, transition: ContainerTransition) -> None:
         settings = await self._ctx.settings.get()
+        log = logging.getLogger("nodvard_deck.ext.nexus-soc")
+        is_crash = bool(transition.details.get("is_crash"))
+        seen_at = time.time()
+        # Derselbe Container, dessen Vorfall noch niemand bearbeitet hat: nur mitzaehlen, kein neuer
+        # Vorfall und keine neue Meldung (sonst gaebe es bei einem Absturz-Container alle 30 Minuten
+        # einen weiteren Eintrag). Zuerst der offene Batch, dann die gespeicherten Vorfaelle.
+        pending = self._store.merge_pending(transition.host.name, transition.target, is_crash=is_crash, seen_at=seen_at)
+        if pending is not None:
+            try:
+                await self._queue.add(pending)
+            except Exception:  # noqa: BLE001 - der Zaehler ist eine Zugabe, kein Pflichtschritt
+                log.exception("nexus_soc_incident_persist_failed")
+            return
+        try:
+            merged = await self._history.merge_into_active(
+                host_name=transition.host.name, target=transition.target, is_crash=is_crash,
+                seen_at=seen_at, window_s=INCIDENT_MERGE_WINDOW_S, action_waiting=self._action_waiting,
+            )
+        except Exception:  # noqa: BLE001 - lieber ein weiterer Vorfall als ein verlorenes Ereignis
+            log.exception("nexus_soc_incident_merge_failed")
+            merged = None
+        if merged is not None:
+            await self._ctx.ws.broadcast("incidents", {"changed": merged["id"]})
+            return
         cooldown_s = settings.get("host_target_cooldown_s") or 1800
         if self._store.is_in_cooldown(transition.host.name, transition.target, cooldown_s=cooldown_s):
             return
@@ -458,7 +498,7 @@ class Extension(NodvardExtension):
             host_name=transition.host.name,
             target=transition.target,
             message=transition.message,
-            details=transition.details,
+            details={**transition.details, "occurrences": 1, "last_seen": seen_at},
         )
         # Sofort dauerhaft merken: ein Neustart im Sammelfenster darf den Vorfall nicht verlieren.
         try:
@@ -468,6 +508,11 @@ class Extension(NodvardExtension):
         is_first = self._store.enqueue(incident)
         if is_first:
             self._batch_ready.set()
+
+    async def _action_waiting(self, action_id: str) -> bool:
+        """Wartet die Aktion eines Vorfalls noch auf Freigabe oder laeuft sie gerade?"""
+        row = await self._ctx.actions.result(action_id)
+        return row is not None and str(getattr(row, "status", "")) in _WAITING_ACTION_STATUSES
 
     async def _resume_open_incidents(self) -> None:
         log = logging.getLogger("nodvard_deck.ext.nexus-soc")
@@ -613,7 +658,9 @@ class Extension(NodvardExtension):
     ) -> tuple[list[str], dict[tuple[str, str], dict[str, Any]]]:
         """OOMKilled/ExitCode/FinishedAt/Error der betroffenen Container, ein `docker inspect`
         je Host. Gibt die Textzeilen fuer den Prompt UND die strukturierten Fakten
-        ((Host-ID, Container) -> Fakten) zurueck. Reine Anreicherung: jeder Fehler wird ignoriert."""
+        ((Host-ID, Container) -> Fakten) zurueck. Die Fehlermeldung (`State.Error`) steht bewusst
+        nicht in den Zeilen: sie kann aus dem Image oder Entrypoint stammen und geht als fremde Daten in
+        den Rahmen (siehe `_ask_ai_and_propose`). Reine Anreicherung: jeder Fehler wird ignoriert."""
         by_host: dict[str, list[str]] = {}
         for incident in batch:
             names = by_host.setdefault(incident.host_id, [])
@@ -636,10 +683,12 @@ class Extension(NodvardExtension):
                     continue
                 structured[(host_id, name)] = fact
                 line = f"{name} @ {host.name}: OOMKilled={str(fact['oom_killed']).lower()}, ExitCode={fact['exit_code']}"
+                if fact.get("restart_count") is not None:
+                    line += f", Neustarts={fact['restart_count']}"
+                if fact.get("image"):
+                    line += f", Image={sanitize_untrusted(fact['image'], MAX_INSPECT_TEXT_CHARS)}"
                 if fact["finished_at"]:
                     line += f", beendet={fact['finished_at']}"
-                if fact["error"]:
-                    line += f", Fehler={fact['error']}"
                 lines.append(line)
         return lines, structured
 
@@ -658,9 +707,27 @@ class Extension(NodvardExtension):
             try:
                 result = await ctx.exec.run(host, f"docker logs --tail 25 {shlex.quote(incident.target)} 2>&1", timeout_s=10)
                 if result.stdout.strip():
-                    logs.append(f"--- LOGS ({incident.target} @ {incident.host_name}) ---\n{result.stdout}")
+                    # Das Ende behalten: `docker logs --tail` liefert die neuesten Zeilen zuletzt, und die
+                    # Absturzursache steht meist in den letzten.
+                    logs.append(
+                        f"({sanitize_untrusted(incident.target, 100)} @ {sanitize_untrusted(incident.host_name, 100)})\n"
+                        + sanitize_untrusted(result.stdout, MAX_LOG_CHARS, keep_tail=True)
+                    )
             except Exception:  # noqa: BLE001 - Log-Abruf ist eine Anreicherung, kein Pflichtschritt
                 pass
+        # Die Fehlermeldung aus `docker inspect` (State.Error) kann aus dem Image oder Entrypoint stammen:
+        # wie eine Logzeile behandeln (gekuerzt, entschaerft, im Rahmen der fremden Daten), nicht bei den Fakten.
+        error_seen: set[tuple[str, str]] = set()
+        for incident in batch:
+            key = (incident.host_id, incident.target)
+            fact = fact_map.get(key)
+            if key in error_seen or fact is None or not fact.get("error"):
+                continue
+            error_seen.add(key)
+            logs.append(
+                f"({sanitize_untrusted(incident.target, 100)} @ {sanitize_untrusted(incident.host_name, 100)}, Docker-Fehlermeldung)\n"
+                + sanitize_untrusted(fact["error"], MAX_INSPECT_TEXT_CHARS)
+            )
 
         settings = await ctx.settings.get()
         batch_delay_s = settings.get("incident_batch_delay_s") or 60
@@ -685,8 +752,10 @@ class Extension(NodvardExtension):
                 "geprüftes Ergebnis -- bitte manuell prüfen."
             )
 
-        # MITTEL nur fuer echte Abstuerze (nicht manuell gestoppt, nicht von aussen per kill beendet,
-        # nicht wieder aufgenommen/wiederholt), siehe `remediation.restart_risk_eligible`.
+        # Neustart-Ziele: jeder Absturz-Vorfall dieses Batches (Host-ID aus dem Vorfall). MITTEL nur
+        # fuer echte Abstuerze (nicht von aussen per kill beendet, nicht wieder aufgenommen/wiederholt,
+        # Fakten vorhanden), siehe `remediation.restart_risk_eligible`; die uebrigen Absturz-Ziele HOCH.
+        crash_targets = {(i.host_id, i.target) for i in batch if i.details.get("is_crash")}
         eligible = {
             (i.host_id, i.target)
             for i in batch
@@ -706,15 +775,23 @@ class Extension(NodvardExtension):
                 i.proposal_started = True
 
         action_summaries, outcome, action_id = await self._propose_from_response(
-            ctx, ai_reply, correlation_id=batch[0].id, restart_targets=eligible, before_propose=before_propose,
-            causes=causes,
+            ctx, ai_reply, correlation_id=batch[0].id, restart_targets=crash_targets | eligible,
+            medium_targets=eligible, before_propose=before_propose, causes=causes,
         )
         display_text = strip_decision_block(ai_reply)
-        # Die Ursache laut System steht als eigene Zeile VOR dem KI-Text, was immer die KI schreibt.
-        display_text = cause_notice(causes) + ("\n\n" + display_text if display_text else "")
+        # Saetze, die den Fakten widersprechen, fliegen raus (Beispiel: "OOMKilled=true, da OOMKilled=false").
+        display_text, dropped = drop_contradictions(
+            display_text, list(fact_map.values()), expected=len(causes), tags={c.tag for _t, _h, c in causes.values()}
+        )
+        # Ursache und Fakten laut System stehen als feste Zeilen VOR dem KI-Text, was immer die KI schreibt.
+        fixed = "\n".join(part for part in (cause_notice(causes), facts_notice(causes, fact_map)) if part)
+        display_text = fixed + ("\n\n" + display_text if display_text else "")
+        notice = contradiction_notice(dropped)
+        if notice:
+            display_text += "\n\n" + notice
         ai_summary = display_text if not action_summaries else display_text + "\n\n" + " | ".join(action_summaries)
 
-        return ai_summary, action_id, outcome, bool(action_summaries)
+        return ai_summary, action_id, outcome, action_id is not None
 
     async def _finish_group(
         self,
@@ -787,33 +864,43 @@ class Extension(NodvardExtension):
         *,
         correlation_id: str | None,
         restart_targets: set[tuple[str, str]] | None = None,
+        medium_targets: set[tuple[str, str]] | None = None,
         before_propose: Any = None,
         causes: dict[tuple[str, str], tuple[str, str, Any]] | None = None,
+        show_unchecked_command: bool = False,
     ) -> tuple[list[str], str, str | None]:
         """Der VORSCHLAGEN-Schritt -- gemeinsam fuer den Chat-Endpunkt
-        UND die Batch-Verarbeitung, damit KEINE Antwort (Chat oder Watcher) je einen
-        anderen Pfad zur Ausfuehrung nimmt als diesen einen.
+        UND die Batch-Verarbeitung.
+
+        Aus KI-Text entsteht hoechstens EINE feste Aktion: der Neustart eines Containers, der in
+        `restart_targets` steht ((Host-ID, Name) der Absturz-Vorfaelle dieses Batches). Risiko MITTEL,
+        wenn das Paar auch in `medium_targets` steht (echter Absturz laut
+        `remediation.restart_risk_eligible`), sonst HOCH. Den Server nimmt der Code aus diesem Paar, den
+        Befehl baut er selbst (`remediation.build_restart_command`), die Begruendung auch. Von
+        der KI kommt nur der Wunsch "diesen Container neu starten". Alles andere (anderer
+        Befehl, fremder Container, anderer Server, Chat ohne Batch) wird NICHT als Aktion
+        angelegt, sondern nur als Text gemeldet.
 
         Gibt zusaetzlich zu den Anzeige-Texten eine grobe `outcome`-Klassifikation
-        ("proposed"/"rejected"/"none") und die entstandene `action_id` zurueck --
+        ("proposed"/"denied"/"success") und die entstandene `action_id` zurueck --
         nur `_process_batch()` braucht das (fuer den Vorfalls-Audit-Eintrag, siehe
         dort), der Chat-Endpunkt ignoriert beides.
 
-        Risiko: HOCH, ausser der Vorschlag ist ein schlichter `docker restart <name>` fuer
-        einen Container aus `restart_targets` ((Host-ID, Name) echter Abstuerze dieses Batches,
-        `remediation.is_routine_restart`) -- dann MITTEL. Der Chat (kein Batch) bleibt HOCH.
-        Sperrliste und Gate-Pruefungen bleiben davon unberuehrt.
-
         `causes` (nur Batch): die feste Einordnung je Container (`remediation.classify_exit_cause`).
         Sie steht als "[Speichermangel] ..." vorn in der Begruendung (`reason`) des Vorschlags, damit
-        unter Aktionen die vom System ermittelte Ursache steht, nicht die Deutung der KI."""
+        unter Aktionen die vom System ermittelte Ursache steht, nicht die Deutung der KI.
+
+        `show_unchecked_command` (nur Chat): Der nicht angelegte Vorschlag nennt den Befehl. Die
+        Chat-Antwort geht nur an den Fragenden, und die KI kennt dort nur seine Nachricht und die
+        Serverliste, keine Logs. Im Bericht fehlt der Befehl (siehe unten)."""
         settings = await ctx.settings.get()
         forbidden = settings.get("forbidden_host_keywords")
         forbidden_keywords = tuple(forbidden) if forbidden else None
 
         batch_targets = restart_targets or set()
+        host_id_by_name = await self._batch_host_ids(ctx, batch_targets)
         summaries: list[str] = []
-        # "none"/"proposed"/"denied" -- MUSS `core.audit.VALID_OUTCOMES` treffen
+        # "success"/"proposed"/"denied" -- MUSS `core.audit.VALID_OUTCOMES` treffen
         # (`{"success","failure","denied","proposed"}`), "none" (kein AKTION-Feld/
         # KEINE) bildet auf "success" ab: der Vorfall wurde geprueft, es gab nichts zu
         # tun, kein Fehler.
@@ -825,37 +912,71 @@ class Extension(NodvardExtension):
                     action="nexus_soc.proposal_rejected",
                     outcome="denied",
                     reason=parsed.rejection_reason,
-                    detail={"command": parsed.command, "host": parsed.host},
+                    detail={"command": sanitize_untrusted(parsed.command or "", 300), "host": parsed.host},
                     correlation_id=correlation_id,
                 )
                 summaries.append(f"Abgelehnt: {parsed.rejection_reason}")
                 outcome = "denied"
                 continue
 
-            host = await ctx.hosts.by_name(parsed.host)
-            if host is None:
-                summaries.append(f"Abgelehnt: Host '{parsed.host}' ist dem Kern nicht bekannt.")
+            target = resolve_restart_target(parsed.command or "", parsed.host, batch_targets, host_id_by_name)
+            host = await ctx.hosts.get(target[0]) if target is not None else None
+            if target is None or host is None:
+                shown = sanitize_untrusted(parsed.command or "", 300)
+                await ctx.audit.log(
+                    action="nexus_soc.proposal_rejected",
+                    outcome="denied",
+                    reason="Kein Neustart eines abgestürzten Containers dieses Berichts: nur als Text angezeigt.",
+                    detail={"command": shown, "host": sanitize_untrusted(parsed.host or "", 100)},
+                    correlation_id=correlation_id,
+                )
+                if show_unchecked_command:
+                    summaries.append(f"Vorschlag der KI, nicht geprüft – nicht automatisch angelegt: {shown}")
+                else:
+                    # Im Bericht kann der Befehl Zugangsdaten aus den Container-Logs tragen. Bericht,
+                    # Meldung und Vorfalls-Liste sehen auch reine Leser: dort ohne Befehl. Er steht
+                    # nur im Protokoll-Eintrag oben (`command`), den nur Leute mit Server-Recht sehen.
+                    summaries.append(
+                        "Vorschlag der KI, nicht geprüft – nicht automatisch angelegt. "
+                        "Den Befehl findest du im Protokoll, wenn du Server-Rechte hast."
+                    )
                 outcome = "denied"
                 continue
 
+            host_id, container = target
             if before_propose is not None:
                 await before_propose()
-            reason = parsed.reason or "(keine Begründung angegeben)"
-            tag = cause_tag_for_command(parsed.command, host.id, causes or {})
+            command = build_restart_command(container)
+            tag = cause_tag_for_command(command, host_id, causes or {})
+            reason = f"Container {container} neu starten nach Absturz"
             if tag:
                 reason = f"[{tag}] {reason}"
             decision = await ctx.actions.propose(
                 ActionRequest(
                     action_type="shell.exec",
                     host_ref=host.id,
-                    payload={"command": parsed.command},
-                    risk=Risk.MEDIUM if is_routine_restart(parsed.command, host.id, batch_targets) else Risk.HIGH,
+                    payload={"command": command},
+                    risk=Risk.MEDIUM if target in (medium_targets or set()) else Risk.HIGH,
                     proposed_by=Actor.ai(model=self._ai.model),
                     reason=reason,
                     correlation_id=correlation_id,
                 )
             )
-            summaries.append(f"Vorschlag ({decision.status.value}): {parsed.command}")
+            # Der Befehl steht nur in der Aktion selbst (dort sieht ihn, wer ihn ausfuehren oder
+            # bestaetigen darf). Die Zusammenfassung landet in Meldung, Vorfalls-Liste und
+            # Protokoll, die auch Leute mit reinem Leserecht sehen -- ohne Befehl.
+            summaries.append(f"Vorschlag ({decision.status.value}) auf {host.display_name}")
             outcome = "proposed"
             action_id = decision.action_id
         return summaries, outcome, action_id
+
+    @staticmethod
+    async def _batch_host_ids(ctx: ExtensionContext, targets: set[tuple[str, str]]) -> dict[str, str]:
+        """Kleinbuchstaben-Servername -> Host-ID fuer die Server der Ziele (nur diese Server
+        kann ein KI-Vorschlag ueberhaupt treffen)."""
+        result: dict[str, str] = {}
+        for host_id in sorted({h for h, _ in targets}):
+            host = await ctx.hosts.get(host_id)
+            if host is not None:
+                result[host.name.lower()] = host.id
+        return result

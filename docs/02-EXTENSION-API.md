@@ -84,7 +84,8 @@ seiner `pyproject.toml` `lattice-sdk` als Abhängigkeit einträgt, stellt sie au
 als Kacheln, gruppiert nach `category` (bekannt: `servers`, `security`, `tools`, `connections`,
 `example`; alles andere und „fehlt“ landet unter „Weitere Module“) und innerhalb der Gruppe nach
 `sort_order` (kleiner = weiter oben, bei Gleichstand nach Name). Die Werte stehen auch in
-`GET /extensions`.
+`GET /extensions`. Module mit `example` (Beispiele für Entwickler wie hello-world) zeigt der Assistent nicht; sie
+stehen nur unter Einstellungen → Erweiterungen.
 
 **`enable_on` (optional):** Anlässe, bei denen der Kern die Erweiterung von selbst einschaltet,
 damit sie für Einsteiger nicht erst in den Einstellungen gesucht werden muss. Bekannt ist
@@ -110,7 +111,7 @@ Erweiterungen). Unterstützt sind `type` (`string`, `integer`, `number`, `boolea
 | Zusatz | Wo | Wirkung |
 |---|---|---|
 | `x-advanced` | Feld | Steht unter „Erweitert“, eingeklappt. |
-| `x-hidden` | Feld | Wird nicht angezeigt (interner Zustand). |
+| `x-hidden` | Feld | Wird nicht angezeigt (interner Zustand). Auf der obersten Ebene übernimmt `PUT /extensions/{id}/settings` das Feld nie; es gehört den eigenen Routen der Extension (`ctx.settings.set()`). |
 | `x-item-title` | Liste von Objekten | Wie ein Eintrag heißt („Server hinzufügen“). |
 | `x-enum-labels` | Feld mit `enum` | Lesbare Texte je Wert: `{"all": "Alle Updates"}`. |
 | `x-widget: "schedule"` | Text (Cron) | Zeitplan-Wähler statt Cron-Feld. |
@@ -122,7 +123,15 @@ Erweiterungen). Unterstützt sind `type` (`string`, `integer`, `number`, `boolea
 | `pattern` | Text, Wörter einer Liste | Regulärer Ausdruck (wie JSON-Schema, nicht verankert). Die Oberfläche zeigt die Meldung am Feld und sperrt „Speichern“; das Backend prüft dasselbe (`422`). Leere Werte sind immer erlaubt. |
 | `x-pattern-message` | neben `pattern` | Deutsche Meldung, wenn das Muster nicht passt (Standard: „Das Format stimmt nicht.“). |
 | `x-test-message` | Kopfebene | `true`, wenn die Extension einen `NotificationChannel` bereitstellt: die Verbindungskarte zeigt „Testnachricht senden“. |
-| `x-secrets` | Kopfebene | Liste der Geheimnisse (Tresor-Labels): `{"label": "proxmox-token:{name}", "title": "…", "description": "…", "per_item": "connections", "optional": true}`. `per_item` erzeugt je Eintrag der genannten Liste ein Geheimnis (über dessen `name`). `optional: true`: die Extension arbeitet auch ohne; fehlt ein nicht-optionales Geheimnis oder ein `required`-Feld, meldet `GET /extensions` `needs_setup`. |
+| `x-secrets` | Kopfebene | Liste der Geheimnisse (Tresor-Labels): `{"label": "proxmox-token:{name}", "title": "…", "description": "…", "per_item": "connections", "optional": true}`. `per_item` erzeugt je Eintrag der genannten Liste ein Geheimnis (über dessen `name`); fällt ein Eintrag beim Speichern über `PUT /extensions/{id}/settings` weg oder wird umbenannt, löscht der Kern sein Geheimnis, und ein neu angelegter Eintrag startet ohne (ein altes Geheimnis unter demselben Namen wird gelöscht). `optional: true`: die Extension arbeitet auch ohne; fehlt ein nicht-optionales Geheimnis oder ein `required`-Feld, meldet `GET /extensions` `needs_setup`. |
+| `x-secret-bound-to` | Eintrag in `x-secrets` | Felder, an die das Geheimnis gebunden ist: bei `per_item` Feldnamen des Eintrags (`["base_url"]`), sonst Pfade wie `pihole.url`. Ändert sich eines davon über `PUT /extensions/{id}/settings`, löscht der Kern das Geheimnis (Antwort `secrets_cleared`, Protokoll `detail.secrets_cleared`), auch bei der ersten Adresse (leer → Wert); ohne gespeicherten Wert zählt der `default` des Felds. Keine Änderung sind andere Schreibweisen derselben Adresse: Groß-/Kleinschreibung von Schema und Rechnername, Standardport (`:80` bei http, `:443` bei https), `/` am Ende, Fragment (`#…`), fehlendes Schema (= `http://`). Ein anderer Pfad oder eine andere Abfrage (`?…`) zählt als Änderung. `PUT /extensions/{id}/secrets` nimmt das Geheimnis erst an, wenn eines der Felder gespeichert einen Wert oder `default` hat, sonst `409` („Erst die Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“). |
+
+**Eigene Routen für Verbindungen.** Speichert eine Extension Einstellungen selbst (`ctx.settings.set()`,
+etwa über eigene `/connections`-Routen), löscht der Kern keine Geheimnisse. Dann ruft sie
+`ctx.secrets.delete(label)` selbst auf, wenn eine Verbindung neu angelegt oder entfernt wird oder ihre
+Adresse wechselt. Für den Vergleich gibt es `nodvard_sdk.same_target(alt, neu)` (`True` = dasselbe Ziel,
+nach denselben Regeln wie bei `x-secret-bound-to`; die Oberfläche rechnet dasselbe in
+`frontend/src/lib/targetAddress.ts`). So machen es Proxmox VE und Backups.
 
 **Verbindung testen.** Jede Extension mit Einstellungen bekommt in der Oberfläche den Knopf
 „Verbindung testen“ (`POST /extensions/{id}/test`). Der Kern ruft dafür `health()` der
@@ -172,29 +181,72 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 
 | Handle | Zweck | Permission |
 |---|---|---|
-| `ctx.api` | `include_router(r)` → `/api/v1/ext/<id>/…` | — |
+| `ctx.api` | `include_router(r, permission=…, public=…)` → `/api/v1/ext/<id>/…`, ohne weitere Angabe nur mit Anmeldung (siehe „Routen und Anmeldung“ unten). Fängt eine Route `HostUnreachable` oder einen SSH-Fehler nicht selbst ab, antwortet der Kern mit `502` und dem Grund in `detail` (nicht `500`, kein Traceback im Container-Protokoll) | —; `public=True`: `api.public` |
 | `ctx.ui` | `register_page()`, `register_widget()`, `register_nav()` | — |
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protokoll_instanz)` | je Protokoll |
-| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` | `hosts.execute` u. a. |
+| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optional mit `standing_approval`, siehe §3), `check_standing_approval(granted_by_user_id, risk=…)` (gälte eine Dauerfreigabe dieser Person heute noch? `None` = ja, sonst der Grund) | `hosts.execute` u. a.; Dauerfreigabe: `actions.standing_approval` |
 | `ctx.hosts` | `list()`, `get()`, `upsert_discovered()` | `hosts.read` / `hosts.write` |
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (laufende Ausgabe, z. B. Live-Logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
-| `ctx.secrets` | `get_handle(label)`, `create()` | `secrets.read:<label>` |
+| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht) | `secrets.read:<label>` |
 | `ctx.vault_use` | Context-Manager, der einen Wert nur im Speicher materialisiert | dito |
 | `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen | — |
 | `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
 | `ctx.scheduler` | `register_job(JobSpec)` | `schedule.register` |
 | `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
-| `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`) – mit `raise_on_failure=True` wirft `NotificationNotDelivered`, wenn es Kanäle gab und keiner zugestellt hat (für „erneut versuchen“); `would_suppress(host_id=…, host_ids=…)` fragt nur, ob ein Wartungsfenster gerade still schalten würde (siehe unten) | `notify.send` |
+| `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – mit `raise_on_failure=True` wirft `NotificationNotDelivered`, wenn es Kanäle gab und keiner zugestellt hat (für „erneut versuchen“); `would_suppress(host_id=…, host_ids=…)` fragt nur, ob ein Wartungsfenster gerade still schalten würde (siehe unten) | `notify.send` |
 | `ctx.audit` | `log(entry)` | `audit.write` |
-| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)` | `net.outbound:<cidr>` |
+| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen standardmäßig ebenfalls nicht | `net.outbound:<cidr>` |
 | `ctx.ws` | `broadcast(channel, payload)` auf `ext.<id>.*` | — |
 | `ctx.spawn` | überwachter Hintergrundtask mit Neustart-Politik | — |
 | `ctx.logger` | strukturierter Logger, vorgetaggt mit der Extension-ID | — |
+| `ctx.data_dir` | eigener, beschreibbarer Ordner der Extension (im Image `/app/data/ext/<id>/`). Dateien gehören hierher: Der Code im Image gehört root und ist schreibgeschützt, auch der eigene Paketordner. Neue Dateien sind nur für den Benutzer `lattice` lesbar | — |
 
 Nicht am Kontext und bewusst nicht verfügbar: direkter Zugriff auf Kern-Tabellen, das
 `asyncio`-Loop-Objekt, andere Extensions (nur über `ctx.events` und deklarierte
 `requires` + `ctx.capabilities.query()`).
+
+### Routen und Anmeldung
+
+`ctx.api.include_router(router, prefix=…, permission=…, public=…)` hängt einen FastAPI-Router unter
+`/api/v1/ext/<id><prefix>` ein. Die Prüfung gilt für **alle** Routen dieses Routers:
+
+| Aufruf | Wer durchkommt |
+|---|---|
+| `include_router(r)` | jedes angemeldete Konto, ohne bestimmte Berechtigung (ohne Token `401`) |
+| `include_router(r, permission="hosts.read")` | angemeldet **und** mit dieser Berechtigung (ohne Token `401`, ohne die Berechtigung `403`) |
+| `include_router(r, public=True)` | jeder, auch ohne Anmeldung; braucht `api.public` im Manifest |
+
+**Anmeldung ist keine Berechtigung.** Ohne `permission=` kommt jedes angemeldete Konto durch, egal
+mit welcher Rolle. Routen, die Daten zeigen oder etwas ändern, setzen deshalb `permission=` oder
+prüfen selbst. Früher blieb eine Route ohne `permission=` ganz ohne Prüfung; wer eine Adresse
+bewusst ohne Anmeldung anbietet (z. B. für einen Webhook), stellt auf `public=True` um.
+
+**`public=True`** geht nur mit der Berechtigung `api.public` im Manifest, sonst wirft der Aufruf
+`PermissionDenied` und die Erweiterung steht auf Fehler. Zusammen mit `permission=` ist es ebenfalls
+ein Fehler (`InvalidRegistration`). Beim Einschalten stehen die öffentlichen Adressen
+(`/api/v1/ext/<id><prefix>`) im Protokoll, in `detail.public_routes` von `extension.enabled` bzw.
+`extension.auto_enabled`; dazu kommt eine Warnung im Log.
+
+**Grenzen der Prüfung.** Sie greift nur bei normalen FastAPI-Routen (`@router.get` usw.).
+WebSocket-Routen, `router.add_route()` und `router.mount()` (z. B. `StaticFiles`) lehnt der Kern
+ohne `public=True` ab (`InvalidRegistration`), die Erweiterung lässt sich dann nicht einschalten.
+Mit `public=True` sichert die Erweiterung sie selbst ab. Geprüft wird nach `setup()` und nach
+`on_start()`; hängt `on_start()` solche Routen an, nimmt der Kern die Erweiterung wieder heraus.
+Was erst später zur Laufzeit an einen schon eingehängten Router kommt (etwa aus einem
+Hintergrundtask), sieht der Kern nicht mehr: Solche Routen sichern sich selbst ab.
+
+**Größe der Anfrage.** Der Kern nimmt an jeder Route höchstens 1 MiB an (`NODVARD_DECK_MAX_BODY_BYTES`), darüber
+antwortet er mit `413` ([04 §1](04-API.md#1-konventionen)). Eine Route, die bewusst größere Uploads annimmt, erklärt das
+mit `nodvard_sdk.max_body_bytes(limit)`: `@router.post(...)` ganz außen, `@max_body_bytes(...)` direkt über der Funktion.
+`limit` ist eine Obergrenze in Bytes oder eine Funktion ohne Argumente, die sie bei jeder Anfrage liefert (für einstellbare
+Grenzen). Der Kern prüft die `Content-Length` und zählt bei Anfragen ohne Längenangabe mit. Die Angabe hebt die Grenze
+nur an; unter die allgemeine Grenze senken lässt sie sich nicht. Die Route sollte ihre Daten trotzdem als Strom lesen oder
+eigene Prüfungen behalten. Mitgeliefert nutzen das `documents` (20 MB je Dokument) und `inventory` (5 MB je Bild).
+
+Seiten im Frontend-Bundle schicken für diese Routen das Token mit (`Authorization: Bearer …` mit
+dem Token aus `window.__nodvardDeck.getAccessToken()`, wie `HelloPage.tsx` in hello-world; die
+übrigen mitgelieferten Erweiterungen nehmen `authedFetch`, siehe §5).
 
 ### Meldungen und Wartungsfenster
 
@@ -203,11 +255,14 @@ Eine Meldung mit `payload["host_id"]` (ein Server) oder `payload["host_ids"]`
 schaltet ein Wartungsfenster stumm: Sie steht im Verlauf, geht aber an keinen Kanal
 (docs/03 §9). Ohne Host-Bezug ist eine Meldung nie still.
 
-- `send()` gibt `NotifyResult(notification_id, suppressed)` zurück. `suppressed=True`
-  heißt: nur im Verlauf, kein Push. Ältere Kerne und Test-Doubles liefern `None` –
-  Extensions werten das wie `suppressed=False` aus (z. B.
-  `getattr(result, "suppressed", False) is True`). Wer den Rückgabewert nicht braucht,
-  ändert nichts.
+- `send()` gibt `NotifyResult(notification_id, suppressed, delivered)` zurück. `suppressed=True`
+  heißt: nur im Verlauf, kein Push. `delivered=True` heißt: mindestens ein Kanal hat die
+  Meldung zugestellt; `False`: keiner – es ist kein Kanal eingerichtet, alle sind
+  ausgefallen oder ein Wartungsfenster hat den Push unterdrückt; `None`: unbekannt
+  (ältere Kerne). Ältere Kerne und Test-Doubles liefern `None` statt `NotifyResult` –
+  Extensions werten das wie `suppressed=False` und `delivered=None` aus (z. B.
+  `getattr(result, "suppressed", False) is True`, `getattr(result, "delivered", None)`).
+  Wer den Rückgabewert nicht braucht, ändert nichts.
 - `would_suppress(host_id=None, host_ids=None) -> bool` prüft dieselbe Regel, legt aber
   nichts an. Ein einzelner String als `host_ids` gilt wie in `send()` als kaputte Liste
   (nie still). Braucht ebenfalls `notify.send`.
@@ -301,6 +356,43 @@ wissen**:
 
 Eine neue Quelle hinzufügen heißt: ein Objekt registrieren. Kein Kern-Code ändert sich.
 
+`open_write` sollte das Ziel erst ersetzen, wenn alles angekommen ist, und es nie vorab abschneiden: sonst wäre
+bei einem Abbruch der alte Inhalt weg, und zeigen Quelle und Ziel auf dieselbe Datei, schnitte das Schreiben die
+Quelle selbst ab (`files-sftp` schreibt dafür, wo es geht, in eine Temp-Datei im Zielordner und benennt sie
+danach um).
+
+Optional, bewusst **kein** Pflichtmitglied des Protokolls: `async file_identity(path) -> dict | None`. Damit
+erkennt der Kern vor einem Transfer, ob Quelle und Ziel dieselbe Datei sind (Link, `..`-Umweg, zweiter Eintrag
+für denselben Rechner), und `/files/transfer` antwortet dann `409`. Rückgabe: `path` (der aufgelöste, absolute
+Pfad) und, soweit bekannt, `size`, `mtime`, `uid`, `gid`, `mode` sowie `machine` (eine feste Kennung des
+Rechners, etwa `/etc/machine-id`); `None`, wenn es die Datei nicht gibt oder die Quelle es nicht ermitteln kann.
+Eine Ausnahme oder ein Rückgabewert, der kein `dict` ist, zählt wie `None`. Innerhalb derselben Quelle
+entscheidet `path`. Über zwei Quellen hinweg sind zwei verschiedene `machine`-Kennungen immer zwei Dateien;
+sonst müssen außer `path` auch alle fünf Werte vorhanden sein und übereinstimmen (geklonte Rechner teilen oft
+dieselbe Kennung). Ohne `file_identity` erkennt der Kern nur den gleichen Pfad in derselben Quelle. Der Kern
+liest es mit `getattr(source, "file_identity", None)`; ältere Quellen ohne die Methode bleiben gültig.
+
+**Quellen mit eigener Berechtigung:** Optional nennt eine Quelle `required_permission: str | None`
+(fehlt das Attribut, gilt `None`). Dann zeigt und öffnet der Kern sie nur Nutzern, die diese
+Berechtigung selbst haben; `files.read`/`files.write` allein reichen nicht. Gedacht ist das für
+Quellen, die mit fremden Zugangsdaten arbeiten: Die SSH-Quellen der terminal-Extension verlangen
+`hosts.execute`, weil der Zugriff mit dem Zugang des Servers läuft (oft root), nicht mit dem Konto
+des Nutzers. Herunterladen, Suchen, Schreiben, Kopieren und verweigerte Zugriffe stehen für solche
+Quellen im Audit-Log ([04 §3](04-API.md#dateien)). Das Attribut ist bewusst kein Mitglied des
+Protokolls (`@runtime_checkable` würde sonst ältere Quellen ohne es abweisen); der Kern liest es
+mit `getattr`. Ist der Wert kein Text oder leer, sehen und öffnen die Quelle nur Owner und `admin`.
+
+**Fehler einer Quelle:** Die Quelle muss ihre Fehler nicht selbst übersetzen. Der Kern antwortet bei
+`FileNotFoundError` mit `404`, bei jeder anderen Ausnahme mit `502` und `Zugriff auf die Quelle fehlgeschlagen: <Grund>`
+([04 §3](04-API.md#dateien)). Netzfehler (Zeitüberschreitung, Verbindung abgelehnt oder abgebrochen, Name unbekannt,
+kein Weg zum Server) werden zu einem deutschen Satz, von einem anderen `OSError` kommt nur der Name der Ausnahme an
+(sein Text kann Pfade enthalten), sonst ihr Text. Ist der Text einer eigenen Ausnahme schon ein fertiger Satz für die
+Oberfläche, setzt die Quelle an der Klasse `readable = True` (wie `WebDavError` der Nextcloud-Quelle): Dann kommt ein
+nicht leerer Text unverändert an, und der Fall gilt wie ein Netzfehler als erwartbar (kein Traceback im
+Container-Protokoll). Das Attribut ist wie `required_permission` kein Mitglied des Protokolls, der Kern liest es mit
+`getattr`. Dasselbe gilt für Ausnahmen aus `TerminalTarget.open()`; dort steht der Grund in der Fehlermeldung des
+Terminals ([04 §4](04-API.md#4-websocket)).
+
 ### Beispiel: `ActionExecutor` — die Schnittstelle hinter Nodvard Shield und dem Script-Repository
 
 ```python
@@ -335,6 +427,45 @@ Gibt der Kern die Aktion sofort frei (Modus `full`), läuft sie im Hintergrund.
 das Ergebnis brauchen. Eine HTTP-Route gibt `wait_s=REQUEST_WAIT_S` (20 s, aus
 `nodvard_sdk`) mit; ist die Aktion dann noch nicht fertig, kommt `status = executing`
 zurück, und die Seite verweist auf „Aktionen".
+
+`ctx.actions.result(action_id)` und `ctx.actions.list(correlation_id=…, limit=…)` liefern nur
+Aktionen der eigenen Extension, aber mit vollem `result` und vollem `payload`, also samt Befehl sowie
+Ausgabe und Fehlertext vom Server. Wer die Route aufruft, prüft der Kern dort nicht (seine eigene
+API zeigt Ausgabe und Fehlertext nur mit `hosts.execute`, den vollen `payload` nur mit `hosts.execute`
+oder dem passenden `actions.approve:<risiko>`, siehe [04, Aktionen](04-API.md#aktionen--der-bestätigungs-workflow)). Eine
+Route, die sie anzeigt, verlangt deshalb selbst `hosts.execute`, z. B. mit
+`ctx.api.include_router(router, permission="hosts.execute")` wie die scripts-Extension. Ins
+Protokoll (`action.executed`) übernimmt der Kern vom Ergebnis keinen Text vom Server, nur Erfolg,
+Exitcode, Dauer und die Länge von Ausgabe und Fehlertext (dazu einen festen Satz, wenn das Gate
+den Grund selbst festlegt). Felder `output`, `stdout`, `stderr` und `command` in `detail` eigener
+Einträge (`ctx.audit.log`) leert er für Leser ohne `hosts.execute`, `reason` und alle übrigen Felder
+nicht – Text vom Server gehört deshalb weder in `reason` noch in andere Felder von `detail` noch
+in Meldungen, ein Befehl nur in `detail.command` (Meldungen sieht auch, wer nur lesen darf).
+Ereignisse `action.*` (etwa `action.executed` mit dem `payload`) bekommen Handler im Prozess
+(`ctx.events.subscribe`) vollständig; über den WebSocket bekommen Nutzer ohne `hosts.execute` den
+`payload` nur gekürzt ([04 §4](04-API.md#4-websocket)).
+
+**Dauerfreigabe (ohne Klick).** Ein Vorschlag kann sich auf eine Freigabe berufen, die ein Mensch vorab
+erteilt hat: `ActionRequest.standing_approval = StandingApproval(granted_by_user_id=…, granted_at=…, label=…)`.
+Das geht nur mit der Berechtigung `actions.standing_approval` im Manifest. Ob die Freigabe noch zum Vorschlag passt
+(bei Skripten: nichts geändert), prüft die Extension selbst. Das Gate prüft bei jedem Vorschlag, ob die Person noch
+aktiv ist und Dauerfreigaben sowie Aktionen dieser Risikostufe freigeben darf (`actions.standing_approval` und
+`actions.approve:<risiko>`; eingebaut: Owner und `admin`). Vorschläge einer KI laufen nie über eine Dauerfreigabe.
+Gilt sie, läuft die Aktion ohne Klick an, auch im Modus `propose` (Sperrliste und Anti-Flapping greifen weiter);
+`GateDecision.rule` ist dann `standing_approval`, und das Gate hängt an `reason` „– ohne Klick, lief mit
+Dauerfreigabe vom <Datum> durch <Benutzername>“ an (Datum in der eingestellten Zeitzone des Dashboards). Sonst wird
+ein normaler Vorschlag daraus: `reason` bekommt „– Dauerfreigabe vom … durch … gilt nicht: <Grund>“, und wartet die
+Aktion auf einen Klick, nennt `GateDecision.detail` den Grund. Der Name einer fehlenden Berechtigung steht nur in
+`gate_decision.standing_approval_rejected.permission` (und damit im `detail` der Protokollzeile), nie im Text.
+`reason` der Extension nennt also nur, was laufen soll.
+
+Der Executor bekommt `req.standing_approval` nur, wenn die Aktion wirklich ohne Klick anlief (nach einem Klick ist es
+`None`); so kann er direkt vor dem Befehl prüfen, ob die Freigabe noch gilt. Für Anzeigen wie „Dauerfreigabe gilt“
+prüft `ctx.actions.check_standing_approval()` die Person genauso wie das Gate, nur lesend. Weitere Bausteine dafür:
+`nodvard_sdk.current_job_trigger()` sagt einem `JobSpec.handler`, ob er nach Zeitplan (`"schedule"`), von Hand
+(`"manual"`: `POST /jobs/{id}/run` oder `ctx.scheduler.trigger()`) oder außerhalb eines Jobs (`None`) läuft;
+`Host.credential_username` und `Host.credential_port` nennen Konto und SSH-Port des Standard-Zugangs (nie das
+Geheimnis; `None` ohne Zugang oder bei älteren Kernen).
 
 ---
 
@@ -655,7 +786,7 @@ Das ist der Nachweis, dass die Schnittstelle für sie ausreicht.
 | Freitext-Chat-UI | `register_page("soc")`, Streaming über `ctx.ws` |
 | Incident-Queue/Batching | eigene Tabellen `ext_nexus_soc_incidents`, Hintergrundtask via `ctx.spawn` |
 | Docker-Watcher (8 s) | `ctx.spawn` + `ctx.exec.run()` gegen Hosts mit Tag `docker` |
-| Remediation | `ctx.actions.propose(...)` — **nie** `ctx.exec` direkt |
+| Remediation | `ctx.actions.propose(...)` — **nie** `ctx.exec` direkt. Aus KI-Text entsteht nur der Neustart eines abgestürzten Containers (`shell.exec`, den Befehl baut die Extension selbst), alles andere bleibt Text |
 | Sperrliste / Anti-Flapping | Kern-Gate; Extension liefert nur zusätzliche Muster |
 | Begründungspflicht | `ActionRequest.reason` ist Pflichtfeld |
 | Zwei Betriebsmodi | Kern-Einstellung `autonomy.mode`, nicht Extension-Code |
@@ -670,10 +801,11 @@ was ein Container ist.
 
 | Baustein | Umsetzung |
 |---|---|
-| Versionierung | eigenes Git-Repo unter `/data/ext/scripts/repo`, `pygit2`/`dulwich` |
+| Versionierung | eigenes Git-Repo unter `/data/ext/scripts/repo`, `pygit2`/`dulwich`; die Git-Einstellungen setzt die Extension bei jedem Start selbst, und Hooks, Filter und Signieren laufen nie (aus `.git` bringt eine Sicherung nur den Verlauf mit) |
 | Metadaten, Parameter | eigene Tabellen + JSON-Schema pro Skript |
 | „Jetzt ausführen" | `ctx.actions.propose(ActionSpec("script.run"))` → derselbe SSH-Layer wie das Terminal (kein zweiter Ausführungsweg) |
 | Fleet-weiter Zeitplan | `ctx.scheduler` — **eine** Ansicht, weil es **einen** Scheduler gibt |
+| Geplante Läufe ohne Klick | Dauerfreigabe je Skript, gespeichert in `ctx.data_dir` (nicht im Git-Repo: ein Zurücksetzen des Skripts belebt eine erloschene Freigabe nicht wieder). Nur echte Zeitplan-Läufe (`current_job_trigger() == "schedule"`) schicken sie als `ActionRequest.standing_approval` mit. Die Extension prüft vorher, ob Inhalt, Parameter, Ziel, Zeitplan sowie Konto, Adresse und SSH-Port der Server noch wie bei der Freigabe sind, das Kern-Gate, ob die freigebende Person noch darf |
 | Run-Historie | Kern-Tabellen `jobs`/`job_runs` + Audit |
 | Secrets | `ctx.secrets.get_handle(...)`, nie Klartext im Skript |
 | In-Browser-Editor | `register_page`, CodeMirror 6 |
@@ -733,3 +865,14 @@ die eingecheckte Liste `sdk_public.json`; neue Namen werden mit
 `python scripts/update_api_contract.py` nachgezogen, Ausnahmen nur mit Begründung in
 `backend/tests/contract/breaking_exceptions.toml`. Die Major-Version wird auf `1.0` gehoben,
 wenn die mitgelieferten Extensions stabil sind; die Regeln der Tabelle oben gelten dann unverändert.
+
+**Bewusst strenger aus Sicherheitsgründen:** `ctx.api.include_router()` ohne `permission=` verlangt eine Anmeldung
+(früher war so eine Route ohne Anmeldung erreichbar), und WebSocket-Routen, `add_route()` und `mount()` lehnt der Kern
+ohne `public=True` ab; die Erweiterung lässt sich dann nicht einschalten (siehe §2). Die Signatur bleibt
+abwärtskompatibel, `public=` ist neu und optional. Ältere Kerne kennen `api.public` und `public=` nicht (eine Erweiterung
+mit `api.public` im Manifest lädt dort nicht) und lassen Routen ohne `permission=` offen; wer sie mit unterstützt, setzt
+`permission=`.
+
+Ebenso bei der Größe einer Anfrage: Der Kern weist an Erweiterungsrouten jede Anfrage über 1 MiB mit `413` ab; eine
+Route, die größere Uploads annimmt, braucht dafür `max_body_bytes` (siehe §2). Ältere Kerne kennen den Namen nicht (der
+Import scheitert dort) und haben keine allgemeine Grenze.

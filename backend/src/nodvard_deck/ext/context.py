@@ -23,6 +23,7 @@ auch fuer sie zuerst, damit ein Test beweisen kann, dass die Reihenfolge stimmt.
 
 from __future__ import annotations
 
+import functools
 import ipaddress
 import logging
 from collections.abc import Awaitable, Callable, Sequence
@@ -49,6 +50,7 @@ from nodvard_sdk import (
     Notification as SdkNotification,
     NotifyResult,
     PageSpec,
+    Risk,
     Severity,
     WidgetSpec,
 )
@@ -61,12 +63,15 @@ from ..core import rbac, ssh, vault
 from ..core.events import get_event_bus
 from ..db.base import refresh_relationships
 from ..db.session import session_scope
-from ..models import Action, Host, HostTag, Setting
+from ..models import Action, Host, HostTag, NotificationDelivery, Setting
 from ..services import audit as audit_service
 from ..services.hosts import host_to_sdk as _host_to_sdk
 from .runtime import ExtensionRuntime, LoadedExtension, SpawnTarget, SupervisedTask
 
 logger = logging.getLogger("nodvard_deck.ext")
+
+PUBLIC_ROUTES_PERMISSION = "api.public"
+"""Manifest-Berechtigung fuer `ctx.api.include_router(..., public=True)`."""
 
 
 class _PermissionChecker:
@@ -82,22 +87,38 @@ class _PermissionChecker:
 
 
 class ApiHandle:
-    """**Live gefunden beim Bau der ntfy-Extension (WP-6), nicht beim Lesen:** der
-    Docstring von `include_router()` behauptete seit WP-3 woertlich, der Kern
-    "uebernehme" Authentifizierung/Permission-Pruefung fuer montierte Extension-Routen
-    (docs/02-EXTENSION-API.md §2: "kann nicht versehentlich einen ungeschuetzten
-    Endpunkt veroeffentlichen"). Das war nie wahr -- `include_router()` haengte den
-    Router unveraendert an, ohne jemals eine `Depends(...)`-Pruefung hinzuzufuegen.
-    `hello-world`s `/vault-use-and-fail`/`/widgets/hello` liefen seit WP-3
-    unauthentifiziert erreichbar, unbemerkt, weil kein Test je einen Request OHNE
-    Token gegen eine Extension-Route stellte. Siehe Abnahmebericht fuer die volle
-    Einordnung -- dieser Fix macht es Extensions MOEGLICH, eine Permission zu
-    verlangen, zwingt aber KEINE bestehende Extension dazu (bewusst
-    rueckwaertskompatibel: `permission=None` bleibt das bisherige, unauthentifizierte
-    Verhalten)."""
+    """Hängt die Routen einer Erweiterung unter `/api/v1/ext/<id>/...` ein.
+
+    Sicher ist der Standard: Jede Route verlangt mindestens eine gültige Anmeldung.
+    Früher blieb eine Route ohne `permission` ganz ohne Prüfung und war damit ohne
+    Anmeldung erreichbar; wer das Argument vergaß, veröffentlichte den Endpunkt für
+    alle (so geschehen bei mehreren mitgelieferten Erweiterungen und bei hello-world).
+    Öffentlich ist eine Route nur noch mit dem ausdrücklichen `public=True`."""
 
     def __init__(self, loaded: LoadedExtension) -> None:
         self._loaded = loaded
+        # Router, deren Routen eine Anmeldung verlangen (ohne `public=True`). Der Host
+        # prueft sie nach setup() noch einmal (`check_routes`), weil eine Erweiterung
+        # nach include_router() weitere Routen an denselben Router haengen kann.
+        self._guarded: list[Any] = []
+        # Vollstaendige Adress-Praefixe (/api/v1/ext/<id><prefix>), die die Erweiterung mit
+        # `public=True` ohne Anmeldung anbietet. Der Host schreibt sie beim Einschalten ins
+        # Protokoll (services/extensions.py::public_route_prefixes).
+        self.public_prefixes: list[str] = []
+
+    def check_routes(self) -> None:
+        """Wirft `InvalidRegistration`, wenn ein geschuetzter Router eine Route hat, an
+        der die Anmeldepruefung nicht greift."""
+        unguarded = [desc for router in self._guarded for desc in _unguarded_routes(router)]
+        if unguarded:
+            from nodvard_sdk.errors import InvalidRegistration
+
+            raise InvalidRegistration(
+                f"Extension '{self._loaded.manifest.id}': Diese Routen können keine Anmeldung "
+                f"prüfen: {', '.join(unguarded)}. Nur normale FastAPI-Routen (@router.get usw.) "
+                "lassen sich schützen. WebSockets, router.add_route() und router.mount() nur mit "
+                "include_router(..., public=True) einhängen und selbst absichern."
+            )
 
     @property
     def current_actor(self) -> Any:  # noqa: ANN401 - eine FastAPI-Dependency
@@ -119,30 +140,95 @@ class ApiHandle:
         return _current_actor
 
     def include_router(
-        self, router: Any, *, prefix: str = "", tags: list[str] | None = None, permission: str | None = None
+        self,
+        router: Any,
+        *,
+        prefix: str = "",
+        tags: list[str] | None = None,
+        permission: str | None = None,
+        public: bool = False,
     ) -> None:
         """Montiert NICHT sofort -- registriert nur (docs/02 §1: setup() darf kein
         I/O machen). Die eigentliche Montage unter /api/v1/ext/<id>/... macht der
         Host, NACHDEM setup() erfolgreich durchgelaufen ist (services/extensions.py).
 
-        `permission`, falls gesetzt, gilt fuer ALLE Routen dieses Routers (kein
-        Pro-Route-Feingranulat in dieser Runde) -- reicht fuer den ersten echten
-        Bedarf (ntfy: ein einzelner Token-Endpunkt), ist aber kein Ersatz fuer eine
-        spaetere, feinere Loesung, falls eine Extension einmal Routen mit
-        UNTERSCHIEDLICHEN Berechtigungen im selben Router braucht."""
+        Zugriff (gilt fuer ALLE Routen dieses Routers, kein Pro-Route-Feingranulat):
+        - `permission` gesetzt: Anmeldung UND diese Berechtigung.
+        - weder `permission` noch `public`: gueltige Anmeldung, keine bestimmte
+          Berechtigung (401 ohne Token). Anmeldung ist keine Berechtigung: Routen, die
+          Daten zeigen oder etwas aendern, setzen `permission=` oder pruefen selbst.
+        - `public=True`: keinerlei Pruefung, ohne Anmeldung erreichbar. Nur fuer
+          Routen, die bewusst fuer jeden da sind. Braucht die Manifest-Berechtigung
+          `api.public` (sonst `PermissionDenied`); der Host schreibt die oeffentlichen
+          Praefixe beim Einschalten ins Protokoll. Zusammen mit `permission` ein Fehler.
+
+        Grenzen der Anmeldepruefung: Der Host prueft die Router nach `setup()` und nach
+        `on_start()` (`check_routes`) und lehnt dann Routen ab, an denen die Pruefung
+        nicht greift (WebSocket, `add_route()`, `mount()`). Was eine Erweiterung erst
+        spaeter zur Laufzeit an einen schon montierten Router haengt, etwa aus einem
+        Hintergrundtask, sieht der Host nicht mehr: solche Routen muessen sich selbst
+        absichern."""
+        if public and permission is not None:
+            from nodvard_sdk.errors import InvalidRegistration
+
+            raise InvalidRegistration(
+                f"Extension '{self._loaded.manifest.id}': include_router(public=True) "
+                f"verträgt sich nicht mit permission='{permission}'."
+            )
+        if public and not rbac.has_permission(self._loaded.granted_permissions, PUBLIC_ROUTES_PERMISSION):
+            raise PermissionDenied(self._loaded.manifest.id, PUBLIC_ROUTES_PERMISSION)
         if self._loaded.router is None:
             from fastapi import APIRouter
 
             self._loaded.router = APIRouter()
 
         dependencies = []
-        if permission is not None:
+        if public:
+            full_prefix = f"{self._loaded.manifest.api_prefix}{prefix}"
+            if full_prefix not in self.public_prefixes:
+                self.public_prefixes.append(full_prefix)
+            logger.warning(
+                "Extension '%s' hängt öffentliche Routen ein (ohne Anmeldung erreichbar): %s",
+                self._loaded.manifest.id,
+                full_prefix,
+            )
+        elif permission is not None:
             from fastapi import Depends
 
             from ..api.deps import require_permission
 
             dependencies.append(Depends(require_permission(permission)))
+        else:
+            from fastapi import Depends
+
+            from ..api.deps import get_current_user
+
+            dependencies.append(Depends(get_current_user))
+        if not public:
+            self._guarded.append(router)
+            self.check_routes()
         self._loaded.router.include_router(router, prefix=prefix, tags=tags, dependencies=dependencies)
+
+
+def _unguarded_routes(router: Any) -> list[str]:
+    """Routen eines Routers, an denen eine Router-Abhaengigkeit wie `get_current_user`
+    nicht greift: Starlette-Routen (`add_route`), `mount()` (z. B. StaticFiles) und
+    WebSocket-Routen (die HTTP-Pruefung braucht einen Request und bricht dort ab).
+    FastAPI uebernimmt Abhaengigkeiten nur fuer `APIRoute`. Eingebundene Unter-Router
+    werden mit durchsucht (je nach FastAPI-Version als Platzhalter mit
+    `original_router` oder schon aufgeloest). Unbekannte Arten zaehlen als ungeschuetzt."""
+    from fastapi.routing import APIRoute
+
+    found: list[str] = []
+    for route in getattr(router, "routes", []):
+        if isinstance(route, APIRoute):
+            continue
+        nested = getattr(route, "original_router", None)
+        if nested is not None:
+            found.extend(_unguarded_routes(nested))
+            continue
+        found.append(f"{type(route).__name__} {getattr(route, 'path', '?') or '/'}")
+    return found
 
 
 class UiHandle:
@@ -289,13 +375,31 @@ class HostsHandle:
                     # Wahrheit und wird uebernommen -- ein Platzhalter weiterhin nie.
                     if host.kind not in ("vm", "lxc") or dh.address_verified:
                         if host.address != dh.address:
-                            # Eine gepoolte SSH-Verbindung ginge sonst weiter an die alte Adresse.
-                            from ..services.hosts import drop_pooled_connections
+                            # Wie bei einer Aenderung von Hand: Passwoerter gehoeren zum alten Server,
+                            # eine gepoolte Verbindung ginge sonst weiter an die alte Adresse. Fuer
+                            # Gaeste (die Adresse kommt vom Gast selbst und wechselt per DHCP) bleibt
+                            # ein Passwort, wenn der Server-Schluessel schon gemerkt ist: ein anderer
+                            # Server an der neuen Adresse kaeme nie bis zur Anmeldung.
+                            from ..services import hosts as hosts_service
 
-                            await drop_pooled_connections(session, host.id)
+                            old_address = host.address
+                            removed = await hosts_service.forget_address_bound_access(
+                                session, host, spare_pinned=host.kind in ("vm", "lxc")
+                            )
+                            if removed:
+                                await audit_service.log(
+                                    session, actor_type="extension", actor_id=self._ext_id, action="host.updated",
+                                    outcome="success", target_type="host", target_id=host.id,
+                                    detail={
+                                        "changed": {"address": {"from": old_address, "to": dh.address}},
+                                        "password_credentials_removed": removed,
+                                    },
+                                )
                         host.address = dh.address
                     host.status = dh.status.value
-                    host.host_metadata = dh.metadata
+                    # Den Beleg der letzten SSH-Anmeldung (vom Kern, nicht vom Anbieter) behalten.
+                    kept = {k: v for k, v in (host.host_metadata or {}).items() if k == "login_ok"}
+                    host.host_metadata = {**dh.metadata, **kept}
                     # Live gefunden (Server-Seiten): eine Windows-VM stand als
                     # "linux" in Nodvard Deck -- os_family wurde nur beim ANLEGEN gesetzt, und
                     # nur mit dem Standardwert. Jetzt: uebernehmen, wenn der Anbieter es
@@ -357,11 +461,32 @@ class ExecHandle:
             return target, credential.id, settings
 
     async def _connection(self, host: SdkHost) -> asyncssh.SSHClientConnection:
+        from ..services import hosts as hosts_service
+
         target, credential_id, settings = await self._resolve(host)
-        async with session_scope() as session:
-            return await ssh.get_ssh_pool().get(
-                session, target, credential_id=credential_id, connect_timeout_s=settings.ssh_connect_timeout_s
-            )
+        try:
+            async with session_scope() as session:
+                conn = await ssh.get_ssh_pool().get(
+                    session, target, credential_id=credential_id, connect_timeout_s=settings.ssh_connect_timeout_s
+                )
+                # Eine angemeldete Verbindung ist der Beleg, dass der Zugang klappt (für das Abzeichen „Zugang“).
+                # Geschrieben wird nur, wenn der Beleg noch fehlt, und nur für den Zugang, mit dem verbunden wurde.
+                db_host = await session.get(Host, host.id)
+                credential = await hosts_service.default_credential(session, host.id)
+                if (
+                    db_host is not None and credential is not None and credential.id == credential_id
+                    and hosts_service.login_confirmed_at(db_host, credential) is None
+                ):
+                    hosts_service.record_login_ok(db_host, credential)
+                return conn
+        except (ssh.SshAuthError, ssh.HostKeyMismatch):
+            # Anmeldung abgelehnt oder anderer Server-Schlüssel: der frühere Beleg gilt nicht mehr. Eigene
+            # Sitzung, weil die obige beim Fehler zurückgerollt wird.
+            async with session_scope() as session:
+                db_host = await session.get(Host, host.id)
+                if db_host is not None:
+                    hosts_service.clear_login_ok(db_host)
+            raise
 
     async def run(
         self, host: SdkHost, command: str, *, timeout_s: int = 60, user: str | None = None,
@@ -509,6 +634,22 @@ class SecretsHandle:
     async def exists(self, label: str) -> bool:
         async with session_scope() as session:
             return await vault.get_handle(session, label) is not None
+
+    async def delete(self, label: str) -> bool:
+        self._perm.require(f"secrets.read:{label}")
+        async with session_scope() as session:
+            handle = await vault.get_handle(session, label)
+            if handle is None:
+                return False
+            await vault.delete_secret(session, handle.id)
+            await session.flush()
+            # Wie beim Entfernen ueber die Einstellungsseite: im Protokoll steht, welches
+            # Geheimnis weg ist (nur das Label, nie der Wert).
+            await audit_service.log(
+                session, actor_type="extension", actor_id=self._ext_id, action="extension.secret_removed",
+                outcome="success", target_type="extension", target_id=self._ext_id, detail={"label": label},
+            )
+            return True
 
 
 class SettingsHandle:
@@ -670,7 +811,17 @@ class NotifyHandle:
                 payload=notification.payload,
                 raise_on_failure=raise_on_failure,
             )
-        return NotifyResult(notification_id=row.id, suppressed=suppressed)
+            # Was ist wirklich angekommen? `deliver()` hat die Zustellprotokolle gerade
+            # geschrieben; ein ausgefallener oder nicht eingerichteter Kanal steht dort als
+            # "failed" und darf nicht als "gesendet" durchgehen.
+            statuses = (
+                await session.execute(
+                    select(NotificationDelivery.status).where(NotificationDelivery.notification_id == row.id)
+                )
+            ).scalars().all()
+        return NotifyResult(
+            notification_id=row.id, suppressed=suppressed, delivered=any(s == "sent" for s in statuses),
+        )
 
     async def would_suppress(self, *, host_id: str | None = None, host_ids: Sequence[str] | None = None) -> bool:
         """Nur lesen: dieselbe Pruefung wie in `send()`, ohne Verlaufseintrag."""
@@ -792,6 +943,10 @@ class ActionsHandle:
                 self._perm.require(perm)
         else:
             self._perm.require("hosts.execute")
+        if request.standing_approval is not None:
+            # Ohne Klick nur, wenn das Manifest es ausdruecklich anmeldet; die Freigabe
+            # selbst prueft danach das Gate.
+            self._perm.require(gate_service.STANDING_APPROVAL_PERMISSION)
 
         async with session_scope() as session:
             return await gate_service.propose(
@@ -801,6 +956,20 @@ class ActionsHandle:
                 command_field=spec.command_field if spec is not None else None,
                 wait_s=wait_s,
             )
+
+    async def check_standing_approval(self, granted_by_user_id: str, *, risk: Risk) -> str | None:
+        """Gaelte eine Dauerfreigabe von `granted_by_user_id` heute fuer Aktionen der Stufe
+        `risk`? None = ja, sonst der Grund in einfachen Worten. Dieselbe Pruefung wie im Gate
+        (`core.gate.standing_approval_problem`), nur lesend -- fuer Anzeigen wie "Dauerfreigabe
+        gilt". Wie `propose()` mit Freigabe nur mit der Berechtigung `actions.standing_approval`."""
+        from ..core import gate as gate_service
+
+        self._perm.require(gate_service.STANDING_APPROVAL_PERMISSION)
+        async with session_scope() as session:
+            found = await gate_service.standing_approval_problem(
+                session, granted_by_user_id=granted_by_user_id, risk=risk
+            )
+        return None if found is None else found[0]
 
     async def list(self, *, correlation_id: str | None = None, limit: int = 20) -> list[Action]:
         """Die juengsten Aktionen DIESER Extension, optional nur zu einer
@@ -850,6 +1019,56 @@ class ActionsHandle:
             return row
 
 
+class WebSocketRedirectRefused(ConnectionError):
+    """Der Server hat beim WebSocket-Handshake mit einer Weiterleitung (3xx) geantwortet.
+    `ctx.http.websocket()` folgt Weiterleitungen nie. Der Text ist ein fertiger deutscher Satz
+    (`readable`, wie bei `core.ssh.SshError`) und kommt unveraendert beim Aufrufer an."""
+
+    readable = True
+
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        super().__init__(
+            f"Der Server hat die Verbindung auf eine andere Adresse umgeleitet (HTTP {status_code}). "
+            "Solchen Umleitungen folgt Nodvard Deck aus Sicherheitsgründen nicht. "
+            "Prüfe die eingetragene Adresse des Servers."
+        )
+
+
+@functools.lru_cache(maxsize=1)
+def _websocket_connect_class() -> type:
+    """`websockets.asyncio.client.connect` ohne Weiterleitungen. Die Bibliothek folgt 3xx-Antworten
+    bis zu zehnmal, prueft aber nur die Start-Adresse gegen `_require_target_allowed` -- ein Server
+    koennte die Verbindung so auf eine Adresse lenken, die die Erweiterung nicht erreichen duerfte.
+    `process_redirect()` ist die dafuer vorgesehene Stelle der Bibliothek: gibt sie eine Ausnahme
+    zurueck, wird diese statt eines zweiten Verbindungsaufbaus ausgeloest (die erste Verbindung ist
+    dann schon abgebrochen). Lazy, weil `websockets` auch sonst erst beim ersten Gebrauch geladen wird."""
+    from websockets.asyncio.client import connect
+    from websockets.exceptions import InvalidStatus
+
+    class _ConnectWithoutRedirects(connect):
+        def process_redirect(self, exc: Exception) -> Exception | str:
+            if isinstance(exc, InvalidStatus) and 300 <= exc.response.status_code < 400:
+                return WebSocketRedirectRefused(exc.response.status_code)
+            return exc
+
+    return _ConnectWithoutRedirects
+
+
+def _direct_transport(*, verify: bool = True) -> httpx.AsyncHTTPTransport:
+    """Transport ohne Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`).
+
+    httpx liest Proxys nur, wenn der Client den Transport selbst anlegt
+    (`allow_env_proxies = trust_env and transport is None`, httpx 0.28). `trust_env=False` am
+    Client waere der falsche Weg: es schaltet auch `SSL_CERT_FILE`/`SSL_CERT_DIR` ab, und ein
+    Betreiber mit eigener Zertifizierungsstelle verloere sie. Dieser Transport behaelt
+    `trust_env=True` (SSL-Einstellungen aus der Umgebung bleiben), hat aber keinen Proxy.
+    Alle anderen Vorgaben entsprechen dem, was `httpx.AsyncClient()` selbst angelegt haette
+    (`http1`, kein `http2`, Standard-`Limits`, keine Wiederholungen); Weiterleitungen werden
+    weiter nicht verfolgt (Client-Vorgabe `follow_redirects=False`)."""
+    return httpx.AsyncHTTPTransport(verify=verify)
+
+
 class HttpHandle:
     """CIDR-Pruefung nur fuer literale IP-Ziele (kein DNS-Resolving vor dem Check in
     dieser Runde, siehe Abnahmebericht) -- ein DNS-Name braucht mindestens eine
@@ -873,7 +1092,14 @@ class HttpHandle:
     Extension sich gegen jede MITM-Manipulation innerhalb dieses Bereichs blind
     macht. Kein Pro-Host-CA-Pinning in dieser Runde (nur an/aus) -- fuer den
     tatsaechlichen Bedarf (ein einzelnes selbstsigniertes Standardzertifikat je
-    Connector-Instanz) reicht das; siehe docs/00-DECISIONS.md."""
+    Connector-Instanz) reicht das; siehe docs/00-DECISIONS.md.
+
+    **Kein Proxy aus der Umgebung:** beide Clients bekommen einen eigenen Transport
+    (`_direct_transport()`), `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (und die kleinen
+    Schreibweisen) werden also nicht gelesen. Die Zielpruefung oben sieht nur die URL; ginge
+    die Anfrage ueber einen Proxy aus der Umgebung, bekaeme dieser den Header
+    `Authorization` und das Ziel, ohne dass die Erweiterung dafuer freigegeben wurde. Die
+    Verbindung geht immer direkt zum geprueften Ziel."""
 
     def __init__(self, perm: _PermissionChecker, granted_permissions: list[str]) -> None:
         self._perm = perm
@@ -882,7 +1108,7 @@ class HttpHandle:
             for p in granted_permissions
             if p == "net.outbound" or p.startswith("net.outbound:")
         ]
-        self._client = httpx.AsyncClient()
+        self._client = httpx.AsyncClient(transport=_direct_transport())
         self._insecure_client: httpx.AsyncClient | None = None
 
     def _require_target_allowed(self, url: str) -> None:
@@ -909,7 +1135,7 @@ class HttpHandle:
             return self._client
         self._perm.require("net.outbound.insecure_tls")
         if self._insecure_client is None:
-            self._insecure_client = httpx.AsyncClient(verify=False)
+            self._insecure_client = httpx.AsyncClient(transport=_direct_transport(verify=False))
         return self._insecure_client
 
     async def get(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
@@ -960,10 +1186,21 @@ class HttpHandle:
         `max_size=None`: ein Bildschirm-Update ist ein einzelner grosser Frame, das
         websockets-Default (1 MiB) wuerde eine Konsole mit hoher Aufloesung mitten in
         der Sitzung abbrechen. `compression=None`: RFB-Rahmen sind bereits kodiert,
-        permessage-deflate kostet nur CPU (auf dem Pi spuerbar)."""
-        import ssl
+        permessage-deflate kostet nur CPU (auf dem Pi spuerbar).
 
-        from websockets.asyncio.client import connect
+        **Keine Weiterleitungen:** antwortet der Server beim Handshake mit 3xx, entsteht keine
+        zweite Verbindung -- `async with` wirft `WebSocketRedirectRefused` (ein `ConnectionError`
+        mit deutschem Text). Wie bei `get()`/`post()` (httpx folgt dort standardmaessig ebenfalls
+        nicht) bleibt es bei der geprueften Start-Adresse.
+
+        **Kein Proxy aus der Umgebung:** `proxy=None`. Seit websockets 15 nutzt `connect()` sonst von
+        sich aus `HTTP_PROXY`/`HTTPS_PROXY`/`WS_PROXY`/`WSS_PROXY`/`SOCKS_PROXY` (und beachtet
+        `NO_PROXY`). Die Zielpruefung oben kennt keinen Proxy: die Verbindung (samt Zugangs-Header und
+        Ticket) ginge sonst an eine Stelle, die die Erweiterung nie freigegeben bekam. `proxy` gibt es
+        erst ab websockets 15, deshalb steht in `backend/pyproject.toml` `websockets>=15`; in aelteren
+        Versionen wuerde das Keyword an `loop.create_connection()` weitergereicht und mit einem
+        `TypeError` scheitern."""
+        import ssl
 
         self._require_target_allowed(url)
         ssl_context: ssl.SSLContext | None = None
@@ -976,7 +1213,7 @@ class HttpHandle:
             else:
                 ssl_context = ssl.create_default_context()
 
-        return connect(
+        return _websocket_connect_class()(
             url,
             additional_headers=headers,
             subprotocols=subprotocols,  # type: ignore[arg-type]
@@ -984,6 +1221,7 @@ class HttpHandle:
             open_timeout=open_timeout_s,
             max_size=None,
             compression=None,
+            proxy=None,
         )
 
     async def aclose(self) -> None:

@@ -6,7 +6,11 @@ function HelloPage() {
   const [subtitle, setSubtitle] = useState("");
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/v1/ext/hello-world/widgets/hello").then((res) => {
+    const shell = window.__nodvardDeck ?? window.__lattice;
+    const token = shell?.getAccessToken?.();
+    fetch("/api/v1/ext/hello-world/widgets/hello", {
+      headers: token ? { Authorization: `Bearer ${token}` } : {}
+    }).then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.json();
     }).then((body) => {

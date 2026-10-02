@@ -5,7 +5,8 @@ Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0 (siehe LICENSE
 Diese Datei nennt die Fremdkomponenten, die im Docker-Image bzw. im ausgelieferten
 Frontend stecken, mit Version, Lizenz und vollem Lizenztext. Bei den Paketen
 steht außerdem, was sie selbst mitbringen: einkompilierte Bestandteile laut SBOM
-(z. B. Rust-Crates), mitgelieferter Fremdcode und die Lizenzköpfe einzelner Dateien.
+(z. B. Rust-Crates), fest eingebaute Bibliotheken (libuv, libffi, Rust-Standardbibliothek), mitgelieferter
+Fremdcode und die Lizenzköpfe einzelner Dateien.
 
 Automatisch erzeugt mit `python scripts/third_party_licenses.py` -- nicht von Hand
 ändern. Erlaubt sind nur freizügige Lizenzen; `python scripts/check_licenses.py`
@@ -667,6 +668,8 @@ one at http://mozilla.org/MPL/2.0/.
 cffi 2.1.1
 Lizenz: MIT-0
 ------------------------------------------------------------------------------
+[LICENSE]
+
 Except when otherwise stated (look for LICENSE files in directories or
 information at the beginning of each file) all software and
 documentation is licensed as follows:
@@ -688,6 +691,50 @@ documentation is licensed as follows:
     LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
     FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
     DEALINGS IN THE SOFTWARE.
+
+[Fest eingebaute Bibliothek: libffi 3.4.6]
+
+libffi 3.4.6 ist in cffi 2.1.1 fest eingebaut (statisch gelinkt). Das Wheel bringt dafür keinen
+eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen unverändert aus dem
+Quelltext genau dieser Version.
+
+  Lizenz:   MIT
+  Urheber:  Anthony Green; Red Hat, Inc.; Free Software Foundation, Inc.; Plausible Labs
+            Cooperative, Inc.; Oracle and/or its affiliates; Madhavan T. Venkataraman; Microsoft,
+            Inc.; ARM Ltd.; The Written Word, Inc.; Bo Thorsen (laut den Dateiköpfen der Quelltexte)
+  Quelle:   https://github.com/libffi/libffi/tree/v3.4.6
+  Erkannt:  Die Linux-Wheels von cffi enthalten libffi statisch: Die CI von cffi (Workflow ci.yaml
+            am Tag v2.1.1) baut vor dem Wheel libffi 3.4.6 aus dem Quelltext und benennt dabei
+            ffi_call in cffistatic_ffi_call um; dieses Symbol steht im Binary (x86_64 und aarch64).
+            Die Dateiköpfe der eingebauten Quelldateien tragen denselben MIT-Text wie die LICENSE,
+            die für die Urheber auf die Dateiköpfe verweist. Der in closures.c eingebundene
+            Speicherverwalter dlmalloc (Doug Lea) ist vom Autor gemeinfrei gestellt
+            (Public-Domain-Erklärung nach creativecommons.org/licenses/publicdomain laut Dateikopf,
+            nicht CC0).
+
+[Lizenztext zu libffi 3.4.6: LICENSE]
+
+libffi - Copyright (c) 1996-2024  Anthony Green, Red Hat, Inc and others.
+See source files for details.
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+``Software''), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED ``AS IS'', WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
+SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 ------------------------------------------------------------------------------
 click 8.5.0
@@ -1026,10 +1073,238 @@ Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spd
 
   openssl 4.0.2                      Apache-2.0 (OpenSSL ab Version 3.0; die SBOM nennt keine Lizenz)  (Quelle: https://github.com/openssl/openssl/releases/download/openssl-4.0.2/openssl-4.0.2.tar.gz)
 
+[Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)]
+
+Rust-Standardbibliothek (std, core, alloc) ist in cryptography 50.0.1 fest eingebaut (statisch
+gelinkt), ebenso in dulwich 1.2.15, pydantic-core 2.46.5, pyrage 1.4.0, watchfiles 1.3.0. Das Wheel
+bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier (bei den anderen genannten Paketen
+steht nur ein Verweis hierher). Die Texte darunter stammen unverändert aus dem Quelltext.
+
+  Lizenz:   MIT OR Apache-2.0
+  Urheber:  The Rust Project Developers (heute: The Rust Project Contributors); in der
+            Standardbibliothek stecken außerdem addr2line (The gimli Developers), gimli (The Rust
+            Project Developers), object (The Gimli Developers), miniz_oxide (RAD Game Tools and
+            Valve Software; Rich Geldreich and Tenacious Software LLC; Frommi; oyvindln),
+            rustc-demangle (Alex Crichton) und hashbrown (Amanieu d'Antras)
+  Quelle:   https://github.com/rust-lang/rust/tree/master/library
+  Erkannt:  Alle Rust-Erweiterungen dieser Pakete linken die Standardbibliothek statisch ein und
+            nennen sie nicht in ihrer SBOM. Im Binary stehen die Pfade der mitgelieferten Crates
+            (/rust/deps/addr2line-0.25.1, gimli-0.32.3, miniz_oxide-0.8.9, rustc-demangle-0.1.27 und
+            hashbrown 0.16.1 bzw. 0.17.1) sowie Verweise auf den rustc-Quelltext; geprüft an den
+            Wheels für x86_64 und aarch64. Den ELF-Teil der Fehlerausgabe (Backtrace) der
+            Standardbibliothek liest die Crate object 0.37.3; ihr Pfad steht nicht im Binary, aber
+            ihre Funktionen (z. B. object::read::read_ref::ReadRef) in cryptography, dulwich und
+            watchfiles; die Binaries von pydantic-core und pyrage sind ohne Symbole, enthalten aber
+            dieselben Crates der Fehlerausgabe (addr2line, gimli). Die Version 0.37.3 steht in der
+            Cargo.lock der Standardbibliothek bei allen drei Compiler-Ständen, mit denen diese
+            Wheels gebaut sind.
+  Hinweis:  Eine feste Version gibt es nicht: Die Standardbibliothek kommt mit dem Compiler, mit dem
+            das jeweilige Wheel gebaut wurde. Die Lizenztexte stammen aus dem Rust-Quelltext
+            (Hauptzweig) und aus den genannten Crates (miniz_oxide steht unter 'MIT OR Zlib OR
+            Apache-2.0'); ausgegeben ist jeweils der MIT-Text.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT der Standardbibliothek (rust-lang/rust)]
+
+Copyright (c) The Rust Project Contributors
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus addr2line 0.25.1]
+
+Copyright (c) 2016-2018 The gimli Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus gimli 0.32.3]
+
+Copyright (c) 2015 The Rust Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus object 0.37.3]
+
+Copyright (c) 2015 The Gimli Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE aus miniz_oxide 0.8.9 (MIT)]
+
+MIT License
+
+Copyright 2013-2014 RAD Game Tools and Valve Software
+Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
+Copyright (c) 2017 Frommi
+Copyright (c) 2017-2024 oyvindln
+
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus rustc-demangle 0.1.27]
+
+Copyright (c) 2014 Alex Crichton
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Lizenztext zu Rust-Standardbibliothek (std, core, alloc): LICENSE-MIT aus hashbrown 0.17.1 (0.16.1 ist gleich)]
+
+Copyright (c) 2016 Amanieu d'Antras
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
 ------------------------------------------------------------------------------
 dulwich 1.2.15
 Lizenz: Apache-2.0 OR GPL-2.0-or-later
 ------------------------------------------------------------------------------
+[COPYING]
+
 Dulwich may be used under the conditions of either of two licenses,
 the Apache License (version 2.0 or later) or the GNU General Public License,
 version 2.0 or later.
@@ -1577,6 +1852,311 @@ proprietary programs.  If your program is a subroutine library, you may
 consider it more useful to permit linking proprietary applications with the
 library.  If this is what you want to do, use the GNU Lesser General
 Public License instead of this License.
+
+[Fest eingebaute Bibliothek: pyo3 und pyo3-ffi (Rust-Crates) 0.29.2]
+
+pyo3 und pyo3-ffi (Rust-Crates) 0.29.2 ist in dulwich 1.2.15 fest eingebaut (statisch gelinkt). Das
+Wheel bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen
+unverändert aus dem Quelltext genau dieser Version.
+
+  Lizenz:   MIT OR Apache-2.0
+  Urheber:  PyO3 Project and Contributors
+  Quelle:   https://crates.io/crates/pyo3/0.29.2
+  Erkannt:  Die drei Rust-Erweiterungen von dulwich (_objects, _pack, _diff_tree) bringen keine SBOM
+            mit. In allen dreien stehen die Crate-Pfade pyo3-0.29.2 und pyo3-ffi-0.29.2 (x86_64 und
+            aarch64). Die Lizenzdateien beider Crates sind gleich; ausgegeben ist der MIT-Text (von
+            'MIT OR Apache-2.0' gilt eine nach Wahl).
+
+[Lizenztext zu pyo3 und pyo3-ffi (Rust-Crates) 0.29.2: LICENSE-MIT]
+
+Copyright (c) 2023-present PyO3 Project and Contributors.  https://github.com/PyO3
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Fest eingebaute Bibliothek: once_cell (Rust-Crate) 1.21.4]
+
+once_cell (Rust-Crate) 1.21.4 ist in dulwich 1.2.15 fest eingebaut (statisch gelinkt). Das Wheel
+bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen
+unverändert aus dem Quelltext genau dieser Version.
+
+  Lizenz:   MIT OR Apache-2.0
+  Urheber:  Aleksey Kladov (laut Cargo.toml; die Lizenzdatei nennt keinen Urheber)
+  Quelle:   https://crates.io/crates/once_cell/1.21.4
+  Erkannt:  Der Crate-Pfad once_cell-1.21.4 steht in allen drei Rust-Erweiterungen von dulwich
+            (x86_64 und aarch64). Ausgegeben ist der MIT-Text (von 'MIT OR Apache-2.0' gilt eine
+            nach Wahl).
+
+[Lizenztext zu once_cell (Rust-Crate) 1.21.4: LICENSE-MIT]
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+
+[Fest eingebaute Bibliothek: similar (Rust-Crate) 3.2.0]
+
+similar (Rust-Crate) 3.2.0 ist in dulwich 1.2.15 fest eingebaut (statisch gelinkt). Das Wheel bringt
+dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen unverändert
+aus dem Quelltext genau dieser Version.
+
+  Lizenz:   Apache-2.0
+  Urheber:  Armin Ronacher; Pierre-Étienne Meunier; Brandon Williams (laut Cargo.toml; die
+            Lizenzdatei nennt keinen Urheber)
+  Quelle:   https://crates.io/crates/similar/3.2.0
+  Erkannt:  Der Crate-Pfad similar-3.2.0 steht in der Rust-Erweiterung _pack von dulwich (x86_64 und
+            aarch64). memchr und bstr, die in der Cargo.lock von dulwich stehen, sind nicht als
+            Crate im Binary; die memchr-Routinen dort stammen aus der Rust-Standardbibliothek.
+
+[Lizenztext zu similar (Rust-Crate) 3.2.0: LICENSE]
+
+                              Apache License
+                        Version 2.0, January 2004
+                     http://www.apache.org/licenses/
+
+TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
+
+1. Definitions.
+
+   "License" shall mean the terms and conditions for use, reproduction,
+   and distribution as defined by Sections 1 through 9 of this document.
+
+   "Licensor" shall mean the copyright owner or entity authorized by
+   the copyright owner that is granting the License.
+
+   "Legal Entity" shall mean the union of the acting entity and all
+   other entities that control, are controlled by, or are under common
+   control with that entity. For the purposes of this definition,
+   "control" means (i) the power, direct or indirect, to cause the
+   direction or management of such entity, whether by contract or
+   otherwise, or (ii) ownership of fifty percent (50%) or more of the
+   outstanding shares, or (iii) beneficial ownership of such entity.
+
+   "You" (or "Your") shall mean an individual or Legal Entity
+   exercising permissions granted by this License.
+
+   "Source" form shall mean the preferred form for making modifications,
+   including but not limited to software source code, documentation
+   source, and configuration files.
+
+   "Object" form shall mean any form resulting from mechanical
+   transformation or translation of a Source form, including but
+   not limited to compiled object code, generated documentation,
+   and conversions to other media types.
+
+   "Work" shall mean the work of authorship, whether in Source or
+   Object form, made available under the License, as indicated by a
+   copyright notice that is included in or attached to the work
+   (an example is provided in the Appendix below).
+
+   "Derivative Works" shall mean any work, whether in Source or Object
+   form, that is based on (or derived from) the Work and for which the
+   editorial revisions, annotations, elaborations, or other modifications
+   represent, as a whole, an original work of authorship. For the purposes
+   of this License, Derivative Works shall not include works that remain
+   separable from, or merely link (or bind by name) to the interfaces of,
+   the Work and Derivative Works thereof.
+
+   "Contribution" shall mean any work of authorship, including
+   the original version of the Work and any modifications or additions
+   to that Work or Derivative Works thereof, that is intentionally
+   submitted to Licensor for inclusion in the Work by the copyright owner
+   or by an individual or Legal Entity authorized to submit on behalf of
+   the copyright owner. For the purposes of this definition, "submitted"
+   means any form of electronic, verbal, or written communication sent
+   to the Licensor or its representatives, including but not limited to
+   communication on electronic mailing lists, source code control systems,
+   and issue tracking systems that are managed by, or on behalf of, the
+   Licensor for the purpose of discussing and improving the Work, but
+   excluding communication that is conspicuously marked or otherwise
+   designated in writing by the copyright owner as "Not a Contribution."
+
+   "Contributor" shall mean Licensor and any individual or Legal Entity
+   on behalf of whom a Contribution has been received by Licensor and
+   subsequently incorporated within the Work.
+
+2. Grant of Copyright License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   copyright license to reproduce, prepare Derivative Works of,
+   publicly display, publicly perform, sublicense, and distribute the
+   Work and such Derivative Works in Source or Object form.
+
+3. Grant of Patent License. Subject to the terms and conditions of
+   this License, each Contributor hereby grants to You a perpetual,
+   worldwide, non-exclusive, no-charge, royalty-free, irrevocable
+   (except as stated in this section) patent license to make, have made,
+   use, offer to sell, sell, import, and otherwise transfer the Work,
+   where such license applies only to those patent claims licensable
+   by such Contributor that are necessarily infringed by their
+   Contribution(s) alone or by combination of their Contribution(s)
+   with the Work to which such Contribution(s) was submitted. If You
+   institute patent litigation against any entity (including a
+   cross-claim or counterclaim in a lawsuit) alleging that the Work
+   or a Contribution incorporated within the Work constitutes direct
+   or contributory patent infringement, then any patent licenses
+   granted to You under this License for that Work shall terminate
+   as of the date such litigation is filed.
+
+4. Redistribution. You may reproduce and distribute copies of the
+   Work or Derivative Works thereof in any medium, with or without
+   modifications, and in Source or Object form, provided that You
+   meet the following conditions:
+
+   (a) You must give any other recipients of the Work or
+       Derivative Works a copy of this License; and
+
+   (b) You must cause any modified files to carry prominent notices
+       stating that You changed the files; and
+
+   (c) You must retain, in the Source form of any Derivative Works
+       that You distribute, all copyright, patent, trademark, and
+       attribution notices from the Source form of the Work,
+       excluding those notices that do not pertain to any part of
+       the Derivative Works; and
+
+   (d) If the Work includes a "NOTICE" text file as part of its
+       distribution, then any Derivative Works that You distribute must
+       include a readable copy of the attribution notices contained
+       within such NOTICE file, excluding those notices that do not
+       pertain to any part of the Derivative Works, in at least one
+       of the following places: within a NOTICE text file distributed
+       as part of the Derivative Works; within the Source form or
+       documentation, if provided along with the Derivative Works; or,
+       within a display generated by the Derivative Works, if and
+       wherever such third-party notices normally appear. The contents
+       of the NOTICE file are for informational purposes only and
+       do not modify the License. You may add Your own attribution
+       notices within Derivative Works that You distribute, alongside
+       or as an addendum to the NOTICE text from the Work, provided
+       that such additional attribution notices cannot be construed
+       as modifying the License.
+
+   You may add Your own copyright statement to Your modifications and
+   may provide additional or different license terms and conditions
+   for use, reproduction, or distribution of Your modifications, or
+   for any such Derivative Works as a whole, provided Your use,
+   reproduction, and distribution of the Work otherwise complies with
+   the conditions stated in this License.
+
+5. Submission of Contributions. Unless You explicitly state otherwise,
+   any Contribution intentionally submitted for inclusion in the Work
+   by You to the Licensor shall be under the terms and conditions of
+   this License, without any additional terms or conditions.
+   Notwithstanding the above, nothing herein shall supersede or modify
+   the terms of any separate license agreement you may have executed
+   with Licensor regarding such Contributions.
+
+6. Trademarks. This License does not grant permission to use the trade
+   names, trademarks, service marks, or product names of the Licensor,
+   except as required for reasonable and customary use in describing the
+   origin of the Work and reproducing the content of the NOTICE file.
+
+7. Disclaimer of Warranty. Unless required by applicable law or
+   agreed to in writing, Licensor provides the Work (and each
+   Contributor provides its Contributions) on an "AS IS" BASIS,
+   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
+   implied, including, without limitation, any warranties or conditions
+   of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
+   PARTICULAR PURPOSE. You are solely responsible for determining the
+   appropriateness of using or redistributing the Work and assume any
+   risks associated with Your exercise of permissions under this License.
+
+8. Limitation of Liability. In no event and under no legal theory,
+   whether in tort (including negligence), contract, or otherwise,
+   unless required by applicable law (such as deliberate and grossly
+   negligent acts) or agreed to in writing, shall any Contributor be
+   liable to You for damages, including any direct, indirect, special,
+   incidental, or consequential damages of any character arising as a
+   result of this License or out of the use or inability to use the
+   Work (including but not limited to damages for loss of goodwill,
+   work stoppage, computer failure or malfunction, or any and all
+   other commercial damages or losses), even if such Contributor
+   has been advised of the possibility of such damages.
+
+9. Accepting Warranty or Additional Liability. While redistributing
+   the Work or Derivative Works thereof, You may choose to offer,
+   and charge a fee for, acceptance of support, warranty, indemnity,
+   or other liability obligations and/or rights consistent with this
+   License. However, in accepting such obligations, You may act only
+   on Your own behalf and on Your sole responsibility, not on behalf
+   of any other Contributor, and only if You agree to indemnify,
+   defend, and hold each Contributor harmless for any liability
+   incurred by, or claims asserted against, such Contributor by reason
+   of your accepting any such warranty or additional liability.
+
+END OF TERMS AND CONDITIONS
+
+APPENDIX: How to apply the Apache License to your work.
+
+   To apply the Apache License to your work, attach the following
+   boilerplate notice, with the fields enclosed by brackets "[]"
+   replaced with your own identifying information. (Don't include
+   the brackets!)  The text should be enclosed in the appropriate
+   comment syntax for the file format. We also recommend that a
+   file or class name and description of purpose be included on the
+   same "printed page" as the copyright notice for easier
+   identification within third-party archives.
+
+Copyright [yyyy] [name of copyright owner]
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+	http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+[Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)]
+
+Rust-Standardbibliothek (std, core, alloc) ist auch in dulwich fest eingebaut (statisch gelinkt).
+Lizenz (MIT OR Apache-2.0), Urheber und Lizenztexte stehen im Abschnitt des Pakets cryptography
+50.0.1 unter "Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)".
 
 ------------------------------------------------------------------------------
 fastapi 0.141.1
@@ -3953,6 +4533,12 @@ Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spd
   zerovec 0.10.4                     Unicode-3.0  (Urheber: The ICU4X Project Developers)
   zerovec-derive 0.10.3              Unicode-3.0  (Urheber: Manish Goregaokar)
   zmij 1.0.6                         MIT  (Urheber: David Tolnay)
+
+[Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)]
+
+Rust-Standardbibliothek (std, core, alloc) ist auch in pydantic-core fest eingebaut (statisch
+gelinkt). Lizenz (MIT OR Apache-2.0), Urheber und Lizenztexte stehen im Abschnitt des Pakets
+cryptography 50.0.1 unter "Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)".
 
 ------------------------------------------------------------------------------
 PyJWT 2.15.0
@@ -7052,6 +7638,12 @@ authorization of the copyright holder.
 Portions of ICU4X may have been adapted from ICU4C and/or ICU4J.
 ICU 1.8.1 to ICU 57.1 © 1995-2016 International Business Machines Corporation and others.
 
+[Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)]
+
+Rust-Standardbibliothek (std, core, alloc) ist auch in pyrage fest eingebaut (statisch gelinkt).
+Lizenz (MIT OR Apache-2.0), Urheber und Lizenztexte stehen im Abschnitt des Pakets cryptography
+50.0.1 unter "Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)".
+
 ------------------------------------------------------------------------------
 pytesseract 0.3.13
 Lizenz: Apache License 2.0
@@ -8677,6 +9269,166 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
+[Fest eingebaute Bibliothek: libuv 1.48.0]
+
+libuv 1.48.0 ist in uvloop 0.22.1 fest eingebaut (statisch gelinkt). Das Wheel bringt dafür keinen
+eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter stammen unverändert aus dem
+Quelltext genau dieser Version.
+
+  Lizenz:   MIT AND BSD-2-Clause AND ISC
+  Urheber:  libuv project contributors; Joyent, Inc. and other Node contributors; Ben Noordhuis
+            (queue.h, heap-inl.h); Internet Systems Consortium, Inc. und Internet Software
+            Consortium (inet.c); Niels Provos (tree.h)
+  Quelle:   https://github.com/libuv/libuv/tree/v1.48.0
+  Erkannt:  uvloop bringt libuv als vendor/libuv im Quelltext mit und linkt es statisch;
+            uv_version_string() des Wheels meldet 1.48.0. Die meisten Dateien stehen unter dem
+            MIT-Text von libuv bzw. von Joyent. Dateien mit eigener Lizenz, die im Binary stehen:
+            include/uv/tree.h (BSD-2-Clause, Niels Provos; die Signalverwaltung in src/unix/signal.c
+            und die Dateiüberwachung per inotify in src/unix/linux.c nutzen sie), src/inet.c (ISC,
+            uv_inet_pton und uv_inet_ntop) sowie src/idna.c, src/queue.h und src/heap-inl.h
+            (ISC-Text; LICENSE-extra nennt diese drei nicht, ihre Dateiköpfe schon).
+
+[Lizenztext zu libuv 1.48.0: LICENSE (MIT)]
+
+Copyright (c) 2015-present libuv project contributors.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+
+[Lizenztext zu libuv 1.48.0: LICENSE-extra (MIT-Teile aus dem Joyent-Projekt, Liste fremder Dateien)]
+
+This license applies to parts of libuv originating from the
+https://github.com/joyent/libuv repository:
+
+====
+
+Copyright Joyent, Inc. and other Node contributors. All rights reserved.
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to
+deal in the Software without restriction, including without limitation the
+rights to use, copy, modify, merge, publish, distribute, sublicense, and/or
+sell copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+IN THE SOFTWARE.
+
+====
+
+This license applies to all parts of libuv that are not externally
+maintained libraries.
+
+The externally maintained libraries used by libuv are:
+
+  - tree.h (from FreeBSD), copyright Niels Provos. Two clause BSD license.
+
+  - inet_pton and inet_ntop implementations, contained in src/inet.c, are
+    copyright the Internet Systems Consortium, Inc., and licensed under the ISC
+    license.
+
+[Lizenztext zu libuv 1.48.0: Lizenzkopf aus include/uv/tree.h (BSD-2-Clause)]
+
+/*-
+ * Copyright 2002 Niels Provos <provos@citi.umich.edu>
+ * All rights reserved.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions
+ * are met:
+ * 1. Redistributions of source code must retain the above copyright
+ *    notice, this list of conditions and the following disclaimer.
+ * 2. Redistributions in binary form must reproduce the above copyright
+ *    notice, this list of conditions and the following disclaimer in the
+ *    documentation and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
+ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
+ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
+ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
+ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ */
+
+[Lizenztext zu libuv 1.48.0: Lizenzkopf aus src/inet.c (ISC)]
+
+/*
+ * Copyright (c) 2004 by Internet Systems Consortium, Inc. ("ISC")
+ * Copyright (c) 1996-1999 by Internet Software Consortium.
+ *
+ * Permission to use, copy, modify, and distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND ISC DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS.  IN NO EVENT SHALL ISC BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT
+ * OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+[Lizenztext zu libuv 1.48.0: Lizenzkopf aus src/queue.h und src/heap-inl.h (ISC-Text)]
+
+/* Copyright (c) 2013, Ben Noordhuis <info@bnoordhuis.nl>
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
+[Lizenztext zu libuv 1.48.0: Lizenzkopf aus src/idna.c und src/idna.h (ISC-Text)]
+
+/* Copyright libuv contributors. All rights reserved.
+ *
+ * Permission to use, copy, modify, and/or distribute this software for any
+ * purpose with or without fee is hereby granted, provided that the above
+ * copyright notice and this permission notice appear in all copies.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES
+ * WITH REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF
+ * MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR
+ * ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES
+ * WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN
+ * ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF
+ * OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ */
+
 ------------------------------------------------------------------------------
 watchfiles 1.3.0
 Lizenz: MIT
@@ -8740,6 +9492,12 @@ Die vollständigen Texte der genannten Standardlizenzen stehen unter https://spd
   target-lexicon 0.13.5              Apache-2.0 WITH LLVM-exception  (Urheber: Dan Gohman)
   unicode-ident 1.0.12               (MIT OR Apache-2.0) AND Unicode-DFS-2016  (Urheber: David Tolnay)
   walkdir 2.5.0                      Unlicense OR MIT  (Urheber: Andrew Gallant)
+
+[Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)]
+
+Rust-Standardbibliothek (std, core, alloc) ist auch in watchfiles fest eingebaut (statisch gelinkt).
+Lizenz (MIT OR Apache-2.0), Urheber und Lizenztexte stehen im Abschnitt des Pakets cryptography
+50.0.1 unter "Fest eingebaute Bibliothek: Rust-Standardbibliothek (std, core, alloc)".
 
 ------------------------------------------------------------------------------
 websockets 17.1

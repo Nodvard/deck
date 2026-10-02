@@ -84,6 +84,7 @@ function isActionRunning(status) {
 }
 var ACTION_POLL_INTERVAL_MS = 3e3;
 var ACTION_POLL_MAX_MS = 60 * 60 * 1e3;
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -98,6 +99,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };

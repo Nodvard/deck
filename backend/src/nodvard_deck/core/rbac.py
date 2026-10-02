@@ -107,7 +107,7 @@ BUILTIN_ROLES: dict[str, tuple[str, ...]] = {
         "actions.approve:low", "actions.approve:medium",
         "jobs.read", "jobs.run",
         "files.read", "files.write",
-        "audit.read", "notifications.read",
+        "audit.read", "notifications.read", "notifications.write",
     ),
     "viewer": ("hosts.read", "jobs.read", "audit.read", "files.read", "notifications.read"),
 }

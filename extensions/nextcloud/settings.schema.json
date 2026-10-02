@@ -27,6 +27,7 @@
   "x-secrets": [
     {
       "label": "nextcloud-app-password",
+      "x-secret-bound-to": ["base_url"],
       "title": "App-Passwort",
       "description": "In Nextcloud unter Einstellungen → Sicherheit → „Neues App-Passwort erstellen“."
     }

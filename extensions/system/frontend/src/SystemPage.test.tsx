@@ -18,7 +18,7 @@ const INFO: SystemInfo = {
   failed_units: ["nginx.service"],
   updates: [{ package: "linux-image-rpi-v8", security: false }, { package: "openssl", security: true }],
   reboot_required: true, temperature_c: 44.3,
-  findings: [{ tone: "danger", text: "/mnt/daten zu 95 % voll" }, { tone: "warn", text: "Swap zu 71 % belegt -- RAM knapp" }],
+  findings: [{ tone: "danger", text: "/mnt/daten zu 95 % voll" }, { tone: "warn", text: "Swap zu 71 % belegt – RAM knapp" }],
 };
 
 const LIVE: LiveData = {

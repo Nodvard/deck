@@ -201,7 +201,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
       {controls}
       {data.throttled && data.throttled.flags.length > 0 && (
         <p className="panel px-3 py-2 text-sm text-amber-300" data-testid="throttled">
-          Raspberry Pi meldet: {data.throttled.flags.join(", ")} ({data.throttled.raw}) -- meist ein zu schwaches Netzteil oder Hitze.
+          Raspberry Pi meldet: {data.throttled.flags.join(", ")} ({data.throttled.raw}) – meist ein zu schwaches Netzteil oder Hitze.
         </p>
       )}
 

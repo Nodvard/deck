@@ -8,6 +8,7 @@ import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
 
 import { browserTimeZone } from "../../lib/deckTimezone";
+import { COMMON_ZONES, foldForSearch, germanZoneLabel, germanZoneTerms } from "./timezoneNames";
 import { Badge, inputClass } from "./ui";
 
 /** Wird angezeigt, wenn der Browser keine Zonenliste kennt (Intl.supportedValuesOf fehlt). */
@@ -31,14 +32,28 @@ export function timezoneOptions(extra: string[] = []): string[] {
   return [...new Set(["UTC", ...zones, ...extra.filter(Boolean)])].sort((a, b) => a.localeCompare(b));
 }
 
-/** Suche ohne Rücksicht auf Groß-/Kleinschreibung; "new york" findet "America/New_York". */
+/**
+ * Suche ohne Rücksicht auf Groß-/Kleinschreibung, Umlaute und Unterstriche (jedes Suchwort steht am
+ * Anfang eines Wortes im Namen): "new york" findet
+ * "America/New_York", und auch deutsche Namen gehen ("Wien", "Zürich"/"zuerich", "Großbritannien",
+ * "Mitteleuropa", siehe timezoneNames.ts).
+ */
 export function filterTimezones(zones: string[], query: string): string[] {
-  const words = query.toLowerCase().replace(/[_/]/g, " ").split(/\s+/).filter(Boolean);
+  const words = foldForSearch(query).split(/\s+/).filter(Boolean);
   if (words.length === 0) return zones;
+  // Jedes Suchwort muss der Anfang eines Wortes sein: „Wien“ soll Wien finden, nicht „Moldawien“.
   return zones.filter((zone) => {
-    const hay = zone.toLowerCase().replace(/[_/]/g, " ");
-    return words.every((w) => hay.includes(w));
+    const tokens = foldForSearch(`${zone} ${germanZoneTerms(zone).join(" ")}`).split(/\s+/);
+    return words.every((w) => tokens.some((token) => token.startsWith(w)));
   });
+}
+
+/** Ohne Suche: die gewählte Zone zuerst, dann die gängigen (Berlin, Wien, Zürich …), dann alle anderen. */
+export function orderTimezones(zones: string[], selected: string): string[] {
+  const present = new Set(zones);
+  const head = [selected, ...COMMON_ZONES].filter((z, i, all) => present.has(z) && all.indexOf(z) === i);
+  const first = new Set(head);
+  return [...head, ...zones.filter((z) => !first.has(z))];
 }
 
 function timeIn(zone: string): string | null {
@@ -62,8 +77,7 @@ export function TimezonePicker({
   const zones = useMemo(() => timezoneOptions([savedZone, value]), [savedZone, value]);
   // Ohne Suche steht die gewaehlte Zone ganz oben, sonst laege sie irgendwo in der langen Liste.
   const matches = useMemo(() => {
-    const found = filterTimezones(zones, query);
-    return query.trim() ? found : [value, ...found.filter((z) => z !== value)];
+    return query.trim() ? filterTimezones(zones, query) : orderTimezones(zones, value);
   }, [zones, query, value]);
   const device = browserTimeZone();
   const suggestDevice = device !== value && zones.includes(device);
@@ -80,7 +94,7 @@ export function TimezonePicker({
         <input
           type="search"
           aria-label="Zeitzone suchen"
-          placeholder="Zeitzone suchen, z. B. Berlin"
+          placeholder="Zeitzone suchen, z. B. Wien oder Berlin"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           className={`${inputClass} pl-9`}
@@ -101,6 +115,7 @@ export function TimezonePicker({
               }`}
             >
               {z}
+              {germanZoneLabel(z) && <span className="ml-2 text-xs font-normal text-white/45">{germanZoneLabel(z)}</span>}
             </button>
           </li>
         ))}

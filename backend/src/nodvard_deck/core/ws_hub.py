@@ -15,15 +15,16 @@ Hub haelt deshalb ausschliesslich fluechtigen Prozessspeicher, keine Zustellhist
 
 **RBAC-Filterung (Nachtrag, live als Luecke gemeldet):** docs/04 §4 verlangt fuer den
 `events`-Kanal "gefiltert nach RBAC". Jede Verbindung traegt einen Schnappschuss der
-Berechtigungen ihres Nutzers, EINMAL beim Auth-Handshake ueber `services.auth.
+Berechtigungen ihres Nutzers, beim Auth-Handshake ueber `services.auth.
 user_permissions()` ermittelt (`api/v1/ws.py`) -- bewusst NICHT aus dem JWT-`perms`-
 Claim gelesen, obwohl der existiert (`services.auth._issue_tokens()`): HTTP-Requests
 leiten ihre Berechtigung ueber `user_has_permission()` bei JEDEM Request frisch aus
 der DB ab, nie aus dem Claim, der SDK-Vertrag fuer WS soll keine zweite,
-moeglicherweise abweichende Quelle der Wahrheit eroeffnen. Der Schnappschuss ist so
-frisch wie der Access-Token selbst (15 Min, D-07) -- eine spaeter im laufenden
-Betrieb geaenderte Rolle wirkt erst nach einem Reconnect, kein zusaetzlicher
-DB-Zugriff pro Nachricht noetig.
+moeglicherweise abweichende Quelle der Wahrheit eroeffnen. Der Schnappschuss wird
+nicht pro Nachricht, sondern bei der regelmaessigen Pruefung der offenen Verbindung
+(`api/v1/ws.py`, alle 30 s) aufgefrischt (`set_permissions`): eine geaenderte Rolle
+wirkt so nach hoechstens einer halben Minute, ein deaktiviertes oder abgemeldetes
+Konto verliert die Verbindung ganz.
 `publish(..., required_permission=...)` liefert eine Nachricht nur an Verbindungen,
 deren Berechtigungen das erfuellen (`core.rbac.has_permission()`); ohne
 `required_permission` (Default `None`) sieht sie jede abonnierte, authentifizierte
@@ -72,6 +73,13 @@ class WsHub:
     def disconnect(self, conn_id: int) -> None:
         self._connections.pop(conn_id, None)
 
+    def set_permissions(self, conn_id: int, permissions: list[str]) -> None:
+        """Ersetzt den Berechtigungs-Schnappschuss einer offenen Verbindung (die Rolle des
+        Nutzers hat sich geaendert)."""
+        conn = self._connections.get(conn_id)
+        if conn is not None:
+            conn.permissions = list(permissions)
+
     def subscribe(self, conn_id: int, channel: str) -> None:
         conn = self._connections.get(conn_id)
         if conn is not None:
@@ -85,18 +93,38 @@ class WsHub:
     def subscriber_count(self, channel: str) -> int:
         return sum(1 for c in self._connections.values() if channel in c.channels)
 
-    async def publish(self, channel: str, payload: dict[str, Any], *, required_permission: str | None = None) -> None:
+    async def publish(
+        self,
+        channel: str,
+        payload: dict[str, Any],
+        *,
+        required_permission: str | None = None,
+        reduced_payload: dict[str, Any] | None = None,
+        full_permission: str | None = None,
+    ) -> None:
         """Ein einzelner tot/kaputter Socket darf weder andere Empfaenger noch den
         Aufrufer stoppen -- dasselbe Prinzip wie `EventBus.publish()`. `required_
         permission`, falls gesetzt, filtert die Zustellung zusaetzlich zum
         Abonnement -- ein Client OHNE die Berechtigung bleibt abonniert (kein Fehler),
-        bekommt aber genau DIESE Nachricht nicht."""
-        message = {"type": "event", "channel": channel, "payload": payload}
+        bekommt aber genau DIESE Nachricht nicht.
+
+        `reduced_payload` und `full_permission` zusammen: Verbindungen ohne `full_permission`
+        bekommen statt `payload` die gekuerzte Fassung (z. B. ohne Befehl einer Aktion) --
+        dieselbe Nachricht, pro Empfaenger in der passenden Tiefe."""
+        full = {"type": "event", "channel": channel, "payload": payload}
+        reduced = (
+            {"type": "event", "channel": channel, "payload": reduced_payload}
+            if reduced_payload is not None and full_permission is not None
+            else full
+        )
         for conn_id, conn in list(self._connections.items()):
             if channel not in conn.channels:
                 continue
             if required_permission is not None and not has_permission(conn.permissions, required_permission):
                 continue
+            message = full
+            if reduced is not full and not has_permission(conn.permissions, full_permission):  # type: ignore[arg-type]
+                message = reduced
             try:
                 await conn.socket.send_json(message)
             except Exception:  # noqa: BLE001

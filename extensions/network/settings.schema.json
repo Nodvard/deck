@@ -52,11 +52,13 @@
   "x-secrets": [
     {
       "label": "network-pihole-password",
+      "x-secret-bound-to": ["pihole.url"],
       "title": "Pi-hole: Passwort oder App-Passwort",
       "description": "Am besten ein App-Passwort: in Pi-hole unter Einstellungen → Web-Oberfläche / API → „App-Passwort konfigurieren“. Das funktioniert auch mit Zwei-Faktor-Anmeldung."
     },
     {
       "label": "network-npm-password",
+      "x-secret-bound-to": ["npm.url"],
       "title": "Nginx Proxy Manager: Passwort",
       "description": "Das Passwort des oben eingetragenen Kontos."
     }

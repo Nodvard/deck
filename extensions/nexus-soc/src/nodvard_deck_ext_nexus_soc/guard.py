@@ -125,7 +125,8 @@ class Guard:
                     "kind": "new_port", "severity": "warning" if any(p.public for p in fresh) else "info",
                     "title": "Neuer offener Port: " + ", ".join(p.label for p in fresh[:5]),
                     "detail": {"ports": [{"key": p.key, "port": p.port, "proto": p.proto, "address": p.address, "process": p.process,
-                                          "public": p.public, "dynamic": p.dynamic, "count": p.count} for p in fresh]},
+                                          "public": p.public, "dynamic": p.dynamic, "count": p.count, "unreadable": p.unreadable}
+                                         for p in fresh]},
                 })
                 ports["alerted"] = sorted(alerted | {p.key for p in fresh})
         await save_baseline(self._ctx, host.id, "ports", ports)
@@ -243,7 +244,7 @@ class Guard:
             "jails": {name: {k: v for k, v in j.items()} for name, j in snap.jails.items()},
             "banned_count": len(banned),
             "ports": [{"key": p.key, "proto": p.proto, "address": p.address, "port": p.port, "process": p.process,
-                       "public": p.public, "dynamic": p.dynamic, "count": p.count,
+                       "public": p.public, "dynamic": p.dynamic, "count": p.count, "unreadable": p.unreadable,
                        "new": not ix.port_is_known(p, known_ports, dynamic_min=snap.dynamic_min)} for p in snap.ports],
             "ssh_port": snap.sshd.get("port"),
             # None = nicht lesbar (ohne root liefert `sshd -T` nichts) -- nicht "keine Befunde".

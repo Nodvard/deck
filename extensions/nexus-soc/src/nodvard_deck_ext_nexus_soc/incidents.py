@@ -54,6 +54,19 @@ class IncidentStore:
         last = self._cooldowns.get(key)
         return last is not None and (time.time() - last) < cooldown_s
 
+    def merge_pending(self, host_name: str, target: str, *, is_crash: bool, seen_at: float) -> Incident | None:
+        """Steht derselbe Container (gleicher Host und Name, gleiche Art) schon im offenen
+        Batch? Dann zaehlt dort das neue Auftreten mit, es entsteht kein zweiter Vorfall."""
+        key = (host_name.lower(), target.lower())
+        for incident in self._pending:
+            if (incident.host_name.lower(), incident.target.lower()) == key and bool(
+                incident.details.get("is_crash")
+            ) == is_crash:
+                incident.details["occurrences"] = int(incident.details.get("occurrences") or 1) + 1
+                incident.details["last_seen"] = seen_at
+                return incident
+        return None
+
     def enqueue(self, incident: Incident) -> bool:
         """Merkt sich den Cooldown, haengt an die Warteschlange an. Gibt `True`
         zurueck, wenn dies das ERSTE Ereignis eines zuvor leeren Batches ist -- nur

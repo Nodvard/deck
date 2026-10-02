@@ -24,7 +24,9 @@ from .actions import (
     DryRunReport,
     GateDecision,
     GateOutcome,
+    StandingApproval,
 )
+from .addresses import same_target
 from .capabilities import (
     ALL_CAPABILITIES,
     ActionExecutor,
@@ -43,7 +45,7 @@ from .capabilities import (
     TerminalSession,
     TerminalTarget,
 )
-from .context import ConnectorType, ExtensionContext, JobSpec, SecretHandleRef
+from .context import ConnectorType, ExtensionContext, JobSpec, SecretHandleRef, current_job_trigger
 from .errors import (
     ActionBlocked,
     HostUnreachable,
@@ -55,6 +57,7 @@ from .errors import (
     SecretUnavailable,
 )
 from .extension import NodvardExtension
+from .http import max_body_bytes
 from .manifest import KNOWN_PERMISSIONS, ExtensionManifest, load_manifest
 from .types import (
     Actor,
@@ -109,10 +112,13 @@ __all__ = [
     "ExtensionContext",
     "ExtensionManifest",
     "load_manifest",
+    "same_target",
     "KNOWN_PERMISSIONS",
+    "max_body_bytes",
     "ConnectorType",
     "JobSpec",
     "SecretHandleRef",
+    "current_job_trigger",
     # Aktionen / Gate
     "ActionRequest",
     "ActionResult",
@@ -122,6 +128,7 @@ __all__ = [
     "GateOutcome",
     "REQUEST_WAIT_S",
     "DryRunReport",
+    "StandingApproval",
     # Capabilities
     "ALL_CAPABILITIES",
     "HostProvider",

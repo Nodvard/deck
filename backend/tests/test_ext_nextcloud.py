@@ -256,6 +256,31 @@ async def test_nextcloud_list_stat_download_over_the_real_files_api(client, db_s
 
 
 @pytest.mark.asyncio
+async def test_nextcloud_paths_leaving_the_file_area_are_rejected_over_the_real_files_api(
+    client, db_session, test_settings, mock_webdav
+):
+    base_url, state = mock_webdav
+    token = await _setup_nextcloud(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    calls_before = list(state["calls"])
+
+    for bad in ("../../calendars/alice", "/a/../../x", "%2e%2e/%2e%2e/trashbin"):
+        listing = await client.get("/api/v1/files/nextcloud/list", params={"path": bad}, headers=headers)
+        assert listing.status_code == 404, (bad, listing.text)
+        download = await client.get("/api/v1/files/nextcloud/download", params={"path": bad}, headers=headers)
+        assert download.status_code == 404, (bad, download.text)
+        removed = await client.post("/api/v1/files/nextcloud/remove", json={"path": bad}, headers=headers)
+        assert removed.status_code == 404, (bad, removed.text)
+        moved = await client.post(
+            "/api/v1/files/nextcloud/rename", json={"src": "/docs/notes.txt", "dst": bad}, headers=headers
+        )
+        assert moved.status_code == 404, (bad, moved.text)
+
+    assert state["calls"] == calls_before
+    assert "/docs/notes.txt" in state["fs"]
+
+
+@pytest.mark.asyncio
 async def test_nextcloud_listed_entry_path_is_directly_usable_for_a_follow_up_call(
     client, db_session, test_settings, mock_webdav
 ):

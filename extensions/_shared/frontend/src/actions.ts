@@ -35,9 +35,14 @@ export function actionStatusLabel(status: string | null | undefined): string {
   return ACTION_STATUS_LABEL[status ?? ""] ?? status ?? "?";
 }
 
+/** Hinweis, wenn das Backend Ausgabe und Fehlertext weglässt (Nutzer ohne Server-Rechte). */
+export const OUTPUT_HIDDEN_HINT = "Ausgabe nur für Nutzer mit Server-Rechten sichtbar";
+
 /** Das, was Antworten der Aktions-Routen gemeinsam haben: `ActionOut` des Kerns
  * (`id`) bzw. die kurze Antwort der Erweiterungen (`action_id`). */
 export interface ActionState {
+  /** `true`: dem Nutzer fehlen die Server-Rechte, Ausgabe und Fehlertext sind leer. */
+  output_hidden?: boolean | null;
   id?: string;
   action_id?: string;
   status?: string | null;
@@ -73,6 +78,7 @@ export function describeActionOutcome(a: ActionState): ActionOutcome {
     case "succeeded":
       return { tone: "success", text: "Ausgeführt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen – ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };

@@ -12,6 +12,7 @@ Servernamen der jeweiligen Installation ab und ist keine generische Kern-Regel -
 from __future__ import annotations
 
 import re
+import shlex
 from typing import Any, NamedTuple
 
 DEFAULT_FORBIDDEN_HOST_KEYWORDS = (
@@ -42,17 +43,76 @@ def looks_like_host_not_container(command: str, *, forbidden_keywords: tuple[str
 
 
 _PLAIN_RESTART_RE = re.compile(r"docker restart ([A-Za-z0-9][A-Za-z0-9_.-]*)")
+_CONTAINER_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
 
 def is_routine_restart(command: str, host_id: str, batch_targets: set[tuple[str, str]]) -> bool:
     """Ist `command` ein schlichter Neustart eines Containers, der in DIESEM Batch auf
-    GENAU diesem Host als Vorfall vorkam? Nur dann stuft der KI-Vorschlag sein Risiko auf
-    MEDIUM herab -- sonst bleibt es HOCH. Streng: nach dem Trimmen exakt
+    GENAU diesem Host als Vorfall vorkam? Streng: nach dem Trimmen exakt
     `docker restart <name>` (kleingeschrieben, ein Leerzeichen, keine Flags, keine weiteren
     Argumente, keine Shell-Zeichen), Name nach `^[A-Za-z0-9][A-Za-z0-9_.-]*$`.
     `batch_targets` sind (Host-ID, Containername)-Paare der Vorfaelle des Batches."""
     match = _PLAIN_RESTART_RE.fullmatch(command.strip())
     return match is not None and (host_id, match.group(1)) in batch_targets
+
+
+def plain_restart_name(command: str) -> str | None:
+    """Der Containername, wenn `command` ein schlichter `docker restart <name>` ist (siehe
+    `is_routine_restart`), sonst `None`."""
+    match = _PLAIN_RESTART_RE.fullmatch(command.strip())
+    return match.group(1) if match else None
+
+
+def build_restart_command(container: str) -> str:
+    """Der Neustart-Befehl, den der Code selbst baut -- nie ein Befehl aus KI-Text. Der Name wird
+    geprueft (`ValueError` bei Sonderzeichen, Leerzeichen, Anfang mit `-` usw.) und zusaetzlich
+    quotiert."""
+    if not _CONTAINER_NAME_RE.fullmatch(container):
+        raise ValueError(f"Ungültiger Containername: {container!r}")
+    return f"docker restart {shlex.quote(container)}"
+
+
+def resolve_restart_target(
+    command: str, ai_host_name: str | None, restart_targets: set[tuple[str, str]], host_id_by_name: dict[str, str]
+) -> tuple[str, str] | None:
+    """(Host-ID, Containername) fuer einen KI-Vorschlag, oder `None`: dann wird nichts angelegt.
+
+    Nur ein schlichter `docker restart <name>` kommt in Frage, und das Paar muss in
+    `restart_targets` stehen (echte Abstuerze dieses Batches). Den Server bestimmt der Code aus
+    diesem Paar. Steht derselbe Containername auf mehreren Servern des Batches, entscheidet der
+    von der KI genannte Servername nur zwischen diesen -- einen anderen Server kann er nie
+    ansprechen (`host_id_by_name`: Kleinbuchstaben-Servername -> Host-ID der Ziele)."""
+    name = plain_restart_name(command)
+    if name is None or not _CONTAINER_NAME_RE.fullmatch(name):
+        return None  # was `build_restart_command` ablehnen wuerde, kommt gar nicht erst bis zum Vorschlag
+    hosts = sorted(h for h, n in restart_targets if n == name)
+    if len(hosts) > 1:
+        wanted = host_id_by_name.get((ai_host_name or "").lower())
+        hosts = [h for h in hosts if h == wanted]
+    if len(hosts) != 1 or not is_routine_restart(command, hosts[0], restart_targets):
+        return None
+    return hosts[0], name
+
+
+_CONTROL_CHARS_RE = re.compile(
+    r"[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff"
+    r"\U000e0000-\U000e007f]"
+)
+
+
+def sanitize_untrusted(text: str, max_len: int = 2000, *, keep_tail: bool = False) -> str:
+    """Fremden Text (Container-Logs, KI-Vorschlaege) fuer Prompt und Anzeige entschaerfen:
+    Steuerzeichen (ausser Zeilenumbruch und Tab), unsichtbare Zeichen (Richtungszeichen, Breite null,
+    Unicode-Tag-Zeichen, mit denen sich unsichtbarer Text an das Modell schmuggeln laesst) raus, Laenge
+    begrenzen. Ueberlanger Text behaelt standardmaessig den Anfang (Marke `[gekürzt]` dahinter); mit
+    `keep_tail=True` das Ende (Marke davor) -- richtig fuer Logs, bei denen die neuesten Zeilen unten stehen."""
+    cleaned = _CONTROL_CHARS_RE.sub("", (text or "").replace("\r\n", "\n").replace("\r", "\n"))
+    if len(cleaned) > max_len:
+        if keep_tail:
+            cleaned = "[gekürzt]\n" + cleaned[len(cleaned) - max_len :]
+        else:
+            cleaned = cleaned[:max_len] + " [gekürzt]"
+    return cleaned
 
 
 def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact: dict | None) -> bool:
@@ -175,13 +235,118 @@ def cause_notice(causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str:
 
 def cause_tag_for_command(command: str, host_id: str, causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str | None:
     """Kurz-Tag fuer die Begruendung eines Vorschlags: die Einordnung des Containers, den ein
-    `docker restart <name>` trifft, sonst (anderer Befehl) die verschiedenen Tags des Batches."""
-    if not causes:
+    `docker restart <name>` auf diesem Host trifft. Fuer jeden anderen Befehl `None` -- die
+    System-Einordnung darf nie an einem fremden Befehl haengen."""
+    name = plain_restart_name(command)
+    if name is None:
         return None
-    match = _DOCKER_RESTART_RE.search(command)
-    if match is not None:
-        entry = causes.get((host_id, match.group(1)))
-        if entry is not None:
-            return entry[2].tag
-    tags = list(dict.fromkeys(entry[2].tag for entry in causes.values()))
-    return " / ".join(tags)
+    entry = causes.get((host_id, name))
+    return entry[2].tag if entry is not None else None
+
+
+# ---------------------------------------------------------------------------
+# Feste Fakten im Lagebericht und Abgleich mit dem Modelltext
+# ---------------------------------------------------------------------------
+
+
+def format_finished_at(value: Any) -> str:
+    """"2026-09-30T10:00:01.123456789Z" -> "2026-09-30 10:00:01 UTC"; Unlesbares bleibt leer."""
+    match = re.match(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})", str(value or ""))
+    return f"{match.group(1)} {match.group(2)} UTC" if match else ""
+
+
+def facts_line(fact: dict[str, Any]) -> str:
+    """Die Fakten aus `docker inspect` als feste Zeile: Exit-Code, OOMKilled, Neustarts, Image,
+    Zeitpunkt. Vom Code geschrieben, nie vom Modell."""
+    parts = [f"Exit-Code {fact.get('exit_code')}", f"OOMKilled={str(bool(fact.get('oom_killed'))).lower()}"]
+    restarts = fact.get("restart_count")
+    if isinstance(restarts, int) and not isinstance(restarts, bool):
+        parts.append(f"{restarts} Neustart{'' if restarts == 1 else 's'}")
+    if fact.get("image"):
+        parts.append(f"Image {fact['image']}")
+    finished = format_finished_at(fact.get("finished_at"))
+    if finished:
+        parts.append(f"beendet {finished}")
+    return " · ".join(parts)
+
+
+def facts_notice(
+    causes: dict[tuple[str, str], tuple[str, str, Cause]], fact_map: dict[tuple[str, str], dict[str, Any]]
+) -> str:
+    """Feste Zeile(n) "Fakten (docker inspect): ..." fuer alle Container des Batches mit Fakten.
+    Bei genau einem Container ohne dessen Namen, sonst eine Zeile je Container."""
+    entries = [(target, host, fact_map[key]) for key, (target, host, _cause) in causes.items() if key in fact_map]
+    if not entries:
+        return ""
+    if len(entries) == 1:
+        return f"Fakten (docker inspect): {facts_line(entries[0][2])}"
+    return "\n".join(f"Fakten zu {target} @ {host}: {facts_line(fact)}" for target, host, fact in entries)
+
+
+_OOM_CLAIM_RE = re.compile(r"oomkilled\s*(?:=|:|ist|is)?\s*[\"']?(true|false)\b", re.IGNORECASE)
+_EXIT_CLAIM_RE = re.compile(r"(?:exit[\s_-]*code|exitcode|exit)\s*[=:]?\s*(-?\d+)", re.IGNORECASE)
+_MEMORY_WORDS_RE = re.compile(
+    r"speichermangel|out of memory|arbeitsspeicher|\boom\b|nicht genug speicher|speicher\s+(?:war\s+)?(?:voll|knapp|erschöpft)",
+    re.IGNORECASE,
+)
+_NEGATION_RE = re.compile(r"\b(?:kein|keine|keinen|nicht|ohne|not|no|without)\b", re.IGNORECASE)
+_EXTERNAL_RE = re.compile(
+    r"von au(?:ss|ß|s)en (?:beendet|gestoppt|gekillt)|extern beendet|docker (?:kill|stop)|manuell gestoppt", re.IGNORECASE
+)
+_LABEL_PREFIX_RE = re.compile(r"^(\s*Lagebericht\s*:\s*)(.*)$", re.IGNORECASE)
+_SENTENCE_END_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _contradicts(sentence: str, facts: list[dict[str, Any]], *, complete: bool, tags: set[str]) -> bool:
+    claims = {m.lower() for m in _OOM_CLAIM_RE.findall(sentence)}
+    oom_values = {str(bool(f.get("oom_killed"))).lower() for f in facts}
+    if len(claims) == 2 and len(oom_values) < 2:
+        return True  # "OOMKilled=true ... da OOMKilled=false": widerspricht sich selbst
+    if not (facts and complete):
+        return False  # ohne vollstaendige Fakten laesst sich nichts abgleichen
+    if len(oom_values) == 1 and claims and not claims <= oom_values:
+        return True
+    codes = {f.get("exit_code") for f in facts}
+    if any(int(c) not in codes for c in _EXIT_CLAIM_RE.findall(sentence)):
+        return True
+    without_claims = _OOM_CLAIM_RE.sub("", sentence)
+    if oom_values == {"false"} and _MEMORY_WORDS_RE.search(without_claims) and not _NEGATION_RE.search(sentence):
+        return True
+    if oom_values == {"true"} and re.search(r"kein(?:en)?\s+(?:speichermangel|oom)", sentence, re.IGNORECASE):
+        return True
+    return tags == {"echter Absturz"} and bool(_EXTERNAL_RE.search(sentence)) and not _NEGATION_RE.search(sentence)
+
+
+def drop_contradictions(
+    text: str, facts: list[dict[str, Any]], *, expected: int, tags: set[str]
+) -> tuple[str, int]:
+    """Entfernt aus dem Modelltext die Saetze, die den Fakten aus `docker inspect` widersprechen
+    (falscher OOMKilled-Wert, falscher Exit-Code, Speichermangel trotz OOMKilled=false, "von aussen
+    beendet" bei einem echten Absturz) oder sich selbst widersprechen. Gibt den bereinigten Text und
+    die Zahl der entfernten Saetze zurueck. `expected`: Zahl der Container im Batch; liegen nicht
+    fuer alle Fakten vor, wird nur auf Selbstwiderspruch geprueft."""
+    complete = bool(facts) and len(facts) >= expected
+    dropped = 0
+    lines_out: list[str] = []
+    for line in (text or "").splitlines():
+        match = _LABEL_PREFIX_RE.match(line)
+        prefix, body = (match.group(1), match.group(2)) if match else ("", line)
+        kept: list[str] = []
+        for sentence in (s for s in _SENTENCE_END_RE.split(body) if s.strip()):
+            if _contradicts(sentence, facts, complete=complete, tags=tags):
+                dropped += 1
+            else:
+                kept.append(sentence.strip())
+        if kept:
+            lines_out.append(prefix + " ".join(kept) if match else " ".join(kept))
+        elif not body.strip():
+            lines_out.append(line)  # Leerzeilen bleiben
+    return "\n".join(lines_out).strip(), dropped
+
+
+def contradiction_notice(dropped: int) -> str:
+    if dropped <= 0:
+        return ""
+    if dropped == 1:
+        return "Hinweis: Eine Aussage von Nodvard KI widersprach den Fakten oben und wurde entfernt."
+    return f"Hinweis: {dropped} Aussagen von Nodvard KI widersprachen den Fakten oben und wurden entfernt."

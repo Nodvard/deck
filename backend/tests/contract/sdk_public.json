@@ -50,7 +50,8 @@
     "payload": false,
     "proposed_by": true,
     "reason": true,
-    "risk": false
+    "risk": false,
+    "standing_approval": false
    }
   },
   "lattice_sdk.ActionResult": {
@@ -403,6 +404,8 @@
    "art": "klasse",
    "params": {
     "address": true,
+    "credential_port": false,
+    "credential_username": false,
     "display_name": true,
     "has_credential": false,
     "id": true,
@@ -614,6 +617,7 @@
   "lattice_sdk.NotifyResult": {
    "art": "klasse",
    "params": {
+    "delivered": false,
     "notification_id": true,
     "suppressed": false
    }
@@ -701,6 +705,14 @@
     "message": false,
     "total_bytes": false,
     "used_bytes": false
+   }
+  },
+  "lattice_sdk.StandingApproval": {
+   "art": "klasse",
+   "params": {
+    "granted_at": true,
+    "granted_by_user_id": true,
+    "label": false
    }
   },
   "lattice_sdk.StatView": {
@@ -807,7 +819,8 @@
     "payload": false,
     "proposed_by": true,
     "reason": true,
-    "risk": false
+    "risk": false,
+    "standing_approval": false
    }
   },
   "lattice_sdk.actions.ActionResult": {
@@ -864,6 +877,27 @@
   },
   "lattice_sdk.actions.REQUEST_WAIT_S": {
    "art": "konstante"
+  },
+  "lattice_sdk.actions.StandingApproval": {
+   "art": "klasse",
+   "params": {
+    "granted_at": true,
+    "granted_by_user_id": true,
+    "label": false
+   }
+  },
+  "lattice_sdk.addresses.same_target": {
+   "art": "funktion",
+   "params": {
+    "new": true,
+    "old": true
+   }
+  },
+  "lattice_sdk.addresses.target_form": {
+   "art": "funktion",
+   "params": {
+    "value": true
+   }
   },
   "lattice_sdk.capabilities.AIProvider": {
    "art": "klasse",
@@ -1056,6 +1090,10 @@
   "lattice_sdk.context.ActionsHandle": {
    "art": "klasse",
    "methoden": {
+    "check_standing_approval": {
+     "granted_by_user_id": true,
+     "risk": true
+    },
     "list": {
      "correlation_id": false,
      "limit": false
@@ -1081,6 +1119,7 @@
     "include_router": {
      "permission": false,
      "prefix": false,
+     "public": false,
      "router": true,
      "tags": false
     }
@@ -1280,6 +1319,9 @@
      "label": true,
      "value": true
     },
+    "delete": {
+     "label": true
+    },
     "exists": {
      "label": true
     },
@@ -1342,6 +1384,14 @@
      "payload": true
     }
    }
+  },
+  "lattice_sdk.context.current_job_trigger": {
+   "art": "funktion",
+   "params": {}
+  },
+  "lattice_sdk.current_job_trigger": {
+   "art": "funktion",
+   "params": {}
   },
   "lattice_sdk.errors.ActionBlocked": {
    "art": "klasse",
@@ -1434,6 +1484,15 @@
     }
    }
   },
+  "lattice_sdk.http.MAX_BODY_ATTR": {
+   "art": "konstante"
+  },
+  "lattice_sdk.http.max_body_bytes": {
+   "art": "funktion",
+   "params": {
+    "limit": true
+   }
+  },
   "lattice_sdk.is_compatible": {
    "art": "funktion",
    "params": {
@@ -1480,6 +1539,19 @@
    "art": "funktion",
    "params": {
     "path": true
+   }
+  },
+  "lattice_sdk.max_body_bytes": {
+   "art": "funktion",
+   "params": {
+    "limit": true
+   }
+  },
+  "lattice_sdk.same_target": {
+   "art": "funktion",
+   "params": {
+    "new": true,
+    "old": true
    }
   },
   "lattice_sdk.types.Actor": {
@@ -1588,6 +1660,8 @@
    "art": "klasse",
    "params": {
     "address": true,
+    "credential_port": false,
+    "credential_username": false,
     "display_name": true,
     "has_credential": false,
     "id": true,
@@ -1618,6 +1692,7 @@
   "lattice_sdk.types.NotifyResult": {
    "art": "klasse",
    "params": {
+    "delivered": false,
     "notification_id": true,
     "suppressed": false
    }
@@ -1930,7 +2005,8 @@
     "payload": false,
     "proposed_by": true,
     "reason": true,
-    "risk": false
+    "risk": false,
+    "standing_approval": false
    }
   },
   "nodvard_sdk.ActionResult": {
@@ -2283,6 +2359,8 @@
    "art": "klasse",
    "params": {
     "address": true,
+    "credential_port": false,
+    "credential_username": false,
     "display_name": true,
     "has_credential": false,
     "id": true,
@@ -2494,6 +2572,7 @@
   "nodvard_sdk.NotifyResult": {
    "art": "klasse",
    "params": {
+    "delivered": false,
     "notification_id": true,
     "suppressed": false
    }
@@ -2581,6 +2660,14 @@
     "message": false,
     "total_bytes": false,
     "used_bytes": false
+   }
+  },
+  "nodvard_sdk.StandingApproval": {
+   "art": "klasse",
+   "params": {
+    "granted_at": true,
+    "granted_by_user_id": true,
+    "label": false
    }
   },
   "nodvard_sdk.StatView": {
@@ -2687,7 +2774,8 @@
     "payload": false,
     "proposed_by": true,
     "reason": true,
-    "risk": false
+    "risk": false,
+    "standing_approval": false
    }
   },
   "nodvard_sdk.actions.ActionResult": {
@@ -2744,6 +2832,27 @@
   },
   "nodvard_sdk.actions.REQUEST_WAIT_S": {
    "art": "konstante"
+  },
+  "nodvard_sdk.actions.StandingApproval": {
+   "art": "klasse",
+   "params": {
+    "granted_at": true,
+    "granted_by_user_id": true,
+    "label": false
+   }
+  },
+  "nodvard_sdk.addresses.same_target": {
+   "art": "funktion",
+   "params": {
+    "new": true,
+    "old": true
+   }
+  },
+  "nodvard_sdk.addresses.target_form": {
+   "art": "funktion",
+   "params": {
+    "value": true
+   }
   },
   "nodvard_sdk.capabilities.AIProvider": {
    "art": "klasse",
@@ -2936,6 +3045,10 @@
   "nodvard_sdk.context.ActionsHandle": {
    "art": "klasse",
    "methoden": {
+    "check_standing_approval": {
+     "granted_by_user_id": true,
+     "risk": true
+    },
     "list": {
      "correlation_id": false,
      "limit": false
@@ -2961,6 +3074,7 @@
     "include_router": {
      "permission": false,
      "prefix": false,
+     "public": false,
      "router": true,
      "tags": false
     }
@@ -3160,6 +3274,9 @@
      "label": true,
      "value": true
     },
+    "delete": {
+     "label": true
+    },
     "exists": {
      "label": true
     },
@@ -3222,6 +3339,14 @@
      "payload": true
     }
    }
+  },
+  "nodvard_sdk.context.current_job_trigger": {
+   "art": "funktion",
+   "params": {}
+  },
+  "nodvard_sdk.current_job_trigger": {
+   "art": "funktion",
+   "params": {}
   },
   "nodvard_sdk.errors.ActionBlocked": {
    "art": "klasse",
@@ -3314,6 +3439,15 @@
     }
    }
   },
+  "nodvard_sdk.http.MAX_BODY_ATTR": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.http.max_body_bytes": {
+   "art": "funktion",
+   "params": {
+    "limit": true
+   }
+  },
   "nodvard_sdk.is_compatible": {
    "art": "funktion",
    "params": {
@@ -3360,6 +3494,19 @@
    "art": "funktion",
    "params": {
     "path": true
+   }
+  },
+  "nodvard_sdk.max_body_bytes": {
+   "art": "funktion",
+   "params": {
+    "limit": true
+   }
+  },
+  "nodvard_sdk.same_target": {
+   "art": "funktion",
+   "params": {
+    "new": true,
+    "old": true
    }
   },
   "nodvard_sdk.types.Actor": {
@@ -3468,6 +3615,8 @@
    "art": "klasse",
    "params": {
     "address": true,
+    "credential_port": false,
+    "credential_username": false,
     "display_name": true,
     "has_credential": false,
     "id": true,
@@ -3498,6 +3647,7 @@
   "nodvard_sdk.types.NotifyResult": {
    "art": "klasse",
    "params": {
+    "delivered": false,
     "notification_id": true,
     "suppressed": false
    }

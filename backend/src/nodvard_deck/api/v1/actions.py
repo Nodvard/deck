@@ -5,6 +5,15 @@ Katalog+Ausloeser (`GET/POST /hosts/{id}/actions...`) liegt in `api/v1/hosts.py`
 er zusaetzlich einen Host laedt -- beide rufen fuer die eigentliche Entscheidung
 `core.gate` auf, nicht sich gegenseitig.
 
+**Ausgabe:** Ausgabe und Fehlertext einer Ausfuehrung (`result`) liefert die API nur an Nutzer
+mit `hosts.execute` aus (`core/action_output.py`); alle anderen sehen Status, Zeiten und
+Beteiligte, `output_hidden` ist dann `true`.
+
+**Befehl:** Der `payload` (Shell-Befehl, Skript-Inhalt, Parameter) kann Zugangsdaten enthalten.
+Ihn liefert die API vollstaendig nur an Nutzer, die die Aktion ausfuehren (`hosts.execute`) oder
+entscheiden duerfen (`actions.approve:<risiko>`); allen anderen bleiben nur harmlose Kennungen
+(`core/action_output.py`), `payload_hidden` ist dann `true`.
+
 **Permission-Modell, nicht explizit in docs/03 §1 ausbuchstabiert (Gap-Fill-
 Entscheidung):** Lesen (`GET`) braucht `hosts.read` -- ein Vorschlag ist immer
 host-bezogen, wer Hosts sehen darf, darf auch die Vorschlaege dazu sehen. Entscheiden
@@ -28,6 +37,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core import gate as gate_service
+from ...core.action_output import OUTPUT_PERMISSION, hide_result, visible_payload
 from ...models import Action, User
 from ...services.actor_labels import ActorLabels, load_actor_labels, raw_actor
 from ...services.auth import user_has_permission
@@ -46,6 +56,10 @@ class ActionOut(BaseModel):
     action_type: str
     host_id: str | None
     payload: dict[str, Any]
+    """Ohne `hosts.execute` bzw. `actions.approve:<risiko>` nur harmlose Kennungen (z. B. `host_id`,
+    `vmid`); Befehl, Skript-Inhalt und Parameter fehlen dann, `payload_hidden` ist `true`."""
+    payload_hidden: bool = False
+    """`true`, wenn dem Abrufenden Teile des `payload` vorenthalten wurden."""
     risk: str
     status: str
     proposed_by_type: str
@@ -62,17 +76,28 @@ class ActionOut(BaseModel):
     executed_at: datetime | None
     finished_at: datetime | None
     result: dict[str, Any]
+    """Ergebnis der Ausfuehrung. Ohne `hosts.execute` fehlen Ausgabe, Fehlertext und Einzelheiten
+    (`output`, `error`, `detail` sind dann leer); Erfolg, Exitcode und Dauer bleiben."""
+    output_hidden: bool = False
+    """`true`, wenn dem Abrufenden Ausgabe oder Fehlertext vorenthalten wurde (kein `hosts.execute`)."""
     correlation_id: str | None
     idempotency_key: str | None
     expires_at: datetime | None
     created_at: datetime
 
     @classmethod
-    def from_model(cls, a: Action, labels: ActorLabels | None = None) -> "ActionOut":
-        """`labels` kommt aus `load_actor_labels()`; ohne sie stehen die rohen Werte da."""
+    def from_model(
+        cls, a: Action, labels: ActorLabels | None = None, *, show_output: bool, show_payload: bool
+    ) -> "ActionOut":
+        """`labels` kommt aus `load_actor_labels()`; ohne sie stehen die rohen Werte da.
+        `show_output=False` laesst Ausgabe und Fehlertext des Ergebnisses weg. Bewusst ohne
+        Standardwert: wer es vergisst, bekommt einen Fehler statt Ausgabe fuer alle.
+        `show_payload=False` reduziert den `payload` auf harmlose Kennungen (ebenso ohne Standardwert)."""
+        result, output_hidden = (a.result, False) if show_output else hide_result(a.result)
+        payload, payload_hidden = (a.payload, False) if show_payload else visible_payload(a.payload)
         return cls(
             id=a.id, ext_id=a.ext_id, action_type=a.action_type, host_id=a.host_id,
-            payload=a.payload, risk=a.risk, status=a.status,
+            payload=payload, payload_hidden=payload_hidden, risk=a.risk, status=a.status,
             proposed_by_type=a.proposed_by_type, proposed_by_id=a.proposed_by_id,
             proposed_by_label=(
                 labels.proposed_by(a) if labels else raw_actor(a.proposed_by_type, a.proposed_by_id)
@@ -81,22 +106,40 @@ class ActionOut(BaseModel):
             approved_by_user_id=a.approved_by_user_id,
             approved_by_label=labels.approved_by(a) if labels else a.approved_by_user_id,
             approved_at=a.approved_at,
-            executed_at=a.executed_at, finished_at=a.finished_at, result=a.result,
+            executed_at=a.executed_at, finished_at=a.finished_at, result=result,
+            output_hidden=output_hidden,
             correlation_id=a.correlation_id, idempotency_key=a.idempotency_key,
             expires_at=a.expires_at, created_at=a.created_at,
         )
 
 
+def may_see_payload(viewer: User, action: Action) -> bool:
+    """Den Befehl sieht, wer die Aktion ausfuehren darf -- und wer sie bestaetigen darf: eine
+    Freigabe ohne den Befehl zu kennen waere keine."""
+    return user_has_permission(viewer, OUTPUT_PERMISSION) or user_has_permission(
+        viewer, f"actions.approve:{action.risk}"
+    )
+
+
 async def action_out(session: AsyncSession, action: Action, viewer: User) -> ActionOut:
     """Eine Aktion samt aufgeloesten Namen (Vorschlagender/Entscheider). Namen anderer
     Nutzer bekommt nur, wer sie sehen darf (`actor_labels.may_see_other_users`)."""
-    return ActionOut.from_model(action, await load_actor_labels(session, [action], viewer=viewer))
+    labels = await load_actor_labels(session, [action], viewer=viewer)
+    return ActionOut.from_model(
+        action, labels,
+        show_output=user_has_permission(viewer, OUTPUT_PERMISSION),
+        show_payload=may_see_payload(viewer, action),
+    )
 
 
 async def action_outs(session: AsyncSession, actions: list[Action], viewer: User) -> list[ActionOut]:
     """Viele Aktionen, die Namen mit je EINER Abfrage fuer Nutzer und Erweiterungen."""
     labels = await load_actor_labels(session, actions, viewer=viewer)
-    return [ActionOut.from_model(a, labels) for a in actions]
+    show_output = user_has_permission(viewer, OUTPUT_PERMISSION)
+    return [
+        ActionOut.from_model(a, labels, show_output=show_output, show_payload=may_see_payload(viewer, a))
+        for a in actions
+    ]
 
 
 class RejectIn(BaseModel):

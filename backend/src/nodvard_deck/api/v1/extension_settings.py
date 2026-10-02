@@ -6,11 +6,17 @@ Erweiterungen -> Konfigurieren).
 - `PUT  /extensions/{id}/settings` prueft die Werte grob gegen das Schema und
   speichert NUR die Schluessel, die das Schema kennt -- interne Zustaende einer
   Extension (z. B. `acknowledged_unprotected` bei backups) bleiben unangetastet.
+  Felder mit `x-hidden` gehoeren den eigenen Routen der Extension und werden hier nie
+  uebernommen; was nicht mitgeschickt wird, bleibt wie gespeichert, ein `null` entfernt
+  den Wert (dann gilt wieder der Standard). Aendert sich ein Ziel, an das ein Geheimnis
+  gebunden ist (`x-secrets[].x-secret-bound-to`), wird dieses Geheimnis geloescht (auch bei
+  einer ersten Adresse und wenn nur eines von mehreren gebundenen Feldern wechselt).
   Laeuft die Extension, geht das Speichern ueber `ctx.settings.set()`, damit ihr
   `on_settings_changed` sofort greift.
 - `PUT  /extensions/{id}/secrets` setzt oder ersetzt ein Geheimnis im Vault. Welche
   Labels erlaubt sind, beschreibt das Schema unter `x-secrets`; gelesen werden
-  Geheimnisse hier nie.
+  Geheimnisse hier nie. Ist es an Felder gebunden (`x-secret-bound-to`), die alle noch leer
+  sind, antwortet die Route mit 409: erst die Adresse speichern, dann das Geheimnis.
 - `DELETE /extensions/{id}/secrets?label=...` entfernt ein solches Geheimnis wieder
   (idempotent).
 - `POST /extensions/{id}/test` prueft die Verbindung (`health()` der Extension bzw. bei
@@ -57,6 +63,9 @@ class ExtensionSettingsOut(BaseModel):
     schema_: dict[str, Any] | None = Field(default=None, alias="schema")
     values: dict[str, Any]
     secrets: list[SecretSlot]
+    secrets_cleared: list[str] = Field(default_factory=list)
+    """Nur nach `PUT .../settings`: Labels der Geheimnisse, die geloescht wurden, weil sich
+    das Ziel geaendert hat, zu dem sie gehoerten (sie sind dann wieder „nicht gesetzt“)."""
 
     model_config = {"populate_by_name": True}
 
@@ -203,7 +212,9 @@ async def _record(session, ext_id: str) -> ExtensionRecord:  # noqa: ANN001 - As
     return record
 
 
-async def _settings_out(session, ext_id: str, values: dict[str, Any]) -> ExtensionSettingsOut:  # noqa: ANN001
+async def _settings_out(
+    session, ext_id: str, values: dict[str, Any], secrets_cleared: list[str] | None = None  # noqa: ANN001
+) -> ExtensionSettingsOut:
     schema = schema_for(ext_id)
     slots = []
     for spec in _secret_slots_spec(schema, values):
@@ -212,7 +223,7 @@ async def _settings_out(session, ext_id: str, values: dict[str, Any]) -> Extensi
             label=spec["label"], title=spec.get("title") or spec["label"], description=spec.get("description"),
             item=spec.get("item"), is_set=exists, optional=bool(spec.get("optional")),
         ))
-    return ExtensionSettingsOut(schema=schema, values=values, secrets=slots)
+    return ExtensionSettingsOut(schema=schema, values=values, secrets=slots, secrets_cleared=secrets_cleared or [])
 
 
 @router.get("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
@@ -231,11 +242,33 @@ async def put_extension_settings(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Diese Erweiterung hat keine Einstellungen.")
 
     known = schema["properties"]
-    incoming = {k: v for k, v in payload.values.items() if k in known}
-    _check(incoming, {"type": "object", "properties": known, "required": schema.get("required") or []}, "Einstellungen")
+    # `x-hidden`-Felder pflegt die Erweiterung ueber ihre eigenen Routen (z. B. die Profile
+    # der Gameserver); eine alte Kopie aus der Oberflaeche darf sie nicht ueberschreiben.
+    writable = {k: v for k, v in known.items() if not (isinstance(v, dict) and v.get("x-hidden"))}
+    incoming = {k: v for k, v in payload.values.items() if k in writable}
+    _check(incoming, {"type": "object", "properties": writable}, "Einstellungen")
 
-    merged = {**dict(record.settings or {}), **incoming}
-    changed = sorted(k for k in incoming if (record.settings or {}).get(k) != incoming[k])
+    stored = dict(record.settings or {})
+    merged = {**stored, **incoming}
+    for key, value in incoming.items():
+        if value is None:
+            merged.pop(key, None)
+    # Pflichtfelder gelten fuer den Stand nach dem Zusammenfuehren (die Oberflaeche schickt nur
+    # Geaendertes); ein Standardwert im Schema zaehlt wie in der Einrichtungs-Pruefung als gesetzt.
+    required = [k for k in schema.get("required") or [] if (known.get(k) or {}).get("default") is None]
+    _check(merged, {"type": "object", "properties": {}, "required": required}, "Einstellungen")
+    changed = sorted(k for k in incoming if stored.get(k) != merged.get(k))
+
+    # Ein Geheimnis gehoert zu seinem Ziel: wer die Adresse aendert, gibt es neu ein.
+    # Gemeldet (Antwort und Protokoll) wird nur, was wirklich im Tresor lag.
+    cleared = []
+    for label in extension_setup.secrets_to_clear(schema, stored, merged):
+        row = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
+        if row is not None:
+            await vault.delete_secret(session, row.id)
+            cleared.append(label)
+    if cleared:
+        await session.flush()
 
     loaded = get_extension_runtime().loaded.get(ext_id)
     if loaded is not None:
@@ -250,9 +283,10 @@ async def put_extension_settings(
     await extension_setup.clear_last_test(session, ext_id)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="extension.settings", outcome="success",
-        target_type="extension", target_id=ext_id, detail={"changed": changed},
+        target_type="extension", target_id=ext_id,
+        detail={"changed": changed, **({"secrets_cleared": cleared} if cleared else {})},
     )
-    return await _settings_out(session, ext_id, merged)
+    return await _settings_out(session, ext_id, merged, cleared)
 
 
 @router.put("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT)
@@ -260,9 +294,18 @@ async def put_extension_secret(
     ext_id: str, payload: SecretIn, session: SessionDep, settings: SettingsDep, user: CurrentUser
 ) -> None:
     record = await _record(session, ext_id)
-    allowed = {s["label"] for s in _secret_slots_spec(schema_for(ext_id), dict(record.settings or {}))}
-    if payload.label not in allowed:
+    schema = schema_for(ext_id)
+    values = dict(record.settings or {})
+    slot = next((s for s in _secret_slots_spec(schema, values) if s["label"] == payload.label), None)
+    if slot is None:
         raise HTTPException(status_code=422, detail="Dieses Geheimnis gehört nicht zu dieser Erweiterung.")
+    if extension_setup.secret_target_missing(schema, values, slot):
+        # Ohne gespeichertes Ziel gehoert das Geheimnis zu keinem Server; es bekaeme sonst die
+        # Adresse, die später als Erstes eingetragen wird (auch die eines fremden Servers).
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Erst die Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.",
+        )
 
     keyring = vault.load_keyring(settings)
     existing = (await session.execute(select(Secret).where(Secret.label == payload.label))).scalar_one_or_none()

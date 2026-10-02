@@ -62,6 +62,7 @@ _MANAGED_KEYS: dict[str, type] = {
     "hosts.reachability.interval_minutes": int,
     "system.update_check.enabled": bool,
     "system.update_check.channel": str,
+    "ssh.confirm_new_host_keys": bool,
 }
 _DEFAULTS: dict[str, Any] = {
     "autonomy.mode": "propose",
@@ -73,12 +74,14 @@ _DEFAULTS: dict[str, Any] = {
     "hosts.reachability.interval_minutes": reachability_service.DEFAULT_INTERVAL_MINUTES,
     "system.update_check.enabled": update_check_service.DEFAULT_ENABLED,
     "system.update_check.channel": update_check_service.DEFAULT_CHANNEL,
+    "ssh.confirm_new_host_keys": False,
 }
 """Feste Vorgaben. `system.timezone` und `audit.retention_days` haben keine feste: ihre Vorgabe
 kommt aus der Umgebung (`_default_for`)."""
 _AUDITED_KEYS = {
     "system.timezone", "audit.retention_days", "jobs.run_retention_days", "hosts.reachability.enabled",
     "hosts.reachability.interval_minutes", "system.update_check.enabled", "system.update_check.channel",
+    "ssh.confirm_new_host_keys",
 }
 """Diese Einstellungen landen mit altem und neuem Wert im Protokoll (`system.settings.changed`)."""
 _REACHABILITY_KEYS = {"hosts.reachability.enabled", "hosts.reachability.interval_minutes"}
@@ -197,7 +200,10 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
     stored = await settings_service.list_global(session)
     out: list[SettingOut] = []
     for key in _MANAGED_KEYS:
-        value = stored[key] if key in stored else await _default_for(key, session, settings)
+        if key == "ssh.confirm_new_host_keys" and settings.ssh_confirm_new_host_keys is not None:
+            value = settings.ssh_confirm_new_host_keys  # Umgebungsvariable uebersteuert
+        else:
+            value = stored[key] if key in stored else await _default_for(key, session, settings)
         out.append(SettingOut(key=key, value=value))
     return out
 
@@ -208,6 +214,7 @@ async def put_setting(
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
         "system.timezone", "audit.retention_days", "jobs.run_retention_days", "hosts.reachability.enabled",
         "hosts.reachability.interval_minutes", "system.update_check.enabled", "system.update_check.channel",
+        "ssh.confirm_new_host_keys",
     ],
     payload: SettingIn,
     session: SessionDep,
@@ -215,6 +222,14 @@ async def put_setting(
     user: CurrentUser,
 ) -> SettingOut:
     _validate(key, payload.value)
+    if key == "ssh.confirm_new_host_keys" and settings.ssh_confirm_new_host_keys is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Das ist über die Umgebungsvariable NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS festgelegt "
+                "und lässt sich hier nicht ändern."
+            ),
+        )
     if key in _AUDITED_KEYS:
         previous = await _current(key, session, settings)
     if key == "system.timezone":

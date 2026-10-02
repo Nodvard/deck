@@ -7,6 +7,7 @@
  * nur diese Anfrage schlaegt mit einer verstaendlichen Meldung fehl.
  */
 import { SERVER_UNAVAILABLE_TEXT, ServerUnavailableError, useAuthStore } from "../state/auth";
+import { validationText } from "./validation";
 
 export class ApiError extends Error {
   status: number;
@@ -50,19 +51,6 @@ async function readErrorDetail(res: Response): Promise<unknown> {
   } catch {
     return text;
   }
-}
-
-/** FastAPI-Validierungsfehler: `[{loc: ["body", "payload", "snapname"], msg}, ...]`. */
-function validationText(items: unknown[]): string {
-  return items
-    .map((item) => {
-      if (typeof item !== "object" || item === null) return String(item);
-      const { loc, msg } = item as { loc?: unknown; msg?: unknown };
-      const where = Array.isArray(loc) ? loc.filter((part) => !["body", "query", "path"].includes(String(part))).join(".") : "";
-      const text = typeof msg === "string" ? msg : JSON.stringify(item);
-      return where ? `${where}: ${text}` : text;
-    })
-    .join("; ");
 }
 
 /**

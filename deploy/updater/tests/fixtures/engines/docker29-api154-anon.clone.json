@@ -1,0 +1,100 @@
+{
+ "_doc": "Erwarteter create-Body und connect-Liste fuer docker29-api154-anon.json (Golden-Test in test_clone.py; bei einer gewollten Aenderung von clone.py neu erzeugen und den Unterschied pruefen).",
+ "body": {
+  "AttachStderr": true,
+  "AttachStdout": true,
+  "Env": [
+   "U2_SECRET=scrubbed-5",
+   "NODVARD_DECK_AUDIT_RETENTION_DAYS=scrubbed-6"
+  ],
+  "ExposedPorts": {
+   "8080/tcp": {}
+  },
+  "Healthcheck": {
+   "Timeout": 2000000000
+  },
+  "HostConfig": {
+   "Binds": [
+    "u2anon_updater:/app/updater:rw"
+   ],
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "IpcMode": "private",
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "Mounts": [
+    {
+     "Source": "b27fa970d5568f92456194bd4a5b6c6e635d7b6f7f3e88f479ae75a0f78f5728",
+     "Target": "/app/data",
+     "Type": "volume",
+     "VolumeOptions": {}
+    },
+    {
+     "ReadOnly": false,
+     "Source": "db8276d5abee12d7becb0855d620c24823a34e10809e354ce91e189d77fbb4d0",
+     "Target": "/old/only",
+     "Type": "volume"
+    }
+   ],
+   "NetworkMode": "u2anon_back",
+   "PortBindings": {
+    "8080/tcp": [
+     {
+      "HostIp": "",
+      "HostPort": "18082"
+     }
+    ]
+   },
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "unless-stopped"
+   },
+   "Runtime": "runc",
+   "ShmSize": 67108864
+  },
+  "Image": "ghcr.io/nodvard/deck:latest",
+  "Labels": {
+   "com.docker.compose.config-hash": "ea0389d3a5d0cd12a81c45b8295b3b7511b7b9aa368b022ee819e77a9c8aa3c8",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:33ad6395c397f069ef56bf0e922660c841810590c144d223db72ac4e5047d441",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "u2anon",
+   "com.docker.compose.project.config_files": "/srv/u2anon/compose.yml",
+   "com.docker.compose.project.working_dir": "/srv/u2anon",
+   "com.docker.compose.service": "nodvard-deck",
+   "com.docker.compose.version": "5.1.1",
+   "u2anon.user": "scrubbed-3"
+  },
+  "NetworkingConfig": {
+   "EndpointsConfig": {
+    "u2anon_back": {
+     "Aliases": [
+      "u2anon-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-back"
+     ]
+    }
+   }
+  },
+  "StopTimeout": 20
+ },
+ "connects": [
+  [
+   "cd642e628c8e45af5ec6f04ba2cd19f37b90a0701c1e8eb7b16010a13548baba",
+   {
+    "Aliases": [
+     "u2anon-nodvard-deck-1",
+     "nodvard-deck"
+    ]
+   }
+  ]
+ ],
+ "name": "u2anon-nodvard-deck-1",
+ "new_image_id": "sha256:33ad6395c397f069ef56bf0e922660c841810590c144d223db72ac4e5047d441"
+}

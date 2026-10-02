@@ -13,6 +13,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { RecoveryCodesPanel } from "../settings/RecoveryCodesPanel";
 import { TotpEnroll, type TotpSetup } from "../settings/TotpEnroll";
+import { TotpPasswordForm } from "../settings/TotpPasswordForm";
 import { Button, NoticeLine, errorText, type Notice } from "../settings/ui";
 import { StepNav } from "./StepNav";
 
@@ -20,6 +21,7 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
   /** `null` = noch nicht geladen. */
   const [enabled, setEnabled] = useState<boolean | null>(null);
   const [setup, setSetup] = useState<TotpSetup | null>(null);
+  const [asking, setAsking] = useState(false);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
@@ -41,11 +43,12 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
     return () => window.removeEventListener("beforeunload", warn);
   }, [codes]);
 
-  async function start() {
+  async function start(password: string) {
     setBusy(true);
     setNotice(null);
     try {
-      setSetup(await api.post<TotpSetup>("/me/totp/setup"));
+      setSetup(await api.post<TotpSetup>("/me/totp/setup", { current_password: password }));
+      setAsking(false);
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
@@ -107,10 +110,12 @@ export function TotpStep({ username, onBack, onNext }: { username: string; onBac
       <NoticeLine notice={notice} />
       {setup ? (
         <TotpEnroll setup={setup} busy={busy} onConfirm={(digits) => void confirm(digits)} onCancel={() => setSetup(null)} />
+      ) : asking ? (
+        <TotpPasswordForm busy={busy} onSubmit={(password) => void start(password)} onCancel={() => { setAsking(false); setNotice(null); }} />
       ) : (
         <StepNav onBack={onBack}>
           <Button onClick={() => onNext(false)}>Überspringen</Button>
-          <Button variant="primary" busy={busy} onClick={() => void start()}>Jetzt einrichten</Button>
+          <Button variant="primary" onClick={() => setAsking(true)}>Jetzt einrichten</Button>
         </StepNav>
       )}
     </div>

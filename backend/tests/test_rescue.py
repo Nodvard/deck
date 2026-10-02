@@ -271,14 +271,38 @@ def test_wrong_code_gives_no_cookie_and_no_hint(env):
     assert json.loads(body)["unlocked"] is False
 
 
-def test_five_wrong_codes_lock_even_the_right_one_for_a_while(env):
+def test_five_wrong_codes_lock_further_wrong_ones_but_the_right_code_still_works(env):
     for _ in range(rescue.MAX_FAILURES_PER_IP):
         status, headers, _, _ = env.request("POST", "/rescue/unlock", "code=AAAA-BBBB-CCCC")
         assert "set-cookie" not in headers
-    status, headers, body, _ = env.request("POST", "/rescue/unlock", f"code={env.code}")
+    status, headers, body, _ = env.request("POST", "/rescue/unlock", "code=AAAA-BBBB-CCCC")
     assert status == 429 and "set-cookie" not in headers and "retry-after" in headers
     assert int(headers["retry-after"]) >= 60
     assert b"Zu viele" in body
+    assert b"Bitte warte" not in body, "die Sperre trifft nur falsche Codes: Warten hilft nicht, die Eingabe pruefen schon"
+    assert b"richtige Code funktioniert weiterhin sofort" in body
+    status, headers, _, _ = env.request("POST", "/rescue/unlock", f"code={env.code}")
+    assert status == 303 and headers["set-cookie"].startswith("rescue_session="), "der richtige Code kommt auch waehrend der Sperre durch"
+
+
+def test_no_page_message_still_tells_people_to_wait_for_a_lock(env):
+    # Ein alter Link mit ?m=gesperrt zeigt keinen Text mehr, der das Warten verspricht
+    status, _, body, _ = env.request("GET", "/?m=gesperrt")
+    assert status == 503 and b"Bitte warte" not in body and b"flash" not in body.split(b"</style>")[-1]
+
+
+def test_guessing_during_a_lock_is_slowed_down_but_the_right_code_never_waits(env):
+    for sender in range(rescue.MAX_FAILURES_GLOBAL // rescue.MAX_FAILURES_PER_IP):
+        for _ in range(rescue.MAX_FAILURES_PER_IP):
+            env.rescue.try_code(f"10.0.0.{sender}", "falsch")
+    started = time.monotonic()
+    status, _, _, _ = env.request("POST", "/rescue/unlock", "code=AAAA-BBBB-CCCC")
+    assert status == 429
+    assert time.monotonic() - started >= rescue.LOCKED_DELAY_S * 0.9, "ein falscher Code waehrend der Sperre wird gebremst"
+    started = time.monotonic()
+    status, _, _, _ = env.request("POST", "/rescue/unlock", f"code={env.code}")
+    assert status == 303
+    assert time.monotonic() - started < rescue.LOCKED_DELAY_S, "der richtige Code wartet nicht"
 
 
 def test_throttle_counts_when_the_attempt_starts_so_parallel_guesses_do_not_get_through():
@@ -287,9 +311,10 @@ def test_throttle_counts_when_the_attempt_starts_so_parallel_guesses_do_not_get_
     results = [r.try_code("1.2.3.4", "falsch", now=100.0)[0] for _ in range(rescue.MAX_FAILURES_PER_IP + 3)]
     assert results[: rescue.MAX_FAILURES_PER_IP] == ["wrong"] * rescue.MAX_FAILURES_PER_IP
     assert set(results[rescue.MAX_FAILURES_PER_IP:]) == {"locked"}
-    assert r.try_code("1.2.3.4", "ABCD-EFGH-JKLM", now=100.0)[0] == "locked", "auch der richtige Code geht dann nicht durch"
-    status, token_or_retry = r.try_code("1.2.3.4", "ABCD-EFGH-JKLM", now=100.0 + rescue.LOCK_S + 1)
-    assert status == "ok" and token_or_retry, "nach der Sperrzeit geht es wieder"
+    assert r.try_code("1.2.3.4", "falsch", now=100.0)[0] == "locked"
+    status, token = r.try_code("1.2.3.4", "ABCD-EFGH-JKLM", now=100.0)
+    assert status == "ok" and token, "der richtige Code geht auch waehrend der Sperre"
+    assert r.try_code("1.2.3.4", "falsch", now=100.0 + rescue.LOCK_S + 1)[0] == "wrong", "nach der Sperrzeit wird wieder gezaehlt"
 
 
 def test_a_successful_attempt_is_not_counted_against_the_caller():
@@ -308,8 +333,44 @@ def test_other_clients_have_their_own_counter_but_a_global_limit_stops_a_swarm()
     swarm = [f"10.0.{i // 250}.{i % 250}" for i in range(rescue.MAX_FAILURES_GLOBAL + 5)]
     seen = [r.try_code(ip, "falsch", now=60.0)[0] for ip in swarm]
     assert "locked" in seen, "viele verschiedene Absender zusammen werden auch gebremst"
-    assert r.try_code("5.5.5.5", "ABCD-EFGH-JKLM", now=60.0)[0] == "locked"
-    assert r.try_code("5.5.5.5", "ABCD-EFGH-JKLM", now=60.0 + rescue.LOCK_S + 1)[0] == "ok"
+    assert r.try_code("5.5.5.5", "falsch", now=60.0)[0] == "locked"
+    assert r.try_code("5.5.5.5", "ABCD-EFGH-JKLM", now=60.0)[0] == "ok", "die gemeinsame Sperre haelt den richtigen Code nicht auf"
+    assert r.try_code("5.5.5.5", "falsch", now=60.0 + rescue.LOCK_S + 1)[0] == "wrong"
+
+
+def test_a_swarm_of_wrong_codes_cannot_lock_the_owner_out_and_attempts_during_a_lock_do_not_pile_up():
+    r = rescue.Rescue(Path("/nirgends"))
+    r._code = "ABCD-EFGH-JKLM"
+    # 5 Absender mit je 5 Fehlversuchen = globale Grenze; danach geht der richtige Code von einer anderen Adresse trotzdem
+    for sender in range(5):
+        for _ in range(rescue.MAX_FAILURES_PER_IP):
+            assert r.try_code(f"10.0.0.{sender}", "falsch", now=10.0)[0] == "wrong"
+    assert len(r._failures_global) == rescue.MAX_FAILURES_GLOBAL
+    assert r.try_code("192.168.1.10", "falsch", now=11.0)[0] == "locked"
+    assert r.try_code("192.168.1.10", "ABCD-EFGH-JKLM", now=11.0)[0] == "ok"
+    assert r.try_code("192.168.1.10", "abcd efgh jklm", now=12.0)[0] == "ok", "in jeder Schreibweise"
+    # waehrend der Sperre wird nichts mitgezaehlt: weder die Sperre verlaengert sich, noch wachsen die Listen
+    for i in range(1000):
+        assert r.try_code(f"10.9.{i // 250}.{i % 250}", "falsch", now=13.0)[0] == "locked"
+    assert len(r._failures_global) == rescue.MAX_FAILURES_GLOBAL
+    assert r.try_code("192.168.1.10", "falsch", now=10.0 + rescue.LOCK_S + 1)[0] == "wrong", "die Sperre endet wie vorgesehen"
+
+
+def test_the_right_code_works_for_a_shared_sender_address_even_after_it_is_locked():
+    # alle hinter einer Proxy-/Gateway-Adresse: fuenf Fehlversuche eines Einzelnen sperren die Adresse, nicht den Besitzer
+    r = rescue.Rescue(Path("/nirgends"))
+    r._code = "ABCD-EFGH-JKLM"
+    for _ in range(rescue.MAX_FAILURES_PER_IP):
+        r.try_code("172.17.0.1", "falsch", now=5.0)
+    assert r.try_code("172.17.0.1", "falsch", now=5.0)[0] == "locked"
+    assert r.try_code("172.17.0.1", "ABCD-EFGH-JKLM", now=5.0)[0] == "ok"
+
+
+def test_an_empty_or_missing_code_is_never_right_even_without_any_code_set():
+    r = rescue.Rescue(Path("/nirgends"))
+    assert r._code is None
+    for candidate in ("", None, 5, "----"):
+        assert r.try_code("1.2.3.4", candidate, now=1.0)[0] == "wrong"
 
 
 def test_the_throttle_memory_stays_small():
@@ -615,6 +676,162 @@ def test_one_sender_cannot_take_all_connections(env):
     finally:
         for s in blockers:
             s.close()
+
+
+def _raw_exchange(port: int, data: bytes, timeout: float = 5.0) -> bytes:
+    with socket.create_connection(("127.0.0.1", port), timeout=timeout) as sock:
+        sock.sendall(data)
+        chunks = []
+        try:
+            while True:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+        except (TimeoutError, OSError):
+            pass
+        return b"".join(chunks)
+
+
+def test_headers_above_the_total_limit_are_refused_with_431(env):
+    # eine einzige riesige Kopfzeile (die Standardbibliothek liesse 64 KiB zu)
+    big = b"GET / HTTP/1.0\r\nX-Big: " + b"a" * (rescue.MAX_HEADER_BYTES + 100) + b"\r\n\r\n"
+    assert _raw_exchange(env.port, big).startswith(b"HTTP/1.0 431")
+    # viele mittelgrosse Zeilen, jede fuer sich klein, zusammen zu viel. Die Zeilenzahl bleibt bewusst unter
+    # `MAX_HEADERS`: sonst schlaegt schon der Zeilenzaehler der Standardbibliothek an und das 431 kaeme nicht
+    # vom Gesamtbudget (`_HeadReader`).
+    lines = 60
+    many = b"GET / HTTP/1.0\r\n" + b"".join(b"X-%d: %s\r\n" % (i, b"b" * 700) for i in range(lines)) + b"\r\n"
+    assert lines < rescue.MAX_HEADERS
+    assert len(many) > rescue.MAX_HEADER_BYTES
+    assert _raw_exchange(env.port, many).startswith(b"HTTP/1.0 431")
+    # eine abgeschnittene Anfragezeile ohne Ende
+    assert not _raw_exchange(env.port, b"GET /" + b"a" * (rescue.MAX_HEADER_BYTES * 2)).startswith(b"HTTP/1.0 200")
+    assert env.request("GET", "/api/v1/health")[0] == 503, "der Server lebt noch"
+
+
+def test_a_large_cookie_header_from_other_services_still_gets_through(env):
+    # Cookies gelten je Adresse, nicht je Port: Cookies anderer Dienste auf derselben Adresse kommen mit
+    cookie = "other=" + "c" * (12 * 1024)
+    assert env.request("GET", "/", headers={"Cookie": cookie})[0] == 503
+    assert env.request("POST", "/rescue/unlock", f"code={env.code}", headers={"Cookie": cookie})[0] == 303, "auch der Notfallcode geht damit durch"
+    assert rescue.MAX_HEADER_BYTES >= 32 * 1024
+
+
+def test_a_cookie_header_far_above_the_limit_is_refused_with_431(env):
+    huge = b"GET / HTTP/1.0\r\nCookie: other=" + b"c" * (40 * 1024) + b"\r\n\r\n"
+    assert len(huge) > rescue.MAX_HEADER_BYTES
+    assert _raw_exchange(env.port, huge).startswith(b"HTTP/1.0 431")
+    assert env.request("GET", "/api/v1/health")[0] == 503, "der Server lebt noch"
+
+
+def test_more_than_the_maximum_number_of_headers_is_refused(env):
+    lines = b"".join(b"X-%d: 1\r\n" % i for i in range(rescue.MAX_HEADERS + 1))
+    assert _raw_exchange(env.port, b"GET / HTTP/1.0\r\n" + lines + b"\r\n").startswith(b"HTTP/1.0 431")
+
+
+def test_ordinary_requests_with_a_realistic_head_still_work(env):
+    status, _, _, _ = env.request("GET", "/", headers={"User-Agent": "x" * 300, "Accept": "text/html,*/*;q=0.8", "Accept-Language": "de-DE,de;q=0.9", "Cookie": "a=" + "b" * 1500})
+    assert status == 503
+    assert env.request("POST", "/rescue/unlock", f"code={env.code}", headers={"Cookie": "a=" + "b" * 1500})[0] == 303
+
+
+def test_slow_headers_are_cut_off_after_the_short_head_deadline(tmp_path, monkeypatch):
+    # die Kopfzeilen haben eine eigene, kurze Frist; die lange (ganze Verbindung) bleibt weit weg
+    monkeypatch.setattr(rescue, "HEAD_TIMEOUT_S", 0.5)
+    monkeypatch.setattr(rescue, "REQUEST_TIMEOUT_S", 30.0)
+    e = Env(tmp_path)
+    try:
+        sock = socket.create_connection(("127.0.0.1", e.port), timeout=5)
+        try:
+            sock.sendall(b"GET / HTTP/1.0\r\nX-A: ")
+            started = time.monotonic()
+            assert _closed_within(sock, 4.0, trickle=0.1), "die Verbindung wird nach der Kopf-Frist getrennt"
+            assert time.monotonic() - started < 3.0
+        finally:
+            sock.close()
+        assert e.request("GET", "/api/v1/health")[0] == 503
+    finally:
+        e.stop()
+
+
+def test_the_short_head_deadline_does_not_cut_a_slow_body(tmp_path, monkeypatch):
+    monkeypatch.setattr(rescue, "HEAD_TIMEOUT_S", 0.4)
+    monkeypatch.setattr(rescue, "REQUEST_TIMEOUT_S", 10.0)
+    e = Env(tmp_path)
+    try:
+        body = f"code={e.code}".encode()
+        with socket.create_connection(("127.0.0.1", e.port), timeout=5) as sock:
+            sock.sendall(b"POST /rescue/unlock HTTP/1.0\r\nContent-Type: application/x-www-form-urlencoded\r\nContent-Length: %d\r\n\r\n" % len(body))
+            time.sleep(1.0)  # laenger als die Kopf-Frist
+            sock.sendall(body)
+            sock.settimeout(5)
+            assert sock.recv(4096).startswith(b"HTTP/1.0 303")
+    finally:
+        e.stop()
+
+
+def test_local_address_has_its_own_reserve_when_all_other_slots_are_taken(env):
+    # Acht Absender mit je acht halb geschickten Anfragen belegen alle 64 Plaetze. Der Health-Check (127.0.0.1) kommt trotzdem durch.
+    blockers = []
+    try:
+        for host in range(2, 2 + rescue.MAX_CONNECTIONS // rescue.MAX_CONNECTIONS_PER_CLIENT):
+            for _ in range(rescue.MAX_CONNECTIONS_PER_CLIENT):
+                s = socket.create_connection(("127.0.0.1", env.port), timeout=5, source_address=(f"127.0.0.{host}", 0))
+                s.sendall(b"GET / HTTP/1.0\r\nX-A: ")
+                blockers.append(s)
+        time.sleep(0.3)
+        assert len(env.server._per_client) >= 8 and env.server._slots._value == 0, "alle gewoehnlichen Plaetze sind belegt"
+        extra = socket.create_connection(("127.0.0.1", env.port), timeout=5, source_address=("127.0.0.9", 0))
+        extra.settimeout(0.3)
+        try:
+            assert extra.recv(1) == b"", "ein weiterer fremder Absender wird abgewiesen"
+        finally:
+            extra.close()
+        status, _, body, _ = env.request("GET", "/api/v1/health")
+        assert status == 503 and b'"rescue"' in body, "127.0.0.1 hat einen eigenen Platz"
+    finally:
+        for s in blockers:
+            s.close()
+
+
+def test_the_local_reserve_is_limited_and_released(env):
+    held = []
+    try:
+        for _ in range(rescue.RESERVED_LOCAL_CONNECTIONS):
+            s = socket.create_connection(("127.0.0.1", env.port), timeout=5)
+            s.sendall(b"GET / HTTP/1.0\r\nX-A: ")
+            held.append(s)
+        time.sleep(0.3)
+        over = socket.create_connection(("127.0.0.1", env.port), timeout=5)
+        over.settimeout(0.3)
+        try:
+            assert over.recv(1) == b"", "auch der Vorrat ist begrenzt"
+        finally:
+            over.close()
+    finally:
+        for s in held:
+            s.close()
+    deadline = time.monotonic() + 3
+    while env.server._local_slots._value < rescue.RESERVED_LOCAL_CONNECTIONS and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert env.server._local_slots._value == rescue.RESERVED_LOCAL_CONNECTIONS, "die Plaetze werden wieder frei"
+    assert env.request("GET", "/api/v1/health")[0] == 503
+
+
+def test_sender_keys_group_ipv6_by_64_and_only_the_two_loopback_addresses_are_local():
+    assert rescue._sender(("127.0.0.1", 1)) == ("127.0.0.1", True)
+    assert rescue._sender(("::1", 1, 0, 0)) == ("::1", True)
+    assert rescue._sender(("::ffff:127.0.0.1", 1, 0, 0)) == ("127.0.0.1", True)
+    assert rescue._sender(("127.0.0.2", 1)) == ("127.0.0.2", False)
+    assert rescue._sender(("::ffff:192.168.2.5", 1, 0, 0)) == ("192.168.2.5", False)
+    key_a, local_a = rescue._sender(("2001:db8:1:2::a", 1, 0, 0))
+    key_b, _ = rescue._sender(("2001:db8:1:2:ffff::b", 1, 0, 0))
+    key_c, _ = rescue._sender(("2001:db8:1:3::a", 1, 0, 0))
+    assert key_a == key_b != key_c and not local_a
+    assert rescue._sender(("fe80::1%eth0", 1, 0, 0))[0] == "fe80::/64"
+    assert rescue._sender(("kein-ip", 1)) == ("kein-ip", False)
+    assert rescue._sender(None) == ("", False)
 
 
 def test_control_characters_from_the_request_never_reach_the_log_raw(env, capsys):

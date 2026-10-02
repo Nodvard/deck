@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 ALLOWED_CONTENT_TYPES = {
@@ -19,7 +20,9 @@ MAX_DOCUMENT_BYTES = 20 * 1024 * 1024
 
 def documents_dir(ext_data_dir: object) -> Path:
     d = Path(str(ext_data_dir)).resolve() / "documents"
-    d.mkdir(parents=True, exist_ok=True)
+    # 0700 ausdruecklich (nicht nur ueber die umask des Prozesses): Rechnungen und Ausweise sollen in einem
+    # eingebundenen Hostordner nicht fuer andere Benutzer lesbar sein.
+    d.mkdir(mode=0o700, parents=True, exist_ok=True)
     return d
 
 
@@ -29,7 +32,12 @@ def document_path(ext_data_dir: object, filename: str) -> Path:
 
 def save_document(ext_data_dir: object, document_id: str, extension: str, content: bytes) -> str:
     filename = f"{document_id}.{extension}"
-    document_path(ext_data_dir, filename).write_bytes(content)
+    path = document_path(ext_data_dir, filename)
+    # Neue Datei nur fuer den Besitzer (0600); ein vorhandener Link wird nicht verfolgt.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(content)
     return filename
 
 

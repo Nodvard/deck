@@ -138,6 +138,10 @@ async def list_host_requirements(host_id: str, session: SessionDep) -> list[Host
 
 
 class GenerateKeyIn(BaseModel):
+    # Neue Zugaenge heissen in der Oberflaeche „nodvard“; das Formular schickt den Namen immer mit. Der Standard der API
+    # bleibt bewusst „lattice“: aeltere Aufrufer (auch die App) schicken oft keinen Namen, und ein anderer Standard
+    # waere fuer sie eine stille Verhaltensaenderung (anderer Benutzer auf dem Server). Aendern nur ueber eine
+    # angekuendigte Uebergangszeit, siehe docs/04-API.md, Abschnitt „Kompatibilitaet“.
     username: str = "lattice"
     port: int = 22
 
@@ -155,7 +159,7 @@ class GenerateKeyIn(BaseModel):
 class GeneratedKeyOut(BaseModel):
     credential: CredentialOut
     public_key: str
-    """`ssh-ed25519 AAAA... lattice@<Kurzname>` -- gehoert in `authorized_keys` auf dem Server."""
+    """`ssh-ed25519 AAAA... nodvard@<Kurzname>` -- gehoert in `authorized_keys` auf dem Server."""
     fingerprint: str
     """`SHA256:...` wie bei `ssh-keygen -l`."""
 
@@ -341,6 +345,8 @@ async def make_default(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Zugangsdaten.")
     credential, deleted = result
     if not was_default or previous_id is not None:
+        # Wurde der neue Zugang gerade erst geprüft (Schlüsselwechsel), zählt das jetzt als Beleg des Servers.
+        host_check.carry_over_login_ok(host, credential)
         await _audit(
             session, user, "host.credential_made_default", target_id=host_id,
             detail={
@@ -350,11 +356,16 @@ async def make_default(
         )
     if deleted is not None and previous_info is not None:
         await _audit(session, user, "host.credential_deleted", target_id=host_id, detail=previous_info)
-    notice = (
-        "Der alte Zugang ist in Nodvard Deck gelöscht. Sein öffentlicher Schlüssel bleibt in ~/.ssh/authorized_keys "
-        "auf dem Server stehen – dort bei Bedarf selbst entfernen."
-        if deleted is not None else None
-    )
+    notice: str | None = None
+    if deleted is not None:
+        if previous_info is not None and previous_info["kind"] == "ssh_key":
+            notice = (
+                "Der alte Zugang ist in Nodvard Deck gelöscht. Sein öffentlicher Schlüssel bleibt in ~/.ssh/authorized_keys "
+                "auf dem Server stehen – dort bei Bedarf selbst entfernen."
+            )
+        else:
+            # Ein Passwort-Zugang hinterlässt auf dem Server nichts, was man aufräumen müsste.
+            notice = "Der alte Zugang ist in Nodvard Deck gelöscht. Auf dem Server ändert sich dadurch nichts."
     return MakeDefaultOut(**CredentialOut.from_model(credential).model_dump(), notice=notice)
 
 
@@ -450,6 +461,8 @@ async def pin_known_host_key(host_id: str, payload: PinKeyIn, session: SessionDe
     )
     session.add(row)
     await session.flush()
+    # Die ausdrueckliche Bestaetigung hebt die Sperre nach "Schluessel vergessen" auf (und nur sie).
+    await hosts_service.host_key_was_confirmed(session, host_id)
     await _audit(
         session, user, "host.known_key_pinned", target_id=host_id,
         detail={"key_type": row.key_type, "fingerprint": row.fingerprint},

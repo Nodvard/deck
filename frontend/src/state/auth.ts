@@ -11,6 +11,8 @@
  */
 import { create } from "zustand";
 
+import { AUTH_FIELD_LABELS, validationText } from "../lib/validation";
+
 export interface CurrentUser {
   id: string;
   username: string;
@@ -61,12 +63,15 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
 /**
  * Fehlertext einer abgelehnten Auth-Antwort. Der Server schickt `detail` als deutschen
  * Satz -- bei 429 z. B. "Zu viele Fehlversuche. Bitte in 4 Minuten erneut versuchen."
- * Nur ein String wird uebernommen: ein 422 liefert `detail` als Liste,
- * und die als React-Kind zu rendern liesse die Anmeldeseite abstuerzen.
+ * Ein 422 liefert `detail` als Liste (zu kurzes Passwort, ...): die wird zu einem
+ * Satz zusammengesetzt (`lib/validation.ts`) -- als React-Kind gerendert liesse sie die
+ * Anmeldeseite abstuerzen, und "HTTP 422" sagt der Person nichts.
  */
 export async function authErrorText(res: Response): Promise<string> {
   const body = await parseJsonResponse<{ detail?: unknown }>(res).catch(() => ({}) as { detail?: unknown });
   if (typeof body.detail === "string" && body.detail) return body.detail;
+  // 422: die Liste der abgelehnten Felder ("Passwort: Mindestens 8 Zeichen.") statt "HTTP 422".
+  if (Array.isArray(body.detail) && body.detail.length > 0) return validationText(body.detail, AUTH_FIELD_LABELS);
   if (res.status === 429) {
     const seconds = Number(res.headers.get("Retry-After"));
     if (Number.isFinite(seconds) && seconds > 0) {

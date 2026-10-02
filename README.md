@@ -47,7 +47,7 @@ etwas verändert, läuft zuerst durch eine **Freigabe** – so passiert nichts v
 | Nodvard Shield | Sicherheit: Virenscan (ClamAV), Härtungs-Audits (Lynis), Update-Zentrale, Einbruchserkennung, Datei-Integrität, KI-Container-Wache |
 | Netzwerk | Pi-hole und Nginx Proxy Manager: Statistiken, Blocken pausieren, Proxy-Hosts und Zertifikatsablauf |
 | Gameserver | Gameserver starten/stoppen und aktuellen Beitrittscode anzeigen (z. B. Valheim) |
-| Skripte | Versionierte Skript-Bibliothek, auf einem oder vielen Servern ausführen, zeitgesteuert |
+| Skripte | Versionierte Skript-Bibliothek, auf einem oder vielen Servern ausführen, zeitgesteuert – auf Wunsch ohne Klick, solange sich nichts ändert |
 | Dokumente | Dokumentenarchiv mit Texterkennung (OCR) und Volltextsuche |
 | Inventar | Geräte und Gegenstände mit Kaufdaten und Garantie-Erinnerung |
 | Nextcloud | Nextcloud als Quelle im Dateimanager |

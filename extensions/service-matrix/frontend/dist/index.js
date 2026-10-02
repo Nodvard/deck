@@ -104,6 +104,7 @@ var ACTION_STATUS_LABEL = {
   expired: "abgelaufen",
   dismissed: "verworfen"
 };
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -118,6 +119,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };
@@ -697,7 +699,7 @@ function UpdatePanel({
         plan.warnings.length > 0 && /* @__PURE__ */ jsx4("ul", { className: "mt-1 list-disc space-y-0.5 pl-4", children: plan.warnings.map((w) => /* @__PURE__ */ jsx4("li", { className: w.startsWith("Datenbank") ? "font-medium text-red-300" : void 0, children: w }, w)) })
       ] }),
       /* @__PURE__ */ jsxs3("details", { open: true, children: [
-        /* @__PURE__ */ jsx4("summary", { className: "cursor-pointer opacity-70", children: "Befehl auf dem Host" }),
+        /* @__PURE__ */ jsx4("summary", { className: "cursor-pointer opacity-70", children: "Befehl auf dem Server" }),
         /* @__PURE__ */ jsx4("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: plan.command })
       ] }),
       /* @__PURE__ */ jsxs3("details", { children: [
@@ -742,14 +744,17 @@ function UpdatePanel({
 
 // src/ServiceMatrixPage.tsx
 import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
-var MEASURING_HINT = "CPU/RAM werden gemessen -- docker stats braucht je Host ein paar Sekunden.";
-var MEM_UNKNOWN_HINT = "Der Host meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardm\xE4\xDFig aus).";
+var MEASURING_HINT = "CPU/RAM werden gemessen \u2013 das braucht je Server ein paar Sekunden.";
+var MEM_UNKNOWN_HINT = "Der Server meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardm\xE4\xDFig aus).";
 var TONE_CLASS = {
   good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
   warn: "bg-amber-500/15 text-amber-300 border-amber-500/40",
   danger: "bg-red-500/15 text-red-300 border-red-500/40",
   neutral: "bg-white/10 opacity-70"
 };
+var CARD_ROW = "max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-2 max-md:rounded-lg max-md:border max-md:border-white/10 max-md:bg-white/[0.03] max-md:p-3";
+var CARD_LABEL = "max-md:before:mr-1 max-md:before:opacity-60 max-md:before:content-[attr(data-label)]";
+var TOUCH = "max-md:px-3 max-md:py-2";
 var STATE_LABEL = {
   running: "l\xE4uft",
   exited: "gestoppt",
@@ -760,6 +765,48 @@ var STATE_LABEL = {
   dead: "tot",
   error: "Fehler"
 };
+var DURATION_UNITS = {
+  second: { one: "Sekunde", many: "Sekunden", about: "einer" },
+  minute: { one: "Minute", many: "Minuten", about: "einer" },
+  hour: { one: "Stunde", many: "Stunden", about: "einer" },
+  day: { one: "Tag", many: "Tagen", about: "einem" },
+  week: { one: "Woche", many: "Wochen", about: "einer" },
+  month: { one: "Monat", many: "Monaten", about: "einem" },
+  year: { one: "Jahr", many: "Jahren", about: "einem" }
+};
+function durationText(raw) {
+  const text = raw.trim().toLowerCase();
+  if (text === "less than a second") return "weniger als einer Sekunde";
+  const about = /^about an? (second|minute|hour|day|week|month|year)$/.exec(text);
+  if (about) return `etwa ${DURATION_UNITS[about[1]].about} ${DURATION_UNITS[about[1]].one}`;
+  const counted = /^(\d+) (second|minute|hour|day|week|month|year)s?$/.exec(text);
+  if (!counted) return null;
+  const n = Number(counted[1]);
+  const unit = DURATION_UNITS[counted[2]];
+  return `${n} ${n === 1 ? unit.one : unit.many}`;
+}
+function statusText(status) {
+  const raw = (status ?? "").trim();
+  if (!raw) return "";
+  const health = (h) => !h ? "" : h === "healthy" ? " (gesund)" : h === "unhealthy" ? " (nicht gesund)" : h === "health: starting" ? " (wird gepr\xFCft)" : ` (${h})`;
+  const up = /^Up (.+?)(?: \(((?:un)?healthy|health: starting)\))?(?: \(Paused\))?$/i.exec(raw);
+  if (up) {
+    const d = durationText(up[1]);
+    if (d) return `L\xE4uft seit ${d}${health(up[2]?.toLowerCase())}${/\(Paused\)$/i.test(raw) ? " (pausiert)" : ""}`;
+  }
+  const ended = /^Exited \((-?\d+)\) (.+) ago$/i.exec(raw);
+  if (ended) {
+    const d = durationText(ended[2]);
+    if (d) return `Beendet (Code ${ended[1]}) vor ${d}`;
+  }
+  const restarting = /^Restarting \((-?\d+)\) (.+) ago$/i.exec(raw);
+  if (restarting) {
+    const d = durationText(restarting[2]);
+    if (d) return `Startet neu (Code ${restarting[1]}), zuletzt vor ${d}`;
+  }
+  const plain = { created: "Angelegt, noch nicht gestartet", paused: "Pausiert", dead: "Defekt", "removal in progress": "Wird entfernt" };
+  return plain[raw.toLowerCase()] ?? raw;
+}
 var IMAGE_POLL_MS = 2e3;
 function scopeImages(images, hostId) {
   if (!images || !hostId) return images;
@@ -774,7 +821,7 @@ function scopeImages(images, hostId) {
   };
 }
 function summarizeImages(images, checking) {
-  if (checking) return "Image-Updates: Die Registries werden gefragt \u2026";
+  if (checking) return "Image-Updates: Die Image-Quellen werden gefragt \u2026";
   if (!images) return null;
   const results = Object.values(images.data ?? {});
   const hosts = Object.values(images.hosts ?? {});
@@ -802,7 +849,7 @@ function summarizeImages(images, checking) {
   if (local > 0) parts.push(`${local} selbst gebaut`);
   if (unknown > 0) parts.push(`${unknown} nicht pr\xFCfbar`);
   if (stale > 0) parts.push(`${stale} mit \xE4lterer Antwort der Registry`);
-  if (failedHosts > 0) parts.push(failedHosts === 1 ? "1 Host nicht erreichbar" : `${failedHosts} Hosts nicht erreichbar`);
+  if (failedHosts > 0) parts.push(failedHosts === 1 ? "1 Server nicht erreichbar" : `${failedHosts} Server nicht erreichbar`);
   if (applying > 0) parts.push(applyingText);
   return `${head} \xB7 ${parts.join(" \xB7 ")}`;
 }
@@ -855,7 +902,7 @@ async function runHostAction(hostId, actionType, reason, signal) {
   const { action, approved } = await runAction(`/hosts/${hostId}/actions/${actionType}`, { method: "POST", body: JSON.stringify({ payload: {}, reason }) }, { signal });
   const status = action.status ?? "?";
   if (!approved) {
-    if (status === "proposed") return `vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`;
+    if (status === "proposed") return `vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`;
     return action.result?.output ?? ACTION_STATUS_LABEL[status] ?? status;
   }
   if (status === "succeeded") return action.result?.output ?? "erledigt";
@@ -863,8 +910,8 @@ async function runHostAction(hostId, actionType, reason, signal) {
 }
 var PRUNE_ACTIONS = [
   { type: "docker.prune_images", label: "Verwaiste Images entfernen", confirm: "Images ohne Namen entfernen, die kein Container nutzt?" },
-  { type: "docker.prune_unused_images", label: "Ungenutzte Images entfernen", confirm: "Alle Images ohne Container entfernen -- auch benannte? Werden sie wieder gebraucht, l\xE4dt Docker sie neu herunter." },
-  { type: "docker.prune_build_cache", label: "Build-Cache leeren", confirm: "Build-Cache leeren? Der n\xE4chste docker build auf diesem Host dauert dann deutlich l\xE4nger." }
+  { type: "docker.prune_unused_images", label: "Ungenutzte Images entfernen", confirm: "Alle Images ohne Container entfernen \u2013 auch benannte? Werden sie wieder gebraucht, l\xE4dt Docker sie neu herunter." },
+  { type: "docker.prune_build_cache", label: "Build-Cache leeren", confirm: "Build-Cache leeren? Der n\xE4chste docker build auf diesem Server dauert dann deutlich l\xE4nger." }
 ];
 function StoragePanel({ hostId }) {
   const unmountSignal = useUnmountSignal();
@@ -1048,7 +1095,7 @@ function DetailsPanel({ entry }) {
       d.env_keys.length,
       ")"
     ] }),
-    /* @__PURE__ */ jsx5("p", { className: "break-words opacity-70", title: "Werte werden bewusst nicht angezeigt -- dort stehen oft Passw\xF6rter.", children: d.env_keys.join(", ") || "keine" })
+    /* @__PURE__ */ jsx5("p", { className: "break-words opacity-70", title: "Werte werden bewusst nicht angezeigt \u2013 dort stehen oft Passw\xF6rter.", children: d.env_keys.join(", ") || "keine" })
   ] });
 }
 function LogPanel({ entry, onClose }) {
@@ -1235,7 +1282,7 @@ function ServiceMatrixPage() {
   async function trigger(entry, verb) {
     const text = VERB_TEXT[verb];
     if (text.confirm) {
-      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst -- die Oberfl\xE4che ist kurz weg." : "";
+      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg." : "";
       const ok = await deck().confirmDialog(`"${entry.name}" ${text.confirm}${extra}`, {
         danger: verb === "stop",
         confirmLabel: text.label
@@ -1250,7 +1297,7 @@ function ServiceMatrixPage() {
         body: JSON.stringify({ payload: { container: entry.container }, reason: `\xDCber die Service-Matrix ausgel\xF6st (${verb}).` })
       }, { signal: unmountSignal() });
       if (!approved && action.status === "proposed") {
-        setMessage(`"${entry.name}": ${text.label} vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        setMessage(`"${entry.name}": ${text.label} vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
         return;
       }
       const status = action.status ?? "?";
@@ -1284,7 +1331,7 @@ function ServiceMatrixPage() {
     const members = (services ?? []).filter((s) => s.host_id === entry.host_id && s.compose_project === project);
     const self = members.some((s) => s.is_self);
     const ok = await deck().confirmDialog(
-      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? " Darin l\xE4uft Nodvard Deck selbst -- die Oberfl\xE4che ist kurz weg." : ""}`,
+      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? " Darin l\xE4uft Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg." : ""}`,
       { confirmLabel: "Neu starten" }
     );
     if (!ok) return;
@@ -1301,7 +1348,7 @@ function ServiceMatrixPage() {
           status === "succeeded" ? action.result?.output ?? "Stack neu gestartet." : `Stack "${project}": ${ACTION_STATUS_LABEL[status] ?? status}${action.result?.error ? ` (${action.result.error})` : ""}`
         );
       } else if (status === "proposed") {
-        setMessage(`Stack "${project}": vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        setMessage(`Stack "${project}": vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
       } else {
         setMessage(`Stack "${project}": ${ACTION_STATUS_LABEL[status] ?? status}`);
       }
@@ -1341,7 +1388,7 @@ function ServiceMatrixPage() {
         }
       ),
       /* @__PURE__ */ jsx5("button", { type: "button", onClick: load, className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Aktualisieren" }),
-      deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx5(
+      deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && /* @__PURE__ */ jsx5(
         "button",
         {
           type: "button",
@@ -1354,7 +1401,7 @@ function ServiceMatrixPage() {
       ),
       hostFilter && /* @__PURE__ */ jsxs4("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5 text-xs", "data-testid": "host-filter", children: [
         "Nur ",
-        (services ?? []).find((s) => s.host_id === hostFilter)?.host ?? "dieser Host",
+        (services ?? []).find((s) => s.host_id === hostFilter)?.host ?? "dieser Server",
         /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => updateUrl({ host: null }), "aria-label": "Filter entfernen", className: "opacity-70 hover:opacity-100", children: "\u2715" })
       ] })
     ] }),
@@ -1367,13 +1414,14 @@ function ServiceMatrixPage() {
         {
           type: "button",
           onClick: () => void startImageCheck(true),
-          title: "Ohne Zwischenspeicher: Antworten der Registries werden sonst 6 Stunden wiederverwendet. Docker Hub begrenzt die Zahl der Abfragen.",
+          title: "Fragt ohne Zwischenspeicher noch einmal bei den Image-Quellen (Registries) nach. Sonst werden ihre Antworten 6 Stunden wiederverwendet. Docker Hub begrenzt die Zahl der Abfragen.",
           className: "underline opacity-70 hover:opacity-100",
-          children: "Registry neu abfragen"
+          children: "Neu abfragen"
         }
       )
     ] }),
     (services ?? []).length === 0 && /* @__PURE__ */ jsx5(NoContainers, {}),
+    (services ?? []).length > 0 && byHost.size === 0 && /* @__PURE__ */ jsx5("p", { className: "mb-3 text-sm opacity-70", "data-testid": "no-match", children: needle ? "Kein Container passt zu deiner Suche." : "F\xFCr diesen Filter gibt es keine Container." }),
     [...byHost.entries()].map(([host, entries]) => /* @__PURE__ */ jsxs4("section", { className: "mb-6 overflow-x-auto", children: [
       /* @__PURE__ */ jsxs4("div", { className: "mb-2 flex flex-wrap items-center gap-3", children: [
         /* @__PURE__ */ jsx5("h3", { className: "text-sm font-medium uppercase tracking-wide opacity-60", children: host }),
@@ -1402,8 +1450,8 @@ function ServiceMatrixPage() {
         images.hosts[entries[0].host_id].error
       ] }),
       storageFor && storageFor === entries[0]?.host_id && /* @__PURE__ */ jsx5("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx5(StoragePanel, { hostId: storageFor }) }),
-      /* @__PURE__ */ jsxs4("table", { className: "w-full text-sm", children: [
-        /* @__PURE__ */ jsx5("thead", { children: /* @__PURE__ */ jsxs4("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
+      /* @__PURE__ */ jsxs4("table", { role: "table", className: "w-full text-sm max-md:block", children: [
+        /* @__PURE__ */ jsx5("thead", { className: "max-md:hidden", children: /* @__PURE__ */ jsxs4("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
           /* @__PURE__ */ jsx5("th", { className: "py-1 w-1/4", children: "Container" }),
           /* @__PURE__ */ jsx5("th", { className: "py-1 whitespace-nowrap", children: "Zustand" }),
           /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Status" }),
@@ -1412,14 +1460,15 @@ function ServiceMatrixPage() {
           /* @__PURE__ */ jsx5("th", { className: "py-1 whitespace-nowrap", children: "RAM" }),
           /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Aktionen" })
         ] }) }),
-        /* @__PURE__ */ jsx5("tbody", { className: "divide-y divide-white/5", children: entries.map((s) => {
+        /* @__PURE__ */ jsx5("tbody", { role: "rowgroup", className: "divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0", children: entries.map((s) => {
           const manageable = Boolean(s.host_id && s.container) && s.state !== "error";
           const isRunning = s.state === "running" || s.state === "restarting";
           const logsOpen = logsFor === s.id;
           const busy = (verb) => pending === `${s.id}:${verb}`;
+          const imageShown = Boolean(images?.data[s.id]) || Boolean(s.host_id && images?.hosts[s.host_id]?.checking);
           return /* @__PURE__ */ jsxs4(Fragment4, { children: [
-            /* @__PURE__ */ jsxs4("tr", { children: [
-              /* @__PURE__ */ jsxs4("td", { className: "py-1.5 break-words", children: [
+            /* @__PURE__ */ jsxs4("tr", { role: "row", className: CARD_ROW, "data-testid": `row-${s.id}`, children: [
+              /* @__PURE__ */ jsxs4("td", { role: "cell", className: "py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base", children: [
                 s.name,
                 s.is_self && /* @__PURE__ */ jsx5("span", { className: "ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70", children: "Nodvard Deck" }),
                 s.compose_project && /* @__PURE__ */ jsx5(
@@ -1428,16 +1477,16 @@ function ServiceMatrixPage() {
                     type: "button",
                     disabled: !deck().hasPermission("hosts.execute") || pending === `stack:${s.host_id}:${s.compose_project}`,
                     onClick: () => void restartStack(s),
-                    title: "Docker-Compose-Projekt -- klicken: ganzen Stack neu starten",
+                    title: "Docker-Compose-Projekt \u2013 klicken: ganzen Stack neu starten",
                     className: "ml-1.5 rounded bg-sky-500/15 px-1 text-[10px] text-sky-300 hover:bg-sky-500/25 disabled:cursor-default disabled:hover:bg-sky-500/15",
                     children: s.compose_project
                   }
                 ),
                 s.image && /* @__PURE__ */ jsx5("span", { className: "block text-xs opacity-50", children: s.image })
               ] }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1.5", children: /* @__PURE__ */ jsx5("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`, children: STATE_LABEL[s.state] ?? s.state }) }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1.5 break-words opacity-70", children: s.status }),
-              /* @__PURE__ */ jsxs4("td", { className: "py-1.5 text-xs", children: [
+              /* @__PURE__ */ jsx5("td", { role: "cell", className: "py-1.5 max-md:py-0", children: /* @__PURE__ */ jsx5("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`, children: STATE_LABEL[s.state] ?? s.state }) }),
+              /* @__PURE__ */ jsx5("td", { role: "cell", className: "py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs", title: s.status !== statusText(s.status) ? s.status : void 0, children: statusText(s.status) }),
+              /* @__PURE__ */ jsxs4("td", { role: "cell", className: `py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`, children: [
                 /* @__PURE__ */ jsx5("div", { "data-testid": `image-${s.id}`, children: manageable && /* @__PURE__ */ jsx5(ImageUpdateBadge, { result: images?.data[s.id], checking: Boolean(s.host_id && images?.hosts[s.host_id]?.checking), running: isRunning }) }),
                 manageable && /* @__PURE__ */ jsx5(
                   ImageUpdateAction,
@@ -1452,16 +1501,16 @@ function ServiceMatrixPage() {
                   }
                 )
               ] }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1.5 whitespace-nowrap text-xs opacity-80", "data-testid": `cpu-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx5("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id]?.cpu_percent != null ? `${stats[s.id].cpu_percent.toFixed(1)} %` : "\u2013" }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1.5 whitespace-nowrap text-xs opacity-80", "data-testid": `mem-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx5("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id] ? stats[s.id].mem_used != null ? formatBytes(stats[s.id].mem_used) : /* @__PURE__ */ jsx5("span", { title: MEM_UNKNOWN_HINT, children: "n. v." }) : "\u2013" }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap gap-1.5", children: [
+              /* @__PURE__ */ jsx5("td", { role: "cell", "data-label": "CPU", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `cpu-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx5("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id]?.cpu_percent != null ? `${stats[s.id].cpu_percent.toFixed(1)} %` : "\u2013" }),
+              /* @__PURE__ */ jsx5("td", { role: "cell", "data-label": "RAM", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `mem-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx5("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id] ? stats[s.id].mem_used != null ? formatBytes(stats[s.id].mem_used) : /* @__PURE__ */ jsx5("span", { title: MEM_UNKNOWN_HINT, children: "n. v." }) : "\u2013" }),
+              /* @__PURE__ */ jsx5("td", { role: "cell", className: "py-1.5 max-md:w-full max-md:py-0", children: /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap gap-1.5", children: [
                 manageable && !isRunning && /* @__PURE__ */ jsx5(
                   "button",
                   {
                     type: "button",
                     disabled: busy("start"),
                     onClick: () => void trigger(s, "start"),
-                    className: "rounded bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40",
+                    className: `rounded bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 ${TOUCH}`,
                     children: busy("start") ? "\u2026" : "Starten"
                   }
                 ),
@@ -1471,7 +1520,7 @@ function ServiceMatrixPage() {
                     type: "button",
                     disabled: busy("restart"),
                     onClick: () => void trigger(s, "restart"),
-                    className: "px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition",
+                    className: `px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition ${TOUCH}`,
                     children: busy("restart") ? "\u2026" : "Neustart"
                   }
                 ),
@@ -1481,8 +1530,8 @@ function ServiceMatrixPage() {
                     type: "button",
                     disabled: busy("stop") || s.is_self,
                     onClick: () => void trigger(s, "stop"),
-                    title: s.is_self ? "Das ist Nodvard Deck selbst -- Stoppen nur direkt auf dem Host." : void 0,
-                    className: "rounded bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 disabled:opacity-40",
+                    title: s.is_self ? "Das ist Nodvard Deck selbst \u2013 Stoppen nur direkt auf dem Server." : void 0,
+                    className: `rounded bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 disabled:opacity-40 ${TOUCH}`,
                     children: busy("stop") ? "\u2026" : "Stoppen"
                   }
                 ),
@@ -1492,7 +1541,7 @@ function ServiceMatrixPage() {
                     type: "button",
                     onClick: () => setDetailsFor(detailsFor === s.id ? null : s.id),
                     "aria-expanded": detailsFor === s.id,
-                    className: `rounded px-2 py-1 text-xs hover:bg-white/20 ${detailsFor === s.id ? "bg-white/20" : "bg-white/10"}`,
+                    className: `rounded px-2 py-1 text-xs hover:bg-white/20 ${TOUCH} ${detailsFor === s.id ? "bg-white/20" : "bg-white/10"}`,
                     children: "Details"
                   }
                 ),
@@ -1502,15 +1551,15 @@ function ServiceMatrixPage() {
                     type: "button",
                     onClick: () => setLogsFor(logsOpen ? null : s.id),
                     "aria-expanded": logsOpen,
-                    className: `rounded px-2 py-1 text-xs hover:bg-white/20 ${logsOpen ? "bg-white/20" : "bg-white/10"}`,
+                    className: `rounded px-2 py-1 text-xs hover:bg-white/20 ${TOUCH} ${logsOpen ? "bg-white/20" : "bg-white/10"}`,
                     children: "Logs"
                   }
                 ),
-                s.url && /* @__PURE__ */ jsx5("a", { href: s.url, target: "_blank", rel: "noreferrer", className: "px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline", children: "\xD6ffnen" })
+                s.url && /* @__PURE__ */ jsx5("a", { href: s.url, target: "_blank", rel: "noreferrer", className: "px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2", children: "\xD6ffnen" })
               ] }) })
             ] }),
-            detailsFor === s.id && /* @__PURE__ */ jsx5("tr", { children: /* @__PURE__ */ jsx5("td", { colSpan: 7, className: "bg-black/20 p-2", children: /* @__PURE__ */ jsx5(DetailsPanel, { entry: s }) }) }),
-            updateFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx5("tr", { children: /* @__PURE__ */ jsx5("td", { colSpan: 7, className: "bg-black/20 p-2", children: /* @__PURE__ */ jsx5(
+            detailsFor === s.id && /* @__PURE__ */ jsx5("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx5("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx5(DetailsPanel, { entry: s }) }) }),
+            updateFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx5("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx5("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx5(
               UpdatePanel,
               {
                 hostId: s.host_id,
@@ -1521,7 +1570,7 @@ function ServiceMatrixPage() {
                 onClose: () => setUpdateFor(null)
               }
             ) }) }),
-            logsOpen && /* @__PURE__ */ jsx5("tr", { children: /* @__PURE__ */ jsx5("td", { colSpan: 7, className: "bg-black/20 p-2", children: /* @__PURE__ */ jsx5(LogPanel, { entry: s, onClose: () => setLogsFor(null) }) }) })
+            logsOpen && /* @__PURE__ */ jsx5("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx5("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx5(LogPanel, { entry: s, onClose: () => setLogsFor(null) }) }) })
           ] }, s.id);
         }) })
       ] })
@@ -1533,5 +1582,6 @@ export {
   STATE_LABEL,
   ServiceMatrixPage,
   scopeImages,
+  statusText,
   summarizeImages
 };

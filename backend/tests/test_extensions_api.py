@@ -92,7 +92,7 @@ async def test_full_enable_disable_cycle_changes_nav_widgets_and_routes_without_
     widgets_before = await client.get("/api/v1/widgets", headers=_auth_header(token))
     assert pages_before.json() == []
     assert widgets_before.json() == []
-    route_before = await client.get("/api/v1/ext/hello-world/widgets/hello")
+    route_before = await client.get("/api/v1/ext/hello-world/widgets/hello", headers=_auth_header(token))
     assert route_before.status_code == 404
 
     enabled = await client.post("/api/v1/extensions/hello-world/enable", headers=_auth_header(token))
@@ -105,7 +105,7 @@ async def test_full_enable_disable_cycle_changes_nav_widgets_and_routes_without_
     assert [p["id"] for p in pages_after.json()] == ["hello"]
     assert [w["id"] for w in widgets_after.json()] == ["hello"]
 
-    route_after = await client.get("/api/v1/ext/hello-world/widgets/hello")
+    route_after = await client.get("/api/v1/ext/hello-world/widgets/hello", headers=_auth_header(token))
     assert route_after.status_code == 200
     assert route_after.json()["data"][0]["title"] == "Hallo Welt"
 
@@ -119,20 +119,43 @@ async def test_full_enable_disable_cycle_changes_nav_widgets_and_routes_without_
 
     assert (await client.get("/api/v1/pages", headers=_auth_header(token))).json() == []
     assert (await client.get("/api/v1/widgets", headers=_auth_header(token))).json() == []
-    assert (await client.get("/api/v1/ext/hello-world/widgets/hello")).status_code == 404
+    assert (
+        await client.get("/api/v1/ext/hello-world/widgets/hello", headers=_auth_header(token))
+    ).status_code == 404
     caps_after = await client.get("/api/v1/capabilities")
     assert caps_after.json()["extensions"] == []
 
 
 @pytest.mark.asyncio
-async def test_include_router_permission_param_protects_route_default_stays_open(
+async def test_bundled_extension_shows_program_version_but_third_party_its_own(client, db_session, test_settings):
+    from nodvard_deck.models import ExtensionRecord
+    from nodvard_deck.version import __version__
+
+    token = await _bootstrap_owner(client)
+    await _discover_real_hello_world(db_session, test_settings)
+
+    own = (await client.get("/api/v1/extensions/hello-world", headers=_auth_header(token))).json()
+    assert own["bundled"] is True
+    assert own["display_version"] == __version__
+    record = await db_session.get(ExtensionRecord, "hello-world")
+    assert own["version"] == record.version, "version bleibt die aus dem Manifest"
+
+    record.source, record.version = "pip", "2.3.4"
+    await db_session.flush()
+    listed = {e["id"]: e for e in (await client.get("/api/v1/extensions", headers=_auth_header(token))).json()}
+    assert listed["hello-world"]["bundled"] is False
+    assert listed["hello-world"]["display_version"] == "2.3.4"
+    assert listed["hello-world"]["version"] == "2.3.4"
+
+
+@pytest.mark.asyncio
+async def test_include_router_permission_param_protects_route_default_needs_login(
     client, db_session, test_settings
 ):
-    """`ctx.api.include_router(..., permission=...)` ist der Fix fuer eine live
-    gefundene Luecke -- vorher pruefte KEINE Extension-Route je eine Berechtigung,
-    obwohl der SDK-Docstring das Gegenteil behauptete. `/widgets/hello`
-    bleibt bewusst der Default-Fall (kein `permission=`, weiterhin oeffentlich);
-    `/protected-widget` ist die neue, geschuetzte Route."""
+    """`ctx.api.include_router(..., permission=...)` verlangt Anmeldung UND Berechtigung.
+    `/widgets/hello` ist der Default-Fall (kein `permission=`): auch er verlangt eine
+    Anmeldung, keine bestimmte Berechtigung. `/protected-widget` verlangt zusaetzlich
+    `hosts.read`."""
     await _discover_real_hello_world(db_session, test_settings)
     token = await _bootstrap_owner(client)
     await client.post("/api/v1/extensions/hello-world/enable", headers=_auth_header(token))
@@ -146,10 +169,13 @@ async def test_include_router_permission_param_protects_route_default_stays_open
     assert authenticated.status_code == 200
     assert authenticated.json() == {"ok": True}
 
-    # Der Default (kein permission=) bleibt unveraendert oeffentlich -- keine
-    # rueckwirkende Verschaerfung bestehender Extension-Routen.
-    still_open = await client.get("/api/v1/ext/hello-world/widgets/hello")
-    assert still_open.status_code == 200
+    # Der Default (kein permission=) verlangt eine Anmeldung, aber keine Berechtigung.
+    default_anonymous = await client.get("/api/v1/ext/hello-world/widgets/hello")
+    assert default_anonymous.status_code == 401
+    default_logged_in = await client.get(
+        "/api/v1/ext/hello-world/widgets/hello", headers=_auth_header(token)
+    )
+    assert default_logged_in.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -160,7 +186,13 @@ async def test_notify_test_endpoint_creates_a_real_notification(client, db_sessi
     await _discover_real_hello_world(db_session, test_settings)
     await client.post("/api/v1/extensions/hello-world/enable", headers=_auth_header(token))
 
-    r = await client.post("/api/v1/ext/hello-world/notify-test")
+    # Ohne Anmeldung kommt nichts an und es entsteht keine Meldung.
+    anonymous = await client.post("/api/v1/ext/hello-world/notify-test")
+    assert anonymous.status_code == 401
+    unlisted = await client.get("/api/v1/notifications", headers=_auth_header(token))
+    assert not any(n["title"] == "Testmeldung von hello-world" for n in unlisted.json())
+
+    r = await client.post("/api/v1/ext/hello-world/notify-test", headers=_auth_header(token))
     assert r.status_code == 200, r.text
 
     listed = await client.get("/api/v1/notifications", headers=_auth_header(token))
@@ -179,7 +211,9 @@ async def test_vault_use_isolation_survives_a_real_extension_request_failure(
     await _discover_real_hello_world(db_session, test_settings)
     await client.post("/api/v1/extensions/hello-world/enable", headers=_auth_header(token))
 
-    r = await client.post("/api/v1/ext/hello-world/vault-use-and-fail")
+    assert (await client.post("/api/v1/ext/hello-world/vault-use-and-fail")).status_code == 401
+
+    r = await client.post("/api/v1/ext/hello-world/vault-use-and-fail", headers=_auth_header(token))
     assert r.status_code == 500
 
     audit = await client.get(
@@ -307,7 +341,9 @@ async def test_extension_missing_at_boot_reports_error_but_stays_enabled(client,
     listed = await client.get("/api/v1/extensions", headers=_auth_header(token))
     assert {e["id"]: e["state"] for e in listed.json()}["hello-world"] == "error"
     assert (await client.get("/api/v1/pages", headers=_auth_header(token))).json() == []
-    assert (await client.get("/api/v1/ext/hello-world/widgets/hello")).status_code == 404
+    assert (
+        await client.get("/api/v1/ext/hello-world/widgets/hello", headers=_auth_header(token))
+    ).status_code == 404
 
     # Ausdruecklich einschalten: weiter 404, der gespeicherte Zustand bleibt.
     again = await client.post("/api/v1/extensions/hello-world/enable", headers=_auth_header(token))
@@ -326,7 +362,9 @@ async def test_extension_missing_at_boot_reports_error_but_stays_enabled(client,
     back = await client.get("/api/v1/extensions/hello-world", headers=_auth_header(token))
     assert back.json()["state"] == "enabled" and back.json()["last_error"] is None
     assert [p["id"] for p in (await client.get("/api/v1/pages", headers=_auth_header(token))).json()] == ["hello"]
-    assert (await client.get("/api/v1/ext/hello-world/widgets/hello")).status_code == 200
+    assert (
+        await client.get("/api/v1/ext/hello-world/widgets/hello", headers=_auth_header(token))
+    ).status_code == 200
 
     disabled = await client.post("/api/v1/extensions/hello-world/disable", headers=_auth_header(token))
     assert disabled.json()["state"] == "disabled"

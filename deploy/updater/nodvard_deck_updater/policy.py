@@ -1,20 +1,20 @@
-"""Politik des Update-Helfers: reine Funktionen, keine Ein-/Ausgabe (Bauplan 2c-2, 1.5, 2.1 und 3).
+"""Politik des Update-Helfers: reine Funktionen, keine Ein-/Ausgabe.
 
 Hier steht alles, was der Helfer *entscheidet*, bevor er etwas veraendert:
 
 * **Feste Codes** (`CODES`): jede Ablehnung und jeder Grund im Status ist einer davon, nie Freitext
   (`^[a-z_]{1,40}$`). Abgelehnt wird mit `Refusal(code)`.
-* **Image-Referenz und Tag (M7):** nur `ghcr.io/nodvard/deck` mit beweglichem Tag (`latest`, `X.Y`, ohne Tag
+* **Image-Referenz und Tag:** nur `ghcr.io/nodvard/deck` mit beweglichem Tag (`latest`, `X.Y`, ohne Tag
   = `latest`). `X.Y.Z` oder `@sha256:` -> `pinned_version` ("dort aendern"), alles andere -> `foreign_image`.
-* **Versionen (M1, M2):** `X.Y.Z` nur aus ASCII-Ziffern, ohne fuehrende Nullen, je Teil hoechstens 9 Stellen,
+* **Versionen:** `X.Y.Z` nur aus ASCII-Ziffern, ohne fuehrende Nullen, je Teil hoechstens 9 Stellen,
   ohne Vorabversion. So gibt es fuer jede Version genau eine Schreibweise, und `"0.6.\\u0661"` (arabische
   Ziffer) ist keine.
-* **Anforderung (M2):** genau die fuenf Schluessel, doppelte Schluessel abgelehnt, `v == 1`, `id` als UUID4,
+* **Anforderung:** genau die fuenf Schluessel, doppelte Schluessel abgelehnt, `v == 1`, `id` als UUID4,
   Zeitfenster 600 s alt / 60 s Zukunft. Jede Ausnahme beim Lesen (auch `RecursionError`) betrifft nur diese
   eine Anforderung.
-* **Grenzen (M14):** eine angenommene Aktion je 10 min, 24 h kein Update auf eine Version, von der aus
+* **Grenzen:** eine angenommene Aktion je 10 min, 24 h kein Update auf eine Version, von der aus
   zurueckgegangen wurde, verarbeitete IDs 1 h gesperrt, Mindestversion `MIN_VERSION`.
-* **Rueckweg-Slot (M13):** genau ein Slot, nur fuer genau den installierten Container und genau die Version
+* **Rueckweg-Slot:** genau ein Slot, nur fuer genau den installierten Container und genau die Version
   davor, 7 Tage, einmal benutzbar, nie verkettet.
 
 Die Funktionen bekommen die Uhrzeit (`now`) immer als Parameter; nichts hier liest Uhr, Umgebung oder Dateien.
@@ -38,10 +38,10 @@ REPOSITORY = "ghcr.io/nodvard/deck"
 mit (`repository=`), nie ueber die Umgebung (`tests/test_code_guard.py` prueft beides)."""
 
 VERSION_LABEL = "org.opencontainers.image.version"
-"""Label im Image, an dem die Version haengt (M1). Nie aus Container-Labels, Kanal oder Dashboard."""
+"""Label im Image, an dem die Version haengt. Nie aus Container-Labels, Kanal oder Dashboard."""
 
 MIN_VERSION = "0.7.0"
-"""Mindestversion des Ziels und des Rueckwegs: das erste Release mit dem Update-Helfer (M14). Aeltere Versionen
+"""Mindestversion des Ziels und des Rueckwegs: das erste Release mit dem Update-Helfer. Aeltere Versionen
 koennen eine Vorher-Kopie nicht selbst einspielen. Bis das Release feststeht, bewusst die hoehere Annahme
 (sicherer): lieber einmal von Hand aktualisieren als auf eine Version ohne diese Faehigkeit zurueck."""
 
@@ -75,7 +75,7 @@ STATUS_MAX_BYTES = 16 * 1024
 RESULTS_MAX = 10
 
 # ---------------------------------------------------------------------------
-# Codes (Abschnitt 3) -- alle passen auf CODE_RE
+# Codes -- alle passen auf CODE_RE
 # ---------------------------------------------------------------------------
 
 CODE_RE = re.compile(r"[a-z_]{1,40}", re.ASCII)
@@ -137,9 +137,12 @@ PLATFORM_MISMATCH = "platform_mismatch"
 PULL_FAILED = "pull_failed"
 NO_PREVIOUS = "no_previous"
 PREVIOUS_MISMATCH = "previous_mismatch"
+NOT_IMPLEMENTED = "not_implemented"
+"""Die Anforderung ist gueltig und vorgeprueft, diese Helfer-Version fuehrt die Aktion aber (noch) nicht aus (der
+Helfer prueft in diesem Stand nur vor; spaeter auch fuer Protokoll-Funktionen, die ein aelterer Helfer nicht kennt)."""
 REQUEST_CODES = (
     BAD_REQUEST, EXPIRED, REPLAY, BUSY, RATE_LIMITED, BLOCKED_VERSION, NOT_NEWER, TAG_NOT_ON_VERSION,
-    PLATFORM_MISMATCH, PULL_FAILED, NO_PREVIOUS, PREVIOUS_MISMATCH,
+    PLATFORM_MISMATCH, PULL_FAILED, NO_PREVIOUS, PREVIOUS_MISMATCH, NOT_IMPLEMENTED,
 )
 
 # Ablauf
@@ -169,7 +172,7 @@ STEPS = (
     "begin", "pulled", "protected", "renamed", "tagged", "creating", "created", "old_stopped", "started",
     "committed",
 )
-"""Schritte des Journals (5.1/5.5) in ihrer Reihenfolge; auch `busy.step` im Status."""
+"""Schritte des Journals in ihrer Reihenfolge; auch `busy.step` im Status."""
 
 
 class Refusal(Exception):
@@ -195,10 +198,10 @@ class Refusal(Exception):
 
 _NUM = r"(0|[1-9][0-9]{0,8})"
 VERSION_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}", re.ASCII)
-"""Version `X.Y.Z` (M2). Immer mit `fullmatch` benutzen. `[0-9]` statt `\\d`: `\\d` traefe ohne `re.ASCII`
+"""Version `X.Y.Z`. Immer mit `fullmatch` benutzen. `[0-9]` statt `\\d`: `\\d` traefe ohne `re.ASCII`
 auch Unicode-Ziffern."""
 MINOR_TAG_RE = re.compile(rf"{_NUM}\.{_NUM}", re.ASCII)
-"""Bewegliches Tag `X.Y` (M7). Wie die Version hoechstens 9 Stellen je Teil."""
+"""Bewegliches Tag `X.Y`. Wie die Version hoechstens 9 Stellen je Teil."""
 UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.ASCII)
 """Anforderungs-ID: UUID4, nur Kleinbuchstaben (eine Schreibweise je ID, sonst liefe der Replay-Schutz ins Leere)."""
 DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}", re.ASCII)
@@ -237,12 +240,12 @@ def is_code(value: object) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Versionen (M1, M2)
+# Versionen
 # ---------------------------------------------------------------------------
 
 
 def parse_version(text: object) -> tuple[int, int, int] | None:
-    """`(X, Y, Z)` oder `None`, wenn `text` keine Version im Sinne von M2 ist (auch fuer Nicht-Texte)."""
+    """`(X, Y, Z)` oder `None`, wenn `text` keine Version im Sinne dieses Moduls ist (auch fuer Nicht-Texte)."""
     if not isinstance(text, str) or len(text) > _MAX_VERSION_LENGTH:
         return None
     match = VERSION_RE.fullmatch(text)
@@ -262,7 +265,7 @@ def is_newer(candidate: object, current: object) -> bool:
 
 
 def image_version(labels: object) -> str:
-    """Version aus den Labels eines **Images** (`Config.Labels`, M1). Fehlt sie oder ist sie keine Version
+    """Version aus den Labels eines **Images** (`Config.Labels`). Fehlt sie oder ist sie keine Version
     (auch eine Vorabversion): `no_version_label`."""
     if not isinstance(labels, Mapping):
         raise Refusal(NO_VERSION_LABEL)
@@ -282,20 +285,20 @@ def check_target_version(current: str) -> None:
 
 
 def check_newer(requested: str, current: str) -> None:
-    """Ein Update geht nur nach vorn (M1): `requested > current`, sonst `not_newer`."""
+    """Ein Update geht nur nach vorn: `requested > current`, sonst `not_newer`."""
     if not is_newer(requested, current):
         raise Refusal(NOT_NEWER)
 
 
 def check_label(label_version: str, requested: str) -> None:
-    """Nach dem Pull: das Label im gezogenen Image ist **genau** die angeforderte Version (M1). Sonst zeigt das
+    """Nach dem Pull: das Label im gezogenen Image ist **genau** die angeforderte Version. Sonst zeigt das
     bewegliche Tag auf etwas anderes (umgehaengt, Backport, zu frueh gefragt) -> `tag_not_on_version`."""
     if not is_version(label_version) or label_version != requested:
         raise Refusal(TAG_NOT_ON_VERSION)
 
 
 # ---------------------------------------------------------------------------
-# Image-Referenz und Tag (M7)
+# Image-Referenz und Tag
 # ---------------------------------------------------------------------------
 
 
@@ -364,7 +367,7 @@ def registry_digests(repo_digests: object, *, repository: str = REPOSITORY) -> l
 
 
 def require_registry_digest(repo_digests: object, *, repository: str = REPOSITORY) -> list[str]:
-    """Das laufende Image stammt aus der Registry (M7): mindestens ein `RepoDigests`-Eintrag des Repositorys,
+    """Das laufende Image stammt aus der Registry: mindestens ein `RepoDigests`-Eintrag des Repositorys,
     sonst `not_from_registry` (z. B. selbst gebaut und nur als ghcr getaggt)."""
     found = registry_digests(repo_digests, repository=repository)
     if not found:
@@ -424,7 +427,7 @@ def dumps(obj: Any) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Anforderung (M2)
+# Anforderung
 # ---------------------------------------------------------------------------
 
 REQUEST_KEYS = frozenset({"v", "id", "action", "version", "created_at"})
@@ -460,7 +463,7 @@ def _request_from(raw: bytes, file_id: str | None) -> Request:
 
 
 def parse_request(raw: object, *, now: float, file_id: str | None = None) -> Request:
-    """Prueft eine Anforderung streng (M2) und gibt sie zurueck, sonst `Refusal`.
+    """Prueft eine Anforderung streng und gibt sie zurueck, sonst `Refusal`.
 
     * `bad_request`: kein UTF-8-JSON-Objekt bis 4096 Byte, nicht genau die fuenf Schluessel, doppelter
       Schluessel, falscher Typ (`true` ist keine Zahl, `1.0` auch nicht), `v != 1`, `id` keine UUID4 (oder nicht
@@ -485,7 +488,7 @@ def parse_request(raw: object, *, now: float, file_id: str | None = None) -> Req
 
 
 # ---------------------------------------------------------------------------
-# Grenzen (M14)
+# Grenzen
 # ---------------------------------------------------------------------------
 
 
@@ -522,7 +525,7 @@ def check_limits(
 
 
 # ---------------------------------------------------------------------------
-# Rueckweg-Slot (M13)
+# Rueckweg-Slot
 # ---------------------------------------------------------------------------
 
 SLOT_KEYS = ("from_version", "image_id", "repo_digest", "installed_container_id", "installed_image_id", "until")
@@ -580,7 +583,7 @@ def new_slot(
     now: float,
     repository: str = REPOSITORY,
 ) -> Slot:
-    """Slot nach dem Commit eines **Updates** (5.1 Schritt 11). Ein Rueckweg legt nie einen an (nie verkettet,
+    """Slot nach dem Abschluss eines **Updates**. Ein Rueckweg legt nie einen an (nie verkettet,
     siehe `state.State.commit_rollback`)."""
     slot = Slot(
         from_version=from_version,
@@ -602,7 +605,7 @@ def check_rollback(
     target_image_id: str,
     now: float,
 ) -> Slot:
-    """Darf diese Anforderung `rollback` den Slot benutzen (M13)? Gibt den Slot zurueck, sonst `Refusal`:
+    """Darf diese Anforderung `rollback` den Slot benutzen? Gibt den Slot zurueck, sonst `Refusal`:
 
     * `no_previous`: kein Slot, abgelaufen, oder `until` unplausibel weit in der Zukunft.
     * `previous_mismatch`: das Ziel ist nicht **genau** der installierte Container mit dem installierten Image,

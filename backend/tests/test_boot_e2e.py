@@ -32,7 +32,7 @@ from restore_helpers import REPO_ROOT
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="Prozesse und Signale wie im Container (POSIX)")
 
-SECRET_TEXT = "absichtlich kaputt: /home/nico/geheim postgresql://admin:Sup3rGeheim@10.0.0.5/deck"
+SECRET_TEXT = "absichtlich kaputt: /home/user/geheim postgresql://admin:Sup3rGeheim@10.0.0.5/deck"
 
 
 def free_port() -> int:
@@ -125,7 +125,7 @@ def real_database(env: dict[str, str]) -> Path:
 
     engine = create_engine(URL.create("sqlite", database=str(db)))
     with Session(engine) as session:
-        session.add(User(username="nico", password_hash="x", is_owner=True, is_active=True))
+        session.add(User(username="owner", password_hash="x", is_owner=True, is_active=True))
         session.add(Host(name="server1", address="10.0.0.1"))
         session.commit()
     engine.dispose()
@@ -203,7 +203,7 @@ def test_a_broken_migration_leaves_the_database_as_before_and_ends_in_the_rescue
     assert failure["kind"] == "migration_failed" and "zurückgesetzt" in failure["reason"]
     text = "\n".join(failure["log"]) + failure["reason"]
     assert "absichtlich kaputt" in text, "die Ursache steht im Protokoll"
-    for secret in ("Sup3rGeheim", "/home/nico", str(data), str(tmp_path)):
+    for secret in ("Sup3rGeheim", "/home/user", str(data), str(tmp_path)):
         assert secret not in text, secret
     assert state["last_migration"]["state"] == "reverted" and state["started_ok"] is True
 

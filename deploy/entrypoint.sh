@@ -8,6 +8,11 @@
 # direkten `CMD uvicorn ...`.
 set -eu
 
+# Neue Dateien und Ordner sind nur fuer den Besitzer lesbar (Datenbank, Dokumente, Zwischendateien): Wird /app/data
+# als Ordner vom Host eingebunden, kommen andere Benutzer dieses Rechners so nicht an die Daten. Die Einstellung
+# gilt fuer alles, was dieses Skript startet (Migration, Anwendung, Notseite), auch nach dem Wechsel zu `lattice`.
+umask 077
+
 # --- Besitzrechte am Datenordner, dann vom Benutzer root zu `lattice` wechseln ----------------------
 #
 # Das Image startet als root (kein `USER` im Dockerfile), damit dieses Skript den Datenordner
@@ -69,6 +74,21 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 cd /app
+
+# --- Rechte im Datenordner (jetzt als `lattice`, nicht mehr als root) -------------------------------------------------
+#
+# Aeltere Installationen haben Datenbank und Dokumente mit offenen Rechten (0644/0755) angelegt. Hier werden sie einmal
+# je Start geschlossen: nur der Besitzer behaelt Rechte. Das geschieht bewusst NACH dem Wechsel zu `lattice`: ein
+# Programm, das als `lattice` laeuft, kann nur Dateien aendern, die ihm gehoeren, und einem Link, den jemand zwischen
+# Suche und Aenderung unterschiebt, kann kein root-Prozess mehr zum Ziel gemacht werden. `find` folgt keinen Links
+# (`! -type l`) und bleibt mit -xdev auf dem Dateisystem des Ordners. Klappt etwas nicht (z. B. NAS ohne Rechte-Unterstuetzung),
+# gibt es nur eine Warnung.
+if [ -d /app/data ] && [ ! -L /app/data ]; then
+  chmod 700 /app/data || echo "Warnung: Die Rechte am Ordner /app/data liessen sich nicht auf 0700 setzen." >&2
+  find /app/data -xdev ! -type l -perm /077 -exec chmod go-rwx {} + || {
+    echo "Warnung: Nicht alle Dateien in /app/data liessen sich auf nur-Besitzer-Rechte setzen (NAS ohne Rechte-Unterstuetzung?)." >&2
+  }
+fi
 
 # --- Start: erst `nodvard_deck.boot`, scheitert das, die Notseite -- nie eine Neustart-Schleife --------------------------
 #

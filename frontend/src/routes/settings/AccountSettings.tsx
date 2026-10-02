@@ -9,6 +9,7 @@ import { api } from "../../lib/api";
 import { useAuthStore } from "../../state/auth";
 import { RecoveryCodesPanel } from "./RecoveryCodesPanel";
 import { TotpEnroll, type TotpSetup } from "./TotpEnroll";
+import { TotpPasswordForm } from "./TotpPasswordForm";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
 
 interface Me {
@@ -180,6 +181,7 @@ const RECOVERY_TOTAL = 10;
 
 function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolean; username: string; remaining: number; onChanged: () => void }) {
   const [setup, setSetup] = useState<TotpSetup | null>(null);
+  const [asking, setAsking] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [newCodes, setNewCodes] = useState<string[] | null>(null);
@@ -204,11 +206,12 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
     }
   }
 
-  async function start() {
+  async function start(password: string) {
     setBusy(true);
     setNotice(null);
     try {
-      setSetup(await api.post<TotpSetup>("/me/totp/setup"));
+      setSetup(await api.post<TotpSetup>("/me/totp/setup", { current_password: password }));
+      setAsking(false);
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
@@ -264,7 +267,7 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
         {enabled ? (
           !disabling && <Button variant="danger" busy={busy} onClick={() => setDisabling(true)}>Abschalten</Button>
         ) : (
-          !setup && <Button variant="primary" busy={busy} onClick={() => void start()}><KeyRound size={14} /> Einrichten</Button>
+          !setup && !asking && <Button variant="primary" busy={busy} onClick={() => setAsking(true)}><KeyRound size={14} /> Einrichten</Button>
         )}
       </div>
 
@@ -309,6 +312,10 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
             </div>
           )}
         </div>
+      )}
+
+      {!enabled && asking && !setup && (
+        <TotpPasswordForm busy={busy} onSubmit={(password) => void start(password)} onCancel={() => { setAsking(false); setNotice(null); }} />
       )}
 
       {setup && (

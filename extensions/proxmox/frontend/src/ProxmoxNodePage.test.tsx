@@ -819,6 +819,37 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     expect(screen.queryByTestId("updates-pve1")).toBeNull();
   });
 
+  it("Updates: überfälliger oder fehlgeschlagener Prüflauf von Proxmox steht mit Grund da, ein frischer nicht", async () => {
+    const base = richFetch([]);
+    const node = (name: string, over: Record<string, unknown>) => ({
+      connection: "pve2", node: name, error: null, count: 0, badge: "aktuell", tone: "good", summary: "Auf dem neuesten Stand",
+      pve_version: "9.2.20", running_kernel: "7.0.14-16-pve", packages: [], ...over,
+    });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/ext/proxmox/updates")) {
+        return new Response(JSON.stringify({
+          nodes: [
+            node("pve2", { last_check: 1790000000, last_check_ok: true, last_check_status: "OK", last_check_age_s: 3600, last_check_stale: false }),
+            node("alt", { last_check: 1790000000, last_check_ok: true, last_check_status: "OK", last_check_age_s: 90 * 3600, last_check_stale: true }),
+            node("kaputt", { last_check: 1790000000, last_check_ok: false, last_check_status: "command 'apt-get update' failed: exit code 100", last_check_age_s: 3600, last_check_stale: false }),
+            node("neu", {}),
+          ],
+          errors: [],
+        }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<ProxmoxNodePage />);
+
+    await screen.findByTestId("updates-pve2");
+    expect(screen.queryByTestId("updates-check-stale-pve2")).toBeNull();
+    expect(screen.queryByTestId("updates-check-failed-pve2")).toBeNull();
+    expect(screen.getByTestId("updates-check-stale-alt").textContent).toContain("seit 90 Stunden nicht gelaufen");
+    expect(screen.getByTestId("updates-check-failed-kaputt").textContent).toContain("command 'apt-get update' failed: exit code 100");
+    expect(screen.getByTestId("updates-neu").textContent).toContain("noch kein Prüflauf von Proxmox gefunden");
+  });
+
   it("Updates/Speicher: nicht erreichbare Verbindung steht als Hinweis da statt still zu fehlen", async () => {
     const base = richFetch([]);
     const dead = "GET /nodes -> All connection attempts failed";

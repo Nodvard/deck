@@ -41,9 +41,48 @@ class _Services:
         ]
 
 
+class _ServicesWithDeadHost:
+    """Wie DockerServiceCatalog.list_services(), wenn ein Server nicht antwortet: Platzhalterkachel mit Namen
+    und `state="error"`, aber ohne Container."""
+
+    def __init__(self, with_live_host: bool) -> None:
+        self._live = with_live_host
+
+    async def list_services(self):
+        rows = [
+            {"id": "h2:__error__", "name": "⚠ pi-test", "host": "pi-test", "state": "error", "tone": "danger", "url": None, "unreachable": True},
+            {"id": "h3:__error__", "name": "⚠ pi-test", "host": "pi-test", "state": "error", "tone": "danger", "url": None, "unreachable": True},
+        ]
+        if self._live:
+            rows.append({"id": "h1:grafana", "name": "grafana", "host": "docker-test", "host_id": "h1", "state": "running", "tone": "good"})
+        return rows
+
+
 class _HangingServices:
     async def list_services(self):
         await asyncio.sleep(3600)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("live", [False, True])
+async def test_unreachable_hosts_are_reported_not_counted_as_stopped(client, live):
+    token = await _bootstrap_owner(client)
+    get_extension_runtime().capabilities.provide("fake-services", ServiceCatalog, _ServicesWithDeadHost(live))
+
+    body = (await client.get("/api/v1/overview", headers=_auth_header(token))).json()
+    assert body["services_unreachable_hosts"] == ["pi-test"], "jeder Server nur einmal"
+    assert [s["name"] for s in body["services"] if not s["unreachable"]] == (["grafana"] if live else [])
+    assert all(s["unreachable"] for s in body["services"] if s["state"] == "error")
+    assert body["services_running"] == (1 if live else 0)
+
+
+@pytest.mark.asyncio
+async def test_overview_without_dead_hosts_has_empty_unreachable_list(client):
+    token = await _bootstrap_owner(client)
+    get_extension_runtime().capabilities.provide("fake-services", ServiceCatalog, _Services())
+    body = (await client.get("/api/v1/overview", headers=_auth_header(token))).json()
+    assert body["services_unreachable_hosts"] == []
+    assert not any(s["unreachable"] for s in body["services"])
 
 
 class _Backups:

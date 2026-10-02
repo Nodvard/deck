@@ -1,4 +1,4 @@
-"""Eigener Zustand des Helfers in `/state` (Bauplan 2c-2, 1.4, 5.4, 5.5; M5, M12, M13, M14).
+"""Eigener Zustand des Helfers in `/state`.
 
 `/state` ist ein eigenes Volume, das das Dashboard nie sieht. Der Helfer trifft Entscheidungen **nur** auf
 Grundlage dieses Ordners und der Engine -- nie aus `status.json`, dem Kanal (ausser den Anforderungen) oder
@@ -9,7 +9,7 @@ Grundlage dieses Ordners und der Engine -- nie aus `status.json`, dem Kanal (aus
   Die Sperre gilt je geoeffneter Datei und endet mit dem Prozess, auch bei einem Absturz.
 * `state.json` -- `slot` (Rueckweg, `policy.Slot`), `actions` (Zeitpunkte angenommener Aktionen),
   `blocked` (`{version: bis}`, 24 h nach einem Rueckweg), `seen` (`{id: zeit}`, 1 h) und `hold_until`.
-* `journal.json` -- der laufende Vorgang (5.5). **Write-ahead:** der Ablauf schreibt den naechsten Schritt,
+* `journal.json` -- der laufende Vorgang. **Write-ahead:** der Ablauf schreibt den naechsten Schritt,
   *bevor* er ihn ausfuehrt; jedes Schreiben endet mit fsync auf Datei **und** Ordner.
 
 Geschrieben wird immer atomar: Zufallsname mit `O_CREAT|O_EXCL|O_NOFOLLOW`, fsync, `os.replace`, fsync des
@@ -39,8 +39,8 @@ ein Link, richtiger Besitzer, Groessengrenze.
   `state.json.broken` liegt da, war der Zustand schon einmal kaputt -- auch das gilt als sicherer Zustand.
 * `journal.json` ungueltig: Der Helfer setzt dieselbe 24-h-Sperre im Zustand, legt das Journal als
   `journal.json.broken` beiseite und meldet `JournalCorrupt` (mit dem gesperrten Zustand in `.state`). Der Ablauf
-  (Schritt 3) handelt dann **nicht** automatisch, denn er weiss nicht, was schon geschehen ist (nie gegen den
-  Nutzer, C4). **Die Sperre gehoert dem Speicher:** der Store merkt sich die gesetzte Sperre (`_hold_floor`) und
+  handelt dann **nicht** automatisch, denn er weiss nicht, was schon geschehen ist (nie gegen den Nutzer).
+  **Die Sperre gehoert dem Speicher:** der Store merkt sich die gesetzte Sperre (`_hold_floor`) und
   `save_state` schreibt nie weniger -- ein vorher geladener `State` kann sie nicht mehr ueberschreiben, in welcher
   Reihenfolge der Ablauf auch laedt und speichert. **Geprueft wird deshalb ueber den Store:** `StateStore.check`
   wendet die Sperre vor den Grenzen auf den uebergebenen `State` an (ein `State`, der vor dem Erkennen des kaputten
@@ -299,7 +299,7 @@ class State:
             self.seen = dict(newest)
 
     def record_action(self, now: float) -> None:
-        """Zaehlt eine **angenommene** Aktion (M14). Gedacht fuer den Moment der Annahme, nicht erst den Commit:
+        """Zaehlt eine **angenommene** Aktion. Gedacht fuer den Moment der Annahme, nicht erst den Commit:
         auch ein gescheitertes Update kostet einen Neustart."""
         self.actions.append(int(now))
         self.actions = sorted(self.actions)[-MAX_ACTIONS:]
@@ -419,7 +419,7 @@ RESTART_KEYS = ("Name", "MaximumRetryCount")
 
 @dataclass(frozen=True)
 class OldContainer:
-    """Das Ziel vor dem Vorgang (5.1 Schritt 1). `tag_text` ist `Config.Image` unveraendert (M8)."""
+    """Das Ziel vor dem Vorgang. `tag_text` ist `Config.Image` unveraendert."""
 
     id: str
     name: str
@@ -431,7 +431,7 @@ class OldContainer:
 
 @dataclass(frozen=True)
 class NewImage:
-    """Das Image, auf das gewechselt wird (5.1 Schritt 2), und ab `created` der neue Container (`id`).
+    """Das Image, auf das gewechselt wird, und ab `created` der neue Container (`id`).
     Beim Rueckweg ist es der Vorgaenger aus dem Slot; `digest` darf dann fehlen."""
 
     image_id: str

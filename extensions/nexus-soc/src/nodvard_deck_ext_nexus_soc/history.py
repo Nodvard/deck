@@ -9,11 +9,13 @@ und einer Gesamtzahl fuer die Seitennavigation.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
+from .incident_text import clean_incident_message
 from .models import IncidentRecord
 
 if TYPE_CHECKING:
@@ -53,13 +55,25 @@ def _ts(dt: datetime | None) -> float | None:
     return dt.timestamp()
 
 
+def occurrences_of(details: dict[str, Any] | None) -> int:
+    """Wie oft derselbe Vorfall erneut gemeldet wurde (1 = nur das erste Mal)."""
+    value = (details or {}).get("occurrences")
+    return value if isinstance(value, int) and not isinstance(value, bool) and value > 1 else 1
+
+
 def record_out(r: IncidentRecord) -> dict[str, Any]:
+    details = r.details if isinstance(r.details, dict) else {}
+    last_seen = details.get("last_seen")
     return {
         "id": r.id,
         "host_id": r.host_id,
         "host_name": r.host_name,
         "target": r.target,
-        "message": r.message,
+        # Aeltere Titel tragen noch die eingefrorene Docker-Zeit ("... 4 seconds ago"): beim
+        # Anzeigen bereinigt, der gespeicherte Datensatz bleibt unveraendert.
+        "message": clean_incident_message(r.message),
+        "occurrences": occurrences_of(details),
+        "last_seen": float(last_seen) if isinstance(last_seen, (int, float)) and not isinstance(last_seen, bool) else _ts(r.created_at),
         "created_at": _ts(r.created_at),
         "status": r.status,
         "status_label": STATUS_LABEL.get(r.status, r.status),
@@ -95,6 +109,61 @@ class IncidentRepository:
             row.status = incident.status
             row.ai_summary = incident.ai_summary
             row.action_id = incident.action_id
+
+    async def merge_into_active(
+        self,
+        *,
+        host_name: str,
+        target: str,
+        is_crash: bool,
+        seen_at: float,
+        window_s: float,
+        action_waiting: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> dict[str, Any] | None:
+        """Gibt es zu diesem Container schon einen Vorfall, den noch niemand bearbeitet hat
+        (offen, Aktion vorgeschlagen, oder von Nodvard KI automatisch auf "Geprueft" gesetzt),
+        und liegt sein ERSTES Auftreten nicht laenger als `window_s` zurueck? Dann wird dort der
+        Zaehler erhoeht und das neue Auftreten vermerkt, statt einen weiteren Vorfall
+        anzulegen. Nach "Bestaetigen", "Erledigt" oder "Verwerfen" durch einen Menschen beginnt
+        der naechste Absturz wieder einen neuen Vorfall.
+
+        Das Fenster zaehlt ab dem ersten Auftreten, nicht ab dem letzten: sonst bliebe ein
+        Container, der jede Nacht abstuerzt, nach der ersten Meldung fuer immer still.
+
+        Ein Vorfall mit verknuepfter Aktion zaehlt nur mit, solange `action_waiting(action_id)`
+        sagt, dass die Aktion noch wartet oder laeuft. Ist sie erledigt (etwa der Neustart lief
+        schon, und der Container stuerzt trotzdem wieder ab), ist das ein neuer Vorfall.
+        Gibt den Vorfall zurueck oder `None`."""
+        unhandled = or_(
+            IncidentRecord.status.in_(("open", "proposed")),
+            and_(IncidentRecord.status == "reviewed", IncidentRecord.status_changed_at.is_(None)),
+        )
+        since = datetime.fromtimestamp(seen_at - window_s, UTC)
+        async with self._ctx.db.session() as session:
+            rows = (
+                await session.execute(
+                    select(IncidentRecord)
+                    .where(
+                        func.lower(IncidentRecord.host_name) == host_name.lower(),
+                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.is_crash == is_crash,
+                        IncidentRecord.created_at >= since,
+                        unhandled,
+                    )
+                    .order_by(IncidentRecord.created_at.desc(), IncidentRecord.id.desc())
+                )
+            ).scalars().all()
+            for row in rows:
+                if row.action_id and (action_waiting is None or not await action_waiting(row.action_id)):
+                    continue
+                details = dict(row.details) if isinstance(row.details, dict) else {}
+                last = details.get("last_seen")
+                last_ts = float(last) if isinstance(last, (int, float)) and not isinstance(last, bool) else _ts(row.created_at)
+                details["occurrences"] = occurrences_of(details) + 1
+                details["last_seen"] = max(seen_at, last_ts or seen_at)
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                return record_out(row)
+        return None
 
     async def get(self, incident_id: str) -> dict[str, Any] | None:
         async with self._ctx.db.session() as session:

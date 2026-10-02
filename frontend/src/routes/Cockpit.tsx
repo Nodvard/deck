@@ -29,6 +29,9 @@ import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { FirstStepsCard } from "../components/FirstStepsCard";
 import { Icon } from "../components/Icon";
 import { usePages } from "../lib/catalog";
+import { useExtensionLabel } from "../lib/extensionNames";
+import { NEW_HOST_TARGET } from "../lib/firstSteps";
+import { neverAnswered } from "../lib/hosts";
 import {
   formatAge,
   formatBytes,
@@ -243,7 +246,7 @@ function MachineRow({ host, canTerminal, hint }: { host: HostOut; canTerminal: b
       <div className="min-w-0 flex-1">
         <Link to={`/hosts/${host.id}`} className="block break-words text-sm font-medium hover:underline">{host.display_name}</Link>
         <p className="break-words text-[11px] text-white/45">
-          {KIND_LABEL[host.kind ?? ""] ?? "Host"} · {host.address}
+          {KIND_LABEL[host.kind ?? ""] ?? "Server"} · {host.address}
         </p>
         {hint && <p className="break-words text-[11px] text-white/40" data-testid={`machine-${host.id}-hint`}>{hint}</p>}
       </div>
@@ -275,6 +278,8 @@ function metricsHint(host: HostOut, systemModuleOn: boolean | null): string | nu
   if (!host.credential) return "Keine Auslastung: noch kein SSH-Zugang";
   if (!host.enabled) return "Keine Auslastung: Messwerte für diesen Server sind aus";
   if (systemModuleOn === false) return "Keine Auslastung: Modul „System“ ist aus";
+  // Hat der Server nie geantwortet, kommt auch nichts mehr nach: erst die Verbindung klaeren, nicht auf Kurven warten.
+  if (hostHealth(host.status) === "problem" && neverAnswered(host)) return "Noch keine Verbindung: prüfe zuerst den Zugang";
   if (systemModuleOn && hostHealth(host.status) !== "problem") return "Noch keine Messwerte";
   return null;
 }
@@ -290,6 +295,7 @@ export function Cockpit() {
   const { data: terminalHosts } = useTerminalHosts(canExecute);
   const { data: latest, isLoading: latestLoading, isError: latestError } = useLatestMetrics(canReadHosts);
   const { data: pages } = usePages();
+  const extensionLabel = useExtensionLabel((overview?.attention ?? []).some((a) => a.source_ext_id));
 
   const nodes = useMemo(() => (hosts ?? []).filter(isNode), [hosts]);
   // Server mit einem letzten Messwert (aus dem Verlauf) bekommen eine Karte wie die Knoten, alle anderen
@@ -313,9 +319,16 @@ export function Cockpit() {
   const unknownHosts = allHosts.filter((h) => hostHealth(h.status) === "unknown");
   const backups = overview?.backups ?? null;
   const backupsUnreachable = backups?.unreachable_names ?? [];
-  const services = overview?.services ?? [];
+  // Platzhalter nicht erreichbarer Server (`unreachable`) sind keine Dienste: sie zaehlen weder als „laeuft“ noch als „laeuft nicht“.
+  const services = (overview?.services ?? []).filter((s) => !s.unreachable);
+  const servicesDown = overview?.services_unreachable_hosts ?? [];
+  // Nicht nur „Server aus“: der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst aus, keine Rechte).
+  const servicesDownText = `Container von ${servicesDown.length === 1 ? "1 Server" : `${servicesDown.length} Servern`} nicht abrufbar`;
+  // Ein Server, der ohnehin als „nicht erreichbar“ in der Liste steht, zaehlt nicht doppelt.
+  const problemNames = new Set(problemHosts.map((h) => h.display_name));
+  const servicesDownExtra = servicesDown.filter((name) => !problemNames.has(name));
   const attention = overview?.attention ?? [];
-  const issues = problemHosts.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
+  const issues = problemHosts.length + servicesDownExtra.length + (backups?.failed ?? 0) + backupsUnreachable.length + attention.length + (overview?.pending_actions ?? 0);
 
   // Eigene Apps und erkannte Dienste in einer Liste (`services` bleibt fuer die Kennzahl „Dienste“).
   const apps = overview?.apps ?? [];
@@ -351,13 +364,13 @@ export function Cockpit() {
             ) : issues === 0 && unknownHosts.length > 0 ? (
               <>
                 <Server size={16} className="text-white/55" />
-                Keine Störung bekannt. {online} von {allHosts.length} Hosts online, {unknownHosts.length} noch nicht geprüft
+                Keine Störung bekannt. {online} von {allHosts.length} Servern online, {unknownHosts.length} noch nicht geprüft
                 {services.length > 0 && overview ? `, ${overview.services_running} Dienste aktiv` : ""}.
               </>
             ) : issues === 0 ? (
               <>
                 <CheckCircle2 size={16} className="text-emerald-400" />
-                Alles läuft rund. {online} von {allHosts.length} Hosts online{overview && services.length > 0 ? `, ${overview.services_running} Dienste aktiv` : ""}.
+                Alles läuft rund. {online} von {allHosts.length} Servern online{overview && services.length > 0 ? `, ${overview.services_running} Dienste aktiv` : ""}.
               </>
             ) : (
               <>
@@ -374,7 +387,7 @@ export function Cockpit() {
       {canReadHosts && (
         <div className="grid grid-cols-2 gap-3 px-4 pt-5 sm:px-6 md:grid-cols-3 xl:grid-cols-5">
           <StatCard
-            icon={<Server size={16} />} label="Hosts" value={loading ? "…" : noHosts ? "0" : `${online}/${allHosts.length}`}
+            icon={<Server size={16} />} label="Server" value={loading ? "…" : noHosts ? "0" : `${online}/${allHosts.length}`}
             sub={
               problemHosts.length ? `${problemHosts.length} nicht erreichbar`
                 : noHosts ? "noch keiner angelegt"
@@ -386,8 +399,17 @@ export function Cockpit() {
           <StatCard
             icon={<Boxes size={16} />} label="Dienste"
             value={overview ? (services.length === 0 ? "–" : `${overview.services_running}/${services.length}`) : "…"}
-            sub={overview && services.length === 0 ? "noch keine erfasst" : "Container laufen"}
-            tone={noHosts || services.length === 0 ? "neutral" : overview && overview.services_running < services.length ? "warn" : "good"}
+            sub={
+              servicesDown.length && services.length === 0 ? `unbekannt · ${servicesDownText}`
+                : servicesDown.length ? `Container laufen · ${servicesDownText}`
+                : overview && services.length === 0 ? "noch keine erfasst"
+                : "Container laufen"
+            }
+            tone={
+              servicesDown.length ? "warn"
+                : noHosts || services.length === 0 ? "neutral"
+                : overview && overview.services_running < services.length ? "warn" : "good"
+            }
           />
           {(backups || loading) && (
             <StatCard
@@ -446,7 +468,7 @@ export function Cockpit() {
                 action={
                   canWriteHosts ? (
                     <>
-                      <ButtonLink to="/settings/hosts">Server hinzufügen</ButtonLink>
+                      <ButtonLink to={NEW_HOST_TARGET}>Server hinzufügen</ButtonLink>
                       <DemoSeedButton />
                     </>
                   ) : undefined
@@ -463,7 +485,7 @@ export function Cockpit() {
               <div className="panel divide-y divide-white/[0.06]" data-testid="attention">
                 {!loading && issues === 0 && (
                   <p className="flex items-center gap-2 p-4 text-sm text-white/60">
-                    <CheckCircle2 size={16} className="text-emerald-400" /> Nichts offen -- genieß die Ruhe.
+                    <CheckCircle2 size={16} className="text-emerald-400" /> Nichts offen – genieß die Ruhe.
                   </p>
                 )}
                 {problemHosts.map((h) => (
@@ -474,6 +496,11 @@ export function Cockpit() {
                 {(backups?.failed_names ?? []).map((name) => (
                   <p key={name} className="flex items-center gap-2 px-4 py-3 text-sm">
                     <DatabaseBackup size={15} className="text-red-300" /> Backup fehlgeschlagen: {name}
+                  </p>
+                ))}
+                {servicesDownExtra.map((name) => (
+                  <p key={`services-unreachable-${name}`} className="flex items-center gap-2 px-4 py-3 text-sm">
+                    <span className="status-dot problem" /> Container nicht abrufbar: {name}
                   </p>
                 ))}
                 {backupsUnreachable.map((name) => (
@@ -492,12 +519,12 @@ export function Cockpit() {
                     <AlertTriangle size={15} className={`mt-0.5 flex-none ${a.severity === "critical" ? "text-red-300" : "text-amber-300"}`} />
                     <span className="min-w-0 flex-1">
                       <span className="block break-words">{a.title}</span>
-                      <span className="text-[11px] text-white/45">{relativeTime(a.ts)}{a.source_ext_id ? ` · ${a.source_ext_id}` : ""}</span>
+                      <span className="text-[11px] text-white/45">{relativeTime(a.ts)}{a.source_ext_id ? ` · ${extensionLabel(a.source_ext_id)}` : ""}</span>
                     </span>
                   </Link>
                 ))}
                 {(overview?.errors ?? []).map((e) => (
-                  <p key={e} className="px-4 py-2 text-[11px] text-white/45">Teilweise nicht abrufbar -- {e}</p>
+                  <p key={e} className="px-4 py-2 text-[11px] text-white/45">Teilweise nicht abrufbar: {e}</p>
                 ))}
               </div>
             </div>

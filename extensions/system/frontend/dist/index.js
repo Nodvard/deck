@@ -90,6 +90,7 @@ function isActionRunning(status) {
 }
 var ACTION_POLL_INTERVAL_MS = 3e3;
 var ACTION_POLL_MAX_MS = 60 * 60 * 1e3;
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -104,6 +105,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };
@@ -531,7 +533,7 @@ function LiveView({ hostId, fetchLive }) {
       data.throttled.flags.join(", "),
       " (",
       data.throttled.raw,
-      ") -- meist ein zu schwaches Netzteil oder Hitze."
+      ") \u2013 meist ein zu schwaches Netzteil oder Hitze."
     ] }),
     /* @__PURE__ */ jsxs2("div", { className: "grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
       /* @__PURE__ */ jsx3(Tile, { label: "CPU", value: pct(cpu.total?.percent), sub: freqs.length ? `${Math.max(...freqs)} MHz \xB7 ${cpu.cores} Kerne` : `${cpu.cores} Kerne`, spark: /* @__PURE__ */ jsx3(Spark, { values: history.cpu, max: 100 }) }),
@@ -800,7 +802,7 @@ function InfoView({ info, canRestart, busyUnit, onRestart }) {
       " \xB7 Hostname ",
       info.hostname ?? "?"
     ] }),
-    info.findings.length > 0 ? /* @__PURE__ */ jsx4("ul", { className: "panel mb-4 divide-y divide-white/5 text-sm", "data-testid": "findings", children: info.findings.map((f) => /* @__PURE__ */ jsx4("li", { className: `px-3 py-2 ${TONE_TEXT[f.tone] ?? ""}`, children: f.text }, f.text)) }) : /* @__PURE__ */ jsx4("p", { className: "panel mb-4 px-3 py-2 text-sm text-emerald-300", "data-testid": "findings", children: "Alles in Ordnung -- nichts braucht Aufmerksamkeit." }),
+    info.findings.length > 0 ? /* @__PURE__ */ jsx4("ul", { className: "panel mb-4 divide-y divide-white/5 text-sm", "data-testid": "findings", children: info.findings.map((f) => /* @__PURE__ */ jsx4("li", { className: `px-3 py-2 ${TONE_TEXT[f.tone] ?? ""}`, children: f.text }, f.text)) }) : /* @__PURE__ */ jsx4("p", { className: "panel mb-4 px-3 py-2 text-sm text-emerald-300", "data-testid": "findings", children: "Alles in Ordnung \u2013 nichts braucht Aufmerksamkeit." }),
     /* @__PURE__ */ jsxs3("div", { className: "mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
       /* @__PURE__ */ jsx4(Stat, { label: "L\xE4uft seit", value: formatUptime(info.uptime_s) }),
       /* @__PURE__ */ jsx4(Stat, { label: "CPU", value: info.cpu_percent != null ? `${info.cpu_percent.toFixed(0)} %` : "?", sub: `${info.cpus ?? "?"} Kerne \xB7 Last ${info.load.map((l) => l.toFixed(2)).join(" / ")}` }),
@@ -990,7 +992,7 @@ function SystemPage() {
         action: /* @__PURE__ */ jsx4(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" })
       }
     ),
-    !hostId && hosts !== null && hosts.length > 0 && /* @__PURE__ */ jsx4("p", { className: "text-sm opacity-60", children: "Einen Linux-Server w\xE4hlen -- oder \xFCber dessen Server-Seite \u201ESystem-Monitor\u201C \xF6ffnen." }),
+    !hostId && hosts !== null && hosts.length > 0 && /* @__PURE__ */ jsx4("p", { className: "text-sm opacity-60", children: "Einen Linux-Server w\xE4hlen \u2013 oder \xFCber dessen Server-Seite \u201ESystem-Monitor\u201C \xF6ffnen." }),
     hostId && tab === "live" && /* @__PURE__ */ jsx4(LiveView, { hostId, fetchLive }),
     tab === "info" && error && /* @__PURE__ */ jsxs3("p", { className: "text-sm text-red-400", children: [
       "Fehler: ",

@@ -57,6 +57,9 @@ class ServiceOut(BaseModel):
     tone: str | None = None
     url: str | None = None
     image: str | None = None
+    unreachable: bool = False
+    """`true` bei der Platzhalterkachel eines Servers, dessen Dienste gerade nicht gelesen werden konnten. Sie
+    ist kein Dienst und zaehlt nicht als "laeuft nicht"."""
 
 
 class AppTileOut(BaseModel):
@@ -103,6 +106,9 @@ class AttentionItem(BaseModel):
 class OverviewOut(BaseModel):
     services: list[ServiceOut]
     services_running: int
+    services_unreachable_hosts: list[str] = []
+    """Namen der Server, deren Dienste nicht gelesen werden konnten (Kacheln mit `unreachable`). Leer, wenn alle
+    antworten. Die Kennzahl "x von y laufen" gilt dann nur fuer die uebrigen Server."""
     apps: list[AppTileOut] = []
     """Eigene Apps (zuerst) und erkannte Dienste (danach), siehe Modul-Docstring."""
     backups: BackupSummary | None
@@ -127,10 +133,19 @@ async def _collect_services(errors: list[str]) -> list[ServiceOut]:
             services.append(ServiceOut(
                 id=str(row.get("id") or row["name"]), name=str(row["name"]), host=row.get("host"),
                 host_id=row.get("host_id"), state=row.get("state"), tone=row.get("tone"),
-                url=row.get("url"), image=row.get("image"),
+                url=row.get("url"), image=row.get("image"), unreachable=row.get("unreachable") is True,
             ))
     services.sort(key=lambda s: (s.state != "running", (s.name or "").lower()))
     return services
+
+
+def _unreachable_hosts(services: list[ServiceOut]) -> list[str]:
+    hosts: list[str] = []
+    for s in services:
+        name = s.host or s.name
+        if s.unreachable and name not in hosts:
+            hosts.append(name)
+    return hosts
 
 
 async def _app_tiles(session: AsyncSession, services: list[ServiceOut]) -> list[AppTileOut]:
@@ -216,6 +231,7 @@ async def overview(session: SessionDep) -> OverviewOut:
     return OverviewOut(
         services=services,
         services_running=sum(1 for s in services if s.state == "running"),
+        services_unreachable_hosts=_unreachable_hosts(services),
         apps=await _app_tiles(session, services),
         backups=expensive["backups"],
         pending_actions=int(pending),

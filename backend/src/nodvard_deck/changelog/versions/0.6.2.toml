@@ -1,0 +1,307 @@
+version = "0.6.2"
+date = "2026-10-02"
+title = "Sicherheit und Feinschliff"
+
+[[entries]]
+kind = "verbessert"
+text = "Neue SSH-Zugänge heißen jetzt „nodvard“ statt „lattice“: Der Benutzer, der Schlüssel-Kommentar und die sudo-Regel auf dem Server tragen den neuen Namen. Bestehende Zugänge laufen unverändert weiter."
+
+[[entries]]
+kind = "verbessert"
+text = "Führst du den Einrichtungsbefehl auf einem Server mit der alten sudo-Regel „lattice“ aus, ersetzt er sie sauber durch die neue. Eine selbst angepasste alte Regel bleibt stehen, du bekommst einen Hinweis."
+
+[[entries]]
+kind = "neu"
+text = "Skripte mit Zeitplan können ohne Klick laufen: Inhaber oder Administrator schalten das je Skript ein und sehen vorher, für welche Server und unter welchem Konto es gilt. Jeder Lauf steht weiter unter „Aktionen“ und im Protokoll, mit Datum der Freigabe und wer sie erteilt hat."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Freigabe ohne Klick erlischt bei jeder Änderung an Inhalt, Parametern, Ziel oder Zeitplan und wenn sich auf einem Server das Anmeldekonto, die Adresse oder der SSH-Port ändert; neue Server in einer Gruppe fragen weiter nach, und Vorschläge der KI laufen nie ohne Klick."
+
+[[entries]]
+kind = "sicherheit"
+text = "„Freigabe zurückziehen“ wirkt sofort, auch auf die restlichen Server eines Laufs, der gerade läuft, und noch kurz vor dem Befehl selbst. Hat die Person, die freigegeben hat, keine Rechte mehr, zeigt die Skripte-Seite das gleich an, und die Läufe warten wieder auf deinen Klick."
+
+[[entries]]
+kind = "sicherheit"
+text = "Befehle und Skript-Inhalte von Aktionen siehst du nur noch, wenn du sie ausführen oder bestätigen darfst. Wer nur ansehen darf, bekommt sie weder in der Aktionen-Liste noch im Protokoll, über Live-Meldungen oder in den Meldungen und Vorfällen der Container-Wache, und die Meldung zu wiederholten Befehlen nennt den Befehl nicht mehr."
+
+[[entries]]
+kind = "sicherheit"
+text = "Auf der Aktionen-Seite steht der Befehl direkt in der Zeile, und die Sammel-Freigabe zeigt ihn ungekürzt. Unsichtbare oder umlenkende Zeichen im Befehl (zum Beispiel eine umgekehrte Schreibrichtung) werden als sichtbare Marke angezeigt. Aktionen mit hohem Risiko bestätigst du nur noch einzeln."
+
+[[entries]]
+kind = "sicherheit"
+text = "Eine offene Live-Verbindung baut sich spätestens nach 15 Minuten neu auf, das macht die Seite von selbst. Für sie gilt damit dieselbe Frist wie für alle anderen Anfragen. Meldungen als gelesen markieren dürfen nur noch Bediener, Administrator und Inhaber."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Ausgabe ausgeführter Aktionen (zum Beispiel das Ergebnis eines Befehls auf einem Server) siehst du nur noch mit Server-Rechten. Wer nur ansehen darf, sieht weiterhin Status, Zeiten und wer die Aktion bestätigt hat, aber keinen Text vom Server mehr, auch nicht im Protokoll."
+
+[[entries]]
+kind = "sicherheit"
+text = "Schlägt ein Update fehl (Update-Zentrale von Nodvard Shield, Image-Updates der Service-Matrix), stehen in Meldungen und Protokoll keine Zeilen aus der Ausgabe des Servers mehr, sondern ein fester Satz, bei der Service-Matrix auch in der Übersicht der Seite. Die Einzelheiten siehst du in der Aktion, wenn du Server-Rechte hast, bei Nodvard Shield auch in der Update-Zentrale."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Deck nimmt keine riesigen Anfragen mehr an: Normale Anfragen über 1 MB weist es sofort ab, auch ohne Anmeldung, statt damit den Speicher zu füllen. Uploads (Sicherung, Dateien, Logo, Dokumente, Bilder) dürfen weiter größer sein."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nachrichten über die Live-Verbindung (WebSocket) sind im Image auf 1 MB begrenzt, vorher waren es 16 MB."
+
+[[entries]]
+kind = "sicherheit"
+text = "Wird ein Konto deaktiviert, werden alle seine Anmeldungen beendet. Wird es später wieder aktiviert, melden sich alte Geräte nicht mehr von allein an – man muss sich neu anmelden. Das gilt auch für eine Anmeldung, die genau in dem Moment läuft: Wird das Konto dabei deaktiviert oder das Passwort geändert, entsteht keine neue Sitzung mehr."
+
+[[entries]]
+kind = "sicherheit"
+text = "Viele gleichzeitige Anmeldeversuche bremsen das Dashboard nicht mehr aus: Passwörter werden im Hintergrund geprüft, nur wenige zugleich. Bei einem Ansturm bittet die Anmeldeseite kurz um einen neuen Versuch, wer schon angemeldet ist, arbeitet normal weiter. Außerdem antwortet ein deaktiviertes Konto genauso schnell wie ein aktives, die Antwortzeit verrät es nicht mehr."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Live-Aktualisierung (Anzeigen ohne Neuladen) endet jetzt auch bei einer schon offenen Seite, spätestens nach einer halben Minute, wenn das Konto deaktiviert, das Passwort geändert oder die Person abgemeldet wird. Geänderte Rollen gelten dort ebenfalls nach spätestens einer halben Minute."
+
+[[entries]]
+kind = "sicherheit"
+text = "Zwei-Faktor schaltest du jetzt nur noch mit deinem Passwort ein. Ein Code aus der App gilt außerdem nur einmal, und wer von vielen Geräten aus falsche Codes durchprobiert, wird für eine Weile gesperrt – du bekommst dann eine Meldung. Den Zwei-Faktor-Schlüssel eines Kontos kann auch niemand mehr über den Tresor austauschen oder löschen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Offene Terminal- und Konsolen-Sitzungen enden jetzt, wenn dein Konto deaktiviert wird, dir das Recht entzogen wird, du dein Passwort änderst oder dich abmeldest. Ein Terminal ohne Eingabe und Ausgabe schließt sich nach 30 Minuten von selbst."
+
+[[entries]]
+kind = "sicherheit"
+text = "Bei der Anmeldung werden sehr lange Eingaben abgewiesen und blähen das Protokoll nicht mehr auf."
+
+[[entries]]
+kind = "behoben"
+text = "Sind Server nicht erreichbar, zeigt die Übersicht bei den Diensten „unbekannt“ und nennt die nicht erreichbaren Server, statt „0 Container laufen“."
+
+[[entries]]
+kind = "behoben"
+text = "Kopien vor Updates heißen bei gleicher Version nicht mehr „Update von 0.5.0 auf 0.5.0“, sondern „Datenbank-Umbau in 0.5.0“."
+
+[[entries]]
+kind = "behoben"
+text = "Bei mitgelieferten Erweiterungen steht „Teil von Nodvard Deck“ mit der Programmversion statt einer immer gleichen „v0.1.0“."
+
+[[entries]]
+kind = "behoben"
+text = "Das Sichern auf dem Server mit dem Skript backup.sh klappt jetzt auch, wenn man es mit „sudo“ startet. Eine halbe oder leere Sicherung bleibt nicht mehr liegen, die Datei ist nur für den Besitzer lesbar, und das Zurückspielen prüft die Datei vorher. Hat das Skript keinen Zugriff auf Docker, sagt es das jetzt deutlich, statt eine irreführende Meldung zu zeigen."
+
+[[entries]]
+kind = "behoben"
+text = "Beim Zurückspielen einer Sicherung mit dem Skript restore.sh geht dein bisheriger Stand nicht mehr verloren, wenn etwas abbricht (Verbindung weg, Platte voll, Strg+C, Stromausfall): Die Daten werden erst daneben entpackt und dann ausgetauscht. Dafür braucht das Zurückspielen kurz doppelt so viel Platz."
+
+[[entries]]
+kind = "verbessert"
+text = "Sichern und Zurückspielen (backup.sh, restore.sh) laufen nie mehr gleichzeitig: Wenn schon eins läuft, wirst du freundlich gebeten zu warten, und es wird nichts verändert. Ein verschlüsseltes Backup (.ndbak) wird nicht vorgemerkt, solange ein früheres Zurückspielen noch nicht fertig ist."
+
+[[entries]]
+kind = "sicherheit"
+text = "„Erneut versuchen“ und „Jetzt sichern“ auf der Backups-Seite übernehmen jetzt die Einstellungen und die Aufbewahrung des Backup-Jobs. Die Rückfrage sagt dir vorher, dass dabei ältere Sicherungen des Gastes gelöscht werden können. Hat der Job keine eigene Aufbewahrung, wird nichts aufgeräumt. Für beide Knöpfe braucht der Proxmox-Zugang jetzt auf dem Backup-Speicher dieselbe Zusatzrolle wie das Anlegen von Jobs."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ein freigegebener Backup-Lauf startet nur, wenn der Job noch so aussieht wie beim Vorschlag. Wurde der Job geändert oder gelöscht, wird nichts gestartet und du schlägst den Lauf neu vor."
+
+[[entries]]
+kind = "sicherheit"
+text = "Eine Änderung an einem Backup-Job wird nur ausgeführt, wenn der Job noch so aussieht wie beim Vorschlag. Hat er sich inzwischen geändert, wird nichts geschrieben und du schlägst die Änderung neu vor."
+
+[[entries]]
+kind = "behoben"
+text = "Im Backup-Widget und auf der Backup-Seite steht „Erneut versuchen“ nur noch bei einem fehlgeschlagenen Backup; sonst heißt der Knopf „Jetzt sichern“, während eines laufenden Backups gibt es keinen."
+
+[[entries]]
+kind = "behoben"
+text = "Das Proxmox-Speicher-Widget zeigt geteilte Speicher (z. B. NFS) nur noch einmal, mit dem Hinweis, auf welchen Knoten sie verfügbar sind."
+
+[[entries]]
+kind = "verbessert"
+text = "Neu eingelesene Proxmox-Server bekommen eine einheitliche Kennung in Kleinbuchstaben, ohne doppelten Knotennamen. Bereits bekannte Server behalten ihre Kennung."
+
+[[entries]]
+kind = "behoben"
+text = "Eine Datei auf sich selbst zu kopieren oder zu verschieben (zum Beispiel über einen Link) leert sie nicht mehr. Du bekommst stattdessen den Hinweis „Quelle und Ziel sind dieselbe Datei“, und beim Verschieben bleibt das Original, wenn nicht alles angekommen ist."
+
+[[entries]]
+kind = "behoben"
+text = "Ein abgebrochener Upload oder Transfer lässt eine vorhandene Datei auf dem Server nicht mehr halb oder leer zurück."
+
+[[entries]]
+kind = "sicherheit"
+text = "Dateien auf Servern kann nur noch öffnen, wer auch Befehle auf Servern ausführen darf. „Nur ansehen“ reicht dafür nicht mehr."
+
+[[entries]]
+kind = "neu"
+text = "Zugriffe auf Dateien von Servern stehen jetzt im Protokoll."
+
+[[entries]]
+kind = "behoben"
+text = "Das Update-Skript für selbst gebaute Images schaltet nicht mehr automatisch auf die alte Version zurück, wenn die neue die Datenbank schon umgebaut hat und gestartet war. Die alte Version hätte die Daten nicht mehr lesen können und nur die Notseite gezeigt. Stattdessen sagt es, wie man bewusst zurückgeht. Reißt die Verbindung während der Prüfung ab, meldet es einen unklaren Zustand, statt zurückzuschalten."
+
+[[entries]]
+kind = "behoben"
+text = "Wenn du die Einstellungen einer Erweiterung speicherst, überschreibt die Seite nichts mehr, was du gar nicht angefasst hast. Vorher gingen zum Beispiel die Profile der Gameserver verloren, wenn sie gleichzeitig in einem anderen Tab geändert wurden."
+
+[[entries]]
+kind = "sicherheit"
+text = "Zugangsdaten bleiben bei dem Ziel, für das du sie eingegeben hast: Änderst du die Adresse eines Dienstes (zum Beispiel ntfy, Proxmox oder Nextcloud) oder entfernst eine Verbindung, werden das Token oder Passwort dazu gelöscht und du gibst es neu ein. Dasselbe gilt für das gespeicherte SSH-Passwort eines Servers, wenn du dessen Adresse änderst oder der automatische Abgleich sie ändert (bei Servern mit gemerktem Schlüssel, die ihre Adresse selbst melden, bleibt es)."
+
+[[entries]]
+kind = "sicherheit"
+text = "Zugangsdaten nimmt Nodvard Deck erst an, wenn die Adresse dazu gespeichert ist. Trägst du bei einem Dienst mit zwei Servern (zum Beispiel Nodvard KI mit Ersatz-Server) einen davon neu ein, wird der gemeinsame Schlüssel ebenfalls gelöscht. Eine andere Schreibweise derselben Adresse (Groß- und Kleinschreibung, Standardport, fehlendes http://) löscht dagegen nichts."
+
+[[entries]]
+kind = "sicherheit"
+text = "Erweiterungen sind jetzt nur noch nach der Anmeldung erreichbar, auch die Beispiel-Erweiterung „Hello World“. Erweiterungen anderer Anbieter, die bewusst ohne Anmeldung erreichbar sein sollen (zum Beispiel für Webhooks), müssen angepasst werden. Erweiterungen, die eigene Live-Verbindungen oder zusätzliche Seitenadressen mitbringen, lassen sich ohne diese Anpassung gar nicht mehr einschalten."
+
+[[entries]]
+kind = "sicherheit"
+text = "Eine Erweiterung darf Adressen ohne Anmeldung nur noch anbieten, wenn sie das ausdrücklich beantragt. Schaltest du so eine Erweiterung ein, steht das im Protokoll."
+
+[[entries]]
+kind = "sicherheit"
+text = "Deine Datenbank und hochgeladene Dokumente sind jetzt nur noch für den Dienstbenutzer lesbar, auch wenn du den Datenordner vom Rechner einbindest. Bestehende Dateien werden beim nächsten Start nachgezogen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Das Programm im Image kann sich nicht mehr selbst verändern, und der Gesundheitscheck läuft abgeschottet. Beim Selbstbauen des Images gelangen außerdem keine Schlüssel oder Datenbanken aus Unterordnern mehr hinein."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die KI-Container-Wache schlägt nur noch den Neustart des betroffenen Containers vor. Andere Ideen der KI werden nicht mehr als Aktion angelegt. Im Chat siehst du sie als Text, im Bericht steht nur ein Hinweis, und den Befehl findest du mit Server-Rechten im Protokoll. Logzeilen und Fehlermeldungen von Docker behandelt sie als fremde Daten, nicht als Anweisung, und sie bekommt davon nur noch die neuesten Zeilen mit der Absturzursache."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Konsole einer VM oder eines Containers folgt keinen Umleitungen des Servers mehr. So kann die Verbindung nicht auf eine andere Adresse im Netz gelenkt werden, die für die Erweiterung gar nicht freigegeben ist. Antwortet ein Server mit einer Umleitung, siehst du jetzt eine verständliche Meldung."
+
+[[entries]]
+kind = "sicherheit"
+text = "Versucht sich jemand mit einem Namen anzumelden, den es nicht gibt, steht im Protokoll nur „unbekannt“. Die Kennung zu diesem Namen und seine Länge sieht nur der Inhaber, alle anderen, auch Administratoren und Betrachter, sehen sie nicht. Die Eingabe selbst steht nirgends – sie hätte ja auch ein ins Namensfeld getipptes Passwort sein können."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Update räumt Nodvard Deck auch die alten Protokoll-Einträge auf: Namen, die jemand bei der Anmeldung vertippt hat, werden einmalig entfernt und sind danach für niemanden mehr sichtbar, auch nicht für den Inhaber. Das lässt sich nicht rückgängig machen. Die Kopie der Datenbank, die vor dem Update entsteht, und ältere Sicherungen enthalten sie noch."
+
+[[entries]]
+kind = "sicherheit"
+text = "Hochgeladene Logos und Bilder können im Browser keine Skripte mehr ausführen, auch wenn jemand ihre Adresse direkt öffnet. SVG-Logos mit Skripten oder fremden Verweisen werden beim Hochladen abgelehnt, und der Support-Link im Aussehen nimmt nur noch http, https und mailto an."
+
+[[entries]]
+kind = "sicherheit"
+text = "Im Dateimanager können Nextcloud-Pfade mit „..“ nicht mehr aus deinem Dateibereich herausführen, sodass Kalender, Kontakte und der Papierkorb geschützt bleiben."
+
+[[entries]]
+kind = "sicherheit"
+text = "Notseite: Mit dem richtigen Notfallcode kommst du jetzt auch dann hinein, wenn vorher jemand viele falsche Codes probiert hat. Außerdem lassen sich die Verbindungen der Notseite nicht mehr so leicht mit halben Anfragen blockieren."
+
+[[entries]]
+kind = "behoben"
+text = "Der Einbruchschutz meldet keine „neuen offenen Ports“ mehr, nur weil Tailscale, NFS, DHCP oder die Zeitsynchronisation nach einem Neustart andere Zufalls-Ports wählen. Echte neue Dienste auf festen Ports melden weiterhin, ebenso ein Programm, das sich nur so nennt und auf einem TCP-Port lauscht. Ohne root steht bei solchen Ports jetzt „Programm nicht lesbar“ statt „Kernel“."
+
+[[entries]]
+kind = "behoben"
+text = "Update-Zentrale: Scheitert eine Prüfung, steht jetzt der Grund da, dazu die letzte erfolgreiche Prüfung und der letzte Versuch; die tägliche Meldung nennt einen nicht erreichbaren Server weiter als Fehler, mit dem Datum des letzten guten Stands. Eine Tagesprüfung, die zur Prüfzeit ausgeblieben ist, weil das Dashboard gerade aus war, wird nach dem Start nachgeholt. Ein Server ohne Paketmanager (z. B. ein NAS) steht als geprüft und „nicht unterstützt“ da."
+
+[[entries]]
+kind = "verbessert"
+text = "Proxmox: Bei den Updates eines Knotens steht, warum der nächtliche Proxmox-Check fehlgeschlagen ist, und ein Hinweis, wenn er seit über 36 Stunden nicht gelaufen ist."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Wiederherstellen aus der Quarantäne kann ein Benutzer auf dem Server die Datei nicht mehr an eine andere Stelle umleiten, und fehlende Ordner werden nicht mehr automatisch angelegt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Virenscan: Der Echtzeit-Wächter prüft jetzt auch Dateien mit einem Zeilenumbruch im Namen und Dateien mit sehr langem Pfad (bis zur Längengrenze des Systems), statt sie stillschweigend zu überspringen. Ein Fund darin wird gemeldet, aber nie automatisch verschoben. Außerdem durchsucht er jetzt auch einen Ordner, der selbst nur eine Verknüpfung ist. Ein kaputter ClamAV-Lauf (zum Beispiel mit beschädigter Datenbank) gilt nie als sauber, auch wenn so eine Datei im Zeitfenster lag."
+
+[[entries]]
+kind = "sicherheit"
+text = "Virenscan: Kommen im Wächter-Zeitfenster mehr als 2000 neue Dateien dazu, gilt der Lauf nicht mehr als sauber. Du siehst einen Hinweis, wie viele Dateien ungeprüft blieben, und ein Fund wird dann nicht automatisch verschoben. Hält das an, bleibt in der Scan-Liste nur eine Zeile je Server stehen, statt alle zehn Minuten eine neue."
+
+[[entries]]
+kind = "sicherheit"
+text = "Quarantäne: Eine Datei, die noch unter einem zweiten Namen liegt, wird nicht mehr verschoben, damit keine Systemdatei unlesbar werden kann. Funde außerhalb der gescannten Ordner kommen nie automatisch in die Quarantäne."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Veraltete Virensignaturen (älter als 7 Tage) senken jetzt den Schutzwert und stehen mit dem Knopf „Signaturen aktualisieren“ unter „Braucht Aufmerksamkeit“."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Ist das letzte Härtungs-Audit fehlgeschlagen, steht das mit Zeitangabe da (der Fehler im Tooltip), und das frühere Ergebnis bleibt sichtbar."
+
+[[entries]]
+kind = "sicherheit"
+text = "Hast du den Schlüssel eines Servers vergessen, verbindet sich Nodvard Deck erst wieder mit ihm, wenn du den neuen Fingerabdruck unter „Verbindung prüfen“ bestätigt hast. Vorher konnte ein Hintergrunddienst den neuen Schlüssel schon selbst merken."
+
+[[entries]]
+kind = "sicherheit"
+text = "Bei neuen Installationen musst du den Fingerabdruck eines neuen Servers standardmäßig bestätigen, bevor Passwort oder Schlüssel an ihn gehen. Bestehende Installationen bleiben, wie sie sind. Unter Einstellungen, Server & Zugänge steht dafür jetzt ein Schalter."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Einspielen einer Sicherung werden Git-Einstellungen von Erweiterungen nicht mehr übernommen, und die Skripte-Verwaltung startet nie Programme aus solchen Einstellungen. Der Verlauf deiner Skripte bleibt erhalten."
+
+[[entries]]
+kind = "behoben"
+text = "Nach dem Einspielen einer Sicherung lassen sich Skripte wieder speichern, auch wenn vorher noch nie eins gespeichert war."
+
+[[entries]]
+kind = "verbessert"
+text = "Beim Einspielen einer älteren Sicherung zeigt dir Nodvard Deck vorher an, wie viele Git-Einstellungen daraus nicht übernommen werden."
+
+[[entries]]
+kind = "behoben"
+text = "Eine falsche Adresse oder ein Fehler beim Aufbauen einer Seite zeigt jetzt eine verständliche deutsche Seite mit Knopf zurück zur Übersicht, statt einer englischen Entwicklerseite."
+
+[[entries]]
+kind = "behoben"
+text = "Terminal, Dateien und Nextcloud sagen jetzt, warum es nicht geht, wenn ein Server nicht antwortet. Im Protokoll steht dazu nur noch eine Zeile statt langer Fehlerausgaben."
+
+[[entries]]
+kind = "verbessert"
+text = "Beim Anlegen eines Kontos steht jetzt klar da, was nicht passt (zu kurzes Passwort, zu kurzer Benutzername, ungültige E-Mail-Adresse). Neue Benutzernamen dürfen nur noch Kleinbuchstaben, Ziffern, Punkt, Minus und Unterstrich enthalten; bestehende Konten und die Anmeldung bleiben unberührt. Auf der Anmeldeseite steht außerdem, wie man das Inhaber-Passwort auch ohne Befehlszeile zurücksetzt."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Zugang eines Servers wird erst grün, wenn sich Nodvard Deck dort wirklich angemeldet hat. Antwortet nur der SSH-Port, steht „Anmeldung noch nicht bestätigt“, und „Erste Schritte“ hakt den Schlüssel erst dann ab. „Befehl ansehen“ öffnet die Seite mit dem schon aufgeklappten Einrichtungsbefehl. Ein Server, der noch nie geantwortet hat, zeigt „Noch keine Verbindung – prüfe zuerst den Zugang“ statt eines grünen Zugangs. Beim Schlüsselwechsel ändert das Prüfen des neuen Zugangs nichts an der Bestätigung des bisherigen; erst wenn du den neuen zum Standard machst, gilt seine Prüfung."
+
+[[entries]]
+kind = "verbessert"
+text = "Service-Matrix am Handy: Jeder Container ist eine Karte mit sichtbaren Knöpfen, nichts liegt mehr außerhalb des Bildschirms. Der Docker-Status steht auf Deutsch („Beendet (Code 0) vor 10 Stunden“)."
+
+[[entries]]
+kind = "verbessert"
+text = "Ist ein Modul ausgeschaltet, schaltet der Knopf „Einschalten“ auf seiner Seite es gleich ein. Beim Namen des Dashboards steht jetzt, dass er auch als App-Name auf dem Handy erscheint, und die Passwortfelder der Einrichtung sind als „neues Passwort“ markiert. Die Zeitzonen-Suche kennt deutsche Namen (Wien, Zürich, Mitteleuropa …), und viele englische Begriffe, Codes und „--“ sind durch verständliche deutsche Texte ersetzt."
+
+[[entries]]
+kind = "behoben"
+text = "„Briefing senden“ sperrt sich jetzt, solange der Bericht erstellt wird, und sagt ehrlich, ob er aufs Handy gegangen ist – mit Link zur Einrichtung der Push-Nachrichten. Der Titel heißt jetzt „Lagebericht“ statt immer „Guten Morgen“."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield erklärt sich Einsteigern: ein Hinweis „Nächster Schritt“, kurze Erklärungen zu ClamAV, Lynis und Fail2ban, und ohne prüfbaren Server steht dort „nichts zu bewerten“ statt „Schutzwert 0 / 100“ – mit dem passenden Hinweis, ob noch ein Server fehlt oder nur der SSH-Zugang. Der Lagebericht sagt dann auch nicht mehr „alles im grünen Bereich“, und offene Bedrohungen stehen weiter im Lagebericht und in der Kachel „Virenschutz“. Die Abzeichen sind nur grün, wenn der Schutz auch wirklich läuft."
+
+[[entries]]
+kind = "behoben"
+text = "Am Handy ist die Karte „Einbruchschutz“ in Nodvard Shield nicht mehr breiter als der Bildschirm."
+
+[[entries]]
+kind = "behoben"
+text = "Vorfälle der Container-Wache zeigen keine eingefrorene Zeitangabe wie „4 seconds ago“ mehr, sondern verständlich zum Beispiel „Container abgestürzt (Exit-Code 137)“. Ältere Vorfälle werden beim Anzeigen ebenso bereinigt."
+
+[[entries]]
+kind = "behoben"
+text = "Stürzt derselbe Container immer wieder ab, entsteht nicht mehr alle halbe Stunde ein neuer Vorfall. Der erste Vorfall zählt mit, wie oft es passiert ist. Nach einem Tag oder wenn ein vorgeschlagener Neustart schon gelaufen ist, kommt wieder eine Meldung."
+
+[[entries]]
+kind = "verbessert"
+text = "Im Lagebericht von Nodvard KI stehen Exit-Code, Speicher-Status, Neustarts, Image und Zeitpunkt jetzt als feste Zeilen, und Sätze, die diesen Fakten widersprechen, werden entfernt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Konsole einer VM oder eines Containers und die Anfragen der Erweiterungen (zum Beispiel an Proxmox, Nextcloud oder ntfy) benutzen keinen Proxy mehr, der in der Umgebung von Nodvard Deck eingetragen ist, und verbinden sich immer direkt mit dem Ziel. So landen Zugangsdaten und Konsolen-Ticket nie bei einer Stelle, die du dafür nicht freigegeben hast. Kommt dein Server nur über einen Proxy ins Internet, erreichen Erweiterungen externe Ziele wie ntfy.sh deshalb nicht mehr."

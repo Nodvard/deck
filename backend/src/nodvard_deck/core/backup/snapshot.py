@@ -373,6 +373,8 @@ def extract_archive(
     limits: ExtractLimits | None = None,
     allow_file: Callable[[str], bool] | None = None,
     allow_dir: Callable[[str], bool] | None = None,
+    skip_entry: Callable[[str, bool], bool] | None = None,
+    skipped: list[str] | None = None,
 ) -> dict[str, Any]:
     """Packt nach `dest` aus und prueft alles: erlaubte Namen, nur normale Dateien (mit
     `allow_dir` auch Ordner), jede Datei genau einmal, sha256 und Groesse gegen das Manifest,
@@ -382,7 +384,10 @@ def extract_archive(
     Eintraege, Einzeldatei und entpackte Gesamtmenge, gemessen am entpackten Strom. Mit
     `allow_file` eine strengere Namens-Erlaubnisliste als `is_safe_member`. Pro Eintrag laeuft
     ausserdem `tarfile.data_filter` (zweite Sicherung neben unserer eigenen Pruefung -- wir
-    schreiben jede Datei selbst und nie ueber `tar.extract`). Entpackt wird nur nach `dest`;
+    schreiben jede Datei selbst und nie ueber `tar.extract`). `skip_entry(name, ist_ordner)` nennt
+    Eintraege, die nicht abgelehnt, sondern einfach nicht geschrieben werden (nur normale Dateien und
+    Ordner; ihre Namen landen in `skipped`). Ihr Inhalt wird trotzdem gelesen und gegen das Manifest
+    geprueft, damit die Pruefsummen-Pruefung dieselbe bleibt. Entpackt wird nur nach `dest`;
     scheitert etwas, liegen dort schon Dateien -- der Aufrufer raeumt `dest` dann weg."""
     seen: dict[str, tuple[str, int]] = {}
     manifest: Any = None
@@ -407,6 +412,14 @@ def extract_archive(
                     raise BackupTooLarge(f"Die Sicherung enthält mehr als {limits.max_entries} Einträge.")
                 if manifest is not None:
                     raise DamagedBackup("unerwarteter Eintrag im Archiv")  # das Manifest ist der letzte Eintrag
+                is_plain_file = member.type in (tarfile.REGTYPE, tarfile.AREGTYPE)
+                skip_it = (
+                    skip_entry is not None and (member.isdir() or is_plain_file) and skip_entry(name, member.isdir())
+                )
+                if skip_it and member.isdir():
+                    if skipped is not None:
+                        skipped.append(name)
+                    continue
                 if member.isdir():
                     if allow_dir is None or not allow_dir(name):
                         raise DamagedBackup("unerwarteter Eintrag im Archiv")
@@ -418,10 +431,13 @@ def extract_archive(
                             raise
                         raise DamagedBackup("unerwarteter Eintrag im Archiv") from exc  # z. B. Ordner nach gleichnamiger Datei
                     continue
-                allowed = allow_file(name) if allow_file is not None else fmt.is_safe_member(name)
+                if skip_it:
+                    allowed = fmt.is_safe_member(name)
+                else:
+                    allowed = allow_file(name) if allow_file is not None else fmt.is_safe_member(name)
                 # Nur gewoehnliche Dateien: GNU-Sparse-Eintraege "entpacken" sich zu Nullen, die der Zaehler am
                 # Strom nicht sieht (kleiner Eintrag, riesige Datei).
-                if not allowed or member.type not in (tarfile.REGTYPE, tarfile.AREGTYPE) or name in seen:
+                if not allowed or not is_plain_file or name in seen:
                     raise DamagedBackup("unerwarteter Eintrag im Archiv")
                 if limits is not None:
                     declared += member.size
@@ -432,6 +448,16 @@ def extract_archive(
                     _filter_member(member, dest)
                 fh = tar.extractfile(member)
                 assert fh is not None
+                if skip_it:
+                    digest = hashlib.sha256()
+                    size = 0
+                    while chunk := fh.read(_READ_SIZE):
+                        digest.update(chunk)
+                        size += len(chunk)
+                    seen[name] = (digest.hexdigest(), size)
+                    if skipped is not None:
+                        skipped.append(name)
+                    continue
                 if name == fmt.ARC_MANIFEST:
                     if member.size > fmt.MAX_MANIFEST_BYTES:
                         raise DamagedBackup("Inhaltsverzeichnis zu gross")

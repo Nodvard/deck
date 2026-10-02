@@ -210,6 +210,68 @@ async def test_host_status_dead_pooled_connection_reports_down_not_500(client, l
         await ssh.reset_ssh_pool()
 
 
+@pytest.mark.asyncio
+async def test_host_status_sets_the_login_proof_and_a_refused_login_drops_it(client, local_ssh_server, monkeypatch):
+    """Eine Live-Prüfung mit Anmeldung belegt den Zugang (`login_ok_at`); lehnt der Server die Anmeldung
+    später ab, gilt der Beleg nicht mehr."""
+    from nodvard_deck.core import ssh
+
+    ctx = await _host_with_live_ssh(client, local_ssh_server)
+    host_url = f"/api/v1/hosts/{ctx['host']['id']}"
+    first = await client.get(f"{host_url}/status", headers=_auth_header(ctx["token"]))
+    assert first.json()["status"] == "up"
+    assert (await client.get(host_url, headers=_auth_header(ctx["token"]))).json()["login_ok_at"] is not None
+
+    await ssh.reset_ssh_pool()
+
+    class _RefusingPool:
+        def generation(self, host_id: str) -> int:
+            return 0
+
+        async def get(self, session, target, **kwargs):  # noqa: ANN001, ARG002
+            raise ssh.SshAuthError("abgelehnt")
+
+    monkeypatch.setattr(ssh, "_pool", _RefusingPool())
+    second = await client.get(f"{host_url}/status", headers=_auth_header(ctx["token"]))
+    assert second.status_code == 200, second.text
+    assert (await client.get(host_url, headers=_auth_header(ctx["token"]))).json()["login_ok_at"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changed_key", [True, False], ids=["changed-key", "unconfirmed-key"])
+async def test_host_status_key_problem_keeps_or_drops_the_login_proof(client, local_ssh_server, monkeypatch, changed_key):
+    """Zeigt der Server einen anderen Schlüssel als gemerkt, galt die frühere Anmeldung einem anderen
+    Gegenüber: der Beleg fällt weg. Ein nur noch nicht bestätigter Schlüssel widerruft nichts. In beiden
+    Fällen steht der Server auf „unbekannt“, nicht auf „down“."""
+    from nodvard_deck.core import ssh
+
+    ctx = await _host_with_live_ssh(client, local_ssh_server)
+    host_url = f"/api/v1/hosts/{ctx['host']['id']}"
+    assert (await client.get(f"{host_url}/status", headers=_auth_header(ctx["token"]))).json()["status"] == "up"
+    proof = (await client.get(host_url, headers=_auth_header(ctx["token"]))).json()["login_ok_at"]
+    assert proof is not None
+
+    await ssh.reset_ssh_pool()
+    error = (
+        ssh.HostKeyMismatch(ctx["host"]["id"], "ssh-ed25519", "SHA256:gemerkt", "SHA256:jetzt")
+        if changed_key
+        else ssh.HostKeyUnknown(ctx["host"]["id"], "ssh-ed25519", "SHA256:jetzt")
+    )
+
+    class _KeyProblemPool:
+        def generation(self, host_id: str) -> int:
+            return 0
+
+        async def get(self, session, target, **kwargs):
+            raise error
+
+    monkeypatch.setattr(ssh, "_pool", _KeyProblemPool())
+    second = await client.get(f"{host_url}/status", headers=_auth_header(ctx["token"]))
+    assert second.status_code == 200, second.text
+    assert second.json()["status"] == "unknown"
+    assert (await client.get(host_url, headers=_auth_header(ctx["token"]))).json()["login_ok_at"] == (None if changed_key else proof)
+
+
 class _FakeUpHostProvider:
     provider_id = "fake-provider"
 
@@ -1272,3 +1334,44 @@ async def test_host_status_keeps_the_status_when_the_target_changed_meanwhile(cl
     assert resp.json()["status"] == "unknown"  # der gespeicherte Status, nicht "down"
     assert resp.json()["checked_live"] is False
     assert "geändert" in resp.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_new_address_removes_stored_ssh_password_but_keeps_key(client, db_session):
+    """Ein gespeichertes SSH-Passwort gehoert zu dem Server, bei dem es eingegeben wurde;
+    unter einer neuen Adresse darf es nicht mehr stehen. Ein Schluessel bleibt."""
+    from sqlalchemy import select
+
+    from nodvard_deck.models import HostCredential, Secret
+
+    token = await _bootstrap_owner(client)
+    headers = _auth_header(token)
+    host = (await client.post("/api/v1/hosts", json={"name": "pw-host", "address": "192.168.2.50"}, headers=headers)).json()
+    pw = await client.post(
+        f"/api/v1/hosts/{host['id']}/credentials",
+        json={"kind": "ssh_password", "username": "root", "port": 22, "secret_value": "GEHEIM-WERT"},
+        headers=headers,
+    )
+    assert pw.status_code == 201, pw.text
+    key = await client.post(
+        f"/api/v1/hosts/{host['id']}/credentials",
+        json={"kind": "ssh_key", "username": "deck", "port": 22, "secret_value": _new_key(), "is_default": False},
+        headers=headers,
+    )
+    assert key.status_code == 201, key.text
+
+    # Gleiche Adresse (und nur ein anderer Anzeigename): nichts wird gelöscht.
+    same = await client.patch(f"/api/v1/hosts/{host['id']}", json={"display_name": "Neu", "address": "192.168.2.50"}, headers=headers)
+    assert same.status_code == 200, same.text
+    kinds = (await db_session.execute(select(HostCredential.kind).where(HostCredential.host_id == host["id"]))).scalars().all()
+    assert sorted(kinds) == ["ssh_key", "ssh_password"]
+
+    moved = await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "192.168.2.51"}, headers=headers)
+    assert moved.status_code == 200, moved.text
+    kinds = (await db_session.execute(select(HostCredential.kind).where(HostCredential.host_id == host["id"]))).scalars().all()
+    assert kinds == ["ssh_key"]
+    left = (await db_session.execute(select(Secret.label).where(Secret.label.like(f"host-cred:{host['id']}:%")))).scalars().all()
+    assert len(left) == 1  # nur der Schluessel
+
+    updated = [r for r in await _audit_rows(db_session) if r.action == "host.updated"]
+    assert updated[-1].detail["password_credentials_removed"] == 1

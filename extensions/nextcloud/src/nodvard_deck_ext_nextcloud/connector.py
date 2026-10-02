@@ -21,12 +21,15 @@ Opt-in ueber `net.outbound.insecure_tls` wie bei `ProxmoxConnector`."""
 
 from __future__ import annotations
 
+import posixpath
 import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
+
+import httpx
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -35,7 +38,43 @@ _DAV = "{DAV:}"
 
 
 class WebDavError(Exception):
-    pass
+    """Fehler beim Zugriff auf Nextcloud (aus, falsche Zugangsdaten, Ordner fehlt): kein Programmfehler,
+    der Text wird der Person gezeigt und im Protokoll ohne Traceback vermerkt."""
+
+    readable = True
+
+
+class InvalidPathError(WebDavError, FileNotFoundError):
+    """Der Pfad wuerde den eigenen Dateibereich verlassen (`..`, Backslash, NUL,
+    kodierte Trenner). Es geht keine Anfrage raus. Als `FileNotFoundError` wird das im
+    Dateimanager der Kern zu einer 404-Antwort."""
+
+
+def _clean_segments(path: str) -> list[str]:
+    """Zerlegt einen logischen Pfad in seine Teile und lehnt alles ab, womit sich ein
+    Pfad aus dem Dateibereich des Benutzers herausschieben liesse: ein `.`- oder
+    `..`-Teil (auch kodiert, z. B. `%2e%2e`), Backslash, NUL und kodierte
+    Schraegstriche. Leere Teile (`a//b`, fuehrender/abschliessender Schraegstrich)
+    fallen weg."""
+    if "\x00" in path or "\\" in path:
+        raise InvalidPathError("Ungültiger Pfad.")
+    segments: list[str] = []
+    for segment in path.split("/"):
+        if not segment:
+            continue
+        # Auch mehrfach kodierte Formen pruefen (%2e%2e, %252e%252e, %2F, %5C ...).
+        decoded = segment
+        for _ in range(5):
+            if decoded in (".", "..") or any(c in decoded for c in ("/", "\\", "\x00")):
+                raise InvalidPathError("Ungültiger Pfad.")
+            again = unquote(decoded)
+            if again == decoded:
+                break
+            decoded = again
+        else:
+            raise InvalidPathError("Ungültiger Pfad.")
+        segments.append(segment)
+    return segments
 
 
 class WebDavEntry:
@@ -137,9 +176,17 @@ class NextcloudConnector:
         return urlsplit(self._base_url).hostname or self._base_url
 
     def _dav_url(self, path: str) -> str:
-        clean = path.strip("/")
-        encoded = quote(clean, safe="/")
-        return f"{self._base_url}/remote.php/dav/files/{quote(self._username)}/{encoded}"
+        encoded = "/".join(quote(segment, safe="") for segment in _clean_segments(path))
+        user_part = f"{self._base_url}/remote.php/dav/files/{quote(self._username, safe='')}/"
+        url = f"{user_part}{encoded}"
+        # Zweite Absicherung: die fertige Adresse muss im Dateibereich des Benutzers
+        # bleiben, so wie der Server sie sieht (einmal dekodiert, `.`/`..` aufgeloest).
+        expected = posixpath.normpath(unquote(urlsplit(user_part).path))
+        parts = urlsplit(url)
+        resolved = posixpath.normpath(unquote(parts.path))
+        if (resolved != expected and not resolved.startswith(expected + "/")) or parts.query or parts.fragment:
+            raise InvalidPathError("Ungültiger Pfad.")
+        return url
 
     def _dav_prefix(self) -> str:
         """Der WebDAV-Praefix vor jedem LOGISCHEN Pfad -- gebraucht, um ihn aus einem
@@ -149,7 +196,7 @@ class NextcloudConnector:
     def _dav_href_path(self, path: str) -> str:
         """Der `href`, den Nextcloud in PROPFIND-Antworten fuer `path` zurueckgibt --
         gebraucht, um den Selbst-Eintrag beim Parsen zu erkennen und zu ueberspringen."""
-        clean = path.strip("/")
+        clean = "/".join(_clean_segments(path))
         return f"{self._dav_prefix()}/{clean}".rstrip("/")
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
@@ -160,8 +207,11 @@ class NextcloudConnector:
             )
         except WebDavError:
             raise
+        except (httpx.TimeoutException, TimeoutError) as exc:
+            # httpx-Zeitueberschreitungen haben keinen Text: ohne diesen Zweig stuende nur "PROPFIND / -> ".
+            raise WebDavError("Nextcloud antwortet nicht (Zeitüberschreitung).") from exc
         except Exception as exc:  # noqa: BLE001 - jeder Netzwerkfehler wird hier vereinheitlicht (wie ProxmoxConnector)
-            raise WebDavError(f"{method} {path} -> {exc}") from exc
+            raise WebDavError(f"{method} {path} -> {str(exc).strip() or type(exc).__name__}") from exc
         if response.status_code >= 400:
             raise WebDavError(f"{method} {path} -> HTTP {response.status_code}: {response.text[:200]}")
         return response

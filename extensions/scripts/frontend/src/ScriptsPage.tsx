@@ -27,6 +27,28 @@ import { deck } from "../../../_shared/frontend/src/deck";
 
 export { describeSchedule };
 
+/** Ein Zielserver einer Dauerfreigabe mit dem Konto, unter dem das Dashboard sich anmeldet. */
+interface StandingHost {
+  id: string;
+  name: string;
+  account: string | null;
+  address?: string | null;
+  /** SSH-Port des Zugangs (fehlt bei älteren Kernen). */
+  port?: number | null;
+}
+
+/** Dauerfreigabe eines Skripts (siehe standing.py im Backend). */
+interface StandingOut {
+  /** false: gilt nicht mehr (`problem`), erlischt beim nächsten Lauf. */
+  active: boolean;
+  problem?: string | null;
+  granted_by_label: string;
+  granted_at: string;
+  hosts: StandingHost[];
+  /** Neue Zielserver, die beim nächsten Lauf normal freigegeben werden müssen. */
+  new_hosts?: string[];
+}
+
 interface ScriptOut {
   id: string;
   name: string;
@@ -37,6 +59,13 @@ interface ScriptOut {
   schedule: string | null;
   enabled: boolean;
   job_id: string;
+  /** Fingerabdruck von Inhalt, Parametern, Ziel und Zeitplan (Backend). */
+  fingerprint?: string;
+  standing_approval?: StandingOut | null;
+  /** Server, die eine Dauerfreigabe jetzt decken würde (nur aktive Skripte mit Zeitplan). */
+  standing_preview?: StandingHost[] | null;
+  /** Fingerabdruck dieser Liste – wird beim Erteilen mitgeschickt. */
+  targets_fingerprint?: string | null;
 }
 
 interface JobOut {
@@ -60,6 +89,9 @@ interface ExecutionOut {
   output: string;
   error: string;
   duration_ms: number | null;
+  /** Lief ohne Klick über die Dauerfreigabe; `reason` nennt, von wem und wann. */
+  standing_approval?: boolean;
+  reason?: string;
 }
 
 const EXEC_STATUS: Record<string, { label: string; tone: Tone }> = {
@@ -82,6 +114,7 @@ function slugify(name: string): string {
  * Erweiterung selbst vorgeschlagen hat, ist ein geplanter. */
 function triggeredBy(e: ExecutionOut): string {
   const name = e.proposed_by_label || e.proposed_by;
+  if (e.standing_approval) return "Zeitplan · ohne Klick (Dauerfreigabe)";
   return e.proposed_by.startsWith("extension/") ? `Zeitplan · ${name}` : name;
 }
 
@@ -103,7 +136,7 @@ export function Executions({ items }: { items: ExecutionOut[] }): JSX.Element {
                 {e.exit_code != null && <span className="text-xs text-white/45">Exit {e.exit_code}</span>}
                 {e.duration_ms != null && <span className="text-xs text-white/45">{(e.duration_ms / 1000).toFixed(1)} s</span>}
                 {!hasOutput && e.status === "failed" && <span className="text-xs text-red-300">ohne Fehlermeldung</span>}
-                <span className="ml-auto text-xs text-white/40" title={e.proposed_by}>
+                <span className="ml-auto text-xs text-white/40" title={e.standing_approval ? e.reason : e.proposed_by}>
                   {e.created_at ? new Date(e.created_at).toLocaleString("de-DE") : ""} · {triggeredBy(e)}
                 </span>
               </summary>
@@ -245,6 +278,101 @@ function targetHint(target: ScriptOut["target"]): string | null {
   return null;
 }
 
+/** Die Teile, deren Änderung eine Dauerfreigabe aufhebt (wie im Backend). */
+function approvalRelevant(s: ScriptOut): string {
+  return JSON.stringify([s.content, s.params_schema, s.target, s.schedule || null]);
+}
+
+/** „pve1 (als root, 192.168.2.10)“ – was die Freigabe für einen Server festhält; ein
+ * ungewöhnlicher SSH-Port steht dabei („…, Port 2222“), der Standard 22 nicht. */
+export function describeStandingHost(h: StandingHost): string {
+  const port = h.port != null && h.port !== 22 ? `Port ${h.port}` : null;
+  const details = [`als ${h.account ?? "kein Konto"}`, h.address, port].filter(Boolean).join(", ");
+  return `${h.name} (${details})`;
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("de-DE");
+}
+
+/** Schalter „Ohne Freigabe nach Zeitplan“ mit Stand der Dauerfreigabe. Erteilen und
+ * Zurückziehen prüft das Backend selbst (nur Owner/Admin); hier nur die Anzeige dazu. */
+export function StandingApprovalPanel({
+  script, dirty, canGrant, busy, onGrant, onRevoke,
+}: {
+  script: ScriptOut;
+  dirty: boolean;
+  canGrant: boolean;
+  busy: boolean;
+  onGrant: () => void;
+  onRevoke: () => void;
+}): JSX.Element {
+  const standing = script.standing_approval ?? null;
+  const on = Boolean(standing);
+  const blocked = !canGrant || busy || (!on && (dirty || !script.enabled));
+  return (
+    <div className="mt-3 rounded-lg border border-white/[0.08] bg-black/15 p-3 text-sm" data-testid="standing-approval">
+      <label className="flex items-start gap-2.5">
+        <input
+          type="checkbox"
+          className="mt-1"
+          aria-label="Ohne Freigabe nach Zeitplan"
+          checked={on}
+          disabled={blocked}
+          onChange={() => (on ? onRevoke() : onGrant())}
+        />
+        <span>
+          <span className="font-medium">Ohne Freigabe nach Zeitplan</span>
+          <span className="mt-0.5 block text-xs text-white/55">
+            Läuft nach Zeitplan ohne Freigabe, solange du das Skript nicht änderst. Jede Änderung an Inhalt,
+            Parametern, Ziel oder Zeitplan hebt das auf, dann fragt das Dashboard wieder nach. Jeder Lauf steht
+            weiter unter „Aktionen“.
+          </span>
+        </span>
+      </label>
+      {standing && (
+        <div className="mt-2.5 space-y-1.5 border-t border-white/[0.06] pt-2.5 text-xs" data-testid="standing-state">
+          <div className="flex flex-wrap items-center gap-2">
+            {standing.active ? <Badge tone="good">Dauerfreigabe gilt</Badge> : <Badge tone="warn">gilt nicht mehr</Badge>}
+            <span className="text-white/60">
+              erteilt von {standing.granted_by_label} am {formatDate(standing.granted_at)} für{" "}
+              {standing.hosts.map(describeStandingHost).join(", ") || "–"}
+            </span>
+            {canGrant && (
+              <Button small variant="ghost" disabled={busy} onClick={onRevoke}>Freigabe zurückziehen</Button>
+            )}
+          </div>
+          {!standing.active && standing.problem && (
+            <p className="text-amber-300">
+              Gilt nicht mehr: {standing.problem} Geplante Läufe warten auf deine Freigabe, beim nächsten Lauf erlischt
+              sie.
+            </p>
+          )}
+          {standing.active && (standing.new_hosts?.length ?? 0) > 0 && (
+            <p className="text-white/55">
+              Neu dabei: {standing.new_hosts!.join(", ")}. Dort fragt das Dashboard weiter nach, bis du neu freigibst.
+            </p>
+          )}
+          {standing.active && dirty && (
+            <p className="text-amber-300">Wenn du deine Änderungen speicherst, erlischt die Dauerfreigabe.</p>
+          )}
+        </div>
+      )}
+      {!standing && !dirty && (script.standing_preview?.length ?? 0) > 0 && (
+        <p className="mt-2 text-xs text-white/55" data-testid="standing-preview">
+          Würde gelten für: {script.standing_preview!.map(describeStandingHost).join(", ")}
+        </p>
+      )}
+      {!standing && !canGrant && <p className="mt-2 text-xs text-white/45">Einschalten können nur Owner oder Admin.</p>}
+      {!standing && canGrant && dirty && <p className="mt-2 text-xs text-white/45">Speichere zuerst deine Änderungen.</p>}
+      {!standing && canGrant && !dirty && !script.enabled && (
+        <p className="mt-2 text-xs text-white/45">Das Skript ist aus – schalte es zuerst auf „aktiv“ und speichere.</p>
+      )}
+    </div>
+  );
+}
+
 function targetLabel(target: ScriptOut["target"], hosts: HostRow[], groups: { id: string; name: string }[]): string {
   if (target.kind === "all") return "Alle Server";
   if (target.kind === "group") return groups.find((g) => g.id === target.group_id)?.name ?? "Gruppe";
@@ -370,6 +498,14 @@ export function ScriptsPage(): JSX.Element {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      // Speichern kann die Dauerfreigabe aufheben -- den neuen Stand gleich anzeigen.
+      setDraft((prev) => ({
+        ...prev,
+        fingerprint: body.fingerprint,
+        standing_approval: body.standing_approval ?? null,
+        standing_preview: body.standing_preview ?? null,
+        targets_fingerprint: body.targets_fingerprint ?? null,
+      }));
       setMessage({ kind: "ok", text: "Gespeichert." });
       setIsNew(false);
       setSelectedId(draft.id);
@@ -390,6 +526,73 @@ export function ScriptsPage(): JSX.Element {
       const res = await authedFetch(`/ext/scripts/scripts/${selectedId}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
       selectNew();
+      load();
+    } catch (err) {
+      setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Nach „Die Zielserver haben sich geändert“: die aktuelle Liste holen, damit der nächste
+   * Klick sie zeigt (der Inhalt im Editor bleibt, wie er ist). */
+  async function refreshPreview(scriptId: string) {
+    try {
+      const res = await authedFetch(`/ext/scripts/scripts/${scriptId}`);
+      if (!res.ok) return;
+      const fresh = (await res.json()) as ScriptOut;
+      setDraft((prev) =>
+        prev.id === scriptId
+          ? { ...prev, standing_preview: fresh.standing_preview ?? null, targets_fingerprint: fresh.targets_fingerprint ?? null }
+          : prev,
+      );
+    } catch {
+      // Dann bleibt es beim Hinweis, die Seite neu zu laden.
+    }
+  }
+
+  async function grantStanding() {
+    if (!selectedId) return;
+    const servers = (draft.standing_preview ?? []).map(describeStandingHost).join(", ") || "–";
+    const ok = await deck().confirmDialog(
+      `„${draft.name || selectedId}“ ab jetzt nach Zeitplan ohne Freigabe laufen lassen (${targetLabel(draft.target, hosts, groups)})? ` +
+        `Gilt für: ${servers}. Neue Server fragen weiter nach, und jede Änderung am Skript, an einem Konto oder ` +
+        "einer Adresse hebt die Freigabe wieder auf.",
+      { danger: true, confirmLabel: "Ohne Freigabe laufen lassen" },
+    );
+    if (!ok) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await authedFetch(`/ext/scripts/scripts/${selectedId}/standing-approval`, {
+        method: "POST",
+        body: JSON.stringify({ fingerprint: draft.fingerprint ?? "", targets_fingerprint: draft.targets_fingerprint ?? "" }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409) void refreshPreview(selectedId);
+      if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      setDraft((prev) => ({ ...prev, standing_approval: body.standing_approval ?? null }));
+      setMessage({ kind: "ok", text: "Dauerfreigabe erteilt – die geplanten Läufe brauchen keinen Klick mehr." });
+      load();
+    } catch (err) {
+      setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function revokeStanding() {
+    if (!selectedId) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await authedFetch(`/ext/scripts/scripts/${selectedId}/standing-approval`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(errorFromBody(body, res.status));
+      }
+      setDraft((prev) => ({ ...prev, standing_approval: null }));
+      setMessage({ kind: "ok", text: "Freigabe zurückgezogen – geplante Läufe warten wieder auf deine Freigabe." });
       load();
     } catch (err) {
       setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
@@ -474,6 +677,8 @@ export function ScriptsPage(): JSX.Element {
     ? scripts?.filter((s) => s.target.kind === "host" && s.target.host_id === hostFilter)
     : scripts;
   const lines = draft.content.split("\n").length;
+  const savedScript = scripts?.find((s) => s.id === selectedId) ?? null;
+  const dirty = savedScript ? approvalRelevant(savedScript) !== approvalRelevant(draft) : true;
   const missingTarget = targetHint(draft.target);
   const showEditor = !isNew || selectedId !== null || (scripts?.length ?? 0) > 0 || draft.id !== "" || draft.name !== "";
 
@@ -519,6 +724,7 @@ export function ScriptsPage(): JSX.Element {
                         {describeSchedule(s.schedule)} · {targetLabel(s.target, hosts, groups)}
                       </span>
                     </span>
+                    {s.standing_approval?.active && <Badge tone="info">ohne Klick</Badge>}
                     {!s.enabled && <Badge>aus</Badge>}
                   </button>
                 </li>
@@ -618,10 +824,21 @@ export function ScriptsPage(): JSX.Element {
                         <Icon name="clock" size={12} className="mt-0.5 flex-none" />
                         <span>
                           Geplante Läufe erscheinen als Vorschlag unter „Aktionen“ und müssen dort freigegeben werden,
-                          sonst verfallen sie nach 24 Stunden. Ohne Rückfrage laufen sie nur, wenn unter
-                          Einstellungen → Automatik „Selbstständig handeln“ bis Risikostufe „Hoch“ oder „Kritisch“ erlaubt ist.
+                          sonst verfallen sie nach 24 Stunden. Ohne Rückfrage laufen sie nur mit einer Dauerfreigabe
+                          (Schalter darunter) oder wenn unter Einstellungen → Automatik „Selbstständig handeln“ bis
+                          Risikostufe „Hoch“ oder „Kritisch“ erlaubt ist.
                         </span>
                       </p>
+                    )}
+                    {!isNew && (draft.schedule || draft.standing_approval) && (
+                      <StandingApprovalPanel
+                        script={draft}
+                        dirty={dirty}
+                        canGrant={deck().hasPermission("actions.standing_approval")}
+                        busy={busy}
+                        onGrant={() => void grantStanding()}
+                        onRevoke={() => void revokeStanding()}
+                      />
                     )}
                   </div>
                 </div>

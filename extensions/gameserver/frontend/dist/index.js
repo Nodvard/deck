@@ -104,6 +104,7 @@ var ACTION_STATUS_LABEL = {
   expired: "abgelaufen",
   dismissed: "verworfen"
 };
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -118,6 +119,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };
@@ -565,7 +567,7 @@ function ServerCard({ server, profiles, onAction, pending, reload }) {
       /* @__PURE__ */ jsxs2("div", { className: "panel p-4", children: [
         /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm font-semibold", children: "Sicherungen" }),
         /* @__PURE__ */ jsx3("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Eigene" }),
-        (d.backups ?? []).length === 0 && /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm text-white/50", children: "Noch keine -- \u201EWelt sichern\u201C legt eine an." }),
+        (d.backups ?? []).length === 0 && /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm text-white/50", children: "Noch keine \u2013 \u201EWelt sichern\u201C legt eine an." }),
         /* @__PURE__ */ jsx3("ul", { className: "mb-3", children: (d.backups ?? []).map((b) => /* @__PURE__ */ jsxs2("li", { className: "flex justify-between py-1 text-sm", children: [
           /* @__PURE__ */ jsx3("span", { className: "font-mono text-xs", children: b.name }),
           /* @__PURE__ */ jsx3("span", { className: "text-white/50", children: size(b.size) })
@@ -647,7 +649,7 @@ function GameServerPage() {
     try {
       const { action: result, approved } = await runAction(`/ext/gameserver/servers/${server.host_id}/${action}`, { method: "POST" }, { signal: unmountSignal() });
       if (!approved && result.status === "proposed") {
-        setMessage(`${server.name}: ${ACTION_LABEL[action]} vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        setMessage(`${server.name}: ${ACTION_LABEL[action]} vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
       } else {
         setMessage(`${server.name}: ${ACTION_LABEL[action]} -> ${ACTION_STATUS_LABEL2[result.status ?? ""] ?? result.status ?? "?"}.`);
       }

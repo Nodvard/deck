@@ -242,7 +242,7 @@ export function UpdatePanel({
             )}
           </div>
           <details open>
-            <summary className="cursor-pointer opacity-70">Befehl auf dem Host</summary>
+            <summary className="cursor-pointer opacity-70">Befehl auf dem Server</summary>
             <pre className="mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]">{plan.command}</pre>
           </details>
           <details>

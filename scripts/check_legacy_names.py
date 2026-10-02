@@ -173,10 +173,19 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "Das Shell-Objekt heisst im Frontend-Code lokal `lattice`, der TypeScript-Typ `LatticeTokenRefreshResult`, das npm-Paket "
        "`lattice-frontend` (Teil B, PR 5)."),
     # --- Namen auf anderen Rechnern und im Container ----------------------------------------------------------------
-    _k("Linux-Benutzer im Container und SSH-Benutzer auf verwalteten Servern", r"lattice:lattice\b|lattice@|!lattice\b|/etc/sudoers\.d/lattice[-.]|lattice[-.]\$U|lattice-\{",
-       "Der Linux-Benutzer `lattice` (UID 1000) im Container bleibt, ebenso der Standard-SSH-Benutzer `lattice` auf den verwalteten "
-       "Servern (Schluesselkommentar `lattice@<Name>`, sudoers-Datei `lattice-<Benutzer>`, Proxmox-Token `...!lattice`, "
-       "Proxmox-Snapshot `lattice-<Zeitstempel>`): sie stehen auf fremden Rechnern, dort aendern wir nichts."),
+    _k("Container-Benutzer und alter Schluesselkommentar und Proxmox-Namen", r"lattice:lattice\b|lattice@|!lattice\b|lattice-\{",
+       "Der Linux-Benutzer `lattice` (UID 1000) im Container bleibt. Auf den verwalteten Servern heissen aeltere Zugaenge weiter "
+       "`lattice`, und aeltere Schluessel tragen dort den Kommentar `lattice@<Name>`: neue Schluessel bekommen `nodvard@<Name>`, "
+       "der Einrichtungsbefehl erkennt alte Eintraege aber an Art und Schluesseltext, nicht am Kommentar (die Tests pruefen "
+       "genau das mit `lattice@...`). Dazu das Proxmox-Token `...!lattice` und der Proxmox-Snapshot `lattice-<Zeitstempel>`: "
+       "sie stehen auf fremden Rechnern, dort aendern wir nichts."),
+    _k("Alte sudo-Regel auf verwalteten Servern", r"/etc/sudoers\.d/lattice[-.]|lattice[-.]\$U|lattice-<Benutzer>|\blattice-lattice\b",
+       "Neue Einrichtungen legen `/etc/sudoers.d/nodvard-<Benutzer>` an. Die alte Regel `/etc/sudoers.d/lattice-<Benutzer>` liegt auf "
+       "bestehenden Servern und bleibt dort gueltig; der Einrichtungsbefehl entfernt sie nur, wenn sie genau der Regel entspricht, "
+       "die Nodvard Deck frueher selbst angelegt hat, sonst bleibt sie mit Hinweis stehen. Deshalb nennen der Befehl (`$O`) und seine "
+       "Tests den alten Dateinamen weiter (`lattice-lattice` = alte Regel fuer den Benutzer `lattice`). Nur dort: neuer Code "
+       "darf keine Regel unter dem alten Namen anlegen.",
+       paths=r"^backend/(?:src/nodvard_deck/services/host_setup\.py|tests/test_host_setup_script\.py)$"),
     _k("Systemd-Einheit des alten Dienstes", r"lattice(?:-backend)?\.service\b",
        "Die alte Dienst-Einheit `lattice.service` bleibt in der Sperrliste der system-Extension (das Dashboard darf sich nicht "
        "selbst anhalten, auch nicht unter dem alten Namen)."),

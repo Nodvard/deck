@@ -1,6 +1,6 @@
-"""`policy.py`: reine Regeln des Update-Helfers (Bauplan 2c-2, Ebene 1 der Teststrategie).
+"""`policy.py`: reine Regeln des Update-Helfers.
 
-Referenzen und Tags (M7), Versionen (M1/M2), Anforderungen (M2), Grenzen (M14), Rueckweg-Slot (M13) und die
+Referenzen und Tags, Versionen, Anforderungen, Grenzen, Rueckweg-Slot und die
 festen Codes. Viele Faelle kommen aus den gemeinsamen Vektoren (`vectors/*.json`), die spaeter auch das Dashboard
 prueft.
 """
@@ -99,7 +99,7 @@ def test_protocol_vector_matches_the_constants():
     }
 
 
-def test_limits_are_the_ones_from_the_plan():
+def test_limits_have_their_documented_values():
     assert policy.REPOSITORY == "ghcr.io/nodvard/deck"
     assert (policy.REQUEST_MAX_BYTES, policy.REQUEST_MAX_AGE_S, policy.REQUEST_MAX_FUTURE_S) == (4096, 600, 60)
     assert (policy.ACTION_INTERVAL_S, policy.BLOCK_AFTER_ROLLBACK_S, policy.SEEN_TTL_S) == (600, 86400, 3600)
@@ -109,7 +109,7 @@ def test_limits_are_the_ones_from_the_plan():
 
 
 # ---------------------------------------------------------------------------
-# Versionen (M1, M2)
+# Versionen
 # ---------------------------------------------------------------------------
 
 VERSIONS = load_vectors("versions.json")
@@ -165,7 +165,7 @@ def test_only_forward_and_label_must_match_exactly():
 
 
 # ---------------------------------------------------------------------------
-# Image-Referenz und Tag (M7)
+# Image-Referenz und Tag
 # ---------------------------------------------------------------------------
 
 REFS = load_vectors("image_refs.json")
@@ -217,7 +217,7 @@ def test_id_patterns():
 
 
 # ---------------------------------------------------------------------------
-# Anforderung (M2)
+# Anforderung
 # ---------------------------------------------------------------------------
 
 REQUESTS = load_vectors("requests.json")
@@ -303,7 +303,7 @@ def test_loads_strict_rejects_duplicates_at_every_level():
     for constant in (b"NaN", b"Infinity", b"-Infinity"):
         with pytest.raises(ValueError):
             policy.loads_strict(b'{"a": ' + constant + b"}", max_bytes=100)
-    # Fund 7: Zahlen, die beim Lesen zu +-Unendlich ueberlaufen, sind dasselbe wie `Infinity`.
+    # Zahlen, die beim Lesen zu +-Unendlich ueberlaufen, sind dasselbe wie `Infinity`.
     for number in (b"1e999", b"-1e999", b"1E+400", b"1" + b"0" * 400 + b".0"):
         for document in (b'{"a": %s}', b"[%s]", b'{"a": {"b": [%s]}}'):
             with pytest.raises(ValueError):
@@ -320,7 +320,7 @@ def test_dumps_is_ascii_and_compact():
 
 
 # ---------------------------------------------------------------------------
-# Grenzen (M14)
+# Grenzen
 # ---------------------------------------------------------------------------
 
 
@@ -359,7 +359,7 @@ def test_hold_after_broken_state_blocks_everything():
 
 
 # ---------------------------------------------------------------------------
-# Rueckweg-Slot (M13)
+# Rueckweg-Slot
 # ---------------------------------------------------------------------------
 
 

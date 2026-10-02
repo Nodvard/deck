@@ -6,14 +6,16 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import { useMemo, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { DemoSeedButton } from "../../components/DemoSeedButton";
 import { api, ApiError } from "../../lib/api";
-import { accessLabel, checkSummary, refreshHosts, type ConnectionCheck, type HostOut } from "../../lib/hosts";
+import { checkSummary, loginOutcome, refreshHosts, type ConnectionCheck, type HostOut } from "../../lib/hosts";
 import { hostHealth, useHosts } from "../../lib/overview";
+import { AccessBadge } from "./hosts/AccessBadge";
 import { GroupsCard } from "./hosts/GroupsCard";
 import { HostForm } from "./hosts/HostForm";
+import { HostKeysCard } from "./hosts/HostKeysCard";
 import { ReachabilityCard } from "./hosts/ReachabilityCard";
 import { Badge, Button, Card, PageHeader, inputClass } from "./ui";
 
@@ -21,11 +23,6 @@ import { Badge, Button, Card, PageHeader, inputClass } from "./ui";
 const SEARCH_FROM = 9;
 
 type RowCheck = { state: "busy" } | { state: "done"; result: ConnectionCheck } | { state: "error"; text: string };
-
-function AccessBadge({ host }: { host: HostOut }) {
-  if (!host.credential) return <Badge tone="warn">Kein Zugang</Badge>;
-  return <Badge tone="good">{accessLabel(host.credential)}</Badge>;
-}
 
 function CheckLine({ check, hostId }: { check: RowCheck; hostId: string }) {
   if (check.state === "busy") return <p className="text-xs text-white/50">Prüfe … (bis zu 30 Sekunden)</p>;
@@ -69,7 +66,7 @@ function HostRow({ host }: { host: HostOut }) {
         </p>
         <p className="mt-0.5 break-all text-xs text-white/50">{host.name} · {host.address}</p>
         <div className="mt-2 flex flex-wrap gap-1.5">
-          <AccessBadge host={host} />
+          <AccessBadge host={host} login={check?.state === "done" ? loginOutcome(check.result) : null} />
           {host.provider_ext_id && <Badge>Automatisch eingelesen</Badge>}
         </div>
         {check && <div className="mt-2"><CheckLine check={check} hostId={host.id} /></div>}
@@ -89,8 +86,18 @@ function HostRow({ host }: { host: HostOut }) {
 
 export function HostsSettings() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const hosts = useHosts();
-  const [adding, setAdding] = useState(false);
+  // `?neu=1` (Erste Schritte, Übersicht): das Formular ist gleich offen, ein Klick weniger.
+  const [adding, setAddingState] = useState(params.get("neu") === "1");
+  const setAdding = (open: boolean) => {
+    setAddingState(open);
+    if (!open && params.has("neu")) {
+      const next = new URLSearchParams(params);
+      next.delete("neu");
+      setParams(next, { replace: true });
+    }
+  };
   const [query, setQuery] = useState("");
 
   const sorted = useMemo(
@@ -166,6 +173,7 @@ export function HostsSettings() {
       )}
 
       <ReachabilityCard />
+      <HostKeysCard />
       <GroupsCard />
     </>
   );

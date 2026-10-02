@@ -21,7 +21,7 @@ async def _login(client, username):
 
 
 async def _enable_2fa(client, token) -> tuple[str, list[str]]:
-    secret = (await client.post("/api/v1/me/totp/setup", headers=_h(token))).json()["secret"]
+    secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
     r = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token))
     assert r.status_code == 200, r.text
     return secret, r.json()["recovery_codes"]

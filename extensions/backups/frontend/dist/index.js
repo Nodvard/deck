@@ -104,6 +104,7 @@ var ACTION_STATUS_LABEL = {
   expired: "abgelaufen",
   dismissed: "verworfen"
 };
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -118,6 +119,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };
@@ -301,7 +303,7 @@ function NewJobForm({ guest, defaultStorage, onDone }) {
           action.status === "succeeded" ? action.result?.output ?? "Angelegt." : isActionRunning(action.status) ? RUNNING_IN_BACKGROUND : `Fehlgeschlagen: ${action.result?.error ?? action.status}`
         );
       } else {
-        onDone(action.status === "proposed" ? `Vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".` : ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?");
+        onDone(action.status === "proposed" ? `Vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".` : ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?");
       }
     } catch (err) {
       onDone(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
@@ -407,7 +409,7 @@ function UnprotectedSection({ inventory, defaultStorage = "", onChanged }) {
           /* @__PURE__ */ jsxs("p", { className: "text-xs font-medium opacity-60", children: [
             "Bewusst ohne Backup (",
             accepted.length,
-            ") -- warnt nicht auf dem Dashboard"
+            ") \u2013 warnt nicht auf dem Dashboard"
           ] }),
           /* @__PURE__ */ jsx("ul", { className: "space-y-0.5 text-xs opacity-70", children: accepted.map((g) => /* @__PURE__ */ jsxs("li", { children: [
             line(g),
@@ -502,7 +504,7 @@ function ConnectionsPanel() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setMessage(`Verbindung "${newName}" angelegt -- jetzt noch ein Token setzen.`);
+      setMessage(`Verbindung "${newName}" angelegt \u2013 jetzt noch ein Token setzen.`);
       setNewName("");
       setNewBaseUrl("");
       setNewTokenId("");
@@ -560,7 +562,7 @@ function ConnectionsPanel() {
   }
   async function removeConnection(name) {
     const ok = await deck().confirmDialog(
-      `Verbindung "${name}" wirklich entfernen? Ein bereits gesetztes Token bleibt im Tresor stehen.`,
+      `Verbindung "${name}" wirklich entfernen? Das gesetzte Token wird mit gel\xF6scht.`,
       { danger: true, confirmLabel: "Entfernen" }
     );
     if (!ok) return;
@@ -733,7 +735,7 @@ function JobEditForm({ job, guests, onDone }) {
   async function save() {
     const summary = changed.map((k) => `${JOB_LABEL[k]}: ${String(initial[k])} \u2192 ${String(values[k])}`).join(", ");
     const warning = shrinks ? " Weniger Aufbewahrung: Proxmox l\xF6scht beim n\xE4chsten Lauf, was \xFCber der neuen Grenze liegt." : newRule ? ` ${NEW_RULE_WARNING}` : "";
-    const ok = await deck().confirmDialog(`Backup-Job \xE4ndern (gilt f\xFCr ${guests.join(", ")}) -- ${summary}?${warning}`, { danger: shrinks || newRule, confirmLabel: "\xC4ndern" });
+    const ok = await deck().confirmDialog(`Backup-Job \xE4ndern (gilt f\xFCr ${guests.join(", ")}) \u2013 ${summary}?${warning}`, { danger: shrinks || newRule, confirmLabel: "\xC4ndern" });
     if (!ok) return;
     setBusy(true);
     try {
@@ -747,7 +749,7 @@ function JobEditForm({ job, guests, onDone }) {
           action.status === "succeeded" ? action.result?.output ?? "Ge\xE4ndert." : isActionRunning(action.status) ? RUNNING_IN_BACKGROUND : `Fehlgeschlagen: ${action.result?.error ?? action.status}`
         );
       } else if (action.status === "proposed") {
-        onDone(`\xC4nderung vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        onDone(`\xC4nderung vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
       } else {
         onDone(ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?");
       }
@@ -836,7 +838,7 @@ function BackupsPage() {
     setHistory(res.ok ? await res.json() : []);
   }
   async function retry(job) {
-    const ok = await deck().confirmDialog(`Startet sofort ein volles Backup von '${job.name}'. Fortfahren?`);
+    const ok = await deck().confirmDialog(`Startet sofort ein Backup von '${job.name}' mit den Einstellungen des Jobs. Hat der Job eine Aufbewahrung, k\xF6nnen danach \xE4ltere Sicherungen dieses Gastes auf dem Speicher gel\xF6scht werden, auch manuelle und die anderer Jobs. Ohne eigene Aufbewahrung bleibt alles erhalten. Fortfahren?`);
     if (!ok) return;
     setBusy(job.job_ref);
     setMessage(null);
@@ -847,7 +849,7 @@ function BackupsPage() {
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
       const { action, approved } = await settleAction(body, { signal: unmountSignal() });
       if (!approved && action.status === "proposed") {
-        setMessage(`Backup-Retry vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        setMessage(`Backup-Retry vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
       } else {
         setMessage(`Backup-Retry -> ${approved && action.status === "succeeded" ? "angenommen" : ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?"}.`);
       }
@@ -869,7 +871,7 @@ function BackupsPage() {
     /* @__PURE__ */ jsx(ConnectionsPanel, {}),
     jobs && (jobs.length > 0 || unreachable.length === 0) && /* @__PURE__ */ jsxs("p", { className: "mb-4 text-sm opacity-70", children: [
       jobs.length,
-      " Job(s) -- ",
+      " Job(s) \u2013 ",
       failing > 0 ? `${failing} ohne best\xE4tigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"
     ] }),
     /* @__PURE__ */ jsx(
@@ -887,7 +889,7 @@ function BackupsPage() {
     unreachable.length > 0 && /* @__PURE__ */ jsx("div", { className: "mb-2 text-sm text-red-400", "data-testid": "unreachable", children: unreachable.map((u) => /* @__PURE__ */ jsxs("p", { children: [
       "Verbindung \u201E",
       u.connection,
-      "\u201C nicht erreichbar -- ihre Backup-Jobs fehlen hier gerade. ",
+      "\u201C nicht erreichbar \u2013 ihre Backup-Jobs fehlen hier gerade. ",
       /* @__PURE__ */ jsxs("span", { className: "text-xs opacity-80", children: [
         "(",
         u.error ?? u.storage,
@@ -900,10 +902,10 @@ function BackupsPage() {
     hostFilter && jobs && /* @__PURE__ */ jsxs("div", { className: "mb-2 flex flex-wrap items-center gap-2 text-xs", children: [
       /* @__PURE__ */ jsxs("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5", "data-testid": "host-filter", children: [
         "Nur ",
-        visibleJobs?.[0]?.name ?? "dieser Host",
+        visibleJobs?.[0]?.name ?? "dieser Server",
         /* @__PURE__ */ jsx("button", { type: "button", onClick: () => updateUrl({ host: null }), "aria-label": "Filter entfernen", className: "opacity-70 hover:opacity-100", children: "\u2715" })
       ] }),
-      visibleJobs?.length === 0 && /* @__PURE__ */ jsx("span", { className: "text-amber-300", children: "Kein Backup-Job erfasst diesen Host -- siehe \u201EOhne Backup\u201C oben." })
+      visibleJobs?.length === 0 && /* @__PURE__ */ jsx("span", { className: "text-amber-300", children: "Kein Backup-Job erfasst diesen Server \u2013 siehe \u201EOhne Backup\u201C oben." })
     ] }),
     visibleJobs && visibleJobs.length > 0 && /* @__PURE__ */ jsxs("table", { className: "w-full text-sm", children: [
       /* @__PURE__ */ jsx("thead", { children: /* @__PURE__ */ jsxs("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
@@ -943,14 +945,14 @@ function BackupsPage() {
           /* @__PURE__ */ jsx("td", { className: "py-1.5 text-xs opacity-70", "data-testid": `inventory-${job.job_ref}`, children: inventory ? inventoryText(inventory.get(`${job.connection}/${job.vmid}`)) : "\u2026" }),
           /* @__PURE__ */ jsx("td", { className: "py-1.5", children: /* @__PURE__ */ jsxs("div", { className: "flex gap-1.5", children: [
             /* @__PURE__ */ jsx("button", { type: "button", onClick: () => void toggleHistory(job), className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: expanded === job.job_ref ? "Verlauf ausblenden" : "Verlauf" }),
-            /* @__PURE__ */ jsx(
+            job.last_status !== "running" && /* @__PURE__ */ jsx(
               "button",
               {
                 type: "button",
                 disabled: busy === job.job_ref,
                 onClick: () => void retry(job),
-                className: "rounded bg-red-500/20 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40",
-                children: "Erneut versuchen"
+                className: job.last_status === "failed" ? "rounded bg-red-500/20 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40" : "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition disabled:opacity-40",
+                children: job.last_status === "failed" ? "Erneut versuchen" : "Jetzt sichern"
               }
             ),
             deck().hasPermission("settings.write") && /* @__PURE__ */ jsx(
@@ -982,7 +984,7 @@ function BackupsPage() {
           history.length === 0 && /* @__PURE__ */ jsx("li", { children: "Keine L\xE4ufe bekannt." }),
           history.map((h) => /* @__PURE__ */ jsxs("li", { children: [
             formatEpoch(h.started_at),
-            " -- ",
+            " \u2013 ",
             STATUS_LABEL[h.status] ?? h.status,
             " (",
             h.node ?? "?",
@@ -997,7 +999,7 @@ function BackupsPage() {
         orphans.length,
         ")"
       ] }),
-      /* @__PURE__ */ jsx("p", { className: "mb-1 text-xs opacity-60", children: "Zu diesen Dateien gibt es keinen bekannten Gast mehr (gel\xF6scht oder umgezogen). Sie belegen nur Platz -- vor dem L\xF6schen in Proxmox pr\xFCfen." }),
+      /* @__PURE__ */ jsx("p", { className: "mb-1 text-xs opacity-60", children: "Zu diesen Dateien gibt es keinen bekannten Gast mehr (gel\xF6scht oder umgezogen). Sie belegen nur Platz \u2013 vor dem L\xF6schen in Proxmox pr\xFCfen." }),
       /* @__PURE__ */ jsx("ul", { className: "text-xs opacity-80", children: orphans.map((o) => /* @__PURE__ */ jsxs("li", { children: [
         o.kind === "lxc" ? "Container" : "VM",
         " ",

@@ -7,6 +7,7 @@ import { Pencil, Plus, UserPlus } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { api, ApiError } from "../lib/api";
+import { USERNAME_HINT, emailProblem, passwordProblem, usernameProblem } from "../lib/credentials";
 import { confirmDialog } from "../state/dialogs";
 import { useAuthStore } from "../state/auth";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, inputClass, type Notice } from "./settings/ui";
@@ -35,6 +36,13 @@ const ROLE_HINTS: Record<string, string> = {
   viewer: "Nur ansehen, nichts ändern",
 };
 
+/** Die eingebauten Rollen heißen in der API englisch; angezeigt werden sie auf Deutsch. Eigene Rollen behalten ihren Namen. */
+const ROLE_LABELS: Record<string, string> = { admin: "Administrator", operator: "Bediener", viewer: "Betrachter" };
+
+export function roleLabel(role: Pick<Role, "name" | "is_builtin">): string {
+  return role.is_builtin ? (ROLE_LABELS[role.name] ?? role.name) : role.name;
+}
+
 const EMPTY_FORM = { username: "", password: "", display_name: "", email: "", role_ids: [] as string[] };
 
 function errorOf(err: unknown): string {
@@ -51,9 +59,9 @@ function RolePicker({ roles, selected, onToggle }: { roles: Role[]; selected: st
             selected.includes(r.id) ? "border-[var(--color-accent)] bg-white/[0.05]" : "border-white/10 hover:border-white/25"
           }`}
         >
-          <input type="checkbox" className="mt-0.5" checked={selected.includes(r.id)} onChange={() => onToggle(r.id)} aria-label={r.name} />
+          <input type="checkbox" className="mt-0.5" checked={selected.includes(r.id)} onChange={() => onToggle(r.id)} aria-label={roleLabel(r)} />
           <span>
-            <span className="block font-medium">{r.name}</span>
+            <span className="block font-medium">{roleLabel(r)}</span>
             <span className="block text-xs text-white/45">{ROLE_HINTS[r.name] ?? (r.is_builtin ? "" : r.description)}</span>
           </span>
         </label>
@@ -89,10 +97,16 @@ export function UsersPage(): JSX.Element {
   async function submitCreate(e: React.FormEvent) {
     e.preventDefault();
     setNotice(null);
+    // Dieselben Regeln wie der Server (lib/credentials.ts): gleich sagen, was nicht passt.
+    const problem = usernameProblem(form.username) ?? passwordProblem(form.password) ?? emailProblem(form.email);
+    if (problem) {
+      setNotice({ kind: "error", text: problem });
+      return;
+    }
     try {
       await api.post("/users", {
         username: form.username, password: form.password,
-        display_name: form.display_name, email: form.email || null, role_ids: form.role_ids,
+        display_name: form.display_name, email: form.email.trim() || null, role_ids: form.role_ids,
       });
       setNotice({ kind: "ok", text: `Benutzer „${form.username}“ angelegt.` });
       setForm(EMPTY_FORM);
@@ -160,14 +174,14 @@ export function UsersPage(): JSX.Element {
       <NoticeLine notice={notice} />
 
       {showForm && (
-        <form onSubmit={(e) => void submitCreate(e)}>
+        <form noValidate onSubmit={(e) => void submitCreate(e)}>
           <Card
             title="Neuen Benutzer anlegen"
             description="Teile dem neuen Benutzer Benutzername und Passwort mit; das Passwort kann er danach unter „Mein Konto“ ändern."
             footer={<Button type="submit" variant="primary"><UserPlus size={14} /> Anlegen</Button>}
           >
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Benutzername" hint="Nur Kleinbuchstaben, z. B. „admin“. Großbuchstaben werden automatisch umgewandelt.">
+              <Field label="Benutzername" hint={USERNAME_HINT}>
                 <input required minLength={3} autoCapitalize="none" spellCheck={false} value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value.toLowerCase() })} className={inputClass} />
               </Field>
               <Field label="Passwort" hint="Mindestens 8 Zeichen">
@@ -230,7 +244,7 @@ export function UsersPage(): JSX.Element {
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-1">
                     {user.email && <span className="mr-2 text-xs text-white/45">{user.email}</span>}
-                    {user.roles.map((r) => <Badge key={r.id}>{r.name}</Badge>)}
+                    {user.roles.map((r) => <Badge key={r.id}>{roleLabel(r)}</Badge>)}
                     {user.is_owner && user.roles.length === 0 && <span className="text-xs text-white/40">alle Rechte</span>}
                     {!user.is_owner && user.roles.length === 0 && <span className="text-xs text-white/40">keine Rollen</span>}
                   </div>
@@ -280,7 +294,12 @@ function EditUser({ user, isSelf, roles, onCancel, onSaved }: { user: UserRow; i
   async function save() {
     const patch: Record<string, unknown> = {};
     if (displayName !== user.display_name) patch.display_name = displayName;
-    if (email !== (user.email ?? "")) patch.email = email || null;
+    // Nur eine geaenderte Adresse pruefen: ein Konto mit einer alten, nie geprueften Adresse bleibt sonst nicht speicherbar.
+    if (email.trim() !== (user.email ?? "").trim()) {
+      const emailError = emailProblem(email);
+      if (emailError) return setNotice({ kind: "error", text: emailError });
+      patch.email = email.trim() || null;
+    }
     const before = user.roles.map((r) => r.id);
     if (roleIds.length !== before.length || roleIds.some((id) => !before.includes(id))) patch.role_ids = roleIds;
     if (password && !passwordLocked) {

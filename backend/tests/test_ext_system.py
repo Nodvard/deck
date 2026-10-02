@@ -75,7 +75,7 @@ def test_parses_the_real_pi_output():
     assert (info["reboot_required"], info["temperature_c"]) == (False, 44.3)
     # Swap zu 71 % belegt und ein Sicherheits-Update -- genau das soll auffallen.
     assert [f["text"] for f in summary_findings(info)] == [
-        "Swap zu 71 % belegt -- RAM knapp", "1 Sicherheits-Update(s) ausstehend",
+        "Swap zu 71 % belegt – RAM knapp", "1 Sicherheits-Update(s) ausstehend",
     ]
 
 
@@ -197,6 +197,49 @@ async def test_system_asks_for_root_to_restart_services(client, db_session, test
     ]
 
 
+def test_widget_cache_is_dropped_when_the_server_list_changes():
+    """Ein neuer Server darf nicht bis zu 5 Minuten im Widget „Server-Zustand“ fehlen."""
+    from types import SimpleNamespace
+
+    from nodvard_deck_ext_system import WidgetCache, hosts_key
+
+    def host(id_: str, name: str, address: str = "192.168.2.10") -> SimpleNamespace:
+        return SimpleNamespace(id=id_, name=name, display_name=name.title(), address=address)
+
+    cache = WidgetCache(300)
+    empty = hosts_key([])
+    assert cache.get(empty, now=0) is None
+    cache.put(empty, now=0, rows=[])
+    assert cache.get(empty, now=100) == [], "gleiche Serverliste, noch frisch: aus dem Speicher"
+    assert cache.get(empty, now=301) is None, "nach fünf Minuten wird neu gefragt"
+
+    cache.put(empty, now=1000, rows=[])
+    with_pi = hosts_key([host("h1", "bastel-pi")])
+    assert cache.get(with_pi, now=1001) is None, "ein neuer Server macht den Speicher ungültig"
+    cache.put(with_pi, now=1001, rows=[{"name": "Bastel-Pi"}])
+    assert cache.get(with_pi, now=1002) == [{"name": "Bastel-Pi"}]
+    # Neue Adresse oder anderer Name: ebenfalls neu abfragen.
+    assert cache.get(hosts_key([host("h1", "bastel-pi", "192.168.2.11")]), now=1003) is None
+    assert cache.get(hosts_key([host("h1", "anderer-name")]), now=1003) is None
+    # Die Reihenfolge der Liste spielt keine Rolle.
+    both = [host("h1", "bastel-pi"), host("h2", "nas")]
+    assert hosts_key(both) == hosts_key(list(reversed(both)))
+
+
+def test_error_text_is_plain_german_even_without_an_exception_message():
+    import asyncio
+
+    from nodvard_deck_ext_system import error_text
+
+    assert "TimeoutError" not in error_text(TimeoutError())
+    assert error_text(TimeoutError()) == "keine Antwort innerhalb der Zeitgrenze – ist der Server an?"
+    assert error_text(asyncio.TimeoutError()) == error_text(TimeoutError())
+    assert error_text(ConnectionRefusedError()).startswith("Verbindung abgelehnt")
+    assert error_text(RuntimeError("Anmeldung abgelehnt")) == "Anmeldung abgelehnt"
+    assert error_text(RuntimeError("")) == "Verbindung fehlgeschlagen"
+    assert "Error" not in error_text(OSError())
+
+
 def test_widget_row_worst_first_and_unreachable_is_danger():
     from types import SimpleNamespace
 
@@ -206,10 +249,10 @@ def test_widget_row_worst_first_and_unreachable_is_danger():
     info = parse_system_info(PI)
     info["findings"] = summary_findings(info)
     assert widget_row(host, info, None) == {
-        "name": "Raspberry Pi", "host_id": "h1", "summary": "Swap zu 71 % belegt -- RAM knapp", "badge": "2 Befunde", "tone": "warn",
+        "name": "Raspberry Pi", "host_id": "h1", "summary": "Swap zu 71 % belegt – RAM knapp", "badge": "2 Befunde", "tone": "warn",
     }
     ok = {**info, "findings": []}
-    assert widget_row(host, ok, None)["summary"] == "Debian GNU/Linux 13 (trixie) -- alles in Ordnung"
+    assert widget_row(host, ok, None)["summary"] == "Debian GNU/Linux 13 (trixie) – alles in Ordnung"
     assert widget_row(host, None, "nicht erreichbar: timeout")["tone"] == "danger"
 
 

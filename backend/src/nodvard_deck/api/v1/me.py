@@ -49,6 +49,13 @@ class TotpDisableRequest(BaseModel):
     current_password: str
 
 
+class TotpSetupRequest(BaseModel):
+    current_password: str | None = None
+    """Das aktuelle Passwort. Fuer das Einschalten der Zwei-Faktor-Anmeldung wird es verlangt (ohne
+    gibt es 400); im Schema optional, damit aeltere Aufrufer mit ihrer Anfrage ohne Body gueltig
+    bleiben und eine verstaendliche Antwort bekommen statt eines 422."""
+
+
 class TotpSetupOut(BaseModel):
     secret: str
     otpauth_uri: str
@@ -138,7 +145,7 @@ async def change_password(
     await confirm_current_password(request, session, user, payload.current_password, "passwort_aendern")
     if payload.new_password == payload.current_password:
         raise HTTPException(status_code=422, detail="Das neue Passwort muss sich vom alten unterscheiden.")
-    user.password_hash = security.hash_password(payload.new_password)
+    user.password_hash = await security.hash_password_async(payload.new_password, signed_in=True)
     await session.flush()
     revoked = await auth_service.revoke_refresh_tokens(session, user.id, except_token_id=current_session_id)
     await audit_service.log(
@@ -147,8 +154,26 @@ async def change_password(
     )
 
 
+TOTP_SETUP_PASSWORD_REQUIRED = (
+    "Zum Einschalten der Zwei-Faktor-Anmeldung brauchst du dein aktuelles Passwort."
+)
+
+
 @router.post("/totp/setup", response_model=TotpSetupOut)
-async def totp_setup(user: CurrentUser, session: SessionDep, settings: SettingsDep) -> TotpSetupOut:
+async def totp_setup(
+    request: Request,
+    user: CurrentUser,
+    session: SessionDep,
+    settings: SettingsDep,
+    payload: TotpSetupRequest | None = None,
+) -> TotpSetupOut:
+    """Beginnt die Einrichtung (Schluessel + QR-Link). Verlangt das aktuelle Passwort (Body
+    `{current_password}`): sonst koennte eine gestohlene Sitzung allein die Zwei-Faktor-Anmeldung
+    mit einem eigenen Authenticator einschalten und den Besitzer aussperren -- Abschalten und neue
+    Wiederherstellungs-Codes verlangen es aus demselben Grund."""
+    if payload is None or not payload.current_password:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=TOTP_SETUP_PASSWORD_REQUIRED)
+    await confirm_current_password(request, session, user, payload.current_password, "2fa_einrichten")
     try:
         secret, otpauth_uri = await auth_service.start_totp_setup(session, settings, user)
     except auth_service.AuthError as exc:

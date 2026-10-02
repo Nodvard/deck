@@ -1,5 +1,5 @@
 {
- "_doc": "Config.Image des Ziels nach M7: Ergebnis ist das bewegliche Tag oder der Code pinned_version/foreign_image.",
+ "_doc": "Config.Image des Ziels: Ergebnis ist das bewegliche Tag oder der Code pinned_version/foreign_image.",
  "repository": "ghcr.io/nodvard/deck",
  "cases": [
   ["ghcr.io/nodvard/deck", "latest"],

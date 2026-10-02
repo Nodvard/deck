@@ -25,7 +25,15 @@ from nodvard_sdk.actions import ActionRequest
 from nodvard_sdk.errors import NodvardError
 
 from .connector import ProxmoxBackupApiError, ProxmoxBackupConnector
-from .job_edit import JobEditError, build_job_create, build_job_update
+from .job_edit import (
+    JobEditError,
+    build_job_create,
+    build_job_update,
+    job_snapshot,
+    retention_note,
+    same_run_options,
+    vzdump_options,
+)
 from .job_edit import describe as describe_job_diff
 from .inventory import list_backup_files, retention_label, summarize
 
@@ -280,16 +288,35 @@ class ProxmoxBackupProvider:
         if not node:
             raise NodvardError(f"Kein Proxmox-Knoten für VMID {vmid} bekannt -- Retry nicht möglich.")
 
+        # Der Stand des Jobs, den der Freigebende zu sehen bekommt, wird festgehalten. Gelesen wird
+        # wie beim Ausfuehren ueber `get_job` (nicht aus der Liste), damit beide Staende dieselbe
+        # Form haben und der Vergleich nicht an Schreibweisen scheitert.
+        current = await connector.get_job(job_id)
+        if not current:
+            raise NodvardError(f"Backup-Job '{job_id}' existiert nicht (mehr).")
+        options = vzdump_options(current)
+
         name, host_id = await self._vm_name_and_host(connection, vmid)
         return ActionRequest(
             action_type="backup.run",
             host_ref=host_id,
-            payload={"connection": connection, "node": node, "vmid": vmid, "storage": job.get("storage")},
+            payload={
+                "connection": connection, "node": node, "vmid": vmid, "storage": job.get("storage"),
+                "job_id": job_id, "options": options,
+            },
             risk=Risk.MEDIUM,
             proposed_by=Actor.extension("backups"),
-            reason=f"Manueller Backup-Retry für VMID {vmid} ({name}).",
+            reason=f"Manueller Backup-Retry für VMID {vmid} ({name}) mit den Einstellungen des Jobs. {retention_note(options)}",
             correlation_id=job_ref,
         )
+
+
+VZDUMP_PERMISSION_HINT = (
+    "Proxmox hat den Backup-Lauf abgelehnt (keine Berechtigung), es wurde nichts gestartet. "
+    "Der Token braucht dafür VM.Backup und auf dem Backup-Speicher Datastore.Allocate "
+    "(dieselbe Zusatzrolle wie zum Anlegen von Jobs); hat der Job eine Bandbreitengrenze oder "
+    "ionice, auch Sys.Modify auf /."
+)
 
 
 class BackupActionExecutor:
@@ -321,7 +348,36 @@ class BackupActionExecutor:
             connector = connectors.get(connection)
             if connector is None:
                 return ActionResult(success=False, error=f"Backup-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
-            upid = await connector.run_vzdump(node, vmid, storage=req.payload.get("storage"))
+            # Gestartet wird nur mit den Einstellungen, die beim Vorschlag freigegeben wurden. Hat sich der
+            # Job seitdem geaendert (oder ist er nicht lesbar), wird nichts gestartet: der Freigebende hat
+            # dann einen anderen Stand gesehen, vor allem was aufgeraeumt wird. Ein Vorschlag ohne Job
+            # (aus einer aelteren Version) laeuft mit `keep-all=1`, raeumt also nichts auf.
+            options: dict[str, Any] | None = None
+            job_id = str(req.payload.get("job_id") or "")
+            if job_id:
+                try:
+                    current = await connector.get_job(job_id)
+                except ProxmoxBackupApiError:
+                    current = {}
+                if not current:
+                    return ActionResult(
+                        success=False,
+                        error=f"Der Backup-Job '{job_id}' ist nicht lesbar (gelöscht oder Proxmox antwortet nicht). Es wurde nichts gestartet – bitte neu vorschlagen.",
+                    )
+                if not same_run_options(req.payload.get("options"), vzdump_options(current)):
+                    return ActionResult(
+                        success=False,
+                        error="Der Backup-Job wurde seit dem Vorschlag geändert. Es wurde nichts gestartet – bitte neu vorschlagen.",
+                    )
+                options = req.payload["options"]
+            try:
+                upid = await connector.run_vzdump(node, vmid, storage=req.payload.get("storage"), options=options)
+            except ProxmoxBackupApiError as exc:
+                if "HTTP 403" not in str(exc):
+                    raise
+                # Die Aufbewahrung geht immer mit (auch `keep-all=1`), dafuer verlangt Proxmox
+                # `Datastore.Allocate` auf dem Speicher -- ohne Hinweis sieht man nur "HTTP 403".
+                return ActionResult(success=False, error=f"{VZDUMP_PERMISSION_HINT} ({exc})")
         except ProxmoxBackupApiError as exc:
             return ActionResult(success=False, error=str(exc))
         return ActionResult(success=True, output=f"Backup gestartet: {upid}")
@@ -349,7 +405,19 @@ class BackupActionExecutor:
             if connector is None:
                 return ActionResult(success=False, error=f"Backup-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
             job = await connector.get_job(job_id)
-            params, diff, _destructive = build_job_update(job, req.payload.get("changes"))
+            expected = req.payload.get("expected")
+            if isinstance(expected, dict) and job_snapshot(job) != expected:
+                return ActionResult(
+                    success=False,
+                    error="Der Backup-Job wurde seit dem Vorschlag geändert. Es wurde nichts geschrieben – bitte die Änderung neu vorschlagen.",
+                )
+            params, diff, destructive = build_job_update(job, req.payload.get("changes"))
+            if destructive and req.risk not in (Risk.HIGH, Risk.CRITICAL):
+                # Nur mit hoher Freigabe: die Änderung würde Sicherungen kosten.
+                return ActionResult(
+                    success=False,
+                    error="Diese Änderung würde Sicherungen löschen, wurde aber nicht mit hohem Risiko freigegeben. Es wurde nichts geschrieben – bitte neu vorschlagen.",
+                )
             await connector.update_job(job_id, params)
         except JobEditError as exc:
             return ActionResult(success=False, error=str(exc))

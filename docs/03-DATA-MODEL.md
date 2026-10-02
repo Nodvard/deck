@@ -43,7 +43,6 @@ secrets.read:ssh-*    secrets.write
 audit.read            settings.write      extensions.manage
 system.read           apps.write
 actions.approve       actions.approve:high
-files.read:<source>   files.write:<source>
 ext.nexus-soc.read    ext.nexus-soc.remediate
 ```
 
@@ -87,7 +86,7 @@ Der Kern besitzt die Host-Identität — siehe
 | enabled | |
 | last_seen_at | letzte erfolgreiche Prüfung (Modul, „Verbindung prüfen“ oder `host-reachability`); leer = noch nie gesehen, dann gibt es beim ersten Ausfall keine Meldung |
 | status | `up` \| `down` \| `unknown` \| `maintenance`. Von Hand angelegte Server führt `host-reachability` nach (TCP zum SSH-Port, „down“ erst nach 2 Fehlschlägen hintereinander); `maintenance` fasst der Job nicht an |
-| metadata | JSON, anbieterspezifisch — der Kern liest es nie inhaltlich |
+| metadata | JSON, anbieterspezifisch. Ausnahme ist der Schlüssel `login_ok`, er gehört dem Kern: der Beleg einer erfolgreichen SSH-Anmeldung mit dem Standard-Zugang (`credential_id`, `address`, `port`, `at`). Daraus entsteht `login_ok_at` in der API, solange Zugang, Adresse und Port noch passen. Der Abgleich eines Anbieters ersetzt den Rest und behält ihn |
 | created_at, updated_at | |
 
 `host_tags(host_id, tag)` — Tags sind das generische Ersatzkonstrukt für fest verdrahtete
@@ -109,7 +108,9 @@ Zielgruppen für Skripte (Script-Repository, siehe [02 §8](02-EXTENSION-API.md#
 
 ### `known_hosts`
 `(host_id, key_type, fingerprint, first_seen_at, accepted_by_user_id)` —
-ersetzt `StrictHostKeyChecking=no`. Abweichung ⇒ Verbindung scheitert sichtbar.
+ersetzt `StrictHostKeyChecking=no`. Abweichung ⇒ Verbindung scheitert sichtbar. Ein unbekannter Schlüssel
+wird beim ersten Verbinden nur dann automatisch gemerkt, wenn keine Bestätigung verlangt ist (§9
+`ssh.confirm_new_host_keys`, `ssh.host_key_confirm_required`); sonst erst über `POST /hosts/{id}/known-hosts`.
 
 ---
 
@@ -138,6 +139,9 @@ ersetzt `StrictHostKeyChecking=no`. Abweichung ⇒ Verbindung scheitert sichtbar
 3. Jede Materialisierung schreibt eine Audit-Zeile (`secret.used`, mit Label und
    Verwender, ohne Wert).
 4. Der Master-Key liegt nie in der DB.
+5. `PUT /secrets/{id}/value` und `DELETE /secrets/{id}` lehnen das Secret hinter `users.totp_secret_id`
+   (Zwei-Faktor-Schlüssel eines Kontos) mit `409` ab: Ersetzen oder Löschen geht dort nicht. Abschalten geht nur über
+   Mein Konto, „Zwei-Faktor zurücksetzen“ oder den Notfall-Befehl.
 
 ---
 
@@ -148,13 +152,13 @@ ersetzt `StrictHostKeyChecking=no`. Abweichung ⇒ Verbindung scheitert sichtbar
 |---|---|
 | id | |
 | ts | indiziert |
-| actor_type | `user` \| `extension` \| `ai` \| `scheduler` \| `system` |
-| actor_id | User-ID, Extension-ID oder Modellname |
+| actor_type | `user` \| `extension` \| `ai` \| `scheduler` \| `system` \| `anonymous` (nicht angemeldet) |
+| actor_id | User-ID, Extension-ID oder Modellname; bei `login.failed`/`login.locked` mit unbekanntem Benutzernamen (eine zu lange Eingabe zählt genauso) `unbekannt` mit `actor_type` `anonymous`, nie der getippte Text |
 | action | `host.restart`, `secret.used`, `action.denied`, `login.failed` … |
 | target_type, target_id | |
 | outcome | `success` \| `failure` \| `denied` \| `proposed` |
 | reason | **Text** — hier landet `BEGRUENDUNG:` |
-| detail | JSON — Befehl, Exit-Code, Gate-Entscheidung, gekürzte Ausgabe |
+| detail | JSON — Befehl, Exit-Code, Gate-Entscheidung; bei `action.executed` von Ausgabe und Fehlertext nur die Länge, nie Text vom Server (ältere Einträge können noch Ausgabe enthalten); bei `login.failed`/`login.locked` mit unbekanntem Benutzernamen statt des Texts nur `username_ref` (12 Hex-Zeichen, HMAC-SHA256 der Eingabe mit dem JWT-Geheimnis der Installation; gleiche Eingabe, gleiche Kennung) und `username_length` |
 | correlation_id | verbindet Incident → Vorschlag → Ausführung → Benachrichtigung |
 | ip, user_agent | |
 
@@ -162,6 +166,18 @@ Kein `UPDATE`, kein `DELETE` aus der Anwendung; nur ein Retention-Job löscht je
 `audit.retention_days`. Die Trennung `outcome=proposed` von `success` ist der Unterschied
 zwischen „die KI wollte" und „die KI tat" — ohne sie lässt sich im Nachhinein nicht
 sagen, was wirklich ausgeführt wurde.
+
+Zu lange Werte in `actor_type`, `actor_id`, `action`, `target_type`, `target_id`, `ip` und
+`user_agent` werden beim Schreiben auf die Spaltenlänge gekürzt (letztes Zeichen „…“);
+`reason` und `detail` werden nicht gekürzt.
+
+Ältere Versionen schrieben bei einer Anmeldung mit unbekanntem Namen den eingetippten Text oder
+eine Kennung `unbekannt:…` als `actor_id` ins Protokoll, bei `login.locked` auch in `detail.username`.
+Die Migration `f3a9c6d18e24` bereinigt diese Einträge einmalig: Akteur `anonymous`/`unbekannt`,
+`detail.username` fällt weg (unter SQLite mit `PRAGMA secure_delete`). Ein `login.locked` eines
+inzwischen gelöschten Kontos wird genauso behandelt. Das lässt sich nicht rückgängig machen.
+Die Kopien unter `backups/vor-update/` und ältere Sicherungen enthalten die Namen noch, bis sie
+ersetzt oder gelöscht sind.
 
 ---
 
@@ -191,6 +207,10 @@ Diese Tabelle trennt Vorschlagen und Ausführen (siehe
 [01 §4](01-ARCHITECTURE.md#4-das-aktions-gate)). Die Bestätigungs-Karte in der
 UI ist eine Zeile mit `status=proposed`; „volle Autonomie" heißt, dass das Gate direkt auf
 `approved` setzt — derselbe Datensatz, dieselbe Nachvollziehbarkeit, nur ohne Klick.
+Ebenso bei einer gültigen Dauerfreigabe ([01 §4](01-ARCHITECTURE.md#4-das-aktions-gate)): `gate_decision` ist dann
+`{"rule": "standing_approval", "standing_approval": {granted_by, granted_at, label}}`, und `approved_by_user_id`
+ist die Person, die sie erteilt hat. Erkennt das Gate eine Dauerfreigabe nicht an, steht sie mit `problem` (und ggf.
+der fehlenden `permission`) unter `gate_decision.standing_approval_rejected`.
 
 `action_flap_history(host_id, fingerprint, ts, blocked)` — generalisiertes Anti-Flapping
 über einen Hash aus (host, action_type, normalisiertem Payload), nicht nur über
@@ -273,7 +293,7 @@ Rückmeldung fällt ein Kanal, der ins Leere meldet, unter Umständen wochenlang
 
 ## 9. Einstellungen und Branding
 
-`settings(key, scope (global|user), user_id, value JSON, updated_at, updated_by_user_id)`
+`settings(key, scope (global|user|host), user_id, value JSON, updated_at, updated_by_user_id)`
 
 Reservierte Schlüssel:
 
@@ -287,6 +307,7 @@ locale.default             notifications.defaults     system.timezone
 backup.config              backup.key              backup.last_run
 system.instance_id         hosts.reachability.enabled
 hosts.reachability.interval_minutes                hosts.reachability.state
+ssh.confirm_new_host_keys  ssh.host_key_confirm_required
 ```
 
 Sicherungen (`services/backups.py`, nur über `/system/backups/...`, nicht über `/settings`; Ändern nur der Owner):
@@ -312,6 +333,15 @@ ist ein interner Merker `{host_id: {"muted": bool}}` für Server, deren Ausfall 
 Wartungsfenster nur im Verlauf, wird danach einmal hörbar nachgeholt); er steht nicht in `GET /settings`.
 Der Kern-Job `host-reachability` hängt wie die anderen Kern-Jobs in `jobs` (`ext_id` null); seine Läufe in `job_runs`
 bleiben nur 24 Stunden, weil er bis zu 1440 mal am Tag läuft.
+
+Server-Schlüssel (`services/hosts.py`): `ssh.confirm_new_host_keys` (global, Vorgabe `false`) legt fest, ob neue
+Server-Schlüssel erst nach Bestätigung gemerkt werden; das Anlegen des ersten Kontos speichert `true`, Installationen
+von davor haben den Wert nicht. `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` übersteuert ihn (siehe docs/04-API.md §3
+„Einstellungen“). `ssh.host_key_confirm_required` ist ein interner Merker je Server (`scope = 'host'`, `user_id` =
+Server-ID): gesetzt beim Vergessen eines gemerkten Schlüssels (`DELETE /hosts/{id}/known-hosts/{key_type}`, im selben
+Commit), entfernt nur beim Bestätigen (`POST /hosts/{id}/known-hosts`) und mit dem Server. Solange er da ist, merkt
+keine Verbindung für diesen Server einen Schlüssel still, auch nicht gegen die Umgebungsvariable; er steht nicht in
+`GET /settings`.
 
 `maintenance.windows` ist eine Liste aus (Cron-Ausdruck, Dauer, betroffene Hosts, was
 unterdrückt wird) statt eines fest eingebauten Fensters. Wichtig: die Unterdrückung gilt
@@ -351,5 +381,5 @@ Container-Erkennung nicht auffällt (Router, NAS-Oberfläche, Pi-hole …).
 
 Der Server ruft die Adresse **nie selbst** ab (keine Statusabfrage → kein SSRF); sie ist nur ein Link im Browser.
 Höchstens 200 Apps (das Anlegen gibt sonst `409`; die Beispieldaten halten die Grenze ein, und beim Verschieben darf die Liste etwas länger sein, falls zwei Anlegen gleichzeitig durchkamen). Alembic-Revision `d4b7a2c91e63` im Kern-Zweig (Downgrade löscht Tabelle und Indizes).
-Die Berechtigung `apps.write` ist additiv (rein ein neuer String, keine Migration): Administrator und Inhaber
+Die Berechtigung `apps.write` ist additiv (rein ein neuer String, keine Migration): Administrator und Owner
 haben sie, Bediener und Betrachter nicht von selbst; Lesen braucht wie die erkannten Apps `hosts.read`.

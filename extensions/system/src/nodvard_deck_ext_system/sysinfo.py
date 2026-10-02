@@ -207,7 +207,7 @@ def summary_findings(info: dict[str, Any]) -> list[dict[str, str]]:
     if info.get("failed_units"):
         findings.append({"tone": "danger", "text": f"{len(info['failed_units'])} Dienst(e) fehlgeschlagen: {', '.join(info['failed_units'][:5])}"})
     if info.get("swap_total") and info.get("swap_used") is not None and info["swap_used"] / info["swap_total"] >= 0.5:
-        findings.append({"tone": "warn", "text": f"Swap zu {100 * info['swap_used'] / info['swap_total']:.0f} % belegt -- RAM knapp"})
+        findings.append({"tone": "warn", "text": f"Swap zu {100 * info['swap_used'] / info['swap_total']:.0f} % belegt – RAM knapp"})
     if info.get("newest_kernel"):
         findings.append({"tone": "warn", "text": f"Neustart nötig: neuer Kernel {info['newest_kernel']} installiert"})
     elif info.get("reboot_required"):

@@ -17,7 +17,7 @@ Adressen mit 404, damit eine Installation nicht jedem Besucher alle Endpunkte sa
 | Thema | Regel |
 |---|---|
 | Auth | `Authorization: Bearer <access_token>` — identisch für Web und App |
-| Fehler | RFC 7807 `application/problem+json`: `{type, title, status, detail, instance, errors[]}` |
+| Fehler | JSON `{"detail": …}`: meist ein deutscher Satz, bei `422` aus der Eingabeprüfung eine Liste `[{type, loc, msg}]` |
 | Paginierung | Cursor: `?limit=50&cursor=…` → `{items, next_cursor}`. Kein Offset. |
 | Filter | explizite Query-Parameter, keine generische Filtersprache |
 | Zeit | ISO-8601 mit `Z`. Immer UTC. Lokalzeit ist Client-Sache. |
@@ -25,6 +25,27 @@ Adressen mit 404, damit eine Installation nicht jedem Besucher alle Endpunkte sa
 | Idempotenz | `Idempotency-Key`-Header auf allen Ausführungs-Endpunkten |
 | Korrelation | `X-Request-Id` rein, in Antwort und Audit-Log wieder raus |
 | Teilantworten | `?fields=` wird **nicht** unterstützt — Mobilfunk-Sparsamkeit läuft über schmale, zweckgebundene Endpunkte |
+
+Lehnt die Eingabeprüfung eine Anfrage ab (`422`), nennt die Antwort je Feld nur `type`, `loc` und `msg`, nie die
+Eingabe selbst. `msg` ist auch bei den häufigen Standardprüfungen ein deutscher Satz (Pflichtangabe fehlt, zu kurz
+oder zu lang, Zahl zu klein oder zu groß, falscher Typ bei Zahlen, Text oder ja/nein, Wert nicht erlaubt, kein
+gültiges JSON, unbekannte Angabe), etwa „Mindestens 8 Zeichen.“; seltenere Prüfungen (etwa eine Liste statt eines
+Objekts) behalten den englischen Text von pydantic. Eigene Prüfungen (`type` `value_error`) liefern ihren eigenen
+Satz, der das Feld oft schon nennt („Benutzername: …“). Wirft ein Endpunkt einen SSH-Fehler (Server nicht erreichbar,
+Anmeldung abgelehnt, Server-Schlüssel nicht bestätigt) oder `HostUnreachable` (auch aus einer Erweiterung) und fängt
+ihn nicht selbst ab, kommt `502` mit dem Grund in `detail` statt `500`, ohne Traceback im Container-Protokoll. Ein
+anderer Netzfehler (etwa einer HTTP-Verbindung), den der Endpunkt nicht abfängt, bleibt `500`.
+
+Der Body einer Anfrage ist standardmäßig auf 1 MiB begrenzt (`NODVARD_DECK_MAX_BODY_BYTES`), auch ohne Anmeldung. Ist die
+`Content-Length` größer, antwortet der Server mit `413` (dazu `Connection: close`), sobald der Endpunkt den Body liest,
+und liest kein Byte davon; ein Endpunkt, der ihn gar nicht liest (etwa ein Upload, dessen Anmeldung oder Berechtigung
+schon scheitert), antwortet wie gewohnt. Ohne Längenangabe (`Transfer-Encoding: chunked`) zählt der Server mit und bricht
+beim Überschreiten mit `413` ab. `detail` nennt die erlaubte Größe
+(„Die Anfrage ist zu groß (erlaubt sind höchstens 1 MB).“). Uploads haben eigene, höhere Grenzen: Sicherung hochladen
+4 GiB (`NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES`), Logo 2 MB, Dokumente (Erweiterung `documents`) 20 MB, Bilder im Inventar
+(Erweiterung `inventory`) 5 MB; `POST /files/{source}/upload` ist standardmäßig unbegrenzt
+(`NODVARD_DECK_FILES_MAX_UPLOAD_BYTES`, siehe „Dateien“). Erweiterungen erklären eine höhere Grenze mit `max_body_bytes`
+aus dem SDK ([02 §2](02-EXTENSION-API.md#routen-und-anmeldung)).
 
 ---
 
@@ -34,21 +55,47 @@ Adressen mit 404, damit eine Installation nicht jedem Besucher alle Endpunkte sa
 GET  /api/v1/health              → {status, version, uptime_s}
                                    (Notseite statt Anwendung: 503 {"status":"rescue"} – nie "ok", siehe „Kopie vor jeder Migration“)
 GET  /api/v1/branding            → Name, Logo, Farben (Login-Seite braucht es)
+GET  /api/v1/branding/logo       → das hochgeladene Logo (404, wenn keins da ist). Antwortet mit
+                                   `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`
+                                   und `X-Content-Type-Options: nosniff`: Wer die Adresse direkt öffnet, bekommt kein
+                                   Skript ausgeführt; als `<img>` eingebunden ändert sich nichts.
 POST /api/v1/auth/login          → {username, password}
                                    → 200 {access_token, expires_in, refresh_token?, user}
                                    → 202 {mfa_required: true, mfa_token}
+                                   → 401 „Ungültiger Benutzername oder Passwort.“, auch bei deaktiviertem Konto
+                                   und zu langer Eingabe (Name über 64, Passwort über 1024 Zeichen). An der
+                                   Antwortzeit lässt sich nicht erkennen, ob es das Konto gibt oder ob es
+                                   deaktiviert ist. Einen unbekannten Namen (eine zu lange Eingabe zählt genauso) nimmt das
+                                   Protokoll (`login.failed`, `login.locked`) nicht auf, die Einträge gibt es aber: Akteur ist
+                                   `anonymous`/`unbekannt`, dazu nur Kennung und Länge des Namens (siehe `/audit`).
+                                   → 503 mit `Retry-After: 5`: gerade laufen zu viele Passwortprüfungen (höchstens
+                                   2 zugleich, 16 wartend); zählt nicht als Fehlversuch. Wird das Konto während
+                                   der Prüfung deaktiviert oder sein Passwort geändert: 401 wie bei falschem Passwort.
 POST /api/v1/auth/mfa            → {mfa_token, code} → wie 200 oben
                                    `code` = 6-stelliger Authenticator-Code ODER ein Wiederherstellungs-Code
                                    (`ABCDE-FGHJK`, Schreibweise egal); Letzterer wird dabei verbraucht.
-                                   Falsche Codes zählen gegen das 5er-Limit je `mfa_token`.
+                                   Falsche Codes zählen gegen das 5er-Limit je `mfa_token`. Ein `mfa_token` gilt
+                                   nur für eine Anmeldung (danach 401), ein Authenticator-Code je Konto nur einmal
+                                   (wiederholt: 401 „Dieser Code wurde schon benutzt. …“). Falsche 6-stellige
+                                   Codes zählen außerdem je Konto, egal von welcher IP: nach 10 in 15 Min oder 20
+                                   in 24 Std 429 mit `Retry-After` (auch mit richtigem Code), `login.locked` im
+                                   Protokoll und eine Meldung „Zwei-Faktor-Code wird durchprobiert“. Für
+                                   Wiederherstellungs-Codes gilt diese Sperre nicht. Mit Wiederherstellungs-Code
+                                   auch 503 wie bei `/auth/login`; der Code wird dann nicht verbraucht, der Versuch
+                                   zählt nicht.
 GET  /api/v1/auth/bootstrap      → {needed}: gibt es noch keinen Nutzer? Solange keiner existiert, steht
                                    zusätzlich `restore: {ok: false, message, at}` da, wenn eine Wiederherstellung
                                    aus dem Assistenten NICHT geklappt hat (der Assistent erklärt dann warum).
 POST /api/v1/auth/bootstrap      → {username, password, setup_code} → 201 {id, username, is_owner}
                                    Erstinbetriebnahme: legt den Owner an. Der `setup_code` steht im
                                    Container-Protokoll (oder `NODVARD_DECK_SETUP_CODE`). Fehlt/falsch: 403;
-                                   zu viele Fehlversuche je IP: 429; es gibt schon einen Nutzer: 409.
+                                   zu viele Fehlversuche je IP: 429; es gibt schon einen Nutzer: 409;
+                                   zu viele Passwortprüfungen gleichzeitig: 503 wie bei `/auth/login`.
                                    Nach Erfolg wird der Code gelöscht.
+                                   `username` wird getrimmt und klein geschrieben, hat 3 bis 64 Zeichen,
+                                   beginnt mit Buchstabe oder Ziffer und enthält nur `a-z`, `0-9`, `.`, `-`
+                                   und `_`; `password` 8 bis 255 Zeichen. Sonst 422 mit deutscher Meldung
+                                   („Benutzername: Nur Kleinbuchstaben, Ziffern sowie . - und _ erlaubt …“).
 PUT/POST/DELETE /api/v1/auth/bootstrap/restore/…, POST /api/v1/auth/bootstrap/restart
                                  → Sicherung einspielen im Assistenten, siehe „Wiederherstellen“ unter §3
                                    „System und Sicherungen“. NUR solange es kein Konto gibt (sonst 409) und
@@ -61,6 +108,10 @@ POST /api/v1/auth/refresh        → neuer Access-Token (+ rotierter Refresh-Tok
 POST /api/v1/auth/logout         → Refresh-Token widerrufen (bei Web: die Tokens beider Cookies) und beide Cookies löschen
 GET  /api/v1/capabilities        → was dieser Server kann
 ```
+
+Routen von Erweiterungen (`/api/v1/ext/<id>/…`) gehören nicht dazu: Sie verlangen eine Anmeldung, außer
+eine Erweiterung bietet sie mit der Berechtigung `api.public` ausdrücklich ohne an
+([02 §2](02-EXTENSION-API.md#routen-und-anmeldung)).
 
 Web erhält den Refresh-Token als `HttpOnly; Secure; SameSite=Strict`-Cookie und **nicht**
 im Body. Android erhält ihn im Body und legt ihn in `flutter_secure_storage`. Der
@@ -105,6 +156,10 @@ GET    /me                          PATCH /me            POST /me/password
 GET    /me/sessions                 DELETE /me/sessions/{id}
 GET    /me/tokens                   POST /me/tokens      DELETE /me/tokens/{id}
 POST   /me/totp/setup               POST /me/totp/confirm   DELETE /me/totp
+                                     → setup: Body {current_password} → 200 {secret, otpauth_uri}; ohne Passwort
+                                       400 „Zum Einschalten der Zwei-Faktor-Anmeldung brauchst du dein aktuelles
+                                       Passwort.“ (der Body ist im Schema optional, damit ältere Aufrufer diese
+                                       Antwort statt 422 bekommen); falsches Passwort wie unten
                                      → confirm: 200 {recovery_codes: [10 Codes]} (einmalig sichtbar,
                                        gespeichert werden nur Argon2-Hashes); nur für eine noch nicht
                                        bestätigte Einrichtung (sonst 409 „Zwei-Faktor ist schon aktiv.“);
@@ -113,25 +168,40 @@ POST   /me/totp/setup               POST /me/totp/confirm   DELETE /me/totp
                                        und meldet alle ANDEREN Anmeldungen ab (die aktuelle bleibt)
 POST   /me/recovery-codes           → {current_password} → 200 {recovery_codes}; ersetzt alle alten Codes;
                                        409 ohne aktive 2FA
-                                     → Sicherheitsabfragen (POST /me/password, DELETE /me/totp, POST /me/recovery-codes,
-                                       POST /users/{id}/reset-2fa mit dem Passwort des Admins): falsches
-                                       `current_password` = 400 „Das aktuelle Passwort stimmt nicht.“ + Audit
+                                     → Sicherheitsabfragen (POST /me/password, POST /me/totp/setup, DELETE /me/totp,
+                                       POST /me/recovery-codes, POST /users/{id}/reset-2fa mit dem Passwort des Admins):
+                                       falsches `current_password` = 400 „Das aktuelle Passwort stimmt nicht.“ + Audit
                                        `auth.password_check_failed`. Dazu zählt auch ein falscher Code bei
                                        POST /me/totp/confirm (Audit `auth.totp_confirm_failed`). Gedrosselt je
                                        Nutzer über alle zusammen: 10 Fehlversuche / 5 Min, dann 429 mit
                                        `Retry-After` (auch mit richtigem Passwort); der Beginn der Sperre steht als
                                        `auth.password_check_locked` im Protokoll.
-                                     → Abmelden (Passwortwechsel, 2FA abschalten/zurücksetzen, Notfall-Befehl) widerruft
-                                       die Refresh-Tokens sofort; bereits ausgestellte Access-Tokens laufen aber
-                                       noch bis zu 15 Minuten weiter (stateless JWT, `access_token_ttl_seconds`).
+                                     → Abmelden (Passwortwechsel, Konto deaktivieren, 2FA abschalten/zurücksetzen,
+                                       Notfall-Befehl) widerruft die Refresh-Tokens sofort; bereits ausgestellte
+                                       Access-Tokens laufen aber noch bis zu 15 Minuten weiter (stateless JWT,
+                                       `access_token_ttl_seconds`). Ein deaktiviertes Konto bekommt trotzdem sofort
+                                       401. Bei `/ws` kann sich eine beendete Anmeldung nicht neu verbinden, offene
+                                       Verbindungen enden nach spätestens 30 s (siehe §4).
+                                       Terminal und Konsole einer abgemeldeten Anmeldung enden dagegen nach
+                                       spätestens 15 s (siehe §4, „Terminal“).
 POST   /me/devices                  → Push-Registrierung der App
 
 GET    /app/changelog               → {current, build, unreleased[], versions[]}: Änderungsprotokoll
                                        (jeder angemeldete Nutzer; Dateien unter backend/src/nodvard_deck/changelog/)
 
 GET    /users        POST /users     GET/PATCH/DELETE /users/{id}
+                                     → POST: `username` wie bei `POST /auth/bootstrap` (getrimmt, klein, 3 bis 64
+                                       Zeichen, nur `a-z 0-9 . - _`, vorne Buchstabe oder Ziffer; sonst 422). Die Regel
+                                       gilt nur für neue Konten: `/auth/login` und der Notfall-Befehl nehmen weiter
+                                       jeden Namen an, ältere Konten (etwa mit Leerzeichen im Namen) bleiben nutzbar.
+                                       `email` (POST und PATCH) prüft der Server nicht.
                                      → PATCH: `password` setzt nur das Passwort ANDERER Nutzer; das eigene → 409
                                        (nur über /me/password mit Altpasswort), das des Owners → 403 (nur er selbst)
+                                     → PATCH `is_active: false` (Owner → 409) und ein neues `password` melden den Nutzer
+                                       überall ab (alle Refresh-Tokens widerrufen). Nach dem Wieder-Aktivieren gilt keine
+                                       alte Anmeldung mehr, er muss sich neu anmelden; nur ein vorher ausgestellter, noch
+                                       nicht abgelaufener Access-Token gilt bei HTTP-Anfragen bis zu seinem Ablauf wieder
+                                       (nicht bei `/ws`, siehe §4).
 POST   /users/{id}/reset-2fa        → `users.write`, Body {current_password} = Passwort des handelnden Admins;
                                        schaltet 2FA eines ANDEREN Nutzers ab und meldet ihn
                                        überall ab (204). Owner: 403 (nur er selbst); eigenes Konto: 409
@@ -157,22 +227,49 @@ POST/DELETE /host-groups/{id}/members/{host_id}
 
 GET    /secrets                      → NUR Metadaten. Nie Werte.
 POST   /secrets      PUT /secrets/{id}/value      DELETE /secrets/{id}
+                                     → PUT …/value und DELETE: 409, wenn das Secret der Zwei-Faktor-Schlüssel eines
+                                       Kontos ist (abschalten nur über DELETE /me/totp, POST /users/{id}/reset-2fa
+                                       oder den Notfall-Befehl)
 POST   /secrets/{id}/test            → Verwendbarkeit prüfen, ohne den Wert zu zeigen
 
-GET    /audit?actor=&action=&outcome=&target=&from=&to=&correlation_id=
-GET    /audit/{id}
+GET    /audit?actor_type=&action=&outcome=&target_type=&target_id=&correlation_id=&since=&until=
+               &exclude_action=…&limit=100&offset=0   (limit höchstens 1000)
 GET    /audit/export                 → NDJSON-Stream
+                                     → /audit und /audit/export: Ausgabe in `detail` (Ergebnis von `action.executed`,
+                                       Felder `output`/`stdout`/`stderr`) und Befehle (Felder `command`) nur mit
+                                       `hosts.execute`, auch in alten Einträgen; siehe „Aktionen“
+                                     → /audit und /audit/export: eingetippte Anmeldenamen stehen in keiner Antwort.
+                                       `detail.username_ref` und `detail.username_length` bekommt nur der Owner
+                                       (für alle anderen, auch Admins, fehlen sie). Alte Einträge zu unbekannten
+                                       Namen zeigt die Antwort für alle mit Akteur `anonymous`/`unbekannt`; bei
+                                       `login.locked` fehlt `detail.username` immer, auch bei bekannten Konten.
+                                       Das Antwortformat bleibt gleich.
 
 GET    /settings     PUT /settings/{key}
 GET    /branding     PUT /branding   POST /branding/logo
+                                     → PUT: `support_url` braucht das Schema `http:`, `https:` oder `mailto:`
+                                       (Groß-/Kleinschreibung egal, dahinter nicht leer) und keine Leer- oder
+                                       Steuerzeichen mittendrin, sonst 422. Leerraum am Rand fällt weg, leer = kein
+                                       Link (`null`). Ein früher gespeicherter ungültiger Wert kommt in
+                                       `GET /branding` als `null` zurück.
+                                     → POST /branding/logo: roher Body, `Content-Type` `image/png`, `image/jpeg`,
+                                       `image/svg+xml` oder `image/webp` (sonst 415), höchstens 2 MB (sonst 413).
+                                       Ein SVG wird vor dem Speichern geprüft (Erlaubnisliste): keine Skripte,
+                                       Ereignis-Attribute (`on…`), Animationen, `<foreignObject>` oder
+                                       Verarbeitungsanweisungen (`<?xml-stylesheet …?>`), keine DOCTYPE-Angabe mit
+                                       `[…]` (eigene Entitäten), keine fremden Namensräume (außer denen von
+                                       Inkscape/Illustrator), Verweise (`href`, `url(…)`) nur auf Teile derselben
+                                       Datei oder eingebettete PNG-/JPEG-/GIF-/WebP-Bilder (`data:…;base64,…`).
+                                       Sonst, auch bei einer kaputten Datei, 422 „SVG-Logo abgelehnt: …“.
 
 GET    /extensions                   GET /extensions/{id}
 POST   /extensions/{id}/enable       POST /extensions/{id}/disable
 PUT    /extensions/{id}/settings     PUT /extensions/{id}/permissions
 POST   /extensions/{id}/reload       DELETE /extensions/{id}
 GET    /extensions/{id}/frontend/index.js     → ESM-Bundle
-GET    /extensions/{id}/settings     → {schema, values, secrets: [{label, title, description, item, is_set, optional}]}
-PUT    /extensions/{id}/secrets      → Geheimnis eines `x-secrets`-Labels setzen/ersetzen (nie lesen)
+GET    /extensions/{id}/settings     → {schema, values, secrets: [{label, title, description, item, is_set, optional}], secrets_cleared}
+PUT    /extensions/{id}/secrets      → Geheimnis eines `x-secrets`-Labels setzen/ersetzen (nie lesen); `409`, solange keines
+                                       der Felder aus `x-secret-bound-to` einen gespeicherten Wert oder `default` hat
 DELETE /extensions/{id}/secrets?label=…  → Geheimnis entfernen (idempotent, 204)
 POST   /extensions/{id}/test         → Verbindung prüfen, Body optional {"mode": "connection"|"message"}
 
@@ -185,8 +282,13 @@ GET    /jobs/{id}/runs               GET /runs/{id}      GET /runs/{id}/output
 POST   /runs/{id}/cancel
 
 GET    /notifications?unread=        POST /notifications/read
-GET    /notifications/{id}
+GET    /notifications/{id}           POST /notifications/read-all
+GET    /notifications/unread-count   → {unread}
 ```
+
+**Meldungen** (`notifications.read` zum Lesen und Zählen): Der Lesestatus (`read_at`) gilt für alle Nutzer gemeinsam.
+Als gelesen markieren (`POST /notifications/read` mit `{ids}`, `POST /notifications/read-all`) verlangt deshalb
+zusätzlich `notifications.write` (eingebaut: Bediener, Admin, Owner), sonst `403`.
 
 **Server, Zugänge und Gruppen** (`hosts.read` zum Lesen, `hosts.write` zum Ändern; jede Änderung steht im
 Protokoll):
@@ -196,14 +298,33 @@ Protokoll):
   keine Multicast-Adresse) oder ein Rechnername nach RFC 1123 – ohne Schema, `user@`, Pfad oder Port (ein einzelner Punkt am Ende wird entfernt); `tags` folgen
   den Markierungsregeln (höchstens 20). Ungültig → `422` mit deutscher Meldung. Der Kurzname lässt sich nicht ändern.
 - `HostOut` enthält außerdem `credential` (der Standard-Zugang als `{id, kind, username, port}` oder `null`,
-  nie ein Geheimnis) und `managed_tags` (die von einer Erweiterung verwalteten Markierungen, Teilmenge von `tags`).
+  nie ein Geheimnis), `managed_tags` (die von einer Erweiterung verwalteten Markierungen, Teilmenge von `tags`) und
+  `login_ok_at`: wann sich Nodvard Deck mit dem aktuellen Standard-Zugang an dieser Adresse und diesem Port
+  nachweislich angemeldet hat. `last_seen_at` heißt dagegen nur, dass der Server geantwortet hat (dem Kern-Job
+  `host-reachability` reicht dafür, dass der SSH-Port Verbindungen annimmt). `login_ok_at` setzt eine gelungene
+  Anmeldung mit dem Standard-Zugang bei `POST /hosts/{id}/check` oder `GET /hosts/{id}/status` (jedes Mal neu) oder
+  eine SSH-Verbindung einer Erweiterung (`ctx.exec`; nur, wenn noch kein Beleg da ist), nie der Kern-Job
+  `host-reachability`. `null` heißt: nicht belegt – noch nie, oder seit der Server die Anmeldung mit dem
+  Standard-Zugang abgelehnt bzw. einen anderen Server-Schlüssel gezeigt hat oder seit einer neuen Adresse oder einem
+  neuen Standard-Zugang, jeweils bis zur nächsten gelungenen Anmeldung (Ausnahme: `make-default` nach frischer
+  Prüfung, siehe unten).
 - `DELETE /hosts/{id}` löscht auch die gespeicherten Zugangsdaten samt ihren Geheimnissen im Tresor und schließt offene
   SSH-Verbindungen. Läuft gerade eine Aktion auf dem Server (`executing`) → `409`.
+- `GET /hosts/{id}/metrics` (`hosts.read`) fragt die aktuellen Messwerte beim `MetricsProvider` des Servers ab →
+  `{values, sampled_at}` (unbekannter Server oder kein Provider: `404`). Scheitert die Abfrage an der Verbindung
+  (SSH-Fehler wie Server nicht erreichbar, Anmeldung abgelehnt oder Schlüssel nicht bestätigt, `HostUnreachable`,
+  Zeitüberschreitung oder ein anderer Netzfehler), kommt `502` mit dem Grund in `detail`. Jeder andere Fehler des
+  Providers bleibt `500`, auch ein Dateifehler oder ein eigener Fehler einer Erweiterung (so meldet die
+  Proxmox-Erweiterung einen nicht erreichbaren Proxmox).
 - `POST /hosts/{id}/credentials`: `username` `[A-Za-z0-9_][A-Za-z0-9_.@\ -]{0,63}` (auch Windows-Namen wie `Max Mustermann`, `user@domain`, `DOMAIN\user`; keine Steuerzeichen), `port` 1–65535; bei `kind = ssh_key`
   muss `secret_value` ein privater Schlüssel ohne Passphrase sein (sonst `422`: „Der Schlüssel ist mit einer Passphrase
   geschützt …“ bzw. „Das ist kein gültiger privater SSH-Schlüssel.“). Schlüssel und Passwörter kommen nie in einer
   Antwort oder im Protokoll zurück – auch `422`-Antworten enthalten die Eingabe nicht (nur `type`, `loc`, `msg`).
   Zugang oder gemerkten Schlüssel zu löschen bzw. die Adresse zu ändern schließt offene SSH-Verbindungen des Servers.
+  Eine neue Adresse löscht außerdem die gespeicherten SSH-Passwörter des Servers samt Geheimnis im Tresor (Schlüssel
+  bleiben): Ein Passwort gehört zu dem Server, bei dem es eingegeben wurde. Das gilt auch, wenn der Abgleich einer
+  Erweiterung (z. B. Proxmox) die Adresse ändert; ausgenommen sind dort VMs und LXC-Container, deren Adresse der Gast
+  selbst meldet und für die schon ein Server-Schlüssel gemerkt ist.
 - `GET /hosts/{id}/known-hosts` → `[{key_type, fingerprint, first_seen_at, accepted_by_user_id, accepted_by_label}]`,
   sortiert nach `key_type`. `accepted_by_label` ist der Benutzername (`null` bei automatischem Merken beim ersten
   Kontakt); fremde Namen sehen nur Nutzer mit `users.read` oder Freigaberecht, sonst steht `user/<id>` da.
@@ -212,7 +333,9 @@ Protokoll):
   Server melden (nach `tags` und `os_families` des Servers gefiltert, sortiert nach `order`). `unix_group` ist `null`,
   wenn der Name nicht `^[a-z_][a-z0-9_-]{0,31}$` entspricht.
 - `POST /hosts/{id}/credentials/generate-key` `{username = "lattice", port = 22}` (`hosts.write`, `201`) erzeugt einen
-  ed25519-Schlüssel nur für diesen Server (Kommentar `lattice@<Kurzname>`). Antwort: `{credential, public_key,
+  ed25519-Schlüssel nur für diesen Server (Kommentar `nodvard@<Kurzname>`). Der Standard `username = "lattice"` bleibt
+  aus Kompatibilitätsgründen (ältere Aufrufer schicken oft keinen Namen); die Oberfläche schlägt `nodvard` vor und
+  schickt den Namen immer mit. Antwort: `{credential, public_key,
   fingerprint}` – **der private Schlüssel liegt nur im Tresor** und steht nie in einer Antwort (auch keiner `422`),
   im Protokoll oder im Log. `is_default` ist nur dann `true`, wenn der Server noch keinen SSH-Zugang (Schlüssel oder
   Passwort) hat; sonst bleibt der bisherige Standard, bis `make-default` ihn umstellt. `username` und `port` werden wie
@@ -221,16 +344,21 @@ Protokoll):
 - `GET /hosts/{id}/credentials/{cid}/setup?sudo=false&groups=` (`hosts.write`) → `{username, public_key, fingerprint,
   one_liner, script, notes, groups, sudo}`: der Befehl, den man auf dem Server ausführt (als root direkt, sonst über
   `sudo`; `script` ist dasselbe lesbar). Der öffentliche Schlüssel wird serverseitig aus dem Tresor abgeleitet, mit dem
-  Kommentar `lattice@<Kurzname>` (nie dem im Schlüssel eingetragenen). Der Befehl legt den Benutzer an (falls es ihn
-  nicht gibt, ohne Passwort-Anmeldung), trägt den Schlüssel als `restrict,pty …` ein und richtet auf Wunsch `sudo` ohne Passwort (`sudo=true`, geprüft mit `visudo`) und
+  Kommentar `nodvard@<Kurzname>` (nie dem im Schlüssel eingetragenen). Der Befehl legt den Benutzer an (falls es ihn
+  nicht gibt, ohne Passwort-Anmeldung), trägt den Schlüssel als `restrict,pty …` ein (einen schon eingetragenen erkennt
+  er an Art und Schlüsseltext, auch mit älterem Kommentar `lattice@…`) und richtet auf Wunsch `sudo` ohne Passwort
+  (`sudo=true`, Datei `/etc/sudoers.d/nodvard-<benutzer>`, geprüft mit `visudo`) und
   Gruppen (`groups=docker` oder `groups=a,b`) ein. Gruppen werden nur eingetragen, wenn Erweiterungen sie für diesen
   Server verlangen (`unix_group`; privilegierte Gruppen – `root`, `sudo`, `wheel`, `admin`, `shadow`, `disk`, `adm`,
   `staff`, `lxd`, `libvirt`, `kvm` – ignoriert der Kern und protokolliert das im Log; `docker` ist bewusst erlaubt und
   bedeutet praktisch root); für `root` gibt es weder Gruppen noch `sudo`. Bei einem Benutzer außer `root` läuft alles,
   was `~/.ssh` und `authorized_keys` anfasst, **als dieser Benutzer** (`runuser`, sonst `su`), nie als root mit `chown`;
   ist `~/.ssh` oder `authorized_keys` ein Link, bricht der Befehl mit `FEHLER` ab, statt ihm zu folgen. Bei `root`
-  (z. B. Proxmox, wo `authorized_keys` ein Link ins Cluster-Dateisystem ist) bleibt der Link unangetastet. Lehnt
-  `visudo` die sudo-Regel ab oder wird sie zurückgenommen, endet der Befehl mit Fehler statt „Fertig“. Jeder Wert im Befehl wird streng
+  (z. B. Proxmox, wo `authorized_keys` ein Link ins Cluster-Dateisystem ist) bleibt der Link unangetastet. Eine ältere
+  Regel `/etc/sudoers.d/lattice-<benutzer>` entfernt der Befehl erst, wenn die neue eingetragen und die ganze
+  Konfiguration geprüft ist, und nur, wenn sie Byte für Byte der Regel entspricht, die er früher selbst angelegt hat;
+  sonst (auch als Link) bleibt sie mit Hinweis stehen. Lehnt `visudo` die sudo-Regel ab oder wird sie zurückgenommen,
+  endet der Befehl mit Fehler statt „Fertig“, ebenso, wenn er die alte Regel wiederherstellen muss. Jeder Wert im Befehl wird streng
   geprüft bzw. mit `shlex.quote` gequotet. `422` für Passwort-Zugänge, nicht-Linux-Server, einen Benutzernamen, der kein
   üblicher Linux-Name ist (`^[a-z_][a-z0-9_-]{0,31}$`), und einen nicht lesbaren Schlüssel. Ändert nichts (kein
   Protokolleintrag).
@@ -242,8 +370,11 @@ Protokoll):
   `credential_id` muss in den letzten 10 Minuten bei „Anmeldung“ `ok` ergeben haben (und Adresse und Port sind
   seitdem gleich), sonst `409` („Bitte zuerst „Verbindung prüfen“ …“), und es wird nichts gelöscht oder umgestellt.
   Gilt nur, wenn wirklich ein alter Zugang gelöscht würde. Der Zustand liegt im Speicher (nach einem Neustart einfach
-  neu prüfen). Der alte öffentliche Schlüssel bleibt in `authorized_keys` auf dem Server
-  stehen – Nodvard Deck entfernt ihn dort nicht (Antwortfeld `notice`, sonst `null`). Ist der Zugang schon Standard,
+  neu prüfen). Wird ein alter Zugang gelöscht, steht in `notice` ein Hinweis, sonst
+  `null`: bei einem Schlüssel, dass er in `authorized_keys` auf dem Server stehen bleibt (Nodvard Deck entfernt ihn dort
+  nicht), bei einem Passwort, dass sich auf dem Server nichts ändert. Hat `POST /hosts/{id}/check` mit dem neuen Zugang
+  in den letzten 10 Minuten die Anmeldung geschafft (Adresse und Port seitdem gleich), übernimmt `login_ok_at` den
+  Zeitpunkt dieser Prüfung; sonst ist es `null` bis zur nächsten gelungenen Anmeldung. Ist der Zugang schon Standard,
   passiert nichts. Protokoll `host.credential_made_default` (`credential_id`, `previous_credential_id`, `deleted_previous`) und
   bei `delete_previous` zusätzlich `host.credential_deleted`.
 - `POST /hosts/{id}/check` `{credential_id?}` (`hosts.write`, Body darf fehlen) prüft Schritt für Schritt, ob sich
@@ -260,10 +391,13 @@ Protokoll):
   Benutzername, Passwort oder Schlüssel gesendet werden, und es wird nichts gemerkt. Ohne Zugang wird der Schlüssel nur
   gelesen (Port 22). Ein **geänderter** Schlüssel ist immer `fail` (auch wenn der Server nur einen anderen Schlüsseltyp zeigt als den
   gemerkten; bei einem Server mit mehreren Schlüsseln wird der gemerkte Typ bevorzugt) und wird nie zum Bestätigen angeboten (erst
-  `DELETE .../known-hosts/{key_type}`, dann neu prüfen). Geprüft wird nur die gespeicherte Adresse und der Port des
+  `DELETE .../known-hosts/{key_type}`, dann neu prüfen und bestätigen). Geprüft wird nur die gespeicherte Adresse und der Port des
   Zugangs. Die Prüfung nutzt eine eigene Verbindung (nicht aus dem Pool); nach gelungener Anmeldung werden die gepoolten
   Verbindungen des Servers ausgemustert (neue Gruppenrechte gelten, laufende Terminals nicht abgeschnitten) und
-  `status`/`last_seen_at` des Servers aktualisiert (`down`: nicht erreichbar, `unknown`: Schlüsselproblem). Texte sind
+  `status`/`last_seen_at` des Servers aktualisiert (`down`: nicht erreichbar, `unknown`: Schlüsselproblem). Mit dem
+  Standard-Zugang setzt eine gelungene Anmeldung `login_ok_at`, eine abgelehnte löscht es; ein geänderter
+  Server-Schlüssel löscht es immer, ein nicht erreichbarer Server nie. Die Prüfung eines anderen Zugangs ändert daran
+  sonst nichts. Texte sind
   feste deutsche Sätze – nie Passwort, Schlüssel, Fehlerausgaben des Servers oder Ausnahme-Texte. Zeitgrenzen: 35 s
   insgesamt, 8 s je Befehl; höchstens zwei Prüfungen gleichzeitig. `429` (mit `Retry-After`, wo es eine Wartezeit gibt)
   bei mehr als 12 Prüfungen je 5 Minuten und Nutzer, bei einer schon laufenden Prüfung desselben Servers und bei
@@ -277,12 +411,19 @@ Protokoll):
   anderen Typs) → `409` („… Erst den alten vergessen.“): ein weiterer Schlüsseltyp wird nie per Bestätigen
   hinzugefügt. Protokoll `host.known_key_pinned`
   (`key_type`, `fingerprint`).
+- `DELETE /hosts/{id}/known-hosts/{key_type}` (`hosts.write`, `204`; kein gemerkter Schlüssel dieses Typs → `404`)
+  vergisst einen gemerkten Server-Schlüssel und schließt offene SSH-Verbindungen des Servers. Danach merkt Nodvard Deck
+  für diesen Server keinen Schlüssel mehr von allein (Terminal, Jobs, Status), egal wie `ssh.confirm_new_host_keys`
+  oder `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` steht: Erst `POST /hosts/{id}/known-hosts` nach einer neuen Prüfung
+  hebt das auf (oder `DELETE /hosts/{id}`). Protokoll `host.known_key_forgotten` (`key_type`, `fingerprint`).
 - `PATCH /host-groups/{id}` (`name`, `description`; Name vergeben → `409`, unbekannt → `404`) und
   `DELETE /host-groups/{id}` (löscht nur die Gruppe und ihre Zuordnungen, nie Server). `POST
   /host-groups/{id}/members/{host_id}` ist idempotent und liefert `404` für eine unbekannte Gruppe oder einen
   unbekannten Server.
 - Protokoll-Einträge (`target_type` `host`, bei Gruppen `host_group`): `host.created`, `host.updated` (`changed` mit
-  `from`/`to` je Feld), `host.deleted`, `host.credential_added`, `host.credential_deleted`, `host.key_generated`,
+  `from`/`to` je Feld; hat eine neue Adresse SSH-Passwörter gelöscht, zusätzlich `password_credentials_removed` mit
+  deren Anzahl, auch beim Abgleich einer Erweiterung, dann als Eintrag der Erweiterung), `host.deleted`,
+  `host.credential_added`, `host.credential_deleted`, `host.key_generated`,
   `host.credential_made_default`, `host.known_key_pinned`, `host.known_key_forgotten`, `host.connection_checked`,
   `host.group_changed` (`change`: `created`, `renamed`, `description_changed`, `member_added`, `member_removed`,
   `deleted`).
@@ -303,6 +444,7 @@ Schlüssel, Wert ungültig → `422`:
 | `hosts.reachability.interval_minutes` | ganze Zahl 1 bis 60 | `2` |
 | `system.update_check.enabled` | `true` oder `false` | `true` |
 | `system.update_check.channel` | `stable` (nur fertige Versionen) oder `beta` (auch Vorabversionen) | `stable` |
+| `ssh.confirm_new_host_keys` | `true` oder `false` | `false`; neue Installationen `true` (gesetzt beim ersten Konto) |
 
 - `system.timezone` ist die Zeitzone aller Zeitpläne (`Job.timezone`, auch die der Erweiterungen) und der
   Wartungsfenster. Beim Setzen bekommen alle Jobs mit der bisherigen Standardzone die neue (eine ausdrücklich andere
@@ -336,6 +478,13 @@ Schlüssel, Wert ungültig → `422`:
   über die Jobs würde sie umgehen). Datenschutz: ghcr.io gehört zu GitHub, das bei jeder Prüfung die IP-Adresse und den Zeitpunkt
   sieht, sonst nichts (der User-Agent `nodvard-deck` nennt keine Version); die tägliche Prüfung lässt sich abschalten. Siehe
   „System und Sicherungen“.
+- `ssh.confirm_new_host_keys`: `true` = Terminal, Jobs und Status merken den Schlüssel eines Servers, für den noch
+  keiner gemerkt ist, nicht still; die Verbindung scheitert, bevor Anmeldedaten gesendet werden, bis der Fingerabdruck
+  über `POST /hosts/{id}/check` und `POST /hosts/{id}/known-hosts` bestätigt ist. `false` = der Schlüssel wird beim
+  ersten Verbinden gemerkt. `POST /auth/bootstrap` (erstes Konto) speichert `true`; Installationen von davor haben
+  keinen Wert, es gilt `false`. Gemerkte Schlüssel betrifft das nie; nach `DELETE /hosts/{id}/known-hosts/{key_type}`
+  ist die Bestätigung für diesen Server immer nötig. Ist `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` gesetzt
+  (`true`/`false`, leer zählt als nicht gesetzt), meldet `GET /settings` deren Wert, und `PUT` antwortet mit `409`.
 - Alle Änderungen dieser Tabelle ab `system.timezone` stehen mit altem und neuem Wert im Protokoll
   (`system.settings.changed`, `target_id` = Schlüssel).
 
@@ -372,7 +521,11 @@ in der Adresse und nie im Protokoll.
   `files/jwt_secret.key` (nur ohne `NODVARD_DECK_JWT_SECRET`), `files/ext/**`, `files/branding/**`, optional
   `files/runs/**`, zuletzt `manifest.json` (Kopie des Kopfes, Alembic-Köpfe, Erweiterungen, sha256 jeder Datei).
   Nicht enthalten: `*-wal`/`-shm`/`-journal`, `setup_code.txt`, `backups/`, `restore/`, `.boot/`, Temp-Dateien,
-  Symlinks und der Verlauf `metrics.db`. Übersprungene Symlinks werden nicht verschwiegen: `last_run.warnings`
+  Symlinks, der Verlauf `metrics.db` und Git-Einstellungen in `ext/`, `branding/`, `runs/` (`core/backup/format.py`):
+  `.gitattributes`, `.gitmodules`, `.gitconfig`, eine Datei `.git` und unter `.git/` alles außer Objekten und Packs
+  (`objects/`), `refs/`, `HEAD`, `index` und `packed-refs` – also weder `config` noch `hooks/`, `info/`, `logs/`. Das
+  gilt unabhängig von Groß- und Kleinschreibung, auch für Windows-Formen wie `.git.` oder den Kurznamen `GIT~1`;
+  `.gitignore` bleibt, der Git-Verlauf selbst ist weiter in der Sicherung. Übersprungene Symlinks werden nicht verschwiegen: `last_run.warnings`
   (Liste deutscher Sätze, älteren Einträgen fehlt das Feld) nennt Anzahl und höchstens fünf Pfade
   („2 Verknüpfungen in Erweiterungsdaten nicht gesichert: ext/a/link, …“); die Sicherung gilt trotzdem als gelungen.
 - Eine neuere Formatversion wird mit Hinweis abgelehnt. Beim Lesen gelten Deckel: scrypt log2 N ≤ 18 (geschrieben
@@ -411,7 +564,7 @@ wird beim Start, **vor** der Migration. Der Zwischenstand liegt unter `<Datenord
 |---|---|---|
 | `GET /system/restore/status` | `system.read` | `{pending, staged, result, replaced, limits, busy}`: Vormerkung, Zwischenstand (**nur der Owner**), Ergebnis des letzten Einspielens (ohne IP-Adressen), alter Stand (`replaced`: Name, Größe, `expires_at` = wann er von selbst gelöscht wird), Grenzen |
 | `PUT /system/restore/upload` | Owner [PW im Kopf] | Roher Strom (`Content-Type: application/octet-stream`, **kein** multipart; sonst `415`). Kopf `X-Confirm-Password`: Anmeldepasswort **prozentkodiert** (UTF-8, `encodeURIComponent`; Kopfzeilen kennen kein Unicode). Owner und Passwort werden geprüft, **bevor** der Body gelesen wird (`403` fehlt, `400` falsch, `429` zu oft). `Content-Length` über `restore_max_upload_bytes` (4 GiB, `NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES`) → `413` ohne Lesen, ebenso bei Überschreitung mitten im Strom; zu wenig Platz → `507` vor dem Lesen; läuft schon ein Upload/eine Prüfung → `409`; ist etwas vorgemerkt → `409`; keine Sicherung (Kopf) → `422`. `201` `{id, state: "uploaded", size, header: {mode, created_at, app_version}, expires_in}` |
-| `POST /system/restore/{id}/inspect` | Owner | `{password}` **oder** `{recovery_key}` (genau eines, sonst `422`). Entschlüsselt in den Staging-Ordner und prüft alles. `200` `{id, state: "ready", summary}`; `summary`: `created_at`, `app_version`, `instance_id`, `mode`, `owner_name`, `users`, `hosts`, `extensions[]`, `includes`, `warnings[]` (u. a. andere Installation, ältere/neuere Version, fehlende Erweiterungen, kein Konto in der Sicherung). Falsches Geheimnis `400` (Upload bleibt, noch ein Versuch), zu wenig Platz `507` (bleibt), `409` bei laufender Arbeit; jeder andere Fehler (beschädigt, zu neu, Erweiterung fehlt, zu groß `413`, nicht einspielbar) `422` und der Zwischenstand ist gelöscht; unbekannte oder fremde `id` `404`. Entschlüsselt wird immer nur **eine** Sicherung zugleich (teilt die Sperre mit den Sicherungen) |
+| `POST /system/restore/{id}/inspect` | Owner | `{password}` **oder** `{recovery_key}` (genau eines, sonst `422`). Entschlüsselt in den Staging-Ordner und prüft alles. `200` `{id, state: "ready", summary}`; `summary`: `created_at`, `app_version`, `instance_id`, `mode`, `owner_name`, `users`, `hosts`, `extensions[]`, `includes`, `warnings[]` (u. a. andere Installation, ältere/neuere Version, fehlende Erweiterungen, kein Konto in der Sicherung, übersprungene Git-Einstellungen). Falsches Geheimnis `400` (Upload bleibt, noch ein Versuch), zu wenig Platz `507` (bleibt), `409` bei laufender Arbeit; jeder andere Fehler (beschädigt, zu neu, Erweiterung fehlt, zu groß `413`, nicht einspielbar) `422` und der Zwischenstand ist gelöscht; unbekannte oder fremde `id` `404`. Entschlüsselt wird immer nur **eine** Sicherung zugleich (teilt die Sperre mit den Sicherungen) |
 | `POST /system/restore/{id}/schedule` | Owner [PW] | `{current_password, sign_out_all: true}` → `200` Vormerkung `{id, source, scheduled_at, expires_in, sign_out_all, backup}`; `restore/pending.json`. Vorher nicht geprüft oder schon etwas vorgemerkt → `409`. Gilt eine Stunde |
 | `DELETE /system/restore/pending` | Owner | Verwirft Vormerkung **und** jeden Zwischenstand → `204` |
 | `DELETE /system/restore/replaced` | Owner [PW] | Body `{current_password}`; löscht den alten Stand (`restore/replaced-…`, enthält alte Konten und Schlüssel) → `204` |
@@ -423,6 +576,10 @@ wird beim Start, **vor** der Migration. Der Zwischenstand liegt unter `<Datenord
   `O_EXCL|O_NOFOLLOW`), Namen nur aus einer Erlaubnisliste (`manifest.json`, `db/lattice.db`,
   `files/{master.key,vault_keyring.json,jwt_secret.key}`, `files/ext/**`, `files/branding/**`, `files/runs/**`),
   nur normale Dateien und Ordner (keine Links, Hardlinks, Geräte, FIFOs), jede Datei einmal, das Manifest zuletzt.
+  Git-Einstellungen darin (dieselbe Regel wie unter „Nicht enthalten“ oben, etwa aus älteren Sicherungen) werden nicht
+  abgelehnt, sondern **übersprungen**: gelesen und per sha256 gegen das Manifest geprüft, aber nicht geschrieben. Ihre Zahl
+  steht in `summary.warnings` („3 Git-Einstellungen aus der Sicherung wurden nicht übernommen, der Verlauf bleibt.“), bis zu
+  fünf Namen im Log (`restore_skipped_vcs_entries`).
   Grenzen am **entpackten** Strom: Einträge (`…_MAX_ENTRIES`, 200 000), Einzeldatei und Gesamtmenge
   (`…_MAX_UNPACKED_BYTES`, 16 GiB, nie mehr als der freie Platz abzüglich 128 MiB) – gegen gzip-Bomben.
   Bei **jedem** Fehler wird der Staging-Ordner gelöscht. Kopf und Manifest müssen zusammenpassen, sha256 jeder Datei.
@@ -478,7 +635,7 @@ auf dem Port der Anwendung:
 |---|---|
 | `GET /api/v1/health` | **`503`** `{"status":"rescue"}` (nie `ok`: Healthcheck, `scripts/deploy_pi.sh` und ein Helfer erkennen so, dass etwas nicht stimmt). Jeder andere Pfad unter `/api/` ebenso `503` mit `{"status":"rescue","detail":…}` |
 | `GET <alles andere>` | Die Seite (`503`, Deutsch, ohne fremde Dateien). **Ohne Code** nur Allgemeines |
-| `POST /rescue/unlock` | Notfallcode (`.boot/rescue_code.txt`, wie der Einrichtungscode; steht als Banner im Protokoll) → `303` + Cookie `rescue_session` (HttpOnly, SameSite=Strict, 15 Minuten). Je Absender 5 Fehlversuche, insgesamt 25 in 10 Minuten, dann `429` |
+| `POST /rescue/unlock` | Notfallcode (`.boot/rescue_code.txt`, wie der Einrichtungscode; steht als Banner im Protokoll) → `303` + Cookie `rescue_session` (HttpOnly, SameSite=Strict, 15 Minuten). Je Adresse 5 Fehlversuche, insgesamt 25 in 10 Minuten, dann `429` (mit `Retry-After`, Antwort erst nach 0,5 s) für jeden weiteren **falschen** Code. Der richtige Code geht immer durch, auch während einer Sperre; Versuche während einer Sperre verlängern sie nicht |
 | `GET /rescue/status`, `GET /rescue/log` | mit Cookie: Grund und bereinigtes Protokoll; ohne: nur `{"status":"rescue","unlocked":false}` bzw. `401` |
 | `POST /rescue/retry` | mit Cookie: Prozessende mit 75, der Container startet neu (Restart-Regel) und `boot` läuft noch einmal |
 | `POST /rescue/rollback` | mit Cookie, nur wenn `boot` eine brauchbare Kopie gefunden hat (sonst `409`): „Stand vor dem Update wiederherstellen“ vormerken, dann wie `retry`. Die Kopie kommt aus dem Zustand, nie aus der Anfrage |
@@ -487,9 +644,14 @@ auf dem Port der Anwendung:
 POST-Anfragen prüfen `Origin` gegen `Host`. Eine Aktion „Kopie herunterladen“ gibt es **bewusst nicht**: Eine unverschlüsselte Datenbank über HTTP herauszugeben ist
 unverantwortlich, und die Verschlüsselung (age/`pyrage`) gehört nicht zur Standardbibliothek. Die Kopie liegt im Datenordner.
 
+Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusammen höchstens 32 KiB, dabei unter 100 Kopfzeilen (sonst `431`); 3 s für die Kopfzeilen,
+10 s für die ganze Verbindung, danach wird sie geschlossen. Höchstens 64 Verbindungen gleichzeitig, davon 8 je Absender (bei IPv6 je /64-Netz); `127.0.0.1` und `::1`
+(Healthcheck im Container) haben 8 eigene Plätze, die andere nicht belegen können.
+
 ### Erweiterungen einrichten und testen
 
-Alle drei Endpunkte brauchen `extensions.manage`, wie das Bearbeiten der Einstellungen.
+`GET`/`PUT /extensions/{id}/settings`, `PUT`/`DELETE /extensions/{id}/secrets` und `POST /extensions/{id}/test` brauchen
+`extensions.manage`.
 
 - `GET /extensions` und `GET /extensions/{id}` liefern zusätzlich (nur additiv, alte Felder
   unverändert): `needs_setup` (bool, nur bei eingeschalteten Erweiterungen: Pflichtfelder
@@ -498,6 +660,9 @@ Alle drei Endpunkte brauchen `extensions.manage`, wie das Bearbeiten der Einstel
   (`{ok, message, at}` oder `null`; wird nach jeder Änderung der Einstellungen oder
   Zugangsdaten gelöscht). Ohne `extensions.manage` fehlt der Text: `last_test` enthält dann nur
   `ok` und `at`, und `setup_reasons` nennt den Fehlschlag ohne Fehlergrund.
+- Jeder Eintrag von `GET /extensions` enthält zusätzlich `bundled` (`true` bei Erweiterungen, die mit Nodvard Deck
+  ausgeliefert werden, also `source == "bundled"`) und `display_version` (bei mitgelieferten die Programmversion,
+  sonst die eigene `version`). `version` bleibt die Version aus `extension.toml`. `/capabilities` ist unverändert.
 - `POST /extensions/{id}/test` ruft `health()` der Erweiterung auf (bei
   Benachrichtigungskanälen zusätzlich `test()`); mit `{"mode": "message"}` sendet es stattdessen
   eine Testnachricht über den Kanal (`422`, wenn die Erweiterung keinen hat). Antwort
@@ -510,10 +675,27 @@ Alle drei Endpunkte brauchen `extensions.manage`, wie das Bearbeiten der Einstel
   (`extension.test`, ohne Text).
 - `DELETE /extensions/{id}/secrets?label=…` entfernt ein Geheimnis aus `x-secrets` (`422` für
   fremde Labels); Protokoll `extension.secret_removed`.
+- `PUT /extensions/{id}/settings` `{values}` übernimmt nur Felder, die das Schema kennt und die
+  nicht `x-hidden` sind (die pflegt die Erweiterung selbst). Nicht mitgeschickte Felder bleiben
+  wie gespeichert, `null` entfernt einen Wert (dann gilt wieder der `default`); Pflichtfelder
+  prüft der Kern am Stand danach (ein `default` zählt als gesetzt). Ändert sich ein Feld, an das
+  ein Geheimnis gebunden ist (`x-secret-bound-to`, siehe [02 §1](02-EXTENSION-API.md#1-anatomie-einer-extension)),
+  löscht der Kern dieses Geheimnis, auch bei der ersten Adresse (leer → Wert); eine andere
+  Schreibweise derselben Adresse zählt nicht als Änderung. Die Antwort nennt die gelöschten
+  Labels in `secrets_cleared` (sonst `[]`, bei `GET` immer `[]`), das Protokoll
+  `extension.settings` zusätzlich zu `changed` in `detail.secrets_cleared` (nur wenn etwas
+  gelöscht wurde).
+- `PUT /extensions/{id}/secrets` antwortet für ein gebundenes Geheimnis mit `409` („Erst die
+  Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“),
+  solange keines der Felder gespeichert einen Wert oder `default` hat.
 - Das alte `POST /ext/proxmox|backups/connections/{name}/token` legt ein Token nur an
   (`409`, wenn schon eines existiert). Zum Setzen **und Ersetzen** dient
   `PUT /extensions/{id}/secrets` mit `{label: "proxmox-token:<name>", value}`; die Oberfläche
-  nutzt nur noch diesen Weg.
+  nutzt nur noch diesen Weg. Das Token der Verbindung löschen die Routen der beiden Erweiterungen selbst:
+  `POST /ext/proxmox|backups/connections` ein altes unter demselben Namen, `PUT …/connections/{name}` eines, wenn
+  `base_url` auf ein anderes Ziel zeigt (Vergleich mit `nodvard_sdk.same_target`, eine andere Schreibweise derselben
+  Adresse zählt nicht), und `DELETE …/connections/{name}` das der entfernten Verbindung. Gab es eines, steht
+  `extension.secret_removed` im Protokoll.
 
 ### Aktionen — der Bestätigungs-Workflow
 
@@ -546,10 +728,43 @@ höchstens `wait` Sekunden (Standard 20) auf das Ergebnis:
   /api/v1/actions/{id}` und `Retry-After: 3`; der Client fragt `GET /actions/{id}` ab,
   bis ein Endstatus da ist. `wait=0` antwortet sofort (für Sammel-Freigaben).
 
-Ein Fehler im Hintergrund endet immer in `failed` mit `result.error`; wird das Dashboard
+Ein Fehler im Hintergrund endet immer in `failed` mit `result.error` (den Text sieht nur, wer
+`hosts.execute` hat, siehe unten); wird das Dashboard
 währenddessen beendet, vermerkt der Kern die Aktion als abgebrochen, und beim nächsten
 Start setzt er übrig gebliebene `executing`-Zeilen auf `failed`. Das Ereignis
 `action.executed` kommt erst, nachdem Ergebnis und Audit-Zeile gespeichert sind.
+
+**Ausgabe nur mit `hosts.execute`.** Ausgabe und Fehlertext einer Ausführung können beliebigen
+Text vom Server enthalten (z. B. das Ergebnis eines Shell-Befehls). Die `action`-Ressource
+liefert sie deshalb nur an Nutzer mit `hosts.execute` (eingebaut: Bediener, Admin, Owner) – in
+`GET /actions`, `GET /actions/{id}`, den Antworten von `approve`, `reject` und `dismiss` und
+von `POST /hosts/{id}/actions/{action}`. Alle anderen, z. B. der Betrachter (viewer), sehen
+Status, Zeiten und Beteiligte; von `result` bleiben nur `success`, `exit_code` und
+`duration_ms`, die übrigen Felder, die das Ergebnis hat, bleiben stehen, aber leer (`output`
+und `error` als `null`, `detail` als `{}`). Das Feld `output_hidden` ist dann `true`, wenn
+tatsächlich etwas weggelassen wurde; mit `hosts.execute` ist es immer `false`.
+
+**Befehl nur mit `hosts.execute` oder Freigaberecht.** Der `payload` einer Aktion (Shell-Befehl, Skript-Inhalt,
+Parameter) kann Zugangsdaten enthalten. Vollständig liefert ihn die `action`-Ressource (in denselben Antworten wie
+oben) nur an Nutzer mit `hosts.execute` oder mit `actions.approve:<risiko>` für das Risiko dieser Aktion: Wer eine
+Aktion freigibt, muss ihren Befehl sehen. Alle anderen bekommen aus dem `payload` nur Kennungen einer festen Liste
+(`host_id`, `vmid`, `node`, `connection`, `job_id`, `script_id`, `unit`, `container`, `project`, `service`, `image`,
+`snapname`, `storage`, `minutes`), und auch die nur als Text bis 200 Zeichen, Zahl oder `true`/`false`; Befehl,
+Skript-Inhalt und Parameter fehlen. Das Feld `payload_hidden` ist dann `true`, wenn tatsächlich etwas weggelassen
+wurde, sonst `false`. Für den Kanal `events` gilt eine strengere Regel (§4).
+
+Ins Protokoll (`action.executed`) schreibt der Kern vom Ergebnis unter `detail.result` nur
+`success`, `exit_code`, `duration_ms` und die Länge von Ausgabe und Fehlertext
+(`output_length`, `error_length`), nie den Text. Legt das Gate den Grund selbst fest (kein
+Executor, Zeitüberschreitung, abgebrochen, beim Start unterbrochen oder eine Ausnahme), steht
+dazu ein fester Satz in `gate_error`; bei einer Ausnahme nennt er nur deren Art, den vollen Text
+hat die Aktion. `GET /audit` und `GET /audit/export` bereinigen für Nutzer ohne `hosts.execute`
+auch ältere Einträge, die noch Ausgabe enthalten: Bei `action.executed` behält `detail.result`
+nur die genannten Werte, alle anderen Felder sind leer (`output` und `error` stehen immer als
+`null` darin, `detail` als `{}`); in allen Einträgen werden Felder `output`, `stdout`, `stderr`
+und `command` (auch verschachtelt) zu `null`, denn ein Befehl kann wie der `payload` einer Aktion Zugangsdaten
+enthalten. Wurde dabei etwas entfernt, setzt `GET /audit`
+`output_hidden: true`; der Export hat dieses Feld nicht.
 
 **Namen statt Kennungen.** Die `action`-Ressource trägt neben den rohen
 Feldern (`proposed_by_type`/`proposed_by_id`, `approved_by_user_id`) zwei lesbare:
@@ -568,6 +783,36 @@ keine Nutzerdaten und stehen jedem offen.
 Extensions bekommen dasselbe für ihre eigenen Zeilen über `ctx.actions.proposer_labels(rows)`
 (nachgeschlagen wird nach der `id`, nicht nach den übergebenen Zeilen). Dort prüft der Kern
 nicht, wer die Seite aufruft -- die Route der Extension muss selbst abgesichert sein.
+
+**Ohne Klick über eine Dauerfreigabe.** Ist eine Aktion über eine Dauerfreigabe angelaufen
+([01 §4](01-ARCHITECTURE.md#4-das-aktions-gate)), ist `gate_decision.rule` `standing_approval`, `approved_by_user_id`
+bzw. `approved_by_label` nennen die Person, die sie erteilt hat, und `reason` endet mit „– ohne Klick, lief mit
+Dauerfreigabe vom <Datum> durch <Benutzername>“. Hat das Gate sie nicht anerkannt, ist es ein normaler Vorschlag mit
+dem Grund in `reason` und in `gate_decision.standing_approval_rejected` (Felder:
+[03 §5](03-DATA-MODEL.md#5-aktionen--das-gate-journal)).
+
+### Dauerfreigabe für geplante Skripte (Erweiterung `scripts`)
+
+```
+POST   /ext/scripts/scripts/{id}/standing-approval   → 200 Skript (wie GET)   {fingerprint, targets_fingerprint}
+DELETE /ext/scripts/scripts/{id}/standing-approval   → 204, Freigabe zurückziehen (wirkt sofort)
+```
+
+Beide brauchen `actions.standing_approval` (eingebaut: Admin und Owner; Bediener und Betrachter bekommen `403`).
+Erteilen geht nur für aktive Skripte mit Zeitplan. Beide Felder im Body sind Pflicht und kommen aus der letzten Antwort
+von `GET /ext/scripts/scripts` bzw. `GET /ext/scripts/scripts/{id}`: `fingerprint` (Inhalt, Parameter, Ziel,
+Zeitplan) und `targets_fingerprint` (die Zielserver mit Konto, Adresse und SSH-Port). Hat sich seitdem etwas davon
+geändert, antwortet `POST` mit `409` und gibt nichts frei; ebenso ohne Zeitplan, bei ausgeschaltetem Skript oder ohne
+Server, auf dem es laufen kann. `DELETE` ohne Freigabe: `404`. Erteilen, Zurückziehen und Erlöschen stehen im
+Protokoll (`scripts.standing_approval.granted`, `scripts.standing_approval.revoked`,
+`scripts.standing_approval.expired`).
+
+`GET /ext/scripts/scripts` und `GET`/`PUT /ext/scripts/scripts/{id}` liefern zusätzlich `fingerprint`, bei aktiven
+Skripten mit Zeitplan `standing_preview` (die Server, die eine Freigabe jetzt decken würde, je `id`, `name`, `account`,
+`address`, `port`) und `targets_fingerprint`, dazu `standing_approval`: `null` ohne Freigabe, sonst `active`, `problem`
+(warum sie nicht mehr gilt), `granted_by_label`, `granted_at`, `hosts` (wie bei `standing_preview`) und `new_hosts`
+(Namen neuer Zielserver, für die sie nicht gilt). Einträge von `GET /ext/scripts/scripts/{id}/runs` tragen
+zusätzlich `standing_approval` (lief ohne Klick) und `reason`.
 
 ### Dashboard und Widgets
 
@@ -596,7 +841,7 @@ PUT    /apps/order                   → [App]     {ids: [...]}: diese zuerst, i
 
 App = `{id, name, url, icon, color, group, sort_order, open_in_new_tab, host_id, host, created_at, updated_at}`
 (`host` = Anzeigename des Servers). Rechte: Lesen `hosts.read` (wie die erkannten Apps im Cockpit); Schreiben
-**`apps.write`** – neu und additiv: nur Administrator und Inhaber haben es von selbst. Die Kacheln stehen auf der
+**`apps.write`** – neu und additiv: nur Administrator und Owner haben es von selbst. Die Kacheln stehen auf der
 Startseite aller Nutzer, ein Link dort ist für jeden ein Klick-Ziel; `hosts.write` (Server und SSH-Zugänge) und
 `settings.write` (ganze Installation) wären dafür deutlich zu viel. Jede Änderung steht im Protokoll
 (`app.created`, `app.updated`, `app.deleted`, `app.reordered`; mit Name und `https://host:port`, nie mit Pfad oder
@@ -619,6 +864,9 @@ Dienste, die Kennzahl „Dienste“ zählt keine Links); neu ist `apps` – eige
 immer frisch aus der Datenbank) vor den erkannten Diensten (`source: "detected"`, aus dem 30-s-Zwischenspeicher).
 Felder: `id, source, name, url, host, host_id, state, tone, image, icon, color, group, open_in_new_tab, sort_order`
 (`null`, wo es für die Art nichts gibt). Wird ein Server gelöscht, bleibt seine App stehen, nur ohne `host_id`.
+Ebenfalls neu: `services[].unreachable` (`true` bei der Platzhalterkachel eines Servers, dessen Container nicht gelesen werden
+konnten – sie ist kein Dienst und zählt nicht als „läuft nicht“) und `services_unreachable_hosts` (Namen dieser Server, sonst leer).
+Der Platzhalter kommt auch, wenn der Server antwortet, Docker aber nicht (Dienst aus, keine Rechte).
 
 ### Beispieldaten
 
@@ -650,9 +898,10 @@ dieselbe Funktion auf (Akteur `system`).
 ### Dateien
 
 ```
-GET    /files/sources                            → alle FileSources aller Extensions
+GET    /files/sources                            → alle FileSources aller Extensions (ohne gesperrte, s. u.)
 GET    /files/{source}/list?path=&cursor=
 GET    /files/{source}/stat?path=
+GET    /files/{source}/info                       → SourceInfo (Quota, Health, Deep-Link)
 GET    /files/{source}/download?path=             → Streaming, Range-fähig
 POST   /files/{source}/upload?path=               → Streaming
 POST   /files/{source}/mkdir | /rename | /remove
@@ -664,9 +913,72 @@ GET    /files/search?q=&sources=                  → Fan-out, Ergebnisse gemisc
 `/files/transfer` ist das Drag-&-Drop zwischen Quellen im Dateimanager: der Server streamt
 `open_read(A) → open_write(B)`, ohne dass die Datei über den Client läuft.
 
+Meinen Quelle und Ziel dieselbe Datei, antwortet `/files/transfer` mit `409` („Quelle und Ziel sind dieselbe
+Datei.“) und startet keinen Lauf. In derselben Quelle zählt der gleiche Pfad, bei einer Quelle mit
+`file_identity()` ([02 §3](02-EXTENSION-API.md#3-capabilities--der-kern-der-entkopplung), bisher die
+SFTP-Quellen der Server) auch der gleiche aufgelöste Pfad (Link, `..`-Umweg). Über zwei Quellen hinweg (etwa
+zwei Einträge für denselben Server) nur, wenn beide `file_identity()` liefern, der aufgelöste Pfad gleich ist
+und dazu Größe, Änderungszeit, Besitzer, Gruppe und Rechte übereinstimmen; zwei verschiedene Rechner-Kennungen
+sind immer zwei Dateien. Im Zweifel gilt die Datei als eine andere. Nicht erkannt wird ein Ordner, der unter
+zwei Pfaden eingehängt ist: eine Datei dort auf ihren eigenen zweiten Pfad zu verschieben, löscht sie.
+Verschieben ist im Dateimanager ein Transfer mit anschließendem `remove` der Quelle; das Original wird nur
+gelöscht, wenn genau so viele Bytes angekommen sind, wie die Quelle beim Anzeigen hatte, sonst bleibt es und
+der Dateimanager sagt das.
+
+Die SFTP-Quellen der Server (terminal-Extension) schreiben bei `upload` und `/files/transfer` erst in eine
+Temp-Datei im Zielordner (`.<name>.nodvard-tmp-…`) und ersetzen das Ziel erst, wenn alles angekommen ist. Ein
+abgebrochener Upload oder Transfer lässt die vorhandene Datei dann unberührt. Ersetzt die Temp-Datei eine
+bestehende Datei, ist sie bis zum Ende nur für ihren Besitzer lesbar (`0600`); die neue Datei behält Besitzer,
+Gruppe und Rechte der alten. Ein Link wird bis zur echten Datei verfolgt und bleibt ein Link. Direkt ins Ziel
+geschrieben wird, wenn der Zugang im Zielordner nichts anlegen darf oder den Besitzer der alten Datei nicht
+übernehmen kann (etwa ohne root bei einer fremden Datei). Dann liest Nodvard Deck erst die ganze Quelle (über
+8 MiB in eine lokale Temp-Datei), bevor es das Ziel öffnet: bricht die Quelle ab, bleibt das Ziel unberührt,
+scheitert erst das Schreiben, kann es unvollständig sein. Pipes und Geräte (etwa `/dev/null`) werden direkt
+beschrieben. Weil beim Ersetzen eine neue Datei entsteht, sieht ein Container, in den die Datei einzeln per
+Bind-Mount eingebunden ist, den neuen Inhalt erst nach einem Neustart des Containers; ein eingebundener Ordner
+ist nicht betroffen.
+
+`upload` hat standardmäßig keine Größengrenze, der Body geht als Strom an die Quelle. `NODVARD_DECK_FILES_MAX_UPLOAD_BYTES`
+(Bytes, `0` = keine Grenze) setzt eine. Ist die `Content-Length` größer, kommt `413` mit `Connection: close`, bevor die
+Quelle das Ziel öffnet. Ohne Längenangabe (`chunked`) bricht erst das Mitzählen ab (siehe §1), bei der eingestellten
+Grenze, mindestens aber bei der allgemeinen (1 MiB); dann hat die Quelle schon zu schreiben begonnen (die SFTP-Quellen
+lassen eine vorhandene Datei dann wie oben unberührt).
+
+Scheitert ein Zugriff an der Quelle (Server aus, Zugang abgelehnt, Zeitüberschreitung), antworten `info`, `list`,
+`stat`, `download`, `upload`, `mkdir`, `rename` und `remove` mit `502` und dem Text
+`Zugriff auf die Quelle fehlgeschlagen: <Grund>`, fehlt die Datei, mit `404`. Bei Netzfehlern ist der Grund ein
+deutscher Satz („Server antwortet nicht (Zeitüberschreitung …)“); die Nextcloud-Quelle nennt ihren eigenen Text
+(bei einer Zeitüberschreitung „Nextcloud antwortet nicht (Zeitüberschreitung).“, sonst Methode, Pfad und die Meldung
+der Gegenstelle). Bei einem Dateifehler (`OSError` wie `PermissionError`, kein Netzfehler) steht nur der Name des
+Fehlers da, nie ein Pfad; den vollen Text schreibt der Server nur ins Container-Protokoll. Ein gescheiterter
+`/files/transfer` trägt denselben Grund im Lauf (`error`).
+
+Rechte: `sources`, `info`, `list`, `stat`, `download` und `search` brauchen `files.read`; `upload`, `mkdir`,
+`rename`, `remove` und `transfer` brauchen `files.write`. Eine Quelle kann zusätzlich eine eigene Berechtigung
+verlangen (`required_permission`, [02 §3](02-EXTENSION-API.md#3-capabilities--der-kern-der-entkopplung)): Die
+SSH-Quellen der terminal-Extension verlangen `hosts.execute`, weil sie mit dem Zugang des Servers arbeiten und
+nicht mit dem des Nutzers. Wer sie nicht hat, sieht die Quelle in `/files/sources` und `/files/search` nicht;
+alle anderen Endpunkte antworten für sie mit `403`, `/files/transfer` auch dann, wenn nur Quelle oder Ziel
+gesperrt ist.
+
+Protokoll, nur für Quellen mit eigener Berechtigung (`target_type` `file_source`, immer nur Quelle und Pfad, nie
+Inhalte): `files.access` (verweigert, `outcome` `denied`), `files.download`, `files.upload`, `files.mkdir`,
+`files.rename`, `files.remove` (die vier schreibenden auch, wenn sie scheitern), `files.search` (je durchsuchter
+Quelle, ohne Suchbegriff), `files.transfer_start` und `files.transfer` (Ergebnis mit `bytes`, beide mit `run_id`).
+`list`, `stat` und `info` stehen nicht im Protokoll.
+
+Bei der Nextcloud-Quelle bleibt jeder Pfad im Dateibereich des eingerichteten Benutzers. Ein Pfad, der ihn
+verlassen könnte (ein `..`-Teil, auch URL-kodiert wie `%2e%2e` oder mehrfach kodiert, ein Backslash, ein
+NUL-Zeichen oder ein kodierter Schrägstrich wie `%2F`), wird abgelehnt, bevor eine Anfrage mit diesem Pfad
+an den Nextcloud-Server geht: `list`, `stat`, `download`, `upload`, `mkdir`, `rename` und `remove` antworten
+mit `404`, ein `/files/transfer` mit so einem Pfad endet als fehlgeschlagener Lauf.
+
 ---
 
 ## 4. WebSocket
+
+Das Image startet uvicorn mit `--ws-max-size 1048576`: Eine einzelne Nachricht vom Client an einen der Sockets darf
+höchstens 1 MiB groß sein, eine größere beendet die Verbindung (ohne den Schalter gilt der uvicorn-Standard von 16 MiB).
 
 ### Multiplexiert: `GET /ws`
 
@@ -675,7 +987,18 @@ Akkulaufzeit — deshalb bewusst nicht ein Socket pro Feature.
 
 Authentifizierung: erste Nachricht nach dem Verbinden ist
 `{"type":"auth","token":"<access_token>"}`. Keine Tokens in der URL (sie landen in
-Proxy-Logs).
+Proxy-Logs). Der Token einer schon beendeten Anmeldung (abgemeldet, widerrufen) bekommt
+`auth_error`, auch solange er noch nicht abgelaufen ist.
+
+Eine offene Verbindung wird bei jedem `ping` (alle 30 s) erneut geprüft: Ist das Konto
+deaktiviert, das Passwort geändert oder die Anmeldung beendet, kommt ein `error` mit dem
+Grund in `payload.title`, danach schließt der Server mit Code `4401`. Geänderte Rollen gelten
+für die Filterung nach RBAC ab dieser Prüfung, ohne neue Verbindung. Außerdem endet die Verbindung, sobald der
+Access-Token abläuft, mit dem sie sich angemeldet hat (Standard 15 Minuten, `access_token_ttl_seconds`): ebenfalls
+`error` mit dem Grund, dann Code `4401`. Ein Token ohne `exp` bekommt schon beim Aufbau `auth_error`. Der Client holt
+sich per `POST /auth/refresh` einen neuen Access-Token, verbindet sich neu und abonniert seine Kanäle wieder. Eine so
+beendete Verbindung bekommt bis zum Schließen nur noch dieses `error`, aber keine Ereignisse mehr, auch nicht auf
+Kanälen ohne Rechteprüfung.
 
 Umschlag, in beide Richtungen:
 
@@ -689,7 +1012,7 @@ Umschlag, in beide Richtungen:
 | `subscribe` / `unsubscribe` / `subscribed` | ↔ | |
 | `event` | ← | Nutzlast auf einem Kanal |
 | `ping` / `pong` | ↔ | 30 s, App erkennt tote Verbindungen |
-| `error` | ← | RFC-7807-Körper |
+| `error` | ← | `payload.title` = Grund als deutscher Satz |
 
 Kanäle:
 
@@ -703,6 +1026,12 @@ runs.{run_id}              Live-Ausgabe eines Laufs
 files.transfer.{id}        Fortschritt
 ext.{ext_id}.{beliebig}    Extension-eigene Kanäle (ctx.ws.broadcast)
 ```
+
+`action.*`-Ereignisse im Kanal `events` (Recht `hosts.read`, z. B. `action.executed`) enthalten den `payload` der
+Aktion (im Umschlag unter `payload.data.payload`) vollständig nur für Verbindungen mit `hosts.execute`;
+`actions.approve:<risiko>` reicht hier anders als bei der REST-Ressource nicht. Alle anderen bekommen dieselbe
+Nachricht mit den Kennungen wie in §3 „Aktionen“ und `payload.data.payload_hidden` (`true`, wenn etwas weggelassen
+wurde).
 
 Verhalten bei Verbindungsabbruch: der Client abonniert nach dem Reconnect neu und holt
 den verpassten Zustand per REST nach. Es gibt **keine** Nachrichten-Wiederholung über
@@ -721,7 +1050,9 @@ POST /terminal/sessions   {host_id, cols, rows, user?}  → {session_id, ws_url}
 ```
 
 Die Kern-Seite `/terminal` (mehrere Tabs, je Tab eine Sitzung) baut darauf auf.
-Scheitert das Öffnen, kommt vor dem Close-Frame `{"type":"error","message":…}`.
+Scheitert das Öffnen, kommt vor dem Close-Frame `{"type":"error","message":…}`. `message` nennt den Grund
+und ist nie leer, bei Netzfehlern ein deutscher Satz („Server antwortet nicht (Zeitüberschreitung bei …). Ist er
+eingeschaltet und im Netz?“); derselbe Grund steht in `terminal.open` mit Ergebnis `failure` (in `reason`).
 
 Auf dem Socket: **binäre** Frames = rohe PTY-Bytes in beide Richtungen.
 **Text**-Frames = JSON-Steuerung:
@@ -732,8 +1063,26 @@ Auf dem Socket: **binäre** Frames = rohe PTY-Bytes in beide Richtungen.
 {"type":"exit","code":0}
 ```
 
-Sitzungen haben ein Leerlauf-Timeout, werden im Audit-Log als `terminal.open` /
-`terminal.close` mit Dauer vermerkt, und optional (Einstellung) mitgeschnitten.
+Sitzungen werden im Audit-Log als `terminal.open` / `terminal.close` mit Dauer vermerkt.
+
+Eine Sitzung hängt an Konto, Recht `hosts.execute`, Passwort und genau der Anmeldung, aus der
+das Ticket stammt. Der Server prüft das beim Öffnen und danach alle 15 s
+(`terminal_recheck_interval_s`): Ist das Konto deaktiviert, das Recht entzogen, das Passwort
+geändert oder die Anmeldung beendet (abgemeldet oder widerrufen), endet die Sitzung. Ohne jede
+Eingabe **und** Ausgabe endet sie nach 30 Minuten (`terminal_idle_timeout_s`, 0 = aus); ein
+Befehl, der noch Text liefert, hält sie offen. Der Grund kommt jeweils als
+`{"type":"error","message":…}` vor dem Close-Frame. Im Protokoll steht er beim Öffnen in
+`terminal.open` mit `denied`, bei einer laufenden Sitzung in `terminal.close` (`reason`, dazu
+`detail.ended_by`: `access_ended` bzw. `idle`).
+
+| Close-Code | Bedeutung |
+|---|---|
+| `1000` | normales Ende |
+| `4401` | Konto, Recht, Passwort oder Anmeldung gelten nicht mehr |
+| `4404` | Ticket unbekannt oder abgelaufen, Host unbekannt |
+| `4408` | Leerlauf |
+| `4500` | Öffnen gescheitert |
+| `4501` | keine Erweiterung bietet für diesen Host ein Terminal an |
 
 ### Konsole: `GET /ws/console/{session_id}` — Bildschirm einer VM/eines Containers
 
@@ -752,6 +1101,17 @@ Auf dem Socket: nur **binäre** Frames, rohe Protokoll-Bytes in beide Richtungen
 angefragtes Subprotokoll `binary` wird bestätigt. Der Browser spricht nur mit Nodvard Deck,
 nie mit dem Hypervisor — dessen Token bleibt im Vault. Jede Öffnung (auch eine
 gescheiterte) steht im Audit-Log als `console.open`.
+
+Unbekannter Host oder keine Konsole für ihn: `404`. Scheitert danach das Öffnen, antwortet der `POST`
+mit `502` und `detail` „Konsole konnte nicht geöffnet werden: …“; derselbe Grund steht in
+`console.open` mit Ergebnis `failure` (in `reason`). Das gilt auch, wenn der Hypervisor den
+WebSocket-Aufbau mit einer Weiterleitung (3xx) beantwortet: Nodvard Deck folgt ihr nicht, es entsteht
+keine zweite Verbindung, und der Grund nennt die Umleitung samt Statuscode
+(z. B. „… umgeleitet (HTTP 302) …“).
+
+Wie beim Terminal endet die Konsole, sobald Konto, Recht `hosts.execute`, Passwort oder
+Anmeldung nicht mehr gelten (Prüfung beim Aufbau und alle 15 s): Close-Code `4401`, sonst
+`1000`. Ein unbekanntes oder abgelaufenes Ticket: `4404`.
 
 ---
 
@@ -798,6 +1158,20 @@ unter `/api/v1/ext/<id>/…`): nur abwärtskompatible Änderungen.
 | Neues Pflichtfeld / neuer Pflicht-Parameter in einer Anfrage (auch: Body, der vorher fehlte) | **nein** |
 | Typ eines Feldes ändern | **nein** |
 | Wert einer festen Werteliste (Enum) entfernen | **nein** |
+
+**Bewusst strenger aus Sicherheitsgründen:** `DELETE /me/totp` und `POST /me/totp/setup` verlangen `current_password`,
+das sie früher nicht brauchten (sonst könnte eine gestohlene Sitzung allein Zwei-Faktor ab- oder mit einem eigenen
+Authenticator einschalten). Bei `DELETE /me/totp` ist der Body dadurch Pflicht (Eintrag in `breaking_exceptions.toml`),
+bei `POST /me/totp/setup` bleibt er im Vertrag optional; ohne Passwort gibt es dort `400` statt `422` (siehe §3).
+Ebenso bei Erweiterungsrouten: Was eine Erweiterung ohne `permission=` einhängt, verlangt eine Anmeldung und antwortet
+ohne Token mit `401` (früher war es ohne Anmeldung erreichbar). Ohne Anmeldung geht nur, was sie ausdrücklich mit
+`public=True` und der Manifest-Berechtigung `api.public` einhängt
+([02 §2](02-EXTENSION-API.md#2-der-extensioncontext)). Bei hello-world verlangen `POST /notify-test` und
+`POST /vault-use-and-fail` dazu `extensions.manage`. Ebenso verlangen `POST /notifications/read` und
+`POST /notifications/read-all` `notifications.write` (früher genügte `notifications.read`), und wer weder
+`hosts.execute` noch `actions.approve:<risiko>` für das Risiko einer Aktion hat, bekommt ihren `payload` gekürzt
+(`payload_hidden`, siehe §3). Ebenso bei der Größe: Einen Body über 1 MiB (siehe §1) beantwortet ein
+Endpunkt, der ihn liest, mit `413` (früher gab es keine allgemeine Grenze); Uploads haben eigene, höhere Grenzen.
 
 **Umbenennen** geht nur so: Der alte Name bleibt mehrere Releases parallel bestehen und ist
 als `deprecated` markiert (`deprecated=True` am Endpunkt bzw. Feld, dazu ein Hinweis im

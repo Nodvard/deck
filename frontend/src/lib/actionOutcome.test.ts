@@ -7,6 +7,19 @@ import { actionReason, describeActionOutcome, isActionOutcomeSource } from "./ac
  * Ergebnis einer Gate-Aktion nicht aus ("Bestätigt" bzw. das Rohwort "failed", kein
  * Grund). Die Formen hier sind die echten ActionOut-Felder aus api/v1/actions.py.
  */
+describe("describeActionOutcome ohne Server-Rechte", () => {
+  it("nennt den Grund für den fehlenden Fehlertext", () => {
+    expect(describeActionOutcome({ status: "failed", output_hidden: true, result: { success: false, error: null } })).toEqual({
+      tone: "error",
+      text: "Fehlgeschlagen – Ausgabe nur für Nutzer mit Server-Rechten sichtbar",
+    });
+  });
+
+  it("zeigt einen vorhandenen Fehlertext wie bisher", () => {
+    expect(describeActionOutcome({ status: "failed", output_hidden: false, result: { error: "kaputt" } }).text).toBe("Fehlgeschlagen: kaputt");
+  });
+});
+
 describe("describeActionOutcome", () => {
   it("Erfolg", () => {
     expect(describeActionOutcome({ status: "succeeded", result: { success: true } })).toEqual({ tone: "success", text: "Ausgeführt" });

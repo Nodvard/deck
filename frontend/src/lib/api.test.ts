@@ -58,7 +58,7 @@ describe("apiFetch Fehlermeldungen", () => {
       ],
     }, 422);
     const err = await thrown(api.post("/hosts/h1/actions/vm.snapshot_rollback", {}));
-    expect(err.message).toBe("payload.snapname: Field required; limit: Input should be a valid integer");
+    expect(err.message).toBe("payload.snapname: Field required. limit: Input should be a valid integer.");
   });
 
   it("ohne verwertbaren Body bleibt es bei HTTP <Status>", async () => {

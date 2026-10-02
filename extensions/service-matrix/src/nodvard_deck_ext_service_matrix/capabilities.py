@@ -121,6 +121,8 @@ def _error_tile(host: Any, message: str) -> dict[str, Any]:
         "status": message,
         "tone": "danger",
         "url": None,
+        # Marker fuer Leser (Cockpit): Platzhalter eines Servers, den wir nicht lesen konnten -- kein Container.
+        "unreachable": True,
     }
 
 

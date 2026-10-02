@@ -224,13 +224,9 @@
       "items": {
         "type": "string"
       },
-      "default": [
-        "rpc.mountd",
-        "rpc.statd",
-        "avahi-daemon"
-      ],
-      "title": "Programme mit wechselnden Ports",
-      "description": "Diese Programme wählen nach jedem Neustart zufällige Ports (typisch für NFS-Server). Solche Ports melden dann nicht jedes Mal „Neuer offener Port“, sondern zählen zusammen als ein Eintrag. Gilt nur für hohe Portnummern; Programmnamen so eintragen, wie sie in der Portliste stehen (höchstens 15 Zeichen, so zeigt der Server sie an). Neue Programme auf festen Ports melden weiterhin. Erkannt wird nur am Programmnamen – trag nur Programme ein, denen du vertraust. Außerdem funktioniert das nur, wenn das Dashboard auf dem Server root bzw. sudo hat; sonst sind die Programmnamen nicht lesbar und die Ports behalten ihre Nummer.",
+      "default": [],
+      "title": "Weitere Programme mit wechselnden Ports",
+      "description": "Diese Programme wählen nach jedem Neustart zufällige Ports. Solche Ports melden dann nicht jedes Mal „Neuer offener Port“, sondern zählen zusammen als ein Eintrag. Schon eingebaut (hier nicht nötig): tailscaled, rpc.mountd, rpc.statd, rpcbind, avahi-daemon, dhclient, dhcpcd und chronyd. Weil sich jedes Programm jeden Namen geben kann, gilt das bei den eingebauten nur für UDP-Ports; TCP-Ports nur bei rpc.mountd und rpc.statd und bei tailscaled nur auf der Tailscale-Adresse. Trag hier nur weitere Programme ein, denen du vertraust; Programmnamen so, wie sie in der Portliste stehen (höchstens 15 Zeichen, so zeigt der Server sie an). Gilt nur für hohe Portnummern; Programme auf festen Ports melden weiterhin. Außerdem funktioniert das nur, wenn das Dashboard auf dem Server root bzw. sudo hat; sonst sind die Programmnamen nicht lesbar. Dann werden zufällige UDP-Ports ohne Programmnamen als ein Eintrag gemeldet, TCP-Ports behalten ihre Nummer.",
       "x-advanced": true
     },
     "exclude_paths": {
@@ -343,6 +339,7 @@
   "x-secrets": [
     {
       "label": "nexus-soc-ollama-key",
+      "x-secret-bound-to": ["ollama_url", "ollama_failover_url"],
       "title": "Nodvard KI: API-Schlüssel des Servers (optional)",
       "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt.",
       "optional": true

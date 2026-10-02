@@ -34,6 +34,17 @@ diesem Benutzer gehören. `docker compose exec` läuft als root; `python -m nodv
 Besitzer des Datenordners. Hilfscontainer mit `--entrypoint` (`backup.sh`, `restore.sh`) laufen mit
 `--user 1000:1000`.
 
+**Dateirechte:** Was `entrypoint.sh` startet (Migration, Anwendung, Notseite), legt neue Dateien und Ordner nur für
+den Besitzer an (`umask 077`); `python -m nodvard_deck.admin` und `python -m nodvard_deck.boot` tun das auch ohne den
+Entrypoint (`docker compose exec`). Bei jedem Start setzt `entrypoint.sh`, nie als root, `/app/data` auf 0700 und
+nimmt Gruppe und anderen alle Rechte an den Dateien und Ordnern darin (Links bleiben unberührt); so werden auch
+ältere Installationen mit offenen Rechten (0644/0755) nachgezogen. Ein eingebundener Hostordner ist danach nur für
+UID 1000 und root lesbar: Backup-Werkzeuge oder Dateimanager, die als anderer Benutzer laufen, brauchen `sudo`.
+Unterstützt der Speicher keine Rechte (manche NAS-Freigaben), läuft der Start weiter, im Protokoll steht höchstens
+eine Warnung. Code, Erweiterungen und Oberfläche unter `/app` gehören root und sind für `lattice` nur lesbar; unter
+`/app` darf `lattice` nur in `/app/data` schreiben. So kann ein Prozess als `lattice` in den Code unter `/app` nichts
+einschleusen, das später als root startet (Healthcheck, `docker compose exec`).
+
 **Zusatzgruppen (`group_add:`):** Durch den Benutzerwechsel (`--clear-groups`) gelten sie nicht mehr. Wer sie braucht
 (z. B. eine Gruppe, die einen NAS-Ordner freigibt), startet den Container selbst als Nicht-root und setzt beides
 zusammen: `user: "1000:1000"` und `group_add: [...]`; der Datenordner muss dann diesem Benutzer gehören.
@@ -56,6 +67,10 @@ Für einen einzelnen Zielrechner reicht ein normaler Build ohne `buildx`:
 docker build -f deploy/Dockerfile -t nodvard-deck:latest .
 ```
 
+Laufzeitdaten gelangen nicht ins Image: `.dockerignore` schließt in jedem Unterordner (z. B. ein `backend/data/` nach
+einem Start aus `backend/`) Datenordner `data/`, Datenbanken (`*.db`, `*.sqlite`), Sicherungen (`*.ndbak`), Schlüssel
+(`*.key`, `jwt_secret*`, `vault_keyring.json`) und `.env`-Dateien aus.
+
 ## Starten aus dem Repo
 
 ```bash
@@ -67,7 +82,7 @@ Danach `http://<host>:8080/` öffnen. Eine frische Installation (kein Nutzer in 
 Datenbank) zeigt automatisch den **Einrichtungsassistenten** (`/setup` statt `/login`,
 solange `GET /api/v1/auth/bootstrap` `{"needed": true}` liefert): Administrator-Konto,
 Zeitzone, Auswahl der Module, optional Zwei-Faktor-Anmeldung und Aussehen (Produktname,
-Kurzname, Akzentfarbe). Logo, alle fünf Farben und Support-Link stellt man danach unter
+Untertitel, Akzentfarbe). Logo, alle fünf Farben und Support-Link stellt man danach unter
 Einstellungen → Aussehen ein (`PUT /api/v1/branding`). Schritt für Schritt:
 [docs/11-ERST-EINRICHTUNG.md](../docs/11-ERST-EINRICHTUNG.md).
 
@@ -134,6 +149,21 @@ Was das Skript tut:
    Danach wartet das Skript, bis `/api/v1/health` wieder antwortet. Klappt das nicht, steht
    **`ROLLBACK-FAIL`** in der Ausgabe (Dienst vermutlich aus), sonst `DEPLOY-FAIL: Rollback
    ausgeführt`. Gibt es nichts zum Zurückschalten (frische Maschine), steht das ehrlich dort.
+
+   **Ausnahme: kein automatischer Rollback nach einer Migration.** Hat der neue Container die
+   Datenbank umgebaut und ist gestartet (`.boot/state.json`: `last_migration.at` nicht älter als der
+   Container, `started_ok: true`), lehnt das alte Image die Daten ab und zeigt nur die Notseite. Meldet danach eine Prüfung ein Problem (Datencheck, Tracebacks, Absturz oder
+   Neustart-Schleife nach dem Health-Ok), endet das Skript mit `DEPLOY-FAIL … hat die Datenbank aber
+   schon umgebaut … KEIN automatischer Rollback`. Lässt sich der Migrationsstand nicht feststellen
+   (Datei nicht lesbar, Verbindung weg), heißt es `Zustand unklar, KEIN automatischer Rollback`.
+   Dann zuerst `docker ps -a` und `docker logs --since 10m deploy-nodvard-deck-1` ansehen. Läuft
+   die neue Version nicht brauchbar und soll der alte Stand zurück, bewusst
+   `bash pi_switch.sh rollback` ausführen und auf der Notseite (Port 8080) den Stand von vor dem
+   Update wiederherstellen. Den Notfallcode dafür zeigt `docker logs deploy-nodvard-deck-1`.
+   Änderungen seit dem Update gehen dabei verloren. Das klappt nur, wenn die alte Version
+   (`nodvard-deck:previous`) die Notseite schon kennt. Sonst die neue Version laufen lassen und den
+   Fehler dort beheben. Bei falschem Volume
+   oder falschem Image wird weiter automatisch zurückgeschaltet, dann sind die alten Daten unberührt.
 8. Erst wenn alles gestimmt hat, räumt `pi_switch.sh cleanup` auf: den alten Container
    `deploy-lattice-1` löschen, alte `nodvard-deck:pi-*`-Tags (außer den Ständen hinter
    `latest`/`previous`) und die alten `lattice:*`-Images. Die `lattice:*`-Images bleiben, solange
@@ -219,6 +249,9 @@ Alle Einstellungen des Dashboards heißen jetzt `NODVARD_DECK_<NAME>` (früher
 `NODVARD_DECK_DATA_DIR` und `NODVARD_DECK_DNS_1`/`_2` (nur Compose). `NODVARD_DECK_API_DOCS=1` schaltet die
 API-Doku (`/docs`, `/redoc`, `/openapi.json`) auch außerhalb des Entwicklungsmodus ohne Anmeldung frei;
 standardmäßig ist sie aus, angemeldete Admins bekommen das Dokument über `GET /api/v1/system/openapi.json`.
+`NODVARD_DECK_MAX_BODY_BYTES` begrenzt die Größe einer Anfrage (Standard 1 MiB, darüber `413`; Uploads wie Sicherung,
+Logo, Dokumente und Bilder haben eigene Grenzen), `NODVARD_DECK_FILES_MAX_UPLOAD_BYTES` die Größe eines Uploads im
+Dateimanager (Standard `0`, keine Grenze).
 
 - **Die alten Namen gelten weiter.** Eine vorhandene `.env`, eine eigene Compose-Datei oder
   ein `docker run -e LATTICE_…` laufen unverändert. Beim Start steht einmalig eine Warnung
@@ -250,7 +283,11 @@ Container eine Neustart-Regel (`restart: unless-stopped`, in den mitgelieferten 
 `docker run` ohne `--restart` bleibt danach aus). Der alte Stand liegt danach unter `/app/data/restore/replaced-…`.
 **`restore.sh` kann eine `.ndbak`-Datei vormerken** (`./restore.sh sicherung.ndbak`): es prüft sie mit
 `python -m nodvard_deck.admin restore-backup`, fragt das Passwort ab und startet den Dienst auf Wunsch neu; eingespielt
-wird dann beim Start. **Nach einem Rückweg (`pi_switch.sh rollback`) auf ein Image von vor der Paket-Umbenennung**
+wird dann beim Start. Der Container bekommt dafür eine Kopie in einem eigenen Ordner unter `/tmp` (bzw. `$TMPDIR`), die
+andere lokale Benutzer nicht lesen können; das Skript löscht sie am Ende wieder. So klappt es auch mit einer Datei, die
+root gehört (dann mit `sudo`), oder in einem Ordner, den der Container-Benutzer 1000 nicht betreten darf. Wer das Skript
+weder als root noch als UID 1000 startet, braucht `setfacl`, sonst bricht es ab und verlangt `sudo`. Liegt noch die
+Marke eines unterbrochenen `.tar.gz`-Einspielens (siehe unten), merkt es nichts vor (Exit-Code 3). **Nach einem Rückweg (`pi_switch.sh rollback`) auf ein Image von vor der Paket-Umbenennung**
 kennt das Image nur den alten Modulnamen; dann statt `restore.sh` direkt
 `docker compose -p deploy run --rm --no-deps --user 1000:1000 --entrypoint python -v "$PWD:/backup:ro" nodvard-deck -m lattice.admin restore-backup /backup/<datei>.ndbak`
 verwenden (`.tar.gz`-Sicherungen betrifft das nicht, die spielt `restore.sh` ohne Python ein). Das ist der Weg ohne Oberfläche. Hochladen größer als 4 GiB (`NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES`)
@@ -279,6 +316,37 @@ D-02 ([docs/00-DECISIONS.md](../docs/00-DECISIONS.md))
 beschriebene Last (eine Handvoll Nutzer, ein paar Dutzend Hosts) ist die kurze
 Ausfallzeit (Sekunden) der einfachste Weg, keine inkonsistente Kopie zu ziehen.
 
+**Rechte:** Ohne Zugriff auf Docker (nicht root, nicht in der Gruppe `docker`) beide mit `sudo` starten. Sonst brechen
+sie ab, bevor sie etwas anhalten oder verändern: `backup.sh` mit „Docker antwortet nicht …“, `restore.sh` mit „Der
+Datenordner liess sich nicht pruefen“. Mit `sudo` gestartet gehören die Sicherung und ein dabei neu angelegter
+Zielordner dem Aufrufer (`SUDO_UID`), als root ohne sudo (etwa aus der root-Crontab) dem Besitzer des Zielordners,
+wenn das nicht root ist. Eine `.tar.gz` liest `restore.sh` selbst und reicht sie über die Standardeingabe in den
+Container; eine Datei, die root gehört, geht also mit `sudo`.
+
+**`backup.sh`** prüft vor dem Anhalten, ob das Image `nodvard-deck:latest` da ist und ob sich in den Zielordner
+schreiben lässt. Die Datei entsteht unter einem Zwischennamen (`<name>.partial.<Zufall>`, Rechte 0600) und bekommt
+ihren Namen erst, wenn sie mindestens 1 KiB groß und ein lesbares tar.gz ist; sonst wird sie gelöscht.
+
+**Sperre:** Beide Skripte (auch `restore.sh` mit `.ndbak`) halten bis zum Ende dieselbe Sperre (`flock` auf
+`deploy/.backup-restore.lock`). Läuft schon eine Sicherung oder ein Einspielen (etwa eine Cron-Sicherung), bricht der
+zweite Lauf mit Exit-Code 4 ab, ohne etwas zu verändern. Fehlt `flock` (Paket util-linux), läuft es mit einer Warnung
+ohne Sperre.
+
+**Einspielen einer `.tar.gz`** (ersetzt den kompletten Inhalt von `/app/data`, fragt vorher nach): `restore.sh` prüft
+die Datei mit `tar tzf`, hält den Dienst an und entpackt sie nach `/app/data/.restore-neu`; die bisherigen Daten
+bleiben dabei unberührt. Scheitert das (Platz, Lesefehler, Strg+C), startet der Dienst wieder auf dem alten Stand
+(außer beim Fertigmachen eines abgebrochenen Austauschs, siehe unten: dann bleibt er gestoppt). Erst danach tauscht es
+per Umbenennen innerhalb des Volumes aus (alte Daten nach `.restore-alt`, neue an ihre Stelle, `.restore-alt` weg);
+kurz liegen die Daten doppelt im Volume. Die Marke `/app/data/.restore-austausch` hält fest, dass und wie weit der
+Austausch läuft. Bricht er mittendrin ab, bleibt der Dienst gestoppt; derselbe Aufruf mit derselben Datei macht ihn an
+der richtigen Stelle fertig und startet den Dienst. Solange die Marke liegt, lehnt `backup.sh` ab (Exit-Code 3); ist
+sie leer oder beschädigt, brechen beide Skripte mit Exit-Code 5 ab, und die Meldung nennt den Weg von Hand. Liegt beim
+Beginn eines neuen Austauschs noch ein `.restore-alt` von früher, wird es nicht gelöscht, sondern als
+`.restore-alt-<Zeit>` beiseitegelegt. Arbeitsordner und Marke kommen in keine Sicherung. SIGHUP (SSH-Abbruch) hält
+das Skript nicht an, den Austausch auch Strg+C nicht. Die Meldungen ab der Rückfrage stehen zusätzlich in
+`deploy/restore.log` (anderer Ordner: `RESTORE_LOG_DIR`); das Protokoll und eine dabei neu angelegte Sperrdatei
+gehören nach `sudo` dem Aufrufer.
+
 **Backup ohne Stopp (fortgeschritten, nicht in `backup.sh` automatisiert):** SQLites
 eigene Online-Backup-API erzeugt eine konsistente Momentaufnahme auch bei laufendem
 Betrieb:
@@ -287,6 +355,7 @@ Betrieb:
 # Das Image hat keine sqlite3-Kommandozeile (python:3.12-slim), Pythons sqlite3-Modul reicht:
 docker compose exec -u lattice nodvard-deck python -c "import sqlite3; s=sqlite3.connect('/app/data/lattice.db'); d=sqlite3.connect('/app/data/_snapshot.db'); s.backup(d); d.close(); s.close()"
 docker compose cp nodvard-deck:/app/data/_snapshot.db ./lattice-db-snapshot.db
+chmod 600 ./lattice-db-snapshot.db   # die Kopie enthält die ganze Datenbank, nur für dich lesbar
 docker compose exec -u lattice nodvard-deck rm /app/data/_snapshot.db
 ```
 
@@ -294,7 +363,8 @@ Beide Skripte lassen den Hilfscontainer bewusst **nicht** durch `/entrypoint.sh`
 (`--entrypoint tar` bzw. `--entrypoint sh`): sonst würde vor dem Sichern oder Einspielen
 die Datenbank-Migration laufen. Ein „Vorher-Backup“ nach einem neuen Build wäre dann
 schon migriert, und `restore.sh` würde an genau der kaputten Datenbank scheitern, die es
-ersetzen soll. Ein `trap` startet den Dienst auch bei einem Fehler wieder.
+ersetzen soll. Ein `trap` startet den Dienst auch bei einem Fehler wieder, außer solange ein Austausch der Daten durch
+`restore.sh` nicht fertig ist (siehe oben).
 
 Das sichert nur `lattice.db` selbst, nicht `master.key`/`jwt_secret.key`/
 Extension-Daten/Script-Repo — für einen vollständigen Restore-Punkt weiterhin
@@ -343,11 +413,14 @@ vorgemerkte Wiederherstellung einspielen, **Kopie der Datenbank anlegen, wenn ei
   wieder genau der alte Stand (Datenbank, Schlüssel, Migrationsstand in `.boot/state.json`, `pre_restore`).
 - **Notseite** (`python -m nodvard_deck.rescue`, nur Standardbibliothek, auf dem Port der Anwendung): `GET /api/v1/health` antwortet **503** `{"status":"rescue"}`
   (nie `ok`: der Docker-Healthcheck schlägt an, `scripts/deploy_pi.sh` schaltet zurück). Sie lauscht auf `--host`/`--port` aus dem Startbefehl (sonst `UVICORN_HOST`);
-  ohne erkennbare Adresse nur auf `127.0.0.1`, wie uvicorn selbst (das Image setzt `--host 0.0.0.0`). Jede Verbindung endet nach 10 s, je Rechner höchstens 8 gleichzeitig.
+  ohne erkennbare Adresse nur auf `127.0.0.1`, wie uvicorn selbst (das Image setzt `--host 0.0.0.0`). Jede Verbindung endet nach 10 s, die Kopfzeilen müssen nach 3 s da sein (Anfragezeile und Kopfzeilen zusammen höchstens
+  32 KiB, dabei unter 100 Kopfzeilen, sonst `431`). Je Rechner höchstens 8 Verbindungen gleichzeitig (bei IPv6 je /64-Netz), insgesamt 64; `127.0.0.1` und `::1`
+  (Healthcheck im Container) haben 8 eigene Plätze.
   Ohne Code zeigt sie nur Allgemeines. Mit dem **Notfallcode**
   (steht als Banner im Protokoll des Containers: `sudo docker compose logs nodvard-deck | grep Notfallcode`, und in `.boot/rescue_code.txt` im Datenordner) zeigt sie Grund und
   bereinigtes Protokoll und bietet „Neu versuchen“ (Container endet mit 75, die Neustart-Regel startet ihn neu) und, wo es geht, „Stand vor dem Update
-  wiederherstellen“. Die Eingabe des Codes ist gedrosselt. Fällt die Notseite selbst aus, **wartet der Container** (`sleep`) – er läuft nie in eine Neustart-Schleife;
+  wiederherstellen“. Die Eingabe des Codes ist gedrosselt (5 Fehlversuche je Rechner, insgesamt 25 in 10 Minuten);
+  die Sperre weist nur falsche Codes ab, der richtige Code geht immer sofort durch. Fällt die Notseite selbst aus, **wartet der Container** (`sleep`) – er läuft nie in eine Neustart-Schleife;
   `docker stop` dauert dann die üblichen 10 Sekunden.
 - **Zurück auf die alte Version** (nach einem Update, das nicht klappt): Image-Version in der Compose-Datei auf die vorherige zurückstellen und den Container neu starten
   (`deploy_pi.sh` und `pi_switch.sh rollback` tun das für das Image selbst).
@@ -361,6 +434,8 @@ vorgemerkte Wiederherstellung einspielen, **Kopie der Datenbank anlegen, wenn ei
 - **Sperre:** Die laufende Anwendung hält `/app/data/.boot/app.lock`. Ein zweiter Container mit demselben Datenordner (z. B. `docker compose run nodvard-deck …` neben dem laufenden Dienst)
   ändert deshalb nichts: `boot` beendet sich mit Code 75. Für Wartungsbefehle lieber `docker compose exec`, oder `run --entrypoint …` bei gestoppter Anwendung (so machen es `backup.sh` und `restore.sh`).
 - **Healthcheck:** `--start-period` ist **300 s** (Image und beide Compose-Dateien), damit eine lange Migration samt Kopie nicht als „unhealthy“ gilt.
+  Ohne `user:` läuft der Check als root; deshalb ruft er `python -I` auf (isoliert: ohne den aktuellen Ordner im Suchpfad, ohne `PYTHON*`-Variablen und
+  ohne Pakete aus dem Benutzerverzeichnis). Eine eigene Compose-Datei mit eigenem `healthcheck:` sollte das `-I` übernehmen.
 - **Alter Stand einer Wiederherstellung oder eines Rückwegs** (`restore/replaced-…`, kann Konten und Schlüssel im Klartext enthalten): wird **nach 30 Tagen automatisch gelöscht**; die Oberfläche nennt den Tag und kann ihn früher löschen.
 
 ## Demo-Modus

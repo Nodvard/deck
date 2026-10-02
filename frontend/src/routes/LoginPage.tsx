@@ -2,6 +2,7 @@ import { AlertCircle, ArrowLeft, Eye, EyeOff, HardDrive, KeyRound, Loader2, Lock
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 
+import { copyrightLine } from "../lib/branding";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
 
@@ -141,7 +142,7 @@ export function LoginPage() {
             ))}
           </ul>
         </div>
-        <p className="text-xs text-white/35">© {new Date().getFullYear()} {productName}</p>
+        <p className="text-xs text-white/35" data-testid="copyright">{copyrightLine()}</p>
       </aside>
 
       {/* Rechte Haelfte: Formular */}
@@ -274,6 +275,9 @@ export function LoginPage() {
               </a>
             </p>
           )}
+
+          {/* Am Handy und Tablet ist die linke Spalte versteckt: die Zeile steht dann hier. */}
+          <p className="mt-8 text-center text-xs text-white/35 lg:hidden" data-testid="copyright-compact">{copyrightLine()}</p>
         </div>
       </main>
     </div>
@@ -302,17 +306,35 @@ function ForgotPasswordHelp() {
         <p className="font-medium text-white/85">Passwort vergessen? Ein Administrator kann es zurücksetzen</p>
         <p className="mt-0.5">
           Wer Administrator ist, setzt es unter Einstellungen → Benutzer → Bearbeiten neu. Beim ersten Konto (dem Inhaber) geht das nur
-          mit dem Notfall-Befehl.
+          mit dem Notfall-Befehl – unten, auch ohne Befehlszeile.
         </p>
       </div>
       <div>
         <p className="font-medium text-white/85">Notfall-Befehl auf dem Server</p>
-        <p className="mt-0.5">Im Ordner mit der Compose-Datei. Der Befehl gibt ein neues Zufalls-Passwort aus:</p>
+        <p className="mt-0.5">Im Ordner mit der Compose-Datei (compose.yml). Der Befehl gibt ein neues Zufalls-Passwort aus:</p>
         <code className={codeBlockClass}>docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
         <p className="mt-1">Alle Benutzernamen zeigt:</p>
         <code className={codeBlockClass}>docker compose exec nodvard-deck python -m nodvard_deck.admin list-users</code>
         <p className="mt-1">Handy und Codes verloren? Dann schaltet dieser Befehl die Zwei-Faktor-Anmeldung ab:</p>
         <code className={codeBlockClass}>docker compose exec nodvard-deck python -m nodvard_deck.admin disable-2fa &lt;benutzername&gt;</code>
+      </div>
+      <div data-testid="forgot-no-command-line">
+        <p className="font-medium text-white/85">Ohne Befehlszeile: die Konsole des Containers</p>
+        <p className="mt-0.5">
+          Du verwaltest Nodvard Deck mit Portainer, Docker Desktop oder auf einem NAS? Dann brauchst du keine Befehlszeile: Öffne die
+          Konsole des Containers von Nodvard Deck und gib den Befehl dort ein. Den Container erkennst du an seinem Namen: Er enthält
+          „nodvard-deck“, meist heißt er „nodvard-deck-nodvard-deck-1“. Ohne das „docker compose exec nodvard-deck“ davor, das steckt
+          in der Konsole schon drin:
+        </p>
+        <ul className="mt-1 list-disc space-y-0.5 pl-4">
+          <li><strong className="font-medium text-white/85">Portainer:</strong> Containers → Container von Nodvard Deck → Symbol „Exec Console“ → „Connect“.</li>
+          <li><strong className="font-medium text-white/85">Docker Desktop:</strong> „Containers“ → die Gruppe „nodvard-deck“ aufklappen → den Container darin anklicken → Reiter „Exec“.</li>
+          <li><strong className="font-medium text-white/85">Synology Container Manager:</strong> Container → den von Nodvard Deck auswählen → „Details“ → Reiter „Terminal“ → „Erstellen“.</li>
+          <li><strong className="font-medium text-white/85">Unraid:</strong> Reiter „Docker“ → Symbol des Containers von Nodvard Deck → „Console“.</li>
+        </ul>
+        <p className="mt-1">Dort gibst du diesen Befehl ein. Er gibt ein neues Zufalls-Passwort aus. Statt <code>&lt;benutzername&gt;</code> schreibst du deinen eigenen Benutzernamen, zum Beispiel <code>admin</code>:</p>
+        <code className={codeBlockClass}>python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
+        <p className="mt-1">Alle Benutzernamen zeigt <code>python -m nodvard_deck.admin list-users</code>, die Zwei-Faktor-Anmeldung schaltet <code>python -m nodvard_deck.admin disable-2fa &lt;benutzername&gt;</code> ab.</p>
       </div>
     </div>
   );

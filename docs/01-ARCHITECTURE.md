@@ -152,7 +152,7 @@ Nebeneffekt: der Nutzer bekommt keine Meldung über eine Aktion, die gar nicht
 stattgefunden hat. Der Text in Benachrichtigung und UI wird aus dem `actions`-Datensatz
 gebaut, nicht aus der Absicht eines Modells.
 
-**Ausführung im Hintergrund.** Ist eine Aktion genehmigt (Klick oder Modus `full`),
+**Ausführung im Hintergrund.** Ist eine Aktion genehmigt (Klick, Modus `full` oder Dauerfreigabe),
 schreibt das Gate `executing` fest und startet den `ActionExecutor` als eigenen
 `asyncio.Task` mit eigener Datenbank-Session (`core/gate.py`, `start_execution`). Die
 HTTP-Anfrage wartet höchstens 20 s darauf und antwortet sonst mit `202 executing`; das
@@ -162,6 +162,14 @@ Notbremse über den Grenzen der Extensions) oder das Dashboard beendet wird. Was
 Absturz auf `executing` stehen lässt, setzt der Kern beim nächsten Start auf `failed`.
 `ctx.actions.propose()` wartet ohne Angabe bis zum Ende (Hintergrund-Jobs); Extension-Routen
 geben `wait_s=REQUEST_WAIT_S` mit und melden danach ggf. `executing`.
+
+**Dauerfreigabe.** Ein Vorschlag kann sich auf eine Freigabe berufen, die ein Mensch vorab erteilt hat
+(`ActionRequest.standing_approval`, [02 §3](02-EXTENSION-API.md#3-capabilities--der-kern-der-entkopplung); bisher nur
+geplante Skripte). Nach Sperrliste und Anti-Flapping prüft das Gate bei jedem Vorschlag selbst, ob diese Person noch
+aktiv ist und Dauerfreigaben sowie Aktionen dieser Risikostufe freigeben darf; Vorschläge einer KI laufen nie darüber.
+Gilt sie, ersetzt sie den Klick, unabhängig von `autonomy.mode`, und die Person steht als Freigebende an der Aktion;
+sonst wird ein normaler Vorschlag daraus. Was passiert ist, hängt das Gate selbst an `reason` an, das Datum der
+Freigabe in der eingestellten Zeitzone des Dashboards.
 
 **Einstellungen (global, pro Extension überschreibbar):**
 
@@ -201,12 +209,16 @@ GET /api/v1/branding      (ohne Auth — die Login-Seite braucht es)
 
 Das Frontend schreibt die Farben beim Start in CSS-Custom-Properties auf `:root`.
 Kein Rebuild, kein Neustart, keine Umgebungsvariable. Logos liegen als Upload im
-Daten-Volume.
+Daten-Volume. Ein SVG-Logo wird beim Hochladen geprüft (keine Skripte, keine Verweise
+aus der Datei hinaus), jedes hochgeladene Logo wird mit einer Sandbox-CSP ausgeliefert;
+der Support-Link nimmt nur `http:`, `https:` und `mailto:` an ([04-API](04-API.md)).
 
 Im Code gilt: **kein Literal für Produktname oder Farbe** außerhalb von
 `branding.py` (Backend-Defaults) und der CSS-Variablen-Definition (Frontend). Auch
 `<title>`, E-Mail-Absender, Push-Titel und APK-Label ziehen aus derselben Quelle.
-Der CI-Purity-Check deckt das mit ab.
+Der CI-Purity-Check deckt das mit ab. Bewusste Ausnahme: Die Anmeldeseite zeigt immer
+„© 2026 Nico Benks · Nodvard Deck“ (`copyrightLine()` in `frontend/src/lib/branding.ts`, ab 2027 mit
+Jahresspanne). Eigenes Branding ändert, wie die Oberfläche heißt, nicht, wem die Software gehört.
 
 ---
 
@@ -215,10 +227,10 @@ Der CI-Purity-Check deckt das mit ab.
 | Bereich | Position |
 |---|---|
 | Extensions | Vertrauenswürdiger Code. Permissions = Struktur + Audit, keine Sandbox. |
-| KI-Aktionen | Voller Handlungsumfang (keine Fähigkeits-Whitelist — bewusste Vorgabe), aber: Sperrliste für katastrophale Muster, Begründungspflicht, Anti-Flapping, Default = Bestätigung. |
+| KI-Aktionen | Aus KI-Text legt Nodvard Shield höchstens eine feste Aktion an: den Neustart eines Containers, dessen Absturz der Vorfall meldet. Befehl und Begründung baut der Code selbst, der Server kommt aus dem Vorfall; alles andere bleibt Text, der Chat legt nie eine Aktion an. Container-Logs und Docker-Fehlermeldungen gehen als fremde Daten (keine Anweisungen) an die KI. Dazu: Sperrliste für katastrophale Muster, Begründungspflicht, Anti-Flapping, Default = Bestätigung, nie über eine Dauerfreigabe. |
 | Secrets | Nie im Klartext in DB, Antwort oder Log. Extensions bekommen Handles. |
 | SSH | Eine Identität aus dem Vault, Known-Hosts-Pinning statt `StrictHostKeyChecking=no`. |
-| API | Alles authentifiziert außer `/branding`, `/health`, `/auth/login`. |
+| API | Alles authentifiziert außer `/branding`, `/health`, `/auth/login`. Routen von Erweiterungen verlangen ohne Angabe eine Anmeldung; ohne Anmeldung nur mit `public=True` und der Manifest-Berechtigung `api.public` (steht beim Einschalten im Protokoll). Mehr als 1 MiB Body bekommt kein Endpunkt zu lesen, auch ohne Anmeldung nicht (darüber `413`; Uploads haben eigene, höhere Grenzen). |
 | Audit | Append-only, jede Aktion, auch die abgelehnten und die nur vorgeschlagenen. |
 | Netz | Kein Port nach außen nötig (geht auch hinter DS-Lite/CGNAT); Zugriff über Reverse-Proxy im LAN oder ein VPN wie Tailscale/WireGuard. |
 
@@ -256,7 +268,7 @@ wird; seine Positivliste `KEPT_NAMES` ist die maßgebliche Liste mit Begründung
 | Docker-Volume `deploy_lattice_data` | Sonst startet das Dashboard leer |
 | Zielordner `~/lattice-deploy-test` von `scripts/deploy_pi.sh` (Standardwert von `DEPLOY_ROOT`) | So ausgelieferte Installationen hängen daran; über `DEPLOY_ROOT` frei wählbar |
 | Linux-Benutzer `lattice` (UID 1000) im Container | Dateirechte im Datenordner |
-| Standard-SSH-Benutzer `lattice` auf verwalteten Servern, sudo-Datei `/etc/sudoers.d/lattice-<benutzer>`, Schlüsselkommentar `lattice@<Name>` | Bestehende Server sind so eingerichtet |
+| Vorgabe `lattice` für `username` bei `POST /hosts/{id}/credentials/generate-key` (die Oberfläche schlägt beim Erzeugen `nodvard` vor und schickt den Namen immer mit); auf bestehenden Servern der Benutzer `lattice`, ältere Schlüssel mit Kommentar `lattice@<Name>` und alte sudo-Dateien `/etc/sudoers.d/lattice-<benutzer>` | Ältere Aufrufer der API schicken oft keinen Namen, ein anderer Standard wäre für sie eine stille Verhaltensänderung; bestehende Server sind so eingerichtet. Neue Schlüssel bekommen `nodvard@<Name>`, neue sudo-Regeln `/etc/sudoers.d/nodvard-<benutzer>`; eine alte Regel entfernt der Einrichtungsbefehl (mit sudo) nur, wenn sie genau die früher von Nodvard Deck angelegte ist |
 | Namen auf verwalteten Servern (systemd-Einheiten `lattice-upgrade-*`, Rollback-Tags, Zustandsordner) | Fortsetzen und Zurückrollen von Updates hängen daran |
 | Import-Map-Pfad `/lattice-shim/` | Alte Tabs verweisen darauf |
 | API-Wert `source: "lattice"` | Dokumentierter Wert, Clients werten ihn aus |

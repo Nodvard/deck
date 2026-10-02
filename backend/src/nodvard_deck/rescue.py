@@ -29,9 +29,13 @@ fremde Dateien aus: ein Stueck HTML mit eingebettetem Stil, kein Skript, keine S
   unverantwortlich, und die Verschluesselung (age) braucht `pyrage`, das nicht zur Standardbibliothek gehoert.
   Die Kopie liegt im Datenordner (`backups/vor-update/`) und laesst sich dort sichern.
 * Aktionen (POST) pruefen `Origin` gegen `Host`; das Cookie ist SameSite=Strict.
-* Haertung: kleine Obergrenzen (Anfrage 4 KiB, 64 gleichzeitige Verbindungen, davon hoechstens 8 je Absender, 10 s
-  je Anfrage -- als Frist fuer die ganze Verbindung, nicht je Lesevorgang), nie Dateien ausliefern, alles Dynamische
-  maskiert, auch im Protokoll (Steuerzeichen aus der Anfrage erscheinen dort als `\\x1b` usw.).
+* Haertung: kleine Obergrenzen (Inhalt 4 KiB, Kopfzeilen zusammen 32 KiB und hoechstens 100, 64 gleichzeitige
+  Verbindungen, davon hoechstens 8 je Absender -- bei IPv6 je /64-Netz --, dazu ein eigener kleiner Vorrat fuer
+  127.0.0.1/::1, damit der Health-Check des Containers immer durchkommt; 3 s fuer die Kopfzeilen und 10 s fuer die
+  ganze Verbindung, beides als Frist fuer das Ganze und nicht je Lesevorgang), nie Dateien ausliefern, alles
+  Dynamische maskiert, auch im Protokoll (Steuerzeichen aus der Anfrage erscheinen dort als `\\x1b` usw.).
+* Eine Sperre nach Fehlversuchen weist nur FALSCHE Codes ab, jeden erst nach einer kurzen Bremse; der richtige Code geht
+  immer sofort durch (siehe `try_code`).
 
 Die Notseite haelt die Sperre des Datenordners (`.boot/app.lock`), solange sie laeuft: ein `compose run` mit `boot`
 daneben aendert dann nichts.
@@ -44,7 +48,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import http.client
 import http.server
+import ipaddress
 import json
 import os
 import re
@@ -86,7 +92,21 @@ _STRIP = re.compile(r"[^A-Za-z0-9]")
 MAX_BODY = 4096
 MAX_CONNECTIONS = 64
 MAX_CONNECTIONS_PER_CLIENT = 8
-"""Ein einzelner Rechner kann so nie alle Plaetze belegen (z. B. mit vielen halb geschickten Anfragen)."""
+"""Ein einzelner Rechner kann so nie alle Plaetze belegen (z. B. mit vielen halb geschickten Anfragen). Bei IPv6 zaehlt das
+ganze /64-Netz als ein Absender: wer ein Netz hat, hat auch Milliarden Adressen."""
+RESERVED_LOCAL_CONNECTIONS = 8
+"""Eigener Vorrat fuer 127.0.0.1 und ::1 (Health-Check im Container, `docker exec`): zaehlt nicht zu `MAX_CONNECTIONS`, damit
+auch dann noch jemand durchkommt, wenn andere alle Plaetze belegen. Von aussen laesst sich diese Adresse nicht vortaeuschen."""
+MAX_HEADER_BYTES = 32 * 1024
+"""Anfragezeile und Kopfzeilen zusammen. Die Standardbibliothek erlaubt sonst 100 Zeilen zu je 64 KiB je Verbindung.
+Grosszuegig bemessen, weil Cookies je Adresse gelten und nicht je Port: Liegen auf derselben Adresse noch andere Dienste
+(Anmeldung ueber einen Proxy, Nextcloud, Proxmox ...), schickt der Browser deren Cookies mit, und die Notseite muss
+gerade im Notfall erreichbar bleiben. Die Kopfzeilen selbst belegen bei 72 Verbindungen (64 plus der Vorrat fuer
+127.0.0.1) zusammen hoechstens rund 2,3 MiB; beim Zerlegen kommen ein paar Kopien dazu."""
+MAX_HEADERS = 100
+"""Hoechstzahl der Kopfzeilen; die Standardbibliothek erzwingt sie selbst (`http.client._MAXHEADERS`), hier steht sie der Klarheit wegen."""
+HEAD_TIMEOUT_S = 3
+"""Frist fuer Anfragezeile und Kopfzeilen (eine ehrliche Anfrage ist in Millisekunden da)."""
 REQUEST_TIMEOUT_S = 10
 """Frist fuer die GANZE Verbindung (siehe `_Handler.setup`), nicht nur fuer jeden einzelnen Lesevorgang."""
 SESSION_TTL_S = 15 * 60
@@ -95,6 +115,9 @@ MAX_FAILURES_PER_IP = 5
 MAX_FAILURES_GLOBAL = 25
 LOCK_S = 10 * 60
 """Fenster der Fehlversuche UND Dauer der Sperre: eine Sperre endet, wenn der aelteste Fehlversuch aus dem Fenster faellt."""
+LOCKED_DELAY_S = 0.5
+"""Bremse waehrend einer Sperre: die Antwort auf einen falschen Code kommt erst nach dieser Zeit. Der richtige Code wartet nie.
+Mit 64 Plaetzen sind so hoechstens 128 Versuche je Sekunde moeglich, egal wie schnell der Rechner ist."""
 MAX_TRACKED_CLIENTS = 512
 ROLLBACK_BY = "notseite"
 
@@ -309,11 +332,25 @@ class Rescue:
     def try_code(self, ip: str, candidate: object, *, now: float | None = None) -> tuple[str, Any]:
         """-> ("ok", Sitzungstoken) | ("wrong", None) | ("locked", Sekunden bis zum naechsten Versuch).
 
-        Ein Versuch zaehlt schon BEIM START (wie `core/login_limit.py`): viele gleichzeitig abgeschickte
-        Versuche kommen so nicht alle an der Pruefung vorbei. Ein richtiger Code nimmt seinen Eintrag zurueck;
-        Anfragen waehrend einer Sperre zaehlen nicht (die Sperre laesst sich nicht verlaengern)."""
+        Der Code wird IMMER geprueft, auch waehrend einer Sperre (immer mit `compare_digest`, vor jeder Auskunft ueber
+        die Sperre). Eine Sperre, ob je Absender oder insgesamt, weist nur FALSCHE Versuche mit "locked" ab; der richtige
+        Code kommt trotzdem durch. Sonst koennte jeder im Netz mit ein paar Fehlversuchen von wenigen Adressen die Notseite
+        fuer alle verschliessen -- gerade den Rueckweg, der sie braucht.
+
+        Raten bleibt aussichtslos: der Code hat 32^12 = 2^60 (rund 10^18) Moeglichkeiten. Waehrend einer Sperre darf zwar
+        jeder weiterraten, aber jede Antwort auf einen falschen Code kommt erst nach `LOCKED_DELAY_S` (siehe `_Handler._post`):
+        bei 64 Plaetzen hoechstens 128 Versuche je Sekunde. Im Mittel braeuchte man 2^59 / 128, rund 4,5 * 10^15 Sekunden,
+        weit ueber hundert Millionen Jahre (selbst ohne Bremse, bei 10.000 je Sekunde, knapp zwei Millionen). Die Antwort
+        verraet nichts ausser dem Erfolg: "locked" und "wrong" sagen bei einem falschen Code nichts darueber, wie nah er war.
+
+        Fehlversuche zaehlen nur, solange keine Sperre greift: waehrend einer Sperre kommt nichts mehr dazu (die Sperre
+        laesst sich nicht verlaengern, und die Listen im Speicher bleiben klein, egal wie viel jemand schickt)."""
         now = time.monotonic() if now is None else now
+        expected = normalize(self._code).encode()
+        good = secrets.compare_digest(normalize(candidate).encode(), expected) and bool(expected)
         with self._lock:
+            if good:
+                return "ok", self._new_session(now)
             horizon = now - LOCK_S
             self._failures_global = [t for t in self._failures_global if t > horizon]
             attempts = [t for t in self._failures_by_ip.get(ip, []) if t > horizon]
@@ -324,15 +361,7 @@ class Rescue:
             attempts.append(now)
             self._failures_by_ip[ip] = attempts
             self._trim_clients(now)
-            expected = normalize(self._code).encode()
-            good = bool(expected) and secrets.compare_digest(normalize(candidate).encode(), expected)
-            if not good:
-                return "wrong", None
-            self._failures_global.remove(now)
-            attempts.remove(now)
-            if not attempts:
-                self._failures_by_ip.pop(ip, None)
-            return "ok", self._new_session(now)
+            return "wrong", None
 
     def _trim_clients(self, now: float) -> None:
         if len(self._failures_by_ip) <= MAX_TRACKED_CLIENTS:
@@ -393,11 +422,16 @@ class Rescue:
 
 _FLASH = {
     "falsch": ("bad", "Der Notfallcode stimmt nicht."),
-    "gesperrt": ("bad", "Zu viele Fehlversuche. Bitte warte einige Minuten."),
     "entsperrt": ("good", "Entsperrt. Die Einzelheiten und die Möglichkeiten stehen unten."),
     "abgemeldet": ("good", "Abgemeldet."),
     "nicht_moeglich": ("bad", "Das geht in dieser Lage nicht."),
 }
+
+_LOCKED_TEXT = (
+    "Der eingegebene Code stimmt nicht – prüfe die Eingabe. "
+    "Der richtige Code funktioniert weiterhin sofort, auch wenn du schon mehrmals falsch getippt hast."
+)
+"""Antwort auf einen falschen Code waehrend einer Sperre (siehe `Rescue.try_code`): Die Sperre weist nur falsche Codes ab."""
 
 _CSS = """
 :root{color-scheme:light dark;--bg:#f4f5f7;--fg:#1b1f24;--muted:#5b6470;--card:#fff;--line:#d5d9e0;--accent:#2b5fd9;--bad:#b3261e;--good:#1b7a3a;--warn:#8a5a00;--warnbg:#fff4d6;--code:#eef0f4}
@@ -646,6 +680,48 @@ _HEALTH_BODY = b'{"status":"rescue"}'
 _API_BODY = json.dumps({"status": "rescue", "detail": "Nodvard Deck läuft im Notfallmodus."}, ensure_ascii=False, separators=(",", ":")).encode()
 
 
+def _sender(address: Any) -> tuple[str, bool]:
+    """-> (Schluessel fuer die Zaehlung je Absender, ob die Verbindung von diesem Rechner selbst kommt).
+
+    IPv6 zaehlt je /64-Netz, IPv4-in-IPv6 als IPv4. Nur 127.0.0.1 und ::1 gelten als "lokal" (Health-Check im Container),
+    nicht jede Adresse aus 127.0.0.0/8."""
+    raw = str(address[0]) if isinstance(address, tuple) and address else ""
+    try:
+        ip = ipaddress.ip_address(raw.split("%", 1)[0])
+    except ValueError:
+        return raw, False
+    if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
+        ip = ip.ipv4_mapped
+    if ip == ipaddress.ip_address("127.0.0.1") or ip == ipaddress.ip_address("::1"):
+        return str(ip), True
+    if isinstance(ip, ipaddress.IPv6Address):
+        return str(ipaddress.ip_network(f"{ip}/64", strict=False)), False
+    return str(ip), False
+
+
+class _HeadReader:
+    """Umhuellt `rfile` und begrenzt Anfragezeile und Kopfzeilen zusammen auf `MAX_HEADER_BYTES`.
+
+    Die Standardbibliothek erlaubt je Kopfzeile 64 KiB und 100 Zeilen: 64 Verbindungen koennten so Hunderte MB belegen.
+    Ist das Budget aufgebraucht, loest die naechste Zeile `http.client.HTTPException` aus; `parse_request` beantwortet das
+    mit 431. Den Inhalt (`read`) und alles andere reicht der Umschlag unveraendert durch (der Inhalt ist anderweitig begrenzt)."""
+
+    def __init__(self, raw: Any, limit: int) -> None:
+        self._raw = raw
+        self._left = limit
+
+    def readline(self, size: int = -1) -> bytes:
+        if self._left <= 0:
+            raise http.client.HTTPException("Kopfzeilen zu gross")
+        n = self._left if size is None or size < 0 else min(size, self._left)
+        line = self._raw.readline(n)
+        self._left -= len(line)
+        return line
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._raw, name)
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     server_version = "NodvardDeckRescue"
     sys_version = ""
@@ -656,9 +732,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def setup(self) -> None:
         super().setup()
         self._expired = threading.Event()
+        self.rfile = _HeadReader(self.rfile, MAX_HEADER_BYTES)
+        # Zwei Fristen: kurz fuer die Kopfzeilen (laeuft bis `parse_request` fertig ist), lang fuer die ganze Verbindung.
+        self._head_deadline = threading.Timer(HEAD_TIMEOUT_S, self._expire)
         self._deadline = threading.Timer(REQUEST_TIMEOUT_S, self._expire)
-        self._deadline.daemon = True
-        self._deadline.start()
+        for timer in (self._head_deadline, self._deadline):
+            timer.daemon = True
+            timer.start()
 
     def _expire(self) -> None:
         """Die Frist ist um: Verbindung zu. `timeout` allein gilt nur je Lesevorgang -- wer alle paar Sekunden ein Byte
@@ -670,6 +750,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             pass
 
     def finish(self) -> None:
+        self._head_deadline.cancel()
         self._deadline.cancel()
         try:
             super().finish()
@@ -678,7 +759,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def parse_request(self) -> bool:
         # Nach dem Abbruch liefert das Lesen "Ende": eine abgeschnittene Anfrage darf nie als vollstaendig gelten.
-        return super().parse_request() and not self._expired.is_set()
+        ok = super().parse_request()
+        self._head_deadline.cancel()  # die Kopfzeilen sind da; Inhalt und Antwort haben die Frist der ganzen Verbindung
+        return ok and not self._expired.is_set()
 
     # --- Helfer ---
     @property
@@ -844,9 +927,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(400, {"status": "rescue", "detail": "Ungültige Anfrage."})
             outcome, value = self.rescue.try_code(self.client_address[0], fields.get("code"))
             if outcome == "locked":
+                self._expired.wait(LOCKED_DELAY_S)  # Bremse fuers Raten waehrend der Sperre; der richtige Code kommt nie hierher
                 print(f"[notseite] {self.client_address[0]}: zu viele Fehlversuche beim Notfallcode, gesperrt.", file=sys.stderr, flush=True)
                 return self._send(
-                    429, _info_page("Zu viele Fehlversuche", "Bitte warte einige Minuten und versuche es dann erneut.").encode(),
+                    429, _info_page("Zu viele Fehlversuche", _LOCKED_TEXT).encode(),
                     "text/html; charset=utf-8", {"Retry-After": str(value)},
                 )
             if outcome == "wrong":
@@ -902,38 +986,44 @@ class _Server(http.server.ThreadingHTTPServer):
             self.address_family = socket.AF_INET6
         self.rescue = rescue
         self._slots = threading.BoundedSemaphore(MAX_CONNECTIONS)
+        self._local_slots = threading.BoundedSemaphore(RESERVED_LOCAL_CONNECTIONS)
         self._per_client: dict[str, int] = {}
         self._per_client_lock = threading.Lock()
         super().__init__(address, handler)
         rescue.server = self
 
     def process_request(self, request: Any, client_address: Any) -> None:
-        sender = str(client_address[0]) if isinstance(client_address, tuple) and client_address else ""
+        sender, local = _sender(client_address)
         with self._per_client_lock:
-            if self._per_client.get(sender, 0) >= MAX_CONNECTIONS_PER_CLIENT or not self._slots.acquire(blocking=False):
+            if local:
+                taken = self._local_slots.acquire(blocking=False)  # eigener Vorrat: andere koennen ihn nicht leeren
+            else:
+                taken = self._per_client.get(sender, 0) < MAX_CONNECTIONS_PER_CLIENT and self._slots.acquire(blocking=False)
+            if not taken:
                 self.shutdown_request(request)  # zu viele gleichzeitige Verbindungen (insgesamt oder von diesem Rechner)
                 return
             self._per_client[sender] = self._per_client.get(sender, 0) + 1
         try:
             super().process_request(request, client_address)
         except BaseException:
-            self._release(sender)  # der Thread ist nie gestartet
+            self._release(client_address)  # der Thread ist nie gestartet
             raise
 
     def process_request_thread(self, request: Any, client_address: Any) -> None:
         try:
             super().process_request_thread(request, client_address)
         finally:
-            self._release(str(client_address[0]) if isinstance(client_address, tuple) and client_address else "")
+            self._release(client_address)
 
-    def _release(self, sender: str) -> None:
+    def _release(self, client_address: Any) -> None:
+        sender, local = _sender(client_address)
         with self._per_client_lock:
             left = self._per_client.get(sender, 0) - 1
             if left > 0:
                 self._per_client[sender] = left
             else:
                 self._per_client.pop(sender, None)
-        self._slots.release()
+        (self._local_slots if local else self._slots).release()
 
     def handle_error(self, request: Any, client_address: Any) -> None:
         if isinstance(sys.exc_info()[1], OSError):

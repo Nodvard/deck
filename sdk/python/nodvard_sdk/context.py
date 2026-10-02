@@ -13,6 +13,7 @@ Siehe docs/02-EXTENSION-API.md §2.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
+from contextvars import ContextVar
 from pathlib import PurePosixPath
 from typing import Any, AsyncContextManager, Protocol, runtime_checkable
 
@@ -26,6 +27,7 @@ from .types import (
     Host,
     Notification,
     NotifyResult,
+    Risk,
     Severity,
 )
 from .widgets import HostRequirementSpec, HostToolSpec, PageSpec, WidgetSpec
@@ -49,6 +51,7 @@ class ApiHandle(Protocol):
         prefix: str = "",
         tags: list[str] | None = None,
         permission: str | None = None,
+        public: bool = False,
     ) -> None:
         """Montiert einen FastAPI-Router unter /api/v1/ext/<ext_id><prefix>.
 
@@ -56,12 +59,30 @@ class ApiHandle(Protocol):
         RBAC-Pruefung dieser einen Berechtigung fuer ALLE Routen des Routers zur
         Kern-Aufgabe -- die Extension definiert dafuer keine eigene Auth-Abhaengigkeit.
 
-        **Ohne `permission` (Default `None`) prueft der Kern NICHTS** -- die Route ist
-        oeffentlich erreichbar wie jede andere unauthentifizierte FastAPI-Route auch.
-        Das ist bewusst so (manche Routen sollen oeffentlich sein, z. B. ein
-        Health-Check), heisst aber: jede Route, die Nutzerdaten zeigt oder aendert,
-        MUSS `permission` explizit setzen. Live gefunden (WP-6): eine fruehere
-        Fassung dieses Docstrings behauptete faelschlich, das geschehe automatisch.
+        **Ohne `permission` verlangt der Kern mindestens eine gueltige Anmeldung**
+        (401 ohne Token, keine bestimmte Berechtigung noetig). Frueher blieb so eine
+        Route ganz ohne Pruefung und war ohne Anmeldung erreichbar; wer das Argument
+        vergass, veroeffentlichte den Endpunkt fuer alle. Der Standard ist deshalb
+        umgedreht (sichere Richtung): bestehende Aufrufe laufen weiter, nur ohne
+        Anmeldung kommt nichts mehr durch. **Anmeldung ist keine Berechtigung:** Routen,
+        die Daten zeigen oder etwas aendern, setzen `permission=` oder pruefen selbst.
+
+        `public=True` ist die ausdrueckliche Ausnahme fuer Routen, die bewusst fuer
+        jeden erreichbar sein sollen (z. B. ein Webhook): dann prueft der Kern nichts.
+        Dafuer braucht die Erweiterung die Manifest-Berechtigung `api.public` (sonst
+        `PermissionDenied`), und der Host schreibt die oeffentlichen Praefixe beim
+        Einschalten ins Protokoll. `public=True` und `permission` zusammen sind ein
+        Fehler (`InvalidRegistration`).
+
+        Die Anmeldepruefung greift nur bei normalen FastAPI-Routen (`@router.get` usw.).
+        WebSocket-Routen, `router.add_route()` und `router.mount()` (z. B. StaticFiles)
+        lehnt der Kern ohne `public=True` mit `InvalidRegistration` ab; mit `public=True`
+        muss die Erweiterung sie selbst absichern (z. B. Einmal-Ticket wie das Terminal).
+
+        Der Host prueft die Router nach `setup()` und nach `on_start()`. Was eine
+        Erweiterung erst spaeter zur Laufzeit an einen schon montierten Router haengt,
+        etwa aus einem Hintergrundtask, sieht der Host nicht mehr: solche Routen muessen
+        sich selbst absichern.
         """
         ...
 
@@ -129,6 +150,14 @@ class ActionsHandle(Protocol):
         ...
 
     async def result(self, action_id: str) -> Any: ...
+
+    async def check_standing_approval(self, granted_by_user_id: str, *, risk: Risk) -> str | None:
+        """Gaelte eine Dauerfreigabe (`StandingApproval`) von `granted_by_user_id` heute fuer
+        Aktionen der Stufe `risk`? None = ja, sonst der Grund in einfachen Worten (Person
+        gesperrt, kein Owner/Admin mehr ...). Dieselbe Pruefung wie im Gate, nur lesend --
+        damit eine Seite nie "gilt" anzeigt, wo das Gate ablehnen wuerde. Braucht die
+        Berechtigung `actions.standing_approval`."""
+        ...
 
     async def list(self, *, correlation_id: str | None = None, limit: int = 20) -> list[Any]:
         """Juengste eigene Aktionen (Zeilen mit status/result/proposed_by_*/created_at),
@@ -198,6 +227,13 @@ class SecretsHandle(Protocol):
         self, *, label: str, kind: str, value: str, description: str | None = None
     ) -> SecretHandleRef: ...
     async def exists(self, label: str) -> bool: ...
+    async def delete(self, label: str) -> bool:
+        """Loescht das Geheimnis mit diesem Label (gleiches Recht wie `get_handle`:
+        `secrets.read:<label>`). Liefert `True`, wenn es eines gab, sonst `False`
+        (kein Fehler). Gedacht fuer Zugangsdaten, die zu einem Ziel gehoeren, das die
+        Extension gerade entfernt oder umstellt. Aeltere Kerne haben
+        die Methode nicht."""
+        ...
 
 
 class SettingsHandle(Protocol):
@@ -207,6 +243,18 @@ class SettingsHandle(Protocol):
     async def core(self, key: str) -> Any:
         """Lesender Zugriff auf freigegebene Kern-Einstellungen (z. B. maintenance.windows)."""
         ...
+
+
+_JOB_TRIGGER: ContextVar[str | None] = ContextVar("nodvard_job_trigger", default=None)
+"""Setzt der Kern-Scheduler fuer die Dauer eines Job-Laufs (siehe `current_job_trigger`)."""
+
+
+def current_job_trigger() -> str | None:
+    """Wie der gerade laufende Job gestartet wurde: "schedule" (nach Zeitplan), "manual"
+    ("Jetzt ausfuehren" ueber die Jobs-Schnittstelle) oder None ausserhalb eines Job-Laufs.
+    Damit kann ein `JobSpec.handler` z. B. eine Dauerfreigabe nur fuer echte Zeitplan-Laeufe
+    nutzen."""
+    return _JOB_TRIGGER.get()
 
 
 @runtime_checkable
@@ -247,9 +295,11 @@ class NotifyHandle(Protocol):
         übergibt `raise_on_failure=True`: dann wirft `NotificationNotDelivered`, wenn es
         Kanäle gab, aber keiner zugestellt hat (kein Kanal oder Wartungsfenster: kein Fehler).
 
-        Liefert `NotifyResult` (Verlaufs-ID, `suppressed`: ein Wartungsfenster hat den Push
-        unterdrückt). Ältere Kerne und Test-Doubles liefern `None` -- wie `suppressed=False`
-        behandeln."""
+        Liefert `NotifyResult` (Verlaufs-ID; `suppressed`: ein Wartungsfenster hat den Push
+        unterdrückt; `delivered`: `True`, wenn mindestens ein Kanal die Meldung zugestellt hat,
+        `False`, wenn keiner es getan hat -- kein Kanal eingerichtet, alle ausgefallen oder
+        unterdrückt -- und `None`, wenn der Kern es nicht weiß). Ältere Kerne und Test-Doubles
+        liefern `None` -- wie `suppressed=False` und `delivered=None` (unbekannt) behandeln."""
         ...
 
     async def would_suppress(self, *, host_id: str | None = None, host_ids: Sequence[str] | None = None) -> bool:
@@ -293,7 +343,11 @@ class HttpHandle(Protocol):
     fuer genau diesen Aufruf ab -- fuer Ziele mit einem selbstsignierten Zertifikat
     (z. B. Proxmox VEs Standard-Auslieferung). Braucht zusaetzlich zu `net.outbound`
     die eigene Berechtigung `net.outbound.insecure_tls` im Manifest; ohne sie wirft
-    der Aufruf `PermissionDenied`, auch wenn `net.outbound` bereits gewaehrt ist."""
+    der Aufruf `PermissionDenied`, auch wenn `net.outbound` bereits gewaehrt ist.
+
+    Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) werden nie benutzt:
+    jede Anfrage geht direkt an die gepruefte Adresse, auch mit `insecure_tls=True`.
+    `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter."""
 
     async def get(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...
     async def post(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...
@@ -310,7 +364,15 @@ class HttpHandle(Protocol):
     ) -> AsyncContextManager["WebSocketConnection"]:
         """Ausgehende WebSocket-Verbindung (`ws://`/`wss://`) -- dieselben
         `net.outbound`-/`insecure_tls`-Pruefungen wie die HTTP-Methoden. Erster Bedarf:
-        eine Hypervisor-Konsole, die nur ueber einen WebSocket erreichbar ist."""
+        eine Hypervisor-Konsole, die nur ueber einen WebSocket erreichbar ist.
+
+        Weiterleitungen (3xx) beim Verbindungsaufbau werden nie verfolgt: `async with` wirft
+        ein `ConnectionError` mit fertigem deutschem Text, eine zweite Verbindung entsteht
+        nicht (die Zielpruefung kennt nur die Start-Adresse).
+
+        Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `WS_PROXY`, `WSS_PROXY`,
+        `SOCKS_PROXY`) werden nie benutzt: die Verbindung geht immer direkt an die
+        gepruefte Adresse."""
         ...
 
 

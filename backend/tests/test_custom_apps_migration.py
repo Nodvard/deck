@@ -14,6 +14,7 @@ from nodvard_deck.migrate import alembic_config, known_revisions
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_CORE_HEAD = "e7a1c4b93d52"  # recovery_codes -- die Revision direkt vor custom_apps
+CUSTOM_APPS_REVISION = "d4b7a2c91e63"
 
 
 def _settings(tmp_path: Path) -> config.Settings:
@@ -45,7 +46,7 @@ def _tables(path: Path) -> set[str]:
         db.close()
 
 
-def test_there_is_exactly_one_core_head_and_it_is_custom_apps():
+def test_there_is_exactly_one_core_head_and_custom_apps_is_part_of_its_chain():
     from alembic.script import ScriptDirectory
 
     cfg, _ = alembic_config(repo_root=REPO_ROOT)
@@ -56,9 +57,10 @@ def test_there_is_exactly_one_core_head_and_it_is_custom_apps():
         if Path(script.get_revision(h).path).resolve().parent == core_dir
     ]
     assert len(core_heads) == 1, f"mehrere Kern-Koepfe: {core_heads}"
-    revision = script.get_revision(core_heads[0])
-    assert revision.down_revision == PREVIOUS_CORE_HEAD
-    assert "custom_apps" in (revision.doc or "")
+    chain = {rev.revision: rev for rev in script.walk_revisions(base="base", head=core_heads[0])}
+    assert CUSTOM_APPS_REVISION in chain
+    assert chain[CUSTOM_APPS_REVISION].down_revision == PREVIOUS_CORE_HEAD
+    assert "custom_apps" in (chain[CUSTOM_APPS_REVISION].doc or "")
     assert core_heads[0] in known_revisions(REPO_ROOT)[1]
 
 

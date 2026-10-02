@@ -121,7 +121,7 @@ export function ActionButton({ action, row, extId, onDone }: { action: WidgetAct
             setError(await failureText({ ...approved, id: approved.id ?? actionId }));
           }
         } else {
-          setNotice(`"${action.label}" vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+          setNotice(`"${action.label}" vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
         }
       } else if (result && isActionRunning(result.status) && (result.id ?? result.action_id)) {
         const final = await settle(result, result.id ?? result.action_id);

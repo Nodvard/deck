@@ -28,6 +28,25 @@ CONTENT_LABEL = {
 }
 
 
+# Speicherarten, die von Natur aus von aussen kommen. Proxmox setzt `shared` dort nicht
+# immer selbst; ohne diese Liste stuenden sie je Knoten einzeln da.
+_REMOTE_TYPES = {"nfs", "cifs", "glusterfs", "cephfs", "pbs"}
+
+
+def is_shared(pool: dict[str, Any]) -> bool:
+    """Geteilt: von Proxmox so markiert (`shared: 1`) oder eine Netzwerk-Speicherart."""
+    if str(pool.get("shared") or "0").lower() in ("1", "true"):
+        return True
+    return str(pool.get("type") or "") in _REMOTE_TYPES
+
+
+def shared_label(nodes: list[str]) -> str:
+    """Kurzer Hinweis, wo ein geteilter Speicher verfuegbar ist."""
+    if len(nodes) <= 3:
+        return f"geteilt, verfügbar auf {', '.join(nodes)}"
+    return f"geteilt, verfügbar auf {len(nodes)} Knoten"
+
+
 def usage_tone(percent: float | None) -> str:
     if percent is None:
         return "neutral"
@@ -82,13 +101,22 @@ async def _guest_names(ctx: "ExtensionContext") -> dict[tuple[str, str], str]:
     return names
 
 
-async def collect_storage(ctx: "ExtensionContext", *, details: bool) -> dict[str, Any]:
+async def collect_storage(
+    ctx: "ExtensionContext", *, details: bool, merge_connections: bool = False
+) -> dict[str, Any]:
     """`details=False` (Widget, alle 30s): nur Belegung, eine Abfrage je Knoten.
     `details=True` (Seite): zusaetzlich der Inhalt je Pool -- Gast-Disks einzeln,
-    Backups/ISOs/Vorlagen als Anzahl + Groesse."""
+    Backups/ISOs/Vorlagen als Anzahl + Groesse.
+
+    Ein geteilter Speicher (NFS ...) steht in der Antwort jedes Knotens. Er kommt nur
+    einmal vor, mit `nodes` (wo er verfuegbar ist); Belegung und Groesse sind auf allen
+    Knoten gleich und werden nicht addiert. Mit `merge_connections` (Widget, ohne
+    Verbindungs-Gruppierung) auch ueber Verbindungen hinweg, wenn Name, Art und Groesse
+    gleich sind -- zwei eigenstaendige Proxmox-Server, die dieselbe Freigabe einbinden."""
     pools: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     names = await _guest_names(ctx) if details else {}
+    shared_rows: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     for conn_name, connector in (await build_connectors(ctx)).items():
         try:
@@ -96,7 +124,6 @@ async def collect_storage(ctx: "ExtensionContext", *, details: bool) -> dict[str
         except ProxmoxApiError as exc:
             errors.append({"connection": conn_name, "error": str(exc)})
             continue
-        seen_shared: set[str] = set()
         for node in nodes:
             node_name = node.get("node")
             if not node_name or node.get("status") not in (None, "online"):
@@ -108,12 +135,25 @@ async def collect_storage(ctx: "ExtensionContext", *, details: bool) -> dict[str
                 continue
             for pool in raw:
                 storage = str(pool.get("storage"))
-                # Geteilter Speicher (NFS ...) erscheint auf jedem Knoten desselben
-                # Clusters -- einmal reicht.
-                if pool.get("shared") and storage in seen_shared:
-                    continue
-                if pool.get("shared"):
-                    seen_shared.add(storage)
+                shared = is_shared(pool)
+                shared_keys: list[tuple[Any, ...]] = []
+                if shared:
+                    shared_keys = [("conn", conn_name, storage)]
+                    if merge_connections and pool.get("total"):
+                        shared_keys.append(("all", storage, pool.get("type"), pool.get("total")))
+                    known = next((shared_rows[k] for k in shared_keys if k in shared_rows), None)
+                    if known is not None:
+                        # Auch die Schluessel dieses Funds merken: der naechste Knoten
+                        # derselben Verbindung findet die Zeile sonst nicht, wenn er
+                        # (z. B. Speicher gerade inaktiv, Groesse 0) den Verbindungs-
+                        # uebergreifenden Schluessel nicht bildet.
+                        for k in shared_keys:
+                            shared_rows.setdefault(k, known)
+                        if node_name not in known["nodes"]:
+                            known["nodes"].append(node_name)
+                        if conn_name not in known["connections"]:
+                            known["connections"].append(conn_name)
+                        continue
                 content = [c for c in str(pool.get("content") or "").split(",") if c]
                 percent = _percent(pool)
                 row: dict[str, Any] = {
@@ -124,7 +164,9 @@ async def collect_storage(ctx: "ExtensionContext", *, details: bool) -> dict[str
                     "type": pool.get("type"),
                     "content": content,
                     "content_labels": [CONTENT_LABEL.get(c, c) for c in content],
-                    "shared": bool(pool.get("shared")),
+                    "nodes": [node_name],
+                    "connections": [conn_name],
+                    "shared": shared,
                     "active": bool(pool.get("active", 1)),
                     "total": pool.get("total"),
                     "used": pool.get("used"),
@@ -134,6 +176,8 @@ async def collect_storage(ctx: "ExtensionContext", *, details: bool) -> dict[str
                 }
                 if details:
                     row.update(await _pool_content(connector, conn_name, node_name, storage, names))
+                for k in shared_keys:
+                    shared_rows[k] = row
                 pools.append(row)
 
     pools.sort(key=lambda p: (p["connection"], p["node"], -(p["used_percent"] or 0)))

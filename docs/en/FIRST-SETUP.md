@@ -46,8 +46,9 @@ The database is created or updated automatically when the container starts; ther
 that. Then open `http://<address-of-the-machine>:8080` in your browser, e.g. **http://192.168.1.10:8080**
 (for a different port, use the variable `NODVARD_DECK_PORT`). The data lives in its own Docker storage
 (volume `nodvard-deck-data`). If you would rather use a folder on the NAS (`./daten:/app/data`), you do not
-need to set any permissions: when it starts, the container sets the ownership of that folder itself. To
-update (in the same folder): `docker compose pull && docker compose up -d`.
+need to set any permissions: when it starts, the container sets the ownership of that folder itself. Afterwards
+only the user with the number 1000 and root can read it (if the storage supports permissions); backup tools or
+file managers that run as another user need `sudo` for it. To update (in the same folder): `docker compose pull && docker compose up -d`.
 The setup code (next section) is shown by the wizard together with instructions on where to find it
 (command line, Docker Desktop, Portainer, Synology, Unraid). The log line is in German and starts with
 "Einrichtungscode" (setup code).
@@ -115,11 +116,12 @@ from step 3.
 **Step 1 of 6 — Create the administrator account** („Administrator-Konto anlegen“)
 
 - **Setup code** („Einrichtungscode“): see above.
-- **Username** („Benutzername“): lowercase letters only (uppercase letters are converted
-  automatically), at least 3 characters.
+- **Username** („Benutzername“): at least 3 characters, only lowercase letters, digits and `.`, `-` and `_`,
+  no spaces, starting with a letter or a digit (e.g. `admin`). Uppercase letters are converted automatically.
 - **Password** („Passwort“) and **Confirm password** („Passwort bestätigen“): at least
   8 characters.
-- "Create account" („Konto anlegen“).
+- "Create account" („Konto anlegen“). If an entry does not fit, the wizard says right away which one, in German
+  (e.g. „Benutzername: Mindestens 3 Zeichen.“, meaning "Username: at least 3 characters.").
 
 This first account is the **owner** („Inhaber“). The owner may always do everything, even
 if roles are changed later – so you cannot lock yourself out.
@@ -128,13 +130,17 @@ if roles are changed later – so you cannot lock yourself out.
 
 Schedules (for example the morning briefing at 7:00) and maintenance windows follow this time zone. It is
 preselected with the time zone of the device you are using in the browser; if the browser does not know it,
-the current setting stays. With the search (for example "Berlin", "New York") or the list you pick a different
+the current setting stays. With the search (for example "Berlin", "New York", also German names such as "Wien" or
+"Mitteleuropa") or the list you pick a different
 one. "Continue" („Weiter“) saves it, "Skip" („Überspringen“) leaves the setting as it is. You can change it
-later under Settings → System („Einstellungen → System“).
+later under Settings → System („Einstellungen → System“). Without a search, the list shows the selected zone
+first, then the common ones (Berlin, Vienna, Zurich …); known zones show their German name next to them (e.g.
+„Österreich, Wien“ for `Europe/Vienna`).
 
 **Step 3 of 6 — What do you want to use?** („Was willst du nutzen?“)
 
-All bundled modules as tiles with a switch, sorted by topic: first "For your servers" („Für deine Server“)
+All bundled modules as tiles with a switch (except the sample module "Hello World" for developers, which only appears
+under Settings → Extensions), sorted by topic: first "For your servers" („Für deine Server“)
 (System, Terminal, Service matrix, Proxmox VE …), then security, tools, connections to other services.
 One click on the tile or the switch turns a module on or off. No module is mandatory ("Skip"). Modules that
 still need details afterwards (address, credentials, token) carry the note "Needs details afterwards"
@@ -145,7 +151,8 @@ reminds you (see [4.](#4-enable-extensions)). Order and group come from the modu
 
 **Step 4 of 6 — Two-factor login (optional)** („Zwei-Faktor-Anmeldung“)
 
-"Set up now" („Jetzt einrichten“) shows a **QR code** for the authenticator app (it is drawn in the browser,
+"Set up now" („Jetzt einrichten“) first asks for your current password for safety ("Continue" („Weiter“)), then
+shows a **QR code** for the authenticator app (it is drawn in the browser,
 nothing is sent to an external service) plus the key as text in case scanning does not work. Enter the
 six-digit code from the app and press "Confirm" („Bestätigen“). The **recovery codes** („Wiederherstellungs-Codes“;
 the interface also calls them „Rettungscodes“, see [2.1](#21-two-factor-login-and-recovery-codes)) are then shown
@@ -155,7 +162,8 @@ gesichert“). "Skip" sets nothing up; you can do it later under Settings → My
 
 **Step 5 of 6 — Appearance (optional)** („Aussehen“)
 
-Product name („Produktname“), short name („Kurzname“), accent color („Akzentfarbe“) →
+Product name („Produktname“), subtitle („Untertitel“: the small line under the name; the same text is the app's name on
+the phone's home screen, so keep it short), accent color („Akzentfarbe“) →
 "Save" („Speichern“), or "Skip". The logo and the remaining colors are available later under
 Settings → Appearance („Einstellungen → Aussehen“).
 
@@ -177,7 +185,8 @@ After that, `/setup` is gone (it only leads to the login page).
 ### 2.1 Two-factor login and recovery codes
 
 In the wizard (step 4) or later under Settings → My account → "Two-factor login"
-(„Einstellungen → Mein Konto → Zwei-Faktor-Anmeldung“) → "Set up" („Einrichten“): scan the QR code with the
+(„Einstellungen → Mein Konto → Zwei-Faktor-Anmeldung“) → "Set up" („Einrichten“): enter your current password
+for safety ("Continue" („Weiter“)), then scan the QR code with the
 authenticator app (or enter the key by hand) and confirm the six-digit code. As soon as two-factor login is
 active, Nodvard Deck shows **ten recovery codes, once** (format `ABCDE-FGHJK`). Save them with "Copy"
 („Kopieren“) or "Save as text file" („Als Textdatei speichern“) – ideally in a password manager or
@@ -187,6 +196,10 @@ printed out, **not** only on the phone, because the phone is exactly what is sup
   recovery code" („Handy nicht zur Hand? Wiederherstellungs-Code verwenden“) and type in a code. Each code works
   **exactly once**; Nodvard Deck records the use in the audit log and sends a
   notification (Notifications page („Meldungen“), also as a push if ntfy is set up).
+- **Codes from the app** work only **once** per account; if one has already been used, wait for the next
+  one. After 10 wrong codes in 15 minutes (or 20 in 24 hours), no matter from which device, code entry for the
+  account is blocked for a while and Nodvard Deck sends a notification. Whoever guesses that often probably knows
+  the password – if it was not you, change it. With a recovery code you still get in during the block.
 - **How many are left** is shown under My account. If there are few or none: "Generate new recovery codes"
   („Neue Wiederherstellungs-Codes erzeugen“) (asks for the current password; the old codes become invalid
   immediately).
@@ -199,17 +212,23 @@ printed out, **not** only on the phone, because the phone is exactly what is sup
 
 Settings → Users → **"New user"** („Einstellungen → Benutzer → Neuer Benutzer“):
 
-- **Username** („Benutzername“): lowercase, converted automatically. Upper or lower case
-  does not matter at login.
+- **Username** („Benutzername“): the same rule as for the first account (at least 3 characters, only lowercase
+  letters, digits, `.`, `-` and `_`, starting with a letter or a digit); uppercase letters are converted
+  automatically. Upper or lower case does not matter at login. Older accounts whose name does not fit this rule
+  (e.g. with spaces) keep signing in normally.
 - **Password** („Passwort“): at least 8 characters. The new user can change it under "My
   account" („Mein Konto“). (The password of *other* users is set later under "Edit"
   („Bearbeiten“); your own and the owner's cannot be set there – your own is set under "My account".)
-- **Display name** („Anzeigename“), **Email (optional)** („E-Mail (optional)“)
+- **Display name** („Anzeigename“), **Email (optional)** („E-Mail (optional)“); an address you enter needs an `@`
+  (e.g. `name@beispiel.de`).
 - **Roles** („Rollen“):
-  - `admin` – full administration, including users and settings
-  - `operator` – operate servers, approve actions up to medium risk
-  - `viewer` – view only, change nothing
-- "Create" („Anlegen“).
+  - **Administrator** (`admin`) – full administration, including users and settings
+  - **Operator** („Bediener“, `operator`) – operate servers, approve actions up to medium risk
+  - **Viewer** („Betrachter“, `viewer`) – view only, change nothing. Without the privilege `hosts.execute` (as for commands), the viewer
+    sees neither files on servers nor the commands and output of actions (text from the server), not even in the audit
+    log. `viewer` can read notifications but cannot mark them as read (the read status is shared by all users)
+- "Create" („Anlegen“). If an entry does not fit, a notice at the top says right away which one, in German
+  (e.g. „Passwort: Mindestens 8 Zeichen.“, meaning "Password: at least 8 characters.").
 
 **Resetting a user's two-factor login:** If someone has lost their phone and their recovery codes, a user
 with the privilege `users.write` (role `admin`) turns off that person's two-factor login under Settings →
@@ -218,6 +237,12 @@ for). The person is signed out everywhere, and the audit log records who did it.
 the password only, and the person can set up two-factor again. **This does not work for the owner** – the
 owner's two-factor login can only be turned off by the owner personally (under My account) or by the
 emergency command on the server ([12.](#12-locked-out-emergency-commands)).
+
+**Deactivating a user:** Under Settings → Users → **"Deactivate"** („Deaktivieren“), a user with the
+privilege `users.write` blocks another person's account (the list then shows "Blocked" („Gesperrt“); there
+is no such button for the owner or for your own account). The person is signed out everywhere, and a page that
+is already open stops getting live updates after half a minute at most. After **"Activate"** („Aktivieren“),
+old devices do not sign in again by themselves; the person has to sign in again.
 
 ## 4. Enable extensions
 
@@ -231,10 +256,19 @@ installations are not affected.
 In the setup wizard (step 3, see [2.](#2-setup-wizard-setup)) you switch on the modules you want to use with a
 click. Later you can do that at any time under Settings → Extensions („Einstellungen → Erweiterungen“), with the
 switch on the right; "Configure" („Konfigurieren“) opens the extension's settings ("Setup required" –
-„Einrichtung nötig“ – means that details are still missing or that the last connection test failed). A good
+„Einrichtung nötig“ – means that details are still missing or that the last connection test failed). If you open
+the page of a module that is switched off (for example via a bookmark), it says so, and **"Switch on"** („Einschalten“)
+switches it on right there (without the privilege for that, it says that an administrator can switch it on). A good
 start for almost any home network: Terminal, System, Nodvard Shield and ntfy notifications, plus Service matrix if
 Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Backups if
 you use Proxmox** – otherwise leave them off (see [4.1](#41-without-proxmox)). The rest as needed.
+
+**Credentials belong to their address.** In an extension's settings, first enter the address and click "Save"
+(„Speichern“), then store the token or password in the "Connection" card („Verbindung“) – Nodvard Deck does not
+accept them before that. If you change the address later (for example the ntfy server or a Proxmox address),
+Nodvard Deck deletes the matching credentials when saving, and you enter them again; the page tells you
+beforehand. A different spelling of the same address (upper/lower case in the host name, default port, trailing `/`,
+missing `http://`) does not count as a change.
 
 ### 4.1 Without Proxmox
 
@@ -261,7 +295,11 @@ different then:
   yet" („noch nicht geprüft“).
 - **Utilization and history** (CPU, memory, disk, network, temperature) come from the **System** module via SSH, only
   for Linux servers with an SSH login. Without this module the server page shows a notice instead of the rings and
-  curves. The history is measured every 30 seconds and is still empty for the first few minutes.
+  curves. The history is measured every 30 seconds and is still empty for the first few minutes. If the server has
+  never answered or the login is not confirmed yet, the server page says so instead of letting you wait for curves
+  (if you may change servers, with the link "To access" („Zum Zugang“)). In the cockpit, a server with an SSH login
+  that is "unreachable" („nicht erreichbar“) and has never answered shows „Noch keine Verbindung: prüfe zuerst den
+  Zugang“ (no connection yet: check the access first).
 - **Utilization in the cockpit:** In the "Infrastructure" („Infrastruktur“) area, every Linux server with measurements
   gets a card with rings for CPU, memory and disk, just like the Proxmox nodes. The numbers come from the history that
   is already being kept (latest measurement, every 30 seconds); the cockpit triggers **no** SSH connection when it
@@ -280,7 +318,10 @@ different then:
   Nodvard Deck never calls the addresses itself (so it shows no "running/not running"), allows only `http://` and
   `https://` and no credentials in the address; icons are never image URLs.
 - **Updates, antivirus, intrusion protection:** Nodvard Shield, for all Linux servers with an SSH login. The AI container
-  watch in it is optional; without an AI server it still shows crashed containers.
+  watch in it is optional; without an AI server it still shows crashed containers. With AI it proposes at most a
+  restart of a crashed container, which you find under "Actions" („Aktionen“); other ideas from the AI only appear
+  as text in the status report of the container watch. If it suggests another command, the status report only
+  mentions that; you see the command itself in the audit log if you have server rights (`hosts.execute`).
 - **Console in the browser** (a guest's screen) exists only for Proxmox guests. For every other server you use the
   **Terminal**.
 - **Backups:** The Backups module shows only Proxmox backups. You back up the dashboard itself under Settings →
@@ -289,6 +330,10 @@ different then:
 **The "First steps" card:** On the start page (cockpit), a checklist at the top walks you through exactly these
 steps – create a server, store an SSH login, check the connection, set up modules, push notifications, first
 widget – each with a button to the right place. Nodvard Deck ticks the boxes itself, based on what is already set up.
+**"Store an SSH login"** („SSH-Zugang hinterlegen“) only counts a key once Nodvard Deck has actually logged in with it
+(a password counts right away); until then, **"View command"** („Befehl ansehen“) leads to the server's page with the
+setup command already expanded. **"Check the connection"** („Verbindung prüfen“) is only ticked once a login is
+confirmed: the server merely answering is not enough.
 Only steps for which you have the privilege are shown. The card disappears by itself when everything is done; with
 **"Hide"** („Ausblenden“) you remove it earlier (applies to your account on every device). Empty pages (Terminal,
 Files, server page, Service matrix, Game servers, Proxmox) now also say what is missing and offer the button for the
@@ -322,7 +367,8 @@ have created a real server, the button is gone; you can still delete the sample 
 
 ### 5.1 Create a server
 
-1. Press **"Add server"** („Server hinzufügen“) (on an empty list the button is also in the middle).
+1. Press **"Add server"** („Server hinzufügen“) (on an empty list the button is also in the middle). If you come via
+   "Add server" in the cockpit or in the "First steps" card, the form is already open.
 2. **Short name** („Kurzname“) – lowercase, no spaces, e.g. `pi`. It can **not** be changed later (Nodvard Shield and
    other extensions recognize the server by it).
 3. **Display name** („Anzeigename“) (what the server is called in the lists; empty = short name) and **Address**
@@ -343,13 +389,19 @@ placeholder. Then, on the server's page, enter the real IP under **General → E
 Nodvard Deck no longer overwrites an address set by hand with the placeholder, only with an address that the guest
 itself reports. For Proxmox *nodes*, the extension overwrites the address again at the next sync.
 
+If the server has a stored **SSH password**, changing the address deletes it; you enter it again afterwards. SSH
+keys stay. This also applies when an extension's sync changes the address (e.g. of a Proxmox node); for VMs and
+containers that report their address themselves and whose server key is already remembered, the password stays.
+
 ### 5.2 Set up SSH access – three ways
 
 On the server's page, card **SSH access** („SSH-Zugang“):
 
 - **Generate SSH key (recommended)** („SSH-Schlüssel erzeugen“). Nodvard Deck generates a key of its own just for this
-  server. You only specify the **user on the server** (default `lattice`; it is created if it does not exist yet –
-  for Proxmox nodes use `root`) and the port (22). Afterwards the page shows the **setup command** (5.3).
+  server. You only specify the **user on the server** (default `nodvard`, a user of its own just for Nodvard
+  Deck; it is created if it does not exist yet –
+  for Proxmox nodes use `root`) and the port (22). Older logins may still be called `lattice`; they keep working
+  unchanged. Afterwards the page shows the **setup command** (5.3).
 - **Enter password** („Passwort eingeben“). For a user that already exists on the server. The password is stored
   encrypted and never shown again. A key is more secure.
 - **Paste your own key** („Eigenen Schlüssel einfügen“). Paste the private key (text beginning with `-----BEGIN …`,
@@ -371,7 +423,8 @@ management), paste it, press Enter. It
 
 Under "What does the command do?" („Was macht der Befehl?“) the same sequence is shown in readable form, line by
 line. The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on
-Debian or the Pi. It can safely be run several times.
+Debian or the Pi. It can safely be run several times: it recognizes a key that is already there, even with the older
+comment `lattice@…`, and does not add it twice.
 
 ### 5.4 Check the connection
 
@@ -391,7 +444,8 @@ what does not – with a hint on what to do:
 - **New:** The first time, the check shows the fingerprint and stops. Until then, **no password and no key** has gone
   to the server. Compare the fingerprint with the one on the server (`ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub`;
   the page shows the command to copy) and press **"Fingerprint matches – confirm"** („Fingerabdruck stimmt –
-  bestätigen“). The page then continues checking right away.
+  bestätigen“). The page then continues checking right away. In your own home network and for a freshly set up
+  server, confirming is fine; for a server on the internet, really compare the fingerprint.
 - **Changed:** If the server later shows a different fingerprint, a clear warning appears – **without** a confirm
   button. This happens after a reinstallation of the server, but also when someone puts themselves in between. If it
   was a reinstallation: card **Server key** („Server-Schlüssel“) → **Forget** („Vergessen“), then check again and
@@ -403,10 +457,26 @@ From the list it is also quicker: **Check** („Prüfen“) next to each server 
 „4 von 5 in Ordnung“), and the server page (`/hosts/<ID>`) has a card **Access** („Zugang“) with "Check
 connection".
 
-> **Note:** Nodvard Deck remembers new server keys on the very first connection (Terminal, monitoring, …) by itself,
-> as long as the setting `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` is not set to `true` (default off; set it in the
-> Compose file under `environment:`, see the example in [2.](#2-setup-wizard-setup); the repository's
-> `deploy/docker-compose.yml` has the line prepared). With `true`, this only happens through "Check connection".
+**When the access turns green:** In the list and on the server page, the SSH access badge only turns green once the
+server answers and Nodvard Deck has actually logged in there with this login, for example via "Check connection" or
+when a module queries the server via SSH. The server answering only means that its SSH port is open. Until then the
+badge stays grey, with a yellow note next to it saying what is missing: „noch nicht geprüft“ (not checked yet), „noch
+keine Verbindung“ (no connection yet: the server has never answered), „Anmeldung noch nicht bestätigt“ (login not
+confirmed yet: with a key, the setup command is usually still missing), „keine Antwort“ (no answer) or „Anmeldung
+klappt nicht“ (login does not work). After a new address, a rejected login, a changed server key or a new default
+login without a fresh check, the login counts as unconfirmed again until it works the next time.
+
+> **Note:** Whether Nodvard Deck remembers a new server key by itself on the very first connection (Terminal,
+> monitoring, …) is set under **Settings → Servers & access** in the card **New server keys** („Neue
+> Server-Schlüssel“). On new installations, **Only remember new server keys after my confirmation** („Neue
+> Server-Schlüssel erst nach meiner Bestätigung merken“) is on: Nodvard Deck then remembers a key only through
+> "Check connection", and no password and no key goes to the server before that. Installations that were set up
+> before this setting existed stay at "off" and keep remembering by themselves until you switch it on. The
+> environment variable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true` or `false`; in the Compose file under
+> `environment:`, see the example in [2.](#2-setup-wizard-setup); the repository's `deploy/docker-compose.yml` has
+> the line prepared) overrides the switch: the card then shows the variable's value, and saving reports an error.
+> After **Forget** („Vergessen“) you always have to confirm the new fingerprint, no matter how this is set – until
+> then Nodvard Deck no longer connects to the server.
 > Keys that have already been remembered are never affected. The cleaner way is always: check and confirm first.
 
 ### 5.5 Replace access, delete, groups
@@ -414,10 +484,12 @@ connection".
 - **Replace:** Card SSH access → **Replace** („Ersetzen“) creates a *new* login (generate key, password or your own
   key); the old one stays the default. Run the new login's command on the server, press **Check new access**
   („Neuen Zugang prüfen“) and then **Use new access** („Neuen Zugang verwenden“). Only after a successful, fresh check
-  (at most 10 minutes old) is the old login deleted – that way you do not lock yourself out. **The old public key
-  stays on the server in `~/.ssh/authorized_keys`**; remove it there yourself if needed.
-- **Delete access:** Terminal, updates and monitoring then no longer reach the server. The key stays registered on the
-  server.
+  (at most 10 minutes old) is the old login deleted – that way you do not lock yourself out. If the old login was a
+  key, **its public key stays on the server in `~/.ssh/authorized_keys`**; remove it there yourself if needed. For a
+  password, nothing changes on the server. Checking the new login does not change the confirmation of the old one
+  (5.4); only once you use the new one does its check count.
+- **Delete access:** Terminal, updates and monitoring then no longer reach the server. A key stays registered on the
+  server; for a password, nothing changes there.
 - **Groups:** On the list under **Groups** („Gruppen“) you create, rename and delete them; on the server's page you
   assign them with a tick. "Scripts" („Skripte“) can run a script on all servers of a group.
 - **Delete server:** Card "Danger zone" („Gefahrenbereich“) (or "Delete" („Löschen“) on the server page). For safety,
@@ -427,7 +499,7 @@ connection".
 
 **Testing:** In the "Terminal" menu the server now appears (the Terminal extension switches itself on with the first
 SSH login, unless you had switched it off yourself). Open a session – if the login works, it works for all the other
-extensions too.
+extensions too. A terminal session without any input or output closes by itself after 30 minutes.
 
 ## 6. Root rights without a password and the docker group
 
@@ -462,10 +534,12 @@ boxes itself, because the extensions report what they need.
 Without either tick box you get the **lean variant**: its own user, key only, no root rights. That is enough for
 Terminal, Files and Scripts.
 
-**What the "Root rights" tick box does exactly:** It creates `/etc/sudoers.d/lattice-<user>` with the line
+**What the "Root rights" tick box does exactly:** It creates `/etc/sudoers.d/nodvard-<user>` with the line
 `<user> ALL=(root) NOPASSWD: ALL`. The line is first written to a trial file and checked with `visudo -c`; only then
 does it move into place with permissions `0440` (root), afterwards `visudo -c` checks everything once more, and on an
-error the file is removed again immediately ("sudo-Regel zurückgenommen" – sudo rule withdrawn). If `sudo` is not
+error the file is removed again immediately ("sudo-Regel zurückgenommen" – sudo rule withdrawn). The command deletes an
+older rule `lattice-<user>` only after this check and only if it consists of exactly the line above; otherwise it
+stays in place and you get a hint. If `sudo` is not
 installed at all, the command says so (as root `apt install sudo`; on Proxmox best log in as `root` right away).
 
 **This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or may use sudo
@@ -478,12 +552,13 @@ the key**, and the key is stored encrypted in Nodvard Deck.
 Then it needs neither sudo nor tick boxes. The key ends up in `/root/.ssh/authorized_keys`, which on Proxmox is a link
 into the cluster folder – so it then applies on **all nodes of the cluster**.
 
-**Using an existing user** (on the Pi e.g. `admin`): enter that name instead of `lattice` when generating. Running
+**Using an existing user** (on the Pi e.g. `admin`): enter that name instead of `nodvard` when generating. Running
 `sudo -n true && echo geht-schon` on the server shows whether it may already use sudo without a password (on
 Raspberry Pi OS this is often the case for the first user).
 
 Do not be surprised: the file watcher of Nodvard Shield reports the new sudo file and the new `authorized_keys` once –
-that was you.
+that was you. The same applies if you run the command again with the "Root rights" tick box on a server that still
+has the old rule `lattice-<user>`: `nodvard-<user>` is added, and the old one goes away if it is unchanged (see above).
 
 ## 7. Connect Proxmox
 
@@ -516,8 +591,10 @@ Turn on Settings → Extensions → **"ntfy notifications"** („Einstellungen �
   requires login.
 
 In the ntfy app on your phone, subscribe to the same server and the same topic.
-**Testing:** "Nodvard Shield" page → "Send briefing" („Briefing senden“). All messages are also in the dashboard under
-"Notifications" („Meldungen“) – even if the push notification does not arrive.
+**Testing:** "Nodvard Shield" page → "Send briefing" („Briefing senden“). Creating it can take up to half a minute if a
+server does not respond. Afterwards the page tells you whether the status report („Lagebericht – …“) was also delivered
+as a push notification. If not, ntfy is not set up yet or the ntfy server cannot be reached. All messages are also in
+the dashboard under "Notifications" („Meldungen“) – even if the push notification does not arrive.
 
 ## 9. Automation and maintenance windows
 
@@ -526,7 +603,19 @@ Settings → **Automation & security** („Einstellungen → Automatik & Sicherh
 - **Autonomy** („Selbstständigkeit“): "Suggest only" („Nur vorschlagen“) is the default and right for the beginning –
   every action waits for your approval under "Actions" („Aktionen“). "Act autonomously" („Selbstständig handeln“)
   lets actions up to the chosen risk level ("Allowed without asking up to risk level" – „Ohne Rückfrage erlaubt bis
-  Risikostufe“) run without asking.
+  Risikostufe“) run without asking. Under "Actions" („Aktionen“), an action's command appears right in its row
+  (without the privilege `hosts.execute` and without the right to approve its risk level, only a notice appears
+  there); invisible or redirecting characters in it (such as a reversed writing direction) appear as a visible marker
+  like `⟦U+202E⟧`. "Approve selected" („Ausgewählte freigeben“) shows all commands in full in its confirmation, but
+  leaves out actions with high or critical risk; you confirm those one by one.
+- **Scripts without a click**: Independently of this, an active script with a schedule can get a standing approval
+  („Dauerfreigabe“): on the Scripts page („Skripte“), turn on the switch "Without approval on schedule" („Ohne Freigabe
+  nach Zeitplan“) for the script (owner and `admin` only). Beforehand you see which servers, accounts and addresses it
+  covers. Any change to content, parameters, target or schedule, and a different account, address or SSH port on one of
+  these servers, cancels it; new servers that join a group or "All servers" („Alle Server“) still ask. If the person
+  who granted it is deactivated or no longer has the rights for it, the runs wait for your click again as well. Every
+  run still appears under "Actions" („Aktionen“) and in the audit log, and "Withdraw approval" („Freigabe
+  zurückziehen“) takes effect immediately.
 - **Blocked commands** („Gesperrte Befehle“): your own patterns (regular expressions) that are never executed. The
   dangerous default cases are always blocked.
 - **Maintenance windows** („Wartungsfenster“): "Add window" („Fenster hinzufügen“) → start, duration, "Applies to"
@@ -623,6 +712,9 @@ Good to know:
   valid for one hour; an abandoned intermediate state is deleted after one hour.
 - With the environment variable `NODVARD_DECK_JWT_SECRET`, no login secret is in the backup.
 - The history of the measurements (`metrics.db`) is not part of the backup and stays as it is.
+- **Git settings** in the extensions' data (for example in "Scripts" („Skripte“)) are not part of the backup either, but
+  the history of your scripts is; the extension creates the settings anew itself. If an older backup still contains some,
+  they are skipped during the restore, and the summary names their number among the warnings.
 
 **Emergency without the interface:** in the folder with the Compose file
 
@@ -661,6 +753,20 @@ sudo ./backup.sh ~/nodvard-deck-backups
 To restore: `sudo ./restore.sh ~/nodvard-deck-backups/nodvard-deck-backup-<timestamp>.tar.gz`
 (asks first).
 
+If your user is in the `docker` group, leave out `sudo`. Without access to Docker, both scripts abort before they stop
+or change anything (`backup.sh` reports "Docker is not responding" („Docker antwortet nicht …“)). Started with `sudo`,
+the backup still belongs to you, not root, and only you can read it.
+
+How restoring works:
+
+- `restore.sh` checks the file, first unpacks it **next to** the current data and then swaps it in. For a short time
+  this needs twice the space. If unpacking fails (disk full, Ctrl+C), Nodvard Deck keeps running on the old state.
+- If the swap itself breaks off (for example due to a power failure), Nodvard Deck stays stopped. Then run the same
+  command with the same file again: it finishes the swap and starts Nodvard Deck. Do not start it by hand before that;
+  `backup.sh` refuses to run in the meantime.
+- If the SSH connection drops after the confirmation, restoring carries on. How it ended is in `deploy/restore.log`.
+- If a backup or a restore is already running, a second run stops without changing anything.
+
 Important:
 
 - **The backup contains the keys** (`master.key`, `vault_keyring.json`). With them, all passwords, SSH keys and
@@ -673,6 +779,10 @@ Important:
   ```
   30 4 * * 0 cd /home/admin/deck/deploy && ./backup.sh /home/admin/nodvard-deck-backups >> /home/admin/nodvard-deck-backup.log 2>&1
   ```
+
+  The file then belongs to the owner of the target folder if that is not root (if the first `sudo ./backup.sh`
+  created it, that is you), so fetching it with `scp` as above works. If a backup or a restore is already running,
+  the run stops without changing anything (message in the log).
 
 ### 10.4 Updates: the copy before the migration
 
@@ -758,6 +868,12 @@ still happen – reload the page (F5).
 cd ~/nodvard-deck && sudo docker compose logs --since 15m nodvard-deck | grep -iE -A5 "error|traceback"
 ```
 
+**"Seite nicht gefunden" (page not found):** The address does not exist (any more), e.g. an old bookmark; "Zur
+Übersicht" (to the overview) leads to the cockpit. **"Die Seite konnte nicht geladen werden" (the page could not be
+loaded)** usually appears right after an update: reload the page (F5). With **"Hier ist etwas schiefgegangen"
+(something went wrong here)** reload as well; if it stays, "Technische Einzelheiten" (technical details) names the
+error, and the log (see above) helps further.
+
 **Proxmox unreachable** (push "Proxmox 'pve1' nicht erreichbar" (unreachable), tiles with "nicht erreichbar" or "Nicht
 abrufbar: …" (not available)) – the error message usually gives the reason:
 
@@ -775,17 +891,31 @@ abrufbar: …" (not available)) – the error message usually gives the reason:
   longer: on the Proxmox and Backups pages, under "Manage connections" („Verbindungen verwalten“), switch it to
   "disabled" („deaktiviert“); then no notifications come either.
 
-**Server missing in Terminal / "Keine Linux-Server mit Zugangsdaten" (no Linux servers with credentials) in Nodvard Shield:**
+**Server missing in Terminal / "Noch kein Server prüfbar" (no server checkable yet) or "Keine Linux-Server mit SSH-Zugang
+gefunden" (no Linux servers with an SSH login found) in Nodvard Shield:**
 No SSH login stored: Settings → Servers & access ([5.2](#52-set-up-ssh-access--three-ways)). Nodvard Shield also takes only
-servers that are entered as `linux`.
+servers that are entered as `linux` and – if "Only servers with tag" („Nur Server mit Markierung“) is filled in in its
+settings – only servers with that tag.
 
 **"Keine root-Rechte …" (no root rights):** sudo without a password is missing
 ([6.](#6-root-rights-without-a-password-and-the-docker-group)). The "Check connection" card shows it under "Root
 rights" („Root-Rechte“).
 
+**"Der Server-Schlüssel von diesem Server ist noch nicht bestätigt." (the server key of this server has not been
+confirmed yet):** Nodvard Deck does not know this server's fingerprint yet (a new server while "Only remember new
+server keys after my confirmation" is on), or you forgot it. Under Servers & access, press "Check connection" for the
+server and confirm the fingerprint ([5.4](#54-check-the-connection)).
+
 **"Host-Schlüssel … hat sich geändert" (host key … has changed):** Server reinstalled? Then, under Servers & access, on
 the server's "Server key" card, forget the old one, check again and confirm the new fingerprint. If not: first find out
 why – it can also be an attack.
+
+**"Server antwortet nicht (Zeitüberschreitung …)" (server not answering, timeout), "Der Server lehnt die Verbindung ab
+…" (the server refuses the connection), "Kein Weg zum Server …" (no route to the server) or "Den Namen … kennt das Netz
+nicht." (the network does not know the name)** in the terminal or file manager (there with "Zugriff auf die Quelle
+fehlgeschlagen:" (access to the source failed) in front): Nodvard Deck cannot reach the server. The sentence usually
+names address and port. Check that the server is on, that the address under Servers & access is correct and that SSH
+runs there. There is no traceback about it in the log.
 
 **"Server nicht erreichbar – bitte gleich noch einmal versuchen." (server unreachable – please try again in a moment) at
 login:** The dashboard is not answering. On the machine running Nodvard Deck, check
@@ -793,6 +923,15 @@ login:** The dashboard is not answering. On the machine running Nodvard Deck, ch
 If **"Server meldet: …"** (server reports: …) appears instead (also when reloading the page), the dashboard is
 answering and names the reason, e.g. that the disk is full – then fix that reason. You are not signed out in the
 process.
+
+**"Gerade sind viele Anmeldungen gleichzeitig im Gange. Bitte versuche es in ein paar Sekunden noch einmal." (many
+logins are in progress at the same time, please try again in a few seconds) at login:** Nodvard Deck checks only a few
+passwords at the same time, so that many login attempts at once do not slow the dashboard down. Wait a few seconds and
+try again; anyone who is already signed in keeps working normally. If the message appears often, there are very many
+login attempts at once; failed ones are in the audit log („Anmeldung fehlgeschlagen“ – login failed). For a name that
+does not exist, the "Who" column („Wer“) only shows "not signed in · unknown" („Nicht angemeldet · unbekannt“), never
+the input itself (it could be a password typed into the name field). Only the owner sees an identifier (`username_ref`)
+and the length of the input when expanding the row; the same input has the same identifier.
 
 ## 12. Locked out? Emergency commands
 
@@ -808,8 +947,8 @@ sudo docker compose exec nodvard-deck python -m nodvard_deck.admin reset-passwor
 sudo docker compose exec nodvard-deck python -m nodvard_deck.admin disable-2fa admin
 ```
 
-(`admin` stands for the username that `list-users` shows. With an installation from the repository, change to
-the repository's `deploy/` folder instead of `cd ~/nodvard-deck`.)
+(`admin` stands for the username that `list-users` shows; an older name with spaces goes in quotation marks. With an
+installation from the repository, change to the repository's `deploy/` folder instead of `cd ~/nodvard-deck`.)
 
 - **`list-users`** shows username, owner/user, locked or active, and whether two-factor is on.
 - **`reset-password <username>`** sets a new, random password and **prints it** (e.g. `k7mq-x2vd-h9pa-tn4c`). All of
@@ -821,10 +960,23 @@ the repository's `deploy/` folder instead of `cd ~/nodvard-deck`.)
 On errors (user does not exist, database not reachable) an understandable message is shown. The command changes only
 users – no servers, no keys, no settings.
 
+**Without a command line** (Portainer, Docker Desktop, NAS): open the console of the Nodvard Deck container and enter
+the command there **without** `sudo docker compose exec nodvard-deck` in front, e.g.
+`python -m nodvard_deck.admin reset-password admin`. You recognize the container by "nodvard-deck" in its name; it is
+usually called `nodvard-deck-nodvard-deck-1`. This is where the console is:
+
+- **Portainer:** Containers → the Nodvard Deck container → "Exec Console" icon → "Connect".
+- **Docker Desktop:** "Containers" → expand the group "nodvard-deck" → click the container in it → "Exec" tab.
+- **Synology Container Manager:** Container → select the Nodvard Deck one → "Details" → "Terminal" tab → "Create".
+- **Unraid:** "Docker" tab → icon of the Nodvard Deck container → "Console".
+
+The same instructions are on the login page under "Forgot password?" („Passwort vergessen?“).
+
 **Good to know:** When Nodvard Deck "signs someone out everywhere" (password changed, two-factor reset or turned off,
 emergency command), the login ends immediately – but someone who still has an access key that was already issued in the
 browser can keep working with it for **up to 15 minutes**, until it expires by itself. In case of serious suspicion,
-therefore also change the password and wait a few minutes.
+therefore also change the password and wait a few minutes. Terminal and console do not wait for this period: open
+sessions of an ended login close after at most 15 seconds, and new ones can no longer be used with it.
 
 ## 13. Nodvard Deck does not start: the rescue page
 
@@ -845,7 +997,8 @@ name such as `localhost`), only locally on `127.0.0.1` – just like uvicorn its
    ```
 
    It stays the same until the next successful start. Wrong entries are slowed down (5 per machine, 25 in total in 10
-   minutes).
+   minutes, then "Too many failed attempts" („Zu viele Fehlversuche“)). The right code still always works at once: you
+   do not have to wait, even if someone else in the network has entered wrong codes many times before.
 3. **With the code,** the reason and a cleaned-up log (without paths, passwords, SQL parameters) appear, together with
    the steps that fit the reason:
    - **Try again** („Neu versuchen“): ends the container process; the restart policy (`restart: unless-stopped`)
@@ -878,8 +1031,8 @@ helper script. There is no setup command and no connection check – you generat
 **Generate a key** (once, on the machine running Nodvard Deck):
 
 ```bash
-ssh-keygen -t ed25519 -N "" -f ~/.ssh/lattice_ed25519 -C lattice
-cat ~/.ssh/lattice_ed25519.pub        # this one line goes onto the servers
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/nodvard_ed25519 -C nodvard
+cat ~/.ssh/nodvard_ed25519.pub        # this one line goes onto the servers
 ```
 
 Without a passphrase (`-N ""`), because Nodvard Deck does not ask for a passphrase when connecting. Nodvard Deck gets an
@@ -961,12 +1114,12 @@ while True:
             print("Gespeichert.")
         elif choice == "3":
             host_id = ask("ID des Servers")
-            user = ask("SSH-Benutzer", "lattice")
+            user = ask("SSH-Benutzer", "nodvard")
             port = int(ask("SSH-Port", "22"))
             if ask("Anmeldung mit Schlüssel (s) oder Passwort (p)?", "s") == "p":
                 kind, secret = "ssh_password", getpass.getpass("SSH-Passwort: ")
             else:
-                with open(os.path.expanduser(ask("Privater Schlüssel", "~/.ssh/lattice_ed25519"))) as f:
+                with open(os.path.expanduser(ask("Privater Schlüssel", "~/.ssh/nodvard_ed25519"))) as f:
                     kind, secret = "ssh_key", f.read()
             call("POST", f"/hosts/{host_id}/credentials",
                  {"kind": kind, "username": user, "port": port, "secret_value": secret, "is_default": True})
@@ -980,7 +1133,7 @@ while True:
         elif choice == "5":
             host_id = ask("ID des Servers")
             call("DELETE", f"/hosts/{host_id}/known-hosts/{ask('Schlüsseltyp aus der Fehlermeldung', 'ssh-ed25519')}")
-            print("Vergessen. Beim nächsten Verbinden merkt sich Nodvard Deck den neuen Schlüssel.")
+            print("Vergessen. Jetzt in der Oberfläche „Verbindung prüfen“ drücken und den neuen Fingerabdruck bestätigen – vorher verbindet sich Nodvard Deck nicht mehr mit dem Server.")
         elif choice.lower() == "q":
             break
     except (Fehler, OSError, ValueError) as exc:
@@ -996,34 +1149,38 @@ python3 ~/lattice-server.py
 
 Log in with a Nodvard Deck account that may manage servers (owner or `admin`). The script shows all servers with their
 **ID** (which is also in the browser address of a server page: `/hosts/<ID>`). With 1 you create a server, with 2 you
-change the address, with 3 you store an SSH login (key `~/.ssh/lattice_ed25519` or password), with 4 you show the
-logins, and with 5 you forget a remembered server key (after the server has been reinstalled).
+change the address (a stored SSH password is deleted in the process; store it again with 3), with 3 you store an
+SSH login (key `~/.ssh/nodvard_ed25519` or password), with 4 you show the
+logins, and with 5 you forget a remembered server key (after the server has been reinstalled). The script does not
+confirm fingerprints. After forgetting (5), Nodvard Deck only connects again once you have pressed "Check connection" in
+the interface and confirmed the new fingerprint. The same applies to new servers as long as "Only remember new server
+keys after my confirmation" is on (on new installations from the start).
 
 The key on the server is then added by hand, e.g. for a user of its own:
 
 ```bash
-sudo adduser --disabled-password --gecos "Nodvard Deck" lattice
-sudo install -d -m 700 -o lattice -g lattice /home/lattice/.ssh
-echo 'PASTE THE LINE FROM lattice_ed25519.pub HERE' | sudo tee /home/lattice/.ssh/authorized_keys
-sudo chown lattice:lattice /home/lattice/.ssh/authorized_keys
-sudo chmod 600 /home/lattice/.ssh/authorized_keys
-sudo usermod -aG docker lattice        # only where Docker runs
+sudo adduser --disabled-password --gecos "Nodvard Deck" nodvard
+sudo install -d -m 700 -o nodvard -g nodvard /home/nodvard/.ssh
+echo 'PASTE THE LINE FROM nodvard_ed25519.pub HERE' | sudo tee /home/nodvard/.ssh/authorized_keys
+sudo chown nodvard:nodvard /home/nodvard/.ssh/authorized_keys
+sudo chmod 600 /home/nodvard/.ssh/authorized_keys
+sudo usermod -aG docker nodvard        # only where Docker runs
 ```
 
 For root rights without a password (see [6.](#6-root-rights-without-a-password-and-the-docker-group) – practically
 root!):
 
 ```bash
-echo 'lattice ALL=(root) NOPASSWD: ALL' > /tmp/lattice-sudo
-sudo visudo -cf /tmp/lattice-sudo && sudo install -m 0440 -o root -g root /tmp/lattice-sudo /etc/sudoers.d/lattice-lattice
-rm /tmp/lattice-sudo
+echo 'nodvard ALL=(root) NOPASSWD: ALL' > /tmp/nodvard-sudo
+sudo visudo -cf /tmp/nodvard-sudo && sudo install -m 0440 -o root -g root /tmp/nodvard-sudo /etc/sudoers.d/nodvard-nodvard
+rm /tmp/nodvard-sudo
 sudo visudo -c
 ```
 
 If the last `visudo -c` reports an error, delete the file again **immediately**
-(`sudo rm /etc/sudoers.d/lattice-lattice`) – a broken sudo file can disable sudo. The file name must not contain a
+(`sudo rm /etc/sudoers.d/nodvard-nodvard`) – a broken sudo file can disable sudo. The file name must not contain a
 dot, otherwise sudo ignores the file. To test, from the machine running Nodvard Deck:
 
 ```bash
-ssh -i ~/.ssh/lattice_ed25519 lattice@SERVER-IP 'sudo -n true && echo sudo-ok; docker ps >/dev/null && echo docker-ok'
+ssh -i ~/.ssh/nodvard_ed25519 nodvard@SERVER-IP 'sudo -n true && echo sudo-ok; docker ps >/dev/null && echo docker-ok'
 ```

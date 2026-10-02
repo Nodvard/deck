@@ -5,6 +5,7 @@
  * unter den Text.
  */
 import { FlaskConical, Loader2 } from "lucide-react";
+import { Link } from "react-router-dom";
 
 import { canManageDemo, useDemoStatus, useRemoveDemo } from "../lib/demo";
 import { useAuthStore } from "../state/auth";
@@ -27,6 +28,15 @@ export function DemoBanner() {
         <span className="text-amber-100/80">
           Alles hier ist ausgedacht
           {canManageDemo(can) ? "." : " – ein Administrator kann sie löschen."}
+        </span>{" "}
+        <span className="text-amber-100/80" data-testid="demo-modules-hint">
+          Wie viel davon zu sehen ist, hängt von den eingeschalteten Modulen ab
+          {can("extensions.manage") ? (
+            <>
+              {" "}
+              (<Link to="/settings/extensions" className="underline underline-offset-2 hover:text-amber-50">Module ansehen</Link>).
+            </>
+          ) : "."}
         </span>
         {error && <span role="alert" className="mt-1 block text-red-200">{error}</span>}
       </p>

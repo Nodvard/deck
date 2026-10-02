@@ -8,7 +8,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { api } from "../lib/api";
+import { useExtensionLabel } from "../lib/extensionNames";
 import { useWsSubscription } from "../lib/ws";
+import { useAuthStore } from "../state/auth";
 
 export interface NotificationOut {
   id: string;
@@ -48,8 +50,9 @@ export function useUnreadNotifications(enabled: boolean): number {
   return data?.unread ?? 0;
 }
 
-function NotificationItem({ n, onRead }: { n: NotificationOut; onRead: (id: string) => void }) {
+function NotificationItem({ n, onRead, canMark }: { n: NotificationOut; onRead: (id: string) => void; canMark: boolean }) {
   const [open, setOpen] = useState(false);
+  const sourceLabel = useExtensionLabel(Boolean(n.source_ext_id));
   const long = n.body.length > 240 || n.body.split("\n").length > 4;
   return (
     <li className={`rounded border p-3 text-sm ${n.read_at ? "border-white/5 opacity-70" : "border-white/15"}`} data-testid={`notification-${n.id}`}>
@@ -60,14 +63,14 @@ function NotificationItem({ n, onRead }: { n: NotificationOut; onRead: (id: stri
         <span className="min-w-0 flex-1 break-words font-medium">{n.title}</span>
         <span className="text-xs opacity-50">
           {new Date(n.ts).toLocaleString()}
-          {n.source_ext_id ? ` · ${n.source_ext_id}` : ""}
+          {n.source_ext_id ? ` · ${sourceLabel(n.source_ext_id)}` : ""}
         </span>
         {typeof n.payload?.path === "string" && n.payload.path.startsWith("/") && (
-          <Link to={n.payload.path} onClick={() => { if (!n.read_at) onRead(n.id); }} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
+          <Link to={n.payload.path} onClick={() => { if (!n.read_at && canMark) onRead(n.id); }} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
             Öffnen →
           </Link>
         )}
-        {!n.read_at && (
+        {!n.read_at && canMark && (
           <button type="button" onClick={() => onRead(n.id)} className="rounded bg-white/10 px-2 py-0.5 text-xs hover:bg-white/20">
             Gelesen
           </button>
@@ -87,6 +90,8 @@ function NotificationItem({ n, onRead }: { n: NotificationOut; onRead: (id: stri
 
 export function NotificationsPage() {
   const queryClient = useQueryClient();
+  // Der Lesestatus gilt fuer alle Nutzer gemeinsam; markieren duerfen nur Nutzer mit Schreibrecht.
+  const canMark = useAuthStore((s) => s.hasPermission)("notifications.write");
   const [onlyUnread, setOnlyUnread] = useState(false);
   const { data, error, isLoading } = useQuery({
     queryKey: ["notifications", "list", onlyUnread],
@@ -115,7 +120,7 @@ export function NotificationsPage() {
           <input type="checkbox" checked={onlyUnread} onChange={(e) => setOnlyUnread(e.target.checked)} />
           Nur ungelesene
         </label>
-        {unread > 0 && (
+        {unread > 0 && canMark && (
           <button type="button" onClick={() => void markAll()} className="rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20">
             Alle als gelesen markieren
           </button>
@@ -125,12 +130,12 @@ export function NotificationsPage() {
       {error && <p className="text-sm text-red-400">Fehler: {error instanceof Error ? error.message : String(error)}</p>}
       {data && data.length === 0 && (
         <p className="text-sm opacity-60">
-          {onlyUnread ? "Keine ungelesenen Meldungen." : "Noch keine Meldungen -- hier landen z. B. Lageberichte und Warnungen der Extensions."}
+          {onlyUnread ? "Keine ungelesenen Meldungen." : "Noch keine Meldungen – hier landen z. B. Lageberichte und Warnungen der Module."}
         </p>
       )}
       <ul className="flex flex-col gap-2">
         {(data ?? []).map((n) => (
-          <NotificationItem key={n.id} n={n} onRead={(id) => void markRead(id)} />
+          <NotificationItem key={n.id} n={n} canMark={canMark} onRead={(id) => void markRead(id)} />
         ))}
       </ul>
     </div>

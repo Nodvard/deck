@@ -8,7 +8,9 @@ Programm unter ihre Lizenz zu stellen. Geprüft werden (wie in `scripts/third_pa
 
 * alle Python-Pakete aus `deploy/constraints.txt` (installierte Metadaten),
 * alle ausgelieferten npm-Pakete (Production-Dependencies des Frontends und der
-  Extension-Bundles, Lizenzangabe aus `frontend/package-lock.json`).
+  Extension-Bundles, Lizenzangabe aus `frontend/package-lock.json`),
+* die in Wheels fest eingebauten Bibliotheken (`_PY_EMBEDDED` in `scripts/third_party_licenses.py`), samt
+  Prüfung, dass der Eintrag zur Paketversion in `deploy/constraints.txt` passt.
 
 Erlaubt: MIT, BSD (alle Varianten), Apache-2.0, ISC, PSF-2.0/Python-2.0, Unlicense, 0BSD,
 Zlib sowie MPL-2.0 (nur UNVERÄNDERT verwenden; erscheint als Hinweis im Bericht).
@@ -315,10 +317,26 @@ def check_packages(packages: list[tpl.Package], exceptions: dict[tuple[str, str]
     return report
 
 
+def embedded_packages(pins: list[tuple[str, str]]) -> list[tpl.Package]:
+    """Fest eingebaute Bibliotheken (`_PY_EMBEDDED`) als eigene Eintraege, damit auch ihre Lizenz geprüft wird.
+
+    Gilt der Eintrag für eine andere Paketversion als die in `deploy/constraints.txt` (oder steht das Paket
+    dort nicht mehr), wird das wie bei `scripts/third_party_licenses.py` als Problem der Umgebung gemeldet
+    (Exit 2): Die Lizenzangabe wurde dann für eine andere Version geprüft."""
+    packages = []
+    for lib in tpl._PY_EMBEDDED:
+        where = ", ".join(pkg for pkg, _ in lib.pins)
+        pkg = tpl.Package("python", f"{lib.name} (eingebaut in {where})", lib.version, lib.license, "_PY_EMBEDDED")
+        pkg.problems += tpl.embedded_pin_problems(pins, (lib,))
+        packages.append(pkg)
+    return packages
+
+
 def collect_packages(repo: Path = REPO_ROOT) -> list[tpl.Package]:
-    python_packages = tpl.collect_python(tpl.read_constraints(repo / "deploy" / "constraints.txt"))
+    pins = tpl.read_constraints(repo / "deploy" / "constraints.txt")
+    python_packages = tpl.collect_python(pins)
     npm_packages = tpl.collect_npm(repo, with_texts=False)
-    return python_packages + npm_packages
+    return python_packages + embedded_packages(pins) + npm_packages
 
 
 def violation_message(finding: Finding) -> str:
@@ -367,6 +385,12 @@ def main(argv: list[str] | None = None) -> int:
             "(bzw. das Paket aus constraints.txt/package-lock.json korrigieren).",
             file=sys.stderr,
         )
+        if any("Eintrag für fest eingebaute Bibliothek" in problem for problem in report.env_problems):
+            print(
+                "Bei \"Eintrag für fest eingebaute Bibliothek prüfen\" hilft keine Installation: den Eintrag in "
+                "`_PY_EMBEDDED` (scripts/third_party_licenses.py) prüfen, so wie in der Meldung beschrieben.",
+                file=sys.stderr,
+            )
     for line in report.skipped:
         print(f"Hinweis: {line}")
     if args.liste:

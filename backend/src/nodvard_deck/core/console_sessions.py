@@ -33,6 +33,10 @@ class PendingConsole:
     session: Any
     """Erfuellt `nodvard_sdk.capabilities.ConsoleSession`."""
     created_at: float
+    stamp: str = ""
+    """Fingerabdruck des Passworts beim Anlegen (`services.session_guard.credential_stamp`)."""
+    login_id: str | None = None
+    """Anmeldung (`sid` im Zugangs-Token), aus der der Eintrag stammt (`services.session_guard`)."""
 
 
 async def _close_quietly(session: Any) -> None:
@@ -47,11 +51,14 @@ class ConsoleSessionStore:
         self._pending: dict[str, PendingConsole] = {}
         self._cleanup_tasks: set[asyncio.Task[None]] = set()
 
-    def add(self, *, host_id: str, user_id: str, session: Any, ttl_s: float) -> PendingConsole:
+    def add(
+        self, *, host_id: str, user_id: str, session: Any, ttl_s: float, stamp: str = "",
+        login_id: str | None = None,
+    ) -> PendingConsole:
         session_id = uuid.uuid4().hex
         entry = PendingConsole(
             session_id=session_id, host_id=host_id, user_id=user_id,
-            session=session, created_at=time.monotonic(),
+            session=session, created_at=time.monotonic(), stamp=stamp, login_id=login_id,
         )
         self._pending[session_id] = entry
         asyncio.get_running_loop().call_later(ttl_s, self._expire, session_id)

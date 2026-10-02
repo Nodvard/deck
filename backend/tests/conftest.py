@@ -196,6 +196,11 @@ def test_settings(tmp_path: Path):
         ext_data_dir=tmp_path / "ext-data",
         # Nie die echte Datei eines Images (/app/image-info.json), falls die Tests in einem Container laufen.
         image_info_path=tmp_path / "image-info.json",
+        # Die vielen SSH-Tests gegen den lokalen Testserver verlassen sich darauf, dass der erste
+        # Schluessel still gemerkt wird (so wie bei bestehenden Installationen). Neue Installationen
+        # verlangen eine Bestaetigung; das pruefen die Tests in test_ssh_confirm_new_host_keys.py,
+        # indem sie die Uebersteuerung wieder auf `None` setzen.
+        ssh_confirm_new_host_keys=False,
     )
 
 
@@ -690,6 +695,37 @@ async def ssh_server_factory():
             await asyncio.wait_for(server.wait_closed(), timeout=5.0)
         except asyncio.TimeoutError:
             pass
+
+
+@pytest.fixture
+def pause_session_guard():
+    """Fuer WS-Tests mit `running_app`, die WAEHREND einer offenen Sitzung etwas aendern.
+
+    Die Test-App teilt sich EINE Datenbankverbindung mit dem Test (StaticPool), und ihre Anfragen
+    schreiben in die Test-Session, ohne festzuschreiben. Die regelmaessige Pruefung der offenen
+    Sitzung (`services/session_guard.py`) oeffnet und schliesst dabei eine eigene Session auf
+    derselben Verbindung; faellt deren Schliessen (Rollback) zwischen das Schreiben der Anfrage und
+    das `commit()` des Tests, ist die Aenderung weg und die Sitzung endet nie (gelegentlich
+    gesehen). Gebrauch: `with pause_session_guard(modul) as lock:` und Aenderung samt `commit()`
+    unter `async with lock:` -- jede `session_scope()` des Moduls nimmt dann zuerst die Sperre.
+    Im Betrieb hat jede Session ihre eigene Verbindung, dort gibt es das nicht."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _pause(module):
+        lock = asyncio.Lock()
+        original = module.session_scope
+
+        @contextlib.asynccontextmanager
+        async def _scope():
+            async with lock, original() as session:
+                yield session
+
+        with pytest.MonkeyPatch.context() as mp:
+            mp.setattr(module, "session_scope", _scope)
+            yield lock
+
+    return _pause
 
 
 @pytest_asyncio.fixture

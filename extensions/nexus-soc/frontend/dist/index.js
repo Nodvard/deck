@@ -1,5 +1,5 @@
 // src/SocPage.tsx
-import { useCallback as useCallback5, useContext as useContext2, useEffect as useEffect7, useMemo as useMemo2, useState as useState6 } from "react";
+import { useCallback as useCallback5, useContext as useContext2, useEffect as useEffect7, useMemo as useMemo2, useRef as useRef2, useState as useState6 } from "react";
 
 // ../../_shared/frontend/src/ui.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -348,6 +348,7 @@ function isActionRunning(status) {
 }
 var ACTION_POLL_INTERVAL_MS = 3e3;
 var ACTION_POLL_MAX_MS = 60 * 60 * 1e3;
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -362,6 +363,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };
@@ -501,6 +503,9 @@ function ago(ts) {
 // src/ContainerWatch.tsx
 import { useCallback as useCallback2, useEffect as useEffect4, useState as useState3 } from "react";
 import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+function withoutRelativeTime(text) {
+  return text.replace(/\s*(?:about\s+|less than\s+)?(?:an?|\d+)\s*(?:second|minute|hour|day|week|month|year)s? ago\b/gi, "");
+}
 var STATUS_LABELS = {
   open: "Offen",
   proposed: "Aktion vorgeschlagen",
@@ -561,7 +566,7 @@ function AuditTrail({ incidentId }) {
     ] }),
     e.reason && /* @__PURE__ */ jsxs3("span", { className: "opacity-80", children: [
       " -- ",
-      e.reason
+      withoutRelativeTime(e.reason)
     ] })
   ] }, e.id)) });
 }
@@ -726,6 +731,7 @@ function ContainerWatch() {
             incident.ai_summary && /* @__PURE__ */ jsx3("p", { className: "mt-2 whitespace-pre-wrap break-words rounded-lg border border-white/[0.06] bg-black/20 p-3 text-xs text-white/75", children: incident.ai_summary }),
             /* @__PURE__ */ jsxs3("p", { className: "mt-1.5 text-xs text-white/40", children: [
               formatTimestamp(incident.created_at),
+              (incident.occurrences ?? 1) > 1 ? ` \xB7 ${incident.occurrences}\xD7 aufgetreten, zuletzt ${formatTimestamp(incident.last_seen ?? incident.created_at)}` : "",
               incident.status_changed_at ? ` \xB7 Status ge\xE4ndert ${formatTimestamp(incident.status_changed_at)}` : ""
             ] })
           ] }),
@@ -770,6 +776,10 @@ function ServerSetupLink({ className = "" }) {
 
 // src/GuardTab.tsx
 import { Fragment as Fragment3, jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+function noProcessText(p) {
+  if (p.unreadable) return "Programm nicht lesbar (kein root)";
+  return p.dynamic ? "ohne Programm (Kernel)" : "unbekanntes Programm";
+}
 function portName(p) {
   if (p.dynamic) return `wechselnde Ports/${p.proto}${p.count && p.count > 1 ? ` (${p.count})` : ""}`;
   return `${p.port}/${p.proto}`;
@@ -816,7 +826,7 @@ function EventDetail({ ev, onBan }) {
       " ",
       /* @__PURE__ */ jsxs4("span", { className: "text-white/50", children: [
         "\xB7 ",
-        p.process ?? (p.dynamic ? "ohne Programm (Kernel)" : "unbekanntes Programm"),
+        p.process ?? noProcessText(p),
         " \xB7 ",
         p.public ? `offen auf ${p.address}` : "nur lokal"
       ] })
@@ -906,6 +916,7 @@ function GuardTab({ canManage }) {
   }
   return /* @__PURE__ */ jsxs4(Fragment3, { children: [
     notice && /* @__PURE__ */ jsx5(Notice, { text: notice.text, kind: notice.kind, onClose: () => setNotice(null) }),
+    /* @__PURE__ */ jsx5("p", { className: "mb-4 text-sm text-white/55", "data-testid": "guard-intro", children: "Der Einbruchschutz zeigt, wer sich von au\xDFen auf deinen Servern anzumelden versucht (per SSH, dem Fernzugang) und was sich auf ihnen ver\xE4ndert. Fail2ban ist ein kleines Programm, das Adressen sperrt, die zu oft ein falsches Passwort probieren." }),
     /* @__PURE__ */ jsxs4("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
       /* @__PURE__ */ jsx5(Stat, { label: "Fehlgeschlagene SSH-Anmeldungen", value: sm.failed_24h, hint: "letzte 24 Stunden", tone: sm.failed_24h > 100 ? "warn" : void 0 }),
       /* @__PURE__ */ jsx5(Stat, { label: "Angreifende Adressen", value: sm.attackers }),
@@ -991,7 +1002,7 @@ function GuardTab({ canManage }) {
             !v && /* @__PURE__ */ jsx5("p", { className: "text-sm text-white/50", children: "Noch keine Daten \u2013 \u201EAlle jetzt pr\xFCfen\u201C startet den ersten Blick." }),
             v?.error && /* @__PURE__ */ jsx5("p", { className: "text-sm text-amber-300", children: v.error }),
             v && !v.error && /* @__PURE__ */ jsxs4("div", { className: "space-y-4 text-sm", children: [
-              (!v.is_root || !v.ssh_log_found) && /* @__PURE__ */ jsx5("p", { className: "rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-200", children: !v.is_root ? "Ohne root-Rechte sind SSH-Protokoll, Fail2ban und Programmnamen der Ports nur eingeschr\xE4nkt lesbar." : "Kein SSH-Protokoll gefunden (journald/auth.log)." }),
+              (!v.is_root || !v.ssh_log_found) && /* @__PURE__ */ jsx5("p", { className: "rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-200", children: !v.is_root ? "Ohne root-Rechte sind SSH-Protokoll, Fail2ban und Programmnamen der Ports nur eingeschr\xE4nkt lesbar. Zuf\xE4llige UDP-Ports ohne Programmnamen z\xE4hlen dann zusammen als ein Eintrag \u2013 ein neues Programm darunter f\xE4llt nicht auf." : "Kein SSH-Protokoll gefunden (journald/auth.log)." }),
               /* @__PURE__ */ jsxs4("section", { children: [
                 /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: "SSH \u2013 letzte 24 Stunden" }),
                 /* @__PURE__ */ jsxs4("p", { className: "mb-2", children: [
@@ -1071,7 +1082,7 @@ function GuardTab({ canManage }) {
                   v.ports.map((p) => /* @__PURE__ */ jsxs4(
                     "span",
                     {
-                      title: p.dynamic ? `Zuf\xE4llige Ports, \xE4ndern sich nach jedem Neustart \xB7 ${p.process ?? "ohne Programm"}` : `${p.address}:${p.port} \xB7 ${p.process ?? "?"}${p.public ? "" : " \xB7 nur lokal"}`,
+                      title: p.dynamic ? `Zuf\xE4llige Ports, \xE4ndern sich nach jedem Neustart \xB7 ${p.process ?? (p.unreadable ? "Programm nicht lesbar (kein root)" : "ohne Programm")}` : `${p.address}:${p.port} \xB7 ${p.process ?? "?"}${p.public ? "" : " \xB7 nur lokal"}`,
                       className: `rounded-md px-2 py-0.5 font-mono text-[11px] ${p.new ? "bg-red-500/20 text-red-200" : p.public ? "bg-white/[0.08] text-white/80" : "bg-white/[0.04] text-white/40"}`,
                       children: [
                         portName(p),
@@ -1269,9 +1280,10 @@ function UpdatesTab({ canManage }) {
             ] }),
             /* @__PURE__ */ jsxs5("p", { className: "mt-0.5 text-xs text-white/45", children: [
               st?.manager ? `${st.manager} \xB7 Kernel ${st.kernel ?? "?"} \xB7 l\xE4uft seit ${uptime(st.uptime_s)} \xB7 ` : "",
-              "gepr\xFCft ",
-              ago(st?.checked_at)
+              st?.checked_at ? `gepr\xFCft ${ago(st.checked_at)}` : "noch nie erfolgreich gepr\xFCft",
+              st?.error && !st.unsupported && st.attempted_at ? ` \xB7 letzter Versuch ${ago(st.attempted_at)} fehlgeschlagen` : ""
             ] }),
+            h.check_overdue && /* @__PURE__ */ jsx6("p", { className: "mt-1 text-xs text-amber-300", "data-testid": `updates-overdue-${h.host_id}`, children: "Die geplante Pr\xFCfung ist hier ausgeblieben (das Dashboard lief zur Pr\xFCfzeit nicht). Der Stand kann veraltet sein \u2013 \u201EPr\xFCfen\u201C holt ihn nach." }),
             st?.error && /* @__PURE__ */ jsx6("p", { className: `mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`, children: st.error }),
             st?.refresh_error && /* @__PURE__ */ jsx6("p", { className: "mt-1 text-xs text-amber-300/80", children: st.refresh_error }),
             needsReboot && st.reboot_reasons.length > 0 && /* @__PURE__ */ jsxs5("p", { className: "mt-1 text-xs text-white/50", children: [
@@ -1378,6 +1390,68 @@ var FINDING_STATUS = {
   deleted: { label: "gel\xF6scht", tone: "good" },
   ignored: { label: "ignoriert", tone: "neutral" }
 };
+function ageText(days) {
+  if (days >= 14) return `${Math.floor(days / 7)} Wochen`;
+  return days === 1 ? "1 Tag" : `${days} Tage`;
+}
+function HardeningCell({ host: h }) {
+  const shown = h.last_audit?.hardening_index != null ? h.last_audit : h.last_ok_audit?.hardening_index != null ? h.last_ok_audit : null;
+  const failed = h.last_audit && h.last_audit.status !== "ok" ? h.last_audit : null;
+  return /* @__PURE__ */ jsxs6(Fragment5, { children: [
+    shown && shown.hardening_index != null && /* @__PURE__ */ jsxs6("div", { className: "w-28", children: [
+      /* @__PURE__ */ jsxs6("div", { className: "flex justify-between text-xs", children: [
+        /* @__PURE__ */ jsx7("span", { children: shown.hardening_index }),
+        /* @__PURE__ */ jsxs6("span", { className: "text-white/40", children: [
+          shown.warnings,
+          " Warn."
+        ] })
+      ] }),
+      /* @__PURE__ */ jsx7("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx7("div", { className: "h-1.5 rounded-full", style: { width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "#34d399" : "#fbbf24" } }) })
+    ] }),
+    failed && /* @__PURE__ */ jsxs6("p", { className: `${shown ? "mt-1 " : ""}text-xs text-amber-300`, title: failed.error ?? void 0, "data-testid": "audit-failed", children: [
+      "Letztes Audit fehlgeschlagen (",
+      ago(failed.created_at),
+      ")"
+    ] }),
+    !shown && !failed && /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: "\u2013" })
+  ] });
+}
+var NOTICE_STYLE = {
+  ok: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+  error: "border-red-500/30 bg-red-500/10 text-red-200",
+  warn: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+  info: "border-sky-500/30 bg-sky-500/10 text-sky-200"
+};
+function RunNotice({ notice, onClose }) {
+  return /* @__PURE__ */ jsxs6("div", { role: notice.kind === "error" ? "alert" : "status", className: `mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`, children: [
+    /* @__PURE__ */ jsxs6("span", { className: "min-w-0", children: [
+      notice.text,
+      notice.links?.map((l) => /* @__PURE__ */ jsx7("a", { href: l.href, className: "ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white", children: l.label }, l.href))
+    ] }),
+    onClose && /* @__PURE__ */ jsx7("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "flex-none opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx7(Icon, { name: "x", size: 14 }) })
+  ] });
+}
+function briefingNotice(r) {
+  const stored = `Briefing erstellt: \u201E${r.title}\u201C. Es steht unter \u201EMeldungen\u201C`;
+  const inbox = { href: "/notifications", label: "Meldungen \xF6ffnen" };
+  switch (r.push) {
+    case "sent":
+      return { kind: "ok", text: `${stored} und wurde auch als Push-Nachricht zugestellt.`, links: [inbox] };
+    case "suppressed":
+      return { kind: "warn", text: `${stored}. Als Push-Nachricht kommt es nicht an, weil gerade ein Wartungsfenster l\xE4uft.`, links: [inbox] };
+    case "not_delivered": {
+      const links = [inbox];
+      if (deck().hasPermission("extensions.manage")) links.push({ href: "/settings/extensions/ntfy", label: "Push-Nachrichten einrichten" });
+      return {
+        kind: "warn",
+        text: `${stored}. Aufs Handy kommt es erst, wenn Push-Nachrichten (ntfy) eingerichtet sind und der ntfy-Dienst erreichbar ist (nicht einer deiner Server).`,
+        links
+      };
+    }
+    default:
+      return { kind: "ok", text: `${stored}.`, links: [inbox] };
+  }
+}
 function ScoreRing({ score }) {
   const r = 42;
   const c = 2 * Math.PI * r;
@@ -1405,7 +1479,7 @@ function ScoreRing({ score }) {
     /* @__PURE__ */ jsxs6("div", { children: [
       /* @__PURE__ */ jsx7("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
       /* @__PURE__ */ jsx7("p", { className: "text-lg font-semibold", style: { color: tone }, children: label }),
-      /* @__PURE__ */ jsx7("p", { className: "mt-1 max-w-xs text-xs text-white/45", children: "Aus Abdeckung (ClamAV), aktuellen Scans, offenen Funden und H\xE4rtungsindex." })
+      /* @__PURE__ */ jsx7("p", { className: "mt-1 max-w-[16rem] text-xs text-white/45", children: "Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde und wie sicher die Server eingestellt sind (H\xE4rtung)." })
     ] })
   ] });
 }
@@ -1418,6 +1492,8 @@ function SocPage() {
   const [overview, setOverview] = useState6(null);
   const [error, setError] = useState6(null);
   const [notice, setNotice] = useState6(null);
+  const [briefingBusy, setBriefingBusy] = useState6(false);
+  const briefingLock = useRef2(false);
   const canManage = deck().hasPermission("soc.manage");
   const hostFilter = urlParams.get("host") || null;
   const showAllHosts = () => updateUrl({ host: null });
@@ -1462,10 +1538,21 @@ function SocPage() {
     const r = await call(`${API}/audits`, { method: "POST", body: JSON.stringify({ host_ids: hostIds }) });
     return `${r.hosts} Server werden gepr\xFCft (dauert einige Minuten).`;
   });
-  const sendBriefing = () => run("Briefing", async () => {
-    const r = await call(`${API}/briefing`, { method: "POST" });
-    return `gesendet \u2013 \u201E${r.title}\u201C`;
-  });
+  async function sendBriefing() {
+    if (briefingLock.current) return;
+    briefingLock.current = true;
+    setBriefingBusy(true);
+    setNotice({ kind: "info", text: "Briefing wird erstellt \u2026 Das kann bis zu einer halben Minute dauern, wenn ein Server nicht antwortet." });
+    try {
+      setNotice(briefingNotice(await call(`${API}/briefing`, { method: "POST" })));
+      loadOverview();
+    } catch (err) {
+      setNotice({ kind: "error", text: `Briefing: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      briefingLock.current = false;
+      setBriefingBusy(false);
+    }
+  }
   const install = (host, pkg) => run(pkg === "signatures" ? `Signaturen (${host.host_name})` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} installieren (${host.host_name})`, async () => {
     const ok = await deck().confirmDialog(
       pkg === "signatures" ? `Virensignaturen auf \u201E${host.host_name}\u201C jetzt aktualisieren? Das automatische Signatur-Update wird dabei eingeschaltet.` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} auf \u201E${host.host_name}\u201C installieren?`,
@@ -1480,18 +1567,26 @@ function SocPage() {
     Page,
     {
       title: "Nodvard Shield",
-      description: "Virenschutz, Quarant\xE4ne und H\xE4rtung f\xFCr alle Server \u2013 plus die KI-Container-Wache (Nodvard KI) f\xFCr Docker-Container.",
+      description: "Sch\xFCtzt deine Server: Virenscans, Sicherheitsupdates, Einbruchschutz und eine Pr\xFCfung, wie sicher alles eingestellt ist \u2013 plus die KI-Wache (Nodvard KI) f\xFCr abgest\xFCrzte Docker-Container.",
       actions: canManage && /* @__PURE__ */ jsxs6(Fragment5, { children: [
-        /* @__PURE__ */ jsx7(Button, { onClick: () => void sendBriefing(), children: "Briefing senden" }),
-        /* @__PURE__ */ jsxs6(Button, { onClick: () => void startAudit(), children: [
+        /* @__PURE__ */ jsx7(
+          Button,
+          {
+            onClick: () => void sendBriefing(),
+            disabled: briefingBusy,
+            title: "Schickt dir jetzt den Lagebericht: Server, Virenschutz, Updates und Einbruchschutz auf einen Blick.",
+            children: briefingBusy ? "Briefing wird erstellt \u2026" : "Briefing senden"
+          }
+        ),
+        /* @__PURE__ */ jsxs6(Button, { onClick: () => void startAudit(), title: "Lynis pr\xFCft, wie sicher deine Server eingestellt sind (dauert einige Minuten).", children: [
           /* @__PURE__ */ jsx7(Icon, { name: "clock", size: 14 }),
           " H\xE4rtungs-Audit"
         ] }),
-        /* @__PURE__ */ jsxs6(Button, { onClick: () => void startScan("deep"), children: [
+        /* @__PURE__ */ jsxs6(Button, { onClick: () => void startScan("deep"), title: "Pr\xFCft das ganze System auf Schadsoftware \u2013 das kann Stunden dauern.", children: [
           /* @__PURE__ */ jsx7(Icon, { name: "search", size: 14 }),
           " Tiefenscan"
         ] }),
-        /* @__PURE__ */ jsxs6(Button, { variant: "primary", onClick: () => void startScan("quick"), children: [
+        /* @__PURE__ */ jsxs6(Button, { variant: "primary", onClick: () => void startScan("quick"), title: "Pr\xFCft typische Ablageorte auf Schadsoftware \u2013 in wenigen Minuten fertig.", children: [
           /* @__PURE__ */ jsx7(Icon, { name: "play", size: 14 }),
           " Schnellscan starten"
         ] })
@@ -1522,7 +1617,7 @@ function SocPage() {
           /* @__PURE__ */ jsx7("button", { type: "button", onClick: showAllHosts, className: "text-xs text-white/70 hover:text-white hover:underline", children: "Alle Server anzeigen" })
         ] }),
         /* @__PURE__ */ jsxs6(HostFilter.Provider, { value: hostFilter, children: [
-          notice && /* @__PURE__ */ jsx7(Notice, { text: notice.text, kind: notice.kind, onClose: () => setNotice(null) }),
+          notice && /* @__PURE__ */ jsx7(RunNotice, { notice, onClose: () => setNotice(null) }),
           error && ["overview", "scans", "quarantine", "hardening"].includes(tab) && /* @__PURE__ */ jsx7(Notice, { text: `Fehler: ${error}` }),
           tab === "overview" && overview && /* @__PURE__ */ jsx7(
             OverviewTab,
@@ -1552,13 +1647,80 @@ function SocPage() {
 }
 function SideLink({ title, text, tone, onClick }) {
   const dot = tone === "good" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-red-400";
-  return /* @__PURE__ */ jsxs6("button", { type: "button", onClick, className: "panel flex items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]", children: [
+  return /* @__PURE__ */ jsxs6("button", { type: "button", onClick, className: "panel flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]", children: [
     /* @__PURE__ */ jsx7("span", { className: `h-2.5 w-2.5 flex-none rounded-full ${dot}` }),
     /* @__PURE__ */ jsxs6("span", { className: "min-w-0 flex-1", children: [
       /* @__PURE__ */ jsx7("span", { className: "block text-xs text-white/50", children: title }),
-      /* @__PURE__ */ jsx7("span", { className: "block truncate text-sm", children: text })
+      /* @__PURE__ */ jsx7("span", { className: "block truncate text-sm", title: text, children: text })
     ] }),
-    /* @__PURE__ */ jsx7("span", { className: "text-white/35", children: "\u2192" })
+    /* @__PURE__ */ jsx7("span", { className: "flex-none text-white/35", children: "\u2192" })
+  ] });
+}
+function nextStep(hosts, openThreats, canManage, on) {
+  if (openThreats > 0) {
+    return {
+      text: `${openThreats === 1 ? "Es wurde eine Bedrohung gefunden" : `Es wurden ${openThreats} Bedrohungen gefunden`}. Schau sie dir an und entscheide, was damit passiert.`,
+      action: { label: "Funde ansehen", run: on.threats }
+    };
+  }
+  if (hosts.length === 0) return null;
+  if (hosts.every((h) => h.reachable === false)) {
+    return {
+      text: hosts.length === 1 ? `\u201E${hosts[0].host_name}\u201C antwortet nicht. Pr\xFCfe, ob der Server l\xE4uft und ob Adresse und Zugang stimmen.` : "Kein Server antwortet. Pr\xFCfe, ob die Server laufen und ob Adresse und Zugang stimmen.",
+      link: deck().hasPermission("hosts.write") ? { href: "/settings/hosts", label: "Server & Zug\xE4nge \xF6ffnen" } : void 0
+    };
+  }
+  const reachable = hosts.filter((h) => h.reachable !== false);
+  const noClam = reachable.find((h) => !h.clamav_installed);
+  if (noClam) {
+    const more = reachable.filter((h) => !h.clamav_installed).length - 1;
+    return {
+      text: `Installiere ClamAV (den Virenscanner) auf \u201E${noClam.host_name}\u201C${more > 0 ? ` und ${more} weiteren Server${more > 1 ? "n" : ""}` : ""}. Ohne ihn wird dort nichts gepr\xFCft.`,
+      action: canManage ? { label: "ClamAV installieren", run: () => on.install(noClam, "clamav") } : void 0
+    };
+  }
+  const neverScanned = reachable.find((h) => h.clamav_installed && !h.last_scan && !h.scanning);
+  if (neverScanned) {
+    return {
+      text: `\u201E${neverScanned.host_name}\u201C wurde noch nie gepr\xFCft. Starte den ersten Schnellscan.`,
+      action: canManage ? { label: "Schnellscan starten", run: () => on.scan(neverScanned) } : void 0
+    };
+  }
+  const noLynis = reachable.find((h) => !h.lynis_installed);
+  if (noLynis) {
+    return {
+      text: `Installiere Lynis auf \u201E${noLynis.host_name}\u201C. Es pr\xFCft, wie sicher der Server eingestellt ist (H\xE4rtung).`,
+      action: canManage ? { label: "Lynis installieren", run: () => on.install(noLynis, "lynis") } : void 0
+    };
+  }
+  return null;
+}
+function coverageBadge(on, name, onWord, covered, total, interval) {
+  if (!on) return { tone: "warn", text: `${name} aus` };
+  if (covered === 0) return { tone: "warn", text: `${name}: an, aber noch auf keinem Server aktiv` };
+  if (covered < total) return { tone: "warn", text: `${name}: ${onWord} auf ${covered} von ${total} Servern${interval ?? ""}` };
+  return { tone: "good", text: `${name} ${onWord}${interval ?? ""}` };
+}
+var GLOSSARY = [
+  ["ClamAV", "der Virenscanner. Er l\xE4uft kostenlos auf deinen Servern und sucht nach bekannten Schadprogrammen."],
+  ["Signaturen", "die Liste bekannter Schadprogramme, mit der ClamAV vergleicht. Sie sollte t\xE4glich aktualisiert werden."],
+  ["Schnellscan / Tiefenscan", "der Schnellscan pr\xFCft typische Ablageorte und ist in Minuten fertig; der Tiefenscan pr\xFCft das ganze System und kann Stunden dauern."],
+  ["Echtzeit-W\xE4chter", "pr\xFCft alle paar Minuten neue und ge\xE4nderte Dateien."],
+  ["Quarant\xE4ne", "gefundene Schadsoftware wird weggesperrt statt gel\xF6scht. Du kannst sie zur\xFCckholen oder endg\xFCltig l\xF6schen."],
+  ["Lynis, H\xE4rtung, H\xE4rtungs-Audit", "Lynis pr\xFCft, wie sicher ein Server eingestellt ist \u2013 das ist das H\xE4rtungs-Audit. \u201EH\xE4rtung\u201C hei\xDFt: den Server sicherer einstellen. Der Wert geht von 0 (unsicher) bis 100."],
+  ["Fail2ban", "sperrt Adressen, die zu oft ein falsches Passwort probieren (Reiter \u201EEinbruchschutz\u201C)."]
+];
+function Glossary() {
+  return /* @__PURE__ */ jsxs6("details", { className: "mb-5 rounded-lg border border-white/[0.06] px-3 py-2 text-xs text-white/55", "data-testid": "glossary", children: [
+    /* @__PURE__ */ jsx7("summary", { className: "cursor-pointer select-none text-white/70 hover:text-white", children: "Was bedeuten die Begriffe?" }),
+    /* @__PURE__ */ jsx7("dl", { className: "mt-2 space-y-1.5", children: GLOSSARY.map(([term, text]) => /* @__PURE__ */ jsxs6("div", { children: [
+      /* @__PURE__ */ jsx7("dt", { className: "inline font-medium text-white/80", children: term }),
+      " ",
+      /* @__PURE__ */ jsxs6("dd", { className: "inline", children: [
+        "\u2013 ",
+        text
+      ] })
+    ] }, term)) })
   ] });
 }
 function OverviewTab({
@@ -1575,17 +1737,69 @@ function OverviewTab({
   const s = overview.summary;
   const c = overview.config;
   const hosts = useForHost(overview.hosts);
+  const attention = useForHost(overview.attention ?? []);
+  const noServers = s.hosts === 0;
+  const step = nextStep(hosts, s.open_threats, canManage, {
+    threats: onOpenThreats,
+    install: onInstall,
+    scan: onScan
+  });
+  const realtime = coverageBadge(c.realtime_enabled, "Echtzeit-W\xE4chter", "aktiv", s.protected, s.hosts, ` (alle ${c.watch_interval_min} Min.)`);
+  const quarantine = coverageBadge(c.auto_quarantine, "Automatische Quarant\xE4ne", "an", s.protected, s.hosts);
   return /* @__PURE__ */ jsxs6(Fragment5, { children: [
+    step && /* @__PURE__ */ jsxs6("div", { className: "mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-3 text-sm", "data-testid": "next-step", children: [
+      /* @__PURE__ */ jsxs6("p", { className: "min-w-0 flex-1", children: [
+        /* @__PURE__ */ jsx7("strong", { className: "font-semibold", children: "N\xE4chster Schritt:" }),
+        " ",
+        step.text
+      ] }),
+      step.action && /* @__PURE__ */ jsx7(Button, { variant: "primary", small: true, onClick: step.action.run, children: step.action.label }),
+      step.link && /* @__PURE__ */ jsx7("a", { href: step.link.href, className: "text-xs underline underline-offset-2 hover:text-white", children: step.link.label })
+    ] }),
     /* @__PURE__ */ jsxs6("div", { className: "mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]", children: [
-      /* @__PURE__ */ jsx7("div", { className: "panel flex items-center px-6 py-4", children: /* @__PURE__ */ jsx7(ScoreRing, { score: s.score }) }),
+      noServers ? /* @__PURE__ */ jsxs6("div", { className: "panel px-6 py-4", "data-testid": "no-servers", children: [
+        /* @__PURE__ */ jsx7("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
+        (s.hosts_known ?? 0) > 0 ? /* @__PURE__ */ jsxs6(Fragment5, { children: [
+          /* @__PURE__ */ jsx7("p", { className: "text-lg font-semibold", children: "Noch kein Server pr\xFCfbar \u2013 nichts zu bewerten" }),
+          /* @__PURE__ */ jsxs6("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
+            "Du hast ",
+            s.hosts_known === 1 ? "einen Server" : `${s.hosts_known} Server`,
+            " angelegt, aber Nodvard Shield kann noch keinen pr\xFCfen. Daf\xFCr braucht er einen Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung).",
+            deck().hasPermission("hosts.write") && /* @__PURE__ */ jsxs6(Fragment5, { children: [
+              " ",
+              /* @__PURE__ */ jsx7("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Zugang einrichten" })
+            ] })
+          ] })
+        ] }) : /* @__PURE__ */ jsxs6(Fragment5, { children: [
+          /* @__PURE__ */ jsx7("p", { className: "text-lg font-semibold", children: "Noch kein Server \u2013 nichts zu bewerten" }),
+          /* @__PURE__ */ jsxs6("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
+            "F\xFCge zuerst einen Server hinzu.",
+            deck().hasPermission("hosts.write") && /* @__PURE__ */ jsxs6(Fragment5, { children: [
+              " ",
+              /* @__PURE__ */ jsx7("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Server hinzuf\xFCgen" })
+            ] })
+          ] })
+        ] })
+      ] }) : /* @__PURE__ */ jsx7("div", { className: "panel flex items-center px-6 py-4", children: /* @__PURE__ */ jsx7(ScoreRing, { score: s.score }) }),
       /* @__PURE__ */ jsxs6("div", { className: "grid grid-cols-2 gap-3 md:grid-cols-4", children: [
-        /* @__PURE__ */ jsx7(Stat, { label: "Gesch\xFCtzte Server", value: `${s.protected} / ${s.hosts}`, hint: "ClamAV installiert", tone: s.protected < s.hosts ? "warn" : "good" }),
+        /* @__PURE__ */ jsx7(Stat, { label: "Gesch\xFCtzte Server", value: `${s.protected} / ${s.hosts}`, hint: "mit Virenscanner (ClamAV)", tone: noServers ? void 0 : s.protected < s.hosts ? "warn" : "good" }),
         /* @__PURE__ */ jsx7("button", { type: "button", onClick: onOpenThreats, className: "text-left [&>div]:h-full", children: /* @__PURE__ */ jsx7(Stat, { label: "Offene Bedrohungen", value: s.open_threats, hint: s.open_threats ? "Jetzt pr\xFCfen \u2192" : "keine", tone: s.open_threats ? "bad" : "good" }) }),
         /* @__PURE__ */ jsx7(Stat, { label: "Neutralisiert", value: s.neutralized_total, hint: `${s.quarantined} in Quarant\xE4ne \xB7 ${s.findings_30d} Funde in 30 Tagen` }),
-        /* @__PURE__ */ jsx7(Stat, { label: "H\xE4rtung (\xD8 Lynis)", value: s.avg_hardening ?? "\u2013", hint: "von 100", tone: s.avg_hardening == null ? void 0 : s.avg_hardening >= 70 ? "good" : "warn" })
+        /* @__PURE__ */ jsx7(Stat, { label: "H\xE4rtung (\xD8)", value: s.avg_hardening ?? "\u2013", hint: "von 100 \xB7 wie sicher die Server eingestellt sind (Lynis)", tone: s.avg_hardening == null ? void 0 : s.avg_hardening >= 70 ? "good" : "warn" })
       ] })
     ] }),
-    (side.updates?.checked || side.guard) && /* @__PURE__ */ jsxs6("div", { className: "mb-5 grid gap-3 md:grid-cols-2", "data-testid": "side-summary", children: [
+    attention.length > 0 && /* @__PURE__ */ jsx7("div", { className: "mb-5", "data-testid": "shield-attention", children: /* @__PURE__ */ jsx7(Card, { title: "Braucht Aufmerksamkeit", padded: false, children: /* @__PURE__ */ jsx7("ul", { className: "divide-y divide-white/[0.06]", children: attention.map((a) => {
+      const host = overview.hosts.find((h) => h.host_id === a.host_id);
+      return /* @__PURE__ */ jsxs6("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
+        /* @__PURE__ */ jsx7("span", { "aria-hidden": "true", className: `h-2 w-2 flex-none rounded-full ${a.tone === "warn" ? "bg-amber-300" : "bg-white/40"}` }),
+        /* @__PURE__ */ jsxs6("div", { className: "min-w-0 flex-1", children: [
+          /* @__PURE__ */ jsx7("p", { className: "break-words font-medium", children: a.title }),
+          /* @__PURE__ */ jsx7("p", { className: "text-xs text-white/50", children: a.hint })
+        ] }),
+        canManage && host && a.kind === "signatures" && /* @__PURE__ */ jsx7(Button, { small: true, onClick: () => onInstall(host, "signatures"), children: a.action_label })
+      ] }, `${a.kind}-${a.host_id}`);
+    }) }) }) }),
+    (side.updates?.checked || side.guard) && /* @__PURE__ */ jsxs6("div", { className: "mb-5 grid grid-cols-1 gap-3 md:grid-cols-2", "data-testid": "side-summary", children: [
       !!side.updates?.checked && /* @__PURE__ */ jsx7(
         SideLink,
         {
@@ -1606,14 +1820,8 @@ function OverviewTab({
       )
     ] }),
     /* @__PURE__ */ jsxs6("div", { className: "mb-5 flex flex-wrap gap-2 text-xs", children: [
-      /* @__PURE__ */ jsxs6(Badge, { tone: c.realtime_enabled ? "good" : "warn", children: [
-        "Echtzeit-W\xE4chter ",
-        c.realtime_enabled ? `aktiv (alle ${c.watch_interval_min} Min.)` : "aus"
-      ] }),
-      /* @__PURE__ */ jsxs6(Badge, { tone: c.auto_quarantine ? "good" : "warn", children: [
-        "Automatische Quarant\xE4ne ",
-        c.auto_quarantine ? "an" : "aus"
-      ] }),
+      /* @__PURE__ */ jsx7("span", { className: "max-w-full [&>span]:whitespace-normal", children: /* @__PURE__ */ jsx7(Badge, { tone: realtime.tone, children: realtime.text }) }),
+      /* @__PURE__ */ jsx7("span", { className: "max-w-full [&>span]:whitespace-normal", children: /* @__PURE__ */ jsx7(Badge, { tone: quarantine.tone, children: quarantine.text }) }),
       /* @__PURE__ */ jsxs6(Badge, { children: [
         "Schnellscan: ",
         describeSchedule(c.quick_scan_cron, "aus")
@@ -1623,11 +1831,12 @@ function OverviewTab({
         describeSchedule(c.deep_scan_cron, "aus")
       ] }),
       /* @__PURE__ */ jsxs6(Badge, { children: [
-        "Audit: ",
+        "H\xE4rtungs-Audit: ",
         describeSchedule(c.audit_cron, "aus")
       ] }),
       /* @__PURE__ */ jsx7("a", { href: "/settings/extensions/nexus-soc", className: "text-white/50 underline-offset-2 hover:text-white hover:underline", children: "Einstellungen \xE4ndern" })
     ] }),
+    /* @__PURE__ */ jsx7(Glossary, {}),
     /* @__PURE__ */ jsx7(Card, { title: "Server", padded: false, actions: /* @__PURE__ */ jsxs6(Button, { small: true, variant: "ghost", onClick: onRefresh, children: [
       /* @__PURE__ */ jsx7(Icon, { name: "refresh", size: 12 }),
       " Status neu pr\xFCfen"
@@ -1639,9 +1848,9 @@ function OverviewTab({
     ] }) : /* @__PURE__ */ jsx7("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs6("table", { className: "w-full text-left text-sm", children: [
       /* @__PURE__ */ jsx7("thead", { className: "text-xs uppercase tracking-wider text-white/40", children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/[0.06]", children: [
         /* @__PURE__ */ jsx7("th", { className: "px-5 py-2.5 font-medium", children: "Server" }),
-        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", children: "Virenschutz" }),
+        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", title: "ClamAV ist der Virenscanner auf dem Server", children: "Virenschutz" }),
         /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", children: "Letzter Scan" }),
-        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", children: "H\xE4rtung" }),
+        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", title: "Wie sicher der Server eingestellt ist (gepr\xFCft von Lynis), 0 bis 100", children: "H\xE4rtung" }),
         /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium" })
       ] }) }),
       /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/[0.04]", children: hosts.map((h) => /* @__PURE__ */ jsxs6("tr", { "data-testid": `host-${h.host_id}`, children: [
@@ -1661,6 +1870,12 @@ function OverviewTab({
             "Signaturen ",
             h.signature_version ?? "?",
             h.signature_date ? ` \xB7 ${h.signature_date}` : "",
+            h.signature_stale === true && /* @__PURE__ */ jsxs6("span", { className: "text-amber-300", children: [
+              " \xB7 ",
+              ageText(h.signature_age_days ?? 0),
+              " alt"
+            ] }),
+            h.signature_stale == null && /* @__PURE__ */ jsx7("span", { className: "text-amber-300", children: " \xB7 Alter unbekannt" }),
             h.freshclam_active === false && /* @__PURE__ */ jsx7("span", { className: "text-amber-300", children: " \xB7 Auto-Update aus" })
           ] })
         ] }) : h.reachable === false ? /* @__PURE__ */ jsx7(Badge, { children: "unbekannt" }) : /* @__PURE__ */ jsx7(Badge, { tone: "bad", children: "nicht installiert" }) }),
@@ -1672,22 +1887,13 @@ function OverviewTab({
             ago(h.last_scan.started_at)
           ] })
         ] }) : /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: "noch nie" }) }),
-        /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: h.auditing ? /* @__PURE__ */ jsx7(Badge, { tone: "info", children: "Audit l\xE4uft \u2026" }) : h.last_audit?.hardening_index != null ? /* @__PURE__ */ jsxs6("div", { className: "w-28", children: [
-          /* @__PURE__ */ jsxs6("div", { className: "flex justify-between text-xs", children: [
-            /* @__PURE__ */ jsx7("span", { children: h.last_audit.hardening_index }),
-            /* @__PURE__ */ jsxs6("span", { className: "text-white/40", children: [
-              h.last_audit.warnings,
-              " Warn."
-            ] })
-          ] }),
-          /* @__PURE__ */ jsx7("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx7("div", { className: "h-1.5 rounded-full", style: { width: `${h.last_audit.hardening_index}%`, background: h.last_audit.hardening_index >= 70 ? "#34d399" : "#fbbf24" } }) })
-        ] }) : h.last_audit?.error ? /* @__PURE__ */ jsx7("span", { className: "text-xs text-amber-300", children: h.last_audit.error }) : /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: "\u2013" }) }),
+        /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: h.auditing ? /* @__PURE__ */ jsx7(Badge, { tone: "info", children: "Audit l\xE4uft \u2026" }) : /* @__PURE__ */ jsx7(HardeningCell, { host: h }) }),
         /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: canManage && /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap justify-end gap-1", children: [
           h.clamav_installed && /* @__PURE__ */ jsx7(Button, { small: true, onClick: () => onScan(h), disabled: h.scanning, children: "Scannen" }),
-          h.clamav_installed && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", onClick: () => onInstall(h, "signatures"), children: "Signaturen" }),
-          !h.clamav_installed && h.reachable !== false && /* @__PURE__ */ jsx7(Button, { small: true, variant: "primary", onClick: () => onInstall(h, "clamav"), children: "ClamAV installieren" }),
-          !h.lynis_installed && h.reachable !== false && /* @__PURE__ */ jsx7(Button, { small: true, onClick: () => onInstall(h, "lynis"), children: "Lynis installieren" }),
-          h.lynis_installed && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", onClick: () => onAudit(h), disabled: h.auditing, children: "Audit" })
+          h.clamav_installed && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", title: "Die Liste bekannter Schadprogramme jetzt aktualisieren", onClick: () => onInstall(h, "signatures"), children: "Signaturen" }),
+          !h.clamav_installed && h.reachable !== false && /* @__PURE__ */ jsx7(Button, { small: true, variant: "primary", title: "ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert.", onClick: () => onInstall(h, "clamav"), children: "ClamAV installieren" }),
+          !h.lynis_installed && h.reachable !== false && /* @__PURE__ */ jsx7(Button, { small: true, title: "Lynis pr\xFCft, wie sicher der Server eingestellt ist.", onClick: () => onInstall(h, "lynis"), children: "Lynis installieren" }),
+          h.lynis_installed && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", title: "Pr\xFCft, wie sicher der Server eingestellt ist (H\xE4rtung)", onClick: () => onAudit(h), disabled: h.auditing, children: "Audit" })
         ] }) })
       ] }, h.host_id)) })
     ] }) }) })
@@ -1913,7 +2119,7 @@ function HardeningTab({ canManage, onAudit }) {
       {
         icon: "clock",
         title: "Noch kein H\xE4rtungs-Audit",
-        text: "Lynis pr\xFCft jeden Server auf unsichere Einstellungen (SSH, Passwortregeln, offene Dienste \u2026) und vergibt einen H\xE4rtungsindex von 0 bis 100.",
+        text: "Lynis ist ein kostenloses Pr\xFCfprogramm. Es sucht auf jedem Server nach unsicheren Einstellungen (SSH, Passwortregeln, offene Dienste \u2026) und vergibt einen H\xE4rtungswert von 0 bis 100 \u2013 je h\xF6her, desto sicherer.",
         action: canManage && /* @__PURE__ */ jsx7(Button, { variant: "primary", onClick: onAudit, children: "Audit jetzt starten" })
       }
     );
@@ -1922,9 +2128,16 @@ function HardeningTab({ canManage, onAudit }) {
     Card,
     {
       title: a.host_name,
-      description: `Gepr\xFCft ${when(a.created_at)}`,
+      description: `${a.status === "ok" ? "Gepr\xFCft" : "Versucht"} ${when(a.created_at)}`,
       actions: a.hardening_index != null && /* @__PURE__ */ jsx7("span", { className: `text-2xl font-semibold ${a.hardening_index >= 70 ? "text-emerald-300" : "text-amber-300"}`, children: a.hardening_index }),
-      children: a.status !== "ok" ? /* @__PURE__ */ jsx7("p", { className: "text-sm text-amber-300", children: a.error }) : /* @__PURE__ */ jsxs6(Fragment5, { children: [
+      children: a.status !== "ok" ? /* @__PURE__ */ jsxs6(Fragment5, { children: [
+        /* @__PURE__ */ jsxs6("p", { className: "text-sm text-amber-300", children: [
+          "Letztes Audit fehlgeschlagen (",
+          ago(a.created_at),
+          ")"
+        ] }),
+        a.error && /* @__PURE__ */ jsx7("p", { className: "mt-1 break-words text-xs text-white/50", children: a.error })
+      ] }) : /* @__PURE__ */ jsxs6(Fragment5, { children: [
         /* @__PURE__ */ jsxs6("p", { className: "mb-2 text-xs uppercase tracking-wider text-white/40", children: [
           "Warnungen (",
           a.warnings.length,

@@ -37,10 +37,12 @@ services:
       # Selbst-Antesten. Unveraendert `false` lassen fuer einen echten Einsatz --
       # siehe deploy/README.md fuer den aktuellen Umsetzungsstand dieses Schalters.
       NODVARD_DECK_DEMO_MODE: "false"
-      # Optional, Standard aus: neue Server-Schluessel werden nicht mehr still im Hintergrund
-      # gemerkt, sondern nur nach Bestaetigung unter Einstellungen -> Server & Zugaenge
-      # ("Verbindung pruefen"). Bereits gemerkte Schluessel sind nie betroffen. Alter Name:
-      # LATTICE_SSH_CONFIRM_NEW_HOST_KEYS.
+      # Optional, uebersteuert die Einstellung unter Einstellungen -> Server & Zugaenge: "true" = neue
+      # Server-Schluessel werden nicht still gemerkt, sondern erst nach Bestaetigung ("Verbindung
+      # pruefen"); "false" = wie frueher still merken. Ohne diese Zeile gilt die gespeicherte
+      # Einstellung (neue Installationen: bestaetigen, bestehende: still merken). Nach "Schluessel
+      # vergessen" ist die Bestaetigung immer noetig. Bereits gemerkte Schluessel sind nie betroffen.
+      # Alter Name: LATTICE_SSH_CONFIRM_NEW_HOST_KEYS.
       # NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: "true"
     # DNS nur fuer DIESEN Container (Docker Compose `dns:`), nicht am Host geaendert.
     # Hintergrund: ohne dieses Feld erbt der Container den Host-Resolver. Zeigt der auf
@@ -77,7 +79,7 @@ services:
       # als Ziel erlaubt, neben dem Standard /app/data/backups.
       # - ./sicherungen:/backups
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+      test: ["CMD", "python", "-I", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
       interval: 30s
       timeout: 3s
       # Vor dem Start laeuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`) -- bei einer grossen Datenbank auf einem Pi

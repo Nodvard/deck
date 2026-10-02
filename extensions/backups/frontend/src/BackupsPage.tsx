@@ -135,7 +135,7 @@ function NewJobForm({ guest, defaultStorage, onDone }: { guest: UnprotectedGuest
             : `Fehlgeschlagen: ${action.result?.error ?? action.status}`,
         );
       } else {
-        onDone(action.status === "proposed" ? `Vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".` : ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?");
+        onDone(action.status === "proposed" ? `Vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".` : ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?");
       }
     } catch (err) {
       onDone(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
@@ -241,7 +241,7 @@ function UnprotectedSection({ inventory, defaultStorage = "", onChanged }: { inv
       </ul>
       {accepted.length > 0 && (
         <div className="mt-2" data-testid="unprotected-accepted">
-          <p className="text-xs font-medium opacity-60">Bewusst ohne Backup ({accepted.length}) -- warnt nicht auf dem Dashboard</p>
+          <p className="text-xs font-medium opacity-60">Bewusst ohne Backup ({accepted.length}) – warnt nicht auf dem Dashboard</p>
           <ul className="space-y-0.5 text-xs opacity-70">
             {accepted.map((g) => (
               <li key={`${g.connection}-${g.vmid}`}>
@@ -360,7 +360,7 @@ function ConnectionsPanel(): JSX.Element {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setMessage(`Verbindung "${newName}" angelegt -- jetzt noch ein Token setzen.`);
+      setMessage(`Verbindung "${newName}" angelegt – jetzt noch ein Token setzen.`);
       setNewName("");
       setNewBaseUrl("");
       setNewTokenId("");
@@ -421,7 +421,7 @@ function ConnectionsPanel(): JSX.Element {
 
   async function removeConnection(name: string) {
     const ok = await deck().confirmDialog(
-      `Verbindung "${name}" wirklich entfernen? Ein bereits gesetztes Token bleibt im Tresor stehen.`,
+      `Verbindung "${name}" wirklich entfernen? Das gesetzte Token wird mit gelöscht.`,
       { danger: true, confirmLabel: "Entfernen" },
     );
     if (!ok) return;
@@ -605,7 +605,7 @@ function JobEditForm({ job, guests, onDone }: { job: JobOut; guests: string[]; o
     const warning = shrinks
       ? " Weniger Aufbewahrung: Proxmox löscht beim nächsten Lauf, was über der neuen Grenze liegt."
       : newRule ? ` ${NEW_RULE_WARNING}` : "";
-    const ok = await deck().confirmDialog(`Backup-Job ändern (gilt für ${guests.join(", ")}) -- ${summary}?${warning}`, { danger: shrinks || newRule, confirmLabel: "Ändern" });
+    const ok = await deck().confirmDialog(`Backup-Job ändern (gilt für ${guests.join(", ")}) – ${summary}?${warning}`, { danger: shrinks || newRule, confirmLabel: "Ändern" });
     if (!ok) return;
     setBusy(true);
     try {
@@ -621,7 +621,7 @@ function JobEditForm({ job, guests, onDone }: { job: JobOut; guests: string[]; o
             : `Fehlgeschlagen: ${action.result?.error ?? action.status}`,
         );
       } else if (action.status === "proposed") {
-        onDone(`Änderung vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        onDone(`Änderung vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
       } else {
         onDone(ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?");
       }
@@ -727,7 +727,7 @@ export function BackupsPage(): JSX.Element {
   }
 
   async function retry(job: JobOut) {
-    const ok = await deck().confirmDialog(`Startet sofort ein volles Backup von '${job.name}'. Fortfahren?`);
+    const ok = await deck().confirmDialog(`Startet sofort ein Backup von '${job.name}' mit den Einstellungen des Jobs. Hat der Job eine Aufbewahrung, können danach ältere Sicherungen dieses Gastes auf dem Speicher gelöscht werden, auch manuelle und die anderer Jobs. Ohne eigene Aufbewahrung bleibt alles erhalten. Fortfahren?`);
     if (!ok) return;
     setBusy(job.job_ref);
     setMessage(null);
@@ -739,7 +739,7 @@ export function BackupsPage(): JSX.Element {
 
       const { action, approved } = await settleAction(body, { signal: unmountSignal() });
       if (!approved && action.status === "proposed") {
-        setMessage(`Backup-Retry vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        setMessage(`Backup-Retry vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
       } else {
         setMessage(`Backup-Retry -> ${approved && action.status === "succeeded" ? "angenommen" : ACTION_STATUS_LABEL[action.status ?? ""] ?? action.status ?? "?"}.`);
       }
@@ -769,7 +769,7 @@ export function BackupsPage(): JSX.Element {
       <ConnectionsPanel />
       {jobs && (jobs.length > 0 || unreachable.length === 0) && (
         <p className="mb-4 text-sm opacity-70">
-          {jobs.length} Job(s) -- {failing > 0 ? `${failing} ohne bestätigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"}
+          {jobs.length} Job(s) – {failing > 0 ? `${failing} ohne bestätigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"}
         </p>
       )}
       <UnprotectedSection
@@ -783,7 +783,7 @@ export function BackupsPage(): JSX.Element {
         <div className="mb-2 text-sm text-red-400" data-testid="unreachable">
           {unreachable.map((u) => (
             <p key={u.connection}>
-              Verbindung „{u.connection}“ nicht erreichbar -- ihre Backup-Jobs fehlen hier gerade. <span className="text-xs opacity-80">({u.error ?? u.storage})</span>
+              Verbindung „{u.connection}“ nicht erreichbar – ihre Backup-Jobs fehlen hier gerade. <span className="text-xs opacity-80">({u.error ?? u.storage})</span>
             </p>
           ))}
         </div>
@@ -794,13 +794,13 @@ export function BackupsPage(): JSX.Element {
       {hostFilter && jobs && (
         <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
           <span className="accent-soft flex items-center gap-1 rounded px-2 py-0.5" data-testid="host-filter">
-            Nur {visibleJobs?.[0]?.name ?? "dieser Host"}
+            Nur {visibleJobs?.[0]?.name ?? "dieser Server"}
             <button type="button" onClick={() => updateUrl({ host: null })} aria-label="Filter entfernen" className="opacity-70 hover:opacity-100">
               ✕
             </button>
           </span>
           {visibleJobs?.length === 0 && (
-            <span className="text-amber-300">Kein Backup-Job erfasst diesen Host -- siehe „Ohne Backup“ oben.</span>
+            <span className="text-amber-300">Kein Backup-Job erfasst diesen Server – siehe „Ohne Backup“ oben.</span>
           )}
         </div>
       )}
@@ -843,12 +843,18 @@ export function BackupsPage(): JSX.Element {
                       <button type="button" onClick={() => void toggleHistory(job)} className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
                         {expanded === job.job_ref ? "Verlauf ausblenden" : "Verlauf"}
                       </button>
-                      <button
-                        type="button" disabled={busy === job.job_ref} onClick={() => void retry(job)}
-                        className="rounded bg-red-500/20 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40"
-                      >
-                        Erneut versuchen
-                      </button>
+                      {/* Der Knopf startet immer ein volles Backup jetzt; "Erneut versuchen"
+                          passt nur nach einem Fehlschlag, waehrend eines Laufs gibt es keinen. */}
+                      {job.last_status !== "running" && (
+                        <button
+                          type="button" disabled={busy === job.job_ref} onClick={() => void retry(job)}
+                          className={job.last_status === "failed"
+                            ? "rounded bg-red-500/20 px-2 py-1 text-xs hover:bg-red-500/30 disabled:opacity-40"
+                            : "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition disabled:opacity-40"}
+                        >
+                          {job.last_status === "failed" ? "Erneut versuchen" : "Jetzt sichern"}
+                        </button>
+                      )}
                       {deck().hasPermission("settings.write") && (
                         <button type="button" onClick={() => setEditing(editing === job.job_ref ? null : job.job_ref)}
                           className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
@@ -882,7 +888,7 @@ export function BackupsPage(): JSX.Element {
                         {history.length === 0 && <li>Keine Läufe bekannt.</li>}
                         {history.map((h) => (
                           <li key={h.upid}>
-                            {formatEpoch(h.started_at)} -- {STATUS_LABEL[h.status] ?? h.status} ({h.node ?? "?"})
+                            {formatEpoch(h.started_at)} – {STATUS_LABEL[h.status] ?? h.status} ({h.node ?? "?"})
                           </li>
                         ))}
                       </ul>
@@ -899,7 +905,7 @@ export function BackupsPage(): JSX.Element {
         <section className="mt-4 text-sm" data-testid="orphans">
           <h3 className="font-semibold opacity-80">Verwaiste Sicherungen ({orphans.length})</h3>
           <p className="mb-1 text-xs opacity-60">
-            Zu diesen Dateien gibt es keinen bekannten Gast mehr (gelöscht oder umgezogen). Sie belegen nur Platz -- vor dem Löschen in Proxmox prüfen.
+            Zu diesen Dateien gibt es keinen bekannten Gast mehr (gelöscht oder umgezogen). Sie belegen nur Platz – vor dem Löschen in Proxmox prüfen.
           </p>
           <ul className="text-xs opacity-80">
             {orphans.map((o) => (

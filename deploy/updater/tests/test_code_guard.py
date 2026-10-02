@@ -1,4 +1,4 @@
-"""Code-Waechter fuer den Update-Helfer (Bauplan 2c-2, M16, Ebene 6 der Teststrategie).
+"""Code-Waechter fuer den Update-Helfer.
 
 Der Helfer laeuft mit Zugriff auf den Docker-Socket, also mit so viel Macht wie root auf dem Rechner. Darum
 prueft dieser Test ueber den Syntaxbaum **jedes** `*.py` im Paket `nodvard_deck_updater` -- auch Module, die
@@ -34,7 +34,7 @@ spaeter dazukommen (engine, target, clone, flow, __main__), ohne dass jemand hie
    weitergereicht, z. B. an `functools.reduce`), keine Attribute wie `__dict__`, `__builtins__`, `__globals__`,
    `__subclasses__`, `f_globals`, `_getframe`, `sys.modules`, `attrgetter`, ...
 6. **Keine gefaehrlichen Engine-Pfade im Code:** `/exec`, `/archive`, `/build`, `/commit`, `/images/load`,
-   `/volumes`, `/swarm`, `/plugins`, `/session`, `v=1`/`v=true`, `force=1`/`force=true` (Abschnitt 6).
+   `/volumes`, `/swarm`, `/plugins`, `/session`, `v=1`/`v=true`, `force=1`/`force=true`.
 
 **Was ein Syntaxbaum-Waechter prinzipiell nicht kann:** er sieht keine Typen und keine Laufzeitwerte. Wer es darauf
 anlegt (`operator.attrgetter`-artige Umwege, Zeichenketten fuer Attributnamen ueber Formatstrings, ein Objekt, dessen
@@ -76,10 +76,10 @@ ALLOWED_MODULES = frozenset({
     "os", "os.path", "stat", "errno", "fcntl", "secrets",
     # Uhr, SIGTERM, Argumente/Ausgabe, Heartbeat-Thread
     "time", "signal", "sys", "threading",
-    # Engine-API ueber AF_UNIX (6): ein eigener Client, nichts anderes
+    # Engine-API ueber AF_UNIX: ein eigener Client, nichts anderes
     "socket", "http.client", "urllib.parse",
 })
-"""Alles, was das Paket braucht oder laut Bauplan fuer `engine`, `target`, `clone`, `flow` und `__main__` brauchen
+"""Alles, was das Paket braucht oder fuer `engine`, `target`, `clone`, `flow` und `__main__` brauchen
 wird. Bewusst **nicht** dabei: `logging` (JSON-Zeilen laufen ueber `json` und `sys.stdout`; `logging.handlers`/
 `.config` und `FileHandler` koennen senden bzw. Code ausfuehren), `uuid`/`hashlib`/`base64` (die Signatur kommt
 spaeter mit `cryptography`), `datetime`, `argparse`, `select`, `copy`, `traceback`. Wer eins braucht, traegt es hier
@@ -485,7 +485,8 @@ PACKAGE_FLAGS = _package_flag_names()
 
 def test_guard_sees_the_whole_package():
     names = {path.relative_to(PACKAGE_DIR).as_posix() for path in MODULES}
-    assert {"__init__.py", "policy.py", "channel.py", "state.py"} <= names
+    assert {"__init__.py", "policy.py", "channel.py", "state.py", "engine.py", "target.py", "clone.py",
+            "__main__.py"} <= names
     assert {"DIR_FLAGS", "READ_FLAGS", "_CREATE_FLAGS"} <= PACKAGE_FLAGS[0], "Flags mit O_NOFOLLOW sind erkannt"
     assert PACKAGE_FLAGS[1] == {"DIR_FLAGS"}, "nur die Ordner-Flags enthalten O_DIRECTORY"
 
@@ -577,7 +578,7 @@ def test_production_code_never_overrides_the_expected_owner():
 
 
 def test_status_json_is_only_ever_written():
-    # Der Helfer entscheidet nur aus /state und der Engine (1.4): `status.json` ist das, was das Dashboard sehen
+    # Der Helfer entscheidet nur aus /state und der Engine: `status.json` ist das, was das Dashboard sehen
     # darf, nie eine Eingabe. Es wird nur in `Channel.write_status` benutzt (und als Konstante benannt).
     for path in MODULES:
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -632,7 +633,7 @@ def _module_strings(tree: ast.Module) -> dict[str, str]:
 def test_repository_matches_the_dashboard_constant_once_it_exists():
     path = REPO_ROOT / "backend" / "src" / "nodvard_deck" / "core" / "updates.py"
     if not path.exists():
-        pytest.skip("core/updates.py (Update-Suche 2c-1) ist noch nicht in diesem Stand")
+        pytest.skip("core/updates.py (Update-Suche) ist noch nicht in diesem Stand")
     values = _module_strings(ast.parse(path.read_text(encoding="utf-8")))
     assert values.get("OFFICIAL_IMAGE") == policy.REPOSITORY
 
@@ -669,7 +670,7 @@ def test_package_imports_without_site_packages_and_ignores_the_environment():
 
 
 def test_dashboard_image_never_contains_the_channel_path():
-    # M4: Ein Image, das `/app/updater` schon mitbringt, gaebe der Wurzel des Kanals beim ersten Einhaengen des
+    # Ein Image, das `/app/updater` schon mitbringt, gaebe der Wurzel des Kanals beim ersten Einhaengen des
     # Volumes (Copy-up) den Besitzer uid 1000 -- der Helfer richtet den Kanal selbst ein, das Dashboard-Image
     # kennt den Pfad nicht. Das Dashboard bekommt ihn nur ueber das Volume in der Compose-Datei.
     for name in ("Dockerfile", "entrypoint.sh"):
@@ -814,7 +815,7 @@ BAD_WHY = {
     "http.server aus from-Import": ("from http import server", "Modul nicht auf der Erlaubnisliste"),
     "weiteres Paket der Standardbibliothek": ("import xml.etree", "Modul nicht auf der Erlaubnisliste: xml.etree"),
     "_socket (Standard AF_INET)": ("import _socket\n_socket.socket()", "verbotenes Modul: _socket"),
-    # --- Aliase (Fund 11)
+    # --- Aliase
     "socket als Modul-Alias": ("import socket as so\nso.socket()", "Modul mit Alias importiert"),
     "socket-Klasse als Alias": ("from socket import socket as S\nS()", "from socket import socket"),
     "json als Alias": ("import json as j", "Modul mit Alias importiert"),
@@ -866,7 +867,7 @@ BAD_WHY = {
     "os.path.realpath": ("import os\nos.path.realpath('/channel/x')", "verbotener Name realpath"),
     "from os import stat": ("from os import stat", "from os import stat"),
     "Datei per Schluesselwort": ("f(filename='/state/log')", "Schluesselwort filename="),
-    # --- HTTPConnection (Fund 10)
+    # --- HTTPConnection
     "connect ruft super().connect()": (CONNECT + "        super().connect()", "benutzt super()"),
     "connect ruft super(C, self).connect()": (
         CONNECT + "        self.timeout = 5\n        super(C, self).connect()", "benutzt super()"),
@@ -878,7 +879,7 @@ BAD_WHY = {
         CONNECT + "        socket.socket(socket.AF_UNIX)", "setzt self.sock nicht aus einem eigenen socket.socket"),
     "connect mit TCP-Socket": (
         CONNECT + "        self.sock = socket.socket()", "socket() ohne ausdruecklich socket.AF_UNIX"),
-    # --- Schutz von REPOSITORY und SERVICE_ENV (Fund 12)
+    # --- Schutz von REPOSITORY und SERVICE_ENV
     "REPOSITORY ueber __dict__": ("import policy\npolicy.__dict__['REPOSITORY'] = 'evil'", "Reflexion: __dict__"),
     "REPOSITORY ueber setattr mit Variable": ("k = 'REPO' + 'SITORY'\nsetattr(policy, k, 'evil')",
                                               "setattr nur als Aufruf auf self/cls"),
@@ -978,3 +979,152 @@ def test_guard_still_flags_the_package_patterns_when_a_rule_is_broken_on_purpose
     assert violations(good) == []
     assert violations(good.replace(" | os.O_NOFOLLOW", ""))
     assert violations(good.replace(" | os.O_DIRECTORY", ""))
+
+
+# ---------------------------------------------------------------------------
+# Engine-Pfade nur in engine.py und nur aus der Allowlist
+# ---------------------------------------------------------------------------
+
+ENGINE_PATH_RE = re.compile(r"/(?:_ping|version|containers|images|networks|distribution|exec|build|commit|volumes"
+                            r"|swarm|plugins|session|info|events|system|auth|secrets|configs|services|tasks|nodes)\b")
+"""Texte, die wie ein Pfad der Engine-API aussehen (auch die, die es im Helfer gar nicht geben darf)."""
+NETWORK_MODULES = {"socket", "http.client", "http"}
+
+
+def engine_path_problems(source: str, filename: str, allowed: set[str]) -> list[str]:
+    """Jeder Text im Code (ohne Docstrings), der mit einem Engine-Pfad beginnt, muss genau ein Muster aus `allowed`
+    sein (fuer engine.py: die Tabelle `ENDPOINTS`; fuer alle anderen Module: nichts)."""
+    tree = ast.parse(source, filename=filename)
+    docstrings = _docstring_ids(tree)
+    found = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
+                and ENGINE_PATH_RE.match(node.value) and node.value not in allowed):
+            found.append(f"{filename}:{node.lineno}: Engine-Pfad ausserhalb der Allowlist: {node.value!r}")
+    return found
+
+
+def _endpoint_patterns() -> set[str]:
+    from nodvard_deck_updater import engine
+    return {pattern for _method, pattern in engine.ENDPOINTS.values()}
+
+
+@pytest.mark.parametrize("path", MODULES, ids=lambda p: p.relative_to(PACKAGE_DIR).as_posix())
+def test_engine_paths_only_in_engine_and_only_from_the_table(path):
+    allowed = _endpoint_patterns() if path.name == "engine.py" else set()
+    assert engine_path_problems(path.read_text(encoding="utf-8"), path.name, allowed) == []
+
+
+def test_endpoint_table_contains_nothing_forbidden():
+    from nodvard_deck_updater import engine
+    for method, pattern in engine.ENDPOINTS.values():
+        assert method in {"GET", "POST", "DELETE"}
+        assert not ENGINE_FORBIDDEN_RE.search(pattern), pattern
+        assert pattern.startswith("/") and "?" not in pattern
+    assert ("POST", "/containers/{id}/exec") not in engine.ENDPOINTS.values()
+
+
+@pytest.mark.parametrize(("source", "allowed"), [
+    ("x = '/containers/{id}/logs'", {"/containers/{id}/json"}),   # nicht in der Tabelle
+    ("x = '/containers/{id}/json'", set()),                       # in einem anderen Modul
+    ("x = '/info'", set()),
+    ("x = '/events?since=1'", set()),
+    ("x = f'/containers/{cid}/json'", set()),                     # f-String: der feste Anfang zaehlt
+    ("x = '/images/' + ref", set()),
+])
+def test_engine_path_guard_catches(source, allowed):
+    assert engine_path_problems(source, "<test>", allowed)
+
+
+def test_engine_path_guard_allows_ordinary_paths():
+    source = "a = '/app/updater'\nb = '/channel'\nc = '/proc/self/mountinfo'\nd = '/var/run/docker.sock'\n" \
+             "e = '/state'\nf = 'containers/'\n\"\"\"Docstring /containers/{id}/exec\"\"\"\n"
+    assert engine_path_problems(source, "<test>", set()) == []
+
+
+def network_use(source: str) -> tuple[set[str], list[int]]:
+    """Importierte Module und die Zeilen, die die Interna des Engine-Clients benutzen (`_request`, `_UnixConnection`)."""
+    tree = ast.parse(source)
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module)
+    uses_internals = [node.lineno for node in ast.walk(tree)
+                      if isinstance(node, ast.Attribute) and node.attr in {"_request", "_UnixConnection"}
+                      or isinstance(node, ast.Name) and node.id == "_UnixConnection"]
+    return imported, uses_internals
+
+
+def test_network_and_engine_internals_only_in_engine():
+    for path in MODULES:
+        imported, uses_internals = network_use(path.read_text(encoding="utf-8"))
+        if path.name == "engine.py":
+            assert {"socket", "http.client"} <= imported
+            continue
+        assert not imported & NETWORK_MODULES, (path.name, imported & NETWORK_MODULES)
+        assert uses_internals == [], (path.name, uses_internals)
+
+
+@pytest.mark.parametrize("source", [
+    "import socket", "from socket import AF_UNIX", "import http.client", "from http import client",
+    "engine._request('GET', '/_ping')", "from .engine import _UnixConnection\nc = _UnixConnection('x')",
+    "self._engine._UnixConnection",
+])
+def test_network_guard_catches(source):
+    # Negativtest zur Regel oben: jede dieser Zeilen ausserhalb von engine.py faellt auf.
+    imported, uses_internals = network_use(source)
+    assert imported & NETWORK_MODULES or uses_internals
+
+
+def test_network_guard_allows_the_public_engine_api():
+    imported, uses_internals = network_use("from .engine import Engine\nEngine().inspect_container('x')\n")
+    assert not imported & NETWORK_MODULES and uses_internals == []
+
+
+# ---------------------------------------------------------------------------
+# Das Paket beschreibt sich selbst
+# ---------------------------------------------------------------------------
+
+INTERNAL_REFERENCE_RE = re.compile("|".join([
+    "Bau" + "plan", "Be" + "fund", "Test" + "strategie", r"Ab" + r"schnitt [0-9]", r"\bFu" + r"nd [0-9]",
+    r"\bPR ?[0-9]", r"\bM[0-9]{1,2}\b", r"\bSch" + r"ritt [0-9]", r"\b2c-[0-9]", r"docs/[0-9]{2}", r"\bEbene [0-9]",
+    r"\w \([0-9]{1,2}(?:\.[0-9]{1,2})?(?:/[0-9]{1,2}(?:\.[0-9]{1,2})?)*\)(?=[.:,;\s)])",  # z. B. "je Endpunkt (6)."
+    # Verweis auf eine Abschnittsnummer, z. B. "der Status nach 1.5"; eine Version wie "nach 0.7.1" bleibt
+    r"\bnach [0-9]{1,2}\.[0-9]{1,2}\b(?!\.[0-9])",
+]))
+"""Verweise auf Planungsunterlagen, die nicht im Repository liegen (Nummern von Massnahmen, Abschnitten, Paketen)."""
+
+
+def test_code_and_tests_refer_to_no_internal_planning_documents():
+    # Das Paket liegt im oeffentlichen Repository: Kommentare, Docstrings, Testnamen und Vektoren muessen ohne
+    # Unterlagen verstaendlich sein, die der Leser nicht hat. Aufnahmen unter `fixtures/` sind Daten der Engine.
+    files = [*UPDATER_DIR.joinpath("nodvard_deck_updater").rglob("*.py"), *UPDATER_DIR.joinpath("tools").rglob("*.py"),
+             *UPDATER_DIR.joinpath("tests").glob("*.py"), *UPDATER_DIR.joinpath("tests", "vectors").glob("*.json")]
+    assert len(files) > 15
+    found = [f"{path.relative_to(UPDATER_DIR).as_posix()}:{number}: {match.group(0)}"
+             for path in files if path.name != os.path.basename(__file__)
+             for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
+             for match in INTERNAL_REFERENCE_RE.finditer(line)]
+    assert found == []
+
+
+@pytest.mark.parametrize("text", [
+    "siehe Bau" + "plan 2c-2", "(M10)", "Fu" + "nd 14", "Be" + "fund: x", "Ab" + "schnitt 6", "PR 3", "PR5", "2c-1",
+    "Test" + "strategie", "Sch" + "ritt 3", "docs/05-X.md", "Abfrage je Endpunkt (6).", "der Engine (1.4): x",
+    "Ebene 5", "Schritte des Journals (5.1/5.5) in ihrer Reihenfolge", "Der Status nach 1.5 (nur feste Codes).",
+    "der Engine (12.10): x", "Journal (5.1/5.5/6).", "status.json nach 1.5", "wie nach 2.3.",
+])
+def test_internal_reference_pattern_catches(text):
+    assert INTERNAL_REFERENCE_RE.search(text)
+
+
+@pytest.mark.parametrize("text", [
+    "der Abschnitt `files`", "oberste Ebene", "M", "Modul M", "PRIORITY", "Schritt `creating`", "range(5)",
+    "os._exit(3)  # Absturz", "tief verschachtelt (2000)", "time.sleep(0.2)", "math.isfinite(1.0)",
+    "nach dem Neustart", "Zeitstempel nach 2024", "Schritte des Journals in ihrer Reihenfolge",
+    "Update von 0.7.0 nach 0.7.1", "nach 0.7.1-rc.1",
+])
+def test_internal_reference_pattern_leaves_normal_text_alone(text):
+    assert not INTERNAL_REFERENCE_RE.search(text)

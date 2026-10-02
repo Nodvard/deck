@@ -181,6 +181,17 @@
     "204": null
    }
   },
+  "DELETE /api/v1/ext/scripts/scripts/{script_id}/standing-approval": {
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
   "DELETE /api/v1/extensions/{ext_id}/secrets": {
    "params": {
     "path:ext_id": {
@@ -423,8 +434,14 @@
        "idempotency_key": {
         "type": "null|string"
        },
+       "output_hidden": {
+        "type": "boolean"
+       },
        "payload": {
         "type": "object"
+       },
+       "payload_hidden": {
+        "type": "boolean"
        },
        "proposed_by_id": {
         "type": "string"
@@ -506,8 +523,14 @@
       "idempotency_key": {
        "type": "null|string"
       },
+      "output_hidden": {
+       "type": "boolean"
+      },
       "payload": {
        "type": "object"
+      },
+      "payload_hidden": {
+       "type": "boolean"
       },
       "proposed_by_id": {
        "type": "string"
@@ -753,6 +776,9 @@
        },
        "outcome": {
         "type": "string"
+       },
+       "output_hidden": {
+        "type": "boolean"
        },
        "reason": {
         "type": "null|string"
@@ -1982,6 +2008,9 @@
        "enabled": {
         "type": "boolean"
        },
+       "fingerprint": {
+        "type": "string"
+       },
        "id": {
         "type": "string"
        },
@@ -1997,8 +2026,80 @@
        "schedule": {
         "type": "null|string"
        },
+       "standing_approval": {
+        "fields": {
+         "active": {
+          "type": "boolean"
+         },
+         "granted_at": {
+          "type": "string"
+         },
+         "granted_by_label": {
+          "type": "string"
+         },
+         "hosts": {
+          "items": {
+           "fields": {
+            "account": {
+             "type": "null|string"
+            },
+            "address": {
+             "type": "null|string"
+            },
+            "id": {
+             "type": "string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "port": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "new_hosts": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "problem": {
+          "type": "null|string"
+         }
+        },
+        "type": "null|object"
+       },
+       "standing_preview": {
+        "items": {
+         "fields": {
+          "account": {
+           "type": "null|string"
+          },
+          "address": {
+           "type": "null|string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "port": {
+           "type": "integer|null"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array|null"
+       },
        "target": {
         "type": "object"
+       },
+       "targets_fingerprint": {
+        "type": "null|string"
        }
       },
       "type": "object"
@@ -2026,6 +2127,9 @@
       "enabled": {
        "type": "boolean"
       },
+      "fingerprint": {
+       "type": "string"
+      },
       "id": {
        "type": "string"
       },
@@ -2041,8 +2145,80 @@
       "schedule": {
        "type": "null|string"
       },
+      "standing_approval": {
+       "fields": {
+        "active": {
+         "type": "boolean"
+        },
+        "granted_at": {
+         "type": "string"
+        },
+        "granted_by_label": {
+         "type": "string"
+        },
+        "hosts": {
+         "items": {
+          "fields": {
+           "account": {
+            "type": "null|string"
+           },
+           "address": {
+            "type": "null|string"
+           },
+           "id": {
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "port": {
+            "type": "integer|null"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "new_hosts": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "problem": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      },
+      "standing_preview": {
+       "items": {
+        "fields": {
+         "account": {
+          "type": "null|string"
+         },
+         "address": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "port": {
+          "type": "integer|null"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
       "target": {
        "type": "object"
+      },
+      "targets_fingerprint": {
+       "type": "null|string"
       }
      },
      "type": "object"
@@ -2226,10 +2402,16 @@
        "api_version": {
         "type": "string"
        },
+       "bundled": {
+        "type": "boolean"
+       },
        "category": {
         "type": "null|string"
        },
        "description": {
+        "type": "null|string"
+       },
+       "display_version": {
         "type": "null|string"
        },
        "granted_permissions": {
@@ -2297,10 +2479,16 @@
       "api_version": {
        "type": "string"
       },
+      "bundled": {
+       "type": "boolean"
+      },
       "category": {
        "type": "null|string"
       },
       "description": {
+       "type": "null|string"
+      },
+      "display_version": {
        "type": "null|string"
       },
       "granted_permissions": {
@@ -2402,6 +2590,12 @@
          }
         },
         "type": "object"
+       },
+       "type": "array"
+      },
+      "secrets_cleared": {
+       "items": {
+        "type": "string"
        },
        "type": "array"
       },
@@ -2716,6 +2910,9 @@
        "last_seen_at": {
         "type": "null|string"
        },
+       "login_ok_at": {
+        "type": "null|string"
+       },
        "managed_tags": {
         "items": {
          "type": "string"
@@ -2817,6 +3014,9 @@
        "type": "null|string"
       },
       "last_seen_at": {
+       "type": "null|string"
+      },
+      "login_ok_at": {
        "type": "null|string"
       },
       "managed_tags": {
@@ -3682,6 +3882,9 @@
          "tone": {
           "type": "null|string"
          },
+         "unreachable": {
+          "type": "boolean"
+         },
          "url": {
           "type": "null|string"
          }
@@ -3692,6 +3895,12 @@
       },
       "services_running": {
        "type": "integer"
+      },
+      "services_unreachable_hosts": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
       },
       "unread_notifications": {
        "type": "integer"
@@ -4797,6 +5006,9 @@
       "last_seen_at": {
        "type": "null|string"
       },
+      "login_ok_at": {
+       "type": "null|string"
+      },
       "managed_tags": {
        "items": {
         "type": "string"
@@ -5126,8 +5338,14 @@
       "idempotency_key": {
        "type": "null|string"
       },
+      "output_hidden": {
+       "type": "boolean"
+      },
       "payload": {
        "type": "object"
+      },
+      "payload_hidden": {
+       "type": "boolean"
       },
       "proposed_by_id": {
        "type": "string"
@@ -5207,8 +5425,14 @@
       "idempotency_key": {
        "type": "null|string"
       },
+      "output_hidden": {
+       "type": "boolean"
+      },
       "payload": {
        "type": "object"
+      },
+      "payload_hidden": {
+       "type": "boolean"
       },
       "proposed_by_id": {
        "type": "string"
@@ -5301,8 +5525,14 @@
       "idempotency_key": {
        "type": "null|string"
       },
+      "output_hidden": {
+       "type": "boolean"
+      },
       "payload": {
        "type": "object"
+      },
+      "payload_hidden": {
+       "type": "boolean"
       },
       "proposed_by_id": {
        "type": "string"
@@ -6849,6 +7079,140 @@
     }
    }
   },
+  "POST /api/v1/ext/scripts/scripts/{script_id}/standing-approval": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "fingerprint": {
+       "required": true,
+       "type": "string"
+      },
+      "targets_fingerprint": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:script_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "content": {
+       "type": "string"
+      },
+      "description": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "fingerprint": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "job_id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "params_schema": {
+       "type": "object"
+      },
+      "schedule": {
+       "type": "null|string"
+      },
+      "standing_approval": {
+       "fields": {
+        "active": {
+         "type": "boolean"
+        },
+        "granted_at": {
+         "type": "string"
+        },
+        "granted_by_label": {
+         "type": "string"
+        },
+        "hosts": {
+         "items": {
+          "fields": {
+           "account": {
+            "type": "null|string"
+           },
+           "address": {
+            "type": "null|string"
+           },
+           "id": {
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "port": {
+            "type": "integer|null"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "new_hosts": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "problem": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      },
+      "standing_preview": {
+       "items": {
+        "fields": {
+         "account": {
+          "type": "null|string"
+         },
+         "address": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "port": {
+          "type": "integer|null"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
+      "target": {
+       "type": "object"
+      },
+      "targets_fingerprint": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/service-matrix/containers/{host_id}/{container}/image-update": {
    "body": {
     "content_type": "application/json",
@@ -6933,10 +7297,16 @@
       "api_version": {
        "type": "string"
       },
+      "bundled": {
+       "type": "boolean"
+      },
       "category": {
        "type": "null|string"
       },
       "description": {
+       "type": "null|string"
+      },
+      "display_version": {
        "type": "null|string"
       },
       "granted_permissions": {
@@ -7002,10 +7372,16 @@
       "api_version": {
        "type": "string"
       },
+      "bundled": {
+       "type": "boolean"
+      },
       "category": {
        "type": "null|string"
       },
       "description": {
+       "type": "null|string"
+      },
+      "display_version": {
        "type": "null|string"
       },
       "granted_permissions": {
@@ -7467,6 +7843,9 @@
       "last_seen_at": {
        "type": "null|string"
       },
+      "login_ok_at": {
+       "type": "null|string"
+      },
       "managed_tags": {
        "items": {
         "type": "string"
@@ -7580,8 +7959,14 @@
       "idempotency_key": {
        "type": "null|string"
       },
+      "output_hidden": {
+       "type": "boolean"
+      },
       "payload": {
        "type": "object"
+      },
+      "payload_hidden": {
+       "type": "boolean"
       },
       "proposed_by_id": {
        "type": "string"
@@ -8069,6 +8454,18 @@
    }
   },
   "POST /api/v1/me/totp/setup": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "null|string"
+      }
+     },
+     "type": "null|object"
+    }
+   },
    "responses": {
     "200": {
      "fields": {
@@ -9116,6 +9513,9 @@
       "enabled": {
        "type": "boolean"
       },
+      "fingerprint": {
+       "type": "string"
+      },
       "id": {
        "type": "string"
       },
@@ -9131,8 +9531,80 @@
       "schedule": {
        "type": "null|string"
       },
+      "standing_approval": {
+       "fields": {
+        "active": {
+         "type": "boolean"
+        },
+        "granted_at": {
+         "type": "string"
+        },
+        "granted_by_label": {
+         "type": "string"
+        },
+        "hosts": {
+         "items": {
+          "fields": {
+           "account": {
+            "type": "null|string"
+           },
+           "address": {
+            "type": "null|string"
+           },
+           "id": {
+            "type": "string"
+           },
+           "name": {
+            "type": "string"
+           },
+           "port": {
+            "type": "integer|null"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "new_hosts": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "problem": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      },
+      "standing_preview": {
+       "items": {
+        "fields": {
+         "account": {
+          "type": "null|string"
+         },
+         "address": {
+          "type": "null|string"
+         },
+         "id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "port": {
+          "type": "integer|null"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array|null"
+      },
       "target": {
        "type": "object"
+      },
+      "targets_fingerprint": {
+       "type": "null|string"
       }
      },
      "type": "object"
@@ -9219,6 +9691,12 @@
        },
        "type": "array"
       },
+      "secrets_cleared": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
       "values": {
        "type": "object"
       }
@@ -9276,6 +9754,7 @@
       "jobs.run_retention_days",
       "maintenance.windows",
       "security.deny_patterns",
+      "ssh.confirm_new_host_keys",
       "system.timezone",
       "system.update_check.channel",
       "system.update_check.enabled"

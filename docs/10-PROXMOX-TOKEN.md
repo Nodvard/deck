@@ -37,7 +37,7 @@ VE 8). Besonderheiten von Proxmox VE 8 und älteren Versionen stehen unter
 | Hardware ändern (Kerne, RAM, Autostart, Startreihenfolge) | nein | ja |
 | Konsole | nein | ja |
 | Paketlisten aktualisieren, Knoten neu starten | nein | ja |
-| Backup jetzt starten / erneut versuchen | nein | ja |
+| Backup jetzt starten / erneut versuchen | nein | ja, mit Zusatzrolle für den Backup-Speicher |
 | Backup-Jobs anlegen und ändern | nein | ja, mit Zusatzrolle für den Backup-Speicher |
 
 ¹ Proxmox gibt die Liste wartender Updates nur mit `Sys.Modify` heraus – obwohl Nodvard Deck
@@ -77,7 +77,9 @@ niemand in der Proxmox-Oberfläche anmelden.
 
 **A+ – zusätzlich die Liste vorhandener Sicherungen.** Achtung: Mit diesen zwei Rechten
 kann der Token über die Proxmox-API auch Backups anstoßen und vorhandene Sicherungen der Gäste
-**löschen** (Nodvard Deck selbst löscht nie welche). Das gilt genauso für Variante B.
+**löschen**. Das gilt genauso für Variante B. Nodvard Deck selbst löscht keine Sicherung direkt.
+Startest du in Nodvard Deck ein Backup („Backup jetzt starten / erneut versuchen“, nur Variante B), kann
+Proxmox danach nach der Aufbewahrung des Jobs aufräumen.
 
 ```bash
 pveum role modify NodvardRO --append 1 --privs "VM.Backup Datastore.AllocateSpace"
@@ -94,8 +96,12 @@ pveum acl modify / --tokens 'nodvard@pve!dashboard' --roles NodvardFull
 ```
 
 **Backup-Jobs anlegen und ändern** verlangt in Proxmox zusätzlich `Datastore.Allocate` auf
-dem Backup-Speicher des Jobs (beim Ändern auch auf dem bisherigen Speicher). Dieses Recht
-darf auf dem Speicher auch Dateien löschen – deshalb nur dort, nicht auf `/`. Und weil der
+dem Backup-Speicher des Jobs (beim Ändern auch auf dem bisherigen Speicher). Dasselbe gilt für
+**Backup jetzt starten / erneut versuchen**: Nodvard Deck schickt dabei die Einstellungen und die
+Aufbewahrung des Jobs mit. Hat der Job eine Aufbewahrung, kann Proxmox danach aufräumen und ältere
+Sicherungen des Gastes auf dem Speicher löschen, auch manuelle und die anderer Jobs; die Rückfrage
+vor dem Start sagt das. Ohne eigene Aufbewahrung geht `keep-all=1` mit, dann bleibt alles erhalten.
+`Datastore.Allocate` darf auf dem Speicher auch Dateien löschen – deshalb nur dort, nicht auf `/`. Und weil der
 tiefere Pfad die geerbten Rechte ersetzt, stecken Audit und AllocateSpace mit in der Rolle:
 
 ```bash
@@ -113,7 +119,7 @@ mehreren Backup-Speichern die zwei `acl`-Zeilen je Speicher wiederholen.
 | Recht | Wofür Nodvard Deck es braucht | Fehlt es … |
 |---|---|---|
 | `Sys.PowerMgmt` | „Knoten neu starten“ | scheitert nur dieser Knopf |
-| `Sys.Modify` (auf `/`) | Kachel „Proxmox-Updates“, „Paketlisten aktualisieren“, Backup-Jobs anlegen/ändern, bei VMs die Startreihenfolge | Updates-Kachel zeigt HTTP 403, diese Aktionen scheitern |
+| `Sys.Modify` (auf `/`) | Kachel „Proxmox-Updates“, „Paketlisten aktualisieren“, Backup-Jobs anlegen/ändern, Backup jetzt starten / erneut versuchen bei Jobs mit Bandbreitengrenze oder ionice, bei VMs die Startreihenfolge | Updates-Kachel zeigt HTTP 403, diese Aktionen scheitern |
 | `VM.Console` | Konsole | keine Konsole |
 | `VM.Config.Disk` | Gast-Disks in der Speicher-Übersicht (Nodvard Deck liest nur – Proxmox erlaubt mit dem Recht aber auch Disks vergrößern/verschieben) | diese Liste fehlt |
 | `VM.GuestAgent.Audit` | echte IP-Adressen der VMs | Nodvard Deck trägt die Adresse des Proxmox-Servers als Platzhalter ein; die richtige Adresse dann von Hand setzen ([docs/11](11-ERST-EINRICHTUNG.md#5-server-und-ssh-zugang)) |
@@ -138,8 +144,8 @@ in Klammern der englische):
    Benutzer `nodvard@pve`, Rolle wie oben, „Vererben“ (Propagate) an. Dann noch einmal
    „Hinzufügen“ → „API-Token-Berechtigung“: Pfad `/`, Token `nodvard@pve!dashboard`, gleiche
    Rolle.
-5. Nur bei Variante B mit Backup-Jobs: dasselbe mit Pfad `/storage/SPEICHERNAME` und Rolle
-   `NodvardBackupStore`, wieder für Benutzer **und** Token.
+5. Nur bei Variante B, für Backup-Jobs und „Backup jetzt starten / erneut versuchen“: dasselbe
+   mit Pfad `/storage/SPEICHERNAME` und Rolle `NodvardBackupStore`, wieder für Benutzer **und** Token.
 
 ## Prüfen, bevor du es in Nodvard Deck einträgst
 
@@ -187,9 +193,17 @@ Container auf der Seite „Proxmox“ und in der Übersicht.
 
 Gut zu wissen:
 
-- **Token austauschen:** in der Zeile „API-Token-Geheimnis – …“ auf „Neuen Wert setzen“. Der
-  Knopf „Token setzen“ auf der Proxmox- bzw. Backups-Seite (unter „Verbindungen verwalten“)
-  kann nur ein *fehlendes* Token setzen und meldet bei einem vorhandenen einen Fehler (409).
+- **Token austauschen:** in der Zeile „API-Token-Geheimnis – …“ auf „Ersetzen“, neuen Wert eintragen und wieder „Ersetzen“. Auf der
+  Proxmox- bzw. Backups-Seite (unter „Verbindungen verwalten“) heißt der Knopf „Token ersetzen“, wenn
+  schon ein Token da ist, und „Token setzen“, wenn es fehlt.
+- **Adresse ändern oder Verbindung entfernen:** Dabei löscht Nodvard Deck das Token-Geheimnis
+  dieser Verbindung (auch beim Entfernen unter „Verbindungen verwalten“); nach einer neuen Adresse
+  trägst du es neu ein. Dasselbe gilt für einen neuen Kurznamen. Eine andere Schreibweise derselben
+  Adresse (Groß-/Kleinschreibung im Rechnernamen, `:443` bei `https://`, `/` am Ende) zählt nicht
+  als Änderung.
+- **Keine Weiterleitungen:** Nodvard Deck folgt bei Aufrufen an Proxmox keinen Weiterleitungen, auch nicht
+  beim Aufbau der Konsole. Trag deshalb die endgültige Adresse des Knotens ein (`https://…:8006`), keinen
+  Reverse-Proxy, der weiterleitet. Sonst scheitern Abfragen und Konsole mit einer Fehlermeldung.
 - **Einen Server vorübergehend abschalten**, ohne das Token zu verlieren: Proxmox- bzw.
   Backups-Seite → „Verbindungen verwalten“ → Knopf „aktiv“ anklicken (wird zu
   „deaktiviert“).
@@ -257,13 +271,14 @@ Gut zu wissen:
 | Gäste auflösen, Plattengrößen für die Platzprüfung | `GET /cluster/resources`, `…/config` | `VM.Audit` |
 | Backup-Speicher | `GET /nodes/{n}/storage?content=backup` | `Datastore.Audit` |
 | Vorhandene Sicherungen | `GET …/storage/{s}/content?content=backup` | `VM.Backup` + `Datastore.AllocateSpace` |
-| Backup jetzt / erneut versuchen | `POST /nodes/{n}/vzdump` | `VM.Backup` + `Datastore.AllocateSpace` |
+| Backup jetzt / erneut versuchen | `POST /nodes/{n}/vzdump` | `VM.Backup` + `Datastore.AllocateSpace` + `Datastore.Allocate` auf dem Speicher (eine Aufbewahrung geht immer mit, ohne eigene des Jobs `keep-all=1`); bei Jobs mit Bandbreitengrenze oder ionice zusätzlich `Sys.Modify` auf `/` |
 | Job anlegen, ändern | `POST /cluster/backup`, `PUT /cluster/backup/{id}` | `Sys.Modify` auf `/` + `Datastore.Allocate` auf dem Speicher |
 
 ## Hinweise
 
 - **Wenn etwas mit `403` scheitert:** `pveum user token permissions nodvard@pve dashboard` zeigt,
   welche Rechte der Token wirklich hat; mit den Tabellen oben lässt sich das fehlende Recht finden.
+  „Backup jetzt starten / erneut versuchen“ nennt bei `403` die nötigen Rechte selbst.
 - **Proxmox VE 8:** Dort gibt es `VM.GuestAgent.Audit` noch nicht, `pveum role add` bricht
   mit `invalid privilege 'VM.GuestAgent.Audit'` ab. Dann das Recht einfach weglassen
   (Version zeigt `pveversion`). Das VE-8-Gegenstück `VM.Monitor` besser **nicht** vergeben:

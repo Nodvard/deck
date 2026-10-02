@@ -146,6 +146,8 @@ async def test_unreachable_host_shows_a_visible_error_tile_not_raised():
     # eine Fehlermeldung als "Hostname" haette dort eine eigene falsche Gruppe
     # erzeugt.
     assert services[0]["host"] == "docker"
+    # Marker fuer die Uebersicht: Platzhalter, kein Container.
+    assert services[0]["unreachable"] is True
 
 
 @pytest.mark.asyncio
@@ -163,6 +165,7 @@ async def test_a_broken_host_does_not_hide_services_on_a_working_one():
     tones = {s["name"]: s["tone"] for s in services}
     assert tones["grafana"] == "good"
     assert any(t == "danger" for t in tones.values())
+    assert [s["name"] for s in services if not s.get("unreachable")] == ["grafana"]
 
 
 @pytest.mark.asyncio

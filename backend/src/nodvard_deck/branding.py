@@ -31,6 +31,33 @@ beliebiger Content-Types -- ein Logo ist ein Bild, kein generischer Datei-Upload
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 
+UNTRUSTED_FILE_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+}
+"""Header für alles, was Nutzer hochladen und das im selben Origin wie das Dashboard
+ausgeliefert wird. Öffnet jemand die Adresse direkt, läuft kein Skript: `sandbox` gibt
+dem Dokument einen eigenen, leeren Origin, `nosniff` verbietet dem Browser, den Typ zu
+erraten. Ein `<img src>` ist davon nicht betroffen, die Regel gilt nur für die Antwort
+selbst, nicht für die Seite, die sie einbettet."""
+
+SUPPORT_URL_SCHEMES = ("http", "https", "mailto")
+
+
+def clean_support_url(value: str | None) -> str | None:
+    """Gibt die Adresse zurück, wenn sie mit `http:`, `https:` oder `mailto:` beginnt,
+    sonst `None`. Leerzeichen am Rand werden entfernt; Steuerzeichen und Leerraum mitten
+    in der Adresse (`java\tscript:`) machen sie ungültig."""
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        return None
+    scheme, sep, rest = text.partition(":")
+    if not sep or scheme.lower() not in SUPPORT_URL_SCHEMES or not rest:
+        return None
+    return text
+
 
 def logo_dir(data_dir: Path) -> Path:
     return data_dir / "branding"
@@ -111,6 +138,8 @@ async def load_branding(session: AsyncSession) -> Branding:
 
     data = DEFAULT_BRANDING.model_dump()
     data.update(overrides)
+    # Ein früher gespeicherter, ungültiger Wert (z. B. `javascript:`) wird nicht als Link angezeigt.
+    data["support_url"] = clean_support_url(data.get("support_url"))
     return Branding.model_validate(data)
 
 

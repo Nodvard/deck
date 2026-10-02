@@ -38,6 +38,12 @@ const GROUPS: { id: string; title: string; hint?: string }[] = [
 ];
 const OTHER_GROUP = { id: "other", title: "Weitere Module" };
 
+/** Beispiel-Module für Entwickler (z. B. „Hello World“) gehören nicht in den Assistenten: Wer neu anfängt, würde sich
+ * fragen, wozu sie da sind. Unter Einstellungen → Erweiterungen bleiben sie sichtbar. */
+export function forEveryone(rows: ExtensionRow[]): ExtensionRow[] {
+  return rows.filter((r) => r.category !== "example");
+}
+
 /**
  * Kurzfassung der Beschreibung fuer die Kachel: der erste Satz, und steht darin ein Doppelpunkt
  * („Virenschutz fuer alle Server: ClamAV-Scans, ...“), nur das davor. Abkuerzungen wie „z. B.“ oder
@@ -104,7 +110,7 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
     setBusyId(null);
   }
 
-  const groups = useMemo(() => groupModules(rows ?? []), [rows]);
+  const groups = useMemo(() => groupModules(forEveryone(rows ?? [])), [rows]);
   const enabledCount = (rows ?? []).filter((r) => r.state === "enabled").length;
   const needSetup = (rows ?? []).filter((r) => r.state === "enabled" && r.needs_setup).length;
 
@@ -144,7 +150,7 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
                         <span className="min-w-0 flex-1">
                           <span className="block text-sm font-medium">{label}</span>
                           {ext.description && (
-                            <span title={ext.description} className="mt-0.5 line-clamp-3 text-xs text-white/55">
+                            <span title={ext.description} className="mt-0.5 block break-words text-xs text-white/55">
                               {shortDescription(ext.description)}
                             </span>
                           )}

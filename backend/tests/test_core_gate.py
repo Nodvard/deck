@@ -509,7 +509,8 @@ async def test_fail_interrupted_on_boot_marks_only_executing_actions_failed(db_s
     audit = await _last_audit(db_session, "action.executed")
     assert audit.target_id == executing.id
     assert audit.outcome == "failure"
-    assert audit.detail["result"]["error"] == gate.INTERRUPTED_ERROR
+    # Das Protokoll nennt den festen Grund des Gates (nicht als Text vom Server).
+    assert audit.detail["result"] == {"success": False, "gate_error": gate.INTERRUPTED_ERROR}
 
     # Ein zweiter Lauf findet nichts mehr.
     assert await gate.fail_interrupted_on_boot(db_session) == 0
@@ -594,6 +595,17 @@ class _BlockingExecutor:
 async def _stored(sessionmaker, action_id: str) -> Action:
     async with sessionmaker() as verify:
         return await verify.get(Action, action_id)
+
+
+async def _audit_result(sessionmaker, action_id: str) -> dict:
+    """Das Ergebnis, wie es in der Audit-Zeile 'action.executed' der Aktion steht."""
+    async with sessionmaker() as verify:
+        entry = (
+            await verify.execute(
+                select(AuditEntry).where(AuditEntry.action == "action.executed", AuditEntry.target_id == action_id)
+            )
+        ).scalars().one()
+        return entry.detail["result"]
 
 
 @pytest.mark.asyncio
@@ -742,6 +754,7 @@ async def test_shutdown_running_marks_running_actions_as_cancelled(tmp_path):
         stored = await _stored(sessionmaker, decision.action_id)
         assert stored.status == "failed"
         assert stored.result["error"] == gate.CANCELLED_ERROR
+        assert (await _audit_result(sessionmaker, decision.action_id)) == {"success": False, "gate_error": gate.CANCELLED_ERROR}
         assert not gate.is_running(decision.action_id)
     finally:
         await gate.shutdown_running()
@@ -878,6 +891,7 @@ async def test_hanging_executor_ends_in_failed_after_the_emergency_timeout(tmp_p
         stored = await _stored(sessionmaker, decision.action_id)
         assert stored.status == "failed"
         assert stored.result["error"] == gate.EXECUTE_TIMEOUT_ERROR
+        assert (await _audit_result(sessionmaker, decision.action_id)) == {"success": False, "gate_error": gate.EXECUTE_TIMEOUT_ERROR}
         assert executor.started.is_set() and not executor.release.is_set()
     finally:
         await gate.shutdown_running()
@@ -903,12 +917,12 @@ async def test_shutdown_while_saving_keeps_the_known_result(tmp_path, monkeypatc
     saving = asyncio.Event()
     calls = {"n": 0}
 
-    async def _slow_first_record(action_id, status, result, *, publish=True):
+    async def _slow_first_record(action_id, status, result, **kwargs):
         calls["n"] += 1
         if calls["n"] == 1:
             saving.set()
             await asyncio.sleep(3600)
-        return await real_record(action_id, status, result, publish=publish)
+        return await real_record(action_id, status, result, **kwargs)
 
     monkeypatch.setattr(gate, "_record_outcome", _slow_first_record)
     try:

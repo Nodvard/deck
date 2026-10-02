@@ -27,12 +27,14 @@ from __future__ import annotations
 import hashlib
 import logging
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from nodvard_sdk import (
     Actor,
+    ActorType,
     ActionResult,
     DryRunReport,
     Event,
@@ -49,9 +51,11 @@ from nodvard_sdk import (
     Refresh,
     Risk,
     Severity,
+    StandingApproval,
     WidgetSpec,
+    current_job_trigger,
 )
-from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
+from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec, GateOutcome
 from nodvard_sdk.errors import ActionBlocked, NodvardError
 from pydantic import BaseModel
 
@@ -59,6 +63,14 @@ from .params import ParamError, substitute_params
 from .promotion import MAX_COUNT, RecurringFixTracker
 from .repo import Script, ScriptMeta, ScriptRepo
 from .skipnotice import MAX_SEND_TRIES, SkipNotices
+from .standing import (
+    StandingApprovals,
+    StandingRecord,
+    evaluate,
+    port_label,
+    script_fingerprint,
+    targets_fingerprint,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -80,6 +92,123 @@ def _repo_path(ctx: ExtensionContext) -> Path:
 
 def _skip_notices(ctx: ExtensionContext) -> SkipNotices:
     return SkipNotices(Path(str(ctx.data_dir)) / "skip-notices.json")
+
+
+def _standing_approvals(ctx: ExtensionContext) -> StandingApprovals:
+    return StandingApprovals(Path(str(ctx.data_dir)) / "standing-approvals.json")
+
+
+STANDING_WITHDRAWN = "Dauerfreigabe wurde zurückgezogen – nichts ausgeführt."
+"""Fehlertext des Ausfuehrers, wenn die Dauerfreigabe direkt vor dem Befehl nicht mehr gilt."""
+
+STANDING_PERMISSION = "actions.standing_approval"
+"""Nutzer-Berechtigung fuer Erteilen/Zurueckziehen (eingebaute Rollen: nur Owner und Admin)
+und zugleich die Erweiterungs-Berechtigung, Vorschlaege mit Dauerfreigabe einzureichen."""
+
+
+async def _expire_standing(
+    ctx: ExtensionContext, script_id: str, script_name: str, reason: str, *,
+    actor: Actor | None = None, notify: bool = True,
+) -> bool:
+    """Laesst die Dauerfreigabe eines Skripts erloeschen: ab sofort gilt sie nicht mehr, dann
+    Protokollzeile, Eintrag weg und (ausser `notify=False`) EINE Push-Nachricht. True, wenn es
+    eine Freigabe gab.
+
+    Im Zweifel gilt sie nicht (fail closed): Scheitert das Protokoll, bleibt der Eintrag
+    stehen und gilt trotzdem nicht mehr; der naechste Lauf schreibt die Zeile nach (erst
+    danach wird geloescht, sonst ginge das Erloeschen ohne Protokoll verloren). Laesst sich
+    die Datei nicht schreiben, steht das Erloeschen trotzdem im Protokoll und gilt; der
+    naechste Lauf versucht das Loeschen erneut, ohne doppelte Zeile oder Push."""
+    store = _standing_approvals(ctx)
+    record = store.get_raw(script_id)
+    if record is None:
+        store.unblock(script_id)
+        return False
+    pending = store.block(script_id, record, reason)
+    if not pending.logged:
+        try:
+            await ctx.audit.log(
+                action="scripts.standing_approval.expired",
+                outcome="success",
+                target_type="script",
+                target_id=script_id,
+                reason=f"Dauerfreigabe für Skript „{script_name}“ erloschen: {pending.reason}",
+                detail={
+                    "granted_by": record.granted_by_user_id,
+                    "granted_by_label": record.granted_by_label,
+                    "granted_at": record.granted_at,
+                },
+                correlation_id=f"script:{script_id}",
+                actor=actor,
+            )
+        except Exception:  # noqa: BLE001 -- der Lauf geht weiter, nur eben mit Klick
+            _log.error(
+                "Skript %s: Erlöschen der Dauerfreigabe konnte nicht protokolliert werden. Sie gilt "
+                "trotzdem nicht mehr; der nächste Lauf versucht es erneut.",
+                script_id, exc_info=True,
+            )
+            return True
+        pending.logged = True
+    try:
+        store.remove(script_id)
+    except OSError:
+        _log.error(
+            "Skript %s: Dauerfreigabe konnte nicht aus der Datei gelöscht werden. Sie gilt trotzdem "
+            "nicht mehr; der nächste Lauf versucht es erneut.",
+            script_id, exc_info=True,
+        )
+    else:
+        store.unblock(script_id)
+    if notify and not pending.notified:
+        pending.notified = True
+        try:
+            await ctx.notify.send(
+                Notification(
+                    title=f"Dauerfreigabe für „{script_name}“ erloschen",
+                    body=(
+                        f"{pending.reason} Die geplanten Läufe von „{script_name}“ brauchen ab jetzt wieder "
+                        "deine Freigabe unter „Aktionen“. Eine neue Dauerfreigabe kannst du auf der "
+                        "Skripte-Seite erteilen."
+                    ),
+                    severity=Severity.INFO,
+                    correlation_id=f"scripts-standing:{script_id}",
+                    payload={"path": "/ext/scripts/scripts"},
+                )
+            )
+        except Exception:  # noqa: BLE001 -- der Hinweis darf das Erloeschen nicht kippen
+            _log.warning("Skript %s: Hinweis auf erloschene Dauerfreigabe nicht gesendet.", script_id, exc_info=True)
+    elif not notify:
+        pending.notified = True
+    return True
+
+
+async def _recheck_standing(
+    ctx: ExtensionContext, repo: ScriptRepo, script_id: str, first: StandingRecord, host: SdkHost
+) -> str | None:
+    """Gilt die Dauerfreigabe vom Laufbeginn fuer `host` noch? Vor JEDEM Server neu geprueft:
+    Ein Lauf auf mehreren Servern kann lange dauern, und Zurueckziehen, eine Aenderung am
+    Skript oder ein anderes Konto mitten im Lauf muessen sofort wirken. None = gilt, sonst der
+    Grund (dann laeuft der Rest des Laufs mit Klick)."""
+    current = _standing_approvals(ctx).get(script_id)
+    if current is None:
+        return "Sie wurde während des Laufs zurückgezogen oder ist erloschen."
+    same = (current.fingerprint, current.granted_at, current.granted_by_user_id) == (
+        first.fingerprint, first.granted_at, first.granted_by_user_id,
+    )
+    if not same:
+        return "Sie wurde während des Laufs neu erteilt."
+    script = repo.get(script_id)
+    fresh = await ctx.hosts.get(host.id)
+    if script is None or fresh is None:
+        return "Skript oder Server wurde während des Laufs gelöscht."
+    evaluation = evaluate(current, script.meta, script.content, [fresh])
+    if not evaluation.valid:
+        problem = evaluation.problem or "Etwas Freigegebenes hat sich geändert."
+        await _expire_standing(ctx, script_id, script.meta.name, problem)
+        return problem
+    if not evaluation.covered:
+        return "Der Server gehört nicht mehr zur Dauerfreigabe."
+    return None
 
 
 async def _notify_skipped(
@@ -159,6 +288,28 @@ class _ScriptActionExecutor:
         command = req.payload.get("command")
         if not command:
             return ActionResult(success=False, error="payload.command fehlt (aufgelöster Skriptinhalt).")
+        if "account" in req.payload and req.payload["account"] != host.credential_username:
+            # Lief ueber eine Dauerfreigabe, die einem anderen Anmeldekonto galt.
+            name = host.display_name or host.name
+            return ActionResult(
+                success=False,
+                error=(
+                    f"Auf „{name}“ meldet sich das Dashboard inzwischen unter einem anderen Konto an "
+                    f"({req.payload['account'] or 'keins'} → {host.credential_username or 'keins'}). "
+                    "Die Dauerfreigabe galt dem alten Konto, deshalb wurde nichts ausgeführt."
+                ),
+            )
+        if "port" in req.payload and req.payload["port"] != host.credential_port:
+            # Dasselbe fuer den SSH-Port: ein anderer Port ist ein anderes Ziel.
+            name = host.display_name or host.name
+            return ActionResult(
+                success=False,
+                error=(
+                    f"Auf „{name}“ meldet sich das Dashboard inzwischen über einen anderen SSH-Port an "
+                    f"({port_label(req.payload['port'])} → {port_label(host.credential_port)}). "
+                    "Die Dauerfreigabe galt dem alten Port, deshalb wurde nichts ausgeführt."
+                ),
+            )
 
         # Ohne geheime Parameter steht der fertige Befehl im Payload (wie bisher). Mit
         # geheimen steht dort nur die maskierte Fassung -- der echte Befehl entsteht erst
@@ -173,6 +324,11 @@ class _ScriptActionExecutor:
             # Greift eine Sperrregel erst beim echten Befehl, darf die Audit-Zeile den
             # Klartext nicht enthalten: dort steht dann die maskierte Fassung.
             audit_command = req.payload["command"]
+        if self._standing_withdrawn(req):
+            # Zwischen der letzten Pruefung beim Vorschlagen und hier liegen das Gate, der Start
+            # der Ausfuehrung und ggf. das Lesen aus dem Tresor: ein Zurueckziehen (oder eine
+            # Aenderung am Skript) in dieser Zeit muss noch wirken. Direkt vor dem Befehl pruefen.
+            return ActionResult(success=False, error=STANDING_WITHDRAWN)
         try:
             # Skripte (Audits, Updates, Backups) laufen oft minutenlang -- die 60 s
             # Vorgabe von ctx.exec.run() liess z. B. Lynis regelmaessig scheitern.
@@ -192,6 +348,20 @@ class _ScriptActionExecutor:
             error=result.stderr or None,
             duration_ms=result.duration_ms,
         )
+
+    def _standing_withdrawn(self, req: ActionRequest) -> bool:
+        """True, wenn die Aktion ueber eine Dauerfreigabe ohne Klick anlief, die es so nicht mehr
+        gibt: kein Eintrag (zurueckgezogen, erloschen) oder ein Eintrag mit anderem
+        Erteilungszeitpunkt (zurueckgezogen und neu erteilt -- die neue Freigabe galt nicht fuer
+        diesen Vorschlag). Ob sie ohne Klick anlief, sagt das Gate (`req.standing_approval`): Hat
+        es die Dauerfreigabe nicht anerkannt und ein Mensch hat per Klick freigegeben, zaehlt der
+        Klick, auch wenn der Vorschlag noch die Angaben der Dauerfreigabe traegt."""
+        if req.standing_approval is None:
+            return False  # Freigabe per Klick
+        payload = req.payload
+        script_id = payload.get("script_id")
+        record = _standing_approvals(self._ctx).get(script_id) if isinstance(script_id, str) else None
+        return record is None or record.granted_at != payload.get("standing_granted_at")
 
     async def _rebuild_command(
         self, payload: dict[str, Any], masked_command: str, secret_params: list[str]
@@ -243,7 +413,12 @@ class _ScriptJobSpec:
         self.enabled = enabled
 
     async def handler(self, **_: Any) -> dict[str, Any]:
-        return await run_script(self._ctx, self._repo, self._script_id, param_overrides={})
+        # Nur ein echter Zeitplan-Lauf darf eine Dauerfreigabe nutzen; "Jetzt ausfuehren"
+        # ueber die Jobs-Schnittstelle (manual) bleibt ein normaler Vorschlag.
+        return await run_script(
+            self._ctx, self._repo, self._script_id, param_overrides={},
+            scheduled=current_job_trigger() == "schedule",
+        )
 
 
 async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> list[SdkHost]:
@@ -266,6 +441,26 @@ async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> lis
     return []
 
 
+async def _runnable_targets(
+    ctx: ExtensionContext, target: dict[str, Any]
+) -> tuple[list[SdkHost], list[tuple[SdkHost, str]]]:
+    """(Ziele, auf denen der Lauf klappen kann; uebersprungene mit Grund). Ein
+    ausdruecklich gewaehlter Server ('host') bleibt unveraendert Ziel; bei Sammelzielen
+    nur Hosts, auf denen der Lauf ueberhaupt klappen kann."""
+    targets = await _resolve_targets(ctx, target)
+    if target.get("kind") not in ("all", "group"):
+        return targets, []
+    runnable: list[SdkHost] = []
+    skipped: list[tuple[SdkHost, str]] = []
+    for host in targets:
+        reason = _skip_reason(host)
+        if reason is None:
+            runnable.append(host)
+        else:
+            skipped.append((host, reason))
+    return runnable, skipped
+
+
 def _skip_reason(host: SdkHost) -> str | None:
     """Warum ein Host bei 'Alle Server'/'Gruppe' nicht als Ziel taugt
     -- dieselben Kriterien wie nexus-socs `target_hosts()`. Ein Lauf dort wuerde
@@ -281,7 +476,7 @@ def _skip_reason(host: SdkHost) -> str | None:
 
 async def run_script(
     ctx: ExtensionContext, repo: ScriptRepo, script_id: str, *, param_overrides: dict[str, str], actor: Actor | None = None,
-    wait_s: float | None = None,
+    wait_s: float | None = None, scheduled: bool = False,
 ) -> dict[str, Any]:
     """Loest Ziel-Hosts UND Parameter (inkl. `type="secret"` ueber `ctx.vault_use()`)
     auf und schlaegt EINE `script.run`-Aktion PRO Ziel-Host vor. Wird sowohl vom
@@ -292,7 +487,11 @@ async def run_script(
 
     `wait_s` (nur von der HTTP-Route) ist EIN Zeitbudget fuer alle Ziel-Hosts
     zusammen -- sonst wartete ein Lauf auf fuenf Servern bis zu 5 x 20 s. None = jede
-    Aktion bis zum Ende abwarten (geplanter Lauf)."""
+    Aktion bis zum Ende abwarten (geplanter Lauf).
+
+    `scheduled` (nur vom Zeitplan): Gibt es eine gueltige Dauerfreigabe (standing.py), tragen
+    die freigegebenen Ziele sie im Vorschlag und laufen ohne Klick an; neue Ziele bekommen
+    eine normale Freigabe. Ist sie nicht mehr gueltig, erlischt sie hier."""
     deadline = None if wait_s is None else time.monotonic() + wait_s
     script = repo.get(script_id)
     if script is None:
@@ -316,21 +515,13 @@ async def run_script(
             f"Geheime Parameter ({', '.join(given)}) werden nur aus dem Tresor gelesen "
             "und können nicht beim Ausführen mitgegeben werden."
         )
-    targets = await _resolve_targets(ctx, meta.target)
+    targets, skipped_hosts = await _runnable_targets(ctx, meta.target)
     results: list[dict[str, Any]] = []
     if meta.target.get("kind") in ("all", "group"):
-        # Ein ausdruecklich gewaehlter Server ('host') bleibt unveraendert Ziel; bei
-        # Sammelzielen nur Hosts, auf denen der Lauf ueberhaupt klappen kann.
-        runnable = []
         skipped: dict[str, tuple[str, str]] = {}
-        for host in targets:
-            reason = _skip_reason(host)
-            if reason is None:
-                runnable.append(host)
-            else:
-                results.append({"host_id": host.id, "host_name": host.name, "skipped": reason})
-                skipped[host.id] = (host.name, reason)
-        targets = runnable
+        for host, reason in skipped_hosts:
+            results.append({"host_id": host.id, "host_name": host.name, "skipped": reason})
+            skipped[host.id] = (host.name, reason)
         # Den Zeitplan nicht jede Nacht dieselben Server melden lassen --
         # einmal, dann erst wieder bei Aenderung. Bei Handausloesung (`actor`) zeigt die
         # Oberflaeche die Liste ohnehin; dort bleibt der Stand unberuehrt, sonst bliebe die
@@ -356,27 +547,77 @@ async def run_script(
     except ParamError as exc:
         command = None
         param_error = str(exc)
+    standing: StandingApproval | None = None
+    standing_record: StandingRecord | None = None
+    covered: set[str] = set()
+    lost: str | None = None  # warum die Dauerfreigabe fuer den Rest dieses Laufs nicht mehr gilt
+    if scheduled and actor is None and not param_overrides and targets and command is not None:
+        store = _standing_approvals(ctx)
+        pending = store.pending_expiry(script_id)
+        if pending is not None:
+            # Ein frueheres Erloeschen konnte nicht protokolliert oder geloescht werden.
+            await _expire_standing(ctx, script_id, meta.name, pending.reason)
+        standing_record = store.get(script_id)
+        if standing_record is not None:
+            evaluation = evaluate(standing_record, meta, script.content, targets)
+            if not evaluation.valid:
+                await _expire_standing(ctx, script_id, meta.name, evaluation.problem or "")
+                standing_record = None
+            else:
+                covered = {h.id for h in evaluation.covered}
+                standing = StandingApproval(
+                    granted_by_user_id=standing_record.granted_by_user_id,
+                    granted_at=datetime.fromisoformat(standing_record.granted_at),
+                    label=f"Skript „{meta.name}“ ({script_id})",
+                )
     for host in targets:
         if command is None:
             results.append({"host_id": host.id, "host_name": host.name, "error": param_error})
             continue
+        # Ob es ohne Klick lief, haengt das Gate an (erst nach seiner Pruefung).
+        reason = f"Skript '{meta.name}' ({script_id}) ausführen"
+        use_standing = standing is not None and host.id in covered
+        if use_standing and standing_record is not None:
+            problem = await _recheck_standing(ctx, repo, script_id, standing_record, host)
+            if problem is not None:
+                lost, standing, use_standing = problem, None, False
+        payload: dict[str, Any] = {
+            "command": command,
+            "script_id": script_id,
+            "params": values,
+            "secret_params": secrets,
+        }
+        if use_standing and standing_record is not None:
+            # Das Freigegebene: Konto und Port prueft der Executor direkt vor dem Ausfuehren noch
+            # einmal (zwischen Gate und Ausfuehrung kann es sich aendern), ebenso ob genau diese
+            # Dauerfreigabe (Erteilungszeitpunkt) dann noch gilt.
+            payload["account"] = standing_record.hosts.get(host.id)
+            if host.id in standing_record.ports:
+                payload["port"] = standing_record.ports[host.id]
+            payload["standing_granted_at"] = standing_record.granted_at
+        elif standing_record is not None and host.id not in covered:
+            reason += " – neuer Server, nicht in der Dauerfreigabe: bitte einzeln freigeben"
+        elif lost is not None:
+            reason += f" – die Dauerfreigabe gilt nicht mehr: {lost} Bitte selbst freigeben."
         decision = await ctx.actions.propose(
             ActionRequest(
                 action_type="script.run",
                 host_ref=host.id,
-                payload={
-                    "command": command,
-                    "script_id": script_id,
-                    "params": values,
-                    "secret_params": secrets,
-                },
+                payload=payload,
                 risk=Risk.HIGH,
                 proposed_by=actor or Actor.extension("scripts"),
-                reason=f"Skript '{meta.name}' ({script_id}) ausführen",
+                reason=reason,
                 correlation_id=f"script:{script_id}",
+                standing_approval=standing if use_standing else None,
             ),
             wait_s=None if deadline is None else max(0.0, deadline - time.monotonic()),
         )
+        if use_standing and decision.outcome == GateOutcome.REQUIRE_CONFIRMATION:
+            # Das Gate hat die Freigabe nicht anerkannt (z. B. Person gesperrt oder keine
+            # Admin-Rechte mehr): dieser Lauf wartet auf einen Klick, und die Freigabe erlischt.
+            lost = decision.detail or "Das Dashboard hat die Freigabe nicht anerkannt."
+            await _expire_standing(ctx, script_id, meta.name, lost)
+            standing = None
         results.append(
             {
                 "host_id": host.id,
@@ -402,6 +643,36 @@ class _RunIn(BaseModel):
     param_overrides: dict[str, str] = {}
 
 
+class _StandingIn(BaseModel):
+    fingerprint: str
+    """Der Fingerabdruck, den die Seite angezeigt hat (`_ScriptOut.fingerprint`). Hat jemand
+    das Skript inzwischen geaendert, wird nicht freigegeben -- sonst gaebe man etwas frei,
+    das man nie gesehen hat."""
+    targets_fingerprint: str
+    """Dasselbe fuer die angezeigten Zielserver samt Konto und Adresse
+    (`_ScriptOut.targets_fingerprint`)."""
+
+
+class _StandingHostOut(BaseModel):
+    id: str
+    name: str
+    account: str | None
+    address: str | None = None
+    port: int | None = None
+
+
+class _StandingOut(BaseModel):
+    active: bool
+    """False: die Freigabe gilt nicht mehr (`problem`) und erlischt beim naechsten Lauf."""
+    problem: str | None = None
+    granted_by_label: str
+    granted_at: str
+    hosts: list[_StandingHostOut]
+    """Die Server, fuer die die Freigabe gilt."""
+    new_hosts: list[str] = []
+    """Namen neuer Zielserver, die beim naechsten Lauf eine normale Freigabe brauchen."""
+
+
 class _ScriptOut(BaseModel):
     id: str
     name: str
@@ -412,6 +683,16 @@ class _ScriptOut(BaseModel):
     schedule: str | None
     enabled: bool
     job_id: str
+    fingerprint: str = ""
+    """Fingerabdruck von Inhalt, Parametern, Ziel und Zeitplan (fuer das Erteilen einer
+    Dauerfreigabe, siehe `_StandingIn`)."""
+    standing_approval: _StandingOut | None = None
+    """Die Dauerfreigabe des Skripts, None ohne."""
+    standing_preview: list[_StandingHostOut] | None = None
+    """Fuer aktive Skripte mit Zeitplan: die Server, die eine Dauerfreigabe JETZT decken
+    wuerde, mit Konto und Adresse (zeigt der Bestaetigungsdialog)."""
+    targets_fingerprint: str | None = None
+    """Fingerabdruck von `standing_preview` (fuer `_StandingIn.targets_fingerprint`)."""
 
     @classmethod
     def from_script(cls, script: Script) -> "_ScriptOut":
@@ -425,6 +706,7 @@ class _ScriptOut(BaseModel):
             schedule=script.meta.schedule,
             enabled=script.meta.enabled,
             job_id=_job_id(script.meta.id),
+            fingerprint=script_fingerprint(script.meta, script.content),
         )
 
 
@@ -487,9 +769,50 @@ class Extension(NodvardExtension):
 
         router = APIRouter()
 
+        async def _out(script: Script) -> _ScriptOut:
+            out = _ScriptOut.from_script(script)
+            meta = script.meta
+            record = _standing_approvals(ctx).get(meta.id)
+            grantable = bool(meta.schedule and meta.enabled)
+            if record is None and not grantable:
+                return out
+            targets, _skipped = await _runnable_targets(ctx, meta.target)
+            if grantable:
+                out.standing_preview = [
+                    _StandingHostOut(
+                        id=h.id, name=h.display_name or h.name, account=h.credential_username,
+                        address=h.address, port=h.credential_port,
+                    )
+                    for h in targets
+                ]
+                out.targets_fingerprint = targets_fingerprint(targets)
+            if record is None:
+                return out
+            evaluation = evaluate(record, meta, script.content, targets)
+            problem = evaluation.problem
+            if evaluation.valid:
+                # Dieselbe Pruefung der Person wie im Gate -- sonst zeigte die Seite "gilt",
+                # obwohl der naechste Lauf auf einen Klick wartet.
+                problem = await ctx.actions.check_standing_approval(record.granted_by_user_id, risk=Risk.HIGH)
+            out.standing_approval = _StandingOut(
+                active=problem is None,
+                problem=problem,
+                granted_by_label=record.granted_by_label,
+                granted_at=record.granted_at,
+                hosts=[
+                    _StandingHostOut(
+                        id=hid, name=record.host_names.get(hid, hid), account=account,
+                        address=record.addresses.get(hid), port=record.ports.get(hid),
+                    )
+                    for hid, account in record.hosts.items()
+                ],
+                new_hosts=[h.display_name or h.name for h in evaluation.uncovered],
+            )
+            return out
+
         @router.get("/scripts")
         async def list_scripts() -> list[_ScriptOut]:
-            return [_ScriptOut.from_script(s) for s in self._repo.list_all()]
+            return [await _out(s) for s in self._repo.list_all()]
 
         @router.get("/widgets/overview")
         async def overview_widget_data() -> dict[str, Any]:
@@ -512,7 +835,7 @@ class Extension(NodvardExtension):
             script = self._repo.get(script_id)
             if script is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
-            return _ScriptOut.from_script(script)
+            return await _out(script)
 
         @router.get("/scripts/{script_id}/history")
         async def script_history(script_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -536,6 +859,9 @@ class Extension(NodvardExtension):
                 out.append({
                     "action_id": row.id,
                     "status": row.status,
+                    # Lief ohne Klick ueber die Dauerfreigabe; `reason` nennt wer und wann.
+                    "standing_approval": (row.gate_decision or {}).get("rule") == "standing_approval",
+                    "reason": row.reason,
                     "host_id": row.host_id,
                     "host_name": names.get(row.host_id or "", row.host_id),
                     "proposed_by": f"{row.proposed_by_type}/{row.proposed_by_id}",
@@ -550,7 +876,9 @@ class Extension(NodvardExtension):
             return out
 
         @router.put("/scripts/{script_id}")
-        async def save_script(script_id: str, payload: _ScriptIn, create: bool = False) -> _ScriptOut:
+        async def save_script(
+            script_id: str, payload: _ScriptIn, create: bool = False, actor: Actor = Depends(ctx.api.current_actor)
+        ) -> _ScriptOut:
             """`create=true` kommt von "Neues Skript": ist die Kennung schon
             vergeben, 409 statt das bestehende Skript still zu ueberschreiben."""
             if not _valid_id(script_id):
@@ -581,6 +909,19 @@ class Extension(NodvardExtension):
                 payload.content,
                 commit_message=f"scripts: '{script_id}' {'angelegt' if is_new else 'aktualisiert'}",
             )
+            record = _standing_approvals(ctx).get_raw(script_id)
+            if record is not None and is_new:
+                # Ein neu angelegtes Skript erbt nie eine alte Freigabe derselben Kennung.
+                await _expire_standing(
+                    ctx, script_id, meta.name, "Das Skript wurde neu angelegt.", actor=actor, notify=False
+                )
+            elif record is not None and record.fingerprint != script_fingerprint(meta, payload.content):
+                # Inhalt, Parameter, Ziel oder Zeitplan geaendert: die Dauerfreigabe galt dem
+                # alten Stand. Name, Beschreibung und "aktiv" zaehlen nicht (standing.py).
+                who = actor.label or actor.id
+                await _expire_standing(
+                    ctx, script_id, meta.name, f"Das Skript wurde von {who} geändert.", actor=actor
+                )
             if payload.target.get("kind") not in ("all", "group"):
                 # Kein Sammelziel mehr: ein alter Stand dürfte sonst bei einem Rückwechsel
                 # eine erwartete Meldung unterdrücken.
@@ -593,10 +934,10 @@ class Extension(NodvardExtension):
             )
             script = self._repo.get(script_id)
             assert script is not None
-            return _ScriptOut.from_script(script)
+            return await _out(script)
 
         @router.delete("/scripts/{script_id}", status_code=status.HTTP_204_NO_CONTENT)
-        async def delete_script(script_id: str) -> None:
+        async def delete_script(script_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> None:
             script = self._repo.get(script_id)
             if script is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
@@ -610,6 +951,9 @@ class Extension(NodvardExtension):
             )
             self._repo.delete(script_id)
             _skip_notices(ctx).forget(script_id)
+            await _expire_standing(
+                ctx, script_id, script.meta.name, "Das Skript wurde gelöscht.", actor=actor, notify=False
+            )
 
         @router.post("/scripts/{script_id}/run")
         async def run_now(script_id: str, payload: _RunIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
@@ -628,6 +972,147 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
         ctx.api.include_router(router, permission="hosts.execute")
+
+        # Dauerfreigabe erteilen/zurueckziehen: eigener Router mit eigener Berechtigung --
+        # bei den eingebauten Rollen haben sie nur Owner und Admin, Bediener und Betrachter
+        # bekommen 403 (serverseitig, nicht nur in der Oberflaeche).
+        standing_router = APIRouter()
+
+        @standing_router.post("/scripts/{script_id}/standing-approval")
+        async def grant_standing(
+            script_id: str, payload: _StandingIn, actor: Actor = Depends(ctx.api.current_actor)
+        ) -> _ScriptOut:
+            """Dauerfreigabe erteilen: die geplanten Laeufe dieses Skripts laufen auf den
+            jetzigen Zielservern ohne Klick, solange sich nichts aendert (standing.py)."""
+            script = self._repo.get(script_id)
+            if script is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
+            meta = script.meta
+            if actor.type != ActorType.USER:
+                # Nur ein Mensch; ctx.api.current_actor liefert ohnehin immer den Nutzer.
+                raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nur ein Mensch kann freigeben.")
+            if not meta.schedule or not meta.enabled:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Eine Dauerfreigabe gibt es nur für aktive Skripte mit Zeitplan.",
+                )
+            fingerprint = script_fingerprint(meta, script.content)
+            if payload.fingerprint != fingerprint:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Das Skript wurde inzwischen geändert – lade die Seite neu und prüfe es noch einmal.",
+                )
+            targets, _skipped = await _runnable_targets(ctx, meta.target)
+            if not targets:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Das Skript hat gerade keinen Server, auf dem es laufen kann.",
+                )
+            if payload.targets_fingerprint != targets_fingerprint(targets):
+                # Seit dem Laden der Seite kam ein Server dazu, fiel weg oder hat ein anderes
+                # Konto bzw. eine andere Adresse: nur freigeben, was man gesehen hat.
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Die Zielserver haben sich inzwischen geändert – lade die Seite neu und prüfe die Liste noch einmal.",
+                )
+            record = StandingRecord(
+                fingerprint=fingerprint,
+                granted_by_user_id=actor.id,
+                granted_by_label=actor.label or actor.id,
+                granted_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                hosts={h.id: h.credential_username for h in targets},
+                host_names={h.id: h.display_name or h.name for h in targets},
+                addresses={h.id: h.address for h in targets},
+                ports={h.id: h.credential_port for h in targets},
+            )
+            store = _standing_approvals(ctx)
+            try:
+                store.set(script_id, record)
+            except OSError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Die Dauerfreigabe konnte nicht gespeichert werden.",
+                ) from exc
+            try:
+                await ctx.audit.log(
+                    action="scripts.standing_approval.granted",
+                    outcome="success",
+                    target_type="script",
+                    target_id=script_id,
+                    reason=f"Dauerfreigabe für Skript „{meta.name}“ erteilt",
+                    detail={
+                        "fingerprint": fingerprint,
+                        "schedule": meta.schedule,
+                        "hosts": [
+                            {
+                                "id": h.id, "name": h.display_name or h.name, "account": h.credential_username,
+                                "address": h.address, "port": h.credential_port,
+                            }
+                            for h in targets
+                        ],
+                    },
+                    correlation_id=f"script:{script_id}",
+                    actor=actor,
+                )
+            except Exception:
+                # Ohne Protokollzeile keine Freigabe.
+                store.remove(script_id)
+                raise
+            return await _out(script)
+
+        @standing_router.delete("/scripts/{script_id}/standing-approval", status_code=status.HTTP_204_NO_CONTENT)
+        async def revoke_standing(script_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> None:
+            """Freigabe zurueckziehen: wirkt sofort, auch auf die restlichen Server eines
+            laufenden Laufs (der prueft sie vor jedem Server neu)."""
+            script = self._repo.get(script_id)
+            if script is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
+            store = _standing_approvals(ctx)
+            record = store.get(script_id)
+            if record is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Skript gibt es keine Dauerfreigabe.")
+            # Zuerst im Speicher sperren: so gilt sie sofort nicht mehr, auch wenn die Datei
+            # gleich nicht beschreibbar ist.
+            pending = store.block(script_id, record, "Sie wurde zurückgezogen.")
+            stuck = False
+            try:
+                store.remove(script_id)
+            except OSError:
+                stuck = True
+                _log.error(
+                    "Skript %s: zurückgezogene Dauerfreigabe konnte nicht aus der Datei gelöscht werden.",
+                    script_id, exc_info=True,
+                )
+            else:
+                store.unblock(script_id)
+            await ctx.audit.log(
+                action="scripts.standing_approval.revoked",
+                outcome="success",
+                target_type="script",
+                target_id=script_id,
+                reason=f"Dauerfreigabe für Skript „{script.meta.name}“ zurückgezogen",
+                detail={
+                    "granted_by": record.granted_by_user_id,
+                    "granted_by_label": record.granted_by_label,
+                    "granted_at": record.granted_at,
+                    **({"entry_removed": False} if stuck else {}),
+                },
+                correlation_id=f"script:{script_id}",
+                actor=actor,
+            )
+            # Zurueckziehen ist schon protokolliert; ein spaeteres Nachholen nur noch loeschen.
+            pending.logged = pending.notified = True
+            if stuck:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=(
+                        "Die Freigabe gilt ab sofort nicht mehr, ließ sich aber nicht dauerhaft löschen "
+                        "(Speicher voll oder keine Schreibrechte?). Nach einem Neustart des Dashboards "
+                        "bitte noch einmal zurückziehen."
+                    ),
+                )
+
+        ctx.api.include_router(standing_router, permission=STANDING_PERMISSION)
 
         ctx.ui.register_host_tool(HostToolSpec(
             id="scripts", title="Skripte", icon="terminal-square", category="control",
@@ -692,14 +1177,17 @@ class Extension(NodvardExtension):
                 f"#!/bin/sh\n{command}\n",
                 commit_message=f"scripts: automatischer Entwurf nach {MAX_COUNT}x Wiederholung",
             )
+            # Der Befehl selbst steht nur im Entwurf (Skripte-Seite, `hosts.execute`): Meldungen
+            # liest auch, wer nur ansehen darf, und Befehle koennen Zugangsdaten enthalten.
             await ctx.notify.send(
                 Notification(
                     title="Wiederkehrende Reparatur erkannt",
                     body=(
-                        f"'{command}' wurde mehrfach erfolgreich ausgeführt -- Entwurf "
+                        f"Derselbe Befehl wurde {MAX_COUNT}x erfolgreich ausgeführt -- Entwurf "
                         f"'{draft_id}' im Skript-Repository angelegt (deaktiviert)."
                     ),
                     severity=Severity.INFO,
+                    payload={"path": "/ext/scripts/scripts"},
                 )
             )
 

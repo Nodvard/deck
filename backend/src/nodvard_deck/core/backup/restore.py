@@ -474,6 +474,7 @@ def _version_key(version: str) -> tuple[int, ...] | None:
 def build_summary(
     manifest: dict[str, Any], facts: DbFacts, files: dict[str, list], *, layout: Layout,
     current_version: str, current_instance_id: str | None, has_accounts: bool | None, installed: set[str] | None,
+    skipped_files: int = 0,
 ) -> dict[str, Any]:
     header = manifest.get("header") if isinstance(manifest.get("header"), dict) else {}
     created_at = _text(manifest.get("created_at"), 40)
@@ -510,6 +511,12 @@ def build_summary(
         warnings.append("In der Sicherung gibt es noch kein Konto. Nach dem Einspielen beginnt die Einrichtung von vorn.")
     elif facts.owner_name is None:
         warnings.append("In der Sicherung ist kein Owner-Konto zu finden.")
+    if skipped_files == 1:
+        warnings.append("1 Git-Einstellung aus der Sicherung wurde nicht übernommen, der Verlauf bleibt.")
+    elif skipped_files > 1:
+        warnings.append(
+            f"{skipped_files} Git-Einstellungen aus der Sicherung wurden nicht übernommen, der Verlauf bleibt."
+        )
     return {
         "created_at": created_at,
         "app_version": app_version,
@@ -538,16 +545,29 @@ def stage_backup(
     make_private_dir(staging.parent)
     staging.mkdir(mode=0o700)
     try:
+        skipped: list[str] = []
         with open(upload, "rb") as fh:
             manifest = container.read_backup(
                 fh, secret, staging, limits=limits, allow_file=fmt.is_restore_file, allow_dir=fmt.is_restore_dir,
+                skip_entry=fmt.is_unwanted_restore_entry, skipped=skipped,
+            )
+        if skipped:
+            logger.warning(
+                "restore_skipped_vcs_entries count=%d examples=%s", len(skipped), ", ".join(sorted(skipped)[:5]),
             )
         facts = inspect_db(staging / fmt.ARC_DB)
         installed = installed_extension_ids(layout.extensions_dir)
         check_compatible(facts, manifest, known=known, installed=installed, current_version=current_version)
         files: dict[str, list] = {}
         total = 0
+        skipped_names = set(skipped)
+        skipped_files = 0
         for item in manifest["files"]:
+            if item["path"] in skipped_names:
+                # Nicht eingespielt, also auch nicht Teil dessen, was spaeter erneut geprueft wird; die Zahl
+                # landet in der Zusammenfassung (Oberflaeche und Kommandozeile), nicht nur im Protokoll.
+                skipped_files += 1
+                continue
             files[item["path"]] = [item["sha256"], item["size"]]
             total += item["size"]
         db = manifest["db"]
@@ -556,6 +576,7 @@ def stage_backup(
         summary = build_summary(
             manifest, facts, files, layout=layout, current_version=current_version,
             current_instance_id=current_instance_id, has_accounts=has_accounts, installed=installed,
+            skipped_files=skipped_files,
         )
         compat = {
             "app_version": _text(manifest.get("app_version"), 32),

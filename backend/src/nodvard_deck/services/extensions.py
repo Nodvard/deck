@@ -62,6 +62,15 @@ async def record_user_choice(session: AsyncSession, ext_id: str) -> None:
     await _clear_untouched(session, ext_id)
 
 
+def public_route_prefixes(ext_id: str) -> list[str]:
+    """Adressen (`/api/v1/ext/<id>/...`), die die geladene Erweiterung mit `public=True`
+    ohne Anmeldung anbietet. Fuer das Protokoll beim Einschalten; leer, wenn es keine gibt
+    oder die Erweiterung nicht geladen ist."""
+    loaded = get_extension_runtime().loaded.get(ext_id)
+    api = getattr(getattr(loaded, "ctx", None), "api", None)
+    return list(getattr(api, "public_prefixes", None) or [])
+
+
 async def auto_enable_for(
     app: FastAPI, session: AsyncSession, settings: Settings, trigger: str, *, user_id: str | None = None
 ) -> list[str]:
@@ -96,11 +105,16 @@ async def auto_enable_for(
             ok = record.state == "enabled"
             if ok:
                 enabled.append(record.id)
+            public_routes = public_route_prefixes(record.id)
             await audit_service.log(
                 session, actor_type="user" if user_id else "system", actor_id=user_id or "system",
                 action="extension.auto_enabled", outcome="success" if ok else "failure",
                 target_type="extension", target_id=record.id,
-                detail={"trigger": trigger, **({} if ok else {"error": (record.last_error or "")[:300]})},
+                detail={
+                    "trigger": trigger,
+                    **({} if ok else {"error": (record.last_error or "")[:300]}),
+                    **({"public_routes": public_routes} if public_routes else {}),
+                },
             )
     except Exception:  # noqa: BLE001
         log.exception("Automatisches Einschalten (%s) fehlgeschlagen", trigger)
@@ -255,6 +269,8 @@ async def enable_extension(
     await session.commit()
     try:
         await instance.setup(ctx)
+        # Auch Routen, die setup() erst nach include_router() angehaengt hat.
+        ctx.api.check_routes()
     except Exception as exc:  # noqa: BLE001
         record.state = "error"
         record.last_error = f"setup() fehlgeschlagen: {exc}"
@@ -273,16 +289,39 @@ async def enable_extension(
         loaded.mounted_routes = runtime.mount_router(app, manifest.id, loaded.router)
 
     await session.commit()
+    start_error: Exception | None = None
     try:
         await instance.on_start(ctx)
     except Exception as exc:  # noqa: BLE001
+        start_error = exc
+
+    # Der Router steht seit setup() und ist live: Routen, die on_start() (auch kurz vor
+    # einem Absturz) angehaengt hat, bekommen die Anmeldepruefung nicht. Sie fliegen raus,
+    # und die Erweiterung wird wie bei einem setup()-Fehler zurueckgebaut.
+    try:
+        ctx.api.check_routes()
+    except Exception as exc:  # noqa: BLE001
+        record.state = "error"
+        record.last_error = f"on_start() hat Routen angehängt, die keine Anmeldung prüfen: {exc}"
+        record.last_error_at = utcnow()
+        try:
+            await instance.on_stop(ctx)
+        except Exception:  # Aufraeumen darf nicht an einer kaputten Extension scheitern
+            log.exception("on_stop() nach abgelehnten Routen von '%s' fehlgeschlagen", manifest.id)
+        try:
+            await _cleanup_loaded(app, loaded)
+        except Exception:  # der eigentliche Fehler bleibt die Meldung
+            logging.getLogger(__name__).exception("Aufräumen nach abgelehnten Routen von '%s'", manifest.id)
+        return
+
+    if start_error is not None:
         # setup() ist bereits durchgelaufen (Seiten/Widgets/Router stehen) -- das ist
         # bewusst so belassen (halb registriert ist immer noch nuetzlicher als gar
         # nicht sichtbar), aber der Fehler wird gemeldet und die Extension bleibt
         # trackbar, damit disable() sie sauber wieder entfernen kann.
         runtime.loaded[manifest.id] = loaded
         record.state = "error"
-        record.last_error = f"on_start() fehlgeschlagen: {exc}"
+        record.last_error = f"on_start() fehlgeschlagen: {start_error}"
         record.last_error_at = utcnow()
         return
 

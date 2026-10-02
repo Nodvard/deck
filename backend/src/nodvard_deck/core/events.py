@@ -61,12 +61,22 @@ class EventBus:
                 logger.exception("event_handler_failed name=%s", event.name)
 
         from . import rbac
+        from .action_output import OUTPUT_PERMISSION, redact_action_event
         from .ws_hub import get_ws_hub
 
+        message = {"name": event.name, "data": event.payload, "correlation_id": event.correlation_id}
+        # `action.*` tragen den Befehl der Aktion (Handler im Prozess bekommen ihn, z. B. die
+        # Skripte-Erweiterung). Ueber WebSocket sehen ihn nur Nutzer mit Server-Recht;
+        # alle anderen bekommen die Aktion ohne Befehl (`core/action_output.py`).
+        reduced = None
+        if event.name.split(".", 1)[0] == "action":
+            reduced = {**message, "data": redact_action_event(event.payload)}
         await get_ws_hub().publish(
             "events",
-            {"name": event.name, "data": event.payload, "correlation_id": event.correlation_id},
+            message,
             required_permission=rbac.permission_for_event(event.name),
+            reduced_payload=reduced,
+            full_permission=OUTPUT_PERMISSION if reduced is not None else None,
         )
 
 

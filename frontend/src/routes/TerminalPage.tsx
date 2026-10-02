@@ -55,8 +55,10 @@ const STATUS_DOT: Record<TabStatus, string> = {
 /** Close-Codes aus api/v1/terminal.py -- in Worte gefasst statt nur als Zahl. */
 const CLOSE_REASON: Record<number, string> = {
   4404: "Sitzungsticket unbekannt oder abgelaufen.",
-  4501: "Für diesen Host bietet keine Extension ein Terminal an.",
+  4501: "Für diesen Server bietet kein Modul ein Terminal an.",
   4500: "Sitzung konnte nicht geöffnet werden.",
+  4401: "Die Sitzung wurde beendet: Konto, Berechtigung oder Anmeldung gelten nicht mehr.",
+  4408: "Die Sitzung wurde wegen Leerlauf beendet.",
 };
 
 /** Einmal laden, fuer alle Tabs teilen -- jeder neue Tab wartete sonst auf einen
@@ -150,7 +152,8 @@ function TerminalView({
             report("closed");
           } else if (control.type === "error") {
             finished = true;
-            setMessage(control.message ?? "Sitzung konnte nicht geöffnet werden.");
+            // `||` statt `??`: ein leerer Grund ("") soll den Standardtext zeigen, nicht gar nichts.
+            setMessage(control.message || "Sitzung konnte nicht geöffnet werden.");
             setEnded(true);
             report("error");
           }
@@ -357,11 +360,11 @@ export function TerminalPage() {
         <input
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          placeholder="Host suchen …"
-          aria-label="Host suchen"
+          placeholder="Server suchen …"
+          aria-label="Server suchen"
           className="rounded bg-white/10 px-2 py-1 text-sm"
         />
-        {!hosts && <p className="text-sm opacity-60">Lade Hosts …</p>}
+        {!hosts && <p className="text-sm opacity-60">Lade Server …</p>}
         {hosts && shownHosts.length === 0 && hasUsable && <p className="text-sm opacity-60">Kein Server passt zur Suche.</p>}
         {hosts && !hasUsable && (
           <NoTerminalHosts
@@ -415,7 +418,7 @@ export function TerminalPage() {
           ))}
         </div>
         {tabs.length === 0 && (
-          <p className="text-sm opacity-60">Links einen Host wählen -- jede Sitzung öffnet sich als eigener Tab.</p>
+          <p className="text-sm opacity-60">Links einen Server wählen – jede Sitzung öffnet sich als eigener Tab.</p>
         )}
         {tabs.map((t) => (
           <TerminalView

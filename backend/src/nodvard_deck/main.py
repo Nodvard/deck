@@ -16,9 +16,11 @@ import logging
 import time
 from contextlib import asynccontextmanager
 
+import asyncssh
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+from nodvard_sdk.errors import HostUnreachable
 from nodvard_sdk.errors import PermissionDenied as ExtensionPermissionDenied
 from nodvard_sdk.types import Event
 from sqlalchemy.exc import OperationalError as SqlOperationalError
@@ -26,10 +28,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
 from .api import api_v1_router
+from .api.body_limit import BodyLimitMiddleware
 from .api.errors import install_validation_error_handler
 from .config import get_settings
 from .core import bootstate
 from .core.demo_seed import DemoBlockedError, seed_demo_data
+from .core.error_text import describe_connection_error
 from .core.events import get_event_bus
 from .core.gate import fail_interrupted_on_boot as fail_interrupted_actions_on_boot
 from .core.gate import shutdown_running as shutdown_running_actions
@@ -37,6 +41,8 @@ from .core.log_filters import install_access_log_filters
 from .core.metrics_history import get_metrics_collector
 from .core.restart import exit_if_requested
 from .core.scheduler import get_scheduler_service, register_core_jobs
+from .core.security import HashingBusy
+from .core.ssh import SshError
 from .db.session import get_engine, session_scope
 from .services.auth import ensure_builtin_roles, prepare_setup_code
 from .services.extensions import discover_and_sync, load_enabled_from_registry
@@ -294,6 +300,8 @@ def create_app() -> FastAPI:
     )
     app.include_router(api_v1_router)
     install_validation_error_handler(app)
+    # Obergrenze fuer die Groesse jeder Anfrage, bevor irgendein Handler sie liest (api/body_limit.py).
+    app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
 
     # Live gefunden (Backup-Job-Editor): schlaegt eine Extension eine Aktion vor, fuer
     # die ihr selbst eine Berechtigung fehlt, kam beim Nutzer nur "HTTP 500" an. Das
@@ -302,6 +310,16 @@ def create_app() -> FastAPI:
     async def _extension_permission_denied(_request: Request, exc: ExtensionPermissionDenied) -> JSONResponse:
         logging.getLogger("nodvard_deck.ext").warning("Extension-Berechtigung fehlt: %s", exc)
         return JSONResponse(status_code=500, content={"detail": f"Einer Erweiterung fehlt eine Berechtigung: {exc}"})
+
+    # Passwort-Pruefungen rechnen in wenigen Threads (`security.run_hashing`); stauen sich dahinter
+    # zu viele, kommt ein ehrliches "gleich nochmal" statt einer Warteschlange ohne Ende.
+    @app.exception_handler(HashingBusy)
+    async def _hashing_busy(_request: Request, _exc: HashingBusy) -> JSONResponse:
+        return JSONResponse(
+            status_code=503,
+            headers={"Retry-After": "5"},
+            content={"detail": "Gerade sind viele Anmeldungen gleichzeitig im Gange. Bitte versuche es in ein paar Sekunden noch einmal."},
+        )
 
     # Live gefunden: ein abgebrochener VZDump-Lauf hatte die Platte des Hosts von
     # Nodvard Deck gefuellt -- jeder Schreibzugriff (z. B. "Bestaetigen" auf der
@@ -320,6 +338,18 @@ def create_app() -> FastAPI:
                 "gespeichert werden. Bitte Platz freigeben (z. B. alte Backups löschen)."
             },
         )
+
+    # Ein Server, der nicht antwortet, ist kein Programmfehler. Faengt eine Anfrage das nirgends selbst
+    # ab (z. B. eine Erweiterung, die per SSH misst), kam bisher ein 500 mit Traceback im Protokoll --
+    # und `deploy_pi.sh` wertet "Traceback" in den letzten Minuten als gescheiterten Start. Jetzt:
+    # 502 mit verstaendlichem Grund, im Protokoll eine Zeile.
+    @app.exception_handler(SshError)
+    @app.exception_handler(asyncssh.Error)
+    @app.exception_handler(HostUnreachable)
+    async def _server_unreachable(request: Request, exc: Exception) -> JSONResponse:
+        reason = describe_connection_error(exc)
+        logging.getLogger("nodvard_deck.ssh").info("server_unreachable path=%s reason=%s", request.url.path, reason)
+        return JSONResponse(status_code=502, content={"detail": reason})
 
     # Merkposition FUER Extension-Routen: sie muessen vor dem StaticFiles-Catch-all
     # unten stehen, sonst wuerde "/" ihn zuerst treffen und jede /api/v1/ext/<id>/...

@@ -61,7 +61,7 @@ describe("Cockpit", () => {
     renderCockpit();
     expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/, Nico$/);
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("2 Dinge brauchen deine Aufmerksamkeit"));
-    expect(screen.getByTestId("stat-Hosts").textContent).toContain("9/9");
+    expect(screen.getByTestId("stat-Server").textContent).toContain("9/9");
     expect(screen.getByTestId("stat-Dienste").textContent).toContain("13/14");
     expect(screen.getByTestId("stat-Backups").textContent).toContain("3/5");
     expect(screen.getByTestId("stat-Backups").textContent).toContain("2 noch ohne Lauf");
@@ -112,8 +112,42 @@ describe("Cockpit", () => {
     const calm = { ...(respond("/api/v1/overview", "GET") as object), pending_actions: 0, attention: [] };
     vi.stubGlobal("fetch", mockFetch({ "/overview": calm }));
     renderCockpit();
-    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund. 9 von 9 Hosts online, 13 Dienste aktiv."));
+    await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Alles läuft rund. 9 von 9 Servern online, 13 Dienste aktiv."));
     expect(screen.getByTestId("attention").textContent).toContain("Nichts offen");
+  });
+
+  it("alle Docker-Server nicht erreichbar: „unbekannt“ statt 0 von 3", async () => {
+    const base = respond("/api/v1/overview", "GET") as { services: object[] };
+    const dead = ["a", "b", "c"].map((h) => ({
+      id: `${h}:__error__`, name: `⚠ ${h}`, host: h, host_id: null, state: "error", tone: "danger", url: null, image: null, unreachable: true,
+    }));
+    const overview = { ...base, pending_actions: 0, attention: [], services: dead, services_running: 0, services_unreachable_hosts: ["a", "b", "c"] };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+
+    await waitFor(() => expect(screen.getByTestId("stat-Dienste").textContent).toContain("Container von 3 Servern nicht abrufbar"));
+    const stat = screen.getByTestId("stat-Dienste").textContent ?? "";
+    expect(stat).toContain("unbekannt");
+    expect(stat).not.toContain("0/");
+    expect(screen.getByTestId("cockpit-status").textContent).not.toContain("Dienste aktiv");
+  });
+
+  it("nur ein Docker-Server nicht erreichbar: die übrigen zählen, der Ausfall steht daneben", async () => {
+    const base = respond("/api/v1/overview", "GET") as { services: object[] };
+    const live = (n: string, state: string) => ({ id: `h1:${n}`, name: n, host: "h1", host_id: "h1", state, tone: null, url: null, image: null });
+    const dead = { id: "h2:__error__", name: "⚠ h2", host: "h2", host_id: null, state: "error", tone: "danger", url: null, image: null, unreachable: true };
+    const overview = {
+      ...base, pending_actions: 0, attention: [], services: [live("a", "running"), live("b", "running"), live("c", "exited"), dead],
+      services_running: 2, services_unreachable_hosts: ["h2"],
+    };
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview }));
+    renderCockpit();
+
+    await waitFor(() => expect(screen.getByTestId("stat-Dienste").textContent).toContain("2/3"));
+    expect(screen.getByTestId("stat-Dienste").textContent).toContain("Container von 1 Server nicht abrufbar");
+    // Kachel gelb und Überschrift „Alles läuft rund“ passen nicht zusammen: der Server steht unter „Braucht Aufmerksamkeit“.
+    expect(screen.getByTestId("cockpit-status").textContent).not.toContain("Alles läuft rund");
+    expect(screen.getByTestId("attention").textContent).toContain("Container nicht abrufbar: h2");
   });
 
   it("Backup-Verbindung nicht erreichbar: Warnung statt eines Jobs, zählt als Aufmerksamkeit", async () => {
@@ -159,7 +193,7 @@ describe("Cockpit", () => {
     vi.stubGlobal("fetch", fetchMock);
     renderCockpit();
     expect(await screen.findByTestId("modules")).toBeInTheDocument();
-    expect(screen.queryByTestId("stat-Hosts")).toBeNull();
+    expect(screen.queryByTestId("stat-Server")).toBeNull();
     const urls = fetchMock.mock.calls.map(([u]) => String(u));
     expect(urls.some((u) => u.includes("/hosts") || u.includes("/overview"))).toBe(false);
   });
@@ -170,8 +204,8 @@ describe("Cockpit", () => {
     const empty = await screen.findByTestId("cockpit-no-hosts");
     expect(screen.getByTestId("cockpit-status").textContent).toBe("Noch kein Server eingerichtet.");
     expect(screen.getByTestId("cockpit-status").textContent).not.toContain("Alles läuft rund");
-    expect(screen.getByTestId("stat-Hosts").textContent).not.toContain("0/0");
-    expect(within(empty).getByRole("link", { name: "Server hinzufügen" })).toHaveAttribute("href", "/settings/hosts");
+    expect(screen.getByTestId("stat-Server").textContent).not.toContain("0/0");
+    expect(within(empty).getByRole("link", { name: "Server hinzufügen" })).toHaveAttribute("href", "/settings/hosts?neu=1");
     expect(document.body.textContent).not.toContain("Noch keine Hosts bekannt");
   });
 
@@ -185,7 +219,7 @@ describe("Cockpit", () => {
     expect(screen.queryByTestId("cockpit-no-hosts")).toBeNull();
     expect(screen.getByTestId("machine-demo-sicherung").textContent).toContain("192.0.2.13");
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Dinge brauchen deine Aufmerksamkeit"));
-    expect(screen.getByTestId("stat-Hosts").textContent).toContain("3/5");
+    expect(screen.getByTestId("stat-Server").textContent).toContain("3/5");
   });
 
   it("Leerzustand ohne Recht auf Beispieldaten (nur hosts.write): Knopf „Server hinzufügen“, aber kein Beispiel-Knopf", async () => {
@@ -218,7 +252,7 @@ describe("Cockpit", () => {
     previewState.start = false; // der Normalfall der Vorschau: alles erledigt
     renderCockpit();
     await screen.findByTestId("cockpit-status");
-    await waitFor(() => expect(screen.getByTestId("stat-Hosts").textContent).toContain("9/9"));
+    await waitFor(() => expect(screen.getByTestId("stat-Server").textContent).toContain("9/9"));
     expect(screen.queryByTestId("first-steps")).toBeNull();
   });
 
@@ -307,7 +341,7 @@ describe("Cockpit", () => {
       previewState.noApps = true;
       vi.stubGlobal("fetch", mockFetch());
       renderCockpit();
-      await waitFor(() => expect(screen.getByTestId("stat-Hosts").textContent).toContain("9/9"));
+      await waitFor(() => expect(screen.getByTestId("stat-Server").textContent).toContain("9/9"));
       await screen.findByTestId("host-cards");
       expect(screen.queryByTestId("apps-section")).toBeNull();
     });

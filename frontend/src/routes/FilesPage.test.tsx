@@ -383,6 +383,37 @@ describe("FilesPage Zielordner-Dialog", () => {
     expect(await screen.findByText(/'notes.txt' verschoben/)).toBeInTheDocument();
   });
 
+  it("Verschieben loescht das Original nicht, wenn weniger Bytes ankamen als die Quelle hat", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    render(<FilesPage />);
+
+    const dialog = await openPickerFor("notes.txt");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Nextcloud" }));
+    fireEvent.click(within(dialog).getByLabelText("Verschieben (Original danach löschen)"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hierher verschieben" }));
+
+    await waitFor(() => expect(wsHandlers.has("runs.run-1")).toBe(true));
+    act(() => wsHandlers.get("runs.run-1")!({ status: "succeeded", bytes: 0 }));
+    expect(await screen.findByText(/das Original bleibt/)).toBeInTheDocument();
+    expect(removeCalls).toEqual([]);
+  });
+
+  it("Verschieben loescht das Original nicht, wenn die Groesse der Quelle unbekannt war", async () => {
+    powerRoot = [{ name: "notes.txt", path: "/notes.txt", is_dir: false, size: null, modified_at: null, mime: null }];
+    vi.stubGlobal("fetch", mockFetch());
+    render(<FilesPage />);
+
+    const dialog = await openPickerFor("notes.txt");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Nextcloud" }));
+    fireEvent.click(within(dialog).getByLabelText("Verschieben (Original danach löschen)"));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Hierher verschieben" }));
+
+    await waitFor(() => expect(wsHandlers.has("runs.run-1")).toBe(true));
+    act(() => wsHandlers.get("runs.run-1")!({ status: "succeeded", bytes: 42 }));
+    expect(await screen.findByText(/Größe der Quelle war nicht bekannt/)).toBeInTheDocument();
+    expect(removeCalls).toEqual([]);
+  });
+
   it("Verschieben ohne Erfolg laesst das Original stehen", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<FilesPage />);

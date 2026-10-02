@@ -14,7 +14,18 @@ import { ServerSetupLink } from "./ServerSetupLink";
 
 interface Attacker { ip: string; count: number; users: string[]; last_ts: number | null; banned: boolean }
 interface LoginRow { user: string; ip: string; method: string; ts: number | null }
-interface PortRow { key: string; proto: string; address: string; port: number; process: string | null; public: boolean; new: boolean; dynamic?: boolean; count?: number }
+interface PortRow {
+  key: string; proto: string; address: string; port: number; process: string | null; public: boolean; new: boolean;
+  dynamic?: boolean; count?: number;
+  /** Ohne root zeigt der Server keinen Programmnamen (fehlt bei älteren Ständen). */
+  unreadable?: boolean;
+}
+
+/** Was bei einem Port ohne Programmnamen dahintersteht: ohne root nicht lesbar, sonst ein Kernel-Dienst. */
+function noProcessText(p: PortRow): string {
+  if (p.unreadable) return "Programm nicht lesbar (kein root)";
+  return p.dynamic ? "ohne Programm (Kernel)" : "unbekanntes Programm";
+}
 
 /** Programme mit wechselnden Ports (NFS-Server) erscheinen als ein Eintrag statt mit jedem Zufallsport. */
 function portName(p: PortRow): string {
@@ -111,7 +122,7 @@ function EventDetail({ ev, onBan }: { ev: SecurityEvent; onBan: (ip: string) => 
       {d.ports && (
         <ul className="space-y-1">
           {d.ports.map((p) => (
-            <li key={p.key}><span className="font-mono">{portName(p)}</span> <span className="text-white/50">· {p.process ?? (p.dynamic ? "ohne Programm (Kernel)" : "unbekanntes Programm")} · {p.public ? `offen auf ${p.address}` : "nur lokal"}</span></li>
+            <li key={p.key}><span className="font-mono">{portName(p)}</span> <span className="text-white/50">· {p.process ?? noProcessText(p)} · {p.public ? `offen auf ${p.address}` : "nur lokal"}</span></li>
           ))}
         </ul>
       )}
@@ -216,6 +227,11 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
     <>
       {notice && <Notice text={notice.text} kind={notice.kind} onClose={() => setNotice(null)} />}
 
+      <p className="mb-4 text-sm text-white/55" data-testid="guard-intro">
+        Der Einbruchschutz zeigt, wer sich von außen auf deinen Servern anzumelden versucht (per SSH, dem Fernzugang) und was sich auf ihnen verändert.
+        Fail2ban ist ein kleines Programm, das Adressen sperrt, die zu oft ein falsches Passwort probieren.
+      </p>
+
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat label="Fehlgeschlagene SSH-Anmeldungen" value={sm.failed_24h} hint="letzte 24 Stunden" tone={sm.failed_24h > 100 ? "warn" : undefined} />
         <Stat label="Angreifende Adressen" value={sm.attackers} />
@@ -297,7 +313,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                   <div className="space-y-4 text-sm">
                     {(!v.is_root || !v.ssh_log_found) && (
                       <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-                        {!v.is_root ? "Ohne root-Rechte sind SSH-Protokoll, Fail2ban und Programmnamen der Ports nur eingeschränkt lesbar." : "Kein SSH-Protokoll gefunden (journald/auth.log)."}
+                        {!v.is_root ? "Ohne root-Rechte sind SSH-Protokoll, Fail2ban und Programmnamen der Ports nur eingeschränkt lesbar. Zufällige UDP-Ports ohne Programmnamen zählen dann zusammen als ein Eintrag – ein neues Programm darunter fällt nicht auf." : "Kein SSH-Protokoll gefunden (journald/auth.log)."}
                       </p>
                     )}
 
@@ -378,7 +394,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                         {v.ports.map((p) => (
                           <span
                             key={p.key}
-                            title={p.dynamic ? `Zufällige Ports, ändern sich nach jedem Neustart · ${p.process ?? "ohne Programm"}` : `${p.address}:${p.port} · ${p.process ?? "?"}${p.public ? "" : " · nur lokal"}`}
+                            title={p.dynamic ? `Zufällige Ports, ändern sich nach jedem Neustart · ${p.process ?? (p.unreadable ? "Programm nicht lesbar (kein root)" : "ohne Programm")}` : `${p.address}:${p.port} · ${p.process ?? "?"}${p.public ? "" : " · nur lokal"}`}
                             className={`rounded-md px-2 py-0.5 font-mono text-[11px] ${p.new ? "bg-red-500/20 text-red-200" : p.public ? "bg-white/[0.08] text-white/80" : "bg-white/[0.04] text-white/40"}`}
                           >
                             {portName(p)}{p.process ? ` ${p.process}` : ""}{p.new ? " · neu" : ""}

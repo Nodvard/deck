@@ -445,6 +445,17 @@ def test_pull_failures_are_explained_and_keep_the_good_news():
         assert ia.describe_pull_failure(text).endswith("Der Container läuft unverändert weiter.")
 
 
+def test_the_public_pull_failure_text_never_quotes_a_line_from_the_host():
+    log = "@@step=pull\n Image x Pulling\nError response from daemon: GEHEIM-AUS-DER-AUSGABE"
+    assert "GEHEIM-AUS-DER-AUSGABE" in ia.describe_pull_failure(log)
+    public = ia.describe_pull_failure(log, public=True)
+    assert "GEHEIM" not in public
+    assert public == "Herunterladen fehlgeschlagen – Einzelheiten stehen in der Aktion. Der Container läuft unverändert weiter."
+    # Feste Gruende bleiben, wie sie sind.
+    assert ia.describe_pull_failure("toomanyrequests", public=True) == ia.describe_pull_failure("toomanyrequests")
+    assert ia.describe_pull_failure("no space left", public=True) == ia.describe_pull_failure("no space left")
+
+
 def test_result_texts_contain_ids_rollback_and_a_log_tail():
     t = target()
     verdict = ia.Verdict(True, "Container läuft wieder (gesund).", new_image_id=NEW_ID, health="healthy")
@@ -1041,6 +1052,45 @@ async def test_a_failing_pull_leaves_the_container_alone_and_always_pushes(tmp_p
     assert note.severity is Severity.WARNING and note.title.endswith("fehlgeschlagen") and note.payload["tags"] == ["warning"]
     assert "Zurück" not in note.body
     assert ctx.audit_rows[0]["outcome"] == "failure"
+
+
+def assert_no_host_text(ctx, applier, secret: str) -> None:
+    """Uebersicht der Seite (`applied`, ohne besonderes Recht lesbar), Protokoll und Meldung tragen keine Zeile vom Host."""
+    (applied,) = applier.snapshot()["applied"].values()
+    (row,) = ctx.audit_rows
+    (note,) = ctx.sent
+    for text in (applied["summary"], row["reason"], json.dumps(row["detail"]), note.title, note.body):
+        assert secret not in text
+    assert row["outcome"] == "failure" and applied["ok"] is False
+    assert applied["summary"].startswith("„nextcloud-app“: ") and row["reason"] == applied["summary"]
+    assert note.body.splitlines()[0] == applied["summary"]
+
+
+@pytest.mark.asyncio
+async def test_a_pull_error_line_stays_in_the_action_output_but_not_in_log_summary_or_push(tmp_path, fast):
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    secret = "GEHEIM-AUS-DER-AUSGABE"
+    docker.polls = [f"@@rc=10\n@@step=pull\n@@tail\nError response from daemon: {secret}\n"]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and result.exit_code == ia.RC_PULL
+    assert secret in result.error and secret in result.output, "wer ausfuehren darf, sieht die ganze Zeile"
+    assert_no_host_text(ctx, applier, secret)
+    assert applier.snapshot()["applied"]["h1:nextcloud-app"]["summary"] == (
+        "„nextcloud-app“: Herunterladen fehlgeschlagen – Einzelheiten stehen in der Aktion. Der Container läuft unverändert weiter."
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_start_error_line_stays_in_the_action_output_but_not_in_log_summary_or_push(tmp_path, fast):
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    secret = "mkdir: cannot create directory '/home/x/.local': Permission denied"
+    docker.launch_out = f"@@launch\n{secret}\n@@nopid\n"
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and secret in result.error and secret in result.output
+    assert_no_host_text(ctx, applier, secret)
+    assert applier.snapshot()["applied"]["h1:nextcloud-app"]["summary"] == (
+        "„nextcloud-app“: Update-Lauf konnte nicht gestartet werden – Einzelheiten stehen in der Aktion."
+    )
 
 
 @pytest.mark.asyncio

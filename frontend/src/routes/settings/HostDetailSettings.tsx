@@ -96,7 +96,7 @@ function HostDetail({ hostId }: { hostId: string }) {
       <Card title="SSH-Zugang" description="Damit sich Nodvard Deck auf dem Server anmelden kann (Terminal, Updates, Überwachung).">
         {credentials.isLoading && <p className="text-sm text-white/50">Lade Zugänge …</p>}
         {credentials.isError && <p role="alert" className="text-sm text-red-300">Die Zugänge konnten nicht geladen werden.</p>}
-        {credentials.data && <AccessPanel host={h} credentials={credentials.data} autoOpen={params.get("neu") === "1"} />}
+        {credentials.data && <AccessPanel host={h} credentials={credentials.data} autoOpen={params.get("neu") === "1"} showCommand={params.get("befehl") === "1"} />}
       </Card>
 
       <Card title="Verbindung prüfen" description="Testet Schritt für Schritt, ob sich Nodvard Deck mit dem Server verbinden kann, und sagt, was noch fehlt.">

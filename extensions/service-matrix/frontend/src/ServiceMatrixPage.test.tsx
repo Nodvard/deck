@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { navigateTo } from "../../../_shared/frontend/src/testShell";
 
 import type { AppliedState, ApplyingState } from "./ImageUpdateApply";
-import { ImageUpdateBadge, ServiceMatrixPage, summarizeImages, type ImageResult } from "./ServiceMatrixPage";
+import { ImageUpdateBadge, ServiceMatrixPage, statusText, summarizeImages, type ImageResult } from "./ServiceMatrixPage";
 
 const SERVICES = [
   { id: "h1:nginx", name: "nginx", host: "docker", host_id: "h1", container: "nginx", is_self: false, state: "running", status: "Up 2 hours", tone: "good", url: "http://10.0.0.5:8080" },
@@ -54,7 +54,7 @@ describe("ServiceMatrixPage", () => {
     render(<ServiceMatrixPage />);
 
     await screen.findByText("nginx");
-    expect(screen.getByText("Up 2 hours")).toBeInTheDocument();
+    expect(screen.getByText("Läuft seit 2 Stunden")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Öffnen" })).toHaveAttribute("href", "http://10.0.0.5:8080");
   });
 
@@ -87,6 +87,59 @@ describe("ServiceMatrixPage", () => {
     render(<ServiceMatrixPage />);
 
     expect(await screen.findByText("Fehler: Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.")).toBeInTheDocument();
+  });
+
+  it("Handy: jede Zeile wird zur Karte (Tabelle ohne Spaltenköpfe, Werte mit Beschriftung, Knöpfe in der Karte)", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    render(<ServiceMatrixPage />);
+    await screen.findByText("nginx");
+    const row = screen.getByTestId("row-h1:nginx");
+    // Ab 768 px Breite bleibt es die Tabelle; darunter liegen die Zellen untereinander in einer Karte.
+    expect(row.className).toContain("max-md:flex");
+    expect(row.className).toContain("max-md:flex-wrap");
+    const table = row.closest("table")!;
+    expect(table.className).toContain("max-md:block");
+    expect(table.querySelector("thead")!.className).toContain("max-md:hidden");
+    expect(screen.getByTestId("cpu-h1:nginx")).toHaveAttribute("data-label", "CPU");
+    expect(screen.getByTestId("mem-h1:nginx")).toHaveAttribute("data-label", "RAM");
+    // Die Knöpfe sind Teil derselben Karte (kein seitliches Wischen nötig) und am Handy größer.
+    const details = within(row).getByRole("button", { name: "Details" });
+    expect(details.className).toContain("max-md:py-2");
+    expect(within(row).getByRole("button", { name: "Logs" })).toBeInTheDocument();
+    expect(within(row).getByRole("button", { name: "Neustart" })).toBeInTheDocument();
+  });
+
+  it("Docker-Status auf Deutsch, mit dem Original als Tooltip", async () => {
+    const services = [
+      { ...SERVICES[0], status: "Up 3 hours (healthy)" },
+      { ...SERVICES[1], status: "Exited (0) 10 hours ago" },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) =>
+      String(input).includes("/widgets/matrix") ? new Response(JSON.stringify({ data: services, meta: {} })) : new Response("{}", { status: 404 })));
+    render(<ServiceMatrixPage />);
+    await screen.findByText("nginx");
+    const up = screen.getByText("Läuft seit 3 Stunden (gesund)");
+    expect(up).toHaveAttribute("title", "Up 3 hours (healthy)");
+    expect(screen.getByText("Beendet (Code 0) vor 10 Stunden")).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain("hours ago");
+  });
+
+  it("ohne Container gibt es keinen Knopf „Image-Updates prüfen“ (er würde nichts bewirken)", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ data: [], meta: {} }), { status: 200 })));
+    render(<ServiceMatrixPage />);
+    await screen.findByText("Noch kein Server mit Docker");
+    expect(screen.queryByRole("button", { name: "Image-Updates prüfen" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Aktualisieren" })).toBeInTheDocument();
+  });
+
+  it("eine Suche ohne Treffer sagt es", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    render(<ServiceMatrixPage />);
+    await screen.findByText("nginx");
+    fireEvent.change(screen.getByLabelText("Container suchen"), { target: { value: "gibt-es-nicht" } });
+    expect(screen.getByTestId("no-match").textContent).toBe("Kein Container passt zu deiner Suche.");
+    fireEvent.change(screen.getByLabelText("Container suchen"), { target: { value: "" } });
+    expect(screen.queryByTestId("no-match")).toBeNull();
   });
 
   it("zeigt Docker-Zustaende auf Deutsch, die Farbe bleibt am Ton", async () => {
@@ -157,7 +210,7 @@ describe("ServiceMatrixPage -- Container-Verwaltung", () => {
     await screen.findByText("worker");
 
     fireEvent.click(screen.getByRole("button", { name: "Starten" }));
-    await screen.findByText(/vorgeschlagen -- Freigabe durch einen Admin/);
+    await screen.findByText(/vorgeschlagen – Freigabe durch einen Admin/);
     expect(calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
   });
 
@@ -474,14 +527,14 @@ describe("ServiceMatrixPage -- Image-Updates", () => {
     }
   });
 
-  it("'Registry neu abfragen' überspringt den Zwischenspeicher, der Host-Filter begrenzt die Prüfung", async () => {
+  it("'Neu abfragen' überspringt den Zwischenspeicher, der Host-Filter begrenzt die Prüfung", async () => {
     window.history.replaceState({}, "", "/ext/service-matrix/matrix?host=h1");
     try {
       const calls: { url: string; method: string }[] = [];
       vi.stubGlobal("fetch", imageFetch(calls, { data: RESULTS, hosts: CHECKED }));
       render(<ServiceMatrixPage />);
       await screen.findByText("nginx");
-      fireEvent.click(await screen.findByRole("button", { name: "Registry neu abfragen" }));
+      fireEvent.click(await screen.findByRole("button", { name: "Neu abfragen" }));
       await waitFor(() => expect(calls.some((c) => c.method === "POST")).toBe(true));
       expect(calls.find((c) => c.method === "POST")?.url).toBe("/api/v1/ext/service-matrix/image-updates/check?host_id=h1&force=true");
     } finally {
@@ -548,7 +601,7 @@ describe("ServiceMatrixPage -- Image-Updates", () => {
         },
         false,
       );
-      expect(text).toContain("1 mit Update · 2 aktuell · 1 nicht prüfbar · 1 mit älterer Antwort der Registry · 1 Host nicht erreichbar");
+      expect(text).toContain("1 mit Update · 2 aktuell · 1 nicht prüfbar · 1 mit älterer Antwort der Registry · 1 Server nicht erreichbar");
       expect(text).not.toContain("alles aktuell");
     });
 
@@ -582,7 +635,7 @@ describe("ServiceMatrixPage -- Image-Updates", () => {
       expect(limited).toContain("1 aktuell · 1 selbst gebaut · 1 nicht prüfbar");
       const hostDown = summarizeImages({ data: { "h1:a": res("current"), "h1:lattice": res("local") }, hosts: { h1: okHost, h2: { checking: false, checked_at: null, error: "weg" } } }, false);
       expect(hostDown).not.toContain("alles aktuell");
-      expect(hostDown).toContain("1 aktuell · 1 selbst gebaut · 1 Host nicht erreichbar");
+      expect(hostDown).toContain("1 aktuell · 1 selbst gebaut · 1 Server nicht erreichbar");
     });
 
     it("ohne laufende Container und ohne Fehler, während der Prüfung und ganz ohne Stand", () => {
@@ -653,7 +706,7 @@ describe("ServiceMatrixPage -- Image-Updates", () => {
     await screen.findByText("nginx");
     await waitFor(() => expect(screen.getByTestId("image-h1:nginx").textContent).toBe("Update verfügbar"));
     expect(screen.queryByRole("button", { name: "Image-Updates prüfen" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Registry neu abfragen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Neu abfragen" })).toBeNull();
   });
 });
 
@@ -993,3 +1046,32 @@ describe("ServiceMatrixPage ohne Container", () => {
   });
 });
 
+
+describe("statusText (Docker-Status auf Deutsch)", () => {
+  it.each([
+    ["Up 2 hours", "Läuft seit 2 Stunden"],
+    ["Up 1 day", "Läuft seit 1 Tag"],
+    ["Up 3 days", "Läuft seit 3 Tagen"],
+    ["Up About an hour", "Läuft seit etwa einer Stunde"],
+    ["Up About a minute", "Läuft seit etwa einer Minute"],
+    ["Up Less than a second", "Läuft seit weniger als einer Sekunde"],
+    ["Up 5 minutes (unhealthy)", "Läuft seit 5 Minuten (nicht gesund)"],
+    ["Up 4 seconds (health: starting)", "Läuft seit 4 Sekunden (wird geprüft)"],
+    ["Up 2 weeks (Paused)", "Läuft seit 2 Wochen (pausiert)"],
+    ["Exited (0) 10 hours ago", "Beendet (Code 0) vor 10 Stunden"],
+    ["Exited (137) 3 days ago", "Beendet (Code 137) vor 3 Tagen"],
+    ["Restarting (1) 5 seconds ago", "Startet neu (Code 1), zuletzt vor 5 Sekunden"],
+    ["Created", "Angelegt, noch nicht gestartet"],
+    ["Paused", "Pausiert"],
+  ])("%s", (raw, expected) => {
+    expect(statusText(raw)).toBe(expected);
+  });
+
+  it("was nicht passt, bleibt wie es ist (z. B. die Meldung eines nicht erreichbaren Servers)", () => {
+    expect(statusText("Nicht erreichbar: timeout")).toBe("Nicht erreichbar: timeout");
+    expect(statusText("Exited (1)")).toBe("Exited (1)");
+    expect(statusText("Up gestern")).toBe("Up gestern");
+    expect(statusText("")).toBe("");
+    expect(statusText(null)).toBe("");
+  });
+});

@@ -364,10 +364,16 @@ function ScheduleSection({ overview, onSaved }: { overview: BackupOverview; onSa
         </button>
         <button type="button" className="rounded-md bg-white/[0.06] px-2 py-1 text-white/70 hover:bg-white/[0.12] disabled:opacity-40"
           disabled={!overview.target.external_available} onClick={() => setDir(overview.target.external_root)}
-          title={overview.target.external_available ? undefined : "Nicht eingebunden (siehe Anleitung)"}>
+          title={overview.target.external_available ? undefined : "Dieser Ordner ist nicht eingebunden."}>
           Eingebundener Ordner {overview.target.external_root}
         </button>
       </div>
+      {!overview.target.external_available && (
+        <p className="mt-2 text-xs text-white/50" data-testid="external-not-mounted">
+          Der Ordner {overview.target.external_root} ist hier nicht eingebunden, darum ist der zweite Knopf gesperrt. Um Sicherungen auf einem anderen Laufwerk oder einem NAS abzulegen, muss dieser Ordner in
+          der Compose-Datei von Nodvard Deck unter „volumes“ eingebunden werden. Bis dahin bleibt „Im Datenordner“.
+        </p>
+      )}
       {!keepValid && <p role="alert" className="mt-2 text-xs text-red-300">Bitte eine ganze Zahl zwischen {keepMin} und {keepMax} eingeben.</p>}
       <label className="mt-3 flex items-start gap-2 text-sm text-white/75">
         <input type="checkbox" checked={includeRuns} onChange={(e) => setIncludeRuns(e.target.checked)} className="mt-1" />

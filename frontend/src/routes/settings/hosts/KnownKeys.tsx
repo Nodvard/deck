@@ -1,7 +1,8 @@
 /**
  * Gemerkte Server-Schluessel: Nodvard Deck merkt sich den Fingerabdruck, den ein Server beim
- * ersten Mal zeigt, und lehnt danach jeden anderen ab. Nach einer Neuinstallation des Servers
- * muss man den alten bewusst vergessen -- mit Rueckfrage.
+ * ersten Mal zeigt (je nach Einstellung nach Bestaetigung unter „Verbindung pruefen“), und lehnt
+ * danach jeden anderen ab. Nach einer Neuinstallation des Servers muss man den alten bewusst
+ * vergessen -- mit Rueckfrage; den neuen Fingerabdruck muss man dann immer bestaetigen.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -19,7 +20,7 @@ export function KnownKeys({ host }: { host: HostOut }) {
 
   async function forget(keyType: string) {
     const ok = await confirmDialog(
-      `Gemerkten Schlüssel (${keyType}) von „${host.display_name}“ vergessen? Nur machen, wenn der Server neu installiert wurde. Beim nächsten Prüfen musst du den neuen Fingerabdruck bestätigen.`,
+      `Gemerkten Schlüssel (${keyType}) von „${host.display_name}“ vergessen? Nur machen, wenn der Server neu installiert wurde. Bis du unter „Verbindung prüfen“ den neuen Fingerabdruck bestätigst, verbindet sich Nodvard Deck nicht mehr mit dem Server.`,
       { danger: true, confirmLabel: "Vergessen" },
     );
     if (!ok) return;
@@ -28,7 +29,7 @@ export function KnownKeys({ host }: { host: HostOut }) {
     try {
       await api.delete(`/hosts/${host.id}/known-hosts/${encodeURIComponent(keyType)}`);
       await refreshHosts(queryClient);
-      setNotice({ kind: "ok", text: "Schlüssel vergessen. Beim nächsten Prüfen bestätigst du den neuen Fingerabdruck." });
+      setNotice({ kind: "ok", text: "Schlüssel vergessen. Drück jetzt „Verbindung prüfen“ und bestätige den neuen Fingerabdruck – vorher verbindet sich Nodvard Deck nicht mehr mit dem Server." });
     } catch (err) {
       setNotice({ kind: "error", text: err instanceof ApiError ? err.message : String(err) });
     } finally {
@@ -41,7 +42,7 @@ export function KnownKeys({ host }: { host: HostOut }) {
       <NoticeLine notice={notice} />
       {keys.isError && <NoticeLine notice={{ kind: "error", text: "Die gemerkten Schlüssel konnten nicht geladen werden." }} />}
       {keys.data && keys.data.length === 0 && (
-        <p className="text-sm text-white/50">Noch kein Schlüssel gemerkt – das passiert bei der ersten Prüfung.</p>
+        <p className="text-sm text-white/50">Noch kein Schlüssel gemerkt. Unter „Verbindung prüfen“ siehst du den Fingerabdruck und kannst ihn bestätigen.</p>
       )}
       {keys.data && keys.data.length > 0 && (
         <ul className="divide-y divide-white/[0.06] rounded-lg border border-white/[0.08]">

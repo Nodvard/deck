@@ -20,6 +20,11 @@ import { authedFetch } from "../../../_shared/frontend/src/api";
 import { Badge, Button, Card, Icon, Notice, Stat, buttonClass, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
 
+/** Ältere Protokolleinträge tragen noch die eingefrorene Docker-Zeit ("... 4 seconds ago"). */
+function withoutRelativeTime(text: string): string {
+  return text.replace(/\s*(?:about\s+|less than\s+)?(?:an?|\d+)\s*(?:second|minute|hour|day|week|month|year)s? ago\b/gi, "");
+}
+
 interface Incident {
   id: string;
   host_name: string;
@@ -32,6 +37,8 @@ interface Incident {
   ai_summary: string | null;
   action_id: string | null;
   is_crash: boolean;
+  occurrences?: number;
+  last_seen?: number | null;
 }
 
 interface HistoryPage {
@@ -126,7 +133,7 @@ function AuditTrail({ incidentId }: { incidentId: string }): JSX.Element {
           <span className="opacity-50">{new Date(e.ts).toLocaleString()}</span>{" "}
           <span className="font-medium">{AUDIT_ACTION_LABELS[e.action] ?? e.action}</span>{" "}
           <span className="opacity-60">({OUTCOME_LABELS[e.outcome] ?? e.outcome})</span>
-          {e.reason && <span className="opacity-80"> -- {e.reason}</span>}
+          {e.reason && <span className="opacity-80"> -- {withoutRelativeTime(e.reason)}</span>}
         </li>
       ))}
     </ol>
@@ -315,6 +322,7 @@ export function ContainerWatch(): JSX.Element {
                     )}
                     <p className="mt-1.5 text-xs text-white/40">
                       {formatTimestamp(incident.created_at)}
+                      {(incident.occurrences ?? 1) > 1 ? ` · ${incident.occurrences}× aufgetreten, zuletzt ${formatTimestamp(incident.last_seen ?? incident.created_at)}` : ""}
                       {incident.status_changed_at ? ` · Status geändert ${formatTimestamp(incident.status_changed_at)}` : ""}
                     </p>
                   </div>

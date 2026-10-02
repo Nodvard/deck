@@ -6,9 +6,12 @@ import asyncio
 import shutil
 import subprocess
 import sys
+import time
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -16,6 +19,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "nex
 
 from nodvard_deck.core.deny_patterns import match_deny_patterns  # noqa: E402
 from nodvard_deck_ext_nexus_soc import updates as up  # noqa: E402
+
+BERLIN = ZoneInfo("Europe/Berlin")
+
+
+def _berlin(hour: int, minute: int = 0, day: int = 2) -> float:
+    """Unix-Zeit von `day`. Oktober 2026, `hour:minute` Uhr Berlin (Sommerzeit)."""
+    return datetime(2026, 10, day, hour, minute, tzinfo=BERLIN).timestamp()
+
+
+_BERLIN_0600 = _berlin(6)
 
 APT_STATUS = """@@pm
 apt
@@ -285,6 +298,10 @@ def test_parse_upgrade_output():
     assert ok.summary == "13 Paket(e) aktualisiert – Neustart nötig"
     bad = up.parse_upgrade_output("E: dpkg was interrupted, you must manually run 'dpkg --configure -a'\n@@upgrade-done\n", 100)
     assert not bad.ok and bad.summary.startswith("E: dpkg was interrupted")
+    # Protokoll und Meldungen bekommen keine Zeile vom Server: bei Erfolg derselbe Text, bei einem Fehler ein fester.
+    assert ok.public == ok.summary
+    assert bad.public == "Fehlgeschlagen (Rückgabecode 100). Einzelheiten stehen in der Update-Zentrale."
+    assert up.parse_upgrade_output("x", None).public == "Fehlgeschlagen. Einzelheiten stehen in der Update-Zentrale."
 
 
 def test_update_report_levels():
@@ -306,6 +323,16 @@ def test_update_report_levels():
     assert (title, body, level) == ("1 Update(s) offen", "- pve2: 1 Update(s)", "info")
     # Ein echter Fehler (z. B. Zeitüberschreitung) bleibt eine Warnung.
     assert build_update_report([(h2, {"manager": None, "error": "Zeitüberschreitung"})])[2] == "warning"
+    # Auch mit einem alten guten Stand (Paketmanager gesetzt) zählt eine fehlgeschlagene Prüfung als Fehler:
+    # ohne Zahlen, mit dem Zeitpunkt des Stands.
+    stale = {"manager": "apt", "count": 4, "security_count": 2, "error": "Verbindung abgelehnt", "checked_at": _BERLIN_0600}
+    title, body, level = build_update_report([(h2, stale)], zone=ZoneInfo("Europe/Berlin"))
+    assert (title, level) == ("Update-Prüfung: 1 Fehler", "warning")
+    assert body == "- Pi: Prüfung fehlgeschlagen (Verbindung abgelehnt), Stand von 02.10.2026 06:00"
+    title, body, _ = build_update_report([(h1, {"manager": "apt", "count": 1, "security_count": 0}), (h2, stale)], zone=ZoneInfo("Europe/Berlin"))
+    assert title == "1 Update(s) offen" and body.splitlines() == ["- pve2: 1 Update(s)", "- Pi: Prüfung fehlgeschlagen (Verbindung abgelehnt), Stand von 02.10.2026 06:00"]
+    assert build_update_report([(h2, {**stale, "checked_at": None})])[1] == "- Pi: Prüfung fehlgeschlagen (Verbindung abgelehnt)"
+    assert build_update_report([(h2, stale)])[1].endswith("Stand von 02.10.2026 04:00 UTC")  # ohne Zone: UTC, so beschriftet
 
 
 # --- Ablauf mit Fake-Kontext -------------------------------------------------------
@@ -348,7 +375,8 @@ class _Ctx:
         self.center = None
         self.busy_seen: list[dict] = []
         self._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2", tags=["auto-update"])
-        self.settings = SimpleNamespace(get=self._settings)
+        self.core_settings: dict[str, object] = {"system.timezone": "Europe/Berlin"}
+        self.settings = SimpleNamespace(get=self._settings, core=self._core_setting)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
         self.exec = SimpleNamespace(run=self._run)
         self.db = SimpleNamespace(session=self._session)
@@ -360,6 +388,10 @@ class _Ctx:
 
     async def _settings(self):
         return self._settings_value
+
+    async def _core_setting(self, key):
+        # Wie der Kern (`ext/context.py`, `SettingsHandle.core`): die gespeicherte Zeile `{"value": ...}`
+        return {"value": self.core_settings[key]} if key in self.core_settings else None
 
     async def _list(self, tag=None):
         return [self._host]
@@ -470,11 +502,34 @@ async def test_server_without_a_known_package_manager_is_unsupported_not_failed(
     center = UpdateCenter(ctx, Defender(ctx))
     [st] = await center.check([ctx._host])
     assert st["unsupported"] is True and st["manager"] is None
+    # "Kein Paketmanager" ist ein gueltiges Ergebnis: geprueft, nicht "noch nie erfolgreich geprueft"
+    assert isinstance(st["checked_at"], float) and st["attempted_at"] == st["checked_at"]
     summary = (await center.overview())["summary"]
     assert (summary["errors"], summary["checked"], summary["hosts"]) == (0, 0, 1)
 
     assert await center.auto_update() == {"hosts": 1, "failed": 0}
     assert ctx.notes == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_turns_out_to_have_no_known_package_manager_replaces_its_old_state():
+    """Der alte Stand (apt) bleibt nur bei einem Fehlschlag stehen. "Kein Paketmanager" ist keiner:
+    sonst zeigte die Karte ewig die Pakete eines Servers, auf dem es keinen Paketmanager mehr gibt."""
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    center = UpdateCenter(ctx, Defender(ctx))
+    assert (await center.check_host(ctx._host))["count"] == 3
+
+    async def nas(host, command, timeout_s=60):
+        return SimpleNamespace(exit_code=0, stdout="@@pm\nnone\n@@end\n", stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=nas)
+    st = await center.check_host(ctx._host)
+    assert st["unsupported"] is True and st["manager"] is None and st["count"] == 0 and st["checked_at"]
     await engine.dispose()
 
 
@@ -777,8 +832,414 @@ async def test_scheduled_check_report_of_a_single_server_belongs_to_that_host():
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_daily_report_keeps_naming_a_server_that_is_down_after_one_good_check(monkeypatch):
+    """Nach einer guten Pruefung blieb der Stand samt Paketmanager erhalten, der Tagesbericht zaehlte
+    einen Server nur ohne Paketmanager als fehlgeschlagen: ein dauerhaft nicht erreichbarer Server
+    stand nie mehr als Fehler da, sondern mit alten Zahlen oder als "Alle Server aktuell"."""
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter
+    from nodvard_sdk import Severity
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    center = UpdateCenter(ctx, Defender(ctx))
+    clock = _pin_clock(monkeypatch, _berlin(6, day=1))
+    await center.check_host(ctx._host)  # ein guter Lauf: 3 Updates, davon 2 Sicherheit
+
+    async def down(host, command, timeout_s=60):
+        raise ConnectionError("Server nicht erreichbar")
+
+    ctx.exec = SimpleNamespace(run=down)
+    for day in (2, 3, 4):  # drei Tage in Folge nicht erreichbar
+        clock["t"] = _berlin(6, day=day)
+        res = await center.scheduled_check()
+        note = ctx.notes[-1]
+        assert res["title"] == note.title == "Update-Prüfung: 1 Fehler"
+        assert note.severity == Severity.WARNING
+        assert note.body.startswith("- Raspberry Pi: Prüfung fehlgeschlagen (")
+        assert "Server nicht erreichbar" in note.body
+        assert note.body.endswith("), Stand von 01.10.2026 06:00")  # Zeit der letzten guten Pruefung, in der Zone des Dashboards
+        assert "Sicherheit" not in note.body  # die alten Zahlen zaehlen nicht mit
+    await engine.dispose()
+
+
 async def _hosts(*hosts):
     return list(hosts)
+
+
+# --- Tagespruefung: Erfolg und Versuch trennen, ausgebliebene Server nachholen --------------
+
+
+@pytest.mark.asyncio
+async def test_a_failed_check_keeps_the_time_of_the_last_success_and_names_the_attempt(monkeypatch):
+    """Frueher stand nach einem Fehlschlag "gerade geprueft" neben altem Stand: `checked_at` wurde bei
+    jedem Versuch ueberschrieben. Jetzt bleibt es der Zeitpunkt der letzten erfolgreichen Pruefung."""
+    from nodvard_deck_ext_nexus_soc import patching
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    center = UpdateCenter(ctx, Defender(ctx))
+    clock = {"t": 1_000_000.0}
+    monkeypatch.setattr("nodvard_deck_ext_nexus_soc.defender._now", lambda: datetime.fromtimestamp(clock["t"], UTC))
+
+    good = await center.check_host(ctx._host)
+    assert (good["checked_at"], good["attempted_at"], good["error"]) == (1_000_000.0, 1_000_000.0, None)
+
+    ok_run = ctx._run
+
+    async def down(host, command, timeout_s=60):
+        raise ConnectionError("Server nicht erreichbar")
+
+    ctx.exec = SimpleNamespace(run=down)
+    clock["t"] += 3 * 3600
+    failed = await center.check_host(ctx._host)
+    assert "Server nicht erreichbar" in failed["error"]
+    assert failed["checked_at"] == 1_000_000.0 and failed["attempted_at"] == 1_000_000.0 + 3 * 3600
+    assert failed["count"] == 3  # der letzte gute Stand bleibt sichtbar
+
+    # Auch ein zweiter Fehlschlag in Folge verliert den guten Stand nicht
+    clock["t"] += 3600
+    again = await center.check_host(ctx._host)
+    assert again["checked_at"] == 1_000_000.0 and again["attempted_at"] == 1_000_000.0 + 4 * 3600 and again["count"] == 3
+
+    ctx.exec = SimpleNamespace(run=ok_run)
+    clock["t"] += 3600
+    back = await center.check_host(ctx._host)
+    assert back["error"] is None and back["checked_at"] == back["attempted_at"] == 1_000_000.0 + 5 * 3600
+    # Der Versuch liegt nach dem zuletzt faelligen Zeitpunkt: nichts ausgeblieben
+    assert patching.check_overdue(back, back["attempted_at"] - 60) is False
+    assert patching.check_overdue(back, back["attempted_at"] + 60) is True
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_server_that_never_got_a_good_check_has_no_success_time():
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+
+    async def down(host, command, timeout_s=60):
+        raise ConnectionError("keine Verbindung")
+
+    ctx.exec = SimpleNamespace(run=down)
+    st = await UpdateCenter(ctx, Defender(ctx)).check_host(ctx._host)
+    assert st["checked_at"] is None and st["attempted_at"] and st["error"]
+    await engine.dispose()
+
+
+def test_check_overdue_compares_the_last_attempt_with_the_last_due_time():
+    from nodvard_deck_ext_nexus_soc.patching import check_overdue
+
+    due = 5_000_000.0
+    assert check_overdue(None, due) is False and check_overdue({}, due) is False
+    assert check_overdue({"checked_at": due + 60}, due) is False
+    assert check_overdue({"checked_at": due - 60}, due) is True
+    assert check_overdue({"checked_at": due - 60}, None) is False  # kein lesbarer Zeitplan
+    # Stand von vor dem Update kennt nur `checked_at`; ein juengerer Fehlversuch zaehlt als Versuch
+    assert check_overdue({"checked_at": due - 5 * 86400, "attempted_at": due + 60}, due) is False
+    assert check_overdue({"checked_at": due - 5 * 86400, "attempted_at": due - 60}, due) is True
+    assert check_overdue({"checked_at": None, "attempted_at": None}, due) is False
+
+
+def test_last_due_is_the_latest_scheduled_moment_in_the_schedule_zone():
+    from nodvard_deck_ext_nexus_soc.patching import last_due
+
+    assert last_due("0 6 * * *", _berlin(6, 5), BERLIN) == _berlin(6)
+    assert last_due("0 6 * * *", _berlin(6), BERLIN) == _berlin(6)  # genau zur Zeit: faellig
+    assert last_due("0 6 * * *", _berlin(5, 59), BERLIN) == _berlin(6, day=1)  # heute noch nicht dran: gestern
+    assert last_due("0 */6 * * *", _berlin(13), BERLIN) == _berlin(12)
+    assert last_due("15 4,16 * * *", _berlin(10), BERLIN) == _berlin(4, 15)
+    assert last_due("*/20 * * * *", _berlin(9, 50), BERLIN) == _berlin(9, 40)
+    assert last_due("10-30/10 5 * * *", _berlin(8), BERLIN) == _berlin(5, 30)
+    # Die Zone entscheidet: 06:00 Uhr in UTC ist eine andere Zeit als 06:00 Uhr in Berlin
+    assert last_due("0 6 * * *", _berlin(8, 5), ZoneInfo("UTC")) == datetime(2026, 10, 2, 6, tzinfo=UTC).timestamp()
+    # Ueber eine Zeitumstellung hinweg (Ende der Sommerzeit am 25.10.2026)
+    after = datetime(2026, 10, 26, 6, 5, tzinfo=BERLIN).timestamp()
+    assert last_due("0 6 * * *", after, BERLIN) == datetime(2026, 10, 26, 6, tzinfo=BERLIN).timestamp()
+    assert last_due("0 6 * * *", datetime(2026, 10, 26, 5, tzinfo=BERLIN).timestamp(), BERLIN) == datetime(2026, 10, 25, 6, tzinfo=BERLIN).timestamp()
+    for cron in ("0 6 * * 1", "0 6 1 * *", "kaputt", "61 6 * * *", "0 25 * * *", "0 6 * * * *", "0 */0 * * *", "a-b 6 * * *", "30-10 6 * * *", ""):
+        assert last_due(cron, _berlin(7), BERLIN) is None, cron
+
+
+@pytest.mark.asyncio
+async def test_schedule_zone_reads_the_zone_set_in_the_dashboard_through_the_real_core(db_session):
+    """Der Kern speichert Einstellungen als `{"value": ...}`, und `ctx.settings.core()` gibt genau das
+    zurueck. Die eingestellte Zone muss trotzdem ankommen, sonst rechnet die Pruefung in der
+    Vorgabe-Zone statt in der Zone, in der der Zeitplaner laeuft."""
+    from nodvard_deck.core import timezone as tz_service
+    from nodvard_deck.ext.context import SettingsHandle
+    from nodvard_deck_ext_nexus_soc.patching import schedule_zone
+
+    ctx = SimpleNamespace(settings=SettingsHandle(None, "nexus-soc"))
+    assert await schedule_zone(ctx) == ZoneInfo("Europe/Berlin")  # nichts eingestellt: Vorgabe
+    await tz_service.set_timezone(db_session, "Asia/Tokyo")
+    assert await ctx.settings.core("system.timezone") == {"value": "Asia/Tokyo"}
+    assert await schedule_zone(ctx) == ZoneInfo("Asia/Tokyo")
+
+
+@pytest.mark.asyncio
+async def test_schedule_zone_prefers_the_core_setting_and_skips_unknown_names(monkeypatch):
+    from nodvard_deck_ext_nexus_soc.patching import DEFAULT_ZONE, schedule_zone
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    for name in ("NODVARD_DECK_TIMEZONE", "LATTICE_TIMEZONE", "TZ"):
+        monkeypatch.delenv(name, raising=False)
+    assert await schedule_zone(ctx) == ZoneInfo("Europe/Berlin")
+    ctx.core_settings["system.timezone"] = "Asia/Tokyo"
+    assert await schedule_zone(ctx) == ZoneInfo("Asia/Tokyo")
+    # Nichts oder Unbrauchbares gespeichert: Umgebung, zuletzt die Vorgabe des Kerns
+    ctx.core_settings["system.timezone"] = "Mars/Base"
+    monkeypatch.setenv("TZ", "America/New_York")
+    assert await schedule_zone(ctx) == ZoneInfo("America/New_York")
+    monkeypatch.setenv("NODVARD_DECK_TIMEZONE", "Europe/Lisbon")
+    assert await schedule_zone(ctx) == ZoneInfo("Europe/Lisbon")
+    monkeypatch.setenv("NODVARD_DECK_TIMEZONE", "unsinn")
+    monkeypatch.setenv("TZ", "auch/unsinn")
+    assert await schedule_zone(ctx) == ZoneInfo(DEFAULT_ZONE)
+    ctx.settings = SimpleNamespace(get=ctx._settings)  # alter Kern ohne `core`
+    assert await schedule_zone(ctx) == ZoneInfo(DEFAULT_ZONE)
+    await engine.dispose()
+
+
+def _pin_clock(monkeypatch, t: float) -> dict[str, float]:
+    clock = {"t": t}
+    monkeypatch.setattr("nodvard_deck_ext_nexus_soc.defender._now", lambda: datetime.fromtimestamp(clock["t"], UTC))
+    return clock
+
+
+@pytest.mark.asyncio
+async def test_overview_flags_a_server_whose_daily_check_did_not_happen(monkeypatch):
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter, save_baseline
+    from nodvard_sdk import Host
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3")
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
+    center = UpdateCenter(ctx, Defender(ctx))
+    clock = _pin_clock(monkeypatch, _berlin(6, 30))
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 0, "security_count": 0, "checked_at": _berlin(6, 1), "attempted_at": _berlin(6, 1)})
+    await save_baseline(ctx, "h2", "updates", {"manager": "apt", "count": 0, "security_count": 0, "checked_at": _berlin(6, 1, day=1)})
+
+    async def flags():
+        return {r["host_id"]: r["check_overdue"] for r in (await center.overview())["hosts"]}
+
+    assert await flags() == {"h1": False, "h2": True}
+
+    # Direkt nach dem Zeitpunkt laeuft die Tagespruefung noch: noch kein Hinweis
+    clock["t"] = _berlin(6, 5)
+    assert await flags() == {"h1": False, "h2": False}
+    # Ein Server, der gerade geprueft wird, bekommt keinen Hinweis
+    clock["t"] = _berlin(6, 30)
+    center._checking.add("h2")
+    assert await flags() == {"h1": False, "h2": False}
+    center._checking.discard("h2")
+
+    # Ein Versuch heute nach dem Zeitpunkt (auch ein fehlgeschlagener) genuegt
+    await save_baseline(ctx, "h2", "updates", {"manager": "apt", "count": 0, "checked_at": _berlin(6, 1, day=1), "attempted_at": _berlin(6, 2), "error": "weg"})
+    assert await flags() == {"h1": False, "h2": False}
+    await save_baseline(ctx, "h2", "updates", {"manager": "apt", "count": 0, "checked_at": _berlin(6, 1, day=1)})
+
+    # Ausgeschaltete oder nur woechentliche Pruefung: ein alter Stand ist gewollt, kein Hinweis
+    for settings in ({"updates_check_enabled": False}, {"updates_check_cron": "0 6 * * 0"}):
+        ctx._settings_value = settings
+        assert await flags() == {"h1": False, "h2": False}, settings
+    ctx._settings_value = {"updates_check_cron": "0 */6 * * *"}  # der letzte Zeitpunkt war 06:00 Uhr
+    assert await flags() == {"h1": False, "h2": True}
+    clock["t"] = _berlin(12, 30)  # 12:00 Uhr verpasst: auch h1 (letzter Versuch 06:01 Uhr)
+    assert await flags() == {"h1": True, "h2": True}
+    await engine.dispose()
+
+
+def test_overdue_applies_only_to_an_enabled_daily_or_more_frequent_check():
+    from nodvard_deck_ext_nexus_soc.patching import overdue_applies
+
+    assert overdue_applies({}) and overdue_applies({"updates_check_cron": "15 4 * * *"})
+    assert overdue_applies({"updates_check_cron": "0 */6 * * *"})
+    assert not overdue_applies({"updates_check_enabled": False})
+    assert not overdue_applies({"updates_check_cron": "0 6 * * 1"}) and not overdue_applies({"updates_check_cron": "0 6 1 * *"})
+    assert not overdue_applies({"updates_check_cron": "kaputt"})
+
+
+@pytest.mark.asyncio
+async def test_one_server_failing_inside_the_check_does_not_stop_the_others(monkeypatch):
+    """Ein Fehler beim Speichern eines Servers (nicht bei der SSH-Abfrage) brach frueher die ganze
+    Sammelpruefung samt Tagesbericht ab."""
+    from nodvard_deck_ext_nexus_soc import patching
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter
+    from nodvard_sdk import Host
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3")
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
+    real_save = patching.save_baseline
+
+    async def flaky(c, host_id, kind, data):
+        if host_id == "h2":
+            raise RuntimeError("Datenbank gesperrt")
+        await real_save(c, host_id, kind, data)
+
+    monkeypatch.setattr(patching, "save_baseline", flaky)
+    center = UpdateCenter(ctx, Defender(ctx))
+    res = await center.scheduled_check()
+    assert res["hosts"] == 2
+    body = ctx.notes[-1].body
+    assert "- Raspberry Pi: 3 Update(s), davon 2 Sicherheit" in body
+    assert "- pve2: Prüfung fehlgeschlagen" in body and "Datenbank gesperrt" in body
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_after_a_start_the_missed_daily_check_is_made_up_for(monkeypatch):
+    """Der Zeitplaner holt einen verpassten Lauf nicht nach (Dashboard lief um 06:00 nicht): Server mit
+    ausgebliebener Pruefung werden kurz nach dem Start nachgeholt, frische nicht."""
+    from nodvard_deck_ext_nexus_soc import patching
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter, save_baseline
+    from nodvard_sdk import Host
+
+    monkeypatch.setattr(patching, "CATCH_UP_DELAY_S", 0)
+    clock = _pin_clock(monkeypatch, _berlin(9))
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3")
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
+    old = _berlin(6, 1, day=1)  # gestern, kurz nach der Pruefzeit
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 0, "checked_at": old})
+    await save_baseline(ctx, "h2", "updates", {"manager": "apt", "count": 0, "checked_at": _berlin(6, 1), "attempted_at": _berlin(6, 1)})
+    center = UpdateCenter(ctx, Defender(ctx))
+
+    center.schedule_catch_up()
+    center.schedule_catch_up()  # doppelt aufgerufen (Start und Einstellungsaenderung): nur ein Lauf
+    await center._catch_up
+    assert sum("@@pm" in c for c in ctx.commands) == 1  # nur h1
+    assert (await patching.load_baseline(ctx, "h1", "updates"))["checked_at"] == clock["t"] > old
+    assert (await patching.load_baseline(ctx, "h2", "updates"))["count"] == 0
+
+    # Mit ausgeschalteter Tagespruefung wird nichts nachgeholt
+    ctx.commands.clear()
+    ctx._settings_value = {"updates_check_enabled": False}
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 0, "checked_at": old})
+    center.schedule_catch_up()
+    await center._catch_up
+    assert ctx.commands == []
+
+    # Woechentlicher Zeitplan: nach einem Tag ist nichts ausgeblieben
+    ctx._settings_value = {"updates_check_cron": "0 6 * * 0"}
+    center.schedule_catch_up()
+    await center._catch_up
+    assert ctx.commands == []
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("start", "attempt", "expect_catch_up"), [
+    # Dashboard um 06:00 kurz aus, Start um 06:05: der Versuch von gestern (06:02) liegt vor dem Zeitpunkt von heute
+    (_berlin(6, 5), _berlin(6, 2, day=1), True),
+    # Auch ein langsamer gestriger Lauf (fertig erst 06:04) aendert daran nichts
+    (_berlin(6, 1), _berlin(6, 4, day=1), True),
+    # Start vor der Pruefzeit: heute ist noch nichts faellig
+    (_berlin(5, 30), _berlin(6, 2, day=1), False),
+    # Heute schon geprueft (Start nach der Pruefzeit, Lauf lief)
+    (_berlin(6, 5), _berlin(6, 1), False),
+    # Gestern Abend von Hand geprueft, um 06:00 nichts: ausgeblieben
+    (_berlin(9), _berlin(21, day=1), True),
+])
+async def test_catch_up_follows_the_schedule_not_a_fixed_age(monkeypatch, start, attempt, expect_catch_up):
+    """Eine feste Altersgrenze (frueher 30 Stunden) holte im Hauptfall nichts nach: der Versuch von
+    gestern ist beim Start knapp 24 Stunden alt."""
+    from nodvard_deck_ext_nexus_soc import patching
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter, save_baseline
+
+    monkeypatch.setattr(patching, "CATCH_UP_DELAY_S", 0)
+    _pin_clock(monkeypatch, start)
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)  # Zeitplan der Tagespruefung: Vorgabe, 06:00 Uhr in der Zone des Dashboards
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 0, "checked_at": attempt, "attempted_at": attempt})
+    center = UpdateCenter(ctx, Defender(ctx))
+    center.schedule_catch_up()
+    await center._catch_up
+    assert sum("@@pm" in c for c in ctx.commands) == (1 if expect_catch_up else 0)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_catch_up_leaves_servers_alone_that_the_running_daily_check_still_has_to_do(monkeypatch):
+    """Laeuft die Tagespruefung gerade (z. B. Einstellung kurz nach 06:00 Uhr geaendert), warten Server
+    noch auf ihre Reihe -- ihr letzter Versuch liegt vor dem Zeitpunkt. Das Nachholen darf sie nicht
+    parallel ein zweites Mal pruefen, und die Seite meldet sie nicht als ausgeblieben."""
+    from nodvard_deck_ext_nexus_soc import patching
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter, save_baseline
+    from nodvard_sdk import Host
+
+    monkeypatch.setattr(patching, "CATCH_UP_DELAY_S", 0)
+    monkeypatch.setattr(patching, "MAX_PARALLEL", 1)
+    clock = _pin_clock(monkeypatch, _berlin(6, 1))
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3")
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
+    for host_id in ("h1", "h2"):
+        await save_baseline(ctx, host_id, "updates", {"manager": "apt", "count": 0, "checked_at": _berlin(6, 1, day=1), "attempted_at": _berlin(6, 1, day=1)})
+    center = UpdateCenter(ctx, Defender(ctx))
+    gate, seen, plain = asyncio.Event(), [], ctx._run
+
+    async def slow(host, command, timeout_s=60):
+        if "@@pm" in command:
+            seen.append(host.id)
+            if host.id == "h1":
+                await gate.wait()
+        return await plain(host, command, timeout_s)
+
+    ctx.exec = SimpleNamespace(run=slow)
+    daily = asyncio.ensure_future(center.scheduled_check())
+    for _ in range(50):
+        if seen:
+            break
+        await asyncio.sleep(0)
+    assert seen == ["h1"]  # h2 wartet auf seine Reihe
+
+    clock["t"] = _berlin(6, 30)  # ein langsamer Lauf, laenger als die Schonfrist der Seite
+    assert {r["host_id"]: r["check_overdue"] for r in (await center.overview())["hosts"]} == {"h1": False, "h2": False}
+    center.schedule_catch_up()
+    await center._catch_up
+    assert seen == ["h1"]
+    gate.set()
+    await daily
+    assert seen == ["h1", "h2"]  # jeder Server genau einmal
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_stopping_the_extension_cancels_a_pending_catch_up(monkeypatch):
+    from nodvard_deck_ext_nexus_soc import patching
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter, save_baseline
+
+    monkeypatch.setattr(patching, "CATCH_UP_DELAY_S", 0.05)
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    await save_baseline(ctx, "h1", "updates", {"manager": "apt", "count": 0, "checked_at": time.time() - 3 * 86400})
+    center = UpdateCenter(ctx, Defender(ctx))
+    center.schedule_catch_up()
+    center.cancel_catch_up()
+    await asyncio.sleep(0.1)
+    assert center._catch_up.cancelled() and ctx.commands == []
+    center.cancel_catch_up()  # zweimal ist harmlos
+    await engine.dispose()
+
+
 
 
 # --- Updates laufen entkoppelt auf dem Server ------------------------------
@@ -1199,4 +1660,115 @@ async def test_resume_without_a_run_on_the_server_or_without_the_server_marks_it
     assert await center.abort_interrupted_runs() == 1
     runs = {r.id: r for r in await _runs(ctx)}
     assert runs["upd_3333333333333333"].status == "error"
+    await engine.dispose()
+
+
+# --- Zeilen vom Server stehen nur im Ergebnis der Aktion --------------------------
+
+SERVER_LINE = "E: Unable to locate package GEHEIM-AUS-DER-AUSGABE"
+POLL_FAILED = f"@@rc=100\n@@summary\n@@tail\n{SERVER_LINE}\n@@upgrade-done\n"
+PUBLIC_FAILURE = "Fehlgeschlagen (Rückgabecode 100). Einzelheiten stehen in der Update-Zentrale."
+
+
+def _nothing_from_the_server(ctx, secret="GEHEIM-AUS-DER-AUSGABE"):
+    """Protokoll (Audit) und Meldungen (Push) tragen keine Zeile vom Server."""
+    for row in ctx.audits:
+        assert secret not in (row["reason"] or "") and secret not in str(row["detail"])
+    for note in ctx.notes:
+        assert secret not in note.title and secret not in note.body
+
+
+@pytest.mark.asyncio
+async def test_a_failed_update_keeps_the_server_line_in_the_result_but_not_in_the_log():
+    engine, ctx, center = await _center()
+    ctx.polls = [POLL_FAILED]
+    ok, summary, out, rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
+    assert (ok, rc) == (False, 100)
+    assert summary == SERVER_LINE and "GEHEIM-AUS-DER-AUSGABE" in out, "das Ergebnis der Aktion bleibt vollstaendig"
+    [row] = ctx.audits
+    assert row["outcome"] == "failure" and row["reason"] == f"Alle Updates auf Raspberry Pi: {PUBLIC_FAILURE}"
+    _nothing_from_the_server(ctx)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_start_error_line_is_not_written_to_the_log():
+    engine, ctx, center = await _center()
+    ctx.launch_reply = "@@launch\nmkdir: cannot create directory '/var/lib/nexus-updates': GEHEIM-AUS-DER-AUSGABE\n@@nopid\n"
+    ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
+    assert not ok and "GEHEIM-AUS-DER-AUSGABE" in summary
+    assert ctx.audits[-1]["reason"] == (
+        "Alle Updates auf Raspberry Pi: Update-Lauf konnte nicht gestartet werden. Einzelheiten stehen in der Update-Zentrale."
+    )
+    _nothing_from_the_server(ctx)
+    await engine.dispose()
+
+
+class _FailingReboot(_Ctx):
+    async def _run(self, host, command, timeout_s=60):
+        if "shutdown -r" in command:
+            self.commands.append(command)
+            return SimpleNamespace(exit_code=1, stdout="Failed to connect to bus: GEHEIM-AUS-DER-AUSGABE", stderr="", duration_ms=5)
+        return await super()._run(host, command, timeout_s)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_reboot_keeps_the_server_line_in_the_result_but_not_in_the_log():
+    engine, ctx, center = await _center(_FailingReboot)
+    ok, summary, _out, rc = await center.execute(ctx._host, "reboot", command=up.REBOOT_COMMAND, trigger="manual")
+    assert (ok, rc) == (False, 1) and "GEHEIM-AUS-DER-AUSGABE" in summary
+    assert ctx.audits[-1]["reason"] == "Neustart auf Raspberry Pi: Neustart fehlgeschlagen. Einzelheiten stehen in der Update-Zentrale."
+    _nothing_from_the_server(ctx)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_reported_after_a_dashboard_restart_names_no_server_line():
+    engine, ctx, center = await _center()
+    rid = "upd_0123456789abcdef"
+    await _add_running(ctx, rid, remote_id=rid)
+    ctx.polls = [POLL_FAILED]
+    assert await center.resume_interrupted() == 1
+    [note] = ctx.notes
+    assert note.title == "Sicherheitsupdates auf Raspberry Pi: fehlgeschlagen"
+    assert note.body == f"{PUBLIC_FAILURE}\nDas Dashboard wurde währenddessen neu gestartet."
+    _nothing_from_the_server(ctx)
+    [run] = await _runs(ctx)
+    assert run.summary == SERVER_LINE, "die Update-Zentrale selbst zeigt den Lauf weiter vollstaendig"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_failure_found_after_the_wait_limit_names_no_server_line(monkeypatch):
+    from nodvard_deck_ext_nexus_soc import patching
+
+    monkeypatch.setattr(patching, "UPGRADE_TIMEOUT", 0)
+    monkeypatch.setattr(patching, "LATE_FOLLOW_S", 3600)
+    engine, ctx, center = await _center()
+    ctx.center = center
+    ctx.polls = [POLL_RUNNING, POLL_RUNNING, POLL_FAILED]
+    ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
+    assert not ok and "noch weiterlaufen" in summary
+    await asyncio.gather(*center._late)
+    [note] = ctx.notes
+    assert note.title == "Alle Updates auf Raspberry Pi: fehlgeschlagen"
+    assert note.body == f"{PUBLIC_FAILURE}\nDer Lauf hat länger gedauert, als das Dashboard gewartet hat."
+    _nothing_from_the_server(ctx)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_the_automatic_run_reports_a_failure_without_the_server_line():
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update"})
+    center = UpdateCenter(ctx, Defender(ctx))
+    ctx.polls = [POLL_RUNNING, POLL_FAILED]
+    assert await center.auto_update() == {"hosts": 1, "failed": 1}
+    [note] = ctx.notes
+    assert note.title == "Automatische Updates: 1 Server, 1 Fehler"
+    assert note.body == f"- Raspberry Pi: FEHLGESCHLAGEN – {PUBLIC_FAILURE}"
+    _nothing_from_the_server(ctx)
     await engine.dispose()

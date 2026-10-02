@@ -84,7 +84,9 @@ core brings the SDK along anyway).
 **`category` and `sort_order` (optional):** The setup wizard shows the installed modules as tiles,
 grouped by `category` (known: `servers`, `security`, `tools`, `connections`, `example`; anything
 else, and a missing value, ends up under "More modules" („Weitere Module“)) and, within the group,
-by `sort_order` (smaller = further up; on a tie, by name). The values are also in `GET /extensions`.
+by `sort_order` (smaller = further up; on a tie, by name). The values are also in `GET /extensions`. Modules with
+`example` (examples for developers such as hello-world) are not shown in the wizard; they only appear under
+Settings → Extensions („Einstellungen → Erweiterungen“).
 
 **`enable_on` (optional):** Occasions on which the core switches the extension on by itself, so that
 beginners do not first have to look for it in the settings. Known is `host_credential` (a server has
@@ -109,7 +111,7 @@ and `pattern`. In addition, these additions (all optional; unknown ones are igno
 | Addition | Where | Effect |
 |---|---|---|
 | `x-advanced` | field | Appears under "Advanced" („Erweitert“), collapsed. |
-| `x-hidden` | field | Is not displayed (internal state). |
+| `x-hidden` | field | Is not displayed (internal state). At the top level, `PUT /extensions/{id}/settings` ignores the field; it belongs to the extension's own routes (`ctx.settings.set()`). |
 | `x-item-title` | list of objects | What an entry is called ("Add server" – „Server hinzufügen“). |
 | `x-enum-labels` | field with `enum` | Readable texts per value: `{"all": "Alle Updates"}` ("All updates"). |
 | `x-widget: "schedule"` | text (cron) | Schedule picker instead of a cron field. |
@@ -121,7 +123,15 @@ and `pattern`. In addition, these additions (all optional; unknown ones are igno
 | `pattern` | text, words of a list | Regular expression (as in JSON Schema, not anchored). The interface shows the message at the field and disables "Save"; the backend checks the same (`422`). Empty values are always allowed. |
 | `x-pattern-message` | next to `pattern` | German message when the pattern does not match (default: "Das Format stimmt nicht.", i.e. "The format is not correct."). |
 | `x-test-message` | top level | `true` if the extension provides a `NotificationChannel`: the connection card shows "Send test message" („Testnachricht senden“). |
-| `x-secrets` | top level | List of the secrets (vault labels): `{"label": "proxmox-token:{name}", "title": "…", "description": "…", "per_item": "connections", "optional": true}`. `per_item` creates one secret per entry of the named list (via its `name`). `optional: true`: the extension also works without it; if a non-optional secret or a `required` field is missing, `GET /extensions` reports `needs_setup`. |
+| `x-secrets` | top level | List of the secrets (vault labels): `{"label": "proxmox-token:{name}", "title": "…", "description": "…", "per_item": "connections", "optional": true}`. `per_item` creates one secret per entry of the named list (via its `name`); if an entry disappears or is renamed when saving via `PUT /extensions/{id}/settings`, the core deletes its secret, and a newly created entry starts without one (an old secret under the same name is deleted). `optional: true`: the extension also works without it; if a non-optional secret or a `required` field is missing, `GET /extensions` reports `needs_setup`. |
+| `x-secret-bound-to` | entry in `x-secrets` | Fields the secret is bound to: with `per_item`, field names of the entry (`["base_url"]`), otherwise paths like `pihole.url`. If one of them changes via `PUT /extensions/{id}/settings`, the core deletes the secret (response `secrets_cleared`, audit log `detail.secrets_cleared`), also for the first address (empty → value); without a stored value, the field's `default` counts. Other spellings of the same address are not a change: upper/lower case of scheme and host name, default port (`:80` for http, `:443` for https), trailing `/`, fragment (`#…`), missing scheme (= `http://`). A different path or query (`?…`) counts as a change. `PUT /extensions/{id}/secrets` only accepts the secret once one of the fields has a stored value or `default`, otherwise `409` („Erst die Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“, i.e. "First enter the address and save the settings, then store the credentials."). |
+
+**Own routes for connections.** If an extension saves settings itself (`ctx.settings.set()`, e.g. via
+its own `/connections` routes), the core deletes no secrets. The extension then calls
+`ctx.secrets.delete(label)` itself when a connection is created or removed or its address changes.
+For the comparison there is `nodvard_sdk.same_target(old, new)` (`True` = same target, by the same
+rules as for `x-secret-bound-to`; the interface computes the same in
+`frontend/src/lib/targetAddress.ts`). Proxmox VE and Backups do it this way.
 
 **Testing the connection.** Every extension with settings gets the button "Test connection"
 („Verbindung testen“) in the interface (`POST /extensions/{id}/test`). For this, the core calls the
@@ -171,29 +181,73 @@ permission-checked and writes to the audit log where needed.
 
 | Handle | Purpose | Permission |
 |---|---|---|
-| `ctx.api` | `include_router(r)` → `/api/v1/ext/<id>/…` | — |
+| `ctx.api` | `include_router(r, permission=…, public=…)` → `/api/v1/ext/<id>/…`, without further arguments only with a login (see "Routes and login" below). If a route does not catch `HostUnreachable` or an SSH error itself, the core answers `502` with the reason in `detail` (not `500`, no traceback in the container log) | —; `public=True`: `api.public` |
 | `ctx.ui` | `register_page()`, `register_widget()`, `register_nav()` | — |
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protocol_instance)` | per protocol |
-| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` | `hosts.execute` and others |
+| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optionally with `standing_approval`, see section 3), `check_standing_approval(granted_by_user_id, risk=…)` (would a standing approval by this person still apply today? `None` = yes, otherwise the reason) | `hosts.execute` and others; standing approval: `actions.standing_approval` |
 | `ctx.hosts` | `list()`, `get()`, `upsert_discovered()` | `hosts.read` / `hosts.write` |
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (live output, e.g. live logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
-| `ctx.secrets` | `get_handle(label)`, `create()` | `secrets.read:<label>` |
+| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it) | `secrets.read:<label>` |
 | `ctx.vault_use` | context manager that materializes a value in memory only | same |
 | `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables | — |
 | `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
 | `ctx.scheduler` | `register_job(JobSpec)` | `schedule.register` |
 | `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
-| `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`) – with `raise_on_failure=True` it raises `NotificationNotDelivered` if there were channels and none delivered (for "try again"); `would_suppress(host_id=…, host_ids=…)` only asks whether a maintenance window would currently silence a notification (see below) | `notify.send` |
+| `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – with `raise_on_failure=True` it raises `NotificationNotDelivered` if there were channels and none delivered (for "try again"); `would_suppress(host_id=…, host_ids=…)` only asks whether a maintenance window would currently silence a notification (see below) | `notify.send` |
 | `ctx.audit` | `log(entry)` | `audit.write` |
-| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)` | `net.outbound:<cidr>` |
+| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` do not follow them by default either | `net.outbound:<cidr>` |
 | `ctx.ws` | `broadcast(channel, payload)` on `ext.<id>.*` | — |
 | `ctx.spawn` | supervised background task with restart policy | — |
 | `ctx.logger` | structured logger, pre-tagged with the extension ID | — |
+| `ctx.data_dir` | the extension's own writable folder (in the image `/app/data/ext/<id>/`). Files belong here: the code in the image belongs to root and is read-only, including the extension's own package folder. New files are readable only by the user `lattice` | — |
 
 Deliberately not available on the context: direct access to core tables, the `asyncio`
 loop object, other extensions (only via `ctx.events` and declared `requires` +
 `ctx.capabilities.query()`).
+
+### Routes and login
+
+`ctx.api.include_router(router, prefix=…, permission=…, public=…)` mounts a FastAPI router under
+`/api/v1/ext/<id><prefix>`. The check applies to **all** routes of that router:
+
+| Call | Who gets through |
+|---|---|
+| `include_router(r)` | any logged-in account, no particular permission needed (`401` without a token) |
+| `include_router(r, permission="hosts.read")` | logged in **and** holding this permission (`401` without a token, `403` without the permission) |
+| `include_router(r, public=True)` | anyone, even without logging in; needs `api.public` in the manifest |
+
+**A login is not a permission.** Without `permission=`, any logged-in account gets through, whatever
+its role. Routes that show data or change something therefore set `permission=` or check for
+themselves. A route without `permission=` used to have no check at all; if you deliberately offer an
+address without login (e.g. for a webhook), switch to `public=True`.
+
+**`public=True`** only works with the permission `api.public` in the manifest; otherwise the call
+raises `PermissionDenied` and the extension ends up in the error state. Combined with `permission=`
+it is an error as well (`InvalidRegistration`). When the extension is enabled, the public addresses
+(`/api/v1/ext/<id><prefix>`) go into the audit log, in `detail.public_routes` of `extension.enabled`
+or `extension.auto_enabled`; a warning also appears in the log.
+
+**Limits of the check.** It only works for normal FastAPI routes (`@router.get` etc.). WebSocket
+routes, `router.add_route()` and `router.mount()` (e.g. `StaticFiles`) are rejected by the core
+without `public=True` (`InvalidRegistration`), and the extension cannot be enabled. With
+`public=True` the extension secures them itself. The check runs after `setup()` and after
+`on_start()`; if `on_start()` adds such routes, the core takes the extension out again. Anything
+attached to an already mounted router later at runtime (for example from a background task) is no
+longer seen by the core: such routes must secure themselves.
+
+**Request size.** The core accepts at most 1 MiB on every route (`NODVARD_DECK_MAX_BODY_BYTES`) and answers anything
+larger with `413` ([API, section 1](../04-API.md#1-konventionen), in German). A route that deliberately accepts larger
+uploads declares this with `nodvard_sdk.max_body_bytes(limit)`: `@router.post(...)` outermost, `@max_body_bytes(...)`
+directly above the function. `limit` is an upper bound in bytes, or a function without arguments that returns it on
+every request (for configurable limits). The core checks the `Content-Length` and counts along for requests without a
+length. The declaration only raises the limit; it cannot lower it below the general limit. The route should still read
+its data as a stream or keep its own checks. Among the bundled extensions, `documents` (20 MB per document) and
+`inventory` (5 MB per image) use it.
+
+Pages in the frontend bundle send the token along for these routes (`Authorization: Bearer …` with
+the token from `window.__nodvardDeck.getAccessToken()`, like `HelloPage.tsx` in hello-world; the
+other bundled extensions use `authedFetch`, see section 5).
 
 ### Notifications and maintenance windows
 
@@ -203,10 +257,13 @@ is silenced by a maintenance window: it appears in the history but goes to no ch
 (see [Data model, section 9](../03-DATA-MODEL.md#9-einstellungen-und-branding), in
 German). Without a host reference a notification is never silent.
 
-- `send()` returns `NotifyResult(notification_id, suppressed)`. `suppressed=True`
-  means: history only, no push. Older cores and test doubles return `None` –
-  extensions treat that like `suppressed=False` (e.g.
-  `getattr(result, "suppressed", False) is True`). If you do not need the return value,
+- `send()` returns `NotifyResult(notification_id, suppressed, delivered)`. `suppressed=True`
+  means: history only, no push. `delivered=True` means: at least one channel delivered the
+  notification; `False`: none did – no channel is set up, all of them failed, or a
+  maintenance window suppressed the push; `None`: unknown (older cores). Older cores and
+  test doubles return `None` instead of `NotifyResult` – extensions treat that like
+  `suppressed=False` and `delivered=None` (e.g. `getattr(result, "suppressed", False) is True`,
+  `getattr(result, "delivered", None)`). If you do not need the return value,
   nothing changes for you.
 - `would_suppress(host_id=None, host_ids=None) -> bool` checks the same rule but creates
   nothing. As in `send()`, a single string passed as `host_ids` counts as a broken list
@@ -305,6 +362,44 @@ TrueNAS**:
 
 Adding a new source means: registering one object. No core code changes.
 
+`open_write` should replace the target only once everything has arrived and never truncate it up front: otherwise
+an abort would lose the old content, and if source and target are the same file, writing would truncate the source
+itself (`files-sftp` therefore writes, where possible, to a temp file in the target folder and renames it
+afterwards).
+
+Optional, deliberately **not** a required member of the protocol: `async file_identity(path) -> dict | None`. With
+it the core detects before a transfer whether source and target are the same file (link, `..` detour, second entry
+for the same machine), and `/files/transfer` then answers `409`. Return value: `path` (the resolved, absolute path)
+and, as far as known, `size`, `mtime`, `uid`, `gid`, `mode` plus `machine` (a fixed ID of the machine, e.g.
+`/etc/machine-id`); `None` if the file does not exist or the source cannot determine it. An exception or a return
+value that is not a `dict` counts as `None`. Within the same source, `path` decides. Across two sources, two
+different `machine` IDs are always two files; otherwise, besides `path`, all five values must be present and match
+(cloned machines often share the same ID). Without `file_identity` the core only recognizes the same path within
+the same source. The core reads it with `getattr(source, "file_identity", None)`; older sources without the method
+stay valid.
+
+**Sources with their own permission:** Optionally, a source names `required_permission: str | None`
+(if the attribute is missing, `None` applies). The core then shows and opens it only for users who
+hold that permission themselves; `files.read`/`files.write` alone are not enough. This is meant for
+sources that work with someone else's credentials: the SSH sources of the terminal extension require
+`hosts.execute`, because access runs with the server's login (often root), not with the user's
+account. Downloads, searches, writes, copies and denied attempts on such sources are recorded in the
+audit log ([API, section 3](../04-API.md#dateien), in German). The attribute is deliberately not a
+member of the protocol (otherwise `@runtime_checkable` would reject older sources without it); the
+core reads it with `getattr`. If the value is not a string or is empty, only the owner and `admin`
+can see and open the source.
+
+**Errors of a source:** A source does not have to translate its errors itself. The core answers `404` for a
+`FileNotFoundError` and `502` with `Zugriff auf die Quelle fehlgeschlagen: <Grund>` (access to the source failed:
+reason) for any other exception ([API, section 3](../04-API.md#dateien), in German). Network errors (timeout, connection
+refused or lost, unknown name, no route to the server) become a German sentence, from any other `OSError` only the
+exception's name gets through (its text can contain paths), otherwise its text. If the text of an exception of your
+own is already a finished sentence for the interface, the source sets `readable = True` on the class (like
+`WebDavError` of the Nextcloud source): a non-empty text then arrives unchanged, and the case counts as expected, like
+a network error (no traceback in the container log). Like `required_permission`, the attribute is not a member of the
+protocol; the core reads it with `getattr`. The same applies to exceptions from `TerminalTarget.open()`; there the
+reason appears in the terminal's error message ([API, section 4](../04-API.md#4-websocket), in German).
+
 ### Example: `ActionExecutor` — the interface Nodvard Shield and the script repository are built on
 
 ```python
@@ -340,6 +435,47 @@ By default `propose()` waits until it has finished — right for background jobs
 the result. An HTTP route passes `wait_s=REQUEST_WAIT_S` (20 s, from `nodvard_sdk`); if
 the action is not finished by then, `status = executing` is returned, and the page points
 to Actions („Aktionen“).
+
+`ctx.actions.result(action_id)` and `ctx.actions.list(correlation_id=…, limit=…)` return only
+the extension's own actions, but with the full `result` and the full `payload`, i.e. including the
+command as well as output and error text from the server. The core does not check who calls the route
+here (its own API shows output and error text only with `hosts.execute`, the full `payload` only with
+`hosts.execute` or the matching `actions.approve:<risk>`; see [API, „Aktionen“](../04-API.md#aktionen--der-bestätigungs-workflow),
+in German). A route that shows them must therefore require `hosts.execute` itself, e.g. with
+`ctx.api.include_router(router, permission="hosts.execute")` like the scripts extension. From the
+result, the core puts no text from the server into the audit log (`action.executed`), only
+success, exit code, duration and the length of output and error text (plus a fixed sentence when
+the gate sets the reason itself). In `detail` of your own entries (`ctx.audit.log`) the core
+empties the fields `output`, `stdout`, `stderr` and `command` for readers without `hosts.execute`,
+but not `reason` or any other field – so text from the server belongs neither in `reason` nor in
+other fields of `detail`, nor in notifications, and a command only in `detail.command` (users who
+may only read see notifications as well). In-process handlers (`ctx.events.subscribe`) receive
+`action.*` events (such as `action.executed` with the `payload`) in full; over the WebSocket, users
+without `hosts.execute` get only a shortened `payload`
+([API, section 4](../04-API.md#4-websocket), in German).
+
+**Standing approval (without a click).** A proposal can rely on an approval that a person gave in advance:
+`ActionRequest.standing_approval = StandingApproval(granted_by_user_id=…, granted_at=…, label=…)`. This only works
+with the permission `actions.standing_approval` in the manifest. Whether the approval still fits the proposal (for
+scripts: nothing has changed) is checked by the extension itself. On every proposal, the gate checks whether the
+person is still active and may grant standing approvals and approve actions of this risk level
+(`actions.standing_approval` and `actions.approve:<risk>`; built in: owner and `admin`). Proposals from an AI never
+run via a standing approval. If it applies, the action starts without a click, even in mode `propose` (blocklist and
+anti-flapping still apply); `GateDecision.rule` is then `standing_approval`, and the gate appends „– ohne Klick, lief
+mit Dauerfreigabe vom <Datum> durch <Benutzername>“ (without a click, ran with the standing approval of <date> by
+<username>) to `reason` (date in the dashboard's configured time zone). Otherwise it becomes a normal proposal:
+`reason` gets „– Dauerfreigabe vom … durch … gilt nicht: <Grund>“ (standing approval … does not apply: <reason>), and
+if the action waits for a click, `GateDecision.detail` names the reason. The name of a missing permission is only in
+`gate_decision.standing_approval_rejected.permission` (and thus in `detail` of the audit entry), never in the text.
+So the extension's own `reason` only says what is to run.
+
+The executor receives `req.standing_approval` only if the action really started without a click (after a click it is
+`None`); this lets it check right before the command whether the approval still applies. For displays such as
+"standing approval applies" („Dauerfreigabe gilt“), `ctx.actions.check_standing_approval()` checks the person the same
+way as the gate, read-only. Related: `nodvard_sdk.current_job_trigger()` tells a `JobSpec.handler` whether it runs on
+schedule (`"schedule"`), by hand (`"manual"`: `POST /jobs/{id}/run` or `ctx.scheduler.trigger()`) or outside a job
+(`None`); `Host.credential_username` and `Host.credential_port` give the account and SSH port of the default login
+(never the secret; `None` without a login or with older cores).
 
 ---
 
@@ -664,7 +800,7 @@ This is the proof that the interface is sufficient for them.
 | Free-text chat UI | `register_page("soc")`, streaming via `ctx.ws` |
 | Incident queue/batching | own tables `ext_nexus_soc_incidents`, background task via `ctx.spawn` |
 | Docker watcher (8 s) | `ctx.spawn` + `ctx.exec.run()` against hosts with the tag `docker` |
-| Remediation | `ctx.actions.propose(...)` — **never** `ctx.exec` directly |
+| Remediation | `ctx.actions.propose(...)` — **never** `ctx.exec` directly. AI text only ever yields a restart of a crashed container (`shell.exec`, the extension builds the command itself); everything else stays text |
 | Blocklist / anti-flapping | core gate; the extension only supplies additional patterns |
 | Obligation to give a reason | `ActionRequest.reason` is a mandatory field |
 | Two operating modes | core setting `autonomy.mode`, not extension code |
@@ -679,10 +815,11 @@ guests, what a container is.
 
 | Component | Implementation |
 |---|---|
-| Versioning | own Git repo under `/data/ext/scripts/repo`, `pygit2`/`dulwich` |
+| Versioning | own Git repo under `/data/ext/scripts/repo`, `pygit2`/`dulwich`; the extension sets the Git settings itself on every start, and hooks, filters and signing never run (from `.git`, a backup only carries the history) |
 | Metadata, parameters | own tables + a JSON Schema per script |
 | "Run now" | `ctx.actions.propose(ActionSpec("script.run"))` → the same SSH layer as the terminal (no second execution path) |
 | Fleet-wide schedule | `ctx.scheduler` — **one** view, because there is **one** scheduler |
+| Scheduled runs without a click | standing approval per script, stored in `ctx.data_dir` (not in the Git repo: resetting the script does not revive an expired approval). Only real scheduled runs (`current_job_trigger() == "schedule"`) send it as `ActionRequest.standing_approval`. Beforehand the extension checks that content, parameters, target, schedule and the servers' account, address and SSH port are still as they were when it was granted; the core gate checks that the person who granted it is still allowed to |
 | Run history | core tables `jobs`/`job_runs` + audit |
 | Secrets | `ctx.secrets.get_handle(...)`, never plaintext in the script |
 | In-browser editor | `register_page`, CodeMirror 6 |
@@ -742,3 +879,13 @@ list `sdk_public.json`; new names are brought up to date with `python scripts/up
 exceptions only with a justification in `backend/tests/contract/breaking_exceptions.toml`. The major
 version will be raised to `1.0` once the bundled extensions are stable; the rules of the table
 above then apply unchanged.
+
+**Deliberately stricter for security reasons:** `ctx.api.include_router()` without `permission=` requires a login
+(such a route used to be reachable without one), and the core rejects WebSocket routes, `add_route()` and `mount()`
+without `public=True`; the extension then cannot be enabled (see section 2). The signature stays backward-compatible,
+`public=` is new and optional. Older cores know neither `api.public` nor `public=` (an extension with `api.public` in its
+manifest does not load there) and leave routes without `permission=` open; if you also support them, set `permission=`.
+
+The same goes for the request size: the core rejects any request over 1 MiB on extension routes with `413`; a route that
+accepts larger uploads needs `max_body_bytes` for that (see section 2). Older cores do not know the name (the import
+fails there) and have no general limit.

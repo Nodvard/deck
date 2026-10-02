@@ -12,7 +12,7 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { actionReason, describeActionOutcome, OUTCOME_TEXT_CLASS, type ActionOutcome } from "../lib/actionOutcome";
+import { actionReason, describeActionOutcome, OUTCOME_TEXT_CLASS, OUTPUT_HIDDEN_HINT, type ActionOutcome } from "../lib/actionOutcome";
 import {
   ACTION_POLL_INTERVAL_MS,
   ActionWaitTimeout,
@@ -23,6 +23,7 @@ import {
   waitForAction,
 } from "../lib/actions";
 import { api, ApiError } from "../lib/api";
+import { visibleCommand } from "../lib/visibleCommand";
 import { confirmDialog, promptDialog } from "../state/dialogs";
 import { useAuthStore } from "../state/auth";
 
@@ -31,7 +32,10 @@ interface ActionOut {
   ext_id: string;
   action_type: string;
   host_id: string | null;
+  /** Befehl (`command`) und weitere Einzelheiten; ohne Server-Rechte nur Kennungen, siehe `payload_hidden`. */
   payload: Record<string, unknown>;
+  /** Befehl und Parameter fehlen, weil dem Nutzer die Server-Rechte fehlen. */
+  payload_hidden?: boolean;
   risk: string;
   status: string;
   proposed_by_type: string;
@@ -46,6 +50,8 @@ interface ActionOut {
   // ohne diese Felder koennte die Seite keinen Fehlergrund zeigen.
   gate_decision: { rule?: string | null; detail?: string | null; user_reason?: string | null };
   result: { success?: boolean; error?: string | null };
+  /** Ausgabe und Fehlertext fehlen, weil dem Nutzer die Server-Rechte fehlen. */
+  output_hidden?: boolean;
   finished_at: string | null;
   created_at: string;
 }
@@ -81,6 +87,17 @@ const STATUS_CLASS: Record<string, string> = {
   dismissed: "bg-white/10 opacity-70",
   expired: "bg-white/10 opacity-70",
 };
+
+/** Aktionen mit diesem Risiko lassen sich nicht in der Sammel-Freigabe bestätigen, nur einzeln. */
+const SINGLE_APPROVAL_RISKS = ["high", "critical"];
+
+/** Der Befehl (Shell-Befehl bzw. aufgelöster Skript-Inhalt), den die Aktion ausführen würde. */
+function commandOf(a: ActionOut): string | null {
+  const command = a.payload?.command;
+  return typeof command === "string" && command.trim() !== "" ? command : null;
+}
+
+const COMMAND_HIDDEN_HINT = "Befehl nur für Nutzer mit Server-Rechten sichtbar";
 
 /** „Vorgeschlagen von“: der Name, den das Backend aufgelöst hat; sonst der rohe Wert. */
 function proposedByText(a: ActionOut): string {
@@ -226,7 +243,10 @@ export function ActionsPage(): JSX.Element {
   }, [actions]);
 
   const selectable = (actions ?? []).filter((a) => a.status === "proposed" && hasPermission(`actions.approve:${a.risk}`));
+  const hasSingleOnly = selectable.some((a) => SINGLE_APPROVAL_RISKS.includes(a.risk));
   const selectedActions = selectable.filter((a) => selected.has(a.id));
+  // Hohe und kritische Risiken gibt es nur einzeln: so steht der Befehl vor jeder Freigabe vor Augen.
+  const approvable = selectedActions.filter((a) => !SINGLE_APPROVAL_RISKS.includes(a.risk));
   const allSelected = selectable.length > 0 && selectedActions.length === selectable.length;
   const anyBusy = busyIds.size > 0 || bulkBusy;
 
@@ -278,6 +298,17 @@ export function ActionsPage(): JSX.Element {
     if (next.tone !== "error") return;
     const text = action && !next.text.startsWith(`${action.action_type}: `) ? `${action.action_type}: ${next.text}` : next.text;
     setLateErrors((prev) => (prev.some((e) => e.text === text) ? prev : [...prev, { tone: "error" as const, text }].slice(-MAX_LATE_ERRORS)));
+  }
+
+  /** Die Befehle der Aktionen, damit die Rueckfrage zeigt, was wirklich laeuft. */
+  function describeCommands(batch: ActionOut[]): string {
+    const lines = batch.flatMap((a) => {
+      const command = commandOf(a);
+      if (command === null) return [];
+      // Ungekürzt: wer freigibt, soll genau den Befehl lesen, der läuft (der Dialog scrollt).
+      return [`${a.action_type} auf ${hostLabel(a.host_id)}:\n${visibleCommand(command)}`];
+    });
+    return lines.length > 0 ? `\n\nBefehle:\n${lines.join("\n\n")}` : "";
   }
 
   /** Kurze Aufzaehlung fuer die Rueckfrage: Typ x Anzahl und betroffene Server. */
@@ -346,7 +377,7 @@ export function ActionsPage(): JSX.Element {
   }
 
   async function reject(action: ActionOut) {
-    const reason = await promptDialog(`Ablehnen von "${action.action_type}" -- Begründung:`);
+    const reason = await promptDialog(`Ablehnen von "${action.action_type}" – Begründung:`);
     if (!reason) return;
     markBusy(action.id, true);
     const seq = clearMessage();
@@ -381,15 +412,14 @@ export function ActionsPage(): JSX.Element {
    * und ihre eigene Rechtepruefung. `?wait=0`: die API wartet nicht auf das Ergebnis,
    * sonst haengt der Sammelklick bis zu 20 s pro Aktion. */
   async function approveSelected() {
-    if (bulkRunning.current || selectedActions.length === 0) return;
-    const batch = selectedActions;
-    const danger = batch.some((a) => a.risk === "high" || a.risk === "critical");
+    if (bulkRunning.current || approvable.length === 0) return;
+    const batch = approvable;
     bulkRunning.current = true;
     setBulkBusy(true);
     try {
       const ok = await confirmDialog(
-        `${batch.length} ausgewählte ${batch.length === 1 ? "Aktion" : "Aktionen"} bestätigen und jetzt ausführen? (${describeBatch(batch)})`,
-        { danger, confirmLabel: "Freigeben" },
+        `${batch.length} ausgewählte ${batch.length === 1 ? "Aktion" : "Aktionen"} bestätigen und jetzt ausführen? (${describeBatch(batch)})${describeCommands(batch)}`,
+        { confirmLabel: "Freigeben" },
       );
       if (!ok) return;
       clearMessage();
@@ -524,11 +554,11 @@ export function ActionsPage(): JSX.Element {
           </label>
           <button
             type="button"
-            disabled={anyBusy || selectedActions.length === 0}
+            disabled={anyBusy || approvable.length === 0}
             onClick={() => void approveSelected()}
             className="rounded bg-emerald-500/20 px-3 py-1.5 text-xs hover:bg-emerald-500/30 disabled:opacity-40"
           >
-            Ausgewählte freigeben ({selectedActions.length})
+            Ausgewählte freigeben ({approvable.length})
           </button>
           <button
             type="button"
@@ -539,6 +569,12 @@ export function ActionsPage(): JSX.Element {
             Ausgewählte verwerfen ({selectedActions.length})
           </button>
         </div>
+      )}
+
+      {hasSingleOnly && (
+        <p className="mb-3 text-xs opacity-70">
+          Aktionen mit hohem oder kritischem Risiko gibt „Ausgewählte freigeben“ nicht mit frei. Bestätige sie einzeln – so siehst du jeden Befehl, bevor er läuft.
+        </p>
       )}
 
       {error && <p className="text-sm text-red-400">Fehler: {error}</p>}
@@ -560,7 +596,7 @@ export function ActionsPage(): JSX.Element {
                 </th>
                 <th className="py-1">Zeit</th>
                 <th className="py-1">Aktion</th>
-                <th className="py-1">Host</th>
+                <th className="py-1">Server</th>
                 <th className="py-1">Risiko</th>
                 <th className="py-1">Status</th>
                 <th className="py-1">Vorgeschlagen von</th>
@@ -590,6 +626,16 @@ export function ActionsPage(): JSX.Element {
                     <td className="py-1.5 opacity-70">{new Date(a.created_at).toLocaleString()}</td>
                     <td className="py-1.5">
                       {a.ext_id}/{a.action_type}
+                      {commandOf(a) !== null ? (
+                        <pre
+                          data-testid={`command-${a.id}`}
+                          className="mt-1 max-h-40 max-w-md overflow-auto whitespace-pre-wrap break-all rounded bg-black/30 p-1.5 font-mono text-xs"
+                        >
+                          {visibleCommand(commandOf(a) ?? "")}
+                        </pre>
+                      ) : (
+                        a.payload_hidden && <p className="mt-1 max-w-xs break-words text-xs opacity-70">{COMMAND_HIDDEN_HINT}</p>
+                      )}
                     </td>
                     <td className="py-1.5">{hostLabel(a.host_id)}</td>
                     <td className="py-1.5 opacity-70">{a.risk}</td>
@@ -601,6 +647,9 @@ export function ActionsPage(): JSX.Element {
                         <p className={`mt-1 max-w-xs break-words text-xs ${describeActionOutcome(a).tone === "error" ? "text-red-300" : "opacity-70"}`}>
                           {why}
                         </p>
+                      )}
+                      {a.output_hidden && (
+                        <p className="mt-1 max-w-xs break-words text-xs opacity-70">{OUTPUT_HIDDEN_HINT}</p>
                       )}
                       {decided && (
                         <p className="mt-1 max-w-xs break-words text-xs opacity-70" title={decided.title}>

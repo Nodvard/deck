@@ -23,14 +23,22 @@ frontend/dist/
 **/.vite/
 **/*.tsbuildinfo
 
-# Laufzeitdaten -- niemals ins Image backen (Master-Key/Secrets).
-data/
-*.db
-*.db-wal
-*.db-shm
-master.key
-.env
-.env.local
+# Laufzeitdaten -- niemals ins Image backen (Master-Key, Geheimnisse, Datenbank, Sicherungen).
+# Mit `**/`: Wer Backend oder alembic aus `backend/` heraus startet, bekommt dort ein eigenes `data/`
+# (die Standardpfade sind relativ zum aktuellen Ordner); ohne `**/` griffen die Muster nur im obersten Ordner.
+**/data/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+**/*.sqlite
+**/*.sqlite3
+**/*.ndbak
+**/master.key
+**/*.key
+**/jwt_secret*
+**/vault_keyring.json
+**/.env
+**/.env.*
 
 reference/
 mobile/

@@ -17,4 +17,6 @@ permissions = [
   "secrets.read:scripts-*",
   "schedule.register",
   "notify.send",
+  "audit.write",
+  "actions.standing_approval",
 ]

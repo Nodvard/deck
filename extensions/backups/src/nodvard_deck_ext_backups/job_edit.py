@@ -62,6 +62,71 @@ def current_values(job: dict[str, Any]) -> dict[str, Any]:
     return values
 
 
+def job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
+    """Der Stand eines Jobs, auf dem das Risiko einer Aenderung berechnet wurde (alle editierbaren
+    Werte plus die Aufbewahrungsregeln, die Nodvard Deck nicht anzeigt). Wird beim Vorschlag in
+    die Aktion geschrieben und bei der Ausfuehrung mit dem frisch gelesenen Job verglichen."""
+    return {**{k: v for k, v in current_values(job).items() if k != "keep-all"}, "prune": parse_prune(job.get("prune-backups"))}
+
+
+# Einstellungen des Jobs, die ein manueller Lauf uebernimmt (nur einfache Werte, nie Nutzereingaben).
+# `remove` gehoert dazu: ein Job mit `remove=0` raeumt nie auf, der Nachlauf darf es dann auch nicht
+# (ohne den Schluessel gilt in Proxmox `remove=1`). `tmpdir` (wie `dumpdir`/`script`) nimmt Proxmox
+# nur von `root@pam` an, nie von einem API-Token -- mitgeschickt wuerde jeder Nachlauf abgelehnt.
+VZDUMP_JOB_KEYS = (
+    "storage", "mode", "compress", "notes-template", "bwlimit", "ionice", "zstd", "pigz",
+    "stopwait", "lockwait", "protected", "remove",
+)
+VZDUMP_RETENTION_KEYS = ("prune-backups", "maxfiles")
+
+
+def run_retention(job: dict[str, Any] | None) -> dict[str, str]:
+    """Aufbewahrung fuer einen manuellen Lauf: die des Jobs. Ohne eigene (oder nicht sicher
+    lesbare) Regel `keep-all=1` -- sonst raeumt Proxmox nach der Regel des Speichers auf und
+    loescht womoeglich Sicherungen, die der Job behalten haette."""
+    job = job or {}
+    prune = {k: v for k, v in parse_prune(job.get("prune-backups")).items() if v}
+    if prune:
+        return {"prune-backups": ",".join(f"{k}={prune[k]}" for k in _ALL_KEEPS if k in prune)}
+    maxfiles = str(job.get("maxfiles") or "").strip()
+    if maxfiles.isdigit() and int(maxfiles) > 0:
+        return {"maxfiles": maxfiles}
+    return {"prune-backups": "keep-all=1"}
+
+
+def vzdump_options(job: dict[str, Any] | None) -> dict[str, Any]:
+    """Parameter fuer `POST /nodes/{node}/vzdump` aus einem (frisch gelesenen) Job."""
+    options: dict[str, Any] = {}
+    for key in VZDUMP_JOB_KEYS:
+        value = (job or {}).get(key)
+        if isinstance(value, str) and value.strip() or isinstance(value, (int, float)):
+            options[key] = value
+    options.update(run_retention(job))
+    return options
+
+
+def same_run_options(approved: Any, current: dict[str, Any]) -> bool:
+    """Sind die freigegebenen Lauf-Einstellungen (`vzdump_options` beim Vorschlag) noch die des Jobs?
+    Verglichen wird als Text: Proxmox liefert Zahlen mal als Zahl, mal als Text."""
+    if not isinstance(approved, dict):
+        return False
+
+    def normalized(options: dict[str, Any]) -> dict[str, str]:
+        return {str(key): str(value).strip() for key, value in options.items()}
+
+    return normalized(approved) == normalized(current)
+
+
+def retention_note(options: dict[str, Any]) -> str:
+    never_removes = str(options.get("remove", "1")).strip().lower() in ("0", "false", "no", "off")
+    if never_removes or options.get("prune-backups") == "keep-all=1":
+        return "Es wird nichts aufgeräumt."
+    return (
+        "Aufgeräumt wird nach der Aufbewahrung des Jobs: ältere Sicherungen dieses Gastes auf dem Speicher "
+        "können dabei gelöscht werden, auch manuelle und die anderer Jobs."
+    )
+
+
 def build_job_update(job: dict[str, Any], changes: Any) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
     """-> (Parameter fuer PUT /cluster/backup/{id}, echte Aenderungen, destruktiv?)."""
     if not isinstance(changes, dict) or not changes:

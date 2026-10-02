@@ -90,6 +90,13 @@ class Host(BaseModel):
     unangetastet). Default `True` aus Rueckwaertskompatibilitaet fuer Code, der diese
     Klasse ohne das Feld konstruiert (z. B. bestehende Tests) -- `host_to_sdk()`
     (services/hosts.py) setzt es fuer echte Hosts immer explizit."""
+    credential_username: str | None = None
+    """Unter welchem Konto `ctx.exec.run()` auf diesem Host anmeldet (Benutzername des
+    Standard-Zugangs, z. B. "root"); None ohne Zugang oder bei aelteren Kernen. Nur der
+    Name, nie das Geheimnis."""
+    credential_port: int | None = None
+    """SSH-Port, ueber den `ctx.exec.run()` auf diesem Host anmeldet (Port des Standard-Zugangs,
+    meist 22); None ohne Zugang oder bei aelteren Kernen."""
 
 
 class DiscoveredHost(BaseModel):
@@ -164,10 +171,17 @@ class NotifyResult(BaseModel):
     Verlauf entsteht in beiden Fällen.
 
     Ältere Kerne und Test-Doubles liefern `None` -- wer den Wert auswertet, behandelt
-    `None` wie `suppressed=False` (docs/02-EXTENSION-API.md §2)."""
+    `None` wie `suppressed=False` (docs/02-EXTENSION-API.md §2).
+
+    `delivered`: `True`, wenn mindestens ein Kanal die Meldung wirklich zugestellt hat.
+    `False`, wenn keiner zugestellt hat -- es gibt keinen Kanal, alle sind ausgefallen oder
+    noch nicht eingerichtet, oder ein Wartungsfenster hat den Push unterdrückt (`suppressed`).
+    `None`: unbekannt (ältere Kerne). Damit kann eine Seite ehrlich sagen, ob etwas auf dem
+    Handy ankommt, statt nur "gesendet" zu melden."""
 
     notification_id: str
     suppressed: bool = False
+    delivered: bool | None = None
 
 
 class Event(BaseModel):

@@ -267,6 +267,14 @@ def test_a_new_use_of_the_old_name_is_found(line):
     assert kinds(line) == ["name"], line
 
 
+def test_the_old_sudo_rule_name_is_only_allowed_where_the_setup_command_replaces_it():
+    line = 'O="/etc/sudoers.d/lattice-$U"'
+    assert kinds(line, rel="backend/src/nodvard_deck/services/host_setup.py") == []
+    assert kinds("assert sorted(names) == ['lattice-lattice']", rel="backend/tests/test_host_setup_script.py") == []
+    assert kinds(line) == ["name"], "neuer Code legt keine sudo-Regel unter dem alten Namen an"
+    assert kinds('install -m 0440 "$T" "/etc/sudoers.d/lattice-$U"', rel="extensions/system/src/x.py") == ["name"]
+
+
 def test_capitalised_prose_is_not_checked():
     assert kinds("# Lattice startet nicht, wenn die Datenbank fehlt.") == []
     assert kinds("Lattice-Hosts werden verwaltet") == []

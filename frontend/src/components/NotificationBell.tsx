@@ -13,7 +13,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 
 import { api } from "../lib/api";
+import { useExtensionLabel } from "../lib/extensionNames";
 import { relativeTime } from "../lib/overview";
+import { useAuthStore } from "../state/auth";
 import { SEVERITY_LABEL, type NotificationOut } from "../routes/NotificationsPage";
 
 const MAX_ITEMS = 8;
@@ -38,6 +40,7 @@ function targetPath(n: NotificationOut): string | null {
 function BellRow({ n, onOpen }: { n: NotificationOut; onOpen: (n: NotificationOut) => void }) {
   const unread = !n.read_at;
   const sev = SEVERITY_ICON[n.severity] ?? SEVERITY_ICON.info;
+  const sourceLabel = useExtensionLabel(Boolean(n.source_ext_id));
   return (
     <li data-testid={`bell-item-${n.id}`} data-unread={unread ? "true" : "false"}>
       <button
@@ -57,7 +60,7 @@ function BellRow({ n, onOpen }: { n: NotificationOut; onOpen: (n: NotificationOu
           </span>
           <span className="mt-0.5 block truncate text-[11px] text-white/45">
             {relativeTime(n.ts)}
-            {n.source_ext_id ? ` · ${n.source_ext_id}` : ""}
+            {n.source_ext_id ? ` · ${sourceLabel(n.source_ext_id)}` : ""}
           </span>
         </span>
         {unread && <span aria-hidden className="mt-1.5 h-2 w-2 flex-none rounded-full bg-accent" />}
@@ -67,6 +70,8 @@ function BellRow({ n, onOpen }: { n: NotificationOut; onOpen: (n: NotificationOu
 }
 
 export function NotificationBell({ unread }: { unread: number }) {
+  // Der Lesestatus gilt fuer alle Nutzer gemeinsam; markieren duerfen nur Nutzer mit Schreibrecht.
+  const canMark = useAuthStore((s) => s.hasPermission)("notifications.write");
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
   const bellRef = useRef<HTMLButtonElement>(null);
@@ -120,7 +125,7 @@ export function NotificationBell({ unread }: { unread: number }) {
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["notifications"] });
 
   const openItem = (n: NotificationOut) => {
-    if (!n.read_at) void api.post("/notifications/read", { ids: [n.id] }).then(refresh, () => undefined);
+    if (!n.read_at && canMark) void api.post("/notifications/read", { ids: [n.id] }).then(refresh, () => undefined);
     setOpen(false);
     navigate(targetPath(n) ?? "/notifications");
   };
@@ -166,7 +171,7 @@ export function NotificationBell({ unread }: { unread: number }) {
             <span className="text-xs text-white/50" data-testid="bell-unread">
               {unread > 0 ? `${unread} ungelesen` : "alles gelesen"}
             </span>
-            {unread > 0 && (
+            {unread > 0 && canMark && (
               <button
                 type="button"
                 onClick={() => void markAll()}

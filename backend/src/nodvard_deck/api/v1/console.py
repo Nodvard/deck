@@ -27,12 +27,14 @@ from pydantic import BaseModel
 from ...config import Settings, get_settings
 from ...core.console_sessions import get_console_session_store
 from ...db import refresh_relationships
+from ...db.session import session_scope
 from ...ext.runtime import get_extension_runtime
 from ...models import Host
 from ...services import audit as audit_service
 from ...services import hosts as hosts_service
+from ...services import session_guard
 from ...services.hosts import host_to_sdk
-from ..deps import CurrentUser, SessionDep, require_permission
+from ..deps import CurrentSessionId, CurrentUser, SessionDep, require_permission
 
 router = APIRouter(tags=["console"])
 
@@ -80,6 +82,7 @@ async def create_console_session(
     session: SessionDep,
     user: CurrentUser,
     settings: Annotated[Settings, Depends(get_settings)],
+    login_id: CurrentSessionId,
 ) -> ConsoleSessionOut:
     host = await session.get(Host, payload.host_id)
     if host is None:
@@ -113,7 +116,8 @@ async def create_console_session(
         target_type="host", target_id=host.id, detail={"protocol": console.protocol},
     )
     pending = get_console_session_store().add(
-        host_id=host.id, user_id=user.id, session=console, ttl_s=settings.terminal_session_ttl_s
+        host_id=host.id, user_id=user.id, session=console, ttl_s=settings.terminal_session_ttl_s,
+        stamp=session_guard.credential_stamp(user), login_id=login_id,
     )
     return ConsoleSessionOut(
         session_id=pending.session_id,
@@ -124,6 +128,8 @@ async def create_console_session(
 
 
 _WS_UNKNOWN_TICKET = 4404
+_WS_ACCESS_ENDED = 4401
+"""Konto deaktiviert, Berechtigung entzogen, Passwort geaendert oder abgemeldet."""
 
 
 @router.websocket("/ws/console/{session_id}")
@@ -141,6 +147,32 @@ async def console_ws(
         await websocket.close(code=_WS_UNKNOWN_TICKET)
         return
     console = pending.session
+
+    watch = session_guard.SessionWatch(user_id=pending.user_id, stamp=pending.stamp, login_id=pending.login_id)
+
+    async def _access_ended() -> str | None:
+        async with session_scope() as db_session:
+            return await watch.ended_reason(db_session, permission="hosts.execute")
+
+    stop_watchdog = asyncio.Event()
+
+    async def _watchdog() -> bool:
+        """Beendet die Konsole, wenn Konto, Berechtigung oder Anmeldung nicht mehr gelten (die Pruefung
+        beim Aufbau ist bis zu 30 s alt, danach liefe sie sonst unbegrenzt weiter). `True` = Zugriff
+        beendet, `False` = anders gestoppt. Wird nie abgebrochen, sondern ueber `stop_watchdog` gestoppt
+        -- eine mitten in der Datenbankabfrage abgebrochene Aufgabe wuerde deren Verbindung mit wegreissen."""
+        interval = max(0.05, settings.terminal_recheck_interval_s)
+        while True:
+            try:
+                if await _access_ended() is not None:
+                    return True
+            except Exception:  # noqa: BLE001 - ein Datenbank-Haenger beendet keine laufende Konsole
+                pass
+            try:
+                await asyncio.wait_for(stop_watchdog.wait(), timeout=interval)
+                return False
+            except asyncio.TimeoutError:
+                pass
 
     async def _pump_host_to_client() -> None:
         try:
@@ -163,16 +195,20 @@ async def console_ws(
 
     reader = asyncio.ensure_future(_pump_host_to_client())
     writer = asyncio.ensure_future(_pump_client_to_host())
+    watchdog = asyncio.ensure_future(_watchdog())
+    ended = False
     try:
-        await asyncio.wait({reader, writer}, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait({reader, writer, watchdog}, return_when=asyncio.FIRST_COMPLETED)
+        ended = watchdog.done() and not watchdog.cancelled() and watchdog.exception() is None and watchdog.result()
     finally:
         # Dieselbe Begrenzung wie in terminal.py (dort live gefunden): ein in
         # `websocket.receive()` haengender Writer reagiert nicht immer sofort auf
         # `cancel()` -- ohne Zeitlimit bliebe die Verbindung unbestimmt offen.
         reader.cancel()
         writer.cancel()
+        stop_watchdog.set()
         try:
-            await asyncio.wait_for(asyncio.gather(reader, writer, return_exceptions=True), timeout=5.0)
+            await asyncio.wait_for(asyncio.gather(reader, writer, watchdog, return_exceptions=True), timeout=5.0)
         except (asyncio.TimeoutError, Exception):  # noqa: BLE001
             pass
         try:
@@ -180,6 +216,6 @@ async def console_ws(
         except Exception:  # noqa: BLE001
             pass
         try:
-            await websocket.close()
+            await websocket.close(code=_WS_ACCESS_ENDED if ended else 1000)
         except Exception:  # noqa: BLE001 - moeglicherweise schon zu
             pass

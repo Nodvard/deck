@@ -285,7 +285,7 @@ function ServerCard({ server, profiles, onAction, pending, reload }: {
         <div className="panel p-4">
           <p className="mb-2 text-sm font-semibold">Sicherungen</p>
           <p className="mb-1 text-[11px] uppercase tracking-wider text-white/45">Eigene</p>
-          {(d.backups ?? []).length === 0 && <p className="mb-2 text-sm text-white/50">Noch keine -- „Welt sichern“ legt eine an.</p>}
+          {(d.backups ?? []).length === 0 && <p className="mb-2 text-sm text-white/50">Noch keine – „Welt sichern“ legt eine an.</p>}
           <ul className="mb-3">
             {(d.backups ?? []).map((b) => (
               <li key={b.name} className="flex justify-between py-1 text-sm"><span className="font-mono text-xs">{b.name}</span><span className="text-white/50">{size(b.size)}</span></li>
@@ -389,7 +389,7 @@ export function GameServerPage(): JSX.Element {
     try {
       const { action: result, approved } = await runAction(`/ext/gameserver/servers/${server.host_id}/${action}`, { method: "POST" }, { signal: unmountSignal() });
       if (!approved && result.status === "proposed") {
-        setMessage(`${server.name}: ${ACTION_LABEL[action]} vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        setMessage(`${server.name}: ${ACTION_LABEL[action]} vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
       } else {
         setMessage(`${server.name}: ${ACTION_LABEL[action]} -> ${ACTION_STATUS_LABEL[result.status ?? ""] ?? result.status ?? "?"}.`);
       }

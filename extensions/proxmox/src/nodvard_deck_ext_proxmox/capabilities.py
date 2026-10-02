@@ -216,6 +216,27 @@ async def _none() -> None:
     return None
 
 
+def _slug(text: str) -> str:
+    return re.sub(r"[^a-z0-9_-]+", "-", text.lower()).strip("-")
+
+
+def node_host_name(connection: str, node: str) -> str:
+    """Kennung fuer einen NEU eingelesenen Knoten: klein geschrieben (wie jede Host-Kennung
+    im Kern) und ohne Doppelung, wenn Verbindung und Knoten gleich heissen
+    (`pve-pve1` statt `pve-pve1-pve1`). Bereits eingelesene Hosts behalten ihre Kennung --
+    der Kern aendert sie bei einem erneuten Abgleich nie."""
+    conn, name = _slug(connection), _slug(node)
+    return (f"pve-{conn}" if conn == name else f"pve-{conn}-{name}")[:64]
+
+
+def guest_host_name(connection: str, short: str, vmid: str) -> str:
+    return f"proxmox-{_slug(connection)}-{short}-{_slug(vmid)}"[:64]
+
+
+def _legacy_node_host_name(connection: str, node: str) -> str:
+    return f"pve-{connection}-{node}"
+
+
 _POWER_ACTIONS = frozenset({"start", "stop", "shutdown", "reboot", "reset", "suspend", "resume"})
 
 _TASK_WAIT_S = 30.0
@@ -241,6 +262,29 @@ class ProxmoxHostProvider:
 
     async def discover_hosts(self) -> list[DiscoveredHost]:
         discovered: list[DiscoveredHost] = []
+        # Kennungen sind im Kern eindeutig. Wer schon eingelesen ist, behaelt seine
+        # (der Kern uebernimmt `name` nur beim Anlegen); fuer neue wird die einheitliche
+        # Form nur genommen, wenn sie noch frei ist -- sonst die bisherige.
+        known = await self._ctx.hosts.list()
+        taken = {h.name for h in known}
+        name_by_ref = {
+            h.provider_ref: h.name for h in known if h.provider_ref and h.provider_ext_id == self._ctx.ext_id
+        }
+
+        def free_name(provider_ref: str, wanted: str, fallback: str) -> str:
+            if provider_ref in name_by_ref:
+                return name_by_ref[provider_ref]
+            chosen = wanted if wanted not in taken else fallback
+            # Sind beide Formen schon vergeben (z. B. Verbindung „a“ + Knoten „b-c“ neben „a-b“ + „c“),
+            # haengt eine Zahl an: ein doppelter Name wuerde sonst den ganzen Abgleich abbrechen.
+            n = 2
+            while chosen in taken:
+                suffix = f"-{n}"
+                chosen = fallback[: 64 - len(suffix)] + suffix
+                n += 1
+            taken.add(chosen)
+            return chosen
+
         for conn_name, connector in (await build_connectors(self._ctx)).items():
             # Eine nicht erreichbare Verbindung (pve2 aus oder gerade im
             # Neustart) riss vorher den ganzen Lauf mit -- auch pve1 wurde nicht mehr
@@ -253,10 +297,11 @@ class ProxmoxHostProvider:
                 continue
             for node in nodes:
                 node_name = node["node"]
+                node_ref = f"{conn_name}/node/{node_name}"
                 discovered.append(
                     DiscoveredHost(
-                        provider_ref=f"{conn_name}/node/{node_name}",
-                        name=f"pve-{conn_name}-{node_name}",
+                        provider_ref=node_ref,
+                        name=free_name(node_ref, node_host_name(conn_name, node_name), _legacy_node_host_name(conn_name, node_name)),
                         display_name=f"Proxmox-Knoten {node_name}",
                         address=connector.host,
                         kind="hypervisor",
@@ -294,10 +339,11 @@ class ProxmoxHostProvider:
                 for (kind, guest), address, os_family in zip(guests, addresses, os_families, strict=True):
                     vmid = str(guest["vmid"])
                     short = "vm" if kind == "qemu" else "lxc"
+                    guest_ref = f"{conn_name}/{kind}/{node_name}/{vmid}"
                     discovered.append(
                         DiscoveredHost(
-                            provider_ref=f"{conn_name}/{kind}/{node_name}/{vmid}",
-                            name=f"proxmox-{conn_name}-{short}-{vmid}",
+                            provider_ref=guest_ref,
+                            name=free_name(guest_ref, guest_host_name(conn_name, short, vmid), f"proxmox-{conn_name}-{short}-{vmid}"),
                             display_name=guest.get("name") or f"{'VM' if kind == 'qemu' else 'LXC'} {vmid}",
                             address=address or connector.host,
                             address_verified=address is not None,

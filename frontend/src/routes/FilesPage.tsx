@@ -139,8 +139,8 @@ export function FilesPage(): JSX.Element {
   const [uploadProgress, setUploadProgress] = useState<{ name: string; percent: number } | null>(null);
   const [draggingPath, setDraggingPath] = useState<string | null>(null);
   const [dropTargetKey, setDropTargetKey] = useState<string | null>(null);
-  const [picker, setPicker] = useState<{ fromSourceId: string; entry: { path: string; name: string }; targetSourceId: string | null } | null>(null);
-  const [pendingMove, setPendingMove] = useState<{ runId: string; sourceId: string; path: string; name: string } | null>(null);
+  const [picker, setPicker] = useState<{ fromSourceId: string; entry: { path: string; name: string; size?: number | null }; targetSourceId: string | null } | null>(null);
+  const [pendingMove, setPendingMove] = useState<{ runId: string; sourceId: string; path: string; name: string; size: number | null } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const activeSource = sources?.find((s) => s.source_id === sourceId) ?? null;
@@ -181,6 +181,17 @@ export function FilesPage(): JSX.Element {
       if (pendingMove && pendingMove.runId === transferRunId) {
         const move = pendingMove;
         setPendingMove(null);
+        // Das Original nur loeschen, wenn genau so viele Bytes angekommen sind, wie die Quelle beim
+        // Anzeigen hatte -- sonst waere nach einer leeren oder halben Kopie alles weg.
+        if (move.size === null || data.bytes !== move.size) {
+          setMessage(
+            move.size === null
+              ? `'${move.name}' kopiert, aber das Original bleibt: Die Größe der Quelle war nicht bekannt, ob alles angekommen ist, lässt sich nicht prüfen.`
+              : `'${move.name}' kopiert, aber das Original bleibt: Es kamen ${formatSize(data.bytes ?? 0)} an, die Quelle hat ${formatSize(move.size)}. Bitte prüfe die Kopie.`,
+          );
+          if (sourceId) loadDir(sourceId, path);
+          return;
+        }
         void api
           .post(`/files/${encodeURIComponent(move.sourceId)}/remove`, { path: move.path, recursive: false })
           .then(() => {
@@ -298,7 +309,7 @@ export function FilesPage(): JSX.Element {
   function onEntryDragStart(e: DragEvent, entry: FileEntryOut) {
     if (!sourceId || !canTransfer(entry)) return; // Ordner (siehe Modul-Docstring) und Links ins Leere sind keine Transfer-Quelle
     e.dataTransfer.effectAllowed = "copy";
-    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ sourceId, path: entry.path, name: entry.name }));
+    e.dataTransfer.setData(DRAG_MIME, JSON.stringify({ sourceId, path: entry.path, name: entry.name, size: entry.size }));
     setDraggingPath(entry.path);
   }
 
@@ -319,14 +330,14 @@ export function FilesPage(): JSX.Element {
   }
 
   async function startTransfer(
-    dragged: { sourceId: string; path: string; name: string },
+    dragged: { sourceId: string; path: string; name: string; size?: number | null },
     targetSourceId: string,
     targetDirPath: string,
     move = false,
   ) {
     const destPath = joinPath(targetDirPath, dragged.name);
     if (dragged.sourceId === targetSourceId && destPath === dragged.path) {
-      setMessage("Ziel ist identisch mit der Quelle -- nichts zu tun.");
+      setMessage("Ziel ist identisch mit der Quelle – nichts zu tun.");
       return;
     }
     try {
@@ -335,7 +346,7 @@ export function FilesPage(): JSX.Element {
         to: { source: targetSourceId, path: destPath },
       });
       setTransferRunId(res.run_id);
-      if (move) setPendingMove({ runId: res.run_id, sourceId: dragged.sourceId, path: dragged.path, name: dragged.name });
+      if (move) setPendingMove({ runId: res.run_id, sourceId: dragged.sourceId, path: dragged.path, name: dragged.name, size: dragged.size ?? null });
       const targetLabel = sources?.find((s) => s.source_id === targetSourceId)?.label ?? targetSourceId;
       setMessage(`${move ? "Verschiebe" : "Kopiere"} '${dragged.name}' nach ${targetLabel} · ${destPath} …`);
     } catch (err) {
@@ -343,11 +354,11 @@ export function FilesPage(): JSX.Element {
     }
   }
 
-  function readDragged(e: DragEvent): { sourceId: string; path: string; name: string } | null {
+  function readDragged(e: DragEvent): { sourceId: string; path: string; name: string; size?: number | null } | null {
     e.preventDefault();
     setDropTargetKey(null);
     const raw = e.dataTransfer.getData(DRAG_MIME);
-    return raw ? (JSON.parse(raw) as { sourceId: string; path: string; name: string }) : null;
+    return raw ? (JSON.parse(raw) as { sourceId: string; path: string; name: string; size?: number | null }) : null;
   }
 
   async function handleDrop(e: DragEvent, targetSourceId: string, targetDirPath: string) {
@@ -393,7 +404,7 @@ export function FilesPage(): JSX.Element {
             text={
               canManageExtensions
                 ? "Dateien kommen von Modulen. Schalte unter Einstellungen → Erweiterungen eines ein, zum Beispiel Terminal (Dateien auf deinen Servern, dafür braucht der Server einen SSH-Zugang) oder Nextcloud."
-                : "Dateien kommen von Modulen. Sobald ein Administrator eines einschaltet, erscheinen sie hier."
+                : "Dateien kommen von Modulen. Sobald ein Administrator eines einschaltet, erscheinen sie hier. Dateien auf Servern sieht nur, wer auch Befehle auf Servern ausführen darf."
             }
             action={
               canManageExtensions || canWriteHosts ? (
@@ -577,7 +588,7 @@ export function FilesPage(): JSX.Element {
                         {canTransfer(entry) && sourceId && (
                           <button
                             type="button"
-                            onClick={() => setPicker({ fromSourceId: sourceId, entry: { path: entry.path, name: entry.name }, targetSourceId: null })}
+                            onClick={() => setPicker({ fromSourceId: sourceId, entry: { path: entry.path, name: entry.name, size: entry.size }, targetSourceId: null })}
                             className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20"
                           >
                             Kopieren nach …

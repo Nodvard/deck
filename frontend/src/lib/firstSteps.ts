@@ -11,7 +11,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { api } from "./api";
 import { isSshCredential } from "./hosts";
-import { hostHealth, type HostOut } from "./overview";
+import { type HostOut } from "./overview";
 
 /** Die Erweiterung fuer Push-Nachrichten. Der Kern weiss sonst nichts ueber einzelne Erweiterungen;
  * hier gibt es (noch) keine allgemeine Kennzeichnung ueber die API. */
@@ -63,6 +63,8 @@ export interface FirstStepsInput {
 }
 
 const HOST_TARGET = "/settings/hosts";
+/** Die Serverliste mit schon geöffnetem Formular „Neuen Server anlegen“. */
+export const NEW_HOST_TARGET = "/settings/hosts?neu=1";
 
 function name(ext: ExtensionInfo): string {
   return ext.name ?? ext.id;
@@ -85,16 +87,25 @@ export function buildFirstSteps({ can, hosts, extensions, placedWidgets, catalog
   if (can("hosts.write") && can("hosts.read") && hosts) {
     const withAccess = hosts.filter((h) => h.credential && isSshCredential(h.credential));
     steps.push({
-      id: "server", title: "Server anlegen", done: hosts.length > 0, to: HOST_TARGET, action: "Server hinzufügen",
+      id: "server", title: "Server anlegen", done: hosts.length > 0, to: NEW_HOST_TARGET, action: "Server hinzufügen",
       text: "Trag den ersten Rechner ein, den Nodvard Deck im Blick behalten soll, zum Beispiel den Raspberry Pi.",
     });
     const noAccess = preferManual(hosts.filter((h) => !h.credential || !isSshCredential(h.credential)));
+    // Ein Schluessel allein reicht nicht: solange sich Nodvard Deck damit nie angemeldet hat, fehlt vermutlich
+    // der Befehl auf dem Server. Dass der Server antwortet, belegt das nicht (der SSH-Port ist offen, mehr nicht).
+    const confirmed = withAccess.filter((h) => h.credential!.kind !== "ssh_key" || !!h.login_ok_at);
+    const waitingKey = preferManual(withAccess.filter((h) => !confirmed.includes(h)));
+    const accessDone = confirmed.length > 0;
     steps.push({
-      id: "access", title: "SSH-Zugang hinterlegen", done: withAccess.length > 0,
-      to: noAccess ? `${HOST_TARGET}/${noAccess.id}` : HOST_TARGET, action: "Zugang einrichten",
-      text: "Damit sich Nodvard Deck auf dem Server anmelden kann, braucht er einen SSH-Zugang. Das geht per Klick, ohne Befehle.",
+      id: "access", title: "SSH-Zugang hinterlegen", done: accessDone,
+      // `?befehl=1`: die Seite klappt den Einrichtungsbefehl gleich auf.
+      to: !accessDone && waitingKey ? `${HOST_TARGET}/${waitingKey.id}?befehl=1` : noAccess ? `${HOST_TARGET}/${noAccess.id}` : HOST_TARGET,
+      action: !accessDone && waitingKey ? "Befehl ansehen" : "Zugang einrichten",
+      text: !accessDone && waitingKey
+        ? "Der Schlüssel ist erzeugt, aber noch nicht bestätigt: Führe den Befehl auf dem Server aus und prüfe danach die Verbindung. Die Seite zeigt ihn dir zum Kopieren."
+        : "Nodvard Deck meldet sich per SSH auf dem Server an. Mit einem Passwort geht das ohne Befehl; für den vollen Zugang mit Schlüssel führst du einmal einen Befehl auf dem Server aus – die Seite zeigt ihn dir zum Kopieren.",
     });
-    const connected = withAccess.some((h) => hostHealth(h.status) === "online");
+    const connected = withAccess.some((h) => !!h.login_ok_at);
     const toCheck = preferManual(withAccess);
     steps.push({
       id: "check", title: "Verbindung prüfen", done: connected,

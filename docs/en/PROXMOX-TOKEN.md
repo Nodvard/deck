@@ -39,7 +39,7 @@ against VE 8). Special cases for Proxmox VE 8 and older versions are listed unde
 | Change hardware (cores, RAM, autostart, start order) | no | yes |
 | Console | no | yes |
 | Refresh package lists, reboot node | no | yes |
-| Start a backup now / retry | no | yes |
+| Start a backup now / retry | no | yes, with an extra role for the backup storage |
 | Create and change backup jobs | no | yes, with an extra role for the backup storage |
 
 ¹ Proxmox only returns the list of pending updates with `Sys.Modify` – even though Nodvard Deck
@@ -78,8 +78,10 @@ pveum acl modify / --tokens 'nodvard@pve!dashboard' --roles NodvardRO
 web interface with it either.
 
 **A+ – additionally the list of existing backups.** Note: with these two privileges the token
-can also trigger backups through the Proxmox API and **delete** existing backups of the guests
-(Nodvard Deck itself never deletes any). The same applies to variant B.
+can also trigger backups through the Proxmox API and **delete** existing backups of the guests.
+The same applies to variant B. Nodvard Deck itself never deletes a backup directly. But if you start a
+backup in Nodvard Deck ("Start a backup now / retry", variant B only), Proxmox may prune afterwards
+according to the job's retention.
 
 ```bash
 pveum role modify NodvardRO --append 1 --privs "VM.Backup Datastore.AllocateSpace"
@@ -96,8 +98,12 @@ pveum acl modify / --tokens 'nodvard@pve!dashboard' --roles NodvardFull
 ```
 
 **Creating and changing backup jobs** additionally requires `Datastore.Allocate` in Proxmox on
-the job's backup storage (when changing a job, also on its previous storage). On that storage
-this privilege also allows deleting files – so grant it only there, not on `/`. And because the
+the job's backup storage (when changing a job, also on its previous storage). The same applies to
+**starting a backup now / retry**: Nodvard Deck sends the job's settings and retention along. If the
+job has a retention, Proxmox may prune afterwards and delete older backups of the guest on that
+storage, including manual ones and those of other jobs; the confirmation prompt says so. Without a
+retention of its own, `keep-all=1` is sent and everything is kept.
+On that storage `Datastore.Allocate` also allows deleting files – so grant it only there, not on `/`. And because the
 deeper path replaces the inherited privileges, Audit and AllocateSpace are part of this role:
 
 ```bash
@@ -115,7 +121,7 @@ storages, repeat the two `acl` lines for each storage.
 | Privilege | What Nodvard Deck needs it for | If it is missing … |
 |---|---|---|
 | `Sys.PowerMgmt` | "Reboot node" („Knoten neu starten“) | only this button fails |
-| `Sys.Modify` (on `/`) | "Proxmox updates" tile („Proxmox-Updates“), "Refresh package lists" („Paketlisten aktualisieren“), creating/changing backup jobs, start order for VMs | the updates tile shows HTTP 403, these actions fail |
+| `Sys.Modify` (on `/`) | "Proxmox updates" tile („Proxmox-Updates“), "Refresh package lists" („Paketlisten aktualisieren“), creating/changing backup jobs, starting a backup now / retry for jobs with a bandwidth limit or ionice, start order for VMs | the updates tile shows HTTP 403, these actions fail |
 | `VM.Console` | Console | no console |
 | `VM.Config.Disk` | Guest disks in the storage overview (Nodvard Deck only reads – but with this privilege Proxmox also allows growing/moving disks) | this list is missing |
 | `VM.GuestAgent.Audit` | Real IP addresses of the VMs | Nodvard Deck enters the address of the Proxmox server as a placeholder; then set the correct address by hand ([FIRST-SETUP.md](FIRST-SETUP.md#5-servers-and-ssh-access)) |
@@ -139,8 +145,8 @@ interface, with the German label in quotes; they can differ slightly depending o
 4. **Permissions** („Berechtigungen“) → "Add" → "User Permission" („Benutzer-Berechtigung“): path `/`,
    user `nodvard@pve`, role as above, "Propagate" („Vererben“) on. Then "Add" once more → "API Token
    Permission" („API-Token-Berechtigung“): path `/`, token `nodvard@pve!dashboard`, same role.
-5. Only for variant B with backup jobs: the same with path `/storage/STORAGE_NAME` and role
-   `NodvardBackupStore`, again for the user **and** the token.
+5. Only for variant B, for backup jobs and "Start a backup now / retry": the same with path
+   `/storage/STORAGE_NAME` and role `NodvardBackupStore`, again for the user **and** the token.
 
 ## Check before you enter it in Nodvard Deck
 
@@ -194,9 +200,18 @@ show up on the "Proxmox" page and in the "Overview" („Übersicht“).
 Good to know:
 
 - **Replacing the token:** in the row "API token secret – …" („API-Token-Geheimnis – …“)
-  click "Set new value" („Neuen Wert setzen“). The "Set token" („Token setzen“) button on the
-  Proxmox or Backups page (under "Manage connections" („Verbindungen verwalten“)) can only set
-  a *missing* token and reports an error (409) if one already exists.
+  click "Replace" („Ersetzen“), enter the new value and click "Replace" again. On the
+  Proxmox or Backups page (under "Manage connections" („Verbindungen verwalten“)) the button is
+  called "Replace token" („Token ersetzen“) when a token exists and "Set token" („Token setzen“)
+  when it is missing.
+- **Changing the address or removing a connection:** Nodvard Deck then deletes the token secret of
+  this connection (also when removing it under "Manage connections" („Verbindungen verwalten“));
+  after a new address you enter it again. The same applies to a new short name. A different spelling
+  of the same address (upper/lower case in the host name, `:443` with `https://`, trailing `/`) does
+  not count as a change.
+- **No redirects:** Nodvard Deck never follows redirects when calling Proxmox, not even when opening
+  the console. So enter the final address of the node (`https://…:8006`), not a reverse proxy that redirects.
+  Otherwise queries and the console fail with an error message.
 - **Temporarily switching a server off** without losing the token: Proxmox or Backups page →
   "Manage connections" („Verbindungen verwalten“) → click the "active" („aktiv“) button (it
   changes to "disabled" („deaktiviert“)).
@@ -265,13 +280,14 @@ Good to know:
 | Resolve guests, disk sizes for the space check | `GET /cluster/resources`, `…/config` | `VM.Audit` |
 | Backup storage | `GET /nodes/{n}/storage?content=backup` | `Datastore.Audit` |
 | Existing backups | `GET …/storage/{s}/content?content=backup` | `VM.Backup` + `Datastore.AllocateSpace` |
-| Back up now / retry | `POST /nodes/{n}/vzdump` | `VM.Backup` + `Datastore.AllocateSpace` |
+| Back up now / retry | `POST /nodes/{n}/vzdump` | `VM.Backup` + `Datastore.AllocateSpace` + `Datastore.Allocate` on the storage (a retention is always sent, `keep-all=1` if the job has none); for jobs with a bandwidth limit or ionice additionally `Sys.Modify` on `/` |
 | Create, change a job | `POST /cluster/backup`, `PUT /cluster/backup/{id}` | `Sys.Modify` on `/` + `Datastore.Allocate` on the storage |
 
 ## Notes
 
 - **If something fails with `403`:** `pveum user token permissions nodvard@pve dashboard` shows
   which privileges the token really has; the tables above help to find the missing one.
+  "Start a backup now / retry" names the required privileges itself on a `403`.
 - **Proxmox VE 8:** `VM.GuestAgent.Audit` does not exist there yet, and `pveum role add`
   aborts with `invalid privilege 'VM.GuestAgent.Audit'`. In that case simply leave that
   privilege out (`pveversion` shows the version). Better **not** grant the VE 8 counterpart

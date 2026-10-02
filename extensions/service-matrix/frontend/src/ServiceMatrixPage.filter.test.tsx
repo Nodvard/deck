@@ -65,7 +65,7 @@ describe("Image-Zusammenfassung mit Server-Filter", () => {
     await screen.findByText("nginx");
     const button = await screen.findByRole("button", { name: "Image-Updates prüfen" });
     expect(button).not.toBeDisabled();
-    expect(screen.getByTestId("image-summary").textContent).not.toContain("Registries werden gefragt");
+    expect(screen.getByTestId("image-summary").textContent).not.toContain("Image-Quellen werden gefragt");
   });
 
   it("prüft der gefilterte Host selbst, steht der Hinweis da", async () => {

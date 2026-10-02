@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { removeQuestion, type DemoStatus } from "../lib/demo";
@@ -41,7 +42,7 @@ function login(permissions: string[]) {
 
 function renderBanner() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}><DemoBanner /></QueryClientProvider>);
+  return render(<QueryClientProvider client={client}><MemoryRouter><DemoBanner /></MemoryRouter></QueryClientProvider>);
 }
 
 beforeEach(() => {
@@ -55,6 +56,21 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("DemoBanner", () => {
+  it("sagt, dass es von den eingeschalteten Modulen abhängt, wie viel zu sehen ist, und führt zu den Modulen", async () => {
+    renderBanner();
+    const hint = await screen.findByTestId("demo-modules-hint");
+    expect(hint.textContent).toContain("hängt von den eingeschalteten Modulen ab");
+    expect(within(hint).getByRole("link", { name: "Module ansehen" })).toHaveAttribute("href", "/settings/extensions");
+  });
+
+  it("ohne Recht für Module nur der Satz, kein Link", async () => {
+    login(["hosts.read"]);
+    renderBanner();
+    const hint = await screen.findByTestId("demo-modules-hint");
+    expect(hint.textContent).toContain("hängt von den eingeschalteten Modulen ab");
+    expect(within(hint).queryByRole("link")).toBeNull();
+  });
+
   it("zeigt oben „Du siehst Beispieldaten“ mit Knopf zum Löschen, solange Beispieldaten da sind", async () => {
     renderBanner();
     const banner = await screen.findByTestId("demo-banner");

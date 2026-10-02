@@ -607,4 +607,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    # Auch ohne den Entrypoint (`compose exec` erbt dessen umask nicht): neue Dateien nur fuer den Besitzer.
+    os.umask(0o077)
     sys.exit(main())

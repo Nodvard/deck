@@ -382,7 +382,12 @@ def test_script_text_keeps_the_safety_properties():
     assert "/app/data" in text
     assert "-xdev" in text, "bleibt auf dem Dateisystem des Datenordners"
     assert "chown -h" in text, "folgt keinen Links"
-    assert "chown -R" not in text and "chmod" not in text
+    assert "chown -R" not in text and "chmod -R" not in text
+    # Rechte im Datenordner setzt erst der Prozess NACH dem Wechsel zu lattice (kein root-chmod, dem ein untergeschobener Link zum Ziel wird).
+    before_switch = text.split("exec setpriv", 1)[0]
+    assert not any("chmod" in line and not line.lstrip().startswith("#") for line in before_switch.splitlines())
+    assert any(line.lstrip().startswith("chmod 700 /app/data") for line in text.splitlines())
+    assert "\numask 077\n" in text and text.index("\numask 077\n") < text.index('if [ "$(id -u)" = "0" ]')
     assert text.rindex("setpriv") < text.rindex("python -m nodvard_deck.boot") < text.rindex("python -m nodvard_deck.rescue") < text.rindex('exec "$@"')
     # Der Einstiegspunkt ist `nodvard_deck.boot`, nicht mehr `nodvard_deck.migrate` (die Migration ruft boot selbst auf).
     commands = [line for line in text.splitlines() if line.strip() and not line.lstrip().startswith("#")]
@@ -441,6 +446,20 @@ def test_dockerfile_healthcheck_waits_long_enough_for_a_slow_migration_but_not_f
     assert "/api/v1/health" in code, "die Notseite antwortet dort mit 503: der Healthcheck schlaegt dann an"
 
 
+def test_dockerfile_starts_uvicorn_with_a_small_websocket_message_limit():
+    # uvicorn laesst WebSocket-Nachrichten bis 16 MiB zu; /ws nimmt im Anmeldefenster auch ohne Konto eine erste Nachricht an.
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    match = re.search(r'^CMD \[(.*)\]\s*$', code, re.MULTILINE)
+    assert match, "CMD in der Listenschreibweise"
+    args = re.findall(r'"([^"]*)"', match.group(1))
+    assert args[0] == "uvicorn"
+    assert "--ws-max-size" in args, "ohne den Schalter gilt der uvicorn-Standard von 16 MiB je Nachricht"
+    limit = int(args[args.index("--ws-max-size") + 1])
+    assert 64 * 1024 <= limit <= 1024**2, "Anmeldung, Terminal-Eingaben und Ereignisse brauchen weit weniger als 1 MiB"
+    assert args[args.index("--host") + 1] == "0.0.0.0" and args[args.index("--port") + 1] == "8080"
+
+
 @needs_sh
 def test_after_the_switch_home_is_not_roots_home(setup):
     # Als lattice mit HOME=/root scheiterte asyncssh an ~/.ssh/crt (kein Leserecht auf /root) -> jede SSH-Verbindung brach ab.
@@ -450,3 +469,129 @@ def test_after_the_switch_home_is_not_roots_home(setup):
     homes = [line for line in setup.lines("steps") if line.startswith("app home=")]
     assert homes and homes[0] != "app home=/root", homes
     assert homes[0] == "app home=/app" or homes[0].startswith("app home=/"), homes
+
+
+# --- Rechte: umask und Aufraeumen vorhandener Dateien ---------------------------------------------------------
+
+CHMOD_STUB = """#!/bin/sh
+echo "uid=$STUB_UID $*" >> "$STUB_LOG.chmod"
+exec /bin/chmod "$@"
+"""
+
+
+def _mode(path: Path) -> int:
+    return stat.S_IMODE(path.lstat().st_mode)
+
+
+@needs_sh
+@pytest.mark.parametrize("uid", [0, 1000])
+def test_boot_and_app_start_with_a_closed_umask(setup, uid):
+    # Sonst entstehen Datenbank, Dokumente und Zwischendateien mit 0644/0755 und sind im eingebundenen Hostordner fuer jeden lesbar.
+    _executable(setup.bin / "app", 'echo "app umask=$(umask)" >> "$STUB_LOG.steps"\n')
+    stub = setup.bin / "python"
+    stub.write_text(stub.read_text(encoding="utf-8").replace("#!/bin/sh\n", '#!/bin/sh\necho "python umask=$(umask)" >> "$STUB_LOG.steps"\n', 1), encoding="utf-8")
+    result = setup.run(uid=uid)
+    assert result.returncode == 0, result.stderr
+    steps = setup.lines("steps")
+    assert "python umask=0077" in steps and "app umask=0077" in steps, steps
+
+
+@needs_sh
+@pytest.mark.parametrize("uid", [0, 1000])
+def test_existing_open_files_in_the_data_folder_are_closed_once_at_start(setup, uid):
+    (setup.data).chmod(0o755)
+    (setup.data / "lattice.db").chmod(0o644)
+    (setup.data / "unterordner").chmod(0o755)
+    (setup.data / "unterordner" / "datei.txt").chmod(0o666)
+    tool = setup.data / "unterordner" / "programm.sh"
+    tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    tool.chmod(0o755)
+    # Ziel eines Links aus dem Datenordner: darf nicht angefasst werden.
+    setup.outside.chmod(0o755)
+    (setup.outside / "wichtig.txt").chmod(0o644)
+    result = setup.run(uid=uid)
+    assert result.returncode == 0, result.stderr
+    assert _mode(setup.data) == 0o700
+    assert _mode(setup.data / "lattice.db") == 0o600
+    assert _mode(setup.data / "unterordner") == 0o700
+    assert _mode(setup.data / "unterordner" / "datei.txt") == 0o600
+    assert _mode(tool) == 0o700, "das Ausfuehrungsrecht des Besitzers bleibt"
+    assert _mode(setup.outside) == 0o755 and _mode(setup.outside / "wichtig.txt") == 0o644, "ein Link nach draussen wird nicht verfolgt"
+
+
+@needs_sh
+def test_rights_are_set_by_the_image_user_never_by_root(setup):
+    # Ein als root laufendes chmod koennte ein zwischen Suche und Aenderung untergeschobener Link auf fremde Dateien lenken.
+    _executable(setup.bin / "chmod", CHMOD_STUB)
+    (setup.data / "lattice.db").chmod(0o644)
+    result = setup.run(uid=0)
+    assert result.returncode == 0, result.stderr
+    calls = setup.lines("chmod")
+    assert calls, "chmod lief"
+    image_uid = os.getuid() + 1
+    assert all(call.startswith(f"uid={image_uid} ") for call in calls), calls
+
+
+@needs_sh
+def test_a_data_folder_that_is_a_link_is_left_alone(setup, tmp_path):
+    # Ist /app/data selbst ein Link, wird dem Link nicht gefolgt (weder chmod noch find).
+    target = tmp_path / "anderswo"
+    target.mkdir()
+    target.chmod(0o755)
+    (target / "datei").write_text("x", encoding="utf-8")
+    (target / "datei").chmod(0o644)
+    real = setup.data
+    moved = tmp_path / "echt"
+    real.rename(moved)
+    real.symlink_to(target)
+    result = setup.run(uid=1000)
+    assert result.returncode == 0, result.stderr
+    assert _mode(target) == 0o755 and _mode(target / "datei") == 0o644
+
+
+@needs_sh
+def test_failing_chmod_only_warns_and_the_app_still_starts(setup):
+    _executable(setup.bin / "chmod", "#!/bin/sh\necho 'chmod: Operation not permitted' >&2\nexit 1\n")
+    result = setup.run(uid=1000)
+    assert result.returncode == 0, result.stderr
+    assert "Warnung" in result.stderr
+    assert setup.lines("steps")[-1].startswith("app uid=")
+
+
+def test_dockerfile_hands_only_the_data_folder_to_the_image_user():
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    flat = re.sub(r"\\\n\s*", " ", code)
+    assert not re.search(r"chown\s+-R\s+lattice", flat), "Code unter /app darf dem Dienstbenutzer nicht gehoeren"
+    assert "chown lattice:lattice /app/data" in flat, "nur der Datenordner gehoert lattice"
+    assert not re.search(r"chown\s+(-\w+\s+)*lattice(:lattice)?\s+/app(\s|$)", flat), "auch /app selbst nicht"
+    assert "chown -R root:root /app" in flat and "go-w" in flat, "alles andere ist root-eigen und nicht fuer andere beschreibbar"
+    assert "chmod 700 /app/data" in flat
+    # `lattice` darf keine `__pycache__` mehr anlegen: was zur Laufzeit importiert wird und nicht in site-packages liegt,
+    # uebersetzt schon der Build (Erweiterungen, Migrationen); sonst wuerde es bei jedem Start neu uebersetzt.
+    compile_step = re.search(r"python -m compileall[^\n&|]*", flat)
+    assert compile_step, "compileall im Build"
+    assert "/app/extensions" in compile_step.group(0) and "/app/backend/migrations" in compile_step.group(0)
+
+
+def _healthcheck_python_args(command: list[str] | str) -> list[str]:
+    parts = command.split() if isinstance(command, str) else list(command)
+    index = parts.index("python")
+    return parts[index + 1 : index + 3]
+
+
+def test_dockerfile_healthcheck_runs_python_isolated():
+    # Der Check laeuft als root im Ordner /app: ohne `-I` stuende der aktuelle Ordner vorn im Suchpfad.
+    text = DOCKERFILE.read_text(encoding="utf-8")
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    match = re.search(r"HEALTHCHECK[^\n]*\\\n\s*CMD\s+(python[^\n]*)", code)
+    assert match, "HEALTHCHECK mit CMD python"
+    assert _healthcheck_python_args(match.group(1)) == ["-I", "-c"]
+
+
+@pytest.mark.parametrize("name", ["docker-compose.yml", "compose.standalone.yml"])
+def test_compose_healthchecks_run_python_isolated(name):
+    yaml = pytest.importorskip("yaml")
+    data = yaml.safe_load((ROOT / "deploy" / name).read_text(encoding="utf-8"))
+    test = data["services"]["nodvard-deck"]["healthcheck"]["test"]
+    assert test[0] == "CMD" and _healthcheck_python_args(test[1:]) == ["-I", "-c"]

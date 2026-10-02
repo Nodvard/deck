@@ -165,7 +165,7 @@ async def test_send_without_configuration_raises_clearly(db_session, tmp_path, t
     from nodvard_sdk.capabilities import NotificationChannel
 
     channel = _runtime.capabilities.query(NotificationChannel)[0]
-    with pytest.raises(RuntimeError, match="nicht konfiguriert"):
+    with pytest.raises(RuntimeError, match="noch nicht eingerichtet"):
         await channel.send(Notification(title="T", body="B", severity=Severity.INFO))
 
 

@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GlobalDialogs } from "../components/GlobalDialogs";
 import { useAuthStore } from "../state/auth";
-import { UsersPage } from "./UsersPage";
+import { UsersPage, roleLabel } from "./UsersPage";
 
 const ROLES = [
   { id: "role-admin", name: "admin", description: "Eingebaute Rolle 'admin'", is_builtin: true },
@@ -80,8 +80,22 @@ describe("UsersPage", () => {
     expect(ownerRow.queryByRole("button", { name: "Entfernen" })).not.toBeInTheDocument();
 
     const nicoRow = within(screen.getByTestId("user-user-nico"));
-    expect(nicoRow.getByText("viewer")).toBeInTheDocument();
+    expect(nicoRow.getByText("Betrachter")).toBeInTheDocument();
+    expect(nicoRow.queryByText("viewer")).toBeNull();
     expect(nicoRow.getByRole("button", { name: "Entfernen" })).toBeInTheDocument();
+  });
+
+  it("die eingebauten Rollen stehen auf Deutsch da, eigene Rollen behalten ihren Namen", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    renderPage();
+    await screen.findByText("owner1");
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    expect(screen.getByLabelText("Administrator")).toBeInTheDocument();
+    expect(screen.getByLabelText("Betrachter")).toBeInTheDocument();
+    expect(screen.queryByLabelText("admin")).toBeNull();
+    expect(roleLabel({ name: "operator", is_builtin: true })).toBe("Bediener");
+    expect(roleLabel({ name: "operator", is_builtin: false })).toBe("operator");
+    expect(roleLabel({ name: "buchhaltung", is_builtin: false })).toBe("buchhaltung");
   });
 
   it("legt einen neuen Nutzer mit Rolle ueber das Formular an", async () => {
@@ -93,12 +107,118 @@ describe("UsersPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
     fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "Frisch" } });
     fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: "correct-horse-battery" } });
-    fireEvent.click(screen.getByLabelText("admin"));
+    fireEvent.click(screen.getByLabelText("Administrator"));
     fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
 
     await waitFor(() => expect(created).not.toBeNull());
     expect((created as { username: string }).username).toBe("frisch");
     expect((created as { role_ids: string[] }).role_ids).toEqual(["role-admin"]);
+  });
+
+  it.each([
+    ["Kollege Max", "correct-horse-battery", /^Benutzername: Nur Kleinbuchstaben, Ziffern sowie \. - und _ erlaubt, ohne Leerzeichen/],
+    ["ko", "correct-horse-battery", "Benutzername: Mindestens 3 Zeichen."],
+    ["frisch", "kurz", "Passwort: Mindestens 8 Zeichen."],
+  ])("lehnt %j / Passwort mit klarer Meldung ab, ohne etwas zu senden", async (username, password, expected) => {
+    let created: unknown = null;
+    vi.stubGlobal("fetch", mockFetch({ onCreate: (body) => (created = body) }));
+    renderPage();
+
+    await screen.findByText("owner1");
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    expect(screen.getByText(/Nur Kleinbuchstaben, Ziffern sowie \. - und _, mindestens 3 Zeichen, ohne Leerzeichen/)).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: username } });
+    fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: password } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(created).toBeNull();
+  });
+
+  it("lehnt eine E-Mail ohne @ ab, ohne etwas zu senden (das Formular hat noValidate, der Browser prüft sie nicht)", async () => {
+    let created: unknown = null;
+    vi.stubGlobal("fetch", mockFetch({ onCreate: (body) => (created = body) }));
+    renderPage();
+
+    await screen.findByText("owner1");
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "frisch" } });
+    fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: "correct-horse-battery" } });
+    fireEvent.change(screen.getByLabelText(/^E-Mail/), { target: { value: "kein-email" } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+
+    expect(await screen.findByText(/^E-Mail: Das sieht nicht nach einer Adresse aus/)).toBeInTheDocument();
+    expect(created).toBeNull();
+  });
+
+  it("sendet eine gültige E-Mail ohne Leerzeichen am Rand, eine leere als null", async () => {
+    const created: { email: string | null }[] = [];
+    vi.stubGlobal("fetch", mockFetch({ onCreate: (body) => created.push(body as { email: string | null }) }));
+    renderPage();
+
+    await screen.findByText("owner1");
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "frisch" } });
+    fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: "correct-horse-battery" } });
+    fireEvent.change(screen.getByLabelText(/^E-Mail/), { target: { value: " frisch@beispiel.de " } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+    await waitFor(() => expect(created).toHaveLength(1));
+    expect(created[0].email).toBe("frisch@beispiel.de");
+
+    await screen.findByText(/Benutzer „frisch“ angelegt/);
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "zweiter" } });
+    fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: "correct-horse-battery" } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+    await waitFor(() => expect(created).toHaveLength(2));
+    expect(created[1].email).toBeNull();
+  });
+
+  it("Bearbeiten: eine geänderte, kaputte E-Mail wird abgelehnt; eine alte, unveränderte blockiert das Speichern nicht", async () => {
+    const onPatch = vi.fn();
+    const users = [USERS[0], { ...USERS[1], email: "alt-ohne-at " }];
+    vi.stubGlobal("fetch", mockFetch({ users, onPatch }));
+    renderPage();
+
+    await screen.findByText("owner1");
+    fireEvent.click(within(screen.getByTestId("user-user-nico")).getByRole("button", { name: "Bearbeiten" }));
+
+    // Nur den Anzeigenamen ändern: die alte Adresse wird nicht erneut geprüft und nicht mitgeschickt.
+    fireEvent.change(screen.getByLabelText(/^Anzeigename/), { target: { value: "Nico B." } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(onPatch).toHaveBeenCalledWith("user-nico", { display_name: "Nico B." }));
+
+    // Neue, kaputte Adresse: Meldung, kein zweiter Aufruf.
+    fireEvent.click(within(screen.getByTestId("user-user-nico")).getByRole("button", { name: "Bearbeiten" }));
+    fireEvent.change(screen.getByLabelText(/^E-Mail/), { target: { value: "kaputt" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    expect(await screen.findByText(/^E-Mail: Das sieht nicht nach einer Adresse aus/)).toBeInTheDocument();
+    expect(onPatch).toHaveBeenCalledTimes(1);
+
+    // Gültige Adresse: wird getrimmt gesendet.
+    fireEvent.change(screen.getByLabelText(/^E-Mail/), { target: { value: " nico@beispiel.de " } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(onPatch).toHaveBeenCalledTimes(2));
+    expect(onPatch).toHaveBeenLastCalledWith("user-nico", { email: "nico@beispiel.de" });
+  });
+
+  it("zeigt die Ablehnung des Servers (422) als Satz, nicht als „HTTP 422“", async () => {
+    const msg = "Benutzername: Nur Kleinbuchstaben, Ziffern sowie . - und _ erlaubt, ohne Leerzeichen; er muss mit einem Buchstaben oder einer Ziffer beginnen.";
+    const base = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/users") && init?.method === "POST") {
+        return new Response(JSON.stringify({ detail: [{ type: "value_error", loc: ["body", "username"], msg }] }), { status: 422 });
+      }
+      return base(input, init);
+    }));
+    renderPage();
+
+    await screen.findByText("owner1");
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "frisch" } });
+    fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: "correct-horse-battery" } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+    expect(await screen.findByText(msg)).toBeInTheDocument();
   });
 
   it("aendert die Rollen eines Nutzers", async () => {
@@ -109,7 +229,7 @@ describe("UsersPage", () => {
     await screen.findByText("owner1");
     const nicoRow = within(screen.getByTestId("user-user-nico"));
     fireEvent.click(nicoRow.getByRole("button", { name: "Bearbeiten" }));
-    fireEvent.click(screen.getByLabelText("admin"));
+    fireEvent.click(screen.getByLabelText("Administrator"));
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
 
     await waitFor(() =>

@@ -19,7 +19,7 @@ import { Icon } from "./Icon";
 
 export interface PaletteItem {
   id: string;
-  group: "Seiten" | "Hosts" | "Apps";
+  group: "Seiten" | "Server" | "Apps";
   title: string;
   subtitle?: string;
   icon: JSX.Element;
@@ -97,20 +97,20 @@ function usePaletteItems(open: boolean): PaletteItem[] {
     const terminalIds = new Set(terminalHosts ?? []);
     for (const host of hosts ?? []) {
       items.push({
-        id: `host:${host.id}`, group: "Hosts", title: host.display_name, subtitle: host.address,
+        id: `host:${host.id}`, group: "Server", title: host.display_name, subtitle: host.address,
         keywords: `${host.name} ${host.kind ?? ""} server seite einstellungen werkzeuge`, icon: <Server size={16} strokeWidth={1.8} />,
         run: () => navigate(`/hosts/${host.id}`),
       });
       if (hasConsole(host)) {
         items.push({
-          id: `console:${host.id}`, group: "Hosts", title: `${host.display_name}: Konsole`, subtitle: host.address,
+          id: `console:${host.id}`, group: "Server", title: `${host.display_name}: Konsole`, subtitle: host.address,
           keywords: `${host.name} ${host.kind ?? ""} bildschirm vnc`, icon: <Monitor size={16} strokeWidth={1.8} />,
           run: () => navigate(`/console/${host.id}`),
         });
       }
       if (terminalIds.has(host.id)) {
         items.push({
-          id: `terminal:${host.id}`, group: "Hosts", title: `${host.display_name}: Terminal`, subtitle: host.address,
+          id: `terminal:${host.id}`, group: "Server", title: `${host.display_name}: Terminal`, subtitle: host.address,
           keywords: `${host.name} ssh shell`, icon: <SquareTerminal size={16} strokeWidth={1.8} />,
           run: () => navigate(`/terminal?host=${encodeURIComponent(host.id)}`),
         });
@@ -184,7 +184,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               autoFocus
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Seite, Host oder App suchen …"
+              placeholder="Seite, Server oder App suchen …"
               aria-label="Suchen"
               className="w-full bg-transparent text-sm outline-none placeholder:opacity-50"
             />

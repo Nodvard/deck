@@ -6,7 +6,7 @@ import { navigateTo } from "../../../_shared/frontend/src/testShell";
 import { BackupsPage } from "./BackupsPage";
 
 const JOBS = [
-  { job_ref: "pve2--job1--100", connection: "pve2", vmid: "100", name: "docker", host_id: "h1", node: "pve2", storage: "backup-pve1", schedule: "0 2 * * *", enabled: true, last_status: "ok", last_run_at: 1700000000 },
+  { job_ref: "pve2--job1--100", connection: "pve2", vmid: "100", name: "docker", host_id: "h1", node: "pve2", storage: "backup-pve1", schedule: "0 2 * * *", enabled: true, last_status: "failed", last_run_at: 1700000000 },
 ];
 
 /**
@@ -15,7 +15,7 @@ const JOBS = [
  * Retry-Aufruf feuert, nie was danach passiert (die eigentliche Luecke: nichts
  * bestaetigte den Vorschlag je).
  */
-function mockFetch(opts: { onRetry?: () => void; onApprove?: () => void; connections?: unknown[]; unprotected?: unknown; inventory?: unknown } = {}) {
+function mockFetch(opts: { jobs?: unknown[]; onRetry?: () => void; onApprove?: () => void; connections?: unknown[]; unprotected?: unknown; inventory?: unknown } = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -29,7 +29,7 @@ function mockFetch(opts: { onRetry?: () => void; onApprove?: () => void; connect
       return new Response(JSON.stringify(opts.unprotected ?? { guests: [], errors: [] }), { status: 200 });
     }
     if (url.includes("/ext/backups/jobs") && !url.includes("/history") && !url.includes("/retry")) {
-      return new Response(JSON.stringify(JOBS), { status: 200 });
+      return new Response(JSON.stringify(opts.jobs ?? JOBS), { status: 200 });
     }
     if (url.includes("/retry") && method === "POST") {
       opts.onRetry?.();
@@ -79,6 +79,41 @@ describe("BackupsPage retry()", () => {
 
     await waitFor(() => expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("docker")));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/retry"), expect.anything()));
+  });
+
+  it("sagt in der Rückfrage, dass nach der Aufbewahrung des Jobs ältere Sicherungen gelöscht werden können", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    render(<BackupsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Erneut versuchen" }));
+
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    const message = confirmDialog.mock.calls[0][0];
+    expect(message).toContain("Aufbewahrung");
+    expect(message).toContain("ältere Sicherungen");
+    expect(message).toContain("auch manuelle und die anderer Jobs");
+    expect(message).toContain("bleibt alles erhalten");
+    expect(message).not.toContain("volles Backup");
+  });
+
+  it("bietet bei einem erfolgreichen Backup 'Jetzt sichern' an, nicht 'Erneut versuchen'", async () => {
+    const fetchMock = mockFetch({ jobs: [{ ...JOBS[0], last_status: "ok" }] });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<BackupsPage />);
+
+    const button = await screen.findByRole("button", { name: "Jetzt sichern" });
+    expect(screen.queryByRole("button", { name: "Erneut versuchen" })).toBeNull();
+    fireEvent.click(button);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/retry"), expect.anything()));
+  });
+
+  it("zeigt waehrend eines laufenden Backups keinen Sicherungs-Knopf", async () => {
+    vi.stubGlobal("fetch", mockFetch({ jobs: [{ ...JOBS[0], last_status: "running" }] }));
+    render(<BackupsPage />);
+
+    await screen.findByText("Läuft");
+    expect(screen.queryByRole("button", { name: "Erneut versuchen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Jetzt sichern" })).toBeNull();
   });
 
   it("bricht ab, wenn die Rueckfrage abgelehnt wird", async () => {
@@ -389,7 +424,7 @@ describe("BackupsPage ConnectionsPanel", () => {
 
       window.history.replaceState({}, "", "/ext/backups/backups?host=h-ohne-job");
       render(<BackupsPage />);
-      expect(await screen.findByText(/Kein Backup-Job erfasst diesen Host/)).toBeInTheDocument();
+      expect(await screen.findByText(/Kein Backup-Job erfasst diesen Server/)).toBeInTheDocument();
       expect(screen.queryByText("(100)")).toBeNull();
       fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
       expect(await screen.findByText("(100)")).toBeInTheDocument();
@@ -403,7 +438,7 @@ describe("BackupsPage ConnectionsPanel", () => {
     try {
       vi.stubGlobal("fetch", mockFetch());
       render(<BackupsPage />);
-      expect(await screen.findByText(/Kein Backup-Job erfasst diesen Host/)).toBeInTheDocument();
+      expect(await screen.findByText(/Kein Backup-Job erfasst diesen Server/)).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
       expect(await screen.findByText("(100)")).toBeInTheDocument();
       expect(window.location.search).toBe("?x=1"); // nur ?host= entfernt

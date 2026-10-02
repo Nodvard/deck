@@ -126,10 +126,13 @@ def test_groups_are_added_only_if_the_group_exists():
 def test_sudo_rule_is_checked_with_visudo_before_install_and_rolled_back():
     script = _script(sudo=True)
     check = script.index('visudo -c -q -f "$T"')
-    install = script.index('install -m 0440 -o root -g root "$T" "/etc/sudoers.d/lattice-$U"')
-    whole = script.index("visudo -c -q ||", install)
-    rollback = script.index('rm -f "/etc/sudoers.d/lattice-$U"', whole)
+    install = script.index('install -m 0440 -o root -g root "$T" "$N"')
+    whole = script.index("if visudo -c -q; then", install)
+    rollback = script.index('else rm -f "$N"', whole)
     assert check < install < whole < rollback
+    assert 'N="/etc/sudoers.d/nodvard-$U"' in script and 'O="/etc/sudoers.d/lattice-$U"' in script
+    # Die alte Regel wird erst nach der Pruefung der ganzen Konfiguration angefasst und nur nach Vergleich.
+    assert whole < script.index('cmp -s "$T" "$O"') < script.index('rm -f "$O"') < rollback
     assert 'echo "$U ALL=(root) NOPASSWD: ALL" > "$T"' in script
     assert "command -v visudo" in script
     assert "sudo ist nicht installiert" in script
@@ -137,7 +140,7 @@ def test_sudo_rule_is_checked_with_visudo_before_install_and_rolled_back():
     assert 'trap "rm -f \\"\\$T\\"" EXIT' in script
     assert "abgelehnt" in script and "FEHLER" in script
     # Dateiname ohne Punkt: sudo ueberspringt sonst die Datei.
-    assert "lattice-$U" in script and "lattice.$U" not in script
+    assert "nodvard-$U" in script and "nodvard.$U" not in script and "lattice.$U" not in script
 
 
 def test_one_liner_runs_as_root_directly_and_otherwise_via_sudo():
@@ -285,9 +288,9 @@ def test_public_key_derivation_hides_details_of_broken_keys():
 
 
 def test_key_comment_is_made_safe_from_the_host_name():
-    assert host_setup.key_comment("bastel-pi") == "lattice@bastel-pi"
-    assert host_setup.key_comment("pve node\n'$(id)") == "lattice@pve-node----id-"
-    assert host_setup.key_comment("x" * 200) == "lattice@" + "x" * 64
+    assert host_setup.key_comment("bastel-pi") == "nodvard@bastel-pi"
+    assert host_setup.key_comment("pve node\n'$(id)") == "nodvard@pve-node----id-"
+    assert host_setup.key_comment("x" * 200) == "nodvard@" + "x" * 64
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +314,8 @@ def _stub(path: Path, body: str) -> None:
 
 def _sandbox(
     tmp_path: Path, *, user="lattice", existing_user=True, with_docker_group=True, with_visudo=True,
-    visudo_whole_fails=False, visudo_rule_fails=False, runuser="runuser",
+    visudo_whole_fails=False, visudo_rule_fails=False, runuser="runuser", sudoers_dir: Path | None = None,
+    visudo_whole_fails_on_call: int | None = None,
 ):
     """Attrappen fuer alles, was das Skript am System aendern wuerde. Sie schreiben nur in
     `calls.log`; `getent` zeigt auf ein Home in `tmp_path`."""
@@ -348,8 +352,12 @@ esac
         _stub(bin_dir / "su", f'echo "su $*" >> "{log}"\nwhile [ "$1" != "--" ]; do shift; done\nshift\nexec /bin/sh -c "exec \\"\\$@\\"" "$@"\n')
     _stub(bin_dir / "usermod", f'echo "usermod $*" >> "{log}"\n')
     # `install -d` legt das Verzeichnis an, sonst wird nur protokolliert (kein Schreiben nach /etc).
+    # Mit `sudoers_dir` kopiert `install -m 0440 QUELLE ZIEL` wirklich, wenn das Ziel dort liegt.
+    sudoers_case = f'"{sudoers_dir}"/*) cp "$src" "$dest";;' if sudoers_dir else ""
     _stub(bin_dir / "install", f'''echo "install $*" >> "{log}"
 [ "$1" = "-d" ] && eval "mkdir -p \\"\\${{$#}}\\""
+for a in "$@"; do src=$dest; dest=$a; done
+case "$dest" in {sudoers_case} esac
 exit 0
 ''')
     if with_visudo:
@@ -358,6 +366,12 @@ exit 0
             whole = 'case "$*" in *-f*) exit 0;; *) exit 1;; esac'
         if visudo_rule_fails:
             whole = "exit 1"
+        if visudo_whole_fails_on_call is not None:
+            counter = tmp_path / "visudo-calls"
+            whole = (
+                f'case "$*" in *-f*) exit 0;; esac\nn=$(cat "{counter}" 2>/dev/null || echo 0); n=$((n + 1)); '
+                f'echo $n > "{counter}"\n[ "$n" != {visudo_whole_fails_on_call} ]'
+            )
         _stub(bin_dir / "visudo", f'echo "visudo $*" >> "{log}"\n{whole}\n')
     # Unter /etc wird nur protokolliert: ohne root (z. B. auf einem CI-Runner) scheitert ein echtes
     # `rm -f /etc/sudoers.d/...` schon am fehlenden Leserecht des Ordners. Alles andere (mktemp-Dateien) wirklich loeschen.
@@ -437,7 +451,7 @@ def test_run_installs_sudo_rule_after_successful_check(tmp_path):
     assert done.returncode == 0, done.stderr
     calls = log.read_text().splitlines()
     install = [c for c in calls if c.startswith("install -m 0440 -o root -g root ")]
-    assert len(install) == 1 and install[0].endswith(" /etc/sudoers.d/lattice-lattice")
+    assert len(install) == 1 and install[0].endswith(" /etc/sudoers.d/nodvard-lattice")
     assert any(c.startswith("visudo -c -q -f ") for c in calls)
     assert "visudo -c -q" in calls, "danach wird die ganze Konfiguration nochmals geprueft"
     assert "FEHLER" not in done.stdout
@@ -448,7 +462,7 @@ def test_run_rolls_back_the_sudo_rule_when_the_whole_config_is_broken(tmp_path):
     bin_dir, _, log = _sandbox(tmp_path, visudo_whole_fails=True)
     done = _run(_script(sudo=True), bin_dir)
     assert done.returncode != 0, "eine zurueckgenommene sudo-Regel ist kein Erfolg"
-    assert "rm -f /etc/sudoers.d/lattice-lattice" in log.read_text()
+    assert "rm -f /etc/sudoers.d/nodvard-lattice" in log.read_text()
     assert "FEHLER: sudo-Regel zurückgenommen." in done.stdout
     assert "Fertig." not in done.stdout and "Nicht alles hat geklappt" in done.stdout
 
@@ -567,3 +581,146 @@ def test_run_stops_when_the_user_switch_fails(tmp_path):
     done = _run(_script(), bin_dir)
     assert done.returncode != 0 and "Fertig." not in done.stdout
     assert not (home / ".ssh" / "authorized_keys").exists()
+
+
+# ---------------------------------------------------------------------------
+# sudo-Regel: neuer Name nodvard-<Benutzer>, alte lattice-<Benutzer> sauber ablösen
+# ---------------------------------------------------------------------------
+
+SUDO_RULE = "lattice ALL=(root) NOPASSWD: ALL\n"
+
+
+def _sudoers_run(tmp_path: Path, old_rule: str | None, *, old_link_to: Path | None = None, **sandbox_kw):
+    """Fuehrt den Befehl mit sudo gegen ein echtes Verzeichnis anstelle von /etc/sudoers.d aus."""
+    sudoers = tmp_path / "sudoers.d"
+    sudoers.mkdir()
+    if old_rule is not None:
+        (sudoers / "lattice-lattice").write_text(old_rule)
+    if old_link_to is not None:
+        (sudoers / "lattice-lattice").symlink_to(old_link_to)
+    bin_dir, _, log = _sandbox(tmp_path, sudoers_dir=sudoers, **sandbox_kw)
+    script = _script(sudo=True).replace("/etc/sudoers.d/", f"{sudoers}/")
+    assert str(sudoers) in script
+    return _run(script, bin_dir), sudoers, log
+
+
+@needs_sh
+def test_run_new_server_gets_only_the_nodvard_sudo_rule(tmp_path):
+    done, sudoers, _ = _sudoers_run(tmp_path, None)
+    assert done.returncode == 0, done.stderr
+    assert sorted(p.name for p in sudoers.iterdir()) == ["nodvard-lattice"]
+    assert (sudoers / "nodvard-lattice").read_text() == SUDO_RULE
+    assert "Hinweis" not in done.stdout and "FEHLER" not in done.stdout
+
+
+@needs_sh
+def test_run_replaces_the_identical_old_sudo_rule(tmp_path):
+    done, sudoers, log = _sudoers_run(tmp_path, SUDO_RULE)
+    assert done.returncode == 0, done.stderr
+    assert sorted(p.name for p in sudoers.iterdir()) == ["nodvard-lattice"], "keine doppelte Regel"
+    assert "wurde durch nodvard-lattice ersetzt" in done.stdout
+    calls = log.read_text().splitlines()
+    # Erst die neue Datei pruefen und installieren, dann die ganze Konfiguration pruefen, erst dann die alte entfernen.
+    first_check = next(i for i, c in enumerate(calls) if c.startswith("visudo -c -q -f "))
+    install = next(i for i, c in enumerate(calls) if c.startswith("install -m 0440"))
+    whole = next(i for i, c in enumerate(calls) if c == "visudo -c -q")
+    removal = next(i for i, c in enumerate(calls) if c.startswith("rm -f ") and c.endswith("/lattice-lattice"))
+    assert first_check < install < whole < removal
+    visudo_calls = [c for c in calls if c.startswith("visudo")]
+    assert visudo_calls[-1] == "visudo -c -q" and calls.index(visudo_calls[-1], removal) > removal, (
+        "nach dem Entfernen wird die ganze Konfiguration nochmals geprueft"
+    )
+
+
+@needs_sh
+@pytest.mark.parametrize(
+    "old_rule",
+    ["lattice ALL=(ALL) ALL\n", "lattice ALL=(root) NOPASSWD: ALL\n# von Hand\n", "lattice ALL=(root) NOPASSWD: ALL", ""],
+)
+def test_run_keeps_a_foreign_old_sudo_rule_with_a_hint(tmp_path, old_rule):
+    done, sudoers, _ = _sudoers_run(tmp_path, old_rule)
+    assert done.returncode == 0, done.stderr
+    assert (sudoers / "lattice-lattice").read_text() == old_rule, "fremde Regel unveraendert"
+    assert (sudoers / "nodvard-lattice").read_text() == SUDO_RULE
+    assert "lattice-lattice ist eine andere Regel" in done.stdout and "bleibt stehen" in done.stdout
+    assert "ersetzt" not in done.stdout
+
+
+@needs_sh
+def test_run_keeps_an_old_sudo_rule_that_is_a_symlink(tmp_path):
+    target = tmp_path / "ziel"
+    target.write_text(SUDO_RULE)
+    done, sudoers, _ = _sudoers_run(tmp_path, None, old_link_to=target)
+    assert done.returncode == 0, done.stderr
+    assert (sudoers / "lattice-lattice").is_symlink() and target.read_text() == SUDO_RULE
+    assert "ist ein Link und bleibt stehen" in done.stdout
+
+
+@needs_sh
+def test_run_removes_nothing_when_visudo_rejects_the_new_rule(tmp_path):
+    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_rule_fails=True)
+    assert done.returncode != 0
+    assert sorted(p.name for p in sudoers.iterdir()) == ["lattice-lattice"], "alte Regel bleibt, neue wurde nie angelegt"
+    assert "abgelehnt" in done.stdout
+
+
+@needs_sh
+def test_run_removes_nothing_when_the_whole_config_is_broken_after_install(tmp_path):
+    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_whole_fails=True)
+    assert done.returncode != 0
+    # Die neue Regel wird zurueckgenommen, die alte bleibt: der Server hat danach genau den Stand von vorher.
+    assert sorted(p.name for p in sudoers.iterdir()) == ["lattice-lattice"]
+    assert (sudoers / "lattice-lattice").read_text() == SUDO_RULE
+    assert "sudo-Regel zurückgenommen" in done.stdout and "ersetzt" not in done.stdout
+
+
+@needs_sh
+def test_run_restores_the_old_rule_when_the_config_breaks_after_removing_it(tmp_path):
+    # Zweiter Aufruf der ganzen Pruefung (nach dem Entfernen) scheitert.
+    done, sudoers, _ = _sudoers_run(tmp_path, SUDO_RULE, visudo_whole_fails_on_call=2)
+    assert done.returncode != 0
+    assert (sudoers / "lattice-lattice").read_text() == SUDO_RULE, "alte Regel wiederhergestellt"
+    assert "Die alte sudo-Regel wurde wiederhergestellt" in done.stdout and "Fertig." not in done.stdout
+
+
+@needs_sh
+def test_run_rerun_with_only_the_nodvard_rule_changes_nothing(tmp_path):
+    done, sudoers, _ = _sudoers_run(tmp_path, None)
+    assert done.returncode == 0
+    bin_dir = tmp_path / "bin"
+    script = _script(sudo=True).replace("/etc/sudoers.d/", f"{sudoers}/")
+    again = _run(script, bin_dir)
+    assert again.returncode == 0, again.stderr
+    assert sorted(p.name for p in sudoers.iterdir()) == ["nodvard-lattice"]
+    assert "Hinweis" not in again.stdout
+
+
+@needs_sh
+def test_run_does_not_add_the_key_again_when_it_is_there_with_the_old_comment(tmp_path):
+    """Schluessel, die vor der Umstellung eingetragen wurden, tragen `lattice@...`; der Befehl leitet jetzt
+    `nodvard@...` ab -- derselbe Schluessel darf deshalb nicht zum zweiten Mal in die Datei."""
+    bin_dir, home, _ = _sandbox(tmp_path)
+    (home / ".ssh").mkdir()
+    authorized = home / ".ssh" / "authorized_keys"
+    old_line = f"restrict,pty {KEY}\n"  # KEY traegt den alten Kommentar lattice@bastel-pi
+    authorized.write_text(old_line)
+    new_key = KEY.replace("lattice@bastel-pi", "nodvard@bastel-pi")
+    done = _run(_script(key=new_key), bin_dir)
+    assert done.returncode == 0, done.stderr
+    assert authorized.read_text() == old_line
+    # Ein anderer Schluessel wird dagegen angehaengt.
+    other = new_key.replace("Platzhalter", "Anderslautend", 1)
+    done = _run(_script(key=other), bin_dir)
+    assert done.returncode == 0, done.stderr
+    assert authorized.read_text() == old_line + f"restrict,pty {other}\n"
+
+
+@needs_sh
+def test_run_root_does_not_add_the_key_again_when_it_is_there_with_the_old_comment(tmp_path):
+    bin_dir, home, _ = _sandbox(tmp_path, user="root")
+    (home / ".ssh").mkdir()
+    authorized = home / ".ssh" / "authorized_keys"
+    authorized.write_text(f"restrict,pty {KEY}\n")
+    done = _run(_script("root", key=KEY.replace("lattice@", "nodvard@")), bin_dir)
+    assert done.returncode == 0, done.stderr
+    assert authorized.read_text() == f"restrict,pty {KEY}\n"

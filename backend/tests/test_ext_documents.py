@@ -337,6 +337,8 @@ async def test_download_returns_original_bytes_content_type_and_filename(client,
     assert downloaded.content == content
     assert downloaded.headers["content-type"] == "image/png"
     assert "mein dokument.png" in downloaded.headers["content-disposition"]
+    assert downloaded.headers["x-content-type-options"] == "nosniff"
+    assert "sandbox" in downloaded.headers["content-security-policy"]
 
 
 def _filename_from_disposition(header: str) -> str:
@@ -500,3 +502,17 @@ async def test_rename_changes_only_the_display_name(client, db_session, test_set
     for bad in ("", "../x.png", "a\nb.png"):
         assert (await client.patch(f"/api/v1/ext/documents/documents/{doc['id']}", json={"original_filename": bad}, headers=headers)).status_code == 422
     assert (await client.patch("/api/v1/ext/documents/documents/nope", json={"original_filename": "x"}, headers=headers)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_document_upload_larger_than_the_general_request_limit_is_accepted(client, db_session, test_settings):
+    from nodvard_deck_ext_documents.storage import MAX_DOCUMENT_BYTES
+
+    token = await _enable_documents(client, db_session, test_settings)
+    headers = {**_auth_header(token), "Content-Type": "image/png"}
+    url = "/api/v1/ext/documents/documents?filename=gross.png"
+
+    ok = await client.post(url, content=b"\x89PNG\r\n\x1a\n" + b"\x00" * (2 * 1024 * 1024), headers=headers)
+    assert ok.status_code == 201, ok.text
+    too_big = await client.post(url, content=b"\x00" * (MAX_DOCUMENT_BYTES + 1), headers=headers)
+    assert too_big.status_code == 413

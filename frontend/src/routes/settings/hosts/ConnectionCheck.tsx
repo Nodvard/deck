@@ -72,6 +72,9 @@ function KeyConfirm({
         <div className="mt-2.5">
           <Button variant="primary" busy={busy} onClick={onConfirm}>Fingerabdruck stimmt – bestätigen</Button>
           <p className="mt-1 text-xs text-white/45">Erst wenn der Fingerabdruck mit dem auf dem Server übereinstimmt. Vorher wurde nichts an den Server geschickt.</p>
+          <p className="mt-1 text-xs text-white/45" data-testid="fingerprint-ease">
+            Im eigenen Heimnetz und bei einem frisch eingerichteten Server ist Bestätigen in Ordnung. Bei einem Server im Internet vergleiche den Fingerabdruck wirklich.
+          </p>
         </div>
       )}
     </>

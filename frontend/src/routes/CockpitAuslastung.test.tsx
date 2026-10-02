@@ -141,6 +141,16 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(screen.getByTestId("machine-m-deb-hint")).toHaveTextContent("Messwerte für diesen Server sind aus");
   });
 
+  it("ein Server, der nie geantwortet hat, schickt zuerst zum Zugang statt auf Messwerte zu warten", async () => {
+    const hosts = respond("/api/v1/hosts", "GET") as { id: string }[];
+    vi.stubGlobal("fetch", mockFetch({
+      "/hosts/metrics/latest": { hosts: {}, stale_after_s: 120 },
+      "/hosts": hosts.map((h) => (h.id === "m-deb" ? { ...h, status: "down", last_seen_at: null } : h)),
+    }));
+    renderCockpit();
+    expect(await screen.findByTestId("machine-m-deb-hint")).toHaveTextContent("Noch keine Verbindung: prüfe zuerst den Zugang");
+  });
+
   it("fällt die Abfrage der Werte aus, bleibt das Cockpit benutzbar: alle Server als Zeilen", async () => {
     vi.stubGlobal("fetch", mockFetch({ "/hosts/metrics/latest": undefined }));
     renderCockpit();

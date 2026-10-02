@@ -100,6 +100,23 @@ async def create_secret(
     return SecretOut.from_model(secret)
 
 
+LOGIN_SECRET_MESSAGE = (
+    "Dieser Eintrag gehört zur Zwei-Faktor-Anmeldung eines Kontos und lässt sich hier weder "
+    "ändern noch löschen. Abschalten geht unter „Mein Konto“ bzw. bei anderen Nutzern unter "
+    "„Benutzer“ mit „Zwei-Faktor zurücksetzen“."
+)
+
+
+async def _refuse_login_secret(session: SessionDep, secret_id: str) -> None:
+    """Der Schluessel der Zwei-Faktor-Anmeldung liegt im Tresor wie jedes andere Secret. Ueber
+    diese Endpunkte ersetzt, haette jeder mit `secrets.write` einen eigenen Authenticator fuer
+    ein fremdes Konto (auch das des Inhabers), ohne Passwortabfrage und am Protokoll von
+    `user.2fa_reset` vorbei; geloescht, kaeme der Besitzer nicht mehr hinein."""
+    owner_of = await session.execute(select(User.id).where(User.totp_secret_id == secret_id).limit(1))
+    if owner_of.first() is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=LOGIN_SECRET_MESSAGE)
+
+
 @router.put(
     "/{secret_id}/value",
     status_code=status.HTTP_204_NO_CONTENT,
@@ -108,6 +125,7 @@ async def create_secret(
 async def replace_secret_value(
     secret_id: str, payload: SecretValueUpdate, session: SessionDep, settings: SettingsDep
 ) -> None:
+    await _refuse_login_secret(session, secret_id)
     keyring = vault.load_keyring(settings)
     try:
         await vault.replace_secret_value(session, keyring, secret_id, payload.value)
@@ -124,4 +142,5 @@ async def delete_secret(secret_id: str, session: SessionDep) -> None:
     """Idempotent -- ein bereits geloeschtes/unbekanntes Secret ist kein Fehler,
     gleiche Haltung wie `services.auth.logout()` gegenueber einem unbekannten
     Refresh-Token."""
+    await _refuse_login_secret(session, secret_id)
     await vault.delete_secret(session, secret_id)

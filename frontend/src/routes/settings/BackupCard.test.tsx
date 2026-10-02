@@ -142,6 +142,24 @@ describe("Karte Sicherung", () => {
     expect(await screen.findByText(/schützt vor Fehlbedienung, aber nicht vor einem Defekt/)).toBeInTheDocument();
   });
 
+  it("Ordner nicht eingebunden: ein sichtbarer Satz erklärt, warum der Knopf gesperrt ist (kein bloßer Tooltip)", async () => {
+    mockApi({ "GET /system/backups": () => overview() });
+    render(<BackupCard />);
+    const note = await screen.findByTestId("external-not-mounted");
+    expect(note.textContent).toContain("/backups ist hier nicht eingebunden");
+    expect(note.textContent).toContain("Compose-Datei");
+    expect(screen.getByRole("button", { name: /Eingebundener Ordner \/backups/ })).toBeDisabled();
+  });
+
+  it("Ordner eingebunden: kein Erklärsatz, der Knopf geht", async () => {
+    const base = overview();
+    mockApi({ "GET /system/backups": () => overview({ target: { ...base.target, external_available: true } }) });
+    render(<BackupCard />);
+    await screen.findByRole("button", { name: /Eingebundener Ordner/ });
+    expect(screen.queryByTestId("external-not-mounted")).toBeNull();
+    expect(screen.getByRole("button", { name: /Eingebundener Ordner/ })).toBeEnabled();
+  });
+
   it("ohne Schlüssel kein automatisches Sichern und kein „Jetzt sichern“", async () => {
     mockApi({ "GET /system/backups": () => overview() });
     render(<BackupCard />);

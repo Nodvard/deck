@@ -1,4 +1,4 @@
-"""`channel.py`: der Kanal zwischen Dashboard und Helfer (Bauplan 2c-2, Ebene 2 der Teststrategie).
+"""`channel.py`: der Kanal zwischen Dashboard und Helfer.
 
 Echtes Dateisystem unter `tmp_path`. Das Dashboard gilt als Angreifer: Symlinks, FIFOs, Hardlinks, riesige und
 duenne Dateien, ausgetauschte Ordner, vorab hingelegte Temp-Namen, sehr viele Eintraege. Der Helfer darf dabei
@@ -96,7 +96,7 @@ def run_with_timeout(func, timeout: float = 10.0):
 
 
 # ---------------------------------------------------------------------------
-# Einrichten (M4)
+# Einrichten
 # ---------------------------------------------------------------------------
 
 
@@ -184,7 +184,7 @@ def test_poll_before_setup_is_refused(root, uid):
 
 
 # ---------------------------------------------------------------------------
-# Anforderungen lesen (M3)
+# Anforderungen lesen
 # ---------------------------------------------------------------------------
 
 
@@ -305,7 +305,7 @@ def test_non_empty_directories_stay_and_are_reported_never_removed_recursively(c
 
 
 def test_directories_never_crowd_out_real_requests(ch, root):
-    # Fund 1: mehr als 32 Ordner `<uuid4>.json` und mehr als 1000 fremde Ordner (alle nicht leer, damit sie
+    # Mehr als 32 Ordner `<uuid4>.json` und mehr als 1000 fremde Ordner (alle nicht leer, damit sie
     # stehen bleiben) belegten frueher die Plaetze von MAX_HANDLE/MAX_SCAN -- echte Anforderungen kamen nie dran.
     # Echte Anforderungen vor *und* nach den Ordnern, damit es von der Reihenfolge im Dateisystem unabhaengig ist.
     wanted = {rid(i) for i in range(5)} | {rid(i) for i in range(5, 10)}
@@ -361,7 +361,7 @@ def make_full_folders(root, count: int, prefix: str = "fremd") -> None:
 
 
 def test_rmdir_attempts_per_round_are_bounded_but_every_folder_still_counts(ch, root, rmdir_calls):
-    # Befund: 100 500 volle Ordner kosteten jede Runde 100 500 `rmdir` (0,6 s). Jetzt hoechstens `MAX_RMDIR`;
+    # 100 500 volle Ordner kosteten jede Runde 100 500 `rmdir` (0,6 s). Jetzt hoechstens `MAX_RMDIR`;
     # der Rest wird ohne Systemaufruf als uebrig gezaehlt, `directories` und `cluttered` bleiben richtig.
     assert 0 < channel.MAX_RMDIR <= channel.MAX_SCAN
     total = channel.MAX_RMDIR + 50
@@ -489,7 +489,7 @@ def test_never_writes_into_requests(ch, root, monkeypatch):
 
 
 def test_requests_dir_of_another_owner_is_unsafe_without_root_too(root, uid, monkeypatch):
-    # Die Besitzerpruefung an `requests/` (M4) auch ohne root: `fstat` meldet einen anderen Besitzer.
+    # Die Besitzerpruefung an `requests/` auch ohne root: `fstat` meldet einen anderen Besitzer.
     c = Channel(root, expected_uid=uid)
     c.setup()
     fake_owner(monkeypatch, {requests_dir(root): uid + 1000})
@@ -544,7 +544,7 @@ def test_operating_profile_root_without_capabilities(root):
 
 
 def test_protocol_vector_files_section_matches_the_channel():
-    # Fund 14: der Abschnitt `files` ist der Vertrag fuer das Dashboard (PR 5); weichen Helfer und Vektor ab, bleiben
+    # Der Abschnitt `files` ist der Vertrag fuer das Dashboard; weichen Helfer und Vektor ab, bleiben
     # beide Seiten gruen und arbeiten trotzdem nicht zusammen (z. B. 0600 statt 0644, anderes Muster fuer Temp-Dateien).
     files = load_vectors("protocol.json")["files"]
     assert set(files) == {"status", "requests_dir", "request_name_pattern", "dashboard_tmp_pattern", "requests_mode",
@@ -644,7 +644,7 @@ def test_ten_thousand_entries_do_not_stall_a_round(ch, root):
 
 
 # ---------------------------------------------------------------------------
-# Status (1.5, M4, M17)
+# Status
 # ---------------------------------------------------------------------------
 
 

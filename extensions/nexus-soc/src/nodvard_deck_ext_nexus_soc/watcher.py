@@ -47,6 +47,8 @@ import shlex
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol
 
+from .incident_text import describe_restart_loop, describe_transition, strip_relative_time
+
 logger = logging.getLogger("nodvard_deck.ext.nexus-soc.watcher")
 
 _STARTUP_DELAY_S = 60.0
@@ -99,20 +101,30 @@ def inspect_exit_command(names: list[str]) -> str:
     """Ein nur lesender `docker inspect` fuer die Beendigungs-Fakten mehrerer Container."""
     return (
         "docker inspect --type container --format "
-        "'{{.Name}}|{{.State.OOMKilled}}|{{.State.ExitCode}}|{{.State.Running}}|{{.State.FinishedAt}}|{{.State.Error}}' "
+        "'{{.Name}}|{{.State.OOMKilled}}|{{.State.ExitCode}}|{{.State.Running}}|{{.State.FinishedAt}}"
+        "|{{.RestartCount}}|{{.Config.Image}}|{{.State.Error}}' "
         + " ".join(shlex.quote(n) for n in names)
     )
 
 
 def parse_exit_facts(output: str) -> dict[str, dict[str, Any]]:
-    """Ausgabe von `inspect_exit_command` -> {Name: {oom_killed, exit_code, running, finished_at, error}}.
-    `State.Error` steht zuletzt (darf selbst ein "|" enthalten); unlesbare Zeilen entfallen."""
+    """Ausgabe von `inspect_exit_command` -> {Name: {oom_killed, exit_code, running, finished_at, error,
+    restart_count, image}}. `State.Error` steht zuletzt (darf selbst ein "|" enthalten); unlesbare
+    Zeilen entfallen. Aeltere Ausgaben ohne Neustart-Zaehler und Image (6 Felder) werden weiter
+    gelesen, dann fehlen `restart_count` und `image`."""
     facts: dict[str, dict[str, Any]] = {}
     for line in output.splitlines():
-        parts = line.strip().split("|", 5)
-        if len(parts) != 6:
-            continue
-        name, oom, code, running, finished, error = (p.strip() for p in parts)
+        line = line.strip()
+        extra: dict[str, Any] = {}
+        parts = line.split("|", 7)
+        if len(parts) == 8 and parts[5].strip().isdigit():
+            name, oom, code, running, finished, restarts, image, error = (p.strip() for p in parts)
+            extra = {"restart_count": int(restarts), "image": image}
+        else:
+            parts = line.split("|", 5)
+            if len(parts) != 6:
+                continue
+            name, oom, code, running, finished, error = (p.strip() for p in parts)
         name = name.lstrip("/")
         if (
             not name
@@ -127,6 +139,7 @@ def parse_exit_facts(output: str) -> dict[str, dict[str, Any]]:
             "running": running == "true",
             "finished_at": "" if finished.startswith("0001-") else finished,
             "error": error,
+            **extra,
         }
     return facts
 
@@ -309,12 +322,9 @@ class DockerWatcher:
                             ContainerTransition(
                                 host=host,
                                 target=name,
-                                message=(
-                                    f"Container CRASH (Absturzschleife: {restart_delta}x neu gestartet "
-                                    f"seit der letzten Prüfung, {status_str})"
-                                ),
+                                message=describe_restart_loop(restart_delta),
                                 details={
-                                    "status": status_str,
+                                    "status": strip_relative_time(status_str),
                                     "state": state,
                                     "is_crash": True,
                                     "restart_count": current[0] if current else None,
@@ -333,13 +343,13 @@ class DockerWatcher:
                         and "exited (0)" not in status_str.lower()
                         and "exited (143)" not in status_str.lower()
                     )
-                    event_kind = "CRASH" if is_crash else ("PAUSIERT" if state == "paused" else "MANUELLER STOP")
+                    event_kind = "crash" if is_crash else ("paused" if state == "paused" else "stopped")
                     await self._on_transition(
                         ContainerTransition(
                             host=host,
                             target=name,
-                            message=f"Container {event_kind} ({status_str})",
-                            details={"status": status_str, "state": state, "is_crash": is_crash},
+                            message=describe_transition(kind=event_kind, state=state, status=status_str),
+                            details={"status": strip_relative_time(status_str), "state": state, "is_crash": is_crash},
                             is_crash=is_crash,
                         )
                     )

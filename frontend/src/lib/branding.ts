@@ -65,3 +65,20 @@ export function applyBranding(branding: Branding): void {
     if (link) link.href = branding.favicon_url;
   }
 }
+
+/** Rechteinhaber und Name der Software. Beides bleibt auch bei eigenem Branding (Produktname, Logo) stehen:
+ * das Branding aendert, wie die Oberflaeche heisst, nicht, wem die Software gehoert und wie sie heisst. */
+export const COPYRIGHT_HOLDER = "Nico Benks";
+export const SOFTWARE_NAME = "Nodvard Deck";
+const COPYRIGHT_FIRST_YEAR = 2026;
+
+/** Zeile „© 2026 Nico Benks · Nodvard Deck“ (ab 2027 „© 2026–2027 ...“) fuer die Anmeldeseite. */
+export function copyrightLine(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const years = year > COPYRIGHT_FIRST_YEAR ? `${COPYRIGHT_FIRST_YEAR}–${year}` : `${COPYRIGHT_FIRST_YEAR}`;
+  return `© ${years} ${COPYRIGHT_HOLDER} · ${SOFTWARE_NAME}`;
+}
+
+/** Erklärt den „Untertitel“: derselbe Wert (`short_name`) ist auch der Name der App auf dem Handy (Web-App-Manifest). */
+export const SHORT_NAME_HINT =
+  "Kleine Zeile unter dem Namen und Name der App auf dem Handy-Startbildschirm, also kurz halten. Leer: der Anfang des Produktnamens.";

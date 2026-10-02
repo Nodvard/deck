@@ -139,3 +139,51 @@ async def test_invalid_kind_is_rejected_by_schema(client):
         headers=_auth_header(token),
     )
     assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_two_factor_key_of_an_account_cannot_be_replaced_or_deleted(client, db_session, test_settings):
+    """Mit `secrets.write` liess sich der Zwei-Faktor-Schluessel eines fremden Kontos (auch des
+    Inhabers) durch einen eigenen ersetzen oder loeschen -- ohne Passwort und an `reset-2fa`
+    vorbei."""
+    import pyotp
+    from sqlalchemy import select
+
+    from nodvard_deck.models import User
+
+    owner_token = await _bootstrap_owner(client)
+    setup = await client.post(
+        "/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(owner_token)
+    )
+    assert setup.status_code == 200, setup.text
+    secret = setup.json()["secret"]
+    confirmed = await client.post(
+        "/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_auth_header(owner_token)
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    owner = (await db_session.execute(select(User).where(User.username == "owner1"))).scalar_one()
+    totp_secret_id = owner.totp_secret_id
+
+    await _create_user_with_role(db_session, username="admin1", password="whatever123", role="admin")
+    admin_token = (
+        await client.post("/api/v1/auth/login", json={"username": "admin1", "password": "whatever123"})
+    ).json()["access_token"]
+    listed = (await client.get("/api/v1/secrets", headers=_auth_header(admin_token))).json()
+    assert totp_secret_id in {s["id"] for s in listed}
+
+    replaced = await client.put(
+        f"/api/v1/secrets/{totp_secret_id}/value",
+        json={"value": pyotp.random_base32()},
+        headers=_auth_header(admin_token),
+    )
+    assert replaced.status_code == 409
+    assert "Zwei-Faktor" in replaced.json()["detail"]
+    deleted = await client.delete(f"/api/v1/secrets/{totp_secret_id}", headers=_auth_header(admin_token))
+    assert deleted.status_code == 409
+
+    # Der Schluessel ist unveraendert: der alte Authenticator gilt weiter.
+    from nodvard_deck.core import vault
+
+    await db_session.refresh(owner)
+    assert owner.totp_secret_id == totp_secret_id
+    assert await vault.read_secret_plaintext(db_session, vault.load_keyring(test_settings), totp_secret_id) == secret

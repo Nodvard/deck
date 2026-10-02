@@ -215,3 +215,133 @@ async def test_app_manifest_and_icons_follow_branding_without_login(client):
     assert Image.open(BytesIO((await client.get("/api/v1/app/icon-512-maskable.png")).content)).getpixel((0, 0))[3] == 255
     assert Image.open(BytesIO((await client.get("/api/v1/app/icon-192.png")).content)).getpixel((0, 0))[3] == 0
     assert (await client.get("/api/v1/app/icon-64.png")).status_code == 404
+
+
+_SKRIPT_SVG = b"<svg xmlns='http://www.w3.org/2000/svg'><script>fetch('/api/v1/auth/refresh')</script></svg>"
+_HARMLOSES_SVG = (
+    b"<?xml version='1.0' encoding='UTF-8'?>"
+    b"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' viewBox='0 0 10 10'>"
+    b"<defs><linearGradient id='a'><stop offset='0' stop-color='#fff'/></linearGradient>"
+    b"<style>.k{fill:url(#a)}</style></defs>"
+    b"<title>Logo</title><g><rect width='10' height='10' style='fill:url(#a)'/><use xlink:href='#a'/>"
+    b"<path d='M0 0L10 10' fill='url(#a)'/></g></svg>"
+)
+
+
+@pytest.mark.asyncio
+async def test_logo_upload_accepts_a_harmless_svg(client):
+    token = await _bootstrap_owner(client)
+    r = await client.post(
+        "/api/v1/branding/logo", content=_HARMLOSES_SVG,
+        headers={**_auth_header(token), "Content-Type": "image/svg+xml"},
+    )
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("svg", [
+    _SKRIPT_SVG,
+    b"<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><rect onclick='alert(1)'/></svg>",
+    (b"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>"
+     b"<a xlink:href='javascript:alert(1)'><rect/></a></svg>"),
+    (b"<svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink'>"
+     b"<use xlink:href='https://boese.example/x.svg#a'/></svg>"),
+    b"<svg xmlns='http://www.w3.org/2000/svg'><image href='https://boese.example/p.png'/></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><foreignObject><div/></foreignObject></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><rect fill='url(https://boese.example/x)'/></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><style>@import 'https://boese.example/a.css';</style></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><set attributeName='href' to='javascript:alert(1)'/></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><rect fill='JaVa&#9;Script:alert(1)'/></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><html:script xmlns:html='http://www.w3.org/1999/xhtml'/></svg>",
+    b"<!DOCTYPE svg [<!ENTITY a 'aaaa'><!ENTITY b '&a;&a;&a;&a;'>]><svg xmlns='http://www.w3.org/2000/svg'>&b;</svg>",
+    b"<html><body>kein svg</body></html>",
+    b"kein xml",
+    b"<?xml-stylesheet type='text/xsl' href='https://boese.example/x.xsl'?><svg xmlns='http://www.w3.org/2000/svg'/>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><style>rect{fill:\\75rl(https://boese.example/x)}</style></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><style>@\\69mport 'https://boese.example/a.css';</style></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><style>rect{fill:image-set('https://boese.example/x' 1x)}</style></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg'><rect fill='\\75rl(https://boese.example/x)'/></svg>",
+    b"<svg xmlns='http://www.w3.org/2000/svg' xml:base='https://boese.example/'><use href='#a'/></svg>",
+    b"<?xml version='1.0' encoding='bogus'?><svg xmlns='http://www.w3.org/2000/svg'/>",
+], ids=lambda b: b[:60].decode("latin-1"))
+async def test_logo_upload_rejects_dangerous_or_broken_svg(client, test_settings, svg):
+    token = await _bootstrap_owner(client)
+    r = await client.post(
+        "/api/v1/branding/logo", content=svg,
+        headers={**_auth_header(token), "Content-Type": "image/svg+xml"},
+    )
+    assert r.status_code == 422, r.text
+    assert "SVG" in r.json()["detail"]
+    from nodvard_deck.branding import find_logo_file
+
+    assert find_logo_file(test_settings.data_dir) is None
+
+
+@pytest.mark.asyncio
+async def test_logo_response_is_sandboxed_without_login(client, test_settings):
+    """Ein schon gespeichertes (auch unsicheres) SVG darf beim direkten Öffnen kein Skript
+    im Origin des Dashboards ausführen."""
+    from nodvard_deck.branding import save_logo_file
+
+    save_logo_file(test_settings.data_dir, _SKRIPT_SVG, "svg")
+    r = await client.get("/api/v1/branding/logo")
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "image/svg+xml"
+    csp = r.headers["content-security-policy"]
+    assert "default-src 'none'" in csp and "sandbox" in csp
+    assert r.headers["x-content-type-options"] == "nosniff"
+
+
+@pytest.mark.asyncio
+async def test_app_icons_carry_the_same_protective_headers(client):
+    r = await client.get("/api/v1/app/icon-192.png")
+    assert r.status_code == 200
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert "sandbox" in r.headers["content-security-policy"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", [
+    "javascript:alert(1)", "JavaScript:alert(1)", " javascript:alert(1)", "java\tscript:alert(1)",
+    "data:text/html,<script>1</script>", "vbscript:x", "//example.org/hilfe", "example.org/hilfe", "https:", "ftp://example.org",
+])
+async def test_put_branding_rejects_unsafe_support_url(client, url):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/branding", json={**_PAYLOAD, "support_url": url}, headers=_auth_header(token))
+    assert r.status_code == 422, r.text
+    assert "Support-Link" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("url", ["https://example.org/hilfe", "http://hilfe.lan", "mailto:it@example.org", "MAILTO:it@example.org"])
+async def test_put_branding_accepts_http_https_and_mailto_support_url(client, url):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/branding", json={**_PAYLOAD, "support_url": url}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["support_url"] == url
+
+
+@pytest.mark.asyncio
+async def test_put_branding_empty_support_url_means_none(client):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/branding", json={**_PAYLOAD, "support_url": "  "}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["support_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_stored_unsafe_support_url_does_not_crash_and_is_not_shown(client, db_session):
+    """Ein früher gespeicherter, ungültiger Wert bricht das Laden nicht, wird aber nicht als Link angeboten."""
+    from nodvard_deck.branding import SETTINGS_KEY_PREFIX
+    from nodvard_deck.db import utcnow
+    from nodvard_deck.models import Setting
+
+    db_session.add(Setting(
+        key=f"{SETTINGS_KEY_PREFIX}support_url", scope="global", user_id="", value="javascript:alert(1)",
+        updated_at=utcnow(), updated_by_user_id=None,
+    ))
+    await db_session.flush()
+    r = await client.get("/api/v1/branding")
+    assert r.status_code == 200, r.text
+    assert r.json()["support_url"] is None

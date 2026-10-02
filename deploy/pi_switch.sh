@@ -14,6 +14,8 @@
 #
 # Exit 3 = es wurde nichts veraendert (Docker nicht erreichbar, Image fehlt, Compose-Datei
 # nicht lesbar); der Aufrufer darf dann NICHT zurueckschalten.
+# Exit 4 = der Container hat das richtige Volume, laeuft aber nicht (mehr) oder haengt in der
+# Neustart-Schleife. War er vorher schon gesund, kann er die Datenbank bereits umgebaut haben.
 #
 # Die Namen sind ueberschreibbar (Tests), Standard ist der echte Betrieb:
 #   DECK_IMAGE=nodvard-deck  CONTAINER=deploy-nodvard-deck-1
@@ -97,10 +99,11 @@ check_container() {
   status="$(inspect_container "$name" '{{.State.Status}}')"
   restarting="$(inspect_container "$name" '{{.State.Restarting}}')"
   vol="$(inspect_container "$name" '{{range .Mounts}}{{if eq .Destination "/app/data"}}{{.Name}}{{end}}{{end}}')"
-  if [ "$status" != "running" ] || [ "$restarting" != "false" ]; then
-    die "Container $name laeuft nicht (Status: $status, Neustart-Schleife: $restarting)."
-  fi
   [ "$vol" = "$VOLUME" ] || die "Container $name hat unter /app/data das Volume '${vol:-<keins>}' statt $VOLUME -- die Daten waeren weg (leeres Volume)."
+  if [ "$status" != "running" ] || [ "$restarting" != "false" ]; then
+    printf 'FAIL: %s\n' "Container $name laeuft nicht (Status: $status, Neustart-Schleife: $restarting)." >&2
+    exit 4
+  fi
 }
 
 # Traegt der neue Container das Image von nodvard-deck:latest, laeuft er, hat er das richtige

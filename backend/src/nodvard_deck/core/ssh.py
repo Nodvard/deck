@@ -41,7 +41,8 @@ from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Session
 
-from ..models import KnownHostKey
+from ..models import KnownHostKey, Setting
+from .error_text import describe_connection_error
 
 KEEPALIVE_INTERVAL_S = 15.0
 KEEPALIVE_COUNT_MAX = 3
@@ -53,11 +54,24 @@ geschlossen, `is_closed()` greift und der Pool verbindet neu."""
 
 
 class SshError(Exception):
+    readable = True
+    """Der Text ist ein fertiger deutscher Satz fuer die Oberflaeche (siehe `core.error_text`)."""
     key_type: str | None = None
     fingerprint: str | None = None
     """Hat der Server im Schluesseltausch einen Schluessel gezeigt und der wurde akzeptiert, stehen
     hier Typ und Fingerabdruck (`connect()` setzt sie, bevor es den Fehler wirft). So weiss der
     Aufrufer bei einer abgelehnten Anmeldung, dass der Server-Schluessel selbst in Ordnung war."""
+
+
+class SshUnreachable(SshError, OSError):
+    """Der Server war nicht zu erreichen oder die Verbindung riss ab (Netzwerkfehler, Zeitlimit, Name
+    unbekannt). Der Text sagt es auf Deutsch, auch wenn die Ursache keinen hatte (`TimeoutError()`).
+    Bewusst AUCH ein `OSError`: wer bisher `except OSError` schrieb, faengt es weiter; `__cause__` ist
+    die urspruengliche Ausnahme."""
+
+
+class SshTimeout(SshUnreachable, TimeoutError):
+    """Wie `SshUnreachable`, aber der Server hat gar nicht geantwortet (auch ein `TimeoutError`)."""
 
 
 class SshAuthError(SshError):
@@ -217,6 +231,24 @@ async def _known_fingerprints(session: AsyncSession, host_id: str) -> dict[str, 
     return {row.key_type: row.fingerprint for row in result.scalars().all()}
 
 
+HOST_KEY_CONFIRM_REQUIRED = "ssh.host_key_confirm_required"
+"""Merker je Server in der Tabelle `settings` (`scope=HOST_KEY_CONFIRM_SCOPE`, `user_id=<host_id>`):
+nach "Schluessel vergessen" darf fuer diesen Server kein Schluessel still gemerkt werden, bis er
+ausdruecklich bestaetigt ist. Gesetzt und entfernt in `services/hosts.py`."""
+HOST_KEY_CONFIRM_SCOPE = "host"
+
+
+async def host_key_confirm_pending(session: AsyncSession, host_id: str) -> bool:
+    """Liegt fuer `host_id` der Merker `HOST_KEY_CONFIRM_REQUIRED`? Immer frisch aus der Datenbank."""
+    result = await session.execute(
+        select(Setting.key).where(
+            Setting.key == HOST_KEY_CONFIRM_REQUIRED, Setting.scope == HOST_KEY_CONFIRM_SCOPE,
+            Setting.user_id == host_id,
+        )
+    )
+    return result.first() is not None
+
+
 async def _remember_fingerprint(
     session: AsyncSession, host_id: str, key_type: str, fingerprint: str
 ) -> None:
@@ -240,6 +272,11 @@ async def connect(
     mit `HostKeyUnknown`, bevor Anmeldedaten gesendet werden, und es wird nichts gespeichert."""
     allow_tofu = tofu and target.allow_tofu
     known = await _known_fingerprints(session, target.host_id)
+    if allow_tofu and not known and await host_key_confirm_pending(session, target.host_id):
+        # `target` kann von kurz vor einem "Schluessel vergessen" stammen (Merker damals noch nicht
+        # da, gemerkter Schluessel jetzt schon weg). Erst NACH den gemerkten Schluesseln lesen: ist
+        # der Schluessel schon weg, ist der Merker (selber Commit) auch schon zu sehen.
+        allow_tofu = False
     holder: list[_PinningClient] = []
 
     def _client_factory() -> asyncssh.SSHClient:
@@ -282,6 +319,12 @@ async def connect(
 
     try:
         conn = await asyncssh.connect(**connect_kwargs)
+    except (OSError, asyncio.TimeoutError) as exc:
+        # Kein SSH-Fehler, sondern das Netz: nicht erreichbar, abgelehnt, Name unbekannt, Zeitlimit.
+        # Ein `TimeoutError()` hat keinen Text -- ohne diese Umwandlung stuende bei Terminal und
+        # Dateien nirgends, warum es nicht geht.
+        error_type = SshTimeout if isinstance(exc, TimeoutError) else SshUnreachable
+        raise error_type(describe_connection_error(exc, address=target.address, port=target.port, network=True)) from exc
     except asyncssh.Error as exc:
         if holder and holder[0].mismatch:
             client = holder[0]

@@ -39,6 +39,8 @@ async def test_list_settings_returns_defaults_when_unset(client):
         "hosts.reachability.enabled": True, "hosts.reachability.interval_minutes": 2,
         # Nach Updates suchen: an, nur fertige Versionen.
         "system.update_check.enabled": True, "system.update_check.channel": "stable",
+        # Neue Server-Schluessel bestaetigen: die Test-Einstellungen legen die Umgebungsvariable auf aus fest.
+        "ssh.confirm_new_host_keys": False,
     }
 
 
@@ -165,7 +167,7 @@ async def test_list_settings_survives_saved_branding(client):
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
         "system.timezone", "audit.retention_days", "jobs.run_retention_days",
         "hosts.reachability.enabled", "hosts.reachability.interval_minutes",
-        "system.update_check.enabled", "system.update_check.channel",
+        "system.update_check.enabled", "system.update_check.channel", "ssh.confirm_new_host_keys",
     }
 
 

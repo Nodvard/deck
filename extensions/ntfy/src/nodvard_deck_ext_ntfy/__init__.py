@@ -76,7 +76,7 @@ class _NtfyChannel:
         server_url = settings.get("server_url")
         topic = settings.get("topic")
         if not server_url or not topic:
-            raise RuntimeError("ntfy ist nicht konfiguriert (server_url/topic fehlen).")
+            raise RuntimeError("ntfy ist noch nicht eingerichtet: Es fehlen die Adresse des ntfy-Servers und das Thema (Einstellungen, Erweiterungen, ntfy).")
         return str(server_url).rstrip("/"), str(topic)
 
     async def _dashboard_url(self) -> str | None:

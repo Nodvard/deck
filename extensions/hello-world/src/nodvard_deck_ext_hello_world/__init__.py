@@ -4,12 +4,12 @@
 Registriert genau die fuenf Grundbausteine einer Extension (Seite, Widget, Job,
 Einstellung, Capability) und demonstriert zusaetzlich `ctx.spawn`, `ctx.events`,
 `ctx.audit` und `ctx.vault_use()` inklusive der Isolations-Garantie:
-`POST /vault-use-and-fail` materialisiert ein Secret und scheitert danach absichtlich,
-um zu beweisen, dass der `secret.used`-Audit-Eintrag trotzdem stehen bleibt.
-Dazu kommen `POST /notify-test` (echtes
-`ctx.notify.send()`, sonst kein HTTP-Weg dafuer -- das Notification-Center ist
-absichtlich nur lesend ueber die API) und ein Job-Handler, den der Kern-Scheduler
-ausfuehrt.
+`POST /vault-use-and-fail` (nur mit `extensions.manage`) materialisiert ein Secret und
+scheitert danach absichtlich, um zu beweisen, dass der `secret.used`-Audit-Eintrag
+trotzdem stehen bleibt. Dazu kommen `POST /notify-test` (ebenfalls nur mit
+`extensions.manage`; echtes `ctx.notify.send()`, sonst kein HTTP-Weg dafuer -- das
+Notification-Center ist absichtlich nur lesend ueber die API) und ein Job-Handler, den
+der Kern-Scheduler ausfuehrt.
 """
 
 from __future__ import annotations
@@ -64,6 +64,8 @@ class Extension(NodvardExtension):
     async def setup(self, ctx: ExtensionContext) -> None:
         router = APIRouter()
 
+        # Ohne `permission=` verlangt der Kern eine gueltige Anmeldung (Standard der
+        # SDK-Methode `include_router`); fuer ein Demo-Widget reicht das.
         @router.get("/widgets/hello")
         async def hello_widget_data() -> dict:
             return {
@@ -78,13 +80,18 @@ class Extension(NodvardExtension):
         @protected_router.get("/protected-widget")
         async def protected_widget_data() -> dict:
             """WP-6: demonstriert `ctx.api.include_router(..., permission=...)` --
-            im Gegensatz zu `/widgets/hello` unten (bewusst weiterhin oeffentlich, als
-            Demo des Defaultverhaltens) verlangt DIESE Route `hosts.read`."""
+            im Gegensatz zu `/widgets/hello` (nur Anmeldung, der Standard) verlangt
+            DIESE Route zusaetzlich `hosts.read`."""
             return {"ok": True}
 
         ctx.api.include_router(protected_router, permission="hosts.read")
 
-        @router.post("/notify-test")
+        # Die beiden schreibenden Demo-Routen loesen echte Wirkungen aus (Push-Meldung,
+        # Tresor-Eintrag, Fehler im Protokoll) -- deshalb nur fuer Verwalter von
+        # Erweiterungen, nicht fuer jeden angemeldeten Nutzer.
+        admin_router = APIRouter()
+
+        @admin_router.post("/notify-test")
         async def notify_test(host_id: str | None = None) -> dict:
             """Reine Boot-Test-Demo (WP-6), wie `/vault-use-and-fail` fuer
             `vault_use()`: es gibt sonst keinen HTTP-Weg, `ctx.notify.send()` real
@@ -102,7 +109,7 @@ class Extension(NodvardExtension):
             )
             return {"sent": True}
 
-        @router.post("/vault-use-and-fail")
+        @admin_router.post("/vault-use-and-fail")
         async def vault_use_and_fail() -> dict:
             if not await ctx.secrets.exists("hello-world-demo"):
                 await ctx.secrets.create(
@@ -114,6 +121,7 @@ class Extension(NodvardExtension):
             raise RuntimeError("Absichtlicher Fehler NACH der Materialisierung (WP-3-Boot-Test)")
 
         ctx.api.include_router(router)
+        ctx.api.include_router(admin_router, permission="extensions.manage")
 
         ctx.ui.register_page(
             PageSpec(

@@ -84,7 +84,7 @@ export function WidgetCard({ widget }: { widget: WidgetOut }) {
         )}
         {error && (
           <p className="text-sm text-red-400">
-            Extension-Fehler: {error instanceof Error ? error.message : String(error)}
+            Fehler im Modul: {error instanceof Error ? error.message : String(error)}
           </p>
         )}
         {response && renderBody(widget, response)}
@@ -94,21 +94,21 @@ export function WidgetCard({ widget }: { widget: WidgetOut }) {
 
   function renderBody(spec: WidgetOut, res: WidgetDataResponse) {
     if (typeof res !== "object" || res === null || !("data" in res)) {
-      return <p className="text-sm text-red-400">Extension-Fehler: Antwort hat keine "data"-Eigenschaft.</p>;
+      return <p className="text-sm text-red-400">Fehler im Modul: Die Antwort enthält keine Daten.</p>;
     }
     const { data } = res;
     const expectsArray = ARRAY_KINDS.has(spec.view.kind);
     if (expectsArray && !Array.isArray(data)) {
       return (
         <p className="text-sm text-red-400">
-          Extension-Fehler: "{spec.view.kind}" erwartet ein Array in "data", bekam {typeof data}.
+          Fehler im Modul: "{spec.view.kind}" erwartet ein Array in "data", bekam {typeof data}.
         </p>
       );
     }
     if (!expectsArray && Array.isArray(data)) {
       return (
         <p className="text-sm text-red-400">
-          Extension-Fehler: "{spec.view.kind}" erwartet ein Objekt in "data", bekam ein Array.
+          Fehler im Modul: "{spec.view.kind}" erwartet ein Objekt in "data", bekam ein Array.
         </p>
       );
     }
@@ -133,7 +133,7 @@ export function WidgetCard({ widget }: { widget: WidgetOut }) {
       case "log":
         return <LogView view={spec.view} data={data} />;
       default:
-        return <p className="text-sm text-red-400">Extension-Fehler: unbekannter View-Typ.</p>;
+        return <p className="text-sm text-red-400">Fehler im Modul: unbekannte Anzeigeart.</p>;
     }
   }
 }

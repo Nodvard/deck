@@ -78,7 +78,24 @@ describe("Karte Kopien vor Updates", () => {
   it("kennt eine Kopie ohne Versionsangabe", async () => {
     mockInfo(() => json({ pre_update_copies: [{ ...COPY, from_version: null, to_version: null }] }));
     render(<UpdateCopiesCard />);
-    expect(await screen.findByText("Update von früherer Version")).toBeInTheDocument();
+    expect(await screen.findByText("Datenbank-Umbau (Version nicht bekannt)")).toBeInTheDocument();
+  });
+
+  it("gleiche Version vorher und nachher: Datenbank-Umbau statt „Update von 0.5.0 auf 0.5.0“", async () => {
+    mockInfo(() => json({ pre_update_copies: [{ ...COPY, from_version: "0.5.0", to_version: "0.5.0" }] }));
+    render(<UpdateCopiesCard />);
+    expect(await screen.findByText("Datenbank-Umbau in 0.5.0")).toBeInTheDocument();
+    expect(screen.queryByText(/auf 0\.5\.0/)).not.toBeInTheDocument();
+  });
+
+  it("kennt nur eine der beiden Versionen", async () => {
+    mockInfo(() => json({ pre_update_copies: [
+      { ...COPY, name: "a.db", from_version: null, to_version: "0.7.0" },
+      { ...COPY, name: "b.db", from_version: "0.6.0", to_version: null },
+    ] }));
+    render(<UpdateCopiesCard />);
+    expect(await screen.findByText("Update von früherer Version auf 0.7.0")).toBeInTheDocument();
+    expect(screen.getByText("Update von Version 0.6.0")).toBeInTheDocument();
   });
 
   it("zeigt bei einem älteren Server (ohne das Feld) oder einem Fehler gar nichts", async () => {

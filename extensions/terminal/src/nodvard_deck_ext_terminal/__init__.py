@@ -10,7 +10,11 @@ nur der duenne Adapter, der die drei SDK-Capability-Protokolle (`ActionExecutor`
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import re
+import secrets
 import stat as statmod
+import tempfile
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack
 from datetime import UTC, datetime
@@ -187,6 +191,161 @@ async def _entry_after_rename(sftp: Any, path: PurePosixPath) -> FileEntry:
     return _attrs_to_entry(path, attrs)
 
 
+async def _write_target(sftp: Any, path: PurePosixPath) -> str:
+    """Der Pfad, der beim Schreiben ersetzt wird. Ein Link wird bis zur echten Datei verfolgt
+    (wie beim direkten Schreiben), sonst wuerde das Ersetzen den Link selbst austauschen."""
+    target = str(path)
+    with contextlib.suppress(Exception):  # gibt es das Ziel (noch) nicht, wird es neu angelegt
+        if _is_symlink(await sftp.lstat(target)):
+            target = str(await sftp.realpath(target))
+    return target
+
+
+def _temp_path(target: str, kind: str = "tmp") -> str:
+    p = PurePosixPath(target)
+    return str(p.with_name(f".{p.name[:100]}.nodvard-{kind}-{secrets.token_hex(6)}"))
+
+
+async def _existing_attrs(sftp: Any, target: str) -> Any | None:
+    try:
+        return await sftp.stat(target)
+    except Exception:  # noqa: BLE001 - neue Datei: es gibt nichts zu uebernehmen
+        return None
+
+
+_PRIVATE_MODE = 0o600
+"""Rechte der Temp-Datei, solange sie eine bestehende Datei ersetzen soll und geschrieben wird:
+die alte Datei kann geheim sein, und wer die Temp-Datei in dieser Zeit oeffnet, liest sonst mit."""
+
+
+async def _take_over_owner(f: Any, old: Any) -> bool:
+    """Besitzer und Gruppe der bestehenden Datei auf die frisch angelegte Temp-Datei uebertragen,
+    BEVOR geschrieben wird. `True`, wenn die neue Datei danach genau diese Werte traegt (oder es
+    nichts zu uebertragen gibt); `False`, wenn nicht: Ein Zugang ohne root darf den Besitzer nicht
+    aendern, die ersetzte Datei gehoerte dann dem SSH-Benutzer, und wer sie vorher schreiben durfte
+    (etwa ein Webserver-Benutzer), verlaere das Recht. Der Aufrufer schreibt dann direkt ins Ziel.
+
+    Nur ueber den OFFENEN Dateigriff, nie ueber den Pfad: SETSTAT auf einen Pfad folgt Links. Wer
+    im Zielordner schreiben darf, koennte die Temp-Datei gegen einen Link auf eine fremde Datei
+    tauschen, und die bekaeme dann (als root) Besitzer und Rechte des Ziels. Das Ergebnis wird am
+    Griff nachgelesen, nicht aus dem Erfolg von `chown` geschlossen (manche Server melden Erfolg,
+    ohne etwas zu aendern). Kann es nicht gelesen werden, gilt es als nicht uebertragen."""
+    if old.uid is None or old.gid is None:
+        return True
+    with contextlib.suppress(Exception):  # scheitert ohne root, das Ergebnis wird unten geprueft
+        await f.chown(old.uid, old.gid)
+    try:
+        now = await f.stat()
+    except Exception:  # noqa: BLE001 - nicht pruefbar heisst nicht "uebertragen"
+        return False
+    return (getattr(now, "uid", None), getattr(now, "gid", None)) == (old.uid, old.gid)
+
+
+async def _copy_mode(f: Any, old: Any) -> None:
+    """Die Rechte der bestehenden Datei auf die neue uebertragen, soweit der Server es erlaubt.
+    Nur ueber den offenen Dateigriff (siehe `_take_over_owner`). Kommt NACH dem Besitzerwechsel,
+    weil der setuid/setgid loescht."""
+    if old.permissions is not None:
+        with contextlib.suppress(Exception):
+            await f.chmod(statmod.S_IMODE(old.permissions))
+
+
+async def _write_in_place(sftp: Any, target: str, stream: Any) -> None:
+    """Direkt ins Ziel schreiben (der Weg von frueher), fuer Ziele, die sich nicht ersetzen lassen.
+    Das erste Stueck wird VOR dem Abschneiden gelesen: scheitert die Quelle gleich zu Beginn
+    (fehlt, nicht lesbar), bleibt das Ziel unberuehrt."""
+    chunks = stream.__aiter__()
+    try:
+        first = await chunks.__anext__()
+    except StopAsyncIteration:
+        first = b""
+    async with sftp.open(target, "wb") as f:
+        if first:
+            await f.write(first)
+        async for chunk in chunks:
+            await f.write(chunk)
+
+
+_SPOOL_IN_MEMORY = 8 * 1024 * 1024
+"""So viel der Quelle bleibt im Arbeitsspeicher, bevor `_write_in_place_from_copy` sie in eine
+lokale Temp-Datei auslagert."""
+
+
+async def _write_in_place_from_copy(sftp: Any, target: str, stream: Any) -> None:
+    """Wie `_write_in_place`, liest aber die GANZE Quelle, bevor das Ziel geoeffnet wird. Das erste
+    Stueck zu lesen reicht nicht: meint die Quelle dieselbe Datei wie das Ziel (Hardlink,
+    eingehaengter Ordner unter zwei Pfaden -- das erkennt der Kern nicht immer), schneidet das
+    Oeffnen zum Schreiben die Quelle ab, und es bliebe nur das erste Stueck. So bleibt auch bei
+    einer Quelle, die mittendrin abbricht, das Ziel unberuehrt. Die Kopie liegt in einer lokalen,
+    sofort entfernten Temp-Datei (nur der Prozess selbst kann sie oeffnen)."""
+    with tempfile.SpooledTemporaryFile(max_size=_SPOOL_IN_MEMORY) as spool:
+        async for chunk in stream:
+            await asyncio.to_thread(spool.write, chunk)
+        await asyncio.to_thread(spool.seek, 0)
+
+        async def replay():  # noqa: ANN202 - AsyncIterator[bytes]
+            while piece := await asyncio.to_thread(spool.read, 65536):
+                yield piece
+
+        await _write_in_place(sftp, target, replay())
+
+
+_SFTP_PERMISSION_DENIED = 3
+"""SFTP-Statuscode "Zugriff verweigert" (`SSH_FX_PERMISSION_DENIED`)."""
+
+_SFTP_OP_UNSUPPORTED = 8
+"""SFTP-Statuscode "Vorgang nicht unterstuetzt" (`SSH_FX_OP_UNSUPPORTED`). Die Extension kennt
+asyncssh nicht, erkennt den Fall also am Code der Ausnahme."""
+
+
+async def _replace(sftp: Any, tmp: str, target: str) -> None:
+    """Ersetzt `target` in einem Schritt (`posix-rename@openssh.com`). Kennt der Server das nicht,
+    wird das alte Ziel erst beiseite gelegt und bei einem Fehler zurueckgeholt."""
+    try:
+        await sftp.posix_rename(tmp, target)
+        return
+    except Exception as exc:  # noqa: BLE001 - nur "nicht unterstuetzt" hat den Rueckweg
+        if getattr(exc, "code", None) != _SFTP_OP_UNSUPPORTED:
+            raise
+    try:
+        await sftp.lstat(target)
+    except Exception:  # noqa: BLE001 - nichts zu ersetzen: ein einfaches Umbenennen genuegt
+        await sftp.rename(tmp, target)
+        return
+    backup = _temp_path(target, "old")
+    await sftp.rename(target, backup)
+    try:
+        await sftp.rename(tmp, target)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            await sftp.rename(backup, target)
+        raise
+    with contextlib.suppress(Exception):
+        await sftp.remove(backup)
+
+
+async def _discard(sftp: Any, tmp: str) -> None:
+    with contextlib.suppress(Exception):
+        await sftp.remove(tmp)
+
+
+_MACHINE_ID = re.compile(r"[0-9a-f]{32}")
+
+
+async def _machine_id(sftp: Any) -> str | None:
+    """`/etc/machine-id`: fest je Rechner, egal unter welcher Adresse er im Deck steht. So erkennt
+    der Kern zwei Eintraege fuer denselben Rechner, ohne zwei per rsync gleich gehaltene Dateien
+    auf verschiedenen Rechnern fuer eine zu halten. `None`, wenn sie fehlt (etwa in einem
+    SFTP-chroot) oder nicht wie eine Kennung aussieht."""
+    try:
+        async with sftp.open("/etc/machine-id", "rb") as f:
+            data = await f.read(64)
+    except Exception:  # noqa: BLE001 - ohne Kennung entscheidet der Kern ueber die Dateiwerte
+        return None
+    value = bytes(data).strip().decode("ascii", "replace")
+    return value if _MACHINE_ID.fullmatch(value) else None
+
+
 class _SshFileSource:
     """Erfuellt `nodvard_sdk.capabilities.FileSource` ueber SFTP -- die Grundlage,
     auf der WP-11 den Dateimanager baut (docs/02 §7).
@@ -207,6 +366,10 @@ class _SshFileSource:
         self.label = label or "SSH (SFTP)"
         self.icon = "server"
         self.caps = FileSourceCaps(write=True, rename=True, remove=True, mkdir=True, search=True, range_read=True)
+        # Der SFTP-Zugriff läuft mit den Zugangsdaten des Servers (oft root), nicht mit dem Konto
+        # des Nutzers im Deck. Der Kern verlangt darum für jede Dateiaktion dieselbe Berechtigung
+        # wie für Befehle auf dem Server.
+        self.required_permission = "hosts.execute"
         self._ctx = ctx
         self._host_id = host_id
 
@@ -273,13 +436,77 @@ class _SshFileSource:
                     yield chunk
 
     async def open_write(self, path: PurePosixPath, stream, *, size: int | None = None) -> FileEntry:  # noqa: ANN001
+        """Schreibt in eine temporaere Datei im Zielordner und ersetzt das Ziel erst, wenn alles
+        fehlerfrei angekommen ist. Direkt ins Ziel zu schreiben schnitte es sofort auf 0 Byte ab,
+        bevor die Quelle auch nur gelesen wurde: zeigt sie auf dieselbe Datei (Link, `..`,
+        zweiter Server-Eintrag) oder scheitert das Lesen, waere der Inhalt weg."""
         host = await self._host()
         async with self._ctx.exec.sftp(host) as sftp:
-            async with sftp.open(str(path), "wb") as f:
-                async for chunk in stream:
-                    await f.write(chunk)
-            attrs = await sftp.stat(str(path))
+            target = await _write_target(sftp, path)
+            old = await _existing_attrs(sftp, target)
+            if old is not None and old.permissions is not None and not statmod.S_ISREG(old.permissions):
+                # Pipe, Geraet (etwa /dev/null) oder Ordner: ersetzen tauschte sie gegen eine normale
+                # Datei aus, also hineinschreiben wie frueher (ein Ordner scheitert dabei sofort).
+                await _write_in_place(sftp, target, stream)
+            else:
+                await self._write_replacing(sftp, target, old, stream)
+            attrs = await sftp.stat(target)
             return _attrs_to_entry(path, attrs)
+
+    @staticmethod
+    async def _write_replacing(sftp: Any, target: str, old: Any | None, stream: Any) -> None:
+        tmp = _temp_path(target)
+        try:
+            # Ersetzt die Datei eine bestehende, ist sie bis zum Ende nur fuer den Zugang lesbar.
+            f = await (sftp.open(tmp, "xb", type(old)(permissions=_PRIVATE_MODE)) if old is not None else sftp.open(tmp, "xb"))
+        except Exception as exc:
+            # Die Datei darf geschrieben werden, im Ordner aber nichts angelegt (etwa eine
+            # gruppen-schreibbare Datei in /etc): dann wie frueher direkt hinein.
+            if old is None or getattr(exc, "code", None) != _SFTP_PERMISSION_DENIED:
+                raise
+            await _write_in_place_from_copy(sftp, target, stream)
+            return
+        keeps_owner = True
+        try:
+            async with f:
+                # Gleich nach dem Anlegen, nicht erst am Ende: scheitert es, wird nichts geschrieben.
+                keeps_owner = old is None or await _take_over_owner(f, old)
+                if keeps_owner:
+                    async for chunk in stream:
+                        await f.write(chunk)
+                    if old is not None:
+                        await _copy_mode(f, old)
+            if keeps_owner:
+                await _replace(sftp, tmp, target)
+        except BaseException:
+            await _discard(sftp, tmp)
+            raise
+        if not keeps_owner:
+            # Ohne root laesst sich der Besitzer nicht halten: ersetzen gaebe die Datei dem SSH-Benutzer.
+            await _discard(sftp, tmp)
+            await _write_in_place_from_copy(sftp, target, stream)
+
+    async def file_identity(self, path: PurePosixPath) -> dict[str, Any] | None:
+        """Woran der Kern erkennt, ob zwei Pfade dieselbe Datei meinen (siehe `FileSource`):
+        aufgeloester Pfad plus Groesse, Aenderungszeit, Besitzer und Rechte, dazu `machine`, die
+        Kennung des Rechners (`/etc/machine-id`), wenn sie lesbar ist. `None`, wenn die Datei nicht
+        existiert oder der Server den Pfad nicht aufloest -- im Zweifel gilt sie als andere."""
+        host = await self._host()
+        async with self._ctx.exec.sftp(host) as sftp:
+            try:
+                attrs = await sftp.stat(str(path))
+                resolved = await sftp.realpath(str(path))
+            except Exception:  # noqa: BLE001 - nicht pruefbar heisst nicht "gleich"
+                return None
+            return {
+                "path": str(resolved),
+                "size": attrs.size,
+                "mtime": getattr(attrs, "mtime", None),
+                "uid": getattr(attrs, "uid", None),
+                "gid": getattr(attrs, "gid", None),
+                "mode": getattr(attrs, "permissions", None),
+                "machine": await _machine_id(sftp),
+            }
 
     async def mkdir(self, path: PurePosixPath) -> FileEntry:
         host = await self._host()

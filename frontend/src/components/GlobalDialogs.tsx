@@ -27,7 +27,7 @@ export function GlobalDialogs() {
             <Dialog.Title className="mb-2 text-base font-semibold">
               {confirmPending?.options.title ?? "Bestätigen"}
             </Dialog.Title>
-            <Dialog.Description className="mb-4 text-sm opacity-80">
+            <Dialog.Description className="mb-4 max-h-[60vh] overflow-y-auto whitespace-pre-wrap break-words text-sm opacity-80">
               {confirmPending?.message}
             </Dialog.Description>
             <div className="flex justify-end gap-2">

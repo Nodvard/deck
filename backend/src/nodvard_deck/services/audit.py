@@ -11,6 +11,7 @@ Die periodische Ausfuehrung von `purge_expired()` uebernimmt der Kern-Scheduler
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from types import SimpleNamespace
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,11 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..core import audit as core_audit
 from ..core.audit import write_entry
 from ..db import utcnow
-from ..models import AuditEntry
+from ..models import AuditEntry, User
 
 __all__ = [
     "RETENTION_KEY", "RETENTION_MAX_DAYS", "RETENTION_MIN_DAYS",
-    "effective_retention_days", "log", "list_entries", "purge_expired", "to_ndjson", "write_entry",
+    "effective_retention_days", "hide_typed_names", "log", "list_entries", "purge_expired", "to_ndjson", "write_entry",
 ]
 
 RETENTION_KEY = "audit.retention_days"
@@ -77,6 +78,54 @@ async def list_entries(
     return list(result.scalars().all())
 
 
+LEGACY_UNKNOWN_NAME_REASONS = ("Unbekannter Benutzername.", "Eingabe zu lang.")
+"""Gruende, mit denen aeltere `login.failed`-Eintraege den eingetippten Text als Akteur trugen."""
+
+
+TYPED_NAME_TRACES = ("username_ref", "username_length")
+"""Was neue Eintraege ueber einen unbekannten Namen festhalten (`services.auth.unknown_login_audit`)."""
+
+
+async def hide_typed_names(
+    session: AsyncSession, entries: list[AuditEntry], *, keep_traces: bool = False
+) -> list[AuditEntry]:
+    """Schwaerzt in Antworten die Namen, die jemand bei einer Anmeldung eingetippt hat.
+
+    Neue Eintraege enthalten den Text gar nicht mehr (`services.auth.unknown_login_audit`),
+    nur Kennung und Laenge. Die sieht nur, wer `keep_traces` setzt (der Owner): mit der Kennung
+    liesse sich eine Vermutung pruefen (selbst als Namen eintippen, Kennungen vergleichen), die
+    Laenge verkleinert das Raten. Aeltere Eintraege trugen den Text noch: bei `login.failed` mit
+    unbekanntem Namen als `actor_id`, bei `login.locked` als `detail.username`. Die Migration
+    `f3a9c6d18e24` entfernt ihn aus der Datenbank; hier bleibt die Schwaerzung als zweite
+    Sicherung, und zwar fuer alle, auch den Owner. Dort steht „unbekannt“; die Zeilen in der
+    Datenbank bleiben dabei unveraendert (es sind Kopien, nichts wird gespeichert)."""
+    candidates = [
+        e for e in entries
+        if e.action in ("login.failed", "login.locked") and (
+            (e.actor_type == "user" and (
+                (e.action == "login.failed" and e.reason in LEGACY_UNKNOWN_NAME_REASONS)
+                or (e.action == "login.locked" and "username" in (e.detail or {}))
+            ))
+            or (not keep_traces and any(k in (e.detail or {}) for k in TYPED_NAME_TRACES))
+        )
+    ]
+    if not candidates:
+        return entries
+    ids = {e.actor_id for e in candidates if e.actor_type == "user"}
+    known = set((await session.execute(select(User.id).where(User.id.in_(ids)))).scalars().all()) if ids else set()
+    hidden: dict[str, SimpleNamespace] = {}
+    for e in candidates:
+        copy = SimpleNamespace(**{c.name: getattr(e, c.name) for c in AuditEntry.__table__.columns})
+        copy.detail = {
+            k: v for k, v in (e.detail or {}).items()
+            if k != "username" and (keep_traces or k not in TYPED_NAME_TRACES)
+        }
+        if e.actor_type == "user" and e.actor_id not in known:
+            copy.actor_type, copy.actor_id = "anonymous", "unbekannt"
+        hidden[e.id] = copy
+    return [hidden.get(e.id, e) for e in entries]  # type: ignore[misc]
+
+
 async def effective_retention_days(session: AsyncSession, *, fallback: int) -> int:
     """Aufbewahrungsdauer des Protokolls in Tagen: die Einstellung `audit.retention_days`
     (Einstellungen, System), sonst `fallback` (die Umgebungsvariable). Ein gespeicherter Wert
@@ -99,7 +148,7 @@ async def purge_expired(session: AsyncSession, *, retention_days: int) -> int:
     return result.rowcount or 0
 
 
-def to_ndjson(entries: list[AuditEntry]) -> str:
+def to_ndjson(entries: list[AuditEntry], *, hide_output: bool = False) -> str:
     if not entries:
         return ""
-    return "\n".join(core_audit.to_ndjson_line(e) for e in entries) + "\n"
+    return "\n".join(core_audit.to_ndjson_line(e, hide_output=hide_output) for e in entries) + "\n"

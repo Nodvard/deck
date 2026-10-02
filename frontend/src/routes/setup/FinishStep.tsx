@@ -45,8 +45,8 @@ export function FinishStep({ onBack, onFinish }: { onBack: () => void; onFinish:
       <div className="rounded border border-white/10 p-3 text-xs">
         <p className="font-medium">Trotzdem ausgesperrt? Der Notfall-Befehl</p>
         <p className="mt-1 opacity-70">
-          Auf dem Server, im Ordner mit der Compose-Datei, setzt dieser Befehl ein neues Passwort (der Benutzername steht statt
-          <code> &lt;benutzername&gt;</code>):
+          Auf dem Server, im Ordner mit der Compose-Datei, setzt dieser Befehl ein neues Passwort. Statt
+          <code> &lt;benutzername&gt;</code> schreibst du deinen eigenen Benutzernamen, zum Beispiel <code>admin</code>:
         </p>
         <code className={`${codeBlockClass} mt-1`}>docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
         <p className="mt-1 opacity-70">Er steht auch auf der Anmeldeseite unter „Passwort vergessen?“.</p>

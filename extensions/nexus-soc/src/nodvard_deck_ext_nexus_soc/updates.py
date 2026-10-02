@@ -298,10 +298,22 @@ class UpgradeResult:
     removed: int = 0
     reboot_required: bool = False
     summary: str = ""
+    # Kurzfassung ohne Zeilen vom Server fuer Protokoll und Meldungen (die Ausgabe darf Inhalte vom
+    # Server enthalten, die nur mit Server-Recht sichtbar sind). `None`: `summary` selbst enthaelt keine.
+    public_summary: str | None = None
     # Das Dashboard hat aufgehoert zu warten, der Lauf kann auf dem Server noch laufen.
     timed_out: bool = False
     # Pakete, die apt "zurueckgehalten" hat (Update braucht Ersetzen/Entfernen anderer Pakete).
     kept_back: list[str] = field(default_factory=list)
+
+    @property
+    def public(self) -> str:
+        """Der Text fuer Protokoll und Meldungen (siehe `public_summary`)."""
+        return self.summary if self.public_summary is None else self.public_summary
+
+
+DETAILS_HINT = "Einzelheiten stehen in der Update-Zentrale."
+"""Ersatz fuer eine Zeile vom Server in Texten, die auch ohne Server-Recht sichtbar sind."""
 
 
 _APT_SUMMARY_RE = re.compile(r"(\d+) upgraded, (\d+) newly installed, (\d+) to remove")
@@ -341,7 +353,9 @@ def parse_upgrade_output(output: str, exit_code: int | None) -> UpgradeResult:
         removed = int(m.group(3))
     reboot = REBOOT_MARK in output
     ok = exit_code == 0
+    public: str | None = None
     if not ok:
+        public = "Fehlgeschlagen" + (f" (Rückgabecode {exit_code})" if exit_code is not None else "") + f". {DETAILS_HINT}"
         err = [ln.strip() for ln in output.splitlines() if ln.strip().startswith(("E:", "Error", "error:"))]
         summary = err[-1] if err else (output.strip().splitlines() or ["Fehlgeschlagen"])[-1]
     elif m:
@@ -354,4 +368,7 @@ def parse_upgrade_output(output: str, exit_code: int | None) -> UpgradeResult:
         summary += f" – {len(kept)} zurückgehalten ({', '.join(kept[:KEPT_BACK_SHOWN])}{more})"
     if reboot and ok:
         summary += " – Neustart nötig"
-    return UpgradeResult(ok=ok, upgraded=upgraded, removed=removed, reboot_required=reboot, summary=summary[:300], kept_back=kept)
+    return UpgradeResult(
+        ok=ok, upgraded=upgraded, removed=removed, reboot_required=reboot, summary=summary[:300], public_summary=public,
+        kept_back=kept,
+    )

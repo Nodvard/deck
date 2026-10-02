@@ -112,10 +112,44 @@ describe("buildFirstSteps", () => {
   it("Zugang: führt zum ersten Server ohne Zugang, von Hand angelegte zuerst", () => {
     const steps = buildFirstSteps({
       ...base,
-      hosts: [host("vm1", { provider_ext_id: "x" }), host("pi"), host("mit", { credential: ssh })],
+      hosts: [host("vm1", { provider_ext_id: "x" }), host("pi"), host("mit", { credential: ssh, status: "up", login_ok_at: "2026-10-01T09:00:00Z" })],
     });
     expect(steps.find((s) => s.id === "access")?.to).toBe("/settings/hosts/pi");
     expect(steps.find((s) => s.id === "access")?.done).toBe(true);
+  });
+
+  it("Zugang: verspricht nicht „ohne Befehle“, sondern sagt, dass es einen Befehl auf dem Server gibt", () => {
+    const text = buildFirstSteps(base).find((s) => s.id === "access")!.text;
+    expect(text).not.toMatch(/ohne Befehle/);
+    expect(text).toContain("Befehl auf dem Server");
+    expect(text).toContain("zum Kopieren");
+  });
+
+  it("Zugang: ein Schlüssel auf einem Server, der nie geantwortet hat, ist noch nicht erledigt", () => {
+    const steps = buildFirstSteps({ ...base, hosts: [host("pi", { credential: ssh, status: "down" })] });
+    const access = steps.find((s) => s.id === "access")!;
+    expect(access.done).toBe(false);
+    expect(access.to).toBe("/settings/hosts/pi?befehl=1");
+    expect(access.action).toBe("Befehl ansehen");
+    expect(access.text).toContain("Führe den Befehl auf dem Server aus");
+    expect(steps.find((s) => s.id === "check")?.done).toBe(false);
+  });
+
+  it("Zugang: antwortet der Server nur am SSH-Port, ohne dass die Anmeldung je geklappt hat, bleibt der Schlüssel offen", () => {
+    const open = host("pi", { credential: ssh, status: "up", last_seen_at: "2026-10-01T09:00:00Z" });
+    const steps = buildFirstSteps({ ...base, hosts: [open] });
+    expect(steps.find((s) => s.id === "access")?.done).toBe(false);
+    expect(steps.find((s) => s.id === "access")?.action).toBe("Befehl ansehen");
+    expect(steps.find((s) => s.id === "check")?.done).toBe(false);
+  });
+
+  it("Zugang: ein Schlüssel mit belegter Anmeldung oder ein Passwort zählt als erledigt", () => {
+    const proven = host("pi", { credential: ssh, status: "down", last_seen_at: "2026-10-01T09:00:00Z", login_ok_at: "2026-10-01T09:00:00Z" });
+    const steps = buildFirstSteps({ ...base, hosts: [proven] });
+    expect(steps.find((s) => s.id === "access")?.done).toBe(true);
+    expect(steps.find((s) => s.id === "check")?.done).toBe(true);
+    const password = host("pw", { credential: { id: "c2", kind: "ssh_password" as const, username: "pi", port: 22 }, status: "unknown" });
+    expect(buildFirstSteps({ ...base, hosts: [password] }).find((s) => s.id === "access")?.done).toBe(true);
   });
 
   it("ein API-Token ist kein SSH-Zugang", () => {
@@ -145,7 +179,7 @@ describe("FirstStepsCard", () => {
     renderCard();
     expect(await screen.findByRole("heading", { name: "Erste Schritte" })).toBeInTheDocument();
     expect(screen.getByText("0 von 6 erledigt")).toBeInTheDocument();
-    expect(within(step("server")).getByRole("link", { name: "Server hinzufügen" })).toHaveAttribute("href", "/settings/hosts");
+    expect(within(step("server")).getByRole("link", { name: "Server hinzufügen" })).toHaveAttribute("href", "/settings/hosts?neu=1");
     expect(within(step("access")).getByRole("link", { name: "Zugang einrichten" })).toHaveAttribute("href", "/settings/hosts");
     expect(within(step("modules")).getByRole("link", { name: "Module ansehen" })).toHaveAttribute("href", "/settings/extensions");
     expect(within(step("push")).getByRole("link", { name: "Einschalten" })).toHaveAttribute("href", "/settings/extensions");
@@ -157,7 +191,7 @@ describe("FirstStepsCard", () => {
   });
 
   it("Häkchen entstehen aus den Daten: Server, Zugang, Verbindung, Module, Push, Widget", async () => {
-    world.hosts = [host("pi", { credential: ssh, status: "up" })];
+    world.hosts = [host("pi", { credential: ssh, status: "up", login_ok_at: "2026-10-01T09:00:00Z" })];
     world.extensions = [ext("terminal"), ext("ntfy", { needs_setup: true })];
     world.items = [{ widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} }];
     renderCard();
@@ -179,7 +213,7 @@ describe("FirstStepsCard", () => {
   });
 
   it("verschwindet von selbst, wenn alles erledigt ist", async () => {
-    world.hosts = [host("pi", { credential: ssh, status: "up" })];
+    world.hosts = [host("pi", { credential: ssh, status: "up", login_ok_at: "2026-10-01T09:00:00Z" })];
     world.extensions = [ext("terminal"), ext("ntfy")];
     world.items = [{ widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} }];
     const { client, container } = renderCard();

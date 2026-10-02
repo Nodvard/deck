@@ -5,7 +5,7 @@
  * Uebersicht mit Schutzstatus je Server, Scans (ClamAV), Quarantaene, Haertung (Lynis)
  * und Container-Wache. Alles laeuft ueber `/ext/nexus-soc/defender/...`.
  */
-import { useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
 import { Badge, Button, Card, EmptyState, Icon, Notice, Page, Stat, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
@@ -34,6 +34,18 @@ interface ScanRow {
   finished_at: number | null;
 }
 
+interface AuditSummary { status: string; hardening_index: number | null; warnings: number; created_at: number; error: string | null }
+
+interface AttentionItem {
+  kind: string;
+  tone: "warn" | "info";
+  host_id: string;
+  host_name: string;
+  title: string;
+  hint: string;
+  action_label: string;
+}
+
 interface HostRow {
   host_id: string;
   host_name: string;
@@ -45,10 +57,15 @@ interface HostRow {
   signature_version?: string | null;
   signature_date?: string | null;
   freshclam_active?: boolean | null;
+  /** Ganze Tage seit dem Bau der Signaturen; fehlt oder `null` = unbekannt. */
+  signature_age_days?: number | null;
+  signature_stale?: boolean | null;
   lynis_installed: boolean;
   quarantine_files?: number;
   last_scan: ScanRow | null;
-  last_audit: { status: string; hardening_index: number | null; warnings: number; created_at: number; error: string | null } | null;
+  last_audit: AuditSummary | null;
+  /** Letztes erfolgreiches Audit; bleibt sichtbar, wenn das neueste gescheitert ist. */
+  last_ok_audit?: AuditSummary | null;
   scanning: boolean;
   auditing: boolean;
 }
@@ -56,9 +73,10 @@ interface HostRow {
 interface Overview {
   hosts: HostRow[];
   summary: {
-    hosts: number; protected: number; open_threats: number; quarantined: number; neutralized_total: number;
-    findings_30d: number; avg_hardening: number | null; score: number;
+    hosts: number; hosts_known?: number; protected: number; open_threats: number; quarantined: number; neutralized_total: number;
+    findings_30d: number; avg_hardening: number | null; score: number; stale_signatures?: number;
   };
+  attention?: AttentionItem[];
   config: {
     auto_quarantine: boolean; realtime_enabled: boolean; watch_interval_min: number;
     quick_scan_cron: string; deep_scan_cron: string; audit_cron: string;
@@ -117,6 +135,96 @@ const FINDING_STATUS: Record<string, { label: string; tone: Tone }> = {
   ignored: { label: "ignoriert", tone: "neutral" },
 };
 
+/** "3 Tage", "5 Wochen" -- für das Alter der Signaturen. */
+function ageText(days: number): string {
+  if (days >= 14) return `${Math.floor(days / 7)} Wochen`;
+  return days === 1 ? "1 Tag" : `${days} Tage`;
+}
+
+/** Härtungs-Spalte: der Index des neuesten erfolgreichen Audits; ist das letzte Audit gescheitert, steht das mit
+ *  Zeitangabe darunter und der eigentliche Fehler im Tooltip. */
+function HardeningCell({ host: h }: { host: HostRow }) {
+  const shown = h.last_audit?.hardening_index != null ? h.last_audit : h.last_ok_audit?.hardening_index != null ? h.last_ok_audit : null;
+  const failed = h.last_audit && h.last_audit.status !== "ok" ? h.last_audit : null;
+  return (
+    <>
+      {shown && shown.hardening_index != null && (
+        <div className="w-28">
+          <div className="flex justify-between text-xs"><span>{shown.hardening_index}</span><span className="text-white/40">{shown.warnings} Warn.</span></div>
+          <div className="mt-1 h-1.5 rounded-full bg-white/10">
+            <div className="h-1.5 rounded-full" style={{ width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "#34d399" : "#fbbf24" }} />
+          </div>
+        </div>
+      )}
+      {failed && (
+        <p className={`${shown ? "mt-1 " : ""}text-xs text-amber-300`} title={failed.error ?? undefined} data-testid="audit-failed">
+          Letztes Audit fehlgeschlagen ({ago(failed.created_at)})
+        </p>
+      )}
+      {!shown && !failed && <span className="text-xs text-white/40">–</span>}
+    </>
+  );
+}
+
+/** Hinweis oben auf der Seite. Neben "ok"/"error" gibt es "warn" (erledigt, aber mit Einschraenkung) und
+ * "info" (laeuft gerade); `links` fuehren zur Stelle, an der man es richtet. */
+interface PageNotice {
+  kind: "ok" | "error" | "warn" | "info";
+  text: string;
+  links?: { href: string; label: string }[];
+}
+
+const NOTICE_STYLE: Record<PageNotice["kind"], string> = {
+  ok: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+  error: "border-red-500/30 bg-red-500/10 text-red-200",
+  warn: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+  info: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+};
+
+function RunNotice({ notice, onClose }: { notice: PageNotice; onClose?: () => void }) {
+  return (
+    <div role={notice.kind === "error" ? "alert" : "status"} className={`mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`}>
+      <span className="min-w-0">
+        {notice.text}
+        {notice.links?.map((l) => (
+          <a key={l.href} href={l.href} className="ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white">{l.label}</a>
+        ))}
+      </span>
+      {onClose && (
+        <button type="button" aria-label="Hinweis schließen" onClick={onClose} className="flex-none opacity-60 hover:opacity-100"><Icon name="x" size={14} /></button>
+      )}
+    </div>
+  );
+}
+
+/** Antwort von `POST /defender/briefing`; `push` sagt ehrlich, ob die Meldung aufs Handy ging. */
+interface BriefingResult {
+  title: string;
+  push?: "sent" | "suppressed" | "not_delivered" | "unknown";
+}
+
+function briefingNotice(r: BriefingResult): PageNotice {
+  const stored = `Briefing erstellt: „${r.title}“. Es steht unter „Meldungen“`;
+  const inbox = { href: "/notifications", label: "Meldungen öffnen" };
+  switch (r.push) {
+    case "sent":
+      return { kind: "ok", text: `${stored} und wurde auch als Push-Nachricht zugestellt.`, links: [inbox] };
+    case "suppressed":
+      return { kind: "warn", text: `${stored}. Als Push-Nachricht kommt es nicht an, weil gerade ein Wartungsfenster läuft.`, links: [inbox] };
+    case "not_delivered": {
+      const links = [inbox];
+      if (deck().hasPermission("extensions.manage")) links.push({ href: "/settings/extensions/ntfy", label: "Push-Nachrichten einrichten" });
+      return {
+        kind: "warn",
+        text: `${stored}. Aufs Handy kommt es erst, wenn Push-Nachrichten (ntfy) eingerichtet sind und der ntfy-Dienst erreichbar ist (nicht einer deiner Server).`,
+        links,
+      };
+    }
+    default:
+      return { kind: "ok", text: `${stored}.`, links: [inbox] };
+  }
+}
+
 function ScoreRing({ score }: { score: number }) {
   const r = 42;
   const c = 2 * Math.PI * r;
@@ -135,7 +243,7 @@ function ScoreRing({ score }: { score: number }) {
       <div>
         <p className="text-xs uppercase tracking-wider text-white/45">Schutzwert</p>
         <p className="text-lg font-semibold" style={{ color: tone }}>{label}</p>
-        <p className="mt-1 max-w-xs text-xs text-white/45">Aus Abdeckung (ClamAV), aktuellen Scans, offenen Funden und Härtungsindex.</p>
+        <p className="mt-1 max-w-[16rem] text-xs text-white/45">Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde und wie sicher die Server eingestellt sind (Härtung).</p>
       </div>
     </div>
   );
@@ -152,7 +260,9 @@ export function SocPage(): JSX.Element {
   const setTab = useCallback((t: Tab) => updateUrl({ tab: t === "overview" ? null : t }), [updateUrl]);
   const [overview, setOverview] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [notice, setNotice] = useState<PageNotice | null>(null);
+  const [briefingBusy, setBriefingBusy] = useState(false);
+  const briefingLock = useRef(false);
   const canManage = deck().hasPermission("soc.manage");
   const hostFilter = urlParams.get("host") || null;
   const showAllHosts = () => updateUrl({ host: null });
@@ -206,11 +316,23 @@ export function SocPage(): JSX.Element {
       return `${r.hosts} Server werden geprüft (dauert einige Minuten).`;
     });
 
-  const sendBriefing = () =>
-    run("Briefing", async () => {
-      const r = await call<{ title: string }>(`${API}/briefing`, { method: "POST" });
-      return `gesendet – „${r.title}“`;
-    });
+  // Das Erstellen dauert bei einem Server, der nicht antwortet, ~20 Sekunden: Knopf sperren (kein zweites
+  // Briefing durch Doppelklick) und sagen, dass etwas passiert. Danach ehrlich melden, ob es aufs Handy ging.
+  async function sendBriefing() {
+    if (briefingLock.current) return;
+    briefingLock.current = true;
+    setBriefingBusy(true);
+    setNotice({ kind: "info", text: "Briefing wird erstellt … Das kann bis zu einer halben Minute dauern, wenn ein Server nicht antwortet." });
+    try {
+      setNotice(briefingNotice(await call<BriefingResult>(`${API}/briefing`, { method: "POST" })));
+      loadOverview();
+    } catch (err) {
+      setNotice({ kind: "error", text: `Briefing: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      briefingLock.current = false;
+      setBriefingBusy(false);
+    }
+  }
 
   const install = (host: HostRow, pkg: "clamav" | "lynis" | "signatures") =>
     run(pkg === "signatures" ? `Signaturen (${host.host_name})` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} installieren (${host.host_name})`, async () => {
@@ -227,13 +349,16 @@ export function SocPage(): JSX.Element {
   return (
     <Page
       title="Nodvard Shield"
-      description="Virenschutz, Quarantäne und Härtung für alle Server – plus die KI-Container-Wache (Nodvard KI) für Docker-Container."
+      description="Schützt deine Server: Virenscans, Sicherheitsupdates, Einbruchschutz und eine Prüfung, wie sicher alles eingestellt ist – plus die KI-Wache (Nodvard KI) für abgestürzte Docker-Container."
       actions={canManage && (
         <>
-          <Button onClick={() => void sendBriefing()}>Briefing senden</Button>
-          <Button onClick={() => void startAudit()}><Icon name="clock" size={14} /> Härtungs-Audit</Button>
-          <Button onClick={() => void startScan("deep")}><Icon name="search" size={14} /> Tiefenscan</Button>
-          <Button variant="primary" onClick={() => void startScan("quick")}><Icon name="play" size={14} /> Schnellscan starten</Button>
+          <Button onClick={() => void sendBriefing()} disabled={briefingBusy}
+            title="Schickt dir jetzt den Lagebericht: Server, Virenschutz, Updates und Einbruchschutz auf einen Blick.">
+            {briefingBusy ? "Briefing wird erstellt …" : "Briefing senden"}
+          </Button>
+          <Button onClick={() => void startAudit()} title="Lynis prüft, wie sicher deine Server eingestellt sind (dauert einige Minuten)."><Icon name="clock" size={14} /> Härtungs-Audit</Button>
+          <Button onClick={() => void startScan("deep")} title="Prüft das ganze System auf Schadsoftware – das kann Stunden dauern."><Icon name="search" size={14} /> Tiefenscan</Button>
+          <Button variant="primary" onClick={() => void startScan("quick")} title="Prüft typische Ablageorte auf Schadsoftware – in wenigen Minuten fertig."><Icon name="play" size={14} /> Schnellscan starten</Button>
         </>
       )}
     >
@@ -270,7 +395,7 @@ export function SocPage(): JSX.Element {
         </div>
       )}
       <HostFilter.Provider value={hostFilter}>
-      {notice && <Notice text={notice.text} kind={notice.kind} onClose={() => setNotice(null)} />}
+      {notice && <RunNotice notice={notice} onClose={() => setNotice(null)} />}
       {error && ["overview", "scans", "quarantine", "hardening"].includes(tab) && <Notice text={`Fehler: ${error}`} />}
 
       {tab === "overview" && overview && (
@@ -297,14 +422,89 @@ interface SideSummary {
 function SideLink({ title, text, tone, onClick }: { title: string; text: string; tone: "good" | "warn" | "bad"; onClick: () => void }) {
   const dot = tone === "good" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-red-400";
   return (
-    <button type="button" onClick={onClick} className="panel flex items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]">
+    <button type="button" onClick={onClick} className="panel flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]">
       <span className={`h-2.5 w-2.5 flex-none rounded-full ${dot}`} />
       <span className="min-w-0 flex-1">
         <span className="block text-xs text-white/50">{title}</span>
-        <span className="block truncate text-sm">{text}</span>
+        <span className="block truncate text-sm" title={text}>{text}</span>
       </span>
-      <span className="text-white/35">→</span>
+      <span className="flex-none text-white/35">→</span>
     </button>
+  );
+}
+
+/** Was als Erstes zu tun ist -- fuer jemanden, der die Begriffe noch nicht kennt. `null`: nichts Dringendes. */
+interface NextStep {
+  text: string;
+  action?: { label: string; run: () => void };
+  link?: { href: string; label: string };
+}
+
+function nextStep(
+  hosts: HostRow[], openThreats: number, canManage: boolean,
+  on: { threats: () => void; install: (h: HostRow, pkg: "clamav" | "lynis") => void; scan: (h: HostRow) => void },
+): NextStep | null {
+  if (openThreats > 0) {
+    return { text: `${openThreats === 1 ? "Es wurde eine Bedrohung gefunden" : `Es wurden ${openThreats} Bedrohungen gefunden`}. Schau sie dir an und entscheide, was damit passiert.`,
+      action: { label: "Funde ansehen", run: on.threats } };
+  }
+  if (hosts.length === 0) return null;
+  if (hosts.every((h) => h.reachable === false)) {
+    return {
+      text: hosts.length === 1 ? `„${hosts[0].host_name}“ antwortet nicht. Prüfe, ob der Server läuft und ob Adresse und Zugang stimmen.`
+        : "Kein Server antwortet. Prüfe, ob die Server laufen und ob Adresse und Zugang stimmen.",
+      link: deck().hasPermission("hosts.write") ? { href: "/settings/hosts", label: "Server & Zugänge öffnen" } : undefined,
+    };
+  }
+  const reachable = hosts.filter((h) => h.reachable !== false);
+  const noClam = reachable.find((h) => !h.clamav_installed);
+  if (noClam) {
+    const more = reachable.filter((h) => !h.clamav_installed).length - 1;
+    return { text: `Installiere ClamAV (den Virenscanner) auf „${noClam.host_name}“${more > 0 ? ` und ${more} weiteren Server${more > 1 ? "n" : ""}` : ""}. Ohne ihn wird dort nichts geprüft.`,
+      action: canManage ? { label: "ClamAV installieren", run: () => on.install(noClam, "clamav") } : undefined };
+  }
+  const neverScanned = reachable.find((h) => h.clamav_installed && !h.last_scan && !h.scanning);
+  if (neverScanned) {
+    return { text: `„${neverScanned.host_name}“ wurde noch nie geprüft. Starte den ersten Schnellscan.`,
+      action: canManage ? { label: "Schnellscan starten", run: () => on.scan(neverScanned) } : undefined };
+  }
+  const noLynis = reachable.find((h) => !h.lynis_installed);
+  if (noLynis) {
+    return { text: `Installiere Lynis auf „${noLynis.host_name}“. Es prüft, wie sicher der Server eingestellt ist (Härtung).`,
+      action: canManage ? { label: "Lynis installieren", run: () => on.install(noLynis, "lynis") } : undefined };
+  }
+  return null;
+}
+
+/** Abzeichen "Echtzeit-Waechter" und "Automatische Quarantaene": gruen nur, wenn es auch wirkt --
+ * ohne ClamAV auf einem Server gibt es dort nichts, was waechst oder wegsperrt. */
+function coverageBadge(on: boolean, name: string, onWord: string, covered: number, total: number, interval?: string): { tone: Tone; text: string } {
+  if (!on) return { tone: "warn", text: `${name} aus` };
+  if (covered === 0) return { tone: "warn", text: `${name}: an, aber noch auf keinem Server aktiv` };
+  if (covered < total) return { tone: "warn", text: `${name}: ${onWord} auf ${covered} von ${total} Servern${interval ?? ""}` };
+  return { tone: "good", text: `${name} ${onWord}${interval ?? ""}` };
+}
+
+const GLOSSARY: [string, string][] = [
+  ["ClamAV", "der Virenscanner. Er läuft kostenlos auf deinen Servern und sucht nach bekannten Schadprogrammen."],
+  ["Signaturen", "die Liste bekannter Schadprogramme, mit der ClamAV vergleicht. Sie sollte täglich aktualisiert werden."],
+  ["Schnellscan / Tiefenscan", "der Schnellscan prüft typische Ablageorte und ist in Minuten fertig; der Tiefenscan prüft das ganze System und kann Stunden dauern."],
+  ["Echtzeit-Wächter", "prüft alle paar Minuten neue und geänderte Dateien."],
+  ["Quarantäne", "gefundene Schadsoftware wird weggesperrt statt gelöscht. Du kannst sie zurückholen oder endgültig löschen."],
+  ["Lynis, Härtung, Härtungs-Audit", "Lynis prüft, wie sicher ein Server eingestellt ist – das ist das Härtungs-Audit. „Härtung“ heißt: den Server sicherer einstellen. Der Wert geht von 0 (unsicher) bis 100."],
+  ["Fail2ban", "sperrt Adressen, die zu oft ein falsches Passwort probieren (Reiter „Einbruchschutz“)."],
+];
+
+function Glossary() {
+  return (
+    <details className="mb-5 rounded-lg border border-white/[0.06] px-3 py-2 text-xs text-white/55" data-testid="glossary">
+      <summary className="cursor-pointer select-none text-white/70 hover:text-white">Was bedeuten die Begriffe?</summary>
+      <dl className="mt-2 space-y-1.5">
+        {GLOSSARY.map(([term, text]) => (
+          <div key={term}><dt className="inline font-medium text-white/80">{term}</dt>{" "}<dd className="inline">– {text}</dd></div>
+        ))}
+      </dl>
+    </details>
   );
 }
 
@@ -324,22 +524,85 @@ function OverviewTab({
   const s = overview.summary;
   const c = overview.config;
   const hosts = useForHost(overview.hosts);
+  const attention = useForHost(overview.attention ?? []);
+  const noServers = s.hosts === 0;
+  const step = nextStep(hosts, s.open_threats, canManage, {
+    threats: onOpenThreats, install: onInstall, scan: onScan,
+  });
+  const realtime = coverageBadge(c.realtime_enabled, "Echtzeit-Wächter", "aktiv", s.protected, s.hosts, ` (alle ${c.watch_interval_min} Min.)`);
+  const quarantine = coverageBadge(c.auto_quarantine, "Automatische Quarantäne", "an", s.protected, s.hosts);
   return (
     <>
+      {step && (
+        <div className="mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-3 text-sm" data-testid="next-step">
+          <p className="min-w-0 flex-1"><strong className="font-semibold">Nächster Schritt:</strong> {step.text}</p>
+          {step.action && <Button variant="primary" small onClick={step.action.run}>{step.action.label}</Button>}
+          {step.link && <a href={step.link.href} className="text-xs underline underline-offset-2 hover:text-white">{step.link.label}</a>}
+        </div>
+      )}
+
       <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
-        <div className="panel flex items-center px-6 py-4"><ScoreRing score={s.score} /></div>
+        {noServers ? (
+          <div className="panel px-6 py-4" data-testid="no-servers">
+            <p className="text-xs uppercase tracking-wider text-white/45">Schutzwert</p>
+            {(s.hosts_known ?? 0) > 0 ? (
+              <>
+                <p className="text-lg font-semibold">Noch kein Server prüfbar – nichts zu bewerten</p>
+                <p className="mt-1 max-w-xs text-xs text-white/55">
+                  Du hast {s.hosts_known === 1 ? "einen Server" : `${s.hosts_known} Server`} angelegt, aber Nodvard Shield kann noch keinen prüfen.
+                  Dafür braucht er einen Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung).
+                  {deck().hasPermission("hosts.write") && <> <a href="/settings/hosts" className="underline underline-offset-2 hover:text-white">Zugang einrichten</a></>}
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="text-lg font-semibold">Noch kein Server – nichts zu bewerten</p>
+                <p className="mt-1 max-w-xs text-xs text-white/55">
+                  Füge zuerst einen Server hinzu.
+                  {deck().hasPermission("hosts.write") && <> <a href="/settings/hosts" className="underline underline-offset-2 hover:text-white">Server hinzufügen</a></>}
+                </p>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="panel flex items-center px-6 py-4"><ScoreRing score={s.score} /></div>
+        )}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Stat label="Geschützte Server" value={`${s.protected} / ${s.hosts}`} hint="ClamAV installiert" tone={s.protected < s.hosts ? "warn" : "good"} />
+          <Stat label="Geschützte Server" value={`${s.protected} / ${s.hosts}`} hint="mit Virenscanner (ClamAV)" tone={noServers ? undefined : s.protected < s.hosts ? "warn" : "good"} />
           <button type="button" onClick={onOpenThreats} className="text-left [&>div]:h-full">
             <Stat label="Offene Bedrohungen" value={s.open_threats} hint={s.open_threats ? "Jetzt prüfen →" : "keine"} tone={s.open_threats ? "bad" : "good"} />
           </button>
           <Stat label="Neutralisiert" value={s.neutralized_total} hint={`${s.quarantined} in Quarantäne · ${s.findings_30d} Funde in 30 Tagen`} />
-          <Stat label="Härtung (Ø Lynis)" value={s.avg_hardening ?? "–"} hint="von 100" tone={s.avg_hardening == null ? undefined : s.avg_hardening >= 70 ? "good" : "warn"} />
+          <Stat label="Härtung (Ø)" value={s.avg_hardening ?? "–"} hint="von 100 · wie sicher die Server eingestellt sind (Lynis)" tone={s.avg_hardening == null ? undefined : s.avg_hardening >= 70 ? "good" : "warn"} />
         </div>
       </div>
 
+      {attention.length > 0 && (
+        <div className="mb-5" data-testid="shield-attention">
+          <Card title="Braucht Aufmerksamkeit" padded={false}>
+            <ul className="divide-y divide-white/[0.06]">
+              {attention.map((a) => {
+                const host = overview.hosts.find((h) => h.host_id === a.host_id);
+                return (
+                  <li key={`${a.kind}-${a.host_id}`} className="flex flex-wrap items-center gap-3 px-5 py-3 text-sm">
+                    <span aria-hidden="true" className={`h-2 w-2 flex-none rounded-full ${a.tone === "warn" ? "bg-amber-300" : "bg-white/40"}`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="break-words font-medium">{a.title}</p>
+                      <p className="text-xs text-white/50">{a.hint}</p>
+                    </div>
+                    {canManage && host && a.kind === "signatures" && (
+                      <Button small onClick={() => onInstall(host, "signatures")}>{a.action_label}</Button>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </Card>
+        </div>
+      )}
+
       {(side.updates?.checked || side.guard) && (
-        <div className="mb-5 grid gap-3 md:grid-cols-2" data-testid="side-summary">
+        <div className="mb-5 grid grid-cols-1 gap-3 md:grid-cols-2" data-testid="side-summary">
           {!!side.updates?.checked && (
             <SideLink
               title="Updates"
@@ -364,13 +627,15 @@ function OverviewTab({
       )}
 
       <div className="mb-5 flex flex-wrap gap-2 text-xs">
-        <Badge tone={c.realtime_enabled ? "good" : "warn"}>Echtzeit-Wächter {c.realtime_enabled ? `aktiv (alle ${c.watch_interval_min} Min.)` : "aus"}</Badge>
-        <Badge tone={c.auto_quarantine ? "good" : "warn"}>Automatische Quarantäne {c.auto_quarantine ? "an" : "aus"}</Badge>
+        <span className="max-w-full [&>span]:whitespace-normal"><Badge tone={realtime.tone}>{realtime.text}</Badge></span>
+        <span className="max-w-full [&>span]:whitespace-normal"><Badge tone={quarantine.tone}>{quarantine.text}</Badge></span>
         <Badge>Schnellscan: {describeSchedule(c.quick_scan_cron, "aus")}</Badge>
         <Badge>Tiefenscan: {describeSchedule(c.deep_scan_cron, "aus")}</Badge>
-        <Badge>Audit: {describeSchedule(c.audit_cron, "aus")}</Badge>
+        <Badge>Härtungs-Audit: {describeSchedule(c.audit_cron, "aus")}</Badge>
         <a href="/settings/extensions/nexus-soc" className="text-white/50 underline-offset-2 hover:text-white hover:underline">Einstellungen ändern</a>
       </div>
+
+      <Glossary />
 
       <Card title="Server" padded={false} actions={<Button small variant="ghost" onClick={onRefresh}><Icon name="refresh" size={12} /> Status neu prüfen</Button>}>
         {hosts.length === 0 ? (
@@ -389,9 +654,9 @@ function OverviewTab({
               <thead className="text-xs uppercase tracking-wider text-white/40">
                 <tr className="border-b border-white/[0.06]">
                   <th className="px-5 py-2.5 font-medium">Server</th>
-                  <th className="px-3 py-2.5 font-medium">Virenschutz</th>
+                  <th className="px-3 py-2.5 font-medium" title="ClamAV ist der Virenscanner auf dem Server">Virenschutz</th>
                   <th className="px-3 py-2.5 font-medium">Letzter Scan</th>
-                  <th className="px-3 py-2.5 font-medium">Härtung</th>
+                  <th className="px-3 py-2.5 font-medium" title="Wie sicher der Server eingestellt ist (geprüft von Lynis), 0 bis 100">Härtung</th>
                   <th className="px-3 py-2.5 font-medium" />
                 </tr>
               </thead>
@@ -408,6 +673,8 @@ function OverviewTab({
                           <Badge tone="good">ClamAV {h.clamav_version}</Badge>
                           <p className="mt-0.5 text-xs text-white/45">
                             Signaturen {h.signature_version ?? "?"}{h.signature_date ? ` · ${h.signature_date}` : ""}
+                            {h.signature_stale === true && <span className="text-amber-300"> · {ageText(h.signature_age_days ?? 0)} alt</span>}
+                            {h.signature_stale == null && <span className="text-amber-300"> · Alter unbekannt</span>}
                             {h.freshclam_active === false && <span className="text-amber-300"> · Auto-Update aus</span>}
                           </p>
                         </>
@@ -422,23 +689,16 @@ function OverviewTab({
                       ) : <span className="text-xs text-white/40">noch nie</span>}
                     </td>
                     <td className="px-3 py-3">
-                      {h.auditing ? <Badge tone="info">Audit läuft …</Badge> : h.last_audit?.hardening_index != null ? (
-                        <div className="w-28">
-                          <div className="flex justify-between text-xs"><span>{h.last_audit.hardening_index}</span><span className="text-white/40">{h.last_audit.warnings} Warn.</span></div>
-                          <div className="mt-1 h-1.5 rounded-full bg-white/10">
-                            <div className="h-1.5 rounded-full" style={{ width: `${h.last_audit.hardening_index}%`, background: h.last_audit.hardening_index >= 70 ? "#34d399" : "#fbbf24" }} />
-                          </div>
-                        </div>
-                      ) : h.last_audit?.error ? <span className="text-xs text-amber-300">{h.last_audit.error}</span> : <span className="text-xs text-white/40">–</span>}
+                      {h.auditing ? <Badge tone="info">Audit läuft …</Badge> : <HardeningCell host={h} />}
                     </td>
                     <td className="px-3 py-3">
                       {canManage && (
                         <div className="flex flex-wrap justify-end gap-1">
                           {h.clamav_installed && <Button small onClick={() => onScan(h)} disabled={h.scanning}>Scannen</Button>}
-                          {h.clamav_installed && <Button small variant="ghost" onClick={() => onInstall(h, "signatures")}>Signaturen</Button>}
-                          {!h.clamav_installed && h.reachable !== false && <Button small variant="primary" onClick={() => onInstall(h, "clamav")}>ClamAV installieren</Button>}
-                          {!h.lynis_installed && h.reachable !== false && <Button small onClick={() => onInstall(h, "lynis")}>Lynis installieren</Button>}
-                          {h.lynis_installed && <Button small variant="ghost" onClick={() => onAudit(h)} disabled={h.auditing}>Audit</Button>}
+                          {h.clamav_installed && <Button small variant="ghost" title="Die Liste bekannter Schadprogramme jetzt aktualisieren" onClick={() => onInstall(h, "signatures")}>Signaturen</Button>}
+                          {!h.clamav_installed && h.reachable !== false && <Button small variant="primary" title="ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert." onClick={() => onInstall(h, "clamav")}>ClamAV installieren</Button>}
+                          {!h.lynis_installed && h.reachable !== false && <Button small title="Lynis prüft, wie sicher der Server eingestellt ist." onClick={() => onInstall(h, "lynis")}>Lynis installieren</Button>}
+                          {h.lynis_installed && <Button small variant="ghost" title="Prüft, wie sicher der Server eingestellt ist (Härtung)" onClick={() => onAudit(h)} disabled={h.auditing}>Audit</Button>}
                         </div>
                       )}
                     </td>
@@ -673,16 +933,21 @@ function HardeningTab({ canManage, onAudit }: { canManage: boolean; onAudit: () 
   if (!audits) return <p className="text-sm text-white/50">Lade …</p>;
   if (shown.length === 0) {
     return (
-      <EmptyState icon="clock" title="Noch kein Härtungs-Audit" text="Lynis prüft jeden Server auf unsichere Einstellungen (SSH, Passwortregeln, offene Dienste …) und vergibt einen Härtungsindex von 0 bis 100."
+      <EmptyState icon="clock" title="Noch kein Härtungs-Audit" text="Lynis ist ein kostenloses Prüfprogramm. Es sucht auf jedem Server nach unsicheren Einstellungen (SSH, Passwortregeln, offene Dienste …) und vergibt einen Härtungswert von 0 bis 100 – je höher, desto sicherer."
         action={canManage && <Button variant="primary" onClick={onAudit}>Audit jetzt starten</Button>} />
     );
   }
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       {shown.map((a) => (
-        <Card key={a.id} title={a.host_name} description={`Geprüft ${when(a.created_at)}`}
+        <Card key={a.id} title={a.host_name} description={`${a.status === "ok" ? "Geprüft" : "Versucht"} ${when(a.created_at)}`}
           actions={a.hardening_index != null && <span className={`text-2xl font-semibold ${a.hardening_index >= 70 ? "text-emerald-300" : "text-amber-300"}`}>{a.hardening_index}</span>}>
-          {a.status !== "ok" ? <p className="text-sm text-amber-300">{a.error}</p> : (
+          {a.status !== "ok" ? (
+            <>
+              <p className="text-sm text-amber-300">Letztes Audit fehlgeschlagen ({ago(a.created_at)})</p>
+              {a.error && <p className="mt-1 break-words text-xs text-white/50">{a.error}</p>}
+            </>
+          ) : (
             <>
               <p className="mb-2 text-xs uppercase tracking-wider text-white/40">Warnungen ({a.warnings.length})</p>
               {a.warnings.length === 0 ? <p className="mb-3 text-sm text-emerald-300">Keine Warnungen.</p> : (

@@ -11,8 +11,10 @@ Was passiert (alles oder nichts -- vorher wird alles geprueft, erst dann geschri
    heutigen Datum (oder `--date`) und optional `--title`.
 2. Die Bruchstuecke werden geloescht (die README.md bleibt).
 3. Die Versionsnummer wird an allen Stellen angehoben: `backend/src/nodvard_deck/version.py`,
-   `backend/pyproject.toml`, `frontend/package.json` und die beiden Wurzel-Eintraege in
-   `frontend/package-lock.json` (sonst zeigt der naechste `npm install` einen Unterschied).
+   `backend/pyproject.toml`, `frontend/package.json`, die beiden Wurzel-Eintraege in
+   `frontend/package-lock.json` (sonst zeigt der naechste `npm install` einen Unterschied) und die
+   Version des Update-Helfers (`deploy/updater/nodvard_deck_updater/__init__.py`, er wird mit jedem
+   Release zusammen gebaut und meldet dieselbe Nummer wie das Dashboard).
 
 Abgelehnt wird, wenn die Version nicht groesser ist als die aktuelle, wenn es keine
 Bruchstuecke gibt oder wenn die bisherigen Versionsnummern nicht im Gleichschritt sind
@@ -90,6 +92,10 @@ class Tree:
         return self.root / "backend" / "src" / "nodvard_deck" / "version.py"
 
     @property
+    def updater_init(self) -> Path:
+        return self.root / "deploy" / "updater" / "nodvard_deck_updater" / "__init__.py"
+
+    @property
     def pyproject(self) -> Path:
         return self.root / "backend" / "pyproject.toml"
 
@@ -142,6 +148,8 @@ def read_versions(tree: Tree) -> dict[str, str | None]:
     found: dict[str, str | None] = {}
     match = _VERSION_PY_RE.search(_read(tree.version_py))
     found["backend/src/nodvard_deck/version.py"] = match.group(2) if match else None
+    match = _VERSION_PY_RE.search(_read(tree.updater_init))
+    found["deploy/updater/nodvard_deck_updater/__init__.py"] = match.group(2) if match else None
     found["backend/pyproject.toml"] = _pyproject_version(_read(tree.pyproject))
     try:
         found["frontend/package.json"] = json.loads(_read(tree.package_json)).get("version")
@@ -187,6 +195,7 @@ def bumped_files(tree: Tree, version: str) -> dict[Path, str]:
     out: dict[Path, str] = {}
 
     out[tree.version_py] = _sub_once(_VERSION_PY_RE, _read(tree.version_py), version, "version.py")
+    out[tree.updater_init] = _sub_once(_VERSION_PY_RE, _read(tree.updater_init), version, "Update-Helfer (__init__.py)")
 
     pyproject = _read(tree.pyproject)
     block = _PYPROJECT_PROJECT_RE.search(pyproject)
@@ -205,6 +214,8 @@ def bumped_files(tree: Tree, version: str) -> dict[Path, str]:
     # Gegenprobe im Speicher: jede Stelle muss danach die neue Nummer nennen.
     if _VERSION_PY_RE.search(out[tree.version_py]).group(2) != version:  # type: ignore[union-attr]
         raise ReleaseError("version.py liess sich nicht richtig anheben.")
+    if _VERSION_PY_RE.search(out[tree.updater_init]).group(2) != version:  # type: ignore[union-attr]
+        raise ReleaseError("Die Version des Update-Helfers liess sich nicht richtig anheben.")
     if _pyproject_version(out[tree.pyproject]) != version:
         raise ReleaseError("pyproject.toml liess sich nicht richtig anheben.")
     try:

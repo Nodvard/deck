@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+import urllib.parse
 import sys
 from pathlib import Path
 
@@ -190,9 +191,12 @@ def _build_mock_backup_app() -> tuple[FastAPI, dict]:
         return {"data": (state["tasks"] + state["ring_noise"])[-25:]}
 
     @app.post("/api2/json/nodes/{node}/vzdump")
-    async def run_vzdump(node: str, _: None = Depends(_check_auth)) -> dict:
+    async def run_vzdump(node: str, request: Request, _: None = Depends(_check_auth)) -> dict:
         upid = f"UPID:{node}:new"
         state["vzdump_calls"].append({"node": node})
+        state.setdefault("vzdump_params", []).append(
+            {k: v[0] for k, v in urllib.parse.parse_qs((await request.body()).decode()).items()}
+        )
         state["tasks"].append({"upid": upid, "node": node, "type": "vzdump", "id": "100", "status": "OK", "starttime": 9000, "endtime": 9300})
         return {"data": upid}
 
@@ -327,6 +331,318 @@ async def test_retry_proposes_through_the_gate_and_reaches_the_real_mock(
     assert approve.status_code == 200, approve.text
     assert approve.json()["status"] == "succeeded"
     assert state["vzdump_calls"] == [{"node": "pve2"}]
+
+
+async def _retry_and_approve(client, headers, job_ref: str) -> dict:
+    retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
+    assert retry.status_code == 200, retry.text
+    approve = await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)
+    assert approve.status_code == 200, approve.text
+    return approve.json()
+
+
+@pytest.mark.asyncio
+async def test_retry_takes_over_the_retention_and_settings_of_the_job(client, db_session, test_settings, mock_backup_api):
+    """Ohne die Aufbewahrung des Jobs raeumt Proxmox nach der Regel des Speichers auf und
+    loescht womoeglich Sicherungen, die der Job behalten haette."""
+    base_url, state = mock_backup_api
+    state["jobs"][0].update({"compress": "zstd", "notes-template": "{{guestname}}", "prune-backups": {"keep-daily": "7", "keep-weekly": "4"}})
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    job_ref = next(j["job_ref"] for j in jobs if j["vmid"] == "100")
+
+    retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
+    action = (await client.get(f"/api/v1/actions/{retry.json()['action_id']}", headers=headers)).json()
+    assert "Aufbewahrung des Jobs" in action["reason"]
+    approved = (await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)).json()
+    assert approved["status"] == "succeeded", approved
+    assert state["vzdump_params"] == [{
+        "vmid": "100", "storage": "backup-pve1", "mode": "snapshot", "compress": "zstd",
+        "notes-template": "{{guestname}}", "prune-backups": "keep-daily=7,keep-weekly=4",
+    }]
+
+
+@pytest.mark.asyncio
+async def test_retry_of_a_job_without_own_retention_cleans_nothing_up(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    state["jobs"] = [{"id": "backup-zabbix", "vmid": "102", "storage": "backup-pve1", "schedule": "22:30", "enabled": 1, "node": "pve2"}]
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    approved = await _retry_and_approve(client, headers, jobs[0]["job_ref"])
+    assert approved["status"] == "succeeded", approved
+    assert state["vzdump_params"] == [{"vmid": "102", "storage": "backup-pve1", "prune-backups": "keep-all=1"}]
+
+
+@pytest.mark.asyncio
+async def test_retry_is_refused_when_the_job_changed_between_proposal_and_approval(client, db_session, test_settings, mock_backup_api):
+    """Freigegeben wurde "es wird nichts aufgeraeumt". Bekommt der Job danach eine Aufbewahrung,
+    darf der Nachlauf nicht mit Aufraeumen starten."""
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    job_ref = next(j["job_ref"] for j in jobs if j["vmid"] == "100")
+    state["jobs"][0].pop("prune-backups", None)
+    retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
+    action = (await client.get(f"/api/v1/actions/{retry.json()['action_id']}", headers=headers)).json()
+    assert "nichts aufgeräumt" in action["reason"]
+    assert action["payload"]["options"]["prune-backups"] == "keep-all=1"
+
+    state["jobs"][0]["prune-backups"] = "keep-last=9"  # zwischen Vorschlag und Freigabe geaendert
+    refused = (await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)).json()
+    assert refused["status"] == "failed", refused
+    assert "seit dem Vorschlag geändert" in refused["result"]["error"]
+    assert "nichts gestartet" in refused["result"]["error"]
+    assert state["vzdump_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_is_refused_when_the_job_is_gone_when_the_action_runs(client, db_session, test_settings, mock_backup_api):
+    """Ein geloeschter Job darf nicht still mit Standardwerten (unkomprimiert, ohne Notizen) laufen."""
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    job_ref = next(j["job_ref"] for j in jobs if j["vmid"] == "100")
+    retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
+    assert retry.json()["status"] == "proposed"
+
+    state["jobs"].clear()
+    refused = (await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)).json()
+    assert refused["status"] == "failed", refused
+    assert "nicht lesbar" in refused["result"]["error"]
+    assert state["vzdump_calls"] == []
+
+
+@pytest.mark.asyncio
+async def test_retry_runs_with_the_approved_options_when_the_job_is_unchanged(client, db_session, test_settings, mock_backup_api):
+    """Nur der Zeitplan ist nicht Teil des Laufs: eine Aenderung daran ist kein Grund abzulehnen."""
+    base_url, state = mock_backup_api
+    state["jobs"][0].update({"compress": "zstd", "prune-backups": {"keep-last": "3"}})
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    job_ref = next(j["job_ref"] for j in jobs if j["vmid"] == "100")
+    retry = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/retry", headers=headers)
+    state["jobs"][0]["schedule"] = "04:00"
+    approved = (await client.post(f"/api/v1/actions/{retry.json()['action_id']}/approve", headers=headers)).json()
+    assert approved["status"] == "succeeded", approved
+    assert state["vzdump_params"][0]["prune-backups"] == "keep-last=3"
+    assert state["vzdump_params"][0]["compress"] == "zstd"
+
+
+def _executor_with_fake_http(job: dict | None, calls: list, post_status: int = 200):
+    """Executor gegen einen echten Connector, dessen HTTP-Schicht nur mitschreibt."""
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+    from nodvard_deck_ext_backups.capabilities import BackupActionExecutor
+    from nodvard_deck_ext_backups.connector import ProxmoxBackupConnector
+
+    class _Response:
+        def __init__(self, data, status_code=200):
+            self._data = data
+            self.status_code = status_code
+            self.text = "" if status_code < 400 else '{"data":null}'
+
+        def json(self):
+            return {"data": self._data}
+
+    class _Http:
+        async def request(self, method, url, **kwargs):
+            calls.append((method, url.split("/api2/json")[1], kwargs.get("data") or kwargs.get("json")))
+            return _Response(job) if method == "GET" else _Response("UPID:x", post_status)
+
+    connector = ProxmoxBackupConnector(type("C", (), {"http": _Http()})(), base_url="http://x", token_id="a", token_secret="b")
+
+    async def factory():
+        return {"primary": connector}
+
+    return BackupActionExecutor(factory)
+
+
+@pytest.mark.asyncio
+async def test_old_retry_proposal_without_job_reference_never_cleans_up():
+    """Ein Vorschlag aus einer aelteren Version hat keinen Job im Payload: er laeuft mit
+    `keep-all=1`, nicht mit der Regel des Speichers."""
+    from nodvard_sdk import Actor, Risk
+    from nodvard_sdk.actions import ActionRequest
+
+    calls: list = []
+    executor = _executor_with_fake_http(None, calls)
+    req = ActionRequest(
+        action_type="backup.run", payload={"connection": "primary", "node": "pve2", "vmid": "100", "storage": "backup-pve1"},
+        risk=Risk.MEDIUM, proposed_by=Actor.extension("backups"), reason="alt",
+    )
+    assert (await executor.execute(req)).success
+    assert calls == [("POST", "/nodes/pve2/vzdump", {"vmid": "100", "storage": "backup-pve1", "prune-backups": "keep-all=1"})]
+
+
+@pytest.mark.asyncio
+async def test_retry_with_job_but_unreadable_job_or_missing_options_starts_nothing():
+    from nodvard_sdk import Actor, Risk
+    from nodvard_sdk.actions import ActionRequest
+
+    def request(**payload):
+        return ActionRequest(
+            action_type="backup.run",
+            payload={"connection": "primary", "node": "pve2", "vmid": "100", "storage": "s", "job_id": "j", **payload},
+            risk=Risk.MEDIUM, proposed_by=Actor.extension("backups"), reason="x",
+        )
+
+    calls: list = []
+    unreadable = await _executor_with_fake_http(None, calls).execute(request(options={"storage": "s", "prune-backups": "keep-all=1"}))
+    assert not unreadable.success and "nicht lesbar" in unreadable.error
+    assert all(method == "GET" for method, _path, _data in calls)
+
+    calls = []
+    job = {"id": "j", "storage": "s", "prune-backups": "keep-last=1"}
+    without_options = await _executor_with_fake_http(job, calls).execute(request())
+    assert not without_options.success and "bitte neu vorschlagen" in without_options.error
+    assert all(method == "GET" for method, _path, _data in calls)
+
+
+@pytest.mark.asyncio
+async def test_retry_never_sends_tmpdir_because_proxmox_takes_it_only_from_root():
+    """`tmpdir` nimmt Proxmox nur von `root@pam` an, nie von einem API-Token: mitgeschickt
+    scheiterte jeder Nachlauf eines Jobs mit eigenem Temp-Ordner."""
+    from nodvard_sdk import Actor, Risk
+    from nodvard_sdk.actions import ActionRequest
+
+    calls: list = []
+    job = {"id": "j", "storage": "s", "tmpdir": "/mnt/tmp", "compress": "zstd", "prune-backups": "keep-last=2"}
+    executor = _executor_with_fake_http(job, calls)
+    from nodvard_deck_ext_backups.job_edit import vzdump_options
+
+    assert "tmpdir" not in vzdump_options(job)
+    req = ActionRequest(
+        action_type="backup.run",
+        payload={"connection": "primary", "node": "pve2", "vmid": "100", "storage": "s", "job_id": "j", "options": vzdump_options(job)},
+        risk=Risk.MEDIUM, proposed_by=Actor.extension("backups"), reason="x",
+    )
+    assert (await executor.execute(req)).success
+    assert calls[-1] == ("POST", "/nodes/pve2/vzdump", {"vmid": "100", "storage": "s", "compress": "zstd", "prune-backups": "keep-last=2"})
+
+
+@pytest.mark.asyncio
+async def test_retry_explains_which_proxmox_rights_are_missing_on_403():
+    """Die Aufbewahrung geht immer mit, dafuer verlangt Proxmox `Datastore.Allocate` auf dem Speicher.
+    Ein 403 nennt das, statt nur "HTTP 403" zu zeigen."""
+    from nodvard_sdk import Actor, Risk
+    from nodvard_sdk.actions import ActionRequest
+
+    calls: list = []
+    executor = _executor_with_fake_http(None, calls, post_status=403)
+    req = ActionRequest(
+        action_type="backup.run", payload={"connection": "primary", "node": "pve2", "vmid": "100", "storage": "s"},
+        risk=Risk.MEDIUM, proposed_by=Actor.extension("backups"), reason="x",
+    )
+    result = await executor.execute(req)
+    assert not result.success
+    assert "Datastore.Allocate" in result.error and "nichts gestartet" in result.error
+    assert "HTTP 403" in result.error
+
+
+def test_same_run_options_ignores_number_or_text_and_whitespace():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+    from nodvard_deck_ext_backups.job_edit import same_run_options
+
+    assert same_run_options({"remove": 0, "bwlimit": "100", "mode": "stop "}, {"remove": "0", "bwlimit": 100, "mode": "stop"})
+    assert not same_run_options({"prune-backups": "keep-all=1"}, {"prune-backups": "keep-last=9"})
+    assert not same_run_options({"storage": "s"}, {"storage": "s", "compress": "zstd"})
+    assert not same_run_options(None, {"storage": "s"})
+
+
+def test_run_retention_picks_the_jobs_rule_and_falls_back_to_keep_all():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+    from nodvard_deck_ext_backups.job_edit import run_retention, vzdump_options
+
+    assert run_retention({"prune-backups": "keep-last=3,keep-weekly=2"}) == {"prune-backups": "keep-last=3,keep-weekly=2"}
+    assert run_retention({"prune-backups": {"keep-hourly": "24", "keep-daily": "7"}}) == {"prune-backups": "keep-hourly=24,keep-daily=7"}
+    assert run_retention({"prune-backups": "keep-all=1"}) == {"prune-backups": "keep-all=1"}
+    assert run_retention({"maxfiles": 4}) == {"maxfiles": "4"}
+    for unknown in ({}, None, {"prune-backups": "kaputt"}, {"prune-backups": ""}, {"maxfiles": 0}):
+        assert run_retention(unknown) == {"prune-backups": "keep-all=1"}
+    options = vzdump_options({"storage": "s", "mode": "stop", "id": "x", "schedule": "02:00", "prune-backups": "keep-last=2", "fleecing": {"enabled": 1}})
+    assert options == {"storage": "s", "mode": "stop", "prune-backups": "keep-last=2"}
+
+
+def test_retry_of_a_job_that_never_prunes_does_not_prune_either():
+    """`remove=0` am Job heisst: nie aufraeumen. Ohne den Schluessel gilt in Proxmox `remove=1`,
+    der Nachlauf haette dann nach `prune-backups` geloescht."""
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+    from nodvard_deck_ext_backups.job_edit import retention_note, vzdump_options
+
+    options = vzdump_options({"storage": "s", "prune-backups": "keep-last=1", "remove": 0})
+    assert options["remove"] == 0
+    assert retention_note(options) == "Es wird nichts aufgeräumt."
+    cleaning = retention_note(vzdump_options({"prune-backups": "keep-last=1"}))
+    assert cleaning.startswith("Aufgeräumt wird nach der Aufbewahrung des Jobs")
+    assert "auch manuelle und die anderer Jobs" in cleaning
+
+
+@pytest.mark.asyncio
+async def test_retry_passes_remove_0_of_the_job_to_proxmox():
+    from nodvard_sdk import Actor, Risk
+    from nodvard_sdk.actions import ActionRequest
+
+    calls: list = []
+    job = {"id": "j", "storage": "s", "prune-backups": "keep-last=1", "remove": 0}
+    executor = _executor_with_fake_http(job, calls)
+    from nodvard_deck_ext_backups.job_edit import vzdump_options
+
+    req = ActionRequest(
+        action_type="backup.run",
+        payload={"connection": "primary", "node": "pve2", "vmid": "100", "storage": "s", "job_id": "j", "options": vzdump_options(job)},
+        risk=Risk.MEDIUM, proposed_by=Actor.extension("backups"), reason="x",
+    )
+    assert (await executor.execute(req)).success
+    assert calls[-1] == ("POST", "/nodes/pve2/vzdump", {"vmid": "100", "storage": "s", "remove": 0, "prune-backups": "keep-last=1"})
+
+
+@pytest.mark.asyncio
+async def test_job_edit_is_refused_when_the_job_changed_since_the_proposal(client, db_session, test_settings, mock_backup_api):
+    """Zwei offene Vorschlaege (3 -> 5 und 3 -> 20), in umgekehrter Reihenfolge bestaetigt:
+    der zweite wuerde von 20 auf 5 senken, war aber nur als "mittel" freigegeben."""
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    jobs = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    job_ref = next(j["job_ref"] for j in jobs if j["vmid"] == "100")
+    first = (await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/edit", json={"changes": {"keep-last": 5}}, headers=headers)).json()
+    second = (await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/edit", json={"changes": {"keep-last": 20}}, headers=headers)).json()
+    assert (first["risk"], second["risk"]) == ("medium", "medium")
+
+    done = (await client.post(f"/api/v1/actions/{second['action_id']}/approve", headers=headers)).json()
+    assert done["status"] == "succeeded", done
+    refused = (await client.post(f"/api/v1/actions/{first['action_id']}/approve", headers=headers)).json()
+    assert refused["status"] == "failed", refused
+    assert "seit dem Vorschlag geändert" in refused["result"]["error"]
+    assert state["jobs"][0]["prune-backups"] == "keep-last=20,keep-weekly=2"
+    assert len(state["job_updates"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_job_edit_proposal_without_snapshot_is_refused_when_it_would_delete():
+    """Ein aelterer Vorschlag ohne Stand im Payload: loescht die Aenderung inzwischen Sicherungen,
+    gilt sie nur mit hohem Risiko."""
+    from nodvard_sdk import Actor, Risk
+    from nodvard_sdk.actions import ActionRequest
+
+    calls: list = []
+    executor = _executor_with_fake_http({"id": "j", "prune-backups": "keep-last=20", "digest": "d"}, calls)
+
+    def request(risk):
+        return ActionRequest(
+            action_type="backup.job_update", payload={"connection": "primary", "job_id": "j", "changes": {"keep-last": 5}},
+            risk=risk, proposed_by=Actor.extension("backups"), reason="alt",
+        )
+
+    result = await executor.execute(request(Risk.MEDIUM))
+    assert not result.success and "hohem Risiko" in result.error
+    assert all(method == "GET" for method, _path, _data in calls), "nichts darf geschrieben werden"
+    assert (await executor.execute(request(Risk.HIGH))).success
+    assert (await executor.execute(request(Risk.CRITICAL))).success
 
 
 @pytest.mark.asyncio
@@ -867,6 +1183,24 @@ async def test_a_running_backup_is_reported_as_running(client, db_session, test_
     assert {j["vmid"]: j["last_status"] for j in jobs}["102"] == "running"
 
 
+@pytest.mark.asyncio
+async def test_widget_offers_retry_only_after_a_failure(client, db_session, test_settings, mock_backup_api):
+    """"Erneut versuchen" stand vorher an jedem Job, auch an erfolgreichen. Jetzt:
+    nur nach einem Fehlschlag; sonst "Jetzt sichern"; waehrend eines Laufs keiner."""
+    base_url, _state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+
+    rows = (await client.get("/api/v1/ext/backups/widgets/summary", headers=_auth_header(token))).json()["data"]
+    flags = {r["last_status"]: (r["can_retry"], r["can_backup_now"]) for r in rows}
+    assert flags["failed"] == (True, False)
+    assert flags["ok"] == (False, True)
+
+    widgets = (await client.get("/api/v1/widgets", headers=_auth_header(token))).json()
+    spec = next(w for w in widgets if w["ext_id"] == "backups")
+    labels = {a["id"]: a["label"] for a in spec["view"]["item"]["actions"]}
+    assert labels == {"retry": "Erneut versuchen", "backup_now": "Jetzt sichern"}
+
+
 # ---------------------------------------------------------------------------
 # Backup-Abdeckung: was NICHT gesichert wird
 # ---------------------------------------------------------------------------
@@ -893,8 +1227,9 @@ async def test_guests_without_any_backup_job_are_listed_and_lead_the_widget(clie
     assert len(rows) == 4
     widgets = (await client.get("/api/v1/widgets", headers=_auth_header(token))).json()
     spec = next(w for w in widgets if w["ext_id"] == "backups")
-    # "Erneut versuchen" nur, wo es einen Job gibt.
-    assert spec["view"]["item"]["actions"][0]["show_if"] == "{{ job_ref }}"
+    # Kein Sicherungs-Knopf fuer Zeilen ohne Job.
+    assert [a["show_if"] for a in spec["view"]["item"]["actions"]] == ["{{ can_retry }}", "{{ can_backup_now }}"]
+    assert all(r["can_retry"] is False and r["can_backup_now"] is False for r in rows[:2])
     assert (await client.get("/api/v1/ext/backups/unprotected")).status_code == 401
 
 

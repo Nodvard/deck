@@ -1,0 +1,1247 @@
+{
+ "_doc": "Echtes Paar alt/neu (Docker 29.3.1): Inspect des alten Containers und seines Images, das neue Image, der neue Container nach create+connect (angelegt) und nach dem Start (gesund). Bereinigt wie record_engine.py; gleiche Werte haben dasselbe Kennzeichen.",
+ "api": "1.43",
+ "created": {
+  "AppArmorProfile": "",
+  "Args": [
+   "scrubbed-1",
+   "scrubbed-2",
+   "scrubbed-3",
+   "scrubbed-4",
+   "scrubbed-5",
+   "scrubbed-6"
+  ],
+  "Config": {
+   "AttachStderr": true,
+   "AttachStdin": false,
+   "AttachStdout": true,
+   "Cmd": [
+    "scrubbed-1",
+    "scrubbed-2",
+    "scrubbed-3",
+    "scrubbed-4",
+    "scrubbed-5",
+    "scrubbed-6"
+   ],
+   "Domainname": "",
+   "Entrypoint": [
+    "/entrypoint.sh"
+   ],
+   "Env": [
+    "U2_SECRET=scrubbed-7",
+    "NODVARD_DECK_AUDIT_RETENTION_DAYS=scrubbed-9",
+    "PATH=scrubbed-11",
+    "LANG=scrubbed-12",
+    "GPG_KEY=scrubbed-13",
+    "PYTHON_VERSION=scrubbed-14",
+    "PYTHON_SHA256=scrubbed-15",
+    "PYTHONUNBUFFERED=scrubbed-16",
+    "PIP_NO_CACHE_DIR=scrubbed-16",
+    "NODVARD_DECK_ENV=scrubbed-8",
+    "NODVARD_DECK_LOG_JSON=scrubbed-17",
+    "NODVARD_DECK_DATA_DIR=scrubbed-18",
+    "PIP_CERT=scrubbed-19",
+    "U2_IMAGE_ONLY=scrubbed-26",
+    "U2_NEW_ONLY=scrubbed-16",
+    "U2_SHARED=scrubbed-27"
+   ],
+   "ExposedPorts": {
+    "8080/tcp": {},
+    "8081/tcp": {}
+   },
+   "Healthcheck": {
+    "Interval": 5000000000,
+    "Retries": 4,
+    "StartPeriod": 200000000000,
+    "Test": [
+     "CMD",
+     "scrubbed-21",
+     "scrubbed-22",
+     "scrubbed-23"
+    ],
+    "Timeout": 4000000000
+   },
+   "Hostname": "e51baa01b2d3",
+   "Image": "ghcr.io/nodvard/deck:latest",
+   "Labels": {
+    "com.docker.compose.config-hash": "08b7d3dfeb983d7fd849c4cbcfdddbf276b74a4915fbf7ea882a5749ba4a95cc",
+    "com.docker.compose.container-number": "1",
+    "com.docker.compose.depends_on": "",
+    "com.docker.compose.image": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+    "com.docker.compose.oneoff": "False",
+    "com.docker.compose.project": "u2probe",
+    "com.docker.compose.project.config_files": "/srv/probe/compose143.yml",
+    "com.docker.compose.project.working_dir": "/srv/probe",
+    "com.docker.compose.service": "nodvard-deck",
+    "com.docker.compose.version": "5.1.1",
+    "org.opencontainers.image.source": "https://github.com/nodvard/deck",
+    "org.opencontainers.image.version": "0.7.1",
+    "u2probe.image": "scrubbed-26",
+    "u2probe.newonly": "scrubbed-28",
+    "u2probe.user": "scrubbed-24"
+   },
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "StopTimeout": 20,
+   "Tty": false,
+   "User": "",
+   "Volumes": {
+    "/app/data": {}
+   },
+   "WorkingDir": "/app"
+  },
+  "Created": "2026-10-01T19:54:06.584686018Z",
+  "Driver": "overlayfs",
+  "ExecIDs": null,
+  "GraphDriver": {
+   "Data": null,
+   "Name": "overlayfs"
+  },
+  "HostConfig": {
+   "AutoRemove": false,
+   "Binds": [
+    "u2probe-updater:/app/updater:rw",
+    "/srv/probe/bind:/probe-bind:ro"
+   ],
+   "BlkioDeviceReadBps": null,
+   "BlkioDeviceReadIOps": null,
+   "BlkioDeviceWriteBps": null,
+   "BlkioDeviceWriteIOps": null,
+   "BlkioWeight": 0,
+   "BlkioWeightDevice": null,
+   "CapAdd": null,
+   "CapDrop": null,
+   "Cgroup": "",
+   "CgroupParent": "",
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "ContainerIDFile": "",
+   "CpuCount": 0,
+   "CpuPercent": 0,
+   "CpuPeriod": 0,
+   "CpuQuota": 0,
+   "CpuRealtimePeriod": 0,
+   "CpuRealtimeRuntime": 0,
+   "CpuShares": 0,
+   "CpusetCpus": "",
+   "CpusetMems": "",
+   "DeviceCgroupRules": null,
+   "DeviceRequests": null,
+   "Devices": null,
+   "Dns": null,
+   "DnsOptions": null,
+   "DnsSearch": null,
+   "ExtraHosts": [
+    "u2probe.local:127.0.0.1"
+   ],
+   "GroupAdd": null,
+   "IOMaximumBandwidth": 0,
+   "IOMaximumIOps": 0,
+   "IpcMode": "private",
+   "Isolation": "",
+   "Links": null,
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "MaskedPaths": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/interrupts",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware"
+   ],
+   "Memory": 0,
+   "MemoryReservation": 0,
+   "MemorySwap": 0,
+   "MemorySwappiness": null,
+   "Mounts": [
+    {
+     "Source": "12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1",
+     "Target": "/app/data",
+     "Type": "volume"
+    }
+   ],
+   "NanoCpus": 0,
+   "NetworkMode": "u2probe_back",
+   "OomKillDisable": false,
+   "OomScoreAdj": 0,
+   "PidMode": "",
+   "PidsLimit": null,
+   "PortBindings": {
+    "8080/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "18091"
+     }
+    ]
+   },
+   "Privileged": false,
+   "PublishAllPorts": false,
+   "ReadonlyPaths": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+   ],
+   "ReadonlyRootfs": false,
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "unless-stopped"
+   },
+   "Runtime": "runc",
+   "SecurityOpt": null,
+   "ShmSize": 67108864,
+   "Tmpfs": {
+    "/tmp/u2": ""
+   },
+   "UTSMode": "",
+   "Ulimits": null,
+   "UsernsMode": "",
+   "VolumeDriver": "",
+   "VolumesFrom": null
+  },
+  "HostnamePath": "",
+  "HostsPath": "",
+  "Id": "e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38",
+  "Image": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+  "LogPath": "",
+  "MountLabel": "",
+  "Mounts": [
+   {
+    "Destination": "/app/updater",
+    "Driver": "local",
+    "Mode": "rw",
+    "Name": "u2probe-updater",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/u2probe-updater/_data",
+    "Type": "volume"
+   },
+   {
+    "Destination": "/probe-bind",
+    "Mode": "ro",
+    "Propagation": "rprivate",
+    "RW": false,
+    "Source": "/srv/probe/bind",
+    "Type": "bind"
+   },
+   {
+    "Destination": "/app/data",
+    "Driver": "local",
+    "Mode": "z",
+    "Name": "12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1/_data",
+    "Type": "volume"
+   }
+  ],
+  "Name": "/u2probe-nodvard-deck-1",
+  "NetworkSettings": {
+   "Networks": {
+    "u2probe_back": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "e51baa01b2d3"
+     ],
+     "DNSNames": null,
+     "DriverOpts": null,
+     "EndpointID": "",
+     "Gateway": "",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": {
+      "IPv4Address": "172.31.251.10"
+     },
+     "IPAddress": "",
+     "IPPrefixLen": 0,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "",
+     "NetworkID": ""
+    },
+    "u2probe_front": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-front",
+      "e51baa01b2d3"
+     ],
+     "DNSNames": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-front",
+      "e51baa01b2d3"
+     ],
+     "DriverOpts": null,
+     "EndpointID": "",
+     "Gateway": "",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": null,
+     "IPAddress": "",
+     "IPPrefixLen": 0,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "",
+     "NetworkID": ""
+    }
+   },
+   "Ports": {},
+   "SandboxID": "",
+   "SandboxKey": ""
+  },
+  "Path": "/entrypoint.sh",
+  "Platform": "linux",
+  "ProcessLabel": "",
+  "ResolvConfPath": "",
+  "RestartCount": 0,
+  "State": {
+   "Dead": false,
+   "Error": "",
+   "ExitCode": 0,
+   "FinishedAt": "0001-01-01T00:00:00Z",
+   "OOMKilled": false,
+   "Paused": false,
+   "Pid": 0,
+   "Restarting": false,
+   "Running": false,
+   "StartedAt": "0001-01-01T00:00:00Z",
+   "Status": "created"
+  }
+ },
+ "network_drivers": {
+  "1b672d4cc5bc2df6d6b16bd0af4181341ee8e8c151c2396eff24e42319779cee": "bridge",
+  "2017746eb0236e4f93f3f36c686901804324b3e090ca32154c0513c937aa6660": "bridge"
+ },
+ "new_image": {
+  "Architecture": "amd64",
+  "Author": "",
+  "Comment": "buildkit.dockerfile.v0",
+  "Config": {
+   "ArgsEscaped": true,
+   "AttachStderr": false,
+   "AttachStdin": false,
+   "AttachStdout": false,
+   "Cmd": [
+    "scrubbed-1",
+    "scrubbed-2",
+    "scrubbed-3",
+    "scrubbed-4",
+    "scrubbed-5",
+    "scrubbed-6"
+   ],
+   "Domainname": "",
+   "Entrypoint": [
+    "/entrypoint.sh"
+   ],
+   "Env": [
+    "PATH=scrubbed-11",
+    "LANG=scrubbed-12",
+    "GPG_KEY=scrubbed-13",
+    "PYTHON_VERSION=scrubbed-14",
+    "PYTHON_SHA256=scrubbed-15",
+    "PYTHONUNBUFFERED=scrubbed-16",
+    "PIP_NO_CACHE_DIR=scrubbed-16",
+    "NODVARD_DECK_ENV=scrubbed-8",
+    "NODVARD_DECK_LOG_JSON=scrubbed-17",
+    "NODVARD_DECK_DATA_DIR=scrubbed-18",
+    "PIP_CERT=scrubbed-19",
+    "U2_IMAGE_ONLY=scrubbed-26",
+    "U2_NEW_ONLY=scrubbed-16",
+    "U2_SHARED=scrubbed-27"
+   ],
+   "ExposedPorts": {
+    "8080/tcp": {},
+    "8081/tcp": {}
+   },
+   "Healthcheck": {
+    "Interval": 20000000000,
+    "Retries": 4,
+    "StartPeriod": 200000000000,
+    "Test": [
+     "CMD-SHELL",
+     "scrubbed-25"
+    ],
+    "Timeout": 4000000000
+   },
+   "Hostname": "",
+   "Image": "",
+   "Labels": {
+    "org.opencontainers.image.source": "https://github.com/nodvard/deck",
+    "org.opencontainers.image.version": "0.7.1",
+    "u2probe.image": "scrubbed-26",
+    "u2probe.newonly": "scrubbed-28"
+   },
+   "OnBuild": null,
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "Tty": false,
+   "User": "",
+   "Volumes": {
+    "/app/data": {}
+   },
+   "WorkingDir": "/app"
+  },
+  "Container": "",
+  "ContainerConfig": null,
+  "Created": "2026-10-01T10:03:07.057681948Z",
+  "DockerVersion": "",
+  "GraphDriver": {
+   "Data": null,
+   "Name": "overlayfs"
+  },
+  "Id": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+  "Metadata": {
+   "LastTagTime": "2026-10-01T19:44:47.369096046Z"
+  },
+  "Os": "linux",
+  "Parent": "",
+  "RepoDigests": [
+   "u2probe/deck-new@sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3"
+  ],
+  "RepoTags": [
+   "u2probe/deck-new:0.7.1"
+  ],
+  "RootFS": {
+   "Layers": [
+    "sha256:a6dc765193a52cbaede3c93a9ff48b9540948dd0774bbe7031fcb5847606f9ac",
+    "sha256:7ca599ccfc97fa428fcf941eda7c2d643f066feb947020dcdbbf913cec34d5dc",
+    "sha256:b54011271bdbf69ae643cb5a4af6a5bc2f834ae8bc0833b736b52bbd2396e99f",
+    "sha256:c321a426ca693e386f4df5f198d7f32c2da49e29f53ff77d695ceb02dfb0a421",
+    "sha256:e12183ca74f8df414e04b0263ce40b2573e2c8efb19a3132b1aebd781e9ba428",
+    "sha256:acf9aef5dbc6e89d1bee6d432bd8955ad8f95ee2907843732fbade60b8ac75d9",
+    "sha256:677bc6ec8f8114bfb83c6c3332ac31c934a360e4cfa80917df71ef2d08443442",
+    "sha256:2a3dc9a53ae21387a9f91e199dd0a1b88472aaa0c08832c81cc87a693fef5d0d",
+    "sha256:d70d13d44ec5738b48870f9cf897a9fe702860c58c2f0a5887c386919cd03d87",
+    "sha256:25148c6131f1167a7310fa52a22bc58b5ef381451d620863bf56860b006f46ef",
+    "sha256:3bed3f2c784db1986d51c300634ac32ac05a55b9424037aee4835e8d3b09ae9a",
+    "sha256:59baed1cc227452ee4f11cee11ed232ee3d71dd65afd6fbb8598cd8a5e4d7df1",
+    "sha256:44d0109509b96c0b643fc3ce3fba31aa85026888512c8df77a85ccec87ad910c",
+    "sha256:60c26dd43878bb5b903fcc705fcddfacbc9ef5493249e4bf38893abba215f381",
+    "sha256:aae582f813f215ea0819acf2ffadcc3bd61616f46fc745c2aa09377e331afcad",
+    "sha256:df0e25ee8ace0a327296fe898e9c5edfe508885f5cbb754ef680f322151bee96",
+    "sha256:4df865934cd0b4b4e907c8dfde5c8a4ca7ef3286a2edbc47a042554d11cdb37e",
+    "sha256:f24a4b3a1b34c5480a533454b7f912488c4e78303f0245ef3eb894ea0805e81c",
+    "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+   ],
+   "Type": "layers"
+  },
+  "Size": 97790300,
+  "VirtualSize": 97790300
+ },
+ "old": {
+  "AppArmorProfile": "",
+  "Args": [
+   "scrubbed-1",
+   "scrubbed-2",
+   "scrubbed-3",
+   "scrubbed-4",
+   "scrubbed-5",
+   "scrubbed-6"
+  ],
+  "Config": {
+   "AttachStderr": true,
+   "AttachStdin": false,
+   "AttachStdout": true,
+   "Cmd": [
+    "scrubbed-1",
+    "scrubbed-2",
+    "scrubbed-3",
+    "scrubbed-4",
+    "scrubbed-5",
+    "scrubbed-6"
+   ],
+   "Domainname": "",
+   "Entrypoint": [
+    "/entrypoint.sh"
+   ],
+   "Env": [
+    "U2_SECRET=scrubbed-7",
+    "NODVARD_DECK_ENV=scrubbed-8",
+    "NODVARD_DECK_AUDIT_RETENTION_DAYS=scrubbed-9",
+    "U2_SHARED=scrubbed-10",
+    "PATH=scrubbed-11",
+    "LANG=scrubbed-12",
+    "GPG_KEY=scrubbed-13",
+    "PYTHON_VERSION=scrubbed-14",
+    "PYTHON_SHA256=scrubbed-15",
+    "PYTHONUNBUFFERED=scrubbed-16",
+    "PIP_NO_CACHE_DIR=scrubbed-16",
+    "NODVARD_DECK_LOG_JSON=scrubbed-17",
+    "NODVARD_DECK_DATA_DIR=scrubbed-18",
+    "PIP_CERT=scrubbed-19",
+    "U2_IMAGE_ONLY=scrubbed-20"
+   ],
+   "ExposedPorts": {
+    "8080/tcp": {}
+   },
+   "Healthcheck": {
+    "Interval": 5000000000,
+    "Retries": 3,
+    "StartPeriod": 300000000000,
+    "Test": [
+     "CMD",
+     "scrubbed-21",
+     "scrubbed-22",
+     "scrubbed-23"
+    ],
+    "Timeout": 3000000000
+   },
+   "Hostname": "757d874156a5",
+   "Image": "ghcr.io/nodvard/deck:latest",
+   "Labels": {
+    "com.docker.compose.config-hash": "08b7d3dfeb983d7fd849c4cbcfdddbf276b74a4915fbf7ea882a5749ba4a95cc",
+    "com.docker.compose.container-number": "1",
+    "com.docker.compose.depends_on": "",
+    "com.docker.compose.image": "sha256:ad877719e88a954ee89ed493e36b304f9d40eae3f518132513f6e7900f49403d",
+    "com.docker.compose.oneoff": "False",
+    "com.docker.compose.project": "u2probe",
+    "com.docker.compose.project.config_files": "/srv/probe/compose143.yml",
+    "com.docker.compose.project.working_dir": "/srv/probe",
+    "com.docker.compose.service": "nodvard-deck",
+    "com.docker.compose.version": "5.1.1",
+    "org.opencontainers.image.source": "https://github.com/nodvard/deck",
+    "org.opencontainers.image.version": "0.7.0",
+    "u2probe.image": "scrubbed-20",
+    "u2probe.user": "scrubbed-24"
+   },
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "StopTimeout": 20,
+   "Tty": false,
+   "User": "",
+   "Volumes": {
+    "/app/data": {}
+   },
+   "WorkingDir": "/app"
+  },
+  "Created": "2026-10-01T19:53:59.259162035Z",
+  "Driver": "overlayfs",
+  "ExecIDs": null,
+  "GraphDriver": {
+   "Data": null,
+   "Name": "overlayfs"
+  },
+  "HostConfig": {
+   "AutoRemove": false,
+   "Binds": [
+    "u2probe-updater:/app/updater:rw",
+    "/srv/probe/bind:/probe-bind:ro"
+   ],
+   "BlkioDeviceReadBps": null,
+   "BlkioDeviceReadIOps": null,
+   "BlkioDeviceWriteBps": null,
+   "BlkioDeviceWriteIOps": null,
+   "BlkioWeight": 0,
+   "BlkioWeightDevice": null,
+   "CapAdd": null,
+   "CapDrop": null,
+   "Cgroup": "",
+   "CgroupParent": "",
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "ContainerIDFile": "",
+   "CpuCount": 0,
+   "CpuPercent": 0,
+   "CpuPeriod": 0,
+   "CpuQuota": 0,
+   "CpuRealtimePeriod": 0,
+   "CpuRealtimeRuntime": 0,
+   "CpuShares": 0,
+   "CpusetCpus": "",
+   "CpusetMems": "",
+   "DeviceCgroupRules": null,
+   "DeviceRequests": null,
+   "Devices": null,
+   "Dns": null,
+   "DnsOptions": null,
+   "DnsSearch": null,
+   "ExtraHosts": [
+    "u2probe.local:127.0.0.1"
+   ],
+   "GroupAdd": null,
+   "IOMaximumBandwidth": 0,
+   "IOMaximumIOps": 0,
+   "IpcMode": "private",
+   "Isolation": "",
+   "Links": null,
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "MaskedPaths": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/interrupts",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware"
+   ],
+   "Memory": 0,
+   "MemoryReservation": 0,
+   "MemorySwap": 0,
+   "MemorySwappiness": null,
+   "NanoCpus": 0,
+   "NetworkMode": "u2probe_back",
+   "OomKillDisable": false,
+   "OomScoreAdj": 0,
+   "PidMode": "",
+   "PidsLimit": null,
+   "PortBindings": {
+    "8080/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "18091"
+     }
+    ]
+   },
+   "Privileged": false,
+   "PublishAllPorts": false,
+   "ReadonlyPaths": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+   ],
+   "ReadonlyRootfs": false,
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "unless-stopped"
+   },
+   "Runtime": "runc",
+   "SecurityOpt": null,
+   "ShmSize": 67108864,
+   "Tmpfs": {
+    "/tmp/u2": ""
+   },
+   "UTSMode": "",
+   "Ulimits": null,
+   "UsernsMode": "",
+   "VolumeDriver": "",
+   "VolumesFrom": null
+  },
+  "HostnamePath": "/var/lib/docker/containers/757d874156a52dfa81e6d02923efb99400587082e4f368454c512076703820e3/hostname",
+  "HostsPath": "/var/lib/docker/containers/757d874156a52dfa81e6d02923efb99400587082e4f368454c512076703820e3/hosts",
+  "Id": "757d874156a52dfa81e6d02923efb99400587082e4f368454c512076703820e3",
+  "Image": "sha256:ad877719e88a954ee89ed493e36b304f9d40eae3f518132513f6e7900f49403d",
+  "LogPath": "/var/lib/docker/containers/757d874156a52dfa81e6d02923efb99400587082e4f368454c512076703820e3/757d874156a52dfa81e6d02923efb99400587082e4f368454c512076703820e3-json.log",
+  "MountLabel": "",
+  "Mounts": [
+   {
+    "Destination": "/app/updater",
+    "Driver": "local",
+    "Mode": "rw",
+    "Name": "u2probe-updater",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/u2probe-updater/_data",
+    "Type": "volume"
+   },
+   {
+    "Destination": "/probe-bind",
+    "Mode": "ro",
+    "Propagation": "rprivate",
+    "RW": false,
+    "Source": "/srv/probe/bind",
+    "Type": "bind"
+   },
+   {
+    "Destination": "/app/data",
+    "Driver": "local",
+    "Mode": "",
+    "Name": "12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1/_data",
+    "Type": "volume"
+   }
+  ],
+  "Name": "/u2probe-nodvard-deck-1",
+  "NetworkSettings": {
+   "Networks": {
+    "u2probe_back": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "757d874156a5"
+     ],
+     "DNSNames": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "757d874156a5"
+     ],
+     "DriverOpts": null,
+     "EndpointID": "f2ecf192d8cd8535c3aa7a0b8a825cbeef1542ca4a0840316f846d11a08956b8",
+     "Gateway": "172.31.251.1",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": {
+      "IPv4Address": "172.31.251.10"
+     },
+     "IPAddress": "172.31.251.10",
+     "IPPrefixLen": 24,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "ee:1f:0b:2b:25:9c",
+     "NetworkID": "1b672d4cc5bc2df6d6b16bd0af4181341ee8e8c151c2396eff24e42319779cee"
+    },
+    "u2probe_front": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-front",
+      "757d874156a5"
+     ],
+     "DNSNames": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-front",
+      "757d874156a5"
+     ],
+     "DriverOpts": null,
+     "EndpointID": "9f8c98ac9b48bf835b870855459ead58d3176a039f70bb0f98d78ab996ca3873",
+     "Gateway": "172.18.0.1",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": {},
+     "IPAddress": "172.18.0.2",
+     "IPPrefixLen": 16,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "42:67:9c:35:d5:48",
+     "NetworkID": "2017746eb0236e4f93f3f36c686901804324b3e090ca32154c0513c937aa6660"
+    }
+   },
+   "Ports": {
+    "8080/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "18091"
+     }
+    ]
+   },
+   "SandboxID": "3221dc8c60e9a2a23bae254d83aabc470c4261a064ae1259f9b719a8ed598565",
+   "SandboxKey": "/var/run/docker/netns/3221dc8c60e9"
+  },
+  "Path": "/entrypoint.sh",
+  "Platform": "linux",
+  "ProcessLabel": "",
+  "ResolvConfPath": "/var/lib/docker/containers/757d874156a52dfa81e6d02923efb99400587082e4f368454c512076703820e3/resolv.conf",
+  "RestartCount": 0,
+  "State": {
+   "Dead": false,
+   "Error": "",
+   "ExitCode": 0,
+   "FinishedAt": "0001-01-01T00:00:00Z",
+   "Health": {
+    "FailingStreak": 0,
+    "Log": [
+     {
+      "End": "2026-10-01T19:54:04.948037931Z",
+      "ExitCode": 0,
+      "Output": "",
+      "Start": "2026-10-01T19:54:04.791140282Z"
+     }
+    ],
+    "Status": "healthy"
+   },
+   "OOMKilled": false,
+   "Paused": false,
+   "Pid": 22900,
+   "Restarting": false,
+   "Running": true,
+   "StartedAt": "2026-10-01T19:53:59.389706233Z",
+   "Status": "running"
+  }
+ },
+ "old_image": {
+  "Architecture": "amd64",
+  "Author": "",
+  "Comment": "buildkit.dockerfile.v0",
+  "Config": {
+   "ArgsEscaped": true,
+   "AttachStderr": false,
+   "AttachStdin": false,
+   "AttachStdout": false,
+   "Cmd": [
+    "scrubbed-1",
+    "scrubbed-2",
+    "scrubbed-3",
+    "scrubbed-4",
+    "scrubbed-5",
+    "scrubbed-6"
+   ],
+   "Domainname": "",
+   "Entrypoint": [
+    "/entrypoint.sh"
+   ],
+   "Env": [
+    "PATH=scrubbed-11",
+    "LANG=scrubbed-12",
+    "GPG_KEY=scrubbed-13",
+    "PYTHON_VERSION=scrubbed-14",
+    "PYTHON_SHA256=scrubbed-15",
+    "PYTHONUNBUFFERED=scrubbed-16",
+    "PIP_NO_CACHE_DIR=scrubbed-16",
+    "NODVARD_DECK_ENV=scrubbed-8",
+    "NODVARD_DECK_LOG_JSON=scrubbed-17",
+    "NODVARD_DECK_DATA_DIR=scrubbed-18",
+    "PIP_CERT=scrubbed-19",
+    "U2_IMAGE_ONLY=scrubbed-20",
+    "U2_SHARED=scrubbed-10"
+   ],
+   "ExposedPorts": {
+    "8080/tcp": {}
+   },
+   "Healthcheck": {
+    "Interval": 30000000000,
+    "Retries": 3,
+    "StartPeriod": 300000000000,
+    "Test": [
+     "CMD-SHELL",
+     "scrubbed-25"
+    ],
+    "Timeout": 3000000000
+   },
+   "Hostname": "",
+   "Image": "",
+   "Labels": {
+    "org.opencontainers.image.source": "https://github.com/nodvard/deck",
+    "org.opencontainers.image.version": "0.7.0",
+    "u2probe.image": "scrubbed-20"
+   },
+   "OnBuild": null,
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "Tty": false,
+   "User": "",
+   "Volumes": {
+    "/app/data": {}
+   },
+   "WorkingDir": "/app"
+  },
+  "Container": "",
+  "ContainerConfig": null,
+  "Created": "2026-10-01T10:03:07.057681948Z",
+  "DockerVersion": "",
+  "GraphDriver": {
+   "Data": null,
+   "Name": "overlayfs"
+  },
+  "Id": "sha256:ad877719e88a954ee89ed493e36b304f9d40eae3f518132513f6e7900f49403d",
+  "Metadata": {
+   "LastTagTime": "2026-10-01T19:53:58.748022848Z"
+  },
+  "Os": "linux",
+  "Parent": "",
+  "RepoDigests": [
+   "ghcr.io/nodvard/deck@sha256:ad877719e88a954ee89ed493e36b304f9d40eae3f518132513f6e7900f49403d"
+  ],
+  "RepoTags": [
+   "ghcr.io/nodvard/deck:0.7.0",
+   "ghcr.io/nodvard/deck:latest"
+  ],
+  "RootFS": {
+   "Layers": [
+    "sha256:a6dc765193a52cbaede3c93a9ff48b9540948dd0774bbe7031fcb5847606f9ac",
+    "sha256:7ca599ccfc97fa428fcf941eda7c2d643f066feb947020dcdbbf913cec34d5dc",
+    "sha256:b54011271bdbf69ae643cb5a4af6a5bc2f834ae8bc0833b736b52bbd2396e99f",
+    "sha256:c321a426ca693e386f4df5f198d7f32c2da49e29f53ff77d695ceb02dfb0a421",
+    "sha256:e12183ca74f8df414e04b0263ce40b2573e2c8efb19a3132b1aebd781e9ba428",
+    "sha256:acf9aef5dbc6e89d1bee6d432bd8955ad8f95ee2907843732fbade60b8ac75d9",
+    "sha256:677bc6ec8f8114bfb83c6c3332ac31c934a360e4cfa80917df71ef2d08443442",
+    "sha256:2a3dc9a53ae21387a9f91e199dd0a1b88472aaa0c08832c81cc87a693fef5d0d",
+    "sha256:d70d13d44ec5738b48870f9cf897a9fe702860c58c2f0a5887c386919cd03d87",
+    "sha256:25148c6131f1167a7310fa52a22bc58b5ef381451d620863bf56860b006f46ef",
+    "sha256:3bed3f2c784db1986d51c300634ac32ac05a55b9424037aee4835e8d3b09ae9a",
+    "sha256:59baed1cc227452ee4f11cee11ed232ee3d71dd65afd6fbb8598cd8a5e4d7df1",
+    "sha256:44d0109509b96c0b643fc3ce3fba31aa85026888512c8df77a85ccec87ad910c",
+    "sha256:60c26dd43878bb5b903fcc705fcddfacbc9ef5493249e4bf38893abba215f381",
+    "sha256:aae582f813f215ea0819acf2ffadcc3bd61616f46fc745c2aa09377e331afcad",
+    "sha256:df0e25ee8ace0a327296fe898e9c5edfe508885f5cbb754ef680f322151bee96",
+    "sha256:4df865934cd0b4b4e907c8dfde5c8a4ca7ef3286a2edbc47a042554d11cdb37e",
+    "sha256:f24a4b3a1b34c5480a533454b7f912488c4e78303f0245ef3eb894ea0805e81c",
+    "sha256:5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+   ],
+   "Type": "layers"
+  },
+  "Size": 97789758,
+  "VirtualSize": 97789758
+ },
+ "started": {
+  "AppArmorProfile": "",
+  "Args": [
+   "scrubbed-1",
+   "scrubbed-2",
+   "scrubbed-3",
+   "scrubbed-4",
+   "scrubbed-5",
+   "scrubbed-6"
+  ],
+  "Config": {
+   "AttachStderr": true,
+   "AttachStdin": false,
+   "AttachStdout": true,
+   "Cmd": [
+    "scrubbed-1",
+    "scrubbed-2",
+    "scrubbed-3",
+    "scrubbed-4",
+    "scrubbed-5",
+    "scrubbed-6"
+   ],
+   "Domainname": "",
+   "Entrypoint": [
+    "/entrypoint.sh"
+   ],
+   "Env": [
+    "U2_SECRET=scrubbed-7",
+    "NODVARD_DECK_AUDIT_RETENTION_DAYS=scrubbed-9",
+    "PATH=scrubbed-11",
+    "LANG=scrubbed-12",
+    "GPG_KEY=scrubbed-13",
+    "PYTHON_VERSION=scrubbed-14",
+    "PYTHON_SHA256=scrubbed-15",
+    "PYTHONUNBUFFERED=scrubbed-16",
+    "PIP_NO_CACHE_DIR=scrubbed-16",
+    "NODVARD_DECK_ENV=scrubbed-8",
+    "NODVARD_DECK_LOG_JSON=scrubbed-17",
+    "NODVARD_DECK_DATA_DIR=scrubbed-18",
+    "PIP_CERT=scrubbed-19",
+    "U2_IMAGE_ONLY=scrubbed-26",
+    "U2_NEW_ONLY=scrubbed-16",
+    "U2_SHARED=scrubbed-27"
+   ],
+   "ExposedPorts": {
+    "8080/tcp": {},
+    "8081/tcp": {}
+   },
+   "Healthcheck": {
+    "Interval": 5000000000,
+    "Retries": 4,
+    "StartPeriod": 200000000000,
+    "Test": [
+     "CMD",
+     "scrubbed-21",
+     "scrubbed-22",
+     "scrubbed-23"
+    ],
+    "Timeout": 4000000000
+   },
+   "Hostname": "e51baa01b2d3",
+   "Image": "ghcr.io/nodvard/deck:latest",
+   "Labels": {
+    "com.docker.compose.config-hash": "08b7d3dfeb983d7fd849c4cbcfdddbf276b74a4915fbf7ea882a5749ba4a95cc",
+    "com.docker.compose.container-number": "1",
+    "com.docker.compose.depends_on": "",
+    "com.docker.compose.image": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+    "com.docker.compose.oneoff": "False",
+    "com.docker.compose.project": "u2probe",
+    "com.docker.compose.project.config_files": "/srv/probe/compose143.yml",
+    "com.docker.compose.project.working_dir": "/srv/probe",
+    "com.docker.compose.service": "nodvard-deck",
+    "com.docker.compose.version": "5.1.1",
+    "org.opencontainers.image.source": "https://github.com/nodvard/deck",
+    "org.opencontainers.image.version": "0.7.1",
+    "u2probe.image": "scrubbed-26",
+    "u2probe.newonly": "scrubbed-28",
+    "u2probe.user": "scrubbed-24"
+   },
+   "OpenStdin": false,
+   "StdinOnce": false,
+   "StopTimeout": 20,
+   "Tty": false,
+   "User": "",
+   "Volumes": {
+    "/app/data": {}
+   },
+   "WorkingDir": "/app"
+  },
+  "Created": "2026-10-01T19:54:06.584686018Z",
+  "Driver": "overlayfs",
+  "ExecIDs": null,
+  "GraphDriver": {
+   "Data": null,
+   "Name": "overlayfs"
+  },
+  "HostConfig": {
+   "AutoRemove": false,
+   "Binds": [
+    "u2probe-updater:/app/updater:rw",
+    "/srv/probe/bind:/probe-bind:ro"
+   ],
+   "BlkioDeviceReadBps": null,
+   "BlkioDeviceReadIOps": null,
+   "BlkioDeviceWriteBps": null,
+   "BlkioDeviceWriteIOps": null,
+   "BlkioWeight": 0,
+   "BlkioWeightDevice": null,
+   "CapAdd": null,
+   "CapDrop": null,
+   "Cgroup": "",
+   "CgroupParent": "",
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "ContainerIDFile": "",
+   "CpuCount": 0,
+   "CpuPercent": 0,
+   "CpuPeriod": 0,
+   "CpuQuota": 0,
+   "CpuRealtimePeriod": 0,
+   "CpuRealtimeRuntime": 0,
+   "CpuShares": 0,
+   "CpusetCpus": "",
+   "CpusetMems": "",
+   "DeviceCgroupRules": null,
+   "DeviceRequests": null,
+   "Devices": null,
+   "Dns": null,
+   "DnsOptions": null,
+   "DnsSearch": null,
+   "ExtraHosts": [
+    "u2probe.local:127.0.0.1"
+   ],
+   "GroupAdd": null,
+   "IOMaximumBandwidth": 0,
+   "IOMaximumIOps": 0,
+   "IpcMode": "private",
+   "Isolation": "",
+   "Links": null,
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "MaskedPaths": [
+    "/proc/acpi",
+    "/proc/asound",
+    "/proc/interrupts",
+    "/proc/kcore",
+    "/proc/keys",
+    "/proc/latency_stats",
+    "/proc/sched_debug",
+    "/proc/scsi",
+    "/proc/timer_list",
+    "/proc/timer_stats",
+    "/sys/devices/virtual/powercap",
+    "/sys/firmware"
+   ],
+   "Memory": 0,
+   "MemoryReservation": 0,
+   "MemorySwap": 0,
+   "MemorySwappiness": null,
+   "Mounts": [
+    {
+     "Source": "12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1",
+     "Target": "/app/data",
+     "Type": "volume"
+    }
+   ],
+   "NanoCpus": 0,
+   "NetworkMode": "u2probe_back",
+   "OomKillDisable": false,
+   "OomScoreAdj": 0,
+   "PidMode": "",
+   "PidsLimit": null,
+   "PortBindings": {
+    "8080/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "18091"
+     }
+    ]
+   },
+   "Privileged": false,
+   "PublishAllPorts": false,
+   "ReadonlyPaths": [
+    "/proc/bus",
+    "/proc/fs",
+    "/proc/irq",
+    "/proc/sys",
+    "/proc/sysrq-trigger"
+   ],
+   "ReadonlyRootfs": false,
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "unless-stopped"
+   },
+   "Runtime": "runc",
+   "SecurityOpt": null,
+   "ShmSize": 67108864,
+   "Tmpfs": {
+    "/tmp/u2": ""
+   },
+   "UTSMode": "",
+   "Ulimits": null,
+   "UsernsMode": "",
+   "VolumeDriver": "",
+   "VolumesFrom": null
+  },
+  "HostnamePath": "/var/lib/docker/containers/e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38/hostname",
+  "HostsPath": "/var/lib/docker/containers/e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38/hosts",
+  "Id": "e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38",
+  "Image": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+  "LogPath": "/var/lib/docker/containers/e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38/e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38-json.log",
+  "MountLabel": "",
+  "Mounts": [
+   {
+    "Destination": "/app/data",
+    "Driver": "local",
+    "Mode": "z",
+    "Name": "12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/12ff789417661744670295100fdedfafb4737ca4ad6f4a3a01b21658d9e00ea1/_data",
+    "Type": "volume"
+   },
+   {
+    "Destination": "/app/updater",
+    "Driver": "local",
+    "Mode": "rw",
+    "Name": "u2probe-updater",
+    "Propagation": "",
+    "RW": true,
+    "Source": "/var/lib/docker/volumes/u2probe-updater/_data",
+    "Type": "volume"
+   },
+   {
+    "Destination": "/probe-bind",
+    "Mode": "ro",
+    "Propagation": "rprivate",
+    "RW": false,
+    "Source": "/srv/probe/bind",
+    "Type": "bind"
+   }
+  ],
+  "Name": "/u2probe-nodvard-deck-1",
+  "NetworkSettings": {
+   "Networks": {
+    "u2probe_back": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "e51baa01b2d3"
+     ],
+     "DNSNames": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "e51baa01b2d3"
+     ],
+     "DriverOpts": null,
+     "EndpointID": "5d9e2c84d46be561b1522e8ed9be29612d6ed7a03df78636deefe1b3c9848773",
+     "Gateway": "172.31.251.1",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": {
+      "IPv4Address": "172.31.251.10"
+     },
+     "IPAddress": "172.31.251.10",
+     "IPPrefixLen": 24,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "9e:8d:da:7e:4c:c1",
+     "NetworkID": "1b672d4cc5bc2df6d6b16bd0af4181341ee8e8c151c2396eff24e42319779cee"
+    },
+    "u2probe_front": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-front",
+      "e51baa01b2d3"
+     ],
+     "DNSNames": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck",
+      "deck-front",
+      "e51baa01b2d3"
+     ],
+     "DriverOpts": null,
+     "EndpointID": "543e1fb6a38228a39bdbfa5a9e4e1e5675f7ba3ed1c24817e6be81cb190b72d7",
+     "Gateway": "172.18.0.1",
+     "GlobalIPv6Address": "",
+     "GlobalIPv6PrefixLen": 0,
+     "GwPriority": 0,
+     "IPAMConfig": null,
+     "IPAddress": "172.18.0.2",
+     "IPPrefixLen": 16,
+     "IPv6Gateway": "",
+     "Links": null,
+     "MacAddress": "7a:9f:0e:b2:a9:86",
+     "NetworkID": "2017746eb0236e4f93f3f36c686901804324b3e090ca32154c0513c937aa6660"
+    }
+   },
+   "Ports": {
+    "8080/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "18091"
+     }
+    ],
+    "8081/tcp": null
+   },
+   "SandboxID": "ede26d874626e7c3deca99bf5834d1ea200ab80942e9038008f2f229713c5087",
+   "SandboxKey": "/var/run/docker/netns/ede26d874626"
+  },
+  "Path": "/entrypoint.sh",
+  "Platform": "linux",
+  "ProcessLabel": "",
+  "ResolvConfPath": "/var/lib/docker/containers/e51baa01b2d33054393b71d5c723f159567182160add45e707a9b4fda1c0cf38/resolv.conf",
+  "RestartCount": 0,
+  "State": {
+   "Dead": false,
+   "Error": "",
+   "ExitCode": 0,
+   "FinishedAt": "0001-01-01T00:00:00Z",
+   "Health": {
+    "FailingStreak": 0,
+    "Log": [
+     {
+      "End": "2026-10-01T19:54:13.35305626Z",
+      "ExitCode": 0,
+      "Output": "",
+      "Start": "2026-10-01T19:54:13.202686483Z"
+     }
+    ],
+    "Status": "healthy"
+   },
+   "OOMKilled": false,
+   "Paused": false,
+   "Pid": 25704,
+   "Restarting": false,
+   "Running": true,
+   "StartedAt": "2026-10-01T19:54:07.834638844Z",
+   "Status": "running"
+  }
+ }
+}

@@ -30,6 +30,7 @@ from nodvard_sdk import (
     Refresh,
     StatusGridView,
     WidgetSpec,
+    same_target,
 )
 from pydantic import BaseModel
 
@@ -44,7 +45,7 @@ from .config import TOKEN_LABEL, build_connector, build_connectors
 from .connector import ProxmoxApiError
 from .guest_config import collect_guest_details
 from .node_health import collect_disks, collect_node_health
-from .storage import collect_storage, format_bytes, percent_badge
+from .storage import collect_storage, format_bytes, percent_badge, shared_label
 from .tasks import collect_tasks
 from .updates import collect_updates
 from .watch import run_watch
@@ -206,6 +207,9 @@ class Extension(NodvardExtension):
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
+            # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen (etwa von
+            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse.
+            await ctx.secrets.delete(f"proxmox-token:{payload.name}")
             connections.append(payload.model_dump())
             settings["connections"] = connections
             await ctx.settings.set(settings)
@@ -219,7 +223,11 @@ class Extension(NodvardExtension):
                 if conn.get("name") != name:
                     continue
                 updates = payload.model_dump(exclude_unset=True)
+                old_url = conn.get("base_url")
                 conn.update(updates)
+                if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
+                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue.
+                    await ctx.secrets.delete(f"proxmox-token:{name}")
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
                 return await _connection_out(conn)
@@ -227,10 +235,8 @@ class Extension(NodvardExtension):
 
         @router.delete("/connections/{name}", status_code=status.HTTP_204_NO_CONTENT)
         async def remove_connection(name: str) -> None:
-            """Entfernt nur den Eintrag aus `settings.connections` -- ein bereits
-            gesetztes Token bleibt im Vault stehen (dieselbe bewusste Nicht-Loesung
-            wie ueberall sonst im Projekt: `DELETE /api/v1/secrets/{id}` fuer den
-            Aufraeumschritt, `SecretsHandle` hat kein eigenes `delete()`)."""
+            """Entfernt die Verbindung samt ihrem Token im Tresor -- sonst bekaeme eine spaeter
+            neu angelegte Verbindung mit demselben Namen das alte Token."""
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
             filtered = [c for c in connections if c.get("name") != name]
@@ -238,6 +244,7 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
             settings["connections"] = filtered
             await ctx.settings.set(settings)
+            await ctx.secrets.delete(f"proxmox-token:{name}")
 
         ctx.api.include_router(router, permission="secrets.write")
 
@@ -398,7 +405,7 @@ class Extension(NodvardExtension):
         async def storage_widget_data() -> dict:
             """Nur Belegung (eine Abfrage je Knoten) -- das Widget laedt alle 60s neu;
             der Pool-Inhalt waere dafuer zu teuer."""
-            overview = await collect_storage(ctx, details=False)
+            overview = await collect_storage(ctx, details=False, merge_connections=True)
             # Wie bei den Updates: Fehler als eigene rote Zeile. Texte kommen
             # fertig aus dem Backend, damit die Fehlerzeile keine leeren Zahlen zeigt.
             rows: list[dict] = [
@@ -414,7 +421,9 @@ class Extension(NodvardExtension):
             rows += [
                 {
                     **pool,
-                    "summary": f"{pool['connection']} · {format_bytes(pool['used'])} von {format_bytes(pool['total'])}",
+                    "summary": (
+                        f"{shared_label(pool['nodes'])} · " if pool["shared"] else f"{pool['connection']} · "
+                    ) + f"{format_bytes(pool['used'])} von {format_bytes(pool['total'])}",
                     "badge": percent_badge(pool["used_percent"]),
                 }
                 for pool in overview["pools"]

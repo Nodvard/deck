@@ -15,13 +15,18 @@ function Where() {
   return <p data-testid="where">{location.pathname + location.search}</p>;
 }
 
-function renderPage() {
+function Current() {
+  const location = useLocation();
+  return <p data-testid="current-url">{location.pathname + location.search}</p>;
+}
+
+function renderPage(initial = "/settings/hosts") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/settings/hosts"]}>
+      <MemoryRouter initialEntries={[initial]}>
         <Routes>
-          <Route path="/settings/hosts" element={<HostsSettings />} />
+          <Route path="/settings/hosts" element={<><HostsSettings /><Current /></>} />
           <Route path="*" element={<Where />} />
         </Routes>
       </MemoryRouter>
@@ -29,7 +34,7 @@ function renderPage() {
   );
 }
 
-const PI = hostFixture({ id: "h1", credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } });
+const PI = hostFixture({ id: "h1", login_ok_at: "2026-10-01T10:00:00Z", credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } });
 const ZABBIX = hostFixture({
   id: "h2", name: "zabbix", display_name: "Zabbix", address: "192.168.2.83", kind: "vm", provider_ext_id: "proxmox",
   credential: { id: "c2", kind: "ssh_password", username: "admin", port: 22 },
@@ -47,7 +52,72 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+describe("Server & Zugänge: Formular „Neuen Server anlegen“ gleich offen", () => {
+  it("mit ?neu=1 (Erste Schritte, Übersicht) steht das Formular schon da, ohne zweiten Klick", async () => {
+    mockHostsApi({ "GET /hosts": [], "GET /host-groups": [] });
+    renderPage("/settings/hosts?neu=1");
+    expect(await screen.findByText("Neuen Server anlegen")).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Kurzname/)).toBeInTheDocument();
+    // Der Knopf „Server hinzufügen“ oben entfällt, solange das Formular offen ist.
+    expect(screen.queryByRole("button", { name: "Server hinzufügen" })).toBeNull();
+  });
+
+  it("ohne ?neu=1 öffnet erst der Knopf das Formular", async () => {
+    mockHostsApi({ "GET /hosts": [PI], "GET /host-groups": [] });
+    renderPage();
+    await screen.findByText("Bastel-Pi");
+    expect(screen.queryByText("Neuen Server anlegen")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Server hinzufügen" }));
+    expect(screen.getByText("Neuen Server anlegen")).toBeInTheDocument();
+  });
+
+  it("Abbrechen schließt das Formular und nimmt ?neu=1 aus der Adresse (Neuladen öffnet es nicht wieder)", async () => {
+    mockHostsApi({ "GET /hosts": [PI], "GET /host-groups": [] });
+    renderPage("/settings/hosts?neu=1");
+    await screen.findByText("Neuen Server anlegen");
+    expect(screen.getByTestId("current-url")).toHaveTextContent("/settings/hosts?neu=1");
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    await waitFor(() => expect(screen.queryByText("Neuen Server anlegen")).toBeNull());
+    expect(screen.getByTestId("current-url")).toHaveTextContent(/^\/settings\/hosts$/);
+  });
+});
+
 describe("Server & Zugänge: Liste", () => {
+  it("ein Zugang ist nur grün, wenn der Server antwortet; sonst steht dabei, was fehlt", async () => {
+    const NEVER = hostFixture({ id: "h4", name: "bastel", display_name: "Bastel", status: "down", last_seen_at: null, credential: { id: "c4", kind: "ssh_key", username: "nodvard", port: 22 } });
+    const NEW = hostFixture({ id: "h5", name: "neu", display_name: "Neu", status: "unknown", last_seen_at: null, credential: { id: "c5", kind: "ssh_password", username: "pi", port: 22 } });
+    mockHostsApi({ "GET /hosts": [PI, NEVER, NEW], "GET /host-groups": [] });
+    renderPage();
+    await screen.findByText("Bastel-Pi");
+    expect(screen.getByText("Schlüssel · lattice").className).toContain("emerald");
+    expect(screen.getByText("Schlüssel · nodvard").className).not.toContain("emerald");
+    expect(screen.getByText("noch keine Verbindung")).toBeInTheDocument();
+    expect(screen.getByText("Passwort · pi").className).not.toContain("emerald");
+    expect(screen.getByText("noch nicht geprüft")).toBeInTheDocument();
+  });
+
+  it("antwortet der Server nur am SSH-Port, ist das Abzeichen nicht grün; die Prüfung in der Zeile färbt es nach ihrem Ergebnis", async () => {
+    const OPEN = hostFixture({
+      id: "h6", name: "offen", display_name: "Offen", status: "up", last_seen_at: "2026-10-01T10:00:00Z",
+      credential: { id: "c6", kind: "ssh_key", username: "nodvard", port: 22 },
+    });
+    const failed = checkFixture({
+      ok: false, credential_id: "c6",
+      items: [
+        { id: "reachable", label: "Server erreichbar", status: "ok", detail: "", hint: "" },
+        { id: "login", label: "Anmeldung", status: "fail", detail: "Der Server hat den Schlüssel nicht akzeptiert.", hint: "" },
+      ],
+    });
+    mockHostsApi({ "GET /hosts": [OPEN], "GET /host-groups": [], "POST /hosts/h6/check": failed });
+    renderPage();
+    await screen.findByText("Offen");
+    expect(screen.getByText("Schlüssel · nodvard").className).not.toContain("emerald");
+    expect(screen.getByText("Anmeldung noch nicht bestätigt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Prüfen" }));
+    expect(await screen.findByText("Anmeldung klappt nicht")).toBeInTheDocument();
+    expect(screen.queryByText("Anmeldung noch nicht bestätigt")).toBeNull();
+  });
+
   it("zeigt jeden Server mit Namen, Adresse und der Art seines Zugangs", async () => {
     mockHostsApi({ "GET /hosts": [PI, ZABBIX, KI], "GET /host-groups": [] });
     renderPage();

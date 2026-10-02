@@ -28,6 +28,7 @@ from nodvard_sdk import (
     Risk,
     WidgetAction,
     WidgetSpec,
+    same_target,
 )
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from nodvard_sdk.errors import NodvardError
@@ -36,7 +37,7 @@ from pydantic import BaseModel
 from .capabilities import BackupActionExecutor, ProxmoxBackupProvider, job_vmids
 from .config import TOKEN_LABEL, build_connectors
 from .connector import ProxmoxBackupApiError
-from .job_edit import JobEditError, build_job_create, build_job_update, current_values
+from .job_edit import JobEditError, build_job_create, build_job_update, current_values, job_snapshot
 from .space import check_backup_space
 from .watch import run_backup_watch
 
@@ -137,7 +138,7 @@ class Extension(NodvardExtension):
                 default_risk=Risk.MEDIUM,
                 permissions=["hosts.execute"],
                 host_bound=False,
-                confirm_text="Startet sofort ein volles Backup dieser VM. Fortfahren?",
+                confirm_text="Startet sofort ein Backup dieser VM mit den Einstellungen des Jobs. Hat der Job eine Aufbewahrung, können danach ältere Sicherungen dieser VM auf dem Speicher gelöscht werden, auch manuelle und die anderer Jobs. Ohne eigene Aufbewahrung bleibt alles erhalten. Fortfahren?",
             )
         )
         ctx.actions.register(
@@ -240,6 +241,9 @@ class Extension(NodvardExtension):
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
+            # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen (etwa von
+            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse.
+            await ctx.secrets.delete(f"{TOKEN_LABEL}:{payload.name}")
             connections.append(payload.model_dump())
             settings["connections"] = connections
             await ctx.settings.set(settings)
@@ -253,7 +257,11 @@ class Extension(NodvardExtension):
                 if conn.get("name") != name:
                     continue
                 updates = payload.model_dump(exclude_unset=True)
+                old_url = conn.get("base_url")
                 conn.update(updates)
+                if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
+                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue.
+                    await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
                 return await _connection_out(conn)
@@ -268,6 +276,7 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
             settings["connections"] = filtered
             await ctx.settings.set(settings)
+            await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
 
         ctx.api.include_router(router, permission="secrets.write")
 
@@ -358,7 +367,7 @@ class Extension(NodvardExtension):
                         return _space_warning_response(warning)
             request = ActionRequest(
                 action_type="backup.job_update",
-                payload={"connection": connection, "job_id": job_id, "changes": changes},
+                payload={"connection": connection, "job_id": job_id, "changes": changes, "expected": job_snapshot(job)},
                 risk=Risk.HIGH if destructive else Risk.MEDIUM,
                 proposed_by=actor,
                 reason=f"Backup-Job '{job_id}' über die Backups-Seite geändert: " + ", ".join(d["label"] for d in diff),
@@ -469,8 +478,8 @@ class Extension(NodvardExtension):
             except (RuntimeError, NodvardError):
                 unprotected = []
             # Nicht erreichbare Verbindungen und ungesicherte Gaeste ZUERST -- auf der
-            # kleinen Kachel sonst unter den Jobs verschwunden. Ohne `job_ref` blendet
-            # `show_if` "Erneut versuchen" aus.
+            # kleinen Kachel sonst unter den Jobs verschwunden. Ohne `job_ref` gibt es
+            # keinen Sicherungs-Knopf.
             unreachable = [j for j in jobs if j.get("last_status") == "unreachable"]
             rows = unreachable + [
                 {**g, "job_ref": "", "storage": "kein Backup-Job", "last_status": "unprotected"}
@@ -482,6 +491,12 @@ class Extension(NodvardExtension):
             for row in rows:
                 row["last_status_label"] = _LAST_STATUS_LABEL.get(row.get("last_status"), row.get("last_status"))
                 row["tone"] = _LAST_STATUS_TONE.get(row.get("last_status"), "neutral")
+                # Beide Knoepfe starten dasselbe (ein volles Backup jetzt), heissen aber
+                # je nach Lage anders: "Erneut versuchen" gibt es nur nach einem
+                # Fehlschlag. Ohne `job_ref` (kein Job) und waehrend eines Laufs keiner.
+                has_job = bool(row.get("job_ref"))
+                row["can_retry"] = has_job and row.get("last_status") == "failed"
+                row["can_backup_now"] = has_job and row.get("last_status") in ("ok", "unknown")
             return {"data": rows, "meta": {}}
 
         # Sicherheits-Nachtrag: dieser
@@ -523,10 +538,17 @@ class Extension(NodvardExtension):
                             WidgetAction(
                                 id="retry", label="Erneut versuchen", endpoint="jobs/{{ job_ref }}/retry",
                                 method="POST", confirm=True,
-                                confirm_text="Startet sofort ein volles Backup dieser VM. Fortfahren?",
+                                confirm_text="Startet sofort ein Backup dieser VM mit den Einstellungen des Jobs. Hat der Job eine Aufbewahrung, können danach ältere Sicherungen dieser VM auf dem Speicher gelöscht werden, auch manuelle und die anderer Jobs. Ohne eigene Aufbewahrung bleibt alles erhalten. Fortfahren?",
                                 style="danger", permissions=["hosts.execute"],
-                                show_if="{{ job_ref }}",
-                            )
+                                show_if="{{ can_retry }}",
+                            ),
+                            WidgetAction(
+                                id="backup_now", label="Jetzt sichern", endpoint="jobs/{{ job_ref }}/retry",
+                                method="POST", confirm=True,
+                                confirm_text="Startet sofort ein Backup dieser VM mit den Einstellungen des Jobs. Hat der Job eine Aufbewahrung, können danach ältere Sicherungen dieser VM auf dem Speicher gelöscht werden, auch manuelle und die anderer Jobs. Ohne eigene Aufbewahrung bleibt alles erhalten. Fortfahren?",
+                                style="secondary", permissions=["hosts.execute"],
+                                show_if="{{ can_backup_now }}",
+                            ),
                         ],
                     ),
                     empty_text="Keine Backup-Jobs konfiguriert",

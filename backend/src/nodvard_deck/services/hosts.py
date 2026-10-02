@@ -8,17 +8,90 @@ reine DB-Verdrahtung, keine HTTP-Kenntnis.
 
 from __future__ import annotations
 
-from nodvard_sdk import Host as SdkHost, HostStatus
+from datetime import datetime
+
+from nodvard_sdk import Host as SdkHost
+from nodvard_sdk import HostStatus
 from nodvard_sdk.actions import ActionStatus
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..core import ssh, vault
-from ..models import Action, Host, HostCredential, HostGroup, HostTag, KnownHostKey, host_group_members
+from ..db import utcnow
+from ..models import (
+    Action,
+    Host,
+    HostCredential,
+    HostGroup,
+    HostTag,
+    KnownHostKey,
+    Setting,
+    host_group_members,
+)
 from . import custom_apps
+from . import settings as settings_service
 
 _HOST_STATUS_VALUES = {s.value for s in HostStatus}
+
+
+CONFIRM_NEW_KEYS_SETTING = "ssh.confirm_new_host_keys"
+"""Globale Einstellung (Tabelle `settings`): neue Server-Schluessel nur nach Bestaetigung merken.
+Der Bootstrap des ersten Kontos schaltet sie bei NEUEN Installationen ein; fehlt sie (bestehende
+Installationen), gilt `False` -- das alte Verhalten."""
+
+HOST_KEY_CONFIRM_REQUIRED = ssh.HOST_KEY_CONFIRM_REQUIRED
+"""Merker je Server (Tabelle `settings`, `scope="host"`, `user_id=<host_id>`): nach "Schluessel
+vergessen" darf der Server nie wieder still einen Schluessel unterschoben bekommen -- erst die
+ausdrueckliche Bestaetigung ("Verbindung pruefen", `POST /hosts/{id}/known-hosts`) nimmt ihn weg.
+Bewusst nicht in `Host.host_metadata`: das ueberschreibt der Abgleich der Anbieter-Erweiterungen bei
+jedem Lauf, und Erweiterungen sehen es. `core/ssh.connect` prueft ihn zusaetzlich direkt vor dem
+Verbindungsaufbau."""
+_HOST_SCOPE = ssh.HOST_KEY_CONFIRM_SCOPE
+
+
+LOGIN_OK_KEY = "login_ok"
+"""Schlüssel in `Host.host_metadata`: die letzte erfolgreiche SSH-Anmeldung. Der Erreichbarkeits-Job
+setzt `status`/`last_seen_at` schon, wenn nur der Port antwortet -- belegt ist eine Anmeldung erst
+hiermit."""
+
+
+def record_login_ok(host: Host, credential: HostCredential, at: datetime | None = None) -> None:
+    """Hält dauerhaft fest: die Anmeldung mit `credential` an `host` hat geklappt (`at`: wann, sonst jetzt).
+    Es gibt nur diesen einen Beleg je Server, er gehört zum Standard-Zugang -- ein anderer Zugang
+    darf ihn nicht überschreiben (`login_confirmed_at` vergleicht den Zugang)."""
+    record = {
+        "credential_id": credential.id, "address": host.address, "port": credential.port,
+        "at": (at or utcnow()).isoformat(),
+    }
+    host.host_metadata = {**(host.host_metadata or {}), LOGIN_OK_KEY: record}
+
+
+def clear_login_ok(host: Host, credential_id: str | None = None) -> None:
+    """Die Anmeldung hat zuletzt nicht geklappt: der frühere Beleg gilt nicht mehr. Mit `credential_id`
+    nur, wenn der Beleg zu genau diesem Zugang gehört -- scheitert ein anderer Zugang, bleibt der
+    Beleg des funktionierenden stehen."""
+    record = (host.host_metadata or {}).get(LOGIN_OK_KEY)
+    if record is None:
+        return
+    if credential_id is not None and not (isinstance(record, dict) and record.get("credential_id") == credential_id):
+        return
+    host.host_metadata = {k: v for k, v in host.host_metadata.items() if k != LOGIN_OK_KEY}
+
+
+def login_confirmed_at(host: Host, credential: HostCredential | None) -> datetime | None:
+    """Wann hat sich Nodvard Deck zuletzt wirklich per SSH angemeldet -- mit GENAU diesem Zugang,
+    an dieser Adresse und diesem Port? Sonst `None` (nie, oder der Zugang bzw. die Adresse
+    wurde seitdem geändert)."""
+    record = (host.host_metadata or {}).get(LOGIN_OK_KEY)
+    if credential is None or not isinstance(record, dict):
+        return None
+    if record.get("credential_id") != credential.id or record.get("address") != host.address or record.get("port") != credential.port:
+        return None
+    try:
+        return datetime.fromisoformat(str(record.get("at")))
+    except ValueError:
+        return None
 
 
 class HostServiceError(Exception):
@@ -34,6 +107,31 @@ async def drop_pooled_connections(session: AsyncSession, host_id: str) -> None:
     Session nochmals -- siehe `ssh.drop_host_after_commit`."""
     await ssh.get_ssh_pool().drop_host(host_id)
     ssh.drop_host_after_commit(session, host_id)
+
+
+async def forget_address_bound_access(session: AsyncSession, host: Host, *, spare_pinned: bool = False) -> int:
+    """Nach einer geaenderten Adresse des Servers: gespeicherte SSH-Passwoerter loeschen und offene
+    Verbindungen schliessen. Ein Passwort gehoert zu dem Server, bei dem es eingegeben wurde; unter
+    einer neuen Adresse wuerde es sonst bei jemand anderem landen. Schluessel bleiben (der Server
+    prueft ihn, das Dashboard verraet ihn nicht). Eine gepoolte Verbindung geht sonst weiter an die
+    ALTE Adresse.
+
+    `spare_pinned`: Passwoerter bleiben, wenn fuer den Server schon ein Schluessel gemerkt ist. Die
+    Anmeldung beginnt erst nach dem Schluesseltausch (`core/ssh.connect`): ein anderer Server an der
+    neuen Adresse zeigt einen anderen Schluessel und bekommt nie ein Passwort zu sehen. Gedacht fuer
+    Adressen, die der Anbieter selbst fuehrt und die sich legitim aendern (DHCP).
+
+    Liefert die Zahl der geloeschten Passwoerter."""
+    from ..db import refresh_relationships
+
+    removed = 0
+    if not (spare_pinned and await ssh.load_known_fingerprints(session, host.id)):
+        await refresh_relationships(session, host, "credentials")
+        for credential in [c for c in host.credentials if c.kind == "ssh_password"]:
+            if await delete_credential(session, host.id, credential.id):
+                removed += 1
+    await drop_pooled_connections(session, host.id)
+    return removed
 
 
 def host_to_sdk(host: Host) -> SdkHost:
@@ -61,6 +159,11 @@ def host_to_sdk(host: Host) -> SdkHost:
         # eines existiert, damit eine Datei-/Terminal-Quelle vorab entscheiden kann,
         # ob sie sich als nutzbar anbietet.
         has_credential=any(c.is_default for c in host.credentials),
+        # Nur der Benutzername (kein Geheimnis): z. B. erlischt eine Dauerfreigabe der
+        # Skripte, wenn ein Server danach unter einem anderen Konto angesprochen wird.
+        credential_username=next((c.username for c in host.credentials if c.is_default), None),
+        # Ebenso der Port: ein anderer Port ist ein anderer Dienst (gleiche Adresse, anderes Ziel).
+        credential_port=next((c.port for c in host.credentials if c.is_default), None),
     )
 
 
@@ -141,8 +244,7 @@ async def update_host(session: AsyncSession, host_id: str, **fields: object) -> 
     # in der gecachten Collection (D-12).
     await refresh_relationships(session, host, "tags", "credentials")
     if address_changed:
-        # Eine gepoolte Verbindung geht sonst weiter an die ALTE Adresse.
-        await drop_pooled_connections(session, host.id)
+        await forget_address_bound_access(session, host)
     return host
 
 
@@ -182,6 +284,7 @@ async def delete_host(session: AsyncSession, host_id: str) -> bool:
     secret_ids = [c.secret_id for c in host.credentials]
     # Eigene App-Kacheln mit diesem Server als Bezug bleiben stehen, nur ohne Server (nicht vom SQLite-Pragma abhaengig).
     await custom_apps.unlink_host(session, host_id)
+    await host_key_was_confirmed(session, host_id)
     await session.delete(host)
     # Ohne Flush bleibt `host` im Identity-Map als "zum Loeschen vorgemerkt", aber
     # noch auffindbar -- ein zweiter delete_host()-Aufruf im selben Request wuerde
@@ -344,10 +447,40 @@ async def resolve_connection_target(
         host_id=host.id, address=host.address, port=credential.port,
         username=credential.username, kind=credential.kind, secret_value=plaintext,
         generation=generation,
-        # Einstellung ssh_confirm_new_host_keys: dann merken Hintergrundjobs, Terminal und Status
-        # keinen neuen Server-Schluessel mehr still, nur "Verbindung pruefen" (Bestaetigen) tut es.
-        allow_tofu=not settings.ssh_confirm_new_host_keys,
+        # Muss der Schluessel bestaetigt werden, merken Hintergrundjobs, Terminal und Status keinen
+        # neuen Server-Schluessel mehr still, nur "Verbindung pruefen" (Bestaetigen) tut es.
+        allow_tofu=not await host_key_confirmation_required(session, settings, host.id),
     )
+
+
+async def host_key_confirmation_required(session: AsyncSession, settings: Settings, host_id: str) -> bool:
+    """Darf fuer diesen Server ein unbekannter Schluessel NICHT still gemerkt werden?
+
+    Reihenfolge (die erste Antwort gilt):
+    1. Merker am Server (nach "Schluessel vergessen"): immer ja, auch gegen die Umgebungsvariable.
+    2. Umgebungsvariable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true`/`false`), falls gesetzt.
+    3. Gespeicherte Einstellung `ssh.confirm_new_host_keys` (neue Installationen: an).
+    4. Sonst nein (bestehende Installationen, wie bisher)."""
+    if await ssh.host_key_confirm_pending(session, host_id):
+        return True
+    if settings.ssh_confirm_new_host_keys is not None:
+        return settings.ssh_confirm_new_host_keys
+    return await settings_service.get_global(session, CONFIRM_NEW_KEYS_SETTING, False) is True
+
+
+async def require_host_key_confirmation(session: AsyncSession, host_id: str) -> None:
+    """Setzt den Merker (siehe `HOST_KEY_CONFIRM_REQUIRED`); in derselben Sitzung wie das Vergessen."""
+    if await session.get(Setting, (HOST_KEY_CONFIRM_REQUIRED, _HOST_SCOPE, host_id)) is None:
+        session.add(Setting(key=HOST_KEY_CONFIRM_REQUIRED, scope=_HOST_SCOPE, user_id=host_id, value={"value": True}))
+        await session.flush()
+
+
+async def host_key_was_confirmed(session: AsyncSession, host_id: str) -> None:
+    """Nimmt den Merker weg. Nur der Bestaetigen-Weg (`POST /hosts/{id}/known-hosts`) ruft das auf."""
+    row = await session.get(Setting, (HOST_KEY_CONFIRM_REQUIRED, _HOST_SCOPE, host_id))
+    if row is not None:
+        await session.delete(row)
+        await session.flush()
 
 
 async def clear_known_host_key(session: AsyncSession, host_id: str, key_type: str) -> bool:
@@ -362,6 +495,10 @@ async def clear_known_host_key(session: AsyncSession, host_id: str, key_type: st
     if row is None:
         return False
     await session.delete(row)
+    # Ab jetzt darf KEIN Hintergrunddienst den naechsten Schluessel still merken (auch nicht, wenn
+    # die Einstellung es sonst erlaubt): erst die ausdrueckliche Bestaetigung nimmt den Merker weg.
+    # Im selben Commit wie das Loeschen.
+    await require_host_key_confirmation(session, host_id)
     # Das Vertrauen ist weg -- eine offene Verbindung, die auf dem alten Schluessel
     # beruht, wird geschlossen; die naechste muss den Schluessel neu bestaetigen.
     await drop_pooled_connections(session, host_id)

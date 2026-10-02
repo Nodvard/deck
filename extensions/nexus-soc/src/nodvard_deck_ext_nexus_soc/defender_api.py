@@ -84,6 +84,9 @@ async def register_jobs(ctx: ExtensionContext, defender: Defender, updates: Upda
                              s.get("guard_enabled", True), guard_run))
     for job in jobs:
         await ctx.scheduler.register_job(job)
+    # Der Zeitplaner holt einen verpassten Lauf (Dashboard war zur Zeit aus) nicht nach: die
+    # Update-Pruefung holt sich ausgebliebene Server selbst.
+    updates.schedule_catch_up()
 
 
 OLD_VERSION_MESSAGE = "Vorschlag stammt von einer älteren Version – bitte neu auslösen."
@@ -306,6 +309,21 @@ def build_routers(
         """Kachel fuer die Uebersicht: erste Zeile Gesamtlage, danach je Server."""
         o = await defender.overview()
         sm = o["summary"]
+        if sm["hosts"] == 0:
+            # Ohne pruefbaren Server gibt es nichts zu bewerten -- "Schutzwert 0 / 100, keine Bedrohung" waere irrefuehrend.
+            # Zwei Faelle: gar kein Server angelegt, oder Server da, aber keiner pruefbar (Linux, verwaltet, mit SSH-Zugang,
+            # ggf. mit der eingestellten Markierung).
+            if sm.get("hosts_known", 0) > 0:
+                title = "Noch kein Server prüfbar"
+                subtitle = ("Nodvard Shield prüft Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung). "
+                            "Einstellungen → Server & Zugänge → Zugang einrichten.")
+            else:
+                title = "Noch kein Server"
+                subtitle = "Füge zuerst einen Server hinzu (Einstellungen → Server & Zugänge)."
+            # Offene Funde aus frueheren Scans bleiben offen, auch wenn der Server inzwischen fehlt -- die Kachel zeigt sie.
+            threats = sm.get("open_threats", 0)
+            label, tone = (f"{threats} Bedrohung(en)", "danger") if threats else ("nichts zu bewerten", "neutral")
+            return {"data": [{"title": title, "subtitle": subtitle, "label": label, "tone": tone}], "meta": {}}
         rows = [{
             "title": f"Schutzwert {sm['score']} / 100",
             "subtitle": f"{sm['protected']}/{sm['hosts']} Server geschützt · {sm['quarantined']} in Quarantäne",
@@ -319,13 +337,15 @@ def build_routers(
                 label, tone = "ohne Virenschutz", "warn"
             elif status == "infected":
                 label, tone = "Bedrohung", "danger"
+            elif status == "clean" and h.get("signature_stale") is True:
+                label, tone = "Signaturen veraltet", "warn"
             elif status == "clean":
                 label, tone = "sauber", "good"
             elif status == "running" or h.get("scanning"):
                 label, tone = "Scan läuft", "accent"
             else:
                 label, tone = "noch nicht gescannt", "neutral"
-            audit = h.get("last_audit") or {}
+            audit = h.get("last_ok_audit") or h.get("last_audit") or {}
             hardening = f" · Härtung {audit['hardening_index']}" if audit.get("hardening_index") is not None else ""
             rows.append({"title": h["host_name"], "subtitle": f"ClamAV {h.get('clamav_version') or '–'}{hardening}", "label": label, "tone": tone})
         return {"data": rows, "meta": {}}
@@ -452,11 +472,22 @@ def build_routers(
         return await _propose(host, "nexus_soc.upgrade", fields, reason, actor, risk,
                               error_status=status.HTTP_409_CONFLICT)
 
+    briefing_running = False
+
     @manage.post("/briefing")
     async def briefing_now() -> dict:
-        return await defender.send_briefing(
-            await updates.overview() if updates is not None else None, await guard.summary_line() if guard is not None else None,
-        )
+        """Lagebericht jetzt. Das Erstellen kann bei einem nicht erreichbaren Server ~20 s dauern:
+        ein zweiter Klick (auch aus einem anderen Tab) legt kein zweites Briefing an."""
+        nonlocal briefing_running
+        if briefing_running:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Der Lagebericht wird gerade schon erstellt – bitte einen Moment warten.")
+        briefing_running = True
+        try:
+            return await defender.send_briefing(
+                await updates.overview() if updates is not None else None, await guard.summary_line() if guard is not None else None,
+            )
+        finally:
+            briefing_running = False
 
     @manage.post("/audits")
     async def start_audit(payload: _AuditIn) -> dict:

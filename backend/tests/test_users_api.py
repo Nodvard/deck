@@ -292,3 +292,51 @@ async def test_own_password_cannot_be_set_via_patch(client):
     assert "Mein Konto" in r.json()["detail"]
     login = await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})
     assert login.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_reactivated_account_does_not_get_its_old_sessions_back(client):
+    """Deaktivieren beendet alle Anmeldungen des Kontos. Nach dem Wieder-Aktivieren darf ein altes
+    Geraet (Refresh-Token von damals) nicht einfach weitermachen, auch wenn der Admin das
+    Passwort nicht neu gesetzt hat."""
+    owner, _ = await _bootstrap_owner(client)
+    created = await client.post(
+        "/api/v1/users", json={"username": "anna", "password": "correct-horse-battery"}, headers=_auth_header(owner)
+    )
+    assert created.status_code == 201, created.text
+    anna_id = created.json()["id"]
+    phone = await client.post(
+        "/api/v1/auth/login", json={"username": "anna", "password": "correct-horse-battery", "client_type": "android"}
+    )
+    assert phone.status_code == 200, phone.text
+    old_refresh = phone.json()["refresh_token"]
+
+    off = await client.patch(f"/api/v1/users/{anna_id}", json={"is_active": False}, headers=_auth_header(owner))
+    assert off.status_code == 200
+    on = await client.patch(f"/api/v1/users/{anna_id}", json={"is_active": True}, headers=_auth_header(owner))
+    assert on.status_code == 200
+
+    assert (await client.post("/api/v1/auth/refresh", json={"refresh_token": old_refresh})).status_code == 401
+    # Neu anmelden geht natuerlich wieder.
+    again = await client.post("/api/v1/auth/login", json={"username": "anna", "password": "correct-horse-battery"})
+    assert again.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_editing_an_active_account_keeps_its_sessions(client):
+    """Nur das Deaktivieren meldet ab; andere Aenderungen (oder ein erneutes `is_active: true`)
+    lassen die Anmeldungen in Ruhe."""
+    owner, _ = await _bootstrap_owner(client)
+    created = await client.post(
+        "/api/v1/users", json={"username": "anna", "password": "correct-horse-battery"}, headers=_auth_header(owner)
+    )
+    anna_id = created.json()["id"]
+    phone = await client.post(
+        "/api/v1/auth/login", json={"username": "anna", "password": "correct-horse-battery", "client_type": "android"}
+    )
+    refresh = phone.json()["refresh_token"]
+    patched = await client.patch(
+        f"/api/v1/users/{anna_id}", json={"display_name": "Anna", "is_active": True}, headers=_auth_header(owner)
+    )
+    assert patched.status_code == 200
+    assert (await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh})).status_code == 200

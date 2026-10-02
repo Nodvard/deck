@@ -241,3 +241,89 @@ async def test_console_hosts_lists_only_hosts_with_a_console(running_app, db_ses
         resp = await ac.get("/api/v1/console/hosts", headers={"Authorization": f"Bearer {token}"})
     assert resp.status_code == 200
     assert resp.json() == [vm.id]
+
+
+async def _operator_login(http_base: str, owner_token: str) -> tuple[str, str]:
+    """Nutzer mit Rolle operator (hat `hosts.execute`): (ID, Access-Token)."""
+    async with AsyncClient(base_url=http_base) as ac:
+        roles = {r["name"]: r["id"] for r in (await ac.get("/api/v1/roles", headers={"Authorization": f"Bearer {owner_token}"})).json()}
+        created = await ac.post(
+            "/api/v1/users",
+            json={"username": "bedienung", "password": "correct-horse-battery", "role_ids": [roles["operator"]]},
+            headers={"Authorization": f"Bearer {owner_token}"},
+        )
+        assert created.status_code == 201, created.text
+        login = await ac.post("/api/v1/auth/login", json={"username": "bedienung", "password": "correct-horse-battery"})
+        return created.json()["id"], login.json()["access_token"]
+
+
+async def _deactivate(http_base: str, owner_token: str, user_id: str) -> None:
+    async with AsyncClient(base_url=http_base) as ac:
+        r = await ac.patch(f"/api/v1/users/{user_id}", json={"is_active": False}, headers={"Authorization": f"Bearer {owner_token}"})
+        assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_open_console_ends_when_the_account_is_deactivated(running_app, db_session, test_settings, pause_session_guard):
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    test_settings.terminal_recheck_interval_s = 0.2
+    http_base, ws_base = running_app
+    host = await hosts_service.create_host(db_session, name="vm-1", address="10.0.0.5")
+    await db_session.commit()
+    target = _FakeConsoleTarget({host.id})
+    get_extension_runtime().capabilities.provide("fake-hv", ConsoleTarget, target)
+
+    owner_token = await _bootstrap_owner(http_base)
+    user_id, token = await _operator_login(http_base, owner_token)
+    ws_url = (await _open(http_base, token, host.id)).json()["ws_url"]
+
+    from nodvard_deck.api.v1 import console as console_api
+
+    with pause_session_guard(console_api) as lock:
+        async with websockets.connect(f"{ws_base}{ws_url}") as ws:
+            assert await ws.recv() == b"RFB 003.008\n"
+            async with lock:  # siehe conftest.py `pause_session_guard`
+                await _deactivate(http_base, owner_token, user_id)
+                await db_session.commit()
+            with pytest.raises(ConnectionClosed) as closed:
+                async with asyncio.timeout(8):
+                    while True:
+                        await ws.recv()
+    assert closed.value.rcvd.code == 4401
+    for _ in range(100):
+        if target.opened[0].closed:
+            break
+        await asyncio.sleep(0.02)
+    assert target.opened[0].closed
+
+
+@pytest.mark.asyncio
+async def test_console_ticket_of_a_deactivated_account_is_refused(running_app, db_session):
+    http_base, ws_base = running_app
+    host = await hosts_service.create_host(db_session, name="vm-1", address="10.0.0.5")
+    await db_session.commit()
+    target = _FakeConsoleTarget({host.id})
+    get_extension_runtime().capabilities.provide("fake-hv", ConsoleTarget, target)
+
+    owner_token = await _bootstrap_owner(http_base)
+    user_id, token = await _operator_login(http_base, owner_token)
+    ws_url = (await _open(http_base, token, host.id)).json()["ws_url"]
+    await _deactivate(http_base, owner_token, user_id)
+    await db_session.commit()
+
+    import websockets
+    from websockets.exceptions import ConnectionClosed
+
+    async with websockets.connect(f"{ws_base}{ws_url}") as ws:
+        with pytest.raises(ConnectionClosed) as closed:
+            async with asyncio.timeout(8):
+                while True:
+                    await ws.recv()
+    assert closed.value.rcvd.code == 4401
+    for _ in range(100):
+        if target.opened[0].closed:
+            break
+        await asyncio.sleep(0.02)
+    assert target.opened[0].closed

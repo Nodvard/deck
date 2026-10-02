@@ -30,7 +30,10 @@ from nodvard_deck.services import settings as settings_service
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 
-_PERMISSIONS = ["hosts.read", "hosts.execute", "secrets.read:scripts-*", "schedule.register", "notify.send"]
+_PERMISSIONS = [
+    "hosts.read", "hosts.execute", "secrets.read:scripts-*", "schedule.register", "notify.send",
+    "audit.write", "actions.standing_approval",
+]
 
 
 @pytest.fixture(autouse=True)
@@ -944,6 +947,36 @@ async def test_recurring_action_executed_events_promote_a_disabled_draft_script(
         )
     )
     assert set(ext._repo.list_ids()) - before == new_ids
+
+
+@pytest.mark.asyncio
+async def test_promotion_notice_does_not_contain_the_command(tmp_path, db_session, settings_bound):
+    """Meldungen liest auch, wer nur ansehen darf: der Befehl (evtl. mit Passwort) steht nur im
+    Entwurf auf der Skripte-Seite, nicht im Meldungstext."""
+    _runtime, _ctx, _ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    from nodvard_deck_ext_scripts.promotion import MAX_COUNT
+
+    command = "mysql -u root -pGEHEIM123 -e 'flush logs'"
+    for _ in range(MAX_COUNT):
+        await get_event_bus().publish(
+            Event(
+                name="action.executed",
+                payload={
+                    "action_type": "shell.exec", "host_id": "host-xyz", "outcome": "success",
+                    "payload": {"command": command},
+                },
+            )
+        )
+
+    from nodvard_deck.models import Notification as NotificationRow
+
+    notes = (
+        await db_session.execute(select(NotificationRow).where(NotificationRow.title == "Wiederkehrende Reparatur erkannt"))
+    ).scalars().all()
+    assert notes  # (Handler frueherer Tests am globalen Bus koennen weitere Meldungen anlegen)
+    for note in notes:
+        assert "GEHEIM123" not in note.body and "GEHEIM123" not in str(note.payload)
+        assert note.payload == {"path": "/ext/scripts/scripts"}
 
 
 @pytest.mark.asyncio

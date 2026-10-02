@@ -33,7 +33,10 @@ export interface HostOut {
   /** Messwerte sammeln. */
   enabled: boolean;
   status: string;
+  /** Wann der Server zuletzt geantwortet hat -- der SSH-Port nimmt Verbindungen an, mehr nicht. */
   last_seen_at: string | null;
+  /** Wann sich Nodvard Deck zuletzt wirklich mit dem Standard-Zugang angemeldet hat; `null`: noch nie belegt. */
+  login_ok_at?: string | null;
   provider_ext_id: string | null;
 }
 
@@ -74,6 +77,8 @@ export interface ServiceOut {
   tone: string | null;
   url: string | null;
   image: string | null;
+  /** Platzhalter eines Servers, dessen Container nicht gelesen werden konnten (kein Dienst). Fehlt bei aelteren Servern. */
+  unreachable?: boolean;
 }
 
 /** Eine Kachel im Bereich „Apps“ (`GET /overview` -> `apps`): ein erkannter Dienst oder eine eigene App, die jemand
@@ -101,6 +106,8 @@ export interface AppTileOut {
 export interface OverviewOut {
   services: ServiceOut[];
   services_running: number;
+  /** Namen der Server, deren Container nicht gelesen werden konnten. Fehlt bei aelteren Servern. */
+  services_unreachable_hosts?: string[];
   /** Eigene Apps zuerst (nach Position), danach die erkannten Dienste. `services` bleibt davon unberuehrt. */
   apps: AppTileOut[];
   backups: {

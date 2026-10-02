@@ -29,6 +29,7 @@ from ...services import audit as audit_service
 from ...services import extension_setup
 from ...services import extensions as extensions_service
 from ...services.auth import user_has_permission
+from ...version import __version__
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 
 router = APIRouter(prefix="/extensions", tags=["extensions"])
@@ -76,6 +77,12 @@ class ExtensionOut(BaseModel):
     last_test: dict | None = None
     """Ergebnis des letzten Verbindungstests: `{ok, message, at}`; weg nach jeder Aenderung der
     Einstellungen oder Zugangsdaten."""
+    bundled: bool = False
+    """`true` bei Erweiterungen, die mit Nodvard Deck ausgeliefert werden (`source == "bundled"`). Ihre eigene
+    `version` wird bis zur 1.0 nicht gepflegt und sagt nichts; massgeblich ist die Programmversion."""
+    display_version: str | None = None
+    """Die Version, die Menschen angezeigt wird: bei mitgelieferten Erweiterungen die Programmversion, bei
+    nachinstallierten (pip) die eigene `version`."""
 
     @classmethod
     def from_model(cls, record: ExtensionRecord) -> "ExtensionOut":
@@ -94,6 +101,8 @@ class ExtensionOut(BaseModel):
             category=manifest.get("category") or None,
             sort_order=manifest.get("sort_order") if isinstance(manifest.get("sort_order"), int) else 100,
             has_settings=_has_settings(record.id),
+            bundled=record.source == "bundled",
+            display_version=__version__ if record.source == "bundled" else record.version,
         )
 
 
@@ -126,9 +135,15 @@ async def _with_setup(
 async def _audit_toggle(session, user: User, action: str, ext_id: str, record: ExtensionRecord | None) -> None:  # noqa: ANN001
     """Protokolleintrag fuer das bewusste Ein-/Ausschalten (`state` ist das Ergebnis: eine
     Erweiterung, die beim Laden abstuerzt, steht danach auf `error`)."""
+    detail: dict = {"state": record.state if record else None}
+    # Bietet die Erweiterung Adressen ohne Anmeldung an (`public=True`, Berechtigung
+    # `api.public`), steht das im Protokoll -- wer sie einschaltet, soll das nachlesen koennen.
+    public_routes = extensions_service.public_route_prefixes(ext_id)
+    if public_routes:
+        detail["public_routes"] = public_routes
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action=action, outcome="success",
-        target_type="extension", target_id=ext_id, detail={"state": record.state if record else None},
+        target_type="extension", target_id=ext_id, detail=detail,
     )
 
 

@@ -30,6 +30,12 @@ function mockFetch(calls: { url: string; method: string; body?: unknown }[]) {
       rows = rows.map((r) => ({ ...r, read_at: r.read_at ?? "2026-09-24T12:00:00Z" }));
       return new Response(JSON.stringify({ marked: 2 }));
     }
+    if (url.endsWith("/api/v1/extensions") && method === "GET") {
+      return new Response(JSON.stringify([
+        { id: "nexus-soc", name: "Nodvard Shield", state: "enabled" },
+        { id: "proxmox", name: "Proxmox VE", state: "enabled" },
+      ]));
+    }
     throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
   });
 }
@@ -60,13 +66,28 @@ beforeEach(() => {
 });
 
 describe("NotificationsPage", () => {
+  it("zeigt ohne Schreibrecht keine Knöpfe zum Als-gelesen-Markieren", async () => {
+    useAuthStore.setState({
+      accessToken: "tok", status: "authenticated", mfaToken: null,
+      user: { id: "u2", username: "gast", display_name: null, email: null, is_owner: false, locale: "de", permissions: ["notifications.read"] },
+    });
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    await screen.findByTestId("notification-n1");
+    expect(screen.queryByRole("button", { name: "Gelesen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Alle als gelesen/ })).toBeNull();
+  });
+
   it("zeigt Meldungen mit deutscher Stufe und Quelle, lange Texte eingeklappt", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
     renderPage();
     const first = await screen.findByTestId("notification-n1");
     expect(within(first).getByText("Warnung")).toBeInTheDocument();
     expect(within(screen.getByTestId("notification-n2")).getByText("Kritisch")).toBeInTheDocument();
-    expect(first.textContent).toContain("nexus-soc");
+    // Die Quelle steht mit dem Namen der Erweiterung da, nicht mit ihrer Kennung.
+    await waitFor(() => expect(first.textContent).toContain("Nodvard Shield"));
+    expect(first.textContent).not.toContain("nexus-soc");
+    expect(within(screen.getByTestId("notification-n2")).getByText(/Proxmox VE/)).toBeInTheDocument();
     expect(first.querySelector("p")?.className).toContain("line-clamp-4");
     fireEvent.click(within(first).getByRole("button", { name: "Mehr anzeigen" }));
     expect(first.querySelector("p")?.className).not.toContain("line-clamp-4");

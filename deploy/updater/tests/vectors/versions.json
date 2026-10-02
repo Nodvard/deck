@@ -1,5 +1,5 @@
 {
- "_doc": "Versionen nach M2: X.Y.Z, nur ASCII-Ziffern, keine fuehrenden Nullen, je Teil hoechstens 9 Stellen, keine Vorabversion.",
+ "_doc": "Versionen: X.Y.Z, nur ASCII-Ziffern, keine fuehrenden Nullen, je Teil hoechstens 9 Stellen, keine Vorabversion.",
  "valid": [
   "0.0.0",
   "0.7.0",

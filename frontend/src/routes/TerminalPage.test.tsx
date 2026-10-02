@@ -166,7 +166,7 @@ describe("TerminalPage", () => {
     vi.stubGlobal("fetch", mockFetch([]));
     renderPage();
     await screen.findByText("Raspberry Pi");
-    fireEvent.change(screen.getByLabelText("Host suchen"), { target: { value: "gibtsnicht" } });
+    fireEvent.change(screen.getByLabelText("Server suchen"), { target: { value: "gibtsnicht" } });
     expect(screen.getByText("Kein Server passt zur Suche.")).toBeInTheDocument();
     expect(screen.queryByTestId("terminal-empty")).toBeNull();
   });
@@ -241,6 +241,41 @@ describe("TerminalPage", () => {
     act(() => ws.serverOpen());
     act(() => ws.onmessage?.({ data: JSON.stringify({ type: "error", message: "Host key mismatch" }) }));
     expect(await screen.findByText("Host key mismatch")).toBeTruthy();
+  });
+
+  it("Oeffnungsfehler mit leerem Grund zeigt trotzdem einen Satz statt nichts", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    fireEvent.click((await screen.findAllByRole("button", { name: "Terminal öffnen" }))[0]);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.serverOpen());
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "error", message: "" }) }));
+    expect(await screen.findByText("Sitzung konnte nicht geöffnet werden.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Neu verbinden" })).toBeTruthy();
+  });
+
+  it("Oeffnungsfehler: der deutsche Grund vom Server steht da (Server antwortet nicht)", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    fireEvent.click((await screen.findAllByRole("button", { name: "Terminal öffnen" }))[0]);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.serverOpen());
+    const reason = "Server antwortet nicht (Zeitüberschreitung bei 192.168.2.10:22). Ist er eingeschaltet und im Netz?";
+    act(() => ws.onmessage?.({ data: JSON.stringify({ type: "error", message: reason }) }));
+    expect(await screen.findByText(reason)).toBeTruthy();
+  });
+
+  it("zeigt bei einem Ende durch Leerlauf oder entzogene Anmeldung den Grund statt nur „getrennt“", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    fireEvent.click((await screen.findAllByRole("button", { name: "Terminal öffnen" }))[0]);
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    const ws = FakeWebSocket.instances[0];
+    act(() => ws.serverOpen());
+    act(() => ws.onclose?.({ code: 4408 }));
+    expect(await screen.findByText("Die Sitzung wurde wegen Leerlauf beendet.")).toBeTruthy();
   });
 
   it("Handy: Hostliste über dem Terminal statt 240 px daneben", async () => {

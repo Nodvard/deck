@@ -51,6 +51,7 @@
   "x-secrets": [
     {
       "label": "proxmox-token:{name}",
+      "x-secret-bound-to": ["base_url"],
       "per_item": "connections",
       "title": "API-Token-Geheimnis",
       "description": "Der geheime Wert, den Proxmox beim Anlegen des Tokens einmalig anzeigt."

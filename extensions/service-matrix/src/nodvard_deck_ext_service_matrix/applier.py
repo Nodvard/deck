@@ -171,6 +171,13 @@ class _Outcome:
     log: str = ""
     step: str | None = None
     message: str = ""
+    public_message: str = ""
+    """Wie `message`, aber ohne Zeilen vom Host (fuer Protokoll, Meldung und `applied`).
+    Leer: `message` selbst enthaelt keinen Text vom Host."""
+
+    @property
+    def safe_message(self) -> str:
+        return self.public_message or self.message
 
 
 @dataclass(frozen=True)
@@ -569,6 +576,7 @@ class ImageApplier:
         show_rollback = False
         success = False
         pull_failed = outcome.state == "done" and outcome.rc == ia.RC_PULL
+        public_message: str | None = None  # gesetzt, wenn `message` eine Zeile vom Host enthaelt
 
         if outcome.state == "done" and outcome.rc == 0:
             self._set_phase(app_key, "verify")
@@ -578,6 +586,7 @@ class ImageApplier:
             show_rollback = not success
         elif pull_failed:
             message = ia.describe_pull_failure(log_text)  # nichts veraendert, kein Zurueck noetig
+            public_message = ia.describe_pull_failure(log_text, public=True)
         else:
             if outcome.state == "done":
                 message = (
@@ -586,6 +595,7 @@ class ImageApplier:
                 )
             else:
                 message = outcome.message
+                public_message = outcome.safe_message
             if outcome.state in ("done", "lost", "timeout"):  # dort kann schon etwas veraendert sein
                 snap = await self._snapshot_once(host, t, rollback_ref)
             show_rollback = outcome.rc == ia.RC_UP or outcome.step in ("up", "done")
@@ -609,7 +619,10 @@ class ImageApplier:
 
         duration_s = self._now() - started
         new_id = verdict.new_image_id if verdict else None
-        summary = output.splitlines()[0]
+        # Was auch ohne Server-Recht sichtbar ist (Uebersicht der Seite, Protokoll, Meldung): bei einem
+        # Fehler nur feste Texte. Die Zeile vom Host steht nur in der Ausgabe der Aktion.
+        public_output = output if success else ia.failure_headline(t, public_message or message)
+        summary = public_output.splitlines()[0]
         self._applied[app_key] = {"ok": success, "summary": summary, "finished_at": _iso_now()}
         self._applied_at[app_key] = time.time()
         detail = {
@@ -621,7 +634,7 @@ class ImageApplier:
         if resumed:
             detail["resumed"] = True
         await self._audit(actor, host, t, success, summary, detail, run_id)
-        await self._notify(host, t, success, output, duration_s, show_rollback and not success, run_id, rollback, resumed=resumed)
+        await self._notify(host, t, success, public_output, duration_s, show_rollback and not success, run_id, rollback, resumed=resumed)
         return ActionResult(
             success=success, exit_code=outcome.rc, output=output[-20000:], error=None if success else message,
             duration_ms=int(duration_s * 1000), detail=detail,
@@ -646,7 +659,10 @@ class ImageApplier:
             if not info.started and info.method is None:  # schon der Ordner scheiterte: nichts gestartet
                 lines = [ln for ln in out.strip().splitlines() if not ln.startswith("@@")]
                 reason = lines[-1][:200] if lines else "keine Rückmeldung"
-                return _Outcome("not_started", message=f"Update-Lauf konnte nicht gestartet werden: {reason}")
+                return _Outcome(
+                    "not_started", message=f"Update-Lauf konnte nicht gestartet werden: {reason}",
+                    public_message=f"Update-Lauf konnte nicht gestartet werden – {ia.DETAILS_HINT}",
+                )
         return await self._wait(host, run_id, app_key, unknown_message=unknown, reach_grace_s=reach_grace_s)
 
     async def _wait(
@@ -752,15 +768,16 @@ class ImageApplier:
             log.exception("image_update_audit_failed host=%s container=%s", host.id, t.container)
 
     async def _notify(
-        self, host: Any, t: ComposeTarget, success: bool, output: str, duration_s: float, with_rollback: bool, run_id: str, rollback: str | None,
-        *, resumed: bool = False,
+        self, host: Any, t: ComposeTarget, success: bool, public_output: str, duration_s: float, with_rollback: bool, run_id: str,
+        rollback: str | None, *, resumed: bool = False,
     ) -> None:
         """Fehler immer, Erfolg nur nach mehr als `NOTIFY_SUCCESS_AFTER_S` (nach einem Neustart immer). Bewusst OHNE `host_id`
-        im Payload: ein Ergebnis, auf das der Nutzer wartet, soll ein Wartungsfenster nicht schlucken."""
+        im Payload: ein Ergebnis, auf das der Nutzer wartet, soll ein Wartungsfenster nicht schlucken.
+        `public_output`: die Ausgabe ohne Zeilen vom Host (siehe `_conclude`); die Meldung zeigt nur die ersten Zeilen."""
         if success and duration_s <= NOTIFY_SUCCESS_AFTER_S and not resumed:
             return
         host_name = getattr(host, "display_name", None) or host.name
-        lines = output.splitlines()
+        lines = public_output.splitlines()
         body = "\n".join(lines[:2] if success else lines[:1])
         if with_rollback and rollback:
             body += "\nZurück (auf dem Host):\n" + ia.rollback_commands(t, rollback)

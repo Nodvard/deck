@@ -246,6 +246,8 @@ async def test_item_image_upload_serve_and_delete_round_trip(client, db_session,
     assert served.status_code == 200
     assert served.content == png_bytes
     assert served.headers["content-type"] == "image/png"
+    assert served.headers["x-content-type-options"] == "nosniff"
+    assert "sandbox" in served.headers["content-security-policy"]
 
     deleted = await client.delete(f"/api/v1/ext/inventory/items/{item_id}/images/{image_id}", headers=headers)
     assert deleted.status_code == 204
@@ -409,3 +411,21 @@ async def test_reads_and_writes_require_their_respective_permission(client, db_s
 
     write_forbidden = await client.post("/api/v1/ext/inventory/categories", json={"name": "X"}, headers=reader_headers)
     assert write_forbidden.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_image_upload_larger_than_the_general_request_limit_is_accepted(client, db_session, test_settings):
+    from nodvard_deck_ext_inventory.images import MAX_IMAGE_BYTES
+
+    token = await _enable_inventory(client, db_session, test_settings)
+    headers = _auth_header(token)
+    item = await client.post("/api/v1/ext/inventory/items", json={"name": "Kamera"}, headers=headers)
+    url = f"/api/v1/ext/inventory/items/{item.json()['id']}/images"
+    png = {**headers, "Content-Type": "image/png"}
+
+    size = 2 * 1024 * 1024
+    assert 1024**2 < size < MAX_IMAGE_BYTES
+    ok = await client.post(url, content=b"\x89PNG\r\n\x1a\n" + b"\x00" * size, headers=png)
+    assert ok.status_code == 201, ok.text
+    too_big = await client.post(url, content=b"\x00" * (MAX_IMAGE_BYTES + 1), headers=png)
+    assert too_big.status_code == 413

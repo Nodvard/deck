@@ -97,6 +97,14 @@ describe("Einbruchschutz", () => {
     expect(screen.queryByRole("link", { name: "Zugang einrichten" })).not.toBeInTheDocument();
   });
 
+  it("erklärt Anfängern in einfachen Worten, was SSH und Fail2ban sind", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<GuardTab canManage />);
+    const intro = await screen.findByTestId("guard-intro");
+    expect(intro).toHaveTextContent(/SSH, dem Fernzugang/);
+    expect(intro).toHaveTextContent(/Fail2ban ist ein kleines Programm, das Adressen sperrt, die zu oft ein falsches Passwort probieren/);
+  });
+
   it("zeigt Kennzahlen, Ereignisse und je Server Angreifer, Ports und Datei-Wächter", async () => {
     vi.stubGlobal("fetch", mockFetch([]));
     render(<GuardTab canManage />);
@@ -117,6 +125,7 @@ describe("Einbruchschutz", () => {
 
     const pi = within(screen.getByTestId("guard-h-pi"));
     expect(pi.getByText(/Ohne root-Rechte/)).toBeInTheDocument();
+    expect(pi.getByText(/Zufällige UDP-Ports ohne Programmnamen zählen dann zusammen als ein Eintrag/)).toBeInTheDocument();
     expect(pi.getByRole("button", { name: "Fail2ban installieren" })).toBeInTheDocument();
 
     const ev = within(screen.getByTestId("event-ev2"));
@@ -166,6 +175,44 @@ describe("Einbruchschutz", () => {
     expect(screen.queryByText("ohne Fail2ban")).toBeNull();
     expect(screen.queryByRole("button", { name: "Fail2ban installieren" })).toBeNull();
     expect(screen.getByText("Fail2ban läuft auf 0/1 Servern · bei 1 nicht lesbar")).toBeInTheDocument();
+  });
+
+  it("nennt bei Ports ohne Programmnamen den Grund: ohne root nicht lesbar, mit root ein Kernel-Dienst", async () => {
+    const base = OVERVIEW.hosts[1];
+    const unreadable = { key: "udp/dyn/?", proto: "udp", address: "0.0.0.0", port: 41641, process: null, public: true, new: true, dynamic: true, count: 2, unreadable: true };
+    const kernel = { key: "tcp/dyn/-", proto: "tcp", address: "0.0.0.0", port: 39259, process: null, public: true, new: false, dynamic: true, count: 4, unreadable: false };
+    const overview: GuardOverview = {
+      ...OVERVIEW,
+      hosts: [
+        { ...base, host_id: "h-user", host_name: "ohne-root", view: { ...base.view!, ports: [unreadable] } },
+        { ...base, host_id: "h-root", host_name: "mit-root", view: { ...base.view!, is_root: true, ports: [kernel] } },
+      ],
+    };
+    const events: SecurityEvent[] = [
+      { ...EVENTS[0], id: "ev-user", host_id: "h-user", host_name: "ohne-root", title: "Neuer offener Port: wechselnde Ports/udp (Programm nicht lesbar)", detail: { ports: [unreadable] } },
+      { ...EVENTS[0], id: "ev-root", host_id: "h-root", host_name: "mit-root", title: "Neuer offener Port: wechselnde Ports/tcp (ohne Programm)", detail: { ports: [kernel] } },
+    ];
+    const fallback = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/defender/guard")) return new Response(JSON.stringify(overview), { status: 200 });
+      if (url.includes("/defender/events") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify(events), { status: 200 });
+      return fallback(input, init);
+    }));
+    render(<GuardTab canManage />);
+
+    const user = within(await screen.findByTestId("guard-h-user"));
+    expect(user.getByText("wechselnde Ports/udp (2) · neu")).toHaveAttribute("title", "Zufällige Ports, ändern sich nach jedem Neustart · Programm nicht lesbar (kein root)");
+    const root = within(screen.getByTestId("guard-h-root"));
+    expect(root.getByText("wechselnde Ports/tcp (4)")).toHaveAttribute("title", "Zufällige Ports, ändern sich nach jedem Neustart · ohne Programm");
+
+    const evUser = within(screen.getByTestId("event-ev-user"));
+    fireEvent.click(evUser.getByText("Details"));
+    expect(evUser.getByText(/Programm nicht lesbar \(kein root\)/, { selector: "span" })).toBeInTheDocument();
+    expect(evUser.queryByText(/ohne Programm \(Kernel\)/)).toBeNull();
+    const evRoot = within(screen.getByTestId("event-ev-root"));
+    fireEvent.click(evRoot.getByText("Details"));
+    expect(evRoot.getByText(/ohne Programm \(Kernel\)/)).toBeInTheDocument();
   });
 
   it("übernimmt einen neuen Port als bekannt", async () => {

@@ -170,7 +170,9 @@ Fehlerbild.
 **Sicherheitskorrektur gegenüber dem Vorgängersystem:** Dort lief SSH mit
 `-o StrictHostKeyChecking=no`. Der neue Layer pflegt eine eigene Known-Hosts-Tabelle
 (TOFU beim ersten Kontakt, danach Pinning; eine Änderung erzeugt eine sichtbare Warnung
-statt stiller Annahme).
+statt stiller Annahme). Neue Installationen verzichten standardmäßig auf TOFU: Ein neuer
+Schlüssel wird erst gemerkt, wenn jemand den Fingerabdruck bestätigt hat (Einstellung
+`ssh.confirm_new_host_keys`); nach dem Vergessen eines Schlüssels gilt das immer.
 
 **Eigene SSH-Schlüssel:** Zugangsdaten gehören in den Vault (D-06); Rotation und Widerruf
 sind Plattform-Funktionen, keine Handarbeit in `authorized_keys`. Nodvard Deck kann je
@@ -194,7 +196,11 @@ Secrets auf einmal möglich ist. Ein Entsperren per Passphrase (Argon2id-KDF) be
 ist vorgesehen, aber noch nicht umgesetzt.
 
 ### D-07 Auth
-- Passwörter: **Argon2id** (`argon2-cffi`).
+- Passwörter: **Argon2id** (`argon2-cffi`). Bei Anfragen laufen Prüfen und Hashen in einem Thread
+  (nicht im Event-Loop), höchstens zwei zugleich. Warten schon 16 weitere, antworten Anmeldung, 2FA mit
+  Wiederherstellungs-Code und Ersteinrichtung mit 503 (`Retry-After: 5`). Was nur Angemeldete
+  auslösen (Passwort ändern oder setzen, Benutzer anlegen, Sicherheitsabfragen, neue
+  Wiederherstellungs-Codes), wartet stattdessen.
 - Access-Token: JWT, 15 min, im Speicher des Clients.
 - Refresh-Token: opaker Zufallswert, gehasht in der DB, **widerrufbar**, 30 Tage.
   Web bekommt ihn als `HttpOnly; Secure; SameSite=Strict`-Cookie, Android als Wert für
@@ -363,7 +369,7 @@ Singleton lautlos das Falsche liefert.
    `app.dependency_overrides` stillschweigend ignoriert. **Strukturell behoben** für
    alle Extensions, weil `mount_router()` der einzige Aufrufpfad ist, über den eine
    Extension-Route montiert wird. Ein Regressionstest
-   (`test_include_router_permission_param_protects_route_default_stays_open`) prüft es
+   (`test_include_router_permission_param_protects_route_default_needs_login`) prüft es
    gegen einen echten, über die Registry geladenen Aufrufer.
 
 **Der Unterschied zwischen Fall 3 und den Fällen 1+2 ist die eigentliche Lehre:**

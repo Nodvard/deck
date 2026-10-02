@@ -338,3 +338,85 @@ async def test_files_endpoints_require_authentication(client, db_session):
     _register(_FakeFileSource("fake"))
     unauthenticated = await client.get("/api/v1/files/sources")
     assert unauthenticated.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_upload_larger_than_the_general_request_limit_is_accepted(client, db_session):
+    """Dateien-Upload hat eine eigene, hoehere Grenze als normale Anfragen (1 MiB)."""
+    source = _FakeFileSource("fake")
+    _register(source)
+    token = await _bootstrap_owner(client)
+
+    data = b"d" * (3 * 1024 * 1024)
+    uploaded = await client.post("/api/v1/files/fake/upload?path=/gross.bin", headers=_auth_header(token), content=data)
+    assert uploaded.status_code == 200, uploaded.text
+    assert source.files["/gross.bin"] == data
+
+
+class _TruncatingFileSource(_FakeFileSource):
+    """Eine Quelle, die direkt ins Ziel schreibt: `open_write` leert eine vorhandene Datei sofort ("wb"), noch
+    bevor der Koerper gelesen wird."""
+
+    def __init__(self, source_id: str = "fake") -> None:
+        super().__init__(source_id)
+        self.open_write_calls = 0
+
+    async def open_write(self, path: PurePosixPath, stream, *, size: int | None = None) -> FileEntry:
+        self.open_write_calls += 1
+        self.files[str(path)] = b""
+        return await super().open_write(path, stream, size=size)
+
+
+@pytest.mark.asyncio
+async def test_upload_over_the_configured_limit_is_refused_before_the_target_is_opened(client, db_session, monkeypatch):
+    from nodvard_deck.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "files_max_upload_bytes", 2 * 1024 * 1024)
+    source = _TruncatingFileSource("fake")
+    source.files["/wichtig.bin"] = b"altes Wissen"
+    _register(source)
+    token = await _bootstrap_owner(client)
+
+    too_big = await client.post(
+        "/api/v1/files/fake/upload?path=/wichtig.bin", headers=_auth_header(token), content=b"d" * (3 * 1024 * 1024)
+    )
+    assert too_big.status_code == 413
+    assert "2 MB" in too_big.json()["detail"], too_big.text
+    assert too_big.headers.get("connection") == "close", "sonst liest uvicorn den ungelesenen Rest des Koerpers noch ganz ein"
+    assert source.open_write_calls == 0, "die Quelle darf das Ziel gar nicht erst oeffnen (eine direkt schreibende kuerzt es dabei auf 0 Byte)"
+    assert source.files["/wichtig.bin"] == b"altes Wissen"
+
+    fits = await client.post(
+        "/api/v1/files/fake/upload?path=/passt.bin", headers=_auth_header(token), content=b"d" * (2 * 1024 * 1024)
+    )
+    assert fits.status_code == 200, fits.text
+    assert source.open_write_calls == 1 and source.files["/passt.bin"] == b"d" * (2 * 1024 * 1024)
+
+
+@pytest.mark.asyncio
+async def test_upload_below_the_general_request_limit_but_over_a_smaller_file_limit_is_refused_too(client, db_session, monkeypatch):
+    from nodvard_deck.config import get_settings
+
+    # Eine Grenze unter der allgemeinen (1 MiB) greift die Middleware allein nicht; der Handler prueft die Laenge selbst.
+    monkeypatch.setattr(get_settings(), "files_max_upload_bytes", 100 * 1024)
+    source = _TruncatingFileSource("fake")
+    source.files["/wichtig.bin"] = b"altes Wissen"
+    _register(source)
+    token = await _bootstrap_owner(client)
+
+    too_big = await client.post(
+        "/api/v1/files/fake/upload?path=/wichtig.bin", headers=_auth_header(token), content=b"d" * (200 * 1024)
+    )
+    assert too_big.status_code == 413 and "100 KB" in too_big.json()["detail"], too_big.text
+    assert source.open_write_calls == 0 and source.files["/wichtig.bin"] == b"altes Wissen"
+
+
+@pytest.mark.asyncio
+async def test_upload_without_a_limit_still_reaches_the_source(client, db_session):
+    source = _TruncatingFileSource("fake")
+    _register(source)
+    token = await _bootstrap_owner(client)
+
+    uploaded = await client.post("/api/v1/files/fake/upload?path=/gross.bin", headers=_auth_header(token), content=b"d" * (3 * 1024 * 1024))
+    assert uploaded.status_code == 200, uploaded.text
+    assert source.open_write_calls == 1

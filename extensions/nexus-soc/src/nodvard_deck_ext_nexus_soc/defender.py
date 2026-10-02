@@ -20,6 +20,7 @@ from nodvard_sdk import Notification, Severity
 from sqlalchemy import func, select, update
 
 from . import antivirus as av
+from . import protection
 from .hostscope import host_scope
 from .models import AuditRecord, FindingRecord, ScanRecord
 
@@ -53,6 +54,16 @@ _log = logging.getLogger("nodvard_deck.ext.nexus-soc")
 # Scans und Update-Laeufe leben als Hintergrund-Task im Prozess -- nach einem Neustart
 # des Dashboards kommt ein abgebrochener Lauf nie zurueck.
 ABORTED_BY_RESTART = "Abgebrochen – Dashboard wurde neu gestartet"
+
+
+def _unreliable_hint(parsed: av.ScanResult) -> str:
+    """Hinweistext zu einem Lauf, der keine automatische Quarantaene bekommt: unleserliche Pfade, nicht gepruefte Dateien
+    (Obergrenze des Waechters) oder beides."""
+    if not parsed.skipped:
+        return UNRELIABLE_HINT
+    if not parsed.paths_unsure:
+        return av.skipped_message(parsed.skipped, moved=True)
+    return f"{av.skipped_message(parsed.skipped)} {UNRELIABLE_HINT}"
 
 
 def _now() -> datetime:
@@ -179,6 +190,20 @@ class Defender:
         await asyncio.gather(*(one(h, s) for h, s in todo), return_exceptions=True)
         await self._ctx.ws.broadcast("defender", {"scans": [s for _, s in todo]})
 
+    @staticmethod
+    async def _drop_previous_capped_watch_row(session: Any, host_id: str, scan_id: str) -> None:
+        """Haelt die Scan-Liste bei dauerhaft vielen neuen Dateien kurz: War auch der Waechter-Lauf davor (derselbe Server)
+        nur wegen der Obergrenze unvollstaendig, ersetzt die Zeile dieses Laufs die alte. Sonst legte ein Server mit
+        ununterbrochen vielen Aenderungen alle zehn Minuten eine sichtbare Fehlerzeile an und drueckte die echten Schnell-
+        und Tiefenscans aus der Liste. Eine saubere Zeile dazwischen, ein Fund oder ein anderer Fehler unterbrechen die
+        Folge: Dann bleiben beide Zeilen."""
+        previous = (await session.execute(
+            select(ScanRecord).where(ScanRecord.host_id == host_id, ScanRecord.kind == "watch", ScanRecord.id != scan_id)
+            .order_by(ScanRecord.started_at.desc()).limit(1)
+        )).scalar_one_or_none()
+        if previous is not None and previous.status == "error" and (previous.error or "").startswith(av.SKIPPED_PREFIX):
+            await session.delete(previous)
+
     async def _run_scan(self, host: Host, scan_id: str, kind: str, paths: list[str]) -> None:
         settings = await self._settings()
         max_mb = int(settings.get("max_filesize_mb") or 50)
@@ -198,7 +223,8 @@ class Defender:
         try:
             result = await self._ctx.exec.run(host, command, timeout_s=SCAN_TIMEOUTS.get(kind, 3600))
             output = (result.stdout or "") + (result.stderr or "")
-            parsed = av.parse_scan_output(output, mark)
+            # Die Wurzeln sind genau die Pfade, die der Befehl gescannt hat: Funde ausserhalb davon sind nie echt.
+            parsed = av.parse_scan_output(output, mark, roots=paths)
             if result.exit_code == 127:
                 parsed = av.ScanResult(status="error", error=av.NOT_INSTALLED_MESSAGE)
         except Exception as exc:  # noqa: BLE001 - jeder Fehler landet sichtbar am Scan
@@ -214,10 +240,13 @@ class Defender:
             scan.files_scanned = parsed.files_scanned
             scan.infected = parsed.infected
             scan.error = parsed.error or ("; ".join(parsed.errors[:3]) if parsed.errors else None)
+            hint = _unreliable_hint(parsed)
             if parsed.unreliable and parsed.status == "infected":
-                scan.error = UNRELIABLE_HINT
+                scan.error = hint
             scan.output_tail = output[-4000:] if output else None
             scan.finished_at = _now()
+            if kind == "watch" and parsed.status == "error" and parsed.skipped:
+                await self._drop_previous_capped_watch_row(session, host.id, scan_id)
             for path, sig in parsed.findings:
                 existing = (await session.execute(
                     select(FindingRecord).where(
@@ -226,7 +255,7 @@ class Defender:
                 )).scalar_one_or_none()
                 if existing is not None:
                     existing.scan_id = scan_id
-                    if parsed.unreliable and not existing.note:
+                    if parsed.paths_unsure and not existing.note:
                         existing.note = UNRELIABLE_NOTE
                     finding_ids.append(existing.id)
                     continue
@@ -234,7 +263,7 @@ class Defender:
                 session.add(FindingRecord(
                     id=fid, scan_id=scan_id, host_id=host.id, host_name=host.display_name or host.name, path=path,
                     signature=sig[:255], status="detected", detected_at=_now(),
-                    note=UNRELIABLE_NOTE if parsed.unreliable else None,
+                    note=UNRELIABLE_NOTE if parsed.paths_unsure else None,
                 ))
                 finding_ids.append(fid)
 
@@ -255,7 +284,7 @@ class Defender:
                     ok, _msg = await self.quarantine(fid, actor=None)
                     quarantined += int(ok)
             if parsed.unreliable:
-                body = f"ClamAV meldet {parsed.infected} Fund(e). {UNRELIABLE_HINT}"
+                body = f"ClamAV meldet {parsed.infected} Fund(e). {hint}"
             else:
                 names = ", ".join(f"{p} ({s})" for p, s in parsed.findings[:3])
                 body = (
@@ -396,6 +425,7 @@ class Defender:
             data = {
                 "reachable": True, "clamav_installed": st.clamav_installed, "clamav_version": st.clamav_version,
                 "signature_version": st.signature_version, "signature_date": st.signature_date,
+                "signature_ts": protection.parse_signature_date(st.signature_date),
                 "freshclam_active": st.freshclam_active, "lynis_installed": st.lynis_installed,
                 "lynis_version": st.lynis_version, "quarantine_files": st.quarantine_files, "os_id": st.os_id,
             }
@@ -406,6 +436,7 @@ class Defender:
 
     async def overview(self, *, refresh: bool = False) -> dict[str, Any]:
         hosts = await self.target_hosts()
+        hosts_known = len(await self._ctx.hosts.list())
         statuses = await asyncio.gather(*(self.host_status(h, refresh=refresh) for h in hosts))
         async with self._ctx.db.session() as session:
             last_scans: dict[str, ScanRecord] = {}
@@ -414,8 +445,11 @@ class Defender:
             )).scalars():
                 last_scans.setdefault(row.host_id, row)
             last_audits: dict[str, AuditRecord] = {}
+            last_ok_audits: dict[str, AuditRecord] = {}
             for row in (await session.execute(select(AuditRecord).order_by(AuditRecord.created_at.desc()).limit(500))).scalars():
                 last_audits.setdefault(row.host_id, row)
+                if row.status == "ok" and row.hardening_index is not None:
+                    last_ok_audits.setdefault(row.host_id, row)
             counts = dict((await session.execute(
                 select(FindingRecord.status, func.count()).group_by(FindingRecord.status)
             )).all())
@@ -425,33 +459,43 @@ class Defender:
             )).scalar_one()
 
         rows = []
+        now = _now().timestamp()
         for host, st in zip(hosts, statuses, strict=True):
             scan = last_scans.get(host.id)
             audit = last_audits.get(host.id)
+            ok_audit = last_ok_audits.get(host.id)
             rows.append({
                 "host_id": host.id, "host_name": host.display_name or host.name, "host_status": host.status.value,
                 **st,
+                **protection.signature_info(st.get("signature_ts"), now),
                 "last_scan": scan_out(scan) if scan else None,
                 "last_audit": {"status": audit.status, "hardening_index": audit.hardening_index, "warnings": len(audit.warnings),
                                "created_at": _ts(audit.created_at), "error": audit.error} if audit else None,
+                # Letztes erfolgreiches Audit: bleibt sichtbar, wenn das neueste gescheitert ist.
+                "last_ok_audit": {"status": ok_audit.status, "hardening_index": ok_audit.hardening_index, "warnings": len(ok_audit.warnings),
+                                  "created_at": _ts(ok_audit.created_at), "error": None} if ok_audit else None,
                 "scanning": self._big_scan_running(host.id),
                 "auditing": self.is_running(host.id, "audit"),
             })
 
         open_threats = int(counts.get("detected", 0))
         protected = sum(1 for r in rows if r.get("clamav_installed"))
-        indices = [r["last_audit"]["hardening_index"] for r in rows if r.get("last_audit") and r["last_audit"]["hardening_index"] is not None]
+        indices = [r["last_ok_audit"]["hardening_index"] for r in rows if r.get("last_ok_audit")]
         settings = await self._settings()
         return {
             "hosts": rows,
             "summary": {
-                "hosts": len(rows), "protected": protected, "open_threats": open_threats,
+                # "hosts" sind nur die pruefbaren Server (Linux, verwaltet, mit SSH-Zugang, ggf. passende Markierung);
+                # "hosts_known" alle eingerichteten -- die Seite unterscheidet "keiner angelegt" von "keiner pruefbar".
+                "hosts": len(rows), "hosts_known": hosts_known, "protected": protected, "open_threats": open_threats,
                 "quarantined": int(counts.get("quarantined", 0)),
                 "neutralized_total": int(counts.get("quarantined", 0)) + int(counts.get("deleted", 0)),
                 "findings_30d": int(recent),
                 "avg_hardening": round(sum(indices) / len(indices)) if indices else None,
+                "stale_signatures": sum(1 for r in rows if r.get("clamav_installed") and r.get("signature_stale") is True),
                 "score": _score(rows, open_threats, indices),
             },
+            "attention": protection.attention_items(rows),
             "config": {
                 "auto_quarantine": settings.get("auto_quarantine", True),
                 "realtime_enabled": settings.get("realtime_enabled", True),
@@ -466,13 +510,13 @@ class Defender:
         overview = await self.overview(refresh=True)
         title, body, level = build_briefing(overview, await self._ctx.hosts.list(), updates, guard)
         sev = {"critical": Severity.CRITICAL, "warning": Severity.WARNING}.get(level, Severity.INFO)
-        await self._ctx.notify.send(Notification(
+        result = await self._ctx.notify.send(Notification(
             title=title, body=body, severity=sev,
             payload={"path": SOC_PATH, "tags": ["coffee"], "actions": [
                 {"label": "Updates", "path": f"{SOC_PATH}?tab=updates"}, {"label": "Einbruchschutz", "path": f"{SOC_PATH}?tab=guard"},
             ]},
         ))
-        return {"title": title, "body": body, "level": level}
+        return {"title": title, "body": body, "level": level, "push": push_state(result)}
 
     # --- Listen -----------------------------------------------------------------
 
@@ -508,19 +552,45 @@ class Defender:
 DEFAULT_CRONS = {"quick": "0 2 * * *", "deep": "30 3 * * 0", "audit": "0 1 * * *", "briefing": "0 7 * * *"}
 
 
+def push_state(result: Any) -> str:
+    """Was ist mit der Meldung auf dem Weg aufs Handy passiert? Ehrlich, nicht "gesendet":
+
+    - `sent`: mindestens ein Kanal (z. B. ntfy) hat sie zugestellt
+    - `suppressed`: ein Wartungsfenster hat den Push unterdrueckt (die Meldung steht trotzdem unter "Meldungen")
+    - `not_delivered`: kein Kanal hat sie zugestellt -- keiner eingerichtet oder alle ausgefallen
+    - `unknown`: aeltere Kerne liefern kein Ergebnis"""
+    delivered = getattr(result, "delivered", None)
+    if result is None or delivered is None:
+        return "unknown"
+    if getattr(result, "suppressed", False):
+        return "suppressed"
+    return "sent" if delivered else "not_delivered"
+
+
 def build_briefing(
     overview: dict[str, Any], hosts_all: list[Any], updates: dict[str, Any] | None = None,
     guard: tuple[str | None, list[str]] | None = None,
 ) -> tuple[str, str, str]:
-    """Titel, Text und Stufe des Morgen-Briefings (wie im alten Skript: ein Blick
-    aufs Handy genuegt, um zu wissen, ob etwas zu tun ist)."""
+    """Titel, Text und Stufe des Lageberichts (wie im alten Skript: ein Blick
+    aufs Handy genuegt, um zu wissen, ob etwas zu tun ist).
+
+    Der Titel nennt keine Tageszeit: der Bericht kommt zum eingestellten Zeitpunkt, aber auch
+    auf Knopfdruck um 21:45 Uhr -- "Guten Morgen" waere dann falsch."""
     sm = overview["summary"]
     down = [h.display_name or h.name for h in hosts_all if getattr(h.status, "value", h.status) == "down"]
-    lines = [
-        f"Server: {len(hosts_all) - len(down)}/{len(hosts_all)} erreichbar" + (f" – aus/weg: {', '.join(down[:6])}" if down else ""),
-        f"Virenschutz: Schutzwert {sm['score']}/100, {sm['protected']}/{sm['hosts']} Server mit ClamAV",
-        f"Bedrohungen: {sm['open_threats']} offen, {sm['quarantined']} in Quarantäne, {sm['findings_30d']} Funde in 30 Tagen",
-    ]
+    if not hosts_all:
+        lines = ["Server: noch keiner eingerichtet – füge unter Einstellungen → Server & Zugänge den ersten hinzu."]
+    else:
+        lines = [f"Server: {len(hosts_all) - len(down)}/{len(hosts_all)} erreichbar" + (f" – aus/weg: {', '.join(down[:6])}" if down else "")]
+    if sm["hosts"] == 0:
+        # Ohne pruefbaren Server gibt es nichts zu bewerten -- kein "Schutzwert 0/100". Offene Funde aus frueheren
+        # Scans bleiben aber offen (auch wenn der Server inzwischen fehlt): die gehoeren trotzdem in den Bericht.
+        lines.append("Virenschutz: noch nichts zu prüfen – geprüft werden Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung).")
+        if sm["open_threats"]:
+            lines.append(f"Bedrohungen: {sm['open_threats']} offen, {sm['quarantined']} in Quarantäne, {sm['findings_30d']} Funde in 30 Tagen")
+    else:
+        lines.append(f"Virenschutz: Schutzwert {sm['score']}/100, {sm['protected']}/{sm['hosts']} Server mit ClamAV")
+        lines.append(f"Bedrohungen: {sm['open_threats']} offen, {sm['quarantined']} in Quarantäne, {sm['findings_30d']} Funde in 30 Tagen")
     if sm.get("avg_hardening") is not None:
         lines.append(f"Härtung: Ø {sm['avg_hardening']}/100 (Lynis)")
     problems = []
@@ -539,23 +609,38 @@ def build_briefing(
         problems.extend(guard[1])
     for h in overview["hosts"]:
         scan = h.get("last_scan") or {}
+        # Alte Signaturen und ausgeschaltetes Update sind fast immer dasselbe Problem: ein Eintrag je Server,
+        # sonst verdraengen sie bei mehreren Servern die uebrigen Punkte (die Liste ist auf sechs begrenzt).
+        sig_problem = protection.signature_problem(h)
         if not h.get("clamav_installed") and h.get("reachable") is not False:
             problems.append(f"{h['host_name']}: kein ClamAV")
         elif scan.get("status") == "error":
             problems.append(f"{h['host_name']}: letzter Scan fehlgeschlagen")
-        elif h.get("freshclam_active") is False:
+        elif h.get("freshclam_active") is False and not sig_problem:
             problems.append(f"{h['host_name']}: Signatur-Update aus")
+        if sig_problem:
+            problems.append(sig_problem + (", Signatur-Update aus" if h.get("freshclam_active") is False else ""))
     if problems:
         lines.append("Zu tun: " + "; ".join(problems[:6]))
     level = "critical" if sm["open_threats"] else ("warning" if (down or problems) else "info")
-    title = "Guten Morgen – alles im grünen Bereich" if level == "info" else (
-        "Guten Morgen – Bedrohung offen!" if level == "critical" else "Guten Morgen – es gibt etwas zu tun")
+    if level == "critical":
+        title = "Lagebericht – Bedrohung offen!"
+    elif level == "warning":
+        title = "Lagebericht – es gibt etwas zu tun"
+    elif not hosts_all:
+        title = "Lagebericht – noch kein Server eingerichtet"
+    elif sm["hosts"] == 0:
+        # Server sind da, aber keiner ist pruefbar (z. B. ohne SSH-Zugang): "alles im gruenen Bereich" waere gelogen.
+        title = "Lagebericht – noch nichts geprüft"
+    else:
+        title = "Lagebericht – alles im grünen Bereich"
     return title, "\n".join(lines), level
 
 
 def _score(rows: list[dict[str, Any]], open_threats: int, indices: list[int]) -> int:
     """Grobe Schutz-Note 0-100: Abdeckung (ClamAV installiert, aktuelle Scans),
-    offene Funde, Haertungsindex. Bewusst einfach und nachvollziehbar."""
+    offene Funde, Haertungsindex, Abzug fuer veraltete Signaturen (Gewichtung in `protection.py`).
+    Bewusst einfach und nachvollziehbar."""
     if not rows:
         return 0
     now = _now().timestamp()
@@ -567,6 +652,7 @@ def _score(rows: list[dict[str, Any]], open_threats: int, indices: list[int]) ->
     hardening = (sum(indices) / len(indices) / 100) if indices else 0.5
     score = 40 * covered + 25 * fresh + 25 * hardening + 10
     score -= min(40, open_threats * 20)
+    score -= protection.signature_penalty(rows)
     return max(0, min(100, round(score)))
 
 

@@ -142,6 +142,12 @@ async function toTotp() {
   await screen.findByRole("button", { name: "Jetzt einrichten" });
 }
 
+/** Nach „Jetzt einrichten“ verlangt der Server das aktuelle Passwort. */
+async function enterTotpPassword(password = "geheim123") {
+  fireEvent.change(await screen.findByLabelText(/^Passwort zur Bestätigung/), { target: { value: password } });
+  fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
+}
+
 async function toBranding() {
   await toTotp();
   fireEvent.click(screen.getByRole("button", { name: "Überspringen" }));
@@ -212,6 +218,19 @@ describe("SetupPage", () => {
     expect(backend.calls.find((c) => c.method === "POST" && c.path === "/auth/bootstrap")!.body).toMatchObject({ username: "nico", setup_code: "ABCD-EFGH-JKMN" });
   });
 
+  it("Passwortfelder sind „neues Passwort“ (Browser schlagen kein altes vor), Fehler werden vorgelesen", async () => {
+    makeBackend();
+    renderSetup();
+    await screen.findByText("Willkommen");
+    expect(screen.getByLabelText("Passwort")).toHaveAttribute("autocomplete", "new-password");
+    expect(screen.getByLabelText("Passwort bestätigen")).toHaveAttribute("autocomplete", "new-password");
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "nico" } });
+    fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "correct-horse-battery" } });
+    fireEvent.change(screen.getByLabelText("Passwort bestätigen"), { target: { value: "correct-horse-battery" } });
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Bitte den Einrichtungscode eingeben.");
+  });
+
   it("zeigt die Meldung des Servers bei falschem Code", async () => {
     const backend = makeBackend();
     const online = backend.fetchMock.getMockImplementation()!;
@@ -237,6 +256,52 @@ describe("SetupPage", () => {
 
     expect(await screen.findByText("Passwörter stimmen nicht überein.")).toBeInTheDocument();
     expect(backend.count("POST", "/auth/bootstrap")).toBe(0);
+  });
+
+  it("sagt unter den Feldern, was erlaubt ist: Zeichen im Benutzernamen, mindestens 8 Zeichen beim Passwort", async () => {
+    makeBackend();
+    renderSetup();
+    await screen.findByText("Willkommen");
+    expect(screen.getByText(/Nur Kleinbuchstaben, Ziffern sowie \. - und _, mindestens 3 Zeichen, ohne Leerzeichen/)).toBeInTheDocument();
+    expect(screen.getByText("Mindestens 8 Zeichen.")).toBeInTheDocument();
+    // Der Hinweis hängt am Feld, ohne dessen Namen zu verändern.
+    expect(screen.getByLabelText("Passwort")).toHaveAccessibleDescription("Mindestens 8 Zeichen.");
+  });
+
+  it.each([
+    ["zu kurzes Passwort", { user: "nico", pw: "kurz" }, "Passwort: Mindestens 8 Zeichen."],
+    ["zu kurzer Benutzername", { user: "ko", pw: "correct-horse-battery" }, "Benutzername: Mindestens 3 Zeichen."],
+    ["Benutzername mit Leerzeichen", { user: "kollege max", pw: "correct-horse-battery" }, /^Benutzername: Nur Kleinbuchstaben, Ziffern sowie \. - und _ erlaubt, ohne Leerzeichen/],
+  ])("%s: klare Meldung statt „HTTP 422“, ohne etwas zu senden", async (_name, input, expected) => {
+    const backend = makeBackend();
+    renderSetup();
+    await fillAccount();
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: input.user } });
+    fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: input.pw } });
+    fireEvent.change(screen.getByLabelText("Passwort bestätigen"), { target: { value: input.pw } });
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+
+    expect(await screen.findByText(expected)).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 422/)).not.toBeInTheDocument();
+    expect(backend.count("POST", "/auth/bootstrap")).toBe(0);
+    expect(progress()).toMatch(/Schritt 1 von 6/);
+  });
+
+  it("lehnt der Server trotzdem mit 422 ab, steht dessen deutscher Satz da (nicht „HTTP 422“)", async () => {
+    const backend = makeBackend();
+    const online = backend.fetchMock.getMockImplementation()!;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/api/v1/auth/bootstrap") && init?.method === "POST") {
+        return new Response(JSON.stringify({ detail: [{ type: "string_too_short", loc: ["body", "password"], msg: "Mindestens 8 Zeichen." }] }), { status: 422 });
+      }
+      return online(input, init);
+    }));
+    renderSetup();
+    await fillAccount();
+    fireEvent.click(screen.getByRole("button", { name: "Konto anlegen" }));
+    expect(await screen.findByText("Passwort: Mindestens 8 Zeichen.")).toBeInTheDocument();
+    expect(screen.queryByText(/HTTP 422/)).not.toBeInTheDocument();
+    expect(progress()).toMatch(/Schritt 1 von 6/);
   });
 
   it("klappt die Anleitung zum Einrichtungscode auf: Befehlszeile, Docker Desktop, Portainer, Synology, Unraid", async () => {
@@ -285,7 +350,7 @@ describe("SetupPage", () => {
 
       await screen.findByRole("listbox", { name: "Zeitzonen" });
       fireEvent.change(screen.getByLabelText("Zeitzone suchen"), { target: { value: "tokyo" } });
-      fireEvent.click(within(screen.getByRole("listbox", { name: "Zeitzonen" })).getByRole("option", { name: "Asia/Tokyo" }).querySelector("button")!);
+      fireEvent.click(within(screen.getByRole("listbox", { name: "Zeitzonen" })).getByRole("option", { name: /^Asia\/Tokyo/ }).querySelector("button")!);
       expect(screen.getByText("nicht gespeichert")).toBeInTheDocument();
       fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
       await screen.findByText(/Schritt 3 von 6/);
@@ -435,6 +500,7 @@ describe("SetupPage", () => {
       expect(progress()).toBe("Schritt 4 von 6 — Zwei-Faktor-Anmeldung (optional)");
 
       fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
+      await enterTotpPassword();
       const qr = await screen.findByRole("img", { name: "QR-Code für die Authenticator-App" });
       expect(qr.querySelector("path")?.getAttribute("d")?.length ?? 0).toBeGreaterThan(200);
       expect(screen.getByTestId("totp-secret")).toHaveTextContent("ABCD EFGH IJKL MNOP");
@@ -445,6 +511,7 @@ describe("SetupPage", () => {
       expect(panel).toHaveTextContent("AAAAA-BBBBB");
       expect(panel).toHaveTextContent("CCCCC-DDDDD");
       expect(backend.calls.find((c) => c.path === "/me/totp/confirm")?.body).toEqual({ code: "123456" });
+      expect(backend.calls.find((c) => c.path === "/me/totp/setup")?.body).toEqual({ current_password: "geheim123" });
       // Erst nach „Ich habe die Codes gesichert“ geht es weiter.
       expect(progress()).toMatch(/Schritt 4 von 6/);
       fireEvent.click(screen.getByRole("button", { name: "Ich habe die Codes gesichert" }));
@@ -461,6 +528,7 @@ describe("SetupPage", () => {
       renderSetup();
       await toTotp();
       fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
+      await enterTotpPassword();
       await screen.findByTestId("totp-secret");
       fireEvent.change(screen.getByLabelText("Bestätigungscode"), { target: { value: "000000" } });
       fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
@@ -481,6 +549,7 @@ describe("SetupPage", () => {
       renderSetup();
       await toTotp();
       fireEvent.click(screen.getByRole("button", { name: "Jetzt einrichten" }));
+      await enterTotpPassword();
       await screen.findByTestId("totp-secret");
       fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
       expect(await screen.findByRole("button", { name: "Jetzt einrichten" })).toBeInTheDocument();
@@ -502,6 +571,15 @@ describe("SetupPage", () => {
   });
 
   describe("Aussehen und Abschluss", () => {
+    it("der Untertitel sagt, dass er auch der App-Name auf dem Handy ist", async () => {
+      makeBackend();
+      renderSetup();
+      await toBranding();
+      const field = screen.getByLabelText(/^Untertitel/);
+      const hint = document.getElementById(field.getAttribute("aria-describedby") ?? "");
+      expect(hint?.textContent).toContain("Name der App auf dem Handy");
+    });
+
     it("Aussehen speichern führt zum Abschluss, Zurück zur Zwei-Faktor-Auswahl", async () => {
       const backend = makeBackend();
       renderSetup();
@@ -534,6 +612,7 @@ describe("SetupPage", () => {
       expect(screen.getByText(/Karte „Erste Schritte“/)).toBeInTheDocument();
       expect(await screen.findByRole("link", { name: /Zwei-Faktor jetzt einrichten/ })).toHaveAttribute("href", "/settings/account");
       expect(screen.getByText("docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password <benutzername>")).toBeInTheDocument();
+      expect(document.body).toHaveTextContent(/Statt <benutzername> schreibst du deinen eigenen Benutzernamen, zum Beispiel admin/);
       expect(sessionStorage.getItem("deck.setup.step")).toBe("done");
 
       fireEvent.click(screen.getByRole("button", { name: "Weiter zum Dashboard" }));

@@ -299,22 +299,66 @@ describe("Fehlertexte bei abgelehnter Anmeldung", () => {
 
   it("429 beim zweiten Faktor: Hinweis, zurück zum Passwort-Schritt", async () => {
     useAuthStore.setState({ mfaToken: "mfa" });
-    stubFetch(new Response(JSON.stringify({ detail: "Zu viele falsche 2FA-Codes. Bitte melde dich erneut an." }), { status: 429 }));
+    stubFetch(new Response(JSON.stringify({ detail: "Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an." }), { status: 429 }));
     const result = await useAuthStore.getState().submitMfa("123456");
-    expect(result).toEqual({ ok: false, error: "Zu viele falsche 2FA-Codes. Bitte melde dich erneut an." });
+    expect(result).toEqual({ ok: false, error: "Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an." });
     expect(useAuthStore.getState().mfaToken).toBeNull();
   });
 
   it("falscher Code (401): bleibt beim zweiten Faktor", async () => {
     useAuthStore.setState({ mfaToken: "mfa" });
-    stubFetch(new Response(JSON.stringify({ detail: "Ungültiger 2FA-Code." }), { status: 401 }));
-    expect(await useAuthStore.getState().submitMfa("123456")).toEqual({ ok: false, error: "Ungültiger 2FA-Code." });
+    stubFetch(new Response(JSON.stringify({ detail: "Ungültiger Zwei-Faktor-Code." }), { status: 401 }));
+    expect(await useAuthStore.getState().submitMfa("123456")).toEqual({ ok: false, error: "Ungültiger Zwei-Faktor-Code." });
     expect(useAuthStore.getState().mfaToken).toBe("mfa");
   });
 
-  it("422 mit detail-Liste: kein Objekt als Fehlertext", async () => {
+  it("422 mit detail-Liste: ein lesbarer Satz, kein Objekt und kein „HTTP 422“", async () => {
     useAuthStore.setState({ mfaToken: "mfa" });
-    stubFetch(new Response(JSON.stringify({ detail: [{ loc: ["body", "code"], msg: "too short" }] }), { status: 422 }));
-    expect(await useAuthStore.getState().submitMfa("12345")).toEqual({ ok: false, error: "HTTP 422" });
+    stubFetch(new Response(JSON.stringify({ detail: [{ type: "string_too_short", loc: ["body", "code"], msg: "Mindestens 6 Zeichen." }] }), { status: 422 }));
+    expect(await useAuthStore.getState().submitMfa("12345")).toEqual({ ok: false, error: "Code: Mindestens 6 Zeichen." });
+  });
+});
+
+/** Zu kurzes Passwort oder Benutzername im Assistenten zeigten nur „HTTP 422“. */
+describe("useAuthStore.bootstrap() -- Eingabefehler des Servers (422)", () => {
+  function stubFetch(res: Response) {
+    vi.stubGlobal("fetch", vi.fn(async () => res));
+  }
+
+  function reject422(detail: unknown[]) {
+    stubFetch(new Response(JSON.stringify({ detail }), { status: 422 }));
+  }
+
+  it("zu kurzes Passwort: „Passwort: Mindestens 8 Zeichen.“", async () => {
+    reject422([{ type: "string_too_short", loc: ["body", "password"], msg: "Mindestens 8 Zeichen." }]);
+    expect(await useAuthStore.getState().bootstrap("nico", "kurz", "CODE")).toEqual({ ok: false, error: "Passwort: Mindestens 8 Zeichen." });
+  });
+
+  it("zu kurzer Benutzername: „Benutzername: Mindestens 3 Zeichen.“", async () => {
+    reject422([{ type: "string_too_short", loc: ["body", "username"], msg: "Mindestens 3 Zeichen." }]);
+    expect(await useAuthStore.getState().bootstrap("ko", "correct-horse-battery", "CODE")).toEqual({ ok: false, error: "Benutzername: Mindestens 3 Zeichen." });
+  });
+
+  it("Benutzername mit Leerzeichen: der Satz des Servers steht unverändert da (nennt sein Feld schon selbst)", async () => {
+    const msg = "Benutzername: Nur Kleinbuchstaben, Ziffern sowie . - und _ erlaubt, ohne Leerzeichen; er muss mit einem Buchstaben oder einer Ziffer beginnen.";
+    reject422([{ type: "value_error", loc: ["body", "username"], msg }]);
+    expect(await useAuthStore.getState().bootstrap("kollege max", "correct-horse-battery", "CODE")).toEqual({ ok: false, error: msg });
+  });
+
+  it("mehrere Fehler werden zusammengefasst, unbekannte Felder behalten ihren Namen", async () => {
+    reject422([
+      { type: "string_too_short", loc: ["body", "username"], msg: "Mindestens 3 Zeichen." },
+      { type: "string_too_short", loc: ["body", "password"], msg: "Mindestens 8 Zeichen." },
+      { type: "missing", loc: ["body", "irgendwas"], msg: "Pflichtangabe fehlt." },
+    ]);
+    expect(await useAuthStore.getState().bootstrap("a", "b", "CODE")).toEqual({
+      ok: false,
+      error: "Benutzername: Mindestens 3 Zeichen. Passwort: Mindestens 8 Zeichen. irgendwas: Pflichtangabe fehlt.",
+    });
+  });
+
+  it("ohne lesbare Liste bleibt es bei „HTTP <Status>“", async () => {
+    stubFetch(new Response("", { status: 422 }));
+    expect(await useAuthStore.getState().bootstrap("nico", "kurz", "CODE")).toEqual({ ok: false, error: "HTTP 422" });
   });
 });

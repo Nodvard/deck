@@ -51,6 +51,14 @@ async def test_discover_and_sync_creates_disabled_record_for_hello_world(db_sess
     assert record.source == "bundled"
 
 
+def _fake_login(app: FastAPI) -> None:
+    """Die Erweiterungsrouten verlangen eine Anmeldung. Diese Tests pruefen nur Einhaengen
+    und Entfernen der Routen in einer eigenen App ohne Datenbank, also gilt jeder als angemeldet."""
+    from nodvard_deck.api.deps import get_current_user
+
+    app.dependency_overrides[get_current_user] = lambda: object()
+
+
 @pytest.mark.asyncio
 async def test_enable_hello_world_registers_page_widget_and_mounts_router(db_session, test_settings):
     settings = _real_settings(test_settings)
@@ -75,6 +83,7 @@ async def test_enable_hello_world_registers_page_widget_and_mounts_router(db_ses
     # als lazy `_IncludedRouter`-Platzhalter ohne eigenes `.path`-Attribut (dieselbe
     # Eigenheit, die schon beim ersten Boot-Test auffiel) -- der einzige verlaessliche
     # Nachweis, dass die Route wirklich dispatcht, ist eine echte Anfrage.
+    _fake_login(app)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         r = await ac.get("/api/v1/ext/hello-world/widgets/hello")
@@ -134,6 +143,7 @@ async def test_disable_hello_world_unmounts_routes_and_clears_ui(db_session, tes
     await extensions_service.enable_extension(app, db_session, settings, "hello-world")
     before_disable = len(app.router.routes)
 
+    _fake_login(app)
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         still_up = await ac.get("/api/v1/ext/hello-world/widgets/hello")

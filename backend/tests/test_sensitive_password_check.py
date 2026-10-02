@@ -22,7 +22,7 @@ async def _setup(client, username="nico"):
         json={"username": username, "password": PASSWORD, "setup_code": "TEST-CODE-2345"},
     )
     token = (await client.post("/api/v1/auth/login", json={"username": username, "password": PASSWORD})).json()["access_token"]
-    secret = (await client.post("/api/v1/me/totp/setup", headers=_h(token))).json()["secret"]
+    secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
     r = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token))
     assert r.status_code == 200
     return token
@@ -134,8 +134,52 @@ async def _start_totp(client, username="nico"):
         json={"username": username, "password": PASSWORD, "setup_code": "TEST-CODE-2345"},
     )
     token = (await client.post("/api/v1/auth/login", json={"username": username, "password": PASSWORD})).json()["access_token"]
-    secret = (await client.post("/api/v1/me/totp/setup", headers=_h(token))).json()["secret"]
+    secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
     return token, secret
+
+
+async def _owner_token(client):
+    await client.post(
+        "/api/v1/auth/bootstrap",
+        json={"username": "nico", "password": PASSWORD, "setup_code": "TEST-CODE-2345"},
+    )
+    return (await client.post("/api/v1/auth/login", json={"username": "nico", "password": PASSWORD})).json()["access_token"]
+
+
+@pytest.mark.asyncio
+async def test_enabling_2fa_needs_the_current_password(client, db_session):
+    token = await _owner_token(client)
+
+    # Ohne Body und ohne Passwort: verstaendliche Ablehnung, nichts angelegt.
+    for kwargs in ({}, {"json": {}}, {"json": {"current_password": ""}}):
+        r = await client.post("/api/v1/me/totp/setup", headers=_h(token), **kwargs)
+        assert r.status_code == 400
+        assert "aktuelles Passwort" in r.json()["detail"]
+    owner = (await db_session.execute(select(User).where(User.username == "nico"))).scalar_one()
+    assert owner.totp_secret_id is None
+
+    wrong = await client.post("/api/v1/me/totp/setup", json={"current_password": "falsch"}, headers=_h(token))
+    assert wrong.status_code == 400
+    assert wrong.json()["detail"] == "Das aktuelle Passwort stimmt nicht."
+    await db_session.refresh(owner)
+    assert owner.totp_secret_id is None
+    assert (await db_session.execute(
+        select(AuditEntry).where(AuditEntry.action == "auth.password_check_failed")
+    )).scalars().all()
+
+    ok = await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))
+    assert ok.status_code == 200
+    assert ok.json()["secret"]
+
+
+@pytest.mark.asyncio
+async def test_wrong_passwords_at_2fa_setup_are_throttled(client):
+    token = await _owner_token(client)
+    for _ in range(login_limit.MAX_FAILURES_PER_USER):
+        r = await client.post("/api/v1/me/totp/setup", json={"current_password": "falsch"}, headers=_h(token))
+        assert r.status_code == 400
+    blocked = await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))
+    assert blocked.status_code == 429
 
 
 @pytest.mark.asyncio
@@ -168,6 +212,17 @@ async def test_wrong_confirm_codes_are_throttled_and_audited(client, db_session)
     failed = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "auth.totp_confirm_failed"))).scalars().all()
     assert len(failed) == login_limit.MAX_FAILURES_PER_USER
     assert (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "auth.password_check_locked"))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_wrong_confirm_code_says_so_in_plain_german(client):
+    """Kein „2FA“ und kein „--“ in der Meldung, die Leute sehen."""
+    token, _secret = await _start_totp(client)
+    r = await client.post("/api/v1/me/totp/confirm", json={"code": "000000"}, headers=_h(token))
+    assert r.status_code == 400
+    detail = r.json()["detail"]
+    assert detail == "Ungültiger Code. Die Zwei-Faktor-Anmeldung ist noch nicht aktiv."
+    assert "2FA" not in detail and "--" not in detail
 
 
 @pytest.mark.asyncio

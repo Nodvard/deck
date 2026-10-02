@@ -29,6 +29,9 @@ COPY frontend/ frontend/
 # in tailwind.config.js `content`, lagen hier aber erst NACH `npm run build` vor. Ihre
 # eigenen Klassen (farbige Badges, Abstaende ...) fehlten deshalb im ausgelieferten CSS.
 COPY extensions/ extensions/
+# `tsc -b` prueft auch die Tests mit; frontend/src/lib/targetAddress.test.ts liest dieselben
+# Beispiele wie das SDK (sdk/python/tests/vectors/same_target.json). Ohne sie scheitert der Build.
+COPY sdk/python/tests/vectors/ sdk/python/tests/vectors/
 RUN cd frontend && npm run build
 
 # Extension-Frontend-Bundles sind laut .gitignore committete Fixtures (keine
@@ -99,7 +102,19 @@ COPY --from=frontend-build /src/frontend/dist ./frontend/dist
 COPY THIRD_PARTY_LICENSES /app/THIRD_PARTY_LICENSES
 COPY LICENSE /app/LICENSE
 
-RUN mkdir -p /app/data && chown -R lattice:lattice /app
+# Nur der Datenordner gehoert `lattice`. Code, Erweiterungen und Oberflaeche bleiben root-eigen und fuer
+# andere nur lesbar: Wer als `lattice` Code ausfuehrt (Fehler in einer Erweiterung oder Abhaengigkeit), kann
+# unter /app nichts ablegen -- und so nichts einschleusen, das spaeter als root startet (Healthcheck,
+# `docker compose exec`). `/app` selbst ist ebenfalls root-eigen: sonst koennte `lattice` dort z. B. ein Paket
+# `http/` anlegen, das ein als root gestartetes Python statt des echten laedt. Vorher werden die
+# Erweiterungen und die Migrationen (laedt Alembic bei jedem Start) einmal uebersetzt, weil `lattice` zur
+# Laufzeit keine `__pycache__`-Ordner mehr anlegen darf; sonst uebersetzt Python sie bei jedem Start neu.
+RUN python -m compileall -q /app/extensions /app/backend/migrations || true
+RUN mkdir -p /app/data \
+    && chown -R root:root /app \
+    && chmod -R go+rX,go-w /app \
+    && chown lattice:lattice /app/data \
+    && chmod 700 /app/data
 # Docker initialisiert ein frisches BENANNTES Volume aus dem Inhalt (inkl. Ownership)
 # des Image-Pfads, an dem es zum ersten Mal gemountet wird -- deshalb reicht dieses
 # `chown` VOR `VOLUME` fuer den Normalfall. Ein Bind-Mount von einem Host-Verzeichnis
@@ -108,9 +123,8 @@ RUN mkdir -p /app/data && chown -R lattice:lattice /app
 VOLUME /app/data
 
 # Ohne diesen Entrypoint startet uvicorn gegen ein unmigriertes Volume und stirbt sofort mit
-# "no such table: roles" -- siehe entrypoint.sh fuer die volle Begruendung. Ausserhalb
-# von /app, damit er nicht mit der `lattice`-Ownership dort kollidiert; world-readable/
-# -executable reicht, der `lattice`-Nutzer braucht keinen Schreibzugriff darauf.
+# "no such table: roles" -- siehe entrypoint.sh fuer die volle Begruendung. Root-eigen;
+# world-readable/-executable reicht, der `lattice`-Nutzer braucht keinen Schreibzugriff darauf.
 #
 # Warum `chmod 755` statt `chmod +x`: `chmod +x`
 # (relativ, ohne u/g/o) ADDIERT nur das Execute-Bit auf die vorhandenen Rechte --
@@ -150,8 +164,14 @@ EXPOSE 8080
 # `--start-period=300s`: vor dem Start der Anwendung laeuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`);
 # bei einer grossen Datenbank auf einem Pi dauert das Minuten. Waehrend der Karenzzeit zaehlen Fehlschlaege nicht,
 # der Container gilt nicht als "unhealthy". Die Notseite antwortet mit 503, der Check schlaegt dann an.
+# Der Check laeuft als root (das Image hat bewusst kein `USER`, siehe oben). `python -I` (isoliert) nimmt den
+# aktuellen Ordner nicht in den Suchpfad auf und ignoriert PYTHON*-Umgebungsvariablen und das Benutzerverzeichnis
+# fuer Pakete: so kann nichts, was jemand neben das Programm legt, mit root-Rechten geladen werden.
 HEALTHCHECK --interval=30s --timeout=3s --start-period=300s --retries=3 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)" || exit 1
+    CMD python -I -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)" || exit 1
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["uvicorn", "nodvard_deck.main:app", "--host", "0.0.0.0", "--port", "8080"]
+# `--ws-max-size`: groesste WebSocket-Nachricht (uvicorn-Standard waeren 16 MiB, auch von Clients ohne Konto im
+# 10-Sekunden-Anmeldefenster von /ws). 1 MiB reicht fuer Anmeldung, Terminal-Eingaben und Ereignisse bei Weitem.
+# Der Entrypoint liest aus dem Startbefehl nur --host und --port.
+CMD ["uvicorn", "nodvard_deck.main:app", "--host", "0.0.0.0", "--port", "8080", "--ws-max-size", "1048576"]

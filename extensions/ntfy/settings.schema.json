@@ -30,6 +30,7 @@
   "x-secrets": [
     {
       "label": "ntfy-token",
+      "x-secret-bound-to": ["server_url"],
       "title": "Zugriffstoken (optional)",
       "description": "Nur nötig, wenn dein ntfy-Server eine Anmeldung verlangt.",
       "optional": true

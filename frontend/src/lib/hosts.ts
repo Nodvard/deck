@@ -11,7 +11,7 @@
 import { useQueries, useQuery, type QueryClient } from "@tanstack/react-query";
 
 import { api, ApiError } from "./api";
-import type { HostCredentialSummary, HostOut } from "./overview";
+import { hostHealth, type HostCredentialSummary, type HostOut } from "./overview";
 
 export type { HostCredentialSummary, HostOut };
 
@@ -111,6 +111,45 @@ export const CREDENTIAL_KIND_LABEL: Record<string, string> = {
 /** Nur SSH-Zugaenge gehoeren auf diese Seite (Zugriffstoken kennt keine Oberflaeche). */
 export function isSshCredential(credential: { kind: string }): boolean {
   return credential.kind === "ssh_key" || credential.kind === "ssh_password";
+}
+
+/**
+ * Wie weit der Zugang eines Servers belegt ist -- aus dem Zustand des Servers und, falls die Person
+ * gerade „Verbindung pruefen“ gedrueckt hat, aus dessen Ergebnis (`login`). Ein gespeicherter Zugang
+ * allein beweist nichts: Bei einem Schluessel kann der Befehl auf dem Server noch fehlen, ein
+ * Passwort kann falsch sein. „Erreichbar“ heisst im Kern nur: der SSH-Port nimmt Verbindungen an --
+ * das sieht der Erreichbarkeits-Job auch ohne Anmeldung. Gruen wird ein SSH-Zugang deshalb erst mit
+ * einer belegten Anmeldung (`login_ok_at`); antwortet der Server, ohne dass sie je geklappt hat,
+ * heisst der Zustand `unconfirmed`.
+ */
+export type AccessState = "ok" | "login-failed" | "never-answered" | "no-answer" | "unchecked" | "unconfirmed";
+
+type AccessHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostOut, "login_ok_at" | "credential">>;
+
+/** Hat der Server einen SSH-Zugang, dessen Anmeldung noch nie belegt wurde? */
+export function loginUnproven(host: Partial<Pick<HostOut, "credential" | "login_ok_at">>): boolean {
+  return !!host.credential && isSshCredential(host.credential) && !host.login_ok_at;
+}
+
+export function accessState(host: AccessHost, login: "ok" | "fail" | null = null): AccessState {
+  if (login === "ok") return "ok";
+  if (login === "fail") return "login-failed";
+  const health = hostHealth(host.status);
+  if (health === "online") return loginUnproven(host) ? "unconfirmed" : "ok";
+  if (neverAnswered(host)) return health === "unknown" ? "unchecked" : "never-answered";
+  return health === "unknown" ? "unchecked" : "no-answer";
+}
+
+/** Ein Server, der noch nie geantwortet hat: es gibt keinen Beleg, dass er je erreichbar war. */
+export function neverAnswered(host: Pick<HostOut, "status" | "last_seen_at">): boolean {
+  return hostHealth(host.status) !== "online" && !host.last_seen_at;
+}
+
+/** Ergebnis der Anmeldung in einer Verbindungspruefung: `null`, wenn die Pruefung sie gar nicht erreicht hat. */
+export function loginOutcome(result: ConnectionCheck): "ok" | "fail" | null {
+  const item = result.items.find((i) => i.id === "login");
+  if (!item || item.status === "skipped") return null;
+  return item.status === "ok" ? "ok" : "fail";
 }
 
 /** „Schluessel · lattice“ -- die kurze Beschriftung eines Zugangs. */

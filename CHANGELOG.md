@@ -10,6 +10,37 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.6.2] – 2026-10-02
+
+Security and polish release.
+
+- **Security:** fixes from a full security review:
+  - Files on servers (SSH) only for users who may run commands on servers. File access, actions
+    and failed logins land in the audit log; login names that do not exist are never stored in
+    plain text.
+  - Commands and output of actions only for users with server rights. The live connection
+    re-checks account, session and rights and ends with its token.
+  - Two-factor codes and login steps are single-use, with a per-account lockout; setting up 2FA
+    asks for the current password. Deactivating an account or changing a password signs it out
+    everywhere, terminal and console included.
+  - Extension routes require a login by default; extension secrets are bound to their target
+    address. Console and extension requests never follow redirects or use proxies from the
+    environment.
+  - Request size limit (1 MiB, with separate limits for uploads), SVG logos checked and served
+    sandboxed, hardened rescue page, backups no longer carry Git settings, hardened image
+    (code owned by root, data readable only by its owner).
+  - The AI container watch only ever proposes a fixed container restart.
+  - New installations ask you to confirm the fingerprint of a new server before any password
+    or key is sent.
+- **Fixed:** `backup.sh`/`restore.sh` work with sudo, with a lock and a safe swap; "Retry" on
+  Proxmox backups keeps the job's retention; copying a file onto itself no longer empties it;
+  quarantine restore follows no links; the virus-scan watcher no longer skips files silently;
+  update check with reason and catch-up; no port alarms for random ports; the Pi deploy script no
+  longer rolls back after a database migration.
+- **New:** scheduled scripts can run without a click (per script, owner or admin only, ends with
+  any change); new SSH logins are called `nodvard`; clearer error pages and hints; Nodvard Shield
+  explains the next step and its terms; a server only turns green after a real login.
+
 ## [0.6.1] – 2026-10-02
 
 - **Fixed:** every SSH connection failed in the Docker image with "Permission denied: '/root/.ssh/crt'"

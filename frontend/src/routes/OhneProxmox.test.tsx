@@ -68,10 +68,10 @@ describe("Cockpit ohne Proxmox", () => {
     renderCockpit();
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("Keine Störung bekannt"));
     const status = screen.getByTestId("cockpit-status").textContent ?? "";
-    expect(status).toContain("1 von 4 Hosts online, 3 noch nicht geprüft");
+    expect(status).toContain("1 von 4 Servern online, 3 noch nicht geprüft");
     expect(status).not.toContain("Alles läuft rund");
 
-    const hosts = screen.getByTestId("stat-Hosts").textContent ?? "";
+    const hosts = screen.getByTestId("stat-Server").textContent ?? "";
     expect(hosts).toContain("1/4");
     expect(hosts).toContain("3 noch nicht geprüft");
     expect(screen.getByTestId("stat-Dienste").textContent).toContain("5/5");

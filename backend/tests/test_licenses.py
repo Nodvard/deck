@@ -17,6 +17,7 @@ Deshalb gilt:
 from __future__ import annotations
 
 import base64
+import dataclasses
 import email.message
 import json
 import re
@@ -666,6 +667,169 @@ def test_docker_image_ships_the_license_file():
 
 
 # ---------------------------------------------------------------------------
+# Fest eingebaute Bibliotheken ohne mitgelieferten Lizenztext (uvloop: libuv, cffi: libffi)
+# ---------------------------------------------------------------------------
+
+
+def _embedded(package: str) -> tpl.EmbeddedLibrary:
+    (lib,) = [lib for lib in tpl._PY_EMBEDDED if lib.package == package]
+    return lib
+
+
+def test_embedded_libraries_are_listed_with_their_full_texts_in_the_checked_in_file():
+    """uvloop enthaelt libuv, cffi enthaelt libffi (statisch gelinkt, ohne Lizenztext im Wheel); dazu
+    kommen Rust-Crates in dulwich und die Rust-Standardbibliothek in den Rust-Wheels."""
+    text = LICENSES_FILE.read_text(encoding="utf-8")
+    assert {lib.package for lib in tpl._PY_EMBEDDED} == {"cffi", "uvloop", "dulwich", "cryptography"}
+    for lib in tpl._PY_EMBEDDED:
+        section = _section(text, lib.package)
+        assert f"[Fest eingebaute Bibliothek: {lib.title}]" in section
+        assert f"{lib.title} ist in {lib.package} {lib.package_version} fest eingebaut" in section
+        assert f"Lizenz:   {lib.license}" in section and lib.source_url in section
+        for label, filename in lib.texts:
+            assert f"[Lizenztext zu {lib.title}: {label}]" in section, label
+            body = tpl._read_text(tpl.EMBEDDED_DIR / filename)
+            assert body and body in section, f"{filename} steht nicht unveraendert in THIRD_PARTY_LICENSES"
+
+    libuv = _section(text, "uvloop")
+    assert "libuv 1.48.0" in libuv and "MIT AND BSD-2-Clause AND ISC" in libuv
+    for needle in (
+        "Copyright (c) 2015-present libuv project contributors.",  # LICENSE
+        "Copyright Joyent, Inc. and other Node contributors.",  # LICENSE-extra
+        "Copyright 2002 Niels Provos",  # tree.h, BSD-2-Clause
+        "Redistributions in binary form must reproduce the above copyright",
+        "Copyright (c) 2004 by Internet Systems Consortium, Inc.",  # inet.c, ISC
+        "Copyright (c) 2013, Ben Noordhuis",  # queue.h/heap-inl.h
+        "Copyright libuv contributors.",  # idna.c/idna.h
+        "Permission to use, copy, modify, and/or distribute this software for any",
+    ):
+        assert needle in libuv, needle
+    libffi = _section(text, "cffi")
+    assert "libffi 3.4.6" in libffi and "libffi - Copyright (c) 1996-2024  Anthony Green, Red Hat, Inc and others." in libffi
+    for holder in ("Anthony Green", "Red Hat, Inc.", "ARM Ltd.", "The Written Word, Inc.", "Madhavan T. Venkataraman"):
+        assert holder in libffi, holder
+
+
+def test_every_embedded_text_file_exists_and_is_used():
+    used = {filename for lib in tpl._PY_EMBEDDED for _, filename in lib.texts}
+    on_disk = {path.name for path in tpl.EMBEDDED_DIR.iterdir()}
+    assert used == on_disk, f"nicht eingetragen: {sorted(on_disk - used)}, Datei fehlt: {sorted(used - on_disk)}"
+    for filename in used:
+        raw = (tpl.EMBEDDED_DIR / filename).read_bytes()
+        assert raw.strip() and b"\r" not in raw and raw.endswith(b"\n"), filename
+        assert b"Copyright" in raw or b"copyright" in raw, filename
+
+
+def test_embedded_entries_are_complete():
+    for lib in tpl._PY_EMBEDDED:
+        assert lib.package == tpl.pep503(lib.package)
+        for _, pin_version in lib.pins:
+            assert re.fullmatch(r"\d+(\.\d+)+", pin_version), lib.title
+        assert all(pkg == tpl.pep503(pkg) for pkg, _ in lib.also_in)
+        # Eine Version darf nur fehlen, wenn sie mit dem Compiler des Wheels wechselt (Rust-Standardbibliothek).
+        assert re.fullmatch(r"\d+(\.\d+)+", lib.version) or (lib.version == "" and lib.note), lib.title
+        assert lib.license and lib.holders and lib.source_url.startswith("https://") and len(lib.evidence) > 80
+        assert lib.version in lib.source_url
+        assert lib.texts
+
+
+def test_embedded_entries_match_the_pinned_versions():
+    """Sicherheitsgurt: wer uvloop oder cffi in deploy/constraints.txt aendert, muss den Eintrag pruefen.
+    (Der Voll-Vergleich der Datei wird ohne passende Umgebung uebersprungen, dieser Test nie.)"""
+    pins = tpl.read_constraints()
+    problems = tpl.embedded_table_problems(pins)
+    for name, version in pins:
+        problems += tpl.embedded_version_problems(name, version)
+    assert not problems, "\n".join(problems)
+
+
+def test_a_changed_version_makes_the_embedded_check_fail_loudly():
+    (lib,) = tpl.embedded_for("UVLoop")
+    assert lib.name == "libuv"
+    assert tpl.embedded_version_problems("uvloop", lib.package_version) == []
+    (message,) = tpl.embedded_version_problems("uvloop", "99.0.0")
+    assert "Eintrag für fest eingebaute Bibliothek prüfen" in message
+    assert "libuv 1.48.0" in message and lib.package_version in message and "99.0.0" in message and "_PY_EMBEDDED" in message
+    assert tpl.embedded_version_problems("httpx", "1.0") == []  # andere Pakete sind nicht betroffen
+    # Das Paket ist ganz aus den constraints verschwunden: der Eintrag darf nicht stehen bleiben.
+    pins = [pin for pin in tpl.read_constraints() if tpl.pep503(pin[0]) != "uvloop"]
+    (gone,) = tpl.embedded_table_problems(pins)
+    assert "Eintrag für fest eingebaute Bibliothek prüfen" in gone and "uvloop" in gone and "nicht mehr" in gone
+
+
+def test_a_newer_pinned_version_is_a_text_problem_even_when_the_package_is_not_installed(monkeypatch):
+    import importlib.metadata as md
+
+    real = md.distribution
+
+    def fake(name):
+        if name == "uvloop":
+            raise md.PackageNotFoundError(name)
+        return real(name)
+
+    monkeypatch.setattr(tpl.importlib_metadata, "distribution", fake)
+    (pkg,) = tpl.collect_python([("uvloop", "99.0.0")], {"sys_platform": "win32"})
+    assert any("Eintrag für fest eingebaute Bibliothek prüfen" in problem for problem in pkg.text_problems)
+
+
+def test_third_party_cli_fails_when_a_pinned_version_outgrows_an_embedded_entry(tmp_path, monkeypatch, capsys):
+    pins = [(name, "99.0.0" if tpl.pep503(name) == "uvloop" else version) for name, version in tpl.read_constraints()]
+    monkeypatch.setattr(tpl, "read_constraints", lambda path=tpl.CONSTRAINTS: pins)
+    monkeypatch.setattr(tpl, "collect_all", lambda repo=tpl.REPO_ROOT: (tpl.collect_python(pins), []))
+    out = tmp_path / "THIRD_PARTY_LICENSES"
+    assert tpl.main(["--check", "--output", str(out)]) == 2
+    assert tpl.main(["--output", str(out)]) == 2 and not out.exists()
+    assert "Eintrag für fest eingebaute Bibliothek prüfen" in capsys.readouterr().err
+
+
+def test_third_party_cli_fails_when_an_embedded_entry_has_no_package_any_more(monkeypatch, capsys):
+    pins = [pin for pin in tpl.read_constraints() if tpl.pep503(pin[0]) != "cffi"]
+    monkeypatch.setattr(tpl, "read_constraints", lambda path=tpl.CONSTRAINTS: pins)
+    monkeypatch.setattr(tpl, "collect_all", lambda repo=tpl.REPO_ROOT: (tpl.collect_python(pins), []))
+    assert tpl.main(["--check"]) == 2
+    assert "libffi 3.4.6" in capsys.readouterr().err
+
+
+def test_embedded_texts_are_rendered_and_missing_files_are_reported(tmp_path):
+    lib = tpl.EmbeddedLibrary(
+        package="demo-paket", package_version="1.0", name="libdemo", version="2.3", license="MIT",
+        holders="Erika Muster", source_url="https://example.org/libdemo/tree/v2.3", evidence="Symbol demo_call steht im Binary.",
+        texts=(("LICENSE", "demo-LICENSE.txt"), ("Lizenzkopf aus demo.c", "fehlt.txt")),
+    )
+    (tmp_path / "demo-LICENSE.txt").write_text("Copyright (c) Erika Muster\r\n\r\nPermission ...\r\n", encoding="utf-8")
+    blocks, problems = tpl.embedded_texts("Demo_Paket", (lib,), tmp_path)
+    assert [label for label, _ in blocks] == ["Fest eingebaute Bibliothek: libdemo 2.3", "Lizenztext zu libdemo 2.3: LICENSE"]
+    overview = blocks[0][1]
+    assert "libdemo 2.3 ist in demo-paket 1.0 fest eingebaut" in overview
+    assert "Erika Muster" in overview and "Lizenz:   MIT" in overview and "demo_call" in overview
+    assert blocks[1][1] == "Copyright (c) Erika Muster\n\nPermission ..."
+    assert problems == ["libdemo 2.3: Textdatei fehlt.txt fehlt unter scripts/embedded_licenses/"]
+    assert tpl.embedded_texts("anderes-paket", (lib,), tmp_path) == ([], [])
+
+
+def test_embedded_libraries_pass_the_license_guard_and_are_listed_by_it():
+    for lib in tpl._PY_EMBEDDED:
+        assert guard.evaluate_license(lib.license).rank < guard.UNBEKANNT, lib.license
+    names = {pkg.name for pkg in guard.collect_packages()}
+    assert {"libuv (eingebaut in uvloop)", "libffi (eingebaut in cffi)"} <= names
+    # Eine eingebaute Bibliothek unter Copyleft wuerde den Waechter ausloesen.
+    bad = guard.check_packages([_pkg("libbad (eingebaut in demo)", "1.0", "GPL-3.0-only")], exceptions={})
+    assert [f.name for f in bad.violations] == ["libbad (eingebaut in demo)"]
+
+
+def test_installed_uvloop_really_contains_the_libuv_version_of_the_entry():
+    try:
+        from uvloop.loop import libuv_get_version
+    except ImportError:  # Windows oder Wheel einer anderen Architektur
+        pytest.skip("uvloop ist hier nicht importierbar")
+    number = libuv_get_version()
+    actual = f"{number >> 16}.{(number >> 8) & 0xFF}.{number & 0xFF}"
+    assert actual == _embedded("uvloop").version, (
+        f"das installierte uvloop enthaelt libuv {actual}: Eintrag in _PY_EMBEDDED (scripts/third_party_licenses.py) pruefen"
+    )
+
+
+# ---------------------------------------------------------------------------
 # PyMuPDF ist raus (AGPL)
 # ---------------------------------------------------------------------------
 
@@ -689,3 +853,199 @@ def test_pypdfium2_is_declared_and_pinned():
     constraints = (REPO / "deploy" / "constraints.txt").read_text(encoding="utf-8")
     assert re.search(r"^pypdfium2==\d+\.\d+\.\d+$", constraints, re.MULTILINE)
     assert "pypdfium2" in (REPO / "backend" / "pyproject.toml").read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# dulwich (Rust-Crates ohne SBOM) und die Rust-Standardbibliothek der Rust-Wheels
+# ---------------------------------------------------------------------------
+
+_RUST_WHEELS = {"cryptography", "dulwich", "pydantic-core", "pyrage", "watchfiles"}
+
+
+def _installed_binary_bytes(package: str, pattern: str, pin_version: str) -> bytes:
+    """Bytes der ersten Erweiterungsdatei `pattern` im installierten Paket (Test wird uebersprungen, wenn das
+    Paket nicht in der gepinnten Version installiert ist)."""
+    import importlib.metadata as md
+
+    try:
+        dist = md.distribution(package)
+    except md.PackageNotFoundError:
+        pytest.skip(f"{package} ist nicht installiert")
+    if dist.version != pin_version:
+        pytest.skip(f"{package} {dist.version} ist nicht die gepinnte Version {pin_version}")
+    for entry in dist.files or []:
+        if re.fullmatch(pattern, entry.as_posix()):
+            return Path(dist.locate_file(entry)).read_bytes()
+    pytest.skip(f"{package}: keine Datei {pattern}")
+
+
+def _dulwich(name: str) -> tpl.EmbeddedLibrary:
+    (lib,) = [lib for lib in tpl.embedded_for("dulwich") if lib.name.startswith(name)]
+    return lib
+
+
+def test_dulwich_rust_crates_are_listed_with_version_license_and_text():
+    """dulwich hat keine SBOM; seine Rust-Erweiterungen enthalten pyo3, pyo3-ffi, once_cell und similar."""
+    text = LICENSES_FILE.read_text(encoding="utf-8")
+    section = _section(text, "dulwich")
+    assert "[Fest eingebaute Bibliothek: pyo3 und pyo3-ffi (Rust-Crates) 0.29.2]" in section
+    assert "[Fest eingebaute Bibliothek: once_cell (Rust-Crate) 1.21.4]" in section
+    assert "[Fest eingebaute Bibliothek: similar (Rust-Crate) 3.2.0]" in section
+    assert "Copyright (c) 2023-present PyO3 Project and Contributors." in section
+    assert "Armin Ronacher" in section and "Apache License\n" in section and "Version 2.0, January 2004" in section
+    assert "Aleksey Kladov" in section
+    assert (_dulwich("pyo3").license, _dulwich("once_cell").license, _dulwich("similar").license) == (
+        "MIT OR Apache-2.0",
+        "MIT OR Apache-2.0",
+        "Apache-2.0",
+    )
+    # Nur, was im Binary nachweisbar ist: memchr und bstr stehen in der Cargo.lock, nicht als Crate in den .so-Dateien.
+    assert {lib.name.split(" ")[0] for lib in tpl.embedded_for("dulwich")} == {"pyo3", "once_cell", "similar"}
+
+
+def test_dulwich_entries_are_checked_against_the_pin():
+    versions = {lib.package_version for lib in tpl.embedded_for("dulwich")}
+    assert versions == {"1.2.15"}
+    assert tpl.embedded_version_problems("dulwich", "1.2.15") == []
+    problems = tpl.embedded_version_problems("dulwich", "1.3.0")
+    assert len(problems) >= 4 and all("dulwich" in p and "1.3.0" in p and "_PY_EMBEDDED" in p for p in problems)
+    pins = [pin for pin in tpl.read_constraints() if tpl.pep503(pin[0]) != "dulwich"]
+    assert any("dulwich" in p and "nicht mehr" in p for p in tpl.embedded_table_problems(pins))
+
+
+def test_installed_dulwich_really_contains_the_listed_crates():
+    data = _installed_binary_bytes("dulwich", r"dulwich/_pack\..*\.(so|pyd)", _dulwich("pyo3").package_version)
+    for needle in (b"pyo3-0.29.2", b"pyo3-ffi-0.29.2", b"once_cell-1.21.4", b"similar-3.2.0"):
+        assert needle in data, f"{needle.decode()} steht nicht im Binary: Eintrag in _PY_EMBEDDED pruefen"
+    assert b"memchr-2." not in data and b"bstr-" not in data
+
+
+def test_rust_standard_library_is_listed_once_with_texts_and_pointers_in_every_rust_wheel():
+    text = LICENSES_FILE.read_text(encoding="utf-8")
+    (std,) = [lib for lib in tpl._PY_EMBEDDED if lib.name.startswith("Rust-Standardbibliothek")]
+    assert std.license == "MIT OR Apache-2.0" and "The Rust Project Developers" in std.holders
+    assert std.version == "" and std.note and "Compiler" in std.note
+    assert {pkg for pkg, _ in std.pins} == _RUST_WHEELS
+    for crate in ("addr2line", "gimli", "object", "miniz_oxide", "rustc-demangle", "hashbrown"):
+        assert crate in std.holders and crate in std.evidence, crate
+    title = f"Fest eingebaute Bibliothek: {std.title}"
+    primary = _section(text, std.package)
+    assert f"[{title}]" in primary and "Copyright (c) The Rust Project Contributors" in primary
+    assert "Copyright (c) 2016-2018 The gimli Developers" in primary and "Copyright (c) 2016 Amanieu d'Antras" in primary
+    assert "Copyright (c) 2015 The Gimli Developers" in primary and "LICENSE-MIT aus object 0.37.3" in primary
+    assert "Copyright (c) 2014 Alex Crichton" in primary and "Copyright (c) 2017 Frommi" in primary
+    assert "ebenso in dulwich 1.2.15, pydantic-core 2.46.5, pyrage 1.4.0, watchfiles 1.3.0" in primary
+    shown = {tpl.pep503(name): name for name, _ in tpl.read_constraints()}  # Ueberschrift wie in constraints.txt
+    for other in sorted(_RUST_WHEELS - {std.package}):
+        section = _section(text, shown[other])
+        assert f"[{title}]" in section, other
+        assert f"stehen im Abschnitt des Pakets {std.package} {std.package_version}" in " ".join(section.split()), other
+        assert "Copyright (c) The Rust Project Contributors" not in section, other  # Texte nur einmal
+    assert guard.evaluate_license(std.license).rank < guard.UNBEKANNT
+
+
+def test_rust_standard_library_entry_is_checked_against_every_pin():
+    (std,) = [lib for lib in tpl._PY_EMBEDDED if lib.name.startswith("Rust-Standardbibliothek")]
+    assert tpl.embedded_table_problems(tpl.read_constraints(), (std,)) == []
+    for pkg, version in std.pins:
+        assert tpl.embedded_version_problems(pkg, version, (std,)) == []
+        (message,) = tpl.embedded_version_problems(pkg, "99.0", (std,))
+        assert pkg in message and "99.0" in message and "Rust-Standardbibliothek" in message
+    # Fehlt eines der Pakete in den constraints, meldet das der Tabellen-Test, nicht nur beim Hauptpaket.
+    pins = [pin for pin in tpl.read_constraints() if tpl.pep503(pin[0]) != "watchfiles"]
+    (gone,) = tpl.embedded_table_problems(pins, (std,))
+    assert "watchfiles" in gone and "nicht mehr" in gone
+
+
+def test_shared_embedded_entry_renders_a_pointer_in_the_other_packages(tmp_path):
+    lib = tpl.EmbeddedLibrary(
+        package="eins", package_version="1.0", also_in=(("zwei", "2.0"),), name="libgemeinsam", version="",
+        license="MIT", holders="Erika Muster", source_url="https://example.org/libgemeinsam",
+        evidence="Pfade stehen im Binary.", note="Version haengt vom Compiler ab.", texts=(("LICENSE", "demo-LICENSE.txt"),),
+    )
+    (tmp_path / "demo-LICENSE.txt").write_text("Copyright (c) Erika Muster\n", encoding="utf-8")
+    blocks, problems = tpl.embedded_texts("eins", (lib,), tmp_path)
+    assert not problems and [label for label, _ in blocks] == ["Fest eingebaute Bibliothek: libgemeinsam", "Lizenztext zu libgemeinsam: LICENSE"]
+    assert "libgemeinsam ist in eins 1.0 fest eingebaut (statisch gelinkt), ebenso in zwei 2.0." in blocks[0][1].replace("\n", " ")
+    assert "Hinweis:  Version haengt vom Compiler ab." in blocks[0][1]
+    (pointer,) = tpl.embedded_texts("Zwei", (lib,), tmp_path)[0]
+    assert pointer[0] == "Fest eingebaute Bibliothek: libgemeinsam"
+    assert "eins 1.0" in pointer[1] and "Erika Muster" not in pointer[1]
+    assert tpl.embedded_version_problems("zwei", "2.0", (lib,)) == []
+    assert len(tpl.embedded_version_problems("zwei", "3.0", (lib,))) == 1
+
+
+def test_installed_rust_wheels_really_contain_the_standard_library_crates():
+    if not sys.platform.startswith("linux"):
+        # Unter Windows (MSVC) liest die Standardbibliothek Backtraces ueber dbghelp: addr2line, gimli,
+        # miniz_oxide und object stecken dort nicht im Binary. Die Liste gilt fuer das Linux-Image.
+        pytest.skip("Die Crates der Fehlerausgabe stecken nur in den Linux-Wheels; Pruefung nur unter Linux.")
+    data = _installed_binary_bytes("cryptography", r"cryptography/hazmat/bindings/_rust\..*\.(so|pyd)", "50.0.1")
+    for needle in (b"addr2line-0.25.1", b"gimli-0.32.3", b"miniz_oxide-0.8.9", b"rustc-demangle-0.1.27", b"hashbrown-"):
+        assert needle in data, f"{needle.decode()} steht nicht im Binary: Eintrag zur Rust-Standardbibliothek pruefen"
+    # object steht ohne Pfad im Binary, aber mit seinen Funktionen (Rust-Symbol _RNvXNtNtCs..._6object4read8read_ref...).
+    assert b"6object4read8read_ref" in data, "die Crate object steht nicht im Binary: Eintrag zur Rust-Standardbibliothek pruefen"
+
+
+def test_object_crate_license_text_is_the_unchanged_mit_text_of_version_0_37_3():
+    (std,) = [lib for lib in tpl._PY_EMBEDDED if lib.name.startswith("Rust-Standardbibliothek")]
+    assert ("LICENSE-MIT aus object 0.37.3", "object-0.37.3-LICENSE-MIT.txt") in std.texts
+    text = (tpl.EMBEDDED_DIR / "object-0.37.3-LICENSE-MIT.txt").read_text(encoding="utf-8")
+    assert text.startswith("Copyright (c) 2015 The Gimli Developers\n")
+    assert "Permission is hereby granted, free of charge, to any" in text
+
+
+def test_dlmalloc_is_described_as_public_domain_not_cc0():
+    text = LICENSES_FILE.read_text(encoding="utf-8")
+    libffi = " ".join(_section(text, "cffi").split())
+    assert "dlmalloc (Doug Lea) ist vom Autor gemeinfrei gestellt" in libffi
+    assert "creativecommons.org/licenses/publicdomain" in libffi and "nicht CC0" in libffi
+    assert "gemeinfrei (CC0)" not in libffi
+    (lib,) = tpl.embedded_for("cffi")
+    assert "gemeinfrei (CC0)" not in lib.evidence
+
+
+def test_tree_h_reason_names_both_users_in_libuv():
+    text = LICENSES_FILE.read_text(encoding="utf-8")
+    libuv = " ".join(_section(text, "uvloop").split())
+    assert "src/unix/signal.c und die Dateiüberwachung per inotify in src/unix/linux.c nutzen sie" in libuv
+    (lib,) = tpl.embedded_for("uvloop")
+    assert "src/unix/signal.c" in lib.evidence and "src/unix/linux.c" in lib.evidence
+
+
+def _with_embedded_version(monkeypatch, package: str, version: str):
+    """Tabelle so veraendern, als waere der Eintrag fuer eine aeltere Paketversion geprueft worden (= nach einem
+    Pin-Wechsel in deploy/constraints.txt, bei dem das passende Paket schon installiert ist)."""
+    table = []
+    for lib in tpl._PY_EMBEDDED:
+        if lib.package == package:
+            lib = dataclasses.replace(lib, package_version=version)
+        table.append(dataclasses.replace(lib, also_in=tuple((p, version if p == package else v) for p, v in lib.also_in)))
+    monkeypatch.setattr(tpl, "_PY_EMBEDDED", tuple(table))
+
+
+@pytest.mark.parametrize("package", ["uvloop", "cffi", "dulwich", "cryptography", "watchfiles"])
+def test_license_guard_alone_fails_after_a_pin_change_of_an_embedded_package(monkeypatch, capsys, package):
+    assert guard.main([]) == 0
+    capsys.readouterr()
+    _with_embedded_version(monkeypatch, package, "0.0.1")
+    assert guard.main([]) == 2
+    err = capsys.readouterr().err
+    assert "Eintrag für fest eingebaute Bibliothek prüfen" in err and package in err and "0.0.1" in err
+    assert "_PY_EMBEDDED" in err
+
+
+def test_license_guard_alone_fails_when_an_embedded_package_left_the_constraints(monkeypatch, capsys):
+    real = tpl.read_constraints
+    monkeypatch.setattr(tpl, "read_constraints", lambda path=tpl.CONSTRAINTS: [p for p in real(path) if tpl.pep503(p[0]) != "pyrage"])
+    packages = guard.embedded_packages(tpl.read_constraints())
+    assert any("nicht mehr in den constraints" in problem for pkg in packages for problem in pkg.problems)
+    assert guard.main([]) == 2
+    assert "pyrage" in capsys.readouterr().err
+
+
+def test_license_guard_embedded_packages_are_clean_for_the_real_pins():
+    packages = guard.embedded_packages(tpl.read_constraints())
+    assert all(not pkg.problems for pkg in packages)
+    names = {pkg.name for pkg in packages}
+    assert "Rust-Standardbibliothek (std, core, alloc) (eingebaut in cryptography, dulwich, pydantic-core, pyrage, watchfiles)" in names

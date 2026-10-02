@@ -18,10 +18,10 @@ import hashlib
 import json
 import logging
 import re
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from nodvard_sdk import Actor, ActionRequest, GateDecision, GateOutcome, Risk
+from nodvard_sdk import Actor, ActionRequest, GateDecision, GateOutcome, Risk, StandingApproval
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionStatus
 from nodvard_sdk.capabilities import ActionExecutor
 from nodvard_sdk.types import Event
@@ -33,6 +33,7 @@ from ..db import utcnow
 from ..db.session import session_scope
 from ..models import Action
 from . import deny_patterns
+from .action_output import audit_result
 from .events import get_event_bus
 from .flap import check_and_record as _flap_check_and_record
 
@@ -55,11 +56,23 @@ def describe_error(exc: BaseException) -> str:
     Zeitueberschreitungen) haben einen leeren Text, dann stand bei der Aktion nur
     "fehlgeschlagen" ohne jeden Hinweis."""
     text = str(exc).strip()
+    if getattr(exc, "readable", False) and text:
+        return text  # z. B. SshUnreachable: der Text sagt schon auf Deutsch, was los ist
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return f"Zeitüberschreitung{': ' + text if text else ''} – der Befehl hat zu lange gebraucht."
     if isinstance(exc, (ConnectionError, OSError)) and not text:
         return f"Server nicht erreichbar ({type(exc).__name__})."
     return text or type(exc).__name__
+
+
+def _audit_error_for(exc: BaseException) -> str:
+    """Grund fuers Protokoll, wenn eine Ausnahme die Ausfuehrung beendet hat. Bewusst ohne den
+    Text der Ausnahme: ein Executor kann Inhalte vom Server hineinschreiben, im Protokoll steht
+    nur die Art des Fehlers. Der volle Text steht in der Aktion (`describe_error`)."""
+    if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
+        return "Zeitüberschreitung – der Befehl hat zu lange gebraucht."
+    return f"Die Ausführung ist mit einem Fehler beendet worden ({type(exc).__name__}). Einzelheiten stehen in der Aktion."
+
 
 async def _extra_deny_patterns(session: AsyncSession) -> tuple[deny_patterns.DenyPattern, ...]:
     from ..services import settings as settings_service
@@ -136,6 +149,27 @@ def _request_from_row(action: Action) -> ActionRequest:
         reason=action.reason,
         correlation_id=action.correlation_id,
         idempotency_key=action.idempotency_key,
+        standing_approval=_standing_from_row(action),
+    )
+
+
+def _standing_from_row(action: Action) -> StandingApproval | None:
+    """Die Dauerfreigabe, ueber die die Aktion ohne Klick anlief -- None, wenn ein Mensch sie per
+    Klick freigegeben hat (auch dann, wenn der Vorschlag sich auf eine Dauerfreigabe berief, das
+    Gate sie aber nicht anerkannt hat). So kann der Executor direkt vor dem Befehl pruefen, ob sie
+    noch gilt, ohne einen Klick auszubremsen."""
+    decision = action.gate_decision or {}
+    info = decision.get("standing_approval")
+    if decision.get("rule") != "standing_approval" or not isinstance(info, dict):
+        return None
+    try:
+        granted_at = datetime.fromisoformat(str(info.get("granted_at")))
+    except ValueError:
+        # Schreibt nur das Gate selbst; im Zweifel trotzdem als Dauerfreigabe kennzeichnen.
+        granted_at = action.approved_at or utcnow()
+    return StandingApproval(
+        granted_by_user_id=str(info.get("granted_by") or ""), granted_at=granted_at,
+        label=None if info.get("label") is None else str(info["label"]),
     )
 
 
@@ -198,7 +232,8 @@ async def _run_action(action_id: str) -> None:
     Schreibzugriff, blockierte SQLite (ein Schreiber zur Zeit, D-02) sie gegen eine
     noch offene Transaktion (Live-Fund WP-8, proxmox). Waehrend der Ausfuehrung ist
     deshalb keine Transaktion offen."""
-    outcome: tuple[ActionStatus, dict[str, Any]] | None = None
+    # Status, Ergebnis der Aktion und (falls das Gate den Grund selbst nennt) der feste Text fuers Protokoll.
+    outcome: tuple[ActionStatus, dict[str, Any], str | None] | None = None
     try:
         async with session_scope() as session:
             action = await session.get(Action, action_id)
@@ -211,9 +246,8 @@ async def _run_action(action_id: str) -> None:
 
         executor = await find_executor(request.action_type)
         if executor is None:
-            outcome = ActionStatus.FAILED, {
-                "success": False, "error": f"Kein ActionExecutor für '{request.action_type}'.",
-            }
+            error = f"Kein ActionExecutor für '{request.action_type}'."
+            outcome = ActionStatus.FAILED, {"success": False, "error": error}, error
         else:
             deadline = asyncio.timeout(EXECUTE_TIMEOUT_S)
             try:
@@ -222,36 +256,45 @@ async def _run_action(action_id: str) -> None:
                 outcome = (
                     ActionStatus.SUCCEEDED if res.success else ActionStatus.FAILED,
                     res.model_dump(mode="json"),
+                    None,
                 )
             except Exception as exc:  # noqa: BLE001 - siehe Docstring: darf das Protokoll nie verschlucken
                 logger.exception("gate_execute_raised action_id=%s action_type=%s", action_id, request.action_type)
-                error = EXECUTE_TIMEOUT_ERROR if deadline.expired() else describe_error(exc)
-                outcome = ActionStatus.FAILED, {"success": False, "error": error}
-        await _record_outcome(action_id, *outcome)
+                if deadline.expired():
+                    outcome = ActionStatus.FAILED, {"success": False, "error": EXECUTE_TIMEOUT_ERROR}, EXECUTE_TIMEOUT_ERROR
+                else:
+                    outcome = ActionStatus.FAILED, {"success": False, "error": describe_error(exc)}, _audit_error_for(exc)
+        await _record_outcome(action_id, outcome[0], outcome[1], gate_error=outcome[2])
     except asyncio.CancelledError:
         # Beim Beenden: Stand das Ergebnis schon fest (abgebrochen erst beim
         # Speichern), zaehlt es -- sonst ist der Ausgang unbekannt.
         if outcome is not None:
             try:
-                await _record_outcome(action_id, *outcome, publish=False)
+                await _record_outcome(action_id, outcome[0], outcome[1], gate_error=outcome[2], publish=False)
             except Exception:  # noqa: BLE001 - dann bleibt nur der Abbruch-Vermerk
                 logger.exception("gate_record_outcome_on_cancel_failed action_id=%s", action_id)
-        await _record_outcome_safely(action_id, {"success": False, "error": CANCELLED_ERROR}, publish=False)
+        await _record_outcome_safely(
+            action_id, {"success": False, "error": CANCELLED_ERROR}, gate_error=CANCELLED_ERROR, publish=False
+        )
         raise
     except Exception as exc:  # z. B. Datenbankfehler beim Laden/Speichern
         logger.exception("gate_background_failed action_id=%s", action_id)
-        await _record_outcome_safely(action_id, {"success": False, "error": describe_error(exc)})
+        await _record_outcome_safely(
+            action_id, {"success": False, "error": describe_error(exc)}, gate_error=_audit_error_for(exc)
+        )
 
 
-async def _record_outcome_safely(action_id: str, result: dict[str, Any], *, publish: bool = True) -> None:
+async def _record_outcome_safely(
+    action_id: str, result: dict[str, Any], *, gate_error: str | None = None, publish: bool = True
+) -> None:
     try:
-        await _record_outcome(action_id, ActionStatus.FAILED, result, publish=publish)
+        await _record_outcome(action_id, ActionStatus.FAILED, result, gate_error=gate_error, publish=publish)
     except Exception:  # letzte Rettung ist fail_interrupted_on_boot()
         logger.exception("gate_record_outcome_failed action_id=%s", action_id)
 
 
 async def _record_outcome(
-    action_id: str, status: ActionStatus, result: dict[str, Any], *, publish: bool = True
+    action_id: str, status: ActionStatus, result: dict[str, Any], *, gate_error: str | None = None, publish: bool = True
 ) -> None:
     """Ergebnis und Audit-Zeile in EINER eigenen Transaktion festschreiben, erst danach
     Abonnenten benachrichtigen: ein Abonnent, der ueber eine eigene
@@ -280,7 +323,13 @@ async def _record_outcome(
                     target_type="action",
                     target_id=action.id,
                     reason=action.reason,
-                    detail={"action_type": action.action_type, "result": result},
+                    # Nur Erfolg, Exitcode und Laengen: die Ausgabe kann Inhalte vom Server
+                    # enthalten und steht nur in der Aktion (Abruf mit `hosts.execute`). Der feste
+                    # Grund des Gates (`gate_error`) steht dazu im Protokoll.
+                    detail={
+                        "action_type": action.action_type,
+                        "result": audit_result(result, gate_error=gate_error),
+                    },
                     correlation_id=action.correlation_id,
                 )
                 event_payload = {
@@ -362,6 +411,79 @@ async def _persist_denied(
     )
 
 
+STANDING_APPROVAL_PERMISSION = "actions.standing_approval"
+"""Wer eine Dauerfreigabe erteilen darf (bei den eingebauten Rollen nur Owner und Admin).
+Dieselbe Zeichenkette ist die Erweiterungs-Berechtigung, ueberhaupt Vorschlaege mit einer
+Dauerfreigabe einzureichen (`ext.context.ActionsHandle.propose`)."""
+
+
+_RISK_WORDS = {Risk.LOW: "niedrigem", Risk.MEDIUM: "mittlerem", Risk.HIGH: "hohem", Risk.CRITICAL: "kritischem"}
+
+
+async def standing_approval_problem(
+    session: AsyncSession, *, granted_by_user_id: str, risk: Risk, from_ai: bool = False
+) -> tuple[str, str | None] | None:
+    """None, wenn eine Dauerfreigabe von `granted_by_user_id` fuer Aktionen der Stufe `risk`
+    gilt; sonst (Grund in einfachen Worten, fehlende Berechtigung oder None).
+
+    Die Extension hat schon geprueft, ob die Freigabe zum Vorschlag passt (bei Skripten:
+    unveraendert seit der Freigabe). Hier prueft der Kern, was nur er weiss: Gibt es den
+    Menschen hinter der Freigabe noch, ist er aktiv, und darf er HEUTE noch Dauerfreigaben
+    erteilen und Aktionen dieser Risikostufe bestaetigen? Wird ein Admin herabgestuft oder
+    gesperrt, laeuft ab dem naechsten Vorschlag wieder alles ueber den Klick. Dieselbe
+    Pruefung nutzt die Anzeige (`ext.context.ActionsHandle.check_standing_approval`), damit
+    eine Seite nie "gilt" zeigt, wo das Gate ablehnen wuerde.
+
+    Der Grund landet in Aktion, Protokoll und Push-Nachricht, deshalb ohne Namen von
+    Berechtigungen; die Berechtigung steht getrennt daneben (fuer `gate_decision`)."""
+    from ..models import User
+    from ..services.auth import user_has_permission
+
+    if from_ai:
+        # Vorschlaege einer KI nie ohne Klick, egal was mitgeschickt wird.
+        return "Vorschläge der KI laufen nie über eine Dauerfreigabe.", None
+    user = await session.get(User, granted_by_user_id)
+    if user is None or not user.is_active:
+        return "Die Person, die die Dauerfreigabe erteilt hat, gibt es nicht mehr oder sie ist gesperrt.", None
+    if not user_has_permission(user, STANDING_APPROVAL_PERMISSION):
+        return (
+            (
+                "Die Person, die die Dauerfreigabe erteilt hat, ist kein Owner oder Admin mehr und darf "
+                "keine Dauerfreigaben mehr erteilen."
+            ),
+            STANDING_APPROVAL_PERMISSION,
+        )
+    permission = f"actions.approve:{risk.value}"
+    if not user_has_permission(user, permission):
+        return (
+            (
+                "Die Person, die die Dauerfreigabe erteilt hat, hat keine Berechtigung mehr für Freigaben "
+                f"mit {_RISK_WORDS.get(risk, risk.value)} Risiko."
+            ),
+            permission,
+        )
+    return None
+
+
+async def _standing_note(session: AsyncSession, granted_by_user_id: str, granted_at: Any) -> str:
+    """Der Text "vom <Datum> durch <Benutzer>" -- das Datum in der eingestellten Zeitzone des
+    Dashboards (wie Zeitplaene und Wartungsfenster), nicht in der des Prozesses."""
+    from zoneinfo import ZoneInfo
+
+    from ..models import User
+    from .timezone import get_timezone
+
+    try:
+        zone = ZoneInfo(await get_timezone(session))
+    except Exception:  # noqa: BLE001 -- ein Anzeigedatum darf den Vorschlag nie kippen
+        zone = None
+    when = granted_at if granted_at.tzinfo is not None else granted_at.replace(tzinfo=timezone.utc)
+    date = when.astimezone(zone).strftime("%d.%m.%Y") if zone is not None else when.strftime("%d.%m.%Y")
+    user = await session.get(User, granted_by_user_id)
+    who = (user.username if user is not None else None) or granted_by_user_id
+    return f"vom {date} durch {who}"
+
+
 async def propose(
     session: AsyncSession, *, ext_id: str, request: ActionRequest, command_field: str | None,
     wait_s: float | None = None,
@@ -405,6 +527,46 @@ async def propose(
     except ValueError:
         max_risk = Risk.LOW
     auto_allow = mode == "full" and _RISK_ORDER[request.risk] <= _RISK_ORDER[max_risk]
+    rule = "autonomy:full" if auto_allow else "autonomy:propose"
+    gate_decision: dict[str, Any] = {}
+    approved_by_user_id: str | None = None
+    standing = request.standing_approval
+    reason = request.reason
+    if standing is not None:
+        # Eine gueltige Dauerfreigabe ersetzt den Klick -- unabhaengig von der Automatik-
+        # Einstellung. Sperrliste und Anti-Flapping (oben) gelten trotzdem.
+        from nodvard_sdk import ActorType
+
+        found = await standing_approval_problem(
+            session, granted_by_user_id=standing.granted_by_user_id, risk=request.risk,
+            from_ai=request.proposed_by.type == ActorType.AI,
+        )
+        standing_info = {
+            "granted_by": standing.granted_by_user_id,
+            "granted_at": standing.granted_at.isoformat(),
+            "label": standing.label,
+        }
+        # Den Hinweis setzt das Gate erst NACH der Pruefung -- so steht "lief ohne Klick"
+        # nur an Aktionen, die wirklich ohne Klick angelaufen sind.
+        note = await _standing_note(session, standing.granted_by_user_id, standing.granted_at)
+        if found is None:
+            auto_allow = True
+            rule = "standing_approval"
+            approved_by_user_id = standing.granted_by_user_id
+            gate_decision["standing_approval"] = standing_info
+            reason = f"{reason} – ohne Klick, lief mit Dauerfreigabe {note}"
+        else:
+            problem, permission = found
+            rejected_info: dict[str, Any] = {**standing_info, "problem": problem}
+            if permission is not None:
+                rejected_info["permission"] = permission
+            gate_decision["standing_approval_rejected"] = rejected_info
+            reason = f"{reason} – Dauerfreigabe {note} gilt nicht: {problem}"
+            if not auto_allow:
+                # Laeuft sie trotzdem an (Automatik "Selbststaendig handeln"), wartet sie auf
+                # keinen Klick -- dann auch nicht dazu auffordern.
+                reason += " Bitte selbst freigeben."
+    gate_decision = {"rule": rule, **gate_decision}
 
     row = Action(
         ext_id=ext_id,
@@ -415,14 +577,16 @@ async def propose(
         status=ActionStatus.EXECUTING.value if auto_allow else ActionStatus.PROPOSED.value,
         proposed_by_type=request.proposed_by.type.value,
         proposed_by_id=request.proposed_by.id,
-        reason=request.reason,
-        gate_decision={"rule": "autonomy:full" if auto_allow else "autonomy:propose"},
+        reason=reason,
+        gate_decision=gate_decision,
         correlation_id=request.correlation_id,
         idempotency_key=request.idempotency_key,
         expires_at=None if auto_allow else now + timedelta(seconds=request.expires_in_s or DEFAULT_EXPIRES_IN_S),
     )
     if auto_allow:
         row.approved_at = now
+        # Bei einer Dauerfreigabe steht ihr Urheber als "bestaetigt von" an der Aktion.
+        row.approved_by_user_id = approved_by_user_id
     session.add(row)
     await session.flush()
 
@@ -436,8 +600,8 @@ async def propose(
         outcome="proposed",
         target_type="action",
         target_id=row.id,
-        reason=request.reason,
-        detail={"rule": row.gate_decision["rule"]},
+        reason=reason,
+        detail=gate_decision,
         correlation_id=request.correlation_id,
     )
 
@@ -445,12 +609,13 @@ async def propose(
         await _start_and_wait(session, row, wait_s)
         return GateDecision(
             action_id=row.id, outcome=GateOutcome.ALLOW, status=ActionStatus(row.status),
-            rule="autonomy:full", detail=None,
+            rule=rule, detail=None,
         )
 
+    rejected = gate_decision.get("standing_approval_rejected")
     return GateDecision(
         action_id=row.id, outcome=GateOutcome.REQUIRE_CONFIRMATION, status=ActionStatus.PROPOSED,
-        rule="autonomy:propose", detail=None, expires_at=row.expires_at,
+        rule="autonomy:propose", detail=rejected["problem"] if rejected else None, expires_at=row.expires_at,
     )
 
 
@@ -587,7 +752,8 @@ async def fail_interrupted_on_boot(session: AsyncSession) -> int:
         await audit_service.log(
             session, actor_type="system", actor_id="gate", action="action.executed", outcome="failure",
             target_type="action", target_id=row.id, reason=row.reason,
-            detail={"action_type": row.action_type, "result": result}, correlation_id=row.correlation_id,
+            detail={"action_type": row.action_type, "result": audit_result(result, gate_error=INTERRUPTED_ERROR)},
+            correlation_id=row.correlation_id,
         )
     return failed
 

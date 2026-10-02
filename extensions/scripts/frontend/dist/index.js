@@ -624,6 +624,7 @@ function slugify(name) {
 }
 function triggeredBy(e) {
   const name = e.proposed_by_label || e.proposed_by;
+  if (e.standing_approval) return "Zeitplan \xB7 ohne Klick (Dauerfreigabe)";
   return e.proposed_by.startsWith("extension/") ? `Zeitplan \xB7 ${name}` : name;
 }
 function Executions({ items }) {
@@ -644,7 +645,7 @@ function Executions({ items }) {
           " s"
         ] }),
         !hasOutput && e.status === "failed" && /* @__PURE__ */ jsx3("span", { className: "text-xs text-red-300", children: "ohne Fehlermeldung" }),
-        /* @__PURE__ */ jsxs3("span", { className: "ml-auto text-xs text-white/40", title: e.proposed_by, children: [
+        /* @__PURE__ */ jsxs3("span", { className: "ml-auto text-xs text-white/40", title: e.standing_approval ? e.reason : e.proposed_by, children: [
           e.created_at ? new Date(e.created_at).toLocaleString("de-DE") : "",
           " \xB7 ",
           triggeredBy(e)
@@ -720,6 +721,82 @@ function targetHint(target) {
   if (target.kind === "group" && !target.group_id) return "Bitte zuerst eine Gruppe w\xE4hlen.";
   if ((target.kind ?? "host") === "host" && !target.host_id) return "Bitte zuerst einen Server w\xE4hlen.";
   return null;
+}
+function approvalRelevant(s) {
+  return JSON.stringify([s.content, s.params_schema, s.target, s.schedule || null]);
+}
+function describeStandingHost(h) {
+  const port = h.port != null && h.port !== 22 ? `Port ${h.port}` : null;
+  const details = [`als ${h.account ?? "kein Konto"}`, h.address, port].filter(Boolean).join(", ");
+  return `${h.name} (${details})`;
+}
+function formatDate(iso) {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleDateString("de-DE");
+}
+function StandingApprovalPanel({
+  script,
+  dirty,
+  canGrant,
+  busy,
+  onGrant,
+  onRevoke
+}) {
+  const standing = script.standing_approval ?? null;
+  const on = Boolean(standing);
+  const blocked = !canGrant || busy || !on && (dirty || !script.enabled);
+  return /* @__PURE__ */ jsxs3("div", { className: "mt-3 rounded-lg border border-white/[0.08] bg-black/15 p-3 text-sm", "data-testid": "standing-approval", children: [
+    /* @__PURE__ */ jsxs3("label", { className: "flex items-start gap-2.5", children: [
+      /* @__PURE__ */ jsx3(
+        "input",
+        {
+          type: "checkbox",
+          className: "mt-1",
+          "aria-label": "Ohne Freigabe nach Zeitplan",
+          checked: on,
+          disabled: blocked,
+          onChange: () => on ? onRevoke() : onGrant()
+        }
+      ),
+      /* @__PURE__ */ jsxs3("span", { children: [
+        /* @__PURE__ */ jsx3("span", { className: "font-medium", children: "Ohne Freigabe nach Zeitplan" }),
+        /* @__PURE__ */ jsx3("span", { className: "mt-0.5 block text-xs text-white/55", children: "L\xE4uft nach Zeitplan ohne Freigabe, solange du das Skript nicht \xE4nderst. Jede \xC4nderung an Inhalt, Parametern, Ziel oder Zeitplan hebt das auf, dann fragt das Dashboard wieder nach. Jeder Lauf steht weiter unter \u201EAktionen\u201C." })
+      ] })
+    ] }),
+    standing && /* @__PURE__ */ jsxs3("div", { className: "mt-2.5 space-y-1.5 border-t border-white/[0.06] pt-2.5 text-xs", "data-testid": "standing-state", children: [
+      /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-2", children: [
+        standing.active ? /* @__PURE__ */ jsx3(Badge, { tone: "good", children: "Dauerfreigabe gilt" }) : /* @__PURE__ */ jsx3(Badge, { tone: "warn", children: "gilt nicht mehr" }),
+        /* @__PURE__ */ jsxs3("span", { className: "text-white/60", children: [
+          "erteilt von ",
+          standing.granted_by_label,
+          " am ",
+          formatDate(standing.granted_at),
+          " f\xFCr",
+          " ",
+          standing.hosts.map(describeStandingHost).join(", ") || "\u2013"
+        ] }),
+        canGrant && /* @__PURE__ */ jsx3(Button, { small: true, variant: "ghost", disabled: busy, onClick: onRevoke, children: "Freigabe zur\xFCckziehen" })
+      ] }),
+      !standing.active && standing.problem && /* @__PURE__ */ jsxs3("p", { className: "text-amber-300", children: [
+        "Gilt nicht mehr: ",
+        standing.problem,
+        " Geplante L\xE4ufe warten auf deine Freigabe, beim n\xE4chsten Lauf erlischt sie."
+      ] }),
+      standing.active && (standing.new_hosts?.length ?? 0) > 0 && /* @__PURE__ */ jsxs3("p", { className: "text-white/55", children: [
+        "Neu dabei: ",
+        standing.new_hosts.join(", "),
+        ". Dort fragt das Dashboard weiter nach, bis du neu freigibst."
+      ] }),
+      standing.active && dirty && /* @__PURE__ */ jsx3("p", { className: "text-amber-300", children: "Wenn du deine \xC4nderungen speicherst, erlischt die Dauerfreigabe." })
+    ] }),
+    !standing && !dirty && (script.standing_preview?.length ?? 0) > 0 && /* @__PURE__ */ jsxs3("p", { className: "mt-2 text-xs text-white/55", "data-testid": "standing-preview", children: [
+      "W\xFCrde gelten f\xFCr: ",
+      script.standing_preview.map(describeStandingHost).join(", ")
+    ] }),
+    !standing && !canGrant && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Einschalten k\xF6nnen nur Owner oder Admin." }),
+    !standing && canGrant && dirty && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Speichere zuerst deine \xC4nderungen." }),
+    !standing && canGrant && !dirty && !script.enabled && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Das Skript ist aus \u2013 schalte es zuerst auf \u201Eaktiv\u201C und speichere." })
+  ] });
 }
 function targetLabel(target, hosts, groups) {
   if (target.kind === "all") return "Alle Server";
@@ -823,6 +900,13 @@ function ScriptsPage() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      setDraft((prev) => ({
+        ...prev,
+        fingerprint: body.fingerprint,
+        standing_approval: body.standing_approval ?? null,
+        standing_preview: body.standing_preview ?? null,
+        targets_fingerprint: body.targets_fingerprint ?? null
+      }));
       setMessage({ kind: "ok", text: "Gespeichert." });
       setIsNew(false);
       setSelectedId(draft.id);
@@ -842,6 +926,63 @@ function ScriptsPage() {
       const res = await authedFetch(`/ext/scripts/scripts/${selectedId}`, { method: "DELETE" });
       if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
       selectNew();
+      load();
+    } catch (err) {
+      setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function refreshPreview(scriptId) {
+    try {
+      const res = await authedFetch(`/ext/scripts/scripts/${scriptId}`);
+      if (!res.ok) return;
+      const fresh = await res.json();
+      setDraft(
+        (prev) => prev.id === scriptId ? { ...prev, standing_preview: fresh.standing_preview ?? null, targets_fingerprint: fresh.targets_fingerprint ?? null } : prev
+      );
+    } catch {
+    }
+  }
+  async function grantStanding() {
+    if (!selectedId) return;
+    const servers = (draft.standing_preview ?? []).map(describeStandingHost).join(", ") || "\u2013";
+    const ok = await deck().confirmDialog(
+      `\u201E${draft.name || selectedId}\u201C ab jetzt nach Zeitplan ohne Freigabe laufen lassen (${targetLabel(draft.target, hosts, groups)})? Gilt f\xFCr: ${servers}. Neue Server fragen weiter nach, und jede \xC4nderung am Skript, an einem Konto oder einer Adresse hebt die Freigabe wieder auf.`,
+      { danger: true, confirmLabel: "Ohne Freigabe laufen lassen" }
+    );
+    if (!ok) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await authedFetch(`/ext/scripts/scripts/${selectedId}/standing-approval`, {
+        method: "POST",
+        body: JSON.stringify({ fingerprint: draft.fingerprint ?? "", targets_fingerprint: draft.targets_fingerprint ?? "" })
+      });
+      const body = await res.json().catch(() => ({}));
+      if (res.status === 409) void refreshPreview(selectedId);
+      if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      setDraft((prev) => ({ ...prev, standing_approval: body.standing_approval ?? null }));
+      setMessage({ kind: "ok", text: "Dauerfreigabe erteilt \u2013 die geplanten L\xE4ufe brauchen keinen Klick mehr." });
+      load();
+    } catch (err) {
+      setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function revokeStanding() {
+    if (!selectedId) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const res = await authedFetch(`/ext/scripts/scripts/${selectedId}/standing-approval`, { method: "DELETE" });
+      if (!res.ok && res.status !== 404) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(errorFromBody(body, res.status));
+      }
+      setDraft((prev) => ({ ...prev, standing_approval: null }));
+      setMessage({ kind: "ok", text: "Freigabe zur\xFCckgezogen \u2013 geplante L\xE4ufe warten wieder auf deine Freigabe." });
       load();
     } catch (err) {
       setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
@@ -909,6 +1050,8 @@ function ScriptsPage() {
   }
   const visibleScripts = hostFilter ? scripts?.filter((s) => s.target.kind === "host" && s.target.host_id === hostFilter) : scripts;
   const lines = draft.content.split("\n").length;
+  const savedScript = scripts?.find((s) => s.id === selectedId) ?? null;
+  const dirty = savedScript ? approvalRelevant(savedScript) !== approvalRelevant(draft) : true;
   const missingTarget = targetHint(draft.target);
   const showEditor = !isNew || selectedId !== null || (scripts?.length ?? 0) > 0 || draft.id !== "" || draft.name !== "";
   return /* @__PURE__ */ jsxs3(
@@ -947,6 +1090,7 @@ function ScriptsPage() {
                       targetLabel(s.target, hosts, groups)
                     ] })
                   ] }),
+                  s.standing_approval?.active && /* @__PURE__ */ jsx3(Badge, { tone: "info", children: "ohne Klick" }),
                   !s.enabled && /* @__PURE__ */ jsx3(Badge, { children: "aus" })
                 ]
               }
@@ -1054,8 +1198,19 @@ function ScriptsPage() {
                       ),
                       draft.schedule && /* @__PURE__ */ jsxs3("p", { className: "mt-2 flex items-start gap-1.5 text-xs text-white/55", "data-testid": "schedule-hint", children: [
                         /* @__PURE__ */ jsx3(Icon, { name: "clock", size: 12, className: "mt-0.5 flex-none" }),
-                        /* @__PURE__ */ jsx3("span", { children: "Geplante L\xE4ufe erscheinen als Vorschlag unter \u201EAktionen\u201C und m\xFCssen dort freigegeben werden, sonst verfallen sie nach 24 Stunden. Ohne R\xFCckfrage laufen sie nur, wenn unter Einstellungen \u2192 Automatik \u201ESelbstst\xE4ndig handeln\u201C bis Risikostufe \u201EHoch\u201C oder \u201EKritisch\u201C erlaubt ist." })
-                      ] })
+                        /* @__PURE__ */ jsx3("span", { children: "Geplante L\xE4ufe erscheinen als Vorschlag unter \u201EAktionen\u201C und m\xFCssen dort freigegeben werden, sonst verfallen sie nach 24 Stunden. Ohne R\xFCckfrage laufen sie nur mit einer Dauerfreigabe (Schalter darunter) oder wenn unter Einstellungen \u2192 Automatik \u201ESelbstst\xE4ndig handeln\u201C bis Risikostufe \u201EHoch\u201C oder \u201EKritisch\u201C erlaubt ist." })
+                      ] }),
+                      !isNew && (draft.schedule || draft.standing_approval) && /* @__PURE__ */ jsx3(
+                        StandingApprovalPanel,
+                        {
+                          script: draft,
+                          dirty,
+                          canGrant: deck().hasPermission("actions.standing_approval"),
+                          busy,
+                          onGrant: () => void grantStanding(),
+                          onRevoke: () => void revokeStanding()
+                        }
+                      )
                     ] })
                   ] }),
                   /* @__PURE__ */ jsxs3("div", { className: "mt-4 overflow-hidden rounded-lg border border-white/10 bg-black/40", children: [
@@ -1135,5 +1290,7 @@ function ScriptsPage() {
 export {
   Executions,
   ScriptsPage,
-  describeSchedule
+  StandingApprovalPanel,
+  describeSchedule,
+  describeStandingHost
 };

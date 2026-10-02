@@ -331,3 +331,21 @@ async def test_resolve_connection_target_carries_the_pool_generation(db_session,
     assert target.generation == before
     await ssh.get_ssh_pool().drop_host(host.id)
     assert ssh.get_ssh_pool().generation(host.id) == before + 1
+
+
+@pytest.mark.asyncio
+async def test_host_to_sdk_names_the_default_login_account_and_port(db_session, test_settings):
+    """Extensions sehen Konto und SSH-Port des Standard-Zugangs (nie das Geheimnis)."""
+    host = await hosts_service.create_host(db_session, name="a", address="192.168.2.10")
+    assert hosts_service.host_to_sdk(host).credential_username is None
+    assert hosts_service.host_to_sdk(host).credential_port is None
+
+    await hosts_service.add_credential(
+        db_session, test_settings, host_id=host.id, kind="ssh_password", username="root", port=22, secret_value="pw",
+    )
+    await hosts_service.add_credential(
+        db_session, test_settings, host_id=host.id, kind="ssh_password", username="deck", port=2222, secret_value="pw2",
+    )
+
+    sdk_host = hosts_service.host_to_sdk(host)
+    assert (sdk_host.credential_username, sdk_host.credential_port) == ("deck", 2222)

@@ -4,6 +4,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { NotificationOut } from "../routes/NotificationsPage";
+import { useAuthStore } from "../state/auth";
 import { NotificationBell, notificationHeadline } from "./NotificationBell";
 
 const now = Date.now();
@@ -60,9 +61,28 @@ beforeEach(() => {
     row({ id: "c", title: "Alt und gelesen", read_at: ago(10), ts: ago(60 * 30) }),
   ];
   vi.stubGlobal("fetch", mockFetch());
+  loginWith(["*"]);
 });
 
+function loginWith(permissions: string[]) {
+  useAuthStore.setState({
+    accessToken: "tok", status: "authenticated", mfaToken: null,
+    user: { id: "u1", username: "anna", display_name: null, email: null, is_owner: false, locale: "de", permissions },
+  });
+}
+
 describe("NotificationBell", () => {
+  it("ohne Schreibrecht (nur ansehen) gibt es kein „Alle als gelesen“ und ein Klick markiert nichts", async () => {
+    loginWith(["notifications.read"]);
+    renderBell(2);
+    fireEvent.click(bell());
+    await screen.findByTestId("bell-item-a");
+    expect(screen.queryByRole("button", { name: "Alle als gelesen" })).toBeNull();
+    fireEvent.click(within(screen.getByTestId("bell-item-a")).getByRole("button"));
+    expect(screen.getByTestId("where").textContent).toBe("/hosts/pve2");
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
   it("ist zu, bis man auf die Glocke drückt, und meldet das per aria", () => {
     renderBell();
     expect(bell().getAttribute("aria-haspopup")).toBe("dialog");

@@ -202,7 +202,7 @@ async def test_finishing_two_factor_login_writes_both_cookies(client):
     await _bootstrap(client)
     _, login = await _login(client)
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-    secret = (await client.post("/api/v1/me/totp/setup", headers=headers)).json()["secret"]
+    secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=headers)).json()["secret"]
     confirm = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=headers)
     assert confirm.status_code == 200, confirm.text
 

@@ -29,6 +29,7 @@ const host = (
     ? { id: `c-${id}`, kind: extra.credential.kind, username: extra.credential.username, port: extra.credential.port }
     : null,
   is_managed: true, enabled: true, status, last_seen_at: null,
+  login_ok_at: extra.credential && (status === "up" || status === "running") ? "2026-10-01T10:00:00Z" : null,
   provider_ext_id: extra.provider_ext_id === undefined ? "proxmox" : extra.provider_ext_id, provider_ref: null, created_at: "", updated_at: "",
 });
 
@@ -183,7 +184,8 @@ const WIDGETS = [
   w("backups", "summary", "Backup-Center", "database-backup", "widgets/summary", {
     kind: "list", empty_text: "Keine Backup-Jobs konfiguriert", max_items: null,
     item: listItem("{{ name }}", "{{ storage }} · {{ connection }}", { text: "{{ last_status_label }}", tone: "{{ tone }}" }, [
-      { id: "retry", label: "Erneut versuchen", endpoint: "jobs/{{ job_ref }}/retry", method: "POST", confirm: true, confirm_text: "?", style: "danger", permissions: [], show_if: "{{ job_ref }}", payload: null },
+      { id: "retry", label: "Erneut versuchen", endpoint: "jobs/{{ job_ref }}/retry", method: "POST", confirm: true, confirm_text: "?", style: "danger", permissions: [], show_if: "{{ can_retry }}", payload: null },
+      { id: "backup_now", label: "Jetzt sichern", endpoint: "jobs/{{ job_ref }}/retry", method: "POST", confirm: true, confirm_text: "?", style: "secondary", permissions: [], show_if: "{{ can_backup_now }}", payload: null },
     ]),
   }),
   w("gameserver", "servers", "Gameserver", "gamepad-2", "widgets/servers", {
@@ -217,10 +219,10 @@ let layoutItems: unknown[] = WIDGETS.map((widget, i) => ({ widget_id: widget.id,
 
 const WIDGET_DATA: Record<string, unknown> = {
   "/ext/backups/widgets/summary": [
-    { name: "game-win", storage: "kein Backup-Job", connection: "pve2", last_status_label: "kein Backup-Job", tone: "warn", job_ref: "" },
-    { name: "monitoring", storage: "backup-pve1", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--a--102" },
-    { name: "ki-server", storage: "backup-nas", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--b--120" },
-    { name: "docker-lxc", storage: "backup-nas", connection: "pve1", last_status_label: "unbekannt", tone: "neutral", job_ref: "pve1--c--100" },
+    { name: "game-win", storage: "kein Backup-Job", connection: "pve2", last_status_label: "kein Backup-Job", tone: "warn", job_ref: "", can_retry: false, can_backup_now: false },
+    { name: "monitoring", storage: "backup-pve1", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--a--102", can_retry: false, can_backup_now: true },
+    { name: "ki-server", storage: "backup-nas", connection: "pve2", last_status_label: "erfolgreich", tone: "good", job_ref: "pve2--b--120", can_retry: false, can_backup_now: true },
+    { name: "docker-lxc", storage: "backup-nas", connection: "pve1", last_status_label: "unbekannt", tone: "neutral", job_ref: "pve1--c--100", can_retry: false, can_backup_now: true },
   ],
   "/ext/gameserver/widgets/servers": [
     { name: "game-win", join_code_display: "Join-Code: 413749", players_display: "1 Spieler online", service_label: "läuft", tone: "good", can_stop: true, host_id: "g-valheim" },
@@ -600,7 +602,7 @@ function setupRoutes(p: string, method: string, body?: unknown): { handled: bool
       value: SETUP_MODULES.map((m) => {
         const enabled = setupState.enabled.has(m.id);
         return {
-          ...m, version: "0.1.0", api_version: "0.1.0", source: "bundled", granted_permissions: [], last_error: null, has_settings: true,
+          ...m, version: "0.1.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null, has_settings: true,
           state: enabled ? "enabled" : "disabled", needs_setup: enabled && SETUP_NEEDS_SETUP.has(m.id),
         };
       }),
@@ -658,8 +660,8 @@ const KNOWN_KEYS: Record<string, object[]> = {
 
 function setupFor(hostId: string, sudo: boolean, groups: string[]) {
   const h = HOSTS.find((x) => x.id === hostId);
-  const user = h?.credential?.username ?? "lattice";
-  const pub = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPr3vK9xQzWnYc0mH5bLJ2dTuE8sAfGo7iRkXe1NpVq4 lattice@${h?.name ?? "server"}`;
+  const user = h?.credential?.username ?? "nodvard";
+  const pub = `ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPr3vK9xQzWnYc0mH5bLJ2dTuE8sAfGo7iRkXe1NpVq4 nodvard@${h?.name ?? "server"}`;
   const lines = [
     "set -e",
     `U=${user}`,
@@ -668,7 +670,7 @@ function setupFor(hostId: string, sudo: boolean, groups: string[]) {
     'H=$(getent passwd "$U" | cut -d: -f6); G=$(id -gn "$U"); install -d -m 700 -o "$U" -g "$G" "$H/.ssh"; touch "$H/.ssh/authorized_keys"',
     'grep -qF "$K" "$H/.ssh/authorized_keys" || echo "restrict,pty $K" >> "$H/.ssh/authorized_keys"',
     ...groups.map((g) => `if getent group ${g} >/dev/null; then usermod -aG ${g} "$U"; fi`),
-    ...(sudo ? ['echo "$U ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/lattice-$U'] : []),
+    ...(sudo ? ['echo "$U ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/nodvard-$U'] : []),
     'echo "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken."',
   ];
   const notes: string[] = [];
@@ -683,7 +685,7 @@ function setupFor(hostId: string, sudo: boolean, groups: string[]) {
 
 function checkResult(hostId: string) {
   const h = HOSTS.find((x) => x.id === hostId);
-  const user = h?.credential?.username ?? "lattice";
+  const user = h?.credential?.username ?? "nodvard";
   const reachable = { id: "reachable", label: "Server erreichbar", status: "ok", detail: "SSH-Dienst antwortet (SSH-2.0-OpenSSH_9.2p1 Debian-2+deb12u3).", hint: "" };
   const base = { checked_at: new Date().toISOString(), os: null, credential_id: h?.credential?.id ?? null };
   if (previewState.scenario === "new") {
@@ -758,7 +760,7 @@ function serverAccessRoutes(p: string, method: string, body: unknown): { handled
   if (what === "credentials" && action === "make-default") return { handled: true, value: { ...h.credential, host_id: id, is_default: true, created_at: "2026-09-30T10:00:00Z", notice: null } };
   if (what === "credentials" && method === "POST" && p.endsWith("/generate-key")) {
     const b = body as { username?: string; port?: number };
-    const cred = { id: "c-new", host_id: id, kind: "ssh_key", username: b?.username ?? "lattice", port: b?.port ?? 22, is_default: !h.credential, created_at: new Date().toISOString() };
+    const cred = { id: "c-new", host_id: id, kind: "ssh_key", username: b?.username ?? "nodvard", port: b?.port ?? 22, is_default: !h.credential, created_at: new Date().toISOString() };
     return { handled: true, value: { credential: cred, public_key: setupFor(id, false, []).public_key, fingerprint: setupFor(id, false, []).fingerprint } };
   }
   if (what === "credentials" && method === "POST") return { handled: true, value: { ...(body as object), id: "c-new", host_id: id, created_at: new Date().toISOString() } };
@@ -1010,16 +1012,17 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   }
   if (p.startsWith("/ext/nexus-soc/defender/overview")) return {
     hosts: [
-      { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", freshclam_active: true, lynis_installed: true, quarantine_files: 1,
+      { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s1", host_id: "h-pi", host_name: "Raspberry Pi", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "clean", files_scanned: 14210, infected: 0, error: null, output_tail: null, started_at: Date.now() / 1000 - 5400, finished_at: null },
         last_audit: { status: "ok", hardening_index: 71, warnings: 1, created_at: Date.now() / 1000 - 80000, error: null }, scanning: false, auditing: false },
-      { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 06:40 2026", freshclam_active: false, lynis_installed: true,
+      { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Aug 20 06:40 2026", signature_age_days: 43, signature_stale: true, freshclam_active: false, lynis_installed: true,
         last_scan: { id: "s2", host_id: "h-pve2", host_name: "pve2", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "infected", files_scanned: 50311, infected: 1, error: null, output_tail: null, started_at: Date.now() / 1000 - 5000, finished_at: null },
         last_audit: { status: "ok", hardening_index: 62, warnings: 3, created_at: Date.now() / 1000 - 80000, error: null }, scanning: true, auditing: false },
       { host_id: "h-docker", host_name: "docker", host_status: "up", reachable: true, clamav_installed: false, lynis_installed: false, last_scan: null, last_audit: null, scanning: false, auditing: false },
       { host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", host_status: "down", reachable: false, error: "Zeitüberschreitung", clamav_installed: false, lynis_installed: false, last_scan: null, last_audit: null, scanning: false, auditing: false },
     ],
-    summary: { hosts: 4, protected: 2, open_threats: 1, quarantined: 2, neutralized_total: 5, findings_30d: 3, avg_hardening: 67, score: 58 },
+    summary: { hosts: 4, protected: 2, open_threats: 1, quarantined: 2, neutralized_total: 5, findings_30d: 3, avg_hardening: 67, score: 58, stale_signatures: 1 },
+    attention: [{ kind: "signatures", tone: "warn", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", title: "Proxmox-Knoten pve2: Virensignaturen sind 6 Wochen alt", hint: "Mit alten Signaturen erkennt ClamAV neue Schadprogramme nicht. Signaturen aktualisieren – dabei wird auch das automatische Update eingeschaltet.", action_label: "Signaturen aktualisieren" }],
     config: { auto_quarantine: true, realtime_enabled: true, watch_interval_min: 10, quick_scan_cron: "0 2 * * *", deep_scan_cron: "30 3 * * 0", audit_cron: "0 1 * * *" },
   };
   if (p === "/host-groups") return [];
@@ -1040,6 +1043,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     { key: "maintenance.windows", value: [{ cron: "0 3 * * 0", duration_minutes: 90, host_ids: "all" }] },
     { key: "system.timezone", value: "Europe/Berlin" }, { key: "audit.retention_days", value: 90 }, { key: "jobs.run_retention_days", value: 30 },
     { key: "hosts.reachability.enabled", value: true }, { key: "hosts.reachability.interval_minutes", value: 2 },
+    { key: "ssh.confirm_new_host_keys", value: true },
   ];
   if (p.startsWith("/settings/") && method === "PUT") return { key: p.slice("/settings/".length), value: null };
   if (p === "/extensions/proxmox/settings") return {
@@ -1059,7 +1063,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p === "/extensions" && previewState.ohneProxmox) return ohneProxmoxExtensions();
   if (p === "/extensions") return [
     ...PAGES.map((pg) => ({
-      id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", has_settings: ["proxmox", "backups", "nexus-soc", "gameserver", "service-matrix"].includes(pg.ext_id),
+      id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "nexus-soc", "gameserver", "service-matrix"].includes(pg.ext_id),
       state: previewState.noHosts ? "disabled" : pg.ext_id === "nexus-soc" ? "disabled" : pg.ext_id === "gameserver" ? "error" : "enabled",
       name: pg.title, description: `Modul ${pg.title}`, icon: pg.icon, granted_permissions: [],
       last_error: !previewState.noHosts && pg.ext_id === "gameserver" ? "on_start() fehlgeschlagen: Verbindung zu game-win abgelehnt" : null,
@@ -1067,7 +1071,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       setup_reasons: previewState.start && pg.ext_id === "proxmox" ? ["Zugangsdaten fehlen: API-Token-Geheimnis (pve2)."] : [],
     })),
     {
-      ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", granted_permissions: [], last_error: null,
+      ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null,
       state: previewState.noHosts ? "disabled" : "enabled", needs_setup: previewState.start,
       setup_reasons: previewState.start ? ["„ntfy-Server“ ist noch nicht ausgefüllt."] : [],
     },
@@ -1191,7 +1195,7 @@ function ohneProxmoxSoc(p: string, base: Record<string, unknown>): unknown {
 
 function ohneProxmoxExtensions() {
   const row = (id: string, name: string, icon: string, state: string, hasSettings = false) => ({
-    id, version: "1.0.0", api_version: "0.1.0", source: "bundled", has_settings: hasSettings, state, name,
+    id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: hasSettings, state, name,
     description: `Modul ${name}`, icon, granted_permissions: [], last_error: null, needs_setup: false, setup_reasons: [],
   });
   const on = previewState.ohneProxmoxMin ? "disabled" : "enabled";
@@ -1204,7 +1208,7 @@ function ohneProxmoxExtensions() {
     row("gameserver", "Gameserver", "gamepad-2", "disabled", true),
     row("nexus-soc", "Nodvard Shield", "shield-alert", on, true),
     row("scripts", "Skripte", "terminal-square", on),
-    { ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", granted_permissions: [], last_error: null, state: "disabled", needs_setup: false, setup_reasons: [] },
+    { ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null, state: "disabled", needs_setup: false, setup_reasons: [] },
   ];
 }
 

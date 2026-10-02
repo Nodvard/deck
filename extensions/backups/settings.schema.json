@@ -48,6 +48,7 @@
   "x-secrets": [
     {
       "label": "backups-token:{name}",
+      "x-secret-bound-to": ["base_url"],
       "per_item": "connections",
       "title": "API-Token-Geheimnis",
       "description": "Der geheime Wert des Proxmox-API-Tokens."

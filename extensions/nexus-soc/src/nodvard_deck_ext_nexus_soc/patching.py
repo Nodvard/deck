@@ -18,9 +18,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
-from datetime import UTC
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING, Any
+from zoneinfo import ZoneInfo
 
 from nodvard_sdk import Notification, Severity
 from sqlalchemy import select, update
@@ -60,6 +62,14 @@ BUSY_MESSAGE = "Auf diesem Server läuft schon ein Update-Lauf."
 LOST_MESSAGE = ("Der Update-Lauf wurde auf dem Server abgebrochen (Neustart oder Absturz?). "
                 "Bitte dort „sudo dpkg --configure -a“ ausführen und neu prüfen.")
 MAX_PARALLEL = 4
+# Der Zeitplaner ueberspringt einen Lauf, wenn das Dashboard zu dieser Zeit nicht lief (Neustart,
+# Update). Ein Server gilt als "Pruefung ausgeblieben", wenn sein letzter Versuch vor dem zuletzt
+# faelligen Zeitpunkt des Zeitplans liegt (`last_due`).
+CATCH_UP_DELAY_S = 2 * 60  # nach dem Start kurz warten, bis Netz und SSH da sind
+# Der Hinweis auf der Seite erscheint erst so lange nach dem Zeitpunkt: die Tagespruefung selbst
+# braucht fuer mehrere Server einige Minuten, in der ein Server noch auf seine Reihe wartet.
+OVERDUE_HINT_GRACE_S = 15 * 60
+DEFAULT_ZONE = "Europe/Berlin"  # wie im Kern, wenn weder eine Einstellung noch die Umgebung eine Zone nennt
 # Nach "Neu starten" (shutdown -r +1) den neuen Stand selbst nachholen, statt bis zur
 # Tagespruefung "Neustart noetig" stehen zu lassen: nach 4 Minuten, bei
 # Bedarf noch zweimal.
@@ -68,6 +78,101 @@ RECHECK_TRIES = 3
 # So lange gilt ein ausgeloester Neustart als "unterwegs", wenn der Server laut
 # Laufzeit noch gar nicht neu gestartet hat.
 REBOOT_PENDING_MAX_S = 30 * 60
+
+
+def _cron_values(field: str, low: int, high: int) -> set[int] | None:
+    """Werte eines Cron-Felds (Minute oder Stunde): `*`, Zahlen, Bereiche, Listen, Schritte
+    (`*/6`, `10-20/5`). Ungueltig: None."""
+    values: set[int] = set()
+    for part in field.split(","):
+        base, slash, step_text = part.partition("/")
+        step = 1
+        if slash:
+            if not (step_text.isascii() and step_text.isdigit()) or int(step_text) < 1:
+                return None
+            step = int(step_text)
+        if base == "*":
+            first, last = low, high
+        elif "-" in base:
+            a, _, b = base.partition("-")
+            if not (a.isascii() and a.isdigit() and b.isascii() and b.isdigit()):
+                return None
+            first, last = int(a), int(b)
+        elif base.isascii() and base.isdigit():
+            first = int(base)
+            last = high if slash else first
+        else:
+            return None
+        if not low <= first <= last <= high:
+            return None
+        values.update(range(first, last + 1, step))
+    return values
+
+
+def last_due(cron: str, now: float, zone: tzinfo) -> float | None:
+    """Der zuletzt faellige Zeitpunkt (Unix-Zeit, nicht nach `now`) eines Zeitplans, der mindestens
+    taeglich laeuft (Tag, Monat und Wochentag `*`; nur Minute und Stunde zaehlen), in der Zone der
+    Zeitplaene. Anderes oder Ungueltiges: None."""
+    fields = cron.split()
+    if len(fields) != 5 or fields[2:] != ["*", "*", "*"]:
+        return None
+    minutes, hours = _cron_values(fields[0], 0, 59), _cron_values(fields[1], 0, 23)
+    if not minutes or not hours:
+        return None
+    today = datetime.fromtimestamp(now, zone)
+    for back in range(3):
+        day = today - timedelta(days=back)
+        due = [t for h in hours for m in minutes
+               if (t := datetime(day.year, day.month, day.day, h, m, tzinfo=zone).timestamp()) <= now]
+        if due:
+            return max(due)
+    return None
+
+
+def check_overdue(state: dict[str, Any] | None, due: float | None) -> bool:
+    """Liegt der letzte Pruefversuch (auch ein fehlgeschlagener zaehlt) vor dem zuletzt faelligen
+    Zeitpunkt (`last_due`)? Ohne gespeicherten Stand oder ohne Zeitpunkt: nein (noch nie geprueft
+    ist etwas anderes)."""
+    if not state or due is None:
+        return False
+    stamps = [t for t in (state.get("attempted_at"), state.get("checked_at")) if isinstance(t, int | float)]
+    return bool(stamps) and max(stamps) < due
+
+
+def overdue_applies(settings: dict[str, Any]) -> bool:
+    """Gilt `check_overdue` ueberhaupt? Nur wenn die Tagespruefung an ist und mindestens taeglich
+    laeuft (Tag, Monat und Wochentag im Zeitplan "*"). Bei einem woechentlichen Zeitplan oder
+    ausgeschalteter Pruefung ist ein alter Stand gewollt: kein Hinweis, kein Nachholen."""
+    if not settings.get("updates_check_enabled", True):
+        return False
+    fields = str(settings.get("updates_check_cron") or DEFAULT_UPDATE_CRONS["check"]).split()
+    return len(fields) == 5 and fields[2:] == ["*", "*", "*"]
+
+
+def _zone(name: object) -> ZoneInfo | None:
+    if not isinstance(name, str) or not name.strip():
+        return None
+    try:
+        return ZoneInfo(name.strip())
+    except Exception:  # noqa: BLE001 - unbekannter Name: naechste Quelle
+        return None
+
+
+async def schedule_zone(ctx: ExtensionContext) -> tzinfo:
+    """Die Zone, in der die Zeitplaene laufen: die Kern-Einstellung `system.timezone`, sonst wie im
+    Kern `NODVARD_DECK_TIMEZONE`, `TZ`, zuletzt `Europe/Berlin`."""
+    try:
+        stored = await ctx.settings.core("system.timezone")
+    except Exception:  # noqa: BLE001 - aeltere Kerne kennen den Zugriff nicht
+        stored = None
+    if isinstance(stored, dict):
+        stored = stored.get("value")  # der Kern speichert jede Einstellung als {"value": ...}
+    env = os.environ
+    for name in (stored, env.get("NODVARD_DECK_TIMEZONE"), env.get("LATTICE_TIMEZONE"), env.get("TZ"), DEFAULT_ZONE):
+        zone = _zone(name)
+        if zone is not None:
+            return zone
+    return UTC
 
 
 def run_out(r: UpdateRunRecord) -> dict[str, Any]:
@@ -112,6 +217,10 @@ class UpdateCenter:
         self._busy: dict[str, str] = {}  # host_id -> mode, solange ein Einspiel-Lauf laeuft
         self._rechecks: set[asyncio.Task[None]] = set()  # Nachpruefungen nach einem Neustart
         self._late: set[asyncio.Task[None]] = set()  # Nachfragen nach Ablauf der Wartezeit
+        self._catch_up: asyncio.Task[None] | None = None
+        # Laeuft gerade die Tagespruefung? Sie nimmt sich alle Server vor, auch die, die noch auf ihre
+        # Reihe warten (`MAX_PARALLEL`) und deshalb nicht in `_checking` stehen.
+        self._daily_running = 0
 
     async def abort_interrupted_runs(self) -> int:
         """Beim Start: Einspiel-Laeufe, die beim letzten Beenden noch liefen, als
@@ -191,7 +300,7 @@ class UpdateCenter:
             name = host.display_name or host.name or host_name
             await self._ctx.notify.send(Notification(
                 title=f"{up.MODE_LABEL.get(mode, mode)} auf {name}: " + ("fertig" if result.ok else "fehlgeschlagen"),
-                body=f"{result.summary}\nDas Dashboard wurde währenddessen neu gestartet.",
+                body=f"{result.public}\nDas Dashboard wurde währenddessen neu gestartet.",
                 severity=Severity.INFO if result.ok else Severity.WARNING,
                 payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
             ))
@@ -233,7 +342,7 @@ class UpdateCenter:
             name = host.display_name or host.name
             await self._ctx.notify.send(Notification(
                 title=f"{up.MODE_LABEL.get(mode, mode)} auf {name}: " + ("fertig" if result.ok else "fehlgeschlagen"),
-                body=f"{result.summary}\nDer Lauf hat länger gedauert, als das Dashboard gewartet hat.",
+                body=f"{result.public}\nDer Lauf hat länger gedauert, als das Dashboard gewartet hat.",
                 severity=Severity.INFO if result.ok else Severity.WARNING,
                 payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
             ))
@@ -256,13 +365,18 @@ class UpdateCenter:
             except Exception as exc:  # noqa: BLE001 - Fehler landet sichtbar am Server
                 status = up.UpdateStatus(manager=None, error=_describe(exc))
             now = _now().timestamp()
-            data = {**status.as_dict(), "checked_at": now}
             old = await load_baseline(self._ctx, host.id, "updates")
-            if status.error:
-                # Letzten guten Stand behalten, nur den Fehler dazuschreiben.
-                if old and not old.get("error"):
-                    data = {**old, "error": status.error, "checked_at": data["checked_at"]}
+            if status.error and not status.unsupported:
+                # Letzten guten Stand samt Zeitpunkt der letzten erfolgreichen Pruefung (`checked_at`)
+                # behalten; dazu kommen der Fehler und der Zeitpunkt dieses Versuchs (`attempted_at`).
+                # Ohne guten Stand gibt es keine erfolgreiche Pruefung.
+                if old and old.get("manager"):
+                    data = {**old, "error": status.error, "attempted_at": now}
+                else:
+                    data = {**status.as_dict(), "checked_at": None, "attempted_at": now}
             else:
+                # "Kein Paketmanager" (`unsupported`) ist ein gueltiges Ergebnis: geprueft, nur nichts zu tun.
+                data = {**status.as_dict(), "checked_at": now, "attempted_at": now}
                 # Gerade "Neu starten" ausgeloest, der Server laeuft aber noch (Laufzeit
                 # laenger als seit dem Ausloesen): den Hinweis behalten, sonst stuende
                 # sofort wieder "Neustart noetig" samt Knopf da.
@@ -279,12 +393,58 @@ class UpdateCenter:
         sem = asyncio.Semaphore(MAX_PARALLEL)
 
         async def one(h: Host) -> dict[str, Any]:
+            from .defender import _describe, _now
+
             async with sem:
-                return await self.check_host(h, refresh=refresh)
+                try:
+                    return await self.check_host(h, refresh=refresh)
+                except Exception as exc:  # noqa: BLE001 - ein Server darf die Pruefung der anderen nicht abbrechen
+                    logging.getLogger("nodvard_deck.ext.nexus-soc").exception("nexus_soc_update_check_failed host=%s", h.id)
+                    now = _now().timestamp()
+                    return {**up.UpdateStatus(manager=None, error=_describe(exc)).as_dict(), "checked_at": None, "attempted_at": now}
 
         results = await asyncio.gather(*(one(h) for h in hosts if h.id not in self._checking))
         await self._ctx.ws.broadcast("defender", {"updates": len(results)})
         return list(results)
+
+    def schedule_catch_up(self) -> None:
+        """Beim Start (und nach Einstellungsaenderungen): Server, deren Tagespruefung ausgeblieben
+        ist -- das Dashboard lief zur Pruefzeit nicht --, kurz nach dem Start nachholen. Prueft
+        nichts, solange die Tagespruefung aus ist."""
+        if self._catch_up is not None and not self._catch_up.done():
+            return
+
+        async def run() -> None:
+            await asyncio.sleep(CATCH_UP_DELAY_S)
+            from .defender import _now
+
+            now = _now().timestamp()
+            due = await self._last_due(await self._ctx.settings.get(), now)
+            if due is None or self._daily_running:
+                return  # laeuft die Tagespruefung gerade, kommt jeder Server dort dran
+            states = await load_baselines(self._ctx, "updates")
+            late = [h for h in await self._defender.target_hosts() if check_overdue(states.get(h.id), due) and h.id not in self._checking]
+            if late:
+                await self.check(late)
+
+        def done(task: asyncio.Task[None]) -> None:
+            if not task.cancelled() and task.exception() is not None:
+                logging.getLogger("nodvard_deck.ext.nexus-soc").error("nexus_soc_update_catch_up_failed", exc_info=task.exception())
+
+        self._catch_up = asyncio.ensure_future(run())
+        self._catch_up.add_done_callback(done)
+
+    async def _last_due(self, settings: dict[str, Any], now: float) -> float | None:
+        """Wann die Tagespruefung zuletzt faellig war; None, wenn "ausgeblieben" nichts bedeutet
+        (Pruefung aus, woechentlich oder kein lesbarer Zeitplan)."""
+        if not overdue_applies(settings):
+            return None
+        return last_due(str(settings.get("updates_check_cron") or DEFAULT_UPDATE_CRONS["check"]), now, await schedule_zone(self._ctx))
+
+    def cancel_catch_up(self) -> None:
+        """Beim Beenden der Erweiterung: ein noch wartendes Nachholen nicht mehr starten."""
+        if self._catch_up is not None and not self._catch_up.done():
+            self._catch_up.cancel()
 
     def start_check(self, hosts: list[Host]) -> int:
         todo = [h for h in hosts if h.id not in self._checking]
@@ -317,6 +477,8 @@ class UpdateCenter:
     # --- Uebersicht --------------------------------------------------------------
 
     async def overview(self) -> dict[str, Any]:
+        from .defender import _now
+
         hosts = await self._defender.target_hosts()
         states = await load_baselines(self._ctx, "updates")
         async with self._ctx.db.session() as session:
@@ -324,15 +486,21 @@ class UpdateCenter:
                 select(UpdateRunRecord).order_by(UpdateRunRecord.started_at.desc()).limit(30)
             )).scalars()]
         rows = []
+        now = _now().timestamp()
+        settings = await self._ctx.settings.get()
+        due = await self._last_due(settings, now)
+        # Gerade nach dem Zeitpunkt laeuft die Tagespruefung noch: erst nach einer Schonfrist melden,
+        # und nie, solange sie laeuft.
+        hint = due is not None and now - due > OVERDUE_HINT_GRACE_S and not self._daily_running
         for h in hosts:
             st = states.get(h.id)
             rows.append({
                 "host_id": h.id, "host_name": h.display_name or h.name, "host_status": h.status.value,
                 "status": st, "checking": h.id in self._checking, "busy": self._busy.get(h.id),
+                "check_overdue": hint and h.id not in self._checking and check_overdue(st, due),
                 "last_run": next((r for r in runs if r["host_id"] == h.id), None),
             })
         checked = [r["status"] for r in rows if r["status"] and not r["status"].get("error")]
-        settings = await self._ctx.settings.get()
         return {
             "hosts": rows,
             "summary": {
@@ -385,14 +553,21 @@ class UpdateCenter:
 
     async def execute(self, host: Host, mode: str, *, command: str, trigger: str) -> tuple[bool, str, str, int | None]:
         """Fuehrt einen Einspiel-Lauf aus, protokolliert ihn und prueft danach neu.
-        Rueckgabe: (ok, Zusammenfassung, Ausgabe, Rueckgabecode).
+        Rueckgabe: (ok, Zusammenfassung, Ausgabe, Rueckgabecode). Die Zusammenfassung kann eine Zeile
+        vom Server enthalten und gehoert nur in das Ergebnis der Aktion, nicht in Meldungen (dafuer
+        `_execute` und `UpgradeResult.public`)."""
+        result, output, exit_code = await self._execute(host, mode, command=command, trigger=trigger)
+        return result.ok, result.summary, output, exit_code
+
+    async def _execute(self, host: Host, mode: str, *, command: str, trigger: str) -> tuple[up.UpgradeResult, str, int | None]:
+        """Wie `execute`, mit dem ganzen Ergebnis statt der Zusammenfassung.
 
         Updates laufen entkoppelt auf dem Server (`_run_detached`), nur der
         Neustart (kurz, `shutdown -r +1`) laeuft direkt im SSH-Kanal."""
         from .defender import _describe, _new_id, _now
 
         if host.id in self._busy:
-            return False, BUSY_MESSAGE, "", None
+            return up.UpgradeResult(ok=False, summary=BUSY_MESSAGE), "", None
         # Sofort belegen, noch vor dem ersten await: zwei gleichzeitige Aufrufe (Aktion und
         # Zeitplan) duerfen nicht beide durch die Pruefung kommen.
         self._busy[host.id] = mode
@@ -417,7 +592,13 @@ class UpdateCenter:
                     if NO_ROOT in output:
                         result = up.UpgradeResult(ok=False, summary=NO_ROOT_MESSAGE)
                     else:
-                        result = up.UpgradeResult(ok=exit_code == 0, summary="Neustart in einer Minute." if exit_code == 0 else (output.strip()[-200:] or "Neustart fehlgeschlagen"))
+                        if exit_code == 0:
+                            result = up.UpgradeResult(ok=True, summary="Neustart in einer Minute.")
+                        else:
+                            result = up.UpgradeResult(
+                                ok=False, summary=output.strip()[-200:] or "Neustart fehlgeschlagen",
+                                public_summary=f"Neustart fehlgeschlagen. {up.DETAILS_HINT}",
+                            )
             except Exception as exc:  # noqa: BLE001
                 result = up.UpgradeResult(ok=False, summary=_describe(exc))
             late = result.timed_out
@@ -425,7 +606,7 @@ class UpdateCenter:
             if not late:
                 self._busy.pop(host.id, None)
         await self._settle(host, run_id, mode, trigger, result, output)
-        return result.ok, result.summary, output, exit_code
+        return result, output, exit_code
 
     async def _run_detached(self, host: Host, run_id: str, command: str) -> tuple[up.UpgradeResult, str, int | None]:
         """Startet den Lauf entkoppelt auf dem Server und wartet per kurzer Abfragen
@@ -460,7 +641,10 @@ class UpdateCenter:
                 if info.method is None:  # schon der Ordner scheiterte (oder gar keine Antwort): nichts gestartet
                     lines = [ln for ln in out.strip().splitlines() if not ln.startswith("@@")]
                     reason = lines[-1][:200] if lines else "keine Rückmeldung"
-                    return up.UpgradeResult(ok=False, summary=f"Update-Lauf konnte nicht gestartet werden: {reason}"), out, res.exit_code
+                    return up.UpgradeResult(
+                        ok=False, summary=f"Update-Lauf konnte nicht gestartet werden: {reason}",
+                        public_summary=f"Update-Lauf konnte nicht gestartet werden. {up.DETAILS_HINT}",
+                    ), out, res.exit_code
                 # Gestartet, aber die pid-Datei kam nicht innerhalb von 5 s (langsamer Pi):
                 # der Lauf kann trotzdem laufen -- nachsehen wie im Ausnahmefall.
                 unknown = "Der Update-Lauf wurde auf dem Server nicht gefunden – er ist wohl nicht gestartet."
@@ -543,7 +727,7 @@ class UpdateCenter:
         await self._close_run(run_id, result, output)
         await self._ctx.audit.log(
             action=f"nexus_soc.updates_{mode}", outcome="success" if result.ok else "failure", target_type="host",
-            target_id=host.id, reason=f"{up.MODE_LABEL.get(mode, mode)} auf {name}: {result.summary}",
+            target_id=host.id, reason=f"{up.MODE_LABEL.get(mode, mode)} auf {name}: {result.public}",
             detail={"run_id": run_id, "trigger": trigger, "upgraded": result.upgraded}, correlation_id=run_id,
         )
         if mode == "reboot":
@@ -560,6 +744,13 @@ class UpdateCenter:
     # --- Zeitplaene ----------------------------------------------------------------
 
     async def scheduled_check(self) -> dict[str, Any]:
+        self._daily_running += 1
+        try:
+            return await self._scheduled_check()
+        finally:
+            self._daily_running -= 1
+
+    async def _scheduled_check(self) -> dict[str, Any]:
         hosts = await self._defender.target_hosts()
         # Server, die gerade schon geprueft werden, ueberspringt check() -- sie kommen mit
         # ihrem zuletzt gespeicherten Stand in den Bericht, damit keiner fehlt.
@@ -568,7 +759,7 @@ class UpdateCenter:
         fresh = dict(zip((h.id for h in todo), results, strict=True))
         pairs = [(h, fresh[h.id] if h.id in fresh else await load_baseline(self._ctx, h.id, "updates") or {}) for h in hosts]
         settings = await self._ctx.settings.get()
-        title, body, level = build_update_report(pairs)
+        title, body, level = build_update_report(pairs, zone=await schedule_zone(self._ctx))
         if settings.get("updates_notify", True) and level != "none":
             sev = Severity.WARNING if level == "warning" else Severity.INFO
             await self._ctx.notify.send(Notification(
@@ -606,15 +797,16 @@ class UpdateCenter:
                 except ValueError as exc:
                     lines.append(f"- {name}: {exc}")
                     continue
-                ok, summary, _out, _rc = await self.execute(host, mode, command=command, trigger="schedule")
-                failed += 0 if ok else 1
-                lines.append(f"- {name}: {summary}" if ok else f"- {name}: FEHLGESCHLAGEN – {summary}")
+                # Die Meldung nennt nur `public`: eine Zeile vom Server steht nicht in der Push-Nachricht.
+                run, _out, _rc = await self._execute(host, mode, command=command, trigger="schedule")
+                failed += 0 if run.ok else 1
+                lines.append(f"- {name}: {run.public}" if run.ok else f"- {name}: FEHLGESCHLAGEN – {run.public}")
                 st = await load_baseline(self._ctx, host.id, "updates") or st
             else:
                 lines.append(f"- {name}: aktuell")
             if settings.get("auto_reboot", False) and st.get("reboot_required") and not st.get("reboot_pending_since"):
-                ok, summary, _out, _rc = await self.execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
-                lines.append(f"  ↳ Neustart: {summary}")
+                run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
+                lines.append(f"  ↳ Neustart: {run.public}")
         if lines:
             title = f"Automatische Updates: {len(hosts) - skipped} Server" + (f", {failed} Fehler" if failed else "")
             await self._ctx.notify.send(Notification(
@@ -627,17 +819,28 @@ class UpdateCenter:
 DEFAULT_UPDATE_CRONS = {"check": "0 6 * * *", "auto": "30 3 * * *"}
 
 
-def build_update_report(pairs: list[tuple[Any, dict[str, Any]]]) -> tuple[str, str, str]:
-    """Kurzbericht nach der taeglichen Pruefung. Stufe "none" = nichts zu melden."""
+def _stamp(ts: float, zone: tzinfo) -> str:
+    text = datetime.fromtimestamp(ts, zone).strftime("%d.%m.%Y %H:%M")
+    return text + " UTC" if zone is UTC else text
+
+
+def build_update_report(pairs: list[tuple[Any, dict[str, Any]]], zone: tzinfo = UTC) -> tuple[str, str, str]:
+    """Kurzbericht nach der taeglichen Pruefung. Stufe "none" = nichts zu melden.
+
+    Ein Server, dessen Pruefung fehlgeschlagen ist, steht als Fehler da -- auch wenn noch ein
+    Stand einer frueheren Pruefung gespeichert ist (`manager` gesetzt); dessen Zahlen zaehlen
+    nicht mit, die Zeile nennt nur, von wann er stammt."""
     lines: list[str] = []
     security = total = reboot = errors = 0
     for host, st in pairs:
         name = host.display_name or host.name
         if st.get("unsupported"):
             continue  # z. B. ein NAS mit eigener Firmware: kein Fehler, der jeden Tag gemeldet werden müsste
-        if st.get("error") and not st.get("manager"):
+        if st.get("error"):
             errors += 1
-            lines.append(f"- {name}: Prüfung fehlgeschlagen ({st['error']})")
+            checked = st.get("checked_at")
+            since = f", Stand von {_stamp(checked, zone)}" if isinstance(checked, int | float) else ""
+            lines.append(f"- {name}: Prüfung fehlgeschlagen ({st['error']}){since}")
             continue
         count, sec = int(st.get("count") or 0), int(st.get("security_count") or 0)
         total += count

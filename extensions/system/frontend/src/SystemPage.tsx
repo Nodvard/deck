@@ -125,7 +125,7 @@ function InfoView({ info, canRestart, busyUnit, onRestart }: {
           ))}
         </ul>
       ) : (
-        <p className="panel mb-4 px-3 py-2 text-sm text-emerald-300" data-testid="findings">Alles in Ordnung -- nichts braucht Aufmerksamkeit.</p>
+        <p className="panel mb-4 px-3 py-2 text-sm text-emerald-300" data-testid="findings">Alles in Ordnung – nichts braucht Aufmerksamkeit.</p>
       )}
 
       <div className="mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5">
@@ -338,7 +338,7 @@ export function SystemPage(): JSX.Element {
         />
       )}
       {!hostId && hosts !== null && hosts.length > 0 && (
-        <p className="text-sm opacity-60">Einen Linux-Server wählen -- oder über dessen Server-Seite „System-Monitor“ öffnen.</p>
+        <p className="text-sm opacity-60">Einen Linux-Server wählen – oder über dessen Server-Seite „System-Monitor“ öffnen.</p>
       )}
       {hostId && tab === "live" && <LiveView hostId={hostId} fetchLive={fetchLive} />}
       {tab === "info" && error && <p className="text-sm text-red-400">Fehler: {error}</p>}

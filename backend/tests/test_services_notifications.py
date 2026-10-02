@@ -416,3 +416,29 @@ async def test_channel_writing_via_own_session_is_not_blocked_by_the_notificatio
     finally:
         await engine.dispose()
         reset_engine_cache()
+
+
+@pytest.mark.asyncio
+async def test_notify_result_says_whether_a_channel_really_delivered(db_session):
+    """`NotifyResult.delivered`: wahr nur, wenn mindestens ein Kanal zugestellt hat. Ohne Kanal,
+    mit nur ausgefallenen Kanälen und im Wartungsfenster ist es falsch -- damit eine Seite nicht
+    "gesendet" meldet, obwohl nichts aufs Handy geht."""
+    from nodvard_deck.ext.context import NotifyHandle, _PermissionChecker
+
+    handle = NotifyHandle(_PermissionChecker("nexus-soc", ["notify.send"]), "nexus-soc")
+    note = SdkNotification(title="T", body="B")
+
+    assert (await handle.send(note)).delivered is False, "kein Kanal vorhanden"
+
+    broken = _RecordingChannel("chan-broken", fail=True)
+    _provide(broken, ext_id="ext-broken")
+    result = await handle.send(note)
+    assert (result.delivered, result.suppressed) == (False, False), "der einzige Kanal ist ausgefallen"
+
+    good = _RecordingChannel("chan-good")
+    _provide(good, ext_id="ext-good")
+    assert (await handle.send(note)).delivered is True, "ein Kanal reicht"
+
+    await _running_window(db_session, ["host-1"])
+    quiet = await handle.send(SdkNotification(title="T", body="B", payload={"host_id": "host-1"}))
+    assert (quiet.suppressed, quiet.delivered) == (True, False)

@@ -59,6 +59,25 @@ async def test_trigger_now_creates_run_writes_log_and_marks_succeeded(service, d
 
 
 @pytest.mark.asyncio
+async def test_handler_sees_how_the_job_was_started(service, db_session):
+    """`nodvard_sdk.current_job_trigger()`: "manual" bei "Jetzt ausfuehren", "schedule" beim
+    Zeitplan, ausserhalb eines Laufs None (z. B. Dauerfreigaben der Skripte nur nach Zeitplan)."""
+    from nodvard_sdk import current_job_trigger
+
+    job = await _make_job(db_session)
+    seen: list[str | None] = []
+
+    async def handler(**kwargs):
+        seen.append(current_job_trigger())
+
+    await service.trigger_now(job, handler)
+    await service._run_job(job_id=job.id, ext_id=job.ext_id, handler=handler, params={}, trigger_kind="schedule")
+
+    assert seen == ["manual", "schedule"]
+    assert current_job_trigger() is None
+
+
+@pytest.mark.asyncio
 async def test_trigger_now_records_failure_without_crashing(service, db_session):
     job = await _make_job(db_session)
 

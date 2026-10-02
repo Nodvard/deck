@@ -59,10 +59,10 @@ interface ContainerStats {
   mem_limit: number | null;
 }
 
-/** RAM "unbekannt" statt "0 B": auf einem Raspberry Pi zaehlt der Kernel standardmaessig keinen
- * Speicher je Container (cgroup-Speicher-Abrechnung aus). */
-const MEASURING_HINT = "CPU/RAM werden gemessen -- docker stats braucht je Host ein paar Sekunden.";
-const MEM_UNKNOWN_HINT = "Der Host meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardmäßig aus).";
+/** RAM "unbekannt" statt "0 B": live auf dem Raspberry Pi zaehlt der Kernel keinen
+ * Speicher je Container (cgroup-Speicher-Abrechnung standardmaessig aus). */
+const MEASURING_HINT = "CPU/RAM werden gemessen – das braucht je Server ein paar Sekunden.";
+const MEM_UNKNOWN_HINT = "Der Server meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardmäßig aus).";
 
 const TONE_CLASS: Record<string, string> = {
   good: "bg-emerald-500/15 text-emerald-300 border-emerald-500/40",
@@ -70,6 +70,14 @@ const TONE_CLASS: Record<string, string> = {
   danger: "bg-red-500/15 text-red-300 border-red-500/40",
   neutral: "bg-white/10 opacity-70",
 };
+
+/** Eine Zeile der Container-Tabelle wird am Handy zur Karte (siehe Tabelle unten). */
+const CARD_ROW =
+  "max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-3 max-md:gap-y-2 max-md:rounded-lg max-md:border max-md:border-white/10 max-md:bg-white/[0.03] max-md:p-3";
+/** Wert mit eigener Beschriftung (`data-label`), solange die Spaltenköpfe fehlen. */
+const CARD_LABEL = "max-md:before:mr-1 max-md:before:opacity-60 max-md:before:content-[attr(data-label)]";
+/** Größere Knöpfe am Handy: ein Finger trifft die kleinen Schaltflächen sonst kaum. */
+const TOUCH = "max-md:px-3 max-md:py-2";
 
 /** Dockers Zustandswoerter auf Deutsch -- die Farbe haengt weiter am `tone` aus dem
  * Backend, nicht am Text. */
@@ -83,6 +91,54 @@ export const STATE_LABEL: Record<string, string> = {
   dead: "tot",
   error: "Fehler",
 };
+
+/** Zeiteinheiten: Einzahl, Mehrzahl (jeweils im Dativ, wie nach „seit“ und „vor“) und der Artikel für „etwa …“. */
+const DURATION_UNITS: Record<string, { one: string; many: string; about: string }> = {
+  second: { one: "Sekunde", many: "Sekunden", about: "einer" },
+  minute: { one: "Minute", many: "Minuten", about: "einer" },
+  hour: { one: "Stunde", many: "Stunden", about: "einer" },
+  day: { one: "Tag", many: "Tagen", about: "einem" },
+  week: { one: "Woche", many: "Wochen", about: "einer" },
+  month: { one: "Monat", many: "Monaten", about: "einem" },
+  year: { one: "Jahr", many: "Jahren", about: "einem" },
+};
+
+/** Dockers Zeitangabe („3 hours“, „About an hour“, „Less than a second“) in der Wortform nach „seit“ und „vor“. */
+function durationText(raw: string): string | null {
+  const text = raw.trim().toLowerCase();
+  if (text === "less than a second") return "weniger als einer Sekunde";
+  const about = /^about an? (second|minute|hour|day|week|month|year)$/.exec(text);
+  if (about) return `etwa ${DURATION_UNITS[about[1]].about} ${DURATION_UNITS[about[1]].one}`;
+  const counted = /^(\d+) (second|minute|hour|day|week|month|year)s?$/.exec(text);
+  if (!counted) return null;
+  const n = Number(counted[1]);
+  const unit = DURATION_UNITS[counted[2]];
+  return `${n} ${n === 1 ? unit.one : unit.many}`;
+}
+
+/** Dockers Status-Zeile („Up 3 hours“, „Exited (0) 10 hours ago“) auf Deutsch; was nicht passt, bleibt wie es ist. */
+export function statusText(status: string | null | undefined): string {
+  const raw = (status ?? "").trim();
+  if (!raw) return "";
+  const health = (h: string | undefined) => (!h ? "" : h === "healthy" ? " (gesund)" : h === "unhealthy" ? " (nicht gesund)" : h === "health: starting" ? " (wird geprüft)" : ` (${h})`);
+  const up = /^Up (.+?)(?: \(((?:un)?healthy|health: starting)\))?(?: \(Paused\))?$/i.exec(raw);
+  if (up) {
+    const d = durationText(up[1]);
+    if (d) return `Läuft seit ${d}${health(up[2]?.toLowerCase())}${/\(Paused\)$/i.test(raw) ? " (pausiert)" : ""}`;
+  }
+  const ended = /^Exited \((-?\d+)\) (.+) ago$/i.exec(raw);
+  if (ended) {
+    const d = durationText(ended[2]);
+    if (d) return `Beendet (Code ${ended[1]}) vor ${d}`;
+  }
+  const restarting = /^Restarting \((-?\d+)\) (.+) ago$/i.exec(raw);
+  if (restarting) {
+    const d = durationText(restarting[2]);
+    if (d) return `Startet neu (Code ${restarting[1]}), zuletzt vor ${d}`;
+  }
+  const plain: Record<string, string> = { created: "Angelegt, noch nicht gestartet", paused: "Pausiert", dead: "Defekt", "removal in progress": "Wird entfernt" };
+  return plain[raw.toLowerCase()] ?? raw;
+}
 
 /** Image-Updates (rein lesende Pruefung, siehe image_updates.py): Ergebnis je laufendem
  * Container und Stand je Host. Schluessel wie `ServiceEntry.id` (`host_id:container`).
@@ -135,7 +191,7 @@ export function scopeImages(images: ImageUpdates | null, hostId: string | null):
  * Problem: sie stehen nur als Zahl dabei (und allein sind sie auch kein "alles aktuell",
  * denn verglichen wurde ja nichts). */
 export function summarizeImages(images: ImageUpdates | null, checking: boolean): string | null {
-  if (checking) return "Image-Updates: Die Registries werden gefragt …";
+  if (checking) return "Image-Updates: Die Image-Quellen werden gefragt …";
   if (!images) return null;
   const results = Object.values(images.data ?? {});
   const hosts = Object.values(images.hosts ?? {});
@@ -165,7 +221,7 @@ export function summarizeImages(images: ImageUpdates | null, checking: boolean):
   if (local > 0) parts.push(`${local} selbst gebaut`);
   if (unknown > 0) parts.push(`${unknown} nicht prüfbar`);
   if (stale > 0) parts.push(`${stale} mit älterer Antwort der Registry`);
-  if (failedHosts > 0) parts.push(failedHosts === 1 ? "1 Host nicht erreichbar" : `${failedHosts} Hosts nicht erreichbar`);
+  if (failedHosts > 0) parts.push(failedHosts === 1 ? "1 Server nicht erreichbar" : `${failedHosts} Server nicht erreichbar`);
   if (applying > 0) parts.push(applyingText);
   return `${head} · ${parts.join(" · ")}`;
 }
@@ -237,7 +293,7 @@ async function runHostAction(hostId: string, actionType: string, reason: string,
   const { action, approved } = await runAction(`/hosts/${hostId}/actions/${actionType}`, { method: "POST", body: JSON.stringify({ payload: {}, reason }) }, { signal });
   const status = action.status ?? "?";
   if (!approved) {
-    if (status === "proposed") return `vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`;
+    if (status === "proposed") return `vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`;
     return action.result?.output ?? ACTION_STATUS_LABEL[status] ?? status;
   }
   if (status === "succeeded") return action.result?.output ?? "erledigt";
@@ -249,8 +305,8 @@ interface ImageRow { id: string; name: string | null; dangling: boolean; size: n
 
 const PRUNE_ACTIONS: { type: string; label: string; confirm: string }[] = [
   { type: "docker.prune_images", label: "Verwaiste Images entfernen", confirm: "Images ohne Namen entfernen, die kein Container nutzt?" },
-  { type: "docker.prune_unused_images", label: "Ungenutzte Images entfernen", confirm: "Alle Images ohne Container entfernen -- auch benannte? Werden sie wieder gebraucht, lädt Docker sie neu herunter." },
-  { type: "docker.prune_build_cache", label: "Build-Cache leeren", confirm: "Build-Cache leeren? Der nächste docker build auf diesem Host dauert dann deutlich länger." },
+  { type: "docker.prune_unused_images", label: "Ungenutzte Images entfernen", confirm: "Alle Images ohne Container entfernen – auch benannte? Werden sie wieder gebraucht, lädt Docker sie neu herunter." },
+  { type: "docker.prune_build_cache", label: "Build-Cache leeren", confirm: "Build-Cache leeren? Der nächste docker build auf diesem Server dauert dann deutlich länger." },
 ];
 
 /** Docker-Speicher eines Hosts (Roadmap Punkt 2, Portainer-Ersatz): wofuer der Platz
@@ -412,7 +468,7 @@ function DetailsPanel({ entry }: { entry: ServiceEntry }): JSX.Element {
       <p className="mt-2 mb-0.5 font-medium opacity-60">Netze</p>
       <p className="opacity-85">{d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" · ") || "keine"}</p>
       <p className="mt-2 mb-0.5 font-medium opacity-60">Umgebungsvariablen ({d.env_keys.length})</p>
-      <p className="break-words opacity-70" title="Werte werden bewusst nicht angezeigt -- dort stehen oft Passwörter.">{d.env_keys.join(", ") || "keine"}</p>
+      <p className="break-words opacity-70" title="Werte werden bewusst nicht angezeigt – dort stehen oft Passwörter.">{d.env_keys.join(", ") || "keine"}</p>
     </div>
   );
 }
@@ -645,7 +701,7 @@ export function ServiceMatrixPage(): JSX.Element {
   async function trigger(entry: ServiceEntry, verb: Verb) {
     const text = VERB_TEXT[verb];
     if (text.confirm) {
-      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst -- die Oberfläche ist kurz weg." : "";
+      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst – die Oberfläche ist kurz weg." : "";
       const ok = await deck().confirmDialog(`"${entry.name}" ${text.confirm}${extra}`, {
         danger: verb === "stop",
         confirmLabel: text.label,
@@ -660,7 +716,7 @@ export function ServiceMatrixPage(): JSX.Element {
         body: JSON.stringify({ payload: { container: entry.container }, reason: `Über die Service-Matrix ausgelöst (${verb}).` }),
       }, { signal: unmountSignal() });
       if (!approved && action.status === "proposed") {
-        setMessage(`"${entry.name}": ${text.label} vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        setMessage(`"${entry.name}": ${text.label} vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
         return;
       }
       const status = action.status ?? "?";
@@ -698,7 +754,7 @@ export function ServiceMatrixPage(): JSX.Element {
     const members = (services ?? []).filter((s) => s.host_id === entry.host_id && s.compose_project === project);
     const self = members.some((s) => s.is_self);
     const ok = await deck().confirmDialog(
-      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? " Darin läuft Nodvard Deck selbst -- die Oberfläche ist kurz weg." : ""}`,
+      `Stack "${project}" neu starten (${members.map((s) => s.name).join(", ")})? Die Dienste sind kurz nicht erreichbar.${self ? " Darin läuft Nodvard Deck selbst – die Oberfläche ist kurz weg." : ""}`,
       { confirmLabel: "Neu starten" },
     );
     if (!ok) return;
@@ -717,7 +773,7 @@ export function ServiceMatrixPage(): JSX.Element {
             : `Stack "${project}": ${ACTION_STATUS_LABEL[status] ?? status}${action.result?.error ? ` (${action.result.error})` : ""}`,
         );
       } else if (status === "proposed") {
-        setMessage(`Stack "${project}": vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        setMessage(`Stack "${project}": vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
       } else {
         setMessage(`Stack "${project}": ${ACTION_STATUS_LABEL[status] ?? status}`);
       }
@@ -758,7 +814,7 @@ export function ServiceMatrixPage(): JSX.Element {
         <button type="button" onClick={load} className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
           Aktualisieren
         </button>
-        {deck().hasPermission("hosts.execute") && (
+        {deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && (
           <button type="button" disabled={imagesChecking} onClick={() => void startImageCheck(false)}
             title="Fragt bei den Registries nach, ob es neuere Images gibt. Es wird nichts heruntergeladen oder neu gestartet."
             className="px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
@@ -767,7 +823,7 @@ export function ServiceMatrixPage(): JSX.Element {
         )}
         {hostFilter && (
           <span className="accent-soft flex items-center gap-1 rounded px-2 py-0.5 text-xs" data-testid="host-filter">
-            Nur {(services ?? []).find((s) => s.host_id === hostFilter)?.host ?? "dieser Host"}
+            Nur {(services ?? []).find((s) => s.host_id === hostFilter)?.host ?? "dieser Server"}
             <button type="button" onClick={() => updateUrl({ host: null })} aria-label="Filter entfernen" className="opacity-70 hover:opacity-100">
               ✕
             </button>
@@ -781,14 +837,19 @@ export function ServiceMatrixPage(): JSX.Element {
           {imageMessage && <span className="text-red-400">{imageMessage}</span>}
           {!imagesChecking && imageSummary && deck().hasPermission("hosts.execute") && (
             <button type="button" onClick={() => void startImageCheck(true)}
-              title="Ohne Zwischenspeicher: Antworten der Registries werden sonst 6 Stunden wiederverwendet. Docker Hub begrenzt die Zahl der Abfragen."
+              title="Fragt ohne Zwischenspeicher noch einmal bei den Image-Quellen (Registries) nach. Sonst werden ihre Antworten 6 Stunden wiederverwendet. Docker Hub begrenzt die Zahl der Abfragen."
               className="underline opacity-70 hover:opacity-100">
-              Registry neu abfragen
+              Neu abfragen
             </button>
           )}
         </p>
       )}
       {(services ?? []).length === 0 && <NoContainers />}
+      {(services ?? []).length > 0 && byHost.size === 0 && (
+        <p className="mb-3 text-sm opacity-70" data-testid="no-match">
+          {needle ? "Kein Container passt zu deiner Suche." : "Für diesen Filter gibt es keine Container."}
+        </p>
+      )}
       {[...byHost.entries()].map(([host, entries]) => (
         <section key={host} className="mb-6 overflow-x-auto">
           <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -822,8 +883,12 @@ export function ServiceMatrixPage(): JSX.Element {
               <StoragePanel hostId={storageFor} />
             </div>
           )}
-          <table className="w-full text-sm">
-            <thead>
+          {/* Am Handy (unter 768 px) wird aus jeder Zeile eine Karte: Name, Zustand, Werte und die Knöpfe
+              stehen untereinander, nichts liegt rechts außerhalb des Bildschirms. Die Spaltenköpfe entfallen,
+              die Werte tragen ihre Beschriftung selbst (`data-label`). Die Rollen halten die Tabellen-Bedeutung
+              für Vorlese-Programme, die sie bei `display: block` sonst verlieren. */}
+          <table role="table" className="w-full text-sm max-md:block">
+            <thead className="max-md:hidden">
               <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
                 <th className="py-1 w-1/4">Container</th>
                 <th className="py-1 whitespace-nowrap">Zustand</th>
@@ -834,16 +899,18 @@ export function ServiceMatrixPage(): JSX.Element {
                 <th className="py-1">Aktionen</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/5">
+            <tbody role="rowgroup" className="divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0">
               {entries.map((s) => {
                 const manageable = Boolean(s.host_id && s.container) && s.state !== "error";
                 const isRunning = s.state === "running" || s.state === "restarting";
                 const logsOpen = logsFor === s.id;
                 const busy = (verb: Verb) => pending === `${s.id}:${verb}`;
+                // Am Handy steht in der Karte kein einsames „–“: die Zelle erscheint erst mit einem Ergebnis.
+                const imageShown = Boolean(images?.data[s.id]) || Boolean(s.host_id && images?.hosts[s.host_id]?.checking);
                 return (
                   <Fragment key={s.id}>
-                    <tr>
-                      <td className="py-1.5 break-words">
+                    <tr role="row" className={CARD_ROW} data-testid={`row-${s.id}`}>
+                      <td role="cell" className="py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base">
                         {s.name}
                         {s.is_self && <span className="ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70">Nodvard Deck</span>}
                         {s.compose_project && (
@@ -851,7 +918,7 @@ export function ServiceMatrixPage(): JSX.Element {
                             type="button"
                             disabled={!deck().hasPermission("hosts.execute") || pending === `stack:${s.host_id}:${s.compose_project}`}
                             onClick={() => void restartStack(s)}
-                            title="Docker-Compose-Projekt -- klicken: ganzen Stack neu starten"
+                            title="Docker-Compose-Projekt – klicken: ganzen Stack neu starten"
                             className="ml-1.5 rounded bg-sky-500/15 px-1 text-[10px] text-sky-300 hover:bg-sky-500/25 disabled:cursor-default disabled:hover:bg-sky-500/15"
                           >
                             {s.compose_project}
@@ -859,13 +926,15 @@ export function ServiceMatrixPage(): JSX.Element {
                         )}
                         {s.image && <span className="block text-xs opacity-50">{s.image}</span>}
                       </td>
-                      <td className="py-1.5">
+                      <td role="cell" className="py-1.5 max-md:py-0">
                         <span className={`rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`}>
                           {STATE_LABEL[s.state] ?? s.state}
                         </span>
                       </td>
-                      <td className="py-1.5 break-words opacity-70">{s.status}</td>
-                      <td className="py-1.5 text-xs">
+                      <td role="cell" className="py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs" title={s.status !== statusText(s.status) ? s.status : undefined}>
+                        {statusText(s.status)}
+                      </td>
+                      <td role="cell" className={`py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`}>
                         <div data-testid={`image-${s.id}`}>
                           {manageable && <ImageUpdateBadge result={images?.data[s.id]} checking={Boolean(s.host_id && images?.hosts[s.host_id]?.checking)} running={isRunning} />}
                         </div>
@@ -881,7 +950,7 @@ export function ServiceMatrixPage(): JSX.Element {
                           />
                         )}
                       </td>
-                      <td className="py-1.5 whitespace-nowrap text-xs opacity-80" data-testid={`cpu-${s.id}`}>
+                      <td role="cell" data-label="CPU" className={`py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`} data-testid={`cpu-${s.id}`}>
                         {!statsLoaded ? (
                           <span title={MEASURING_HINT}>…</span>
                         ) : stats[s.id]?.cpu_percent != null ? (
@@ -890,7 +959,7 @@ export function ServiceMatrixPage(): JSX.Element {
                           "–"
                         )}
                       </td>
-                      <td className="py-1.5 whitespace-nowrap text-xs opacity-80" data-testid={`mem-${s.id}`}>
+                      <td role="cell" data-label="RAM" className={`py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`} data-testid={`mem-${s.id}`}>
                         {!statsLoaded ? (
                           <span title={MEASURING_HINT}>…</span>
                         ) : stats[s.id] ? (
@@ -903,41 +972,41 @@ export function ServiceMatrixPage(): JSX.Element {
                           "–"
                         )}
                       </td>
-                      <td className="py-1.5">
+                      <td role="cell" className="py-1.5 max-md:w-full max-md:py-0">
                         <div className="flex flex-wrap gap-1.5">
                           {manageable && !isRunning && (
                             <button type="button" disabled={busy("start")} onClick={() => void trigger(s, "start")}
-                              className="rounded bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40">
+                              className={`rounded bg-emerald-500/20 px-2 py-1 text-xs text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 ${TOUCH}`}>
                               {busy("start") ? "…" : "Starten"}
                             </button>
                           )}
                           {manageable && isRunning && (
                             <button type="button" disabled={busy("restart")} onClick={() => void trigger(s, "restart")}
-                              className="px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
+                              className={`px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition ${TOUCH}`}>
                               {busy("restart") ? "…" : "Neustart"}
                             </button>
                           )}
                           {manageable && isRunning && (
                             <button type="button" disabled={busy("stop") || s.is_self} onClick={() => void trigger(s, "stop")}
-                              title={s.is_self ? "Das ist Nodvard Deck selbst -- Stoppen nur direkt auf dem Host." : undefined}
-                              className="rounded bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 disabled:opacity-40">
+                              title={s.is_self ? "Das ist Nodvard Deck selbst – Stoppen nur direkt auf dem Server." : undefined}
+                              className={`rounded bg-red-500/20 px-2 py-1 text-xs text-red-300 hover:bg-red-500/30 disabled:opacity-40 ${TOUCH}`}>
                               {busy("stop") ? "…" : "Stoppen"}
                             </button>
                           )}
                           {manageable && (
                             <button type="button" onClick={() => setDetailsFor(detailsFor === s.id ? null : s.id)} aria-expanded={detailsFor === s.id}
-                              className={`rounded px-2 py-1 text-xs hover:bg-white/20 ${detailsFor === s.id ? "bg-white/20" : "bg-white/10"}`}>
+                              className={`rounded px-2 py-1 text-xs hover:bg-white/20 ${TOUCH} ${detailsFor === s.id ? "bg-white/20" : "bg-white/10"}`}>
                               Details
                             </button>
                           )}
                           {manageable && (
                             <button type="button" onClick={() => setLogsFor(logsOpen ? null : s.id)} aria-expanded={logsOpen}
-                              className={`rounded px-2 py-1 text-xs hover:bg-white/20 ${logsOpen ? "bg-white/20" : "bg-white/10"}`}>
+                              className={`rounded px-2 py-1 text-xs hover:bg-white/20 ${TOUCH} ${logsOpen ? "bg-white/20" : "bg-white/10"}`}>
                               Logs
                             </button>
                           )}
                           {s.url && (
-                            <a href={s.url} target="_blank" rel="noreferrer" className="px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline">
+                            <a href={s.url} target="_blank" rel="noreferrer" className="px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2">
                               Öffnen
                             </a>
                           )}
@@ -945,23 +1014,23 @@ export function ServiceMatrixPage(): JSX.Element {
                       </td>
                     </tr>
                     {detailsFor === s.id && (
-                      <tr>
-                        <td colSpan={7} className="bg-black/20 p-2">
+                      <tr role="row" className="max-md:block">
+                        <td role="cell" colSpan={7} className="bg-black/20 p-2 max-md:block">
                           <DetailsPanel entry={s} />
                         </td>
                       </tr>
                     )}
                     {updateFor === s.id && s.host_id && s.container && (
-                      <tr>
-                        <td colSpan={7} className="bg-black/20 p-2">
+                      <tr role="row" className="max-md:block">
+                        <td role="cell" colSpan={7} className="bg-black/20 p-2 max-md:block">
                           <UpdatePanel hostId={s.host_id} container={s.container} applying={images?.applying?.[s.id]}
                             onStarted={reloadImages} onFinished={load} onClose={() => setUpdateFor(null)} />
                         </td>
                       </tr>
                     )}
                     {logsOpen && (
-                      <tr>
-                        <td colSpan={7} className="bg-black/20 p-2">
+                      <tr role="row" className="max-md:block">
+                        <td role="cell" colSpan={7} className="bg-black/20 p-2 max-md:block">
                           <LogPanel entry={s} onClose={() => setLogsFor(null)} />
                         </td>
                       </tr>

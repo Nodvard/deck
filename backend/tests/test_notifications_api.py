@@ -86,3 +86,47 @@ async def test_unread_count_and_mark_all_read(client, db_session):
     assert (await client.get("/api/v1/notifications/unread-count", headers=_auth_header(token))).json() == {"unread": 0}
     assert (await client.post("/api/v1/notifications/read-all", headers=_auth_header(token))).json() == {"marked": 0}
     assert (await client.get("/api/v1/notifications/unread-count")).status_code == 401
+
+
+async def _role_header(client, db_session, role: str) -> dict:
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+    from nodvard_deck.services import auth as auth_service
+
+    roles = await auth_service.ensure_builtin_roles(db_session)
+    user = User(username=f"u-{role}", password_hash=security.hash_password("whatever123"), is_active=True)
+    user.roles.append(roles[role])
+    db_session.add(user)
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": user.username, "password": "whatever123"})
+    assert login.status_code == 200, login.text
+    return _auth_header(login.json()["access_token"])
+
+
+@pytest.mark.asyncio
+async def test_viewer_can_read_but_not_mark_as_read(client, db_session):
+    """Der Lesestatus gilt fuer alle: wer nur lesen darf, blendet keine Meldung fuer andere aus."""
+    owner = await _bootstrap_owner(client)
+    note = await notifications_service.send(db_session, title="Neue Login-IP", body="x", severity="critical")
+    viewer = await _role_header(client, db_session, "viewer")
+
+    assert (await client.get("/api/v1/notifications", headers=viewer)).status_code == 200
+    assert (await client.get("/api/v1/notifications/unread-count", headers=viewer)).json() == {"unread": 1}
+
+    all_ = await client.post("/api/v1/notifications/read-all", headers=viewer)
+    assert all_.status_code == 403
+    assert "notifications.write" in all_.json()["detail"]
+    one = await client.post("/api/v1/notifications/read", json={"ids": [note.id]}, headers=viewer)
+    assert one.status_code == 403
+
+    # Beim Owner bleibt die Meldung ungelesen.
+    assert (await client.get("/api/v1/notifications/unread-count", headers=_auth_header(owner))).json() == {"unread": 1}
+
+
+@pytest.mark.asyncio
+async def test_operator_can_mark_as_read(client, db_session):
+    note = await notifications_service.send(db_session, title="A", body="x")
+    operator = await _role_header(client, db_session, "operator")
+
+    assert (await client.post("/api/v1/notifications/read", json={"ids": [note.id]}, headers=operator)).json() == {"marked": 1}
+    assert (await client.post("/api/v1/notifications/read-all", headers=operator)).json() == {"marked": 0}

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import socket
+from datetime import datetime
 
 import asyncssh
 import pytest
@@ -462,6 +463,83 @@ async def test_check_as_root_needs_no_sudo():
     assert [(i.id, i.status, i.detail) for i in state.items] == [("root", "ok", "Angemeldet als root – sudo nicht nötig.")]
 
 
+async def _host_out(client, token, host_id) -> dict:
+    r = await client.get(f"/api/v1/hosts/{host_id}", headers=_auth(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+@pytest.mark.asyncio
+async def test_host_out_shows_a_login_only_after_one_really_worked(
+    client, db_session, local_ssh_server, fake_probe, pool, test_settings
+):
+    """Der Erreichbarkeits-Job setzt „up“ schon, wenn nur der Port antwortet: erst eine echte Anmeldung
+    füllt `login_ok_at` -- und eine spätere gescheiterte Anmeldung nimmt es wieder weg."""
+    from nodvard_deck.core import vault
+
+    _, port, *_ = local_ssh_server
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    cred = await _add_password(client, token, host["id"], port)
+    # Wie der Erreichbarkeits-Job: Zustand „up“, ohne dass je eine Anmeldung klappte.
+    stored = await db_session.get(Host, host["id"])
+    stored.status = "up"
+    await db_session.commit()
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None
+
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None, "ein Zwischenstand ohne Anmeldung belegt nichts"
+    r = await _check(client, token, host["id"])
+    assert _statuses(r)["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
+
+    # Das Passwort stimmt nicht mehr: die Anmeldung scheitert, der alte Beleg gilt nicht weiter.
+    db_session.expire_all()
+    credential = await db_session.get(HostCredential, cred["id"])
+    await vault.replace_secret_value(db_session, vault.load_keyring(test_settings), credential.secret_id, "falsches-passwort-xyz")
+    await db_session.commit()
+    host_check.reset_state()
+    r = await _check(client, token, host["id"])
+    assert _statuses(r)["login"] == "fail"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_login_proof_is_dropped_when_the_server_shows_another_host_key(client, db_session, local_ssh_server, fake_probe, pool):
+    """Der Erreichbarkeits-Job setzt nach einem Schlüsselwechsel bald wieder „up“: ohne das Wegräumen
+    stünde der Zugang dann grün da, obwohl jede Anmeldung am geänderten Schlüssel scheitert."""
+    _, port, *_ = local_ssh_server
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    await _add_password(client, token, host["id"], port)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
+
+    [row] = await _known_rows(db_session)
+    row.fingerprint = "SHA256:absichtlich-falsch"
+    await db_session.commit()
+    r = await _check(client, token, host["id"])
+    assert r.json()["host_key"]["status"] == "changed"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_login_proof_is_bound_to_credential_and_address(client, db_session, local_ssh_server, fake_probe, pool):
+    _, port, *_ = local_ssh_server
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    await _add_password(client, token, host["id"], port)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
+
+    # Neue Adresse: der Beleg gehörte zur alten und zählt nicht mehr.
+    r = await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost"}, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None
+
+
 @pytest.mark.asyncio
 async def test_check_wrong_password_fails_the_login_only(client, db_session, local_ssh_server, ssh_server_stats):
     _, port, *_ = local_ssh_server
@@ -527,6 +605,52 @@ async def test_check_changed_key_without_credential_is_a_failure_too(client, db_
     assert pin.status_code == 409, "die Prüfung hat den alten Merkzettel verworfen"
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("how", ["refused", "login-timeout", "unknown-key"])
+async def test_login_proof_stays_when_the_server_is_unreachable_or_the_key_is_unconfirmed(
+    client, db_session, local_ssh_server, fake_probe, pool, monkeypatch, how
+):
+    """Ein Server, der gerade nicht antwortet, oder ein (wieder) unbestätigter Server-Schlüssel widerruft
+    nicht, dass die Anmeldung früher klappte: der Beleg bleibt, bis eine Anmeldung wirklich scheitert."""
+    from nodvard_deck.core import ssh
+
+    _, port, *_ = local_ssh_server
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    await _add_password(client, token, host["id"], port)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    proof = (await _host_out(client, token, host["id"]))["login_ok_at"]
+    assert proof is not None
+
+    if how == "refused":
+
+        async def _refuse(*args, **kwargs):
+            raise ConnectionRefusedError
+
+        monkeypatch.setattr(asyncio, "open_connection", _refuse)
+    elif how == "login-timeout":
+
+        async def _timeout(*args, **kwargs):
+            raise ssh.SshTimeout("keine Antwort")
+
+        monkeypatch.setattr(ssh, "connect", _timeout)
+    else:
+        [row] = await _known_rows(db_session)
+        await db_session.delete(row)
+        await db_session.commit()
+    r = await _check(client, token, host["id"])
+    assert r.status_code == 200, r.text
+    assert r.json()["ok"] is False
+    if how == "unknown-key":
+        assert _statuses(r) == {"reachable": "ok", "host_key": "confirm"}
+    elif how == "login-timeout":
+        assert _statuses(r)["login"] == "fail"
+    else:
+        assert _statuses(r) == {"reachable": "fail"}
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] == proof
+
+
 # ---------------------------------------------------------------------------
 # Mit Schlüssel (generiert)
 # ---------------------------------------------------------------------------
@@ -583,6 +707,85 @@ async def test_check_with_an_explicit_credential_id(client, db_session, local_ss
     assert default.json()["credential_id"] == old["id"] and _statuses(default)["login"] == "fail"
     explicit = await _check(client, token, host["id"], credential_id=new["id"])
     assert explicit.json()["credential_id"] == new["id"] and _statuses(explicit)["login"] == "ok"
+
+
+async def _key_pair_host(client, token, port):
+    """Ein Server mit zwei generierten Zugängen: `old` ist der Standard, `new` noch nicht."""
+    host, old, old_fp = await _key_host(client, token, port)
+    second = (await client.post(GENERATE.format(host["id"]), json={"port": port}, headers=_auth(token))).json()
+    new, new_fp = second["credential"], asyncssh.import_public_key(second["public_key"]).get_fingerprint()
+    assert (old["is_default"], new["is_default"]) == (True, False)
+    return host, old, old_fp, new, new_fp
+
+
+@pytest.mark.asyncio
+async def test_checking_a_non_default_credential_leaves_the_default_login_proof_alone(client, db_session, local_ssh_key_server, pool):
+    """Schlüsselwechsel: neuen Zugang anlegen, prüfen, umstellen. Die Prüfung des neuen Zugangs darf den
+    Beleg des bisherigen (noch aktiven) Standard-Zugangs weder überschreiben noch löschen -- sonst steht
+    der Server auf „Anmeldung noch nicht bestätigt“, obwohl der Standard-Zugang klappt."""
+    _, port, _, authorized = local_ssh_key_server
+    token = await _bootstrap_owner(client)
+    host, old, old_fp, new, new_fp = await _key_pair_host(client, token, port)
+    authorized.append(old_fp)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    proof = (await _host_out(client, token, host["id"]))["login_ok_at"]
+    assert proof is not None
+
+    # Der Einrichtungsbefehl für den neuen Zugang ist noch nicht gelaufen: die Prüfung scheitert ...
+    failed = await _check(client, token, host["id"], credential_id=new["id"])
+    assert failed.json()["credential_id"] == new["id"] and _statuses(failed)["login"] == "fail"
+    out = await _host_out(client, token, host["id"])
+    assert out["credential"]["id"] == old["id"] and out["login_ok_at"] == proof, "Beleg des Standard-Zugangs bleibt"
+
+    # ... und auch eine gelungene Prüfung des neuen Zugangs ändert ihn nicht.
+    authorized.append(new_fp)
+    ok = await _check(client, token, host["id"], credential_id=new["id"])
+    assert _statuses(ok)["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] == proof
+
+    # Erst beim Umstellen wird aus der frischen Prüfung der Beleg des neuen Standards (mit der Zeit der Prüfung).
+    r = await client.post(_default_url(host["id"], new["id"]), json={}, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    out = await _host_out(client, token, host["id"])
+    assert out["credential"]["id"] == new["id"]
+    assert out["login_ok_at"] is not None and datetime.fromisoformat(out["login_ok_at"]) > datetime.fromisoformat(proof)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_check_of_the_default_credential_still_drops_its_login_proof(client, db_session, local_ssh_key_server, pool):
+    """Gegenprobe zum Test davor: scheitert die Anmeldung mit dem Standard-Zugang selbst, fällt sein Beleg weg."""
+    _, port, _, authorized = local_ssh_key_server
+    token = await _bootstrap_owner(client)
+    host, _old, old_fp, _new, new_fp = await _key_pair_host(client, token, port)
+    authorized.extend([old_fp, new_fp])
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
+
+    authorized.remove(old_fp)
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "fail"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_make_default_without_a_fresh_check_leaves_the_new_default_unconfirmed(client, db_session, local_ssh_key_server, pool):
+    """Umgestellt, ohne den neuen Zugang je geprüft zu haben: der alte Beleg gehört dem alten Zugang und
+    gilt für den neuen nicht -- „Anmeldung noch nicht bestätigt“ ist hier richtig."""
+    _, port, _, authorized = local_ssh_key_server
+    token = await _bootstrap_owner(client)
+    host, _old, old_fp, new, new_fp = await _key_pair_host(client, token, port)
+    authorized.extend([old_fp, new_fp])
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
+
+    r = await client.post(_default_url(host["id"], new["id"]), json={}, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    out = await _host_out(client, token, host["id"])
+    assert out["credential"]["id"] == new["id"] and out["login_ok_at"] is None
+    assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
+    assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
 
 
 # ---------------------------------------------------------------------------

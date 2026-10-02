@@ -6,6 +6,7 @@ import { ChevronDown, ChevronRight, Download, Search } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
 import { api } from "../../lib/api";
+import { useExtensionLabel } from "../../lib/extensionNames";
 import { useAuthStore } from "../../state/auth";
 import { Badge, Button, NoticeLine, PageHeader, Toggle, errorText, inputClass, type Notice } from "./ui";
 
@@ -20,6 +21,8 @@ interface AuditEntry {
   outcome: string;
   reason: string | null;
   detail: Record<string, unknown>;
+  /** Ausgabe wurde weggelassen, weil dem Nutzer die Server-Rechte fehlen. */
+  output_hidden?: boolean;
   ip: string | null;
   user_agent: string | null;
 }
@@ -52,8 +55,20 @@ const ACTION_LABELS: Record<string, string> = {
   "action.dismissed": "Aktion verworfen",
   "action.executed": "Aktion ausgeführt",
   "action.expired": "Aktion abgelaufen",
+  "scripts.standing_approval.granted": "Dauerfreigabe erteilt",
+  "scripts.standing_approval.revoked": "Dauerfreigabe zurückgezogen",
+  "scripts.standing_approval.expired": "Dauerfreigabe erloschen",
   "exec.denied": "Befehl gesperrt",
   "console.open": "Konsole geöffnet",
+  "files.access": "Zugriff auf Dateien eines Servers",
+  "files.download": "Datei heruntergeladen",
+  "files.upload": "Datei hochgeladen",
+  "files.mkdir": "Ordner angelegt",
+  "files.rename": "Datei umbenannt",
+  "files.remove": "Datei gelöscht",
+  "files.search": "Server nach Dateien durchsucht",
+  "files.transfer_start": "Kopieren gestartet",
+  "files.transfer": "Datei kopiert",
   "secret.used": "Zugangsdaten verwendet",
   "system.settings.changed": "Systemeinstellung geändert",
   "system.backup.created": "Sicherung erstellt",
@@ -92,6 +107,32 @@ const OUTCOME_TONE: Record<string, "good" | "bad" | "warn" | "neutral"> = {
 
 const OUTCOME_LABELS: Record<string, string> = { success: "Erfolgreich", failure: "Fehlgeschlagen", denied: "Abgelehnt", proposed: "Vorgeschlagen" };
 
+/** Was ein Eintrag betrifft, in Worten (die API nennt die Art englisch: `user`, `host` ...). */
+const TARGET_LABELS: Record<string, string> = {
+  user: "Benutzer", host: "Server", host_group: "Servergruppe", action: "Aktion", extension: "Erweiterung", backup: "Sicherung",
+  restore: "Wiederherstellung", system: "System", setting: "Einstellung", secret: "Zugangsdaten", container: "Container", app: "App",
+};
+
+const UUID_START = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
+
+/** Ein Ziel für die Tabelle: „Benutzer · nico“, „Server · Bastel-Pi“. Eine bloße Nummer sagt niemandem etwas, sie steht
+ * nur in den Einzelheiten. */
+export function targetText(
+  e: Pick<AuditEntry, "target_type" | "target_id">,
+  names: { users: Record<string, string>; hosts: Record<string, string>; extension: (id: string) => string },
+): string {
+  if (!e.target_type) return "–";
+  const kind = TARGET_LABELS[e.target_type] ?? e.target_type;
+  if (!e.target_id) return kind;
+  const name =
+    e.target_type === "user" ? names.users[e.target_id]
+    : e.target_type === "host" ? names.hosts[e.target_id]
+    : e.target_type === "extension" ? names.extension(e.target_id)
+    : undefined;
+  if (name) return `${kind} · ${name}`;
+  return UUID_START.test(e.target_id) ? kind : `${kind} · ${e.target_id}`;
+}
+
 const ACTOR_LABELS: Record<string, string> = { user: "Benutzer", system: "System", extension: "Erweiterung", ai: "KI", token: "API-Token", anonymous: "Nicht angemeldet" };
 
 export function AuditSettings(): JSX.Element {
@@ -107,6 +148,8 @@ export function AuditSettings(): JSX.Element {
   const [hideAutomatic, setHideAutomatic] = useState(true);
   const [open, setOpen] = useState<string | null>(null);
   const [userNames, setUserNames] = useState<Record<string, string>>({});
+  const [hostNames, setHostNames] = useState<Record<string, string>>({});
+  const extensionLabel = useExtensionLabel(entries.some((e) => e.target_type === "extension" || e.actor_type === "extension"));
 
   function query(offset: number): string {
     const params = new URLSearchParams({ limit: String(PAGE), offset: String(offset) });
@@ -134,20 +177,27 @@ export function AuditSettings(): JSX.Element {
   useEffect(() => { void load(0); }, [outcome, actorType, since, hideAutomatic]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!hasPermission("users.read")) return;
-    api.get<{ id: string; username: string }[]>("/users")
-      .then((users) => setUserNames(Object.fromEntries(users.map((u) => [u.id, u.username]))))
-      .catch(() => {});
+    // Namen statt Nummern: wer wen oder was betrifft. Fehlt das Recht oder klappt die Abfrage nicht, bleibt es bei der Nummer.
+    if (hasPermission("users.read")) {
+      api.get<{ id: string; username: string }[]>("/users")
+        .then((users) => setUserNames(Object.fromEntries(users.map((u) => [u.id, u.username]))))
+        .catch(() => {});
+    }
+    if (hasPermission("hosts.read")) {
+      api.get<{ id: string; display_name?: string; name: string }[]>("/hosts")
+        .then((hosts) => setHostNames(Object.fromEntries(hosts.map((h) => [h.id, h.display_name || h.name]))))
+        .catch(() => {});
+    }
   }, [hasPermission]);
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
     if (!needle) return entries;
     return entries.filter((e) =>
-      [e.action, ACTION_LABELS[e.action], e.actor_id, userNames[e.actor_id], e.target_type, e.target_id, e.reason, e.ip, JSON.stringify(e.detail)]
+      [e.action, ACTION_LABELS[e.action], e.actor_id, userNames[e.actor_id], e.target_type, e.target_id, e.target_id ? userNames[e.target_id] ?? hostNames[e.target_id] : null, e.reason, e.ip, JSON.stringify(e.detail)]
         .some((v) => v?.toLowerCase().includes(needle)),
     );
-  }, [entries, search, userNames]);
+  }, [entries, search, userNames, hostNames]);
 
   async function exportFile() {
     const params = new URLSearchParams(query(0));
@@ -170,7 +220,8 @@ export function AuditSettings(): JSX.Element {
 
   function actorName(e: AuditEntry): string {
     if (e.actor_type === "user") return userNames[e.actor_id] ?? e.actor_id;
-    return `${ACTOR_LABELS[e.actor_type] ?? e.actor_type}${e.actor_id && e.actor_id !== e.actor_type ? ` · ${e.actor_id}` : ""}`;
+    const who = e.actor_type === "extension" && e.actor_id ? extensionLabel(e.actor_id) : e.actor_id;
+    return `${ACTOR_LABELS[e.actor_type] ?? e.actor_type}${who && who !== e.actor_type ? ` · ${who}` : ""}`;
   }
 
   return (
@@ -224,11 +275,11 @@ export function AuditSettings(): JSX.Element {
                   <td className="px-3 py-2 text-white/40">{open === e.id ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</td>
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums text-white/60">{new Date(e.ts).toLocaleString("de-DE")}</td>
                   <td className="px-3 py-2">
-                    <span className="block">{ACTION_LABELS[e.action] ?? e.action}</span>
-                    {ACTION_LABELS[e.action] && <span className="block font-mono text-[11px] text-white/35">{e.action}</span>}
+                    {/* Der technische Name (`login.succeeded`) steht nur noch im Tooltip und in den Einzelheiten. */}
+                    <span className="block" title={ACTION_LABELS[e.action] ? e.action : undefined}>{ACTION_LABELS[e.action] ?? e.action}</span>
                   </td>
                   <td className="px-3 py-2 text-white/70">{actorName(e)}</td>
-                  <td className="max-w-[16rem] truncate px-3 py-2 text-white/60">{e.target_type ? `${e.target_type}${e.target_id ? ` · ${e.target_id}` : ""}` : "–"}</td>
+                  <td className="max-w-[16rem] truncate px-3 py-2 text-white/60" title={e.target_id ?? undefined}>{targetText(e, { users: userNames, hosts: hostNames, extension: extensionLabel })}</td>
                   <td className="px-3 py-2"><Badge tone={OUTCOME_TONE[e.outcome] ?? "neutral"}>{OUTCOME_LABELS[e.outcome] ?? e.outcome}</Badge></td>
                 </tr>
                 {open === e.id && (
@@ -236,10 +287,13 @@ export function AuditSettings(): JSX.Element {
                     <td />
                     <td colSpan={5} className="px-3 py-3 text-xs">
                       <dl className="grid gap-x-6 gap-y-1 sm:grid-cols-[auto_1fr]">
+                        <dt className="text-white/40">Vorgang</dt><dd className="font-mono">{e.action}</dd>
+                        {e.target_type && (<><dt className="text-white/40">Ziel</dt><dd className="break-all">{TARGET_LABELS[e.target_type] ?? e.target_type}{e.target_id ? ` · ${e.target_id}` : ""}</dd></>)}
                         {e.reason && (<><dt className="text-white/40">Grund</dt><dd>{e.reason}</dd></>)}
                         {e.ip && (<><dt className="text-white/40">IP-Adresse</dt><dd className="font-mono">{e.ip}</dd></>)}
                         {e.user_agent && (<><dt className="text-white/40">Browser</dt><dd className="truncate">{e.user_agent}</dd></>)}
                       </dl>
+                      {e.output_hidden && <p className="mt-2 text-white/50">Ausgabe nur für Nutzer mit Server-Rechten sichtbar</p>}
                       {Object.keys(e.detail ?? {}).length > 0 && (
                         <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-black/40 p-2 font-mono text-[11px] text-white/70">{JSON.stringify(e.detail, null, 2)}</pre>
                       )}

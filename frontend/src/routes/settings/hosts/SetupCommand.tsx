@@ -75,10 +75,12 @@ export function SetupCommand({ host, credential }: { host: HostOut; credential: 
               Das ist praktisch root: Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server alles tun.
             </p>
           )}
-          <p className="text-xs text-white/45">
-            Eine enger begrenzte sudo-Regel funktioniert mit Nodvard Deck nicht, weil es root-Befehle über „sudo sh -c“ startet.
-            Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.
-          </p>
+          {sudo && (
+            <p className="text-xs text-white/45" data-testid="setup-sudo-note">
+              Eine enger begrenzte sudo-Regel funktioniert mit Nodvard Deck nicht, weil es root-Befehle über „sudo sh -c“ startet.
+              Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.
+            </p>
+          )}
         </div>
       )}
 
@@ -88,6 +90,10 @@ export function SetupCommand({ host, credential }: { host: HostOut; credential: 
         <p role="alert" className="text-sm text-red-300">{errorText(setup.error)}</p>
       ) : setup.data ? (
         <>
+          <p className="text-sm text-white/70" data-testid="setup-howto">
+            So geht’s: Auf dem Server anmelden (per ssh, am Bildschirm oder über die Konsole deiner VM-Verwaltung), den Befehl einfügen, Enter.
+            Danach hier „Verbindung prüfen“.
+          </p>
           <textarea
             ref={area} readOnly rows={4} aria-label="Einrichtungsbefehl" value={setup.data.one_liner}
             onFocus={(e) => e.currentTarget.select()}
@@ -104,12 +110,10 @@ export function SetupCommand({ host, credential }: { host: HostOut; credential: 
             <summary className="cursor-pointer text-sm text-white/70">Was macht der Befehl?</summary>
             <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-white/70">{setup.data.script}</pre>
           </details>
-          {setup.data.notes.filter((n) => !n.includes("praktisch")).map((n) => (
+          {/* „praktisch alles“ und „enger begrenzte sudo-Regel“ stehen schon oben bei den Haken: nicht doppelt zeigen. */}
+          {setup.data.notes.filter((n) => !n.includes("praktisch") && !n.includes("enger begrenzte")).map((n) => (
             <p key={n} className="text-xs text-white/55">{n}</p>
           ))}
-          <p className="text-xs text-white/55">
-            Auf dem Server anmelden (per ssh, am Bildschirm oder über die Konsole deiner VM-Verwaltung), Befehl einfügen, Enter. Danach hier „Verbindung prüfen“.
-          </p>
         </>
       ) : null}
     </div>

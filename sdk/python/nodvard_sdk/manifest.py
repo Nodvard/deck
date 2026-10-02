@@ -36,6 +36,15 @@ KNOWN_PERMISSIONS = frozenset(
         # net.outbound, damit ein Admin diese deutlich riskantere Faehigkeit separat
         # sieht und bestaetigt, siehe ext/context.py HttpHandle-Docstring.
         "net.outbound.insecure_tls",
+        # Erlaubt `ctx.api.include_router(..., public=True)`: Routen, die OHNE Anmeldung
+        # erreichbar sind (z. B. fuer Webhooks). Eigene Berechtigung, damit ein Admin sieht,
+        # dass eine Erweiterung Adressen fuer jeden oeffnet; der Kern schreibt die
+        # oeffentlichen Praefixe beim Einschalten ins Protokoll.
+        "api.public",
+        # Darf Vorschlaege mit einer Dauerfreigabe (ActionRequest.standing_approval) einreichen.
+        # Eigene Berechtigung, damit im Manifest sichtbar ist, welche Erweiterung etwas ohne Klick
+        # starten kann; das Gate prueft die Freigabe trotzdem selbst.
+        "actions.standing_approval",
     }
 )
 

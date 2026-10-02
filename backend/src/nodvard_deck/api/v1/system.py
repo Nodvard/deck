@@ -26,10 +26,12 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import FileResponse, JSONResponse
+from nodvard_sdk import max_body_bytes
 from pydantic import BaseModel, Field
 from sqlalchemy.engine import make_url
 from starlette.background import BackgroundTask
 
+from ...config import get_settings
 from ...core import rate_limit
 from ...core import restart as restart_service
 from ...core import timezone as timezone_service
@@ -425,6 +427,7 @@ async def restore_status(
 
 
 @router.put("/restore/upload", status_code=status.HTTP_201_CREATED)
+@max_body_bytes(lambda: get_settings().restore_max_upload_bytes)
 async def restore_upload(
     request: Request, user: OwnerUser, session: SessionDep, settings: SettingsDep,
     x_confirm_password: Annotated[str | None, Header(description="Anmeldepasswort, prozentkodiert (UTF-8).")] = None,

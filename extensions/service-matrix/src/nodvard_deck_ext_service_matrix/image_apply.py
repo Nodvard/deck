@@ -702,8 +702,15 @@ def _judge_image(snap: Snapshot, old_image_id: str, *, health: str | None, note:
 # --- Ergebnis-Texte ---------------------------------------------------------------------
 
 
-def describe_pull_failure(log: str) -> str:
-    """Grund, warum `docker compose pull` scheiterte -- plus die gute Nachricht."""
+DETAILS_HINT = "Einzelheiten stehen in der Aktion."
+"""Ersatz fuer eine Zeile vom Host in Texten, die auch ohne Server-Recht sichtbar sind."""
+
+
+def describe_pull_failure(log: str, *, public: bool = False) -> str:
+    """Grund, warum `docker compose pull` scheiterte -- plus die gute Nachricht.
+
+    `public=True`: ohne die Zeile aus der Ausgabe des Hosts (die steht nur in der Ausgabe der
+    Aktion), fuer Protokoll, Meldung und die Uebersicht der Seite."""
     lines = [ln.strip() for ln in (log or "").splitlines() if ln.strip() and not ln.startswith("@@")]
     recent = "\n".join(lines[-20:])
     if "no space left" in recent.lower():
@@ -711,9 +718,12 @@ def describe_pull_failure(log: str) -> str:
     else:
         problem = classify_registry_error(recent)
         if problem.kind == "error":
-            errors = [ln for ln in lines if "error" in ln.lower()]
-            line = (errors or lines or ["Exit-Code 10"])[-1]
-            reason = f"Herunterladen fehlgeschlagen: {line[:200]}"
+            if public:
+                reason = f"Herunterladen fehlgeschlagen – {DETAILS_HINT}"
+            else:
+                errors = [ln for ln in lines if "error" in ln.lower()]
+                line = (errors or lines or ["Exit-Code 10"])[-1]
+                reason = f"Herunterladen fehlgeschlagen: {line[:200]}"
         else:
             reason = problem.message
     return f"{reason.rstrip('.')}. Der Container läuft unverändert weiter."
@@ -740,12 +750,17 @@ def success_output(t: ComposeTarget, verdict: Verdict, *, old_image_id: str, rol
     return "\n".join(parts)
 
 
+def failure_headline(t: ComposeTarget, message: str) -> str:
+    """Die erste Zeile der Ausgabe eines gescheiterten Updates."""
+    return f"„{t.container}“: {message}"
+
+
 def failure_output(
     t: ComposeTarget, message: str, *, rollback: str | None, log: str, state: str | None = None, show_rollback: bool = False,
 ) -> str:
     """`show_rollback`: nur wenn schon etwas veraendert wurde (nach dem Pull); `rollback=None`
     heisst dann: die Sicherung konnte nicht angelegt werden."""
-    parts = [f"„{t.container}“: {message}"]
+    parts = [failure_headline(t, message)]
     if state:
         parts.append(f"Aktueller Zustand: {state}")
     if show_rollback:

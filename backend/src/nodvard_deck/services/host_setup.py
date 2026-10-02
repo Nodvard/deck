@@ -68,9 +68,14 @@ def _dq(value: str) -> str:
 
 
 def key_comment(host_name: str) -> str:
-    """Kommentar des erzeugten Schluessels: `lattice@<Kurzname>`, auf sichere Zeichen
-    reduziert (Server, die eine Erweiterung entdeckt hat, koennen beliebige Namen tragen)."""
-    return "lattice@" + re.sub(r"[^A-Za-z0-9_.-]", "-", host_name)[:64]
+    """Kommentar des erzeugten Schluessels: `nodvard@<Kurzname>`, auf sichere Zeichen
+    reduziert (Server, die eine Erweiterung entdeckt hat, koennen beliebige Namen tragen).
+
+    Aeltere Schluessel tragen auf den Servern noch `lattice@<Kurzname>`. Der Kommentar wird bei
+    jedem Aufruf neu abgeleitet und gehoert nicht zur Anmeldung; damit der Einrichtungsbefehl
+    einen alten Eintrag trotzdem erkennt und nicht doppelt anlegt, sucht er nur nach Art und
+    Schluesseltext (siehe `build_setup_script`)."""
+    return "nodvard@" + re.sub(r"[^A-Za-z0-9_.-]", "-", host_name)[:64]
 
 
 @dataclass(frozen=True)
@@ -112,7 +117,9 @@ def build_setup_script(
             wanted.append(group)
     is_root = user == "root"
 
-    lines = ["set -e", f"U={shlex.quote(user)}", f'K="{_dq(key)}"']
+    # `B` = Art und Schluesseltext ohne Kommentar: ein schon eingetragener Schluessel wird auch dann erkannt,
+    # wenn er mit einem anderen Kommentar (frueher `lattice@...`) auf dem Server steht.
+    lines = ["set -e", f"U={shlex.quote(user)}", f'K="{_dq(key)}"', 'B=$(echo "$K" | cut -d" " -f1,2)']
     if not is_root:
         # "*" statt "!": sshd mit `UsePAM no` behandelt ein mit "!" gesperrtes Konto als gesperrt.
         lines.append(
@@ -132,7 +139,7 @@ def build_setup_script(
             '[ ! -s "$A" ] || [ -z "$(tail -c1 "$A")" ] || echo >> "$A"',
             # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
             # Befehle und SFTP gehen weiter.
-            'grep -qF -- "$K" "$A" || echo "restrict,pty $K" >> "$A"',
+            'grep -qF -- "$B" "$A" || echo "restrict,pty $K" >> "$A"',
             '[ -L "$A" ] || { chown "$U:$G" "$A"; chmod 600 "$A"; }',
         ]
     else:
@@ -151,7 +158,7 @@ def build_setup_script(
             '[ -z "$(R tail -c1 "$A" 2>/dev/null)" ] || printf "\\n" | R tee -a "$A" >/dev/null',
             # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
             # Befehle und SFTP gehen weiter.
-            'R grep -qF -- "$K" "$A" 2>/dev/null || printf "%s\\n" "restrict,pty $K" | R tee -a "$A" >/dev/null',
+            'R grep -qF -- "$B" "$A" 2>/dev/null || printf "%s\\n" "restrict,pty $K" | R tee -a "$A" >/dev/null',
             'R chmod 600 "$A"',
         ]
     if not is_root:
@@ -162,11 +169,22 @@ def build_setup_script(
                 f'else echo "Hinweis: Gruppe {group} gibt es hier nicht – übersprungen."; fi'
             )
         if sudo:
+            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine aeltere Regel lattice-<Benutzer> wird erst nach
+            # erfolgreicher Pruefung der neuen entfernt, und nur, wenn sie Byte fuer Byte die Regel ist, die dieser Befehl
+            # frueher selbst angelegt hat (`cmp` gegen die neue Datei). Alles andere bleibt stehen (Hinweis).
+            # Bei einem Fehler wird nichts entfernt, und `visudo -c -q` muss am Ende gelten.
             lines.append(
-                'if command -v visudo >/dev/null; then T=$(mktemp); trap "rm -f \\"\\$T\\"" EXIT; '
+                'if command -v visudo >/dev/null; then T=$(mktemp); trap "rm -f \\"\\$T\\"" EXIT; N="/etc/sudoers.d/nodvard-$U"; O="/etc/sudoers.d/lattice-$U"; '
                 'echo "$U ALL=(root) NOPASSWD: ALL" > "$T"; '
-                'if visudo -c -q -f "$T"; then install -m 0440 -o root -g root "$T" "/etc/sudoers.d/lattice-$U"; '
-                'visudo -c -q || { rm -f "/etc/sudoers.d/lattice-$U"; echo "FEHLER: sudo-Regel zurückgenommen."; F=1; }; '
+                'if visudo -c -q -f "$T"; then install -m 0440 -o root -g root "$T" "$N"; '
+                'if visudo -c -q; then '
+                'if [ -L "$O" ]; then echo "Hinweis: $O ist ein Link und bleibt stehen. Bitte selbst prüfen, ob die Regel noch gebraucht wird."; '
+                'elif [ -e "$O" ]; then '
+                'if cmp -s "$T" "$O"; then rm -f "$O"; echo "Die alte sudo-Regel lattice-$U wurde durch nodvard-$U ersetzt."; '
+                'visudo -c -q || { install -m 0440 -o root -g root "$T" "$O"; echo "FEHLER: Die alte sudo-Regel wurde wiederhergestellt."; F=1; }; '
+                'else echo "Hinweis: $O ist eine andere Regel als die von Nodvard Deck und bleibt stehen. Bitte selbst prüfen, ob sie noch gebraucht wird."; fi; '
+                'fi; '
+                'else rm -f "$N"; echo "FEHLER: sudo-Regel zurückgenommen."; F=1; fi; '
                 'else echo "FEHLER: visudo hat die sudo-Regel abgelehnt, sie wurde nicht eingetragen."; F=1; fi; '
                 'else echo "Hinweis: sudo ist nicht installiert (als root: apt install sudo)."; fi'
             )

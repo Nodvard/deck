@@ -17,8 +17,12 @@ meisten Installationen nicht selbst loesen koennen/wollen.
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from nodvard_sdk import max_body_bytes
 
-from ...branding import MAX_LOGO_BYTES, LOGO_CONTENT_TYPES, Branding, load_branding, save_branding, save_logo_file
+from ...branding import (
+    LOGO_CONTENT_TYPES, MAX_LOGO_BYTES, Branding, clean_support_url, load_branding, save_branding, save_logo_file,
+)
+from ...svg_safe import UnsafeSvg, check_svg
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 
 router = APIRouter(
@@ -30,11 +34,21 @@ router = APIRouter(
 
 @router.put("", response_model=Branding)
 async def put_branding(payload: Branding, session: SessionDep, user: CurrentUser) -> Branding:
+    if payload.support_url is not None and payload.support_url.strip():
+        cleaned = clean_support_url(payload.support_url)
+        if cleaned is None:
+            raise HTTPException(
+                status_code=422, detail="Der Support-Link muss mit http://, https:// oder mailto: beginnen.",
+            )
+        payload.support_url = cleaned
+    else:
+        payload.support_url = None
     await save_branding(session, payload, updated_by_user_id=user.id)
     return await load_branding(session)
 
 
 @router.post("/logo", response_model=Branding)
+@max_body_bytes(MAX_LOGO_BYTES)
 async def upload_logo(request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser) -> Branding:
     """Rohkoerper-Upload wie `POST /files/{source_id}/upload` (api/v1/files.py) --
     dieselbe Konvention statt zusaetzlich `multipart/form-data` einzufuehren. Der
@@ -51,6 +65,12 @@ async def upload_logo(request: Request, session: SessionDep, settings: SettingsD
     content = await request.body()
     if len(content) > MAX_LOGO_BYTES:
         raise HTTPException(status_code=413, detail=f"Logo zu gross (max. {MAX_LOGO_BYTES // 1024} KB).")
+
+    if extension == "svg":
+        try:
+            check_svg(content)
+        except UnsafeSvg as exc:
+            raise HTTPException(status_code=422, detail=f"SVG-Logo abgelehnt: {exc} Nimm ein PNG oder ein bereinigtes SVG.") from exc
 
     save_logo_file(settings.data_dir, content, extension)
 

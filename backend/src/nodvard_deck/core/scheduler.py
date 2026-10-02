@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from nodvard_sdk.context import _JOB_TRIGGER
 
 from ..db import utcnow
 from ..db.session import session_scope
@@ -141,7 +142,13 @@ class SchedulerService:
         lines = [f"[{utcnow().isoformat()}] gestartet (trigger={trigger_kind}, params={params!r})"]
         status, exit_code, error = "succeeded", 0, None
 
-        task: asyncio.Task = asyncio.ensure_future(handler(**params))
+        # Der Task uebernimmt den Kontext beim Anlegen: so weiss der Handler ueber
+        # `nodvard_sdk.current_job_trigger()`, ob er nach Zeitplan oder von Hand laeuft.
+        token = _JOB_TRIGGER.set(trigger_kind)
+        try:
+            task: asyncio.Task = asyncio.ensure_future(handler(**params))
+        finally:
+            _JOB_TRIGGER.reset(token)
         self._running_tasks[run_id] = task
         try:
             result = await task

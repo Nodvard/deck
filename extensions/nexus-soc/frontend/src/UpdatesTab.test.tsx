@@ -98,7 +98,8 @@ describe("Update-Zentrale", () => {
       status: {
         manager: null, count: 0, security_count: 0, reboot_required: false, reboot_reasons: [], kernel: null, latest_kernel: null,
         uptime_s: null, unattended: null, refresh_error: null, error: "Kein unterstützter Paketmanager (apt, dnf, apk) gefunden.",
-        unsupported: true, checked_at: Date.now() / 1000 - 60, packages: [],
+        // So steht es im Backend: „kein Paketmanager“ ist ein gültiges Ergebnis, die Prüfung ist erfolgt.
+        unsupported: true, checked_at: now - 60, attempted_at: now - 60, packages: [],
       },
     };
     const data = { ...DATA, hosts: [...DATA.hosts, nas], summary: { ...DATA.summary, hosts: 3 } };
@@ -110,6 +111,35 @@ describe("Update-Zentrale", () => {
     expect(row.queryByText("Fehler")).toBeNull();
     expect(screen.getByText("1 nicht unterstützt")).toBeInTheDocument();
     expect(screen.queryByText(/noch nicht geprüft/)).toBeNull();
+    expect(row.queryByText(/noch nie erfolgreich geprüft/)).toBeNull();
+    expect(row.getByText(/geprüft gerade eben/)).toBeInTheDocument();
+  });
+
+  it("scheitert die Prüfung, steht der Grund da, dazu die letzte erfolgreiche Prüfung und der letzte Versuch; ausgebliebene Prüfung wird gemeldet", async () => {
+    const base = DATA.hosts[1];
+    const failing = {
+      ...base, host_id: "h-fail", host_name: "pve2", check_overdue: false,
+      status: { ...base.status!, error: "Verbindung abgelehnt", checked_at: now - 3 * 86400, attempted_at: now - 600 },
+    };
+    const never = {
+      ...base, host_id: "h-never", host_name: "neu", check_overdue: false,
+      status: { ...base.status!, manager: null, error: "Zeitüberschreitung", checked_at: null, attempted_at: now - 600 },
+    };
+    const missed = { ...base, host_id: "h-missed", host_name: "alt", check_overdue: true, status: { ...base.status!, checked_at: now - 3 * 86400 } };
+    const data = { ...DATA, hosts: [DATA.hosts[0], failing, never, missed] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(data), { status: 200 })));
+    render(<UpdatesTab canManage />);
+
+    const fail = (await screen.findByTestId("updates-h-fail")).textContent ?? "";
+    expect(fail).toContain("Verbindung abgelehnt");
+    expect(fail).toContain("geprüft vor 3 Tagen");
+    expect(fail).toContain("letzter Versuch vor 10 Min. fehlgeschlagen");
+    const nie = screen.getByTestId("updates-h-never").textContent ?? "";
+    expect(nie).toContain("noch nie erfolgreich geprüft");
+    expect(nie).toContain("Zeitüberschreitung");
+    expect(screen.getByTestId("updates-overdue-h-missed").textContent).toContain("geplante Prüfung ist hier ausgeblieben");
+    expect(screen.queryByTestId("updates-overdue-h-pi")).toBeNull();
+    expect(screen.queryByTestId("updates-overdue-h-fail")).toBeNull();
   });
 
   it("spielt Sicherheitsupdates nach Rückfrage über das Gate ein", async () => {

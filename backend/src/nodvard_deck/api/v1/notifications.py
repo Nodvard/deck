@@ -5,7 +5,9 @@ im Frontend rief sie auf -- Meldungen (z. B. nexus-socs Lageberichte) landeten i
 Datenbank und niemand sah sie. Dazu `GET /unread-count` (fuer den Zaehler im Menue,
 ohne die ganze Liste zu laden) und `POST /read-all`.
 
-Nur Lesen + Als-gelesen-Markieren. Geschrieben wird ausschliesslich ueber
+Nur Lesen + Als-gelesen-Markieren. Der Lesestatus gilt fuer alle Nutzer gemeinsam (eine Spalte
+`read_at`), deshalb verlangt das Markieren `notifications.write` (Operator und Admin); wer nur
+lesen darf, kann Meldungen anderer nicht ausblenden. Geschrieben wird ausschliesslich ueber
 `services.notifications.send()` (derzeit aus `ext.context.NotifyHandle.send()`) --
 kein Endpunkt hier legt selbst eine Zeile an, dasselbe Prinzip wie `api/v1/audit.py`.
 """
@@ -68,7 +70,7 @@ async def get_unread_count(session: SessionDep) -> dict[str, int]:
     return {"unread": await notifications_service.unread_count(session)}
 
 
-@router.post("/read-all")
+@router.post("/read-all", dependencies=[Depends(require_permission("notifications.write"))])
 async def mark_all_read(session: SessionDep) -> dict[str, int]:
     return {"marked": await notifications_service.mark_all_read(session)}
 
@@ -81,7 +83,7 @@ async def get_notification(notification_id: str, session: SessionDep) -> Notific
     return NotificationOut.from_model(row)
 
 
-@router.post("/read")
+@router.post("/read", dependencies=[Depends(require_permission("notifications.write"))])
 async def mark_read(payload: MarkReadIn, session: SessionDep) -> dict[str, int]:
     count = await notifications_service.mark_read(session, payload.ids)
     return {"marked": count}

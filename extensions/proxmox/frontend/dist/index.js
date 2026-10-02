@@ -107,6 +107,7 @@ var ACTION_STATUS_LABEL = {
   expired: "abgelaufen",
   dismissed: "verworfen"
 };
+var OUTPUT_HIDDEN_HINT = "Ausgabe nur f\xFCr Nutzer mit Server-Rechten sichtbar";
 function nonEmpty(value) {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
@@ -121,6 +122,7 @@ function describeActionOutcome(a) {
     case "succeeded":
       return { tone: "success", text: "Ausgef\xFChrt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen \u2013 ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (a.gate_decision?.rule === "user:reject") return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };
@@ -511,8 +513,17 @@ function UpdatesSection({ nodes }) {
         n.pve_version ?? "?",
         " \xB7 Kernel ",
         n.running_kernel ?? "?",
-        n.last_check ? ` \xB7 zuletzt gepr\xFCft ${new Date(n.last_check * 1e3).toLocaleString()}` : "",
-        n.last_check_ok === false ? " (Pr\xFCfung fehlgeschlagen)" : ""
+        n.last_check ? ` \xB7 zuletzt gepr\xFCft ${new Date(n.last_check * 1e3).toLocaleString()}` : " \xB7 noch kein Pr\xFCflauf von Proxmox gefunden"
+      ] }),
+      !n.error && n.last_check_ok === false && /* @__PURE__ */ jsxs2("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-failed-${n.node}`, children: [
+        "Die letzte Pr\xFCfung auf neue Pakete ist fehlgeschlagen",
+        n.last_check_status ? `: ${n.last_check_status}` : "",
+        ". Die Liste kann veraltet sein."
+      ] }),
+      !n.error && n.last_check_stale && /* @__PURE__ */ jsxs2("p", { className: "text-xs text-amber-300", "data-testid": `updates-check-stale-${n.node}`, children: [
+        "Der n\xE4chtliche Pr\xFCflauf von Proxmox ist seit ",
+        n.last_check_age_s ? `${Math.floor(n.last_check_age_s / 3600)} Stunden` : "\xFCber 36 Stunden",
+        " nicht gelaufen. Die Liste kann veraltet sein; auf dem Knoten \u201Esystemctl status pve-daily-update.timer\u201C ansehen."
       ] }),
       n.packages.length > 0 && /* @__PURE__ */ jsxs2("details", { className: "mt-1", children: [
         /* @__PURE__ */ jsxs2("summary", { className: "cursor-pointer text-xs opacity-70", children: [
@@ -739,7 +750,7 @@ function GuestEditForm({ hostId, details, onDone }) {
     e.preventDefault();
     if (changed.length === 0) return;
     const summary = changed.map((k) => `${EDIT_LABEL[k].replace(/ \(MB\)$/, "")}: ${k === "onboot" ? initial.onboot ? "an" : "aus" : initial[k] || "keine"} \u2192 ${k === "onboot" ? values.onboot ? "an" : "aus" : values[k] || "keine"}`).join(", ");
-    const ok = await deck().confirmDialog(`Hardware \xE4ndern -- ${summary}? Manches greift erst nach einem Neustart des Gasts.`, { confirmLabel: "\xC4ndern" });
+    const ok = await deck().confirmDialog(`Hardware \xE4ndern \u2013 ${summary}? Manches greift erst nach einem Neustart des Gasts.`, { confirmLabel: "\xC4ndern" });
     if (!ok) return;
     setBusy(true);
     try {
@@ -753,7 +764,7 @@ function GuestEditForm({ hostId, details, onDone }) {
           status === "succeeded" ? action.result?.output ?? "Ge\xE4ndert." : isActionRunning(status) ? RUNNING_IN_BACKGROUND : `Fehlgeschlagen: ${action.result?.error ?? status}`
         );
       } else if (status === "proposed") {
-        onDone(`\xC4nderung vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        onDone(`\xC4nderung vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
       } else {
         onDone(`${ACTION_STATUS_LABEL[status] ?? status}.`);
       }
@@ -1023,7 +1034,7 @@ function NodeCard({ node, focused = false, visit = 0 }) {
     /* @__PURE__ */ jsx3("span", { className: "font-medium", children: node.display_name }),
     " ",
     /* @__PURE__ */ jsxs2("span", { className: "opacity-60", children: [
-      "(Knoten) -- ",
+      "(Knoten) \u2013 ",
       HOST_STATUS_LABEL[node.status] ?? node.status
     ] }),
     open && /* @__PURE__ */ jsx3(NodeHealthPanel, { hostId: node.id })
@@ -1114,7 +1125,7 @@ function ConnectionsPanel() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setMessage(`Verbindung "${newName}" angelegt -- jetzt noch ein Token setzen.`);
+      setMessage(`Verbindung "${newName}" angelegt \u2013 jetzt noch ein Token setzen.`);
       setNewName("");
       setNewBaseUrl("");
       setNewTokenId("");
@@ -1172,7 +1183,7 @@ function ConnectionsPanel() {
   }
   async function removeConnection(name) {
     const ok = await deck().confirmDialog(
-      `Verbindung "${name}" wirklich entfernen? Ein bereits gesetztes Token bleibt im Tresor stehen.`,
+      `Verbindung "${name}" wirklich entfernen? Das gesetzte Token wird mit gel\xF6scht.`,
       { danger: true, confirmLabel: "Entfernen" }
     );
     if (!ok) return;
@@ -1371,7 +1382,7 @@ function ProxmoxNodePage() {
         body: JSON.stringify({ payload, reason: `\xDCber die Proxmox-Node-Seite ausgel\xF6st (${actionType}).` })
       }, { signal: unmountSignal() });
       if (!approved && action.status === "proposed") {
-        setMessage(key, `${hostLabel}: ${actionLabel(actionType, snapname)} vorgeschlagen -- Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
+        setMessage(key, `${hostLabel}: ${actionLabel(actionType, snapname)} vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe "Aktionen".`);
       } else {
         setMessage(key, describeOutcome(hostLabel, actionType, action, snapname));
       }

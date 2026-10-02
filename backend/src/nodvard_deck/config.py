@@ -116,9 +116,10 @@ def _present_names(source: EnvSettingsSource) -> list[str]:
     ]
 
 
-_EMPTY_MEANS_UNSET = ("build", "image")
+_EMPTY_MEANS_UNSET = ("build", "image", "ssh_confirm_new_host_keys")
 """Felder, bei denen eine leere Variable als nicht gesetzt gilt: Dann greift der naechste Name (z. B. `LATTICE_BUILD`
-hinter einem leeren `NODVARD_DECK_BUILD`) und danach die Datei im Image (`image_info`)."""
+hinter einem leeren `NODVARD_DECK_BUILD`) und danach die Datei im Image (`image_info`). Bei
+`ssh_confirm_new_host_keys` heisst das: keine Uebersteuerung, es gilt die gespeicherte Einstellung."""
 
 
 class _SkipEmpty(PydanticBaseSettingsSource):
@@ -321,6 +322,20 @@ class Settings(BaseSettings):
     migriert nie ohne sie. Mit diesem Schalter entfaellt die Kopie, z. B. wenn der Platz fuer
     sie nie reicht. Dann gibt es bei einer gescheiterten Migration keinen Rueckweg."""
 
+    max_body_bytes: int = 1024**2
+    """NODVARD_DECK_MAX_BODY_BYTES: groesster Anfragekoerper einer normalen Anfrage (Standard 1 MiB).
+    Darueber antwortet der Server sofort mit 413, ohne den Koerper zu lesen. Gilt auch ohne Anmeldung.
+    Routen mit bewusst grossen Uploads (Sicherung wiederherstellen, Dateien hochladen, Logo, Dokumente,
+    Bilder) haben eigene, hoehere Grenzen."""
+
+    files_max_upload_bytes: int = 0
+    """NODVARD_DECK_FILES_MAX_UPLOAD_BYTES: groesste Datei, die im Dateibrowser hochgeladen werden darf.
+    0 (Standard): keine Grenze, wie bisher -- der Upload geht als Strom direkt an die Quelle (SFTP, WebDAV)
+    und landet nie ganz im Speicher; ISO-Abbilder und VM-Images sind oft groesser als 4 GB. Ein Wert ueber 0
+    wird schon am Kopf der Anfrage geprueft, bevor die Quelle das Ziel oeffnet. Bei Uploads ohne Laenge
+    (chunked) zaehlt nur die Middleware mit, und zwar mindestens bis `max_body_bytes`; dort hat die Quelle das
+    Ziel beim Abbruch schon geoeffnet (SFTP schreibt in eine Temp-Datei und laesst das Ziel dann unberuehrt)."""
+
     restore_max_upload_bytes: int = 4 * 1024**3
     """NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES: groesste Sicherungsdatei, die beim Wiederherstellen
     hochgeladen werden darf (Standard 4 GiB). Wird schon am Kopf der Anfrage geprueft, nicht erst
@@ -347,17 +362,29 @@ class Settings(BaseSettings):
     ssh_connect_timeout_s: float = 10.0
     """D-05: gemeinsamer asyncssh-Layer fuer Terminal, Skripte und KI-Remediation."""
 
-    ssh_confirm_new_host_keys: bool = False
-    """NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS=true: neue Server-Schluessel werden nicht mehr
-    still gemerkt (TOFU, core/ssh.py), wenn Hintergrundjobs, Terminal oder Status zum ersten
-    Mal mit einem Server sprechen -- dann scheitert das mit `HostKeyUnknown`, bis jemand den
-    Fingerabdruck unter Einstellungen -> Server & Zugaenge ("Verbindung pruefen") bestaetigt hat.
-    Standard `False` (wie bisher): bestehende Installationen und Hintergrundjobs aendern sich nicht.
-    Bereits gemerkte Schluessel sind nie betroffen."""
+    ssh_confirm_new_host_keys: bool | None = None
+    """NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: Uebersteuerung fuer ALLE Server.
+    `true`: neue Server-Schluessel werden nicht still gemerkt (TOFU, core/ssh.py), wenn
+    Hintergrundjobs, Terminal oder Status zum ersten Mal mit einem Server sprechen -- das
+    scheitert mit `HostKeyUnknown`, bis jemand den Fingerabdruck unter Einstellungen -> Server &
+    Zugaenge ("Verbindung pruefen") bestaetigt hat. `false`: wie frueher, still merken.
+    Nicht gesetzt (`None`, Standard): es gilt die gespeicherte Einstellung `ssh.confirm_new_host_keys`
+    (neue Installationen: an, bestehende: aus; siehe `services.hosts.host_key_confirmation_required`).
+    Bereits gemerkte Schluessel sind nie betroffen; ein "Schluessel vergessen" verlangt immer eine
+    Bestaetigung, egal was hier steht."""
 
     terminal_session_ttl_s: float = 30.0
     """Wie lange ein per `POST /terminal/sessions` gemintetes, noch nicht per WS
     eingeloestes Session-Ticket gueltig bleibt (core/terminal_sessions.py)."""
+
+    terminal_idle_timeout_s: float = 30 * 60
+    """Eine Terminal-Sitzung ohne jede Eingabe UND Ausgabe wird nach so vielen Sekunden beendet
+    (`api/v1/terminal.py`). Solange ein Befehl noch Text liefert, laeuft sie weiter. 0 = aus."""
+
+    terminal_recheck_interval_s: float = 15.0
+    """Wie oft eine offene Terminal-Sitzung pruefen laesst, ob Konto, Berechtigung und Anmeldung
+    noch gelten (`services/session_guard.py`). Wer deaktiviert, abgemeldet oder ausgesperrt wird,
+    verliert die Shell spaetestens nach so vielen Sekunden."""
 
     @property
     def api_docs_public(self) -> bool:

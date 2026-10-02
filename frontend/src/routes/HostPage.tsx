@@ -179,7 +179,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
         report(await settle(approved, action.id, say));
       } else if (action.status === "proposed") {
         closeForm();
-        say({ tone: "pending", text: `${spec.label}: vorgeschlagen -- Freigabe unter „Aktionen“ nötig.` });
+        say({ tone: "pending", text: `${spec.label}: vorgeschlagen – Freigabe unter „Aktionen“ nötig.` });
       } else {
         closeForm();
         report(await settle(action, action.id, say));
@@ -190,7 +190,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
       if (err instanceof ActionWaitTimeout) say({ tone: "pending", text: `${spec.label}: ${GAVE_UP_WAITING_TEXT}` });
       // Gate-Sperre (Sperrliste, Flap-Schutz): 403 mit ActionOut als Body.
       else if (err instanceof ApiError && isActionOutcomeSource(err.detail)) report(err.detail);
-      else say({ tone: "error", text: `${spec.label}: Fehler -- ${err instanceof Error ? err.message : String(err)}` });
+      else say({ tone: "error", text: `${spec.label}: Fehler – ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       setBusy(false);
     }
@@ -523,7 +523,7 @@ function HostView({ hostId }: { hostId: string }) {
         <Metrics host={h} canWriteHosts={canWriteHosts} canManageExtensions={canManageExtensions} />
       </div>
 
-      <HostHistory hostId={h.id} />
+      <HostHistory hostId={h.id} host={h} canCheck={canWriteHosts} />
 
       <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Werkzeuge &amp; Einstellungen</h2>
       {grouped.length === 0 && (

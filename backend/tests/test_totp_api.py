@@ -21,7 +21,7 @@ def _auth_header(token: str) -> dict:
 @pytest.mark.asyncio
 async def test_totp_setup_returns_secret_and_uri(client):
     token = await _bootstrap_and_login(client)
-    r = await client.post("/api/v1/me/totp/setup", headers=_auth_header(token))
+    r = await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))
     assert r.status_code == 200
     body = r.json()
     assert len(body["secret"]) >= 16
@@ -32,7 +32,7 @@ async def test_totp_setup_returns_secret_and_uri(client):
 @pytest.mark.asyncio
 async def test_totp_confirm_wrong_code_rejected(client):
     token = await _bootstrap_and_login(client)
-    await client.post("/api/v1/me/totp/setup", headers=_auth_header(token))
+    await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))
     r = await client.post(
         "/api/v1/me/totp/confirm", json={"code": "000000"}, headers=_auth_header(token)
     )
@@ -45,7 +45,7 @@ async def test_totp_full_lifecycle(client):
     Login geht wieder ohne MFA. Identisch zum manuell verifizierten Boot-Test-Ablauf."""
     token = await _bootstrap_and_login(client)
 
-    setup = (await client.post("/api/v1/me/totp/setup", headers=_auth_header(token))).json()
+    setup = (await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))).json()
     secret = setup["secret"]
     code = pyotp.TOTP(secret).now()
 
@@ -99,7 +99,7 @@ async def test_mfa_token_cannot_be_used_as_access_token(client):
     """Der `typ`-Claim (docs/00 D-07-Praezisierung) verhindert, dass ein kurzlebiges
     MFA-Zwischentoken faelschlich als Bearer-Access-Token akzeptiert wird."""
     token = await _bootstrap_and_login(client)
-    setup = (await client.post("/api/v1/me/totp/setup", headers=_auth_header(token))).json()
+    setup = (await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))).json()
     code = pyotp.TOTP(setup["secret"]).now()
     await client.post("/api/v1/me/totp/confirm", json={"code": code}, headers=_auth_header(token))
 

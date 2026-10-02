@@ -594,12 +594,12 @@ def _ss(proto: str, port: int, proc: str | None, addr: str = "0.0.0.0") -> str:
     return f"{proto}   {state} 0      64           {addr}:{port}        0.0.0.0:*{users}"
 
 
-def _nfs_server_ports(mountd_udp, mountd_tcp, statd, lockd, avahi) -> str:
+def _nfs_server_ports(mountd_udp, mountd_tcp, statd, lockd, avahi, statd_udp=723) -> str:
     """So sieht `ss -tulnp` auf dem NFS-Server (Raspberry Pi) aus -- nach jedem Start andere Ports."""
     lines = [_ss("tcp", 22, "sshd"), _ss("tcp", 2049, None), _ss("tcp", 111, "rpcbind"), _ss("udp", 5353, "avahi-daemon")]
     lines += [_ss("udp", p, "rpc.mountd") for p in mountd_udp] + [_ss("udp", p, "rpc.mountd", "[::]") for p in mountd_udp]
     lines += [_ss("tcp", p, "rpc.mountd") for p in mountd_tcp]
-    lines += [_ss("udp", 723, "rpc.statd")] + [_ss("tcp", p, "rpc.statd") for p in statd]
+    lines += [_ss("udp", statd_udp, "rpc.statd")] + [_ss("tcp", p, "rpc.statd") for p in statd]
     lines += [_ss("tcp", p, None) for p in lockd] + [_ss("udp", p, "avahi-daemon") for p in avahi]
     return "\n".join(lines)
 
@@ -610,7 +610,7 @@ BOOT_1 = _nfs_server_ports(
 )
 BOOT_2 = _nfs_server_ports(
     [40001, 41002, 42003, 43004, 44005, 45006], [46007, 47008, 48009, 49010, 50011, 51012],
-    [52013, 53014, 54015, 55016], [56017, 57018, 58019, 59020], [60021, 33022],
+    [52013, 53014, 54015, 55016], [56017, 57018, 58019, 59020], [60021, 33022], statd_udp=801,
 )
 
 
@@ -618,7 +618,7 @@ def test_random_ports_of_nfs_and_kernel_share_one_key_each():
     ports = ix.parse_ports(BOOT_1.splitlines())
     keys = {p.key for p in ports}
     assert keys == {
-        "tcp/22/sshd", "tcp/111/rpcbind", "tcp/2049/?", "udp/5353/avahi-daemon", "udp/723/rpc.statd",
+        "tcp/22/sshd", "tcp/111/rpcbind", "tcp/2049/?", "udp/5353/avahi-daemon", "udp/dyn/rpc.statd",
         "udp/dyn/rpc.mountd", "tcp/dyn/rpc.mountd", "tcp/dyn/rpc.statd", "tcp/dyn/-", "udp/dyn/avahi-daemon",
     }
     by_key = {p.key: p for p in ports}
@@ -627,6 +627,149 @@ def test_random_ports_of_nfs_and_kernel_share_one_key_each():
     assert by_key["tcp/22/sshd"].label == "22/tcp (sshd)" and not by_key["tcp/22/sshd"].dynamic
     # Nach dem "Neustart" mit ganz anderen Ports entstehen dieselben Schluessel
     assert {p.key for p in ix.parse_ports(BOOT_2.splitlines())} == keys
+
+
+def test_rpc_port_in_reserved_range_changes_per_start_but_fixed_ports_stay_visible():
+    # rpc.statd waehlt seinen UDP-Port zuerst im Bereich 600-1023: jeder Start eine andere Nummer
+    assert {p.key for p in ix.parse_ports([_ss("udp", 723, "rpc.statd")])} == {"udp/dyn/rpc.statd"}
+    assert {p.key for p in ix.parse_ports([_ss("udp", 801, "rpc.statd")])} == {"udp/dyn/rpc.statd"}
+    # feste Ports (rpcbind 111, SSH 22) und fremde Programme im niedrigen Bereich bleiben einzeln
+    keys = {p.key for p in ix.parse_ports([_ss("tcp", 111, "rpcbind"), _ss("udp", 111, "rpcbind"), _ss("tcp", 700, "nc"),
+                                           _ss("tcp", 4444, "rpc.mountd")])}
+    assert keys == {"tcp/111/rpcbind", "udp/111/rpcbind", "tcp/700/nc", "tcp/4444/rpc.mountd"}
+    # Ein alter Stand mit der Portnummer deckt den Sammeleintrag ab
+    dyn = ix.parse_ports([_ss("udp", 801, "rpc.statd")])[0]
+    assert ix.port_is_known(dyn, {"udp/723/rpc.statd"})
+    assert not ix.port_is_known(dyn, {"udp/723/nc"})
+
+
+@pytest.mark.parametrize("proc", ["tailscaled", "rpcbind", "avahi-daemon", "dhclient", "dhcpcd", "chronyd", "Tailscaled"])
+def test_builtin_programs_with_changing_udp_ports_collapse(proc):
+    first = ix.parse_ports([_ss("udp", 41641, proc), _ss("udp", 50123, proc, "[::]")])
+    second = ix.parse_ports([_ss("udp", 36001, proc)])
+    assert [p.dynamic for p in first] == [True] and [p.key for p in first] == [p.key for p in second]
+    assert first[0].count == 2
+
+
+@pytest.mark.parametrize("proc", ["chronyd", "dhclient", "dhcpcd", "avahi-daemon", "rpcbind", "tailscaled"])
+@pytest.mark.parametrize("port", [4444, 40000])
+def test_fake_builtin_name_on_tcp_port_is_reported(proc, port):
+    # Den Programmnamen kann jeder setzen (`exec -a chronyd`): ein TCP-Dienst unter diesem Namen
+    # bleibt einzeln sichtbar und meldet als neuer Port.
+    ports = ix.parse_ports([_ss("tcp", port, proc)])
+    assert [(p.key, p.dynamic) for p in ports] == [(f"tcp/{port}/{proc}", False)]
+    assert not ix.port_is_known(ports[0], {"tcp/dyn/chronyd", f"tcp/{port + 1}/{proc}"})
+    # Auch wenn der Name (alter gespeicherter Wert) zusaetzlich in der Einstellung steht
+    assert not ix.parse_ports([_ss("tcp", port, proc)], dynamic_processes=[proc, "rpc.statd"])[0].dynamic
+
+
+def test_tailscaled_tcp_counts_as_changing_only_on_its_tailscale_address():
+    def dyn(addr):
+        return ix.parse_ports([_ss("tcp", 45678, "tailscaled", addr)])[0].dynamic
+
+    assert dyn("100.64.0.7") and dyn("100.127.255.1") and dyn("[fd7a:115c:a1e0::5]")
+    assert not dyn("0.0.0.0") and not dyn("[::]") and not dyn("192.168.2.10") and not dyn("100.128.0.1")
+    # NFS-Hilfsdienste oeffnen wirklich zufaellige TCP-Ports
+    assert ix.parse_ports([_ss("tcp", 45678, "rpc.statd")])[0].dynamic
+
+
+def test_setting_adds_to_builtin_list_instead_of_replacing_it():
+    # Ein frueher gespeicherter Wert (nur die alten drei) darf tailscaled nicht wieder ausschliessen
+    old_saved = ["rpc.mountd", "rpc.statd", "avahi-daemon"]
+    assert ix.parse_ports([_ss("udp", 41641, "tailscaled")], dynamic_processes=old_saved)[0].dynamic
+    assert ix.parse_ports([_ss("udp", 41641, "tailscaled")], dynamic_processes=[])[0].dynamic
+    assert ix.parse_ports([_ss("tcp", 50000, "mein-dienst")], dynamic_processes=[])[0].dynamic is False
+    assert ix.parse_ports([_ss("tcp", 50000, "mein-dienst")], dynamic_processes=["Mein-Dienst"])[0].dynamic
+
+
+def test_without_root_random_udp_ports_collapse_but_tcp_stays_visible():
+    unprivileged = "@@uid\n1000\n"
+    lines = [_ss("tcp", 22, None), _ss("udp", 41641, None), _ss("udp", 52000, None), _ss("udp", 5353, None),
+             _ss("tcp", 45000, None), _ss("tcp", 8081, None)]
+    snap = ix.parse_guard(unprivileged + _output(ports="\n".join(lines))[len("@@uid\n0\n"):])
+    keys = sorted(p.key for p in snap.ports)
+    assert keys == ["tcp/22/?", "tcp/45000/?", "tcp/8081/?", "udp/5353/?", "udp/dyn/?"]
+    collective = next(p for p in snap.ports if p.dynamic)
+    assert collective.count == 2 and collective.label == "wechselnde Ports/udp (Programm nicht lesbar)"
+    # Alte Staende mit einzelnen "udp/<Port>/?" decken den Sammeleintrag ab
+    assert ix.port_is_known(collective, {"udp/41641/?"})
+
+
+@pytest.mark.asyncio
+async def test_port_rows_say_when_the_program_is_unreadable_because_there_is_no_root():
+    """Der Sammeleintrag "udp/dyn/?" ohne root steht fuer Programme, die nicht lesbar sind -- nicht fuer
+    Kernel-Sockets. Die Oberflaeche braucht dafuer `unreadable` in der Port-Zeile und im Ereignis."""
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.guard import Guard
+
+    def as_user(text: str) -> str:
+        return text.replace("@@uid\n0\n", "@@uid\n1000\n")
+
+    base = [_ss("tcp", 22, None)]
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [as_user(_output(ports="\n".join(base))), as_user(_output(ports="\n".join([*base, _ss("udp", 41641, None)])))])
+    guard = Guard(ctx, Defender(ctx))
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    [event] = await guard.list_events()
+    [port] = event["detail"]["ports"]
+    assert port["key"] == "udp/dyn/?" and port["dynamic"] is True and port["unreadable"] is True
+    rows = {p["key"]: p for p in (await guard.overview())["hosts"][0]["view"]["ports"]}
+    assert rows["udp/dyn/?"]["unreadable"] is True and rows["tcp/22/?"]["unreadable"] is False
+    await engine.dispose()
+
+    # Mit root sind es Kernel-Sockets (ohne Prozess): nicht "unreadable"
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(ports="\n".join(base)), _output(ports="\n".join([*base, _ss("udp", 41641, None)]))])
+    guard = Guard(ctx, Defender(ctx))
+    await guard.inspect(ctx._host)
+    await guard.inspect(ctx._host)
+    rows = {p["key"]: p for p in (await guard.overview())["hosts"][0]["view"]["ports"]}
+    assert rows["udp/dyn/-"]["dynamic"] is True and rows["udp/dyn/-"]["unreadable"] is False
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_random_udp_ports_of_tailscale_and_rpc_raise_no_alarm_but_new_web_server_does():
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.guard import Guard
+
+    def host(ts_udp, ts_tcp, statd_udp, mountd, extra=""):
+        lines = [_ss("tcp", 22, "sshd"), _ss("udp", ts_udp, "tailscaled"), _ss("udp", ts_udp, "tailscaled", "[::]"),
+                 _ss("tcp", ts_tcp, "tailscaled", "100.64.0.7"), _ss("udp", statd_udp, "rpc.statd"),
+                 _ss("udp", mountd, "rpc.mountd"), _ss("tcp", mountd + 1, "rpc.mountd")]
+        return _output(ports="\n".join(lines) + extra)
+
+    engine, sm = await _engine()
+    web = "\n" + _ss("tcp", 8081, "python3")
+    ctx = _Ctx(sm, [host(41641, 34567, 723, 40001), host(55102, 41234, 801, 52000), host(36000, 47000, 650, 60000),
+                    host(36000, 47000, 650, 60000, web), host(36000, 47000, 650, 60000, web)])
+    guard = Guard(ctx, Defender(ctx))
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    assert (await guard.list_events())[0]["title"] == "Neuer offener Port: 8081/tcp (python3)"
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_backdoor_named_like_builtin_program_on_tcp_is_reported():
+    from nodvard_deck_ext_nexus_soc.defender import Defender
+    from nodvard_deck_ext_nexus_soc.guard import Guard
+
+    base = [_ss("tcp", 22, "sshd"), _ss("udp", 41641, "chronyd")]
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [_output(ports="\n".join(base)), _output(ports="\n".join([*base, _ss("tcp", 4444, "chronyd")])),
+                    _output(ports="\n".join([*base, _ss("tcp", 40000, "chronyd")]))])
+    guard = Guard(ctx, Defender(ctx))
+    assert (await guard.inspect(ctx._host))["events"] == 0
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    assert (await guard.list_events())[0]["title"] == "Neuer offener Port: 4444/tcp (chronyd)"
+    assert (await guard.inspect(ctx._host))["events"] == 1
+    assert (await guard.list_events())[0]["title"] == "Neuer offener Port: 40000/tcp (chronyd)"
+    await engine.dispose()
 
 
 def test_dynamic_range_and_root_decide_what_is_random():

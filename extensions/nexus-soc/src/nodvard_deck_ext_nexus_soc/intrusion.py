@@ -36,9 +36,33 @@ WATCH_BINARIES = [
     "/usr/bin/ls", "/usr/bin/ps", "/usr/bin/ss", "/usr/bin/top", "/usr/bin/find", "/usr/sbin/cron",
 ]
 
-# Programme, die bei jedem Start neue zufaellige Ports waehlen (NFS-Server, mDNS). Ihre
-# Ports im dynamischen Bereich zaehlen als ein einziger Eintrag ("udp/dyn/rpc.mountd").
-DEFAULT_DYNAMIC_PROCESSES = ["rpc.mountd", "rpc.statd", "avahi-daemon"]
+# Programme, die bei jedem Start neue zufaellige Ports waehlen. Ihre Ports im dynamischen
+# Bereich zaehlen als ein einziger Eintrag ("udp/dyn/rpc.mountd"). Diese Liste ist fest
+# eingebaut und gilt immer; die Einstellung "guard_dynamic_processes" fuegt weitere hinzu.
+# (Ein gespeicherter Einstellungswert wuerde sonst eine spaeter erweiterte Vorgabe ueberdecken.)
+#   - tailscaled: UDP-Port fuer die Verbindung zu anderen Geraeten und TCP-Port der
+#     Tailscale-Adresse werden bei jedem Start neu gewaehlt
+#   - rpc.mountd, rpc.statd, rpcbind: NFS-Hilfsdienste (RPC) waehlen ihre Ports zufaellig
+#   - avahi-daemon: mDNS-Antwort-Ports
+#   - dhclient, dhcpcd: DHCP-Client oeffnet neben Port 68 zufaellige Ports
+#   - chronyd: Zeitabgleich ueber einen zufaelligen Quell-Port (acquisitionport)
+DEFAULT_DYNAMIC_PROCESSES = [
+    "tailscaled", "rpc.mountd", "rpc.statd", "rpcbind", "avahi-daemon", "dhclient", "dhcpcd", "chronyd",
+]
+# RPC-Dienste (libtirpc) suchen ihren Port zuerst im "reservierten" Bereich 600-1023
+# (bindresvport) -- auch dort aendert er sich bei jedem Start. Feste Ports wie 111 (rpcbind)
+# liegen darunter und bleiben einzeln sichtbar.
+RESERVED_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd", "rpcbind"}
+RESERVED_DYNAMIC_PORT_MIN = 600
+RESERVED_DYNAMIC_PORT_MAX = 1023
+# Den Programmnamen (`comm`) darf sich jedes Programm selbst geben: eine Hintertuer kann sich
+# "chronyd" nennen. Fuer die eingebauten Namen gilt die Ausnahme deshalb nur dort, wo das
+# echte Programm wirklich wechselnde Ports oeffnet -- sonst bleibt der Port einzeln sichtbar
+# und meldet. UDP ist bei allen der Normalfall; TCP nur bei den NFS-Hilfsdiensten (mountd und
+# statd lauschen auch auf zufaelligen TCP-Ports) und bei tailscaled nur auf der eigenen
+# Tailscale-Adresse (von aussen nicht erreichbar, nur aus dem eigenen Tailscale-Netz).
+TCP_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd"}
+TAILSCALE_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 # Untergrenze des dynamischen Bereichs, falls ip_local_port_range nicht lesbar ist.
 DEFAULT_DYNAMIC_PORT_MIN = 32768
 
@@ -114,15 +138,20 @@ class Port:
     # ein Eintrag steht dann fuer alle Ports dieser Art, `count` sagt wie viele es sind.
     dynamic: bool = False
     count: int = 1
+    # Ohne root zeigt `ss` keinen Programmnamen: ein UDP-Port im Zufallsbereich wird dann
+    # mit allen anderen dieser Art zusammengefasst ("udp/dyn/?"), statt einzeln zu melden.
+    unreadable: bool = False
 
     @property
     def key(self) -> str:
         if self.dynamic:
-            return f"{self.proto}/dyn/{self.process or '-'}"
+            return f"{self.proto}/dyn/{self.process or ('?' if self.unreadable else '-')}"
         return f"{self.proto}/{self.port}/{self.process or '?'}"
 
     @property
     def label(self) -> str:
+        if self.dynamic and self.unreadable:
+            return f"wechselnde Ports/{self.proto} (Programm nicht lesbar)"
         if self.dynamic:
             return f"wechselnde Ports/{self.proto} ({self.process or 'ohne Programm'})"
         return f"{self.port}/{self.proto} ({self.process or '?'})"
@@ -330,18 +359,43 @@ def parse_port_range(lines: list[str]) -> int:
     return DEFAULT_DYNAMIC_PORT_MIN
 
 
+def _on_tailscale(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address.strip("[]"))
+    except ValueError:
+        return False
+    return any(ip.version == net.version and ip in net for net in TAILSCALE_NETS)
+
+
+def _builtin_allows(name: str, proto: str, address: str) -> bool:
+    """Darf ein Port des eingebauten Programms `name` auf diesem Protokoll als wechselnd gelten?"""
+    if proto == "udp":
+        return True
+    if name == "tailscaled":
+        return _on_tailscale(address)
+    return name in TCP_DYNAMIC_PROCESSES
+
+
 def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None, dynamic_min: int = DEFAULT_DYNAMIC_PORT_MIN,
                 is_root: bool = True) -> list[Port]:
     """Wertet `ss -tulnp` aus.
 
-    Zufaellige Ports (>= `dynamic_min`) von Programmen aus `dynamic_processes` sowie von
-    Sockets ohne Prozess (Kernel, z. B. lockd) bekommen einen Schluessel ohne Port, sonst
-    meldet jeder Neustart 15 "neue" Ports. Sockets ohne Prozess gelten nur mit root als
-    Kernel-Sockets -- ohne root sind auch normale Programme namenlos, dann bliebe eine
-    echte neue Hintertuer hinter dem Sammeleintrag verborgen.
+    Zufaellige Ports (>= `dynamic_min`) von Programmen aus der festen Liste
+    `DEFAULT_DYNAMIC_PROCESSES` und aus `dynamic_processes` (Einstellung, kommt hinzu) sowie
+    von Sockets ohne Prozess (Kernel, z. B. lockd) bekommen einen Schluessel ohne Port, sonst
+    meldet jeder Neustart 15 "neue" Ports. RPC-Dienste zaehlen auch im Bereich 600-1023 so.
+    Eingebaute Programme zaehlen nur auf den Protokollen als wechselnd, auf denen das echte
+    Programm zufaellige Ports oeffnet (`_builtin_allows`): der Name allein ist faelschbar.
+    Sockets ohne Prozess gelten nur mit root als Kernel-Sockets -- ohne root sind auch normale
+    Programme namenlos, dann bliebe eine echte neue Hintertuer hinter dem Sammeleintrag
+    verborgen. Nur bei UDP wird auch ohne root zusammengefasst ("udp/dyn/?"): dort sind
+    Zufallsports im hohen Bereich der Normalfall (Tailscale, DHCP, mDNS), und ein TCP-Dienst
+    -- der typische Hintertuer-Fall -- bleibt weiter einzeln sichtbar.
     """
-    names = {n.strip().lower() for n in (DEFAULT_DYNAMIC_PROCESSES if dynamic_processes is None else dynamic_processes)
-             if isinstance(n, str) and n.strip()}
+    builtin = {n.lower() for n in DEFAULT_DYNAMIC_PROCESSES}
+    # Eingebaute Namen behalten ihre Regeln, auch wenn sie (alter gespeicherter Wert) zusaetzlich
+    # in der Einstellung stehen; nur weitere Programme aus der Einstellung gelten fuer TCP und UDP.
+    extra = {n.strip().lower() for n in (dynamic_processes or []) if isinstance(n, str) and n.strip()} - builtin
     ports: dict[str, Port] = {}
     seen: dict[str, set[int]] = {}
     for line in lines:
@@ -355,8 +409,20 @@ def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None,
         addr = addr.split("%")[0]
         proc = m.group("proc")
         num = int(port)
-        dynamic = num >= dynamic_min and ((proc.lower() in names) if proc else is_root)
-        p = Port(proto=m.group("proto"), address=addr, port=num, process=proc, dynamic=dynamic)
+        proto = m.group("proto")
+        unreadable = False
+        if proc:
+            lower = proc.lower()
+            allowed = lower in extra or (lower in builtin and _builtin_allows(lower, proto, addr))
+            dynamic = allowed and (
+                num >= dynamic_min
+                or (lower in RESERVED_DYNAMIC_PROCESSES and RESERVED_DYNAMIC_PORT_MIN <= num <= RESERVED_DYNAMIC_PORT_MAX)
+            )
+        elif is_root:
+            dynamic = num >= dynamic_min
+        else:
+            dynamic = unreadable = proto == "udp" and num >= dynamic_min
+        p = Port(proto=proto, address=addr, port=num, process=proc, dynamic=dynamic, unreadable=unreadable)
         # IPv4 und IPv6 desselben Dienstes nur einmal zeigen -- oeffentlich gewinnt.
         existing = ports.get(p.key)
         seen.setdefault(p.key, set()).add(num)
@@ -382,7 +448,11 @@ def port_is_known(port: Port, known: set[str], *, dynamic_min: int = DEFAULT_DYN
     legacy_proc = port.process or "?"
     for k in known:
         m = _LEGACY_PORT_KEY_RE.match(k)
-        if m and m.group("proto") == port.proto and m.group("proc") == legacy_proc and int(m.group("port")) >= dynamic_min:
+        if not m or m.group("proto") != port.proto or m.group("proc") != legacy_proc:
+            continue
+        num = int(m.group("port"))
+        reserved = legacy_proc.lower() in RESERVED_DYNAMIC_PROCESSES and RESERVED_DYNAMIC_PORT_MIN <= num <= RESERVED_DYNAMIC_PORT_MAX
+        if num >= dynamic_min or reserved:
             return True
     return False
 

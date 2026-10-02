@@ -89,7 +89,7 @@ function TypeTextDialog({ open, onOpenChange, rfb }: { open: boolean; onOpenChan
     if (unsupported.length > 0) {
       setError(
         unsupported.includes("↵") && unsupported.length === 1
-          ? "Der Text enthält Zeilenumbrüche -- „Zeilenumbruch = Enter“ anhaken oder entfernen."
+          ? "Der Text enthält Zeilenumbrüche – „Zeilenumbruch = Enter“ anhaken oder entfernen."
           : `Nicht tippbar im Layout ${LAYOUT_LABEL[layout]}: ${unsupported.join(" ")}`,
       );
       return;
@@ -119,7 +119,7 @@ function TypeTextDialog({ open, onOpenChange, rfb }: { open: boolean; onOpenChan
         <Dialog.Content className="fixed left-1/2 top-1/2 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-1 text-lg font-semibold">Text senden</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-70">
-            Wird als Tastendrücke in die Konsole getippt -- es gibt dort keine Zwischenablage. Das Layout muss zu dem im Gast passen.
+            Wird als Tastendrücke in die Konsole getippt – es gibt dort keine Zwischenablage. Das Layout muss zu dem im Gast passen.
           </Dialog.Description>
           <textarea
             value={text}

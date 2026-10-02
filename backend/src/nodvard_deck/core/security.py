@@ -9,8 +9,11 @@ Siehe docs/00-DECISIONS.md D-07.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import secrets
+import weakref
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
@@ -41,6 +44,82 @@ def verify_password(password: str, password_hash: str) -> bool:
         # Ungueltiger/fremder Hash-Text (z. B. leere Migration) -- auch das ist "falsch",
         # nicht "Serverfehler".
         return False
+
+
+# ---------------------------------------------------------------------------
+# Argon2 abseits des Event-Loops. Eine Pruefung braucht 64 MiB und einige hundert ms (auf einem
+# Pi); liefe sie im Loop, stuende waehrenddessen alles still (Anfragen, Terminals, Zeitplaene).
+# Deshalb laeuft sie in einem Thread, und davon gleichzeitig nur wenige -- eine Anmelde-Flut
+# fuellt so weder den Thread-Pool noch den Speicher. Wer dahinter noch wartet, wird ab einer
+# Grenze abgewiesen statt unbegrenzt aufgestaut.
+# ---------------------------------------------------------------------------
+
+MAX_PARALLEL_HASHES = 2
+"""So viele Argon2-Vorgaenge laufen hoechstens gleichzeitig."""
+
+MAX_WAITING_HASHES = 16
+"""So viele weitere duerfen warten; jeder darueber hinaus bekommt sofort `HashingBusy`."""
+
+
+class HashingBusy(Exception):
+    """Gerade rechnen schon zu viele Passwort-Pruefungen; es hilft, in ein paar Sekunden
+    erneut zu versuchen (API: 503)."""
+
+
+class _Gate:
+    def __init__(self) -> None:
+        self.semaphore = asyncio.Semaphore(MAX_PARALLEL_HASHES)
+        self.waiting = 0
+
+
+# Je Event-Loop ein eigenes Tor: ein Semaphore haengt am Loop, in dem er zuerst gebraucht wird
+# (Tests starten mehrere Loops nacheinander).
+_gates: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, _Gate] = weakref.WeakKeyDictionary()
+
+
+def _gate() -> _Gate:
+    loop = asyncio.get_running_loop()
+    gate = _gates.get(loop)
+    if gate is None:
+        gate = _gates[loop] = _Gate()
+    return gate
+
+
+async def run_hashing[T](func: Callable[..., T], *args: Any, signed_in: bool = False) -> T:
+    """Fuehrt eine rechenintensive Passwort-Arbeit in einem Thread aus, hoechstens
+    `MAX_PARALLEL_HASHES` gleichzeitig. Wirft `HashingBusy`, wenn schon `MAX_WAITING_HASHES`
+    warten.
+
+    `signed_in=True` fuer Arbeit, die nur ein angemeldeter Nutzer ausloest (Passwortabfrage bei
+    empfindlichen Aktionen, Passwort setzen, neue Wiederherstellungs-Codes): die wartet in jedem
+    Fall, statt abgewiesen zu werden. Eine Anmelde-Flut von aussen soll niemanden, der schon
+    drin ist, aus seinen Einstellungen aussperren; begrenzt ist diese Arbeit ohnehin (Anmeldung
+    noetig, Drosselung je Konto)."""
+    gate = _gate()
+    if gate.semaphore.locked():
+        if gate.waiting >= MAX_WAITING_HASHES and not signed_in:
+            raise HashingBusy
+        gate.waiting += 1
+        try:
+            await gate.semaphore.acquire()
+        finally:
+            gate.waiting -= 1
+    else:
+        await gate.semaphore.acquire()
+    try:
+        return await asyncio.to_thread(func, *args)
+    finally:
+        gate.semaphore.release()
+
+
+async def hash_password_async(password: str, *, signed_in: bool = False) -> str:
+    """Wie `hash_password`, aber in einem Thread und begrenzt (siehe `run_hashing`)."""
+    return await run_hashing(lambda: hash_password(password), signed_in=signed_in)
+
+
+async def verify_password_async(password: str, password_hash: str, *, signed_in: bool = False) -> bool:
+    """Wie `verify_password`, aber in einem Thread und begrenzt (siehe `run_hashing`)."""
+    return await run_hashing(lambda: verify_password(password, password_hash), signed_in=signed_in)
 
 
 def needs_rehash(password_hash: str) -> bool:

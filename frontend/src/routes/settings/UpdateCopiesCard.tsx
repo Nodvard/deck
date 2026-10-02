@@ -26,9 +26,15 @@ interface SystemInfo {
   pre_update_copies?: PreUpdateCopy[];
 }
 
+/** Beschriftung einer Kopie. Bei gleicher Version vorher/nachher war es kein Versionswechsel, sondern ein Umbau der
+ * Datenbank (neue Migration ohne neue Versionsnummer); fehlt eine Angabe, steht nichts Erfundenes da. */
 function versions(copy: PreUpdateCopy): string {
-  const from = copy.from_version ? `Version ${copy.from_version}` : "früherer Version";
-  return copy.to_version ? `Update von ${from} auf ${copy.to_version}` : `Update von ${from}`;
+  const from = copy.from_version?.trim() || null;
+  const to = copy.to_version?.trim() || null;
+  if (from && to && from === to) return `Datenbank-Umbau in ${to}`;
+  if (!from && !to) return "Datenbank-Umbau (Version nicht bekannt)";
+  const fromText = from ? `Version ${from}` : "früherer Version";
+  return to ? `Update von ${fromText} auf ${to}` : `Update von ${fromText}`;
 }
 
 export function UpdateCopiesCard(): JSX.Element | null {

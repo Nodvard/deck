@@ -213,7 +213,7 @@ async def test_generate_key_stores_private_key_in_the_vault_and_returns_only_the
         "ssh_key", "lattice", 22, True, host["id"],
     )
     assert "secret_value" not in cred and "secret_id" not in cred
-    assert body["public_key"].startswith("ssh-ed25519 ") and body["public_key"].endswith(" lattice@bastel-pi")
+    assert body["public_key"].startswith("ssh-ed25519 ") and body["public_key"].endswith(" nodvard@bastel-pi")
     assert "\n" not in body["public_key"]
 
     # Der private Schluessel liegt im Vault, und der oeffentliche Teil gehoert dazu.
@@ -282,7 +282,7 @@ async def test_generate_key_comment_is_made_safe_for_odd_host_names(client, db_s
     await db_session.commit()
     r = await client.post(GENERATE.format(host.id), json={}, headers=_auth(token))
     assert r.status_code == 201, r.text
-    assert r.json()["public_key"].endswith(" lattice@PVE-node----id-")
+    assert r.json()["public_key"].endswith(" nodvard@PVE-node----id-")
 
 
 @pytest.mark.asyncio
@@ -491,7 +491,7 @@ async def test_setup_refuses_usernames_that_are_not_plain_linux_names(client, db
 @pytest.mark.asyncio
 async def test_setup_ignores_the_comment_of_a_pasted_key(client):
     """Bei einem eingefuegten Schluessel bestimmt der Nutzer den Kommentar im Schluessel --
-    im Befehl steht immer `lattice@<Kurzname>`."""
+    im Befehl steht immer `nodvard@<Kurzname>`."""
     import asyncssh
 
     token = await _bootstrap_owner(client)
@@ -506,7 +506,7 @@ async def test_setup_ignores_the_comment_of_a_pasted_key(client):
     r = await client.get(_setup_url(host["id"], created.json()["id"]), headers=_auth(token))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert body["public_key"].endswith(" lattice@bastel-pi") and len(body["public_key"].split(" ")) == 3
+    assert body["public_key"].endswith(" nodvard@bastel-pi") and len(body["public_key"].split(" ")) == 3
     for text in (body["one_liner"], body["script"]):
         assert "touch /tmp" not in text and "evil" not in text and "pwned" not in text
     assert body["one_liner"].count("'") == 2
@@ -658,6 +658,26 @@ async def test_make_default_on_the_current_default_changes_nothing(client, db_se
     ids = {c["id"] for c in (await client.get(f"/api/v1/hosts/{host['id']}/credentials", headers=_auth(token))).json()}
     assert ids == {old["id"], new["id"]}, "delete_previous loescht nichts, wenn der Zugang schon Standard ist"
     assert await _audit_rows(db_session, "host.credential_made_default") == []
+
+
+@pytest.mark.asyncio
+async def test_make_default_notice_for_a_password_credential_does_not_talk_about_keys(client, db_session, pool):
+    """Der alte Zugang war ein Passwort: auf dem Server steht kein Schluessel, der aufzuraeumen waere."""
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    old = (await client.post(
+        f"/api/v1/hosts/{host['id']}/credentials",
+        json={"kind": "ssh_password", "username": "pi", "secret_value": "GEHEIM-PW-123"}, headers=_auth(token),
+    )).json()
+    new = (await client.post(GENERATE.format(host["id"]), json={"username": "nodvard"}, headers=_auth(token))).json()["credential"]
+    assert (old["is_default"], new["is_default"]) == (True, False)
+    await _mark_login_ok(db_session, host, new)
+
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    assert r.status_code == 200, r.text
+    notice = r.json()["notice"]
+    assert notice and "gelöscht" in notice
+    assert "authorized_keys" not in notice and "Schlüssel" not in notice
 
 
 @pytest.mark.asyncio

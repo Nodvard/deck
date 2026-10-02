@@ -35,7 +35,10 @@ interface UpdateState {
   error: string | null;
   /** Kein Paketmanager, den die Update-Zentrale kennt (z. B. ein NAS mit eigener Firmware): kein Fehler (fehlt bei älteren Ständen). */
   unsupported?: boolean;
-  checked_at: number;
+  /** Letzte erfolgreiche Prüfung (leer, wenn noch keine gelang). */
+  checked_at: number | null;
+  /** Letzter Versuch, auch fehlgeschlagen (fehlt bei älteren Ständen). */
+  attempted_at?: number | null;
   /** Neustart ausgeloest -- die naechste erfolgreiche Pruefung ersetzt den Stand und entfernt das Feld. */
   reboot_pending_since?: number;
 }
@@ -62,6 +65,8 @@ interface HostUpdates {
   status: UpdateState | null;
   checking: boolean;
   busy: string | null;
+  /** Der letzte Prüfversuch liegt vor dem zuletzt fälligen Zeitpunkt des Zeitplans – die geplante Prüfung ist für diesen Server ausgeblieben. */
+  check_overdue?: boolean;
   last_run: UpdateRun | null;
 }
 
@@ -248,8 +253,14 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                   </p>
                   <p className="mt-0.5 text-xs text-white/45">
                     {st?.manager ? `${st.manager} · Kernel ${st.kernel ?? "?"} · läuft seit ${uptime(st.uptime_s)} · ` : ""}
-                    geprüft {ago(st?.checked_at)}
+                    {st?.checked_at ? `geprüft ${ago(st.checked_at)}` : "noch nie erfolgreich geprüft"}
+                    {st?.error && !st.unsupported && st.attempted_at ? ` · letzter Versuch ${ago(st.attempted_at)} fehlgeschlagen` : ""}
                   </p>
+                  {h.check_overdue && (
+                    <p className="mt-1 text-xs text-amber-300" data-testid={`updates-overdue-${h.host_id}`}>
+                      Die geplante Prüfung ist hier ausgeblieben (das Dashboard lief zur Prüfzeit nicht). Der Stand kann veraltet sein – „Prüfen“ holt ihn nach.
+                    </p>
+                  )}
                   {st?.error && <p className={`mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`}>{st.error}</p>}
                   {st?.refresh_error && <p className="mt-1 text-xs text-amber-300/80">{st.refresh_error}</p>}
                   {needsReboot && st.reboot_reasons.length > 0 && (

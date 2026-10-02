@@ -150,6 +150,8 @@ class _LoginOk:
     address: str
     port: int
     at: float
+    checked_at: datetime
+    """Die Uhrzeit derselben Prüfung (für den dauerhaften Beleg, siehe `carry_over_login_ok`)."""
 
 
 _seen_keys: dict[str, _SeenKey] = {}
@@ -205,8 +207,24 @@ def consume_seen_key(host: Host, port: int, key_type: str, fingerprint: str) -> 
 
 
 def mark_login_ok(host: Host, credential: HostCredential) -> None:
-    """Hält fest: die Anmeldung mit `credential` hat gerade geklappt."""
-    _logins_ok[credential.id] = _LoginOk(host.address, credential.port, _now())
+    """Hält fest: die Anmeldung mit `credential` hat gerade geklappt. Für „alten Zugang löschen“ gilt das
+    je Zugang (`login_was_ok`); der dauerhafte Beleg am Server aber nur für den Standard-Zugang: wer
+    einen neuen Zugang vor dem Umstellen prüft, soll den Beleg des bisherigen nicht überschreiben
+    (`carry_over_login_ok` übernimmt ihn beim Umstellen)."""
+    checked_at = utcnow()
+    _logins_ok[credential.id] = _LoginOk(host.address, credential.port, _now(), checked_at)
+    if credential.is_default:
+        hosts_service.record_login_ok(host, credential, checked_at)
+
+
+def carry_over_login_ok(host: Host, credential: HostCredential) -> bool:
+    """Beim Umstellen des Standard-Zugangs: hat `credential` die Anmeldung vor Kurzem geschafft
+    (`login_was_ok`), wird daraus der dauerhafte Beleg des Servers -- mit der Zeit dieser Prüfung --,
+    sonst bleibt der neue Standard unbestätigt, bis eine Prüfung oder eine echte Verbindung es belegt."""
+    if not login_was_ok(host, credential):
+        return False
+    hosts_service.record_login_ok(host, credential, _logins_ok[credential.id].checked_at)
+    return True
 
 
 def login_was_ok(host: Host, credential: HostCredential) -> bool:
@@ -335,6 +353,15 @@ async def _run(
     else:
         if credential is not None:
             _logins_ok.pop(credential.id, None)
+            # Nur wenn die Anmeldung selbst scheiterte: ein Server, der gerade nicht antwortet, hat
+            # damit nicht widerrufen, dass sie früher klappte.
+            # Und nur der Beleg dieses Zugangs: scheitert ein anderer als der Standard (etwa ein neuer, dessen
+            # Einrichtungsbefehl noch nicht gelaufen ist), bleibt der Beleg des funktionierenden stehen.
+            if not state.unreachable and not state.key_problem and any(i.id == "login" and i.status == "fail" for i in state.items):
+                hosts_service.clear_login_ok(host, credential.id)
+        if state.host_key is not None and state.host_key.status == "changed":
+            # Ein anderer Server-Schlüssel: die frühere Anmeldung galt einem anderen Gegenüber, mit jedem Zugang.
+            hosts_service.clear_login_ok(host)
         if state.unreachable:
             host.status = "down"
         elif state.key_problem:

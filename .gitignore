@@ -37,3 +37,9 @@ master.key
 
 # Lokale Deploy-Einstellungen (Zielrechner, DNS) -- nie committen
 deploy/.env.deploy
+
+# Sperrdatei von backup.sh/restore.sh (entsteht beim ersten Lauf)
+deploy/.backup-restore.lock
+
+# Protokoll von restore.sh (Pfade, Benutzernamen; entsteht beim ersten Einspielen)
+deploy/restore.log

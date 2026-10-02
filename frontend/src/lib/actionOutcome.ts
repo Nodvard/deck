@@ -11,8 +11,13 @@
  * Flap-Schutz) bzw. `user_reason` bei einer Ablehnung von Hand (gate.reject()).
  */
 
+/** Hinweis, wenn das Backend Ausgabe und Fehlertext weglässt (Nutzer ohne Server-Rechte). */
+export const OUTPUT_HIDDEN_HINT = "Ausgabe nur für Nutzer mit Server-Rechten sichtbar";
+
 export interface ActionOutcomeSource {
   status?: string | null;
+  /** `true`: dem Nutzer fehlen die Server-Rechte, Ausgabe und Fehlertext sind leer (api/v1/actions.py). */
+  output_hidden?: boolean | null;
   result?: { success?: boolean; error?: string | null } | null;
   gate_decision?: { rule?: string | null; detail?: string | null; user_reason?: string | null } | null;
 }
@@ -55,6 +60,7 @@ export function describeActionOutcome(a: ActionOutcomeSource): ActionOutcome {
     case "succeeded":
       return { tone: "success", text: "Ausgeführt" };
     case "failed":
+      if (!reason && a.output_hidden) return { tone: "error", text: `Fehlgeschlagen – ${OUTPUT_HIDDEN_HINT}` };
       return { tone: "error", text: `Fehlgeschlagen: ${reason ?? "unbekannter Fehler"}` };
     case "denied":
       if (isUserReject(a)) return { tone: "neutral", text: reason ? `Abgelehnt: ${reason}` : "Abgelehnt" };

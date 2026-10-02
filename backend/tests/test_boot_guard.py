@@ -73,7 +73,7 @@ class Ctx:
         conn.execute("INSERT INTO alembic_version VALUES ('halbfertig0000')")
         conn.commit()
         conn.close()
-        raise RuntimeError("Migration kaputt: Tabelle ist /home/nico/geheim/lattice.db und postgresql://admin:Sup3rGeheim@10.0.0.5/deck")
+        raise RuntimeError("Migration kaputt: Tabelle ist /home/user/geheim/lattice.db und postgresql://admin:Sup3rGeheim@10.0.0.5/deck")
 
     def old_db(self, **kw):
         """Eine Datenbank auf einem aelteren (bekannten) Stand."""
@@ -196,7 +196,7 @@ def test_a_failing_migration_returns_to_the_state_before_it(ctx):
     assert "revert" not in state
     text = " ".join(state["failure"]["log"] + [state["failure"]["reason"]])
     assert "Migration kaputt" in text
-    for secret in ("Sup3rGeheim", "/home/nico", str(ctx.data)):
+    for secret in ("Sup3rGeheim", "/home/user", str(ctx.data)):
         assert secret not in text, secret
     assert len(state["failure"]["log"]) <= 50
 

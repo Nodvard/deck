@@ -28,6 +28,7 @@ BASE_VERSION = "0.4.0"
 
 _COPIED = (
     "backend/src/nodvard_deck/version.py",
+    "deploy/updater/nodvard_deck_updater/__init__.py",
     "backend/pyproject.toml",
     "frontend/package.json",
     "frontend/package-lock.json",
@@ -101,7 +102,7 @@ def test_release_writes_version_file_bumps_everything_and_removes_fragments(tree
     assert loaded.unreleased == ()
     assert "3 Eintraege aus 2 Bruchstuecken, 0.4.0 -> 0.5.0" in capsys.readouterr().out
 
-    # Sonst hat sich nichts veraendert: in den vier Dateien genau die Versionszeilen.
+    # Sonst hat sich nichts veraendert: in den kopierten Dateien genau die Versionszeilen.
     after = _snapshot(tree)
     changed = {k for k in before if k in after and before[k] != after[k]}
     assert changed == set(_COPIED)
@@ -181,6 +182,28 @@ def test_refuses_when_version_numbers_are_out_of_step(tree, capsys):
     assert "Gleichschritt" in err and "frontend/package.json: 0.3.0" in err
 
 
+def test_update_helper_version_is_bumped_with_the_rest(tree):
+    """Der Update-Helfer meldet dieselbe Nummer wie das Dashboard: das Release hebt auch seine Datei an."""
+    _with_fragments(tree)
+    assert 'nodvard_deck_updater/__init__.py' in " ".join(release.read_versions(tree))
+    assert '__version__ = "0.4.0"' in tree.updater_init.read_text(encoding="utf-8")
+    assert release.main(["0.5.0"], root=tree.root) == 0
+    assert '__version__ = "0.5.0"' in tree.updater_init.read_text(encoding="utf-8")
+
+
+def test_refuses_when_update_helper_version_is_out_of_step(tree, capsys):
+    """Von Hand geaendert oder vergessen: ohne den Gleichschritt gibt es kein Release."""
+    _with_fragments(tree)
+    init = tree.updater_init
+    init.write_text(init.read_text(encoding="utf-8").replace('__version__ = "0.4.0"', '__version__ = "0.7.0"', 1),
+                    encoding="utf-8")
+    before = _snapshot(tree)
+    assert release.main(["0.5.0"], root=tree.root) == 1
+    assert _snapshot(tree) == before
+    err = capsys.readouterr().err
+    assert "Gleichschritt" in err and "nodvard_deck_updater/__init__.py: 0.7.0" in err
+
+
 def test_refuses_when_newest_version_file_disagrees(tree):
     _with_fragments(tree)
     stale = tree.versions_dir / "0.4.0.toml"
@@ -231,5 +254,6 @@ def test_files_keep_their_line_endings(tree):
 def test_the_real_repository_passes_the_sync_check():
     """Auf den echten Dateien: alle Stellen im Gleichschritt, das Skript findet sie alle."""
     found = release.read_versions(release.Tree(REPO_ROOT))
-    assert len(found) == 5 and None not in found.values()
+    assert len(found) == 6 and None not in found.values()
     assert release.current_version(release.Tree(REPO_ROOT)) == __version__
+    assert found["deploy/updater/nodvard_deck_updater/__init__.py"] == __version__

@@ -139,6 +139,27 @@ class FileSource(Protocol):
     Der Kern baut daraus Explorer, quellenuebergreifende Suche, Drag & Drop zwischen
     Quellen (open_read(A) -> open_write(B), serverseitig) und das Info-Panel — ohne zu
     wissen, ob dahinter SFTP, WebDAV, TrueNAS oder Syncthing steckt.
+
+    Optional: `required_permission: str | None` (Standard: fehlt = `None`). Nennt eine Quelle
+    hier eine Berechtigung (z. B. `"hosts.execute"`), darf der Kern sie nur Nutzern zeigen und
+    öffnen, die diese Berechtigung selbst haben -- `files.read`/`files.write` allein reichen dann
+    nicht. Gedacht für Quellen, die mit fremden Zugangsdaten arbeiten (SSH als root): sonst
+    liest jeder mit `files.read` alles, was der Zugang lesen darf. Bewusst KEIN Pflichtmitglied
+    des Protokolls (`@runtime_checkable` würde sonst jede ältere Quelle ohne das Attribut
+    abweisen); der Kern liest es mit `getattr(source, "required_permission", None)`.
+
+    Optional: `async file_identity(path) -> dict | None`. Damit erkennt der Kern vor einem Transfer,
+    ob Quelle und Ziel dieselbe Datei sind (Link, `..`-Umweg, zweiter Eintrag für denselben
+    Rechner) -- sonst würde das Schreiben die Quelle selbst überschreiben. Rückgabe: `path` (der
+    aufgelöste, absolute Pfad) und, soweit bekannt, `size`, `mtime`, `uid`, `gid`, `mode` sowie
+    `machine` (eine feste Kennung des Rechners, etwa `/etc/machine-id`); `None`, wenn es die Datei
+    nicht gibt oder die Quelle es nicht ermitteln kann. Innerhalb derselben Quelle entscheidet
+    `path`. Über zwei Quellen hinweg sind zwei verschiedene `machine`-Kennungen immer zwei Dateien;
+    bei gleicher oder unbekannter Kennung müssen außer `path` auch alle fünf Werte übereinstimmen
+    (geklonte Rechner teilen oft dieselbe Kennung).
+    Bewusst KEIN Pflichtmitglied; der Kern liest es mit `getattr(source, "file_identity", None)`.
+    Ebenso gilt für `open_write`: eine Quelle sollte das Ziel erst ersetzen, wenn alles
+    angekommen ist, nie vorab abschneiden.
     """
 
     source_id: str
@@ -212,7 +233,12 @@ class ServiceCatalog(Protocol):
     entdeckt, nicht eingetragen.
     """
 
-    async def list_services(self) -> list[dict[str, Any]]: ...
+    async def list_services(self) -> list[dict[str, Any]]:
+        """Je Dienst eine Zeile (`id`, `name`, `host`, `state`, `tone`, `url`, ...). Ein Server, dessen
+        Dienste nicht gelesen werden konnten, kommt als eigene Platzhalterzeile mit `unreachable=True`
+        (und `host` = Name des Servers) -- keine Ausnahme, damit die anderen Server sichtbar bleiben.
+        Leser zaehlen sie nicht als Dienst, sondern als Warnung."""
+        ...
 
 
 @runtime_checkable

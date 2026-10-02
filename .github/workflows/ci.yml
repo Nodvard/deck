@@ -31,6 +31,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install --no-install-recommends -y tesseract-ocr tesseract-ocr-deu
       - run: pip install -c deploy/constraints.txt -e sdk/python -e "backend[dev]"
       - run: pytest sdk/python/tests backend/tests
+      # Die Tests von deploy/backup.sh und deploy/restore.sh mit echten Besitzern und Rechten (Marker needs_root) brauchen
+      # root und werden oben nur uebersprungen: hier noch einmal als root. Die Skripte laufen dabei aus einer Kopie im
+      # Temp-Ordner. Kein Cache und kein Bytecode, damit nichts root-Eigenes im Checkout liegen bleibt.
+      - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider -m needs_root backend/tests/test_deploy_switch.py
       # Update-Helfer (deploy/updater): nur Standardbibliothek, ohne Installation und ohne Backend-conftest -- eigener Aufruf.
       - run: python -m pytest deploy/updater/tests
       # Dieselben Tests noch einmal als root (der Runner hat sudo ohne Passwort): nur dann koennen Dateien einem anderen

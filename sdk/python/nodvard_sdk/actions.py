@@ -72,6 +72,22 @@ class ActionSpec(BaseModel):
     """
 
 
+class StandingApproval(BaseModel):
+    """Eine Dauerfreigabe, die ein Mensch vorab erteilt hat (z. B. "dieses Skript darf nach
+    Zeitplan ohne Klick laufen, solange es sich nicht aendert").
+
+    Die Extension prueft, ob die Freigabe noch zum Vorschlag passt (bei Skripten: Inhalt,
+    Parameter, Ziel, Zeitplan, Zielserver und Konto unveraendert). Das Gate prueft danach
+    selbst, ob `granted_by_user_id` noch aktiv ist und Dauerfreigaben sowie Aktionen dieser
+    Risikostufe bestaetigen darf. Vorschlaege einer KI laufen nie ueber eine Dauerfreigabe.
+    Die Extension braucht dafuer die Berechtigung `actions.standing_approval`."""
+
+    granted_by_user_id: str
+    granted_at: datetime
+    label: str | None = None
+    """Kurzer Text fuer das Protokoll, z. B. "Skript 'lynis' (Dauerfreigabe)"."""
+
+
 class ActionRequest(BaseModel):
     """Ein Vorschlag an das Gate. Niemals direkt ausgeführt."""
 
@@ -90,6 +106,15 @@ class ActionRequest(BaseModel):
     correlation_id: str | None = None
     idempotency_key: str | None = None
     expires_in_s: int | None = None
+    standing_approval: StandingApproval | None = None
+    """Optional: der Vorschlag beruft sich auf eine Dauerfreigabe (siehe `StandingApproval`).
+    Haelt sie der Pruefung im Gate stand, laeuft die Aktion ohne Klick an; sonst wird sie
+    ein ganz normaler Vorschlag. Das Gate haengt dann selbst an `reason` an, was passiert ist
+    ("ohne Klick, lief mit Dauerfreigabe vom <Datum> durch <Benutzer>" bzw. warum sie nicht
+    galt) -- `reason` der Extension nennt also nur, WAS laufen soll.
+
+    Beim Ausfuehren steht das Feld im `ActionRequest` an den Executor nur, wenn die Aktion
+    wirklich ueber die Dauerfreigabe ohne Klick anlief; nach einer Freigabe per Klick ist es None."""
 
     @field_validator("reason")
     @classmethod

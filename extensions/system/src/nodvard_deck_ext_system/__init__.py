@@ -47,6 +47,41 @@ _WIDGET_CACHE_S = 300
 _TONE_ORDER = {"danger": 0, "warn": 1, "good": 2}
 
 
+class WidgetCache:
+    """Zwischenspeicher des Widgets „Server-Zustand“ (siehe `health_widget`).
+
+    Er gilt nur, solange dieselben Server da sind (`key`): Ein neuer Server oder ein neu hinterlegter Zugang soll
+    nicht bis zu fünf Minuten lang fehlen („Keine Linux-Server mit SSH-Zugang“, obwohl gerade einer angelegt wurde)."""
+
+    def __init__(self, ttl_s: float) -> None:
+        self._ttl_s = ttl_s
+        self._entry: tuple[float, Any, list[dict[str, Any]]] | None = None
+
+    def get(self, key: Any, now: float) -> list[dict[str, Any]] | None:
+        if self._entry is None:
+            return None
+        stored_at, stored_key, rows = self._entry
+        return rows if stored_key == key and now - stored_at < self._ttl_s else None
+
+    def put(self, key: Any, now: float, rows: list[dict[str, Any]]) -> None:
+        self._entry = (now, key, rows)
+
+
+def hosts_key(hosts: list[Any]) -> tuple[tuple[str, str, str], ...]:
+    """Woran das Widget erkennt, dass sich die Serverliste geändert hat: Kennung, Adresse und Name."""
+    return tuple(sorted((str(h.id), str(h.address), str(h.display_name or h.name)) for h in hosts))
+
+
+def error_text(exc: BaseException) -> str:
+    """Warum ein Server nicht antwortet, in einem Satz für Menschen. Ausnahmen wie `TimeoutError` haben oft
+    keinen Text: Der Klassenname („TimeoutError“) hilft niemandem."""
+    if isinstance(exc, TimeoutError):  # auch asyncio.TimeoutError (seit Python 3.11 derselbe Typ)
+        return "keine Antwort innerhalb der Zeitgrenze – ist der Server an?"
+    if isinstance(exc, ConnectionRefusedError):
+        return "Verbindung abgelehnt – läuft der SSH-Dienst?"
+    return str(exc).strip() or "Verbindung fehlgeschlagen"
+
+
 def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dict[str, Any]:
     """Eine Zeile des Widgets "Server-Zustand": schlimmster Befund zuerst."""
     name = host.display_name or host.name
@@ -59,7 +94,7 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
     return {
         "name": name,
         "host_id": host.id,
-        "summary": findings[0]["text"] if findings else f"{info.get('os') or 'Linux'} -- alles in Ordnung",
+        "summary": findings[0]["text"] if findings else f"{info.get('os') or 'Linux'} – alles in Ordnung",
         "badge": "OK" if not findings else f"{len(findings)} Befund{'e' if len(findings) > 1 else ''}",
         "tone": tone,
     }
@@ -150,13 +185,13 @@ class Extension(NodvardExtension):
         for spec in ACTION_SPECS:
             ctx.actions.register(spec)
         router = APIRouter()
-        self._widget_cache: tuple[float, list[dict[str, Any]]] | None = None
+        widget_cache = WidgetCache(_WIDGET_CACHE_S)
 
         async def _query(host: Any) -> dict[str, Any]:
             try:
                 result = await asyncio.wait_for(ctx.exec.run(host, SCRIPT, timeout_s=20), timeout=25)
             except Exception as exc:  # noqa: BLE001 - ein Host darf die anderen nicht verstecken
-                return widget_row(host, None, f"nicht erreichbar: {str(exc) or type(exc).__name__}")
+                return widget_row(host, None, f"nicht erreichbar: {error_text(exc)}")
             if "@@os" not in result.stdout:
                 return widget_row(host, None, "Abfrage fehlgeschlagen")
             info = parse_system_info(result.stdout)
@@ -167,14 +202,17 @@ class Extension(NodvardExtension):
         @router.get("/widgets/health")
         async def health_widget() -> dict:
             """Alle Linux-Hosts mit SSH-Zugang, schlimmster zuerst. 5 min zwischengespeichert:
-            je Host ein SSH-Aufruf mit 1 s CPU-Messung -- nicht bei jedem Dashboard-Refresh."""
+            je Host ein SSH-Aufruf mit 1 s CPU-Messung -- nicht bei jedem Dashboard-Refresh.
+            Ändert sich die Serverliste (neuer Server, neuer Zugang), gilt der Speicher nicht mehr."""
             now = time.monotonic()
-            if self._widget_cache and now - self._widget_cache[0] < _WIDGET_CACHE_S:
-                return {"data": self._widget_cache[1], "meta": {"cached": True}}
             hosts = [h for h in await ctx.hosts.list() if h.os_family == "linux" and h.has_credential]
+            key = hosts_key(hosts)
+            cached = widget_cache.get(key, now)
+            if cached is not None:
+                return {"data": cached, "meta": {"cached": True}}
             rows = list(await asyncio.gather(*(_query(h) for h in hosts)))
             rows.sort(key=lambda r: (_TONE_ORDER.get(r["tone"], 2), r["name"].lower()))
-            self._widget_cache = (now, rows)
+            widget_cache.put(key, now, rows)
             return {"data": rows, "meta": {"cached": False}}
 
         @router.get("/hosts/{host_id}/live")
@@ -189,7 +227,7 @@ class Extension(NodvardExtension):
             try:
                 live = await metrics.live(host)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Nicht erreichbar: {str(exc) or type(exc).__name__}") from exc
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Nicht erreichbar: {error_text(exc)}") from exc
             return {**live, "host": {"id": host.id, "name": host.display_name or host.name}}
 
         @router.get("/hosts/{host_id}/info")
@@ -202,7 +240,7 @@ class Extension(NodvardExtension):
             try:
                 result = await ctx.exec.run(host, SCRIPT, timeout_s=30)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Nicht erreichbar: {exc}") from exc
+                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Nicht erreichbar: {error_text(exc)}") from exc
             if "@@os" not in result.stdout:
                 detail = result.stderr.strip() or f"Exit-Code {result.exit_code}"
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Abfrage fehlgeschlagen: {detail}")
@@ -254,7 +292,7 @@ class Extension(NodvardExtension):
         )
         ctx.ui.register_host_tool(HostToolSpec(
             id="system", title="System-Monitor", icon="cpu", category="monitoring",
-            description="Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse -- dazu Dienste und Updates",
+            description="Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse – dazu Dienste und Updates",
             path="/system?host={host_id}", os_families=["linux"], permissions=["hosts.execute"], order=50,
         ))
         # Dienste neu starten geht ueber `sudo -n` (actions.as_root) -- der Einrichtungsbefehl

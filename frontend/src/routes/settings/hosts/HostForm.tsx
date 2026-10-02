@@ -21,12 +21,18 @@ function sameList(a: string[], b: string[]): boolean {
   return a.length === b.length && [...a].sort().every((value, i) => value === [...b].sort()[i]);
 }
 
+const PASSWORD_HINT = "Ändert sich die Adresse, wird das gespeicherte Passwort gelöscht. Du gibst es danach neu ein.";
+
 function addressHint(host: HostOut | undefined): string | undefined {
-  if (!host?.provider_ext_id) return undefined;
-  if (host.kind === "vm" || host.kind === "lxc") {
-    return "Eine von Hand eingetragene Adresse bleibt stehen, solange der Gast keine eigene meldet.";
+  const passwordHint = host?.credential?.kind === "ssh_password" ? PASSWORD_HINT : undefined;
+  let providerHint: string | undefined;
+  if (host?.provider_ext_id) {
+    providerHint = host.kind === "vm" || host.kind === "lxc"
+      ? "Eine von Hand eingetragene Adresse bleibt stehen, solange der Gast keine eigene meldet."
+      : "Wird beim nächsten Abgleich von der Erweiterung überschrieben.";
   }
-  return "Wird beim nächsten Abgleich von der Erweiterung überschrieben.";
+  const parts = [providerHint, passwordHint].filter(Boolean);
+  return parts.length > 0 ? parts.join(" ") : undefined;
 }
 
 export function HostForm({

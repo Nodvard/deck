@@ -20,6 +20,12 @@ Was einbezogen wird
   genannten einkompilierten Bestandteile (Rust-Crates, statisch gelinktes OpenSSL ...) mit
   Name, Version, Lizenz und Urheber angehaengt, samt Lizenztext, wenn die SBOM einen hat
   (`_python_sbom_texts`, Ausnahmen in `_SBOM_SKIP`).
+  Bibliotheken, die ein Wheel statisch eingebaut hat, ohne ihren Lizenztext beizulegen (uvloop:
+  libuv, cffi: libffi, dulwich: einige Rust-Crates, alle Rust-Wheels: die Rust-Standardbibliothek),
+  stehen von Hand gepflegt in `_PY_EMBEDDED`, die Texte unveraendert unter
+  `scripts/embedded_licenses/`. Ein Eintrag gilt nur fuer die dort genannten Paketversionen: aendert
+  sich eine davon in `deploy/constraints.txt`, meldet das Skript (Exit-Code 2) und ein Test, dass
+  der Eintrag zu pruefen ist (`scripts/check_licenses.py` meldet es ebenfalls).
 * npm: die Production-Dependencies des Frontends samt allen transitiven
   Abhaengigkeiten (aus `frontend/package-lock.json`, keine devDependencies), dazu
   alles, was in die Extension-Bundles (`extensions/*/frontend/dist/index.js`)
@@ -354,6 +360,291 @@ def _python_sbom_texts(dist, package_name: str) -> tuple[list[tuple[str, str]], 
     return texts, problems
 
 
+# ---------------------------------------------------------------------------
+# Fest eingebaute Bibliotheken ohne mitgelieferten Lizenztext (von Hand gepflegt)
+# ---------------------------------------------------------------------------
+
+EMBEDDED_DIR = Path(__file__).resolve().parent / "embedded_licenses"
+
+
+@dataclass(frozen=True)
+class EmbeddedLibrary:
+    """Eine Bibliothek (C-Bibliothek oder Rust-Crate), die ein Wheel fest eingebaut hat, ohne ihren
+    Lizenztext mitzuliefern."""
+
+    package: str  # Python-Paket, in dem sie steckt (Name nach PEP 503); dort stehen auch die Lizenztexte
+    package_version: str  # NUR fuer diese Paketversion geprueft; muss zu deploy/constraints.txt passen
+    name: str
+    version: str  # leer, wenn sie keine feste Version hat (Rust-Standardbibliothek: kommt mit dem Compiler)
+    license: str  # SPDX-Ausdruck fuer alles, was davon im Binary landet
+    holders: str  # Urheber laut Quelltext
+    source_url: str  # Quelltext genau dieser Version
+    evidence: str  # woran man erkennt, dass und in welcher Version sie eingebaut ist
+    texts: tuple[tuple[str, str], ...]  # (Beschriftung, Dateiname unter scripts/embedded_licenses/)
+    # Weitere Pakete (Name nach PEP 503, geprueft fuer diese Version), in denen dieselbe Bibliothek steckt.
+    # Ihre Texte stehen nur einmal, bei `package`; bei den anderen Paketen steht ein Verweis.
+    also_in: tuple[tuple[str, str], ...] = ()
+    note: str = ""  # zusaetzlicher Hinweis fuer den Leser (optional)
+
+    @property
+    def title(self) -> str:
+        return f"{self.name} {self.version}".strip()
+
+    @property
+    def pins(self) -> tuple[tuple[str, str], ...]:
+        """Alle Pakete samt Version, fuer die der Eintrag gilt (zuerst das Paket mit den Texten)."""
+        return ((self.package, self.package_version),) + self.also_in
+
+
+# Wie ein Eintrag entsteht: Quelltext (sdist) des Pakets von PyPI holen, dort die Lizenzdateien der
+# Bibliothek lesen und mit `nm`/`readelf` bzw. `strings` am Wheel pruefen, was davon im Binary steht
+# (bei Rust-Erweiterungen stehen die Crates mit Name und Version in den Pfaden, z. B. `similar-3.2.0/src/`).
+# Die Texte liegen UNVERAENDERT im Repo (das Skript laeuft offline). Neue Paketversion: pruefen, ob
+# dieselbe Bibliothek in derselben Version drinsteckt; wenn ja, nur `package_version` anheben, sonst
+# Eintrag und Texte erneuern. Ein Eintrag fuer mehrere Pakete (`also_in`) gilt nur, solange JEDE der
+# genannten Paketversionen zu deploy/constraints.txt passt.
+#
+# Nicht eingetragen, weil nichts fehlt: PyYAML (libyaml: gleiche Urheber und MIT-Text wie PyYAML selbst)
+# und argon2-cffi-bindings (libargon2 unter "CC0-1.0 OR Apache-2.0"; mit der CC0-Wahl ist kein Hinweis noetig).
+# Nicht eingetragen, weil nicht im Binary: memchr, bstr, portable-atomic und libc stehen zwar in der
+# Cargo.lock des dulwich-Quelltexts, tauchen aber nicht als Crate in den Erweiterungen auf (die
+# memchr-Routinen dort stammen aus der Rust-Standardbibliothek).
+_PY_EMBEDDED: tuple[EmbeddedLibrary, ...] = (
+    EmbeddedLibrary(
+        package="cffi",
+        package_version="2.1.1",
+        name="libffi",
+        version="3.4.6",
+        license="MIT",
+        holders=(
+            "Anthony Green; Red Hat, Inc.; Free Software Foundation, Inc.; Plausible Labs Cooperative, Inc.; "
+            "Oracle and/or its affiliates; Madhavan T. Venkataraman; Microsoft, Inc.; ARM Ltd.; "
+            "The Written Word, Inc.; Bo Thorsen (laut den Dateiköpfen der Quelltexte)"
+        ),
+        source_url="https://github.com/libffi/libffi/tree/v3.4.6",
+        evidence=(
+            "Die Linux-Wheels von cffi enthalten libffi statisch: Die CI von cffi (Workflow ci.yaml am Tag v2.1.1) "
+            "baut vor dem Wheel libffi 3.4.6 aus dem Quelltext und benennt dabei ffi_call in cffistatic_ffi_call um; "
+            "dieses Symbol steht im Binary (x86_64 und aarch64). Die Dateiköpfe der eingebauten Quelldateien tragen "
+            "denselben MIT-Text wie die LICENSE, die für die Urheber auf die Dateiköpfe verweist. Der in closures.c "
+            "eingebundene Speicherverwalter dlmalloc (Doug Lea) ist vom Autor gemeinfrei gestellt (Public-Domain-Erklärung "
+            "nach creativecommons.org/licenses/publicdomain laut Dateikopf, nicht CC0)."
+        ),
+        texts=(("LICENSE", "libffi-3.4.6-LICENSE.txt"),),
+    ),
+    EmbeddedLibrary(
+        package="uvloop",
+        package_version="0.22.1",
+        name="libuv",
+        version="1.48.0",
+        license="MIT AND BSD-2-Clause AND ISC",
+        holders=(
+            "libuv project contributors; Joyent, Inc. and other Node contributors; Ben Noordhuis (queue.h, "
+            "heap-inl.h); Internet Systems Consortium, Inc. und Internet Software Consortium (inet.c); "
+            "Niels Provos (tree.h)"
+        ),
+        source_url="https://github.com/libuv/libuv/tree/v1.48.0",
+        evidence=(
+            "uvloop bringt libuv als vendor/libuv im Quelltext mit und linkt es statisch; uv_version_string() des "
+            "Wheels meldet 1.48.0. Die meisten Dateien stehen unter dem MIT-Text von libuv bzw. von Joyent. Dateien "
+            "mit eigener Lizenz, die im Binary stehen: include/uv/tree.h (BSD-2-Clause, Niels Provos; die "
+            "Signalverwaltung in src/unix/signal.c und die Dateiüberwachung per inotify in src/unix/linux.c nutzen sie), src/inet.c (ISC, uv_inet_pton und uv_inet_ntop) "
+            "sowie src/idna.c, src/queue.h und src/heap-inl.h (ISC-Text; LICENSE-extra nennt diese drei nicht, "
+            "ihre Dateiköpfe schon)."
+        ),
+        texts=(
+            ("LICENSE (MIT)", "libuv-1.48.0-LICENSE.txt"),
+            ("LICENSE-extra (MIT-Teile aus dem Joyent-Projekt, Liste fremder Dateien)", "libuv-1.48.0-LICENSE-extra.txt"),
+            ("Lizenzkopf aus include/uv/tree.h (BSD-2-Clause)", "libuv-1.48.0-tree.h.txt"),
+            ("Lizenzkopf aus src/inet.c (ISC)", "libuv-1.48.0-inet.c.txt"),
+            ("Lizenzkopf aus src/queue.h und src/heap-inl.h (ISC-Text)", "libuv-1.48.0-queue.h.txt"),
+            ("Lizenzkopf aus src/idna.c und src/idna.h (ISC-Text)", "libuv-1.48.0-idna.c.txt"),
+        ),
+    ),
+    EmbeddedLibrary(
+        package="dulwich",
+        package_version="1.2.15",
+        name="pyo3 und pyo3-ffi (Rust-Crates)",
+        version="0.29.2",
+        license="MIT OR Apache-2.0",
+        holders="PyO3 Project and Contributors",
+        source_url="https://crates.io/crates/pyo3/0.29.2",
+        evidence=(
+            "Die drei Rust-Erweiterungen von dulwich (_objects, _pack, _diff_tree) bringen keine SBOM mit. In allen "
+            "dreien stehen die Crate-Pfade pyo3-0.29.2 und pyo3-ffi-0.29.2 (x86_64 und aarch64). Die Lizenzdateien "
+            "beider Crates sind gleich; ausgegeben ist der MIT-Text (von 'MIT OR Apache-2.0' gilt eine nach Wahl)."
+        ),
+        texts=(("LICENSE-MIT", "pyo3-0.29.2-LICENSE-MIT.txt"),),
+    ),
+    EmbeddedLibrary(
+        package="dulwich",
+        package_version="1.2.15",
+        name="once_cell (Rust-Crate)",
+        version="1.21.4",
+        license="MIT OR Apache-2.0",
+        holders="Aleksey Kladov (laut Cargo.toml; die Lizenzdatei nennt keinen Urheber)",
+        source_url="https://crates.io/crates/once_cell/1.21.4",
+        evidence=(
+            "Der Crate-Pfad once_cell-1.21.4 steht in allen drei Rust-Erweiterungen von dulwich (x86_64 und "
+            "aarch64). Ausgegeben ist der MIT-Text (von 'MIT OR Apache-2.0' gilt eine nach Wahl)."
+        ),
+        texts=(("LICENSE-MIT", "once_cell-1.21.4-LICENSE-MIT.txt"),),
+    ),
+    EmbeddedLibrary(
+        package="dulwich",
+        package_version="1.2.15",
+        name="similar (Rust-Crate)",
+        version="3.2.0",
+        license="Apache-2.0",
+        holders="Armin Ronacher; Pierre-Étienne Meunier; Brandon Williams (laut Cargo.toml; die Lizenzdatei nennt keinen Urheber)",
+        source_url="https://crates.io/crates/similar/3.2.0",
+        evidence=(
+            "Der Crate-Pfad similar-3.2.0 steht in der Rust-Erweiterung _pack von dulwich (x86_64 und aarch64). "
+            "memchr und bstr, die in der Cargo.lock von dulwich stehen, sind nicht als Crate im Binary; die "
+            "memchr-Routinen dort stammen aus der Rust-Standardbibliothek."
+        ),
+        texts=(("LICENSE", "similar-3.2.0-LICENSE.txt"),),
+    ),
+    EmbeddedLibrary(
+        package="cryptography",
+        package_version="50.0.1",
+        also_in=(("dulwich", "1.2.15"), ("pydantic-core", "2.46.5"), ("pyrage", "1.4.0"), ("watchfiles", "1.3.0")),
+        name="Rust-Standardbibliothek (std, core, alloc)",
+        version="",
+        license="MIT OR Apache-2.0",
+        holders=(
+            "The Rust Project Developers (heute: The Rust Project Contributors); in der Standardbibliothek stecken "
+            "außerdem addr2line (The gimli Developers), gimli (The Rust Project Developers), object (The Gimli "
+            "Developers), miniz_oxide (RAD Game Tools and Valve Software; Rich Geldreich and Tenacious Software LLC; "
+            "Frommi; oyvindln), rustc-demangle (Alex Crichton) und hashbrown (Amanieu d'Antras)"
+        ),
+        source_url="https://github.com/rust-lang/rust/tree/master/library",
+        evidence=(
+            "Alle Rust-Erweiterungen dieser Pakete linken die Standardbibliothek statisch ein und nennen sie nicht in "
+            "ihrer SBOM. Im Binary stehen die Pfade der mitgelieferten Crates (/rust/deps/addr2line-0.25.1, "
+            "gimli-0.32.3, miniz_oxide-0.8.9, rustc-demangle-0.1.27 und hashbrown 0.16.1 bzw. 0.17.1) sowie "
+            "Verweise auf den rustc-Quelltext; geprüft an den Wheels für x86_64 und aarch64. Den ELF-Teil der "
+            "Fehlerausgabe (Backtrace) der Standardbibliothek liest die Crate object 0.37.3; ihr Pfad steht nicht "
+            "im Binary, aber ihre Funktionen (z. B. object::read::read_ref::ReadRef) in cryptography, dulwich und "
+            "watchfiles; die Binaries von pydantic-core und pyrage sind ohne Symbole, enthalten aber dieselben "
+            "Crates der Fehlerausgabe (addr2line, gimli). Die Version 0.37.3 steht in der Cargo.lock der "
+            "Standardbibliothek bei allen drei Compiler-Ständen, mit denen diese Wheels gebaut sind."
+        ),
+        note=(
+            "Eine feste Version gibt es nicht: Die Standardbibliothek kommt mit dem Compiler, mit dem das jeweilige "
+            "Wheel gebaut wurde. Die Lizenztexte stammen aus dem Rust-Quelltext (Hauptzweig) und aus den genannten "
+            "Crates (miniz_oxide steht unter 'MIT OR Zlib OR Apache-2.0'); ausgegeben ist jeweils der MIT-Text."
+        ),
+        texts=(
+            ("LICENSE-MIT der Standardbibliothek (rust-lang/rust)", "rust-std-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus addr2line 0.25.1", "addr2line-0.25.1-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus gimli 0.32.3", "gimli-0.32.3-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus object 0.37.3", "object-0.37.3-LICENSE-MIT.txt"),
+            ("LICENSE aus miniz_oxide 0.8.9 (MIT)", "miniz_oxide-0.8.9-LICENSE.txt"),
+            ("LICENSE-MIT aus rustc-demangle 0.1.27", "rustc-demangle-0.1.27-LICENSE-MIT.txt"),
+            ("LICENSE-MIT aus hashbrown 0.17.1 (0.16.1 ist gleich)", "hashbrown-0.17.1-LICENSE-MIT.txt"),
+        ),
+    ),
+)
+
+
+def embedded_for(package_name: str, table: tuple[EmbeddedLibrary, ...] | None = None) -> list[EmbeddedLibrary]:
+    """Eintraege, deren Texte bei diesem Paket stehen."""
+    return [lib for lib in (_PY_EMBEDDED if table is None else table) if lib.package == pep503(package_name)]
+
+
+def embedded_shared_for(package_name: str, table: tuple[EmbeddedLibrary, ...] | None = None) -> list[EmbeddedLibrary]:
+    """Eintraege, die auch in diesem Paket stecken, deren Texte aber bei einem anderen Paket stehen."""
+    target = pep503(package_name)
+    return [lib for lib in (_PY_EMBEDDED if table is None else table) if any(pkg == target for pkg, _ in lib.also_in)]
+
+
+def embedded_version_problems(name: str, version: str, table: tuple[EmbeddedLibrary, ...] | None = None) -> list[str]:
+    """Der Eintrag gilt nur fuer die Paketversionen, fuer die er geprueft wurde."""
+    target = pep503(name)
+    return [
+        f"Eintrag für fest eingebaute Bibliothek prüfen: {lib.title} ist für {pkg} "
+        f"{pkg_version} eingetragen, die constraints verlangen {version}. Steckt in der neuen Version dieselbe "
+        f"Bibliothek in derselben Version, nur die Paketversion in _PY_EMBEDDED (scripts/third_party_licenses.py) "
+        f"anheben; sonst Eintrag und Texte unter scripts/embedded_licenses/ erneuern."
+        for lib in (_PY_EMBEDDED if table is None else table)
+        for pkg, pkg_version in lib.pins
+        if pkg == target and pkg_version != version
+    ]
+
+
+def embedded_table_problems(pins: list[tuple[str, str]], table: tuple[EmbeddedLibrary, ...] | None = None) -> list[str]:
+    """Eintraege fuer Pakete, die gar nicht mehr in den constraints stehen (sonst bliebe die Bibliothek
+    fuer immer in der Liste)."""
+    pinned = {pep503(pin_name) for pin_name, _ in pins}
+    problems = []
+    for lib in _PY_EMBEDDED if table is None else table:
+        for pkg, _ in lib.pins:
+            if pkg not in pinned:
+                problems.append(
+                    f"Eintrag für fest eingebaute Bibliothek prüfen: {lib.title} ist für {pkg} "
+                    f"eingetragen, das Paket steht nicht mehr in den constraints (Eintrag bzw. dieses Paket aus "
+                    f"_PY_EMBEDDED entfernen, samt nicht mehr gebrauchten Texten unter scripts/embedded_licenses/)."
+                )
+    return problems
+
+
+def embedded_pin_problems(pins: list[tuple[str, str]], table: tuple[EmbeddedLibrary, ...] | None = None) -> list[str]:
+    """Alles, was zwischen `_PY_EMBEDDED` und den Pins nicht mehr stimmt: neue Paketversion oder Paket entfernt."""
+    problems = embedded_table_problems(pins, table)
+    for name, version in pins:
+        problems += embedded_version_problems(name, version, table)
+    return problems
+
+
+def _embedded_overview(lib: EmbeddedLibrary) -> str:
+    def field(label: str, value: str) -> list[str]:
+        return textwrap.wrap(
+            value, width=100, initial_indent=f"  {label:<10}", subsequent_indent=" " * 12, break_on_hyphens=False
+        )
+
+    intro = f"{lib.title} ist in {lib.package} {lib.package_version} fest eingebaut (statisch gelinkt)"
+    if lib.also_in:
+        intro += ", ebenso in " + ", ".join(f"{pkg} {pkg_version}" for pkg, pkg_version in lib.also_in)
+    intro += (
+        ". Das Wheel bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier (bei den anderen genannten "
+        "Paketen steht nur ein Verweis hierher). Die Texte darunter stammen unverändert aus dem Quelltext."
+        if lib.also_in
+        else ". Das Wheel bringt dafür keinen eigenen Lizenztext mit, deshalb steht er hier. Die Texte darunter "
+        "stammen unverändert aus dem Quelltext genau dieser Version."
+    )
+    lines = textwrap.wrap(intro, width=100, break_on_hyphens=False) + [""]
+    lines += field("Lizenz:", lib.license) + field("Urheber:", lib.holders) + field("Quelle:", lib.source_url)
+    lines += field("Erkannt:", lib.evidence)
+    if lib.note:
+        lines += field("Hinweis:", lib.note)
+    return "\n".join(lines)
+
+
+def embedded_texts(
+    name: str, table: tuple[EmbeddedLibrary, ...] | None = None, directory: Path = EMBEDDED_DIR
+) -> tuple[list[tuple[str, str]], list[str]]:
+    """(Textbloecke, Probleme) der fest eingebauten Bibliotheken von Paket `name`."""
+    blocks: list[tuple[str, str]] = []
+    problems: list[str] = []
+    for lib in embedded_for(name, table):
+        blocks.append((f"Fest eingebaute Bibliothek: {lib.title}", _embedded_overview(lib)))
+        for label, filename in lib.texts:
+            path = directory / filename
+            if not path.is_file():
+                problems.append(f"{lib.title}: Textdatei {filename} fehlt unter scripts/embedded_licenses/")
+                continue
+            blocks.append((f"Lizenztext zu {lib.title}: {label}", _read_text(path)))
+    for lib in embedded_shared_for(name, table):
+        pointer = (
+            f"{lib.title} ist auch in {pep503(name)} fest eingebaut (statisch gelinkt). Lizenz ({lib.license}), "
+            f"Urheber und Lizenztexte stehen im Abschnitt des Pakets {lib.package} {lib.package_version} "
+            f"unter \"Fest eingebaute Bibliothek: {lib.title}\"."
+        )
+        blocks.append((f"Fest eingebaute Bibliothek: {lib.title}", "\n".join(textwrap.wrap(pointer, width=100))))
+    return blocks, problems
+
+
 def _python_source_url(meta) -> str:
     for entry in meta.get_all("Project-URL") or []:
         label, _, url = entry.partition(",")
@@ -402,6 +693,7 @@ def collect_python(pins: list[tuple[str, str]], environment: dict[str, str] | No
     packages = []
     for name, version in pins:
         pkg = Package("python", name, version, "", "")
+        pkg.text_problems += embedded_version_problems(name, version)
         try:
             dist = importlib_metadata.distribution(name)
         except importlib_metadata.PackageNotFoundError:
@@ -427,6 +719,9 @@ def collect_python(pins: list[tuple[str, str]], environment: dict[str, str] | No
         sbom_blocks, sbom_problems = _python_sbom_texts(dist, name)
         pkg.texts += sbom_blocks
         pkg.text_problems += sbom_problems
+        embedded_blocks, embedded_problems = embedded_texts(name)
+        pkg.texts += embedded_blocks
+        pkg.text_problems += embedded_problems
         packages.append(pkg)
     return packages
 
@@ -766,7 +1061,8 @@ def render(python_packages: list[Package], npm_packages: list[Package]) -> str:
         "Diese Datei nennt die Fremdkomponenten, die im Docker-Image bzw. im ausgelieferten",
         "Frontend stecken, mit Version, Lizenz und vollem Lizenztext. Bei den Paketen",
         "steht außerdem, was sie selbst mitbringen: einkompilierte Bestandteile laut SBOM",
-        "(z. B. Rust-Crates), mitgelieferter Fremdcode und die Lizenzköpfe einzelner Dateien.",
+        "(z. B. Rust-Crates), fest eingebaute Bibliotheken (libuv, libffi, Rust-Standardbibliothek), mitgelieferter",
+        "Fremdcode und die Lizenzköpfe einzelner Dateien.",
         "",
         "Automatisch erzeugt mit `python scripts/third_party_licenses.py` -- nicht von Hand",
         "ändern. Erlaubt sind nur freizügige Lizenzen; `python scripts/check_licenses.py`",
@@ -855,7 +1151,10 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     python_packages, npm_packages = collect_all()
-    if report_problems(python_packages + npm_packages):
+    table_problems = embedded_table_problems(read_constraints())
+    for problem in table_problems:
+        print(f"PROBLEM  [python] _PY_EMBEDDED: {problem}", file=sys.stderr)
+    if report_problems(python_packages + npm_packages) + len(table_problems):
         print(
             "\nDie Umgebung passt nicht zu deploy/constraints.txt bzw. package-lock.json -- es wurde nichts geschrieben.\n"
             "Abhilfe: `pip install -c deploy/constraints.txt -e sdk/python -e backend` und\n"

@@ -1,0 +1,110 @@
+{
+ "_doc": "Erwarteter create-Body und connect-Liste fuer docker29-api154.json (Golden-Test in test_clone.py; bei einer gewollten Aenderung von clone.py neu erzeugen und den Unterschied pruefen).",
+ "body": {
+  "AttachStderr": true,
+  "AttachStdout": true,
+  "Env": [
+   "U2_SECRET=scrubbed-9",
+   "NODVARD_DECK_AUDIT_RETENTION_DAYS=scrubbed-11"
+  ],
+  "ExposedPorts": {
+   "8080/tcp": {}
+  },
+  "Healthcheck": {
+   "StartInterval": 2000000000,
+   "Test": [
+    "CMD",
+    "scrubbed-22",
+    "scrubbed-23",
+    "scrubbed-24"
+   ]
+  },
+  "HostConfig": {
+   "Binds": [
+    "/srv/probe/bind:/probe-bind:ro",
+    "u2probe-updater:/app/updater:rw"
+   ],
+   "CgroupnsMode": "host",
+   "ConsoleSize": [
+    0,
+    0
+   ],
+   "ExtraHosts": [
+    "u2probe.local:127.0.0.1"
+   ],
+   "IpcMode": "private",
+   "LogConfig": {
+    "Config": {},
+    "Type": "json-file"
+   },
+   "Mounts": [
+    {
+     "ReadOnly": false,
+     "Source": "d6fa0cd79f9de74ecbd1d86b0b7e1d2dd0abd501bf02f6d9c7dd84dc916632da",
+     "Target": "/app/data",
+     "Type": "volume"
+    }
+   ],
+   "NetworkMode": "u2probe_back",
+   "PortBindings": {
+    "8080/tcp": [
+     {
+      "HostIp": "127.0.0.1",
+      "HostPort": "18091"
+     }
+    ]
+   },
+   "RestartPolicy": {
+    "MaximumRetryCount": 0,
+    "Name": "unless-stopped"
+   },
+   "Runtime": "runc",
+   "ShmSize": 67108864,
+   "Tmpfs": {
+    "/tmp/u2": ""
+   }
+  },
+  "Image": "ghcr.io/nodvard/deck:latest",
+  "Labels": {
+   "com.docker.compose.config-hash": "63a88d806fc5ad0b9774f77d9cba7103a01aade09c830a3ce71a71e0c97f0c3b",
+   "com.docker.compose.container-number": "1",
+   "com.docker.compose.depends_on": "",
+   "com.docker.compose.image": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3",
+   "com.docker.compose.oneoff": "False",
+   "com.docker.compose.project": "u2probe",
+   "com.docker.compose.project.config_files": "/srv/probe/compose.yml",
+   "com.docker.compose.project.working_dir": "/srv/probe",
+   "com.docker.compose.service": "nodvard-deck",
+   "com.docker.compose.version": "5.1.1",
+   "u2probe.user": "scrubbed-2"
+  },
+  "NetworkingConfig": {
+   "EndpointsConfig": {
+    "u2probe_back": {
+     "Aliases": [
+      "u2probe-nodvard-deck-1",
+      "nodvard-deck"
+     ],
+     "IPAMConfig": {
+      "IPv4Address": "172.31.251.10"
+     }
+    }
+   }
+  },
+  "StopTimeout": 20
+ },
+ "connects": [
+  [
+   "33a1881ee8347f44782543e9deaf8212ad5301698426d5e65774af68d6a86a2e",
+   {
+    "Aliases": [
+     "u2probe-nodvard-deck-1",
+     "nodvard-deck",
+     "deck-front"
+    ]
+   }
+  ]
+ ],
+ "name": "u2probe-nodvard-deck-1",
+ "new_image_id": "sha256:5fb421c218a3e95fbbe0cff83b307fdd8999a141bb11a63b366d2d6ea48117a3"
+}

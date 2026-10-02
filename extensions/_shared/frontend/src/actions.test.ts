@@ -54,6 +54,12 @@ describe("describeActionOutcome", () => {
     expect(describeActionOutcome({ status: "proposed" }).text).toBe("Wartet auf Freigabe");
     expect(describeActionOutcome({ status: "komisch" }).text).toBe("Unbekannter Zustand (komisch)");
   });
+
+  it("sagt, warum der Fehlertext fehlt, wenn dem Nutzer die Server-Rechte fehlen", () => {
+    expect(describeActionOutcome({ status: "failed", output_hidden: true, result: { success: false, error: null } }).text).toBe(
+      "Fehlgeschlagen – Ausgabe nur für Nutzer mit Server-Rechten sichtbar",
+    );
+  });
 });
 
 describe("waitForAction", () => {

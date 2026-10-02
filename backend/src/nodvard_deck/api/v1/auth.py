@@ -16,9 +16,10 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
+from nodvard_sdk import max_body_bytes
 from pydantic import BaseModel, Field, field_validator
 
-from ...config import Settings
+from ...config import Settings, get_settings
 from ...core import restart as restart_service
 from ...core import setup_code
 from ...db import utcnow
@@ -65,8 +66,8 @@ class BootstrapRequest(BaseModel):
 
     @field_validator("username")
     @classmethod
-    def _lower(cls, value: str) -> str:
-        return auth_service.normalize_username(value)
+    def _check_username(cls, value: str) -> str:
+        return auth_service.validate_new_username(value)
 
 
 class LoginRequest(BaseModel):
@@ -401,6 +402,7 @@ def _setup_scope(request: Request) -> restore_service.Scope:
 
 
 @bootstrap_restore_router.put("/restore/upload", status_code=status.HTTP_201_CREATED)
+@max_body_bytes(lambda: get_settings().restore_max_upload_bytes)
 async def bootstrap_restore_upload(request: Request, session: SessionDep, settings: SettingsDep) -> JSONResponse:
     """Wie `PUT /system/restore/upload`, aber im Assistenten: Einrichtungscode statt Owner."""
     try:

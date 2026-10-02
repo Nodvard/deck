@@ -7,8 +7,12 @@ Funktionen auf und uebersetzen deren Ergebnis/Exceptions in HTTP.
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
+import hashlib
+import hmac
 import logging
+import re
+import time
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -16,6 +20,7 @@ from datetime import datetime, timedelta
 import pyotp
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import set_committed_value
 
 from ..config import Settings
 from ..core import login_limit, security, setup_code, vault
@@ -23,16 +28,17 @@ from ..core.rbac import BUILTIN_ROLES, has_permission
 from ..db import new_id, refresh_relationships, utcnow
 from ..models import RecoveryCode, RefreshToken, Role, RolePermission, User
 from . import audit as audit_service
+from . import settings as settings_service
 
 _log = logging.getLogger("nodvard_deck.auth")
 
 RECOVERY_CODE_COUNT = 10
 """So viele Wiederherstellungs-Codes bekommt man je Satz."""
 
-# Konstanter Dummy-Hash fuer die Timing-Angleichung bei unbekanntem Benutzernamen
-# (siehe login() unten) -- ein echter Argon2id-Hash eines beliebigen Werts, gegen den
-# im "Nutzer existiert nicht"-Fall trotzdem verifiziert wird, damit die Antwortzeit
-# nicht verraet, ob der Benutzername existiert.
+# Konstanter Dummy-Hash fuer die Timing-Angleichung bei unbekanntem Benutzernamen und
+# deaktiviertem Konto (siehe login() unten) -- ein echter Argon2id-Hash eines beliebigen
+# Werts, gegen den in diesen Faellen trotzdem verifiziert wird, damit die Antwortzeit
+# nicht verraet, ob der Benutzername existiert oder das Konto deaktiviert ist.
 _DUMMY_PASSWORD_HASH = security.hash_password(security.generate_opaque_token())
 
 
@@ -46,7 +52,7 @@ class InvalidCredentials(AuthError):
 
 class MfaRequired(AuthError):
     def __init__(self, mfa_token: str) -> None:
-        super().__init__("2FA-Code erforderlich")
+        super().__init__("Zwei-Faktor-Code erforderlich")
         self.mfa_token = mfa_token
 
 
@@ -74,20 +80,57 @@ SENSITIVE_ATTEMPT_KEY = "passwortabfrage"
 SETUP_ATTEMPT_KEY = "einrichtung"
 """Pseudo-Benutzername fuer die Drosselung falscher Einrichtungscodes (je IP)."""
 
-MFA_EXHAUSTED_MESSAGE = "Zu viele falsche 2FA-Codes. Bitte melde dich erneut an."
+MFA_EXHAUSTED_MESSAGE = "Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an."
+MFA_TOKEN_USED_MESSAGE = "Dieser Anmeldeschritt wurde schon abgeschlossen. Bitte melde dich erneut an."
+TOTP_CODE_USED_MESSAGE = "Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt."
 
 
 def _begin_attempt(
-    ip: str | None, username: str, *, mfa_token: str | None = None
+    ip: str | None,
+    username: str,
+    *,
+    mfa_token: str | None = None,
+    account: str | None = None,
 ) -> login_limit.Attempt:
     """Prueft die Drosselung VOR jeder Passwort-/Code-Pruefung (kein Argon2-Aufwand
     fuer gesperrte Versuche) und zaehlt den Versuch sofort mit."""
     try:
-        return login_limit.begin(ip, username, mfa_token=mfa_token)
+        return login_limit.begin(ip, username, mfa_token=mfa_token, account=account)
+    except login_limit.MfaTokenUsed:
+        raise InvalidMfaCode(MFA_TOKEN_USED_MESSAGE) from None
     except login_limit.MfaExhausted:
         raise TooManyAttempts(MFA_EXHAUSTED_MESSAGE) from None
     except login_limit.Locked as exc:
         raise TooManyAttempts(str(exc), retry_after=exc.retry_after) from None
+
+
+UNKNOWN_ACTOR = "unbekannt"
+"""Akteur im Protokoll, wenn der eingegebene Benutzername zu keinem Konto passt."""
+
+
+def unknown_login_audit(settings: Settings, typed: str, *, length: int | None = None) -> dict:
+    """Was das Protokoll ueber eine Anmeldung mit unbekanntem Namen festhaelt: NICHT den Text
+    (wer sein Passwort ins Namensfeld tippt, soll es dort nicht wiederfinden -- das Protokoll
+    liest auch „Nur ansehen“), sondern eine kurze Kennung (HMAC mit dem Server-Schluessel, ohne
+    ihn nicht umkehrbar) und die Laenge. Gleiche Eingaben haben dieselbe Kennung, so faellt eine
+    Haeufung auf, ohne dass man sie lesen kann."""
+    key = settings.get_or_create_jwt_secret().encode("utf-8")
+    digest = hmac.new(key, b"login-username-ref\0" + typed.encode("utf-8"), hashlib.sha256).hexdigest()
+    return {"username_ref": digest[:12], "username_length": len(typed) if length is None else length}
+
+
+async def _verify_password(
+    attempt: login_limit.Attempt | None, password: str, password_hash: str, *, signed_in: bool = False
+) -> bool:
+    """Argon2-Pruefung im Thread, begrenzt (`security.verify_password_async`). Ist gerade zu viel
+    los (`security.HashingBusy`), zaehlt der Versuch nicht als Fehlversuch: der Nutzer kann
+    nichts dafuer, und ein Angreifer soll damit keine fremden Konten sperren koennen."""
+    try:
+        return await security.verify_password_async(password, password_hash, signed_in=signed_in)
+    except security.HashingBusy:
+        if attempt is not None:
+            login_limit.release(attempt)
+        raise
 
 
 async def _record_failure(
@@ -98,17 +141,23 @@ async def _record_failure(
     user_agent: str | None,
     sensitive_ip: str | None = None,
     sensitive_user_id: str | None = None,
-) -> None:
+    actor_type: str = "user",
+    username_detail: dict | None = None,
+) -> list[str]:
     """Fehlversuch verbuchen; beginnt dadurch gerade eine Sperre, genau EIN
     `login.locked`-Audit-Eintrag (committet wird danach wie beim `login.failed`).
 
     Mit `sensitive_user_id` (Passwortabfrage bei empfindlichen Konto-Aktionen, siehe
     `require_current_password`) heisst der Eintrag stattdessen `auth.password_check_locked`,
     mit passendem Text und der echten Client-IP `sensitive_ip` -- die Drosselung selbst
-    haengt dort an der Nutzerkennung, nicht an einer IP/einem Benutzernamen."""
+    haengt dort an der Nutzerkennung, nicht an einer IP/einem Benutzernamen.
+
+    Die Drosselung merkt sich den eingegebenen Namen nur im Speicher. Ins Protokoll kommt er nur,
+    wenn er zu einem Konto gehoert; bei einem unbekannten Namen geben die Aufrufer
+    `username_detail` (siehe `unknown_login_audit`) und `actor_type="anonymous"` mit."""
     scopes = login_limit.failed(attempt)
     if not scopes:
-        return
+        return []
     if sensitive_user_id is not None:
         await audit_service.log(
             session,
@@ -126,7 +175,7 @@ async def _record_failure(
             ip=sensitive_ip,
             user_agent=user_agent,
         )
-        return
+        return scopes
     minutes = login_limit.WINDOW_SECONDS // 60
     reasons = {
         login_limit.SCOPE_USER: (
@@ -136,22 +185,28 @@ async def _record_failure(
         login_limit.SCOPE_IP: (
             f"{login_limit.MAX_FAILURES_PER_IP} Fehlversuche von dieser IP in {minutes} Minuten"
         ),
+        login_limit.SCOPE_ACCOUNT: (
+            f"zu viele falsche Zwei-Faktor-Codes für dieses Konto "
+            f"({login_limit.MAX_MFA_FAILURES_PER_ACCOUNT} in {login_limit.ACCOUNT_WINDOW_SECONDS // 60} Minuten "
+            f"oder {login_limit.MAX_MFA_FAILURES_PER_ACCOUNT_DAY} in 24 Stunden, von beliebigen Adressen)"
+        ),
     }
     await audit_service.log(
         session,
-        actor_type="user",
+        actor_type=actor_type,
         actor_id=actor_id,
         action="login.locked",
         outcome="failure",
         reason="Anmeldung vorübergehend gesperrt: " + "; ".join(reasons[s] for s in scopes) + ".",
         detail={
             "scopes": scopes,
-            "username": attempt.username,
+            **(username_detail if username_detail is not None else {"username": attempt.username}),
             "window_seconds": login_limit.WINDOW_SECONDS,
         },
         ip=attempt.ip,
         user_agent=user_agent,
     )
+    return scopes
 
 
 class UsersAlreadyExist(AuthError):
@@ -175,6 +230,37 @@ async def _commit_before_raising(session: AsyncSession) -> None:
     ausser dem Audit-Eintrag (und ggf. einer bereits gewollten Lazy-Key-Migration aus
     `vault.read_secret_plaintext`) nichts anderes im Transaktionspuffer steht."""
     await session.commit()
+
+
+async def _reload_unchanged(
+    session: AsyncSession, user_id: str, *, password_hash: str, two_factor: bool = False
+) -> User | None:
+    """Liest das Konto nach einer langen Pruefung (Warteschlange und Argon2 dauern auf einem Pi
+    Sekunden) frisch aus der Datenbank und gibt es zurueck, wenn es noch so ist wie geprueft:
+    vorhanden, aktiv, dasselbe Passwort (`password_hash` = der echte Hash des Kontos, wie er vor
+    der Pruefung gelesen wurde, nie der Dummy-Hash) und, mit `two_factor`, Zwei-Faktor weiter
+    eingeschaltet. Sonst `None`: die Anmeldung wird wie eine ungueltige behandelt. Aendert sich
+    das Konto erst nach diesem Lesen, ist das dasselbe Rennen wie bei jeder anderen Anfrage."""
+    current = await session.get(User, user_id, populate_existing=True)
+    if current is None or not current.is_active or current.password_hash != password_hash:
+        return None
+    if two_factor and not two_factor_enabled(current):
+        return None
+    return current
+
+
+async def _store_rehash(session: AsyncSession, user: User, *, old_hash: str, new_hash: str) -> None:
+    """Speichert den neu berechneten Hash nur, wenn das Passwort inzwischen nicht geaendert wurde
+    (`UPDATE ... WHERE password_hash = <alter Hash>`). Sonst wuerde ein gleichzeitiger
+    Passwortwechsel mit dem Hash des alten Passworts ueberschrieben."""
+    result = await session.execute(
+        update(User)
+        .where(User.id == user.id, User.password_hash == old_hash)
+        .values(password_hash=new_hash)
+        .execution_options(synchronize_session=False)
+    )
+    if (result.rowcount or 0) == 1:
+        set_committed_value(user, "password_hash", new_hash)
 
 
 @dataclass
@@ -295,9 +381,39 @@ async def needs_bootstrap(session: AsyncSession) -> bool:
     return any_user is None
 
 
+MAX_USERNAME_LENGTH = 64
+"""Laenger darf kein Benutzername sein (wie bei Anlegen und Einrichtung)."""
+MAX_LOGIN_PASSWORD_LENGTH = 1024
+"""Grosszuegig ueber den 255 Zeichen beim Setzen; alles darueber ist beim Login nie richtig."""
+
+
 def normalize_username(username: str) -> str:
     """Benutzernamen werden immer klein und ohne Leerraum gespeichert und verglichen."""
     return username.strip().lower()
+
+
+USERNAME_MIN_LENGTH = 3
+_USERNAME_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]*")
+USERNAME_RULE_TEXT = (
+    "Benutzername: Nur Kleinbuchstaben, Ziffern sowie . - und _ erlaubt, ohne Leerzeichen; "
+    "er muss mit einem Buchstaben oder einer Ziffer beginnen."
+)
+USERNAME_TOO_SHORT_TEXT = f"Benutzername: Mindestens {USERNAME_MIN_LENGTH} Zeichen."
+
+
+def validate_new_username(username: str) -> str:
+    """Pruefung fuer NEUE Konten (Einrichtung, "Benutzer anlegen"): wie `normalize_username`, aber nur
+    `a-z 0-9 . - _` -- sonst entstuende z. B. aus „Kollege Max“ das Konto „kollege max“, und jeder
+    Notfall-Befehl braeuchte Anfuehrungszeichen. Wirft `ValueError` mit deutschem Text.
+
+    Bewusst NUR beim Anlegen: `login()` und der Notfall-Befehl (`admin.py`) nehmen weiter jeden Namen
+    an, damit sich bestehende Konten mit Leerzeichen anmelden und zuruecksetzen lassen."""
+    name = normalize_username(username)
+    if len(name) < USERNAME_MIN_LENGTH:
+        raise ValueError(USERNAME_TOO_SHORT_TEXT)
+    if not _USERNAME_PATTERN.fullmatch(name):
+        raise ValueError(USERNAME_RULE_TEXT)
+    return name
 
 
 SETUP_CODE_HINT = "Der Einrichtungscode steht im Protokoll des Containers (beim Start ausgegeben)."
@@ -374,12 +490,16 @@ async def bootstrap_owner(session: AsyncSession, *, username: str, password: str
 
     user = User(
         username=normalize_username(username),
-        password_hash=security.hash_password(password),
+        password_hash=await security.hash_password_async(password),
         is_owner=True,
         is_active=True,
     )
     session.add(user)
     await session.flush()
+    # Neue Installation: neue Server-Schluessel nur nach Bestaetigung merken (Einstellung
+    # `ssh.confirm_new_host_keys`). Bestehende Installationen haben den Wert nicht und behalten das
+    # alte Verhalten; die Umgebungsvariable uebersteuert beides.
+    await settings_service.set_global(session, "ssh.confirm_new_host_keys", True, updated_by_user_id=user.id)
     return user
 
 
@@ -464,41 +584,85 @@ async def login(
     # Benutzernamen sind immer klein; aeltere Konten mit Grossbuchstaben finden wir
     # trotzdem, damit niemand ausgesperrt wird.
     username = normalize_username(username)
+    typed_length = len(username)
+    # Zu lange Angaben sind nie gueltig (Benutzernamen haben hoechstens 64, Passwoerter
+    # hoechstens 255 Zeichen). Sie laufen wie ein unbekannter Benutzer durch, aber ohne die
+    # ganze Eingabe zu speichern, in die Datenbank zu schreiben oder zu hashen -- sonst liesse
+    # sich ohne Anmeldung Speicher und Platte fuellen.
+    too_long = len(username) > MAX_USERNAME_LENGTH or len(password) > MAX_LOGIN_PASSWORD_LENGTH
+    if too_long:
+        username = username[:MAX_USERNAME_LENGTH]
+        password = password[:MAX_LOGIN_PASSWORD_LENGTH]
     attempt = _begin_attempt(ip, username)
-    result = await session.execute(select(User).where(func.lower(User.username) == username))
-    user = result.scalar_one_or_none()
+    user = None
+    if not too_long:
+        result = await session.execute(select(User).where(func.lower(User.username) == username))
+        user = result.scalar_one_or_none()
+    # Ab hier wartet die Anfrage auf die Passwort-Pruefung (Warteschlange, Argon2: auf einem Pi
+    # Sekunden). Die Datenbankverbindung gehoert in der Zeit nicht ihr: sonst fuellt eine
+    # Anmelde-Flut den Verbindungs-Pool, bevor die Begrenzung der Pruefungen greift, und wer schon
+    # angemeldet ist, wartet auf eine freie Verbindung. Das Konto wird danach frisch gelesen.
+    await session.commit()
 
     if user is None:
         # Timing-Angleichung: eine Argon2-Verifikation kostet spuerbar Zeit. Ohne
         # diesen Umweg waere "Nutzer existiert nicht" (sofortige Antwort) von
         # "Nutzer existiert, Passwort falsch" (Argon2-Laufzeit) unterscheidbar --
         # ein klassisches Username-Enumeration-Leck ueber die Antwortzeit.
-        security.verify_password(password, _DUMMY_PASSWORD_HASH)
-        # actor_id = der versuchte Benutzername, nicht "unknown": docs/03 §4 nennt
-        # `login.failed` als Beispiel-Aktion, ohne eine unbekannte Identitaet
-        # vorzusehen -- Gap-Fill-Entscheidung analog zu `client_type` aus WP-1.
+        await _verify_password(attempt, password, _DUMMY_PASSWORD_HASH)
+        # Der eingegebene Text kommt NICHT ins Protokoll: es koennte ein Passwort sein, das
+        # jemand ins Namensfeld getippt hat. Nur Kennung und Laenge (`unknown_login_audit`).
+        unknown = unknown_login_audit(settings, username, length=typed_length)
         await audit_service.log(
             session,
-            actor_type="user",
-            actor_id=username,
+            actor_type="anonymous",
+            actor_id=UNKNOWN_ACTOR,
             action="login.failed",
             outcome="failure",
-            reason="Unbekannter Benutzername.",
+            reason="Eingabe zu lang." if too_long else "Unbekannter Benutzername.",
+            detail=unknown,
             ip=ip,
             user_agent=user_agent,
         )
-        await _record_failure(session, attempt, actor_id=username, user_agent=user_agent)
+        await _record_failure(
+            session, attempt, actor_id=UNKNOWN_ACTOR, user_agent=user_agent,
+            actor_type="anonymous", username_detail=unknown,
+        )
         await _commit_before_raising(session)
         raise InvalidCredentials("Ungültiger Benutzername oder Passwort.")
 
-    if not user.is_active or not security.verify_password(password, user.password_hash):
+    # Argon2 laeuft in jedem Fall genau einmal -- auch bei einem deaktivierten Konto, sonst
+    # antwortete es spuerbar schneller als ein aktives oder unbekanntes und verriete so, dass es
+    # existiert. Ein deaktiviertes Konto wird dabei wie ein unbekannter Name gegen den Dummy-Hash
+    # geprueft: sein echter Hash wird gar nicht erst angefasst, nichts haengt davon ab, ob das
+    # Passwort stimmen wuerde, und abgelehnt wird es ohnehin. Rehash und `_reload_unchanged`
+    # laufen nur fuer aktive Konten und immer mit dem echten Hash (`real_hash`).
+    real_hash = user.password_hash
+    checked_hash = real_hash if user.is_active else _DUMMY_PASSWORD_HASH
+    password_ok = await _verify_password(attempt, password, checked_hash)
+    new_hash: str | None = None
+    if password_ok and user.is_active and security.needs_rehash(real_hash):
+        # Nur nebenbei; ist gerade zu viel los, geschieht es beim naechsten Mal.
+        with contextlib.suppress(security.HashingBusy):
+            new_hash = await security.hash_password_async(password)
+    failure: str | None = None
+    if not user.is_active:
+        failure = "Konto deaktiviert."
+    elif not password_ok:
+        failure = "Falsches Passwort."
+    elif await _reload_unchanged(session, user.id, password_hash=real_hash) is None:
+        # Die Pruefung hat gedauert: wurde das Konto in der Zwischenzeit deaktiviert oder geloescht
+        # oder das Passwort geaendert, darf aus dieser Anmeldung keine Sitzung mehr werden (die
+        # Abmeldung aller Geraete beim Deaktivieren/Zuruecksetzen ist schon gelaufen).
+        failure = "Konto oder Passwort wurden während der Anmeldung geändert."
+    if failure is not None:
         await audit_service.log(
             session,
             actor_type="user",
             actor_id=user.id,
             action="login.failed",
             outcome="failure",
-            reason="Konto deaktiviert." if not user.is_active else "Falsches Passwort.",
+            reason=failure,
             target_type="user",
             target_id=user.id,
             ip=ip,
@@ -508,8 +672,8 @@ async def login(
         await _commit_before_raising(session)
         raise InvalidCredentials("Ungültiger Benutzername oder Passwort.")
 
-    if security.needs_rehash(user.password_hash):
-        user.password_hash = security.hash_password(password)
+    if new_hash is not None:
+        await _store_rehash(session, user, old_hash=real_hash, new_hash=new_hash)
 
     if user.totp_secret_id is not None and user.totp_confirmed_at is not None:
         secret = settings.get_or_create_jwt_secret()
@@ -577,19 +741,36 @@ async def verify_mfa(
         or user.totp_secret_id is None
         or user.totp_confirmed_at is None
     ):
-        raise InvalidMfaCode("2FA nicht aktiv für diesen Nutzer.")
+        raise InvalidMfaCode("Zwei-Faktor ist für dieses Konto nicht aktiv.")
 
-    attempt = _begin_attempt(
-        ip or payload.get("ip"), normalize_username(user.username), mfa_token=mfa_token
-    )
     # Sechs Ziffern = Authenticator-Code, alles andere = Wiederherstellungs-Code.
     via_recovery = not security.is_totp_code(code)
+    # Die Sperre je Konto gilt nur fuer die sechsstelligen Codes: nur die lassen sich mit vielen
+    # Adressen durchprobieren. Wiederherstellungs-Codes (zehn Zeichen aus 32) sind dafuer viel zu
+    # lang -- und so kommt der Besitzer mit einem davon weiter hinein, waehrend jemand mit seinem
+    # Passwort das Konto ueber falsche Codes sperrt (sonst bis zu 24 Stunden ohne Ausweg).
+    attempt = _begin_attempt(
+        ip or payload.get("ip"),
+        normalize_username(user.username),
+        mfa_token=mfa_token,
+        account=None if via_recovery else user.id,
+    )
+    totp_step: int | None = None
     if via_recovery:
-        valid = await consume_recovery_code(session, user, code)
+        try:
+            valid = await consume_recovery_code(session, user, code)
+        except security.HashingBusy:
+            login_limit.release(attempt)
+            raise
     else:
         keyring = vault.load_keyring(settings)
         totp_secret = await vault.read_secret_plaintext(session, keyring, user.totp_secret_id)
-        valid = pyotp.TOTP(totp_secret).verify("".join(code.split()), valid_window=1)
+        totp_step = match_totp_step(totp_secret, "".join(code.split()))
+        valid = totp_step is not None
+    # Ein Code gilt nur einmal, ein mfa_token nur fuer eine Anmeldung (siehe `login_limit.claim_success`).
+    replayed = valid and not login_limit.claim_success(attempt, totp_step=totp_step)
+    if replayed:
+        valid = False
     if not valid:
         await audit_service.log(
             session,
@@ -599,18 +780,23 @@ async def verify_mfa(
             outcome="failure",
             target_type="user",
             target_id=user.id,
-            detail={"via": "recovery_code"} if via_recovery else {},
+            detail=({"via": "recovery_code"} if via_recovery else {})
+            | ({"replayed": True} if replayed else {}),
             ip=payload.get("ip"),
             user_agent=payload.get("user_agent"),
         )
-        await _record_failure(
+        scopes = await _record_failure(
             session, attempt, actor_id=user.id, user_agent=payload.get("user_agent")
         )
+        if login_limit.SCOPE_ACCOUNT in scopes:
+            await _report_mfa_guessing(session, user)
         await _commit_before_raising(session)
         if login_limit.mfa_exhausted(attempt):
             raise TooManyAttempts(MFA_EXHAUSTED_MESSAGE)
+        if replayed and not via_recovery:
+            raise InvalidMfaCode(TOTP_CODE_USED_MESSAGE)
         raise InvalidMfaCode(
-            "Ungültiger Wiederherstellungs-Code." if via_recovery else "Ungültiger 2FA-Code."
+            "Ungültiger Wiederherstellungs-Code." if via_recovery else "Ungültiger Zwei-Faktor-Code."
         )
 
     tokens = await _issue_tokens(
@@ -638,6 +824,45 @@ async def verify_mfa(
     if via_recovery:
         await _report_recovery_use(session, user, ip=payload.get("ip"), user_agent=payload.get("user_agent"))
     return tokens
+
+
+async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
+    """Zu viele falsche Codes je Konto: Wer so oft rät, kennt das Passwort schon. Das soll der
+    Besitzer erfahren (Meldungen-Seite, bei eingerichtetem Push-Kanal auch aufs Handy). Die
+    Meldung darf die Antwort an den Anrufer nie kippen."""
+    try:
+        from . import notifications as notifications_service
+
+        await notifications_service.send(
+            session,
+            title="Zwei-Faktor-Code wird durchprobiert",
+            body=(
+                f"Für „{user.username}“ wurden zu viele falsche Zwei-Faktor-Codes eingegeben; weitere "
+                "Versuche sind für eine Weile gesperrt. Wer so oft rät, kennt vermutlich das "
+                "Passwort. Wenn du das nicht warst, ändere das Passwort. Mit einem "
+                "Wiederherstellungs-Code kommst du auch während der Sperre hinein."
+            ),
+            severity="warning",
+            payload={"path": "/settings/account", "tags": ["warning", "key"]},
+        )
+    except Exception:  # noqa: BLE001 - die Antwort an den Anrufer geht vor
+        _log.warning("Meldung zum Durchprobieren des 2FA-Codes nicht zugestellt", exc_info=True)
+
+
+def match_totp_step(totp_secret: str, code: str) -> int | None:
+    """Der Zeitschritt, zu dem `code` passt (aktueller sowie einer davor und danach, wegen
+    Uhrabweichung), sonst `None`. Wer einen Code nur einmal gelten lassen will, merkt sich
+    den Schritt (`login_limit.claim_success`)."""
+    totp = pyotp.TOTP(totp_secret)
+    current = int(_totp_now() // login_limit.TOTP_STEP_SECONDS)
+    for step in (current, current - 1, current + 1):
+        if hmac.compare_digest(totp.at(step * login_limit.TOTP_STEP_SECONDS), code):
+            return step
+    return None
+
+
+def _totp_now() -> float:
+    return time.time()
 
 
 async def _report_recovery_use(
@@ -928,7 +1153,7 @@ async def start_totp_setup(
     Klartext sichtbar, kein Endpunkt liefert ihn je wieder aus."""
     if user.totp_secret_id is not None and user.totp_confirmed_at is not None:
         raise AuthError(
-            "2FA ist bereits aktiv -- erst DELETE /me/totp, dann neu einrichten."
+            "Zwei-Faktor ist schon aktiv. Schalte sie zuerst ab, dann kannst du sie neu einrichten."
         )
 
     keyring = vault.load_keyring(settings)
@@ -976,7 +1201,7 @@ async def confirm_totp_setup(
         raise AuthError("Zwei-Faktor ist schon aktiv.")
     if user.totp_secret_id is None:
         raise AuthError(
-            "Kein 2FA-Setup in Arbeit -- zuerst POST /me/totp/setup aufrufen."
+            "Die Zwei-Faktor-Einrichtung wurde noch nicht gestartet."
         )
 
     attempt = _begin_attempt(f"konto:{user.id}", SENSITIVE_ATTEMPT_KEY)
@@ -1000,7 +1225,7 @@ async def confirm_totp_setup(
             sensitive_ip=ip, sensitive_user_id=user.id,
         )
         await _commit_before_raising(session)
-        raise InvalidMfaCode("Ungültiger 2FA-Code -- Setup nicht bestätigt.")
+        raise InvalidMfaCode("Ungültiger Code. Die Zwei-Faktor-Anmeldung ist noch nicht aktiv.")
     login_limit.succeeded(attempt)
 
     user.totp_confirmed_at = utcnow()
@@ -1051,7 +1276,7 @@ async def require_current_password(
     Nutzerkennung, nicht an der IP -- sonst liesse sich die Sperre mit wechselnden Adressen
     umgehen, und ein Angreifer mit gestohlener Sitzung kaeme trotz Drosselung weiter."""
     attempt = _begin_attempt(f"konto:{user.id}", SENSITIVE_ATTEMPT_KEY)
-    if not security.verify_password(password, user.password_hash):
+    if not await _verify_password(attempt, password, user.password_hash, signed_in=True):
         await audit_service.log(
             session,
             actor_type="user",
@@ -1085,8 +1310,9 @@ async def issue_recovery_codes(session: AsyncSession, user: User) -> list[str]:
             codes.append(candidate)
     # Argon2 ist absichtlich langsam (10 Hashes: auf dem Pi Sekunden) -- nicht im
     # Event-Loop rechnen, sonst steht waehrenddessen das ganze Dashboard.
-    hashes = await asyncio.to_thread(
-        lambda: [security.hash_password(security.normalize_recovery_code(c)) for c in codes]
+    hashes = await security.run_hashing(
+        lambda: [security.hash_password(security.normalize_recovery_code(c)) for c in codes],
+        signed_in=True,
     )
     await session.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user.id))
     for code_hash in hashes:
@@ -1108,7 +1334,10 @@ async def consume_recovery_code(session: AsyncSession, user: User, code: str) ->
     """Loest einen Wiederherstellungs-Code ein: `True` und als benutzt markiert, wenn er zu
     einem noch unbenutzten Code des Nutzers passt. Das Markieren ist atomar (nur wer die Zeile
     von "unbenutzt" auf "benutzt" setzt, gewinnt) -- zwei gleichzeitige Anmeldungen mit
-    demselben Code kommen nicht beide durch."""
+    demselben Code kommen nicht beide durch.
+
+    Achtung: schreibt `session` vor der langen Pruefung fest (`commit()`, damit die Verbindung
+    frei wird). Wer hier etwas Ungespeichertes in der Session hat, speichert es damit mit."""
     normalized = security.normalize_recovery_code(code)
     if not normalized:
         return False
@@ -1121,6 +1350,10 @@ async def consume_recovery_code(session: AsyncSession, user: User, code: str) ->
     ).all()
     if not rows:
         return False
+    checked_hash = user.password_hash
+    # Die Pruefung aller Codes wartet und rechnet (auf einem Pi Sekunden): die Datenbankverbindung
+    # nicht so lange festhalten (siehe `login`).
+    await session.commit()
 
     def _find() -> str | None:
         for row_id, code_hash in rows:
@@ -1128,8 +1361,12 @@ async def consume_recovery_code(session: AsyncSession, user: User, code: str) ->
                 return row_id
         return None
 
-    matched_id = await asyncio.to_thread(_find)
+    matched_id = await security.run_hashing(_find)
     if matched_id is None:
+        return False
+    # Wurde das Konto in der Zwischenzeit deaktiviert, das Passwort geaendert oder Zwei-Faktor
+    # ausgeschaltet, gilt der Code nicht mehr -- und wird nicht verbraucht.
+    if await _reload_unchanged(session, user.id, password_hash=checked_hash, two_factor=True) is None:
         return False
     claim = await session.execute(
         update(RecoveryCode)

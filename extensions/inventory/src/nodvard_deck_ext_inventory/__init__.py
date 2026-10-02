@@ -35,12 +35,20 @@ from nodvard_sdk import (
     PageSpec,
     Refresh,
     WidgetSpec,
+    max_body_bytes,
 )
 from pydantic import BaseModel
 from sqlalchemy import select
 
 from .images import ALLOWED_CONTENT_TYPES, MAX_IMAGE_BYTES, delete_image_file, save_image
 from .models import Base, Category, Item, ItemImage, Location
+
+# Die Bilder kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen
+# noch der Browser den Typ erraten. Als <img> eingebettet ändert sich nichts.
+_UNTRUSTED_FILE_HEADERS = {
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
+    "X-Content-Type-Options": "nosniff",
+}
 
 _WARRANTY_SOON_DAYS = 90
 """Ab wie vielen Tagen vor Ablauf ein Gegenstand im Garantie-Widget auftaucht --
@@ -274,6 +282,7 @@ class Extension(NodvardExtension):
 
         # --- Bilder -----------------------------------------------------------
         @write_router.post("/items/{item_id}/images", status_code=status.HTTP_201_CREATED)
+        @max_body_bytes(MAX_IMAGE_BYTES)
         async def upload_item_image(item_id: str, request: Request) -> ItemImageOut:
             """Rohkoerper-Upload wie `POST /branding/logo` -- dieselbe Konvention
             statt zusaetzlich `multipart/form-data` einzufuehren."""
@@ -311,7 +320,9 @@ class Extension(NodvardExtension):
                 path = image_path(ctx.data_dir, row.filename)
                 if not path.is_file():
                     raise HTTPException(status_code=404, detail="Bilddatei fehlt auf der Platte.")
-                return Response(content=path.read_bytes(), media_type=row.content_type)
+                return Response(
+                    content=path.read_bytes(), media_type=row.content_type, headers=_UNTRUSTED_FILE_HEADERS,
+                )
 
         @write_router.delete("/items/{item_id}/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def delete_item_image(item_id: str, image_id: str) -> None:

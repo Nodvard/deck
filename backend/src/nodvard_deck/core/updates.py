@@ -200,6 +200,9 @@ def normalize_channel(channel: str | None) -> str:
 
 
 def _make_client(transport: httpx.AsyncBaseTransport | None = None) -> httpx.AsyncClient:
+    # Hier bleibt der Proxy aus der Umgebung (HTTP_PROXY/HTTPS_PROXY) gewollt: Die Pruefung fragt nur den festen
+    # Ort ghcr.io, nie ein Ziel einer Erweiterung, und wer das Dashboard hinter einem Proxy fuer ausgehende
+    # Verbindungen betreibt, kommt sonst gar nicht ins Netz. (Anders als `ctx.http` in ext/context.py.)
     return httpx.AsyncClient(
         timeout=httpx.Timeout(TIMEOUT_S),
         follow_redirects=False,

@@ -10,7 +10,8 @@ import { useState } from "react";
 
 import { type ChartSeries, TimeSeriesChart } from "../components/TimeSeriesChart";
 import { api } from "../lib/api";
-import { formatBytes } from "../lib/overview";
+import { loginUnproven, neverAnswered } from "../lib/hosts";
+import { formatBytes, hostHealth, type HostOut } from "../lib/overview";
 
 interface HistoryOut {
   range: string;
@@ -66,7 +67,56 @@ function lastValue(values: (number | null)[] | undefined): number | undefined {
   return undefined;
 }
 
-export function HostHistory({ hostId }: { hostId: string }): JSX.Element | null {
+type HistoryHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostOut, "login_ok_at" | "credential">>;
+
+/** Was statt der Kurven steht, solange es keine Messwerte gibt. Ohne Angaben zum Server: der allgemeine Satz. */
+function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]; host?: HistoryHost; canCheck: boolean }) {
+  const health = host ? hostHealth(host.status) : "online";
+  if (host && health !== "online" && source !== "provider") {
+    // Der Server hat (noch) nicht geantwortet: „in ein paar Minuten“ waere falsch, es wird so nichts kommen.
+    const never = neverAnswered(host);
+    return (
+      <p className="text-sm text-white/60" data-testid="history-no-connection">
+        {never
+          ? canCheck ? "Noch keine Verbindung – prüfe zuerst den Zugang." : "Noch keine Verbindung zu diesem Server. Sobald er antwortet, erscheinen hier die Kurven."
+          : "Noch keine Messwerte, und der Server antwortet gerade nicht. Sobald er wieder da ist, erscheinen hier die Kurven."}
+        {never && canCheck && (
+          <>
+            {" "}
+            <a href="#zugang" className="underline underline-offset-2 hover:text-white">Zum Zugang</a>
+          </>
+        )}
+      </p>
+    );
+  }
+  if (host && source !== "provider" && loginUnproven(host)) {
+    // Der SSH-Port antwortet, angemeldet hat sich Nodvard Deck aber nie: so kommen keine Kurven.
+    return (
+      <p className="text-sm text-white/60" data-testid="history-login-unproven">
+        Noch keine Messwerte. Der Server antwortet, aber die Anmeldung ist noch nicht bestätigt – prüfe zuerst den Zugang.
+        {canCheck && (
+          <>
+            {" "}
+            <a href="#zugang" className="underline underline-offset-2 hover:text-white">Zum Zugang</a>
+          </>
+        )}
+      </p>
+    );
+  }
+  return (
+    <p className="text-sm text-white/50">
+      Noch keine Messwerte. {source === "lattice" ? "Nodvard Deck misst diesen Server alle 30 Sekunden – in ein paar Minuten erscheinen die ersten Kurven." : ""}
+    </p>
+  );
+}
+
+export function HostHistory({ hostId, host, canCheck = false }: {
+  hostId: string;
+  /** Zustand des Servers: ohne Antwort steht statt „in ein paar Minuten“ ein klarer Hinweis. */
+  host?: HistoryHost;
+  /** Darf die Person die Verbindung pruefen (Zugangs-Karte vorhanden)? Dann fuehrt der Hinweis dorthin. */
+  canCheck?: boolean;
+}): JSX.Element | null {
   const [range, setRange] = useState("1h");
   const selected = RANGES.find((r) => r.value === range) ?? RANGES[0];
   const { data, isLoading, error } = useQuery({
@@ -113,11 +163,7 @@ export function HostHistory({ hostId }: { hostId: string }): JSX.Element | null 
       </div>
       {isLoading && <p className="text-sm text-white/50">Lade Verlauf …</p>}
       {error && (error as { status?: number }).status !== 404 && <p className="text-sm text-red-400">Verlauf nicht abrufbar: {(error as Error).message}</p>}
-      {data && panels.length === 0 && (
-        <p className="text-sm text-white/50">
-          Noch keine Messwerte. {data.source === "lattice" ? "Nodvard Deck misst diesen Server alle 30 Sekunden -- in ein paar Minuten erscheinen die ersten Kurven." : ""}
-        </p>
-      )}
+      {data && panels.length === 0 && <EmptyHistory source={data.source} host={host} canCheck={canCheck} />}
       <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
         {panels.map(({ panel, series, yMax }) => (
           <TimeSeriesChart

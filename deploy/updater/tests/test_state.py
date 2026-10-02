@@ -1,4 +1,4 @@
-"""`state.py`: eigener Zustand des Helfers in `/state` (Bauplan 2c-2, Ebene 2 der Teststrategie).
+"""`state.py`: eigener Zustand des Helfers in `/state`.
 
 Echtes Dateisystem unter `tmp_path`: Rechte, Sperre (zweite Instanz), atomares Schreiben mit fsync, kaputte
 Dateien -> definierter sicherer Zustand, Journal (Write-ahead, Schritte nur vorwaerts), Grenzen ueber Neustarts.
@@ -361,8 +361,7 @@ def test_hold_is_extended_not_shortened(store):
 
 
 # ---------------------------------------------------------------------------
-# Lesefehler sind keine kaputten Dateien (Fund 2), der Notweg laesst es gesperrt (Fund 3), die Sperre geht nicht
-# verloren (Fund 4)
+# Lesefehler sind keine kaputten Dateien, der Notweg laesst es gesperrt, die Sperre geht nicht verloren
 # ---------------------------------------------------------------------------
 
 TRANSIENT = [errno.EMFILE, errno.ENFILE, errno.ENOMEM, errno.EIO, errno.ESTALE, errno.EAGAIN]
@@ -499,7 +498,7 @@ def refuse_creating_files(monkeypatch, err=errno.ENOSPC):
 
 @pytest.mark.parametrize("err", [errno.ENOSPC, errno.EMFILE, errno.EIO, errno.EROFS], ids=errno.errorcode.get)
 def test_failed_safe_state_write_keeps_the_hold_after_a_restart(store, state_dir, monkeypatch, err):
-    # Fund 3: kaputtes state.json, und das Schreiben des sicheren Zustands scheitert. Frueher wurde die Datei
+    # Kaputtes state.json, und das Schreiben des sicheren Zustands scheitert. Frueher wurde die Datei
     # trotzdem nach .broken geschoben -> beim naechsten Start gab es `State()` ohne Sperre.
     (state_dir / "state.json").write_bytes(b"kaputt")
     refuse_creating_files(monkeypatch, err)
@@ -559,7 +558,7 @@ def corrupt_journal_file(state_dir):
 
 
 def test_hold_from_a_corrupt_journal_survives_saving_an_older_state(store, state_dir):
-    # Fund 4: die Schleife haelt einen frueher geladenen State; load_journal findet ein kaputtes Journal und setzt die
+    # Die Schleife haelt einen frueher geladenen State; load_journal findet ein kaputtes Journal und setzt die
     # Sperre. Speichert die Schleife danach ihren alten State, darf die Sperre nicht verschwinden.
     mem = store.load_state(NOW)
     corrupt_journal_file(state_dir)
@@ -638,7 +637,7 @@ def count_state_writes(monkeypatch) -> list[str]:
 
 
 def test_clock_set_back_caps_the_hold_floor_too_and_loading_stops_writing(store, state_dir, monkeypatch):
-    # Befund: kaputtes state.json -> Sperre bis NOW + 24 h; die Uhr wird um drei Tage zurueckgestellt. Die Sperre des
+    # Kaputtes state.json -> Sperre bis NOW + 24 h; die Uhr wird um drei Tage zurueckgestellt. Die Sperre des
     # Speichers (`_hold_floor`) hob die Kappung von `hold_until` immer wieder auf: 96 h statt 24 h, und jedes
     # `load_state` schrieb die Datei neu.
     (state_dir / "state.json").write_bytes(b"kaputt")
@@ -716,7 +715,7 @@ def test_limits_survive_a_restart(store):
 
 
 def test_refused_requests_do_not_count_against_the_rate_limit(store):
-    # M14: "Abgelehnte Anforderungen zaehlen nicht". Abgelehntes wird nur als gesehen gemerkt (Replay), nur eine
+    # Abgelehnte Anforderungen zaehlen nicht: Abgelehntes wird nur als gesehen gemerkt (Replay), nur eine
     # angenommene Aktion (`record_action`) sperrt die naechsten 10 Minuten.
     s = State()
     s.mark_seen(RID, NOW)
@@ -776,7 +775,7 @@ def test_caps_keep_the_newest_entries(store):
 
 
 # ---------------------------------------------------------------------------
-# Zeitstempel in der Zukunft (Fund 5): sperren, aber hoechstens bis zur Hoechstfrist
+# Zeitstempel in der Zukunft: sperren, aber hoechstens bis zur Hoechstfrist
 # ---------------------------------------------------------------------------
 
 FAR = NOW + 10 * 365 * 86400
@@ -957,7 +956,7 @@ def make_test_repo_journal(step="begin") -> Journal:
 
 
 def test_journal_floating_tag_and_advance_respect_the_repository(store):
-    # Fund 6: `validate(repository=...)` pruefte gegen das Test-Repository, `floating_tag` und `advance()` immer
+    # Frueher pruefte `validate(repository=...)` gegen das Test-Repository, `floating_tag` und `advance()` immer
     # gegen die Konstante -- mit einem Test-Repository (lokale Registry in der CI) scheiterten beide.
     journal = make_test_repo_journal()
     assert journal.floating_tag == "0.9"

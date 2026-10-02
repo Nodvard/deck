@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -129,11 +129,11 @@ describe("LoginPage", () => {
 
   it("zu viele falsche Codes: zurück zum Passwort, Hinweis bleibt stehen", async () => {
     useAuthStore.setState({ mfaToken: "mfa" });
-    renderLogin(tooMany("Zu viele falsche 2FA-Codes. Bitte melde dich erneut an."));
+    renderLogin(tooMany("Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an."));
     fireEvent.change(screen.getByLabelText("Sechsstelliger Code"), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
 
-    expect(await screen.findByRole("alert")).toHaveTextContent("Zu viele falsche 2FA-Codes. Bitte melde dich erneut an.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Zu viele falsche Zwei-Faktor-Codes. Bitte melde dich erneut an.");
     expect(useAuthStore.getState().mfaToken).toBeNull();
     expect(screen.getByLabelText("Benutzername")).toBeInTheDocument();
   });
@@ -156,5 +156,61 @@ describe("LoginPage", () => {
 
     fireEvent.click(toggle);
     expect(screen.queryByText(/Notfall-Befehl auf dem Server/)).not.toBeInTheDocument();
+  });
+
+  it("„Passwort vergessen?“ zeigt auch den Weg ohne Befehlszeile: Konsole des Containers in Portainer, Docker Desktop, Synology", () => {
+    renderLogin();
+    fireEvent.click(screen.getByRole("button", { name: "Passwort vergessen?" }));
+
+    const section = within(screen.getByTestId("forgot-no-command-line"));
+    expect(section.getByText("Ohne Befehlszeile: die Konsole des Containers")).toBeInTheDocument();
+    for (const [name, where] of [["Portainer:", /Exec Console/], ["Docker Desktop:", /Reiter „Exec“/], ["Synology Container Manager:", /Reiter „Terminal“/], ["Unraid:", /„Console“/]] as const) {
+      const item = section.getByText(name).closest("li")!;
+      expect(item).toHaveTextContent(where);
+    }
+    // In der Konsole des Containers steht „docker compose exec ...“ schon davor -- dort gilt nur der Rest.
+    expect(section.getByText("python -m nodvard_deck.admin reset-password <benutzername>")).toBeInTheDocument();
+    // Die Befehle für die Befehlszeile (compose.yml, ohne -f) bleiben unverändert.
+    expect(screen.getByText(/Im Ordner mit der Compose-Datei \(compose\.yml\)/)).toBeInTheDocument();
+    expect(screen.queryByText(/ -f /)).not.toBeInTheDocument();
+  });
+
+  it("Fußzeile: immer „© 2026 Nico Benks · Nodvard Deck“, auch bei eigenem Branding mit anderem Produktnamen", () => {
+    renderLogin();
+    // Im Test ist der Produktname aus dem Branding ein anderer als „Nodvard Deck“.
+    expect(useBrandingStore.getState().branding?.product_name).not.toBe("Nodvard Deck");
+    expect(screen.getByTestId("copyright").textContent).toMatch(/^© 2026(–\d{4})? Nico Benks · Nodvard Deck$/);
+  });
+
+  it("Fußzeile: auch ohne Branding gleich", () => {
+    useBrandingStore.setState({ branding: null });
+    renderLogin();
+    expect(screen.getByTestId("copyright").textContent).toMatch(/^© 2026(–\d{4})? Nico Benks · Nodvard Deck$/);
+  });
+
+  it("Fußzeile steht zusätzlich unter dem Formular, damit sie am Handy und Tablet sichtbar ist (die linke Spalte ist dort versteckt)", () => {
+    renderLogin();
+    const compact = screen.getByTestId("copyright-compact");
+    expect(compact.textContent).toBe(screen.getByTestId("copyright").textContent);
+    expect(compact.className).toContain("lg:hidden");
+    expect(screen.getByTestId("copyright").closest("aside")?.className).toContain("hidden");
+  });
+
+  it("Anleitung ohne Befehlszeile nennt den Container nicht mit einem Namen, den es so nicht gibt", () => {
+    renderLogin();
+    fireEvent.click(screen.getByRole("button", { name: "Passwort vergessen?" }));
+    const section = within(screen.getByTestId("forgot-no-command-line"));
+    expect(section.getByText(/Container von Nodvard Deck/)).toBeInTheDocument();
+    expect(section.getByText(/nodvard-deck-nodvard-deck-1/)).toBeInTheDocument();
+    expect(section.getByText("Docker Desktop:").closest("li")).toHaveTextContent(/Gruppe „nodvard-deck“ aufklappen/);
+    expect(section.queryByText(/Konsole des Containers „nodvard-deck“/)).not.toBeInTheDocument();
+  });
+
+  it("Notfall-Befehl: sagt ausdrücklich, dass du deinen Benutzernamen statt des Platzhalters schreibst", () => {
+    renderLogin();
+    fireEvent.click(screen.getByRole("button", { name: "Passwort vergessen?" }));
+    const section = screen.getByTestId("forgot-no-command-line");
+    expect(section).toHaveTextContent(/Statt <benutzername> schreibst du deinen eigenen Benutzernamen, zum Beispiel admin/);
+    expect(section).not.toHaveTextContent(/steht statt/);
   });
 });

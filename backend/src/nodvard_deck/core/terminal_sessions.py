@@ -22,17 +22,25 @@ class TerminalSessionTicket:
     rows: int
     created_at: float
     consumed: bool = False
+    stamp: str = ""
+    """Fingerabdruck des Passworts beim Anlegen (`services.session_guard.credential_stamp`);
+    aendert er sich, endet die Sitzung."""
+    login_id: str | None = None
+    """Anmeldung (`sid` im Zugangs-Token), aus der das Ticket stammt (`services.session_guard`)."""
 
 
 class TerminalSessionRegistry:
     def __init__(self) -> None:
         self._tickets: dict[str, TerminalSessionTicket] = {}
 
-    def create(self, *, host_id: str, user_id: str, cols: int, rows: int) -> TerminalSessionTicket:
+    def create(
+        self, *, host_id: str, user_id: str, cols: int, rows: int, stamp: str = "",
+        login_id: str | None = None,
+    ) -> TerminalSessionTicket:
         session_id = uuid.uuid4().hex
         ticket = TerminalSessionTicket(
             session_id=session_id, host_id=host_id, user_id=user_id,
-            cols=cols, rows=rows, created_at=time.monotonic(),
+            cols=cols, rows=rows, created_at=time.monotonic(), stamp=stamp, login_id=login_id,
         )
         self._tickets[session_id] = ticket
         return ticket

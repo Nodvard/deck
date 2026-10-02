@@ -92,7 +92,7 @@ describe("GameServerPage", () => {
     expect(card.textContent).toContain("vor 3 min");
     expect(card.textContent).toContain("portals: casual");
     expect(card.textContent).toContain("gesetzt"); // Passwort: nur ob, nie welches
-    expect(card.textContent).toContain("Noch keine -- „Welt sichern“ legt eine an.");
+    expect(card.textContent).toContain("Noch keine – „Welt sichern“ legt eine an.");
     expect(within(card).getByText("läuft").className).toContain("emerald");
   });
 
@@ -140,7 +140,7 @@ describe("GameServerPage", () => {
     hasPermission.mockImplementation((p: string) => !p.startsWith("actions.approve"));
     render(<GameServerPage />);
     fireEvent.click(await screen.findByRole("button", { name: "Welt sichern" }));
-    expect(await screen.findByText(/vorgeschlagen -- Freigabe durch einen Admin nötig/)).toBeInTheDocument();
+    expect(await screen.findByText(/vorgeschlagen – Freigabe durch einen Admin nötig/)).toBeInTheDocument();
     expect(confirmDialog).not.toHaveBeenCalled();
     expect(calls.some((c) => c.url.endsWith("/approve"))).toBe(false);
   });

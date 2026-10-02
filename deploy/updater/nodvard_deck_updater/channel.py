@@ -1,4 +1,4 @@
-"""Der Kanal zwischen Dashboard und Helfer (Bauplan 2c-2, 1.3, 1.5; M3, M4, M17).
+"""Der Kanal zwischen Dashboard und Helfer.
 
 Ein Volume, im Helfer unter `/channel`, im Dashboard unter `/app/updater`::
 
@@ -69,7 +69,7 @@ REQUESTS_MODE = 0o1777
 STATUS_MODE = 0o644
 REQUEST_MODE = 0o644
 """Modus der Anforderungen des Dashboards (nur zur Abstimmung in `vectors/protocol.json`): root ohne
-`CAP_DAC_OVERRIDE` kann eine `0600`-Datei von uid 1000 nicht lesen (M18)."""
+`CAP_DAC_OVERRIDE` kann eine `0600`-Datei von uid 1000 nicht lesen."""
 MAX_SCAN = 1000
 """Hoechstens so viele Dateien (keine Ordner) je Runde ansehen; der Rest bleibt fuer die naechste Runde liegen."""
 MAX_HANDLE = 32
@@ -331,7 +331,7 @@ def _unlink(dfd: int, name: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Status (1.5)
+# Status
 # ---------------------------------------------------------------------------
 
 STATUS_KEYS = (
@@ -361,10 +361,10 @@ def _check(ok: bool, where: str) -> None:
 
 
 def validate_status(doc: object) -> None:
-    """Strenges Schema von `status.json` (1.5); wirft `ValueError` mit dem Namen des Feldes.
+    """Strenges Schema von `status.json`; wirft `ValueError` mit dem Namen des Feldes.
 
     Jeder Text ist ein fester Code, eine Version, eine UUID4 oder ein bewegliches Tag -- Freitext (Fehler der
-    Engine, Umgebung, Inhalte aus dem Kanal) kann so gar nicht in den Status gelangen (M17).
+    Engine, Umgebung, Inhalte aus dem Kanal) kann so gar nicht in den Status gelangen.
     """
     doc = _keys(doc, STATUS_KEYS, "Schluessel")
     _check(type(doc["proto"]) is int and doc["proto"] == policy.PROTOCOL, "proto")

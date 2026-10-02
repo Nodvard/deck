@@ -80,12 +80,22 @@ afterEach(() => {
 });
 
 describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => {
-  it("nach „Server anlegen“ (?neu=1) ist das Formular zum Erzeugen schon offen, Standard lattice / 22", async () => {
+  it("nach „Server anlegen“ (?neu=1) ist das Formular zum Erzeugen schon offen, Vorgabe nodvard / 22", async () => {
     mockHostsApi(routes());
     renderDetail("/settings/hosts/h1?neu=1");
-    expect(await screen.findByLabelText("Benutzer auf dem Server")).toHaveValue("lattice");
+    expect(await screen.findByLabelText("Benutzer auf dem Server")).toHaveValue("nodvard");
+    expect(screen.getByLabelText("Benutzer auf dem Server")).toHaveAttribute("placeholder", "nodvard");
     expect(screen.getByLabelText("SSH-Port")).toHaveValue("22");
+    expect(screen.getByText(/Ein eigener Benutzer nur für Nodvard Deck/)).toBeInTheDocument();
     expect(screen.getByText(/Bei Proxmox-Knoten „root“ nehmen/)).toBeInTheDocument();
+    expect(screen.getByText(/Ältere Zugänge heißen vielleicht noch „lattice“/)).toBeInTheDocument();
+  });
+
+  it("die Vorgabe gilt nur für den neuen Schlüssel: bei Passwort bleibt das Feld leer, ein bestehender Zugang behält seinen Benutzer", async () => {
+    mockHostsApi(routes());
+    renderDetail("/settings/hosts/h1");
+    fireEvent.click(await screen.findByRole("button", { name: "Passwort eingeben" }));
+    expect(screen.getByLabelText("Benutzer")).toHaveValue("");
   });
 
   it("erzeugt den Schlüssel, zeigt den Einzeiler und kopiert ihn", async () => {
@@ -109,7 +119,7 @@ describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => 
     const area = await screen.findByLabelText("Einrichtungsbefehl");
     // Vorbelegt: root-Rechte (Nodvard Shield verlangt sie) und die Gruppe docker (Service-Matrix).
     await waitFor(() => expect(area).toHaveValue(`${ONE_LINER} #sudo #docker`));
-    expect(calls.find((c) => c.path === "/hosts/h1/credentials/generate-key")?.body).toEqual({ username: "lattice", port: 22 });
+    expect(calls.find((c) => c.path === "/hosts/h1/credentials/generate-key")?.body).toEqual({ username: "nodvard", port: 22 });
     const setupCall = calls.filter((c) => c.path === "/hosts/h1/credentials/c1/setup").at(-1);
     expect(setupCall?.query).toBe("sudo=true&groups=docker");
     expect(screen.getByText(/Das ist praktisch root/)).toBeInTheDocument();
@@ -119,6 +129,21 @@ describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => 
     fireEvent.click(screen.getByRole("button", { name: "Kopieren" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${ONE_LINER} #sudo #docker`));
     expect(await screen.findByRole("button", { name: "Kopiert" })).toBeInTheDocument();
+  });
+
+  it("„Befehl ansehen“ (?befehl=1): der Einrichtungsbefehl des Schlüssels ist gleich aufgeklappt", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()] }));
+    renderDetail("/settings/hosts/h1?befehl=1");
+    const area = await screen.findByLabelText("Einrichtungsbefehl");
+    await waitFor(() => expect((area as HTMLTextAreaElement).value).toContain(ONE_LINER));
+    expect(screen.getByRole("button", { name: "Einrichtungsbefehl verbergen" })).toBeInTheDocument();
+  });
+
+  it("ohne ?befehl=1 bleibt der Befehl zugeklappt, bis die Person ihn zeigt", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()] }));
+    renderDetail();
+    await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" });
+    expect(screen.queryByLabelText("Einrichtungsbefehl")).toBeNull();
   });
 
   it("die Haken laden den Befehl neu: ohne root-Rechte sudo=false, ohne Gruppe keine groups", async () => {
@@ -158,6 +183,44 @@ describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => 
     fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
     await screen.findByLabelText("Einrichtungsbefehl");
     expect(screen.queryByRole("checkbox", { name: /Root-Rechte/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => {
+  const NOTES = [
+    "Der Schlüssel gilt nur zum Anmelden und für Befehle (restrict,pty): kein Weiterleiten von Ports, kein Agent.",
+    "Wer in der Gruppe docker ist oder sudo ohne Passwort darf, kann auf dem Server praktisch alles.",
+    "Eine enger begrenzte sudo-Regel funktioniert mit Nodvard Deck nicht, weil es root-Befehle über „sudo sh -c“ startet. Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.",
+  ];
+  const withNotes = (call: Call) => ({ ...setupFixture(call), notes: NOTES });
+
+  it("„enger begrenzte sudo-Regel“ steht genau einmal da, und „So geht’s“ steht über dem Befehl", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withNotes }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    const area = await screen.findByLabelText("Einrichtungsbefehl");
+    await waitFor(() => expect(area).toHaveValue(`${ONE_LINER} #sudo #docker`));
+    const box = screen.getByTestId("setup-command");
+    expect(box.textContent!.match(/enger begrenzte sudo-Regel/g)).toHaveLength(1);
+    // Die übrigen Hinweise des Backends bleiben.
+    expect(box.textContent).toContain("restrict,pty");
+    // Die Bedienhinweise stehen direkt über dem Befehl, nicht ganz unten nach allen Sicherheitshinweisen.
+    const howto = screen.getByTestId("setup-howto");
+    expect(howto.textContent).toContain("Auf dem Server anmelden");
+    expect(howto.textContent).toContain("Verbindung prüfen");
+    expect(howto.compareDocumentPosition(area) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const note = screen.getByTestId("setup-sudo-note");
+    expect(note.compareDocumentPosition(howto) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("ohne root-Rechte entfällt der Satz ganz (er gilt nur dafür)", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withNotes }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    fireEvent.click(screen.getByRole("checkbox", { name: /Root-Rechte ohne Passwort/ }));
+    await waitFor(() => expect(screen.queryByTestId("setup-sudo-note")).toBeNull());
+    expect(screen.getByTestId("setup-command").textContent).not.toContain("enger begrenzte");
   });
 });
 
@@ -239,6 +302,8 @@ describe("Server-Detail: Verbindung prüfen", () => {
     // Die Zeile darüber nennt den Fingerabdruck nicht noch einmal.
     expect(within(check).getByText("Nodvard Deck kennt diesen Server noch nicht.")).toBeInTheDocument();
     expect(within(check).getByLabelText("wartet auf Bestätigung")).toBeInTheDocument();
+    // Wer den Befehl nicht ausführen mag, erfährt, wann Bestätigen in Ordnung ist.
+    expect(within(check).getByTestId("fingerprint-ease").textContent).toContain("Im eigenen Heimnetz und bei einem frisch eingerichteten Server ist Bestätigen in Ordnung");
 
     fireEvent.click(within(check).getByRole("button", { name: /Fingerabdruck stimmt – bestätigen/ }));
     await waitFor(() => expect(calls.filter((c) => c.path === "/hosts/h1/check")).toHaveLength(2));
@@ -322,7 +387,7 @@ describe("Server-Detail: gemerkte Schlüssel", () => {
     await waitFor(() => expect(calls.some((c) => c.method === "DELETE")).toBe(true));
     const [message, options] = vi.mocked(confirmDialog).mock.calls[0];
     expect(message).toBe(
-      "Gemerkten Schlüssel (sk-ssh-ed25519@openssh.com) von „Bastel-Pi“ vergessen? Nur machen, wenn der Server neu installiert wurde. Beim nächsten Prüfen musst du den neuen Fingerabdruck bestätigen.",
+      "Gemerkten Schlüssel (sk-ssh-ed25519@openssh.com) von „Bastel-Pi“ vergessen? Nur machen, wenn der Server neu installiert wurde. Bis du unter „Verbindung prüfen“ den neuen Fingerabdruck bestätigst, verbindet sich Nodvard Deck nicht mehr mit dem Server.",
     );
     expect(options).toMatchObject({ danger: true, confirmLabel: "Vergessen" });
     expect(await within(panel).findByText(/Noch kein Schlüssel gemerkt/)).toBeInTheDocument();
@@ -434,6 +499,81 @@ describe("Server-Detail: Zugang ersetzen (make-default)", () => {
     expect(vi.mocked(confirmDialog).mock.calls[0][1]).toMatchObject({ danger: true });
   });
 
+  describe("war der bisherige Zugang ein Passwort", () => {
+    const PW = credentialFixture({ id: "c1", kind: "ssh_password", username: "pi" });
+    const pwRoutes = () => routes({
+      "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_password", username: "pi", port: 22 } }),
+      "GET /hosts/h1/credentials": [PW, NEW],
+      "GET /hosts/h1/credentials/c2/setup": setupFixture,
+    });
+
+    it("„Neuen Zugang verwenden“ spricht nicht von einem Schlüssel des alten Zugangs", async () => {
+      mockHostsApi({
+        ...pwRoutes(),
+        "POST /hosts/h1/check": loginOk,
+        "POST /hosts/h1/credentials/c2/make-default": { ...NEW, is_default: true, notice: "Der alte Zugang ist in Nodvard Deck gelöscht. Auf dem Server ändert sich dadurch nichts." },
+      });
+      renderDetail();
+      fireEvent.click(await screen.findByRole("button", { name: "Neuen Zugang prüfen" }));
+      const use = screen.getByRole("button", { name: "Neuen Zugang verwenden" });
+      await waitFor(() => expect(use).toBeEnabled());
+      fireEvent.click(use);
+      await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+      const question = vi.mocked(confirmDialog).mock.calls.at(-1)![0] as string;
+      expect(question).toContain("Der bisherige Zugang (Passwort) wird in Nodvard Deck gelöscht");
+      expect(question).toContain("Auf dem Server ändert sich dadurch nichts.");
+      expect(question).not.toMatch(/Schlüssel|authorized_keys/);
+      expect(await screen.findByText("Der alte Zugang ist in Nodvard Deck gelöscht. Auf dem Server ändert sich dadurch nichts.")).toBeInTheDocument();
+    });
+
+    it("war er ein Schlüssel, bleibt der Hinweis auf authorized_keys", async () => {
+      mockHostsApi({ ...both(), "POST /hosts/h1/check": loginOk, "POST /hosts/h1/credentials/c2/make-default": { ...NEW, is_default: true, notice: null } });
+      renderDetail();
+      fireEvent.click(await screen.findByRole("button", { name: "Neuen Zugang prüfen" }));
+      const use = screen.getByRole("button", { name: "Neuen Zugang verwenden" });
+      await waitFor(() => expect(use).toBeEnabled());
+      fireEvent.click(use);
+      await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+      const question = vi.mocked(confirmDialog).mock.calls.at(-1)![0] as string;
+      expect(question).toContain("Sein Schlüssel bleibt auf dem Server eingetragen");
+      expect(question).toContain("~/.ssh/authorized_keys");
+    });
+
+    it("Zugang löschen: bei einem Passwort kein Hinweis auf authorized_keys", async () => {
+      mockHostsApi(routes({
+        "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_password", username: "pi", port: 22 } }),
+        "GET /hosts/h1/credentials": [PW],
+        "DELETE /hosts/h1/credentials/c1": undefined,
+      }));
+      renderDetail();
+      fireEvent.click(await screen.findByRole("button", { name: "Zugang löschen" }));
+      await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+      const question = vi.mocked(confirmDialog).mock.calls.at(-1)![0] as string;
+      expect(question).toContain("Auf dem Server ändert sich dadurch nichts.");
+      expect(question).not.toMatch(/Schlüssel|authorized_keys/);
+    });
+  });
+
+  it("„Zugang gespeichert. Prüfe jetzt die Verbindung.“ verschwindet, sobald die Prüfung klappt", async () => {
+    let creds = [OLD];
+    mockHostsApi({
+      ...both(),
+      "GET /hosts/h1/credentials": () => creds,
+      "POST /hosts/h1/credentials": () => { creds = [OLD, { ...NEW, kind: "ssh_password", username: "pi" }]; return { ...NEW, kind: "ssh_password", username: "pi" }; },
+      "POST /hosts/h1/check": loginOk,
+    });
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Ersetzen" }));
+    fireEvent.click(screen.getByRole("button", { name: "Passwort eingeben" }));
+    fireEvent.change(screen.getByLabelText("Benutzer"), { target: { value: "pi" } });
+    fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "geheim-123" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    expect(await screen.findByText("Zugang gespeichert. Prüfe jetzt die Verbindung.")).toBeInTheDocument();
+    fireEvent.click(await screen.findByRole("button", { name: "Neuen Zugang prüfen" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Neuen Zugang verwenden" })).toBeEnabled());
+    expect(screen.queryByText("Zugang gespeichert. Prüfe jetzt die Verbindung.")).toBeNull();
+  });
+
   it("zeigt „Anmeldung mit Schlüssel als lattice, Port 22 – seit 30.09.2026“", async () => {
     mockHostsApi(routes({ "GET /hosts/h1/credentials": [OLD] }));
     renderDetail();
@@ -450,14 +590,14 @@ describe("Server-Detail: Eingaben werden nach dem Absenden gelöscht", () => {
 
   it("Passwort: das Feld ist danach leer (auch wenn es schiefging) und nichts liegt im Cache", async () => {
     const calls = mockHostsApi(routes({
-      "POST /hosts/h1/credentials": reply(422, { detail: [{ type: "value_error", loc: ["body", "username"], msg: "Benutzername: nur Buchstaben, Ziffern, _, -, ., @, \\ und Leerzeichen (höchstens 64 Zeichen)." }] }),
+      "POST /hosts/h1/credentials": reply(422, { detail: [{ type: "value_error", loc: ["body", "username"], msg: "Benutzername: Nur Buchstaben, Ziffern, _, -, ., @, \\ und Leerzeichen (höchstens 64 Zeichen)." }] }),
     }));
     const { client } = renderDetail();
     fireEvent.click(await screen.findByRole("button", { name: "Passwort eingeben" }));
     fireEvent.change(screen.getByLabelText("Benutzer"), { target: { value: "bad user!" } });
     fireEvent.change(screen.getByLabelText("Passwort"), { target: { value: "hunter2-geheim" } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
-    expect(await screen.findByText(/Benutzername: nur Buchstaben/)).toBeInTheDocument();
+    expect(await screen.findByText(/Benutzername: Nur Buchstaben/)).toBeInTheDocument();
     expect(screen.getByLabelText("Passwort")).toHaveValue("");
     expect(calls.find((c) => c.method === "POST" && c.path === "/hosts/h1/credentials")?.body).toEqual({
       kind: "ssh_password", username: "bad user!", port: 22, secret_value: "hunter2-geheim", is_default: true,
@@ -526,6 +666,21 @@ describe("Server-Detail: bearbeiten und löschen", () => {
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));
     expect(calls.find((c) => c.method === "PATCH")?.body).toEqual({ address: "192.168.2.99", tags: ["docker", "web"] });
+  });
+
+  it("warnt bei einem Server mit Passwort, dass eine neue Adresse das Passwort löscht (beim Schlüssel nicht)", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_password", username: "admin", port: 22 } }) }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
+    expect(screen.getByText(/wird das gespeicherte Passwort gelöscht/)).toBeInTheDocument();
+  });
+
+  it("zeigt bei einem Schlüssel keine Passwort-Warnung", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1": hostFixture({ credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } }) }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Bearbeiten" }));
+    await screen.findByLabelText("Adresse (IP oder Name)");
+    expect(screen.queryByText(/gespeicherte Passwort gelöscht/)).not.toBeInTheDocument();
   });
 
   it("ohne Änderung wird nichts gesendet", async () => {

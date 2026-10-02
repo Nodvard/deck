@@ -23,6 +23,10 @@ interface ExtensionRow {
   granted_permissions: string[];
   last_error: string | null;
   has_settings?: boolean;
+  /** Mit Nodvard Deck ausgeliefert: die eigene `version` wird bis zur 1.0 nicht gepflegt, es gilt die Programmversion. Fehlt bei aelteren Servern. */
+  bundled?: boolean;
+  /** Programmversion (mitgeliefert) oder eigene Version (nachinstalliert). Fehlt bei aelteren Servern. */
+  display_version?: string | null;
   /** Nur bei eingeschalteten Modulen: Pflichtangaben fehlen oder der letzte Test schlug fehl. */
   needs_setup?: boolean;
   setup_reasons?: string[];
@@ -89,7 +93,9 @@ export function ExtensionsSettings(): JSX.Element {
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <p className="text-sm font-medium">{ext.name ?? ext.id}</p>
-                    <span className="text-xs text-white/35">v{ext.version}</span>
+                    <span className="text-xs text-white/35" data-testid={`ext-version-${ext.id}`}>
+                      {ext.bundled && ext.display_version ? `Teil von Nodvard Deck ${ext.display_version}` : `v${ext.display_version || ext.version}`}
+                    </span>
                     <ExtensionStateBadge state={ext.state} />
                     {ext.needs_setup && <Badge tone="warn">Einrichtung nötig</Badge>}
                   </div>

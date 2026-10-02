@@ -27,7 +27,7 @@ async def _setup(client, username="nico"):
     token = (await client.post("/api/v1/auth/login", json={"username": username, "password": PASSWORD})).json()[
         "access_token"
     ]
-    secret = (await client.post("/api/v1/me/totp/setup", headers=_h(token))).json()["secret"]
+    secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
     confirm = await client.post(
         "/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token)
     )
@@ -216,7 +216,7 @@ async def test_codes_of_one_user_do_not_work_for_another(client, db_session):
         "/api/v1/users", json={"username": "anna", "password": PASSWORD}, headers=_h(token)
     )
     anna_token = (await client.post("/api/v1/auth/login", json={"username": "anna", "password": PASSWORD})).json()["access_token"]
-    secret = (await client.post("/api/v1/me/totp/setup", headers=_h(anna_token))).json()["secret"]
+    secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(anna_token))).json()["secret"]
     await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(anna_token))
     assert (await _mfa(client, codes[0], username="anna")).status_code == 401
     # Nicos Code ist dadurch nicht verbraucht.

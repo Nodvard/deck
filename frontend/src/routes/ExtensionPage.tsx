@@ -1,8 +1,80 @@
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useState, type ComponentType } from "react";
-import { useLocation, useParams } from "react-router-dom";
+import { Link, useLocation, useParams } from "react-router-dom";
 
+import { api } from "../lib/api";
 import { usePages } from "../lib/catalog";
 import { dispatchDeckEvent, findDeck } from "../lib/deckGlobal";
+import type { ExtensionInfo } from "../lib/firstSteps";
+import { useAuthStore } from "../state/auth";
+import { Button, errorText } from "./settings/ui";
+
+/** Die Seite gibt es nicht. Steckt dahinter ein ausgeschaltetes Modul (alter Link, Lesezeichen), sagt die Seite das und
+ * schaltet es auf Knopfdruck ein (wer das darf), statt „nicht gefunden oder keine Berechtigung“ zu raten. */
+function PageMissing({ extId }: { extId: string | undefined }) {
+  const queryClient = useQueryClient();
+  const canManage = useAuthStore((s) => s.hasPermission("extensions.manage"));
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [switchedOn, setSwitchedOn] = useState(false);
+  const { data: ext } = useQuery({
+    queryKey: ["extensions", "one", extId],
+    queryFn: () => api.get<ExtensionInfo>(`/extensions/${encodeURIComponent(extId ?? "")}`),
+    enabled: Boolean(extId),
+    retry: false,
+  });
+  const name = ext?.name ?? extId;
+
+  async function enable() {
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await api.post<{ state?: string; last_error?: string | null } | undefined>(`/extensions/${encodeURIComponent(extId ?? "")}/enable`);
+      // Das Backend antwortet auch dann mit 200, wenn das Modul beim Laden abstürzt: dann nicht „eingeschaltet“ melden.
+      if (result?.state && result.state !== "enabled") {
+        setError(`„${name}“ ließ sich nicht einschalten${result.last_error ? `: ${result.last_error}` : "."}`);
+      } else {
+        setSwitchedOn(true);
+      }
+      for (const key of ["extensions", "pages", "widgets", "capabilities"]) void queryClient.invalidateQueries({ queryKey: [key] });
+    } catch (err) {
+      setError(errorText(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (switchedOn && ext?.state === "enabled") {
+    return <p className="p-6 text-sm" data-testid="module-switched-on" role="status">Das Modul „{name}“ ist eingeschaltet. Die Seite wird geladen …</p>;
+  }
+  if (ext?.state === "disabled") {
+    return (
+      <div className="p-6" data-testid="module-off">
+        <p className="text-sm">Das Modul „{name}“ ist ausgeschaltet, darum gibt es diese Seite gerade nicht.</p>
+        <p className="mt-1 text-sm opacity-70">
+          {canManage ? "Du kannst es gleich hier einschalten. Ausschalten geht jederzeit wieder unter Einstellungen → Erweiterungen." : "Ein Administrator kann es einschalten."}
+        </p>
+        {canManage && <div className="mt-3"><Button variant="primary" busy={busy} onClick={() => void enable()}>Einschalten</Button></div>}
+        {error && <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>}
+      </div>
+    );
+  }
+  if (ext && ext.state !== "enabled") {
+    return (
+      <div className="p-6" data-testid="module-broken">
+        <p className="text-sm">Das Modul „{name}“ läuft gerade nicht. Auf der Erweiterungen-Seite in den Einstellungen steht, woran es liegt.</p>
+        {/* Ein gescheitertes Einschalten von eben: der Grund bleibt stehen, auch wenn der neue Zustand schon da ist. */}
+        {error && <p role="alert" className="mt-2 text-sm text-red-300">{error}</p>}
+      </div>
+    );
+  }
+  return (
+    <p className="p-6 text-sm text-red-400">
+      Seite nicht gefunden oder keine Berechtigung.{" "}
+      <Link to="/" className="underline underline-offset-2">Zur Übersicht</Link>
+    </p>
+  );
+}
 
 /**
  * ESM-Loader (docs/02-EXTENSION-API.md §5): laedt `/api/v1/extensions/<ext_id>/
@@ -71,9 +143,9 @@ export function ExtensionPage() {
   }, []);
 
   if (isLoading) return <p className="p-6 text-sm opacity-60">Lade …</p>;
-  if (!page) return <p className="p-6 text-sm text-red-400">Seite nicht gefunden oder keine Berechtigung.</p>;
-  if (error) return <p className="p-6 text-sm text-red-400">Extension-Fehler: {error}</p>;
-  if (!Component) return <p className="p-6 text-sm opacity-60">Lade Extension-Bundle …</p>;
+  if (!page) return <PageMissing extId={extId} />;
+  if (error) return <p className="p-6 text-sm text-red-400">Fehler im Modul: {error}</p>;
+  if (!Component) return <p className="p-6 text-sm opacity-60">Lade Modul …</p>;
   // Neu aufbauen, wenn sich nur die Query aendert (Server-Seite -> `?host=`): fuer Seiten, die
   // ihre Query nur beim Mount lesen. Die mitgelieferten folgen ihr zusaetzlich ueber das
   // Ereignis oben, auch bei derselben Adresse (docs/02-EXTENSION-API.md, Host-Werkzeuge).

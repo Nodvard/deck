@@ -7,7 +7,7 @@ import { ImageUp, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { api, apiFetch } from "../../lib/api";
-import { applyBranding, type Branding, type BrandingColors } from "../../lib/branding";
+import { SHORT_NAME_HINT, applyBranding, type Branding, type BrandingColors } from "../../lib/branding";
 import { useBrandingStore } from "../../state/branding";
 import { Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
 
@@ -164,7 +164,7 @@ export function AppearanceSettings(): JSX.Element {
             <Field label="Produktname" hint="Voller Name, z. B. „Muster GmbH Serververwaltung“">
               <input value={draft.product_name} maxLength={128} onChange={(e) => set("product_name", e.target.value)} className={inputClass} />
             </Field>
-            <Field label="Kurzname / Zusatz" hint="Kleine Zeile unter dem Namen in der Seitenleiste">
+            <Field label="Untertitel" hint={`${SHORT_NAME_HINT} Der erste Buchstabe steht im Symbol, wenn du kein Logo hochlädst.`}>
               <input value={draft.short_name} maxLength={64} onChange={(e) => set("short_name", e.target.value)} className={inputClass} />
             </Field>
             <Field label="Favicon-Adresse" hint="Optional, Bild-URL für das Browser-Tab-Symbol" className="sm:col-span-2">

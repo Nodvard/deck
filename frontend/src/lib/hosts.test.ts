@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { ApiError } from "./api";
-import { checkSummary, fieldErrors, formatDate, splitCommands, type ConnectionCheck } from "./hosts";
+import { accessState, checkSummary, fieldErrors, formatDate, loginOutcome, neverAnswered, splitCommands, type ConnectionCheck } from "./hosts";
 
 function check(statuses: ConnectionCheck["items"][number]["status"][]): ConnectionCheck {
   return {
@@ -77,5 +77,58 @@ describe("formatDate", () => {
   });
   it("ist bei Unsinn still", () => {
     expect(formatDate("")).toBe("");
+  });
+});
+
+describe("accessState / neverAnswered", () => {
+  const seen = "2026-10-01T10:00:00Z";
+
+  const key = { id: "c1", kind: "ssh_key" as const, username: "nodvard", port: 22 };
+
+  it("grün nur mit belegter Anmeldung: dass der SSH-Port antwortet, genügt nicht", () => {
+    expect(accessState({ status: "up", last_seen_at: seen, credential: key })).toBe("unconfirmed");
+    expect(accessState({ status: "up", last_seen_at: seen, credential: key, login_ok_at: null })).toBe("unconfirmed");
+    expect(accessState({ status: "up", last_seen_at: seen, credential: key, login_ok_at: seen })).toBe("ok");
+    // Ergebnis einer Prüfung in der Ansicht schlägt den gespeicherten Zustand.
+    expect(accessState({ status: "up", last_seen_at: seen, credential: key }, "ok")).toBe("ok");
+    expect(accessState({ status: "up", last_seen_at: seen, credential: key, login_ok_at: seen }, "fail")).toBe("login-failed");
+  });
+
+  it("ohne SSH-Zugang gibt es nichts zu belegen", () => {
+    expect(accessState({ status: "up", last_seen_at: seen })).toBe("ok");
+    expect(accessState({ status: "running", last_seen_at: null })).toBe("ok");
+    expect(accessState({ status: "up", last_seen_at: seen, credential: { ...key, kind: "api_token" } })).toBe("ok");
+  });
+
+  it("Server, der nie geantwortet hat: „noch keine Verbindung“, ohne Zustand „noch nicht geprüft“", () => {
+    expect(neverAnswered({ status: "down", last_seen_at: null })).toBe(true);
+    expect(accessState({ status: "down", last_seen_at: null })).toBe("never-answered");
+    expect(accessState({ status: "unknown", last_seen_at: null })).toBe("unchecked");
+    expect(neverAnswered({ status: "up", last_seen_at: null })).toBe(false);
+  });
+
+  it("früher erreichbar, jetzt nicht: „keine Antwort“", () => {
+    expect(accessState({ status: "down", last_seen_at: seen })).toBe("no-answer");
+    expect(neverAnswered({ status: "down", last_seen_at: seen })).toBe(false);
+  });
+
+  it("das Ergebnis einer Prüfung in der Ansicht schlägt den Zustand des Servers", () => {
+    expect(accessState({ status: "down", last_seen_at: null }, "ok")).toBe("ok");
+    expect(accessState({ status: "up", last_seen_at: seen }, "fail")).toBe("login-failed");
+  });
+});
+
+describe("loginOutcome", () => {
+  function withLogin(status: ConnectionCheck["items"][number]["status"] | null): ConnectionCheck {
+    const items: ConnectionCheck["items"] = [{ id: "reachable", label: "Erreichbar", status: "ok", detail: "", hint: "" }];
+    if (status) items.push({ id: "login", label: "Anmeldung", status, detail: "", hint: "" });
+    return { ok: status === "ok", checked_at: "2026-10-01T10:00:00Z", items, host_key: null, os: null, credential_id: null };
+  }
+
+  it("ok, Fehler oder gar nicht erreicht", () => {
+    expect(loginOutcome(withLogin("ok"))).toBe("ok");
+    expect(loginOutcome(withLogin("fail"))).toBe("fail");
+    expect(loginOutcome(withLogin("skipped"))).toBeNull();
+    expect(loginOutcome(withLogin(null))).toBeNull();
   });
 });

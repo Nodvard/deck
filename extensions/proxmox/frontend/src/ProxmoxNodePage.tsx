@@ -273,6 +273,11 @@ interface NodeUpdates {
   reboot_pending?: boolean;
   last_check?: number | null;
   last_check_ok?: boolean | null;
+  /** Ergebnis des letzten Prüflaufs von Proxmox im Klartext ("OK", "WARNINGS: 1", Fehlertext). */
+  last_check_status?: string | null;
+  last_check_age_s?: number | null;
+  /** Der nächtliche Prüflauf von Proxmox ist deutlich überfällig (mehr als 36 Stunden). */
+  last_check_stale?: boolean;
   packages: { package: string; title: string | null; old_version: string | null; version: string; new_package: boolean }[];
 }
 
@@ -303,8 +308,18 @@ function UpdatesSection({ nodes }: { nodes: NodeUpdates[] }): JSX.Element {
             {!n.error && (
               <p className="text-xs opacity-60">
                 Proxmox {n.pve_version ?? "?"} · Kernel {n.running_kernel ?? "?"}
-                {n.last_check ? ` · zuletzt geprüft ${new Date(n.last_check * 1000).toLocaleString()}` : ""}
-                {n.last_check_ok === false ? " (Prüfung fehlgeschlagen)" : ""}
+                {n.last_check ? ` · zuletzt geprüft ${new Date(n.last_check * 1000).toLocaleString()}` : " · noch kein Prüflauf von Proxmox gefunden"}
+              </p>
+            )}
+            {!n.error && n.last_check_ok === false && (
+              <p className="text-xs text-amber-300" data-testid={`updates-check-failed-${n.node}`}>
+                Die letzte Prüfung auf neue Pakete ist fehlgeschlagen{n.last_check_status ? `: ${n.last_check_status}` : ""}. Die Liste kann veraltet sein.
+              </p>
+            )}
+            {!n.error && n.last_check_stale && (
+              <p className="text-xs text-amber-300" data-testid={`updates-check-stale-${n.node}`}>
+                Der nächtliche Prüflauf von Proxmox ist seit {n.last_check_age_s ? `${Math.floor(n.last_check_age_s / 3600)} Stunden` : "über 36 Stunden"} nicht
+                gelaufen. Die Liste kann veraltet sein; auf dem Knoten „systemctl status pve-daily-update.timer“ ansehen.
               </p>
             )}
             {n.packages.length > 0 && (
@@ -681,7 +696,7 @@ function GuestEditForm({ hostId, details, onDone }: { hostId: string; details: G
     const summary = changed
       .map((k) => `${EDIT_LABEL[k as EditKey].replace(/ \(MB\)$/, "")}: ${k === "onboot" ? (initial.onboot ? "an" : "aus") : initial[k as Exclude<EditKey, "onboot">] || "keine"} → ${k === "onboot" ? (values.onboot ? "an" : "aus") : values[k as Exclude<EditKey, "onboot">] || "keine"}`)
       .join(", ");
-    const ok = await deck().confirmDialog(`Hardware ändern -- ${summary}? Manches greift erst nach einem Neustart des Gasts.`, { confirmLabel: "Ändern" });
+    const ok = await deck().confirmDialog(`Hardware ändern – ${summary}? Manches greift erst nach einem Neustart des Gasts.`, { confirmLabel: "Ändern" });
     if (!ok) return;
     setBusy(true);
     try {
@@ -697,7 +712,7 @@ function GuestEditForm({ hostId, details, onDone }: { hostId: string; details: G
             : `Fehlgeschlagen: ${action.result?.error ?? status}`,
         );
       } else if (status === "proposed") {
-        onDone(`Änderung vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        onDone(`Änderung vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
       } else {
         onDone(`${ACTION_STATUS_LABEL[status] ?? status}.`);
       }
@@ -1022,7 +1037,7 @@ function NodeCard({ node, focused = false, visit = 0 }: { node: HostOut; focused
         {open ? "▾" : "▸"}
       </button>
       <span className="font-medium">{node.display_name}</span>{" "}
-      <span className="opacity-60">(Knoten) -- {HOST_STATUS_LABEL[node.status] ?? node.status}</span>
+      <span className="opacity-60">(Knoten) – {HOST_STATUS_LABEL[node.status] ?? node.status}</span>
       {open && <NodeHealthPanel hostId={node.id} />}
     </div>
   );
@@ -1126,7 +1141,7 @@ function ConnectionsPanel(): JSX.Element {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
-      setMessage(`Verbindung "${newName}" angelegt -- jetzt noch ein Token setzen.`);
+      setMessage(`Verbindung "${newName}" angelegt – jetzt noch ein Token setzen.`);
       setNewName("");
       setNewBaseUrl("");
       setNewTokenId("");
@@ -1187,7 +1202,7 @@ function ConnectionsPanel(): JSX.Element {
 
   async function removeConnection(name: string) {
     const ok = await deck().confirmDialog(
-      `Verbindung "${name}" wirklich entfernen? Ein bereits gesetztes Token bleibt im Tresor stehen.`,
+      `Verbindung "${name}" wirklich entfernen? Das gesetzte Token wird mit gelöscht.`,
       { danger: true, confirmLabel: "Entfernen" },
     );
     if (!ok) return;
@@ -1431,7 +1446,7 @@ export function ProxmoxNodePage(): JSX.Element {
       }, { signal: unmountSignal() });
 
       if (!approved && action.status === "proposed") {
-        setMessage(key, `${hostLabel}: ${actionLabel(actionType, snapname)} vorgeschlagen -- Freigabe durch einen Admin nötig, siehe "Aktionen".`);
+        setMessage(key, `${hostLabel}: ${actionLabel(actionType, snapname)} vorgeschlagen – Freigabe durch einen Admin nötig, siehe "Aktionen".`);
       } else {
         setMessage(key, describeOutcome(hostLabel, actionType, action, snapname));
       }

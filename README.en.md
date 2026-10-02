@@ -50,7 +50,7 @@ first, so nothing happens on your machines by accident.
 | Nodvard Shield | Security: antivirus (ClamAV), hardening audits (Lynis), update center, intrusion detection, file integrity monitoring, AI container watch |
 | Network | Pi-hole and Nginx Proxy Manager: statistics, pause blocking, proxy hosts and certificate expiry |
 | Game servers | Start/stop game servers and show the current join code (e.g. Valheim) |
-| Scripts | Versioned script repository, run on one or many servers, scheduled |
+| Scripts | Versioned script repository, run on one or many servers, scheduled – optionally without a click, as long as nothing changes |
 | Documents | Document archive with OCR and full-text search |
 | Inventory | Devices and items with purchase data and warranty reminders |
 | Nextcloud | Nextcloud as a source in the file manager |

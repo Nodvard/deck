@@ -16,7 +16,7 @@ const INCIDENTS = [
 ];
 const AUDIT = [
   { id: "a2", ts: "2026-09-24T07:05:00Z", actor_type: "extension", actor_id: "nexus-soc", action: "nexus_soc.incident_status", outcome: "success", reason: "Aktion vorgeschlagen -> Geprüft" },
-  { id: "a1", ts: "2026-09-24T07:00:00Z", actor_type: "extension", actor_id: "nexus-soc", action: "nexus_soc.incident", outcome: "proposed", reason: "Container CRASH (Exited (1))" },
+  { id: "a1", ts: "2026-09-24T07:00:00Z", actor_type: "extension", actor_id: "nexus-soc", action: "nexus_soc.incident", outcome: "proposed", reason: "Container CRASH (Exited (1) 3 seconds ago)" },
 ];
 
 function mockFetch(overrides: { incidents?: unknown[]; total?: number; stats?: unknown; hosts?: string[] } = {}) {
@@ -84,6 +84,16 @@ describe("SocPage", () => {
     expect(row.getByText("Aktion vorgeschlagen")).toBeInTheDocument();
     expect(row.getByText("Absturz")).toBeInTheDocument();
     expect(row.queryByText("Crash")).toBeNull();
+  });
+
+  it("zeigt, wie oft derselbe Vorfall aufgetreten ist", async () => {
+    const repeated = { ...INCIDENTS[0], occurrences: 4, last_seen: 1750003600 };
+    vi.stubGlobal("fetch", mockFetch({ incidents: [repeated] }));
+    render(<SocPage />);
+
+    await screen.findByText(/nginx-proxy/);
+    const row = within(screen.getByTestId("incident-inc-1"));
+    expect(row.getByText(/4× aufgetreten, zuletzt/)).toBeInTheDocument();
   });
 
   it("zeigt die KI-Erreichbarkeit an", async () => {
@@ -192,6 +202,8 @@ describe("SocPage", () => {
     const trail = await screen.findByTestId("trail-inc-1");
     const items = within(trail).getAllByRole("listitem").map((li) => li.textContent ?? "");
     expect(items[0]).toContain("Vorfall erfasst und von Nodvard KI bewertet");
+    expect(items[0]).toContain("Container CRASH (Exited (1))");
+    expect(items[0]).not.toContain("ago");
     expect(items[1]).toContain("Status geändert");
     expect(items[1]).toContain("Aktion vorgeschlagen -> Geprüft");
   });

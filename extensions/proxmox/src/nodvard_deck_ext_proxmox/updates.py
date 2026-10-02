@@ -13,6 +13,7 @@ ausstehenden Neustart gesondert.
 from __future__ import annotations
 
 import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from .config import build_connectors
@@ -26,6 +27,21 @@ KERNEL_PACKAGE_RE = re.compile(r"^(proxmox|pve)-kernel-")
 # aelter: "pve-kernel-5.15.108-1-pve") -- im Gegensatz zu Meta-Paketen wie
 # "proxmox-kernel-6.8", die nur auf das neueste Image zeigen.
 KERNEL_IMAGE_RE = re.compile(r"^(?:proxmox|pve)-kernel-(\d+\.\d+\.\d+-\d+)-pve(?:-signed)?$")
+
+
+# Proxmox startet den naechtlichen Check (`pve-daily-update.timer`) mit einer zufaelligen
+# Verzoegerung von mehreren Stunden; zwei gesunde Laeufe liegen deshalb bis zu rund 29 Stunden
+# auseinander. Erst deutlich darueber gilt der Check als ausgeblieben.
+CHECK_STALE_AFTER_S = 36 * 3600
+
+
+def check_age(last_check: Any, now: float | None = None) -> tuple[int | None, bool]:
+    """-> (Alter des letzten Prueflaufs in Sekunden, ob er laenger als `CHECK_STALE_AFTER_S` her ist).
+    Ohne (lesbare) Zeitangabe: (None, False) -- "kein Lauf gefunden" ist etwas anderes als "alt"."""
+    if isinstance(last_check, bool) or not isinstance(last_check, int | float):
+        return None, False
+    age = max(0, int((time.time() if now is None else now) - last_check))
+    return age, age > CHECK_STALE_AFTER_S
 
 
 def version_key(version: str) -> tuple[int, ...]:
@@ -78,6 +94,10 @@ async def _node_updates(connector: Any, conn_name: str, node_name: str, *, detai
     kernel_update = any(KERNEL_PACKAGE_RE.match(str(p.get("Package") or "")) for p in packages)
     summary, badge, tone = summarize(len(packages), kernel_update, reboot_pending, newest)
     manager = str(status.get("pveversion") or "")
+    last_start = last[0].get("starttime") if last else None
+    last_age, last_stale = check_age(last_start)
+    # Ergebnis des letzten Laufs im Klartext ("OK", "WARNINGS: 1", Fehlertext); leer, solange er noch laeuft.
+    last_status = str(last[0].get("status")) if last and last[0].get("endtime") and last[0].get("status") else None
     result.update({
         "pve_version": manager.split("/")[1] if manager.count("/") >= 1 else manager or None,
         "running_kernel": running,
@@ -85,8 +105,11 @@ async def _node_updates(connector: Any, conn_name: str, node_name: str, *, detai
         "reboot_pending": reboot_pending,
         "kernel_update": kernel_update,
         "count": len(packages),
-        "last_check": last[0].get("starttime") if last else None,
+        "last_check": last_start,
         "last_check_ok": (last[0].get("status") == "OK") if last and last[0].get("endtime") else None,
+        "last_check_status": last_status,
+        "last_check_age_s": last_age,
+        "last_check_stale": last_stale,
         "summary": summary,
         "badge": badge,
         "tone": tone,

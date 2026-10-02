@@ -34,7 +34,7 @@ _VIEW_CLASSES = (
     MarkdownView, ActionsView, LogView,
 )
 
-from ...branding import LOGO_CONTENT_TYPES, Branding, find_logo_file, load_branding
+from ...branding import LOGO_CONTENT_TYPES, UNTRUSTED_FILE_HEADERS, Branding, find_logo_file, load_branding
 from ...ext.runtime import get_extension_runtime
 from ...version import __version__
 from ..deps import SessionDep, SettingsDep
@@ -68,7 +68,7 @@ async def get_branding_logo(settings: SettingsDep) -> FileResponse:
     if path is None:
         raise HTTPException(status_code=404, detail="Kein Logo hinterlegt.")
     content_type = _EXT_TO_CONTENT_TYPE.get(path.suffix.removeprefix("."), "application/octet-stream")
-    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store"})
+    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store", **UNTRUSTED_FILE_HEADERS})
 
 
 # --- Als App aufs Handy (PWA) -----------------------------------------------------
@@ -118,7 +118,7 @@ async def app_icon(name: str, session: SessionDep, settings: SettingsDep) -> Res
     logo_key = (str(logo), logo.stat().st_mtime) if logo is not None else None
     png = _render_icon(int(size_text), variant == "maskable", b.product_name[:1].upper() or "N",
                        b.colors.accent, b.colors.accent_strong, b.colors.background, logo_key)
-    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600"})
+    return Response(png, media_type="image/png", headers={"Cache-Control": "public, max-age=3600", **UNTRUSTED_FILE_HEADERS})
 
 
 def _hex(color: str, fallback: tuple[int, int, int]) -> tuple[int, int, int]:
