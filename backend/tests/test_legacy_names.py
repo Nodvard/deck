@@ -566,6 +566,17 @@ def test_the_script_reports_both_rules_when_it_is_clean(monkeypatch, capsys):
 # --------------------------------------------------------------------------- Regel 3: die Positivliste
 
 
+# In der oeffentlichen Ausgabe fehlen die Dateien mit `export-ignore` (scripts/export_public.sh ist selbst eine davon).
+_PUBLIC_SNAPSHOT = not (REPO_ROOT / "scripts" / "export_public.sh").exists()
+
+
+def _left_out_of_the_public_snapshot(where: str) -> bool:
+    """Datei-Angabe (`_f`) auf eine Datei, die die oeffentliche Ausgabe bewusst weglaesst; im Entwicklungs-Repo nie."""
+    if not (_PUBLIC_SNAPSHOT and where.startswith("^") and where.endswith("$")):
+        return False
+    return not (REPO_ROOT / where[1:-1].replace(chr(92), "")).exists()  # re.escape ruecknehmen
+
+
 def _shield_usage() -> dict[str, set[str]]:
     used: dict[str, set[str]] = {}
     for item in guard.list_kept():
@@ -576,7 +587,11 @@ def _shield_usage() -> dict[str, set[str]]:
 
 
 def test_every_entry_of_the_shield_list_is_still_needed():
-    unused = [k.name for k in guard.KEPT_SHIELD if k.name not in _shield_usage()]
+    usage = _shield_usage()
+    unused = [
+        k.name for k in guard.KEPT_SHIELD
+        if k.name not in usage and not all(_left_out_of_the_public_snapshot(w) for w in k.where)
+    ]
     assert not unused, f"nicht mehr gebraucht, bitte aus KEPT_SHIELD streichen: {unused}"
 
 
@@ -588,6 +603,7 @@ def test_every_file_of_the_shield_list_still_needs_its_entry():
         for entry in guard.KEPT_SHIELD
         for where in entry.where
         if not any(re.search(where, path) for path in usage.get(entry.name, set()))
+        and not _left_out_of_the_public_snapshot(where)
     ]
     assert not stale, "diese Dateiangaben werden nicht mehr gebraucht:\n" + "\n".join(stale)
 

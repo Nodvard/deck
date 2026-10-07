@@ -228,6 +228,9 @@ jobs:
           for platform in linux/amd64 linux/arm64; do
             docker run --rm --platform "$platform" --network none --read-only --cap-drop ALL \
               --security-opt no-new-privileges --pids-limit 32 "$IMAGE@$DIGEST" --selftest
+            # Vor der naechsten Plattform wieder entfernen: Docker kann denselben Digest nicht fuer eine zweite
+            # Plattform ablegen ("cannot overwrite digest"), der arm64-Test lief deshalb bei 0.7.0 nie.
+            docker image rm "$IMAGE@$DIGEST" >/dev/null
           done
 
       - name: Tag 1 setzen
