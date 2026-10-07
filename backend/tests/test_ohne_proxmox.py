@@ -19,7 +19,7 @@ from nodvard_deck.services import hosts as hosts_service
 from nodvard_deck.services.hosts import host_to_sdk
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-SSH_MODULES = ("terminal", "system", "service-matrix", "nexus-soc", "scripts")
+SSH_MODULES = ("terminal", "system", "service-matrix", "shield", "scripts")
 
 
 @pytest.fixture(autouse=True)
@@ -68,7 +68,7 @@ async def test_menu_widgets_and_overview_have_no_proxmox_and_no_errors(client, d
 
     pages = (await client.get("/api/v1/pages", headers=headers)).json()
     shown = {p["ext_id"] for p in pages}
-    assert {"system", "service-matrix", "nexus-soc", "scripts"} <= shown
+    assert {"system", "service-matrix", "shield", "scripts"} <= shown
     assert not shown & {"proxmox", "backups"}, "Menüeinträge ausgeschalteter Module dürfen nicht erscheinen"
 
     widgets = (await client.get("/api/v1/widgets", headers=headers)).json()

@@ -81,7 +81,7 @@ MATRIX_PATH = "/ext/service-matrix/matrix"
 STATE_FILE = "image-updates-state.json"
 DEFAULT_CRON = "30 6 * * *"
 JOB_ID = "image-updates"
-_NEVER = "0 0 31 2 *"  # 31. Februar -- Job existiert, laeuft aber nie (wie bei nexus-soc)
+_NEVER = "0 0 31 2 *"  # 31. Februar -- Job existiert, laeuft aber nie (wie bei Shield)
 
 MAX_PARALLEL_HOSTS = 3
 LOCAL_TIMEOUT_S = 20

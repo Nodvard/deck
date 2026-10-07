@@ -8,6 +8,10 @@
  * Passwörter, Schlüssel und der Code stehen nur in lokalem State und werden direkt an `lib/restore.ts`
  * gereicht (nie in einen Query-Cache); nach dem Absenden sind die Felder leer. Nichts davon wird gespeichert.
  *
+ * Ist beim Inhaber die Zwei-Faktor-Anmeldung an, verlangt das Vormerken zusätzlich den Code aus der App. Das Feld
+ * steht gleich da, wenn die Oberfläche weiß, dass Zwei-Faktor an ist (`useTwoFactorEnabled`), sonst erscheint es,
+ * sobald der Server danach fragt (`totp_missing`); das Anmeldepasswort bleibt dann stehen.
+ *
  * Ansprache: du, wie überall in Nodvard Deck.
  */
 import { AlertTriangle, CheckCircle2, FileUp, Loader2, ShieldAlert } from "lucide-react";
@@ -31,6 +35,7 @@ import {
   type RestoreSecret,
   type StagedRestore,
 } from "../../lib/restore";
+import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./SecondFactorField";
 import { Badge, Button, Field, NoticeLine, errorText, inputClass, type Notice } from "./ui";
 
 type Phase =
@@ -80,6 +85,10 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
   const [notice, setNotice] = useState<Notice>(null);
   const [file, setFile] = useState<File | null>(null);
   const [accountPassword, setAccountPassword] = useState("");
+  const [askedForTotp, setAskedForTotp] = useState(false);
+  // Nur beim Inhaber: Im Einrichtungs-Assistenten gibt es noch kein Konto (und keine Anmeldung).
+  const twoFactor = useTwoFactorEnabled(mode === "owner") === true;
+  const [totpCode, setTotpCode] = useState("");
   const [secretKind, setSecretKind] = useState<"password" | "recovery_key">("password");
   const [secret, setSecret] = useState("");
   const [understood, setUnderstood] = useState(false);
@@ -99,6 +108,8 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
     [mode, setupCode],
   );
   const needsAccountPassword = mode === "owner";
+  const needsTotp = needsAccountPassword && (twoFactor || askedForTotp);
+  const totpMissing = needsTotp && !totpCode.trim();
   const credentialsReady = mode === "owner" ? Boolean(accountPassword) : Boolean(setupCode.trim());
 
   const tooBig = file !== null && maxUploadBytes !== undefined && file.size > maxUploadBytes;
@@ -205,14 +216,22 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
 
   async function apply(staged: StagedRestore) {
     const password = accountPassword;
+    const totp = totpCode.trim();
     setAccountPassword("");
+    setTotpCode("");
     setNotice(null);
     setPhase({ kind: "applying", staged });
     let pending: PendingRestore | null = null;
     try {
-      pending = await scheduleRestore(staged.id, auth(password));
+      const base = auth(password);
+      pending = await scheduleRestore(staged.id, base.mode === "owner" && totp ? { ...base, totpCode: totp } : base);
     } catch (err) {
       if (!alive.current) return;
+      if (mode === "owner" && (isTotpMissing(err) || isTotpRejected(err))) {
+        // Das Passwort stimmte; es fehlt nur ein (gültiger) Code aus der App.
+        setAskedForTotp(true);
+        setAccountPassword(password);
+      }
       setNotice({ kind: "error", text: errorText(err) });
       setPhase({ kind: "summary", staged });
       return;
@@ -408,7 +427,7 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
         className="space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
-          if (understood && credentialsReady && !applying) void apply(staged);
+          if (understood && credentialsReady && !totpMissing && !applying) void apply(staged);
         }}
       >
         <NoticeLine notice={notice} />
@@ -462,12 +481,15 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
             />
           </Field>
         )}
+        {needsTotp && (
+          <SecondFactorField value={totpCode} onChange={setTotpCode} allowRecovery={false} className="sm:max-w-sm" />
+        )}
         {mode === "setup" && !setupCode.trim() && codeField}
         <div className="flex flex-wrap justify-end gap-2">
           <Button variant="ghost" onClick={() => void discard()} disabled={applying}>
             Abbrechen
           </Button>
-          <Button type="submit" variant="danger" busy={applying} disabled={!understood || !credentialsReady}>
+          <Button type="submit" variant="danger" busy={applying} disabled={!understood || !credentialsReady || totpMissing}>
             {applying ? "Wird vorbereitet …" : "Einspielen und neu starten"}
           </Button>
         </div>

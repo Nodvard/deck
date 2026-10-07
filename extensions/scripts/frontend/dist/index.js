@@ -798,6 +798,53 @@ function StandingApprovalPanel({
     !standing && canGrant && !dirty && !script.enabled && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Das Skript ist aus \u2013 schalte es zuerst auf \u201Eaktiv\u201C und speichere." })
   ] });
 }
+function ParamsHint({ names }) {
+  const code = "rounded bg-white/[0.06] px-1 font-mono text-[11px] text-white/75";
+  return /* @__PURE__ */ jsxs3("p", { className: "mt-2 flex items-start gap-1.5 text-xs text-white/55", "data-testid": "params-hint", children: [
+    /* @__PURE__ */ jsx3(Icon, { name: "code", size: 12, className: "mt-0.5 flex-none" }),
+    /* @__PURE__ */ jsxs3("span", { children: [
+      names.length > 0 && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+        "Parameter dieses Skripts:",
+        " ",
+        names.map((n, i) => /* @__PURE__ */ jsxs3("span", { children: [
+          i > 0 && ", ",
+          /* @__PURE__ */ jsx3("code", { className: code, children: `$${n}` })
+        ] }, n)),
+        ".",
+        " "
+      ] }),
+      "Parameter schreibst du als ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$name" }),
+      " oder ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "${name}" }),
+      ", ohne Anf\xFChrungszeichen drumherum \u2013 das Dashboard setzt den Wert schon sicher ein. Alles andere mit",
+      " ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$" }),
+      " (z. B.",
+      " ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$HOME" }),
+      ", ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: '"$f"' }),
+      ", ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$(date)" }),
+      ") bleibt, wie es ist. Nur ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$$" }),
+      " wird zu einem einzelnen ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$" }),
+      ": F\xFCr ein ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$" }),
+      " direkt vor einem Parameternamen schreibst du",
+      " ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$$" }),
+      ", f\xFCr die Prozessnummer ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$$" }),
+      " schreibst du",
+      " ",
+      /* @__PURE__ */ jsx3("code", { className: code, children: "$$$$" }),
+      "."
+    ] })
+  ] });
+}
 function targetLabel(target, hosts, groups) {
   if (target.kind === "all") return "Alle Server";
   if (target.kind === "group") return groups.find((g) => g.id === target.group_id)?.name ?? "Gruppe";
@@ -1232,6 +1279,7 @@ function ScriptsPage() {
                       }
                     )
                   ] }),
+                  /* @__PURE__ */ jsx3(ParamsHint, { names: Object.keys(draft.params_schema ?? {}) }),
                   /* @__PURE__ */ jsxs3("div", { className: "mt-4 flex flex-wrap items-center gap-2", children: [
                     /* @__PURE__ */ jsx3(Button, { variant: "primary", disabled: busy || missingTarget !== null, onClick: () => void save(), children: "Speichern" }),
                     missingTarget && /* @__PURE__ */ jsx3("span", { className: "text-xs text-amber-300", children: missingTarget }),
@@ -1289,6 +1337,7 @@ function ScriptsPage() {
 }
 export {
   Executions,
+  ParamsHint,
   ScriptsPage,
   StandingApprovalPanel,
   describeSchedule,

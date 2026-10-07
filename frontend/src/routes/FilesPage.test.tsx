@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GlobalDialogs } from "../components/GlobalDialogs";
 import { useAuthStore } from "../state/auth";
@@ -581,5 +581,233 @@ describe("FilesPage ohne Quellen", () => {
     const empty = await screen.findByTestId("files-no-sources");
     expect(empty.textContent).toContain("Administrator");
     expect(within(empty).queryByRole("link")).toBeNull();
+  });
+});
+
+/**
+ * Abgelaufene Anmeldung (Tab lange im Hintergrund, Rechner im Ruhezustand): Laden und
+ * Hochladen erneuern wie `api.get` einmal still und versuchen es noch einmal -- statt mit
+ * "Nicht authentifiziert" zu scheitern. Das Token "tok" ist hier abgelaufen, erst "tok-neu" gilt.
+ */
+describe("FilesPage bei abgelaufener Anmeldung", () => {
+  const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+  const USER = { id: "u1", username: "nico", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] };
+  const SOURCE = "ssh-sftp%3Apve2";
+
+  let refreshCalls: number;
+  let downloadAuth: (string | null)[];
+  let clickedDownloads: string[];
+
+  /** Antwortet auf alles, was die Seite beim Start braucht, und auf /auth/refresh nach `refresh`. */
+  function stubBackend(opts: { refresh: () => Response; download?: (auth: string | null) => Response }) {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const auth = new Headers(init?.headers).get("Authorization");
+      if (url.endsWith("/api/v1/auth/refresh")) {
+        refreshCalls += 1;
+        return opts.refresh();
+      }
+      if (url.endsWith("/api/v1/files/sources")) return new Response(JSON.stringify(SOURCES), { status: 200 });
+      if (url.includes(`/api/v1/files/${SOURCE}/list`)) return new Response(JSON.stringify({ items: POWER_ROOT }), { status: 200 });
+      if (url.includes(`/api/v1/files/${SOURCE}/download`)) {
+        downloadAuth.push(auth);
+        if (opts.download) return opts.download(auth);
+        return auth === "Bearer tok-neu"
+          ? new Response("inhalt", { status: 200 })
+          : new Response(JSON.stringify({ detail: "Nicht authentifiziert." }), { status: 401 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+    }));
+  }
+
+  const refreshOk = () => new Response(JSON.stringify({ access_token: "tok-neu", user: USER }), { status: 200 });
+
+  beforeEach(() => {
+    refreshCalls = 0;
+    downloadAuth = [];
+    clickedDownloads = [];
+    useAuthStore.setState({ accessToken: "tok", user: USER, status: "authenticated", mfaToken: null });
+    // jsdom kennt keine Blob-Adressen.
+    const urlStatics = URL as unknown as Record<string, unknown>;
+    urlStatics.createObjectURL = () => "blob:test";
+    urlStatics.revokeObjectURL = () => {};
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (this: HTMLAnchorElement) {
+      clickedDownloads.push(this.download);
+    });
+  });
+
+  afterEach(() => {
+    const urlStatics = URL as unknown as Record<string, unknown>;
+    delete urlStatics.createObjectURL;
+    delete urlStatics.revokeObjectURL;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  async function clickDownload() {
+    const row = (await screen.findByText("⠿ notes.txt")).closest("tr")!;
+    fireEvent.click(within(row).getByRole("button", { name: "Laden" }));
+  }
+
+  describe("Laden", () => {
+    it("erste Antwort 401: erneuert einmal und lädt mit dem neuen Token", async () => {
+      stubBackend({ refresh: refreshOk });
+      render(<FilesPage />);
+
+      await clickDownload();
+
+      await waitFor(() => expect(clickedDownloads).toEqual(["notes.txt"]));
+      expect(refreshCalls).toBe(1);
+      expect(downloadAuth).toEqual(["Bearer tok", "Bearer tok-neu"]);
+      expect(screen.queryByText(/Fehler/)).toBeNull();
+    });
+
+    it("Erneuerung abgelehnt: verständliche Meldung statt HTTP 401, kein dritter Versuch", async () => {
+      stubBackend({ refresh: () => new Response(JSON.stringify({ detail: "Abgelaufen" }), { status: 401 }) });
+      render(<FilesPage />);
+
+      await clickDownload();
+
+      expect(await screen.findByText("Fehler: Nicht authentifiziert.")).toBeInTheDocument();
+      expect(refreshCalls).toBe(1);
+      expect(downloadAuth).toEqual(["Bearer tok"]);
+      expect(clickedDownloads).toEqual([]);
+    });
+
+    it("Server beim Erneuern nicht erreichbar: klare Meldung, kein dritter Versuch, weiter angemeldet", async () => {
+      stubBackend({ refresh: () => new Response("Bad Gateway", { status: 502 }) });
+      render(<FilesPage />);
+
+      await clickDownload();
+
+      expect(await screen.findByText(`Fehler: ${UNAVAILABLE}`)).toBeInTheDocument();
+      expect(downloadAuth).toEqual(["Bearer tok"]);
+      expect(useAuthStore.getState().status).toBe("authenticated");
+    });
+
+    it("anderer Fehler: Text des Servers statt HTTP <Status>, ohne Erneuerung", async () => {
+      stubBackend({ refresh: refreshOk, download: () => new Response(JSON.stringify({ detail: "Die Quelle antwortet nicht." }), { status: 502 }) });
+      render(<FilesPage />);
+
+      await clickDownload();
+
+      expect(await screen.findByText("Fehler: Die Quelle antwortet nicht.")).toBeInTheDocument();
+      expect(refreshCalls).toBe(0);
+      expect(downloadAuth).toEqual(["Bearer tok"]);
+    });
+  });
+
+  describe("Hochladen", () => {
+    class FakeXhr {
+      static instances: FakeXhr[] = [];
+      upload = { onprogress: null as ((e: { lengthComputable: boolean; loaded: number; total: number }) => void) | null };
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      status = 0;
+      responseText = "";
+      headers: Record<string, string> = {};
+      open() {
+        /* no-op im Fake */
+      }
+      setRequestHeader(name: string, value: string) {
+        this.headers[name] = value;
+      }
+      send() {
+        FakeXhr.instances.push(this);
+      }
+      /** Der Server antwortet. */
+      respond(status: number, body: unknown = "") {
+        this.status = status;
+        this.responseText = typeof body === "string" ? body : JSON.stringify(body);
+        act(() => this.onload?.());
+      }
+      progress(loaded: number, total: number) {
+        act(() => this.upload.onprogress?.({ lengthComputable: true, loaded, total }));
+      }
+    }
+
+    async function startUpload() {
+      render(<FilesPage />);
+      await screen.findByRole("button", { name: "Hochladen" });
+      const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { files: [new File(["hallo welt"], "notiz.txt", { type: "text/plain" })] } });
+      await waitFor(() => expect(FakeXhr.instances).toHaveLength(1));
+    }
+
+    const expired = { detail: "Nicht authentifiziert." };
+
+    beforeEach(() => {
+      FakeXhr.instances = [];
+      vi.stubGlobal("XMLHttpRequest", FakeXhr as unknown as typeof XMLHttpRequest);
+    });
+
+    it("erste Antwort 401: erneuert einmal, wiederholt mit dem neuen Token, Fortschritt beginnt neu", async () => {
+      stubBackend({ refresh: refreshOk });
+      await startUpload();
+      const [first] = FakeXhr.instances;
+      expect(first.headers.Authorization).toBe("Bearer tok");
+      first.progress(5, 10);
+      await screen.findByText(/wird hochgeladen … 50%/);
+
+      first.respond(401, expired);
+
+      await waitFor(() => expect(FakeXhr.instances).toHaveLength(2));
+      const second = FakeXhr.instances[1];
+      expect(second.headers.Authorization).toBe("Bearer tok-neu");
+      expect(refreshCalls).toBe(1);
+      await screen.findByText(/wird hochgeladen … 0%/);
+      second.progress(10, 10);
+      await screen.findByText(/wird hochgeladen … 100%/);
+      second.respond(200);
+
+      await screen.findByText("'notiz.txt' hochgeladen.");
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    });
+
+    it("Erneuerung abgelehnt: verständliche Meldung statt HTTP 401, kein zweiter Versuch", async () => {
+      stubBackend({ refresh: () => new Response(JSON.stringify({ detail: "Abgelaufen" }), { status: 401 }) });
+      await startUpload();
+
+      FakeXhr.instances[0].respond(401, expired);
+
+      expect(await screen.findByText("Fehler: Nicht authentifiziert.")).toBeInTheDocument();
+      expect(FakeXhr.instances).toHaveLength(1);
+      expect(refreshCalls).toBe(1);
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    });
+
+    it("Server beim Erneuern nicht erreichbar: klare Meldung, kein zweiter Versuch", async () => {
+      stubBackend({ refresh: () => new Response("Bad Gateway", { status: 502 }) });
+      await startUpload();
+
+      FakeXhr.instances[0].respond(401, expired);
+
+      expect(await screen.findByText(`Fehler: ${UNAVAILABLE}`)).toBeInTheDocument();
+      expect(FakeXhr.instances).toHaveLength(1);
+    });
+
+    it("auch der zweite Versuch bekommt 401: Meldung, kein dritter Versuch", async () => {
+      stubBackend({ refresh: refreshOk });
+      await startUpload();
+
+      FakeXhr.instances[0].respond(401, expired);
+      await waitFor(() => expect(FakeXhr.instances).toHaveLength(2));
+      FakeXhr.instances[1].respond(401, expired);
+
+      expect(await screen.findByText("Fehler: Nicht authentifiziert.")).toBeInTheDocument();
+      expect(FakeXhr.instances).toHaveLength(2);
+      expect(refreshCalls).toBe(1);
+    });
+
+    it("anderer Fehler: Text des Servers, weder Erneuerung noch zweiter Versuch", async () => {
+      stubBackend({ refresh: refreshOk });
+      await startUpload();
+
+      FakeXhr.instances[0].respond(413, { detail: "Die Datei ist zu groß." });
+
+      expect(await screen.findByText("Fehler: Die Datei ist zu groß.")).toBeInTheDocument();
+      expect(FakeXhr.instances).toHaveLength(1);
+      expect(refreshCalls).toBe(0);
+    });
   });
 });

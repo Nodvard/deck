@@ -43,6 +43,39 @@ from alembic.config import Config
 from .config import get_settings
 
 
+class DuplicateRevisions(RuntimeError):
+    """Dieselbe Revision liegt in zwei Erweiterungsordnern -- meist ist nach einer Umbenennung (oder
+    beim Auspacken ueber einen alten Stand) der alte Ordner liegen geblieben. Die Meldung ist ein ganzer
+    deutscher Satz ohne Pfade; `boot` zeigt sie auf der Notseite."""
+
+
+def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
+    """Vor Alembic: Ohne diese Pruefung bricht Alembic mit einer unverstaendlichen Meldung ab (ein
+    Zweig-Name sei schon vergeben, oder eine Revision sei mehrfach da)."""
+    from .core.backup.snapshot import REVISION_RE
+
+    seen: dict[str, str] = {}
+    clashes: set[tuple[str, str]] = set()
+    for versions_dir in extension_locations:
+        folder = versions_dir.parent.parent.name
+        for script in sorted(versions_dir.glob("*.py")):
+            try:
+                text = script.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            for revision in REVISION_RE.findall(text):
+                first = seen.setdefault(revision, folder)
+                if first != folder:
+                    clashes.add((first, folder))
+    if clashes:
+        first, second = sorted(clashes)[0]
+        raise DuplicateRevisions(
+            f"Die Migrationen der Erweiterungsordner „{first}“ und „{second}“ sind doppelt – vermutlich ist ein "
+            "alter Ordner liegen geblieben (zum Beispiel nach der Umbenennung einer Erweiterung). Bitte den alten "
+            "Ordner unter extensions/ löschen und neu starten."
+        )
+
+
 def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path]:
     locations = [backend_dir / "migrations" / "versions"]
     extensions_dir = repo_root / "extensions"
@@ -51,13 +84,15 @@ def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path
             versions_dir = ext_dir / "migrations" / "versions"
             if versions_dir.is_dir():
                 locations.append(versions_dir)
+    _check_duplicate_revisions(locations[1:])
     return locations
 
 
 def alembic_config(database_url: str | None = None, repo_root: Path | None = None) -> tuple[Config, list[Path]]:
     """Alembic-Konfiguration samt der gefundenen `version_locations` (Kern + alle Erweiterungen
     mit eigenem Zweig). Ohne `database_url` bleibt die URL leer -- fuer Abfragen am
-    Skriptordner (`known_revisions`) braucht es keine Datenbank."""
+    Skriptordner (`known_revisions`) braucht es keine Datenbank. Wirft `DuplicateRevisions`, wenn zwei
+    Erweiterungsordner dieselbe Revision enthalten."""
     repo_root = repo_root or Path.cwd()
     backend_dir = repo_root / "backend"
     cfg = Config(str(backend_dir / "alembic.ini"))

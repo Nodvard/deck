@@ -1269,7 +1269,7 @@ def test_record_tool_only_reads_and_scrubs():
     world = World.from_fixture("docker29-api154")
     target = world.by_service("nodvard-deck")
     target["Config"]["Env"].append("NODVARD_DECK_JWT_SECRET=" + SECRET)
-    target["Config"]["Labels"]["traefik.http.middlewares.auth.basicauth.users"] = "nico:$apr1$" + SECRET
+    target["Config"]["Labels"]["traefik.http.middlewares.auth.basicauth.users"] = "user:$apr1$" + SECRET
     target["HostConfig"]["LogConfig"] = {"Type": "loki", "Config": {"loki-url": "https://u:" + SECRET + "@x"}}
     target["State"]["Health"] = {"Status": "healthy", "Log": [{"Output": SECRET, "ExitCode": 0}]}
     with FakeEngine(world) as fake:
@@ -1294,21 +1294,21 @@ def private_inspect():
         "Config": {
             "Hostname": "meinserver", "Domainname": "heim.lan",
             "Labels": {"com.docker.compose.service": "web",
-                       "com.docker.compose.project.working_dir": "/home/nico/stack",
+                       "com.docker.compose.project.working_dir": "/home/user/stack",
                        "com.docker.compose.project.config_files":
-                           "/home/nico/stack/compose.yml,/home/nico/stack/override.yml",
-                       "com.docker.compose.project.environment_file": "/home/nico/stack/.env"},
+                           "/home/user/stack/compose.yml,/home/user/stack/override.yml",
+                       "com.docker.compose.project.environment_file": "/home/user/stack/.env"},
         },
         "HostConfig": {
-            "Binds": ["/home/nico/stack/data:/data:rw", "/var/run/docker.sock:/var/run/docker.sock", "named_vol:/x",
-                      "/mnt/nas/media:/media:ro", "C:\\Users\\nico\\stack:/win"],
+            "Binds": ["/home/user/stack/data:/data:rw", "/var/run/docker.sock:/var/run/docker.sock", "named_vol:/x",
+                      "/mnt/nas/media:/media:ro", "C:\\Users\\user\\stack:/win"],
             "Dns": ["10.0.0.53", "192.168.2.1"], "DnsSearch": ["fritz.box", "heim.lan"],
             "ExtraHosts": ["nas.lan:192.168.2.20", "host.docker.internal:host-gateway", "lokal:127.0.0.1"],
             "PortBindings": {"8080/tcp": [{"HostIp": "192.168.2.5", "HostPort": "8080"}]},
             "Mounts": [{"Type": "bind", "Source": "/mnt/nas/media", "Target": "/media"},
                        {"Type": "volume", "Source": "named_vol", "Target": "/y"}],
         },
-        "LogPath": "/home/nico/docker/containers/log.json",
+        "LogPath": "/home/user/docker/containers/log.json",
         "Mounts": [
             {"Type": "bind", "Source": "/mnt/nas/media", "Destination": "/media", "RW": False},
             {"Type": "bind", "Source": "/srv/proxy/docker.sock", "Destination": "/var/run/docker.sock", "RW": True},
@@ -1328,7 +1328,7 @@ def private_inspect():
     }
 
 
-PRIVATE_VALUES = ("nico", "/mnt/nas", "/srv/proxy", "192.168.2.", "10.0.0.", "10.8.0.", "100.64.", "3c:52:82", "2a02:",
+PRIVATE_VALUES = ("/home/user", "/mnt/nas", "/srv/proxy", "192.168.2.", "10.0.0.", "10.8.0.", "100.64.", "3c:52:82", "2a02:",
                   "fe80:", "meinserver", "heim.lan", "fritz.box", "nas.lan", "Users", "/export/x")
 
 
@@ -1351,7 +1351,7 @@ def test_record_tool_scrubbing_keeps_what_the_helper_depends_on():
     labels = config["Labels"]
     # Pfade: gleicher Pfad, gleiche Ersetzung -- Binds und Mounts bleiben vergleichbar, die Verschachtelung bleibt.
     assert host["Binds"][3].split(":")[0] == mounts[0]["Source"] == host["Mounts"][0]["Source"]
-    assert labels["com.docker.compose.project.working_dir"] != "/home/nico/stack"
+    assert labels["com.docker.compose.project.working_dir"] != "/home/user/stack"
     workdir = labels["com.docker.compose.project.working_dir"]
     files = labels["com.docker.compose.project.config_files"].split(",")
     assert len(files) == 2 and all(f.startswith(workdir + "/") for f in files)
@@ -1361,7 +1361,7 @@ def test_record_tool_scrubbing_keeps_what_the_helper_depends_on():
     assert host["Binds"][1] == "/var/run/docker.sock:/var/run/docker.sock" and host["Binds"][2] == "named_vol:/x"
     assert mounts[1]["Source"].endswith("/docker.sock") and "proxy" not in mounts[1]["Source"]
     assert mounts[2]["Source"] == "/var/lib/docker/volumes/named_vol/_data"
-    assert host["Binds"][4].endswith(":/win") and "nico" not in host["Binds"][4]
+    assert host["Binds"][4].endswith(":/win") and "user" not in host["Binds"][4]
     assert host["Mounts"][1]["Source"] == "named_vol"  # ein Volume-Name als Quelle ist kein Pfad und bleibt
     # Adressen: dieselbe Adresse -> dieselbe Ersetzung, dasselbe /24-Netz bleibt ein Netz, Laenge und Loopback bleiben
     nic = out["NetworkSettings"]["Networks"]["back"]
@@ -1420,7 +1420,7 @@ def test_record_tool_aliases_follow_the_hostname_in_any_order():
 
 @pytest.mark.parametrize("text", [
     "192.168.2.5", "10.1.2.3", "x=10.255.255.255:8080", "100.64.0.1", "100.127.255.254", "169.254.1.1",
-    "/home/nico", "/home/nico/stack:/data", "/Users/nico/x", "/root", "/root/.ssh", "/mnt:/home/u:ro",
+    "/home/user", "/home/user/stack:/data", "/Users/user/x", "/root", "/root/.ssh", "/mnt:/home/u:ro",
     "3c:52:82:11:22:33", "2a02:1234::1", "fd00::1", "fe80::1",
 ])
 def test_record_tool_finds_what_does_not_belong(text):
@@ -1459,14 +1459,14 @@ def test_record_tool_output_has_no_host_details():
     tool = _record_tool()
     world = World.from_fixture("docker29-api154")
     target = world.by_service("nodvard-deck")
-    target["Config"]["Labels"]["com.docker.compose.project.working_dir"] = "/home/nico/stack"
-    target["Config"]["Labels"]["com.docker.compose.project.config_files"] = "/home/nico/stack/compose.yml"
+    target["Config"]["Labels"]["com.docker.compose.project.working_dir"] = "/home/user/stack"
+    target["Config"]["Labels"]["com.docker.compose.project.config_files"] = "/home/user/stack/compose.yml"
     target["Config"]["Hostname"] = "meinserver"
     target["HostConfig"]["Dns"] = ["192.168.2.1"]
-    target["HostConfig"]["Binds"] = ["/home/nico/stack/bind:/probe-bind:ro", "u2probe-updater:/app/updater:rw"]
+    target["HostConfig"]["Binds"] = ["/home/user/stack/bind:/probe-bind:ro", "u2probe-updater:/app/updater:rw"]
     for mount in target["Mounts"]:
         if mount["Type"] == "bind":
-            mount["Source"] = "/home/nico/stack/bind"
+            mount["Source"] = "/home/user/stack/bind"
     for endpoint in target["NetworkSettings"]["Networks"].values():
         endpoint["IPAddress"], endpoint["Gateway"] = "192.168.2.50", "192.168.2.1"
         endpoint["MacAddress"] = "3c:52:82:11:22:33"
@@ -1475,7 +1475,7 @@ def test_record_tool_output_has_no_host_details():
     with FakeEngine(world) as fake:
         data = tool.record(fake.path, "u2probe", None, [])
     text = json.dumps(data)
-    for private in ("nico", "192.168.2.", "3c:52:82", "meinserver"):
+    for private in ("/home/user", "192.168.2.", "3c:52:82", "meinserver"):
         assert private not in text, private
     recorded = data["inspect"][target["Id"]]
     (source,) = {m["Source"] for m in recorded["Mounts"] if m["Type"] == "bind"}
@@ -1513,8 +1513,10 @@ def test_record_tool_refuses_anything_but_get():
         engine = tool.read_only_engine(fake.path)
         engine.negotiate()
         engine.list_containers()
-        for call in (lambda: engine.remove_container("a" * 64), lambda: engine.start_container("a" * 64),
-                     lambda: engine.pull("sha256:" + "d" * 64)):
+        # Ohne Bindung lehnte schon der Client ab; das Werkzeug muss vorher greifen (jede Methode ausser GET).
+        for call in (lambda: engine.remove_container("a" * 64, binding=None),
+                     lambda: engine.start_container("a" * 64, binding=None),
+                     lambda: engine.pull("sha256:" + "d" * 64, binding=None)):
             with pytest.raises(SystemExit):
                 call()
     assert fake.methods == {"GET"}

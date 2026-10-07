@@ -115,6 +115,14 @@ Was das Skript tut:
    weil es den Endpunkt nicht kennt, gilt er als eingerichtet, sofern der Container das Volume
    `deploy_lattice_data` hat. **Läuft ein Dashboard-Container, antwortet aber gar nicht, bricht das
    Skript ab, bevor etwas verändert wird** (erst klären: `docker ps`, `docker logs`).
+   Danach merkt sich das Skript (`pi_switch.sh loaded`), welche Erweiterungen der laufende Dienst geladen hat. Jeder Start
+   und jedes Ein- oder Ausschalten einer Erweiterung schreibt die Zeile `Erweiterungen geladen: <Kennungen>` ins Protokoll:
+   Speicher-Kennungen (nach einer Umbenennung die alte, z. B. `nexus-soc` für Nodvard Shield), sortiert, durch Komma
+   getrennt, `(keine)`, wenn nichts läuft. Gelesen wird die letzte solche Zeile im ganzen Docker-Protokoll des laufenden
+   Containers. Kennt der alte Stand die Zeile noch nicht (erster Lauf mit dieser Prüfung) oder ist sie aus dem Protokoll
+   herausgerollt (Docker behält 3 × 10 MB), gibt es nur einen Hinweis und keinen Vergleich. Vorher prüfen:
+   `docker logs deploy-nodvard-deck-1 2>&1 | grep 'Erweiterungen geladen' | tail -n 1`; fehlt die Zeile, erst
+   `docker restart deploy-nodvard-deck-1`.
 5. Auf dem Pi läuft `deploy/pi_switch.sh switch <tag>` (die Schritte stehen dort, getestet in
    `backend/tests/test_deploy_switch.py`), **von der ssh-Leitung abgekoppelt** (`setsid`, Ausgabe in
    `pi_switch.out`/`pi_switch.err` im Deploy-Ordner): Reißt die Verbindung ab, läuft der Schritt auf
@@ -140,8 +148,14 @@ Was das Skript tut:
 6. Bis zu 4 Minuten auf `"status":"ok"` von `/api/v1/health` warten, dann `verify` noch einmal
    („gesund“ allein könnte ein alter Container sein), dann den **Datencheck**: War der Dienst
    vorher eingerichtet, muss `/api/v1/auth/bootstrap` weiter `"needed":false` liefern (sonst sind
-   die Daten weg). Dann die Logs der letzten 5 Minuten auf `Traceback` prüfen. Scheitert diese Log-Prüfung selbst
-   (Verbindung weg), ist der Zustand unklar: `DEPLOY-FAIL`, ebenfalls ohne automatischen Rollback.
+   die Daten weg). Dann der **Erweiterungen-Vergleich**: Jede Erweiterung, die vorher geladen war, muss im neuen
+   Container wieder geladen sein (neue dazu sind in Ordnung). Das Skript wartet dafür bis zu 30 Sekunden auf die Zeile des
+   neuen Stands (`LOADED_WAIT_S`, nie über den Rest der Health-Wartezeit hinaus). Fehlt eine Erweiterung oder fehlt die
+   Zeile ganz, obwohl der alte Stand eine hatte, gilt das wie ein gescheiterter Datencheck. Die Ausgabe nennt die
+   fehlenden Kennungen. Soll eine davon mit dem neuen Stand bewusst wegfallen: sie erst in den Einstellungen
+   ausschalten, dann das Deploy wiederholen. Dann die Logs der letzten 5 Minuten auf `Traceback` prüfen. Scheitert
+   diese Log-Prüfung selbst (Verbindung weg), ist der Zustand unklar: `DEPLOY-FAIL`, ebenfalls ohne automatischen
+   Rollback.
 7. Scheitert einer der Schritte, wird **automatisch zurückgeschaltet** (`pi_switch.sh rollback`):
    Beim ersten Übergang wird der neue Container entfernt und der alte mit `docker start`
    wieder gestartet (ohne Compose), aber nur, wenn sein Image dasselbe ist wie
@@ -152,7 +166,7 @@ Was das Skript tut:
 
    **Ausnahme: kein automatischer Rollback nach einer Migration.** Hat der neue Container die
    Datenbank umgebaut und ist gestartet (`.boot/state.json`: `last_migration.at` nicht älter als der
-   Container, `started_ok: true`), lehnt das alte Image die Daten ab und zeigt nur die Notseite. Meldet danach eine Prüfung ein Problem (Datencheck, Tracebacks, Absturz oder
+   Container, `started_ok: true`), lehnt das alte Image die Daten ab und zeigt nur die Notseite. Meldet danach eine Prüfung ein Problem (Datencheck, Erweiterungen, Tracebacks, Absturz oder
    Neustart-Schleife nach dem Health-Ok), endet das Skript mit `DEPLOY-FAIL … hat die Datenbank aber
    schon umgebaut … KEIN automatischer Rollback`. Lässt sich der Migrationsstand nicht feststellen
    (Datei nicht lesbar, Verbindung weg), heißt es `Zustand unklar, KEIN automatischer Rollback`.
@@ -221,8 +235,11 @@ belastet ihn stark):
 
 ```bash
 # ~/lattice-deploy-test ist der Standardordner (DEPLOY_ROOT); bei anderem DEPLOY_ROOT anpassen.
+# Vor dem Auspacken den alten Ordner extensions/ löschen: sonst bleibt z. B. extensions/nexus-soc neben
+# extensions/shield liegen, und Nodvard Deck startet wegen doppelter Migrationen nicht.
 git archive -o /tmp/nodvard-deck.tar HEAD && scp /tmp/nodvard-deck.tar "$PI_HOST":~/nodvard-deck.tar
-ssh "$PI_HOST" 'tar -xf ~/nodvard-deck.tar -C ~/lattice-deploy-test && cd ~/lattice-deploy-test/deploy \
+ssh "$PI_HOST" 'rm -rf ~/lattice-deploy-test/extensions && tar -xf ~/nodvard-deck.tar -C ~/lattice-deploy-test \
+  && cd ~/lattice-deploy-test/deploy \
   && { docker stop deploy-lattice-1 2>/dev/null || true; } && docker compose -p deploy up -d --build'
 # danach bis zu 4 Min: curl -s localhost:8080/api/v1/health  ->  "status":"ok"
 # und: curl -s localhost:8080/api/v1/auth/bootstrap  ->  {"needed":false}  (sonst: Daten fehlen!)
@@ -264,6 +281,12 @@ Dateimanager (Standard `0`, keine Grenze).
   Namen im Image überstimmt – dann bitte auf den neuen Namen umstellen.
 - **Zurück aufs alte Image** (`nodvard-deck:previous`) geht ohne Änderung: Das alte Image bringt
   seine eigenen alten Werte mit und ignoriert die neuen Namen.
+
+**Proxy für ausgehende Verbindungen** (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY` im Container): Den nutzt nur die
+Update-Suche bei ghcr.io. Erweiterungen (Proxmox, Nextcloud, ntfy usw.) und die Konsole einer VM oder eines Containers
+verbinden sich immer direkt mit ihrem Ziel, damit Zugangsdaten und Konsolen-Ticket bei keiner anderen Stelle landen.
+Kommt der Rechner nur über einen Proxy ins Internet, erreichen Erweiterungen externe Ziele wie `ntfy.sh` deshalb nicht;
+Ziele, die der Rechner direkt erreicht (z. B. im eigenen Netz), gehen weiter.
 
 ## Backup / Restore
 
@@ -375,6 +398,7 @@ Extension-Daten/Script-Repo — für einen vollständigen Restore-Punkt weiterhi
 **Gibt es eine neue Version?** Steht unter Einstellungen → System → „Updates“. Das Dashboard fragt einmal am Tag bei ghcr.io nach
 (abschaltbar; ghcr.io gehört zu GitHub, das dabei die IP-Adresse und den Zeitpunkt sieht, sonst nichts, auch nicht die installierte Version), „Jetzt suchen“ geht
 jederzeit. Dort stehen auch die Anleitungen für Docker Compose, Docker Desktop, Portainer, Synology, Unraid und `scripts/deploy_pi.sh`.
+Mit dem [Update-Helfer](#update-helfer) geht das Einspielen dort per Knopf; ohne ihn wie folgt von Hand.
 Mit dem fertigen Image (Datei `deploy/compose.standalone.yml`, bei der Installation als `compose.yml` abgelegt) reicht im Ordner der Datei:
 
 ```bash
@@ -431,12 +455,128 @@ vorgemerkte Wiederherstellung einspielen, **Kopie der Datenbank anlegen, wenn ei
   * **Der Rückweg funktioniert erst auf Versionen, die diese Funktion schon enthalten.** Eine ältere Version (bis 0.5.x) kann eine Kopie nicht selbst einspielen und kennt die Notseite nicht;
     die Vorversion muss also mindestens die Version mit „Kopie vor jeder Migration“ sein. Beim ersten Update **auf** eine solche Version legt diese die Kopie schon an; zurück geht es danach.
     Scheitert die Migration, steht die Datenbank allerdings sofort wieder auf dem alten Stand – dann läuft auch eine ältere Version weiter.
+- **Zurück von 0.7 auf 0.6.x (Nodvard Shield heißt technisch seit 0.7 `shield` statt `nexus-soc`):** 0.7 bringt keine Migration, der Rückweg
+  braucht also keine Kopie und keine Notseite. Was danach passiert, hängt davon ab, wie die Installation entstanden ist:
+  * **Bestehende Installation** (schon vor 0.7 eingerichtet): Shield nutzt weiter die gespeicherte Zeile `nexus-soc`. Nach dem Rückweg ist alles
+    da, Shield läuft. Nur Vorschläge, die unter 0.7 entstanden sind, zeigt das alte Image nicht auf den Shield-Seiten; unter „Aktionen“ stehen sie
+    und lassen sich weiter freigeben. Ein erneutes Update auf 0.7 geht ohne Verlust.
+  * **Neu mit 0.7 eingerichtet** (Zeile `shield`): Das alte Image kennt diese Kennung nicht. Unter 0.6.1 steht Shield als „Fehler“ (fehlt) da, dazu
+    legt 0.6.1 eine ausgeschaltete Zeile `nexus-soc` ohne Einstellungen an; Shield ist im alten Image also aus. Nach dem erneuten Update auf 0.7 ist
+    alles wieder da. 0.6.0 setzt die Zeile `shield` auf „Fehler“; nach dem erneuten Update auf 0.7 Shield dann einmal von Hand einschalten
+    (Einstellungen → Erweiterungen). Was in der Zeit mit dem alten Image unter `nexus-soc` eingestellt wurde, kommt nicht mit.
+  * **Sicherungen:** Eine Sicherung aus 0.5 oder 0.6.x lässt sich in 0.7 einspielen. Eine Sicherung aus einer mit 0.7 neu eingerichteten Installation
+    lässt sich in 0.6.x einspielen, das alte Image warnt aber „Diese Erweiterungen aus der Sicherung gibt es hier nicht: shield …“ und zeigt die Einstellungen von
+    Shield nicht; nach dem
+    Update auf 0.7 sind sie wieder da.
 - **Sperre:** Die laufende Anwendung hält `/app/data/.boot/app.lock`. Ein zweiter Container mit demselben Datenordner (z. B. `docker compose run nodvard-deck …` neben dem laufenden Dienst)
   ändert deshalb nichts: `boot` beendet sich mit Code 75. Für Wartungsbefehle lieber `docker compose exec`, oder `run --entrypoint …` bei gestoppter Anwendung (so machen es `backup.sh` und `restore.sh`).
 - **Healthcheck:** `--start-period` ist **300 s** (Image und beide Compose-Dateien), damit eine lange Migration samt Kopie nicht als „unhealthy“ gilt.
   Ohne `user:` läuft der Check als root; deshalb ruft er `python -I` auf (isoliert: ohne den aktuellen Ordner im Suchpfad, ohne `PYTHON*`-Variablen und
   ohne Pakete aus dem Benutzerverzeichnis). Eine eigene Compose-Datei mit eigenem `healthcheck:` sollte das `-I` übernehmen.
 - **Alter Stand einer Wiederherstellung oder eines Rückwegs** (`restore/replaced-…`, kann Konten und Schlüssel im Klartext enthalten): wird **nach 30 Tagen automatisch gelöscht**; die Oberfläche nennt den Tag und kann ihn früher löschen.
+
+## Update-Helfer
+
+Mit dem Update-Helfer spielst du Updates unter Einstellungen → System → „Updates“ per Knopf ein und kannst danach 7 Tage
+lang einmal per Knopf zurück (Karte „Kopien vor Updates“). Der Helfer ist ein kleiner eigener Dienst `updater` in
+derselben Compose-Datei wie Nodvard Deck. Er läuft nur, wenn du ihn **bewusst einschaltest**: mit
+[`compose.standalone-mit-helfer.yml`](compose.standalone-mit-helfer.yml) statt `compose.standalone.yml`. Bedienung in der
+Oberfläche: [docs/11-ERST-EINRICHTUNG.md §10.6](../docs/11-ERST-EINRICHTUNG.md#106-update-per-knopf-update-helfer).
+
+> **Achtung:** Der Helfer bekommt Zugriff auf Docker (den Docker-Socket). Das ist so viel wie root auf diesem Rechner.
+> Darum ist er streng gebaut: kein Netz, kein offener Port, nur lesbar, ohne Sonderrechte, mit Speicher- und
+> Prozessgrenze. Vom Dashboard nimmt er nur Aufträge an (Aktion und Version), prüft alles selbst und tauscht nur den
+> Dienst `nodvard-deck` im selben Compose-Projekt gegen eine neuere **offizielle** Version (`ghcr.io/nodvard/deck`).
+> Willst du das nicht, bleib bei `compose.standalone.yml` und aktualisiere von Hand (siehe oben).
+
+**Image:** `ghcr.io/nodvard/deck-updater:1`. Es entsteht bei jedem Versions-Tag im Job `updater-image` von
+`.github/workflows/release.yml` (für `linux/amd64` und `linux/arm64`, Tag `:<version>`). Das Tag `1` bekommt eine Version
+erst, wenn ihr Selbsttest auf beiden Plattformen bestanden ist, und nie eine Vorabversion; es gilt für alle Helfer mit
+derselben Schnittstelle. Gebaut wird aus `deploy/updater/Dockerfile`, nur aus der Standardbibliothek von Python.
+
+**Was er kann:**
+- Update auf die neueste fertige Version, wenn Nodvard Deck mit dem offiziellen Image und beweglichem Tag läuft
+  (`ghcr.io/nodvard/deck:latest` oder eine Reihe wie `:0.7`). Die Docker-Engine lädt die neue Version selbst, der Helfer
+  hat kein Netz.
+- Startet die neue Version nicht (beendet sich, startet immer wieder neu, zeigt die Notseite oder ist nach 15 Minuten
+  nicht bereit), schaltet er von selbst auf die alte Version zurück.
+- Rückweg per Knopf auf die Version davor: einmal, 7 Tage lang. Hat die neue Version die Datenbank umgebaut, gehen die
+  Daten mit zurück (die Oberfläche sagt das vorher und verlangt eine Bestätigung).
+- Nach einem Absturz oder Neustart des Rechners macht er einen angefangenen Vorgang zu Ende oder baut ihn zurück.
+- Jedes Ergebnis steht genau einmal im Protokoll, wichtige kommen zusätzlich als Meldung.
+
+**Was er (noch) nicht kann:**
+- Nur Installationen mit Docker Compose (Kommandozeile, Docker Desktop, Portainer-Stack, Synology-Projekt, Unraid mit
+  Compose-Plugin). Einzeln über eine Oberfläche angelegte Container gehen nicht.
+- Kein Update bei fester Version in der Compose-Datei (`:0.7.0`, `@sha256:…`), bei Vorabversionen und bei einem selbst
+  gebauten Image (etwa über `scripts/deploy_pi.sh`); die Karte sagt dann, warum der Knopf fehlt.
+- Ziele erst ab Version 0.7.0: Das erste Update per Knopf geht von 0.7.0 auf die Version danach.
+- Sich selbst aktualisieren: Das machst du von Hand (siehe unten).
+- Die Aufträge des Dashboards sind noch nicht signiert; der Helfer prüft sie gegen seine eigenen Regeln und gegen das,
+  was er bei Docker vorfindet.
+
+**Voraussetzungen**
+- Nodvard Deck ab 0.7.0, installiert wie unter „Installation ohne das Repo“.
+- Der Dienst heißt `nodvard-deck`. Umbenannt? Dann beim Helfer `NODVARD_DECK_UPDATER_SERVICE` auf den neuen Namen setzen
+  (Zeile in der Compose-Datei einkommentieren).
+
+**Einrichten – Kommandozeile (Linux, Docker Desktop)**
+1. In den Ordner mit deiner `compose.yml` wechseln und sie sichern: `cp compose.yml compose.yml.alt`. Eigene Änderungen
+   merken: Port, Sicherungsordner, DNS und vor allem einen Ordner statt des Datenspeichers (z. B. `./daten:/app/data`).
+   Fehlt der in der neuen Datei, startet Nodvard Deck mit leeren Daten (deine Daten bleiben im Ordner liegen).
+2. Datei mit Helfer laden (ersetzt die alte; Projektname und Datenspeicher bleiben gleich), eigene Änderungen übernehmen
+   und starten:
+
+   ```bash
+   curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone-mit-helfer.yml
+   docker compose up -d
+   ```
+
+3. Unter Einstellungen → System → „Updates“ steht nach kurzer Zeit „Update-Helfer: bereit“. Bei „nicht bereit“ nennt die
+   Karte den Grund und was hilft.
+
+Rootless Docker: neben die `compose.yml` eine Datei `.env` mit `NODVARD_DECK_DOCKER_SOCKET=/run/user/1000/docker.sock`
+legen (`echo $XDG_RUNTIME_DIR/docker.sock` zeigt deinen Pfad).
+
+**Einrichten – Portainer und Synology:** den Inhalt deines Stacks bzw. Projekts durch `compose.standalone-mit-helfer.yml`
+ersetzen, eigene Änderungen übernehmen (vor allem einen Ordner statt des Datenspeichers) und neu starten (Portainer:
+„Update the stack“). Der Helfer muss im **selben** Stack bzw. Projekt stehen, nicht als eigener. Anderer Socket: in
+Portainer unter „Environment variables“ `NODVARD_DECK_DOCKER_SOCKET` setzen.
+
+**Selbsttest:** Ob das Image vollständig und lauffähig ist, prüft es ohne Docker-Zugang, Kanal und Zustand:
+
+```bash
+docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
+  ghcr.io/nodvard/deck-updater:1 --selftest     # Ausgabe: eine Zeile mit "ok":true
+```
+
+Aus dem Quellcode geht dasselbe im Ordner `deploy/updater` mit `python -m nodvard_deck_updater --selftest` (im Image läuft
+es als `python -I -m nodvard_deck_updater --selftest`).
+
+**Helfer aktualisieren** (nicht, während er gerade ein Update macht): `docker compose pull updater && docker compose up -d updater`
+(Synology: per SSH im Projektordner, mit `sudo` davor). Willst du genau festlegen, welcher Helfer läuft, häng den Digest
+an: `image: ghcr.io/nodvard/deck-updater:1@sha256:…` (Wert: `docker buildx imagetools inspect ghcr.io/nodvard/deck-updater:1`,
+Zeile „Digest“). Dann wechselt er nur, wenn du den Wert änderst. Die Service-Matrix bietet für das Helfer-Image kein
+„Einspielen“ an.
+
+**Helfer ausschalten oder entfernen**
+- Vorübergehend: `docker compose stop updater`. Die Karte zeigt dann „antwortet nicht“ und die Anleitung für Updates von
+  Hand. Beim nächsten `docker compose up -d` läuft er wieder.
+- Entfernen: wieder `compose.standalone.yml` als `compose.yml` nehmen (eigene Änderungen übernehmen), dann
+  `docker compose up -d --remove-orphans`. Danach dürfen die Volumes des Helfers weg:
+  `docker volume rm nodvard-deck-updater nodvard-deck-updater-state`. Der Rückweg per Knopf ist damit weg, deine Daten
+  (`nodvard-deck-data`) bleiben.
+
+**Startet Nodvard Deck nach einem Update gar nicht mehr** (und der Helfer hat nicht von selbst zurückgeschaltet): in der
+Compose-Datei die Vorversion eintragen (z. B. `ghcr.io/nodvard/deck:0.7.0`), `docker compose up -d`, dann auf der Notseite
+„Stand vor dem Update wiederherstellen“ (siehe oben). Läuft alles wieder: zurück auf `ghcr.io/nodvard/deck:latest` und
+`docker compose up -d`. Solange die feste Version eingetragen ist, bleibt der Knopf aus.
+
+**Hinweis für die Veröffentlichung:** Die Pakete `deck` und `deck-updater` der Organisation `nodvard` in der
+GitHub-Container-Registry (`ghcr.io/nodvard/deck`, `ghcr.io/nodvard/deck-updater`) müssen auf GitHub einmal auf
+**Public** gestellt werden (Paket → „Package settings“ → „Change visibility“). Neue Pakete sind dort oft erst privat: Dann
+kann ein fremder Rechner die Images nicht ziehen, und die Update-Suche bekommt kein anonymes Token. Nach dem ersten
+Release mit dem Helfer also bei `deck-updater` nachsehen.
 
 ## Demo-Modus
 

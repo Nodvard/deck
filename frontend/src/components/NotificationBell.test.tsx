@@ -16,6 +16,8 @@ function row(over: Partial<NotificationOut> & { id: string }): NotificationOut {
 
 let rows: NotificationOut[];
 let calls: { url: string; method: string; body?: unknown }[];
+/** Antwort auf `GET /extensions` (Namen zu den Kennungen); `null` = nicht erreichbar, dann stehen die Kennungen da. */
+let extensions: unknown[] | null;
 
 function mockFetch() {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -25,6 +27,7 @@ function mockFetch() {
     if (url.includes("/api/v1/notifications?") && method === "GET") return new Response(JSON.stringify(rows));
     if (url.endsWith("/notifications/read") && method === "POST") return new Response(JSON.stringify({ marked: 1 }));
     if (url.endsWith("/notifications/read-all") && method === "POST") return new Response(JSON.stringify({ marked: 2 }));
+    if (url.endsWith("/api/v1/extensions") && method === "GET" && extensions) return new Response(JSON.stringify(extensions));
     throw new Error(`Unerwarteter Fetch: ${method} ${url}`);
   });
 }
@@ -55,9 +58,10 @@ const bell = () => screen.getByRole("button", { name: /^Meldungen/ });
 
 beforeEach(() => {
   calls = [];
+  extensions = null;
   rows = [
     row({ id: "a", severity: "critical", title: "Speicher fast voll", source_ext_id: "proxmox", payload: { path: "/hosts/pve2" } }),
-    row({ id: "b", severity: "warning", title: "Lagebericht", source_ext_id: "nexus-soc", ts: ago(90) }),
+    row({ id: "b", severity: "warning", title: "Lagebericht", source_ext_id: "shield", ts: ago(90) }),
     row({ id: "c", title: "Alt und gelesen", read_at: ago(10), ts: ago(60 * 30) }),
   ];
   vi.stubGlobal("fetch", mockFetch());
@@ -133,6 +137,20 @@ describe("NotificationBell", () => {
     expect(screen.getByTestId("bell-item-b").textContent).toContain("vor 1 h");
     expect(screen.getByTestId("bell-item-c").dataset.unread).toBe("false");
     expect(screen.getByTestId("bell-unread").textContent).toBe("2 ungelesen");
+  });
+
+  it("nennt als Quelle den Namen der Erweiterung, auch wenn die Meldung die alte Kennung einer umbenannten trägt", async () => {
+    rows[1] = { ...rows[1], source_ext_id: "nexus-soc" };
+    extensions = [
+      { id: "shield", name: "Nodvard Shield", legacy_ids: ["nexus-soc"], state: "enabled" },
+      { id: "proxmox", name: "Proxmox VE", state: "enabled" },
+    ];
+    renderBell();
+    fireEvent.click(bell());
+    const old = await screen.findByTestId("bell-item-b");
+    await waitFor(() => expect(old.textContent).toContain("Nodvard Shield"));
+    expect(old.textContent).not.toContain("nexus-soc");
+    expect(screen.getByTestId("bell-item-a").textContent).toContain("Proxmox VE");
   });
 
   it("Einträge sind per Tab erreichbar (echte Knöpfe)", async () => {

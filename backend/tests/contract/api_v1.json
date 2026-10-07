@@ -294,6 +294,9 @@
       "current_password": {
        "required": true,
        "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -392,6 +395,9 @@
     "200": {
      "items": {
       "fields": {
+       "action_label": {
+        "type": "null|string"
+       },
        "action_type": {
         "type": "string"
        },
@@ -418,6 +424,9 @@
        },
        "ext_id": {
         "type": "string"
+       },
+       "ext_name": {
+        "type": "null|string"
        },
        "finished_at": {
         "type": "null|string"
@@ -481,6 +490,9 @@
    "responses": {
     "200": {
      "fields": {
+      "action_label": {
+       "type": "null|string"
+      },
       "action_type": {
        "type": "string"
       },
@@ -507,6 +519,9 @@
       },
       "ext_id": {
        "type": "string"
+      },
+      "ext_name": {
+       "type": "null|string"
       },
       "finished_at": {
        "type": "null|string"
@@ -2361,6 +2376,202 @@
     }
    }
   },
+  "GET /api/v1/ext/shield/ai/models": {
+   "params": {
+    "query:which": {
+     "enum": [
+      "failover",
+      "primary"
+     ],
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/audits": {
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/events": {
+   "params": {
+    "query:all": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/findings": {
+   "params": {
+    "query:status_filter": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/guard": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/scans": {
+   "params": {
+    "query:host": {
+     "type": "null|string"
+    },
+    "query:include_watch": {
+     "type": "boolean"
+    },
+    "query:limit": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/widgets/protection": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/widgets/security": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/history": {
+   "params": {
+    "query:host": {
+     "type": "null|string"
+    },
+    "query:limit": {
+     "type": "integer"
+    },
+    "query:offset": {
+     "type": "integer"
+    },
+    "query:q": {
+     "type": "null|string"
+    },
+    "query:since": {
+     "type": "null|string"
+    },
+    "query:status": {
+     "type": "null|string"
+    },
+    "query:until": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/incidents": {
+   "params": {
+    "query:status_filter": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/stats": {
+   "responses": {
+    "200": {
+     "fields": {
+      "ai_configured": {
+       "type": "boolean"
+      },
+      "ai_healthy": {
+       "type": "boolean"
+      },
+      "ai_message": {
+       "type": "null|string"
+      },
+      "by_status": {
+       "type": "object"
+      },
+      "pending_batch": {
+       "type": "integer"
+      },
+      "watched_hosts": {
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/widgets/incidents": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/system/hosts/{host_id}/info": {
    "params": {
     "path:host_id": {
@@ -2434,6 +2645,12 @@
        },
        "last_test": {
         "type": "null|object"
+       },
+       "legacy_ids": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        "name": {
         "type": "null|string"
@@ -2511,6 +2728,12 @@
       },
       "last_test": {
        "type": "null|object"
+      },
+      "legacy_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
       },
       "name": {
        "type": "null|string"
@@ -3927,6 +4150,12 @@
        "id": {
         "type": "string"
        },
+       "legacy_ext_ids": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
        "mobile": {
         "enum": [
          "hidden",
@@ -4238,6 +4467,161 @@
     }
    }
   },
+  "GET /api/v1/system/updates/helper": {
+   "responses": {
+    "200": {
+     "fields": {
+      "busy": {
+       "fields": {
+        "action": {
+         "enum": [
+          "rollback",
+          "update"
+         ],
+         "type": "string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "since": {
+         "type": "integer"
+        },
+        "step": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "heartbeat_at": {
+       "type": "integer|null"
+      },
+      "helper_version": {
+       "type": "null|string"
+      },
+      "last_result": {
+       "fields": {
+        "action": {
+         "enum": [
+          "rollback",
+          "update"
+         ],
+         "type": "string"
+        },
+        "code": {
+         "type": "null|string"
+        },
+        "finished_at": {
+         "type": "integer"
+        },
+        "from": {
+         "type": "null|string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "outcome": {
+         "enum": [
+          "aborted",
+          "applied",
+          "external_change",
+          "failed_manual",
+          "refused",
+          "reverted",
+          "rolled_back"
+         ],
+         "type": "string"
+        },
+        "to": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      },
+      "pending": {
+       "fields": {
+        "action": {
+         "enum": [
+          "rollback",
+          "update"
+         ],
+         "type": "string"
+        },
+        "at": {
+         "type": "integer"
+        },
+        "id": {
+         "type": "string"
+        },
+        "to": {
+         "type": "null|string"
+        }
+       },
+       "type": "null|object"
+      },
+      "present": {
+       "type": "boolean"
+      },
+      "previous": {
+       "fields": {
+        "data_revert": {
+         "type": "boolean|null"
+        },
+        "data_since": {
+         "type": "integer|null"
+        },
+        "until": {
+         "type": "integer"
+        },
+        "version": {
+         "type": "string"
+        }
+       },
+       "type": "null|object"
+      },
+      "ready": {
+       "type": "boolean"
+      },
+      "ready_reason": {
+       "type": "null|string"
+      },
+      "reason": {
+       "enum": [
+        "invalid",
+        "missing",
+        "proto",
+        "stale",
+        "unsafe"
+       ],
+       "type": "null|string"
+      },
+      "state": {
+       "enum": [
+        "busy",
+        "error",
+        "idle",
+        "unsafe"
+       ],
+       "type": "null|string"
+      },
+      "target": {
+       "fields": {
+        "current_version": {
+         "type": "null|string"
+        },
+        "floating_tag": {
+         "type": "null|string"
+        },
+        "pinned": {
+         "type": "boolean"
+        }
+       },
+       "type": "null|object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/terminal/hosts": {
    "responses": {
     "200": {
@@ -4400,6 +4784,12 @@
        },
        "id": {
         "type": "string"
+       },
+       "legacy_ext_ids": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        "permissions": {
         "items": {
@@ -5296,6 +5686,9 @@
    "responses": {
     "200": {
      "fields": {
+      "action_label": {
+       "type": "null|string"
+      },
       "action_type": {
        "type": "string"
       },
@@ -5322,6 +5715,9 @@
       },
       "ext_id": {
        "type": "string"
+      },
+      "ext_name": {
+       "type": "null|string"
       },
       "finished_at": {
        "type": "null|string"
@@ -5383,6 +5779,9 @@
    "responses": {
     "200": {
      "fields": {
+      "action_label": {
+       "type": "null|string"
+      },
       "action_type": {
        "type": "string"
       },
@@ -5409,6 +5808,9 @@
       },
       "ext_id": {
        "type": "string"
+      },
+      "ext_name": {
+       "type": "null|string"
       },
       "finished_at": {
        "type": "null|string"
@@ -5483,6 +5885,9 @@
    "responses": {
     "200": {
      "fields": {
+      "action_label": {
+       "type": "null|string"
+      },
       "action_type": {
        "type": "string"
       },
@@ -5509,6 +5914,9 @@
       },
       "ext_id": {
        "type": "string"
+      },
+      "ext_name": {
+       "type": "null|string"
       },
       "finished_at": {
        "type": "null|string"
@@ -6888,6 +7296,36 @@
     }
    }
   },
+  "POST /api/v1/ext/nexus-soc/defender/updates/propose-all": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array|null"
+      },
+      "mode": {
+       "enum": [
+        "all",
+        "security"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/nexus-soc/incidents/{incident_id}/confirm": {
    "params": {
     "path:incident_id": {
@@ -7258,6 +7696,411 @@
     }
    }
   },
+  "POST /api/v1/ext/shield/chat": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "message": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/audits": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/briefing": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/events/acknowledge-all": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/events/{event_id}/acknowledge": {
+   "params": {
+    "path:event_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/findings/{finding_id}/ignore": {
+   "params": {
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/findings/{finding_id}/quarantine": {
+   "params": {
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/findings/{finding_id}/{action}": {
+   "params": {
+    "path:action": {
+     "enum": [
+      "delete",
+      "restore"
+     ],
+     "required": true,
+     "type": "string"
+    },
+    "path:finding_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/guard/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/hosts/{host_id}/ban": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "ip": {
+       "required": true,
+       "type": "string"
+      },
+      "jail": {
+       "type": "string"
+      },
+      "unban": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/hosts/{host_id}/install": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "package": {
+       "enum": [
+        "clamav",
+        "fail2ban",
+        "lynis",
+        "signatures",
+        "unattended"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/hosts/{host_id}/upgrade": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "mode": {
+       "enum": [
+        "all",
+        "cleanup",
+        "reboot",
+        "security"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/scans": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      },
+      "kind": {
+       "enum": [
+        "custom",
+        "deep",
+        "quick"
+       ],
+       "type": "string"
+      },
+      "paths": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/updates/check": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "enum": [
+        "all"
+       ],
+       "items": {
+        "type": "string"
+       },
+       "type": "array|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/updates/propose-all": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "host_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array|null"
+      },
+      "mode": {
+       "enum": [
+        "all",
+        "security"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/incidents/{incident_id}/confirm": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/incidents/{incident_id}/dismiss": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/incidents/{incident_id}/reopen": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/incidents/{incident_id}/resolve": {
+   "params": {
+    "path:incident_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/token": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "value": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
   "POST /api/v1/ext/system/hosts/{host_id}/services/restart": {
    "body": {
     "content_type": "application/json",
@@ -7329,6 +8172,12 @@
       },
       "last_test": {
        "type": "null|object"
+      },
+      "legacy_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
       },
       "name": {
        "type": "null|string"
@@ -7404,6 +8253,12 @@
       },
       "last_test": {
        "type": "null|object"
+      },
+      "legacy_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
       },
       "name": {
        "type": "null|string"
@@ -7917,6 +8772,9 @@
    "responses": {
     "200": {
      "fields": {
+      "action_label": {
+       "type": "null|string"
+      },
       "action_type": {
        "type": "string"
       },
@@ -7943,6 +8801,9 @@
       },
       "ext_id": {
        "type": "string"
+      },
+      "ext_name": {
+       "type": "null|string"
       },
       "finished_at": {
        "type": "null|string"
@@ -8406,6 +9267,9 @@
       "current_password": {
        "required": true,
        "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -8612,6 +9476,9 @@
       },
       "password": {
        "type": "null|string"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -8637,6 +9504,9 @@
     "schema": {
      "fields": {
       "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
        "type": "string"
       }
      },
@@ -8726,6 +9596,9 @@
       },
       "sign_out_all": {
        "type": "boolean"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -8740,6 +9613,53 @@
    "responses": {
     "200": {
      "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/system/updates/apply": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      },
+      "version": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "202": {
+     "fields": {
+      "action": {
+       "enum": [
+        "rollback",
+        "update"
+       ],
+       "type": "string"
+      },
+      "data_revert": {
+       "type": "boolean"
+      },
+      "from": {
+       "type": "null|string"
+      },
+      "request_id": {
+       "type": "string"
+      },
+      "to": {
+       "type": "string"
+      }
+     },
+     "type": "object"
     }
    }
   },
@@ -8799,6 +9719,52 @@
         "live",
         "offline"
        ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/system/updates/rollback": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "accept_data_loss": {
+       "type": "boolean"
+      },
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "202": {
+     "fields": {
+      "action": {
+       "enum": [
+        "rollback",
+        "update"
+       ],
+       "type": "string"
+      },
+      "data_revert": {
+       "type": "boolean"
+      },
+      "from": {
+       "type": "null|string"
+      },
+      "request_id": {
+       "type": "string"
+      },
+      "to": {
        "type": "string"
       }
      },

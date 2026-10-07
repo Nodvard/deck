@@ -77,12 +77,22 @@ POST /api/v1/auth/mfa            → {mfa_token, code} → wie 200 oben
                                    Falsche Codes zählen gegen das 5er-Limit je `mfa_token`. Ein `mfa_token` gilt
                                    nur für eine Anmeldung (danach 401), ein Authenticator-Code je Konto nur einmal
                                    (wiederholt: 401 „Dieser Code wurde schon benutzt. …“). Falsche 6-stellige
-                                   Codes zählen außerdem je Konto, egal von welcher IP: nach 10 in 15 Min oder 20
-                                   in 24 Std 429 mit `Retry-After` (auch mit richtigem Code), `login.locked` im
+                                   Codes zählen außerdem je Konto, egal von welcher IP und zusammen mit den
+                                   falschen Codes bei Bestätigungen (Zwei-Faktor abschalten, neue
+                                   Wiederherstellungs-Codes, Sicherung laden und einspielen, Update und Rückweg;
+                                   siehe §3 und „System und
+                                   Sicherungen“): nach 10 in 15 Min oder 20 in 24 Std 429 mit `Retry-After` (auch
+                                   mit richtigem Code), `login.locked` (beginnt die Sperre bei einer Bestätigung:
+                                   `auth.password_check_locked`) im
                                    Protokoll und eine Meldung „Zwei-Faktor-Code wird durchprobiert“. Für
                                    Wiederherstellungs-Codes gilt diese Sperre nicht. Mit Wiederherstellungs-Code
                                    auch 503 wie bei `/auth/login`; der Code wird dann nicht verbraucht, der Versuch
                                    zählt nicht.
+                                   Die Zählung je Konto übersteht einen Neustart: Beim Start trägt Nodvard Deck die
+                                   falschen Codes der letzten 24 Stunden aus dem Protokoll wieder ein
+                                   (`mfa.failed`, `auth.totp_check_failed`, ohne `via: recovery_code`; Zeitstempel
+                                   bis 24 Stunden in der Zukunft zählen als „jetzt“, spätere gar nicht). Die Sperren
+                                   je Adresse und Name und je `mfa_token` beginnen nach einem Neustart neu.
 GET  /api/v1/auth/bootstrap      → {needed}: gibt es noch keinen Nutzer? Solange keiner existiert, steht
                                    zusätzlich `restore: {ok: false, message, at}` da, wenn eine Wiederherstellung
                                    aus dem Assistenten NICHT geklappt hat (der Assistent erklärt dann warum).
@@ -163,11 +173,30 @@ POST   /me/totp/setup               POST /me/totp/confirm   DELETE /me/totp
                                      → confirm: 200 {recovery_codes: [10 Codes]} (einmalig sichtbar,
                                        gespeichert werden nur Argon2-Hashes); nur für eine noch nicht
                                        bestätigte Einrichtung (sonst 409 „Zwei-Faktor ist schon aktiv.“);
-                                       falsche Codes: 400, gedrosselt (s. u.)
-                                     → DELETE /me/totp: Body {current_password}; 204, löscht auch die Codes
-                                       und meldet alle ANDEREN Anmeldungen ab (die aktuelle bleibt)
-POST   /me/recovery-codes           → {current_password} → 200 {recovery_codes}; ersetzt alle alten Codes;
-                                       409 ohne aktive 2FA
+                                       falsche Codes: 400, gedrosselt (s. u.); der bestätigende Code gilt danach je
+                                       Konto nicht noch einmal (Anmeldung, Bestätigung)
+                                     → DELETE /me/totp: Body {current_password, totp_code}; 204, löscht auch die Codes
+                                       und meldet alle ANDEREN Anmeldungen ab (die aktuelle bleibt). Ist Zwei-Faktor an,
+                                       ist `totp_code` Pflicht: der aktuelle Code aus der App (gilt je Konto nur einmal)
+                                       oder ein Wiederherstellungs-Code (`ABCDE-FGHJK`, Schreibweise egal; wird
+                                       verbraucht). Erst das Passwort (falsch: 400 ohne `code`, der Code bleibt
+                                       unangetastet), dann der Code: fehlt er 403 {detail, code: "totp_missing"} (kein
+                                       Fehlversuch); falsch 400 {detail, code: "totp_wrong"}, App-Code schon benutzt 400
+                                       {detail, code: "totp_used"}; zu viele 429 mit `Retry-After`. Falsche App-Codes
+                                       zählen auf die Grenze je Konto wie bei /auth/mfa (10 in 15 Min, 20 in 24 Std,
+                                       zusammen mit Anmeldung und Bestätigungen); greift sie, sagt die 429-Meldung, dass
+                                       ein Wiederherstellungs-Code weiter geht. Falsche Wiederherstellungs-Codes zählen
+                                       wie bei der Anmeldung auf einen eigenen Zähler (10 in 5 Min, je Konto statt je
+                                       Adresse, das richtige Passwort setzt ihn nicht zurück) und auf den aller
+                                       Sicherheitsabfragen des Kontos (30 in 5 Min). Ohne Zwei-Faktor reicht das Passwort.
+                                       Audit `auth.2fa_disabled` mit `detail.via` (`totp`/`recovery_code`); falsche Codes
+                                       `auth.totp_check_failed` (`aktion`, ggf. `via`, `replayed`), nie der Code. Mit
+                                       Wiederherstellungs-Code zusätzlich `mfa.recovery_used` ({remaining, aktion}) und
+                                       eine Meldung wie bei der Anmeldung.
+POST   /me/recovery-codes           → {current_password, totp_code} → 200 {recovery_codes}; ersetzt alle alten Codes;
+                                       409 ohne aktive 2FA; `totp_code` (App-Code oder einer der bisherigen
+                                       Wiederherstellungs-Codes), Antworten, Audit (`auth.recovery_codes_generated` mit
+                                       `detail.via`) und Meldung wie bei DELETE /me/totp.
                                      → Sicherheitsabfragen (POST /me/password, POST /me/totp/setup, DELETE /me/totp,
                                        POST /me/recovery-codes, POST /users/{id}/reset-2fa mit dem Passwort des Admins):
                                        falsches `current_password` = 400 „Das aktuelle Passwort stimmt nicht.“ + Audit
@@ -202,6 +231,11 @@ GET    /users        POST /users     GET/PATCH/DELETE /users/{id}
                                        alte Anmeldung mehr, er muss sich neu anmelden; nur ein vorher ausgestellter, noch
                                        nicht abgelaufener Access-Token gilt bei HTTP-Anfragen bis zu seinem Ablauf wieder
                                        (nicht bei `/ws`, siehe §4).
+                                     → Protokoll: `user.created`, `user.updated`, `user.deleted` (wer handelt,
+                                       `target_id` = Konto). `detail` nennt `username`, Rollen, bei PATCH nur die
+                                       Änderungen (`roles`/`is_active` mit altem und neuem Wert,
+                                       `display_name_changed`, `email_changed`, `password_reset`); nie ein Passwort
+                                       oder eine E-Mail-Adresse.
 POST   /users/{id}/reset-2fa        → `users.write`, Body {current_password} = Passwort des handelnden Admins;
                                        schaltet 2FA eines ANDEREN Nutzers ab und meldet ihn
                                        überall ab (204). Owner: 403 (nur er selbst); eigenes Konto: 409
@@ -486,7 +520,9 @@ Schlüssel, Wert ungültig → `422`:
   ist die Bestätigung für diesen Server immer nötig. Ist `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` gesetzt
   (`true`/`false`, leer zählt als nicht gesetzt), meldet `GET /settings` deren Wert, und `PUT` antwortet mit `409`.
 - Alle Änderungen dieser Tabelle ab `system.timezone` stehen mit altem und neuem Wert im Protokoll
-  (`system.settings.changed`, `target_id` = Schlüssel).
+  (`system.settings.changed`, `target_id` = Schlüssel). Ebenso die vier Schlüssel des Freigabe-Gates
+  (`autonomy.mode`, `autonomy.max_risk`, `security.deny_patterns`, `maintenance.windows`). Eine Liste, die als JSON
+  länger als 8000 Zeichen ist, steht dort nur mit ihrer Länge (`{"truncated": true, "count": n}`).
 
 ### System und Sicherungen
 
@@ -494,23 +530,29 @@ Alle Pfade unter `/system`. **Ansehen** braucht `system.read` (Rolle `admin` hat
 ändert oder Daten herausgibt, darf **nur der Owner** (`require_owner`: die Rolle allein reicht nicht, auch `*`
 nicht, sonst `403`). Mit **[PW]** markierte Aufrufe verlangen zusätzlich `current_password` im Body: fehlt es →
 `403`, falsch → `400`, zu oft falsch → `429` (dieselbe Drosselung wie bei `/me/password`). Passwörter stehen nie
-in der Adresse und nie im Protokoll.
+in der Adresse und nie im Protokoll. Mit **[2FA]** markierte Aufrufe verlangen bei eingeschalteter Zwei-Faktor-Anmeldung
+zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederherstellungs-Codes gelten hier nicht): fehlt er →
+`403` (`code` `totp_missing`), falsch → `400` (`code` `totp_wrong`), schon benutzt → `400` (`code` `totp_used`), zu viele falsche →
+`429` mit `Retry-After` (siehe „Zwei-Faktor-Code bei Update und Rückweg“ unten). Ohne Zwei-Faktor wird `totp_code` nicht beachtet.
 
 | Methode, Pfad | Recht | Zweck |
 |---|---|---|
-| `GET /system/info` | `system.read` | `version`, `build` (genaue Version des Release-Images bzw. `NODVARD_DECK_BUILD`, sonst `null`), `image` (Herkunft ohne Tag, aus der Datei `/app/image-info.json` im Image bzw. `NODVARD_DECK_IMAGE`; `null` bei einem selbst gebauten Image), `timezone`, `data_dir`, `data_free_bytes`, `database` (`sqlite`/`postgresql`), `updater_available` (noch `false`), `pre_update_copies[]` (die neuesten, höchstens drei **Kopien der Datenbank von vor einer Migration**, neueste zuerst: `name`, `created_at`, `from_version`, `to_version`, `size`; ohne Pfade; leer, solange es noch keine gibt) |
-| `GET /system/updates` | `system.read` | Stand von „Nach Updates suchen“, **ohne** Anfrage ins Netz (aus `<Datenordner>/update_check.json`): `current` (laufende Version: beim offiziellen Image dessen genaue Version aus `/app/image-info.json`, auch eine Vorabversion wie `0.6.0-rc1`; sonst `version`), `latest` (neueste Version im Kanal laut letzter gelungener Prüfung; `null`, wenn noch nie geprüft oder geprüft, aber keine passende Version gefunden – dann ist `checked_at` gesetzt), `latest_digest` (sha256 des Manifests, wenn bekannt), `available` (`latest` neuer als `current`, Semver), `channel` (`stable`/`beta`), `enabled` (tägliche Prüfung an), `checked_at` (letzte gelungene Prüfung), `attempted_at` (letzter Versuch), `source` (`cache`; `offline`, wenn der letzte Versuch scheiterte), `error` (dann „Konnte nicht prüfen (offline?).“; `latest`, `checked_at`, `attempted_at` und `error` gelten nur für den eingestellten Kanal), `official_image` (das Image stammt laut `image` genau aus `ghcr.io/nodvard/deck`), `image`, `official_image_name`, `helper` (noch immer `false`), `release_notes_url` (`https://github.com/nodvard/deck/blob/v<latest>/CHANGELOG.md`) |
+| `GET /system/info` | `system.read` | `version`, `build` (genaue Version des Release-Images bzw. `NODVARD_DECK_BUILD`, sonst `null`), `image` (Herkunft ohne Tag, aus der Datei `/app/image-info.json` im Image bzw. `NODVARD_DECK_IMAGE`; `null` bei einem selbst gebauten Image), `timezone`, `data_dir`, `data_free_bytes`, `database` (`sqlite`/`postgresql`), `updater_available` (ein Update-Helfer ist eingerichtet und antwortet; dieselbe Quelle wie `present` in `GET /system/updates/helper`), `pre_update_copies[]` (die neuesten, höchstens drei **Kopien der Datenbank von vor einer Migration**, neueste zuerst: `name`, `created_at`, `from_version`, `to_version`, `size`; ohne Pfade; leer, solange es noch keine gibt) |
+| `GET /system/updates` | `system.read` | Stand von „Nach Updates suchen“, **ohne** Anfrage ins Netz (aus `<Datenordner>/update_check.json`): `current` (laufende Version: beim offiziellen Image dessen genaue Version aus `/app/image-info.json`, auch eine Vorabversion wie `0.6.0-rc1`; sonst `version`), `latest` (neueste Version im Kanal laut letzter gelungener Prüfung; `null`, wenn noch nie geprüft oder geprüft, aber keine passende Version gefunden – dann ist `checked_at` gesetzt), `latest_digest` (sha256 des Manifests, wenn bekannt), `available` (`latest` neuer als `current`, Semver), `channel` (`stable`/`beta`), `enabled` (tägliche Prüfung an), `checked_at` (letzte gelungene Prüfung), `attempted_at` (letzter Versuch), `source` (`cache`; `offline`, wenn der letzte Versuch scheiterte), `error` (dann „Konnte nicht prüfen (offline?).“; `latest`, `checked_at`, `attempted_at` und `error` gelten nur für den eingestellten Kanal), `official_image` (das Image stammt laut `image` genau aus `ghcr.io/nodvard/deck`), `image`, `official_image_name`, `helper` (wie `updater_available` in `GET /system/info`), `release_notes_url` (`https://github.com/nodvard/deck/blob/v<latest>/CHANGELOG.md`) |
 | `POST /system/updates/check` | `system.read` | Jetzt nachsehen; Antwort wie `GET`, mit `source: live`. Scheitert die Abfrage (offline, `401`/`429`/`5xx` der Registry, kaputtes JSON, Zeitlimit), kommt **kein** Fehlercode, sondern der letzte Stand mit `source: offline` und `error`. Höchstens **einmal pro Minute** für alle zusammen, sonst `429` „Gerade erst nachgesehen …“ mit `Retry-After` |
+| `GET /system/updates/helper` | `system.read` | Zustand des Update-Helfers, ohne Anfrage ins Netz (siehe „Update-Helfer“ unten): `present` (eingerichtet und antwortet, Herzschlag höchstens 90 s alt), `reason` (warum nicht: `missing` nicht eingerichtet, `stale` antwortet nicht, `unsafe` Kanal nicht sicher, `proto` andere Protokollversion, `invalid` unlesbarer Status; sonst `null`), `ready` (könnte jetzt ein Update einspielen), `ready_reason` (fester Bezeichner des Helfers: warum er nicht bereit ist, oder ein Hinweis wie `channel_cluttered`; `finishing`: der letzte Vorgang ist entschieden, der Helfer räumt nur noch auf, `ready` ist dann `false` und `busy` `null`), `state` (`idle`/`busy`/`unsafe`/`error`), `helper_version`, `heartbeat_at`, `target` (`current_version`, `floating_tag` = `latest` oder `X.Y`, `null` bei fester Version; `pinned`: die Version steht fest in der Compose-Datei, `X.Y.Z` oder Digest), `busy` (`id`, `action` `update`/`rollback`, `step`, `since`), `previous` (Rückweg: `version`, `until`; nur solange er gilt; dazu `data_revert`: `true` = die laufende Version hat beim Start die Datenbank umgebaut, beim Rückweg geht alles seit `data_since` verloren und `accept_data_loss` ist Pflicht, `false` = die Daten bleiben, `null` = unklar, der Rückweg wird dann mit `data_unclear` abgelehnt – dieselbe Entscheidung wie bei `POST /system/updates/rollback`; `data_since`: Unix-Zeit des Umbaus, nur bei `data_revert: true`), `last_result` (`id`, `action`, `from`, `to`, `outcome`, `code`, `finished_at`), `pending` (eigene Anforderung ohne Ergebnis, höchstens 30 Minuten alt: `id`, `action`, `to`, `at`). Zeiten als Unix-Zeit in Sekunden, Gründe und Codes nur feste Bezeichner, nie Freitext. Ist `present` `false`, ist `ready` `false` und alle übrigen Felder außer `reason` sind `null`; nur `last_result` (bei `stale`) und `pending` können trotzdem gesetzt sein. Hält nebenbei neue Ergebnisse des Helfers im Protokoll fest |
+| `POST /system/updates/apply` | Owner [PW] [2FA] | `{version, current_password, totp_code?}`: Update auf `version` beim Update-Helfer anfordern → `202` `{request_id, action: "update", from, to, data_revert: false}` (`Cache-Control: no-store`); das Ergebnis steht danach in `GET /system/updates/helper`. `version` muss die neueste gefundene sein (`latest` aus `GET /system/updates`) und neuer als die laufende. `409`: Helfer fehlt oder antwortet nicht (`helper_missing`), räumt noch auf (`helper_finishing`), ist beschäftigt (`helper_busy`) oder nicht bereit (`helper_not_ready`), Kanal nicht sicher (`channel_unsafe`), schon eine Anforderung offen (`request_pending`), nicht das offizielle Image (`not_official_image`), Version in der Compose-Datei fest eingetragen (`pinned`); `422`: keine gültige Version (`bad_version`), Vorabversion (`prerelease`), nicht die neueste gefundene (`not_latest`), nicht neuer als die laufende (`not_newer`), passt nicht zum Tag der Compose-Datei (`tag_mismatch`); `429` (`rate_limited`) mit `Retry-After` |
+| `POST /system/updates/rollback` | Owner [PW] [2FA] | `{current_password, accept_data_loss?, totp_code?}`: Rückweg auf die Version vor dem letzten Update (`previous` in `GET /system/updates/helper`) anfordern → `202` wie bei `apply`, mit `action: "rollback"`. Hat die laufende Version beim Start die Datenbank umgebaut, gehen die Daten mit zurück (`data_revert: true`: alles seit dem Update geht für das Dashboard verloren, der ersetzte Stand liegt danach im Datenordner unter `restore/replaced-…`): dann ist `accept_data_loss: true` Pflicht (sonst `422` `accept_data_loss`), und vor der Anforderung wird die Vormerkung `.boot/rollback.json` geschrieben; scheitert danach das Schreiben der Anforderung oder endet der Rückweg mit `refused` oder `aborted`, wird sie wieder gelöscht. `409` wie bei `apply` außer `not_official_image` und `pinned`, dazu `no_previous` (kein Rückweg, oder er gilt nicht mehr), `data_unclear` (die Datenbank wurde umgebaut, aber der Eintrag passt nicht genau zu diesem Rückweg oder die Kopie fehlt), `marker_failed` (die Vormerkung ließ sich nicht speichern, nichts angefordert); `429` wie bei `apply` |
 | `GET /system/openapi.json` | `system.read` | Das vollständige OpenAPI-Dokument (alle Endpunkte samt mitgelieferter Erweiterungen); ersetzt das öffentliche `/openapi.json`, das es nur im Entwicklungsmodus oder mit `NODVARD_DECK_API_DOCS=1` gibt |
 | `GET /system/backups` | `system.read` | `config`, `key` (`key_id`, `created_at` – nie Schlüssel oder Passwort), `target` (`dir`, `default_dir`, `external_root`, `external_available`, `same_storage_as_data`, `free_bytes`, `error`), `backups[]` (`name`, `size`, `created_at`, `app_version`, `key_id`, `mode`, `status` `ok`/`ungeprueft`/`beschaedigt`, `checked_at`, `check_ok`, `key_current`), `last_run`, `running`, `sqlite`, `limits` |
 | `PUT /system/backups/config` | Owner, [PW] nur bei gefährlicher Änderung | `{enabled, schedule, keep, dir, include_runs, current_password?}`; `current_password` ist **optional** und nur nötig, wenn `keep` kleiner wird als bisher, `enabled` von an auf aus geht oder `dir` sich ändert (sonst `403` mit Text, welche Änderung das Passwort braucht; falsch `400`, zu oft `429` wie bei den anderen [PW]-Endpunkten; geprüft **vor** der Eingabeprüfung, ohne dass ein Ordner angelegt wird); `keep` 1–60, `schedule` Cron, `dir` nur `<Datenordner>/backups` oder `/backups` bzw. darunter (absolut, kein `..`, kein Symlink, `realpath` gleich, beschreibbar) → sonst `422`; `enabled` ohne Sicherungspasswort → `409`. Antwort wie `GET /system/backups` |
 | `PUT /system/backups/key` | Owner [PW] | `{current_password, password}` (≥ 12 Zeichen, sonst `422`). Antwort **einmalig** `{key_id, recipient, recovery_key}` (`Cache-Control: no-store`) |
 | `POST /system/backups/run` | Owner | Jetzt sichern, als Kern-Job `system-backup` im Hintergrund → `202`; läuft schon eine Sicherung oder fehlt der Schlüssel → `409` |
-| `POST /system/backups/download` | Owner [PW] | `{current_password, mode: "schluessel"\|"passwort", password?}` → `202` mit Ticket `{ticket, job_id, status, filename, size, error, expires_in, url}`; baut die Datei im Hintergrund (kein Job: dessen Protokoll enthielte die Parameter). `409` bei laufender Sicherung, fehlendem Schlüssel (`schluessel`) oder ohne SQLite-Datei; `507` bei zu wenig Platz |
+| `POST /system/backups/download` | Owner [PW] [2FA] | `{current_password, mode: "schluessel"\|"passwort", password?, totp_code?}` (der Code, weil die Datei alle Schlüssel enthält, auch den der Zwei-Faktor-Anmeldung) → `202` mit Ticket `{ticket, job_id, status, filename, size, error, expires_in, url}`; baut die Datei im Hintergrund (kein Job: dessen Protokoll enthielte die Parameter). `409` bei laufender Sicherung, fehlendem Schlüssel (`schluessel`) oder ohne SQLite-Datei; `507` bei zu wenig Platz |
 | `GET /system/backups/download-jobs/{job_id}` | Owner, nur eigener Download | Stand `building`/`ready`/`failed`, Antwort wie beim Ticket (`404` für fremde, unbekannte oder schon abgeholte Downloads). `job_id` ist eine eigene Zufalls-ID und taugt **nicht** zum Herunterladen: die Oberfläche fragt sie jede Sekunde ab, sie steht also in der Adresse (und im Zugriffsprotokoll), das Ticket nicht |
 | `GET /system/backups/download/{ticket}/status` | Owner, nur eigenes Ticket | **Veraltet** (`deprecated`), bleibt als Übergang: dasselbe über das Ticket in der Adresse. Neu: `download-jobs/{job_id}` |
 | `GET /system/backups/download/{ticket}` | Ticket | Liefert die Datei als normalen Download (Streaming). Gilt **einmal**, 5 Minuten ab Fertigstellung, nur solange der Nutzer noch aktiver Owner ist; sonst `404`, während des Baus `409`. Eine eigens gebaute Datei wird danach gelöscht. Ein Filter am uvicorn-Zugriffsprotokoll (`core/log_filters.py`) ersetzt das Ticket in Adressen unter `…/system/backups/download/` durch `…` |
-| `POST /system/backups/{name}/ticket` | Owner [PW] | Ticket für eine vorhandene automatische Sicherung (die Datei bleibt liegen) |
+| `POST /system/backups/{name}/ticket` | Owner [PW] [2FA] | `{current_password, totp_code?}`: Ticket für eine vorhandene automatische Sicherung (die Datei bleibt liegen) |
 | `POST /system/backups/{name}/verify` | Owner | sha256 der Datei gegen die Prüfsummen-Datei `<name>.json` (ohne Passwort) → `{ok, detail}` |
 | `DELETE /system/backups/{name}` | Owner [PW] | Body `{current_password}`; nur `nodvard-deck-sicherung-*.ndbak` mit eigenem Kopf, die `.json` daneben verschwindet mit → `204`; unbekannt → `404` |
 
@@ -544,7 +586,7 @@ in der Adresse und nie im Protokoll.
   dessen sha256 `latest_digest` ist. Je Anfrage höchstens 5 s; Token und Tags zusammen höchstens 15 s, das Manifest bekommt nur die
   restliche Zeit (reicht sie nicht, bleibt `latest_digest` `null`, die Prüfung gilt trotzdem). Jede Antwort wird ungepackt angefordert
   (`Accept-Encoding: identity`, eine gepackte gilt als Fehler) und höchstens 1 MiB gelesen (eine größere `Content-Length` bricht vor dem
-  Lesen ab). User-Agent `nodvard-deck`, ohne Version. Es läuft immer nur eine Prüfung zur Zeit. Eine Antwort ohne Tag-Liste gilt als
+  Lesen ab). User-Agent `nodvard-deck`, ohne Version. Ein Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) gilt hier, anders als bei Erweiterungen (`ctx.http`). Es läuft immer nur eine Prüfung zur Zeit. Eine Antwort ohne Tag-Liste gilt als
   Fehler (der letzte Stand bleibt); eine vollständige Antwort ohne passende Version ist ein Ergebnis (`latest: null`). Täglich als
   Kern-Job `system-update-check` (Schalter `system.update_check.enabled`), dazu der Knopf „Jetzt suchen“. Das Repository steht als eine Konstante im Kern
   (`core.updates.REPOSITORY`). Das Release-Image trägt Herkunft und Version als Datei `/app/image-info.json` (Build-Argumente
@@ -554,6 +596,43 @@ in der Adresse und nie im Protokoll.
   `current` der Update-Suche (und `from_version`/`to_version` der Kopien vor Updates) nimmt beim offiziellen Image dagegen zuerst die
   Version aus der Datei, dann `build` (jeweils nur, wenn es eine Version ist), sonst `version`: eine veraltete Variable verfälscht den
   Vergleich nicht.
+- **Update-Helfer** (`services/update_helper.py`, `core/updater_client.py`): ein eigenes kleines Programm neben dem Dashboard, das
+  Update und Rückweg selbst einspielt. Beide teilen sich nur einen Ordner (`/app/updater`, Einstellung `updater_dir`, nur für Tests
+  ändern), ein eigenes Volume, das der Helfer einrichtet und das root gehört: `status.json` schreibt nur der Helfer, das Dashboard
+  legt Anforderungen (Aktion und Version) unter `requests/` ab. Fehlt der Ordner, gibt es keinen Helfer (`present: false`,
+  `reason: missing`). Eingeschaltet wird der Helfer mit einer eigenen Compose-Datei
+  ([deploy/README „Update-Helfer“](../deploy/README.md#update-helfer)). Verbindlich entscheidet immer der Helfer;
+  was das Dashboard vorher prüft, sorgt für eine klare Antwort. Höchstens **eine Anforderung je 10 Minuten**, Update und Rückweg
+  zusammen, sonst `429` „Gerade erst angefordert …“ mit `Retry-After`; was nicht angefordert wurde (Kanal nicht sicher, Vormerkung
+  nicht gespeichert) oder der Helfer abgelehnt hat (`refused`), zählt nicht. Ablehnungen von `apply`/`rollback` tragen neben
+  `detail` einen festen `code` (siehe Tabelle, dazu `403` `not_owner`, `password_missing` und `totp_missing`), bei `helper_missing` und
+  `channel_unsafe` auch `helper_reason`, bei `helper_not_ready`, wenn der Helfer einen Grund nennt. Ein falsches Passwort antwortet
+  wie bei den anderen [PW]-Endpunkten nur mit `detail`, ein falscher oder schon benutzter Zwei-Faktor-Code mit `code` `totp_wrong`
+  bzw. `totp_used`.
+- **Zwei-Faktor-Code bei Update und Rückweg** ([2FA]): dieselben Bausteine wie bei `POST /auth/mfa`. Ein Code gilt je Konto nur
+  einmal, auch quer zwischen Anmeldung und Bestätigung. Falsche Codes zählen gegen dieselbe Grenze je Konto (10 in 15 Minuten,
+  20 in 24 Stunden, Anmeldung und Bestätigung zusammen); danach `429` auch mit richtigem Code. Beginnt die Sperre bei einer
+  Bestätigung, steht sie als `auth.password_check_locked` im Protokoll, dazu kommt die Meldung „Zwei-Faktor-Code wird
+  durchprobiert“. Jeder falsche Code, der nicht schon an der Sperre scheitert, steht als `auth.totp_check_failed` im
+  Protokoll (`detail.aktion` `update_einspielen` bzw. `update_zurueck`, bei einem schon benutzten Code `replayed: true`; nie
+  der Code). Während einer Sperre wird nicht mehr geprüft: Dann gibt es `429` und keinen `auth.totp_check_failed`-Eintrag.
+  Die Ablehnung steht trotzdem als `system.update.request_refused` bzw. `system.update.rollback_refused` mit `detail.code`
+  `confirm_429` im Protokoll. Die Grenze je Konto gilt auch über einen Neustart hinweg (siehe `POST /auth/mfa`), ebenso die für
+  falsche Wiederherstellungs-Codes bei Bestätigungen (10 in 5 Minuten je Konto). Nach dem Einspielen einer Sicherung zählt
+  deren Protokoll. Dasselbe gilt für Sicherung laden und einspielen ([2FA] in der Tabelle oben).
+- Protokoll des Update-Helfers: `system.update.requested` bzw. `system.update.rollback_requested` (`request_id`, `from`, `to`, beim
+  Rückweg auch `copy` und `data_revert`); jede Ablehnung als `system.update.request_refused` bzw. `system.update.rollback_refused`
+  mit `detail.code` (bei der Bestätigung `outcome` `denied` und `not_owner`, `password_missing` oder `confirm_<Statuscode>`, sonst
+  `failure` und der Code der Antwort). Ergebnisse des Helfers stehen **genau einmal je Anforderung** als `system.update.<outcome>`
+  im Protokoll (Akteur `system`/`updater`, `target_id` = Anforderung, `outcome` `success` bei `applied` und `reverted`, sonst
+  `failure`): `applied` (Update eingespielt), `reverted` (Rückweg eingespielt), `rolled_back` (hat nicht geklappt, die
+  Ausgangsversion läuft weiter bzw. wieder), `refused` (vom Helfer abgelehnt), `aborted` (abgebrochen, bevor die neue Version
+  gestartet wurde; schon Geändertes ist zurückgebaut), `failed_manual` (die vorige Version ließ sich nicht wieder starten, bitte
+  von Hand nachsehen), `external_change` (von außen wurde etwas am Container geändert). Festgehalten wird beim Start (ist danach
+  noch etwas offen, alle 30 s, höchstens 30 Minuten), bei `GET /system/updates/helper` und vor jeder neuen Anforderung; welche
+  schon eingetragen sind, steht in `<Datenordner>/updater_seen.json` (außerhalb der Datenbank, übersteht also das Zurückspielen
+  einer Kopie). Bei `applied`, `reverted`, `rolled_back`, `failed_manual` und `external_change` kommt zusätzlich eine Meldung
+  (`payload.path` = `/settings/system`).
 - Den Kern-Job `system-backup` steuert nur diese Karte: `PATCH`/`DELETE /jobs/{id}` auf ihn → `409`
   (sonst könnte ein Admin über `jobs.write` die automatischen Sicherungen still abschalten).
 
@@ -565,7 +644,7 @@ wird beim Start, **vor** der Migration. Der Zwischenstand liegt unter `<Datenord
 | `GET /system/restore/status` | `system.read` | `{pending, staged, result, replaced, limits, busy}`: Vormerkung, Zwischenstand (**nur der Owner**), Ergebnis des letzten Einspielens (ohne IP-Adressen), alter Stand (`replaced`: Name, Größe, `expires_at` = wann er von selbst gelöscht wird), Grenzen |
 | `PUT /system/restore/upload` | Owner [PW im Kopf] | Roher Strom (`Content-Type: application/octet-stream`, **kein** multipart; sonst `415`). Kopf `X-Confirm-Password`: Anmeldepasswort **prozentkodiert** (UTF-8, `encodeURIComponent`; Kopfzeilen kennen kein Unicode). Owner und Passwort werden geprüft, **bevor** der Body gelesen wird (`403` fehlt, `400` falsch, `429` zu oft). `Content-Length` über `restore_max_upload_bytes` (4 GiB, `NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES`) → `413` ohne Lesen, ebenso bei Überschreitung mitten im Strom; zu wenig Platz → `507` vor dem Lesen; läuft schon ein Upload/eine Prüfung → `409`; ist etwas vorgemerkt → `409`; keine Sicherung (Kopf) → `422`. `201` `{id, state: "uploaded", size, header: {mode, created_at, app_version}, expires_in}` |
 | `POST /system/restore/{id}/inspect` | Owner | `{password}` **oder** `{recovery_key}` (genau eines, sonst `422`). Entschlüsselt in den Staging-Ordner und prüft alles. `200` `{id, state: "ready", summary}`; `summary`: `created_at`, `app_version`, `instance_id`, `mode`, `owner_name`, `users`, `hosts`, `extensions[]`, `includes`, `warnings[]` (u. a. andere Installation, ältere/neuere Version, fehlende Erweiterungen, kein Konto in der Sicherung, übersprungene Git-Einstellungen). Falsches Geheimnis `400` (Upload bleibt, noch ein Versuch), zu wenig Platz `507` (bleibt), `409` bei laufender Arbeit; jeder andere Fehler (beschädigt, zu neu, Erweiterung fehlt, zu groß `413`, nicht einspielbar) `422` und der Zwischenstand ist gelöscht; unbekannte oder fremde `id` `404`. Entschlüsselt wird immer nur **eine** Sicherung zugleich (teilt die Sperre mit den Sicherungen) |
-| `POST /system/restore/{id}/schedule` | Owner [PW] | `{current_password, sign_out_all: true}` → `200` Vormerkung `{id, source, scheduled_at, expires_in, sign_out_all, backup}`; `restore/pending.json`. Vorher nicht geprüft oder schon etwas vorgemerkt → `409`. Gilt eine Stunde |
+| `POST /system/restore/{id}/schedule` | Owner [PW] [2FA] | `{current_password, sign_out_all: true, totp_code?}` → `200` Vormerkung `{id, source, scheduled_at, expires_in, sign_out_all, backup}`; `restore/pending.json`. Vorher nicht geprüft oder schon etwas vorgemerkt → `409`. Gilt eine Stunde |
 | `DELETE /system/restore/pending` | Owner | Verwirft Vormerkung **und** jeden Zwischenstand → `204` |
 | `DELETE /system/restore/replaced` | Owner [PW] | Body `{current_password}`; löscht den alten Stand (`restore/replaced-…`, enthält alte Konten und Schlüssel) → `204` |
 | `POST /system/restart` | Owner [PW] | Body `{current_password}`. Beendet den Prozess nach der Antwort mit dem Rückgabewert **75**; der Container startet ihn neu (Regel `restart: unless-stopped`; ohne Regel bleibt der Dienst aus). → `202` `{restarting, exit_code: 75}` |
@@ -624,7 +703,7 @@ Zustand in `<Datenordner>/.boot/`, Kopien in `<Datenordner>/backups/vor-update/`
 - **Downgrade-Erkennung:** Kennt das Image Revisionen der Datenbank nicht (sie ist neuer), kommt die Kopie nur automatisch zurück, wenn (1) die letzte
   Migration von Ständen ausging, die dieses Image kennt, und genau den jetzigen Stand erzeugt hat, (2) die Kopie existiert, heil ist und diese Stände
   hat und (3) die neue Version nie erfolgreich gestartet ist (`started_ok=false`). Oder eine ausdrückliche Vormerkung (`.boot/rollback.json`, 24 Stunden gültig,
-  von der Notseite) liegt vor: dann auch nach einem guten Start; die neueren Daten bleiben unter `restore/replaced-…` (30 Tage). Sonst: Notseite.
+  von der Notseite oder von `POST /system/updates/rollback`) liegt vor: dann auch nach einem guten Start; die neueren Daten bleiben unter `restore/replaced-…` (30 Tage). Sonst: Notseite.
 - **Fehler führen zur Notseite**, nie zu einer Neustart-Schleife: `boot` gibt 1 zurück, `deploy/entrypoint.sh` startet `python -m nodvard_deck.rescue`; fällt die aus, wartet
   der Container (`exec sleep`). Das gilt auch für einen unlesbaren Journal-Eintrag oder einen gescheiterten Rückweg einer Wiederherstellung (`rollback_failed`).
 
@@ -667,8 +746,11 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   Benachrichtigungskanälen zusätzlich `test()`); mit `{"mode": "message"}` sendet es stattdessen
   eine Testnachricht über den Kanal (`422`, wenn die Erweiterung keinen hat). Antwort
   `{ok, message, details?}`: `message` ist ein verständlicher deutscher Satz („Keine Antwort
-  von 192.168.1.20:8006 – Adresse und Port prüfen.“, „Zugangsdaten abgelehnt …“, „Zertifikat
-  wird nicht vertraut …“, „Adresse nicht gefunden …“), `details` bei mehreren Verbindungen
+  von 192.168.1.20:8006 – Adresse und Port prüfen.“, „Zugangsdaten abgelehnt …“ bei 401, „Zugriff verweigert – dem
+  Konto oder Token fehlt ein Recht auf dem Server …“ bei 403, „Zertifikat wird nicht vertraut …“, „Adresse nicht
+  gefunden …“). Aus Fehlern von httpcore, h11, idna und websockets in der Ursachenkette übernimmt der Test keinen
+  Text (sie können Teile fremder Antworten enthalten), feste Sätze der Erweiterung stehen ohne den Vorspann
+  „Technische Meldung“. `details` bei mehreren Verbindungen
   `[{name, ok, message}]`. Geheimnisse stehen nie im Text. Ein fehlgeschlagener Test ist
   `200` mit `ok: false`. `409`: Erweiterung ausgeschaltet, `404` unbekannt, `429` nach mehr als
   10 Tests pro Minute und Nutzer (mit `Retry-After`). Jeder Test steht im Protokoll
@@ -685,6 +767,9 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   Labels in `secrets_cleared` (sonst `[]`, bei `GET` immer `[]`), das Protokoll
   `extension.settings` zusätzlich zu `changed` in `detail.secrets_cleared` (nur wenn etwas
   gelöscht wurde).
+  Felder mit `x-widget: "schedule"` müssen ein gültiger Cron-Ausdruck sein (fünf Angaben, dieselbe Prüfung wie beim
+  Anmelden des Jobs); sonst `422` „„<Feldtitel>“: Der Zeitplan „…“ ist ungültig. Erlaubt sind fünf Angaben: …“, und
+  nichts wird gespeichert. Leer oder `null` bleibt erlaubt (dann gilt der Standard der Erweiterung).
 - `PUT /extensions/{id}/secrets` antwortet für ein gebundenes Geheimnis mit `409` („Erst die
   Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“),
   solange keines der Felder gespeichert einen Wert oder `default` hat.
@@ -807,12 +892,53 @@ Server, auf dem es laufen kann. `DELETE` ohne Freigabe: `404`. Erteilen, Zurück
 Protokoll (`scripts.standing_approval.granted`, `scripts.standing_approval.revoked`,
 `scripts.standing_approval.expired`).
 
+`PUT /ext/scripts/scripts/{id}` (Skript speichern) prüft einen Zeitplan vor dem Speichern: Ein ungültiger ergibt `422`
+„Der Zeitplan „…“ ist ungültig: …“, und nichts landet im Versionsverlauf. Ein ungültiger Zeitplan aus einer älteren
+Version legt die Erweiterung beim Start nicht mehr lahm: Das Skript läuft dann vorerst nicht nach Zeitplan, dazu kommt
+eine Meldung. Ebenso nutzt Nodvard Shield für einen ungültigen gespeicherten Zeitplan vorerst seinen Standard und meldet
+das.
+
 `GET /ext/scripts/scripts` und `GET`/`PUT /ext/scripts/scripts/{id}` liefern zusätzlich `fingerprint`, bei aktiven
 Skripten mit Zeitplan `standing_preview` (die Server, die eine Freigabe jetzt decken würde, je `id`, `name`, `account`,
 `address`, `port`) und `targets_fingerprint`, dazu `standing_approval`: `null` ohne Freigabe, sonst `active`, `problem`
 (warum sie nicht mehr gilt), `granted_by_label`, `granted_at`, `hosts` (wie bei `standing_preview`) und `new_hosts`
 (Namen neuer Zielserver, für die sie nicht gilt). Einträge von `GET /ext/scripts/scripts/{id}/runs` tragen
 zusätzlich `standing_approval` (lief ohne Klick) und `reason`.
+
+### Update-Vorschläge für viele Server und Härtungs-Audit (Erweiterung `shield`)
+
+```
+POST /ext/shield/defender/updates/propose-all   → 200 {mode, results[], counts}   Recht: soc.manage
+POST /ext/shield/defender/audits                → 200 {hosts, started, running, audits}   Recht: soc.manage
+```
+
+**`propose-all`.** Body: `{"mode": "security" | "all", "host_ids": ["…"]}`. `host_ids` ist optional; ohne Angabe gilt
+jeder Server der Update-Übersicht, bei dem für `mode` etwas offen ist (`security`: Sicherheitsupdates, `all`: Updates).
+Aufräumen und Neustart gibt es hier nicht (`422`); beides bleibt eine Entscheidung je Server
+(`POST /ext/shield/defender/hosts/{id}/upgrade`).
+
+Die Route legt nur Vorschläge an (Gate, Aktion „System-Updates einspielen“); freigegeben wird wie beim Einzelweg unter
+„Aktionen“, gesammelt, außer bei hohem Risiko (dist-upgrade). Steht die Automatik auf „Selbstständig handeln“, laufen
+freigegebene Aktionen von selbst an. Jeder Vorschlag entsteht genau wie der Einzelvorschlag (Plan aus dem gespeicherten
+Update-Stand, Befehl aus den Feldern, bei der Einstellung „Proxmox: Alle Updates als dist-upgrade“ Risiko `high`). Die
+Vorschläge entstehen nacheinander und ohne Warten auf freigegebene Aktionen; die Route öffnet keine SSH-Verbindung.
+
+`results[]`: je Server `host_id`, `name`, `result` (`proposed`, `skipped`, `failed`), bei `skipped`/`failed` `reason`
+(deutscher Satz; bei einem unerwarteten Fehler ein fester Satz, Einzelheiten im Protokoll des Dashboards), bei `proposed`
+`action_id`, `status` (`proposed`, bei automatischer Freigabe `executing`) und `risk`. `skipped`: nichts offen, nie geprüft,
+nicht unterstützt, Einspiel-Lauf aktiv oder für den Server liegt schon ein offener Update-Vorschlag vor. `failed`: Plan
+oder Gate sind gescheitert; die anderen Server sind davon unberührt. `counts`: `proposed`, `skipped`, `failed`, `total`.
+Läuft schon ein Sammel-Vorschlag, gibt die Route `409`. Im Protokoll steht ein Eintrag `shield.updates_proposed_all`
+(Modus, Zählung, vorgeschlagene Server). Offene Vorschläge findet die Route unter den letzten 200 Aktionen der Erweiterung.
+
+**`audits`.** Body `{"host_ids": [...]}` oder `{"host_ids": "all"}` (Standard: alle Server von Shield). Die Antwort kommt sofort:
+`started` (neu gestartet), `running` (lief schon, es startet kein zweites) und `audits` (je Server `requested_at`,
+`started_at`, `waiting` – es laufen schon drei Audits –, `already_running`). Lynis läuft auf dem Server vom SSH-Kanal
+entkoppelt, mit niedriger Priorität und höchstens 3 Stunden; das Ergebnis kommt später in `GET /ext/shield/defender/audits`,
+auch nach einem Neustart des Dashboards. `GET /ext/shield/defender/overview` nennt je Server ein laufendes Audit
+(`audit_run`).
+
+Die alten Adressen `/ext/nexus-soc/…` antworten gleich (veraltet, siehe §7).
 
 ### Dashboard und Widgets
 
@@ -947,11 +1073,18 @@ lassen eine vorhandene Datei dann wie oben unberührt).
 Scheitert ein Zugriff an der Quelle (Server aus, Zugang abgelehnt, Zeitüberschreitung), antworten `info`, `list`,
 `stat`, `download`, `upload`, `mkdir`, `rename` und `remove` mit `502` und dem Text
 `Zugriff auf die Quelle fehlgeschlagen: <Grund>`, fehlt die Datei, mit `404`. Bei Netzfehlern ist der Grund ein
-deutscher Satz („Server antwortet nicht (Zeitüberschreitung …)“); die Nextcloud-Quelle nennt ihren eigenen Text
-(bei einer Zeitüberschreitung „Nextcloud antwortet nicht (Zeitüberschreitung).“, sonst Methode, Pfad und die Meldung
-der Gegenstelle). Bei einem Dateifehler (`OSError` wie `PermissionError`, kein Netzfehler) steht nur der Name des
+deutscher Satz („Server antwortet nicht (Zeitüberschreitung …)“); die Nextcloud-Quelle nennt einen eigenen festen Satz je
+Fall, nie den Antworttext des Servers (etwa „Nextcloud antwortet nicht (Zeitüberschreitung).“, „Nextcloud findet … nicht
+(HTTP 404). …“, „In der Nextcloud ist kein Speicherplatz mehr frei (HTTP 507).“, „Nextcloud ist gerade nicht bereit (HTTP
+503), zum Beispiel im Wartungsmodus. …“). Eine Weiterleitung (3xx) ist bei ihr nie ein Erfolg: „Nextcloud leitet auf eine
+andere Adresse um (HTTP n). …“, ohne die Zieladresse. Bei einem Dateifehler (`OSError` wie `PermissionError`, kein Netzfehler) steht nur der Name des
 Fehlers da, nie ein Pfad; den vollen Text schreibt der Server nur ins Container-Protokoll. Ein gescheiterter
 `/files/transfer` trägt denselben Grund im Lauf (`error`).
+
+`download` holt den ersten Teil aus der Quelle, bevor die Antwort beginnt. Scheitert die Quelle dabei (Weiterleitung, Datei
+fehlt, Server nicht erreichbar), kommt ein HTTP-Fehler statt einer leeren oder abgebrochenen Datei: `404` mit
+„'<pfad>' nicht gefunden.“, sonst `502` wie oben. Eine leere Datei ist weiterhin `200` ohne Inhalt. Bei Quellen mit eigener
+Berechtigung steht ein gescheiterter Download im Protokoll als `files.download` mit Ergebnis `failure` und dem Status.
 
 Rechte: `sources`, `info`, `list`, `stat`, `download` und `search` brauchen `files.read`; `upload`, `mkdir`,
 `rename`, `remove` und `transfer` brauchen `files.write`. Eine Quelle kann zusätzlich eine eigene Berechtigung
@@ -1107,7 +1240,9 @@ mit `502` und `detail` „Konsole konnte nicht geöffnet werden: …“; derselb
 `console.open` mit Ergebnis `failure` (in `reason`). Das gilt auch, wenn der Hypervisor den
 WebSocket-Aufbau mit einer Weiterleitung (3xx) beantwortet: Nodvard Deck folgt ihr nicht, es entsteht
 keine zweite Verbindung, und der Grund nennt die Umleitung samt Statuscode
-(z. B. „… umgeleitet (HTTP 302) …“).
+(z. B. „… umgeleitet (HTTP 302) …“). Einen Proxy aus der Umgebung von Nodvard Deck (`HTTP_PROXY`,
+`HTTPS_PROXY`, `WSS_PROXY` usw.) benutzt die Konsole nie, ihre Verbindungen gehen immer direkt an die eingetragene
+Adresse des Hypervisors.
 
 Wie beim Terminal endet die Konsole, sobald Konto, Recht `hosts.execute`, Passwort oder
 Anmeldung nicht mehr gelten (Prüfung beim Aufbau und alle 15 s): Close-Code `4401`, sonst
@@ -1172,11 +1307,43 @@ ohne Token mit `401` (früher war es ohne Anmeldung erreichbar). Ohne Anmeldung 
 `hosts.execute` noch `actions.approve:<risiko>` für das Risiko einer Aktion hat, bekommt ihren `payload` gekürzt
 (`payload_hidden`, siehe §3). Ebenso bei der Größe: Einen Body über 1 MiB (siehe §1) beantwortet ein
 Endpunkt, der ihn liest, mit `413` (früher gab es keine allgemeine Grenze); Uploads haben eigene, höhere Grenzen.
+Ebenso verlangen `DELETE /me/totp` und `POST /me/recovery-codes` bei eingeschalteter Zwei-Faktor-Anmeldung zusätzlich
+`totp_code` (App-Code oder Wiederherstellungs-Code), `POST /system/backups/download`, `POST /system/backups/{name}/ticket`
+und `POST /system/restore/{id}/schedule` den App-Code. Im Vertrag ist das Feld optional (kein Schema-Bruch). Ältere
+Clients, z. B. eine ältere Android-App, bekommen `403` mit `code: "totp_missing"` und können diese Aktionen erst nach
+einem Update ausführen. Fehler beim Code tragen zusätzlich `code` (`totp_wrong`, `totp_used`), auch bei Update und Rückweg.
+Und bei Erweiterungen: `ctx.http` folgt keiner Weiterleitung mehr, auch nicht mit `follow_redirects=True`, und
+`ctx.audit.log()` schreibt keine Kern-Einträge (`mfa.*`, `auth.*`, `login.*`, `system.*`, `user.*`); beides in
+[02 §2](02-EXTENSION-API.md#2-der-extensioncontext).
 
 **Umbenennen** geht nur so: Der alte Name bleibt mehrere Releases parallel bestehen und ist
 als `deprecated` markiert (`deprecated=True` am Endpunkt bzw. Feld, dazu ein Hinweis im
 Änderungsprotokoll). Erst wenn App und Extensions den neuen Namen nutzen, darf der alte
 später entfallen. Wirklich unvermeidbare Brüche brauchen `/api/v2` (siehe §6).
+
+**Umbenannte Erweiterungen (`legacy_ids`).** Bekommt eine Erweiterung eine neue Kennung
+([02 §1](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)), gelten ihre alten Adressen weiter. Diese bleiben in allen
+1.x erhalten (als veraltet markiert) und fallen frühestens mit 2.0 weg. Es sind keine Weiterleitungen (kein `3xx`, kein
+eigener Kopf in der Antwort), sondern dieselben Routen unter einer zweiten Adresse:
+- `/api/v1/ext/<alt>/…`: dieselben Routen wie unter `/api/v1/ext/<neu>/…`, mit derselben Anmeldeprüfung und denselben
+  Antworten. Im OpenAPI-Schema sind sie `deprecated` und stehen hinter der neuen Adresse. Öffentliche Routen stehen mit
+  beiden Präfixen im Protokoll.
+- `/api/v1/extensions/<alt>/…` (Abruf, enable, disable, `frontend/index.js`, settings, secrets, test) meint dieselbe
+  Erweiterung und dieselbe gespeicherte Zeile. Antworten nennen in `id` die neue Kennung. Ausnahme: Liegt unter der alten
+  Kennung noch ein verwaister Stand (ein Zwilling, z. B. nach Neuinstallation, Rückweg und erneutem Update), antworten
+  ändernde Aufrufe darüber mit `409`. Lesen geht weiter.
+- Neue optionale Felder: `ExtensionOut.legacy_ids`, `PageOut.legacy_ext_ids`, `WidgetOut.legacy_ext_ids` (jeweils `[]`
+  ohne Umbenennung), `ActionOut.action_label` (Name der angemeldeten Aktionsart, sonst `null`) und `ActionOut.ext_name`
+  (Name der installierten Erweiterung, auch bei alter Kennung, sonst `null`).
+- `GET /extensions` listet jede Erweiterung einmal unter ihrer neuen Kennung; verwaiste Zwillinge fehlen.
+  `GET /jobs?ext_id=` filtert nach der Speicher-Kennung (bei Nodvard Shield auf bestehenden Installationen
+  `nexus-soc`), `GET /capabilities` nennt nur die neue Kennung.
+
+**Nodvard Shield** heißt seit 0.7 `shield` (früher `nexus-soc`). Veraltet sind damit `/api/v1/ext/nexus-soc/**` (alle
+Routen der Erweiterung, heute 34 Pfade, jeder auch unter `/api/v1/ext/shield/…`) und `/api/v1/extensions/nexus-soc/**`.
+Beide antworten wie die neuen. Neue Einträge im Protokoll heißen `shield.*`, ältere `nexus_soc.*` bleiben stehen; ein
+Filter `GET /audit?action=shield.…` findet die älteren nicht. Die Aktionsarten bleiben `nexus_soc.*`
+([01 „Alte und neue Namen“](01-ARCHITECTURE.md#alte-und-neue-namen)).
 
 **Automatischer Schutz:** `backend/tests/contract/api_v1.json` ist ein eingecheckter
 Schnappschuss des Vertrags (je Pfad und Methode: Parameter, Body-Felder mit Pflicht-Kennzeichen

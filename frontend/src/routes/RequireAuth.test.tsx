@@ -57,18 +57,18 @@ afterEach(() => {
 describe("RequireAuth -> Anmeldung -> zurück zur Ziel-Adresse", () => {
   it("ntfy-Link mit ?tab=&host=: nach dem Login derselbe Reiter", async () => {
     stubServer({ mfa: false });
-    renderApp("/ext/nexus-soc/soc?tab=guard&host=h-pi#oben");
+    renderApp("/ext/shield/soc?tab=guard&host=h-pi#oben");
     signIn();
-    expect((await screen.findByTestId("where")).textContent).toBe("/ext/nexus-soc/soc?tab=guard&host=h-pi#oben");
+    expect((await screen.findByTestId("where")).textContent).toBe("/ext/shield/soc?tab=guard&host=h-pi#oben");
   });
 
   it("auch mit zweitem Faktor", async () => {
     stubServer({ mfa: true });
-    renderApp("/ext/nexus-soc/soc?tab=quarantine");
+    renderApp("/ext/shield/soc?tab=quarantine");
     signIn();
     fireEvent.change(await screen.findByLabelText("Sechsstelliger Code"), { target: { value: "123 456" } });
     fireEvent.click(screen.getByRole("button", { name: "Bestätigen" }));
-    expect((await screen.findByTestId("where")).textContent).toBe("/ext/nexus-soc/soc?tab=quarantine");
+    expect((await screen.findByTestId("where")).textContent).toBe("/ext/shield/soc?tab=quarantine");
   });
 
   it("direkt /login aufgerufen: danach die Startseite", async () => {
@@ -93,10 +93,10 @@ describe("RequireAuth -- Rückkehradresse aus der Adresszeile", () => {
   afterEach(() => window.history.replaceState(null, "", "/"));
 
   it("nach Sitzungsablauf: Reiter und Filter aus der Adresszeile bleiben erhalten", async () => {
-    window.history.replaceState(null, "", "/ext/nexus-soc/soc?tab=updates#oben");
+    window.history.replaceState(null, "", "/ext/shield/soc?tab=updates#oben");
     useAuthStore.setState({ accessToken: "tok", user: USER, status: "authenticated", mfaToken: null });
     render(
-      <MemoryRouter initialEntries={["/ext/nexus-soc/soc"]}>
+      <MemoryRouter initialEntries={["/ext/shield/soc"]}>
         <Routes>
           <Route path="/login" element={<FromProbe />} />
           <Route element={<RequireAuth />}>
@@ -109,7 +109,7 @@ describe("RequireAuth -- Rückkehradresse aus der Adresszeile", () => {
 
     act(() => useAuthStore.setState({ accessToken: null, user: null, status: "anonymous" }));
 
-    expect(screen.getByTestId("from").textContent).toBe("/ext/nexus-soc/soc?tab=updates#oben");
+    expect(screen.getByTestId("from").textContent).toBe("/ext/shield/soc?tab=updates#oben");
   });
 });
 
@@ -153,7 +153,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
 
   it("503: kein Login, Hinweis, nach 5 s neuer Versuch -> Seite erscheint", async () => {
     stubRefresh(() => new Response("Service Unavailable", { status: 503 }));
-    renderApp("/ext/nexus-soc/soc?tab=guard");
+    renderApp("/ext/shield/soc?tab=guard");
     await tick(0);
 
     expect(refreshCalls).toBe(1);
@@ -169,7 +169,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
     expect(refreshCalls).toBe(2);
 
     // Dieselbe Adresse wie angefordert, kein Umweg ueber den Login.
-    expect(screen.getByTestId("where").textContent).toBe("/ext/nexus-soc/soc?tab=guard");
+    expect(screen.getByTestId("where").textContent).toBe("/ext/shield/soc?tab=guard");
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
     expect(useAuthStore.getState().status).toBe("authenticated");
   });
@@ -177,7 +177,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
   it("507 mit Grund (Platte voll): der Text des Servers, kein Login, es wird weiter versucht", async () => {
     const detail = "Der Speicherplatz auf dem Server ist voll. Bitte Platz schaffen.";
     stubRefresh(() => new Response(JSON.stringify({ detail }), { status: 507 }));
-    renderApp("/ext/nexus-soc/soc?tab=guard");
+    renderApp("/ext/shield/soc?tab=guard");
     await tick(0);
 
     expect(refreshCalls).toBe(1);
@@ -191,7 +191,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
     serverUp = true;
     await tick(5_000);
     expect(refreshCalls).toBe(2);
-    expect(screen.getByTestId("where").textContent).toBe("/ext/nexus-soc/soc?tab=guard");
+    expect(screen.getByTestId("where").textContent).toBe("/ext/shield/soc?tab=guard");
   });
 
   it("502 mit Fehlerseite vom Proxy: weiter der feste Text „Server nicht erreichbar“", async () => {
@@ -272,7 +272,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
       if (url === "/api/v1/auth/login") return new Response(JSON.stringify({ access_token: "tok", expires_in: 900, user: USER }), { status: 200 });
       throw new Error(`Unerwarteter Fetch: ${url}`);
     }));
-    renderApp("/ext/nexus-soc/soc?tab=guard");
+    renderApp("/ext/shield/soc?tab=guard");
     await tick(0);
     expect(screen.getByRole("link", { name: "Zur Anmeldung" })).toBeInTheDocument();
 
@@ -285,7 +285,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
 
     signIn();
     await tick(0);
-    expect(screen.getByTestId("where").textContent).toBe("/ext/nexus-soc/soc?tab=guard");
+    expect(screen.getByTestId("where").textContent).toBe("/ext/shield/soc?tab=guard");
   });
 
   it("Server erreichbar, Cookie abgelehnt (401): Weiterleitung zum Login", async () => {
@@ -294,7 +294,7 @@ describe("RequireAuth -- Server beim ersten Laden nicht erreichbar", () => {
       if (String(input) === "/api/v1/auth/bootstrap") return new Response(JSON.stringify({ needed: false }), { status: 200 });
       return new Response(JSON.stringify({ detail: "Ungültig." }), { status: 401 });
     }));
-    renderApp("/ext/nexus-soc/soc");
+    renderApp("/ext/shield/soc");
     await tick(0);
 
     expect(screen.getByLabelText("Benutzername")).toBeInTheDocument();

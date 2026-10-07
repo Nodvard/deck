@@ -36,7 +36,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { FolderPickerDialog, type FolderChoice } from "../components/FolderPickerDialog";
-import { api, ApiError } from "../lib/api";
+import { api, ApiError, apiErrorFromBody, apiErrorFromResponse, apiFetchResponse, refreshAfterUnauthorized } from "../lib/api";
 import { useWsSubscription } from "../lib/ws";
 import { useAuthStore } from "../state/auth";
 import { confirmDialog, promptDialog } from "../state/dialogs";
@@ -98,13 +98,19 @@ function formatSize(size: number | null): string {
 }
 
 /**
- * `fetch()` kann Upload-
+ * Ein Versuch, die Datei hochzuladen. `fetch()` kann Upload-
  * Fortschritt fuer den Request-Body nicht melden (kein `onprogress` fuer den
  * Request, nur `ReadableStream`-Tricks mit duenner Browser-Unterstuetzung) --
  * `XMLHttpRequest.upload.onprogress` ist dafuer der etablierte Weg, deshalb hier
- * bewusst XHR statt `fetch()`, nur fuer diesen einen Aufruf.
+ * bewusst XHR statt `fetch()`, nur fuer diesen einen Aufruf. Das Token wird bei jedem
+ * Versuch frisch aus dem Store gelesen.
  */
-function uploadWithProgress(sourceId: string, dirPath: string, file: File, onProgress: (percent: number) => void): Promise<void> {
+function sendUpload(
+  sourceId: string,
+  dirPath: string,
+  file: File,
+  onProgress: (percent: number) => void,
+): Promise<{ status: number; text: string }> {
   return new Promise((resolve, reject) => {
     const token = useAuthStore.getState().accessToken;
     const xhr = new XMLHttpRequest();
@@ -114,13 +120,25 @@ function uploadWithProgress(sourceId: string, dirPath: string, file: File, onPro
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
     };
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve();
-      else reject(new Error(`HTTP ${xhr.status}`));
-    };
+    xhr.onload = () => resolve({ status: xhr.status, text: xhr.status >= 200 && xhr.status < 300 ? "" : xhr.responseText });
     xhr.onerror = () => reject(new Error("Netzwerkfehler beim Hochladen."));
     xhr.send(file);
   });
+}
+
+/**
+ * Hochladen mit Fortschritt. Kommt ein 401 zurueck (Anmeldung abgelaufen, z. B. nach einer
+ * langen Pause), wird wie bei `apiFetch` einmal still erneuert und der Upload EINMAL
+ * wiederholt -- der Fortschritt beginnt dann bei 0. Bei anderen Fehlern gibt es keinen
+ * zweiten Versuch.
+ */
+async function uploadWithProgress(sourceId: string, dirPath: string, file: File, onProgress: (percent: number) => void): Promise<void> {
+  let res = await sendUpload(sourceId, dirPath, file, onProgress);
+  if (res.status === 401 && (await refreshAfterUnauthorized())) {
+    onProgress(0);
+    res = await sendUpload(sourceId, dirPath, file, onProgress);
+  }
+  if (res.status < 200 || res.status >= 300) throw apiErrorFromBody(res.status, res.text);
 }
 
 export function FilesPage(): JSX.Element {
@@ -228,12 +246,9 @@ export function FilesPage(): JSX.Element {
     if (!sourceId) return;
     setBusy(true);
     try {
-      const token = useAuthStore.getState().accessToken;
-      const res = await fetch(
-        `/api/v1/files/${encodeURIComponent(sourceId)}/download?path=${encodeURIComponent(entry.path)}`,
-        { headers: token ? { Authorization: `Bearer ${token}` } : {} },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Wie `api.get`: bei 401 einmal still erneuern und wiederholen, Fehlertext aus der Antwort.
+      const res = await apiFetchResponse(`/files/${encodeURIComponent(sourceId)}/download?path=${encodeURIComponent(entry.path)}`);
+      if (!res.ok) throw await apiErrorFromResponse(res);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

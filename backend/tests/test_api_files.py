@@ -151,6 +151,149 @@ async def test_download_honors_range_header_when_source_supports_it(client, db_s
     assert res.headers["content-range"] == "bytes 6-9/10"
 
 
+class _ReadableSourceError(Exception):
+    """Wie `WebDavError`/`SshError`: der Text ist schon ein fertiger deutscher Satz."""
+
+    readable = True
+
+
+class _StreamSource(_FakeFileSource):
+    """Quelle mit frei waehlbarem Lesestrom: `chunks` werden geliefert, oder `error` kommt gleich beim ersten
+    Abruf (bevor etwas geliefert wird). `closed` zeigt, ob der Strom am Ende geschlossen wurde."""
+
+    def __init__(self, source_id: str = "fake", *, chunks=(), error: BaseException | None = None) -> None:
+        super().__init__(source_id)
+        self.files["/leer.txt"] = b""
+        self.chunks = list(chunks)
+        self.error = error
+        self.closed = False
+
+    async def open_read(self, path: PurePosixPath, *, offset: int = 0):
+        try:
+            if self.error is not None:
+                raise self.error
+            for chunk in self.chunks:
+                yield chunk
+        finally:
+            self.closed = True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_text"),
+    [
+        (ConnectionError("Server nicht erreichbar"), 502, "Zugriff auf die Quelle fehlgeschlagen"),
+        (_ReadableSourceError("Die Quelle hat umgeleitet (HTTP 302)."), 502, "Die Quelle hat umgeleitet (HTTP 302)."),
+        (FileNotFoundError("weg"), 404, "'/notes.txt' nicht gefunden."),
+    ],
+)
+@pytest.mark.parametrize("range_header", [None, "bytes=2-"])
+async def test_download_reports_a_failure_at_the_start_as_an_error(
+    client, db_session, error, expected_status, expected_text, range_header
+):
+    """Starlette schickt den Antwortkopf (200/206) schon beim Start des Stroms. Scheitert die Quelle gleich beim
+    ersten Teil (Nextcloud antwortet mit einer Weiterleitung oder 404), kam beim Browser ein 200 mit leerem oder
+    abgebrochenem Koerper an. Jetzt kommt der Fehler der Quelle als HTTP-Fehler, auch bei einer Bereichsanfrage."""
+    source = _StreamSource(error=error)
+    _register(source)
+    headers = _auth_header(await _bootstrap_owner(client))
+    if range_header:
+        headers["Range"] = range_header
+
+    res = await client.get("/api/v1/files/fake/download?path=/notes.txt", headers=headers)
+
+    assert res.status_code == expected_status, res.text
+    assert expected_text in res.json()["detail"]
+    assert source.closed is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("chunks", "expected"),
+    [
+        ([b"hallo ", b"welt"], b"hallo welt"),
+        ([b"", b"hallo welt"], b"hallo welt"),  # ein leerer erster Teil ist keine leere Datei
+        ([b"hallo welt"], b"hallo welt"),
+        ([], b""),  # leere Datei: 200 ohne Inhalt
+    ],
+)
+async def test_download_streams_every_chunk_and_closes_the_source(client, db_session, chunks, expected):
+    source = _StreamSource(chunks=chunks)
+    _register(source)
+    headers = _auth_header(await _bootstrap_owner(client))
+    path = "/leer.txt" if not chunks else "/notes.txt"
+
+    res = await client.get(f"/api/v1/files/fake/download?path={path}", headers=headers)
+
+    assert res.status_code == 200, res.text
+    assert res.content == expected
+    assert res.headers["accept-ranges"] == "bytes"
+    assert source.closed is True
+
+
+@pytest.mark.asyncio
+async def test_download_closes_the_source_even_if_the_body_is_never_read():
+    """Der erste Teil ist beim Aufbau der Antwort schon geholt; wird der Koerper nie gelesen (Browser weg, bevor
+    der Strom beginnt), schliesst die Nacharbeit der Antwort den Strom, statt ihn bis zur Muellabfuhr offen zu lassen."""
+    import types
+
+    from nodvard_deck.api.v1.files import download_file
+
+    source = _StreamSource(chunks=[b"hallo ", b"welt"])
+    _register(source)
+
+    response = await download_file(
+        "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1"), None
+    )
+
+    assert source.closed is False  # der Strom steht nach dem ersten Teil
+    await response.background()
+    assert source.closed is True
+
+
+@pytest.mark.asyncio
+async def test_download_closes_the_source_if_the_audit_entry_fails(monkeypatch):
+    """Scheitert der Protokoll-Eintrag nach dem ersten Teil, gibt es keine Antwort und damit keine Nacharbeit, die den
+    Strom schliesst. Der Endpunkt schliesst ihn dann selbst."""
+    import types
+
+    from nodvard_deck.api.v1 import files as files_api
+
+    async def broken_audit(*_args, **_kwargs):
+        raise RuntimeError("Protokoll nicht beschreibbar")
+
+    monkeypatch.setattr(files_api, "_audit", broken_audit)
+    source = _StreamSource(chunks=[b"hallo ", b"welt"])
+    _register(source)
+
+    with pytest.raises(RuntimeError, match="Protokoll nicht beschreibbar"):
+        await files_api.download_file(
+            "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1"), None
+        )
+
+    assert source.closed is True
+
+
+@pytest.mark.asyncio
+async def test_download_closes_the_source_if_the_body_is_abandoned_midway():
+    """Bricht die Antwort mitten im Strom ab (der Generator wird geschlossen), wird auch der Strom der Quelle geschlossen."""
+    import types
+
+    from nodvard_deck.api.v1.files import download_file
+
+    source = _StreamSource(chunks=[b"hallo ", b"welt"])
+    _register(source)
+    response = await download_file(
+        "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1"), None
+    )
+
+    body = response.body_iterator
+    assert await anext(body) == b"hallo "
+    await body.aclose()
+
+    assert source.closed is True
+
+
 @pytest.mark.asyncio
 async def test_unknown_source_returns_404(client, db_session):
     _register(_FakeFileSource("fake"))

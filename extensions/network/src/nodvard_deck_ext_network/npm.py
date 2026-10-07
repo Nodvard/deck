@@ -30,7 +30,7 @@ from .transport import (
     as_int,
     error_message,
     json_body,
-    redirect_message,
+    raise_if_redirect,
     send,
 )
 
@@ -216,9 +216,7 @@ class NpmClient:
             raise NpmAuthError("Für den Nginx Proxy Manager fehlt noch das Passwort (Einstellungen → Erweiterungen → Netzwerk).")
         response = await self._send("POST", "/api/tokens", json={"identity": self._identity, "secret": password})
         body = json_body(response)
-        redirect = redirect_message(response, SERVICE)
-        if redirect:
-            raise NpmError(redirect)
+        raise_if_redirect(response, SERVICE, NpmError)
         if response.status_code == 404 or (response.status_code < 400 and not isinstance(body, dict)):
             raise NpmError(
                 "Unter dieser Adresse antwortet keine Nginx-Proxy-Manager-Schnittstelle. Gemeint ist die "
@@ -264,6 +262,7 @@ class NpmClient:
                 async with self._lock:
                     self._token = None
                 raise NpmAuthError("Nginx Proxy Manager lehnt die Anmeldung ab – bitte Zugangsdaten prüfen.")
+        raise_if_redirect(response, SERVICE, NpmError)
         return response
 
     async def _api_json(self, method: str, path: str) -> Any:

@@ -10,6 +10,7 @@
 #   ./pi_switch.sh rollback             # zurueck auf den alten Stand, pruefen
 #   ./pi_switch.sh precheck             # Stand VOR dem Umschalten: laeuft ein Dashboard, ist es eingerichtet?
 #   ./pi_switch.sh bootstrap [versuche] # needed=false|needed=true|http=<code>|noanswer (GET /api/v1/auth/bootstrap)
+#   ./pi_switch.sh loaded [sekunden]    # none|invalid|list=<kennungen>: welche Erweiterungen hat das laufende Dashboard geladen?
 #   ./pi_switch.sh detached <unterbefehl> ...   # wie der Unterbefehl, aber von der ssh-Leitung abgekoppelt
 #
 # Exit 3 = es wurde nichts veraendert (Docker nicht erreichbar, Image fehlt, Compose-Datei
@@ -257,6 +258,66 @@ cmd_bootstrap() {
   say "noanswer"
 }
 
+# Welche Erweiterungen hat das laufende Dashboard geladen? Jeder Start und jedes Ein- oder Ausschalten danach schreibt
+# eine Zeile
+#   Erweiterungen geladen: <Speicher-Kennungen, sortiert, durch Komma getrennt>      oder      ... (keine)
+# ins Protokoll (backend/src/nodvard_deck/services/extensions.py, `_announce_loaded`; ein Test haelt den Text
+# gleich), die letzte sagt, was gerade laeuft. scripts/deploy_pi.sh vergleicht die Zeile des alten mit der des neuen Containers: Eine Erweiterung,
+# die vorher geladen war und nachher fehlt, gilt als Fehler -- auch wenn nichts sonst meldet, dass sie nicht
+# laeuft (z. B. die Zeile der Erweiterung bleibt "eingeschaltet", der Dienst findet sie aber nicht mehr).
+LOADED_MARKER='Erweiterungen geladen: '
+
+# Liest ein Protokoll von stdin, nimmt die LETZTE Zeile mit dem Text (ein Neustart oder ein Ein-/Ausschalten schreibt
+# eine neue) und gibt aus:
+#   none            keine solche Zeile
+#   invalid         die Zeile ist nicht lesbar (keine gueltige Liste hinter dem Text)
+#   list=<a,b,c>    die Kennungen; `list=` ohne etwas dahinter: es war keine Erweiterung geladen ("(keine)")
+# Vor der Zeile darf alles stehen (Zeitstempel, Ebene, Farbcodes). Dahinter muss genau die Liste folgen: Kennungen
+# (a-z, 0-9, Bindestrich; Anfang a-z), durch Kommas getrennt, danach Ende der Zeile, Leerraum oder ein Anfuehrungs-/
+# Klammerzeichen (falls einmal als JSON geschrieben). Alles andere ist `invalid`, nie eine verkuerzte Liste. Nichts davon
+# wird je als Befehl oder Muster ausgewertet, es wird nur verglichen.
+loaded_from_log() {
+  local LC_ALL=C line rest esc re_none re_list
+  line="$(grep -a -F -- "$LOADED_MARKER" | tail -n 1)" || true
+  if [ -z "$line" ]; then say none; return 0; fi
+  esc="$(printf '\033')"
+  line="$(printf '%s' "$line" | sed -e "s/${esc}\\[[0-9;]*[A-Za-z]//g")" || true
+  rest="${line##*"$LOADED_MARKER"}"
+  re_none='^\(keine\)([]}"[:space:]]|$)'
+  re_list='^([a-z][a-z0-9-]*(,[a-z][a-z0-9-]*)*)([]}"[:space:]]|$)'
+  if [[ "$rest" =~ $re_none ]]; then
+    say "list="
+  elif [[ "$rest" =~ $re_list ]]; then
+    say "list=${BASH_REMATCH[1]}"
+  else
+    say invalid
+  fi
+}
+
+# `loaded [sekunden]`: Antwort fuer das gerade laufende Dashboard (neuer Name vor altem, wie bei `precheck`), ohne
+# etwas zu veraendern. Laeuft keins, oder steht noch keine Zeile im Protokoll, wird bis zu `sekunden` gewartet
+# (Standard 0 = ein Versuch; die Zeile steht vor dem ersten Health-Ok im Protokoll, das Warten faengt nur die
+# Verzoegerung des Docker-Protokolls ab), danach `none`. Das ganze Protokoll wird gelesen (Docker begrenzt es auf
+# 3 x 10 MB): der Start liegt oft weit zurueck, und jede Anfrage steht auch darin.
+cmd_loaded() {
+  need_docker
+  local secs="${1:-0}" name="" candidate answer deadline
+  case "$secs" in ''|*[!0-9]*) echo "Nutzung: $0 loaded [sekunden]" >&2; exit 2 ;; esac
+  for candidate in "$CONTAINER" "$OLD_CONTAINER"; do
+    if container_running "$candidate"; then name="$candidate"; break; fi
+  done
+  if [ -z "$name" ]; then say none; return 0; fi
+  deadline=$((SECONDS + secs))
+  while :; do
+    answer="$(docker logs "$name" 2>&1 | loaded_from_log || true)"
+    [ "$answer" = none ] || break
+    [ "$SECONDS" -lt "$deadline" ] || break
+    container_running "$name" || break
+    sleep "${LOADED_POLL_SLEEP_S:-2}"
+  done
+  say "${answer:-none}"
+}
+
 # Wie der Unterbefehl, aber von der ssh-Leitung abgekoppelt: eigene Sitzung (setsid), Ein-/Ausgabe
 # in Dateien. Reisst die Verbindung ab, laeuft der Schaltschritt auf dem Pi zu Ende (Ergebnis in
 # pi_switch.out/.err/.log). Bleibt die Verbindung, wird die Ausgabe am Ende ausgegeben.
@@ -278,9 +339,10 @@ case "${1:-}" in
   detached) shift; cmd_detached "$@" ;;
   precheck) cmd_precheck ;;
   bootstrap) shift; cmd_bootstrap "$@" ;;
+  loaded) shift; cmd_loaded "$@" ;;
   switch) shift; cmd_switch "$@" ;;
   verify) need_docker; verify ;;
   cleanup) cmd_cleanup ;;
   rollback) cmd_rollback ;;
-  *) echo "Nutzung: $0 switch <image-tag> | verify | cleanup | rollback" >&2; exit 2 ;;
+  *) echo "Nutzung: $0 switch <image-tag> | verify | cleanup | rollback | precheck | bootstrap | loaded" >&2; exit 2 ;;
 esac

@@ -10,6 +10,9 @@ vi.mock("../lib/ws", () => ({ useWsSubscription: () => undefined }));
 
 const LONG_BODY = Array.from({ length: 8 }, (_, i) => `Zeile ${i + 1} des Lageberichts`).join("\n");
 
+/** Antwort auf `GET /extensions`. */
+let extensions: { id: string; name: string; state: string; legacy_ids?: string[] }[];
+
 let rows: { id: string; ts: string; severity: string; title: string; body: string; source_ext_id: string | null; correlation_id: null; read_at: string | null; payload?: Record<string, unknown> }[];
 
 function mockFetch(calls: { url: string; method: string; body?: unknown }[]) {
@@ -31,10 +34,7 @@ function mockFetch(calls: { url: string; method: string; body?: unknown }[]) {
       return new Response(JSON.stringify({ marked: 2 }));
     }
     if (url.endsWith("/api/v1/extensions") && method === "GET") {
-      return new Response(JSON.stringify([
-        { id: "nexus-soc", name: "Nodvard Shield", state: "enabled" },
-        { id: "proxmox", name: "Proxmox VE", state: "enabled" },
-      ]));
+      return new Response(JSON.stringify(extensions));
     }
     throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
   });
@@ -52,8 +52,12 @@ function renderPage() {
 }
 
 beforeEach(() => {
+  extensions = [
+    { id: "shield", name: "Nodvard Shield", state: "enabled" },
+    { id: "proxmox", name: "Proxmox VE", state: "enabled" },
+  ];
   rows = [
-    { id: "n1", ts: "2026-09-24T11:00:00Z", severity: "warning", title: "Lagebericht der Container-Wache (2 Ereignisse)", body: LONG_BODY, source_ext_id: "nexus-soc", correlation_id: null, read_at: null },
+    { id: "n1", ts: "2026-09-24T11:00:00Z", severity: "warning", title: "Lagebericht der Container-Wache (2 Ereignisse)", body: LONG_BODY, source_ext_id: "shield", correlation_id: null, read_at: null },
     { id: "n2", ts: "2026-09-24T10:00:00Z", severity: "critical", title: "Speicher fast voll", body: "local-lvm 95 %", source_ext_id: "proxmox", correlation_id: null, read_at: null },
     { id: "n3", ts: "2026-09-23T10:00:00Z", severity: "info", title: "Alt und gelesen", body: "", source_ext_id: null, correlation_id: null, read_at: "2026-09-23T11:00:00Z" },
   ];
@@ -86,19 +90,43 @@ describe("NotificationsPage", () => {
     expect(within(screen.getByTestId("notification-n2")).getByText("Kritisch")).toBeInTheDocument();
     // Die Quelle steht mit dem Namen der Erweiterung da, nicht mit ihrer Kennung.
     await waitFor(() => expect(first.textContent).toContain("Nodvard Shield"));
-    expect(first.textContent).not.toContain("nexus-soc");
+    expect(first.textContent).not.toContain("shield");
     expect(within(screen.getByTestId("notification-n2")).getByText(/Proxmox VE/)).toBeInTheDocument();
     expect(first.querySelector("p")?.className).toContain("line-clamp-4");
     fireEvent.click(within(first).getByRole("button", { name: "Mehr anzeigen" }));
     expect(first.querySelector("p")?.className).not.toContain("line-clamp-4");
   });
 
+  it("Meldungen mit der alten Kennung einer umbenannten Erweiterung zeigen trotzdem deren Namen", async () => {
+    rows[0].source_ext_id = "nexus-soc";
+    extensions = [
+      { id: "shield", name: "Nodvard Shield", state: "enabled", legacy_ids: ["nexus-soc"] },
+      { id: "proxmox", name: "Proxmox VE", state: "enabled" },
+    ];
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    const first = await screen.findByTestId("notification-n1");
+    await waitFor(() => expect(first.textContent).toContain("Nodvard Shield"));
+    expect(first.textContent).not.toContain("nexus-soc");
+  });
+
+  it("ohne `legacy_ids` bleibt es bei der Kennung, wenn es zu ihr keine Erweiterung gibt", async () => {
+    rows[0].source_ext_id = "nexus-soc";
+    extensions = [{ id: "shield", name: "Nodvard Shield", state: "enabled" }, { id: "proxmox", name: "Proxmox VE", state: "enabled" }];
+    vi.stubGlobal("fetch", mockFetch([]));
+    renderPage();
+    const first = await screen.findByTestId("notification-n1");
+    await waitFor(() => expect(within(screen.getByTestId("notification-n2")).getByText(/Proxmox VE/)).toBeInTheDocument());
+    expect(first.textContent).toContain("nexus-soc");
+    expect(first.textContent).not.toContain("Nodvard Shield");
+  });
+
   it("Meldungen mit Zielseite haben einen Öffnen-Link", async () => {
-    rows[1].payload = { path: "/ext/nexus-soc/soc?tab=guard" };
+    rows[1].payload = { path: "/ext/shield/soc?tab=guard" };
     vi.stubGlobal("fetch", mockFetch([]));
     renderPage();
     const link = within(await screen.findByTestId("notification-n2")).getByRole("link", { name: "Öffnen →" });
-    expect(link.getAttribute("href")).toBe("/ext/nexus-soc/soc?tab=guard");
+    expect(link.getAttribute("href")).toBe("/ext/shield/soc?tab=guard");
     expect(within(screen.getByTestId("notification-n1")).queryByRole("link")).toBeNull();
   });
 

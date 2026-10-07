@@ -3,7 +3,8 @@
 Geprueft wird der echte Client (`nodvard_deck_updater.engine`): Aushandlung der API-Version (1.41 bis 1.54, Podman,
 fehlender Kopf), die Allowlist (Endpunkte, Pfadteile, Abfragen, Bodies), Antworten (304, 404, 409, 500, Fehler im
 200-Strom, kaputtes JSON, falscher Inhaltstyp, doppelte Schluessel, zu gross, abgebrochen) und Transportfehler
-(Socket fehlt, keiner hoert zu, keine Rechte, Zeitlimit).
+(Socket fehlt, keiner hoert zu, keine Rechte, Zeitlimit). Aendernde Aufrufe laufen hier mit einer passenden Bindung
+(`binding_support.bound`); die Regeln der Bindung selbst prueft `test_engine_binding.py`.
 """
 
 from __future__ import annotations
@@ -14,15 +15,26 @@ import socket
 import tempfile
 
 import pytest
+from binding_support import (
+    DIGEST,
+    NAME,
+    NEW,
+    NEW_IMAGE,
+    OLD,
+    OLD_IMAGE,
+    OWN,
+    TAG_TEXT,
+    bound,
+    journal_at,
+)
 from fake_engine import FakeEngine, Response, World
 from nodvard_deck_updater import engine as E
 from nodvard_deck_updater import policy
 from nodvard_deck_updater.policy import Refusal
 
-CID = "a" * 64
+CID = OLD
 NID = "b" * 64
-IMAGE_ID = "sha256:" + "c" * 64
-DIGEST = "sha256:" + "d" * 64
+IMAGE_ID = OLD_IMAGE
 
 
 @pytest.fixture
@@ -37,6 +49,14 @@ def client(fake):
     engine = E.Engine(fake.path)
     engine.negotiate()
     return engine
+
+
+def resolve_and_bind(fake, client):
+    """Wie der Ablauf vor dem Pull: das bewegliche Tag aufloesen (die Fake-Engine merkt sich den Digest), dann an
+    genau diesen Digest binden."""
+    fake.route("GET", r"/distribution/.+/json", Response(body={"Descriptor": {"digest": DIGEST}}))
+    client.distribution("latest")
+    return bound(fake, client, journal_at("begin"), pull_digest=DIGEST)
 
 
 # ---------------------------------------------------------------------------
@@ -114,10 +134,13 @@ def test_version_without_min_api_version_is_accepted():
 
 def test_nothing_goes_out_before_the_first_negotiation(fake):
     engine = E.Engine(fake.path)
+    # Die Bindung selbst braucht keine Engine; sie wird je Aufruf frisch angelegt (nur die letzte gilt).
     for call in (lambda: engine.list_containers(), lambda: engine.inspect_container(CID),
-                 lambda: engine.start_container(CID), lambda: engine.stop_container(CID, 10),
-                 lambda: engine.create_container("deck", {"Image": policy.REPOSITORY, "HostConfig": {}}),
-                 lambda: engine.pull(DIGEST)):
+                 lambda: engine.start_container(CID, binding=engine.bind(journal_at("started"), OWN, undo=True)),
+                 lambda: engine.stop_container(CID, 10, binding=engine.bind(journal_at("old_stopped"), OWN)),
+                 lambda: engine.create_container(NAME, {"Image": TAG_TEXT, "HostConfig": {}},
+                                                 binding=engine.bind(journal_at("creating"), OWN)),
+                 lambda: engine.pull(DIGEST, binding=engine.bind(journal_at("begin"), OWN, pull_digest=DIGEST))):
         with pytest.raises(E.EngineError) as exc:
             call()
         assert exc.value.reason == "not_negotiated" and not isinstance(exc.value, E.NotAllowed)
@@ -345,7 +368,7 @@ def test_not_found_and_conflict(fake, client):
     fake.route("POST", r"/containers/[0-9a-f]{64}/rename",
                Response(status=409, body={"message": "Conflict. The name \x1b[31m\"/x\"\x1b[0m is already in use"}))
     with pytest.raises(E.EngineError) as exc:
-        client.rename_container(CID, "x-previous")
+        client.rename_container(CID, NAME + "-previous", binding=bound(fake, client, journal_at("renamed")))
     assert exc.value.status == 409 and not exc.value.not_found
     assert "\x1b" not in exc.value.message and "\\x1b" in exc.value.message  # ANSI escaped, nur fuers Log
 
@@ -368,14 +391,20 @@ def test_error_without_json_body(fake, client):
 
 
 def test_start_and_stop_report_304_as_already_done(fake, client):
+    def start() -> bool:
+        return client.start_container(NEW, binding=bound(fake, client, journal_at("started")))
+
+    def stop() -> bool:
+        return client.stop_container(CID, 10, binding=bound(fake, client, journal_at("old_stopped")))
+
     fake.route("POST", r"/containers/[0-9a-f]{64}/start", Response(status=304))
     fake.route("POST", r"/containers/[0-9a-f]{64}/stop", Response(status=204))
-    assert client.start_container(CID) is False
-    assert client.stop_container(CID, 10) is True
+    assert start() is False
+    assert stop() is True
     fake.route("POST", r"/containers/[0-9a-f]{64}/start", Response(status=204))
     fake.route("POST", r"/containers/[0-9a-f]{64}/stop", Response(status=304))
-    assert client.start_container(CID) is True
-    assert client.stop_container(CID, 10) is False
+    assert start() is True
+    assert stop() is False
     assert fake.calls("POST", r"/containers/.*/stop")[0].query == {"t": ["10"]}
 
 
@@ -383,15 +412,16 @@ def test_stop_waits_longer_than_the_call_timeout(fake):
     engine = E.Engine(fake.path, call_timeout=0.2)
     engine.negotiate()
     fake.route("POST", r"/containers/[0-9a-f]{64}/stop", Response(status=204, delay=0.5))
-    assert engine.stop_container(CID, 1) is True  # Zeitlimit t + 30 s, nicht das Aufruf-Limit
+    binding = bound(fake, engine, journal_at("old_stopped"))
+    assert engine.stop_container(CID, 1, binding=binding) is True  # Zeitlimit t + 30 s, nicht das Aufruf-Limit
 
 
 def test_create_returns_id_and_warnings(fake, client):
-    fake.route("POST", "/containers/create", Response(status=201, body={"Id": CID, "Warnings": ["a", "b"]}))
-    body = {"Image": policy.REPOSITORY + ":latest", "HostConfig": {}}
-    assert client.create_container("deck", body) == (CID, 2)
+    fake.route("POST", "/containers/create", Response(status=201, body={"Id": NEW, "Warnings": ["a", "b"]}))
+    body = {"Image": TAG_TEXT, "HostConfig": {}}
+    assert client.create_container(NAME, body, binding=bound(fake, client, journal_at("creating"))) == (NEW, 2)
     call = fake.calls("POST", "/containers/create")[0]
-    assert call.query == {"name": ["deck"]} and call.body == body
+    assert call.query == {"name": [NAME]} and call.body == body
     assert call.headers["Content-Type"] == "application/json"
 
 
@@ -399,14 +429,16 @@ def test_create_returns_id_and_warnings(fake, client):
 def test_create_with_bad_id_in_answer(fake, client, answer):
     fake.route("POST", "/containers/create", Response(status=201, body=answer))
     with pytest.raises(E.EngineError) as exc:
-        client.create_container("deck", {"Image": policy.REPOSITORY, "HostConfig": {}})
+        client.create_container(NAME, {"Image": TAG_TEXT, "HostConfig": {}},
+                                binding=bound(fake, client, journal_at("creating")))
     assert exc.value.reason == "bad_response"
 
 
 def test_create_conflict(fake, client):
     fake.route("POST", "/containers/create", Response(status=409, body={"message": "name in use"}))
     with pytest.raises(E.EngineError) as exc:
-        client.create_container("deck", {"Image": policy.REPOSITORY, "HostConfig": {}})
+        client.create_container(NAME, {"Image": TAG_TEXT, "HostConfig": {}},
+                                binding=bound(fake, client, journal_at("creating")))
     assert exc.value.status == 409
 
 
@@ -423,7 +455,7 @@ def test_pull_reads_the_whole_stream(fake, client):
     chunks = _stream({"status": "Pulling from nodvard/deck"}, {"status": "Downloading", "progress": "[=>  ]"},
                      {"status": "Digest: " + DIGEST}, {"status": "Status: Downloaded newer image"})
     fake.route("POST", "/images/create", Response(chunks=chunks))
-    assert client.pull(DIGEST) == 4
+    assert client.pull(DIGEST, binding=resolve_and_bind(fake, client)) == 4
     call = fake.calls("POST", "/images/create")[0]
     assert call.query == {"fromImage": [policy.REPOSITORY], "tag": [DIGEST]}
 
@@ -432,29 +464,32 @@ def test_pull_stream_split_at_odd_places(fake, client):
     data = b"".join(_stream({"status": "aä"}, {"status": "b"}, {"status": "c"}))
     chunks = [data[i:i + 3] for i in range(0, len(data), 3)]  # auch mitten in einem UTF-8-Zeichen
     fake.route("POST", "/images/create", Response(chunks=chunks))
-    assert client.pull(DIGEST) == 3
+    assert client.pull(DIGEST, binding=resolve_and_bind(fake, client)) == 3
 
 
 def test_pull_error_inside_the_200_stream(fake, client):
     chunks = _stream({"status": "Pulling"}, {"errorDetail": {"message": "manifest unknown"},
                                              "error": "manifest unknown\x1b[0m"}, {"status": "never"})
     fake.route("POST", "/images/create", Response(chunks=chunks))
+    binding = resolve_and_bind(fake, client)
     with pytest.raises(E.EngineError) as exc:
-        client.pull(DIGEST)
+        client.pull(DIGEST, binding=binding)
     assert exc.value.reason == "stream_error" and "\x1b" not in exc.value.message
 
 
 def test_pull_error_detail_only(fake, client):
     fake.route("POST", "/images/create", Response(chunks=_stream({"errorDetail": {"message": "denied"}})))
+    binding = resolve_and_bind(fake, client)
     with pytest.raises(E.EngineError) as exc:
-        client.pull(DIGEST)
+        client.pull(DIGEST, binding=binding)
     assert exc.value.reason == "stream_error" and exc.value.message == "denied"
 
 
 def test_pull_error_before_the_stream(fake, client):
     fake.route("POST", "/images/create", Response(status=500, body={"message": "Get https://ghcr.io: dial tcp"}))
+    binding = resolve_and_bind(fake, client)
     with pytest.raises(E.EngineError) as exc:
-        client.pull(DIGEST)
+        client.pull(DIGEST, binding=binding)
     assert exc.value.reason == "http" and exc.value.status == 500
 
 
@@ -466,22 +501,25 @@ def test_pull_error_before_the_stream(fake, client):
 ])
 def test_pull_broken_stream(fake, client, chunks):
     fake.route("POST", "/images/create", Response(chunks=chunks))
+    binding = resolve_and_bind(fake, client)
     with pytest.raises(E.EngineError) as exc:
-        client.pull(DIGEST)
+        client.pull(DIGEST, binding=binding)
     assert exc.value.reason == "bad_response"
 
 
 def test_pull_stream_aborted(fake, client):
     fake.route("POST", "/images/create", Response(chunks=_stream({"status": "a"}, {"status": "b"}), drop=True))
+    binding = resolve_and_bind(fake, client)
     with pytest.raises(E.EngineError) as exc:
-        client.pull(DIGEST)
+        client.pull(DIGEST, binding=binding)
     assert exc.value.reason in ("disconnected", "bad_response")
 
 
 def test_pull_single_object_too_large(fake, client):
     fake.route("POST", "/images/create", Response(chunks=[b'{"status": "' + b"x" * (E.STREAM_OBJECT_MAX_BYTES + 10)]))
+    binding = resolve_and_bind(fake, client)
     with pytest.raises(E.EngineError) as exc:
-        client.pull(DIGEST)
+        client.pull(DIGEST, binding=binding)
     assert exc.value.reason == "too_large"
 
 
@@ -499,6 +537,7 @@ def test_every_endpoint_of_the_table_reaches_the_engine_as_expected(fake, client
     fake.route("DELETE", r"/images/.*", Response(status=200, body=[]))
     fake.route("POST", "/images/create", Response(chunks=_stream({"status": "ok"})))
     fake.route("GET", r".*", Response(body={}))
+    fake.route("GET", r"/distribution/.+/json", Response(body={"Descriptor": {"digest": DIGEST}}))
     fake.route("GET", "/containers/json", Response(body=[]))
     fake.route("GET", "/version", Response(body={"ApiVersion": "1.54", "MinAPIVersion": "1.40"}))
     fake.route("GET", "/_ping", Response(body=b"OK", headers={"Api-Version": "1.54"}, content_type="text/plain"))
@@ -509,17 +548,22 @@ def test_every_endpoint_of_the_table_reaches_the_engine_as_expected(fake, client
     client.inspect_network(NID)
     client.distribution("latest")
     client.distribution("0.7")
-    client.create_container("deck", {"Image": policy.REPOSITORY, "HostConfig": {}})
-    client.connect_network(NID, CID, {"Aliases": ["deck"]})
-    client.start_container(CID)
-    client.stop_container(CID, 30)
-    client.rename_container(CID, "deck-previous")
-    client.set_restart_policy(CID, "no")
-    client.remove_container(CID)
-    client.tag_image(IMAGE_ID, policy.REPOSITORY, "latest")
-    client.tag_image(IMAGE_ID, E.PREVIOUS_REPOSITORY, "0.7.0")
-    client.remove_protect_tag("0.7.0")
-    client.pull(DIGEST)
+    # Die aendernden Aufrufe in der Reihenfolge eines Updates, jeder mit der Bindung an den Schritt, in dem er laeuft.
+    client.pull(DIGEST, binding=bound(fake, client, journal_at("begin"), pull_digest=DIGEST))
+    client.tag_image(IMAGE_ID, E.PREVIOUS_REPOSITORY, "0.7.0", binding=bound(fake, client, journal_at("protected")))
+    client.rename_container(CID, NAME + "-previous", binding=bound(fake, client, journal_at("renamed")))
+    client.tag_image(NEW_IMAGE, policy.REPOSITORY, "latest", binding=bound(fake, client, journal_at("tagged")))
+    client.create_container(NAME, {"Image": TAG_TEXT, "HostConfig": {}},
+                            binding=bound(fake, client, journal_at("creating")))
+    client.connect_network(NID, NEW, {"Aliases": ["deck"]}, binding=bound(fake, client, journal_at("created")))
+    old_stopped = bound(fake, client, journal_at("old_stopped"))
+    client.set_restart_policy(CID, "no", binding=old_stopped)
+    client.stop_container(CID, 30, binding=old_stopped)
+    client.start_container(NEW, binding=bound(fake, client, journal_at("started")))
+    # Rueckbau: vor dem Commit nur der neue Container, und das Schutz-Tag dieses Vorgangs.
+    undo = bound(fake, client, journal_at("started"), undo=True)
+    client.remove_container(NEW, binding=undo)
+    client.remove_protect_tag("0.7.0", binding=undo)
     client.negotiate()
     seen = {(r.method, r.path) for r in fake.requests}
     assert seen == {
@@ -527,18 +571,18 @@ def test_every_endpoint_of_the_table_reaches_the_engine_as_expected(fake, client
         ("GET", f"/images/{IMAGE_ID}/json"), ("GET", f"/images/{policy.REPOSITORY}@{DIGEST}/json"),
         ("GET", f"/networks/{NID}"), ("GET", f"/distribution/{policy.REPOSITORY}:latest/json"),
         ("GET", f"/distribution/{policy.REPOSITORY}:0.7/json"), ("POST", "/containers/create"),
-        ("POST", f"/networks/{NID}/connect"), ("POST", f"/containers/{CID}/start"),
+        ("POST", f"/networks/{NID}/connect"), ("POST", f"/containers/{NEW}/start"),
         ("POST", f"/containers/{CID}/stop"), ("POST", f"/containers/{CID}/rename"),
-        ("POST", f"/containers/{CID}/update"), ("DELETE", f"/containers/{CID}"),
-        ("POST", f"/images/{IMAGE_ID}/tag"), ("DELETE", "/images/nodvard-deck-previous:0.7.0"),
-        ("POST", "/images/create"),
+        ("POST", f"/containers/{CID}/update"), ("DELETE", f"/containers/{NEW}"),
+        ("POST", f"/images/{IMAGE_ID}/tag"), ("POST", f"/images/{NEW_IMAGE}/tag"),
+        ("DELETE", "/images/nodvard-deck-previous:0.7.0"), ("POST", "/images/create"),
     }
     assert len({name for name in E.ENDPOINTS}) == len(E.ENDPOINTS) == 17
     by_path = {(r.method, r.path): r for r in fake.requests}
-    assert by_path[("DELETE", f"/containers/{CID}")].query == {"v": ["0"], "force": ["0"]}
+    assert by_path[("DELETE", f"/containers/{NEW}")].query == {"v": ["0"], "force": ["0"]}
     assert by_path[("POST", f"/containers/{CID}/update")].body == {
         "RestartPolicy": {"Name": "no", "MaximumRetryCount": 0}}
-    assert by_path[("POST", f"/networks/{NID}/connect")].body == {"Container": CID,
+    assert by_path[("POST", f"/networks/{NID}/connect")].body == {"Container": NEW,
                                                                   "EndpointConfig": {"Aliases": ["deck"]}}
     assert by_path[("GET", "/containers/json")].query == {
         "all": ["1"], "filters": ['{"label":["com.docker.compose.project=p"]}']}
@@ -564,10 +608,13 @@ def test_anything_outside_the_table_is_refused_before_sending(fake, client, meth
 @pytest.mark.parametrize("bad", ["a" * 63, "A" * 64, "a" * 65, "../" + "a" * 61, "a" * 63 + "\n", 12, None,
                                  "sha256:" + "a" * 64, "a" * 32 + "/" + "a" * 31])
 def test_container_and_network_ids_are_checked(fake, client, bad):
-    for call in (client.inspect_container, client.inspect_network, client.start_container,
-                 client.remove_container):
-        with pytest.raises(E.NotAllowed):
+    binding = client.bind(journal_at("created"), OWN)
+    for call in (client.inspect_container, client.inspect_network,
+                 lambda ref: client.start_container(ref, binding=binding),
+                 lambda ref: client.remove_container(ref, binding=binding)):
+        with pytest.raises(E.NotAllowed) as exc:
             call(bad)
+        assert type(exc.value) is E.NotAllowed  # die Form faellt durch, nicht erst die Bindung
     assert len(fake.requests) == 2
 
 
@@ -614,8 +661,11 @@ def test_repository_comes_from_the_constructor_only(fake):
     ("set_restart_policy", (CID, "no", True)),
 ])
 def test_query_rules(fake, client, call, args):
-    with pytest.raises(E.NotAllowed):
-        getattr(client, call)(*args)
+    # Die Form wird vor der Bindung geprueft: auch mit einer Bindung, die vieles erlaubt, bleibt es die Form.
+    binding = client.bind(journal_at("creating"), OWN)
+    with pytest.raises(E.NotAllowed) as exc:
+        getattr(client, call)(*args, binding=binding)
+    assert type(exc.value) is E.NotAllowed
     assert len(fake.requests) == 2
 
 
@@ -624,8 +674,10 @@ def test_query_rules(fake, client, call, args):
     {"v": "0", "force": "0", "link": "1"},
 ])
 def test_remove_container_query_is_fixed(fake, client, query):
-    with pytest.raises(E.NotAllowed):
-        client._request("DELETE", "/containers/{id}", params={"id": CID}, query=query)
+    binding = client.bind(journal_at("committed"), OWN)  # erlaubte das Entfernen des alten Containers
+    with pytest.raises(E.NotAllowed) as exc:
+        client._request("DELETE", "/containers/{id}", params={"id": CID}, query=query, binding=binding)
+    assert type(exc.value) is E.NotAllowed
 
 
 @pytest.mark.parametrize("query", [
@@ -647,8 +699,10 @@ def test_list_query_rules(fake, client, query):
     None, [],
 ])
 def test_update_only_with_restart_policy(fake, client, body):
-    with pytest.raises(E.NotAllowed):
-        client._request("POST", "/containers/{id}/update", params={"id": CID}, body=body)
+    binding = client.bind(journal_at("created"), OWN)
+    with pytest.raises(E.NotAllowed) as exc:
+        client._request("POST", "/containers/{id}/update", params={"id": CID}, body=body, binding=binding)
+    assert type(exc.value) is E.NotAllowed
 
 
 @pytest.mark.parametrize("body", [
@@ -664,8 +718,9 @@ def test_update_only_with_restart_policy(fake, client, body):
     [],
 ])
 def test_create_body_rules(fake, client, body):
-    with pytest.raises(E.NotAllowed):
-        client.create_container("deck", body)
+    with pytest.raises(E.NotAllowed) as exc:
+        client.create_container(NAME, body, binding=client.bind(journal_at("creating"), OWN))
+    assert type(exc.value) is E.NotAllowed
     assert fake.calls("POST", "/containers/create") == []
 
 
@@ -690,7 +745,7 @@ def test_the_create_body_of_the_clone_passes(fake, client):
                         Healthcheck={"Test": ["CMD", "x"], "Retries": 3}, ExposedPorts={"8080/tcp": {}},
                         Hostname="deck", User="1000")
     client._body_for("create_container", _create_body(NetworkingConfig=_DEL))
-    assert client.create_container("deck", body)[0] == "f" * 64
+    assert client.create_container(NAME, body, binding=bound(fake, client, journal_at("creating")))[0] == "f" * 64
     assert fake.calls("POST", "/containers/create")[0].body == body
 
 
@@ -733,8 +788,9 @@ def test_the_create_body_of_the_clone_passes(fake, client):
     {1: "x", "Image": policy.REPOSITORY, "HostConfig": {}},
 ])
 def test_create_body_only_with_known_keys_in_exact_spelling(fake, client, body):
-    with pytest.raises(E.NotAllowed):
-        client.create_container("deck", body)
+    with pytest.raises(E.NotAllowed) as exc:
+        client.create_container(NAME, body, binding=client.bind(journal_at("creating"), OWN))
+    assert type(exc.value) is E.NotAllowed
     assert fake.calls("POST", "/containers/create") == []
 
 
@@ -750,8 +806,9 @@ def test_create_body_key_lists_have_no_two_names_that_differ_only_in_case():
     {"aliases": ["x"]}, {"Aliases": ["x"], "aliases": ["y"]}, {"MacAddress": "x"}, {"NetworkID": "x"}, {"Brandneu": 1},
 ])
 def test_connect_endpoint_config_only_with_known_keys(fake, client, endpoint):
-    with pytest.raises(E.NotAllowed):
-        client.connect_network(NID, CID, endpoint)
+    with pytest.raises(E.NotAllowed) as exc:
+        client.connect_network(NID, NEW, endpoint, binding=client.bind(journal_at("created"), OWN))
+    assert type(exc.value) is E.NotAllowed
     assert fake.calls("POST", f"/networks/{NID}/connect") == []
 
 
@@ -760,29 +817,23 @@ def test_connect_endpoint_config_only_with_known_keys(fake, client, endpoint):
     {"Container": CID, "EndpointConfig": {}, "Force": True},
 ])
 def test_connect_body_rules(fake, client, body):
-    with pytest.raises(E.NotAllowed):
-        client._request("POST", "/networks/{id}/connect", params={"id": NID}, body=body)
+    binding = client.bind(journal_at("created"), OWN)
+    with pytest.raises(E.NotAllowed) as exc:
+        client._request("POST", "/networks/{id}/connect", params={"id": NID}, body=body, binding=binding)
+    assert type(exc.value) is E.NotAllowed
 
 
 def test_bodies_are_only_sent_where_allowed(fake, client):
-    with pytest.raises(E.NotAllowed):
-        client._request("POST", "/containers/{id}/start", params={"id": CID}, body={"x": 1})
+    with pytest.raises(E.NotAllowed) as exc:
+        client._request("POST", "/containers/{id}/start", params={"id": CID}, body={"x": 1},
+                        binding=client.bind(journal_at("created"), OWN))
+    assert type(exc.value) is E.NotAllowed
     with pytest.raises(E.NotAllowed):
         client._request("GET", "/containers/{id}/json", params={"id": CID}, query={"size": "1"})
     with pytest.raises(E.NotAllowed):
         client._request("GET", "/containers/{id}/json", params={"id": CID, "x": "y"})
     with pytest.raises(E.NotAllowed):
         client._request("GET", "/containers/{id}/json", params={})
-
-
-def test_engine_docstring_keeps_track_of_the_missing_binding():
-    # Die Bindung der aendernden Endpunkte an die IDs und Namen aus dem Journal fehlt noch; sie ist der erste Schritt
-    # des Ablaufs. Solange das so ist, steht es im Kopf des Moduls -- der Ablauf ersetzt diesen Test durch die Tests
-    # der Bindung, damit der Hinweis nicht verloren geht.
-    doc = E.__doc__
-    assert "Noch nicht umgesetzt" in doc and "Bindung" in doc
-    for rule in ("remove_container", "tag_image", "rename", "connect", "`pull`"):
-        assert rule in doc
 
 
 def test_sanitize():

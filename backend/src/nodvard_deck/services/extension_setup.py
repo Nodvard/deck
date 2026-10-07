@@ -5,7 +5,8 @@ Alles hier ist generisch und liest nur das Einstellungs-Schema (`required`,
 `x-secrets`) und die gespeicherten Werte -- der Kern kennt keine einzelne Erweiterung.
 
 Das Ergebnis des letzten Verbindungstests liegt als globale Einstellung
-`extension.test.<id>` (`{"ok", "message", "at"}`). Es wird gelöscht, sobald Einstellungen
+`extension.test.<id>` (`{"ok", "message", "at"}`; `<id>` ist die Speicher-Kennung, also nach einer
+Umbenennung die alte Kennung, siehe `services.extensions.get_record`). Es wird gelöscht, sobald Einstellungen
 oder Zugangsdaten der Erweiterung geändert werden -- ein alter Fehlschlag soll nicht
 stehen bleiben, nachdem der Nutzer das Problem behoben hat.
 """
@@ -19,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db import utcnow
+from ..ext.runtime import get_extension_runtime
 from ..models import Secret, Setting
 
 TEST_KEY_PREFIX = "extension.test."
@@ -212,7 +214,7 @@ def setup_reasons(
 
 
 def _row_key(ext_id: str) -> str:
-    return f"{TEST_KEY_PREFIX}{ext_id}"
+    return f"{TEST_KEY_PREFIX}{get_extension_runtime().store_id(ext_id)}"
 
 
 async def save_last_test(session: AsyncSession, ext_id: str, *, ok: bool, message: str) -> dict[str, Any]:
@@ -231,7 +233,7 @@ async def clear_last_test(session: AsyncSession, ext_id: str) -> None:
 
 
 async def load_last_tests(session: AsyncSession) -> dict[str, dict[str, Any]]:
-    """Alle gespeicherten Testergebnisse, je Erweiterungs-ID."""
+    """Alle gespeicherten Testergebnisse, je Speicher-Kennung (`ExtensionRecord.id`)."""
     rows = (await session.execute(select(Setting).where(Setting.key.like(f"{TEST_KEY_PREFIX}%")))).scalars().all()
     out: dict[str, dict[str, Any]] = {}
     for row in rows:

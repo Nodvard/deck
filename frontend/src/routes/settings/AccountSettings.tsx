@@ -8,6 +8,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { useAuthStore } from "../../state/auth";
 import { RecoveryCodesPanel } from "./RecoveryCodesPanel";
+import { SecondFactorField, isTotpRejected } from "./SecondFactorField";
 import { TotpEnroll, type TotpSetup } from "./TotpEnroll";
 import { TotpPasswordForm } from "./TotpPasswordForm";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
@@ -187,20 +188,25 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
   const [newCodes, setNewCodes] = useState<string[] | null>(null);
   const [renewing, setRenewing] = useState(false);
   const [renewPassword, setRenewPassword] = useState("");
+  const [renewCode, setRenewCode] = useState("");
   const [disabling, setDisabling] = useState(false);
   const [disablePassword, setDisablePassword] = useState("");
+  const [disableCode, setDisableCode] = useState("");
 
   async function renew() {
     setBusy(true);
     setNotice(null);
     try {
-      const res = await api.post<{ recovery_codes: string[] }>("/me/recovery-codes", { current_password: renewPassword });
+      const res = await api.post<{ recovery_codes: string[] }>("/me/recovery-codes", { current_password: renewPassword, totp_code: renewCode.trim() });
       setNewCodes(res.recovery_codes);
       setRenewing(false);
       setRenewPassword("");
+      setRenewCode("");
       onChanged();
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
+      // Nur wenn der Code selbst abgelehnt wurde: Bei falschem Passwort prüft der Server ihn gar nicht erst.
+      if (isTotpRejected(err)) setRenewCode("");
     } finally {
       setBusy(false);
     }
@@ -239,15 +245,19 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
     setBusy(true);
     setNotice(null);
     try {
-      await api.delete("/me/totp", { current_password: disablePassword });
+      await api.delete("/me/totp", { current_password: disablePassword, totp_code: disableCode.trim() });
       setNewCodes(null);
       setRenewing(false);
       setDisabling(false);
       setDisablePassword("");
+      setDisableCode("");
       setNotice({ kind: "ok", text: "Zwei-Faktor-Anmeldung abgeschaltet." });
       onChanged();
     } catch (err) {
       setNotice({ kind: "error", text: errorText(err) });
+      // Nur wenn der Code selbst abgelehnt wurde: Bei falschem Passwort prüft der Server ihn gar nicht erst, und ein
+      // abgetippter Wiederherstellungs-Code soll dann stehen bleiben.
+      if (isTotpRejected(err)) setDisableCode("");
     } finally {
       setBusy(false);
     }
@@ -275,14 +285,17 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
         <div className="mt-5 rounded-lg border border-red-500/30 bg-red-500/5 p-4" data-testid="disable-2fa">
           <p className="text-sm text-white/80">
             Zwei-Faktor-Anmeldung wirklich abschalten? Dein Konto ist dann nur noch durch das Passwort geschützt, und deine
-            Wiederherstellungs-Codes werden gelöscht.
+            Wiederherstellungs-Codes werden gelöscht. Zur Sicherheit brauchst du dafür dein Passwort und einen Code.
           </p>
-          <div className="mt-3 flex max-w-md flex-wrap items-end gap-2">
-            <Field label="Passwort zum Abschalten" hint="Zur Sicherheit wird dein aktuelles Passwort verlangt." className="flex-1">
+          <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-2">
+            <Field label="Passwort zum Abschalten" hint="Dein aktuelles Passwort.">
               <input type="password" autoComplete="current-password" value={disablePassword} onChange={(e) => setDisablePassword(e.target.value)} className={inputClass} />
             </Field>
-            <Button variant="danger" busy={busy} disabled={!disablePassword} onClick={() => void disable()}>Abschalten</Button>
-            <Button variant="ghost" onClick={() => { setDisabling(false); setDisablePassword(""); }}>Abbrechen</Button>
+            <SecondFactorField value={disableCode} onChange={setDisableCode} />
+          </div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="danger" busy={busy} disabled={!disablePassword || !disableCode.trim()} onClick={() => void disable()}>Abschalten</Button>
+            <Button variant="ghost" onClick={() => { setDisabling(false); setDisablePassword(""); setDisableCode(""); }}>Abbrechen</Button>
           </div>
         </div>
       )}
@@ -299,12 +312,18 @@ function TotpCard({ enabled, username, remaining, onChanged }: { enabled: boolea
           </p>
           {remaining > 0 && remaining <= 3 && <p className="mt-1 text-xs text-amber-300">Es sind nur noch wenige Codes übrig.</p>}
           {renewing ? (
-            <div className="mt-3 flex max-w-md flex-wrap items-end gap-2">
-              <Field label="Passwort zur Bestätigung" hint="Die alten Codes werden damit sofort ungültig." className="flex-1">
-                <input type="password" autoComplete="current-password" value={renewPassword} onChange={(e) => setRenewPassword(e.target.value)} className={inputClass} />
-              </Field>
-              <Button variant="primary" busy={busy} disabled={!renewPassword} onClick={() => void renew()}>Erzeugen</Button>
-              <Button variant="ghost" onClick={() => { setRenewing(false); setRenewPassword(""); }}>Abbrechen</Button>
+            <div className="mt-3" data-testid="renew-codes">
+              <p className="text-xs text-white/55">Die alten Codes werden damit sofort ungültig. Zur Sicherheit brauchst du dein Passwort und einen Code.</p>
+              <div className="mt-3 grid max-w-xl gap-3 sm:grid-cols-2">
+                <Field label="Passwort zur Bestätigung" hint="Dein aktuelles Passwort.">
+                  <input type="password" autoComplete="current-password" value={renewPassword} onChange={(e) => setRenewPassword(e.target.value)} className={inputClass} />
+                </Field>
+                <SecondFactorField value={renewCode} onChange={setRenewCode} />
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <Button variant="primary" busy={busy} disabled={!renewPassword || !renewCode.trim()} onClick={() => void renew()}>Erzeugen</Button>
+                <Button variant="ghost" onClick={() => { setRenewing(false); setRenewPassword(""); setRenewCode(""); }}>Abbrechen</Button>
+              </div>
             </div>
           ) : (
             <div className="mt-3">

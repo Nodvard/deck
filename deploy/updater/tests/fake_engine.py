@@ -9,6 +9,12 @@ abgebrochene Verbindung, rohe Bytes.
 Jede Anfrage wird aufgezeichnet (`requests`). Pfade ausserhalb der Allowlist des Helfers werden als Verstoss
 festgehalten (`violations`) und mit 599 beantwortet -- die Tests pruefen, dass es keine gibt.
 
+**Bindung auf der Seite der Engine:** Jeder aendernde Aufruf (alles ausser `GET`) muss zu dem Journal passen, das
+gerade gilt (`JournalGuard`, im Ablauf das Journal auf der Platte). Die Regeln sind hier unabhaengig vom Client
+nachgebaut, ebenso die Form der aendernden Aufrufe (`form_problem`: nie `v=1`, nie `force`, `/update` nur mit der
+Restart-Policy, ...); ein Verstoss -- auch ein aendernder Aufruf ohne Waechter -- landet ebenso in `violations` und
+wird mit 599 beantwortet. So faellt auch ein Ablauf auf, der an ein Journal bindet, das er noch nicht geschrieben hat.
+
 Der Socket liegt unter `/tmp/ndu...` (kurz: Unix-Sockets duerfen hoechstens 107 Byte lang sein).
 """
 
@@ -32,6 +38,8 @@ from pathlib import Path
 from typing import Any, Self
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from nodvard_deck_updater.policy import REPOSITORY
+
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "engines"
 _VERSION_PREFIX = re.compile(r"/v(1\.[0-9]{1,3})(/.*)")
 _ALLOWED_PATHS = [
@@ -42,6 +50,10 @@ _ALLOWED_PATHS = [
     ("GET", r"/distribution/.+/json"), ("POST", r"/images/create"), ("GET", r"/images/.+/json"),
     ("POST", r"/images/sha256:[0-9a-f]{64}/tag"), ("DELETE", r"/images/nodvard-deck-previous:[0-9.]+"),
 ]
+
+
+_PREVIOUS_REPOSITORY = "nodvard-deck-previous"
+_PREVIOUS_SUFFIX = "-previous"
 
 
 def load_fixture(name: str) -> dict[str, Any]:
@@ -79,6 +91,215 @@ class Response:
 
 
 Handler = Callable[[Request], Response]
+
+
+def _nothing() -> None:
+    return None
+
+
+@dataclass
+class JournalGuard:
+    """Was die Fake-Engine fuer aendernde Aufrufe zulaesst: dieselben Regeln wie die Bindung des Clients, aber gegen
+    das Journal, das **jetzt** gilt (`journal`, als JSON wie in `journal.json`), den Slot (`slot`, wie in
+    `state.json`) und die eigene ID des Helfers.
+
+    Was nur der Client weiss, sieht die Engine nicht: ob der Ablauf gerade zurueckbaut (hier gilt vor dem Commit, was
+    vorwaerts **oder** im Rueckbau erlaubt ist -- `test_engine_binding.py` prueft, dass das genau die Regeln des
+    Clients sind) und welchen Digest er meint (hier: beim Update einer, den die Fake-Engine bei `/distribution`
+    geliefert hat, beim Rueckweg der des Slots)."""
+
+    own_id: str
+    journal: Callable[[], dict[str, Any] | None]
+    slot: Callable[[], dict[str, Any] | None] = _nothing
+    repository: str = REPOSITORY
+
+    @classmethod
+    def fixed(cls, own_id: str, journal: dict[str, Any] | None, slot: dict[str, Any] | None = None, *,
+              repository: str = REPOSITORY) -> JournalGuard:
+        """Ein fester Stand (fuer Tests ohne `/state`)."""
+        return cls(own_id=own_id, journal=lambda: journal, slot=lambda: slot, repository=repository)
+
+    @classmethod
+    def from_state_dir(cls, path: str | os.PathLike[str], own_id: str, *,
+                       repository: str = REPOSITORY) -> JournalGuard:
+        """Liest bei jedem Aufruf `journal.json` und den Slot aus `state.json` im Ordner `path` (fehlt die Datei:
+        `None`) -- also genau das, was der Ablauf vorher geschrieben hat."""
+        folder = Path(path)
+
+        def read(name: str) -> dict[str, Any] | None:
+            try:
+                return json.loads((folder / name).read_text(encoding="ascii"))
+            except FileNotFoundError:
+                return None
+
+        def slot() -> dict[str, Any] | None:
+            state = read("state.json")
+            return None if state is None else state.get("slot")
+
+        return cls(own_id=own_id, journal=lambda: read("journal.json"), slot=slot, repository=repository)
+
+    def problem(self, request: Request, resolved: set[str]) -> str | None:
+        """Der Verstoss als Text, sonst `None`. `resolved`: die Digests, die `/distribution` geliefert hat.
+
+        Vorwaerts geht jeder aendernde Aufruf nur in dem Schritt des Journals, der ihn ankuendigt (der neue Container
+        startet erst bei `started`, der alte stoppt erst bei `old_stopped`, ...). Was nur dem Rueckbau dient (der
+        alte Container startet wieder, der neue stoppt, das Tag geht zurueck), laesst die Fake-Engine vor dem Commit
+        in jedem Schritt zu -- ob der Ablauf gerade zurueckbaut, weiss nur der Client. Hat das Journal den Rueckbau
+        angekuendigt (`undo`), geht nur noch das: kein Aufruf vorwaerts mehr."""
+        kind, ref = _mutation(request.method, request.path)
+        where = f"{request.method} {request.path}"
+        journal, slot = self.journal(), self.slot()
+        query = {key: values[0] for key, values in request.query.items() if len(values) == 1}
+        body = request.body if isinstance(request.body, dict) else {}
+        if kind == "unknown":
+            return f"aendernd ohne Regel: {where}"
+        if kind == "untag":
+            return None if ref in _protect_versions(journal, slot) else f"Schutz-Tag nicht aus Journal/Slot: {where}"
+        if journal is None:
+            return f"aendernd ohne Journal: {where}"
+        old, new = journal["old"], journal["new"] or {}
+        new_id, undoing = new.get("id"), journal.get("undo") is True
+        step = None if undoing else journal["step"]  # im angekuendigten Rueckbau passt kein Schritt vorwaerts
+        before_commit = journal["step"] != "committed"
+        if kind == "pull":
+            if journal["action"] == "rollback":
+                digests = {slot["repo_digest"].partition("@")[2]} if slot else set()
+            else:
+                digests = set(resolved)
+            ok = step == "begin" and query.get("tag") in digests
+        elif kind == "tag":
+            if query.get("repo") == _PREVIOUS_REPOSITORY:
+                ok = step == "protected" and ref == old["image_id"] and query.get("tag") == old["version"]
+            else:
+                ok = (query.get("repo") == self.repository
+                      and query.get("tag") == _floating(old["tag_text"], self.repository)
+                      and ((step == "tagged" and ref == new.get("image_id"))
+                           or (before_commit and ref == old["image_id"])))
+        elif kind == "create":
+            ok = step == "creating" and query.get("name") == old["name"] and body.get("Image") == old["tag_text"]
+        elif kind == "connect":
+            ok = step == "created" and new_id is not None and body.get("Container") == new_id
+        else:
+            ok = ref is not None and ref != self.own_id and ref in {old["id"], new_id} - {None}
+            if kind == "start":
+                ok = ok and ((ref == new_id and step == "started") or (ref == old["id"] and before_commit))
+            elif kind == "stop":
+                ok = ok and ((ref == old["id"] and step == "old_stopped") or (ref == new_id and before_commit))
+            elif kind == "rename":
+                name = query.get("name")
+                ok = ok and ref == old["id"] and (
+                    (name == old["name"] + _PREVIOUS_SUFFIX and step == "renamed")
+                    or (name == old["name"] and before_commit))
+            elif kind == "remove":
+                ok = ok and ref == (new_id if before_commit else old["id"])
+            elif kind == "update":
+                wanted = (body.get("RestartPolicy") or {})
+                pair = (wanted.get("Name"), wanted.get("MaximumRetryCount"))
+                own = old["restart_policy"]
+                ok = ok and ref == old["id"] and (
+                    (pair == ("no", 0) and step == "old_stopped")
+                    or (pair == (own["Name"], own["MaximumRetryCount"]) and before_commit))
+        return None if ok else f"passt nicht zum Journal ({journal['step']}, undo={undoing}): {where}"
+
+
+def _mutation(method: str, path: str) -> tuple[str | None, str | None]:
+    """Art des aendernden Aufrufs und die angesprochene ID, das Image bzw. die Version; `(None, None)` fuer Lesen."""
+    if method == "GET":
+        return None, None
+    if (method, path) == ("POST", "/containers/create"):
+        return "create", None
+    if (method, path) == ("POST", "/images/create"):
+        return "pull", None
+    match = re.fullmatch(r"/containers/([0-9a-f]{64})/(start|stop|rename|update)", path)
+    if method == "POST" and match:
+        return match[2], match[1]
+    match = re.fullmatch(r"/containers/([0-9a-f]{64})", path)
+    if method == "DELETE" and match:
+        return "remove", match[1]
+    match = re.fullmatch(r"/networks/([0-9a-f]{64})/connect", path)
+    if method == "POST" and match:
+        return "connect", match[1]
+    match = re.fullmatch(r"/images/(sha256:[0-9a-f]{64})/tag", path)
+    if method == "POST" and match:
+        return "tag", match[1]
+    match = re.fullmatch(_PREVIOUS_REPOSITORY + r":([0-9.]+)", path.removeprefix("/images/"))
+    if method == "DELETE" and path.startswith("/images/") and match:
+        return "untag", match[1]
+    return "unknown", None
+
+
+_FORM_QUERY = {
+    "create": {"name"}, "start": set(), "stop": {"t"}, "rename": {"name"}, "update": set(), "remove": {"v", "force"},
+    "connect": set(), "tag": {"repo", "tag"}, "untag": set(), "pull": {"fromImage", "tag"},
+}
+"""Die Abfrageparameter, die ein aendernder Aufruf tragen darf -- genau diese, jeder genau einmal."""
+_MAX_STOP_T = 3600
+"""Laengste Frist fuer `stop` (Sekunden), unabhaengig vom Client festgehalten (dort `engine.MAX_STOP_T`)."""
+_FORM_BODY = frozenset({"create", "update", "connect"})
+"""Nur diese aendernden Aufrufe haben einen Body."""
+_NEVER_CREATE_KEYS = frozenset({"entrypoint", "autoremove"})
+
+
+def form_problem(request: Request, repository: str = REPOSITORY) -> str | None:
+    """Die Form eines aendernden Aufrufs, unabhaengig vom Client nachgebaut: feste Abfrage (nie `v=1`, nie `force`,
+    kein `fromSrc`, kein `signal`), Pull nur des Repositorys nach Digest, `/update` nur mit genau der Restart-Policy,
+    `connect` nur mit `Container` und `EndpointConfig`, `create` nie mit `Entrypoint` oder `AutoRemove` (in keiner
+    Schreibweise) und jeder Schluessel nur in einer Schreibweise. Gibt den Verstoss als Text zurueck, sonst `None`."""
+    kind, _ = _mutation(request.method, request.path)
+    where = f"{request.method} {request.path}"
+    if kind in (None, "unknown"):
+        return None
+    query = request.query
+    if set(query) != _FORM_QUERY[kind] or any(len(values) != 1 for values in query.values()):
+        return f"Abfrage {sorted(query)} passt nicht: {where}"
+    single = {key: values[0] for key, values in query.items()}
+    if kind == "remove" and (single["v"], single["force"]) != ("0", "0"):
+        return f"nur v=0&force=0: {where}"
+    if kind == "stop" and not (re.fullmatch(r"0|[1-9][0-9]{0,3}", single["t"]) and int(single["t"]) <= _MAX_STOP_T):
+        return f"stop: t ungueltig: {where}"
+    if kind == "pull" and (single["fromImage"] != repository
+                           or not re.fullmatch(r"sha256:[0-9a-f]{64}", single["tag"])):
+        return f"pull nur {repository} nach Digest: {where}"
+    body = request.body
+    if kind not in _FORM_BODY:
+        return None if body is None else f"Body nicht erlaubt: {where}"
+    if not isinstance(body, dict):
+        return f"Body ist kein Objekt: {where}"
+    if kind == "update":
+        restart = body.get("RestartPolicy")
+        ok = (set(body) == {"RestartPolicy"} and isinstance(restart, dict)
+              and set(restart) == {"Name", "MaximumRetryCount"} and isinstance(restart["Name"], str)
+              and type(restart["MaximumRetryCount"]) is int)
+        return None if ok else f"update nur mit RestartPolicy: {where}"
+    if kind == "connect":
+        endpoint = body.get("EndpointConfig")
+        ok = (set(body) == {"Container", "EndpointConfig"} and isinstance(endpoint, dict)
+              and len({key.casefold() for key in endpoint}) == len(endpoint))
+        return None if ok else f"connect nur mit Container und EndpointConfig: {where}"
+    host = body.get("HostConfig")
+    for level in (body, host if isinstance(host, dict) else {}):
+        folded = [key.casefold() for key in level]
+        if len(set(folded)) != len(folded) or _NEVER_CREATE_KEYS & set(folded):
+            return f"create: Schluessel doppelt oder verboten: {where}"
+    return None
+
+
+def _protect_versions(journal: dict[str, Any] | None, slot: dict[str, Any] | None) -> set[str]:
+    from_slot = {slot["from_version"]} if slot else set()
+    if journal is None:
+        return from_slot
+    old_version = journal["old"]["version"]
+    if journal["step"] != "committed":
+        return {old_version}
+    if journal["action"] == "rollback":
+        return {old_version, journal["new"]["version"]}
+    return from_slot - {old_version}
+
+
+def _floating(tag_text: str, repository: str) -> str | None:
+    if tag_text == repository:
+        return "latest"
+    return tag_text[len(repository) + 1:] if tag_text.startswith(repository + ":") else None
 
 
 class World:
@@ -194,8 +415,12 @@ class _Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 class FakeEngine:
     """Startet den Server in einem Thread; als Kontextmanager benutzen."""
 
-    def __init__(self, world: World | None = None) -> None:
+    def __init__(self, world: World | None = None, *, guard: JournalGuard | None = None) -> None:
         self.world = world or World()
+        self.guard = guard
+        """Die Regeln fuer aendernde Aufrufe (`JournalGuard`). Ohne Waechter ist jeder aendernde Aufruf ein Verstoss."""
+        self.resolved: set[str] = set()
+        """Die Digests, die `/distribution` geliefert hat (nur die darf ein Pull nennen, ausser dem des Slots)."""
         self.requests: list[Request] = []
         self.violations: list[str] = []
         self._routes: list[tuple[str, re.Pattern[str], Handler]] = []
@@ -238,7 +463,8 @@ class FakeEngine:
             do_GET = do_POST = do_DELETE = do_PUT = do_HEAD = _handle
 
         self._server = _Server(self.path, Handler)
-        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True)
+        self._thread = threading.Thread(target=self._server.serve_forever, kwargs={"poll_interval": 0.005},
+                                        daemon=True)  # kurz: `stop` wartet hoechstens so lange
         self._thread.start()
         return self
 
@@ -284,6 +510,15 @@ class FakeEngine:
             return
         if path != "/_ping" and version is None:
             self.violations.append(f"ohne Version: {request.method} {path}")
+        if request.method != "GET":
+            problem = form_problem(request, REPOSITORY if self.guard is None else self.guard.repository)
+            if problem is None:
+                problem = (f"aendernd ohne Journal-Waechter: {request.method} {path}" if self.guard is None
+                           else self.guard.problem(request, set(self.resolved)))
+            if problem is not None:
+                self.violations.append(problem)
+                self._send(handler, Response(status=599, body={"message": "does not match the journal"}))
+                return
         response = None
         for method, pattern, func in self._routes:
             if method == request.method and pattern.fullmatch(path):
@@ -291,6 +526,12 @@ class FakeEngine:
                 break
         if response is None:
             response = self.world.answer(request)
+        if request.method == "GET" and path.startswith("/distribution/") and response.status == 200 \
+                and isinstance(response.body, dict):
+            digest = (response.body.get("Descriptor") or {}).get("digest")
+            if isinstance(digest, str):
+                with self._lock:
+                    self.resolved.add(digest)
         self._send(handler, response)
 
     def _send(self, handler: BaseHTTPRequestHandler, response: Response) -> None:

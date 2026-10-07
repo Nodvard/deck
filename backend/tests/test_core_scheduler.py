@@ -92,6 +92,42 @@ async def test_trigger_now_records_failure_without_crashing(service, db_session)
 
 
 @pytest.mark.asyncio
+async def test_an_expected_failure_is_logged_without_traceback(service, db_session, tmp_path, caplog):
+    """Meldet ein Handler einen Fehlschlag selbst (`NodvardError`, z. B. "Skript lief auf keinem Server"), steht er
+    als Warnung mit Klartext im Log, ohne Traceback: Die Pruefung nach einem Deploy sucht im Container-Log nach
+    "Traceback" und rollt sonst zurueck. Ein echter Programmfehler behaelt seinen Traceback."""
+    import logging
+
+    from nodvard_sdk.errors import NodvardError
+
+    logging.getLogger("nodvard_deck").disabled = False
+    logging.getLogger("nodvard_deck.core.scheduler").disabled = False
+    job = await _make_job(db_session)
+
+    async def expected(**kwargs):
+        raise NodvardError("Das Skript lief auf keinem Server.")
+
+    with caplog.at_level(logging.WARNING, logger="nodvard_deck.core.scheduler"):
+        run_id = await service.trigger_now(job, expected)
+    run = await jobs_service.get_run(db_session, run_id)
+    assert (run.status, run.exit_code, run.error) == ("failed", 1, "Das Skript lief auf keinem Server.")
+    records = [r for r in caplog.records if "job_run_failed" in r.getMessage()]
+    assert records and all(r.exc_info is None and r.levelno == logging.WARNING for r in records)
+    assert "Das Skript lief auf keinem Server." in records[-1].getMessage()
+    log_text = (tmp_path / "runs" / f"{run_id}.log").read_text(encoding="utf-8")
+    assert "Traceback" not in log_text and "Das Skript lief auf keinem Server." in log_text
+
+    caplog.clear()
+
+    async def bug(**kwargs):
+        raise RuntimeError("kaputt")
+
+    with caplog.at_level(logging.WARNING, logger="nodvard_deck.core.scheduler"):
+        await service.trigger_now(job, bug)
+    assert any(r.exc_info is not None for r in caplog.records if "job_run_failed" in r.getMessage())
+
+
+@pytest.mark.asyncio
 async def test_publishes_ws_events_for_job_and_run_channels(service, db_session):
     hub = WsHub()
 

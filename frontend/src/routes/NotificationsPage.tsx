@@ -1,6 +1,6 @@
 /**
  * Benachrichtigungs-Center: zeigt die Meldungen aus `api/v1/notifications.py` (z. B.
- * nexus-socs Lageberichte), die sonst nur in der Datenbank stuenden. Neue Meldungen kommen
+ * die Lageberichte von Nodvard Shield), die sonst nur in der Datenbank stuenden. Neue Meldungen kommen
  * live ueber den WS-Kanal `notifications` (services/notifications.py publiziert dort).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";

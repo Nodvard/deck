@@ -39,6 +39,7 @@ from nodvard_sdk.types import DiscoveredHost, Host as SdkHost, HostStatus, Risk
 from .config import build_connectors
 from .connector import ProxmoxApiError, ProxmoxConnector
 from .guest_edit import ConfigEditError, build_update, describe, pending_keys
+from .transport import task_outcome
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -604,9 +605,10 @@ class ProxmoxActionExecutor:
                 success=True, output=f"{label} abgeschlossen.",
                 detail={"task_id": task_id, "task_status": "OK"},
             )
+        outcome = task_outcome(exitstatus)
         return ActionResult(
-            success=False, error=f"{label} fehlgeschlagen: {exitstatus or 'unbekannter Ausgang'}",
-            detail={"task_id": task_id, "task_status": exitstatus},
+            success=False, error=f"{label} fehlgeschlagen: {outcome or 'unbekannter Ausgang'}",
+            detail={"task_id": task_id, "task_status": outcome},
         )
 
     async def dry_run(self, req: ActionRequest) -> DryRunReport | None:

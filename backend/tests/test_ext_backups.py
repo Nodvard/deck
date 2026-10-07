@@ -15,7 +15,9 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 import uvicorn
-from fastapi import Depends, FastAPI, Header, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
+from raw_http_helpers import BROKEN_ANSWERS, REDIRECT_ANSWERS, raw_http_server
 from sqlalchemy import select
 
 from nodvard_deck.ext.runtime import get_extension_runtime
@@ -95,6 +97,23 @@ def _build_mock_backup_app() -> tuple[FastAPI, dict]:
         ],
     }
     app = FastAPI()
+
+    @app.exception_handler(HTTPException)
+    async def _proxmox_error(request: Request, exc: HTTPException) -> JSONResponse:
+        """So meldet Proxmox einen Fehler: `{"data": null, "message": "<Grund>"}` (nicht FastAPIs `detail`)."""
+        return JSONResponse({"data": None, "message": exc.detail}, status_code=exc.status_code)
+
+    @app.middleware("http")
+    async def _forced_answer(request: Request, call_next):
+        """Tests setzen `state["forced"]`, um jede Anfrage mit einer festen Antwort zu beantworten
+        (Weiterleitung, HTML statt JSON). `state["forced_hits"]` zaehlt die Anfragen, die ankamen."""
+        forced = state.get("forced")
+        if forced is None:
+            return await call_next(request)
+        state.setdefault("forced_hits", []).append(request.url.path)
+        return Response(content=forced.get("body", ""), status_code=forced["status"], headers=forced.get("headers"),
+                        media_type=forced.get("media_type"))
+
 
     def _check_auth(authorization: str | None = Header(default=None)) -> None:
         if authorization != _EXPECTED_AUTH:
@@ -1831,3 +1850,163 @@ async def test_job_edit_warns_when_the_new_storage_is_too_small(client, db_sessi
     # Andere Aenderungen (Zeitplan) pruefen keinen Platz.
     same = await client.post(f"/api/v1/ext/backups/jobs/{job_ref}/edit", json={"changes": {"schedule": "sun 03:00"}}, headers=headers)
     assert same.status_code == 200, same.text
+
+
+_UMLEITUNG = "Der Server hat die Verbindung auf eine andere Adresse umgeleitet"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [301, 302, 307])
+async def test_backups_redirect_gives_a_readable_german_error_and_is_not_followed(
+    client, db_session, test_settings, mock_backup_api, status_code
+):
+    """Eine 3xx-Antwort (typisch: http:// statt https:// eingetragen) ergibt den deutschen Satz mit dem
+    Statuscode. Die Adresse aus `Location` steht nicht darin, ihr wird nicht gefolgt, und der Rumpf
+    (hier absichtlich gueltiges JSON) wird nicht als Antwort gelesen."""
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    state["forced"] = {
+        "status": status_code,
+        # Dieselbe Adresse wie der Testserver: folgte der Client der Weiterleitung, kaeme `/andere-seite` an
+        # und stuende in `forced_hits` (siehe die Gegenprobe unten).
+        "headers": {"Location": f"{base_url}/andere-seite"},
+        "body": '{"data": {"version": "8.1.3"}}',
+        "media_type": "application/json",
+    }
+    r = await client.post("/api/v1/extensions/backups/test", headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert _UMLEITUNG in body["message"] and f"HTTP {status_code}" in body["message"]
+    assert body["message"] == (
+        f"Der Server hat die Verbindung auf eine andere Adresse umgeleitet (HTTP {status_code}). "
+        "Solchen Umleitungen folgt Nodvard Deck aus Sicherheitsgründen nicht. "
+        "Prüfe die eingetragene Adresse des Servers."
+    )
+    assert base_url not in r.text and "andere-seite" not in r.text
+    assert "Traceback" not in r.text and "JSONDecodeError" not in r.text
+    # Genau ein Aufruf je Anfrage: die Weiterleitung wurde nicht verfolgt.
+    assert "/andere-seite" not in state["forced_hits"]
+    assert state["forced_hits"] and all(path.startswith("/api2/json/") for path in state["forced_hits"])
+    # Gegenprobe: ein Client, der Weiterleitungen folgt, haette die zweite Seite abgerufen und sie waere
+    # in `forced_hits` aufgetaucht. Ohne diese Probe wuerde der Test auch ein Verfolgen der Weiterleitung uebersehen.
+    import contextlib
+
+    import httpx
+
+    state["forced_hits"].clear()
+    async with httpx.AsyncClient(follow_redirects=True, max_redirects=2, trust_env=False) as following:
+        with contextlib.suppress(httpx.TooManyRedirects):  # der Testserver leitet jede Seite wieder um
+            await following.get(f"{base_url}/api2/json/version")
+    assert "/andere-seite" in state["forced_hits"]
+
+
+@pytest.mark.asyncio
+async def test_backups_answer_without_valid_json_gives_a_readable_error(client, db_session, test_settings, mock_backup_api):
+    """Ein 200 mit HTML (z. B. die Anmeldeseite eines Proxys) ergibt einen lesbaren Satz statt eines Tracebacks."""
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    state["forced"] = {"status": 200, "body": "<html><body>Anmelden</body></html>", "media_type": "text/html"}
+    r = await client.post("/api/v1/extensions/backups/test", headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["ok"] is False
+    assert body["message"] == "Die Antwort von Proxmox hat nicht das erwartete Format (HTTP 200). Stimmt die Adresse?"
+    assert "Traceback" not in r.text and "JSONDecodeError" not in r.text and "Expecting value" not in r.text
+
+
+_UMLEITUNG_OHNE_CODE = (
+    "Der Server hat die Verbindung auf eine andere Adresse umgeleitet. "
+    "Solchen Umleitungen folgt Nodvard Deck aus Sicherheitsgründen nicht. "
+    "Prüfe die eingetragene Adresse des Servers."
+)
+_KAPUTTE_ANTWORT = (
+    "Der Server hat die Verbindung abgebrochen oder eine fehlerhafte Antwort geschickt. "
+    "Prüfe die Adresse in den Einstellungen (http:// oder https://, Port)."
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("answer", [*REDIRECT_ANSWERS, *BROKEN_ANSWERS])
+async def test_backups_broken_answers_never_reach_the_test_or_the_pages(client, db_session, test_settings, answer):
+    """Kaputte Antworten (der echte Parser zitiert Zeilen des Servers, auch `Location`) ergeben im Verbindungstest
+    und in der Job-Liste einen festen Satz. "angreifer" steht nirgends."""
+    answers = {**REDIRECT_ANSWERS, **BROKEN_ANSWERS}
+    async with raw_http_server(answers[answer]) as base:
+        token = await _setup_backups(client, db_session, test_settings, base)
+        headers = _auth_header(token)
+        tested = await client.post("/api/v1/extensions/backups/test", headers=headers)
+        jobs = await client.get("/api/v1/ext/backups/jobs", headers=headers)
+    for response in (tested, jobs):
+        assert response.status_code == 200, response.text
+        assert "angreifer" not in response.text.lower() and "bytearray" not in response.text
+        assert "Technische Meldung" not in response.text and "Traceback" not in response.text
+    assert tested.json()["message"] == (_UMLEITUNG_OHNE_CODE if answer in REDIRECT_ANSWERS else _KAPUTTE_ANTWORT)
+
+
+@pytest.mark.asyncio
+async def test_backups_error_reason_from_the_json_is_kept_but_no_raw_text(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    token = await _setup_backups(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    state["forced"] = {
+        "status": 403,
+        "body": '{"data": null, "message": "Permission check failed (/, Sys.Audit)"}',
+        "media_type": "application/json",
+    }
+    rows = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    assert rows[0]["last_status"] == "unreachable"
+    assert "GET /cluster/backup -> HTTP 403: Dem Token fehlt ein Recht für diese Abfrage. Grund laut Proxmox: Permission check failed (/, Sys.Audit)." in str(rows[0])
+    state["forced"] = {"status": 502, "body": "<html><h1>angreifer</h1></html>", "media_type": "text/html"}
+    rows = (await client.get("/api/v1/ext/backups/jobs", headers=headers)).json()
+    assert "angreifer" not in str(rows[0]) and "HTTP 502: Proxmox oder ein Proxy davor meldet einen Fehler." in str(rows[0])
+
+
+def _backups_connector_answering(status_code: int, content: bytes, headers: dict | None = None):
+    """Ein echter Connector, dessen HTTP-Schicht eine feste `httpx.Response` liefert."""
+    import httpx
+
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+    from nodvard_deck_ext_backups.connector import ProxmoxBackupApiError, ProxmoxBackupConnector
+
+    class _Http:
+        async def request(self, method, url, **kwargs):
+            return httpx.Response(status_code, content=content, headers=headers, request=httpx.Request(method, url))
+
+    connector = ProxmoxBackupConnector(type("C", (), {"http": _Http()})(), base_url="https://x:8006", token_id="a@pve!t", token_secret="geheim-1234")
+    return connector, ProxmoxBackupApiError
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [300, 304, 308, 399])
+async def test_backups_connector_every_3xx_is_a_readable_error(status_code):
+    """Der ganze Bereich 300 bis 399 gilt als Weiterleitung, auch 304. Der Rumpf wird nicht gelesen,
+    Location und Zugangsdaten stehen nicht im Text."""
+    connector, error = _backups_connector_answering(
+        status_code, b'{"data": {"version": "8.1.3"}}', {"Location": "https://192.168.2.99/andere-seite"}
+    )
+    with pytest.raises(error) as caught:
+        await connector._request("GET", "/version")
+    text = str(caught.value)
+    assert text.startswith(f"Der Server hat die Verbindung auf eine andere Adresse umgeleitet (HTTP {status_code}).")
+    assert "andere-seite" not in text and "geheim-1234" not in text and "PVEAPIToken" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content", [b"", b"<html></html>", b"[1, 2]", b"null", b'"text"'])
+async def test_backups_connector_2xx_without_json_object_is_a_readable_error(content):
+    """Leerer Rumpf, HTML oder JSON, das kein Objekt ist: ein lesbarer Satz statt eines rohen Fehlers."""
+    connector, error = _backups_connector_answering(200, content)
+    with pytest.raises(error, match=r"^Die Antwort von Proxmox hat nicht das erwartete Format \(HTTP 200\)\. Stimmt die Adresse\?$"):
+        await connector._request("DELETE", "/x")
+
+
+@pytest.mark.asyncio
+async def test_backups_connector_4xx_gives_a_fixed_sentence_and_normal_answers_pass():
+    """4xx nennt Methode, Pfad, Status und einen festen Satz; der Antworttext (hier Klartext) steht nicht darin.
+    `{"data": null}` ist ein Erfolg."""
+    connector, error = _backups_connector_answering(403, b"Permission check failed")
+    with pytest.raises(error, match=r"^GET /version -> HTTP 403: Dem Token fehlt ein Recht für diese Abfrage\.$"):
+        await connector._request("GET", "/version")
+    connector, _ = _backups_connector_answering(200, b'{"data": null}')
+    assert await connector._request("DELETE", "/x") is None

@@ -27,6 +27,7 @@ from nodvard_deck.db import new_id, utcnow
 from nodvard_deck.models import RefreshToken, User
 from nodvard_deck.services import auth as auth_service
 from sqlalchemy import select
+from totp_helpers import setup_confirm_code
 
 NEW = "nodvard_deck_refresh"
 OLD = "lattice_refresh"
@@ -203,7 +204,7 @@ async def test_finishing_two_factor_login_writes_both_cookies(client):
     _, login = await _login(client)
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=headers)).json()["secret"]
-    confirm = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=headers)
+    confirm = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=headers)
     assert confirm.status_code == 200, confirm.text
 
     first = await _post(client, "/login", json={"username": "nico", "password": PASSWORD})

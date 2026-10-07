@@ -1,5 +1,5 @@
 """service-matrix-Extension -- `DockerServiceCatalog`. Fake-`ctx`-Unit-Tests wie
-`test_ext_nexus_soc_watcher.py` -- die reale
+`test_ext_shield_watcher.py` -- die reale
 `ctx.exec.run()` -> echter SSH-Server-Kette ist bereits bewiesen, hier
 geht es um die Docker-ps-Parsing-/URL-Rate-Logik selbst.
 """

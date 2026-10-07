@@ -351,7 +351,7 @@ async def _record_outcome(
         return
     # docs/02-EXTENSION-API.md §6 ("KI befoerdert wiederkehrenden Fix"): eine
     # Extension (z. B. scripts) soll auf wiederholte, identische Ausfuehrungen
-    # reagieren koennen, OHNE die auslösende Extension (z. B. nexus-soc) zu kennen --
+    # reagieren koennen, OHNE die auslösende Extension (z. B. Nodvard Shield) zu kennen --
     # "die beiden Extensions reden ueber den Event-Bus, nicht miteinander". Kern-Code
     # meldet Kern-Zustandsänderungen, unabhängig davon, ob heute schon ein Abonnent
     # existiert.
@@ -726,7 +726,7 @@ INTERRUPTED_ERROR = "Durch Neustart unterbrochen – Ausgang unbekannt, bitte au
 async def fail_interrupted_on_boot(session: AsyncSession) -> int:
     """Eine Aktion, die beim Start noch als `executing` gefuehrt wird, hat
     ein Neustart mitten in der Ausfuehrung abgebrochen (z. B. ein Deploy waehrend
-    `nexus_soc.upgrade`). Ohne diesen Schritt stuende sie fuer immer auf 'Laeuft' --
+    einer langen Aktion wie einem Update). Ohne diesen Schritt stuende sie fuer immer auf 'Laeuft' --
     `expire_stale()` kennt nur `proposed`, `services.jobs.mark_interrupted_on_boot()`
     nur JobRuns. Muss beim Start laufen, BEVOR Extensions geladen werden, damit keine
     gerade frisch gestartete Ausfuehrung mit erwischt wird (main.py-Lifespan). Je

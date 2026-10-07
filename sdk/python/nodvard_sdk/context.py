@@ -276,6 +276,13 @@ class SchedulerHandle(Protocol):
         """
         ...
 
+    def validate_schedule(self, schedule: str) -> None:
+        """Prueft einen Cron-Ausdruck (5 Felder) genau so, wie `register_job()` ihn braucht, ohne etwas
+        anzumelden: `ValueError` mit deutscher Meldung, wenn er sich nicht planen laesst. Fuer Zeitplaene,
+        die eine Erweiterung selbst speichert (z. B. den eines Skripts): erst pruefen, dann speichern --
+        ein gespeicherter kaputter Zeitplan liesse `register_job()` beim naechsten Start scheitern."""
+        ...
+
     async def trigger(self, job_id: str, **params: Any) -> str: ...
 
 
@@ -312,6 +319,10 @@ class NotifyHandle(Protocol):
 
 
 class AuditHandle(Protocol):
+    """Aktionen, die mit `mfa.`, `auth.`, `login.` oder `system.` beginnen, schreibt nur der Kern (er liest
+    sie wieder, etwa fuer die Sperre nach falschen Zwei-Faktor-Codes): `log()` wirft dafuer `ValueError` und
+    schreibt nichts. Eine Erweiterung nimmt ihre eigene Kennung als Anfang (`<kennung>.<ereignis>`)."""
+
     async def log(
         self,
         *,
@@ -328,7 +339,8 @@ class AuditHandle(Protocol):
 
 class WsHandle(Protocol):
     async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
-        """Kanal wird automatisch zu ext.<ext_id>.<channel> erweitert."""
+        """Kanal wird automatisch zu ext.<ext_id>.<channel> erweitert. Nach einer Umbenennung (`legacy_ids`)
+        geht dieselbe Nachricht zusaetzlich an die Kanaele der alten Kennungen."""
         ...
 
 
@@ -347,7 +359,12 @@ class HttpHandle(Protocol):
 
     Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) werden nie benutzt:
     jede Anfrage geht direkt an die gepruefte Adresse, auch mit `insecure_tls=True`.
-    `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter."""
+    `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter.
+
+    Weiterleitungen (3xx) werden nie verfolgt: eine Antwort mit Status 3xx kommt unveraendert zurueck, die
+    Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` wirft `ValueError` (die Zielpruefung
+    kennt nur die Adresse des Aufrufs, nicht das Ziel einer Weiterleitung), auch mit `insecure_tls` und bei
+    `stream()`; `follow_redirects=False` ist erlaubt."""
 
     async def get(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...
     async def post(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...

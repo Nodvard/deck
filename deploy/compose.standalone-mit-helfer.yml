@@ -1,0 +1,102 @@
+# Nodvard Deck MIT Update-Helfer: Updates per Knopf unter Einstellungen -> System -> Updates.
+# Erst ab Nodvard Deck 0.7.0. Vorher gibt es den Helfer noch nicht: Bleib dann bei compose.standalone.yml.
+# Wie compose.standalone.yml, dazu der kleine Dienst "updater". Der Helfer laeuft nur, wenn du diese Datei nimmst.
+#   1. Diese Datei als compose.yml in den Ordner laden. Eine compose.yml aus compose.standalone.yml darfst du damit
+#      ersetzen (gleicher Projektname, gleiche Daten). Die alte vorher sichern:  cp compose.yml compose.yml.alt
+#        curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone-mit-helfer.yml
+#      Hattest du in der alten Datei etwas geaendert (Port, Sicherungsordner, DNS), trag es in die neue ein. Vor allem
+#      einen Ordner statt des Datenspeichers (z. B. ./daten:/app/data): Fehlt er, startet Nodvard Deck mit leeren Daten.
+#   2. In diesem Ordner:  docker compose up -d
+#   3. Browser oeffnen: http://<Adresse-des-Rechners>:8080  (Einrichtungscode: docker compose logs nodvard-deck)
+# Portainer/Synology: die ganze Datei als EINEN Stack bzw. EIN Projekt anlegen, der Helfer muss im selben Projekt stehen.
+#
+# ACHTUNG: Der Helfer bekommt Zugriff auf Docker, das ist so viel wie root auf diesem Rechner. Er hat kein Netz,
+# hoert auf keinem Port und tauscht nur Nodvard Deck gegen eine neuere offizielle Version (ghcr.io/nodvard/deck).
+# Helfer aktualisieren (nicht waehrend eines Updates):  docker compose pull updater && docker compose up -d updater
+# Helfer wieder entfernen: zurueck zu compose.standalone.yml, dann  docker compose up -d --remove-orphans
+# Anderer Port: Umgebungsvariable NODVARD_DECK_PORT setzen (z. B. in einer Datei .env neben dieser Datei).
+
+# Fester Projektname wie in compose.standalone.yml: Der Ordnername bestimmt sonst den Namen des Datenspeichers.
+name: nodvard-deck
+
+services:
+  # Genau wie in compose.standalone.yml, nur mit einer Zeile mehr unter volumes (Kanal zum Helfer).
+  nodvard-deck:
+    image: ghcr.io/nodvard/deck:latest
+    restart: unless-stopped
+    ports:
+      - "${NODVARD_DECK_PORT:-${LATTICE_PORT:-8080}}:8080"
+    volumes:
+      # Alle Daten (Datenbank, Schluessel, Dokumente). Ein benannter Datenspeicher braucht keine
+      # Rechte-Einstellungen. Lieber einen Ordner? "./daten:/app/data" -- der Container setzt die
+      # Besitzrechte an diesem Ordner beim Start selbst.
+      - nodvard_deck_data:/app/data
+      # Kanal zum Update-Helfer: nur Auftraege und Rueckmeldungen, keine Daten (gehoert nicht in Sicherungen).
+      - nodvard_deck_updater:/app/updater
+      # Optional: Ordner fuer die Sicherungen aus Einstellungen -> System -> Sicherung, AUSSERHALB
+      # des Datenspeichers (am besten ein anderes Laufwerk oder ein NAS). Zeile einkommentieren,
+      # Ordner anlegen und dem Nutzer 1000 geben (`mkdir sicherungen && sudo chown 1000:1000 sicherungen`),
+      # dann in der Oberflaeche als Ordner `/backups` waehlen. Nur `/backups` (und darunter) ist
+      # als Ziel erlaubt, neben dem Standard /app/data/backups.
+      # - ./sicherungen:/backups
+    # Eigener Namensserver nur fuer diesen Container. Noetig nur, wenn interne Namen des Heimnetzes
+    # (z. B. von einem Pi-hole) nicht gefunden werden. Zum Einschalten die Zeilen einkommentieren:
+    # dns:
+    #   - 192.168.1.10
+    #   - 1.1.1.1
+    # Begrenzt die Docker-Logdatei (3 x 10 MB), damit sie nicht ungebremst waechst.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-I", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/v1/health', timeout=2)"]
+      interval: 30s
+      timeout: 3s
+      # Vor dem Start laeuft die Migration samt Kopie der Datenbank (`nodvard_deck.boot`) -- bei einer grossen Datenbank auf einem Pi
+      # Minuten. Waehrend dieser Zeit zaehlen Fehlschlaege nicht. Die Notseite antwortet mit 503; der Check schlaegt dann an.
+      start_period: 300s
+      retries: 3
+
+  # Der Update-Helfer. Er liest nur Auftraege aus dem Kanal, prueft sie selbst und spricht dann mit Docker.
+  updater:
+    # Tag 1 bekommt alle Versionen des Helfers mit derselben Schnittstelle. Wer es genau festlegen will: zusaetzlich
+    # den Digest anhaengen (ghcr.io/nodvard/deck-updater:1@sha256:...), dann aendert sich der Helfer nur von Hand.
+    image: ghcr.io/nodvard/deck-updater:1
+    restart: unless-stopped
+    # Kein Netz: Das Herunterladen der neuen Version macht Docker selbst, nicht der Helfer.
+    network_mode: none
+    # Alles nur lesbar, keine Sonderrechte, keine neuen Rechte zur Laufzeit, feste Obergrenzen.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - "no-new-privileges:true"
+    mem_limit: 64m
+    pids_limit: 32
+    # Nur noetig, wenn du den Dienst "nodvard-deck" oben umbenannt hast:
+    # environment:
+    #   NODVARD_DECK_UPDATER_SERVICE: nodvard-deck
+    volumes:
+      # Zugang zu Docker. Ohne ":ro": an einem Socket schuetzt das nichts, Docker liest und schreibt darueber trotzdem.
+      # Rootless Docker: in einer Datei .env neben dieser Datei den Pfad setzen, z. B.
+      #   NODVARD_DECK_DOCKER_SOCKET=/run/user/1000/docker.sock
+      - ${NODVARD_DECK_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock
+      # Kanal (dasselbe Volume wie /app/updater oben) und der eigene Zustand des Helfers (sieht Nodvard Deck nie).
+      - nodvard_deck_updater:/channel
+      - nodvard_deck_updater_state:/state
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Feste Namen: Sie bleiben gleich, auch wenn jemand den Projektnamen ueberstimmt (COMPOSE_PROJECT_NAME, -p).
+volumes:
+  nodvard_deck_data:
+    name: nodvard-deck-data
+  nodvard_deck_updater:
+    name: nodvard-deck-updater
+  nodvard_deck_updater_state:
+    name: nodvard-deck-updater-state

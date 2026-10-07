@@ -425,7 +425,7 @@ async def test_notify_result_says_whether_a_channel_really_delivered(db_session)
     "gesendet" meldet, obwohl nichts aufs Handy geht."""
     from nodvard_deck.ext.context import NotifyHandle, _PermissionChecker
 
-    handle = NotifyHandle(_PermissionChecker("nexus-soc", ["notify.send"]), "nexus-soc")
+    handle = NotifyHandle(_PermissionChecker("shield", ["notify.send"]), "shield")
     note = SdkNotification(title="T", body="B")
 
     assert (await handle.send(note)).delivered is False, "kein Kanal vorhanden"

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Waechter fuer die Umbenennung Lattice -> Nodvard Deck: der alte Name `lattice` kommt nicht zurueck.
+"""Waechter fuer die Umbenennungen Lattice -> Nodvard Deck und `nexus-soc` -> `shield`: die alten Namen kommen nicht zurueck.
 
 Das Projekt hiess `lattice` (Python-Pakete `lattice` und `lattice_sdk`). Seit der Umbenennung heissen sie
 `nodvard_deck` und `nodvard_sdk`; die alten Namen leben nur noch als winzige Alias-Pakete (`backend/src/lattice/`,
@@ -27,6 +27,19 @@ Bundles (`extensions/*/frontend/dist/`), Lock-Dateien, veroeffentlichte Aenderun
 in einer veroeffentlichten Version stand, wird nicht umgeschrieben) und die Alias-Pakete samt ihrer Tests (`test_shim_*`).
 Fliesstext "Lattice" mit grossem L (Produktname in Kommentaren) gehoert zur Umbenennung der sichtbaren Namen, nicht
 hierher: geprueft werden nur die technischen Schreibweisen `lattice` und `LATTICE`.
+
+**Regel 3 (alte Shield-Kennung):** Nodvard Shield hiess bis 0.6 technisch `nexus-soc` (Paket `nodvard_deck_ext_nexus_soc`,
+Aktionsarten `nexus_soc.*`); seit 0.7 heisst die Kennung `shield`. Zwei harte Verbote ohne Positivliste: das Paket
+`nodvard_deck_ext_nexus_soc` steht nirgends, und die alten Adressen `/ext/nexus-soc` und `/extensions/nexus-soc` stehen nur in
+Testdateien mit "legacy" im Namen (den Alias-Tests: `test_*legacy*.py`, `*Legacy*.test.ts(x)`). Jedes andere Vorkommen der klein
+geschriebenen technischen Schreibweise (`nexus`, `nexus-soc`, `nexus_soc`, `nexus-quarantine` ...) muss zu einem Eintrag von
+`KEPT_SHIELD` passen: Namen, die bewusst bleiben, weil sie in der Datenbank oder auf den Servern liegen und ein Rueckweg aufs alte
+Image daran haengt (Tabellen, Aktionsarten, Geheimnis-Label, Server-Ordner). Anders als bei Regel 2 nennt jeder Eintrag die
+Dateien, in denen er gilt (`where`); ein Test sorgt dafuer, dass jede dieser Angaben noch gebraucht wird. Nicht geprueft:
+`docs/`, `reference/`, Markdown, veroeffentlichte Aenderungsprotokolle, gebaute Bundles, die beiden Vertrags-Schnappschuesse
+`api_v1.json` und `alembic_revisions.json`, der eingefrorene Migrationsordner `extensions/shield/migrations/` (eine
+ausgelieferte Revision aendert sich nie) sowie die Waechter selbst und ihre Tests. Der Produktname in Grossschreibung
+(Fliesstext) gehoert zu `backend/tests/test_no_visible_nexus.py`.
 
 Der Waechter laeuft als pytest-Test (`backend/tests/test_legacy_names.py`), also mit `pytest backend/tests` und in der CI.
 """
@@ -120,6 +133,8 @@ class Kept:
     reason: str
     paths: re.Pattern[str] | None = None
     """Nur in Dateien, deren Pfad dazu passt (sonst gilt der Eintrag ueberall)."""
+    where: tuple[str, ...] = ()
+    """Bei `KEPT_SHIELD`: die einzelnen Pfad-Muster, aus denen `paths` zusammengesetzt ist (jedes muss noch gebraucht werden)."""
 
     def applies_to(self, rel: str) -> bool:
         return self.paths is None or bool(self.paths.search(rel))
@@ -208,6 +223,140 @@ KEPT_NAMES: tuple[Kept, ...] = (
 )
 
 
+# --------------------------------------------------------------------------- Regel 3 (alte Shield-Kennung)
+
+SHIELD_PACKAGE_RE = re.compile(r"nodvard_deck_ext_nexus_soc")
+SHIELD_ADDRESS_RE = re.compile(r"/(?:ext|extensions)/nexus-soc(?![\w-])")
+SHIELD_TOKEN_RE = re.compile(r"nexus|(?i:nexus[-_]soc)")
+"""Alles, was nach der alten Kennung aussieht: klein geschriebenes `nexus` (technische Schreibweise) und `nexus_soc` in jeder
+Gross-/Kleinschreibung. Den Produktnamen in Grossschreibung pruefen `test_no_visible_nexus.py` und die Sperrliste des Kerns."""
+
+# Alias-Tests: Dateien, die das Verhalten der alten Kennung ausdruecklich pruefen (Weiterleitung, Namen, Rueckweg). Nur dort darf
+# die alte Adresse stehen.
+_LEGACY_TEST = r"(?:tests/(?:[^/]+/)*test_[^/]*legacy[^/]*\.py|[^/]*[Ll]egacy[^/]*\.test\.tsx?)"
+LEGACY_TEST_RE = re.compile(rf"(?:^|/){_LEGACY_TEST}$")
+LEGACY_TEST_WHERE = rf"(?:^|/){_LEGACY_TEST}$"
+
+SHIELD_EXEMPT_PREFIXES = (
+    "docs/",
+    "reference/",
+    # Veroeffentlichte Aenderungsprotokolle: was in einer Version stand, bleibt stehen.
+    "backend/src/nodvard_deck/changelog/versions/",
+    # Eingefroren: eine ausgelieferte Alembic-Revision aendert sich nie (Dateiname, Branch-Label und Tabellen bleiben alt).
+    "extensions/shield/migrations/",
+    # Schnappschuesse des Vertrags (gespeicherte Namen, Branch-Label); sie entstehen aus dem Code (scripts/update_api_contract.py).
+    "backend/tests/contract/api_v1.json",
+    "backend/tests/contract/alembic_revisions.json",
+    # Die Waechter selbst und ihre Tests: sie nennen die alten Namen als Muster und Beispiele.
+    "scripts/check_legacy_names.py",
+    "backend/tests/test_legacy_names.py",
+    "scripts/check_core_purity.py",  # Sperrliste des Kerns: das Wort steht dort als verbotenes Wort
+    "backend/tests/test_no_visible_nexus.py",  # sucht das Wort in sichtbaren Texten
+)
+
+
+def is_shield_exempt(rel: str) -> bool:
+    return (
+        rel.startswith(SHIELD_EXEMPT_PREFIXES)
+        or rel.endswith(EXEMPT_SUFFIXES)  # Markdown, Lock-Dateien, Bilder ...
+        or bool(EXEMPT_DIST_RE.match(rel))  # gebaute Bundles
+    )
+
+
+def _ks(name: str, pattern: str, reason: str, where: list[str]) -> Kept:
+    """Eintrag der Positivliste fuer Regel 3: Pfad-Angaben sind Pflicht, `paths` ist ihre Vereinigung."""
+    paths = "|".join(f"(?:{w})" for w in where)
+    return Kept(name, re.compile(pattern), reason, re.compile(paths), tuple(where))
+
+
+def _f(*paths: str) -> list[str]:
+    """Je Datei ein Pfad-Muster (so laesst sich pruefen, dass jede Datei der Liste ihren Eintrag noch braucht)."""
+    return ["^" + re.escape(p) + "$" for p in paths]
+
+
+_SHIELD_SRC = r"^extensions/shield/src/nodvard_deck_ext_shield/"
+_SHIELD_OWN_TESTS = r"^backend/tests/test_ext_shield(?:_\w+)?\.py$"
+
+# Reihenfolge wie bei KEPT_NAMES: lange, spezielle Muster zuerst.
+KEPT_SHIELD: tuple[Kept, ...] = (
+    _ks("Shield: Geheimnis-Label",
+        r"nexus-soc-ollama-key|secrets\.read:nexus-soc-\*",
+        "Der API-Schluessel fuer Nodvard KI liegt im Tresor unter dem Label `nexus-soc-ollama-key`; das Recht dazu steht im Manifest als "
+        "`secrets.read:nexus-soc-*`. Das Geheimnis wird nur ueber sein Label gefunden: ein neues Label hiesse, der Schluessel ist weg, und "
+        "das alte Image faende ihn nach einem Rueckweg nicht.",
+        [*_f("extensions/shield/extension.toml", "extensions/shield/settings.schema.json",
+            "extensions/shield/src/nodvard_deck_ext_shield/ollama.py",
+            "frontend/src/preview/fixtures.ts",  # Vorschau-Testdaten: spiegeln das Schema
+            "backend/tests/test_ext_secret_binding.py", "backend/tests/test_shield_legacy_ids.py")]),
+    _ks("Shield: Tabellen und Indizes",
+        r"(?:ix_)?ext_nexus_soc_\w*",
+        "Die Tabellen `ext_nexus_soc_*` (8) und ihre Indizes `ix_ext_nexus_soc_*` behalten ihren Namen: Umbenennen braeuchte eine "
+        "Migration, und dann ginge der Rueckweg aufs alte Image nur ueber die Notseite oder eine Kopie mit Datenverlust "
+        "(wie bei `lattice.db`).",
+        [_SHIELD_SRC, _SHIELD_OWN_TESTS, *_f("backend/tests/test_migrate.py", "backend/tests/test_shield_legacy_ids.py")]),
+    _ks("Shield: Aktionsarten",
+        r"nexus_soc\\?\.(?:restore|delete|install|upgrade|reboot|ban|\*)|ACTION_PREFIX\s*==?\s*\"nexus_soc\"",
+        "Die Aktionsarten `nexus_soc.{restore,delete,install,upgrade,reboot,ban}` stehen in gespeicherten Vorschlaegen und Freigaben, "
+        "und das Gate findet den Ausfuehrer nur ueber die Art. So bleiben offene Vorschlaege ueber das Update und einen Rueckweg "
+        "ausfuehrbar; die Oberflaeche zeigt das Label der `ActionSpec` statt der Art. Der Name steht an einer Stelle (`ACTION_PREFIX` in "
+        "`ids.py`), Tests nennen ihn als Eingabe und Erwartung.",
+        [*_f("extensions/shield/src/nodvard_deck_ext_shield/ids.py", "frontend/src/lib/actionNames.test.ts",
+            "frontend/src/routes/ActionsPage.test.tsx"),
+         _SHIELD_OWN_TESTS, LEGACY_TEST_WHERE]),
+    _ks("Shield: alte Audit-Namen",
+        r"nexus_soc\.(?:incident(?:_status)?|proposal_rejected|\$\{\w+\}|<Vorgang>|\*)",
+        "Aeltere Eintraege im Protokoll (`audit_log`) heissen `nexus_soc.incident`, `nexus_soc.incident_status` und "
+        "`nexus_soc.proposal_rejected` und werden nicht umgeschrieben (Verlauf). Neue Eintraege heissen `shield.*`; nur die Beschriftung der "
+        "Container-Wache kennt beide Namen.",
+        [*_f("extensions/shield/frontend/src/ContainerWatch.tsx", "extensions/shield/frontend/src/ContainerWatch.test.tsx")]),
+    _ks("Shield: Server-Ordner",
+        r"lib\\?/nexus-(?:quarantine|updates)\b",
+        "Auf den verwalteten Servern liegen `/var/lib/nexus-quarantine` (Quarantaene) und `/var/lib/nexus-updates` (laufende Updates). Der "
+        "volle Pfad steht in `ext_nexus_soc_findings.quarantine_path`, die Loesch-Pruefung und die Wiederaufnahme laufender Updates "
+        "haengen am Ordner: ein Umzug gaebe falsche \"geloescht\"-Faelle und abgebrochene Laeufe.",
+        [*_f("extensions/shield/src/nodvard_deck_ext_shield/antivirus.py", "extensions/shield/src/nodvard_deck_ext_shield/detached.py",
+             "backend/tests/test_shield_legacy_ids.py", "extensions/shield/frontend/src/SocPage.test.tsx"),
+         _SHIELD_OWN_TESTS]),
+    _ks("Shield: alte feste Scan-Marke",
+        r"nexus-rc\b",
+        "Frueher trug jeder Scan die feste Rueckgabecode-Marke `@@nexus-rc=`; ein Dateiname mit dieser Marke konnte einen Fund "
+        "verstecken. Heute gilt je Lauf eine Zufallsmarke. Die Tests nennen die alte Marke als abgewehrte Eingabe und als Rest in "
+        "gespeicherten Laeufen (die Oberflaeche blendet ihn aus).",
+        [*_f("backend/tests/test_ext_shield_antivirus.py", "extensions/shield/frontend/src/SocPage.test.tsx")]),
+    _ks("Shield: alter Branch-Label und Ordner im Alembic-Test",
+        r"nexus-soc(?![\w-])",
+        "Die Alembic-Revisionen der Erweiterung behalten Dateinamen und `branch_labels=(\"nexus-soc\",)`: ausgelieferte Revisionen aendern sich "
+        "nie, und ein zweites Label wuerde alle Label-Mengen des Vertrags aendern. Die Tests nennen Label und den alten Ordner "
+        "(`VERSCHOBEN`), um das festzuhalten.",
+        [*_f("backend/tests/contract/test_alembic_revisions.py", "backend/tests/test_migrate.py")]),
+    _ks("Shield: Manifest",
+        r"legacy_ids\s*=\s*\[\"nexus-soc\"\]",
+        "Das Manifest nennt die alte Kennung als `legacy_ids`: Darueber findet der Kern die Registry-Zeile einer bestehenden "
+        "Installation (dort liegen die Einstellungen), haengt die alten Adressen als veraltet ein und kennt die Tabellen-Praefixe.",
+        [*_f("extensions/shield/extension.toml")]),
+    _ks("Shield: Herkunft der Kennung",
+        r"nexus-soc(?![\w-])",
+        "In `ids.py` und `ids.ts` steht, wie die Erweiterung bis 0.6 hiess: die eine Stelle, an der die Herkunft der Kennung "
+        "festgehalten ist. Andere Kommentare verweisen darauf.",
+        [*_f("extensions/shield/src/nodvard_deck_ext_shield/ids.py", "extensions/shield/frontend/src/ids.ts")]),
+    _ks("Shield: alte Kennung als Wert in den Alias-Tests",
+        r"nexus-soc(?![\w-])",
+        "Gespeicherte Daten einer Installation mit 0.6 tragen die alte Kennung (Meldungen `source_ext_id`, Protokoll `actor_id`, "
+        "Vorschlaege `ext_id`, Registry-Zeile, `legacy_ids` in der API). Die Tests stellen diese Daten nach und pruefen, dass Namen, "
+        "Weiterleitung und Rueckweg stimmen. Die alte Adresse darf nur in Dateien mit \"legacy\" im Namen stehen (harte Regel); die "
+        "uebrigen Dateien hier nutzen die Kennung nur als Wert.",
+        [LEGACY_TEST_WHERE,
+         *_f("backend/tests/test_ext_discovery.py", "frontend/src/components/NotificationBell.test.tsx",
+            "frontend/src/routes/NotificationsPage.test.tsx", "frontend/src/routes/Cockpit.test.tsx",
+            "frontend/src/lib/extensionNames.test.ts", "extensions/shield/frontend/src/ContainerWatch.test.tsx")]),
+    _ks("Shield: Herkunftsangabe reference/nexus",
+        r"reference/nexus\b",
+        "Der Ordner `reference/nexus/` enthaelt das alte Skript, aus dem das Dashboard hervorging (Herkunft, mit echten Infrastrukturdaten); "
+        "er ist von der oeffentlichen Ausgabe ausgenommen. Der Test der Ausgabe legt in seinem Wegwerf-Repository Dateien darin an.",
+        [*_f("backend/tests/test_export_public.py")]),
+)
+
+
 # --------------------------------------------------------------------------- Dateien einsammeln
 
 
@@ -245,7 +394,7 @@ def read_text(path: Path) -> str | None:
 class Finding:
     path: str
     line: int
-    rule: str  # "import" | "modul" | "klasse" | "name"
+    rule: str  # "import" | "modul" | "klasse" | "name" (lattice), "shield-paket" | "shield-adresse" | "shield-name" (Regel 3)
     text: str
     kept: str = ""  # Name der Positivliste, wenn erlaubt (nur --list)
 
@@ -253,17 +402,17 @@ class Finding:
         return f"{self.path}:{self.line}: [{self.rule}] {self.text.strip()[:200]}"
 
 
-def mask_kept(line: str, rel: str = "") -> str:
+def mask_kept(line: str, rel: str = "", entries: tuple[Kept, ...] = KEPT_NAMES) -> str:
     """Zeile, in der alle Positivlisten-Treffer durch Leerzeichen ersetzt sind."""
-    for kept in KEPT_NAMES:
+    for kept in entries:
         if kept.applies_to(rel):
             line = kept.pattern.sub(lambda m: " " * len(m.group(0)), line)
     return line
 
 
-def kept_names_in(line: str, rel: str = "") -> list[str]:
+def kept_names_in(line: str, rel: str = "", entries: tuple[Kept, ...] = KEPT_NAMES) -> list[str]:
     found = []
-    for kept in KEPT_NAMES:
+    for kept in entries:
         if not kept.applies_to(rel):
             continue
         if kept.pattern.search(line):
@@ -292,32 +441,59 @@ def check_text(rel: str, text: str) -> list[Finding]:
     return findings
 
 
+def check_shield_text(rel: str, text: str) -> list[Finding]:
+    """Regel 3 fuer eine Datei: die alte Shield-Kennung (Pfad relativ zum Repo, Inhalt)."""
+    findings: list[Finding] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if not SHIELD_TOKEN_RE.search(line):
+            continue
+        if SHIELD_PACKAGE_RE.search(line):
+            findings.append(Finding(rel, lineno, "shield-paket", line))
+            continue
+        if SHIELD_ADDRESS_RE.search(line) and not LEGACY_TEST_RE.search(rel):
+            findings.append(Finding(rel, lineno, "shield-adresse", line))
+            continue
+        if SHIELD_TOKEN_RE.search(mask_kept(line, rel, KEPT_SHIELD)):
+            findings.append(Finding(rel, lineno, "shield-name", line))
+    return findings
+
+
 def find_violations(root: Path = REPO_ROOT, files: list[str] | None = None) -> list[Finding]:
+    """Alle Verstoesse gegen Regel 1 und 2 (`lattice`) und Regel 3 (alte Shield-Kennung)."""
     out: list[Finding] = []
     for rel in files if files is not None else tracked_files(root):
-        if is_exempt(rel):
+        check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
+        if not (check_lattice or check_shield):
             continue
         text = read_text(root / rel)
         if text is None:
             continue
-        out += check_text(rel, text)
+        if check_lattice:
+            out += check_text(rel, text)
+        if check_shield:
+            out += check_shield_text(rel, text)
     return out
 
 
 def list_kept(root: Path = REPO_ROOT) -> list[Finding]:
-    """Alle erlaubten Vorkommen (Uebersicht fuer `--list`)."""
+    """Alle erlaubten Vorkommen (Uebersicht fuer `--list`): Regel 2 mit Art "bleibt", Regel 3 mit Art "shield-bleibt"."""
     out: list[Finding] = []
     for rel in tracked_files(root):
-        if is_exempt(rel):
+        check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
+        if not (check_lattice or check_shield):
             continue
         text = read_text(root / rel)
         if text is None:
             continue
         for lineno, line in enumerate(text.splitlines(), start=1):
-            if TOKEN_RE.search(line):
+            if check_lattice and TOKEN_RE.search(line):
                 names = kept_names_in(line, rel)
                 if names:
                     out.append(Finding(rel, lineno, "bleibt", line, kept=", ".join(names)))
+            if check_shield and SHIELD_TOKEN_RE.search(line):
+                names = kept_names_in(line, rel, KEPT_SHIELD)
+                if names:
+                    out.append(Finding(rel, lineno, "shield-bleibt", line, kept=", ".join(names)))
     return out
 
 
@@ -336,18 +512,32 @@ def main(argv: list[str] | None = None) -> int:
         for item in kept:
             print(f"{item.path}:{item.line}: [{item.kept}] {item.text.strip()[:160]}")
         print(f"\n{len(kept)} erlaubte Vorkommen.\n")
+    lattice_findings = [f for f in findings if not f.rule.startswith("shield-")]
+    shield_findings = [f for f in findings if f.rule.startswith("shield-")]
     if not findings:
         print("OK: Der alte Name `lattice` kommt ausserhalb der Alias-Pakete und der Positivliste nicht vor.")
+        print("OK: Die alte Shield-Kennung `nexus-soc` kommt ausserhalb der Positivliste und der Alias-Tests nicht vor.")
         return 0
 
-    print("Der alte Name `lattice` ist (wieder) im Code:\n")
-    for item in findings:
-        print(f"  {item}")
-    print(
-        f"\n{len(findings)} Fund(e). Der Kern heisst `nodvard_deck`, das SDK `nodvard_sdk` (`NodvardExtension`, `NodvardError`). "
-        "Gehoert der Name wirklich zu den bewusst belassenen (Daten, Namen auf fremden Rechnern, Frontend-Vertrag), "
-        "gehoert er mit Begruendung in KEPT_NAMES in scripts/check_legacy_names.py."
-    )
+    if lattice_findings:
+        print("Der alte Name `lattice` ist (wieder) im Code:\n")
+        for item in lattice_findings:
+            print(f"  {item}")
+        print(
+            f"\n{len(lattice_findings)} Fund(e). Der Kern heisst `nodvard_deck`, das SDK `nodvard_sdk` (`NodvardExtension`, `NodvardError`). "
+            "Gehoert der Name wirklich zu den bewusst belassenen (Daten, Namen auf fremden Rechnern, Frontend-Vertrag), "
+            "gehoert er mit Begruendung in KEPT_NAMES in scripts/check_legacy_names.py.\n"
+        )
+    if shield_findings:
+        print("Die alte Kennung von Nodvard Shield (`nexus-soc`) ist (wieder) im Code:\n")
+        for item in shield_findings:
+            print(f"  {item}")
+        print(
+            f"\n{len(shield_findings)} Fund(e). Die Erweiterung heisst `shield` (Ordner `extensions/shield`, Paket `nodvard_deck_ext_shield`); "
+            "die Kennung steht in `ids.py` bzw. `ids.ts`. Alte Adressen gehoeren nur in Alias-Tests (Dateiname mit \"legacy\"). "
+            "Gehoert der Name wirklich zu den bewusst belassenen (Tabellen, Aktionsarten, Geheimnis-Label, Server-Ordner), "
+            "gehoert er mit Begruendung und Dateiliste in KEPT_SHIELD in scripts/check_legacy_names.py."
+        )
     return 1
 
 

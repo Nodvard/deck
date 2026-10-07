@@ -1,7 +1,7 @@
 /**
  * Aktionen-Seite: die Oberflaeche zum Propose+Confirm-Gate (docs/00-DECISIONS.md,
  * core/gate.py) ueber `GET/POST /actions*` (Liste, Details, approve/reject/dismiss).
- * Bei `autonomy.mode=propose` (Default) landet JEDE Aktion -- ob von nexus-soc
+ * Bei `autonomy.mode=propose` (Default) landet JEDE Aktion -- ob von Nodvard Shield
  * vorgeschlagen oder von einem Nutzer ueber eine Extension-Seite ausgeloest -- als
  * `status=proposed` in der `actions`-Tabelle und bliebe ohne diese Seite dort
  * liegen: hier wird sie bestaetigt oder abgelehnt.
@@ -22,6 +22,7 @@ import {
   RUNNING_IN_BACKGROUND_TEXT,
   waitForAction,
 } from "../lib/actions";
+import { actionLabel, actionTitle, rawActionTitle } from "../lib/actionNames";
 import { api, ApiError } from "../lib/api";
 import { visibleCommand } from "../lib/visibleCommand";
 import { confirmDialog, promptDialog } from "../state/dialogs";
@@ -31,6 +32,10 @@ interface ActionOut {
   id: string;
   ext_id: string;
   action_type: string;
+  /** Lesbarer Name der Aktionsart. Fehlt, wenn die Erweiterung nicht geladen ist (oder bei einem älteren Backend): dann gilt `action_type`. */
+  action_label?: string | null;
+  /** Name der Erweiterung zu `ext_id`. Fehlt, wenn es sie nicht (mehr) gibt: dann gilt `ext_id`. */
+  ext_name?: string | null;
   host_id: string | null;
   /** Befehl (`command`) und weitere Einzelheiten; ohne Server-Rechte nur Kennungen, siehe `payload_hidden`. */
   payload: Record<string, unknown>;
@@ -296,7 +301,7 @@ export function ActionsPage(): JSX.Element {
       return;
     }
     if (next.tone !== "error") return;
-    const text = action && !next.text.startsWith(`${action.action_type}: `) ? `${action.action_type}: ${next.text}` : next.text;
+    const text = action && !next.text.startsWith(`${actionLabel(action)}: `) ? `${actionLabel(action)}: ${next.text}` : next.text;
     setLateErrors((prev) => (prev.some((e) => e.text === text) ? prev : [...prev, { tone: "error" as const, text }].slice(-MAX_LATE_ERRORS)));
   }
 
@@ -306,7 +311,7 @@ export function ActionsPage(): JSX.Element {
       const command = commandOf(a);
       if (command === null) return [];
       // Ungekürzt: wer freigibt, soll genau den Befehl lesen, der läuft (der Dialog scrollt).
-      return [`${a.action_type} auf ${hostLabel(a.host_id)}:\n${visibleCommand(command)}`];
+      return [`${actionLabel(a)} auf ${hostLabel(a.host_id)}:\n${visibleCommand(command)}`];
     });
     return lines.length > 0 ? `\n\nBefehle:\n${lines.join("\n\n")}` : "";
   }
@@ -316,7 +321,7 @@ export function ActionsPage(): JSX.Element {
     const types = new Map<string, number>();
     const hosts = new Set<string>();
     for (const a of batch) {
-      const label = `${a.ext_id}/${a.action_type}`;
+      const label = actionTitle(a);
       types.set(label, (types.get(label) ?? 0) + 1);
       if (a.host_id) hosts.add(hostLabel(a.host_id));
     }
@@ -328,7 +333,7 @@ export function ActionsPage(): JSX.Element {
 
   function report(seq: number, action: ActionOut, res: ActionOut) {
     const outcome = describeActionOutcome(res);
-    showMessage(seq, { tone: outcome.tone, text: `${action.action_type}: ${outcome.text}` }, action);
+    showMessage(seq, { tone: outcome.tone, text: `${actionLabel(action)}: ${outcome.text}` }, action);
   }
 
   /** Die Aktion laeuft noch im Hintergrund -- nachfragen, bis sie fertig
@@ -339,7 +344,7 @@ export function ActionsPage(): JSX.Element {
       report(seq, action, res);
     } catch (err) {
       if (isAbortError(err)) return;
-      if (err instanceof ActionWaitTimeout) showMessage(seq, { tone: "pending", text: `${action.action_type}: ${GAVE_UP_WAITING_TEXT}` });
+      if (err instanceof ActionWaitTimeout) showMessage(seq, { tone: "pending", text: `${actionLabel(action)}: ${GAVE_UP_WAITING_TEXT}` });
       else showMessage(seq, errorMessage(err), action);
     }
     load();
@@ -354,7 +359,7 @@ export function ActionsPage(): JSX.Element {
       // kommt 202 mit 'executing'.
       const res = await api.post<ActionOut>(`/actions/${action.id}/approve`);
       if (isActionRunning(res.status)) {
-        showMessage(seq, { tone: "pending", text: `${action.action_type}: ${RUNNING_IN_BACKGROUND_TEXT}` });
+        showMessage(seq, { tone: "pending", text: `${actionLabel(action)}: ${RUNNING_IN_BACKGROUND_TEXT}` });
         void follow(seq, action);
       } else {
         report(seq, action, res);
@@ -363,7 +368,7 @@ export function ActionsPage(): JSX.Element {
       if (err instanceof ApiError && err.status === 409 && /jetzt: '(approved|executing)'/.test(err.message)) {
         // Schon anderswo bestaetigt (zweiter Klick, anderer Tab) und laeuft noch --
         // kein Fehler, sondern dasselbe wie ein 202: nachfragen bis zum Ergebnis.
-        showMessage(seq, { tone: "pending", text: `${action.action_type}: Wurde schon bestätigt. ${RUNNING_IN_BACKGROUND_TEXT}` });
+        showMessage(seq, { tone: "pending", text: `${actionLabel(action)}: Wurde schon bestätigt. ${RUNNING_IN_BACKGROUND_TEXT}` });
         void follow(seq, action);
       } else {
         showMessage(seq, errorMessage(err), action);
@@ -377,13 +382,13 @@ export function ActionsPage(): JSX.Element {
   }
 
   async function reject(action: ActionOut) {
-    const reason = await promptDialog(`Ablehnen von "${action.action_type}" – Begründung:`);
+    const reason = await promptDialog(`Ablehnen von "${actionLabel(action)}" – Begründung:`);
     if (!reason) return;
     markBusy(action.id, true);
     const seq = clearMessage();
     try {
       await api.post(`/actions/${action.id}/reject`, { reason });
-      showMessage(seq, { tone: "neutral", text: `Abgelehnt: ${action.action_type}.` }, action);
+      showMessage(seq, { tone: "neutral", text: `Abgelehnt: ${actionLabel(action)}.` }, action);
     } catch (err) {
       showMessage(seq, errorMessage(err), action);
     } finally {
@@ -393,13 +398,13 @@ export function ActionsPage(): JSX.Element {
   }
 
   async function dismiss(action: ActionOut) {
-    const ok = await confirmDialog(`"${action.action_type}" verwerfen, ohne sie auszuführen?`);
+    const ok = await confirmDialog(`"${actionLabel(action)}" verwerfen, ohne sie auszuführen?`);
     if (!ok) return;
     markBusy(action.id, true);
     const seq = clearMessage();
     try {
       await api.post(`/actions/${action.id}/dismiss`);
-      showMessage(seq, { tone: "neutral", text: `Verworfen: ${action.action_type}.` });
+      showMessage(seq, { tone: "neutral", text: `Verworfen: ${actionLabel(action)}.` });
     } catch (err) {
       showMessage(seq, errorMessage(err));
     } finally {
@@ -437,7 +442,7 @@ export function ActionsPage(): JSX.Element {
           } else if (err instanceof ApiError && err.status === 409) {
             tally.stale += 1;
           } else if (err instanceof ApiError && err.status === 403) {
-            tally.blocked.push(`${action.ext_id}/${action.action_type}: ${err.message}`);
+            tally.blocked.push(`${actionTitle(action)}: ${err.message}`);
           } else {
             tally.failed.push(err instanceof ApiError ? err.message : String(err));
           }
@@ -618,14 +623,15 @@ export function ActionsPage(): JSX.Element {
                           checked={selected.has(a.id)}
                           disabled={anyBusy}
                           onChange={() => toggleSelected(a.id)}
-                          aria-label={`Auswählen: ${a.ext_id}/${a.action_type} auf ${hostLabel(a.host_id)}`}
+                          aria-label={`Auswählen: ${actionTitle(a)} auf ${hostLabel(a.host_id)}`}
                           className="h-4 w-4"
                         />
                       )}
                     </td>
                     <td className="py-1.5 opacity-70">{new Date(a.created_at).toLocaleString()}</td>
                     <td className="py-1.5">
-                      {a.ext_id}/{a.action_type}
+                      {/* Die rohen Kennungen bleiben als Tooltip erreichbar, sobald Namen dastehen. */}
+                      <span title={actionTitle(a) !== rawActionTitle(a) ? rawActionTitle(a) : undefined}>{actionTitle(a)}</span>
                       {commandOf(a) !== null ? (
                         <pre
                           data-testid={`command-${a.id}`}

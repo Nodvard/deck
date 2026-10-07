@@ -38,6 +38,7 @@ from nodvard_sdk import FileEntry, FileSourceCaps, SourceInfo, max_body_bytes
 from nodvard_sdk.capabilities import FileSource, FileSourceProvider
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.background import BackgroundTask
 
 from ...config import get_settings
 from ...core.error_text import describe_connection_error, is_expected_connection_error
@@ -211,6 +212,45 @@ async def _call(coro: Any, *, not_found: str | None = None) -> Any:
         ) from exc
 
 
+_STREAM_END = object()
+"""Marke fuer "die Quelle hat nichts geliefert" (eine leere Datei), unterscheidbar von einem leeren Teil."""
+
+
+async def _close_stream(stream: Any) -> None:
+    """Schliesst den Strom einer Quelle (`aclose()` eines Async-Generators gibt Dateien und Verbindungen frei).
+    Mehrfaches Schliessen ist harmlos; ein Fehler dabei darf eine fertige oder abgebrochene Antwort nicht stoeren."""
+    aclose = getattr(stream, "aclose", None)
+    if aclose is None:
+        return
+    try:
+        await aclose()
+    except Exception:  # die Antwort ist schon gelaufen, mehr als ein Vermerk ist nicht noetig
+        logger.debug("file_source_close_failed", exc_info=True)
+
+
+async def _start_stream(source: FileSource, path: PurePosixPath, offset: int) -> tuple[Any, Any]:
+    """Oeffnet `open_read()` und holt den ersten Teil. Gibt (Strom, erster Teil) zurueck, der erste Teil ist
+    `_STREAM_END` bei einer leeren Datei. Scheitert das, ist der Strom geschlossen und der Fehler geht weiter
+    (der Aufrufer uebersetzt ihn mit `_call()`)."""
+    stream = aiter(source.open_read(path, offset=offset))
+    try:
+        return stream, await anext(stream, _STREAM_END)
+    except BaseException:
+        await _close_stream(stream)
+        raise
+
+
+async def _primed_stream(stream: Any, first: Any) -> Any:
+    """Der schon geholte erste Teil, danach der Rest des Stroms; der Strom wird am Ende immer geschlossen."""
+    try:
+        if first is not _STREAM_END:
+            yield first
+        async for chunk in stream:
+            yield chunk
+    finally:
+        await _close_stream(stream)
+
+
 @router.get("/files/sources", dependencies=[Depends(require_permission("files.read"))])
 async def list_sources(user: CurrentUser) -> list[FileSourceOut]:
     sources = [s for s in await _all_sources() if _may_use(user, s)]
@@ -248,7 +288,6 @@ async def download_file(
     source = await _resolve_source(source_id, user, session)
     p = PurePosixPath(path)
     entry = await _call(source.stat(p), not_found=f"'{path}' nicht gefunden.")
-    await _audit(session, user.id, source, "files.download", detail={"path": path})
 
     offset = 0
     response_status = status.HTTP_200_OK
@@ -264,11 +303,32 @@ async def download_file(
             response_status = status.HTTP_206_PARTIAL_CONTENT
             headers["Content-Range"] = f"bytes {offset}-{entry.size - 1}/{entry.size}"
 
+    # Den ersten Teil holen, bevor die Antwort gebaut wird: Starlette schickt den Kopf (200/206) sofort beim Start
+    # des Stroms. Scheitert die Quelle gleich am Anfang (Nextcloud antwortet mit einer Weiterleitung oder 404, der
+    # Server ist weg), waere das sonst ein 200 mit leerem oder abgebrochenem Koerper statt eines Fehlers.
+    try:
+        stream, first = await _call(_start_stream(source, p, offset), not_found=f"'{path}' nicht gefunden.")
+    except HTTPException as exc:
+        if _required_permission(source) is not None:
+            await _audit(
+                session, user.id, source, "files.download", outcome="failure",
+                detail={"path": path, "status": exc.status_code},
+            )
+            await session.commit()
+        raise
+    try:
+        await _audit(session, user.id, source, "files.download", detail={"path": path})
+    except BaseException:
+        # Ohne Antwort schliesst sonst niemand den schon geoeffneten Strom.
+        await _close_stream(stream)
+        raise
+
     return StreamingResponse(
-        source.open_read(p, offset=offset),
+        _primed_stream(stream, first),
         status_code=response_status,
         media_type=entry.mime or "application/octet-stream",
         headers=headers,
+        background=BackgroundTask(_close_stream, stream),
     )
 
 

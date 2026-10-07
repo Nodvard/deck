@@ -6,6 +6,10 @@
 # Danach http://<host>:8080/ oeffnen -- eine frische Installation zeigt automatisch
 # den Erstinbetriebnahme-Assistenten (kein Nutzer existiert => /setup statt
 # /login). Siehe deploy/README.md fuer Backup/Restore und den Hardwarebedarf.
+#
+# Update-Helfer: gibt es hier bewusst nicht. Er aktualisiert nur das fertige Image (compose.standalone-mit-helfer.yml);
+# diese Datei baut selbst, aktualisiert wird mit scripts/deploy_pi.sh. Achtung: Dort heisst der Datenspeicher
+# nodvard-deck-data, hier deploy_lattice_data -- einfach die Datei zu wechseln startete mit leeren Daten.
 
 # Projektname FEST, nicht vom Ordnernamen abhaengig: Er steckt im Namen des Volumes
 # des Containers (`deploy-nodvard-deck-1`). Das Volume ist zusaetzlich unten fest benannt.

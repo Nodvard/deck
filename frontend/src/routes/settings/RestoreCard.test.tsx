@@ -285,6 +285,79 @@ describe("Karte Wiederherstellen: Ablauf", () => {
     expect(screen.getByText("Das steckt in der Sicherung")).toBeInTheDocument();
   });
 
+  it("Zwei-Faktor an: fragt der Server beim Einspielen nach dem Code, erscheint das Feld und das Passwort bleibt", async () => {
+    let answers = 0;
+    const calls = mockApi({
+      "GET /system/restore/status": () => status({ staged: staged({ state: "ready", summary: SUMMARY }) }),
+      [`POST /system/restore/${ID}/schedule`]: () => {
+        answers += 1;
+        if (answers === 1) {
+          return new Response(JSON.stringify({ detail: "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code aus deiner App ein.", code: "totp_missing" }), { status: 403 });
+        }
+        if (answers === 2) {
+          return new Response(JSON.stringify({ detail: "Der Zwei-Faktor-Code stimmt nicht.", code: "totp_wrong" }), { status: 400 });
+        }
+        return { id: ID, source: "owner", scheduled_at: "x", expires_in: 3500, sign_out_all: true, backup: {} };
+      },
+      "POST /system/restart": () => ({ restarting: true, exit_code: 75 }),
+    });
+    const health = vi.spyOn(restartProbe, "health");
+    health.mockResolvedValueOnce({ status: "ok", uptime_s: 800 });
+    health.mockResolvedValue({ status: "ok", uptime_s: 3 });
+    render(<RestoreCard />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Ich habe verstanden/ }));
+    expect(screen.queryByLabelText(/^Zwei-Faktor-Code/)).not.toBeInTheDocument();
+    typeInto("Anmeldepasswort zur Bestätigung", "konto-pw");
+    const apply = screen.getByRole("button", { name: "Einspielen und neu starten" });
+    fireEvent.click(apply);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Zwei-Faktor-Code");
+    expect(screen.getByLabelText("Anmeldepasswort zur Bestätigung")).toHaveValue("konto-pw");
+    expect(apply).toBeDisabled();
+    typeInto(/^Zwei-Faktor-Code/, "000000");
+    fireEvent.click(apply);
+    // Vertippt: Das Passwort bleibt stehen, nur der Code muss neu.
+    expect(await screen.findByText("Der Zwei-Faktor-Code stimmt nicht.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Anmeldepasswort zur Bestätigung")).toHaveValue("konto-pw");
+    expect(screen.getByLabelText(/^Zwei-Faktor-Code/)).toHaveValue("");
+    expect(apply).toBeDisabled();
+    typeInto(/^Zwei-Faktor-Code/, "123456");
+    expect(apply).toBeEnabled();
+    fireEvent.click(apply);
+    await waitFor(() => expect(browserNavigation.assign).toHaveBeenCalledWith("/login"));
+    expect(calls.filter((c) => c.path.endsWith("/schedule")).map((c) => c.body)).toEqual([
+      { current_password: "konto-pw", sign_out_all: true },
+      { current_password: "konto-pw", sign_out_all: true, totp_code: "000000" },
+      { current_password: "konto-pw", sign_out_all: true, totp_code: "123456" },
+    ]);
+    // Der Neustart braucht keinen Code, nur das Passwort.
+    expect(calls.find((c) => c.path === "/system/restart")?.body).toEqual({ current_password: "konto-pw" });
+    expect(document.body.innerHTML).not.toContain("konto-pw");
+  });
+
+  it("Zwei-Faktor an (GET /me): das Code-Feld steht beim Einspielen gleich da, ohne Rückfrage des Servers", async () => {
+    const calls = mockApi({
+      "GET /me": () => ({ id: "u1", username: "nico", totp_enabled: true }),
+      "GET /system/restore/status": () => status({ staged: staged({ state: "ready", summary: SUMMARY }) }),
+      [`POST /system/restore/${ID}/schedule`]: () => ({ id: ID, source: "owner", scheduled_at: "x", expires_in: 3500, sign_out_all: true, backup: {} }),
+      "POST /system/restart": () => ({ restarting: true, exit_code: 75 }),
+    });
+    const health = vi.spyOn(restartProbe, "health");
+    health.mockResolvedValueOnce({ status: "ok", uptime_s: 800 });
+    health.mockResolvedValue({ status: "ok", uptime_s: 3 });
+    render(<RestoreCard />);
+    fireEvent.click(await screen.findByRole("checkbox", { name: /Ich habe verstanden/ }));
+    const field = await screen.findByLabelText(/^Zwei-Faktor-Code/);
+    typeInto("Anmeldepasswort zur Bestätigung", "konto-pw");
+    const apply = screen.getByRole("button", { name: "Einspielen und neu starten" });
+    expect(apply).toBeDisabled();
+    fireEvent.change(field, { target: { value: "123456" } });
+    fireEvent.click(apply);
+    await waitFor(() => expect(browserNavigation.assign).toHaveBeenCalledWith("/login"));
+    expect(calls.filter((c) => c.path.endsWith("/schedule")).map((c) => c.body)).toEqual([
+      { current_password: "konto-pw", sign_out_all: true, totp_code: "123456" },
+    ]);
+  });
+
   it("Wartebildschirm: dauert es zu lange, kommt ein Hinweis mit der Neustart-Regel", async () => {
     mockApi({
       "GET /system/restore/status": () => status({ staged: staged({ state: "ready", summary: SUMMARY }) }),

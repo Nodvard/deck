@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useState, type ComponentType } from "react";
-import { Link, useLocation, useParams } from "react-router-dom";
+import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 
 import { api } from "../lib/api";
 import { usePages } from "../lib/catalog";
@@ -91,6 +91,11 @@ export function ExtensionPage() {
   const [error, setError] = useState<string | null>(null);
 
   const page = pages?.find((p) => p.ext_id === extId && `/ext/${p.ext_id}${p.path}` === location.pathname);
+  // Alte Adresse einer umbenannten Erweiterung (Lesezeichen, ntfy-Link, gespeicherte Meldung): die Seite gibt es
+  // unter der heutigen Kennung. Eine Seite unter der Kennung aus der Adresse geht vor.
+  const renamedPage = page
+    ? undefined
+    : pages?.find((p) => extId !== undefined && p.legacy_ext_ids?.includes(extId) && `/ext/${extId}${p.path}` === location.pathname);
 
   useEffect(() => {
     if (!page) return;
@@ -143,6 +148,8 @@ export function ExtensionPage() {
   }, []);
 
   if (isLoading) return <p className="p-6 text-sm opacity-60">Lade …</p>;
+  // Ersetzend, mit unveränderter Abfrage und unverändertem Anker (`?tab=…#…`): Zurück führt nicht auf die alte Adresse.
+  if (renamedPage) return <Navigate replace to={{ pathname: `/ext/${renamedPage.ext_id}${renamedPage.path}`, search: location.search, hash: location.hash }} />;
   if (!page) return <PageMissing extId={extId} />;
   if (error) return <p className="p-6 text-sm text-red-400">Fehler im Modul: {error}</p>;
   if (!Component) return <p className="p-6 text-sm opacity-60">Lade Modul …</p>;

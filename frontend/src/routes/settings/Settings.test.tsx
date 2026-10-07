@@ -11,7 +11,7 @@ import { useBrandingStore } from "../../state/branding";
 import { AccountSettings } from "./AccountSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AuditSettings, targetText } from "./AuditSettings";
-import { AutomationSettings } from "./AutomationSettings";
+import { AutomationSettings, autonomySteps } from "./AutomationSettings";
 import { ExtensionConfigPage } from "./ExtensionConfigPage";
 import { ExtensionsSettings } from "./ExtensionsSettings";
 import { SettingsLayout } from "./SettingsLayout";
@@ -219,7 +219,7 @@ describe("Einstellungen", () => {
     ]);
   });
 
-  it("Mein Konto: Wiederherstellungs-Codes werden einmal gezeigt und lassen sich mit Passwort neu erzeugen", async () => {
+  it("Mein Konto: Wiederherstellungs-Codes werden einmal gezeigt und lassen sich mit Passwort und Code neu erzeugen", async () => {
     let enabled = false;
     let remaining = 0;
     const calls = mockApi({
@@ -243,17 +243,56 @@ describe("Einstellungen", () => {
     expect(await screen.findByText(/Noch 10 von 10 Codes übrig/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Neue Wiederherstellungs-Codes erzeugen" }));
-    const generate = screen.getByRole("button", { name: "Erzeugen" });
+    const renew = within(screen.getByTestId("renew-codes"));
+    const generate = renew.getByRole("button", { name: "Erzeugen" });
     expect(generate).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/^Passwort zur Bestätigung/), { target: { value: "geheim123" } });
+    fireEvent.change(renew.getByLabelText(/^Passwort zur Bestätigung/), { target: { value: "geheim123" } });
+    expect(generate).toBeDisabled();
+    fireEvent.change(renew.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: "AAAAA-BBBBB " } });
     fireEvent.click(generate);
     expect(await screen.findByTestId("recovery-codes")).toHaveTextContent("EEEEE-FFFFF");
-    expect(calls.find((c) => c.path === "/me/recovery-codes")?.body).toEqual({ current_password: "geheim123" });
+    expect(calls.find((c) => c.path === "/me/recovery-codes")?.body).toEqual({ current_password: "geheim123", totp_code: "AAAAA-BBBBB" });
   });
 
-  it("Mein Konto: Zwei-Faktor abschalten verlangt das Passwort und zeigt dessen Fehler", async () => {
+  it("Mein Konto: neue Wiederherstellungs-Codes zeigen einen falschen Code an und lassen einen neuen eintippen", async () => {
+    mockApi({
+      "GET /me": () => ({ id: "u1", username: "nico", display_name: "", email: null, is_owner: false, locale: "de", permissions: [], totp_enabled: true, recovery_codes_remaining: 2 }),
+    });
+    const answers = [
+      { detail: "Das aktuelle Passwort stimmt nicht." },
+      { detail: "Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt.", code: "totp_used" },
+    ];
+    const base = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/me/recovery-codes")) {
+        return new Response(JSON.stringify(answers.shift()), { status: 400 });
+      }
+      return base(input, init);
+    }));
+    render(<AccountSettings />);
+    fireEvent.click(await screen.findByRole("button", { name: "Neue Wiederherstellungs-Codes erzeugen" }));
+    const renew = within(screen.getByTestId("renew-codes"));
+    const codeField = () => renew.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/);
+    fireEvent.change(renew.getByLabelText(/^Passwort zur Bestätigung/), { target: { value: "falsch" } });
+    fireEvent.change(codeField(), { target: { value: "ABCDE-FGHJK" } });
+    fireEvent.click(renew.getByRole("button", { name: "Erzeugen" }));
+    await screen.findByText("Das aktuelle Passwort stimmt nicht.");
+    // Falsches Passwort: Den Code hat der Server gar nicht geprüft, er bleibt stehen.
+    expect(codeField()).toHaveValue("ABCDE-FGHJK");
+
+    fireEvent.change(renew.getByLabelText(/^Passwort zur Bestätigung/), { target: { value: "geheim123" } });
+    fireEvent.change(codeField(), { target: { value: "123456" } });
+    fireEvent.click(renew.getByRole("button", { name: "Erzeugen" }));
+    await screen.findByText("Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt.");
+    expect(codeField()).toHaveValue("");
+    expect(renew.getByLabelText(/^Passwort zur Bestätigung/)).toHaveValue("geheim123");
+    expect(renew.getByRole("button", { name: "Erzeugen" })).toBeDisabled();
+    expect(screen.queryByTestId("recovery-codes")).not.toBeInTheDocument();
+  });
+
+  /** Mein Konto mit eingeschalteter Zwei-Faktor-Anmeldung; `DELETE /me/totp` antwortet der Reihe nach mit `answers`. */
+  function mockDisable(answers: Response[]) {
     let enabled = true;
-    let attempt = 0;
     const calls = mockApi({
       "GET /me": () => ({ id: "u1", username: "nico", display_name: "", email: null, is_owner: false, locale: "de", permissions: [], totp_enabled: enabled, recovery_codes_remaining: 4 }),
     });
@@ -261,24 +300,91 @@ describe("Einstellungen", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       if (String(input).endsWith("/me/totp") && init?.method === "DELETE") {
         calls.push({ method: "DELETE", path: "/me/totp", body: JSON.parse(init.body as string) });
-        attempt += 1;
-        if (attempt === 1) return new Response(JSON.stringify({ detail: "Das aktuelle Passwort stimmt nicht." }), { status: 400 });
-        enabled = false;
-        return new Response(null, { status: 204 });
+        const answer = answers.shift() ?? new Response(null, { status: 204 });
+        if (answer.status === 204) enabled = false;
+        return answer;
       }
       return base(input, init);
     }));
+    return calls;
+  }
+
+  const json = (status: number, body: unknown, headers?: Record<string, string>) =>
+    new Response(JSON.stringify(body), { status, headers });
+
+  const LOCKED_WITH_HINT =
+    "Zu viele Fehlversuche. Bitte in 15 Minuten erneut versuchen. Mit einem noch unbenutzten Wiederherstellungs-Code geht es auch jetzt.";
+
+  async function openDisable() {
     render(<AccountSettings />);
     fireEvent.click(await screen.findByRole("button", { name: "Abschalten" }));
-    const confirm = screen.getAllByRole("button", { name: "Abschalten" })[0];
+    return within(screen.getByTestId("disable-2fa"));
+  }
+
+  it("Mein Konto: Zwei-Faktor abschalten verlangt Passwort und Code und zeigt die Fehler", async () => {
+    const calls = mockDisable([
+      json(400, { detail: "Das aktuelle Passwort stimmt nicht." }),
+      json(400, { detail: "Der Zwei-Faktor-Code stimmt nicht.", code: "totp_wrong" }),
+    ]);
+    const box = await openDisable();
+    const confirm = box.getByRole("button", { name: "Abschalten" });
     expect(confirm).toBeDisabled();
-    fireEvent.change(screen.getByLabelText(/^Passwort zum Abschalten/), { target: { value: "falsch" } });
-    fireEvent.click(screen.getByRole("button", { name: "Abschalten" }));
+    fireEvent.change(box.getByLabelText(/^Passwort zum Abschalten/), { target: { value: "falsch" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: " 123 456 " } });
+    fireEvent.click(confirm);
     await screen.findByText("Das aktuelle Passwort stimmt nicht.");
-    fireEvent.change(screen.getByLabelText(/^Passwort zum Abschalten/), { target: { value: "richtig" } });
-    fireEvent.click(screen.getByRole("button", { name: "Abschalten" }));
+    // Falsches Passwort: Den Code hat der Server gar nicht geprüft, beide Eingaben bleiben stehen.
+    expect(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/)).toHaveValue(" 123 456 ");
+    expect(box.getByLabelText(/^Passwort zum Abschalten/)).toHaveValue("falsch");
+
+    fireEvent.change(box.getByLabelText(/^Passwort zum Abschalten/), { target: { value: "richtig" } });
+    fireEvent.change(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: "000000" } });
+    fireEvent.click(confirm);
+    await screen.findByText("Der Zwei-Faktor-Code stimmt nicht.");
+    // Der Code wurde abgelehnt: Das Code-Feld ist leer (ein App-Code gilt nur kurz), das Passwort bleibt stehen.
+    expect(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/)).toHaveValue("");
+    expect(box.getByLabelText(/^Passwort zum Abschalten/)).toHaveValue("richtig");
+    expect(confirm).toBeDisabled();
+
+    fireEvent.change(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: "654321" } });
+    fireEvent.click(confirm);
     await screen.findByText("Zwei-Faktor-Anmeldung abgeschaltet.");
-    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.body)).toEqual([{ current_password: "falsch" }, { current_password: "richtig" }]);
+    expect(calls.filter((c) => c.method === "DELETE").map((c) => c.body)).toEqual([
+      { current_password: "falsch", totp_code: "123 456" },
+      { current_password: "richtig", totp_code: "000000" },
+      { current_password: "richtig", totp_code: "654321" },
+    ]);
+  });
+
+  it("Mein Konto: Zwei-Faktor abschalten geht auch mit einem Wiederherstellungs-Code", async () => {
+    const calls = mockDisable([]);
+    const box = await openDisable();
+    expect(box.getByText(/Wiederherstellungs-Codes, er ist danach verbraucht/)).toBeInTheDocument();
+    fireEvent.change(box.getByLabelText(/^Passwort zum Abschalten/), { target: { value: "richtig" } });
+    fireEvent.change(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: "abcde-fghjk" } });
+    fireEvent.click(box.getByRole("button", { name: "Abschalten" }));
+    await screen.findByText("Zwei-Faktor-Anmeldung abgeschaltet.");
+    expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ current_password: "richtig", totp_code: "abcde-fghjk" });
+  });
+
+  it("Mein Konto: Zwei-Faktor abschalten zeigt fehlenden Code und Sperre verständlich an", async () => {
+    mockDisable([
+      json(403, { detail: "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code aus deiner App oder einen Wiederherstellungs-Code ein.", code: "totp_missing" }),
+      json(429, { detail: LOCKED_WITH_HINT }, { "Retry-After": "900" }),
+    ]);
+    const box = await openDisable();
+    fireEvent.change(box.getByLabelText(/^Passwort zum Abschalten/), { target: { value: "richtig" } });
+    fireEvent.change(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: "123456" } });
+    fireEvent.click(box.getByRole("button", { name: "Abschalten" }));
+    await screen.findByText(/Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code/);
+    fireEvent.change(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/), { target: { value: "123456" } });
+    fireEvent.click(box.getByRole("button", { name: "Abschalten" }));
+    // Gesperrt sind nur Codes aus der App: Die Meldung sagt, dass ein Wiederherstellungs-Code weiter geht.
+    await screen.findByText(LOCKED_WITH_HINT);
+    expect(box.getByLabelText(/^Code aus der App oder Wiederherstellungs-Code/)).toHaveValue("123456");
+    // Zwei-Faktor ist weiter an: der Bereich zum Abschalten bleibt offen.
+    expect(screen.getByTestId("disable-2fa")).toBeInTheDocument();
   });
 
   it("Aussehen: Logo-Upload, falscher Bildtyp und Speichern aller Felder", async () => {
@@ -349,7 +455,10 @@ describe("Einstellungen", () => {
     fireEvent.click(screen.getByRole("button", { name: /Mittel/ }));
     fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
     await screen.findByText("Gespeichert.");
-    expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([{ value: "full" }, { value: "medium" }]);
+    // Lockern (Vorschlagen -> Selbstständig): erst die Risikostufe, dann der Modus.
+    expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
+      ["/settings/autonomy.max_risk", { value: "medium" }], ["/settings/autonomy.mode", { value: "full" }],
+    ]);
 
     fireEvent.change(screen.getByLabelText("Neues Muster"), { target: { value: "(" } });
     fireEvent.click(screen.getByRole("button", { name: "Hinzufügen" }));
@@ -369,6 +478,149 @@ describe("Einstellungen", () => {
     fireEvent.click(screen.getAllByRole("button", { name: "Speichern" }).at(-1)!);
     await screen.findByText("Wartungsfenster gespeichert.");
     expect(calls.at(-1)?.body).toEqual({ value: [{ cron: "0 2 * * 0", duration_minutes: 60, host_ids: ["h1"] }] });
+  });
+
+  describe("Automatik: Selbstständigkeit wird in zwei Schritten gespeichert", () => {
+    type Stored = { mode: string; risk: string };
+
+    /** Ein Server, der beide Schlüssel einzeln speichert; `failOn` lässt genau diese Anfrage wie einen Verbindungsabbruch scheitern. */
+    function autonomyServer(stored: Stored, opts: { failOn?: string; failReload?: boolean } = {}) {
+      const writes: string[] = [];
+      let attempts = 0;
+      let reloads = 0;
+      const calls = mockApi({
+        "GET /settings": () => {
+          if (attempts > 0) {
+            reloads += 1;
+            if (opts.failReload) throw new TypeError("Failed to fetch");
+          }
+          return [
+            { key: "autonomy.mode", value: stored.mode }, { key: "autonomy.max_risk", value: stored.risk },
+            { key: "security.deny_patterns", value: [] }, { key: "maintenance.windows", value: [] },
+          ];
+        },
+        "GET /hosts": () => [],
+        "PUT /settings/autonomy.mode": (_m, b) => {
+          attempts += 1;
+          if (opts.failOn === "mode") throw new TypeError("Failed to fetch");
+          writes.push("mode");
+          stored.mode = (b as { value: string }).value;
+          return { key: "autonomy.mode", ...(b as object) };
+        },
+        "PUT /settings/autonomy.max_risk": (_m, b) => {
+          attempts += 1;
+          if (opts.failOn === "max_risk") throw new TypeError("Failed to fetch");
+          writes.push("max_risk");
+          stored.risk = (b as { value: string }).value;
+          return { key: "autonomy.max_risk", ...(b as object) };
+        },
+      });
+      return { calls, writes, reloads: () => reloads };
+    }
+
+    const puts = (calls: { method: string; path: string; body: unknown }[]) =>
+      calls.filter((c) => c.method === "PUT").map((c) => `${c.path.replace("/settings/autonomy.", "")}=${(c.body as { value: string }).value}`);
+
+    it("Lockern: erst die Risikostufe, dann der Modus", async () => {
+      const { calls } = autonomyServer({ mode: "propose", risk: "low" });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Hoch/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      await screen.findByText("Gespeichert.");
+      expect(puts(calls)).toEqual(["max_risk=high", "mode=full"]);
+    });
+
+    it("Verschärfen: erst der Modus, dann die Risikostufe", async () => {
+      const { calls } = autonomyServer({ mode: "full", risk: "high" });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("button", { name: /Mittel/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /Nur vorschlagen/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      await screen.findByText("Gespeichert.");
+      expect(puts(calls)).toEqual(["mode=propose", "max_risk=medium"]);
+    });
+
+    it("schreibt nur, was sich geändert hat", async () => {
+      const { calls } = autonomyServer({ mode: "full", risk: "low" });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("button", { name: /Hoch/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      await screen.findByText("Gespeichert.");
+      expect(puts(calls)).toEqual(["max_risk=high"]);
+    });
+
+    it("Lockern, zweiter Schritt scheitert: lädt neu und zeigt den echten Stand (es läuft weiter nichts ohne Rückfrage)", async () => {
+      const server = autonomyServer({ mode: "propose", risk: "low" }, { failOn: "mode" });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Hoch/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      expect(await screen.findByText(/Aktuell gespeichert: Nur vorschlagen\./)).toBeInTheDocument();
+      expect(puts(server.calls)).toEqual(["max_risk=high", "mode=full"]); // der zweite ist gescheitert, gespeichert ist nur der erste
+      expect(server.reloads()).toBe(1);
+      expect(screen.getByRole("radio", { name: /Nur vorschlagen/ })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("radio", { name: /Selbstständig handeln/ })).toHaveAttribute("aria-checked", "false");
+      expect(screen.getByRole("button", { name: /Hoch/ })).toHaveAttribute("aria-pressed", "true"); // so steht es auf dem Server
+    });
+
+    it("Verschärfen, zweiter Schritt scheitert: lädt neu, der Modus steht schon auf „Nur vorschlagen“", async () => {
+      const server = autonomyServer({ mode: "full", risk: "high" }, { failOn: "max_risk" });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("button", { name: /Niedrig/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /Nur vorschlagen/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      expect(await screen.findByText(/Aktuell gespeichert: Nur vorschlagen\./)).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: /Nur vorschlagen/ })).toHaveAttribute("aria-checked", "true");
+      expect(screen.getByRole("button", { name: /Hoch/ })).toHaveAttribute("aria-pressed", "true");
+      expect(server.reloads()).toBe(1);
+    });
+
+    it("Der erste Schritt scheitert: nichts ist gespeichert, die Seite zeigt den Stand vom Server", async () => {
+      const server = autonomyServer({ mode: "propose", risk: "low" }, { failOn: "max_risk" });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
+      fireEvent.click(screen.getByRole("button", { name: /Hoch/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      expect(await screen.findByText(/Server gerade nicht erreichbar.*Aktuell gespeichert: Nur vorschlagen\./)).toBeInTheDocument();
+      expect(puts(server.calls)).toEqual(["max_risk=high"]); // der Versuch, geschrieben wurde nichts
+      expect(server.writes).toEqual([]);
+    });
+
+    it("Klappt auch das Neuladen nicht, steht da, dass der Stand unklar ist (der Entwurf bleibt)", async () => {
+      autonomyServer({ mode: "propose", risk: "low" }, { failOn: "mode", failReload: true });
+      render(<AutomationSettings />);
+      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
+      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      expect(await screen.findByText(/Ob etwas davon gespeichert wurde, ist unklar/)).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: /Selbstständig handeln/ })).toHaveAttribute("aria-checked", "true");
+    });
+
+    it("autonomySteps: in keinem Zwischenstand ist mehr erlaubt als vorher und nachher", () => {
+      const risks = ["low", "medium", "high", "critical"];
+      const modes = ["propose", "full"];
+      /** Was ohne Rückfrage laufen darf: im Modus „propose“ nichts, sonst alles bis zur Risikostufe. */
+      const allowed = (mode: string, risk: string) => (mode === "full" ? risks.slice(0, risks.indexOf(risk) + 1) : []);
+      const subset = (a: string[], b: string[]) => a.every((x) => b.includes(x));
+
+      let checked = 0;
+      for (const m0 of modes) for (const r0 of risks) for (const m1 of modes) for (const r1 of risks) {
+        const before = { mode: m0, maxRisk: r0 };
+        const after = { mode: m1, maxRisk: r1 };
+        let state = { ...before };
+        const steps = autonomySteps(before, after);
+        steps.forEach((step, i) => {
+          state = step.key === "autonomy.mode" ? { ...state, mode: step.value } : { ...state, maxRisk: step.value };
+          if (i === steps.length - 1) return; // der letzte Schritt ist der Endstand, nur davor gibt es einen Zwischenstand
+          const now = allowed(state.mode, state.maxRisk);
+          expect(subset(now, allowed(m0, r0)) && subset(now, allowed(m1, r1)), `${m0}/${r0} -> ${m1}/${r1}: Zwischenstand ${state.mode}/${state.maxRisk}`).toBe(true);
+        });
+        expect(state).toEqual(after); // am Ende steht der gewünschte Stand
+        checked += 1;
+      }
+      expect(checked).toBe(64);
+      expect(autonomySteps({ mode: "full", maxRisk: "low" }, { mode: "full", maxRisk: "low" })).toEqual([]);
+    });
   });
 
   it("Erweiterungen: mitgelieferte zeigen die Programmversion, nachinstallierte ihre eigene, ältere Server v<Version>", async () => {
@@ -391,17 +643,17 @@ describe("Einstellungen", () => {
     let state = "enabled";
     const calls = mockApi({
       "GET /extensions": () => [{
-        id: "nexus-soc", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: "Sicherheitsvorfälle",
+        id: "shield", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: "Sicherheitsvorfälle",
         icon: "shield", granted_permissions: [], last_error: null,
       }],
-      "POST /extensions/nexus-soc/disable": () => { state = "disabled"; return { id: "nexus-soc", state }; },
+      "POST /extensions/shield/disable": () => { state = "disabled"; return { id: "shield", state }; },
     });
     render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
     fireEvent.click(await screen.findByRole("switch", { name: "Nodvard Shield ausschalten" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Ausschalten" }));
     await screen.findByText("„Nodvard Shield“ ausgeschaltet.");
     await waitFor(() => expect(screen.getByRole("switch", { name: "Nodvard Shield einschalten" })).toBeInTheDocument());
-    expect(calls.some((c) => c.path === "/extensions/nexus-soc/disable")).toBe(true);
+    expect(calls.some((c) => c.path === "/extensions/shield/disable")).toBe(true);
   });
 
   it("Erweiterungen: defekte, inkompatible und entfernte Module heißen nicht „Aus“", async () => {
@@ -432,20 +684,20 @@ describe("Einstellungen", () => {
     let state = "error";
     const calls = mockApi({
       "GET /extensions": () => [{
-        id: "nexus-soc", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: null,
+        id: "shield", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: null,
         icon: "shield", granted_permissions: [], last_error: state === "error" ? "on_start() fehlgeschlagen: boom" : null,
       }],
-      "POST /extensions/nexus-soc/disable": () => { state = "disabled"; return { id: "nexus-soc", state }; },
+      "POST /extensions/shield/disable": () => { state = "disabled"; return { id: "shield", state }; },
     });
     render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
-    const row = within(await screen.findByTestId("ext-nexus-soc"));
+    const row = within(await screen.findByTestId("ext-shield"));
     // Der Schalter zeigt „aus“ und startet nur neu -- ausschalten geht ueber den eigenen Knopf.
     fireEvent.click(row.getByRole("button", { name: "Ausschalten" }));
     fireEvent.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Ausschalten" }));
     await screen.findByText("„Nodvard Shield“ ausgeschaltet.");
-    expect(calls.some((c) => c.path === "/extensions/nexus-soc/disable")).toBe(true);
-    expect(calls.some((c) => c.path === "/extensions/nexus-soc/enable")).toBe(false);
-    await waitFor(() => expect(within(screen.getByTestId("ext-nexus-soc")).queryByRole("button", { name: "Ausschalten" })).toBeNull());
+    expect(calls.some((c) => c.path === "/extensions/shield/disable")).toBe(true);
+    expect(calls.some((c) => c.path === "/extensions/shield/enable")).toBe(false);
+    await waitFor(() => expect(within(screen.getByTestId("ext-shield")).queryByRole("button", { name: "Ausschalten" })).toBeNull());
   });
 
   it("Erweiterungen: der Knopf „Ausschalten“ erscheint nur im Fehlerstatus", async () => {
@@ -465,20 +717,20 @@ describe("Einstellungen", () => {
     let last_error: string | null = null;
     mockApi({
       "GET /extensions": () => [{
-        id: "nexus-soc", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: null,
+        id: "shield", version: "1.0.0", state, source: "bundled", name: "Nodvard Shield", description: null,
         icon: "shield", granted_permissions: [], last_error,
       }],
-      "POST /extensions/nexus-soc/enable": () => {
+      "POST /extensions/shield/enable": () => {
         state = "error";
         last_error = "setup() fehlgeschlagen: boom";
-        return { id: "nexus-soc", state, last_error, name: "Nodvard Shield" };
+        return { id: "shield", state, last_error, name: "Nodvard Shield" };
       },
     });
     render(<><ExtensionsSettings /><GlobalDialogs /></>, { wrapper: QueryWrapper });
     fireEvent.click(await screen.findByRole("switch", { name: "Nodvard Shield einschalten" }));
     expect(await screen.findByText("„Nodvard Shield“ ließ sich nicht einschalten: setup() fehlgeschlagen: boom")).toBeInTheDocument();
     expect(screen.queryByText("„Nodvard Shield“ eingeschaltet.")).toBeNull();
-    await waitFor(() => expect(within(screen.getByTestId("ext-nexus-soc")).getByText("Fehler")).toBeInTheDocument());
+    await waitFor(() => expect(within(screen.getByTestId("ext-shield")).getByText("Fehler")).toBeInTheDocument());
   });
 });
 
@@ -721,6 +973,25 @@ describe("Protokoll", () => {
     for (const [, label] of actions) expect(await screen.findByText(label)).toBeInTheDocument();
   });
 
+  it("nennt Änderungen an Benutzern in verständlichem Deutsch und zeigt den Namen auch eines gelöschten Kontos", async () => {
+    const entry = (id: string, action: string, targetId: string, detail: Record<string, unknown>) => ({
+      id, ts: "2026-10-02T10:00:00Z", actor_type: "user", actor_id: "u1", action, target_type: "user", target_id: targetId,
+      outcome: "success", reason: null, detail, ip: null, user_agent: null,
+    });
+    mockApi({
+      "GET /audit": () => [
+        entry("b1", "user.created", "u2", { username: "gast", roles: ["viewer"] }),
+        entry("b2", "user.updated", "u2", { username: "gast", password_reset: true }),
+        entry("b3", "user.deleted", "0c1b5f8e-aaaa-bbbb-cccc-0000000000aa", { username: "weg", roles: [] }),
+      ],
+      "GET /users": () => [{ id: "u1", username: "nico" }, { id: "u2", username: "gast" }],
+    });
+    render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><AuditSettings /></MemoryRouter></QueryClientProvider>);
+    for (const label of ["Benutzer angelegt", "Benutzer geändert", "Benutzer gelöscht"]) expect(await screen.findByText(label)).toBeInTheDocument();
+    await waitFor(() => expect([...document.querySelectorAll("tbody tr td:nth-child(5)")].map((td) => td.textContent))
+      .toEqual(["Benutzer · gast", "Benutzer · gast", "Benutzer · weg"]));
+  });
+
   it("nennt Dateizugriffe auf Servern in verständlichem Deutsch", async () => {
     const actions = [
       ["files.access", "Zugriff auf Dateien eines Servers"], ["files.download", "Datei heruntergeladen"],
@@ -766,7 +1037,7 @@ describe("Protokoll: Namen statt Codes und Nummern", () => {
       "GET /audit": () => entries,
       "GET /users": () => [{ id: "u1", username: "nico" }],
       "GET /hosts": () => [{ id: "0c1b5f8e-aaaa-bbbb-cccc-000000000001", name: "bastel-pi", display_name: "Bastel-Pi" }],
-      "GET /extensions": () => [{ id: "nexus-soc", name: "Nodvard Shield", state: "enabled" }],
+      "GET /extensions": () => [{ id: "shield", name: "Nodvard Shield", state: "enabled" }],
     });
     render(<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}><MemoryRouter><AuditSettings /></MemoryRouter></QueryClientProvider>);
   }
@@ -794,11 +1065,11 @@ describe("Protokoll: Namen statt Codes und Nummern", () => {
   });
 
   it("Erweiterungen mit ihrem Namen, die Nummer steht in den Einzelheiten", async () => {
-    mockAudit([entry({ action: "extension.enabled", target_type: "extension", target_id: "nexus-soc" })]);
+    mockAudit([entry({ action: "extension.enabled", target_type: "extension", target_id: "shield" })]);
     await waitFor(() => expect(document.body.textContent).toContain("Erweiterung · Nodvard Shield"));
     fireEvent.click(screen.getByText("Erweiterung eingeschaltet"));
     expect(screen.getByText("extension.enabled")).toBeInTheDocument(); // Einzelheiten: der technische Name
-    expect(screen.getByText("Erweiterung · nexus-soc")).toBeInTheDocument(); // Einzelheiten: die Kennung
+    expect(screen.getByText("Erweiterung · shield")).toBeInTheDocument(); // Einzelheiten: die Kennung
   });
 
   it("targetText: Art auf Deutsch, Namen wo bekannt", () => {

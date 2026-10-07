@@ -472,6 +472,73 @@ def test_missing_extension_with_its_own_migrations_is_named(layout, tmp_path):
         stage(layout_without, backup)
 
 
+def _renamed_extension_folder(root: Path, *, revision: str | None = None) -> Path:
+    """Installierte Erweiterung `renamed-ext`, frueher `old-ext` (`legacy_ids`), optional mit eigenem Zweig."""
+    ext_dir = root / "renamed-ext"
+    ext_dir.mkdir(parents=True)
+    (ext_dir / "extension.toml").write_text(
+        '[extension]\nid = "renamed-ext"\nname = "x"\nlegacy_ids = ["old-ext"]\n', encoding="utf-8"
+    )
+    if revision:
+        (ext_dir / "migrations" / "versions").mkdir(parents=True)
+        (ext_dir / "migrations" / "versions" / "0001_x.py").write_text(f'revision = "{revision}"\n')
+    return ext_dir
+
+
+def test_backup_assigns_heads_of_a_renamed_extension_to_its_old_row(tmp_path):
+    """Die Registry-Zeile einer umbenannten Erweiterung traegt noch die alte Kennung: das Inhaltsverzeichnis
+    ordnet ihr trotzdem die Koepfe ihres Zweigs zu."""
+    from nodvard_deck.core.backup import snapshot
+
+    _renamed_extension_folder(tmp_path / "extensions", revision="ffffffffffff")
+    db = make_db(tmp_path / "x.db", versions=[*current_heads(), "ffffffffffff"], extensions=[("old-ext", "1.0", "enabled")])
+
+    _heads, extensions = snapshot.db_facts(db, tmp_path / "extensions")
+
+    assert extensions == [{"id": "old-ext", "version": "1.0", "alembic_heads": ["ffffffffffff"]}]
+
+
+def test_row_of_an_old_id_counts_as_installed_when_restoring(tmp_path):
+    """Eine Sicherung mit der Zeile `old-ext` in einer Installation, in der die Erweiterung `renamed-ext` heisst:
+    keine Warnung "gibt es hier nicht"."""
+    _renamed_extension_folder(tmp_path / "extensions")
+    target = make_layout(tmp_path / "ziel", extensions_dir=tmp_path / "extensions")
+    restore.make_private_dir(target.restore_dir)
+    db = make_db(tmp_path / "x.db", extensions=[("old-ext", "1.0", "enabled"), ("weg-ext", "1.0", "enabled")])
+
+    _rid, staged = stage(target, _backup_with_db(tmp_path, db))
+
+    absent = [w for w in staged.summary["warnings"] if "gibt es hier nicht" in w]
+    assert len(absent) == 1 and "weg-ext" in absent[0] and "old-ext" not in absent[0], absent
+
+
+def test_newer_data_of_a_renamed_extension_is_not_reported_as_missing(tmp_path):
+    """Neuere Daten einer umbenannten Erweiterung: die Meldung sagt "neuere Version", nicht "fehlt"."""
+    ext_src = tmp_path / "ext-quelle"
+    _renamed_extension_folder(ext_src, revision="ffffffffffff")
+    db = make_db(tmp_path / "neu.db", versions=[*current_heads(), "ffffffffffff"], extensions=[("old-ext", "1.0", "enabled")])
+    backup = _backup_with_db(tmp_path, db, extensions_dir=ext_src)
+    _renamed_extension_folder(tmp_path / "hier")  # installiert, aber ohne den neuen Kopf
+    target = make_layout(tmp_path / "ziel", extensions_dir=tmp_path / "hier")
+    restore.make_private_dir(target.restore_dir)
+
+    with pytest.raises(UnusableBackup, match="Erweiterung „old-ext“ in dieser Sicherung stammen aus einer neueren Version"):
+        stage(target, backup)
+
+
+def test_installed_extension_ids_fall_back_to_the_folder_name(tmp_path):
+    root = tmp_path / "extensions"
+    _renamed_extension_folder(root)
+    (root / "kaputt").mkdir()
+    (root / "kaputt" / "extension.toml").write_text("kein TOML {{{", encoding="utf-8")
+    (root / "ohne").mkdir()
+    (root / "fremd").mkdir()
+    (root / "fremd" / "extension.toml").write_text('[extension]\nid = "../boese"\nlegacy_ids = "x"\n', encoding="utf-8")
+    (root / "_shared").mkdir()
+
+    assert restore.installed_extension_ids(root) == {"renamed-ext", "old-ext", "kaputt", "ohne", "fremd"}
+
+
 def test_older_known_revisions_are_fine_and_warn(layout, tmp_path):
     older = current_heads()[:2]
     db = make_db(tmp_path / "alt.db", versions=older)

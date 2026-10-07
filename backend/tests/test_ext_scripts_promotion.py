@@ -7,6 +7,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "scripts" / "src"))
 
 from nodvard_deck_ext_scripts.promotion import MAX_COUNT, RecurringFixTracker  # noqa: E402
@@ -67,3 +69,24 @@ def test_failed_or_denied_outcomes_are_not_counted():
     for _ in range(MAX_COUNT + 2):
         assert _observe(tracker, outcome="failure") is None
         assert _observe(tracker, outcome="denied") is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "docker restart nginx",
+        "echo $HOME",
+        'for f in /tmp/*.log; do rm "$f"; done',
+        "kill -HUP $(cat /run/nginx.pid)",
+        "echo $$ $$$ ${VAR:-x} $1 $?",
+        "echo kostet 5$",
+    ],
+)
+def test_draft_runs_exactly_the_promoted_command(command):
+    """Der Entwurf muss beim Ausfuehren genau den Befehl ergeben, der wiederholt lief --
+    auch mit `$$`, `$HOME` oder `$(...)`. Frueher stand der Befehl roh im Entwurf, und jedes
+    `$` liess die Ersetzung scheitern (bzw. machte aus `$$` ein `$`)."""
+    from nodvard_deck_ext_scripts.params import substitute_params
+    from nodvard_deck_ext_scripts.promotion import draft_content
+
+    assert substitute_params(draft_content(command), {}, {}) == f"#!/bin/sh\n{command}\n"

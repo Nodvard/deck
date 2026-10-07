@@ -303,6 +303,18 @@ def test_an_unexpected_error_becomes_a_failure_with_return_code_one(ctx, monkeyp
     assert ctx.state()["failure"]["kind"] == "unexpected"
 
 
+def test_duplicate_migrations_show_their_clear_message_on_the_rescue_page(ctx, monkeypatch):
+    """Doppelte Migrationen in zwei Erweiterungsordnern: die Notseite zeigt die Meldung mit beiden Ordnern,
+    nicht nur den Namen des Fehlers."""
+    message = "Die Migrationen der Erweiterungsordner „old-ext“ und „renamed-ext“ sind doppelt."
+    monkeypatch.setattr(
+        boot.migrate, "known_revisions", lambda *a, **k: (_ for _ in ()).throw(boot.migrate.DuplicateRevisions(message))
+    )
+    assert boot.main() == 1
+    assert ctx.state()["failure"]["kind"] == "unexpected"
+    assert ctx.state()["failure"]["reason"] == message
+
+
 def test_a_failed_record_never_hides_the_failure(ctx, monkeypatch):
     ctx.old_db()
     ctx.on_migrate = ctx.fake_fail

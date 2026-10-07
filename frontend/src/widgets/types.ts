@@ -155,6 +155,9 @@ export interface WidgetSpec {
 
 export interface WidgetOut extends WidgetSpec {
   ext_id: string;
+  /** Frühere Kennungen der Erweiterung (nach einer Umbenennung), damit Dashboard-Einträge mit der alten
+   * `ext_id` dem Widget zugeordnet werden können. Fehlt bei einem älteren Backend. */
+  legacy_ext_ids?: string[];
 }
 
 export type MobileFallback = "widgets" | "webview" | "hidden";
@@ -174,6 +177,9 @@ export interface PageSpec {
 
 export interface PageOut extends PageSpec {
   ext_id: string;
+  /** Frühere Kennungen der Erweiterung: Adressen `/ext/<alt>/…` leitet `ExtensionPage` auf `/ext/<ext_id>/…`
+   * um. Fehlt bei einem älteren Backend. */
+  legacy_ext_ids?: string[];
 }
 
 /** docs/02-EXTENSION-API.md §4: GET /api/v1/ext/<id>/<data_endpoint> -> {data, meta}. */

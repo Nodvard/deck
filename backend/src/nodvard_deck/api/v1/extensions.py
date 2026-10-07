@@ -35,6 +35,39 @@ from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 router = APIRouter(prefix="/extensions", tags=["extensions"])
 
 
+async def refuse_stale_twin_address(session, ext_id: str) -> None:
+    """409, wenn unter der alten Kennung `ext_id` noch ein verwaister Zwilling liegt
+    (`services.extensions.is_stale_twin_address`): Wer diese Adresse benutzt, meint womoeglich den Stand des
+    Zwillings. Ueber sie darf deshalb nichts geaendert werden, weder am Zwilling noch an der Erweiterung."""
+    if await extensions_service.is_stale_twin_address(session, ext_id):
+        canonical = get_extension_runtime().canonical(ext_id)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"„{ext_id}“ ist die alte Kennung von „{canonical}“, und darunter liegt noch ein älterer Stand, "
+                f"den die Erweiterung nicht nutzt. Damit nichts verwechselt wird, geht das nur über „{canonical}“."
+            ),
+        )
+
+
+async def resolve_extension(
+    session, ext_id: str, *, change: bool = False, not_found: str = "Unbekannte Extension."
+) -> tuple[str, ExtensionRecord]:
+    """Die Kennung aus der Adresse `/extensions/{ext_id}/...` -> (heutige Kennung, Registry-Zeile).
+
+    Eine alte Kennung (`legacy_ids` einer umbenannten Erweiterung) gilt wie die heutige; gelesen und
+    geschrieben wird die Zeile der Speicher-Kennung (`services.extensions.get_record`). 404, wenn es keine
+    Zeile gibt. `change=True` fuer alles, was etwas aendert: dann zusaetzlich `refuse_stale_twin_address`.
+    Ohne `legacy_ids` ist die heutige Kennung immer die aus der Adresse."""
+    canonical = get_extension_runtime().canonical(ext_id)
+    record = await extensions_service.get_record(session, canonical)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found)
+    if change:
+        await refuse_stale_twin_address(session, ext_id)
+    return canonical, record
+
+
 def _has_settings(ext_id: str) -> bool:
     from .extension_settings import schema_for
 
@@ -83,12 +116,22 @@ class ExtensionOut(BaseModel):
     display_version: str | None = None
     """Die Version, die Menschen angezeigt wird: bei mitgelieferten Erweiterungen die Programmversion, bei
     nachinstallierten (pip) die eigene `version`."""
+    legacy_ids: list[str] = []
+    """Fruehere Kennungen einer umbenannten Erweiterung (`legacy_ids` im Manifest). Adressen mit einer alten
+    Kennung gelten weiter (`/api/v1/extensions/<alt>/...`, `/api/v1/ext/<alt>/...`, als veraltet markiert) und
+    meinen diese Erweiterung; `id` ist immer die heutige Kennung. Liegt unter einer alten Kennung noch ein
+    verwaister Zwilling, aendern die Kern-Adressen ueber sie nichts (409). Ohne Umbenennung leer."""
 
     @classmethod
     def from_model(cls, record: ExtensionRecord) -> "ExtensionOut":
+        """`id` ist die heutige Kennung: nach einer Umbenennung liegt der Stand womoeglich noch in der Zeile
+        einer alten Kennung (Speicher-Kennung), angezeigt und angesprochen wird die Erweiterung trotzdem
+        unter ihrer heutigen."""
+        runtime = get_extension_runtime()
+        ext_id = runtime.canonical(record.id)
         manifest = record.manifest or {}
         return cls(
-            id=record.id,
+            id=ext_id,
             version=record.version,
             api_version=record.api_version,
             state=_effective_state(record),
@@ -100,9 +143,10 @@ class ExtensionOut(BaseModel):
             last_error=record.last_error,
             category=manifest.get("category") or None,
             sort_order=manifest.get("sort_order") if isinstance(manifest.get("sort_order"), int) else 100,
-            has_settings=_has_settings(record.id),
+            has_settings=_has_settings(ext_id),
             bundled=record.source == "bundled",
             display_version=__version__ if record.source == "bundled" else record.version,
+            legacy_ids=runtime.legacy_ids_of(ext_id),
         )
 
 
@@ -124,7 +168,7 @@ async def _with_setup(
         item.last_test = last if (last is None or can_manage) else {"ok": last.get("ok"), "at": last.get("at")}
         if item.state == "enabled":
             reasons = extension_setup.setup_reasons(
-                schema_for(record.id), dict(record.settings or {}), labels, last, with_test_message=can_manage
+                schema_for(item.id), dict(record.settings or {}), labels, last, with_test_message=can_manage
             )
             item.setup_reasons = reasons
             item.needs_setup = bool(reasons)
@@ -149,15 +193,19 @@ async def _audit_toggle(session, user: User, action: str, ext_id: str, record: E
 
 @router.get("")
 async def list_extensions(session: SessionDep, user: CurrentUser) -> list[ExtensionOut]:
+    """Alle Erweiterungen der Registry, je einmal unter ihrer heutigen Kennung. Ein verwaister Zwilling
+    (Zeile einer alten Kennung, die die umbenannte Erweiterung nicht nutzt) fehlt."""
+    runtime = get_extension_runtime()
     result = await session.execute(select(ExtensionRecord).order_by(ExtensionRecord.id))
-    return await _with_setup(session, list(result.scalars().all()), user)
+    records = [r for r in result.scalars().all() if not runtime.is_stale_twin(r.id)]
+    items = await _with_setup(session, records, user)
+    return sorted(items, key=lambda item: item.id)
 
 
 @router.get("/{ext_id}")
 async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser) -> ExtensionOut:
-    record = await session.get(ExtensionRecord, ext_id)
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Extension.")
+    """Auch ueber eine alte Kennung (`legacy_ids`); die Antwort nennt die heutige in `id`."""
+    _, record = await resolve_extension(session, ext_id)
     return (await _with_setup(session, [record], user))[0]
 
 
@@ -165,15 +213,18 @@ async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser) -> 
 async def enable_extension(
     ext_id: str, request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser
 ) -> ExtensionOut:
+    # Fehlt die Zeile, meldet das Einschalten selbst den Grund (404 mit Text aus dem Dienst).
+    await refuse_stale_twin_address(session, ext_id)
+    canonical = get_extension_runtime().canonical(ext_id)
     try:
-        await extensions_service.enable_extension(request.app, session, settings, ext_id)
+        await extensions_service.enable_extension(request.app, session, settings, canonical)
     except extensions_service.ExtensionLoadError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    record = await session.get(ExtensionRecord, ext_id)
+    record = await extensions_service.get_record(session, canonical)
     # Eine bewusste Entscheidung: der Kern schaltet die Erweiterung nie wieder von selbst ein.
-    await extensions_service.record_user_choice(session, ext_id)
-    await _audit_toggle(session, user, "extension.enabled", ext_id, record)
+    await extensions_service.record_user_choice(session, canonical)
+    await _audit_toggle(session, user, "extension.enabled", canonical, record)
     return ExtensionOut.from_model(record)
 
 
@@ -182,8 +233,10 @@ async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Respon
     """Oeffentlich wie das Kern-Frontend selbst (main.py`s `StaticFiles`-Mount hat
     auch keine Auth) -- ein Bundle ist nur Code, keine Nutzerdaten. Funktioniert
     unabhaengig vom Ladezustand der Extension (Metadaten-Ansicht, wie `GET
-    /extensions/{id}`), nicht nur waehrend sie `enabled` ist."""
-    discovered = get_extension_runtime().discovered.get(ext_id)
+    /extensions/{id}`), nicht nur waehrend sie `enabled` ist. Auch ueber eine alte Kennung
+    (`legacy_ids`): offene Tabs mit einem alten Stand laden so weiter das heutige Bundle."""
+    runtime = get_extension_runtime()
+    discovered = runtime.discovered.get(runtime.canonical(ext_id))
     if discovered is None or not discovered.ok:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Extension.")
     manifest = discovered.manifest
@@ -218,16 +271,14 @@ async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Respon
 
 @router.post("/{ext_id}/disable", dependencies=[Depends(require_permission("extensions.manage"))])
 async def disable_extension(ext_id: str, request: Request, session: SessionDep, user: CurrentUser) -> ExtensionOut:
-    existing = await session.get(ExtensionRecord, ext_id)
-    if existing is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Extension.")
-    await extensions_service.disable_extension(request.app, session, ext_id)
-    # KEIN session.refresh() hier: `existing` ist (Identity Map) dasselbe Objekt, das
+    canonical, _ = await resolve_extension(session, ext_id, change=True)
+    await extensions_service.disable_extension(request.app, session, canonical)
+    # KEIN session.refresh() hier: die Zeile ist (Identity Map) dasselbe Objekt, das
     # disable_extension() gerade mutiert hat -- ein refresh() wuerde eine frische
     # SELECT ausfuehren und die noch nicht geflushte Mutation mit dem alten DB-Stand
     # ueberschreiben (live gefunden: genau das lieferte "enabled" statt "disabled"
     # zurueck, siehe Abnahmebericht).
-    record = await session.get(ExtensionRecord, ext_id)
-    await extensions_service.record_user_choice(session, ext_id)
-    await _audit_toggle(session, user, "extension.disabled", ext_id, record)
+    record = await extensions_service.get_record(session, canonical)
+    await extensions_service.record_user_choice(session, canonical)
+    await _audit_toggle(session, user, "extension.disabled", canonical, record)
     return ExtensionOut.from_model(record)

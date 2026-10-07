@@ -16,10 +16,12 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
+from .params import escape_dollars
+
 MAX_COUNT = 3
 
 _PROMOTABLE_ACTION_TYPES = frozenset({"shell.exec"})
-"""Nur `shell.exec` (z. B. von nexus-soc oder direkt aus dem Terminal vorgeschlagen)
+"""Nur `shell.exec` (z. B. von Nodvard Shield oder direkt aus dem Terminal vorgeschlagen)
 wird beobachtet. Eigene `script.run`-Ausfuehrungen NIE -- sonst wuerde ein bereits
 befoerdertes, wiederkehrend laufendes Skript sich selbst immer wieder neu vorschlagen."""
 
@@ -28,9 +30,17 @@ def fingerprint(action_type: str, host_id: str | None, command: str) -> str:
     return f"{action_type}:{host_id or '-'}:{command}"
 
 
+def draft_content(command: str) -> str:
+    """Inhalt des Entwurfs fuer einen uebernommenen Befehl. Jedes `$` steht darin als
+    `$$`: Beim Ausfuehren macht `substitute_params()` aus `$$` wieder `$`, das Skript
+    fuehrt also genau den Befehl aus, der wiederholt lief (auch mit `$$`, `$HOME`
+    oder `$(...)` darin)."""
+    return f"#!/bin/sh\n{escape_dollars(command)}\n"
+
+
 @dataclass
 class RecurringFixTracker:
-    """Reiner Prozessspeicher (wie nexus-socs `IncidentStore`, WP-9) -- ein Neustart
+    """Reiner Prozessspeicher (wie der `IncidentStore` von Nodvard Shield, WP-9) -- ein Neustart
     faengt bewusst bei null an. Ein Reboot ist selten genug, dass das erneute Zaehlen
     von drei echten Wiederholungen kein reales Problem ist; ein Zaehlstand, der einen
     Neustart unbegrenzt ueberlebt, waere unnoetige Komplexitaet hier."""

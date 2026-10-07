@@ -14,7 +14,7 @@
  * nie ganz im Speicher haelt. `fetch` kennt keinen Upload-Fortschritt, deshalb `XMLHttpRequest`.
  */
 import { SERVER_UNAVAILABLE_TEXT, useAuthStore } from "../state/auth";
-import { ApiError, apiFetch } from "./api";
+import { ApiError, apiFetch, refreshAfterUnauthorized } from "./api";
 
 export type RestoreMode = "owner" | "setup";
 
@@ -72,8 +72,11 @@ export interface RestoreStatus {
 
 export type RestoreSecret = { password: string } | { recovery_key: string };
 
-/** Anmeldedaten eines Aufrufs: Owner-Passwort bzw. Einrichtungscode. Werden nie gespeichert. */
-export type RestoreAuth = { mode: "owner"; accountPassword: string } | { mode: "setup"; setupCode: string };
+/**
+ * Anmeldedaten eines Aufrufs: Owner-Passwort bzw. Einrichtungscode. Werden nie gespeichert. `totpCode` nur beim
+ * Vormerken, wenn Zwei-Faktor an ist (der Server fragt mit `totp_missing` danach).
+ */
+export type RestoreAuth = { mode: "owner"; accountPassword: string; totpCode?: string } | { mode: "setup"; setupCode: string };
 
 const OCTET = "application/octet-stream";
 
@@ -169,8 +172,9 @@ export async function uploadBackup(
     });
   let res = await send();
   if (res.status === 401 && auth.mode === "owner") {
-    // Der Zugang ist waehrend des Hochladens abgelaufen: einmal still erneuern, dann noch einmal.
-    if (await useAuthStore.getState().refresh()) res = await send();
+    // Der Zugang ist waehrend des Hochladens abgelaufen: einmal still erneuern, dann noch einmal
+    // (dieselbe Erneuerung wie `apiFetch`; antwortet der Server nicht, kommt ein ApiError mit Klartext).
+    if (await refreshAfterUnauthorized()) res = await send();
   }
   if (res.status < 200 || res.status >= 300) throw new ApiError(res.status, errorMessage(res.status, res.text));
   return JSON.parse(res.text) as StagedRestore;
@@ -188,7 +192,11 @@ export function scheduleRestore(id: string, auth: RestoreAuth): Promise<PendingR
   return apiFetch<PendingRestore>(`${prefix(auth)}/${id}/schedule`, {
     method: "POST",
     headers: guardHeaders(auth),
-    body: JSON.stringify(auth.mode === "owner" ? { current_password: auth.accountPassword, sign_out_all: true } : { sign_out_all: true }),
+    body: JSON.stringify(
+      auth.mode === "owner"
+        ? { current_password: auth.accountPassword, sign_out_all: true, ...(auth.totpCode ? { totp_code: auth.totpCode } : {}) }
+        : { sign_out_all: true },
+    ),
   });
 }
 
@@ -215,6 +223,8 @@ export function deleteReplaced(accountPassword: string): Promise<void> {
 export interface Health {
   status?: string;
   uptime_s?: number;
+  /** Laufende Version (`GET /api/v1/health`); daran sieht der Update-Ablauf, welche Version nach dem Neustart läuft. */
+  version?: string;
 }
 
 /** Eigenes Objekt, damit Tests Gesundheitsabfrage und Seitenwechsel ersetzen koennen. */
@@ -245,12 +255,18 @@ export const restartTiming = { pollMs: 2000, timeoutMs: 10 * 60 * 1000 };
  * Abfrage einmal scheitert ODER die Laufzeit (`uptime_s`) kleiner geworden ist als vorher (ein sehr
  * schneller Neustart faellt zwischen zwei Abfragen). Eine Antwort VOR dem Neustart zaehlt nicht.
  * Gibt `true` zurueck, wenn der Dienst wieder da ist, `false` nach dem Zeitlimit.
+ *
+ * `timeoutMs`: eigenes Zeitlimit (sonst `restartTiming.timeoutMs`). `ready`: eigene Erkennung, fuer Aufrufer, die
+ * den Ausfall selbst schon gesehen haben (der Update-Helfer schaltet den Container um): dann zaehlt jede gesunde
+ * Antwort, fuer die `ready` zutrifft, auch ohne einen weiteren Ausfall.
  */
 export async function waitForRestart(
   baselineUptime: number | null,
-  { signal, onTick }: { signal?: AbortSignal; onTick?: (seconds: number) => void } = {},
+  {
+    signal, onTick, timeoutMs = restartTiming.timeoutMs, ready,
+  }: { signal?: AbortSignal; onTick?: (seconds: number) => void; timeoutMs?: number; ready?: (health: Health) => boolean } = {},
 ): Promise<boolean> {
-  const { pollMs, timeoutMs } = restartTiming;
+  const { pollMs } = restartTiming;
   const started = Date.now();
   let sawDown = false;
   while (Date.now() - started < timeoutMs) {
@@ -260,6 +276,10 @@ export async function waitForRestart(
     onTick?.(Math.round((Date.now() - started) / 1000));
     if (health === null) {
       sawDown = true;
+      continue;
+    }
+    if (ready) {
+      if (health.status === "ok" && ready(health)) return true;
       continue;
     }
     const restarted = baselineUptime !== null && typeof health.uptime_s === "number" && health.uptime_s < baselineUptime;

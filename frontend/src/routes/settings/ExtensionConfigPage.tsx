@@ -4,8 +4,8 @@
  * gesetzt, ersetzt oder entfernt, nie wieder angezeigt werden, und der Verbindungstest.
  */
 import { AlertTriangle, ArrowLeft, CheckCircle2, KeyRound, Lock, RotateCcw, Send, XCircle, Zap } from "lucide-react";
-import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
@@ -150,19 +150,45 @@ function secretsWithoutTarget(schema: (JsonSchema & { "x-secrets"?: unknown }) |
 
 export function ExtensionConfigPage(): JSX.Element {
   const { extId = "" } = useParams();
+  const navigate = useNavigate();
+  const location = useLocation();
   const [info, setInfo] = useState<ExtInfo | null>(null);
   const [data, setData] = useState<ExtSettings | null>(null);
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  // Die Erweiterung, deren Seite gerade offen ist (`null`: Seite verlassen). Eine Antwort, die erst nach dem Verlassen
+  // oder nach dem Wechsel auf eine andere Erweiterung ankommt, ändert nichts mehr und leitet vor allem nicht mehr um.
+  const openExt = useRef<string | null>(null);
+  const stillOpen = (id: string) => openExt.current === id;
+  // Die Adresse von jetzt, nicht die vom Zeitpunkt der Anfrage (Abfrage und Anker für die Weiterleitung).
+  const here = useRef(location);
+  here.current = location;
 
-  const refreshInfo = () => { api.get<ExtInfo>(`/extensions/${extId}`).then(setInfo).catch(() => {}); };
+  const refreshInfo = () => {
+    api.get<ExtInfo>(`/extensions/${extId}`)
+      .then((loaded) => {
+        if (!stillOpen(extId)) return;
+        // Die Adresse nennt eine frühere Kennung der Erweiterung (Lesezeichen, alter Link): die Seite lebt unter der
+        // heutigen. Ersetzend, damit „Zurück“ nicht wieder auf die alte Adresse führt; alle Aufrufe darunter laufen
+        // dann mit der heutigen Kennung.
+        if (loaded.id && loaded.id !== extId) {
+          const { search, hash } = here.current;
+          navigate({ pathname: `/settings/extensions/${encodeURIComponent(loaded.id)}`, search, hash }, { replace: true });
+        } else {
+          setInfo(loaded);
+        }
+      })
+      .catch(() => {});
+  };
 
   useEffect(() => {
+    openExt.current = extId;
     refreshInfo();
     api.get<ExtSettings>(`/extensions/${extId}/settings`)
-      .then((d) => { setData(d); setValues(d.values); })
-      .catch((err: unknown) => setNotice({ kind: "error", text: errorText(err) }));
+      .then((d) => { if (stillOpen(extId)) { setData(d); setValues(d.values); } })
+      .catch((err: unknown) => { if (stillOpen(extId)) setNotice({ kind: "error", text: errorText(err) }); });
+    return () => { openExt.current = null; };
   }, [extId]);
 
   const dirty = data !== null && JSON.stringify(values) !== JSON.stringify(data.values);
@@ -180,6 +206,7 @@ export function ExtensionConfigPage(): JSX.Element {
       const d = await api.put<ExtSettings>(`/extensions/${extId}/settings`, {
         values: changedValues(data?.schema ?? null, data?.values ?? {}, values),
       });
+      if (!stillOpen(extId)) return;
       setData(d);
       setValues(d.values);
       const cleared = (d.secrets_cleared ?? []).map((label) => {
@@ -194,7 +221,7 @@ export function ExtensionConfigPage(): JSX.Element {
       });
       refreshInfo();
     } catch (err) {
-      setNotice({ kind: "error", text: errorText(err) });
+      if (stillOpen(extId)) setNotice({ kind: "error", text: errorText(err) });
     } finally {
       setBusy(false);
     }

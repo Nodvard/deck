@@ -13,7 +13,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
@@ -77,6 +77,14 @@ class ExtensionManifest(BaseModel):
     fehlender Wert landet unter „Weitere Module“."""
     sort_order: int = 100
     """Reihenfolge innerhalb der Gruppe (kleiner = weiter oben), bei Gleichstand nach Name."""
+    legacy_ids: list[str] = Field(default_factory=list)
+    """Fruehere Kennungen dieser Erweiterung, z. B. `["alt-name"]` nach einer Umbenennung. Der Kern
+    nimmt dann den gespeicherten Stand der alten Kennung weiter (Einstellungen, Zeitplaene, Daten)
+    und erlaubt die alten Tabellen-Praefixe. Leer = nie umbenannt (der Normalfall).
+
+    Grenze: Eine Erweiterung, die Server anlegt (`hosts.write`), kann nicht umbenannt werden -- die Server
+    tragen die Kennung ihres Anbieters. Der Kern lehnt `legacy_ids` zusammen mit `hosts.write` beim
+    Entdecken ab (Meldung im Protokoll)."""
 
     @field_validator("id")
     @classmethod
@@ -111,14 +119,43 @@ class ExtensionManifest(BaseModel):
                 )
         return v
 
+    @field_validator("legacy_ids")
+    @classmethod
+    def _valid_legacy_ids(cls, v: list[str]) -> list[str]:
+        for old in v:
+            if not ID_RE.match(old):
+                raise ValueError(
+                    f"Ungueltige alte Kennung {old!r} in legacy_ids: nur a-z, 0-9 und '-', Beginn mit "
+                    f"Buchstabe, 2-64 Zeichen."
+                )
+        if len(set(v)) != len(v):
+            raise ValueError("legacy_ids nennt eine Kennung mehrfach.")
+        return v
+
+    @model_validator(mode="after")
+    def _legacy_ids_differ_from_id(self) -> "ExtensionManifest":
+        if self.id in self.legacy_ids:
+            raise ValueError(f"legacy_ids darf die eigene Kennung {self.id!r} nicht enthalten.")
+        return self
+
     @property
     def table_prefix(self) -> str:
         """Zwingender Praefix fuer alle Tabellen dieser Extension."""
-        return f"ext_{self.id.replace('-', '_')}_"
+        return _table_prefix(self.id)
+
+    @property
+    def table_prefixes(self) -> tuple[str, ...]:
+        """Alle erlaubten Tabellen-Praefixe: der eigene zuerst (Standard fuer neue Tabellen), danach
+        die der alten Kennungen (`legacy_ids`) -- deren Tabellen behalten ihren Namen."""
+        return (self.table_prefix, *(_table_prefix(old) for old in self.legacy_ids))
 
     @property
     def api_prefix(self) -> str:
         return f"/api/v1/ext/{self.id}"
+
+
+def _table_prefix(ext_id: str) -> str:
+    return f"ext_{ext_id.replace('-', '_')}_"
 
 
 def load_manifest(path: Path) -> ExtensionManifest:

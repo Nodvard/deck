@@ -22,7 +22,7 @@ const EXTENSIONS = [
   { id: "system", state: "disabled", name: "System", description: "Zustand eines Servers auf einer Seite: Auslastung, Speicher.", icon: "cpu", last_error: null, category: "servers", sort_order: 10 },
   { id: "terminal", state: "disabled", name: "Terminal", description: "Web-Terminal per SSH.", icon: "terminal", last_error: null, category: "servers", sort_order: 20 },
   { id: "ntfy", state: "disabled", name: "ntfy-Benachrichtigungen", description: "Schickt Meldungen aufs Handy.", icon: "bell", last_error: null, category: "connections", sort_order: 10 },
-  { id: "nexus-soc", state: "disabled", name: "Nodvard Shield", description: "Virenschutz für alle Server.", icon: "shield-alert", last_error: null, category: "security", sort_order: 10 },
+  { id: "shield", state: "disabled", name: "Nodvard Shield", description: "Virenschutz für alle Server.", icon: "shield-alert", last_error: null, category: "security", sort_order: 10 },
   { id: "fremd", state: "disabled", name: "Fremdmodul", description: null, icon: null, last_error: null },
 ];
 
@@ -413,7 +413,7 @@ describe("SetupPage", () => {
       const groups = screen.getAllByRole("region").map((r) => r.getAttribute("aria-label"));
       expect(groups).toEqual(["Für deine Server", "Sicherheit", "Verbindungen zu anderen Diensten", "Weitere Module"]);
       const tiles = screen.getAllByTestId(/^module-/).map((t) => t.getAttribute("data-testid"));
-      expect(tiles).toEqual(["module-system", "module-terminal", "module-proxmox", "module-nexus-soc", "module-ntfy", "module-fremd"]);
+      expect(tiles).toEqual(["module-system", "module-terminal", "module-proxmox", "module-shield", "module-ntfy", "module-fremd"]);
       // Kurzbeschreibung = erster Satz ("z. B." trennt nicht), die volle Beschreibung steht im Tooltip.
       const proxmox = screen.getByTestId("module-proxmox");
       expect(within(proxmox).getByText("Liest deine Proxmox-Server ein.")).toHaveAttribute("title", "Liest deine Proxmox-Server ein. Mit z. B. Snapshots.");
@@ -745,7 +745,7 @@ describe("Sicherung einspielen im Assistenten", () => {
   });
 
   it("derselbe Ablauf über die Assistenten-Endpunkte: Code in jedem Aufruf, nie ein Konto, am Ende zur Anmeldung", async () => {
-    const { seen } = withRestore();
+    const { backend, seen } = withRestore();
     const send = vi.spyOn(uploadTransport, "send").mockResolvedValue({ status: 201, text: JSON.stringify(STAGED) });
     const health = vi.spyOn(restartProbe, "health");
     health.mockResolvedValueOnce({ status: "ok", uptime_s: 300 });
@@ -792,6 +792,8 @@ describe("Sicherung einspielen im Assistenten", () => {
     expect(calls[0].body).toEqual({ password: "einmal-passwort-123" });
     expect(calls[1].body).toEqual({ sign_out_all: true });
     expect(document.body.innerHTML).not.toContain("einmal-passwort-123");
+    // Ohne Konto fragt der Ablauf auch nicht, ob Zwei-Faktor an ist.
+    expect(backend.count("GET", "/me")).toBe(0);
   });
 
   it("falscher Einrichtungscode: die Meldung des Servers, es geht nicht weiter", async () => {

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAuthStore } from "../state/auth";
-import { api, ApiError } from "./api";
+import { api, ApiError, apiErrorFromBody, apiFetchResponse, refreshAfterUnauthorized } from "./api";
 
 function respondOnce(body: unknown, status: number) {
   vi.stubGlobal("fetch", vi.fn(async () => new Response(body === undefined ? null : JSON.stringify(body), { status })));
@@ -225,5 +225,125 @@ describe("apiFetch bei 401 und nicht erreichbarem Server", () => {
     expect(err.status).toBe(401);
     expect(useAuthStore.getState().status).toBe("anonymous");
     expect(useAuthStore.getState().accessToken).toBeNull();
+  });
+});
+
+/**
+ * Die rohe Antwort (Datei laden, Protokoll-Export) erneuert bei 401 genau wie `apiFetch`:
+ * einmal still, dann ein zweiter Versuch.
+ */
+describe("apiFetchResponse (rohe Antwort, Erneuerung bei 401)", () => {
+  const USER = { id: "u1", username: "nico", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] };
+  const UNAVAILABLE = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
+
+  /** Alles ausser /auth/refresh antwortet 401, solange das Token nicht "tok-neu" ist. */
+  function stubExpiredToken(refresh: () => Response | Promise<Response>) {
+    const calls: { path: string; auth: string | null }[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input).replace(/^\/api\/v1/, "");
+      const auth = new Headers(init?.headers).get("Authorization");
+      calls.push({ path, auth });
+      if (path === "/auth/refresh") return refresh();
+      return auth === "Bearer tok-neu"
+        ? new Response("daten", { status: 200 })
+        : new Response(JSON.stringify({ detail: "Nicht authentifiziert." }), { status: 401 });
+    }));
+    return calls;
+  }
+
+  beforeEach(() => {
+    useAuthStore.setState({ accessToken: "tok", user: USER, status: "authenticated", mfaToken: null });
+  });
+
+  it("401: erneuert einmal und wiederholt mit dem neuen Token", async () => {
+    const calls = stubExpiredToken(() => new Response(JSON.stringify({ access_token: "tok-neu", user: USER }), { status: 200 }));
+
+    const res = await apiFetchResponse("/files/s/download?path=%2Fa");
+
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("daten");
+    expect(calls).toEqual([
+      { path: "/files/s/download?path=%2Fa", auth: "Bearer tok" },
+      { path: "/auth/refresh", auth: null },
+      { path: "/files/s/download?path=%2Fa", auth: "Bearer tok-neu" },
+    ]);
+  });
+
+  it("Erneuerung abgelehnt (401): die 401-Antwort kommt zurück, kein dritter Versuch, abgemeldet", async () => {
+    const calls = stubExpiredToken(() => new Response(JSON.stringify({ detail: "Abgelaufen" }), { status: 401 }));
+
+    const res = await apiFetchResponse("/audit/export");
+
+    expect(res.status).toBe(401);
+    expect(calls.map((c) => c.path)).toEqual(["/audit/export", "/auth/refresh"]);
+    expect(useAuthStore.getState().status).toBe("anonymous");
+  });
+
+  it("Server beim Erneuern nicht erreichbar: ApiError mit klarer Meldung, weiter angemeldet", async () => {
+    const calls = stubExpiredToken(() => new Response("Bad Gateway", { status: 502 }));
+
+    const err = await thrown(apiFetchResponse("/audit/export"));
+
+    expect(err.status).toBe(503);
+    expect(err.message).toBe(UNAVAILABLE);
+    expect(calls).toHaveLength(2);
+    expect(useAuthStore.getState().status).toBe("authenticated");
+    expect(useAuthStore.getState().accessToken).toBe("tok");
+  });
+
+  it("Server beim Erneuern mit echtem Fehler (507): dessen Status und Text", async () => {
+    stubExpiredToken(() => new Response(JSON.stringify({ detail: "Speicherplatz voll." }), { status: 507 }));
+
+    const err = await thrown(apiFetchResponse("/audit/export"));
+
+    expect(err.status).toBe(507);
+    expect(err.message).toBe("Speicherplatz voll.");
+  });
+
+  it("andere Fehlerstatus kommen roh zurück, ohne Erneuerung und ohne zu werfen", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Nicht gefunden." }), { status: 404 })));
+
+    const res = await apiFetchResponse("/files/s/download");
+
+    expect(res.status).toBe(404);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("/auth/refresh selbst und skipAuthRetry werden bei 401 nicht erneuert", async () => {
+    const calls = stubExpiredToken(() => new Response("{}", { status: 401 }));
+
+    expect((await apiFetchResponse("/auth/refresh")).status).toBe(401);
+    expect((await apiFetchResponse("/x", {}, true)).status).toBe(401);
+
+    expect(calls.map((c) => c.path)).toEqual(["/auth/refresh", "/x"]);
+  });
+});
+
+describe("refreshAfterUnauthorized", () => {
+  it("true bei Erfolg, false bei Ablehnung", async () => {
+    const user = { id: "u1", username: "nico", display_name: null, email: null, is_owner: true, locale: "de", permissions: ["*"] };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ access_token: "tok-neu", user }), { status: 200 })));
+    await expect(refreshAfterUnauthorized()).resolves.toBe(true);
+    expect(useAuthStore.getState().accessToken).toBe("tok-neu");
+
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 401 })));
+    await expect(refreshAfterUnauthorized()).resolves.toBe(false);
+  });
+
+  it("wirft einen ApiError, wenn der Server nicht antwortet", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("Failed to fetch"); }));
+
+    const err = await thrown(refreshAfterUnauthorized());
+
+    expect(err.status).toBe(503);
+    expect(err.message).toBe("Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.");
+  });
+});
+
+describe("apiErrorFromBody", () => {
+  it("Text aus detail, sonst HTTP <Status>, Fehlerseite vom Proxy als nicht erreichbar", () => {
+    expect(apiErrorFromBody(413, JSON.stringify({ detail: "Datei zu groß." })).message).toBe("Datei zu groß.");
+    expect(apiErrorFromBody(500, "").message).toBe("HTTP 500");
+    expect(apiErrorFromBody(502, "<html>Bad Gateway</html>").message).toBe("Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.");
   });
 });

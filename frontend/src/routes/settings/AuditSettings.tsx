@@ -5,7 +5,7 @@
 import { ChevronDown, ChevronRight, Download, Search } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 
-import { api } from "../../lib/api";
+import { api, apiErrorFromResponse, apiFetchResponse } from "../../lib/api";
 import { useExtensionLabel } from "../../lib/extensionNames";
 import { useAuthStore } from "../../state/auth";
 import { Badge, Button, NoticeLine, PageHeader, Toggle, errorText, inputClass, type Notice } from "./ui";
@@ -45,8 +45,12 @@ const ACTION_LABELS: Record<string, string> = {
   "auth.password_check_failed": "Passwortabfrage fehlgeschlagen",
   "auth.password_check_locked": "Sicherheitsabfragen vorübergehend gesperrt",
   "auth.totp_confirm_failed": "Zwei-Faktor-Einrichtung: falscher Code",
+  "auth.totp_check_failed": "Bestätigung: falscher Code (App oder Wiederherstellungs-Code)",
   "auth.password_reset_cli": "Passwort per Notfall-Befehl zurückgesetzt",
   "auth.2fa_disabled_cli": "Zwei-Faktor per Notfall-Befehl abgeschaltet",
+  "user.created": "Benutzer angelegt",
+  "user.updated": "Benutzer geändert",
+  "user.deleted": "Benutzer gelöscht",
   "user.2fa_reset": "Zwei-Faktor zurückgesetzt",
   "setup.completed": "Einrichtung abgeschlossen",
   "setup.failed": "Einrichtungscode falsch",
@@ -118,14 +122,17 @@ const UUID_START = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
 /** Ein Ziel für die Tabelle: „Benutzer · nico“, „Server · Bastel-Pi“. Eine bloße Nummer sagt niemandem etwas, sie steht
  * nur in den Einzelheiten. */
 export function targetText(
-  e: Pick<AuditEntry, "target_type" | "target_id">,
+  e: Pick<AuditEntry, "target_type" | "target_id"> & Partial<Pick<AuditEntry, "action" | "detail">>,
   names: { users: Record<string, string>; hosts: Record<string, string>; extension: (id: string) => string },
 ): string {
   if (!e.target_type) return "–";
   const kind = TARGET_LABELS[e.target_type] ?? e.target_type;
   if (!e.target_id) return kind;
+  // Ein gelöschtes Konto steht nicht mehr in der Benutzerliste; sein Name steht im Eintrag selbst
+  // (`user.created`, `user.updated`, `user.deleted`).
+  const recorded = e.action?.startsWith("user.") && typeof e.detail?.username === "string" ? e.detail.username : undefined;
   const name =
-    e.target_type === "user" ? names.users[e.target_id]
+    e.target_type === "user" ? names.users[e.target_id] ?? recorded
     : e.target_type === "host" ? names.hosts[e.target_id]
     : e.target_type === "extension" ? names.extension(e.target_id)
     : undefined;
@@ -204,9 +211,9 @@ export function AuditSettings(): JSX.Element {
     params.delete("limit");
     params.delete("offset");
     try {
-      const token = useAuthStore.getState().accessToken;
-      const res = await fetch(`/api/v1/audit/export?${params}`, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      // Wie `api.get`: bei 401 einmal still erneuern und wiederholen, Fehlertext aus der Antwort.
+      const res = await apiFetchResponse(`/audit/export?${params}`);
+      if (!res.ok) throw await apiErrorFromResponse(res);
       const url = URL.createObjectURL(await res.blob());
       const a = document.createElement("a");
       a.href = url;

@@ -28,7 +28,12 @@ wieder zurueckgenommen (`succeeded`/`release`).
 Alle Funktionen sind synchron und enthalten kein `await` -- im Event-Loop laufen sie
 damit am Stueck; das Lock schuetzt zusaetzlich gegen Aufrufe aus Threads. Der Zustand
 gilt pro Prozess und ist nach einem Neustart weg (der Container startet uvicorn mit
-einem Worker). Die Client-IP kommt aus `request.client.host`; hinter einem spaeteren
+einem Worker). Ausnahme: Beim Start traegt `services.auth.restore_code_limits` die falschen
+Zwei-Faktor-Codes der letzten 24 Stunden aus dem Protokoll wieder ein (`restore_account_failures`,
+`restore_failures`). Sonst finge die Grenze je Konto nach jedem Neustart von vorn an, und wer
+Sitzung und Passwort hat, koennte im Wechsel raten und neu starten.
+
+Die Client-IP kommt aus `request.client.host`; hinter einem spaeteren
 Reverse-Proxy saehen alle Anfragen gleich aus -- dann muss die Proxy-IP-Erkennung
 (uvicorn `--proxy-headers`/`--forwarded-allow-ips`) passend gesetzt werden.
 """
@@ -40,6 +45,7 @@ import math
 import threading
 import time
 from collections import deque
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 WINDOW_SECONDS = 5 * 60
@@ -64,6 +70,11 @@ _ACCOUNT_LIMITS = (
 )
 TOTP_STEP_SECONDS = 30
 """Laenge eines TOTP-Zeitschritts (Standard, wie bei pyotp)."""
+RESTORE_FUTURE_SECONDS = ACCOUNT_DAY_SECONDS
+"""Beim Wiederherstellen nach einem Neustart: Fehlversuche, die laut Protokoll in der Zukunft liegen (die Uhr ging beim
+Schreiben vor oder geht beim Start nach, etwa auf einem Raspberry Pi ohne Uhrenbaustein vor dem Abgleich mit dem
+Zeitserver), zaehlen als gerade eben -- bis hoechstens so weit voraus. Was weiter voraus liegt, passt zu keiner
+brauchbaren Uhr und zaehlt nicht: Sonst sperrte eine falsch gestellte Uhr beim Start jedes Konto einen Tag lang."""
 
 _SWEEP_THRESHOLD = 1024
 _UNKNOWN_IP = "unbekannt"
@@ -75,6 +86,10 @@ SCOPE_ACCOUNT = "account"
 
 def _now() -> float:
     return time.monotonic()
+
+
+def _wall_now() -> float:
+    return time.time()
 
 
 class Locked(Exception):
@@ -334,3 +349,63 @@ def claim_success(attempt: Attempt, *, totp_step: int | None = None) -> bool:
         if attempt.mfa_key is not None:
             _mfa_used[attempt.mfa_key] = _now()
         return True
+
+
+def remember_totp_step(account: str, step: int) -> None:
+    """Ein Authenticator-Code wurde ausserhalb von `claim_success` angenommen (die Einrichtung ist bestaetigt): Sein
+    Zeitschritt gilt danach als benutzt, derselbe Code also nicht noch einmal (Anmeldung, Bestaetigung). Abgelehnt wird
+    hier nichts: Bei der Einrichtung gehoert der Code zu einem neuen Schluessel, er kann vorher nicht benutzt worden
+    sein."""
+    with _lock:
+        if step > _totp_steps.get(account, -1):
+            _totp_steps[account] = step
+
+
+def _restored(wall_times: Iterable[float], *, window: float, limit: int, now: float, now_wall: float) -> list[float]:
+    """Zeitpunkte aus dem Protokoll (Wanduhr, Sekunden seit 1970) als Zeitpunkte dieses Prozesses (`_now`, monoton), mit
+    demselben Alter wie im Protokoll: `now - (now_wall - ts)`. Nur die im Fenster, davon nur die juengsten `limit` (mehr
+    braucht keine Grenze), aufsteigend sortiert. Zukunft siehe `RESTORE_FUTURE_SECONDS`."""
+    ages = sorted(
+        max(0.0, now_wall - ts)
+        for ts in wall_times
+        if now_wall - ts < window and ts - now_wall <= RESTORE_FUTURE_SECONDS
+    )[:limit]
+    return sorted(now - age for age in ages)
+
+
+def _merge(store: dict, key, times: list[float]) -> None:
+    if times:
+        store[key] = deque(sorted([*store.get(key, ()), *times]))
+
+
+def restore_account_failures(account: str, wall_times: Iterable[float], *, now_wall: float | None = None) -> int:
+    """Nach einem Neustart: falsche Codes fuer die Grenze je Konto (`begin(..., account=...)`) aus dem Protokoll wieder
+    eintragen. `wall_times` sind die Zeitpunkte der Fehlversuche in Sekunden seit 1970 (wie `time.time()`), `now_wall`
+    die Wanduhr dazu (sonst `time.time()`). Nur einmal beim Start aufrufen, bevor Anfragen kommen: schon gezaehlte
+    Versuche zaehlten sonst doppelt. Gibt zurueck, wie viele eingetragen wurden."""
+    with _lock:
+        restored = _restored(
+            wall_times,
+            window=ACCOUNT_DAY_SECONDS,
+            limit=MAX_MFA_FAILURES_PER_ACCOUNT_DAY,
+            now=_now(),
+            now_wall=_wall_now() if now_wall is None else now_wall,
+        )
+        _merge(_by_account, account, restored)
+        return len(restored)
+
+
+def restore_failures(ip: str, username: str, wall_times: Iterable[float], *, now_wall: float | None = None) -> int:
+    """Wie `restore_account_failures`, fuer den Zaehler je (`ip`, `username`) (`MAX_FAILURES_PER_USER` in
+    `WINDOW_SECONDS`). Gedacht fuer Zaehler, die mit einem Pseudo-Namen an einem Konto haengen statt an einer Adresse
+    (`services.auth.RECOVERY_ATTEMPT_KEY`); die echten Zaehler je Adresse und Name bleiben fluechtig."""
+    with _lock:
+        restored = _restored(
+            wall_times,
+            window=WINDOW_SECONDS,
+            limit=MAX_FAILURES_PER_USER,
+            now=_now(),
+            now_wall=_wall_now() if now_wall is None else now_wall,
+        )
+        _merge(_by_user, (ip, username), restored)
+        return len(restored)

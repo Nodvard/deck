@@ -105,6 +105,9 @@ SWARM = "swarm"
 FOREIGN_IMAGE = "foreign_image"
 PINNED_VERSION = "pinned_version"
 NOT_FROM_REGISTRY = "not_from_registry"
+"""Die Engine nennt fuer das laufende Image keinen Digest im Repository. Beim alten Store heisst das: nicht aus der
+Registry gezogen; beim containerd-Store nur: das Image hat im Repository keinen Namen (mehr). Umgekehrt beweist ein
+Digest beim containerd-Store nicht, dass das Image aus der Registry stammt (siehe `require_registry_digest`)."""
 NO_VERSION_LABEL = "no_version_label"
 VERSION_TOO_OLD = "version_too_old"
 IMAGE_CONFIG_MISSING = "image_config_missing"
@@ -138,8 +141,9 @@ PULL_FAILED = "pull_failed"
 NO_PREVIOUS = "no_previous"
 PREVIOUS_MISMATCH = "previous_mismatch"
 NOT_IMPLEMENTED = "not_implemented"
-"""Die Anforderung ist gueltig und vorgeprueft, diese Helfer-Version fuehrt die Aktion aber (noch) nicht aus (der
-Helfer prueft in diesem Stand nur vor; spaeter auch fuer Protokoll-Funktionen, die ein aelterer Helfer nicht kennt)."""
+"""Die Anforderung ist gueltig, diese Helfer-Version fuehrt die Aktion aber nicht aus. Fuer Update und Rueckweg kommt
+er nicht vor (beides fuehrt der Helfer aus). Er bleibt im Protokoll, denn Codes kommen nur dazu und fallen nie weg:
+eine spaetere Protokoll-Funktion, die ein aelterer Helfer nicht kennt, beantwortet dieser damit."""
 REQUEST_CODES = (
     BAD_REQUEST, EXPIRED, REPLAY, BUSY, RATE_LIMITED, BLOCKED_VERSION, NOT_NEWER, TAG_NOT_ON_VERSION,
     PLATFORM_MISMATCH, PULL_FAILED, NO_PREVIOUS, PREVIOUS_MISMATCH, NOT_IMPLEMENTED,
@@ -237,6 +241,23 @@ def is_request_id(value: object) -> bool:
 
 def is_code(value: object) -> bool:
     return isinstance(value, str) and value in CODES
+
+
+RESULT_KEYS = ("id", "action", "from", "to", "outcome", "code", "finished_at")
+"""Ein Eintrag in `status.results` (und in `state.json`, damit er einen Neustart des Helfers uebersteht)."""
+
+
+def is_result(entry: object) -> bool:
+    """Ein gueltiger Eintrag fuer `status.results`: genau die sieben Schluessel, nur feste Werte (dieselben Regeln wie
+    `channel.validate_status`)."""
+    if not isinstance(entry, dict) or set(entry) != set(RESULT_KEYS):
+        return False
+    return (is_request_id(entry["id"]) and isinstance(entry["action"], str) and entry["action"] in ACTIONS
+            and (entry["from"] is None or is_version(entry["from"]))
+            and (entry["to"] is None or is_version(entry["to"]))
+            and isinstance(entry["outcome"], str) and entry["outcome"] in OUTCOMES
+            and (entry["code"] is None or is_code(entry["code"]))
+            and _is_int(entry["finished_at"]) and entry["finished_at"] >= 0)
 
 
 # ---------------------------------------------------------------------------
@@ -367,8 +388,26 @@ def registry_digests(repo_digests: object, *, repository: str = REPOSITORY) -> l
 
 
 def require_registry_digest(repo_digests: object, *, repository: str = REPOSITORY) -> list[str]:
-    """Das laufende Image stammt aus der Registry: mindestens ein `RepoDigests`-Eintrag des Repositorys,
-    sonst `not_from_registry` (z. B. selbst gebaut und nur als ghcr getaggt)."""
+    """Die Engine nennt fuer das laufende Image einen Digest im Repository: mindestens ein `RepoDigests`-Eintrag
+    `repository@sha256:...`, sonst `not_from_registry`. Den braucht der Rueckweg-Slot (`Slot.repo_digest`).
+
+    Ob das Image damit aus der Registry stammt, haengt vom Image-Store des Docker-Dienstes ab:
+
+    * **Alter Store** (Graphdriver, etwa overlay2): `RepoDigests` schreibt nur ein Pull (oder Push). Ein selbst gebautes
+      und nur als `repository` getaggtes Image hat keinen Eintrag -> `not_from_registry`.
+    * **containerd-Store** (Standard einer neuen Installation ab Docker 29): `RepoDigests` wird aus den Namen des Images
+      abgeleitet, je Name `<repository>@<Digest des Images>`. Auch ein selbst gebautes oder aus einem anderen Repository
+      umgetaggtes Image hat dann einen Eintrag, nur kennt die Registry diesen Digest nicht. Das erkennt die Pruefung
+      **nicht**: Unterscheiden koennte es die Registry, die wertet die Vorpruefung aber nicht aus (sie fragt sie
+      nie).
+      `not_from_registry` heisst hier nur: das Image hat keinen Namen im Repository (mehr), etwa weil
+      `docker compose pull` das bewegliche Tag schon auf ein neueres Image gelegt hat.
+
+    Was beim containerd-Store daraus folgt, ist abgesichert: Ein Update zieht das offizielle Image nach dem Digest, den
+    die Registry fuer das bewegliche Tag nennt, prueft es wie immer und ersetzt das selbst gebaute. Der Rueckweg-Slot
+    traegt danach einen Digest, den nur dieser Rechner kennt. Solange das alte Image noch da ist (Schutz-Tag), braucht
+    der Rueckweg die Registry nicht; nach `docker image prune -a` scheitert das Ziehen nach diesem Digest
+    (`pull_failed`, nichts veraendert, der Slot bleibt)."""
     found = registry_digests(repo_digests, repository=repository)
     if not found:
         raise Refusal(NOT_FROM_REGISTRY)
@@ -535,8 +574,10 @@ SLOT_KEYS = ("from_version", "image_id", "repo_digest", "installed_container_id"
 class Slot:
     """Der eine Rueckweg nach einem gelungenen Update.
 
-    * `from_version`, `image_id`, `repo_digest`: die Version davor, ihr Image und dessen Digest in der Registry
-      (zum erneuten Ziehen nach `image prune -a`).
+    * `from_version`, `image_id`, `repo_digest`: die Version davor, ihr Image und dessen Digest im Repository, wie die
+      Engine ihn vor dem Update nannte (zum erneuten Ziehen nach `image prune -a`). Beim containerd-Store kennt die
+      Registry ihn nicht, wenn das Image selbst gebaut war; dann geht der Rueckweg nur, solange es noch da ist (siehe
+      `require_registry_digest`).
     * `installed_container_id`, `installed_image_id`: der Container, den der Helfer dabei angelegt hat.
     * `until`: bis dahin gilt der Slot (7 Tage).
     """

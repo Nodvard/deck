@@ -26,6 +26,7 @@ import sqlite3
 import stat
 import tarfile
 import threading
+import tomllib
 import urllib.parse
 import zlib
 from collections.abc import Callable
@@ -206,10 +207,36 @@ def db_facts(db_copy: Path, extensions_dir: Path | None) -> tuple[list[str], lis
     return heads, extensions
 
 
-_REVISION_RE = re.compile(r"^revision\s*(?::\s*str)?\s*=\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
+REVISION_RE = re.compile(r"^revision\s*(?::\s*str)?\s*=\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
+"""Die Revisions-ID in einer Alembic-Skriptdatei (ohne Alembic zu laden); auch `migrate.py` nutzt sie."""
+
+_EXT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
+
+
+def extension_ids(ext_dir: Path) -> list[str]:
+    """Ordnername, Kennung und alte Kennungen (`legacy_ids`) einer installierten Erweiterung.
+
+    Gelesen mit `tomllib` aus `<ordner>/extension.toml` -- nur Standardbibliothek, weil `boot` dieses Modul
+    ohne SDK laedt. Ist die Datei nicht lesbar, gilt nur der Ordnername (wie frueher). So passen die
+    Zeilen einer umbenannten Erweiterung (Registry-Zeile mit der alten Kennung) weiter zu ihrem Ordner."""
+    names = [ext_dir.name]
+    try:
+        data = tomllib.loads((ext_dir / "extension.toml").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return names
+    ext = data.get("extension")
+    if not isinstance(ext, dict):
+        return names
+    legacy = ext.get("legacy_ids")
+    for value in [ext.get("id"), *(legacy if isinstance(legacy, list) else [])]:
+        if isinstance(value, str) and _EXT_ID_RE.match(value) and value not in names:
+            names.append(value)
+    return names
 
 
 def _extension_revisions(extensions_dir: Path | None) -> dict[str, set[str]]:
+    """Kennung -> Revisionen ihres eigenen Migrationszweigs, je Ordner unter allen Namen aus
+    `extension_ids()` (Ordnername, Kennung, alte Kennungen)."""
     out: dict[str, set[str]] = {}
     if extensions_dir is None or not extensions_dir.is_dir():
         return out
@@ -220,10 +247,11 @@ def _extension_revisions(extensions_dir: Path | None) -> dict[str, set[str]]:
         found: set[str] = set()
         for script in versions.glob("*.py"):
             try:
-                found.update(_REVISION_RE.findall(script.read_text(encoding="utf-8", errors="replace")))
+                found.update(REVISION_RE.findall(script.read_text(encoding="utf-8", errors="replace")))
             except OSError:
                 continue
-        out[ext_dir.name] = found
+        for name in extension_ids(ext_dir):
+            out.setdefault(name, set()).update(found)
     return out
 
 

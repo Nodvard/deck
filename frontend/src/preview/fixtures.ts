@@ -11,7 +11,7 @@ const PAGES = [
   page("backups", "backups", "/backups", "Backups", "database-backup", "Infrastruktur", 20),
   page("service-matrix", "matrix", "/matrix", "Service-Matrix", "layout-grid", "Infrastruktur", 30),
   page("gameserver", "servers", "/gameservers", "Gameserver", "gamepad-2", "Infrastruktur", 40),
-  page("nexus-soc", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
+  page("shield", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
   page("scripts", "scripts", "/scripts", "Skripte", "terminal-square", "Automatisierung", 20),
   page("documents", "documents", "/documents", "Dokumente", "file-text", "Dokumente", 10),
   page("inventory", "inventory", "/inventory", "Inventar", "package", "Inventar", 10),
@@ -206,7 +206,7 @@ const WIDGETS = [
   w("proxmox", "updates", "Proxmox-Updates", "package", "widgets/updates", {
     kind: "list", empty_text: "–", max_items: null, item: listItem("{{ node }}", "{{ summary }}", { text: "{{ badge }}", tone: "{{ tone }}" }),
   }),
-  w("nexus-soc", "incidents", "Vorfälle", "shield-alert", "widgets/incidents", {
+  w("shield", "incidents", "Vorfälle", "shield-alert", "widgets/incidents", {
     kind: "list", empty_text: "Keine offenen Vorfälle", max_items: null,
     item: listItem("{{ title }}", "{{ host }}", { text: "{{ status_label }}", tone: "{{ tone }}" }),
   }),
@@ -246,7 +246,7 @@ const WIDGET_DATA: Record<string, unknown> = {
     { node: "pve2", summary: "Auf dem neuesten Stand", badge: "aktuell", tone: "good" },
     { node: "pve1", summary: "Auf dem neuesten Stand", badge: "aktuell", tone: "good" },
   ],
-  "/ext/nexus-soc/widgets/incidents": [
+  "/ext/shield/widgets/incidents": [
     { title: "Container 'clamav' beendet (Exit 137)", host: "docker", status_label: "Vorschlag", tone: "warn" },
   ],
   "/ext/service-matrix/widgets/matrix": OVERVIEW.services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
@@ -373,7 +373,7 @@ function previewLive(): object {
  * die UUID des Nutzers in proposed_by_id; angezeigt wird proposed_by_label. */
 function actionRow(id: string, fields: Record<string, unknown>) {
   return {
-    id, ext_id: "nexus-soc", action_type: "updates.apply", host_id: "h-pi", payload: {}, risk: "medium", status: "proposed",
+    id, ext_id: "shield", action_type: "updates.apply", host_id: "h-pi", payload: {}, risk: "medium", status: "proposed",
     proposed_by_type: "user", proposed_by_id: "5f3c9a1e-7b2d-4c8e-9f10-2a6b4d8c0e13", proposed_by_label: "admin",
     reason: "", gate_decision: {},
     approved_by_user_id: null, approved_by_label: null, approved_at: null, executed_at: null, finished_at: null, result: {}, correlation_id: null,
@@ -383,7 +383,7 @@ function actionRow(id: string, fields: Record<string, unknown>) {
 const ACTIONS = [
   actionRow("act-1", { reason: "Sicherheitsupdates einspielen (12 Pakete, davon 3 Sicherheit)" }),
   actionRow("act-2", {
-    action_type: "container.restart", host_id: "g-docker", proposed_by_type: "extension", proposed_by_id: "nexus-soc",
+    action_type: "container.restart", host_id: "g-docker", proposed_by_type: "extension", proposed_by_id: "shield",
     proposed_by_label: "Nodvard Shield", reason: "KI-Container-Wache: „immich_server“ ist abgestürzt (Exit 137)", created_at: "2026-09-25T19:44:00Z",
   }),
   actionRow("act-3", {
@@ -456,7 +456,9 @@ export const previewState: {
   noApps: boolean;
   /** Eigene Apps („+ App hinzufuegen“), die Anlegen/Aendern/Loeschen in der Vorschau und in Tests veraendern; `null` = Ausgangsstand (siehe `customApps()`). */
   customApps: PreviewApp[] | null;
-} = { scenario: "ok", noHosts: false, start: false, firstStepsDismissed: false, setup: false, demo: false, restore: "", ohneProxmox: false, ohneProxmoxMin: false, noApps: false, customApps: null };
+  /** Update-Helfer (Einstellungen -> System): `?scenario=helfer-<zustand>`, siehe `HELPER_SCENARIOS`; leer = kein Helfer erwähnt (wie bisher). */
+  helper: HelperScenario | "";
+} = { scenario: "ok", noHosts: false, start: false, firstStepsDismissed: false, setup: false, demo: false, restore: "", ohneProxmox: false, ohneProxmoxMin: false, noApps: false, customApps: null, helper: "" };
 
 /** Eine eigene App, wie `GET /apps` sie liefert (ohne die Zeitstempel). */
 interface PreviewApp {
@@ -575,7 +577,7 @@ const SETUP_MODULES = [
   {"id": "inventory", "name": "Inventar", "description": "Inventar für Geräte und Gegenstände: Standorte, Kategorien, Kaufpreis, Garantie mit Ablaufwarnung, Fotos und CSV-Export.", "icon": "package", "category": "tools", "sort_order": 30},
   {"id": "network", "name": "Netzwerk", "description": "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blockierung, Proxy-Hosts und ablaufende Zertifikate. Blockierung pausieren und Proxy-Hosts ein- oder ausschalten – über die Freigabe.", "icon": "activity", "category": "servers", "sort_order": 70},
   {"id": "nextcloud", "name": "Nextcloud", "description": "Bindet deine Nextcloud in den Dateimanager von Nodvard Deck ein: Dateien ansehen, hoch- und herunterladen und zwischen Servern kopieren.", "icon": "cloud", "category": "connections", "sort_order": 20},
-  {"id": "nexus-soc", "name": "Nodvard Shield", "description": "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits – dazu die KI-Container-Wache (Nodvard KI), die abgestürzte Docker-Container erkennt und Lösungen vorschlägt.", "icon": "shield-alert", "category": "security", "sort_order": 10},
+  {"id": "shield", "name": "Nodvard Shield", "description": "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits – dazu die KI-Container-Wache (Nodvard KI), die abgestürzte Docker-Container erkennt und Lösungen vorschlägt.", "icon": "shield-alert", "category": "security", "sort_order": 10},
   {"id": "ntfy", "name": "ntfy-Benachrichtigungen", "description": "Schickt Meldungen von Nodvard Deck als Push-Nachricht aufs Handy über ntfy (ntfy.sh oder eigener Server).", "icon": "bell", "category": "connections", "sort_order": 10},
   {"id": "proxmox", "name": "Proxmox VE", "description": "Liest deine Proxmox-Server mit allen VMs und Containern in Nodvard Deck ein: Auslastung, Start/Stopp/Neustart, Snapshots, Konsole und Speicher-Übersicht.", "icon": "server", "category": "servers", "sort_order": 40},
   {"id": "scripts", "name": "Skripte", "description": "Eigene Skripte zentral verwalten, versionieren und auf einem, mehreren oder allen Servern ausführen – sofort oder nach Zeitplan.", "icon": "terminal-square", "category": "tools", "sort_order": 10},
@@ -584,7 +586,7 @@ const SETUP_MODULES = [
   {"id": "terminal", "name": "Terminal", "description": "Web-Terminal und Dateizugriff per SSH direkt im Browser, mit mehreren Sitzungen gleichzeitig.", "icon": "terminal", "category": "servers", "sort_order": 20},
 ];
 /** Module, die nach dem Einschalten noch Angaben brauchen (wie im echten Backend: Pflichtfelder fehlen). */
-const SETUP_NEEDS_SETUP = new Set(["backups", "network", "nextcloud", "nexus-soc", "ntfy", "proxmox", "service-matrix"]);
+const SETUP_NEEDS_SETUP = new Set(["backups", "network", "nextcloud", "shield", "ntfy", "proxmox", "service-matrix"]);
 const setupState = { enabled: new Set<string>(), totp: false, timezone: "UTC" };
 
 /** Antworten des Assistenten, der nach dem Konto Module, Zeitzone und Zwei-Faktor anfasst. */
@@ -640,7 +642,7 @@ const EMPTY_OVERVIEW = {
 const NTFY = { id: "ntfy", name: "ntfy-Benachrichtigungen", description: "Push-Nachrichten aufs Handy", icon: "bell", has_settings: true };
 
 const REQUIREMENTS = [
-  { ext_id: "nexus-soc", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne, Härtungs-Audit, Fail2ban", order: 50 },
+  { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne, Härtungs-Audit, Fail2ban", order: 50 },
   { ext_id: "system", id: "root", label: "Root-Rechte (System)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Dienste neu starten", order: 60 },
   { ext_id: "service-matrix", id: "docker-group", label: "Docker ohne sudo (Service-Matrix)", check_command: "docker ps -q", ok_text: "Docker ist erreichbar.", fail_hint: "Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
 ];
@@ -794,8 +796,126 @@ function backupOverview() {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Update-Helfer: `?scenario=helfer-<zustand>` (Einstellungen -> System, `?path=/settings/system`)
+// ---------------------------------------------------------------------------
+
+/** Die Zustände für die Vorschau. Mit „bereit“ lässt sich der ganze Ablauf durchspielen (Knopf, Fortschritt, Ergebnis). */
+export const HELPER_SCENARIOS = [
+  "bereit", "nicht-bereit", "antwortet-nicht", "nicht-eingerichtet", "laeuft", "umschalten", "ergebnis", "von-hand", "rueckweg",
+  "rueckweg-ohne-daten", "rueckweg-unklar", "fehlschlag", "frist", "gesperrt",
+] as const;
+export type HelperScenario = (typeof HELPER_SCENARIOS)[number];
+
+/** Antwort, bei der das Dashboard „nicht erreichbar“ ist (503 wie während des Umschaltens); siehe preview/main.tsx. */
+export const PREVIEW_DOWN = { __preview_down__: true };
+
+const HELPER_REQUEST = "6f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60";
+const nowS = () => Math.floor(Date.now() / 1000);
+
+function helperBase() {
+  return {
+    present: true, reason: null, ready: true, ready_reason: null, state: "idle", helper_version: "0.7.0", heartbeat_at: nowS() - 12,
+    target: { current_version: "0.7.0", floating_tag: "latest", pinned: false }, busy: null, previous: null, last_result: null, pending: null,
+  };
+}
+
+const helperBusy = (step: string, action: "update" | "rollback" = "update") => ({
+  ...helperBase(), ready: false, ready_reason: "busy", state: "busy", target: null, busy: { id: HELPER_REQUEST, action, step, since: nowS() - 95 },
+});
+
+const helperResult = (outcome: string, code: string | null, action: "update" | "rollback" = "update") => ({
+  id: HELPER_REQUEST, action, from: action === "update" ? "0.7.0" : "0.7.1", to: action === "update" ? "0.7.1" : "0.7.0", outcome, code,
+  finished_at: nowS() - 3600,
+});
+
+const absent = (reason: string) => ({ ...helperBase(), present: false, reason, ready: false, state: null, helper_version: null, heartbeat_at: null, target: null });
+
+/** Ein in der Vorschau angeforderter Vorgang: jede Abfrage geht einen Schritt weiter, zwischendurch ist das Dashboard weg. */
+let run: { action: "update" | "rollback"; calls: number; healthCalls: number } | null = null;
+let switchCalls = 0;
+const RUN_STEPS = ["begin", "pulled", "protected", "renamed", "creating", "old_stopped"];
+
+function helperView(): unknown {
+  const s = previewState.helper;
+  if (run) {
+    run.calls += 1;
+    if (run.calls === 1) return { ...helperBase(), pending: { id: HELPER_REQUEST, action: run.action, to: run.action === "update" ? "0.7.1" : "0.7.0", at: nowS() } };
+    const step = RUN_STEPS[run.calls - 2];
+    if (step) return helperBusy(step, run.action);
+    if (run.healthCalls < 3) return PREVIEW_DOWN;
+    if (run.calls < RUN_STEPS.length + 5) return helperBusy("started", run.action);
+    const failed = s === "fehlschlag";
+    const outcome = failed ? "rolled_back" : run.action === "update" ? "applied" : "reverted";
+    return { ...helperBase(), last_result: { ...helperResult(outcome, failed ? "exited" : null, run.action), finished_at: nowS() } };
+  }
+  const previous = (data: boolean | null) => ({ version: "0.7.0", until: nowS() + 5 * 24 * 3600, data_revert: data, data_since: data ? nowS() - 2 * 24 * 3600 : null });
+  switch (s) {
+    case "nicht-bereit": return { ...helperBase(), ready: false, ready_reason: "not_from_registry" };
+    case "antwortet-nicht": return absent("stale");
+    case "nicht-eingerichtet": return absent("missing");
+    case "laeuft": return { ...helperBusy("started"), pending: { id: HELPER_REQUEST, action: "update", to: "0.7.1", at: nowS() - 95 } };
+    // Erst der Schritt „anhalten“, danach antwortet das Dashboard nicht mehr (Phase 2, /health bleibt aus).
+    case "umschalten": return switchCalls++ === 0 ? { ...helperBusy("old_stopped"), pending: { id: HELPER_REQUEST, action: "update", to: "0.7.1", at: nowS() - 70 } } : PREVIEW_DOWN;
+    case "ergebnis": return { ...helperBase(), last_result: helperResult("rolled_back", "rescue_page") };
+    // Der Helfer lädt noch herunter, die Frist der Anzeige (in der Vorschau verkürzt, preview/main.tsx) ist schon um.
+    case "frist": return helperBusy("begin");
+    // Vor einer Stunde von 0.7.1 zurückgegangen: 0.7.1 ist 24 Stunden gesperrt, kein Knopf.
+    case "gesperrt": return { ...helperBase(), last_result: helperResult("reverted", null, "rollback") };
+    case "von-hand": return { ...helperBase(), ready: false, ready_reason: "target_unhealthy", last_result: helperResult("failed_manual", "rollback_failed") };
+    case "rueckweg": return { ...helperBase(), target: { current_version: "0.7.1", floating_tag: "latest", pinned: false }, previous: previous(true), last_result: { ...helperResult("applied", null), finished_at: nowS() - 2 * 24 * 3600 } };
+    case "rueckweg-ohne-daten": return { ...helperBase(), target: { current_version: "0.7.1", floating_tag: "latest", pinned: false }, previous: previous(false) };
+    case "rueckweg-unklar": return { ...helperBase(), target: { current_version: "0.7.1", floating_tag: "latest", pinned: false }, previous: previous(null) };
+    default: return helperBase();
+  }
+}
+
+/** `/api/v1/health` in der Vorschau während eines Vorgangs: erst weg, dann die neue Version. `undefined`: keiner läuft. */
+export function previewHealth(): { status: string; uptime_s: number; version: string } | null | undefined {
+  if (previewState.helper === "umschalten") return null;
+  if (!run || run.calls < RUN_STEPS.length + 2) return undefined;
+  run.healthCalls += 1;
+  if (run.healthCalls < 3) return null;
+  const back = previewState.helper === "fehlschlag" ? "0.7.0" : run.action === "update" ? "0.7.1" : "0.7.0";
+  return { status: "ok", uptime_s: 4, version: back };
+}
+
+/** Nach dem Neuladen (in der Vorschau nur angedeutet): der Vorgang ist vorbei. */
+export function previewHelperReload(): void {
+  run = null;
+}
+
+function helperRoutes(p: string, method: string): { handled: boolean; value?: unknown } {
+  // Ohne Szenario: wie bei den meisten Installationen gibt es keinen Helfer.
+  if (!previewState.helper) return p === "/system/updates/helper" ? { handled: true, value: absent("missing") } : { handled: false };
+  if (p === "/system/updates/helper") return { handled: true, value: helperView() };
+  if ((p === "/system/updates/apply" || p === "/system/updates/rollback") && method === "POST") {
+    const action = p.endsWith("/apply") ? "update" : "rollback";
+    run = { action, calls: 0, healthCalls: 0 };
+    return { handled: true, value: { request_id: HELPER_REQUEST, action, from: action === "update" ? "0.7.0" : "0.7.1", to: action === "update" ? "0.7.1" : "0.7.0", data_revert: previewState.helper === "rueckweg" } };
+  }
+  if (p === "/system/updates" || p === "/system/updates/check") {
+    const after = previewState.helper.startsWith("rueckweg");
+    return {
+      handled: true,
+      value: {
+        current: after ? "0.7.1" : "0.7.0", latest: "0.7.1", latest_digest: null, available: !after, channel: "stable", enabled: true,
+        checked_at: "2026-10-03T04:41:00Z", attempted_at: "2026-10-03T04:41:00Z", source: "cache", error: null,
+        official_image: true, image: "ghcr.io/nodvard/deck", official_image_name: "ghcr.io/nodvard/deck", helper: previewState.helper !== "nicht-eingerichtet",
+        release_notes_url: "https://github.com/nodvard/deck/blob/v0.7.1/CHANGELOG.md",
+      },
+    };
+  }
+  if (p === "/system/info" && previewState.helper.startsWith("rueckweg")) {
+    return { handled: true, value: { version: "0.7.1", build: "0.7.1", image: "ghcr.io/nodvard/deck", timezone: "Europe/Berlin", data_dir: "/app/data", data_free_bytes: 21_400_000_000, database: "sqlite", updater_available: true, pre_update_copies: [{ name: "20261001T030000Z_0.7.0_0.7.1.db", created_at: "2026-10-01T03:00:00Z", from_version: "0.7.0", to_version: "0.7.1", size: 8_400_000 }] } };
+  }
+  return { handled: false };
+}
+
 function backupRoutes(p: string, method: string): { handled: boolean; value?: unknown } {
   if (!p.startsWith("/system/")) return { handled: false };
+  const helper = helperRoutes(p, method);
+  if (helper.handled) return helper;
   if (p === "/system/info") return { handled: true, value: { version: "0.5.0", build: null, image: null, timezone: "Europe/Berlin", data_dir: "/app/data", data_free_bytes: 21_400_000_000, database: "sqlite", updater_available: false, pre_update_copies: [{ name: "20260930T220000Z_0.4.0_0.5.0.db", created_at: "2026-09-30T22:00:00Z", from_version: "0.4.0", to_version: "0.5.0", size: 8_400_000 }] } };
   if (p === "/system/updates" || p === "/system/updates/check") {
     return {
@@ -824,7 +944,7 @@ export const RESTORE_ID = "c0ffee00c0ffee00c0ffee00c0ffee00";
 const RESTORE_SUMMARY = {
   created_at: "2026-09-30T00:30:41Z", app_version: "0.5.0", instance_id: "9d41c7a2e0b84f6aa1d3b5c8e7f20416", mode: "passwort", owner_name: "admin",
   users: 3, hosts: 11,
-  extensions: ["proxmox", "backups", "system", "terminal", "service-matrix", "nexus-soc", "ntfy"].map((id) => ({ id, version: "0.5.0" })),
+  extensions: ["proxmox", "backups", "system", "terminal", "service-matrix", "shield", "ntfy"].map((id) => ({ id, version: "0.5.0" })),
   includes: { runs: false, branding: true, jwt_secret: true },
   warnings: [
     "Die Sicherung stammt aus Version 0.4.2, installiert ist 0.5.0. Beim Start werden die Daten auf den neuen Stand gebracht.",
@@ -945,12 +1065,12 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   ];
   if (p.startsWith("/ext/scripts/scripts/lynis-audit/history")) return [{ sha: "a1b2c3d4e5", message: "scripts: Lynis-Sicherheitsaudit als Erststand angelegt", commit_time: 1758700000 }];
   if (p === "/jobs") return [];
-  if (previewState.ohneProxmox && p.startsWith("/ext/nexus-soc/defender/") && method === "GET") {
+  if (previewState.ohneProxmox && p.startsWith("/ext/shield/defender/") && method === "GET") {
     const base = respondWithoutScenario(p, method, body);
     const mapped = base && typeof base === "object" ? ohneProxmoxSoc(p, base as Record<string, unknown>) : base;
     if (mapped !== undefined) return mapped;
   }
-  if (p === "/ext/nexus-soc/defender/updates") {
+  if (p === "/ext/shield/defender/updates") {
     const t = Date.now() / 1000;
     const st = (count: number, sec: number, extra: object = {}) => ({
       manager: "apt", count, security_count: sec, reboot_required: false, reboot_reasons: [], kernel: "6.8.12-4-pve", latest_kernel: null,
@@ -976,7 +1096,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       config: { check_enabled: true, check_cron: "0 6 * * *", auto_enabled: true, auto_mode: "security", auto_cron: "30 3 * * *", auto_reboot: false, auto_tag: null },
     };
   }
-  if (p === "/ext/nexus-soc/defender/guard") {
+  if (p === "/ext/shield/defender/guard") {
     const t = Date.now() / 1000;
     const port = (port: number, proto: string, process: string, pub = true, isNew = false) => ({ key: `${proto}/${port}/${process}`, proto, address: pub ? "0.0.0.0" : "127.0.0.1", port, process, public: pub, new: isNew });
     return {
@@ -1001,7 +1121,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       config: { enabled: true, interval_min: 15, threshold: 20, file_watch: true },
     };
   }
-  if (p.startsWith("/ext/nexus-soc/defender/events")) {
+  if (p.startsWith("/ext/shield/defender/events")) {
     const t = Date.now() / 1000;
     return [
       { id: "ev2", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", kind: "file_changed", kind_label: "Datei geändert", severity: "warning", title: "Wichtige Datei geändert: /etc/passwd", acknowledged: false, created_at: t - 400,
@@ -1010,7 +1130,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
         detail: { ports: [{ key: "tcp/4444/nc", proto: "tcp", address: "0.0.0.0", port: 4444, process: "nc", public: true, new: true }] } },
     ];
   }
-  if (p.startsWith("/ext/nexus-soc/defender/overview")) return {
+  if (p.startsWith("/ext/shield/defender/overview")) return {
     hosts: [
       { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s1", host_id: "h-pi", host_name: "Raspberry Pi", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "clean", files_scanned: 14210, infected: 0, error: null, output_tail: null, started_at: Date.now() / 1000 - 5400, finished_at: null },
@@ -1051,8 +1171,8 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     values: { connections: [{ name: "pve2", base_url: "https://192.168.2.11:8006", token_id: "nodvard@pve!dashboard", tls_insecure_skip_verify: true }] },
     secrets: [{ label: "proxmox-token:pve2", title: "API-Token-Geheimnis", description: "Der geheime Wert, den Proxmox beim Anlegen des Tokens einmalig anzeigt.", item: "pve2", is_set: true }],
   };
-  if (p === "/extensions/nexus-soc/settings") return {
-    schema: NEXUS_SCHEMA, values: { ollama_url: "http://192.168.2.43:11434" },
+  if (p === "/extensions/shield/settings") return {
+    schema: SHIELD_SCHEMA, values: { ollama_url: "http://192.168.2.43:11434" },
     secrets: [{ label: "nexus-soc-ollama-key", title: "Nodvard KI: API-Schlüssel des Servers (optional)", description: null, item: null, is_set: false }],
   };
   if (p.startsWith("/extensions/") && p.split("/").length === 3) {
@@ -1063,8 +1183,8 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p === "/extensions" && previewState.ohneProxmox) return ohneProxmoxExtensions();
   if (p === "/extensions") return [
     ...PAGES.map((pg) => ({
-      id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "nexus-soc", "gameserver", "service-matrix"].includes(pg.ext_id),
-      state: previewState.noHosts ? "disabled" : pg.ext_id === "nexus-soc" ? "disabled" : pg.ext_id === "gameserver" ? "error" : "enabled",
+      id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "shield", "gameserver", "service-matrix"].includes(pg.ext_id),
+      state: previewState.noHosts ? "disabled" : pg.ext_id === "shield" ? "disabled" : pg.ext_id === "gameserver" ? "error" : "enabled",
       name: pg.title, description: `Modul ${pg.title}`, icon: pg.icon, granted_permissions: [],
       last_error: !previewState.noHosts && pg.ext_id === "gameserver" ? "on_start() fehlgeschlagen: Verbindung zu game-win abgelehnt" : null,
       needs_setup: previewState.start && pg.ext_id === "proxmox",
@@ -1135,14 +1255,14 @@ export function respond(path: string, method: string, body?: unknown): unknown {
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString();
 const NOTIFICATIONS = [
   { id: "n1", ts: minutesAgo(5), severity: "critical", title: "Speicher fast voll: local-lvm auf pve2 bei 95 %", body: "", source_ext_id: "proxmox", correlation_id: null, read_at: null, payload: { path: "/hosts/pve2" } },
-  { id: "n2", ts: minutesAgo(32), severity: "warning", title: "Einbruchschutz: 2 neue Sicherheitsereignisse, unter anderem ein ungewöhnlicher SSH-Login von einer unbekannten Adresse", body: "", source_ext_id: "nexus-soc", correlation_id: null, read_at: null, payload: { path: "/ext/nexus-soc/soc?tab=guard" } },
+  { id: "n2", ts: minutesAgo(32), severity: "warning", title: "Einbruchschutz: 2 neue Sicherheitsereignisse, unter anderem ein ungewöhnlicher SSH-Login von einer unbekannten Adresse", body: "", source_ext_id: "shield", correlation_id: null, read_at: null, payload: { path: "/ext/shield/soc?tab=guard" } },
   { id: "n3", ts: minutesAgo(95), severity: "info", title: "", body: "Backup „docker“ erfolgreich abgeschlossen\n2,4 GB in 6 min", source_ext_id: "backups", correlation_id: null, read_at: null, payload: {} },
-  { id: "n4", ts: minutesAgo(60 * 7), severity: "info", title: "Morgen-Briefing: alles im grünen Bereich", body: "", source_ext_id: "nexus-soc", correlation_id: null, read_at: minutesAgo(60 * 6), payload: { path: "/ext/nexus-soc/soc" } },
-  { id: "n5", ts: minutesAgo(60 * 30), severity: "warning", title: "Updates verfügbar: 12 Pakete auf gameserver", body: "", source_ext_id: "nexus-soc", correlation_id: null, read_at: minutesAgo(60 * 29), payload: {} },
+  { id: "n4", ts: minutesAgo(60 * 7), severity: "info", title: "Morgen-Briefing: alles im grünen Bereich", body: "", source_ext_id: "shield", correlation_id: null, read_at: minutesAgo(60 * 6), payload: { path: "/ext/shield/soc" } },
+  { id: "n5", ts: minutesAgo(60 * 30), severity: "warning", title: "Updates verfügbar: 12 Pakete auf gameserver", body: "", source_ext_id: "shield", correlation_id: null, read_at: minutesAgo(60 * 29), payload: {} },
 ];
 
 const PROXMOX_SCHEMA = {"type": "object", "properties": {"connections": {"type": "array", "title": "Proxmox-Server", "description": "Ein Eintrag je Proxmox-Server oder -Cluster. Knoten, VMs und Container werden automatisch eingelesen.", "x-item-title": "Server", "items": {"type": "object", "properties": {"name": {"type": "string", "title": "Kurzname", "description": "Eindeutig und ohne Leerzeichen, z. B. „pve2“ oder „pve1“. Nach dem ersten Einlesen nicht mehr ändern."}, "base_url": {"type": "string", "title": "Adresse", "description": "z. B. https://192.168.2.11:8006"}, "token_id": {"type": "string", "title": "API-Token-ID", "description": "Format benutzer@realm!tokenname, z. B. nodvard@pve!dashboard. Erstellen unter Rechenzentrum → Berechtigungen → API-Token."}, "tls_insecure_skip_verify": {"type": "boolean", "default": false, "title": "Selbstsigniertes Zertifikat erlauben", "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."}}, "required": ["name", "base_url", "token_id"]}}}, "required": ["connections"], "x-secrets": [{"label": "proxmox-token:{name}", "per_item": "connections", "title": "API-Token-Geheimnis", "description": "Der geheime Wert, den Proxmox beim Anlegen des Tokens einmalig anzeigt."}]};
-const NEXUS_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "string", "title": "Nodvard KI: Server (Ollama)", "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.43:11434"}, "ollama_model": {"type": "string", "default": "qwen2.5:7b", "title": "Nodvard KI: Modell", "description": "Name des Modells auf dem Ollama-Server."}, "ollama_failover_url": {"type": "string", "title": "Nodvard KI: Ersatz-Server (optional)", "description": "Wird nur gefragt, wenn der erste Server nicht antwortet."}, "ollama_failover_model": {"type": "string", "default": "qwen2.5:0.5b", "title": "Nodvard KI: Ersatz-Modell", "description": "Meist ein kleineres, schnelleres Modell."}, "docker_host_tag": {"type": "string", "default": "docker", "title": "Überwachte Server", "description": "Server mit dieser Markierung (Tag) werden auf abgestürzte Container überwacht."}, "incident_batch_delay_s": {"type": "number", "default": 300, "title": "Sammelzeit (Sekunden)", "description": "So lange werden Vorfälle gesammelt, bevor die KI eine Einschätzung abgibt.", "x-advanced": true}, "host_target_cooldown_s": {"type": "number", "default": 1800, "title": "Ruhezeit je Container (Sekunden)", "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.", "x-advanced": true}, "suppressed_hosts": {"type": "array", "items": {"type": "string"}, "title": "Ignorierte Server", "description": "Vorfälle dieser Server werden nie gemeldet, z. B. absichtlich pausierte Systeme.", "x-advanced": true}, "forbidden_host_keywords": {"type": "array", "items": {"type": "string"}, "default": ["pve", "proxmox", "host", "server", "node", "router", "gateway", "nas"], "title": "Schutzwörter", "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.", "x-advanced": true}}, "required": ["ollama_url"], "x-secrets": [{"label": "nexus-soc-ollama-key", "title": "Nodvard KI: API-Schlüssel des Servers (optional)", "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt."}]};
+const SHIELD_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "string", "title": "Nodvard KI: Server (Ollama)", "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.43:11434"}, "ollama_model": {"type": "string", "default": "qwen2.5:7b", "title": "Nodvard KI: Modell", "description": "Name des Modells auf dem Ollama-Server."}, "ollama_failover_url": {"type": "string", "title": "Nodvard KI: Ersatz-Server (optional)", "description": "Wird nur gefragt, wenn der erste Server nicht antwortet."}, "ollama_failover_model": {"type": "string", "default": "qwen2.5:0.5b", "title": "Nodvard KI: Ersatz-Modell", "description": "Meist ein kleineres, schnelleres Modell."}, "docker_host_tag": {"type": "string", "default": "docker", "title": "Überwachte Server", "description": "Server mit dieser Markierung (Tag) werden auf abgestürzte Container überwacht."}, "incident_batch_delay_s": {"type": "number", "default": 300, "title": "Sammelzeit (Sekunden)", "description": "So lange werden Vorfälle gesammelt, bevor die KI eine Einschätzung abgibt.", "x-advanced": true}, "host_target_cooldown_s": {"type": "number", "default": 1800, "title": "Ruhezeit je Container (Sekunden)", "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.", "x-advanced": true}, "suppressed_hosts": {"type": "array", "items": {"type": "string"}, "title": "Ignorierte Server", "description": "Vorfälle dieser Server werden nie gemeldet, z. B. absichtlich pausierte Systeme.", "x-advanced": true}, "forbidden_host_keywords": {"type": "array", "items": {"type": "string"}, "default": ["pve", "proxmox", "host", "server", "node", "router", "gateway", "nas"], "title": "Schutzwörter", "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.", "x-advanced": true}}, "required": ["ollama_url"], "x-secrets": [{"label": "nexus-soc-ollama-key", "title": "Nodvard KI: API-Schlüssel des Servers (optional)", "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt."}]};
 
 // ---------------------------------------------------------------------------
 // Szenario „ohne Proxmox“ (`?scenario=ohne-proxmox`, `…-min`): eine Installation ganz ohne Proxmox.
@@ -1206,7 +1326,7 @@ function ohneProxmoxExtensions() {
     row("proxmox", "Proxmox VE", "server", "disabled", true),
     row("backups", "Backups", "database-backup", "disabled", true),
     row("gameserver", "Gameserver", "gamepad-2", "disabled", true),
-    row("nexus-soc", "Nodvard Shield", "shield-alert", on, true),
+    row("shield", "Nodvard Shield", "shield-alert", on, true),
     row("scripts", "Skripte", "terminal-square", on),
     { ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null, state: "disabled", needs_setup: false, setup_reasons: [] },
   ];
@@ -1235,7 +1355,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
     ...(on ? [
       page("system", "system", "/system", "System", "cpu", "Infrastruktur", 10),
       page("service-matrix", "matrix", "/matrix", "Service-Matrix", "layout-grid", "Infrastruktur", 30),
-      page("nexus-soc", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
+      page("shield", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
       page("scripts", "scripts", "/scripts", "Skripte", "terminal-square", "Automatisierung", 20),
     ] : []),
   );
@@ -1261,7 +1381,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
     w("service-matrix", "matrix", "Service-Matrix", "layout-grid", "widgets/matrix", {
       kind: "status_grid", tile_title: "{{ name }}", tile_subtitle: "{{ host }}", tile_tone: "{{ tone }}", tile_link: null,
     }),
-    w("nexus-soc", "incidents", "Vorfälle", "shield-alert", "widgets/incidents", {
+    w("shield", "incidents", "Vorfälle", "shield-alert", "widgets/incidents", {
       kind: "list", empty_text: "Keine offenen Vorfälle", max_items: null,
       item: listItem("{{ title }}", "{{ host }}", { text: "{{ status_label }}", tone: "{{ tone }}" }),
     }),
@@ -1275,7 +1395,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
       { name: "NAS", summary: "Debian 12 · CPU 1 % · RAM 18 % · Platte 78 %", badge: "gut", tone: "good" },
     ],
     "/ext/service-matrix/widgets/matrix": services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
-    "/ext/nexus-soc/widgets/incidents": [],
+    "/ext/shield/widgets/incidents": [],
   });
   for (const key of Object.keys(LATEST)) delete LATEST[key];
   if (on) {

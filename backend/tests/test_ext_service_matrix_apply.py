@@ -98,6 +98,9 @@ def test_relative_config_files_belong_to_the_project_directory_and_env_files_are
         ("nodvard-deck-hub", {"image": "nodvard/deck:latest"}, "self"),
         ("nodvard-deck-own-registry", {"image": "registry.local:5000/nodvard/deck@sha256:" + "a" * 64}, "self"),
         ("nodvard-typo-registry", {"image": "ghcr.io/x/nodvard:2"}, "self"),
+        ("updater-ghcr", {"image": "ghcr.io/nodvard/deck-updater:1"}, "self"),
+        ("updater-pinned", {"image": "ghcr.io/nodvard/deck-updater:1@sha256:" + "b" * 64}, "self"),
+        ("updater-own-registry", {"image": "registry.local:5000/nodvard/deck-updater:0.7.0"}, "self"),
         ("v1-default-name", {"name": "/nextcloud_app_1", "lbls": {**labels(), L("version"): "1.29.2"}}, "compose_v1"),
     ],
 )
@@ -114,9 +117,73 @@ def test_the_container_the_dashboard_runs_in_is_never_updated_here():
     assert isinstance(result, NotUpdatable) and result.kind == "self" and "Deploy-Skript" in result.why
 
 
-@pytest.mark.parametrize("image", ["ghcr.io/other/deck:1", "nodvard/deck-tools:1", "ghcr.io/nodvard/link:1", "deck:1", "ghcr.io/nodvard/decks:1"])
+@pytest.mark.parametrize("image", ["ghcr.io/other/deck:1", "nodvard/deck-tools:1", "ghcr.io/nodvard/link:1", "deck:1", "ghcr.io/nodvard/decks:1",
+                                   "ghcr.io/other/deck-updater:1", "deck-updater:1", "ghcr.io/nodvard/deck-updaters:1"])
 def test_only_nodvard_deck_is_the_dashboard_not_any_repo_called_deck(image):
     assert isinstance(ia.classify(info(image=image), own=False), ComposeTarget), image
+
+
+@pytest.mark.parametrize("image", ["ghcr.io/nodvard/deck-updater:1", "ghcr.io/nodvard/deck-updater:0.7.0@sha256:" + "c" * 64,
+                                   "registry.local:5000/nodvard/deck-updater"])
+def test_the_update_helper_is_never_updated_here_and_the_reason_says_how(image):
+    """Der Update-Helfer hat Zugriff auf Docker; neu angelegt mitten in einem Update des Dashboards liesse er es halb
+    fertig liegen. Kein Knopf, stattdessen der Weg auf dem Server."""
+    result = ia.classify(info(image=image), own=False)
+    assert isinstance(result, NotUpdatable) and result.kind == "self", image
+    assert "Update-Helfer" in result.why and "docker compose pull updater" in result.why
+    assert "deploy_pi" not in result.why
+
+
+HELPER_TITLE = {"org.opencontainers.image.title": "Nodvard Deck Update-Helfer"}
+
+
+@pytest.mark.parametrize("image", ["registry.local:5000/spiegel/updater:1", "harbor.example.org/proxy-cache/helfer:0.7.0",
+                                   "updater:lokal", "ghcr.io/other/deck-tools:1"])
+def test_a_mirrored_update_helper_is_recognised_by_the_title_of_its_image(image):
+    """Unter einem anderen Namen gespiegelt (eigene Registry, Proxy-Cache) hilft der Name nicht. Docker uebernimmt die
+    Labels des Images in die des Containers: Der Titel aus deploy/updater/Dockerfile verraet den Helfer trotzdem."""
+    result = ia.classify(info({**labels(), **HELPER_TITLE}, image=image), own=False)
+    assert isinstance(result, NotUpdatable) and result.kind == "self", image
+    assert "Update-Helfer" in result.why and "docker compose pull updater" in result.why
+
+
+@pytest.mark.parametrize("title", ["Nodvard Deck", "nodvard deck update-helfer", "Nodvard Deck Update-Helfer ", "Nextcloud"])
+def test_other_titles_keep_the_button(title):
+    result = ia.classify(info({**labels(), "org.opencontainers.image.title": title}, image="registry.local:5000/spiegel/app:1"),
+                         own=False)
+    assert isinstance(result, ComposeTarget), title
+
+
+def test_the_title_is_the_one_the_helper_image_really_carries():
+    """Dieselbe Angabe in deploy/updater/Dockerfile und in release.yml (die Labels dort ueberschreiben die des
+    Dockerfiles); aendert sich der Titel, muss die Erkennung mitziehen."""
+    import re
+
+    root = Path(__file__).resolve().parents[2]
+    dockerfile = (root / "deploy" / "updater" / "Dockerfile").read_text(encoding="utf-8")
+    assert re.search(r'org\.opencontainers\.image\.title="([^"]*)"', dockerfile).group(1) == ia.HELPER_IMAGE_TITLE
+    yaml = pytest.importorskip("yaml")
+    release = yaml.safe_load((root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8"))
+    meta = next(s for s in release["jobs"]["updater-image"]["steps"] if str(s.get("uses", "")).startswith("docker/metadata-action@"))
+    titles = [line.split("=", 1)[1] for line in meta["with"]["labels"].splitlines() if line.startswith(ia.LABEL_IMAGE_TITLE + "=")]
+    assert titles == [ia.HELPER_IMAGE_TITLE]
+
+
+@pytest.mark.parametrize("own", [False, True])
+@pytest.mark.parametrize("image", ["ghcr.io/nodvard/deck:latest", "ghcr.io/nodvard/deck:0.7", "ghcr.io/nodvard/deck@sha256:" + "d" * 64])
+def test_the_official_image_points_to_the_updates_in_the_settings(image, own):
+    """Wer das offizielle Image nutzt, aktualisiert unter Einstellungen -> System -> Updates, nicht mit dem
+    Deploy-Skript (das gibt es nur fuer selbst gebaute Images)."""
+    result = ia.classify(info(image=image), own=own)
+    assert isinstance(result, NotUpdatable) and result.kind == "self"
+    assert "Einstellungen → System → Updates" in result.why and "deploy_pi" not in result.why
+
+
+@pytest.mark.parametrize("image", ["nodvard-deck:pi-abc1234", "lattice:latest", "registry.local:5000/nodvard/deck:1", "nodvard/deck:latest"])
+def test_self_built_or_mirrored_images_keep_the_deploy_script_hint(image):
+    result = ia.classify(info(image=image), own=False)
+    assert isinstance(result, NotUpdatable) and result.kind == "self"
+    assert result.why == ia.SELF_WHY and "Deploy-Skript" in result.why
 
 
 def test_compose_v1_with_an_explicit_container_name_stays_updatable():

@@ -14,8 +14,10 @@ Manifeste und Schemas (title, description, name, x-item-title, x-enum-labels, ..
 Nicht geprueft: Tests (die pruefen Erkennung/Verhalten und duerfen den alten Namen als Eingabe nutzen, auch
 `*.test.ts(x)` im Frontend). Dateien, die nicht veroeffentlicht werden (`export-ignore` in `.gitattributes`),
 werden ebenfalls nicht geprueft; die Muster dafuer liest der Test direkt aus `.gitattributes`.
-Bekannte Luecke: die klein geschriebene technische Kennung `nexus-soc` (bleibt bis Version 0.7) wird in Quelltexten
-nicht geprueft; taucht sie in einem sichtbaren Text auf, faengt das nur die Pruefung der Manifest-/Schemafelder ab.
+Die klein geschriebene technische Kennung (`nexus-soc`, bis 0.6 die Kennung von Nodvard Shield, heute `shield`) prueft dieser
+Test nicht: In Quelltexten, Tests und Skripten sorgt `scripts/check_legacy_names.py` (Regel 3, "alte Shield-Kennung", Test
+`backend/tests/test_legacy_names.py`) dafuer, dass sie nur dort steht, wo gespeicherte Daten oder Alias-Tests sie brauchen. In
+sichtbaren Texten von Manifesten und Schemas faengt sie die Pruefung der Felder unten ab (auch klein geschrieben).
 """
 
 from __future__ import annotations
@@ -32,7 +34,7 @@ NAME_ANY_CASE_RE = re.compile(r"\bnexus\b", re.IGNORECASE)
 
 # (Pfad-Endung, genauer Teilstring, Begruendung). Nur der Teilstring wird freigegeben, nicht die ganze Zeile.
 ALLOWED: list[tuple[str, str, str]] = [
-    ("", "bis 0.6 „Nexus SOC“", "Uebergangshinweis zur Umbenennung (Kennung nexus-soc bleibt bis 0.7)"),
+    ("", "bis 0.6 „Nexus SOC“", "Uebergangshinweis zur Umbenennung: so hiess die Erweiterung bis 0.6 (die technische Kennung ist seit 0.7 `shield`)"),
     ("parsing.py", "(?:NODVARD|NEXUS)", "alte KI-Antworten mit dem frueheren Marker weiter erkennen"),
 ]
 
@@ -151,7 +153,7 @@ def _walk_texts(node: object, path: str = ""):
 
 
 def test_kein_nexus_in_sichtbaren_feldern_von_manifesten_und_schemas() -> None:
-    """Auch klein geschrieben (z. B. "KI-Vorfallserkennung (nexus-soc)") -- die Kennung bleibt technisch."""
+    """Auch klein geschrieben (z. B. "KI-Vorfallserkennung (nexus)"): eine technische Kennung gehoert nicht in einen sichtbaren Text."""
     funde: list[str] = []
     for manifest in sorted(ROOT.glob("extensions/*/extension.toml")):
         data = tomllib.loads(manifest.read_text(encoding="utf-8"))
@@ -166,5 +168,5 @@ def test_kein_nexus_in_sichtbaren_feldern_von_manifesten_und_schemas() -> None:
 
 
 def test_shield_heisst_nodvard_shield() -> None:
-    data = tomllib.loads((ROOT / "extensions/nexus-soc/extension.toml").read_text(encoding="utf-8"))
+    data = tomllib.loads((ROOT / "extensions/shield/extension.toml").read_text(encoding="utf-8"))
     assert data.get("extension", data)["name"] == "Nodvard Shield"

@@ -1,7 +1,7 @@
 /**
  * Ende-zu-Ende durch die echte Kette Router -> ExtensionPage (Kern) -> SystemPage: der gewählte
  * Server folgt Links aus der Server-Seite auch dann, wenn die Seite schon offen ist und man
- * zwischendurch umgeschaltet hat. Vorbild: nexus-soc SocPage.navigation.test.tsx.
+ * zwischendurch umgeschaltet hat. Vorbild: extensions/shield SocPage.navigation.test.tsx.
  */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

@@ -18,7 +18,10 @@ from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
 from nodvard_deck.models import Action, ExtensionRecord, Job, Notification as NotificationRow
 
 
-def _manifest(ext_id: str = "test-ext", permissions: list[str] | None = None, requires: list[str] | None = None):
+def _manifest(
+    ext_id: str = "test-ext", permissions: list[str] | None = None, requires: list[str] | None = None,
+    legacy_ids: list[str] | None = None,
+):
     from nodvard_sdk import ExtensionManifest
 
     return ExtensionManifest(
@@ -29,6 +32,7 @@ def _manifest(ext_id: str = "test-ext", permissions: list[str] | None = None, re
         entrypoint="m:E",
         permissions=permissions or [],
         requires=requires or [],
+        legacy_ids=legacy_ids or [],
     )
 
 
@@ -49,10 +53,15 @@ def _isolated_settings(tmp_path):
     )
 
 
-def _build(tmp_path, *, ext_id: str = "test-ext", permissions=None, requires=None, runtime=None, settings=None):
+def _build(
+    tmp_path, *, ext_id: str = "test-ext", permissions=None, requires=None, runtime=None, settings=None,
+    legacy_ids=None, store_id=None,
+):
     runtime = runtime if runtime is not None else ExtensionRuntime()
-    manifest = _manifest(ext_id, permissions, requires)
-    loaded = LoadedExtension(manifest=manifest, instance=None, ctx=None, granted_permissions=manifest.permissions)
+    manifest = _manifest(ext_id, permissions, requires, legacy_ids)
+    loaded = LoadedExtension(
+        manifest=manifest, instance=None, ctx=None, granted_permissions=manifest.permissions, store_id=store_id
+    )
     settings = settings if settings is not None else _isolated_settings(tmp_path)
     ctx = build_context(runtime, loaded, manifest, manifest.permissions, tmp_path / "data", settings)
     loaded.ctx = ctx
@@ -346,6 +355,153 @@ async def test_actions_proposer_labels_name_the_proposer_of_own_rows_only(tmp_pa
     assert by_reason_type == {"user": "kollegin", "extension": "Test-Erweiterung", "ai": "KI"}
     assert labels[foreign[0].id] == f"user/{user.id}", "fremde Zeilen bleiben roh"
     assert await ctx.actions.proposer_labels([]) == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("store_id", ["old-ext", None], ids=["bestand", "eigene-zeile"])
+async def test_actions_of_a_renamed_extension_include_those_under_its_old_id(tmp_path, db_session, store_id):
+    """Nach einer Umbenennung sieht die Erweiterung auch ihre Vorschlaege von vorher (`ext_id` = alte
+    Kennung) -- fremde weiterhin nicht. Neue Vorschlaege tragen die neue Kennung.
+
+    Das gilt auch mit eigener Zeile (Neuinstallation, `store_id` = neue Kennung): Vorschlaege, die das alte
+    Image nach einem Rueckweg unter der alten Kennung angelegt hat, findet sie ueber `legacy_ids`."""
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+
+    user = User(username="kollegin", password_hash=security.hash_password("whatever123"), is_active=True)
+    db_session.add(user)
+    await db_session.flush()
+    perms = ["hosts.execute"]
+    _, _, before = _build(tmp_path, ext_id="old-ext", permissions=perms)
+    _, _, foreign = _build(tmp_path, ext_id="other-ext", permissions=perms)
+    _, loaded, after = _build(
+        tmp_path, ext_id="renamed-ext", permissions=perms, legacy_ids=["old-ext"], store_id=store_id
+    )
+    assert loaded.store_id == (store_id or "renamed-ext")
+
+    def _request(reason: str) -> ActionRequest:
+        return ActionRequest(action_type="shell.exec", proposed_by=Actor.user(user.id, "kollegin"), reason=reason)
+
+    old = await before.actions.propose(_request("vorher"))
+    other = await foreign.actions.propose(_request("fremd"))
+    new = await after.actions.propose(_request("nachher"))
+
+    rows = await after.actions.list()
+    assert {row.id for row in rows} == {old.action_id, new.action_id}
+    assert {row.id: row.ext_id for row in rows}[new.action_id] == "renamed-ext"
+    assert (await after.actions.result(old.action_id)).id == old.action_id
+    assert await after.actions.result(other.action_id) is None
+    foreign_rows = await foreign.actions.list()
+    labels = await after.actions.proposer_labels([*rows, *foreign_rows])
+    assert labels[old.action_id] == labels[new.action_id] == "kollegin"
+    assert labels[other.action_id] == f"user/{user.id}"
+    # Die alte Kennung allein sieht die neuen Vorschlaege nicht (sie kennt keine Umbenennung).
+    assert {row.id for row in await before.actions.list()} == {old.action_id}
+
+
+@pytest.mark.asyncio
+async def test_connector_instances_of_a_renamed_extension_include_those_under_its_old_id(tmp_path, db_session):
+    """`ctx.connectors.instances()` liest ueber alle eigenen Kennungen: Instanzen unter der alten Kennung
+    bleiben nach einer Umbenennung sichtbar, fremde nie. Ohne `legacy_ids` genau die der eigenen Kennung."""
+    from nodvard_deck.models import ConnectorInstance
+
+    for ext_id, name in [("old-ext", "alt"), ("renamed-ext", "neu"), ("other-ext", "fremd")]:
+        db_session.add(ConnectorInstance(ext_id=ext_id, type_id="api", name=name))
+    await db_session.commit()
+    _, _, renamed = _build(tmp_path, ext_id="renamed-ext", legacy_ids=["old-ext"], store_id="old-ext")
+    _, _, plain = _build(tmp_path, ext_id="renamed-ext")
+
+    assert sorted(i.name for i in await renamed.connectors.instances()) == ["alt", "neu"]
+    assert sorted(i.name for i in await renamed.connectors.instances("api")) == ["alt", "neu"]
+    assert await renamed.connectors.instances("andere-art") == []
+    assert [i.name for i in await plain.connectors.instances()] == ["neu"]
+
+
+class _Socket:
+    def __init__(self) -> None:
+        self.sent: list[dict] = []
+
+    async def send_json(self, data: dict) -> None:
+        self.sent.append(data)
+
+
+@pytest.mark.asyncio
+async def test_broadcast_of_a_renamed_extension_also_goes_to_the_channels_of_its_old_ids(tmp_path):
+    """`ctx.ws.broadcast()` sendet auf `ext.<heutige>.<kanal>` und auf den Kanaelen der alten Kennungen (nur
+    die, die ihr laut Scan gehoeren); ohne `legacy_ids` bleibt es bei einem Kanal."""
+    from types import SimpleNamespace
+
+    from nodvard_deck.core.ws_hub import get_ws_hub, reset_ws_hub
+
+    reset_ws_hub()
+    try:
+        runtime = ExtensionRuntime()
+        manifest = _manifest("renamed-ext", legacy_ids=["old-ext", "older-ext", "fremd-ext"])
+        runtime.discovered["renamed-ext"] = SimpleNamespace(manifest=manifest)
+        runtime.legacy_owner = {"old-ext": "renamed-ext", "older-ext": "renamed-ext"}  # `fremd-ext` gehoert ihr nicht
+        _, _, renamed = _build(tmp_path, ext_id="renamed-ext", legacy_ids=["old-ext", "older-ext", "fremd-ext"], runtime=runtime)
+        _, _, plain = _build(tmp_path, ext_id="plain-ext")
+
+        hub = get_ws_hub()
+        socket = _Socket()
+        conn = hub.connect(socket, user_id="u1")
+        for channel in ("ext.renamed-ext.x", "ext.old-ext.x", "ext.older-ext.x", "ext.fremd-ext.x", "ext.plain-ext.x"):
+            hub.subscribe(conn, channel)
+
+        await renamed.ws.broadcast("x", {"n": 1})
+        assert sorted(m["channel"] for m in socket.sent) == ["ext.old-ext.x", "ext.older-ext.x", "ext.renamed-ext.x"]
+        assert all(m["payload"] == {"n": 1} for m in socket.sent)
+
+        socket.sent.clear()
+        await plain.ws.broadcast("x", {"n": 2})
+        assert [m["channel"] for m in socket.sent] == ["ext.plain-ext.x"]
+    finally:
+        reset_ws_hub()
+
+
+@pytest.mark.asyncio
+async def test_settings_and_jobs_use_the_store_id_of_a_renamed_extension(tmp_path, db_session):
+    """Einstellungen und Jobs haengen an der Speicher-Kennung: die Zeile der alten Kennung wird gelesen und
+    geschrieben, der Job landet in ihrer Jobzeile, `trigger()` findet ihn dort."""
+    from sqlalchemy import select
+
+    from nodvard_deck.core.scheduler import reset_scheduler_service
+
+    db_session.add(ExtensionRecord(
+        id="old-ext", version="0.1.0", api_version="0.1", state="enabled", settings={"wert": 1}, manifest={},
+    ))
+    await db_session.commit()
+    _, _, ctx = _build(
+        tmp_path, ext_id="renamed-ext", permissions=["schedule.register"], legacy_ids=["old-ext"], store_id="old-ext"
+    )
+
+    assert await ctx.settings.get() == {"wert": 1}
+    await ctx.settings.set({"wert": 2})
+    db_session.expire_all()
+    assert (await db_session.get(ExtensionRecord, "old-ext")).settings == {"wert": 2}
+    assert await db_session.get(ExtensionRecord, "renamed-ext") is None
+
+    calls: list[dict] = []
+
+    class _Job:
+        id = "ping"
+        name = "Ping"
+        schedule = "*/5 * * * *"
+        params: dict = {}
+        enabled = True
+
+        async def handler(self, **kwargs):
+            calls.append(kwargs)
+
+    reset_scheduler_service()
+    try:
+        await ctx.scheduler.register_job(_Job())
+        jobs = (await db_session.execute(select(Job))).scalars().all()
+        assert [(j.ext_id, j.ext_job_key) for j in jobs] == [("old-ext", "ping")]
+        await ctx.scheduler.trigger("ping")
+        assert len(calls) == 1
+    finally:
+        reset_scheduler_service()
 
 
 @pytest.mark.asyncio
@@ -652,6 +808,27 @@ async def test_capabilities_query_restricted_to_requires(tmp_path):
     assert isinstance(found[0], _Search)
 
 
+@pytest.mark.asyncio
+async def test_capabilities_requires_with_an_old_id_sees_the_renamed_extension(tmp_path):
+    """Eine dritte Erweiterung nennt in `requires` noch die alte Kennung: sie sieht die Faehigkeit der
+    umbenannten Erweiterung (aufgeloest beim Abfragen, nicht beim Laden)."""
+    from nodvard_sdk.capabilities import SearchProvider
+
+    class _Search:
+        async def search(self, query: str, *, limit: int = 20):
+            return []
+
+    runtime = ExtensionRuntime()
+    _, _, consumer = _build(tmp_path, ext_id="consumer", requires=["old-ext"], runtime=runtime)
+    _, _, provider = _build(tmp_path, ext_id="renamed-ext", legacy_ids=["old-ext"], runtime=runtime)
+    provider.capabilities.provide(_Search())
+    assert await consumer.capabilities.query(SearchProvider) == [], "ohne Zuordnung keine fremde Faehigkeit"
+
+    runtime.legacy_owner = {"old-ext": "renamed-ext"}
+    found = await consumer.capabilities.query(SearchProvider)
+    assert len(found) == 1 and isinstance(found[0], _Search)
+
+
 def test_http_handle_blocks_ip_outside_granted_cidr(tmp_path):
     _, _, ctx = _build(tmp_path, permissions=["net.outbound:192.168.1.0/24"])
     with pytest.raises(PermissionDenied):
@@ -798,6 +975,80 @@ def test_db_handle_declare_tables_rejects_a_wrongly_prefixed_table():
     handle = DbHandle("inventory", "ext_inventory_")
     with pytest.raises(TablePrefixViolation, match="items"):
         handle.declare_tables(metadata)
+
+
+def test_db_handle_declare_tables_accepts_old_and_new_prefix_after_a_rename():
+    """Nach einer Umbenennung behalten die alten Tabellen ihren Namen; neue bekommen den neuen
+    Praefix. Fremde Tabellen bleiben verboten."""
+    from sqlalchemy import Column, MetaData, String, Table
+
+    from nodvard_deck.ext.context import DbHandle
+    from nodvard_deck.ext.tables import TablePrefixViolation
+
+    metadata = MetaData()
+    Table("ext_old_ext_items", metadata, Column("id", String(36), primary_key=True))
+    Table("ext_renamed_ext_more", metadata, Column("id", String(36), primary_key=True))
+    handle = DbHandle("renamed-ext", ("ext_renamed_ext_", "ext_old_ext_"))
+    handle.declare_tables(metadata)  # wirft nicht
+
+    Table("ext_inventory_items", metadata, Column("id", String(36), primary_key=True))
+    with pytest.raises(TablePrefixViolation, match="'ext_renamed_ext_' oder 'ext_old_ext_'"):
+        handle.declare_tables(metadata)
+
+
+def test_table_prefix_message_with_one_prefix_stays_as_before():
+    from nodvard_deck.ext.tables import TablePrefixViolation, validate_table_prefix
+
+    expected = (
+        "Extension 'inventory': Tabellen ['items'] verletzen den Pflicht-Präfix 'ext_inventory_' "
+        "(docs/02-EXTENSION-API.md §7)."
+    )
+    for prefix in ("ext_inventory_", ("ext_inventory_",)):
+        with pytest.raises(TablePrefixViolation) as exc:
+            validate_table_prefix("inventory", ["items"], expected_prefix=prefix)
+        assert str(exc.value) == expected
+
+
+def test_runtime_without_renames_returns_every_id_unchanged():
+    """Ohne `legacy_ids` (und vor dem ersten Scan) ist die Speicher-Kennung die Kennung selbst."""
+    from nodvard_deck.ext.runtime import ExtensionRuntime
+
+    runtime = ExtensionRuntime()
+    assert runtime.canonical("inventory") == "inventory"
+    assert runtime.store_id("inventory") == "inventory"
+    assert runtime.is_stale_twin("inventory") is False
+    runtime.store_ids = {"inventory": "inventory"}
+    assert runtime.store_id("inventory") == "inventory"
+
+
+def test_runtime_resolves_old_ids_and_spots_stale_twins():
+    from nodvard_deck.ext.runtime import ExtensionRuntime
+
+    runtime = ExtensionRuntime()
+    runtime.legacy_owner = {"old-ext": "renamed-ext"}
+    runtime.store_ids = {"renamed-ext": "old-ext"}
+    assert runtime.canonical("old-ext") == "renamed-ext"
+    assert runtime.store_id("renamed-ext") == runtime.store_id("old-ext") == "old-ext"
+    assert runtime.is_stale_twin("old-ext") is False  # das ist die genutzte Zeile
+
+    # Neuinstallation mit eigener Zeile: die Zeile der alten Kennung ist ein verwaister Zwilling.
+    runtime.store_ids = {"renamed-ext": "renamed-ext"}
+    assert runtime.store_id("old-ext") == "renamed-ext"
+    assert runtime.is_stale_twin("old-ext") is True
+    assert runtime.is_stale_twin("renamed-ext") is False
+
+
+def test_loaded_extension_store_id_defaults_to_the_id():
+    from nodvard_sdk import ExtensionManifest
+
+    from nodvard_deck.ext.runtime import LoadedExtension
+
+    manifest = ExtensionManifest(id="sample-ext", name="x", version="0.1.0", api_version="0.1", entrypoint="m:E")
+    assert LoadedExtension(manifest=manifest, instance=None, ctx=None, granted_permissions=[]).store_id == "sample-ext"
+    assert (
+        LoadedExtension(manifest=manifest, instance=None, ctx=None, granted_permissions=[], store_id="old").store_id
+        == "old"
+    )
 
 
 def test_http_handle_websocket_checks_target_permission_before_connecting():
@@ -1316,6 +1567,110 @@ async def test_http_handle_keeps_ssl_cert_file_from_the_environment(tmp_path, mo
         target.close()
 
 
+# --- ctx.http: keine Weiterleitungen ------------------------------------------------------------
+
+
+async def _redirect_pair(status: int = 302):
+    """Zwei Server: `start` (127.0.0.1) antwortet mit einer 3xx-Weiterleitung auf `target` (127.0.0.2, ausserhalb
+    der freigegebenen Adressen `127.0.0.1/32`). Gibt Adressen, Zaehler beider Server und `close()` zurueck."""
+    target, target_port, target_hits = await _counting_server("127.0.0.2")
+    start_hits: list[int] = []
+    start, start_port = await _redirecting_server(status, f"http://127.0.0.2:{target_port}/ziel", start_hits)
+
+    def close() -> None:
+        start.close()
+        target.close()
+
+    return f"http://127.0.0.1:{start_port}/x", f"http://127.0.0.2:{target_port}/ziel", start_hits, target_hits, close
+
+
+async def _call_http_handle(handle, method: str, url: str, **kwargs):
+    """`get`/`post`/`request`/`stream` mit derselben Antwort-Form (Status und Kopfzeilen bleiben lesbar)."""
+    if method == "stream":
+        async with handle.stream("GET", url, **kwargs) as response:
+            await response.aread()
+        return response
+    if method == "request":
+        return await handle.request("GET", url, **kwargs)
+    return await getattr(handle, method)(url, **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("insecure_tls", [False, True])
+@pytest.mark.parametrize("method", ["get", "post", "request", "stream"])
+async def test_http_handle_refuses_follow_redirects_and_sends_nothing(method, insecure_tls):
+    """Die Zielpruefung (`net.outbound:<cidr>`) kennt nur die Adresse des Aufrufs. Mit `follow_redirects=True`
+    folgte httpx einer 3xx-Antwort zu einem Ziel, das sie nie gesehen hat (hier 127.0.0.2 ausserhalb von
+    127.0.0.1/32). Der Aufruf scheitert stattdessen sofort mit einem deutschen Satz, bei keinem der beiden
+    Server kommt eine Verbindung an -- auch mit `insecure_tls` und bei `stream()` (schon beim Aufruf)."""
+    from nodvard_deck.ext.context import HttpHandle
+
+    url, _, start_hits, target_hits, close = await _redirect_pair()
+    try:
+        permissions = ["net.outbound:127.0.0.1/32", "net.outbound.insecure_tls"]
+        handle = HttpHandle(_PermissionChecker("ext-1", permissions), permissions)
+        try:
+            with pytest.raises(ValueError, match="Weiterleitungen") as caught:
+                await _call_http_handle(handle, method, url, insecure_tls=insecure_tls, follow_redirects=True)
+        finally:
+            await handle.aclose()
+        assert "follow_redirects" in str(caught.value)
+        assert start_hits == [], "es ging eine Anfrage raus"
+        assert target_hits == [], "die Weiterleitung wurde verfolgt"
+    finally:
+        close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [1, "ja", object()])
+async def test_http_handle_refuses_any_truthy_follow_redirects_value(value):
+    """Nicht nur `True`: jeder Wert, den httpx als "folgen" liest, wird abgelehnt."""
+    from nodvard_deck.ext.context import HttpHandle
+
+    url, _, start_hits, target_hits, close = await _redirect_pair()
+    try:
+        handle = HttpHandle(_PermissionChecker("ext-1", ["net.outbound"]), ["net.outbound"])
+        try:
+            with pytest.raises(ValueError, match="Weiterleitungen"):
+                await handle.get(url, follow_redirects=value)
+        finally:
+            await handle.aclose()
+        assert start_hits == [] and target_hits == []
+    finally:
+        close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [301, 302, 307, 308])
+@pytest.mark.parametrize("extra", ["nothing", "false", "client_default"])
+@pytest.mark.parametrize("method", ["get", "post", "request", "stream"])
+async def test_http_handle_returns_the_redirect_response_unfollowed(method, extra, status):
+    """Ohne Angabe, mit `follow_redirects=False` und mit `httpx.USE_CLIENT_DEFAULT` kommt die 3xx-Antwort
+    selbst zurueck (Status, `Location`); das zweite Ziel wird nie angefragt."""
+    import httpx
+    from nodvard_deck.ext.context import HttpHandle
+
+    kwargs = {
+        "nothing": {},
+        "false": {"follow_redirects": False},
+        "client_default": {"follow_redirects": httpx.USE_CLIENT_DEFAULT},
+    }[extra]
+    url, target_url, start_hits, target_hits, close = await _redirect_pair(status)
+    try:
+        permissions = ["net.outbound:127.0.0.1/32"]
+        handle = HttpHandle(_PermissionChecker("ext-1", permissions), permissions)
+        try:
+            response = await _call_http_handle(handle, method, url, **kwargs)
+        finally:
+            await handle.aclose()
+        assert response.status_code == status
+        assert response.headers["location"] == target_url
+        assert start_hits == [1]
+        assert target_hits == [], "die Weiterleitung wurde verfolgt"
+    finally:
+        close()
+
+
 @pytest.mark.asyncio
 async def test_exec_handle_stream_requires_permission_at_call_time(tmp_path):
     """Container-Verwaltung: `ctx.exec.stream()` (Live-Logs) ist ein zweiter
@@ -1599,3 +1954,137 @@ async def test_upsert_discovered_guest_placeholder_address_never_touches_the_pas
         [DiscoveredHost(provider_ref="pve1/qemu/a/102", name="g", address="192.168.2.77", kind="vm")]
     )
     assert await kinds() == ["ssh_key", "ssh_password"]
+
+
+# --- ctx.audit: Namen, die nur der Kern schreibt ------------------------------------------------
+
+
+async def _audit_rows(db_session) -> list:
+    from nodvard_deck.models import AuditEntry
+    from sqlalchemy import select
+
+    return list((await db_session.execute(select(AuditEntry).order_by(AuditEntry.ts, AuditEntry.id))).scalars().all())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    [
+        "mfa.failed",  # Sperre nach falschen Zwei-Faktor-Codes (beim Start aus dem Protokoll geladen)
+        "mfa.recovery_used",
+        "auth.totp_check_failed",  # dasselbe fuer Bestaetigungen
+        "auth.password_check_locked",
+        "login.failed",
+        "login.locked",
+        "system.update.requested",  # Spur der Update-Knoepfe und Nachweis des Update-Helfers
+        "system.update.succeeded",
+        "system.backup.created",
+        "user.created",  # Spur der Kontenverwaltung (api/v1/users.py)
+        "user.updated",
+        "user.deleted",
+        "user.2fa_reset",
+        # Schreibweisen, die die Abfragen des Kerns nicht immer unterscheiden (SQLite-LIKE ignoriert Gross-/Kleinschreibung)
+        "MFA.failed",
+        "Login.Locked",
+        "SYSTEM.UPDATE.requested",
+        "User.Deleted",
+        "  mfa.failed",
+    ],
+)
+async def test_audit_handle_refuses_actions_only_the_core_writes(tmp_path, db_session, action):
+    """Der Kern liest `mfa.`/`auth.`/`login.`/`system.`-Eintraege wieder und entscheidet danach (Sperre nach
+    falschen Zwei-Faktor-Codes nach einem Neustart, Ergebnis des Update-Helfers). Ein Eintrag einer Erweiterung
+    mit so einem Namen und dem Konto als Ziel sperrte den Owner aus. `user.*` ist die Spur der Kontenverwaltung;
+    ein gefaelschter Eintrag verfaelschte, wer ein Konto geaendert hat. Abgelehnt, nichts wird geschrieben."""
+    _, _, ctx = _build(tmp_path, permissions=["audit.write"])
+    before = len(await _audit_rows(db_session))
+
+    with pytest.raises(ValueError, match="dem Kern vorbehalten"):
+        await ctx.audit.log(
+            action=action, outcome="failure", target_type="user", target_id="u-owner", detail={"via": "gefaelscht"}
+        )
+
+    assert len(await _audit_rows(db_session)) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("action", ["mfa.failed", "system.update.requested"])
+async def test_audit_handle_refuses_core_actions_also_with_an_actor(tmp_path, db_session, action):
+    """Auch mit `actor=` (der Mensch hinter dem Klick, aber auch ein von Hand gebautes `Actor`-Objekt, etwa als
+    `system`/`updater`): die Sperre haengt am Namen der Aktion, nicht am Akteur."""
+    _, _, ctx = _build(tmp_path, permissions=["audit.write"])
+    before = len(await _audit_rows(db_session))
+
+    for actor in (Actor(type=ActorType.SYSTEM, id="updater"), Actor.user("u-owner", "owner1")):
+        with pytest.raises(ValueError, match="dem Kern vorbehalten"):
+            await ctx.audit.log(action=action, outcome="success", target_id="req-1", actor=actor)
+
+    assert len(await _audit_rows(db_session)) == before
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "action",
+    [
+        "hello.started",
+        "scripts.standing_approval.granted",
+        "shield.incident",
+        "service_matrix.image_update",
+        # Der Name zaehlt mit Punkt: aehnlich beginnende Namen bleiben erlaubt.
+        "authors.imported",
+        "systemd.restarted",
+        "logins.counted",
+        "mfa_report.created",
+    ],
+)
+async def test_audit_handle_still_writes_the_extensions_own_actions(tmp_path, db_session, action):
+    _, _, ctx = _build(tmp_path, ext_id="eigene-erweiterung", permissions=["audit.write"])
+
+    await ctx.audit.log(action=action, outcome="success", target_type="host", target_id="h-1")
+
+    rows = await _audit_rows(db_session)
+    assert [(r.action, r.actor_type, r.actor_id, r.outcome) for r in rows] == [
+        (action, "extension", "eigene-erweiterung", "success")
+    ]
+
+
+@pytest.mark.asyncio
+async def test_audit_handle_checks_the_permission_before_the_action_name(tmp_path, db_session):
+    """Wer `audit.write` nicht hat, bekommt wie bisher `PermissionDenied`, auch bei einem Kern-Namen."""
+    _, _, ctx = _build(tmp_path, permissions=[])
+    with pytest.raises(PermissionDenied):
+        await ctx.audit.log(action="mfa.failed", outcome="failure")
+    assert await _audit_rows(db_session) == []
+
+
+def test_the_core_only_audit_prefixes_cover_the_actions_the_core_reads_back():
+    """Was der Kern aus dem Protokoll wieder liest und danach entscheidet, darf keine Erweiterung schreiben koennen:
+    kommt ein neuer solcher Name dazu, muss sein Anfang in `CORE_AUDIT_PREFIXES` stehen."""
+    from nodvard_deck.ext.context import CORE_AUDIT_PREFIXES
+    from nodvard_deck.services.auth import CODE_FAILURE_ACTIONS
+
+    read_back = (*CODE_FAILURE_ACTIONS, "login.failed", "login.locked", "system.update.requested", "system.update.succeeded")
+    assert [name for name in read_back if not name.startswith(CORE_AUDIT_PREFIXES)] == []
+
+
+@pytest.mark.asyncio
+async def test_forged_code_failures_of_an_extension_do_not_lock_the_owner_after_a_restart(tmp_path, db_session):
+    """Der Ernstfall hinter der Sperre der Namen: beim Start traegt `restore_code_limits` die falschen
+    Zwei-Faktor-Codes der letzten 24 Stunden aus dem Protokoll in die Grenze je Konto ein. Schriebe eine Erweiterung
+    solche Eintraege mit dem Konto als Ziel, waere der Owner nach dem naechsten Neustart gesperrt."""
+    from nodvard_deck.core import login_limit
+    from nodvard_deck.services import auth as auth_service
+
+    login_limit.reset()
+    _, _, ctx = _build(tmp_path, permissions=["audit.write"])
+    for action in auth_service.CODE_FAILURE_ACTIONS:
+        for _ in range(login_limit.MAX_MFA_FAILURES_PER_ACCOUNT_DAY):
+            try:
+                await ctx.audit.log(action=action, outcome="failure", target_type="user", target_id="u-owner")
+            except ValueError:
+                pass  # abgelehnt (siehe test_audit_handle_refuses_actions_only_the_core_writes)
+
+    try:
+        assert await auth_service.restore_code_limits(db_session) == 0
+    finally:
+        login_limit.reset()

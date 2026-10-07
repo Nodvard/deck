@@ -30,7 +30,7 @@ from .transport import (
     as_int,
     error_message,
     json_body,
-    redirect_message,
+    raise_if_redirect,
     send,
 )
 
@@ -160,9 +160,7 @@ class PiholeClient:
         not_found = PiholeError(
             "Unter dieser Adresse antwortet keine Pi-hole-Schnittstelle (v6). Bitte die Adresse prüfen – ohne /admin."
         )
-        redirect = redirect_message(response, SERVICE)
-        if redirect:
-            raise PiholeError(redirect)
+        raise_if_redirect(response, SERVICE, PiholeError)
         if response.status_code in (404, 405):
             if await self._looks_like_v5():
                 raise PiholeUnsupported("Pi-hole v5 wird nicht unterstützt – bitte auf v6 aktualisieren.")
@@ -211,6 +209,7 @@ class PiholeClient:
                 async with self._lock:
                     self._authed, self._sid = False, None
                 raise PiholeAuthError("Pi-hole lehnt die Anmeldung ab – bitte Passwort in den Einstellungen prüfen.")
+        raise_if_redirect(response, SERVICE, PiholeError)
         if response.status_code >= 400:
             detail = error_message(response)
             raise PiholeError(f"Pi-hole meldet einen Fehler (HTTP {response.status_code}{': ' + detail if detail else ''}).")

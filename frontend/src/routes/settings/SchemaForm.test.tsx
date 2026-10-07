@@ -134,7 +134,7 @@ describe("Ollama-Modell als Auswahlliste (remote-select)", () => {
       url: { type: "string", title: "KI-Server" },
       model: {
         type: "string", title: "KI-Modell", default: "qwen2.5:7b", "x-widget": "remote-select",
-        "x-options-url": "/ext/nexus-soc/ai/models?which=primary",
+        "x-options-url": "/ext/shield/ai/models?which=primary",
       },
     },
   };
@@ -145,7 +145,7 @@ describe("Ollama-Modell als Auswahlliste (remote-select)", () => {
     render(<Harness schema={schema} initial={{ url: "http://ki:11434" }} onValues={(v) => seen.push(v)} />);
     await screen.findByRole("option", { name: "llama3:8b (4.7 GB)" }, { timeout: 3000 });
     const select = screen.getByLabelText("KI-Modell");
-    expect(urls).toEqual(["/ext/nexus-soc/ai/models?which=primary"]);
+    expect(urls).toEqual(["/ext/shield/ai/models?which=primary"]);
     expect(select).toHaveValue("qwen2.5:7b"); // der Standardwert des Schemas
     fireEvent.change(select, { target: { value: "llama3:8b" } });
     expect(seen.at(-1)).toEqual({ url: "http://ki:11434", model: "llama3:8b" });

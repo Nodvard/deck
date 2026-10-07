@@ -86,19 +86,46 @@ function itemKey(item: { ext_id: string; widget_id: string }): string {
 }
 
 /**
+ * Der Eintrag, den dieses Widget unter einer frueheren Kennung seiner Erweiterung hatte (`legacy_ext_ids`,
+ * nach einer Umbenennung): gleiche `widget_id`, `ext_id` aus der Liste. Bei mehreren gilt die Reihenfolge der
+ * Liste. Ohne Umbenennung gibt es nie einen.
+ */
+function legacyItemFor(items: DashboardLayoutItem[], widget: WidgetOut): DashboardLayoutItem | undefined {
+  for (const legacyId of widget.legacy_ext_ids ?? []) {
+    const found = items.find((i) => i.ext_id === legacyId && i.widget_id === widget.id);
+    if (found) return found;
+  }
+  return undefined;
+}
+
+/**
  * Platziert Widgets, die im Katalog (GET /widgets) auftauchen, aber noch nicht im
  * gespeicherten Layout stehen -- so "erscheinen" neu aktivierte Extensions von selbst
  * auf dem Dashboard, statt dass ein Nutzer sie erst manuell aus dem Widget-Picker
  * holen muss.
+ *
+ * Steht das Widget unter der frueheren Kennung seiner (umbenannten) Erweiterung im Layout, wird es nicht
+ * neu platziert, sondern der Eintrag uebernommen (`{...alt, ext_id: neu}`): Position, Groesse und ein
+ * entferntes Widget (`config.hidden`) bleiben so, wie die Person sie eingerichtet hat. Der alte Eintrag
+ * bleibt in den Daten stehen -- wer auf die alte Version zurueckgeht, findet sein Dashboard unveraendert --,
+ * wird aber nicht gezeigt: der Katalog kennt ihn nicht (`widgetByKey`).
  */
 function appendMissingWidgets(items: DashboardLayoutItem[], widgets: WidgetOut[]): DashboardLayoutItem[] {
   const existingKeys = new Set(items.map(itemKey));
   const missing = widgets.filter((w) => !existingKeys.has(itemKey({ ext_id: w.ext_id, widget_id: w.id })));
   if (missing.length === 0) return items;
 
+  const carriedOver: DashboardLayoutItem[] = [];
+  const fresh: WidgetOut[] = [];
+  for (const w of missing) {
+    const legacy = legacyItemFor(items, w);
+    if (legacy) carriedOver.push({ ...legacy, ext_id: w.ext_id });
+    else fresh.push(w);
+  }
+
   let cursorX = 0;
   let cursorY = items.reduce((max, i) => Math.max(max, i.y + i.h), 0);
-  const additions: DashboardLayoutItem[] = missing.map((w) => {
+  const additions: DashboardLayoutItem[] = fresh.map((w) => {
     const size = sizeFor(w.view.kind, w.size.w, w.size.h);
     const width = size.w;
     if (cursorX + width > COLS) {
@@ -109,7 +136,7 @@ function appendMissingWidgets(items: DashboardLayoutItem[], widgets: WidgetOut[]
     cursorX += width;
     return item;
   });
-  return [...items, ...additions];
+  return [...items, ...carriedOver, ...additions];
 }
 
 export function DashboardPage() {

@@ -1,0 +1,163 @@
+version = "0.7.0"
+date = "2026-10-07"
+title = "Update-Helfer, Shield mit eigenem Namen und mehr Schutz"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Aktionen-Seite, Meldungen und das Protokoll zeigen den Namen der Erweiterung und der Aktion statt technischer Kennungen, auch nach einer Umbenennung der Erweiterung."
+
+[[entries]]
+kind = "verbessert"
+text = "Erweiterungen können künftig umbenannt werden, ohne dass du Einstellungen, Zeitpläne oder Daten verlierst."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield heißt jetzt auch im Hintergrund „shield“. Alte Links, Einstellungen, Funde und offene Vorschläge gelten weiter."
+
+[[entries]]
+kind = "neu"
+text = "Neu ist der Update-Helfer, den du bewusst mit einer eigenen Compose-Datei einschaltest: Mit ihm spielst du künftige Versionen von Nodvard Deck per Knopf ein, zum ersten Mal beim Schritt von 0.7.0 auf die nächste Version."
+
+[[entries]]
+kind = "neu"
+text = "Jedes Ergebnis des Update-Helfers steht genau einmal im Protokoll, wichtige Ergebnisse kommen zusätzlich als Meldung."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Service-Matrix bietet beim Update-Helfer kein „Einspielen“ an und sagt, wie du ihn aktualisierst; beim offiziellen Image von Nodvard Deck zeigt sie den Weg zu Einstellungen → System → Updates."
+
+[[entries]]
+kind = "neu"
+text = "Als Inhaber startest du das Update unter Einstellungen → System → Updates mit Passwort und, falls eingeschaltet, Zwei-Faktor-Code und siehst jeden Schritt; startet die neue Version nicht, schaltet der Helfer von selbst zurück."
+
+[[entries]]
+kind = "neu"
+text = "Nach einem Update kommst du 7 Tage lang einmal per Knopf zurück zur vorigen Version (Karte „Kopien vor Updates“), und die Karte sagt vorher, ob und seit wann dabei Änderungen verloren gehen."
+
+[[entries]]
+kind = "neu"
+text = "In der Update-Zentrale von Nodvard Shield legen die neuen Knöpfe „Alle Updates vorschlagen“ und „Alle Sicherheitsupdates vorschlagen“ für alle passenden Server auf einmal einen Vorschlag an, den du wie gewohnt unter „Aktionen“ freigibst."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Sperre nach zu vielen falschen Zwei-Faktor-Codes gilt jetzt auch nach einem Neustart von Nodvard Deck weiter und lässt sich so nicht mehr durch einen Neustart umgehen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Im Protokoll stehen jetzt auch das Anlegen, Ändern und Löschen von Benutzerkonten (mit Rollen, Sperren und einem Hinweis auf ein neu gesetztes Passwort, nie dem Passwort selbst) und Änderungen an Selbstständigkeit, gesperrten Befehlen und Wartungsfenstern."
+
+[[entries]]
+kind = "behoben"
+text = "Die Selbstständigkeit unter „Automatik & Sicherheit“ wird in sicherer Reihenfolge gespeichert, sodass bei einem Verbindungsabbruch nie mehr ohne Rückfrage läuft als vorher oder nachher, und nach einem Fehler zeigt die Seite den wirklich gespeicherten Stand."
+
+[[entries]]
+kind = "behoben"
+text = "Automatische Updates nehmen den Server, auf dem das Dashboard läuft, als letzten dran und starten ihn erst nach der Zusammenfassung neu, damit die Runde nicht mittendrin abbricht."
+
+[[entries]]
+kind = "behoben"
+text = "Dateien herunterladen und hochladen sowie der Export des Protokolls klappen jetzt auch nach längerer Pause, ohne die Meldung „Nicht authentifiziert“."
+
+[[entries]]
+kind = "behoben"
+text = "Die Beispiel-Erweiterung Hello-World erneuert eine abgelaufene Anmeldung selbst, statt „Fehler beim Laden“ zu zeigen, und hat einen Knopf „Neu laden“."
+
+[[entries]]
+kind = "behoben"
+text = "Leitet Proxmox eine Anfrage auf eine andere Adresse um (etwa weil http:// statt https:// eingetragen ist) oder antwortet in einem unerwarteten Format, zeigen die Seiten Proxmox und Backups jetzt einen verständlichen Hinweis statt eines rohen Fehlers."
+
+[[entries]]
+kind = "behoben"
+text = "Das Härtungs-Audit von Nodvard Shield klappt jetzt auch auf Servern, auf denen Lynis über eine Stunde braucht: Es läuft auf dem Server mit niedriger Priorität weiter, auch wenn das Dashboard zwischendurch neu startet, und das Ergebnis kommt an, sobald Lynis fertig ist, spätestens nach drei Stunden wird es beendet."
+
+[[entries]]
+kind = "verbessert"
+text = "Nach einem Klick auf „Audit“ steht sofort „Audit läuft seit …“ beim Server, auch nach dem Neuladen der Seite und beim Audit nach Zeitplan, und ein zweiter Klick startet kein zweites Audit."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Einen Fund, den du ignoriert oder nach Freigabe wiederhergestellt hast, verschiebt der nächste Scan nicht wieder in die Quarantäne und meldet ihn nicht erneut, es sei denn, ClamAV meldet die Datei mit einer anderen Signatur."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield erkennt Lynis nach der Installation jetzt auch auf Raspberry Pi OS und Debian, wenn das Dashboard nicht als root angemeldet ist, und bietet die Installation nicht noch einmal an."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield nennt bei einem fehlgeschlagenen Scan jetzt einen verständlichen Grund, etwa dass der Server nicht erreichbar war, die Verbindung abgebrochen ist oder der Scan zu lange gedauert hat."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Echtzeit-Wächter und Scans laufen auf einem Server nie mehr gleichzeitig, und was der Wächter dabei auslässt, prüft er beim nächsten Lauf nach."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard KI: Leitet der KI-Server auf eine andere Adresse um, gilt er nicht mehr als erreichbar, und unerwartete Antworten führen nicht mehr zu einem Fehler."
+
+[[entries]]
+kind = "behoben"
+text = "Skripte mit $HOME, \"$f\", $(date) und Ähnlichem brechen nicht mehr mit „unbekannter Platzhalter“ ab, weil nur noch die Parameter des Skripts ersetzt werden."
+
+[[entries]]
+kind = "behoben"
+text = "Ein geplanter Skript-Lauf, der auf keinem Server starten konnte, steht unter „Zeitplan-Läufe“ jetzt als fehlgeschlagen statt als erfolgreich."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Zwei-Faktor-Anmeldung lässt sich nur noch mit Passwort und einem Code abschalten, aus der App oder als Wiederherstellungs-Code, damit niemand sie allein mit deinem Passwort ausschalten kann."
+
+[[entries]]
+kind = "sicherheit"
+text = "Auch neue Wiederherstellungs-Codes gibt es nur noch mit Passwort und Code; benutzt du dafür einen Wiederherstellungs-Code, bekommst du eine Meldung."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ist die Zwei-Faktor-Anmeldung an, brauchst du zum Herunterladen und Einspielen einer Sicherung zusätzlich den Code aus der App; in älteren Apps gehen diese Schritte und das Abschalten erst nach einem App-Update."
+
+[[entries]]
+kind = "verbessert"
+text = "Werden Zwei-Faktor-Codes durchprobiert, sagt die Meldung jetzt genauer, was während der Sperre geht: Dein Passwort kannst du sofort ändern, anmelden kannst du dich mit einem Wiederherstellungs-Code."
+
+[[entries]]
+kind = "sicherheit"
+text = "Leitet Pi-hole, Nginx Proxy Manager, ntfy oder Nextcloud auf eine andere Adresse um, folgt Nodvard Deck dem nicht und schlägt die fremde Adresse auch nicht mehr zum Eintragen vor, sondern sagt dir, was du prüfen solltest."
+
+[[entries]]
+kind = "behoben"
+text = "Bei ntfy und Nextcloud gilt eine Umleitung nicht mehr als Erfolg, und Fehler von ntfy nennen weder Adresse noch Zugangsdaten."
+
+[[entries]]
+kind = "verbessert"
+text = "Fehler der Nextcloud und kaputte Antworten von Pi-hole oder Nginx Proxy Manager erscheinen als verständlicher Satz statt als Antworttext des Servers oder als Abbruch der Seite."
+
+[[entries]]
+kind = "behoben"
+text = "Scheitert ein Download gleich zu Beginn, etwa weil die Nextcloud umleitet oder die Datei fehlt, bekommst du sofort eine Fehlermeldung statt einer leeren oder abgebrochenen Datei."
+
+[[entries]]
+kind = "sicherheit"
+text = "Erweiterungen folgen keiner Umleitung mehr und können keine Protokolleinträge schreiben, die nur Nodvard Deck selbst anlegt, damit dich keine Erweiterung mit gefälschten Fehlversuchen aussperren kann."
+
+[[entries]]
+kind = "verbessert"
+text = "Beim Herunterladen und Einspielen einer Sicherung erscheint das Feld für den Zwei-Faktor-Code gleich, nicht erst nach einem Fehlversuch."
+
+[[entries]]
+kind = "sicherheit"
+text = "Proxmox und Backups zeigen bei einem Fehler einen verständlichen festen Satz statt fremdem Antworttext; nennt Proxmox selbst einen Grund (etwa ein fehlendes Recht deines Tokens), steht er gekürzt dabei."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Verbindungstest erklärt kaputte Antworten und Umleitungen jetzt mit einem verständlichen Satz, auch wenn die Meldung sehr lang war."
+
+[[entries]]
+kind = "behoben"
+text = "Fehlt deinem Token oder Konto ein Recht, meldet der Verbindungstest jetzt „Zugriff verweigert“ statt „Zugangsdaten abgelehnt“."
+
+[[entries]]
+kind = "behoben"
+text = "Ein falsch geschriebener Zeitplan (zum Beispiel „@daily“ oder „0 24 * * *“) lässt sich in den Einstellungen einer Erweiterung und bei Skripten nicht mehr speichern, und die Meldung sagt, wie es richtig aussieht."
+
+[[entries]]
+kind = "behoben"
+text = "Ein kaputter Zeitplan aus einer früheren Version legt Nodvard Shield oder die Skripte nach einem Neustart nicht mehr lahm: Shield nutzt dann seinen Standard, das betroffene Skript läuft vorerst nicht nach Zeitplan, und du bekommst eine Meldung."

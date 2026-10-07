@@ -675,8 +675,42 @@ def test_dashboard_image_never_contains_the_channel_path():
     # kennt den Pfad nicht. Das Dashboard bekommt ihn nur ueber das Volume in der Compose-Datei.
     for name in ("Dockerfile", "entrypoint.sh"):
         assert "/app/updater" not in (REPO_ROOT / "deploy" / name).read_text(encoding="utf-8"), name
-    dockerfile = (REPO_ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")
-    assert not re.search(r"^\s*(?:COPY|ADD)\b[^\n]*updater", dockerfile, re.IGNORECASE | re.MULTILINE)
+    assert _final_stage_problems((REPO_ROOT / "deploy" / "Dockerfile").read_text(encoding="utf-8")) == []
+
+
+def _final_stage_problems(dockerfile: str) -> list[str]:
+    """Anweisungen der letzten Stufe, die etwas vom Helfer ins Dashboard-Image bringen koennten.
+
+    Nur die letzte Stufe wird zum Image. Die Bau-Stufe des Frontends darf die Test-Vektoren des Helfers lesen (tsc
+    prueft den Test der Helfer-Texte mit); die letzte Stufe holt sich von dort nur das fertige Frontend und die
+    Erweiterungen."""
+    instructions, pending = [], ""
+    for line in dockerfile.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if line.rstrip().endswith("\\"):
+            pending += line.rstrip()[:-1] + " "
+            continue
+        keyword, _, rest = (pending + line).strip().partition(" ")
+        pending = ""
+        if keyword:
+            instructions.append((keyword.upper(), rest.strip()))
+    final = instructions[max(i for i, (kw, _rest) in enumerate(instructions) if kw == "FROM"):]
+    problems = [f"{kw} {rest}" for kw, rest in final if kw in {"COPY", "ADD", "VOLUME", "RUN"}
+                and "updater" in rest.lower()]
+    problems += [f"{kw} {rest}" for kw, rest in final if kw == "COPY" and rest.startswith("--from=")
+                 and not rest.split()[-2].startswith(("/src/extensions", "/src/frontend/dist"))]
+    return problems
+
+
+def test_the_image_guard_reads_only_the_final_stage():
+    """Gegenprobe: In der Bau-Stufe darf der Helfer vorkommen, in der letzten Stufe nicht -- auch nicht ueber eine
+    fortgesetzte Zeile oder ein `--from=`, das mehr als das fertige Frontend holt. Kommentare zaehlen nicht."""
+    build = "FROM node AS b\nCOPY deploy/updater/tests/vectors/ x/\nFROM python AS runtime\n# COPY deploy/updater/ x/\n"
+    assert _final_stage_problems(build + "COPY --from=b /src/frontend/dist ./frontend/dist\n") == []
+    assert len(_final_stage_problems(build + "COPY a \\\n  deploy/updater/ /x/\n")) == 1
+    assert len(_final_stage_problems(build + "ADD deploy/Updater.tar /x/\n")) == 1
+    assert _final_stage_problems(build + "COPY --from=b /src /app\n") == ["COPY --from=b /src /app"]
 
 
 def test_ci_runs_the_updater_tests():

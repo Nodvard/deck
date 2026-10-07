@@ -281,6 +281,175 @@ describe("Karte Sicherung", () => {
     expect(screen.getByLabelText("Anmeldepasswort für den Download")).toHaveValue("");
   });
 
+  const TOTP_MISSING = { detail: "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code aus deiner App ein.", code: "totp_missing" };
+  const TOTP_WRONG = { detail: "Der Zwei-Faktor-Code stimmt nicht.", code: "totp_wrong" };
+  const TOTP_USED = { detail: "Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt.", code: "totp_used" };
+
+  it("Download mit Zwei-Faktor: fragt der Server nach dem Code, erscheint das Feld und die Eingaben bleiben stehen", async () => {
+    const start = vi.spyOn(browserDownload, "start").mockImplementation(() => {});
+    let answers = 0;
+    const calls = mockApi({
+      "GET /system/backups": () => overview(),
+      "POST /system/backups/download": () => {
+        answers += 1;
+        if (answers === 1) return new Response(JSON.stringify(TOTP_MISSING), { status: 403 });
+        if (answers === 2) return new Response(JSON.stringify(TOTP_WRONG), { status: 400 });
+        return {
+          ticket: "t1", job_id: "j1", status: "ready", filename: "x.ndbak", size: 1234, error: null,
+          expires_in: 300, url: "/api/v1/system/backups/download/t1",
+        };
+      },
+    });
+    render(<BackupCard />);
+    await screen.findByText("Sicherung herunterladen", { selector: "h4" });
+    expect(screen.queryByLabelText(/^Zwei-Faktor-Code/)).not.toBeInTheDocument();
+    typeInto("Einmal-Passwort", "einmal-passwort-123");
+    typeInto("Einmal-Passwort wiederholen", "einmal-passwort-123");
+    typeInto("Anmeldepasswort für den Download", "konto-pw");
+    const submit = screen.getByRole("button", { name: /Sicherung herunterladen/ });
+    fireEvent.click(submit);
+    await screen.findByText(TOTP_MISSING.detail);
+    expect(screen.getByLabelText("Anmeldepasswort für den Download")).toHaveValue("konto-pw");
+    expect(screen.getByLabelText("Einmal-Passwort")).toHaveValue("einmal-passwort-123");
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Zwei-Faktor-Code/), { target: { value: "000000" } });
+    fireEvent.click(submit);
+    // Vertippt: Nur der Code muss neu, die Passwörter bleiben stehen (das Anmeldepasswort stimmte ja).
+    await screen.findByText(TOTP_WRONG.detail);
+    expect(screen.getByLabelText(/^Zwei-Faktor-Code/)).toHaveValue("");
+    expect(screen.getByLabelText("Anmeldepasswort für den Download")).toHaveValue("konto-pw");
+    expect(screen.getByLabelText("Einmal-Passwort")).toHaveValue("einmal-passwort-123");
+    expect(screen.getByLabelText("Einmal-Passwort wiederholen")).toHaveValue("einmal-passwort-123");
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Zwei-Faktor-Code/), { target: { value: " 123456 " } });
+    fireEvent.click(submit);
+    await screen.findByText(/Download gestartet/);
+    expect(start).toHaveBeenCalledWith("/api/v1/system/backups/download/t1", "x.ndbak");
+    expect(calls.filter((c) => c.path === "/system/backups/download").map((c) => c.body)).toEqual([
+      { current_password: "konto-pw", mode: "passwort", password: "einmal-passwort-123" },
+      { current_password: "konto-pw", mode: "passwort", password: "einmal-passwort-123", totp_code: "000000" },
+      { current_password: "konto-pw", mode: "passwort", password: "einmal-passwort-123", totp_code: "123456" },
+    ]);
+    expect(screen.getByLabelText(/^Zwei-Faktor-Code/)).toHaveValue("");
+    expect(screen.getByLabelText("Anmeldepasswort für den Download")).toHaveValue("");
+  });
+
+  it("Zwei-Faktor an (GET /me): das Code-Feld steht gleich da, ohne Rückfrage des Servers", async () => {
+    const start = vi.spyOn(browserDownload, "start").mockImplementation(() => {});
+    const calls = mockApi({
+      "GET /me": () => ({ id: "u1", username: "nico", totp_enabled: true }),
+      "GET /system/backups": () => overview({ key: { key_id: "0123456789abcdef", created_at: null }, backups: [ITEM] }),
+      "POST /system/backups/download": () => ({
+        ticket: "t1", job_id: "j1", status: "ready", filename: "x.ndbak", size: 1234, error: null,
+        expires_in: 300, url: "/api/v1/system/backups/download/t1",
+      }),
+      [`POST /system/backups/${ITEM.name}/ticket`]: () => (
+        { ticket: "t2", job_id: "j2", status: "ready", filename: ITEM.name, size: 1, error: null, expires_in: 300, url: "/api/v1/system/backups/download/t2" }
+      ),
+    });
+    render(<BackupCard />);
+    // Frische Sicherung: Feld gleich da, Knopf erst mit Code.
+    const field = await screen.findByLabelText(/^Zwei-Faktor-Code/);
+    typeInto("Anmeldepasswort für den Download", "konto-pw");
+    const submit = screen.getByRole("button", { name: /Sicherung herunterladen/ });
+    expect(submit).toBeDisabled();
+    fireEvent.change(field, { target: { value: "123456" } });
+    fireEvent.click(submit);
+    await screen.findByText(/Download gestartet/);
+    expect(calls.filter((c) => c.path === "/system/backups/download").map((c) => c.body)).toEqual([
+      { current_password: "konto-pw", mode: "schluessel", password: null, totp_code: "123456" },
+    ]);
+
+    // Gespeicherte Sicherung: ebenso gleich mit Code, beim Löschen ohne.
+    const list = screen.getByRole("list", { name: "Sicherungen" });
+    fireEvent.click(within(list).getByRole("button", { name: "Herunterladen" }));
+    expect(within(list).getByLabelText(/^Zwei-Faktor-Code/)).toHaveValue("");
+    fireEvent.change(within(list).getByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "konto-pw" } });
+    const confirm = within(list).getAllByRole("button", { name: "Herunterladen" }).at(-1)!;
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(list).getByLabelText(/^Zwei-Faktor-Code/), { target: { value: "654321" } });
+    fireEvent.click(confirm);
+    await screen.findByText("Download gestartet.");
+    expect(calls.filter((c) => c.path.endsWith("/ticket")).map((c) => c.body)).toEqual([
+      { current_password: "konto-pw", totp_code: "654321" },
+    ]);
+    expect(start).toHaveBeenCalledTimes(2);
+    fireEvent.click(within(list).getByRole("button", { name: "Löschen" }));
+    expect(within(list).queryByLabelText(/^Zwei-Faktor-Code/)).not.toBeInTheDocument();
+  });
+
+  it("Zwei-Faktor aus (GET /me): kein Code-Feld; fragt der Server trotzdem, erscheint es", async () => {
+    let answers = 0;
+    mockApi({
+      "GET /me": () => ({ id: "u1", username: "nico", totp_enabled: false }),
+      "GET /system/backups": () => overview(),
+      "POST /system/backups/download": () => {
+        answers += 1;
+        return new Response(JSON.stringify(TOTP_MISSING), { status: 403 });
+      },
+    });
+    render(<BackupCard />);
+    await screen.findByText("Sicherung herunterladen", { selector: "h4" });
+    await waitFor(() => expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).endsWith("/me"))).toBe(true));
+    expect(screen.queryByLabelText(/^Zwei-Faktor-Code/)).not.toBeInTheDocument();
+    typeInto("Einmal-Passwort", "einmal-passwort-123");
+    typeInto("Einmal-Passwort wiederholen", "einmal-passwort-123");
+    typeInto("Anmeldepasswort für den Download", "konto-pw");
+    fireEvent.click(screen.getByRole("button", { name: /Sicherung herunterladen/ }));
+    await screen.findByText(TOTP_MISSING.detail);
+    expect(answers).toBe(1);
+    expect(screen.getByLabelText(/^Zwei-Faktor-Code/)).toBeInTheDocument();
+  });
+
+  it("gespeicherte Sicherung mit Zwei-Faktor: Code-Feld nach der Rückfrage, nicht beim Löschen", async () => {
+    const start = vi.spyOn(browserDownload, "start").mockImplementation(() => {});
+    let answers = 0;
+    const calls = mockApi({
+      "GET /system/backups": () => overview({ key: { key_id: "0123456789abcdef", created_at: null }, backups: [ITEM] }),
+      [`DELETE /system/backups/${ITEM.name}`]: () => undefined,
+      [`POST /system/backups/${ITEM.name}/ticket`]: () => {
+        answers += 1;
+        if (answers === 1) return new Response(JSON.stringify(TOTP_MISSING), { status: 403 });
+        if (answers === 2) return new Response(JSON.stringify(TOTP_USED), { status: 400 });
+        return { ticket: "t2", job_id: "j2", status: "ready", filename: ITEM.name, size: 1, error: null, expires_in: 300, url: "/api/v1/system/backups/download/t2" };
+      },
+    });
+    render(<BackupCard />);
+    const list = await screen.findByRole("list", { name: "Sicherungen" });
+    fireEvent.click(within(list).getByRole("button", { name: "Herunterladen" }));
+    fireEvent.change(within(list).getByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "konto-pw" } });
+    fireEvent.click(within(list).getAllByRole("button", { name: "Herunterladen" }).at(-1)!);
+    await screen.findByText(TOTP_MISSING.detail);
+    expect(within(list).getByLabelText("Anmeldepasswort zur Bestätigung")).toHaveValue("konto-pw");
+    const confirm = within(list).getAllByRole("button", { name: "Herunterladen" }).at(-1)!;
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(list).getByLabelText(/^Zwei-Faktor-Code/), { target: { value: "123456" } });
+    fireEvent.click(confirm);
+    // Schon benutzt: Das Passwort bleibt stehen, nur ein neuer Code fehlt.
+    await screen.findByText(TOTP_USED.detail);
+    expect(within(list).getByLabelText("Anmeldepasswort zur Bestätigung")).toHaveValue("konto-pw");
+    expect(within(list).getByLabelText(/^Zwei-Faktor-Code/)).toHaveValue("");
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(list).getByLabelText(/^Zwei-Faktor-Code/), { target: { value: "654321" } });
+    fireEvent.click(confirm);
+    await screen.findByText("Download gestartet.");
+    expect(start).toHaveBeenCalledWith("/api/v1/system/backups/download/t2", ITEM.name);
+    expect(calls.filter((c) => c.path.endsWith("/ticket")).map((c) => c.body)).toEqual([
+      { current_password: "konto-pw" },
+      { current_password: "konto-pw", totp_code: "123456" },
+      { current_password: "konto-pw", totp_code: "654321" },
+    ]);
+    // Löschen braucht keinen Code: dort gibt es das Feld nicht, und das Passwort allein reicht für den Knopf.
+    fireEvent.click(within(list).getByRole("button", { name: "Löschen" }));
+    expect(within(list).queryByLabelText(/^Zwei-Faktor-Code/)).not.toBeInTheDocument();
+    fireEvent.change(within(list).getByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "konto-pw" } });
+    const remove = within(list).getAllByRole("button", { name: "Löschen" }).at(-1)!;
+    expect(remove).toBeEnabled();
+    fireEvent.click(remove);
+    await screen.findByText("Sicherung gelöscht.");
+    expect(calls.find((c) => c.method === "DELETE")?.body).toEqual({ current_password: "konto-pw" });
+  });
+
   it("Download wartet über die Status-ID, nicht über das Ticket", async () => {
     const start = vi.spyOn(browserDownload, "start").mockImplementation(() => {});
     const calls = mockApi({

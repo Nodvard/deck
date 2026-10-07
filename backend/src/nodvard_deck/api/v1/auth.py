@@ -27,6 +27,7 @@ from ...services import audit as audit_service
 from ...services import auth as auth_service
 from ...services import restore as restore_service
 from ..deps import SessionDep, SettingsDep
+from ..errors import CodedHTTPException
 from .restore_common import (
     RestoreInspectIn,
     RestoreScheduleIn,
@@ -206,6 +207,44 @@ async def confirm_current_password(
         raise _too_many_attempts(exc) from exc
     except auth_service.WrongPassword as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+class TotpMissing(CodedHTTPException):
+    """403: Zwei-Faktor ist an, aber es kam kein Code. Die Antwort ist `{detail, code: "totp_missing"}` (`response()`,
+    beim Werfen ebenso). Wer Fehler selbst beantwortet (`/system/updates/*`, `/me/totp`, `/me/recovery-codes`),
+    erkennt sie daran."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__(status.HTTP_403_FORBIDDEN, detail, "totp_missing")
+
+
+class TotpRejected(CodedHTTPException):
+    """400: Der Code stimmt nicht (`code: "totp_wrong"`) oder wurde schon benutzt (`code: "totp_used"`, nur Codes
+    aus der App). Das Passwort davor stimmte: Die Oberflaeche leert daran nur das Code-Feld."""
+
+    def __init__(self, detail: str, code: str) -> None:
+        super().__init__(status.HTTP_400_BAD_REQUEST, detail, code)
+
+
+async def confirm_current_totp(
+    request: Request, session, settings: Settings, user, code: str, action: str, *, allow_recovery: bool = False,
+    before_claim=None,
+) -> str | None:
+    """Zweiter Teil der Bestaetigung, wenn Zwei-Faktor an ist (`auth_service.require_current_totp`): ohne Code 403
+    (`TotpMissing`), falscher oder schon benutzter Code 400 (`TotpRejected`), zu viele Fehlversuche 429. Ohne Zwei-Faktor passiert
+    nichts (`None`), sonst kommt zurueck, womit bestaetigt wurde (`totp` oder, nur mit `allow_recovery`,
+    `recovery_code`). `before_claim` siehe `auth_service.require_current_totp`."""
+    try:
+        return await auth_service.require_current_totp(
+            session, settings, user, code, action=action, ip=_client_ip(request),
+            user_agent=request.headers.get("user-agent"), allow_recovery=allow_recovery, before_claim=before_claim,
+        )
+    except auth_service.TooManyAttempts as exc:
+        raise _too_many_attempts(exc) from exc
+    except auth_service.TotpRequired as exc:
+        raise TotpMissing(str(exc)) from exc
+    except auth_service.WrongTotp as exc:
+        raise TotpRejected(str(exc), exc.code) from exc
 
 
 # ---------------------------------------------------------------------------

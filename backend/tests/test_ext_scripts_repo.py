@@ -1,6 +1,6 @@
 """`nodvard_deck_ext_scripts.repo.ScriptRepo` -- das Git-gestuetzte Skript-Repository.
 Reine Dateisystem-/dulwich-Logik, kein `ctx`
-noetig -- wie `nodvard_deck_ext_nexus_soc.parsing` bewusst isoliert testbar gehalten.
+noetig -- wie `nodvard_deck_ext_shield.parsing` bewusst isoliert testbar gehalten.
 """
 
 from __future__ import annotations

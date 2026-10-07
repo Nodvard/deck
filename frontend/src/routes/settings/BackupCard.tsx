@@ -6,6 +6,11 @@
  *
  * Passwörter: nur in lokalem State, direkt per `api.*` verschickt und danach geleert --
  * nie in einem Query-Key oder Mutations-Cache (wie HostDetailSettings).
+ *
+ * Herunterladen verlangt bei eingeschalteter Zwei-Faktor-Anmeldung zusätzlich den Code aus der App: Eine Sicherung
+ * enthält auch deren Schlüssel. Das Feld steht gleich da, wenn die Oberfläche weiß, dass Zwei-Faktor an ist
+ * (`useTwoFactorEnabled`), sonst erscheint es, sobald der Server danach fragt (`totp_missing`); die eingegebenen
+ * Passwörter bleiben dann stehen, damit nur noch der Code fehlt.
  */
 import { AlertTriangle, CheckCircle2, Copy, Download, HardDrive, KeyRound, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -27,12 +32,14 @@ import {
 } from "../../lib/backups";
 import { copyText } from "../../lib/clipboard";
 import { useAuthStore } from "../../state/auth";
+import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./SecondFactorField";
 import { Badge, Button, Card, Field, NoticeLine, Toggle, errorText, inputClass, type Notice } from "./ui";
 
 const RUNNING_POLL_MS = 2000;
 
 export function BackupCard(): JSX.Element {
   const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
+  const twoFactor = useTwoFactorEnabled(isOwner) === true;
   const [overview, setOverview] = useState<BackupOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
@@ -138,8 +145,8 @@ export function BackupCard(): JSX.Element {
       <KeySection overview={overview} isOwner={isOwner} onChanged={reload} />
       {isOwner && <ScheduleSection overview={overview} onSaved={setOverview} />}
       <StorageHint overview={overview} />
-      <BackupList overview={overview} isOwner={isOwner} onChanged={reload} />
-      {isOwner && <DownloadSection overview={overview} />}
+      <BackupList overview={overview} isOwner={isOwner} twoFactor={twoFactor} onChanged={reload} />
+      {isOwner && <DownloadSection overview={overview} twoFactor={twoFactor} />}
     </Card>
   );
 }
@@ -438,11 +445,17 @@ function statusBadge(item: BackupItem) {
 
 type Pending = { name: string; kind: "download" | "delete" } | null;
 
-function BackupList({ overview, isOwner, onChanged }: { overview: BackupOverview; isOwner: boolean; onChanged: () => Promise<void> }) {
+function BackupList({ overview, isOwner, twoFactor, onChanged }: {
+  overview: BackupOverview; isOwner: boolean; twoFactor: boolean; onChanged: () => Promise<void>;
+}) {
   const [pending, setPending] = useState<Pending>(null);
   const [password, setPassword] = useState("");
+  const [askedForCode, setAskedForCode] = useState(false);
+  const [code, setCode] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  const needsCode = twoFactor || askedForCode;
+  const codeMissing = pending?.kind === "download" && needsCode && !code.trim();
 
   async function verify(name: string) {
     setBusy(`verify:${name}`);
@@ -462,12 +475,15 @@ function BackupList({ overview, isOwner, onChanged }: { overview: BackupOverview
     if (!pending) return;
     const { name, kind } = pending;
     const current = password;
+    const totp = code.trim();
     setPassword("");
+    setCode("");
     setBusy(`${kind}:${name}`);
     setNotice(null);
     try {
       if (kind === "download") {
-        const ticket = await api.post<DownloadTicket>(`/system/backups/${encodeURIComponent(name)}/ticket`, { current_password: current });
+        const body = totp ? { current_password: current, totp_code: totp } : { current_password: current };
+        const ticket = await api.post<DownloadTicket>(`/system/backups/${encodeURIComponent(name)}/ticket`, body);
         browserDownload.start(ticket.url, ticket.filename);
         setNotice({ kind: "ok", text: "Download gestartet." });
       } else {
@@ -477,6 +493,11 @@ function BackupList({ overview, isOwner, onChanged }: { overview: BackupOverview
       }
       setPending(null);
     } catch (err) {
+      if (isTotpMissing(err) || isTotpRejected(err)) {
+        // Das Passwort stimmte; es fehlt nur ein (gültiger) Code aus der App.
+        setAskedForCode(true);
+        setPassword(current);
+      }
       setNotice({ kind: "error", text: errorText(err) });
     } finally {
       setBusy(null);
@@ -510,23 +531,26 @@ function BackupList({ overview, isOwner, onChanged }: { overview: BackupOverview
                   <Button variant="ghost" busy={busy === `verify:${item.name}`} onClick={() => void verify(item.name)}>
                     <ShieldCheck size={14} /> Prüfen
                   </Button>
-                  <Button variant="ghost" onClick={() => { setPending({ name: item.name, kind: "download" }); setPassword(""); }}>
+                  <Button variant="ghost" onClick={() => { setPending({ name: item.name, kind: "download" }); setPassword(""); setCode(""); }}>
                     <Download size={14} /> Herunterladen
                   </Button>
-                  <Button variant="ghost" onClick={() => { setPending({ name: item.name, kind: "delete" }); setPassword(""); }}>
+                  <Button variant="ghost" onClick={() => { setPending({ name: item.name, kind: "delete" }); setPassword(""); setCode(""); }}>
                     <Trash2 size={14} /> Löschen
                   </Button>
                 </div>
               )}
               {pending?.name === item.name && (
                 <form className="mt-3 flex flex-wrap items-end gap-2 rounded-lg bg-black/20 p-3"
-                  onSubmit={(e) => { e.preventDefault(); if (password) void confirm(); }}>
+                  onSubmit={(e) => { e.preventDefault(); if (password && !codeMissing) void confirm(); }}>
                   <Field label={pending.kind === "delete" ? "Wirklich löschen? Anmeldepasswort zur Bestätigung" : "Anmeldepasswort zur Bestätigung"} className="min-w-0 basis-full sm:flex-1 sm:basis-auto">
                     <input type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)}
                       aria-label="Anmeldepasswort zur Bestätigung" className={inputClass} autoFocus />
                   </Field>
-                  <Button variant="ghost" onClick={() => { setPending(null); setPassword(""); }}>Abbrechen</Button>
-                  <Button type="submit" variant={pending.kind === "delete" ? "danger" : "primary"} disabled={!password}
+                  {pending.kind === "download" && needsCode && (
+                    <SecondFactorField value={code} onChange={setCode} allowRecovery={false} className="min-w-0 basis-full sm:flex-1 sm:basis-auto" />
+                  )}
+                  <Button variant="ghost" onClick={() => { setPending(null); setPassword(""); setCode(""); }}>Abbrechen</Button>
+                  <Button type="submit" variant={pending.kind === "delete" ? "danger" : "primary"} disabled={!password || codeMissing}
                     busy={busy === `${pending.kind}:${item.name}`}>
                     {pending.kind === "delete" ? "Löschen" : "Herunterladen"}
                   </Button>
@@ -544,11 +568,13 @@ function BackupList({ overview, isOwner, onChanged }: { overview: BackupOverview
 // Sicherung herunterladen (jetzt erstellt)
 // ---------------------------------------------------------------------------
 
-function DownloadSection({ overview }: { overview: BackupOverview }) {
+function DownloadSection({ overview, twoFactor }: { overview: BackupOverview; twoFactor: boolean }) {
   const [mode, setMode] = useState<"schluessel" | "passwort">(overview.key ? "schluessel" : "passwort");
   const [oneTime, setOneTime] = useState("");
   const [repeat, setRepeat] = useState("");
   const [accountPassword, setAccountPassword] = useState("");
+  const [askedForCode, setAskedForCode] = useState(false);
+  const [code, setCode] = useState("");
   const [phase, setPhase] = useState<"idle" | "building" | "done">("idle");
   const [notice, setNotice] = useState<Notice>(null);
   const abort = useRef<AbortController | null>(null);
@@ -557,11 +583,19 @@ function DownloadSection({ overview }: { overview: BackupOverview }) {
 
   useEffect(() => () => abort.current?.abort(), []);
 
+  const needsCode = twoFactor || askedForCode;
+  const codeMissing = needsCode && !code.trim();
+
   async function start() {
-    const body = { current_password: accountPassword, mode, password: mode === "passwort" ? oneTime : null };
+    const totp = code.trim();
+    const body = {
+      current_password: accountPassword, mode, password: mode === "passwort" ? oneTime : null, ...(totp ? { totp_code: totp } : {}),
+    };
+    const typed = { oneTime, repeat, accountPassword };
     setOneTime("");
     setRepeat("");
     setAccountPassword("");
+    setCode("");
     setNotice(null);
     setPhase("building");
     abort.current = new AbortController();
@@ -573,6 +607,13 @@ function DownloadSection({ overview }: { overview: BackupOverview }) {
       setNotice({ kind: "ok", text: `Download gestartet (${formatSize(ready.size)}). Der Link gilt nur einmal.` });
     } catch (err) {
       setPhase("idle");
+      if (isTotpMissing(err) || isTotpRejected(err)) {
+        // Das Passwort stimmte; es fehlt nur ein (gültiger) Code aus der App. Die Eingaben bleiben stehen.
+        setAskedForCode(true);
+        setOneTime(typed.oneTime);
+        setRepeat(typed.repeat);
+        setAccountPassword(typed.accountPassword);
+      }
       setNotice({ kind: "error", text: errorText(err) });
     }
   }
@@ -582,7 +623,7 @@ function DownloadSection({ overview }: { overview: BackupOverview }) {
       <h4 id="backup-download-title" className="mb-2 text-sm font-semibold">Sicherung herunterladen</h4>
       <p className="mb-3 text-sm text-white/60">Erstellt jetzt eine frische, verschlüsselte Sicherung und lädt sie auf dieses Gerät.</p>
       <NoticeLine notice={notice} />
-      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!problem && accountPassword && phase !== "building") void start(); }}>
+      <form className="space-y-3" onSubmit={(e) => { e.preventDefault(); if (!problem && accountPassword && !codeMissing && phase !== "building") void start(); }}>
         <fieldset className="space-y-2">
           <legend className="sr-only">Verschlüsselung</legend>
           <label className={`flex items-start gap-2 text-sm ${overview.key ? "text-white/80" : "text-white/40"}`}>
@@ -612,7 +653,10 @@ function DownloadSection({ overview }: { overview: BackupOverview }) {
             <input type="password" autoComplete="current-password" value={accountPassword} onChange={(e) => setAccountPassword(e.target.value)}
               aria-label="Anmeldepasswort für den Download" className={inputClass} />
           </Field>
-          <Button type="submit" variant="primary" busy={phase === "building"} disabled={Boolean(problem) || !accountPassword || !overview.sqlite}>
+          {needsCode && (
+            <SecondFactorField value={code} onChange={setCode} allowRecovery={false} className="min-w-0 basis-full sm:max-w-[12rem] sm:flex-1 sm:basis-auto" />
+          )}
+          <Button type="submit" variant="primary" busy={phase === "building"} disabled={Boolean(problem) || !accountPassword || codeMissing || !overview.sqlite}>
             {phase === "building" ? "Wird erstellt …" : <><Download size={14} /> Sicherung herunterladen</>}
           </Button>
         </div>

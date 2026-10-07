@@ -122,6 +122,8 @@ def _build_mock_webdav_app() -> tuple[FastAPI, dict]:
         entry = state["fs"].get(p)
         if entry is None or entry["is_dir"]:
             raise HTTPException(status_code=404, detail="Nicht gefunden.")
+        if entry.get("redirect_to"):  # nur Tests: PROPFIND kennt die Datei, das Lesen wird umgeleitet
+            return RawResponse(status_code=302, headers={"Location": entry["redirect_to"]})
         return RawResponse(content=entry["content"], media_type=entry["mime"])
 
     @app.put("/remote.php/dav/files/{username}/{path:path}")
@@ -253,6 +255,28 @@ async def test_nextcloud_list_stat_download_over_the_real_files_api(client, db_s
     download = await client.get("/api/v1/files/nextcloud/download?path=/docs/notes.txt", headers=headers)
     assert download.status_code == 200
     assert download.content == b"hello world"
+
+
+@pytest.mark.asyncio
+async def test_nextcloud_download_that_is_redirected_is_an_error_and_not_an_empty_file(
+    client, db_session, test_settings, mock_webdav
+):
+    """PROPFIND kennt die Datei (`stat` klappt), das Lesen antwortet aber mit einer Weiterleitung: der
+    Dateimanager meldet einen Fehler statt eines 200 mit leerem Koerper. Dem Ziel der Weiterleitung wird nicht
+    gefolgt, es steht auch nicht im Text."""
+    base_url, state = mock_webdav
+    token = await _setup_nextcloud(client, db_session, test_settings, base_url)
+    headers = _auth_header(token)
+    state["fs"]["/docs/umleitung.txt"] = {
+        "is_dir": False, "content": b"", "mime": "text/plain", "redirect_to": "http://127.0.0.1:9/anderswo",
+    }
+
+    download = await client.get("/api/v1/files/nextcloud/download?path=/docs/umleitung.txt", headers=headers)
+
+    assert download.status_code == 502, download.text
+    detail = download.json()["detail"]
+    assert "auf eine andere Adresse um (HTTP 302)" in detail, detail
+    assert "anderswo" not in detail
 
 
 @pytest.mark.asyncio

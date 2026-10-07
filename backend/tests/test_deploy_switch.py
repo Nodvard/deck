@@ -11,6 +11,8 @@ auf `nodvard-deck`:
 - nichts veraendern, wenn Docker/Compose/Image nicht in Ordnung sind (Exit 3);
 - falsches (leeres) Volume, leere Daten, eine Waise, eine Neustart-Schleife: nie "OK", immer Rollback;
 - ein Rollback, der selbst nicht klappt, meldet ROLLBACK-FAIL.
+- die Zeile "Erweiterungen geladen: ..." im Protokoll (`pi_switch.sh loaded`): fehlt nach dem Umschalten eine Erweiterung, die
+  vorher geladen war, gilt das wie ein gescheiterter Datencheck (Rollback, ausser die Datenbank ist schon umgebaut).
 
 Die Compose-Datei selbst prueft backend/tests/test_deploy_compose.py.
 """
@@ -20,6 +22,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import shutil
 import signal
 import stat
@@ -411,7 +414,27 @@ elif cmd == "cp":
         info.size = len(data)
         tar.addfile(info, io.BytesIO(data))
     sys.stdout.buffer.write(buf.getvalue())
-elif cmd in ("logs", "image", "builder"):
+elif cmd == "logs":
+    # `docker logs [--since X] <Container>`: der Text kommt je Image des Containers aus STUB_LOGS (JSON {Image: Text}),
+    # ohne Eintrag ist das Protokoll leer. STUB_LOG_LATE="<Container>:<n>": die ersten n Aufrufe ohne --since zeigen die
+    # Zeile "Erweiterungen geladen" noch nicht (das Docker-Protokoll hinkt hinterher).
+    name = rest[-1]
+    if name not in st["containers"]:
+        sys.stderr.write("Error: No such container: %s\n" % name)
+        sys.exit(1)
+    text = json.loads(env("STUB_LOGS", "{}")).get(st["containers"][name]["image"], "")
+    if "--tail" in rest:  # nur die letzten n Zeilen, wie bei Docker
+        text = "".join(text.splitlines(True)[-int(rest[rest.index("--tail") + 1]):])
+    late = env("STUB_LOG_LATE", "")
+    if late and "--since" not in rest and late.rsplit(":", 1)[0] == name:
+        counter = STATE + ".logcalls." + name
+        done = int(open(counter).read()) if os.path.exists(counter) else 0
+        with open(counter, "w") as fh:
+            fh.write(str(done + 1))
+        if done < int(late.rsplit(":", 1)[1]):
+            text = "".join(line for line in text.splitlines(True) if "Erweiterungen geladen" not in line)
+    sys.stdout.write(text)
+elif cmd in ("image", "builder"):
     pass
 else:
     sys.stderr.write("docker-Attrappe kennt nicht: %s\n" % " ".join(args))
@@ -486,6 +509,8 @@ SSH_STUB = """#!/usr/bin/env bash
 cmd="${@: -1}"
 echo "$cmd" >> "$STUB_STATE.ssh"
 if [ -n "${STUB_SSH_FAIL:-}" ] && [[ "$cmd" == *"$STUB_SSH_FAIL"* ]]; then exit 255; fi
+# STUB_SSH_FORGE=<Antwort>: Aufrufe, die STUB_SSH_FORGE_MATCH enthalten, bekommen diese Antwort statt der echten.
+if [ -n "${STUB_SSH_FORGE_MATCH:-}" ] && [[ "$cmd" == *"$STUB_SSH_FORGE_MATCH"* ]]; then printf '%s\n' "$STUB_SSH_FORGE"; exit 0; fi
 case "$cmd" in
   hostname*) echo pi-attrappe; exit 0 ;;
 esac
@@ -2964,3 +2989,426 @@ def test_pi_switch_precheck_and_bootstrap_report_the_rescue_page_as_an_http_stat
     machine.set(images={"nodvard-deck:latest": NEW}, containers={NEW_C: _running(NEW, volume=VOL)})
     result = machine.switch("bootstrap", "1", STUB_RESCUE=NEW)
     assert result.stdout.strip() == "http=503", "503 mit Notfallmodus ist nie 'needed=false'"
+
+
+# ---------------------------------------------------------------------------
+# Erweiterungen vor und nach dem Umschalten vergleichen: die Zeile "Erweiterungen geladen: <Kennungen>"
+# (backend/src/nodvard_deck/services/extensions.py, `_announce_loaded`) im Protokoll des Dashboards
+# ---------------------------------------------------------------------------
+LOADED_LINE = "Erweiterungen geladen: "
+FAST_LOADED = {"LOADED_POLL_SLEEP_S": "0", "LOADED_WAIT_S": "2"}
+DROP_ON_PURPOSE_HINT = "Soll eine davon mit dem neuen Stand bewusst wegfallen: sie erst in den Einstellungen ausschalten, dann das Deploy wiederholen."
+
+
+def _logs(by_image: dict[str, str]) -> dict[str, str]:
+    """Protokolltext je Image des Containers (siehe `STUB_LOGS` in der docker-Attrappe)."""
+    return {"STUB_LOGS": json.dumps(by_image)}
+
+
+def _same(line: str) -> dict[str, str]:
+    return _logs({OLD: line, NEW: line})
+
+
+def _ssh_commands(machine: Machine) -> list[str]:
+    path = Path(str(machine.state_file) + ".ssh")
+    return path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+
+
+def _log_reads(machine: Machine, container: str) -> list[int]:
+    """Stellen in den docker-Aufrufen, an denen das ganze Protokoll eines Containers gelesen wurde."""
+    return [i for i, call in enumerate(machine.calls) if call == f"logs {container}"]
+
+
+def test_pi_switch_looks_for_exactly_the_text_the_service_writes():
+    # Der Text steht an zwei Stellen: im Dienst (er schreibt die Zeile) und hier im Skript (es sucht sie).
+    from nodvard_deck.services.extensions import LOADED_LINE_NONE, LOADED_LINE_PREFIX
+
+    assert LOADED_LINE_PREFIX == LOADED_LINE
+    script = SWITCH.read_text(encoding="utf-8")
+    assert f"LOADED_MARKER='{LOADED_LINE_PREFIX}'" in script
+    assert LOADED_LINE_NONE == "(keine)" and "\\(keine\\)" in script, "die Marke fuer 'keine' steht im Skript"
+
+
+# -- pi_switch.sh loaded -----------------------------------------------------------------------------------------------
+@needs_bash
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (f"{LOADED_LINE}a-ext,b-ext\n", "list=a-ext,b-ext"),
+        (f"2026-10-03T10:00:00.123456789Z {LOADED_LINE}a-ext,b-ext\n", "list=a-ext,b-ext"),
+        (f"\x1b[32mINFO\x1b[0m  {LOADED_LINE}a-ext,b-ext\x1b[0m\n", "list=a-ext,b-ext"),
+        (f"{LOADED_LINE}a-ext,b-ext\r\n", "list=a-ext,b-ext"),
+        (f'{{"message": "{LOADED_LINE}a-ext,b-ext", "level": "INFO"}}\n', "list=a-ext,b-ext"),
+        (f"{LOADED_LINE}a-ext  (2 Stueck)\n", "list=a-ext"),
+        (f"{LOADED_LINE}(keine)\n", "list="),
+        # Ein Neustart schreibt eine neue Zeile: die letzte zaehlt, auch wenn sie "keine" sagt oder unlesbar ist.
+        (f"{LOADED_LINE}a-ext\nINFO: Application startup complete\n{LOADED_LINE}b-ext,c-ext\nINFO: 127.0.0.1 GET /\n", "list=b-ext,c-ext"),
+        (f"{LOADED_LINE}a-ext\n{LOADED_LINE}(keine)\n", "list="),
+        (f"{LOADED_LINE}a-ext\n{LOADED_LINE}kaputt!\n", "invalid"),
+        ("INFO: Application startup complete\n", "none"),
+        ("", "none"),
+        (f"{LOADED_LINE}a-ext,B-ext\n", "invalid"),
+        (f"{LOADED_LINE}a-ext,\n", "invalid"),
+        (f"{LOADED_LINE},a-ext\n", "invalid"),
+        (f"{LOADED_LINE}a-ext,,b-ext\n", "invalid"),
+        (f"{LOADED_LINE}ä-ext\n", "invalid"),
+        (f"{LOADED_LINE}a;b\n", "invalid"),
+        (f"{LOADED_LINE}a_b\n", "invalid"),
+        (f"{LOADED_LINE}1-ext\n", "invalid"),
+        (f"{LOADED_LINE}\n", "invalid"),
+        # Die Zeile steht weit vorn in einem langen Protokoll (jede Anfrage steht auch darin) und neben Binaermuell.
+        (f"\x00binaer\x00\n{LOADED_LINE}a-ext\n" + "INFO: 127.0.0.1 - GET /api/v1/health 200\n" * 2000, "list=a-ext"),
+    ],
+    ids=[
+        "einfach", "zeitstempel", "farbcodes", "crlf", "json", "text-dahinter", "keine", "letzte-zaehlt", "letzte-keine-zaehlt",
+        "letzte-unlesbar-zaehlt", "keine-zeile", "leeres-protokoll", "grossbuchstabe", "komma-am-ende", "komma-am-anfang",
+        "zwei-kommas", "umlaut", "semikolon", "unterstrich", "ziffer-am-anfang", "leere-liste", "langes-protokoll",
+    ],
+)
+def test_pi_switch_loaded_reads_the_last_line_of_the_log_of_the_running_dashboard(machine, text, expected):
+    machine.set(images={}, containers=_old_running())
+    result = machine.switch("loaded", **_logs({OLD: text}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == expected
+
+
+@needs_bash
+@pytest.mark.parametrize("ids", [["shield", "backups", "network", "service-matrix"], []], ids=["mehrere", "keine"])
+def test_pi_switch_loaded_reads_what_the_service_really_writes(machine, capsys, ids):
+    # Nicht nachgebaut: die echte Funktion des Dienstes schreibt die Zeile, das Skript liest sie.
+    from types import SimpleNamespace
+
+    from nodvard_deck.services.extensions import _announce_loaded
+
+    loaded = {i: SimpleNamespace(store_id=i, manifest=SimpleNamespace(id=i)) for i in ids}
+    runtime = SimpleNamespace(loaded=loaded, canonical=lambda i: i, is_stale_twin=lambda i: False)
+    _announce_loaded(runtime, [SimpleNamespace(id=i, state="enabled") for i in ids])
+    written = capsys.readouterr().out
+    assert written.startswith(LOADED_LINE) and written.count("\n") == 1
+    machine.set(images={}, containers=_old_running())
+    result = machine.switch("loaded", **_logs({OLD: "INFO: Start\n" + written + "INFO: fertig\n"}))
+    assert result.stdout.strip() == "list=" + ",".join(sorted(ids))
+
+
+@needs_bash
+def test_pi_switch_loaded_only_compares_and_never_runs_what_the_log_says(machine, tmp_path):
+    pwned = tmp_path / "pwned"
+    machine.set(images={}, containers=_old_running())
+    text = f"{LOADED_LINE}$(touch {pwned}),`touch {pwned}`,a-ext\n{LOADED_LINE}a-ext;touch {pwned}\n"
+    result = machine.switch("loaded", **_logs({OLD: text}))
+    assert result.stdout.strip() == "invalid"
+    assert not pwned.exists()
+
+
+@needs_bash
+def test_pi_switch_loaded_says_none_when_no_dashboard_runs(machine):
+    machine.set(images={}, containers={OLD_C: {"image": OLD, "running": False}})
+    result = machine.switch("loaded", **_same(f"{LOADED_LINE}a-ext\n"))
+    assert result.returncode == 0 and result.stdout.strip() == "none"
+    assert _log_reads(machine, OLD_C) == [], "ein gestoppter Container wird nicht gelesen"
+
+
+@needs_bash
+def test_pi_switch_loaded_prefers_the_container_with_the_new_name_like_precheck(machine):
+    machine.set(images={}, containers={OLD_C: _running(OLD), NEW_C: _running(NEW, volume=VOL)})
+    result = machine.switch("loaded", **_logs({OLD: f"{LOADED_LINE}old-ext\n", NEW: f"{LOADED_LINE}new-ext\n"}))
+    assert result.stdout.strip() == "list=new-ext"
+
+
+@needs_bash
+def test_pi_switch_loaded_needs_docker_and_a_number_of_seconds(machine):
+    machine.set(images={}, containers=_old_running())
+    assert machine.switch("loaded", STUB_DOCKER_DOWN="1").returncode == 3
+    bad = machine.switch("loaded", "bald")
+    assert bad.returncode == 2 and "Nutzung" in bad.stderr
+
+
+@needs_bash
+def test_pi_switch_loaded_waits_for_a_line_that_the_docker_log_shows_late(machine):
+    machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
+    result = machine.switch("loaded", "30", LOADED_POLL_SLEEP_S="0", STUB_LOG_LATE=f"{NEW_C}:3", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0 and result.stdout.strip() == "list=a-ext"
+    assert len(_log_reads(machine, NEW_C)) == 4, "drei Versuche ohne Zeile, der vierte findet sie"
+
+
+@needs_bash
+def test_pi_switch_loaded_gives_up_after_the_time_and_says_none(machine):
+    machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
+    result = machine.switch("loaded", "1", LOADED_POLL_SLEEP_S="0", STUB_LOG_LATE=f"{NEW_C}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0 and result.stdout.strip() == "none"
+    assert len(_log_reads(machine, NEW_C)) >= 2, "es wurde wiederholt"
+
+
+@needs_bash
+def test_pi_switch_loaded_without_a_wait_time_tries_once(machine):
+    machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
+    result = machine.switch("loaded", STUB_LOG_LATE=f"{NEW_C}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.stdout.strip() == "none"
+    assert len(_log_reads(machine, NEW_C)) == 1
+
+
+@needs_bash
+def test_pi_switch_loaded_does_not_wait_for_an_unreadable_line(machine):
+    # "invalid" ist schon eine Antwort: das Warten wuerde sie nicht besser machen.
+    machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
+    result = machine.switch("loaded", "30", **_logs({NEW: f"{LOADED_LINE}kaputt!\n"}))
+    assert result.stdout.strip() == "invalid"
+    assert len(_log_reads(machine, NEW_C)) == 1
+
+
+# -- scripts/deploy_pi.sh: alter gegen neuer Stand ---------------------------------------------------------------------
+@needs_bash
+def test_deploy_pi_same_extensions_before_and_after_is_fine(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_same(f"{LOADED_LINE}backups,shield\n"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Vorher geladene Erweiterungen: backups,shield" in result.stdout
+    assert "Erweiterungen ok" in result.stdout and "DEPLOY-OK" in result.stdout
+    # Der alte Stand wird gelesen, BEVOR er gestoppt wird.
+    calls = machine.calls
+    assert calls.index(f"logs {OLD_C}") < calls.index("stop -t 30 deploy-lattice-1")
+
+
+@needs_bash
+def test_deploy_pi_new_extensions_and_another_order_are_fine(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}b-ext,a-ext\n", NEW: f"{LOADED_LINE}a-ext,b-ext,c-ext\n"}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "DEPLOY-OK" in result.stdout
+
+
+@needs_bash
+def test_deploy_pi_a_missing_extension_fails_and_rolls_back(machine, deploy_run):
+    # Der Fall, den die Pruefung abfangen soll: Der neue Stand ist gesund, die Daten sind da, kein Traceback --
+    # aber eine Erweiterung, die vorher lief, wird nicht mehr geladen.
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}backups,shield\n", NEW: f"{LOADED_LINE}backups\n"}))
+    assert result.returncode != 0
+    assert "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
+    assert "shield" in result.stderr and "Erweiterungen" in result.stderr
+    assert DROP_ON_PURPOSE_HINT in result.stderr
+    assert "Rollback ausgefuehrt" in result.stderr and "ROLLBACK-FAIL" not in result.stderr
+    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}, "zurueck auf den alten Container"
+    assert not any(c.startswith("rm -f deploy-lattice-1") for c in machine.calls), "aufgeraeumt wird erst nach bestandener Pruefung"
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("old", "new", "missing"),
+    [
+        ("ext", "ext-two", "ext"),  # eine Kennung ist der Anfang einer anderen: nicht mit ihr verwechseln
+        ("ext,ext-two", "ext-two,ext-three", "ext"),
+        ("net,network", "network", "net"),
+        ("a-ext,b-ext,c-ext", "(keine)", "a-ext,b-ext,c-ext"),
+    ],
+    ids=["praefix", "praefix-in-liste", "net-network", "alle-fehlen"],
+)
+def test_deploy_pi_compares_whole_ids_not_parts_of_them(machine, deploy_run, old, new, missing):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}{old}\n", NEW: f"{LOADED_LINE}{new}\n"}))
+    assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
+    assert f"jetzt nicht mehr: {missing} " in result.stderr
+    assert "Rollback ausgefuehrt" in result.stderr
+
+
+@needs_bash
+def test_deploy_pi_follow_up_deploy_reads_the_old_state_from_the_container_with_the_same_name(machine, deploy_run):
+    # Folge-Deploy: Der laufende Container heisst schon so wie der neue; sein Protokoll ist weg, sobald er ersetzt ist.
+    machine.set(
+        images={"nodvard-deck:latest": MID, "nodvard-deck:previous": OLDER, deploy_run.local_tag: NEW},
+        containers={NEW_C: _running(MID, volume=VOL)},
+    )
+    result = deploy_run(**_logs({MID: f"{LOADED_LINE}a-ext,b-ext\n", NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
+    assert "jetzt nicht mehr: b-ext" in result.stderr and "Rollback ausgefuehrt" in result.stderr
+    assert machine.containers[NEW_C]["image"] == MID, "zurueck auf den alten Stand"
+    calls = machine.calls
+    assert _log_reads(machine, NEW_C)[0] < calls.index("compose -p deploy up -d --no-build")
+
+
+@needs_bash
+def test_deploy_pi_an_extension_switched_off_since_the_start_is_not_missed(machine, deploy_run):
+    # Seit dem Start ausgeschaltet: Der Dienst schreibt dabei eine neue Zeile, die letzte zaehlt. Der neue Stand laedt die
+    # Erweiterung richtigerweise nicht, das ist kein Fehler.
+    _deploy_state(machine, deploy_run)
+    old_log = f"{LOADED_LINE}a-ext,b-ext\nINFO: 127.0.0.1 - POST /api/v1/extensions/b-ext/disable 200\n{LOADED_LINE}a-ext\n"
+    result = deploy_run(**_logs({OLD: old_log, NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Vorher geladene Erweiterungen: a-ext\n" in result.stdout and "DEPLOY-OK" in result.stdout
+
+
+@needs_bash
+def test_deploy_pi_an_old_state_without_the_line_only_gets_a_hint(machine, deploy_run):
+    # Erster Lauf mit dieser Pruefung (oder die Zeile ist aus dem Docker-Protokoll herausgerollt): nichts zu vergleichen.
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: "INFO: Application startup complete\n", NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'keine Zeile "Erweiterungen geladen"' in result.stdout and "nicht verglichen" in result.stdout
+    assert "Erweiterungen ok" not in result.stdout and "DEPLOY-OK" in result.stdout
+    assert _log_reads(machine, NEW_C) == [], "ohne Vergleich wird das Protokoll des neuen Stands gar nicht gelesen"
+
+
+@needs_bash
+def test_deploy_pi_an_unreadable_line_of_the_old_state_only_gets_a_hint(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}kaputt!\n", NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "nicht lesbar" in result.stdout and "DEPLOY-OK" in result.stdout
+
+
+@needs_bash
+def test_deploy_pi_when_nothing_was_loaded_before_there_is_nothing_to_compare(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}(keine)\n", NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "keine Erweiterung geladen" in result.stdout and "DEPLOY-OK" in result.stdout
+
+
+@needs_bash
+def test_deploy_pi_fresh_machine_is_not_asked_for_extensions(machine, deploy_run):
+    _deploy_state(machine, deploy_run, old=False)
+    result = deploy_run(**_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any("pi_switch.sh loaded" in c for c in _ssh_commands(machine))
+
+
+@needs_bash
+def test_deploy_pi_a_new_state_without_the_line_counts_as_missing_when_the_old_one_had_it(machine, deploy_run):
+    # Gesund, Daten da -- aber der neue Stand meldet nicht, was er geladen hat. Der Vergleich ist unmoeglich, und so sieht
+    # auch ein Stand aus, der seine Erweiterungen verloren hat: lieber zurueck als blind weiter.
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**FAST_LOADED, **_logs({OLD: f"{LOADED_LINE}a-ext\n", NEW: "INFO: Application startup complete\n"}))
+    assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
+    assert "keine lesbare Zeile" in result.stderr and "Rollback ausgefuehrt" in result.stderr
+    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+
+
+@needs_bash
+def test_deploy_pi_a_line_that_shows_up_after_the_wait_time_counts_as_missing(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(LOADED_POLL_SLEEP_S="0", LOADED_WAIT_S="1", STUB_LOG_LATE=f"{NEW_C}:100000", **_same(f"{LOADED_LINE}a-ext\n"))
+    assert result.returncode != 0 and "DEPLOY-OK" not in result.stdout
+    assert "Rollback ausgefuehrt" in result.stderr
+
+
+@needs_bash
+def test_deploy_pi_waits_for_a_line_that_the_docker_log_shows_late(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(LOADED_POLL_SLEEP_S="0", LOADED_WAIT_S="20", STUB_LOG_LATE=f"{NEW_C}:3", **_same(f"{LOADED_LINE}a-ext\n"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Erweiterungen ok" in result.stdout
+    assert len(_log_reads(machine, NEW_C)) >= 4
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    ("env", "low", "high"),
+    [
+        ({"HEALTH_TIMEOUT_S": "240"}, 30, 30),  # Standard: hoechstens 30 s
+        ({"HEALTH_TIMEOUT_S": "100", "LOADED_WAIT_S": "7"}, 7, 7),  # einstellbar
+        ({"HEALTH_TIMEOUT_S": "10", "LOADED_WAIT_S": "1000"}, 5, 10),  # nie ueber den Rest der Health-Wartezeit, mindestens 5 s
+    ],
+    ids=["standard", "eingestellt", "innerhalb-der-health-zeit"],
+)
+def test_deploy_pi_waits_for_the_line_within_the_health_window(machine, deploy_run, env, low, high):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**env, **_same(f"{LOADED_LINE}a-ext\n"))
+    assert result.returncode == 0, result.stdout + result.stderr
+    waits = [int(m.group(1)) for c in _ssh_commands(machine) if (m := re.search(r"pi_switch\.sh loaded (\d+)$", c))]
+    assert len(waits) == 1 and low <= waits[0] <= high, waits
+
+
+@needs_bash
+def test_deploy_pi_does_not_roll_back_a_missing_extension_once_the_new_version_has_migrated(machine, deploy_run):
+    # Wie bei den anderen Pruefungen: Hat der neue Container die Datenbank schon umgebaut und war gestartet, wuerde das
+    # alte Image die Daten ablehnen und nur die Notseite zeigen. Also kein automatischer Rollback, nur DEPLOY-FAIL.
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}a-ext,b-ext\n", NEW: f"{LOADED_LINE}a-ext\n"}), **MIGRATED_NOW)
+    assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
+    assert "KEIN automatischer Rollback" in result.stderr and "2026-10-02T03:00:02Z" in result.stderr
+    assert "fehlen: b-ext" in result.stderr
+    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr
+    assert machine.containers[NEW_C]["running"] is True and OLD_C in machine.containers, "nichts aufgeraeumt, nichts zurueckgeschaltet"
+    # Der Rat passt auch hier, wo nichts zurueckgeschaltet wird: Er verspricht keinen Rueckweg und keinen Neustart.
+    assert DROP_ON_PURPOSE_HINT in result.stderr
+    assert "Rueckweg tut" not in result.stderr and "neu starten" not in result.stderr
+
+
+@needs_bash
+def test_deploy_pi_a_missing_extension_with_an_unknown_migration_state_fails_without_an_automatic_rollback(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}a-ext,b-ext\n", NEW: f"{LOADED_LINE}a-ext\n"}), STUB_BOOTSTATE="")
+    assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
+    assert "Zustand unklar" in result.stderr and "KEIN automatischer Rollback" in result.stderr
+    assert "start deploy-lattice-1" not in machine.calls and "Rollback ausgefuehrt" not in result.stderr
+
+
+@needs_bash
+def test_deploy_pi_a_missing_extension_is_rolled_back_when_the_old_version_can_take_the_data(machine, deploy_run):
+    # Migration aelter als der Container: der neue Stand hat nichts umgebaut, das alte Image kann die Daten weiter lesen.
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}a-ext,b-ext\n", NEW: f"{LOADED_LINE}a-ext\n"}), STUB_BOOTSTATE=_bootstate("2026-09-01T10:00:00Z"))
+    assert result.returncode != 0 and "Rollback ausgefuehrt" in result.stderr and "KEIN automatischer Rollback" not in result.stderr
+    assert machine.containers == {OLD_C: {"image": OLD, "running": True}}
+
+
+@needs_bash
+def test_deploy_pi_a_dropped_connection_before_the_switch_changes_nothing(machine, deploy_run):
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(STUB_SSH_FAIL="pi_switch.sh loaded", **_same(f"{LOADED_LINE}a-ext\n"))
+    assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "nichts veraendert" in result.stderr
+    assert machine.containers == _old_running()
+    assert not any(c.startswith(("tag", "stop", "start", "rm", "compose -p deploy up")) for c in machine.calls)
+
+
+@needs_bash
+def test_deploy_pi_a_dropped_connection_while_comparing_does_not_roll_back(machine, deploy_run):
+    # ssh 255 heisst "Zustand unbekannt", nicht "neuer Stand kaputt".
+    _deploy_state(machine, deploy_run)
+    result = deploy_run(STUB_SSH_FAIL="pi_switch.sh loaded 7", LOADED_WAIT_S="7", HEALTH_TIMEOUT_S="100", **_same(f"{LOADED_LINE}a-ext\n"))
+    assert result.returncode != 0 and "DEPLOY-FAIL" in result.stderr and "DEPLOY-OK" not in result.stdout
+    assert "abgerissen" in result.stderr and "KEIN automatischer Rollback" in result.stderr
+    assert "start deploy-lattice-1" not in machine.calls and "ROLLBACK" not in result.stderr
+    assert machine.containers[NEW_C]["running"] is True
+
+
+@needs_bash
+@pytest.mark.parametrize(
+    "forged",
+    ["list=A-ext", "list=a-ext,", "list=a-ext;b", "list=a-ext,$(touch {pwned})", "list=a-ext list=b-ext", "ganz anders", "", "list =a-ext"],
+    ids=["grossbuchstabe", "komma-am-ende", "semikolon", "befehl", "zwei-listen", "unsinn", "leer", "leerzeichen"],
+)
+def test_deploy_pi_treats_a_malformed_answer_from_the_other_side_as_unreadable(machine, deploy_run, tmp_path, forged):
+    # Was durch die Leitung kommt, wird nur nach festem Muster gelesen: sonst gilt es als unlesbar, nie als Liste.
+    pwned = tmp_path / "pwned"
+    forged = forged.replace("{pwned}", str(pwned))
+    # Vorher: unlesbar -> nur ein Hinweis, der Deploy laeuft weiter.
+    _deploy_state(machine, deploy_run)
+    before = deploy_run(STUB_SSH_FORGE=forged, STUB_SSH_FORGE_MATCH="pi_switch.sh loaded", **_same(f"{LOADED_LINE}a-ext\n"))
+    assert before.returncode == 0, before.stdout + before.stderr
+    assert "nicht lesbar" in before.stdout and "Erweiterungen ok" not in before.stdout
+    assert not pwned.exists()
+    # Nachher (die Antwort des Pi vor dem Umschalten ist echt): unlesbar gilt wie eine fehlende Zeile -> zurueck.
+    _deploy_state(machine, deploy_run)
+    after = deploy_run(
+        STUB_SSH_FORGE=forged, STUB_SSH_FORGE_MATCH="pi_switch.sh loaded 7", LOADED_WAIT_S="7", HEALTH_TIMEOUT_S="100",
+        **_same(f"{LOADED_LINE}a-ext\n"),
+    )
+    assert after.returncode != 0 and "DEPLOY-OK" not in after.stdout and "Rollback ausgefuehrt" in after.stderr
+    assert "keine lesbare Zeile" in after.stderr and "Antwort: invalid" in after.stderr
+    assert not pwned.exists()
+
+
+@needs_bash
+def test_deploy_pi_never_runs_or_prints_what_the_new_log_says(machine, deploy_run, tmp_path):
+    # Eine Zeile mit Befehlszeichen ist unlesbar (also fehlt die Liste), sie wird nie ausgewertet oder ausgegeben.
+    _deploy_state(machine, deploy_run)
+    pwned = tmp_path / "pwned"
+    result = deploy_run(**_logs({OLD: f"{LOADED_LINE}a-ext\n", NEW: f"{LOADED_LINE}a-ext,$(touch {pwned})\n"}), **FAST_LOADED)
+    assert not pwned.exists()
+    assert result.returncode != 0 and "Rollback ausgefuehrt" in result.stderr
+    # Die Meldungen des Skripts selbst geben nichts davon weiter (das Protokoll des gescheiterten Containers zeigt der Rollback
+    # unveraendert, wie bei jedem Fehler).
+    own = [line for line in result.stderr.splitlines() if line.startswith("Erweiterungen:")]
+    assert own and "keine lesbare Zeile" in own[0] and "Antwort: invalid" in own[0]
+    assert not any("touch" in line for line in own)

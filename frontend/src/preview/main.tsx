@@ -32,11 +32,12 @@ import { SettingsLayout } from "../routes/settings/SettingsLayout";
 import { SystemSettings } from "../routes/settings/SystemSettings";
 import { installDeckGlobal } from "../lib/deckGlobal";
 import { migrateLegacyStorage } from "../lib/legacyStorage";
-import { restartProbe, uploadTransport } from "../lib/restore";
+import { browserNavigation, restartProbe, uploadTransport } from "../lib/restore";
+import { AFTER_SUCCESS_PATH, updaterTiming } from "../lib/updater";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
 import "../styles/index.css";
-import { applyOhneProxmox, previewState, respond, RESTORE_ID } from "./fixtures";
+import { applyOhneProxmox, HELPER_SCENARIOS, PREVIEW_DOWN, previewHealth, previewHelperReload, previewState, respond, RESTORE_ID, type HelperScenario } from "./fixtures";
 
 class SilentWebSocket extends EventTarget {
   readyState = 0;
@@ -55,6 +56,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (!path.startsWith("/api/")) return realFetch(input, init);
   const body = respond(path, init?.method ?? "GET", typeof init?.body === "string" ? JSON.parse(init.body) : undefined);
   await new Promise((r) => setTimeout(r, 120));
+  // Update-Helfer: Das Dashboard wird gerade umgeschaltet und antwortet nicht.
+  if (body === PREVIEW_DOWN) return new Response("<html>502</html>", { status: 503 });
   return new Response(JSON.stringify(body ?? {}), { status: body === undefined ? 404 : 200, headers: { "Content-Type": "application/json" } });
 };
 
@@ -73,7 +76,18 @@ uploadTransport.send = ({ onProgress, file }) =>
     }, 150);
   });
 let healthCalls = 0;
-restartProbe.health = async () => (healthCalls++ === 0 ? { status: "ok", uptime_s: 900 } : null);
+restartProbe.health = async () => {
+  const helper = previewHealth(); // läuft ein Vorgang des Update-Helfers, antwortet /health passend dazu
+  if (helper !== undefined) return helper;
+  return healthCalls++ === 0 ? { status: "ok", uptime_s: 900 } : null;
+};
+// Nach einem Update per Knopf lädt die Seite neu; in der Vorschau beginnt sie dann wieder mit demselben Szenario.
+const realAssign = browserNavigation.assign;
+browserNavigation.assign = (url: string) => {
+  if (url !== AFTER_SUCCESS_PATH) return realAssign(url);
+  previewHelperReload();
+  window.location.reload();
+};
 
 // Wie die echte Shell (main.tsx): Browser-Speicher uebernehmen, globales Objekt unter beiden Namen.
 migrateLegacyStorage();
@@ -107,6 +121,13 @@ if (scenario === "keine-apps") previewState.noApps = true;
 if (scenario === "start") previewState.start = true;
 // ?scenario=restore-uploaded|restore-ready|restore-pending|restore-result|restore-replaced: Zustand der Karte Wiederherstellen.
 if (scenario?.startsWith("restore-")) previewState.restore = scenario.slice("restore-".length) as typeof previewState.restore;
+// ?scenario=helfer-bereit|nicht-bereit|antwortet-nicht|nicht-eingerichtet|laeuft|umschalten|ergebnis|von-hand|rueckweg|frist|…: Update-Helfer
+// unter ?path=/settings/system (Liste: HELPER_SCENARIOS). Mit „helfer-bereit“ lässt sich der Ablauf durchspielen.
+if (scenario?.startsWith("helfer-") && (HELPER_SCENARIOS as readonly string[]).includes(scenario.slice("helfer-".length))) {
+  previewState.helper = scenario.slice("helfer-".length) as HelperScenario;
+  // „helfer-frist“: die Frist der Anzeige auf ein paar Sekunden verkürzt, damit die Zeitüberschreitung gleich zu sehen ist.
+  if (previewState.helper === "frist") updaterTiming.timeoutMs = 4000;
+}
 // ?path=/setup: Einrichtungsassistent mit frischer Installation.
 if (previewPath === "/setup") previewState.setup = true;
 
@@ -122,7 +143,7 @@ if (previewPath !== "/login" && previewPath !== "/setup") useAuthStore.setState(
 const EXTENSION_PAGES = import.meta.glob("../../../extensions/*/frontend/src/*Page.tsx");
 const PAGE_BY_EXT: Record<string, string> = {
   gameserver: "GameServerPage", system: "SystemPage", proxmox: "ProxmoxNodePage", backups: "BackupsPage", "service-matrix": "ServiceMatrixPage",
-  "nexus-soc": "SocPage", scripts: "ScriptsPage", documents: "DocumentsPage", inventory: "InventoryPage",
+  shield: "SocPage", scripts: "ScriptsPage", documents: "DocumentsPage", inventory: "InventoryPage",
 };
 
 function PreviewExtensionPage() {

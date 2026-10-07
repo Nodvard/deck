@@ -2,7 +2,7 @@
 
 > The Nodvard Deck interface is currently available in German only; an English interface is planned. UI labels are given in English with the German original in quotes.
 
-As of 1 October 2026. For a fresh installation, work through these steps in order. Where Nodvard
+As of 7 October 2026 (version 0.7). For a fresh installation, work through these steps in order. Where Nodvard
 Deck still has a gap, the guide says so. Without the web interface (using only the API), see the
 [appendix](#appendix-without-the-interface).
 
@@ -196,16 +196,29 @@ printed out, **not** only on the phone, because the phone is exactly what is sup
   recovery code" („Handy nicht zur Hand? Wiederherstellungs-Code verwenden“) and type in a code. Each code works
   **exactly once**; Nodvard Deck records the use in the audit log and sends a
   notification (Notifications page („Meldungen“), also as a push if ntfy is set up).
-- **Codes from the app** work only **once** per account; if one has already been used, wait for the next
-  one. After 10 wrong codes in 15 minutes (or 20 in 24 hours), no matter from which device, code entry for the
-  account is blocked for a while and Nodvard Deck sends a notification. Whoever guesses that often probably knows
-  the password – if it was not you, change it. With a recovery code you still get in during the block.
+- **Codes from the app** work only **once** per account (including the one you used to confirm the setup); if one
+  has already been used, wait for the next one. After 10 wrong codes in 15 minutes (or 20 in 24 hours), no matter from
+  which device, code entry for the account is blocked for a while and Nodvard Deck sends a notification. The block
+  stays in place after a restart of Nodvard Deck. Whoever guesses that often probably knows the password. If it was not
+  you, change your password right away; that works during the block too. During that time you can sign in with a
+  recovery code. Confirmations with a two-factor code (for example for an update) only work again once the block is
+  over.
 - **How many are left** is shown under My account. If there are few or none: "Generate new recovery codes"
-  („Neue Wiederherstellungs-Codes erzeugen“) (asks for the current password; the old codes become invalid
-  immediately).
+  („Neue Wiederherstellungs-Codes erzeugen“). This needs your password and a code: the current one from the app or one
+  of your existing recovery codes. The old codes become invalid immediately.
+- **Switching it off** (My account → "Switch off" („Abschalten“)) only works with your password **and** a code: the
+  current one from the app or a recovery code, which is used up in the process. Someone who only knows your password
+  cannot switch two-factor login off this way. Older apps do not ask for the code yet; there, switching off, new codes
+  and backups only work after an app update, in the browser right away.
+- If a recovery code is used to switch off or to generate new codes, this is recorded in the audit log just like at
+  sign-in, and Nodvard Deck sends a notification.
+- **Downloading or restoring a backup** also asks for the code from the app when two-factor login is on (no recovery
+  code here): a backup contains all keys, including the one for two-factor login. The field for it appears right away.
+  If you mistype, the passwords stay filled in; only the code has to be entered again.
 - Nodvard Deck stores only checksums, not the codes – a lost set cannot be looked up, only replaced.
 - If you had already set up two-factor login before this feature existed, you do not have codes yet:
-  generate them once under My account with "Generate new recovery codes".
+  generate them once under My account with "Generate new recovery codes" (with your password and the code from the
+  app).
 - If someone loses their phone **and** the codes: see [12.](#12-locked-out-emergency-commands).
 
 ## 3. Additional users
@@ -515,7 +528,15 @@ boxes itself, because the extensions report what they need.
   tick box):
   - **Nodvard Shield, antivirus:** move a file to quarantine, restore or delete it, Lynis hardening audit, install tools
     (ClamAV, Lynis, signatures, Fail2ban, automatic updates). Scans also run without root, but then only check files
-    that the user may read.
+    that the user may read. Nodvard Shield detects whether ClamAV and Lynis are installed without root as well (on
+    Debian and the Pi's operating system, Lynis lives in `/usr/sbin`); after an installation it asks the server again right
+    away. The **hardening audit** runs in the background on the server with low priority and can take from a few
+    minutes to over an hour, depending on the server (limit 3 hours). Right after the click the server shows
+    "Audit running since …" („Audit läuft seit …“), a second click does not start a second audit, and the dashboard
+    may restart in the meantime. The logs are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
+    real-time guard never run at the same time on a server; for this lock Shield creates a small folder there:
+    `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A finding that you ignored or restored is not moved to
+    quarantine again by the next scan (unless ClamAV reports the same file with a different signature).
   - **Update center:** apply updates and reboot. Reloading the package lists before the check needs root – without
     it, you stay at the most recently loaded state. Updates run in the background on the server (with systemd as
     `lattice-upgrade-…`, otherwise via `setsid`) and keep running even if the connection drops or the dashboard
@@ -581,7 +602,9 @@ has the old rule `lattice-<user>`: `nodvard-<user>` is added, and the old one go
 Turn on Settings → Extensions → **"ntfy notifications"** („Einstellungen → Erweiterungen → ntfy-Benachrichtigungen“) →
 "Configure" („Konfigurieren“):
 
-- **ntfy server** („ntfy-Server“): e.g. `https://ntfy.sh` or your own.
+- **ntfy server** („ntfy-Server“): e.g. `https://ntfy.sh` or your own. Nodvard Deck always connects to it directly, never
+  through a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`). If the machine running Nodvard Deck only reaches the
+  internet through a proxy, `ntfy.sh` cannot be reached; then use an ntfy server in your own network.
 - **Topic** („Thema (Topic)“): the channel you subscribe to in the ntfy app. On ntfy.sh choose one that is hard to
   guess, because there anyone who knows the name can read along.
 - **Dashboard address (optional)** („Adresse des Dashboards (optional)“): `http://192.168.1.10:8080`. Then tapping a
@@ -641,6 +664,15 @@ Settings → **Automation & security** („Einstellungen → Automatik & Sicherh
 **Automatic updates** (Nodvard Shield): Settings → Extensions → "Nodvard Shield" → "Apply updates automatically"
 („Updates automatisch einspielen“) is **off** by default, as is "Then restart automatically if necessary"
 („Danach automatisch neu starten, wenn nötig“). Only turn it on once the update center has run cleanly for a while.
+The round handles the server that Nodvard Deck itself runs on last; its restart only comes after the summary has been
+sent (with a short notification of its own).
+
+**Propose all updates at once:** in the update center, "Propose all security updates" („Alle Sicherheitsupdates
+vorschlagen“) or "Propose all updates" („Alle Updates vorschlagen“) creates a proposal for every matching server;
+a confirmation lists the servers first. Servers with an open update proposal or an update that is being applied are
+skipped. You then approve under "Actions" („Aktionen“), together with "Approve selected" („Ausgewählte
+freigeben“); proposals with high risk (with "Proxmox: all updates as dist-upgrade") one by one. If autonomy is set to
+"Act autonomously" („Selbstständig handeln“), the proposals start without asking up to the configured risk level.
 
 ## 10. Back up the dashboard itself
 
@@ -841,7 +873,8 @@ which one is the newest. Nodvard Deck looks **once a day** at ghcr.io to see whi
 - **Which versions:** "Only finished versions" (default) or "Also pre-releases (beta)". Pre-releases (e.g. `0.7.0-rc1`)
   are not under `:latest`: to install one, put exactly `ghcr.io/nodvard/deck:0.7.0-rc1` at `image:`.
 - **Without internet** the card says "Couldn't check (offline?)" and shows the last known state; that is not an error.
-- **Installing** is done by your environment, not by the dashboard. With Compose (installed as in
+- **Installing** is done by your environment, not by the dashboard, unless you use the update helper (one button, see
+  [10.6](#106-update-with-one-button-update-helper)). With Compose (installed as in
   [1.1](#11-installation-without-the-repo)), in the folder with your `compose.yml`:
 
   ```bash
@@ -856,11 +889,45 @@ which one is the newest. Nodvard Deck looks **once a day** at ghcr.io to see whi
 - **Going back:** write down the current version before the update (it is shown on the card). To go back, put it at
   `image:` again and restart. Details and the rescue page: [10.4](#104-updates-the-copy-before-the-migration).
 
+### 10.6 Update with one button (update helper)
+
+With the **update helper** you install updates under Settings → System → "Updates" („Einstellungen → System →
+Updates“) with one button and can go back once within 7 days, also with one button. The helper is a small service of
+its own in the same Compose file, which you switch on deliberately. It has access to Docker, which is as much as root on
+this machine. Setting it up, updating and removing it: [deploy/README.md, section "Update-Helfer"](../../deploy/README.md#update-helfer)
+(in German).
+
+- **State:** the "Updates" card shows "Update helper: not set up" („Update-Helfer: nicht eingerichtet“, with a link to
+  the guide), "ready" („bereit“, with version and last sign of life), "not ready" („nicht bereit“, with the reason and
+  what helps) or "not responding" („antwortet nicht“).
+- **Requirements for the button:** the helper is ready, a newer finished version exists, the official image
+  `ghcr.io/nodvard/deck` runs with `:latest` or a matching series such as `:0.7` (not a fixed version), and you are the
+  owner of the installation. The helper only accepts versions from 0.7.0 on, so the first update with the button goes
+  from 0.7.0 to the version after it. If something is missing, the card says why, where that helps.
+- **Update:** "Update now to X" („Jetzt aktualisieren auf X“), then enter your password and, if two-factor login is on,
+  the code from the app. If the new version rebuilds the database, Nodvard Deck makes a copy first as always
+  ([10.4](#104-updates-the-copy-before-the-migration)). The card shows the steps; you can close the page, the helper
+  keeps working without it. While switching over, the dashboard is gone for a few minutes; the page keeps asking and
+  reloads after success. If it takes longer than 30 minutes (slow download), the card keeps asking and shows the result
+  as soon as it is there.
+- **If it fails** (the new version exits, keeps restarting, shows the rescue page or is not ready after 15 minutes), the
+  helper switches back to the old version by itself. The card says why and what you can do; important results also
+  arrive as a notification.
+- **Going back:** for 7 days the "Copies before updates" („Kopien vor Updates“) card shows "Back to version X"
+  („Zurück zu Version X“), once. If the new version rebuilt the database, the data goes back too: the card first names
+  the time since which everything is lost and asks for a checkbox. The replaced state stays under `restore/replaced-…`
+  for 30 days. If it is unclear what happens to the data, there is no button, only the explanation. After going back,
+  the helper does not install the version you left for 24 hours; the card says from when it works again. If a way back
+  that should have taken the data along failed, the notification (bell) says whether the database had already been reset.
+- Update and way back together work at most once in 10 minutes. Without the helper, the guides from
+  [10.5](#105-finding-and-installing-a-new-version) apply.
+
 ## 11. When something goes wrong
 
 **"HTTP 401" or "Not authenticated" („Nicht authentifiziert“) on an extension page** (Proxmox, Backups, Scripts …): In
-the visible tab, Nodvard Deck renews the login by itself. If the tab sat in the background for a long time, it can
-still happen – reload the page (F5).
+the visible tab, Nodvard Deck renews the login by itself. Extension pages, downloading and uploading on the Files page,
+uploading a backup and exporting the audit log also renew an expired login by themselves and try once more. If the
+message still appears, reload the page (F5).
 
 **"HTTP 500" somewhere:** Look at the log (in the folder with the Compose file), the reason is there:
 
@@ -877,19 +944,53 @@ error, and the log (see above) helps further.
 **Proxmox unreachable** (push "Proxmox 'pve1' nicht erreichbar" (unreachable), tiles with "nicht erreichbar" or "Nicht
 abrufbar: …" (not available)) – the error message usually gives the reason:
 
-- `All connection attempts failed` or a timeout: server off, wrong address or port. The address needs `https://` and
-  `:8006`.
-- `CERTIFICATE_VERIFY_FAILED`: the "Allow self-signed certificate" („Selbstsigniertes Zertifikat erlauben“) tick box is
-  missing ([PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#certificate-what-allow-self-signed-certificate-does)).
-- `HTTP 401`: token ID or secret wrong, or token deleted in Proxmox.
-- `HTTP 403 … Permission check failed`: privilege missing – table in
-  [PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#reference-which-call-needs-which-privilege).
-  If individual VMs are missing entirely, they lack `VM.Audit`.
+- "Proxmox ist nicht erreichbar (Verbindung abgelehnt oder kein Weg dorthin) …" (Proxmox is not reachable) or "Proxmox
+  antwortet nicht (Zeitüberschreitung) …" (Proxmox does not answer, timeout): server off, wrong address or port. The
+  address needs `https://` and `:8006`.
+- "Das Zertifikat von Proxmox wird nicht akzeptiert …" (the Proxmox certificate is not accepted): the "Allow self-signed
+  certificate" („Selbstsigniertes Zertifikat erlauben“) tick box is missing
+  ([PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#certificate-what-allow-self-signed-certificate-does)).
+- "HTTP 401: Proxmox hat den Zugang abgelehnt …" (Proxmox refused access): token ID or secret wrong, or token deleted in
+  Proxmox.
+- "HTTP 403: Dem Token fehlt ein Recht für diese Abfrage. Grund laut Proxmox: Permission check failed (…)" (the token
+  lacks a privilege; reason according to Proxmox): privilege missing – table in
+  [PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#reference-which-call-needs-which-privilege). The part "Grund laut Proxmox" only
+  appears if Proxmox gives a reason. "Test connection" („Verbindung testen“) says more generally "Zugriff verweigert – dem
+  Konto oder Token fehlt ein Recht auf dem Server …" (access denied). If individual VMs are missing entirely, they lack
+  `VM.Audit`.
+- "Der Server hat die Verbindung auf eine andere Adresse umgeleitet …" (the server redirected the connection to
+  another address): usually the address has `http://` instead of `https://`, or a proxy in front of it redirects.
+  Nodvard Deck does not follow redirects – enter the node's address directly: `https://<address>:8006`.
+- "Die Antwort von Proxmox hat nicht das erwartete Format (HTTP 200). Stimmt die Adresse?" (the answer from Proxmox
+  does not have the expected format – is the address right?): something other than the Proxmox API answers at the address, such as a
+  proxy's login page. Check the address. "Test connection" („Verbindung testen“) shows both sentences the same way.
 - Test from the machine running Nodvard Deck: the `curl` command in
   [PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#check-before-you-enter-it-in-nodvard-deck).
 - A failed Proxmox (e.g. pve2 off) no longer slows the others down; it simply shows as "unreachable". If it is off for
   longer: on the Proxmox and Backups pages, under "Manage connections" („Verbindungen verwalten“), switch it to
   "disabled" („deaktiviert“); then no notifications come either.
+
+**"… leitet auf eine andere Adresse um"** (… redirects to another address; network with Pi-hole or Nginx Proxy Manager,
+ntfy, Nextcloud): instead of an answer, the server sent a redirect (HTTP 301, 302, 303, 307 or 308). Nodvard Deck never
+follows it, because otherwise a password or token would go to an address nobody entered, and it does not name the target
+address either. Usually the settings have `http://` instead of `https://` (or the other way round), or a proxy in front
+of it redirects. Fix: enter the final address in the settings, as the browser shows it after the redirect. Other
+Nextcloud errors appear as a fixed sentence, for example "Nextcloud ist gerade nicht bereit (HTTP 503), zum Beispiel im
+Wartungsmodus." (maintenance mode) or "In der Nextcloud ist kein Speicherplatz mehr frei (HTTP 507)." (no space left).
+
+**"Der Zeitplan „…“ ist ungültig"** (the schedule … is invalid) when saving (an extension's settings, scripts): a
+custom schedule (choice "Custom" („Eigener“)) needs exactly five fields: minute (0–59), hour (0–23), day (1–31), month (1–12) and
+weekday (0–7), for example `0 2 * * *` for daily at 2 a.m. Shortcuts like `@daily` do not work. If a broken schedule
+still comes from an older version, Nodvard Shield keeps running with its default schedule, or the script does not run
+on a schedule for now; a notification "Zeitplan … ist ungültig" says which one it is.
+
+**Nodvard Shield virus scan failed:** the list of scans gives an understandable reason: whether the server was not
+reachable, the connection broke off in the middle of the scan, the scan exceeded its time limit (with the duration) or
+which message ClamAV wrote, for example "Input/output error" on a failing disk. New files that were deleted again before
+the real-time guard's scan do not count as an error. If a scan is running on a server, the guard quietly skips and checks
+the skipped time on its next run (up to 6 hours back); if it cannot check for longer, this shows up as an error in the
+list. A scan waits up to 6 minutes for a running guard, and a hanging run is ended by the server shortly before the time
+limit. This needs `flock` and `timeout` on the server (util-linux, coreutils); without them, everything runs as before.
 
 **Server missing in Terminal / "Noch kein Server prüfbar" (no server checkable yet) or "Keine Linux-Server mit SSH-Zugang
 gefunden" (no Linux servers with an SSH login found) in Nodvard Shield:**

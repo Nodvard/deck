@@ -8,12 +8,17 @@ import pytest
 from nodvard_deck.core import login_limit
 from nodvard_deck.models import AuditEntry, User
 from sqlalchemy import select
+from totp_helpers import setup_confirm_code
 
 PASSWORD = "correct-horse-battery"
 
 
 def _h(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+
+_SECRETS: dict[str, str] = {}
+"""Access-Token -> Schluessel der Zwei-Faktor-Anmeldung, fuer den Code beim Abschalten."""
 
 
 async def _setup(client, username="nico"):
@@ -23,13 +28,23 @@ async def _setup(client, username="nico"):
     )
     token = (await client.post("/api/v1/auth/login", json={"username": username, "password": PASSWORD})).json()["access_token"]
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
-    r = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token))
+    r = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_h(token))
     assert r.status_code == 200
+    _SECRETS[token] = secret
     return token
 
 
 async def _disable(client, token, password):
-    return await client.request("DELETE", "/api/v1/me/totp", json={"current_password": password}, headers=_h(token))
+    """Abschalten mit dem aktuellen Code aus der App: ihn verlangt der Server zusaetzlich zum Passwort (die Pruefung des
+    Codes selbst steht in test_totp_disable_code.py). Hier geht es nur ums Passwort, das zuerst geprueft wird."""
+    body = {"current_password": password, "totp_code": pyotp.TOTP(_SECRETS[token]).now()}
+    return await client.request("DELETE", "/api/v1/me/totp", json=body, headers=_h(token))
+
+
+async def _renew(client, token, password):
+    """Neue Wiederherstellungs-Codes, wie `_disable` mit dem aktuellen Code aus der App."""
+    body = {"current_password": password, "totp_code": pyotp.TOTP(_SECRETS[token]).now()}
+    return await client.post("/api/v1/me/recovery-codes", json=body, headers=_h(token))
 
 
 async def _change(client, token, password):
@@ -76,13 +91,13 @@ async def test_repeated_wrong_passwords_are_throttled_across_all_sensitive_endpo
         elif i % 3 == 1:
             r = await _change(client, token, "falsch")
         else:
-            r = await client.post("/api/v1/me/recovery-codes", json={"current_password": "falsch"}, headers=_h(token))
+            r = await _renew(client, token, "falsch")
         assert r.status_code == 400, (i, r.text)
 
     for blocked in (
         await _disable(client, token, PASSWORD),  # auch das richtige Passwort kommt waehrend der Sperre nicht durch
         await _change(client, token, PASSWORD),
-        await client.post("/api/v1/me/recovery-codes", json={"current_password": PASSWORD}, headers=_h(token)),
+        await _renew(client, token, PASSWORD),
     ):
         assert blocked.status_code == 429
         assert "Retry-After" in blocked.headers
@@ -95,6 +110,8 @@ async def test_repeated_wrong_passwords_are_throttled_across_all_sensitive_endpo
     assert locked.ip == "127.0.0.1"
     assert "konto:" not in (locked.ip or "") and "Benutzernamen" not in (locked.reason or "")
     assert "Sicherheitsabfrage" in locked.reason and "10 Fehlversuche" in locked.reason
+    assert locked.detail["window_seconds"] == 5 * 60
+    assert "account_window_seconds" not in locked.detail and "day_window_seconds" not in locked.detail
     assert locked.target_type == "user" and locked.actor_type == "user"
 
 
@@ -116,7 +133,7 @@ async def test_success_clears_the_counter(client):
     token = await _setup(client)
     for _ in range(login_limit.MAX_FAILURES_PER_USER - 1):
         assert (await _change(client, token, "falsch")).status_code == 400
-    assert (await client.post("/api/v1/me/recovery-codes", json={"current_password": PASSWORD}, headers=_h(token))).status_code == 200
+    assert (await _renew(client, token, PASSWORD)).status_code == 200
     # Zaehler wurde zurueckgesetzt: wieder 9 Fehlversuche frei.
     for _ in range(login_limit.MAX_FAILURES_PER_USER - 1):
         assert (await _change(client, token, "falsch")).status_code == 400

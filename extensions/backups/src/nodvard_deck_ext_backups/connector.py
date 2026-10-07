@@ -24,13 +24,25 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
 from .job_edit import VZDUMP_JOB_KEYS, VZDUMP_RETENTION_KEYS
+from .transport import (
+    carries_foreign_text,
+    http_error_text,
+    json_body,
+    redirect_text,
+    transport_text,
+    unexpected_format_text,
+)
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
 
 class ProxmoxBackupApiError(Exception):
-    pass
+    """`status_code`: der HTTP-Status der Antwort, falls es eine gab (sonst `None`)."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ProxmoxBackupConnector:
@@ -55,6 +67,12 @@ class ProxmoxBackupConnector:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._base_url}/api2/json{path}"
         headers = {**self._auth_header, **kwargs.pop("headers", {})}
+        # Nie der Text der Ausnahme oder der Antwort in der Meldung (siehe transport.py), und der Fehler wird erst
+        # ausserhalb des `except`-Blocks geworfen: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
+        # Antwort im Text) als `__context__` an der Meldung.
+        problem: str | None = None
+        cause: BaseException | None = None
+        response: Any = None
         try:
             response = await self._ctx.http.request(
                 method, url, headers=headers, insecure_tls=self._tls_insecure_skip_verify, **kwargs
@@ -62,10 +80,19 @@ class ProxmoxBackupConnector:
         except ProxmoxBackupApiError:
             raise
         except Exception as exc:  # noqa: BLE001 - jeder Fehler wird hier vereinheitlicht (wie ProxmoxConnector)
-            raise ProxmoxBackupApiError(f"{method} {path} -> {exc}") from exc
+            problem = transport_text(exc, url)
+            cause = None if carries_foreign_text(exc) else exc
+        if problem is not None:
+            raise ProxmoxBackupApiError(f"{method} {path} -> {problem}") from cause
         if response.status_code >= 400:
-            raise ProxmoxBackupApiError(f"{method} {path} -> HTTP {response.status_code}: {response.text[:200]}")
-        body = response.json()
+            raise ProxmoxBackupApiError(http_error_text(method, path, response), status_code=response.status_code)
+        if 300 <= response.status_code < 400:
+            # `ctx.http` folgt keinen Weiterleitungen: die 3xx-Antwort kommt hier an. Die Adresse
+            # steht bewusst nicht im Text (sie stammt vom Server).
+            raise ProxmoxBackupApiError(redirect_text(response.status_code), status_code=response.status_code)
+        body = json_body(response)
+        if not isinstance(body, dict):
+            raise ProxmoxBackupApiError(unexpected_format_text(response.status_code))
         return body.get("data")
 
     async def list_jobs(self) -> list[dict[str, Any]]:

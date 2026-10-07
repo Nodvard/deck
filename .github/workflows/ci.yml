@@ -18,6 +18,10 @@ concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
+# Kein Job schreibt etwas bei GitHub (nur auschecken, bauen, testen): Das GITHUB_TOKEN darf darum nur lesen.
+permissions:
+  contents: read
+
 jobs:
   backend:
     runs-on: ubuntu-latest
@@ -42,6 +46,35 @@ jobs:
       # needs_root) in der CI nie. Kein Cache und kein Bytecode, damit nichts root-Eigenes im Checkout liegen bleibt.
       - run: sudo -E env "PATH=$PATH" PYTHONDONTWRITEBYTECODE=1 python -m pytest -q -p no:cacheprovider -m needs_root deploy/updater/tests
       - run: python scripts/check_core_purity.py
+
+  # Image des Update-Helfers (deploy/updater/Dockerfile) bauen und so starten wie im Betrieb: ohne Netz, nur lesbar,
+  # ohne Rechte, mit der Speicher- und Prozessgrenze aus deploy/compose.standalone-mit-helfer.yml. Der Selbsttest
+  # prueft, ob das Paket im Image vollstaendig und lauffaehig ist. Dazu eine Obergrenze fuer die Groesse: Das Image soll
+  # klein bleiben (nur Python und das Paket), auch wenn spaeter etwas dazukommt.
+  updater:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Image bauen
+        run: docker build -f deploy/updater/Dockerfile -t nodvard-deck-updater:ci .
+      - name: Selbsttest wie im Betrieb
+        run: docker run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges --memory 64m --pids-limit 32 nodvard-deck-updater:ci --selftest
+      # Gemessen wird die Groesse aller Dateien im Image (entpackt), im Container mit du. `docker image inspect` meldet
+      # je nach Image-Speicher der Engine mal die entpackte, mal die gepackte Groesse (containerd) und taugt darum nicht
+      # als Grenze. DAC_READ_SEARCH, damit du auch Ordner anderer Benutzer lesen darf (sonst meldet du dort einen
+      # Fehler, und der Schritt schlaegt fehl).
+      - name: Groesse unter 160 MB
+        run: |
+          out="$(docker run --rm --network none --read-only --cap-drop ALL --cap-add DAC_READ_SEARCH --entrypoint du nodvard-deck-updater:ci -sxb /)"
+          size="${out%%[[:space:]]*}"
+          case "$size" in
+            ''|*[!0-9]*) echo "Groesse des Images nicht messbar: $out" >&2; exit 1 ;;
+          esac
+          echo "Image des Update-Helfers: $size Byte (alle Dateien, entpackt)"
+          if [ "$size" -ge 160000000 ]; then
+            echo "Das Image des Update-Helfers ist groesser als 160 MB." >&2
+            exit 1
+          fi
 
   frontend:
     runs-on: ubuntu-latest

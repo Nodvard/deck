@@ -10,6 +10,7 @@ from httpx import ASGITransport, AsyncClient
 from nodvard_deck.core import login_limit
 from nodvard_deck.models import AuditEntry
 from sqlalchemy import select
+from totp_helpers import setup_confirm_code
 
 PASSWORD = "correct-horse-battery"
 
@@ -119,6 +120,8 @@ async def test_many_usernames_from_one_ip_are_throttled(client, db_session):
     assert "Retry-After" in r.headers
     locked = await _audit(db_session, "login.locked")
     assert [e.detail["scopes"] for e in locked] == [["ip"]]
+    assert locked[0].detail["window_seconds"] == login_limit.WINDOW_SECONDS
+    assert "account_window_seconds" not in locked[0].detail and "day_window_seconds" not in locked[0].detail
     async with _other_ip_client("192.168.1.50") as other:
         assert (await _login(other)).status_code == 200
 
@@ -260,13 +263,15 @@ def test_lockout_message_singular():
 # ---------------------------------------------------------------------------
 
 
-async def _enable_totp(client) -> str:
+async def _enable_totp(client, now: float | None = None) -> str:
+    """`now`: die feste TOTP-Uhr des Tests (`totp_clock`), sonst die echte. Sonst gehoerte der Code der Einrichtung an
+    einer Schrittgrenze schon zum Schritt der Test-Uhr und gaelte dort als benutzt."""
     await _bootstrap(client)
     token = (await _login(client)).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=headers)).json()["secret"]
     confirm = await client.post(
-        "/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=headers
+        "/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret, now)}, headers=headers
     )
     assert confirm.status_code == 200
     return secret
@@ -314,7 +319,7 @@ async def test_mfa_token_is_dead_after_five_wrong_codes(client):
 
 
 @pytest.mark.asyncio
-async def test_wrong_mfa_codes_count_towards_the_login_lock(client):
+async def test_wrong_mfa_codes_count_towards_the_login_lock(client, db_session):
     """Sonst liesse sich mit dem richtigen Passwort ueber immer neue Tokens doch
     beliebig oft raten."""
     secret = await _enable_totp(client)
@@ -328,6 +333,14 @@ async def test_wrong_mfa_codes_count_towards_the_login_lock(client):
     r = await _login(client)
     assert r.status_code == 429
     assert r.json()["detail"].startswith("Zu viele Fehlversuche.")
+
+    # Von einer Adresse greifen beide Grenzen zugleich: die fuer (Adresse, Name) und die je Konto. Das Protokoll
+    # nennt dann die Fenster beider Grenzen, nicht nur die 5 Minuten.
+    (locked,) = await _audit(db_session, "login.locked")
+    assert locked.detail["scopes"] == ["user", "account"]
+    assert locked.detail["window_seconds"] == login_limit.WINDOW_SECONDS
+    assert locked.detail["account_window_seconds"] == login_limit.ACCOUNT_WINDOW_SECONDS
+    assert locked.detail["day_window_seconds"] == login_limit.ACCOUNT_DAY_SECONDS
 
 
 # ---------------------------------------------------------------------------
@@ -347,7 +360,7 @@ def totp_clock(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_used_totp_code_is_rejected_for_the_same_and_for_a_new_token(client, totp_clock):
-    secret = await _enable_totp(client)
+    secret = await _enable_totp(client, totp_clock[0])
     code = pyotp.TOTP(secret).at(totp_clock[0])
     first = await _mfa_token(client)
     assert (await _mfa(client, first, code)).status_code == 200
@@ -365,7 +378,7 @@ async def test_used_totp_code_is_rejected_for_the_same_and_for_a_new_token(clien
 
 @pytest.mark.asyncio
 async def test_older_step_than_the_last_used_is_rejected(client, totp_clock):
-    secret = await _enable_totp(client)
+    secret = await _enable_totp(client, totp_clock[0])
     newer = pyotp.TOTP(secret).at(totp_clock[0] + 30)
     older = pyotp.TOTP(secret).at(totp_clock[0] - 30)
     assert (await _mfa(client, await _mfa_token(client), newer)).status_code == 200
@@ -374,7 +387,7 @@ async def test_older_step_than_the_last_used_is_rejected(client, totp_clock):
 
 @pytest.mark.asyncio
 async def test_mfa_token_works_only_once(client, totp_clock):
-    secret = await _enable_totp(client)
+    secret = await _enable_totp(client, totp_clock[0])
     token = await _mfa_token(client)
     assert (await _mfa(client, token, pyotp.TOTP(secret).at(totp_clock[0]))).status_code == 200
     totp_clock[0] += 30
@@ -385,7 +398,7 @@ async def test_mfa_token_works_only_once(client, totp_clock):
 
 @pytest.mark.asyncio
 async def test_used_code_is_logged_as_replay(client, db_session, totp_clock):
-    secret = await _enable_totp(client)
+    secret = await _enable_totp(client, totp_clock[0])
     code = pyotp.TOTP(secret).at(totp_clock[0])
     assert (await _mfa(client, await _mfa_token(client), code)).status_code == 200
     assert (await _mfa(client, await _mfa_token(client), code)).status_code == 401
@@ -416,10 +429,16 @@ async def test_wrong_codes_from_many_addresses_lock_the_account(client, db_sessi
 
     locked = await _audit(db_session, "login.locked")
     assert [e.detail["scopes"] for e in locked] == [["account"]]
+    assert locked[0].detail["window_seconds"] == login_limit.ACCOUNT_WINDOW_SECONDS
+    assert locked[0].detail["account_window_seconds"] == login_limit.ACCOUNT_WINDOW_SECONDS
+    assert locked[0].detail["day_window_seconds"] == login_limit.ACCOUNT_DAY_SECONDS
     notes = (await db_session.execute(select(Notification))).scalars().all()
     assert [n.title for n in notes] == ["Zwei-Faktor-Code wird durchprobiert"]
     # Meldung und Protokoll sagen „Zwei-Faktor“, nicht „2FA“ (wie alle anderen Texte der Anmeldung).
     assert "2FA" not in notes[0].body
+    assert "ändere gleich dein Passwort, das geht auch während der Sperre" in notes[0].body
+    assert "Anmelden kannst du dich in der Zeit mit einem Wiederherstellungs-Code" in notes[0].body
+    assert "Bestätigungen mit Zwei-Faktor-Code" in notes[0].body
     assert "2FA" not in locked[0].reason
 
     # Nach dem Fenster geht es wieder.
@@ -451,7 +470,7 @@ async def test_recovery_code_still_works_while_the_account_is_locked(client, db_
     token = (await _login(client)).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=headers)).json()["secret"]
-    confirm = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=headers)
+    confirm = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=headers)
     recovery_codes = confirm.json()["recovery_codes"]
     wrong = _wrong_code(secret)
 

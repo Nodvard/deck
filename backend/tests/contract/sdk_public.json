@@ -280,6 +280,7 @@
     "frontend": false,
     "icon": false,
     "id": true,
+    "legacy_ids": false,
     "name": true,
     "permissions": false,
     "requires": false,
@@ -1304,6 +1305,9 @@
     },
     "trigger": {
      "job_id": true
+    },
+    "validate_schedule": {
+     "schedule": true
     }
    }
   },
@@ -1517,6 +1521,7 @@
     "frontend": false,
     "icon": false,
     "id": true,
+    "legacy_ids": false,
     "name": true,
     "permissions": false,
     "requires": false,
@@ -2235,6 +2240,7 @@
     "frontend": false,
     "icon": false,
     "id": true,
+    "legacy_ids": false,
     "name": true,
     "permissions": false,
     "requires": false,
@@ -3259,6 +3265,9 @@
     },
     "trigger": {
      "job_id": true
+    },
+    "validate_schedule": {
+     "schedule": true
     }
    }
   },
@@ -3472,6 +3481,7 @@
     "frontend": false,
     "icon": false,
     "id": true,
+    "legacy_ids": false,
     "name": true,
     "permissions": false,
     "requires": false,

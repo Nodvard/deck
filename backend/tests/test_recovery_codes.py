@@ -9,6 +9,7 @@ import pyotp
 import pytest
 from nodvard_deck.models import AuditEntry, Notification, RecoveryCode
 from sqlalchemy import select
+from totp_helpers import setup_confirm_code
 
 PASSWORD = "correct-horse-battery"
 CODE_RE = re.compile(r"^[A-HJ-NP-Z2-9]{5}-[A-HJ-NP-Z2-9]{5}$")
@@ -29,7 +30,7 @@ async def _setup(client, username="nico"):
     ]
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
     confirm = await client.post(
-        "/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token)
+        "/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_h(token)
     )
     assert confirm.status_code == 200, confirm.text
     return token, secret, confirm.json()["recovery_codes"]
@@ -154,13 +155,15 @@ async def test_recovery_attempts_count_against_the_mfa_token_limit(client):
 
 @pytest.mark.asyncio
 async def test_regenerate_needs_password_and_invalidates_old_codes(client, db_session):
-    token, _, old = await _setup(client)
+    token, secret, old = await _setup(client)
 
     wrong = await client.post("/api/v1/me/recovery-codes", json={"current_password": "falsch"}, headers=_h(token))
     assert wrong.status_code == 400
     assert (await client.get("/api/v1/me", headers=_h(token))).json()["recovery_codes_remaining"] == 10
 
-    r = await client.post("/api/v1/me/recovery-codes", json={"current_password": PASSWORD}, headers=_h(token))
+    # Ausser dem Passwort braucht es einen Code (siehe test_recovery_codes_need_code.py).
+    body = {"current_password": PASSWORD, "totp_code": pyotp.TOTP(secret).now()}
+    r = await client.post("/api/v1/me/recovery-codes", json=body, headers=_h(token))
     assert r.status_code == 200, r.text
     new = r.json()["recovery_codes"]
     assert len(new) == 10 and not set(new) & set(old)
@@ -174,10 +177,11 @@ async def test_regenerate_needs_password_and_invalidates_old_codes(client, db_se
 
 @pytest.mark.asyncio
 async def test_regenerate_resets_the_remaining_counter(client):
-    token, _, codes = await _setup(client)
+    token, secret, codes = await _setup(client)
     assert (await _mfa(client, codes[0])).status_code == 200
     assert (await client.get("/api/v1/me", headers=_h(token))).json()["recovery_codes_remaining"] == 9
-    await client.post("/api/v1/me/recovery-codes", json={"current_password": PASSWORD}, headers=_h(token))
+    body = {"current_password": PASSWORD, "totp_code": pyotp.TOTP(secret).now()}
+    assert (await client.post("/api/v1/me/recovery-codes", json=body, headers=_h(token))).status_code == 200
     assert (await client.get("/api/v1/me", headers=_h(token))).json()["recovery_codes_remaining"] == 10
 
 
@@ -200,8 +204,9 @@ async def test_regenerate_requires_login(client):
 
 @pytest.mark.asyncio
 async def test_disabling_2fa_deletes_the_codes(client, db_session):
-    token, _, _ = await _setup(client)
-    assert (await client.request("DELETE", "/api/v1/me/totp", json={"current_password": PASSWORD}, headers=_h(token))).status_code == 204
+    token, secret, _ = await _setup(client)
+    body = {"current_password": PASSWORD, "totp_code": pyotp.TOTP(secret).now()}
+    assert (await client.request("DELETE", "/api/v1/me/totp", json=body, headers=_h(token))).status_code == 204
     assert (await db_session.execute(select(RecoveryCode))).first() is None
     assert (await client.get("/api/v1/me", headers=_h(token))).json()["recovery_codes_remaining"] == 0
     # Login geht wieder ohne zweiten Faktor -- der alte Code ist nirgends mehr gueltig.
@@ -217,7 +222,7 @@ async def test_codes_of_one_user_do_not_work_for_another(client, db_session):
     )
     anna_token = (await client.post("/api/v1/auth/login", json={"username": "anna", "password": PASSWORD})).json()["access_token"]
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(anna_token))).json()["secret"]
-    await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(anna_token))
+    await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_h(anna_token))
     assert (await _mfa(client, codes[0], username="anna")).status_code == 401
     # Nicos Code ist dadurch nicht verbraucht.
     assert (await _mfa(client, codes[0], username="nico")).status_code == 200

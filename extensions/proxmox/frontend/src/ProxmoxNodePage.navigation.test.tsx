@@ -1,7 +1,7 @@
 /**
  * Ende-zu-Ende durch die echte Kette Router -> ExtensionPage (Kern) -> ProxmoxNodePage: die
  * Kachel "Aufgabenverlauf" (`?host=&tasks=1`) wirkt auch dann, wenn die Seite schon offen ist und
- * man den Filter zwischendurch entfernt hat. Vorbild: nexus-soc SocPage.navigation.test.tsx.
+ * man den Filter zwischendurch entfernt hat. Vorbild: extensions/shield SocPage.navigation.test.tsx.
  */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

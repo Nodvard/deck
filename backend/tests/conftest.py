@@ -59,13 +59,20 @@ def _isolate_timezone():
     Bewusst OHNE das `monkeypatch`-Fixture: ein autouse-Fixture, das es anfordert, baut es vor
     `db_session` auf und riesse es erst danach wieder ab -- Tests, die damit `core.ssh._pool`
     ersetzen, liessen ihre Attrappe dann noch im Abbau von `db_session` stehen
-    (`reset_ssh_pool()` -> `close_all()` fehlt)."""
+    (`reset_ssh_pool()` -> `close_all()` fehlt).
+
+    Nach jeder Aenderung an `TZ` `time.tzset()`: Sonst rechnet `localtime` noch mit der alten Zone,
+    waehrend `mktime` die neue liest. pyotp nutzt beide; der erste Zwei-Faktor-Code eines Laufs mit
+    gesetzter `TZ` (z. B. Europe/Berlin) waere dann um die Zeitverschiebung falsch."""
     import os
+    import time
 
     from nodvard_deck.core import timezone as tz_service
 
     names = ("NODVARD_DECK_TIMEZONE", "LATTICE_TIMEZONE", "TZ")
     saved = {name: os.environ.pop(name, None) for name in names}
+    if hasattr(time, "tzset"):
+        time.tzset()
     tz_service.reset_timezone_cache()
     yield
     tz_service.reset_timezone_cache()
@@ -74,6 +81,8 @@ def _isolate_timezone():
             os.environ.pop(name, None)
         else:
             os.environ[name] = value
+    if hasattr(time, "tzset"):
+        time.tzset()
 
 
 @pytest.fixture(autouse=True)
@@ -196,6 +205,8 @@ def test_settings(tmp_path: Path):
         ext_data_dir=tmp_path / "ext-data",
         # Nie die echte Datei eines Images (/app/image-info.json), falls die Tests in einem Container laufen.
         image_info_path=tmp_path / "image-info.json",
+        # Nie der echte Kanal zum Update-Helfer (/app/updater), falls die Tests in einem Container laufen.
+        updater_dir=tmp_path / "updater",
         # Die vielen SSH-Tests gegen den lokalen Testserver verlassen sich darauf, dass der erste
         # Schluessel still gemerkt wird (so wie bei bestehenden Installationen). Neue Installationen
         # verlangen eine Bestaetigung; das pruefen die Tests in test_ssh_confirm_new_host_keys.py,

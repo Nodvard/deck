@@ -24,10 +24,16 @@ class TablePrefixViolation(Exception):
     pass
 
 
-def validate_table_prefix(ext_id: str, table_names: Iterable[str], *, expected_prefix: str) -> None:
-    violations = [name for name in table_names if not name.startswith(expected_prefix)]
+def validate_table_prefix(
+    ext_id: str, table_names: Iterable[str], *, expected_prefix: str | tuple[str, ...]
+) -> None:
+    """`expected_prefix`: ein Praefix oder mehrere (nach einer Umbenennung zusaetzlich die der alten
+    Kennungen, siehe `ExtensionManifest.table_prefixes`); jede Tabelle muss mit einem davon beginnen."""
+    prefixes = (expected_prefix,) if isinstance(expected_prefix, str) else tuple(expected_prefix)
+    violations = [name for name in table_names if not name.startswith(prefixes)]
     if violations:
+        allowed = " oder ".join(f"'{p}'" for p in prefixes)
         raise TablePrefixViolation(
             f"Extension '{ext_id}': Tabellen {sorted(violations)} verletzen den "
-            f"Pflicht-Präfix '{expected_prefix}' (docs/02-EXTENSION-API.md §7)."
+            f"Pflicht-Präfix {allowed} (docs/02-EXTENSION-API.md §7)."
         )

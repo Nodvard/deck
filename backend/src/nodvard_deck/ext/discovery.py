@@ -25,7 +25,7 @@ from __future__ import annotations
 import importlib.metadata
 import re
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from nodvard_sdk import ExtensionManifest, load_manifest
@@ -149,3 +149,108 @@ def discover_all(
     extensions_dir: Path, *, entry_point_group: str | Iterable[str] = DEFAULT_ENTRY_POINT_GROUPS
 ) -> list[DiscoveredExtension]:
     return [*scan_directory(extensions_dir), *scan_entry_points(entry_point_group)]
+
+
+LEGACY_BLOCKING_PERMISSIONS: dict[str, str] = {"hosts.write": "Server anlegen"}
+"""Berechtigungen, die sich mit `legacy_ids` nicht vertragen, jeweils mit dem Satzteil fuer die Meldung.
+
+Wer sie hat, speichert Daten dauerhaft unter seiner Kennung und sucht sie darueber wieder: `hosts.write`
+(`ctx.hosts.upsert_discovered`) schreibt `Host.provider_ext_id` und `HostTag.managed_by_ext_id` und findet
+seine Server ueber `provider_ext_id` wieder. Nach einer Umbenennung gaebe es doppelte Server, die alten
+verloeren ihren Anbieter, und ein Rueckweg aufs alte Image faende die neuen nicht. Die Pruefung sitzt im Kern
+und nicht im Manifest-Pruefer des SDK: Es ist eine Grenze der Kern-Speicherung (heute), keine Eigenschaft
+des Manifest-Formats, und faellt weg, sobald der Kern die alten Kennungen auch dort mitliest.
+
+Nicht dabei, weil nichts dauerhaft unter der Kennung gesucht wird: `secrets.*` (`Secret.owner_ext_id` ist
+nur die Herkunftsangabe), `notify.send` (`Notification.source_ext_id`) und `audit.write` (Akteur im
+Protokoll) -- alte Eintraege behalten die alte Kennung, nichts sucht danach. `ctx.connectors` braucht keine
+Berechtigung und liest ueber alle eigenen Kennungen (`ConnectorsHandle`)."""
+
+
+@dataclass
+class LegacyResolution:
+    """Ergebnis von `resolve_legacy()`."""
+
+    found: list[DiscoveredExtension]
+    """Alle Funde in derselben Reihenfolge; abgelehnte stehen darin als Fund mit Fehler."""
+    owner: dict[str, str]
+    """Alte Kennung -> Kennung der Erweiterung, die sie (ohne Konflikt) in `legacy_ids` nennt."""
+    refused: list[DiscoveredExtension]
+    """Die wegen eines Konflikts abgelehnten Funde (mit Fehlertext) -- fuers Protokoll."""
+    refused_old: dict[str, str] = field(default_factory=dict)
+    """Alte Kennung -> Grund, wenn die Erweiterungen, die sie in `legacy_ids` nennen, abgelehnt wurden und es
+    sie selbst nicht als Erweiterung gibt. Bei einem Update steht die Registry-Zeile noch unter dieser Kennung;
+    sie nennt dann diesen Grund statt "nicht gefunden". Jede alte Kennung, die es nicht selbst gibt, steht
+    entweder hier oder in `owner`."""
+
+
+def resolve_legacy(found: list[DiscoveredExtension]) -> LegacyResolution:
+    """Prueft die alten Kennungen (`legacy_ids`) aller gueltigen Funde.
+
+    - Ist eine alte Kennung selbst noch als Erweiterung da, wird die NEUE abgelehnt; die alte bleibt, wie
+      sie ist. So laeuft nichts doppelt, und keine Erweiterung uebernimmt den Stand einer anderen. Als "da"
+      zaehlt ein Ordner mit diesem Namen (auch mit kaputtem Manifest, dann laedt keine der beiden) oder ein
+      Paket mit lesbarem Manifest. Ein Paket mit kaputtem Manifest traegt als Fund den Distributionsnamen
+      und blockiert nichts; laden kann es ohnehin nicht.
+    - Nennen zwei Erweiterungen dieselbe alte Kennung, werden beide abgelehnt.
+    - Hat eine Erweiterung `legacy_ids` UND eine Berechtigung aus `LEGACY_BLOCKING_PERMISSIONS`
+      (heute `hosts.write`), wird sie abgelehnt.
+
+    Ohne `legacy_ids` aendert sich nichts: `found` kommt unveraendert zurueck, `owner` ist leer."""
+    present: dict[str, DiscoveredExtension] = {}
+    for d in found:
+        present.setdefault(d.id, d)
+    claims: dict[str, set[str]] = {}
+    for d in found:
+        if d.ok:
+            for old in d.manifest.legacy_ids:  # type: ignore[union-attr]
+                claims.setdefault(old, set()).add(d.id)
+
+    problems: dict[str, list[str]] = {}
+    for d in found:
+        if not d.ok or not d.manifest.legacy_ids:  # type: ignore[union-attr]
+            continue
+        for permission in d.manifest.permissions:  # type: ignore[union-attr]
+            base = permission.split(":", 1)[0]
+            what = LEGACY_BLOCKING_PERMISSIONS.get(base)
+            if what is None:
+                continue
+            message = f"Erweiterungen, die {what}, können noch nicht umbenannt werden (legacy_ids zusammen mit {base})."
+            if message not in problems.setdefault(d.id, []):
+                problems[d.id].append(message)
+    for old, claimants in sorted(claims.items()):
+        if old in present:
+            other = present[old]
+            where = f"Ordner „{other.source_path.name}“" if other.source == "bundled" else "als Paket installiert"
+            for ext_id in claimants:
+                problems.setdefault(ext_id, []).append(
+                    f"Die alte Kennung „{old}“ gehört noch zu einer installierten Erweiterung ({where}). "
+                    "Bitte die alte Erweiterung entfernen."
+                )
+        elif len(claimants) > 1:
+            others = ", ".join(f"„{c}“" for c in sorted(claimants))
+            for ext_id in claimants:
+                problems.setdefault(ext_id, []).append(
+                    f"Die alte Kennung „{old}“ wird von mehreren Erweiterungen beansprucht ({others})."
+                )
+
+    resolved: list[DiscoveredExtension] = []
+    refused: list[DiscoveredExtension] = []
+    for d in found:
+        if d.ok and d.id in problems:
+            d = DiscoveredExtension(
+                id=d.id, source=d.source, source_path=d.source_path, manifest=None,
+                error=" ".join(problems[d.id]),
+            )
+            refused.append(d)
+        resolved.append(d)
+    owner = {old: next(iter(c)) for old, c in claims.items() if not c & problems.keys()}
+    refused_old: dict[str, str] = {}
+    for old, claimants in sorted(claims.items()):
+        names = sorted(claimants & problems.keys())
+        if old in present or not names:
+            continue
+        reasons = " ".join(dict.fromkeys(p for name in names for p in problems[name]))
+        # Mehrere: der gemeinsame Grund nennt sie schon alle.
+        refused_old[old] = f"Die neue Version heißt „{names[0]}“. {reasons}" if len(names) == 1 else reasons
+    return LegacyResolution(found=resolved, owner=owner, refused=refused, refused_old=refused_old)

@@ -7,6 +7,7 @@ Klartextwert oder `ciphertext` (docs/03-DATA-MODEL.md §3, Invariante 1).
 from __future__ import annotations
 
 import pytest
+from totp_helpers import setup_confirm_code
 
 
 async def _bootstrap_owner(client, username="owner1", password="correct-horse-battery"):
@@ -158,7 +159,7 @@ async def test_two_factor_key_of_an_account_cannot_be_replaced_or_deleted(client
     assert setup.status_code == 200, setup.text
     secret = setup.json()["secret"]
     confirmed = await client.post(
-        "/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_auth_header(owner_token)
+        "/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_auth_header(owner_token)
     )
     assert confirmed.status_code == 200, confirmed.text
     owner = (await db_session.execute(select(User).where(User.username == "owner1"))).scalar_one()

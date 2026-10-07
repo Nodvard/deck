@@ -22,8 +22,12 @@ eine Fehlkonfiguration, bevor er klickt.
 * **Zustand und Socket:** das Ziel bindet weder den Engine-Socket noch das `/state`-Volume des Helfers ein
   (auch nicht ueber einen Elternordner wie `/var/run` oder `/`), sonst `unsafe_target`. Es hat den Kanal des Helfers
   unter `/app/updater` (`channel_missing_in_target`).
-* **Image und Tag:** `Config.Image` ist das Repository mit beweglichem Tag; das laufende Image stammt aus
-  der Registry (`RepoDigests`), traegt das Versions-Label und ist mindestens `MIN_VERSION`.
+* **Image und Tag:** `Config.Image` ist das Repository mit beweglichem Tag; die Engine nennt fuer das laufende Image
+  einen Digest im Repository (`RepoDigests`, fuer den Rueckweg-Slot), es traegt das Versions-Label und ist mindestens
+  `MIN_VERSION`. Die Herkunft beweist der Digest nur beim alten Store der Engine: Beim containerd-Store (Standard ab
+  Docker 29) leitet die Engine ihn aus den Namen ab, dann besteht auch ein selbst gebautes, als ghcr getaggtes Image
+  diese Pruefung. Unterscheiden koennte das die Registry, die wertet die Vorpruefung aber nicht aus (Folgen siehe
+  `policy.require_registry_digest`).
 * **Klonbarkeit:** der `create`-Body wird schon hier probeweise gebaut (`clone.build`), damit
   `custom_entrypoint`, `unknown_field`, `network_unclear`, `macvlan` und `auto_remove` vor dem Klick auffallen.
 * **Umgebung:** kein anderer Container haengt per `NetworkMode`, `PidMode` oder `IpcMode` = `container:<ziel>` am Ziel
@@ -42,7 +46,7 @@ from typing import Any
 from . import clone, policy
 from .engine import SOCKET_PATH, Engine, EngineError
 from .policy import Refusal
-from .state import CONTAINER_NAME_RE, RESTART_POLICIES
+from .state import CONTAINER_NAME_RE, PREVIOUS_SUFFIX, RESTART_POLICIES
 
 LABEL_PROJECT = "com.docker.compose.project"
 LABEL_SERVICE = "com.docker.compose.service"
@@ -51,12 +55,16 @@ SWARM_PREFIX = "com.docker.swarm."
 CHANNEL_IN_TARGET = "/app/updater"
 CHANNEL_IN_HELPER = "/channel"
 STATE_IN_HELPER = "/state"
-PREVIOUS_SUFFIX = "-previous"
 MOUNTINFO_MAX_BYTES = 1024 * 1024
 
 PROJECT_RE = re.compile(r"[a-z0-9][a-z0-9_.-]{0,127}", re.ASCII)
 _MOUNT_ROOT_RE = re.compile(r"(?:\A|.*/)containers/([0-9a-f]{64})/(?:hostname|hosts|resolv\.conf)", re.ASCII)
 _SELF_MOUNT_POINTS = frozenset({"/etc/hostname", "/etc/hosts", "/etc/resolv.conf"})
+NEVER_STARTED = "0001-01-01T00:00:00Z"
+"""`State.StartedAt` eines Containers, der nie gestartet wurde."""
+_DOCKER_TIME_RE = re.compile(
+    r"([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(Z|[+-][0-9]{2}:[0-9]{2})",
+    re.ASCII)
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +122,47 @@ def own_container_id() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Zeitpunkte des Docker-Dienstes
+# ---------------------------------------------------------------------------
+
+
+def docker_time(value: object) -> float | None:
+    """Ein Zeitpunkt des Docker-Dienstes (RFC 3339, bis zu neun Nachkommastellen, etwa `State.StartedAt`) als
+    Sekunden seit 1970 (UTC). `None` fuer alles andere, auch fuer den Nullwert eines nie gestarteten Containers."""
+    if not isinstance(value, str) or value == NEVER_STARTED:
+        return None
+    match = _DOCKER_TIME_RE.fullmatch(value)
+    if match is None:
+        return None
+    year, month, day, hour, minute, second = (int(part) for part in match.group(1, 2, 3, 4, 5, 6))
+    if not (1970 <= year <= 9999 and 1 <= month <= 12 and 1 <= day <= 31 and hour <= 23 and minute <= 59
+            and second <= 60):
+        return None
+    zone = match[8]
+    offset = 0 if zone == "Z" else (1 if zone[0] == "+" else -1) * (int(zone[1:3]) * 3600 + int(zone[4:6]) * 60)
+    fraction = int(match[7]) / 10 ** len(match[7]) if match[7] else 0.0
+    return _days_since_1970(year, month, day) * 86400 + hour * 3600 + minute * 60 + second + fraction - offset
+
+
+def _days_since_1970(year: int, month: int, day: int) -> int:
+    """Tage seit dem 1. 1. 1970 im gregorianischen Kalender (Jahre ab Maerz gezaehlt, dann faellt der Schalttag ans
+    Ende)."""
+    year -= month <= 2
+    era = year // 400
+    year_of_era = year - era * 400
+    day_of_year = (153 * ((month + 9) % 12) + 2) // 5 + day - 1
+    day_of_era = year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year
+    return era * 146097 + day_of_era - 719468
+
+
+def started_at(container: Mapping[str, Any]) -> float | None:
+    """`State.StartedAt` eines Inspects als Sekunden seit 1970; `None`, wenn er fehlt, ungueltig ist oder der Container
+    nie gestartet wurde."""
+    state = container.get("State")
+    return docker_time(state.get("StartedAt")) if isinstance(state, dict) else None
+
+
+# ---------------------------------------------------------------------------
 # Ergebnis
 # ---------------------------------------------------------------------------
 
@@ -140,13 +189,16 @@ class MountRef:
 
 @dataclass(frozen=True)
 class SelfInfo:
-    """Der Helfer selbst: ID, Compose-Projekt, sein Kanal, sein Zustand und der Socket auf dem Rechner."""
+    """Der Helfer selbst: ID, Compose-Projekt, sein Kanal, sein Zustand und der Socket auf dem Rechner. `started_at`:
+    wann der Docker-Dienst seinen Container zuletzt gestartet hat (`State.StartedAt`, Wanduhr des Rechners in diesem
+    Moment; `None`, wenn unbekannt)."""
 
     id: str
     project: str
     channel: MountRef | None
     state: MountRef | None
     socket_source: str | None
+    started_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -345,6 +397,7 @@ def inspect_self(engine: Engine, self_id: str | None) -> SelfInfo:
         channel=_mount_at(mounts, CHANNEL_IN_HELPER),
         state=_mount_at(mounts, STATE_IN_HELPER),
         socket_source=host_path(mounts, SOCKET_PATH),
+        started_at=started_at(me),
     )
 
 

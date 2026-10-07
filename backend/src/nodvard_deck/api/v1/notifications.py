@@ -1,7 +1,7 @@
 """Das Notification-Center -- docs/04-API.md.
 
 Benachrichtigungs-Center: die Endpunkte existierten seit WP-6, aber KEINE Seite
-im Frontend rief sie auf -- Meldungen (z. B. nexus-socs Lageberichte) landeten in der
+im Frontend rief sie auf -- Meldungen (z. B. die Lageberichte von Nodvard Shield) landeten in der
 Datenbank und niemand sah sie. Dazu `GET /unread-count` (fuer den Zaehler im Menue,
 ohne die ganze Liste zu laden) und `POST /read-all`.
 

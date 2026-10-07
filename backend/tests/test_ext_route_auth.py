@@ -119,7 +119,7 @@ async def test_no_bundled_extension_route_is_reachable_without_login(client, db_
             response = await client.request(method, url)
             assert response.status_code == 401, (method, path, response.status_code)
 
-    assert {ext for ext, _, _ in checked} >= {"hello-world", "proxmox", "backups", "nexus-soc", "ntfy"}
+    assert {ext for ext, _, _ in checked} >= {"hello-world", "proxmox", "backups", "shield", "ntfy"}
     assert not DECLARED_PUBLIC_ROUTES - set(checked), "eine als oeffentlich erklaerte Route gibt es nicht mehr"
 
     # OpenAPI zeigt nur APIRoutes mit include_in_schema=True. WebSockets, add_route(),
@@ -134,7 +134,12 @@ async def test_no_bundled_extension_route_is_reachable_without_login(client, db_
             seen += 1
             if not isinstance(route, APIRoute) or not route.include_in_schema:
                 invisible.append((ext_id, f"{type(route).__name__} {getattr(route, 'path', '?')}"))
-    assert seen >= len(checked)
+    # Eine umbenannte Erweiterung (`legacy_ids`) ist zusaetzlich unter ihren alten Adressen eingehaengt: dieselben Routen
+    # als veraltete Pfade im Schema. Sie stehen oben in `checked` (und antworten dort mit 401), die Routenobjekte der
+    # Erweiterung gibt es aber nur einmal.
+    old_addresses = get_extension_runtime().legacy_owner
+    assert {ext for ext, _, _ in checked} & set(old_addresses), "die alten Adressen von Shield sind mit geprueft"
+    assert seen >= len([entry for entry in checked if entry[0] not in old_addresses])
     assert invisible == []
 
 

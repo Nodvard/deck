@@ -26,27 +26,69 @@ und Co. fuehren beliebige Befehle als root auf dem Rechner aus. Darum geht **jed
 
 Fuer Tests nimmt der Konstruktor den Socket-Pfad und das Repository (`repository=`) -- nie aus der Umgebung.
 
-**Noch nicht umgesetzt: die Bindung der aendernden Endpunkte an bestimmte Container und Images.** Die Tabelle
-oben prueft Form und feste Werte, aber noch nicht, **welcher** Container oder welches Image gemeint ist: `id` ist nur
-eine gueltige volle ID, `name` nur ein gueltiger Containername, `tag_image` nimmt jede Image-ID. Das kommt als
-erster Schritt des Ablaufs (`flow.py`, ein eigener Schritt), bevor ein aendernder Aufruf verdrahtet wird. Dann
-bekommen `create`, `start`, `stop`, `rename`, `update`, `remove_container`, `connect`, `tag_image`,
-`remove_protect_tag` und `pull` eine unveraenderliche Bindung als Pflichtparameter (z. B.
-`Engine.bind(journal, own_id, target_name)`); ohne sie wirft jeder aendernde Aufruf `NotAllowed`. Mit ihr gilt:
+**Bindung der aendernden Aufrufe.** Die Tabelle prueft Form und feste Werte, aber nicht, *welcher* Container oder
+welches Image gemeint ist. Das regelt die Bindung (`Binding`, unveraenderlich, angelegt mit
+`Engine.bind(journal, own_id, ...)`): Jeder Endpunkt ausser `GET` -- `create`, `start`, `stop`, `rename`, `update`,
+`remove_container`, `connect`, `tag_image`, `remove_protect_tag` und `pull` -- verlangt sie als Pflichtparameter
+`binding=`. Ohne sie (auch mit `None` oder einem anderen Objekt) wirft der Aufruf `NotBound` (eine Art von
+`NotAllowed`), bevor etwas an die Engine geht. Es gilt nur die **zuletzt** mit `Engine.bind` angelegte Bindung
+derselben Engine; eine aeltere, eine Kopie (`dataclasses.replace`) oder eine ohne `Engine.bind` gebaute wirft ebenso
+`NotBound`. Mit ihr gilt:
 
-* `id` nur der alte oder der neue Container aus dem Journal, nie die eigene ID des Helfers;
-* `create`: `name` ist der Name des Ziels; `rename`: der Name des Ziels oder der Name des Ziels mit Endung `-previous`;
-* `connect`: `Container` ist der neue Container aus dem Journal;
-* `remove_container`: vor dem Commit nur der neue, danach nur der alte Container;
-* `tag_image`: das Repository nur mit dem neuen Image (beim Rueckbau mit dem alten), `nodvard-deck-previous` nur mit dem
-  alten Image und seiner Version als Tag; `remove_protect_tag` nur mit der Version aus dem Journal bzw. dem Slot;
-* `pull` nur mit dem Digest aus der Aufloesung des Tags.
+* `id` nur der alte oder (ab `created`) der neue Container aus dem Journal, nie die eigene ID des Helfers.
+  `Engine.bind` lehnt ein Journal ab, das die eigene ID nennt oder dessen neuer Container der alte ist.
+* **Vorwaerts** (`undo=False`) geht jeder aendernde Aufruf nur in dem Schritt des Journals, der ihn ankuendigt
+  (das Journal wird *vor* dem Schritt geschrieben, die Wiederaufnahme verlaesst sich darauf):
 
-Die Bindung ist eine zweite Schranke gegen Fehler im Ablauf, keine gegen eine falsche Zielwahl: die gebundenen IDs
-kommen aus `target.py`. Dagegen helfen nur die Zielwahl (genau ein Treffer, ohne eigene ID und ohne Journal-IDs) und die
-erneute Pruefung vor jedem Schritt. Die Invarianten der Fake-Engine in den Tests pruefen dieselben Regeln mit, und ein
-Negativtest schickt aendernde Aufrufe mit beliebiger ID, beliebigem Namen und beliebiger Image-ID ohne bzw. mit falscher
-Bindung.
+  * `begin`: `pull` mit dem Digest aus der Aufloesung des Tags (`pull_digest`; beim Rueckweg der Digest des Slots);
+  * `protected`: `tag_image` auf `nodvard-deck-previous` -- das alte Image mit dessen Version als Tag;
+  * `renamed`: `rename` des alten Containers auf `<name>-previous`;
+  * `tagged`: `tag_image` auf das Repository -- das bewegliche Tag des Ziels auf das neue Image;
+  * `creating`: `create` mit dem Namen des Ziels (`old.name`) und dessen unveraendertem Tag-Text als `Image`;
+  * `created`: `connect` des neuen Containers (der Ablauf schreibt `created` mit der neuen ID darum gleich nach
+    `create`, vor `connect` und der Nachkontrolle);
+  * `old_stopped`: `update` des alten Containers auf `no` (er darf nach einem Neustart des Docker-Dienstes nicht
+    wieder anlaufen), dann `stop` des alten;
+  * `started`: `start` des neuen Containers;
+  * `committed`: `remove_container` des alten Containers.
+
+  So startet der neue Container nie, solange das Journal noch sagt, dass der alte laeuft, und der alte wird nie
+  gestoppt, bevor das Journal es ankuendigt.
+* **Rueckbau** (`undo=True`, nur vor dem Commit) in jedem Schritt, aber nur zurueck auf den alten Stand. Hat das Journal
+  den Rueckbau schon angekuendigt (`Journal.undo`), gibt es nur noch diese Bindung: `Engine.bind` ohne `undo` wirft
+  dann `NotBound`, vorwaerts geht nichts mehr. Erlaubt sind `stop` und
+  `remove_container` des neuen Containers, das bewegliche Tag auf das alte Image, `rename` des alten Containers auf
+  den Namen des Ziels, `update` des alten auf genau seine Restart-Policy aus dem Journal, `start` des alten und
+  `remove_protect_tag` seiner Version. Kein `create`, kein `connect`, kein `pull`, kein neues Schutz-Tag, nie `stop`
+  des alten oder `start` des neuen. Einen Container, der nicht im Journal steht, entfernt die Bindung nie: Wer nach
+  einem Absturz im Schritt `creating` den eigenen, schon angelegten Container findet, traegt ihn zuerst ins Journal
+  ein (`created`) und baut dann zurueck.
+* `remove_protect_tag` nur mit einer Version aus Journal bzw. Slot: vor dem Commit nur im Rueckbau die des alten
+  Images (das Schutz-Tag dieses Vorgangs); nach dem Commit eines Updates die des ersetzten Slots (nie die des alten
+  Images, denn das Tag schuetzt jetzt den neuen Slot); nach dem Commit eines Rueckwegs beide Versionen aus dem Journal;
+  ohne Journal nur die des Slots.
+* Nach dem Commit gibt es nur noch `remove_container` des alten Containers und `remove_protect_tag`.
+
+Die Bindung gilt fuer genau einen Stand des Journals: Nach jedem geschriebenen Schritt holt der Ablauf eine neue
+(`Engine.bind` mit dem Journal, wie es jetzt auf der Platte steht); die vorige gilt damit nicht mehr. Scheitert
+`Engine.bind`, gilt keine. Nach dem Commit eines Updates und beim Ablauf eines Slots gibt er den Slot, dessen
+Schutz-Tag entfernt wird, mit, solange dieser noch in `state.json` steht -- erst das Tag entfernen, dann den Slot
+ersetzen (Update) bzw. loeschen (Ablauf), sonst ginge die Version bei einem Absturz verloren und das Tag bliebe fuer
+immer liegen. Beim Rueckweg ist es umgekehrt: Beide Versionen stehen im Journal, darum geht dort zuerst der Slot, und
+die Tags folgen danach (ohne Slot in der Bindung). Die Fake-Engine der Tests prueft dieselben Regeln (und die Form der
+Aufrufe) auf ihrer Seite gegen das Journal, das gerade gilt (`tests/fake_engine.py`, `JournalGuard`).
+
+**Was die Bindung nicht kann:** Sie ist eine zweite Schranke gegen Fehler im Ablauf, keine gegen eine falsche
+Zielwahl. Die gebundenen IDs kommen aus der Zielwahl in `target.py`; zeigt diese auf den falschen Container, bindet
+die Bindung eben an ihn. Dagegen helfen nur die Zielwahl selbst (genau ein Treffer, ohne die eigene ID, mit Journal
+nie ein Ziel) und die erneute Pruefung der Container vor jedem Schritt. Ebenso wenig prueft sie, an welches Netz
+`connect` geht (das kommt aus dem Inspect des Ziels), oder den Body von `create` ueber das Image hinaus (das ist
+Sache von `clone.py` und der Nachkontrolle).
+
+**Ein `Engine`-Objekt fuer alles:** Vorpruefung, Ablauf und Wiederaufnahme benutzen im Helfer dasselbe Objekt. Die
+Vorpruefung handelt bei jedem Lauf die API-Version neu aus; sie laeuft aber in derselben Schleife wie der Ablauf und ruht
+darum, solange ein Vorgang laeuft (`__main__`). Waehrend eines Vorgangs handelt nur der Ablauf selbst neu aus, und nur
+nach einem Fehler der Engine (`flow`).
 """
 
 from __future__ import annotations
@@ -56,12 +98,13 @@ import re
 import socket
 import time
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 from urllib.parse import quote, urlencode
 
 from . import clone, policy
-from .policy import Refusal
-from .state import CONTAINER_NAME_RE, RESTART_POLICIES
+from .policy import Refusal, Slot
+from .state import CONTAINER_NAME_RE, PREVIOUS_SUFFIX, RESTART_POLICIES, Journal
 
 SOCKET_PATH = "/var/run/docker.sock"
 API_MIN = (1, 41)
@@ -108,11 +151,104 @@ ENDPOINTS: dict[str, tuple[str, str]] = {
 Pfadmuster steht genau hier (Code-Waechter: Engine-Pfade gibt es nur in dieser Tabelle)."""
 _ALLOWED = {value: name for name, value in ENDPOINTS.items()}
 _PLACEHOLDER_RE = re.compile(r"\{([a-z_]+)\}")
+BOUND_ENDPOINTS = frozenset(name for name, (method, _pattern) in ENDPOINTS.items() if method != "GET")
+"""Die aendernden Endpunkte: jeder ausser `GET` verlangt eine Bindung (`Binding`). Ein neuer Endpunkt, der etwas
+aendert, faellt so von selbst darunter -- und wird abgelehnt, bis `Engine._check_binding` eine Regel fuer ihn hat."""
 
 
 class NotAllowed(Exception):
     """Ein Aufruf ausserhalb der Allowlist oder mit ungeprueften Teilen. Ein Programmierfehler, kein Fehler der
     Engine: er wird nie an die Engine geschickt."""
+
+
+class NotBound(NotAllowed):
+    """Ein aendernder Aufruf ohne Bindung, mit einer ungueltigen Bindung oder mit Teilen, die nicht zu ihr passen
+    (Container, Name, Image, Version, Digest oder Schritt). Wie `NotAllowed` ein Programmierfehler; die eigene Klasse
+    trennt nur in Tests, welche Pruefung gegriffen hat."""
+
+
+@dataclass(frozen=True)
+class Binding:
+    """Bindet die aendernden Aufrufe an einen Stand des Journals (Regeln im Kopf des Moduls). Unveraenderlich; angelegt
+    mit `Engine.bind`, die Felder werden beim Anlegen geprueft (sonst `NotBound`). Gueltig ist nur die zuletzt
+    angelegte Bindung der Engine, die sie angelegt hat -- eine Kopie mit denselben Werten nicht.
+
+    * `own_id`: die eigene Container-ID des Helfers (aus `/proc/self/mountinfo`).
+    * `journal`: der Vorgang, wie er jetzt auf der Platte steht; `None` nur fuer das Aufraeumen des Slots.
+    * `slot`: der Slot, dessen Schutz-Tag entfernt werden darf (der abgelaufene bzw. beim Commit ersetzte); beim
+      Rueckweg der benutzte, dessen Digest allein `pull` nachladen darf.
+    * `pull_digest`: der Digest aus der Aufloesung des beweglichen Tags (beim Rueckweg der des Slots), nur fuer `pull`.
+    * `undo`: Rueckbau vor dem Commit -- alles geht zurueck auf den alten Container und das alte Image, nichts wird
+      angelegt.
+    * `repository`: das Repository der Engine, die die Bindung angelegt hat; eine andere Engine lehnt sie ab.
+    """
+
+    own_id: str
+    journal: Journal | None
+    slot: Slot | None
+    pull_digest: str | None
+    undo: bool
+    repository: str
+
+    def __post_init__(self) -> None:
+        if not policy.is_container_id(self.own_id):
+            raise NotBound("Bindung: eigene ID ungueltig")
+        if type(self.undo) is not bool:
+            raise NotBound("Bindung: undo ist kein Wahrheitswert")
+        if self.pull_digest is not None and not policy.is_digest(self.pull_digest):
+            raise NotBound("Bindung: pull_digest ungueltig")
+        if self.slot is not None:
+            if type(self.slot) is not Slot:
+                raise NotBound("Bindung: slot ist kein Slot")
+            try:
+                self.slot.validate(repository=self.repository)
+            except (ValueError, TypeError):
+                raise NotBound("Bindung: slot ungueltig") from None
+        journal = self.journal
+        if journal is None:
+            if self.undo or self.pull_digest is not None:
+                raise NotBound("Bindung: ohne Journal nur das Schutz-Tag des Slots")
+            return
+        if type(journal) is not Journal:
+            raise NotBound("Bindung: journal ist kein Journal")
+        try:
+            journal.validate(repository=self.repository)
+        except (ValueError, TypeError):
+            raise NotBound("Bindung: Journal ungueltig") from None
+        new_id = journal.new.id if journal.new is not None else None
+        if self.own_id in (journal.old.id, new_id):
+            raise NotBound("Bindung: das Journal nennt den Helfer selbst")
+        if new_id == journal.old.id:
+            raise NotBound("Bindung: neuer und alter Container sind derselbe")
+        if self.undo and journal.step == "committed":
+            raise NotBound("Bindung: nach dem Commit gibt es keinen Rueckbau")
+        if journal.undo and not self.undo:
+            raise NotBound("Bindung: der Rueckbau ist angekuendigt, vorwaerts geht nichts mehr")
+
+    @property
+    def container_ids(self) -> frozenset[str]:
+        """Die Container, die aendernde Aufrufe ansprechen duerfen: der alte und (ab `created`) der neue."""
+        journal = self.journal
+        if journal is None:
+            return frozenset()
+        ids = {journal.old.id}
+        if journal.new is not None and journal.new.id is not None:
+            ids.add(journal.new.id)
+        return frozenset(ids) - {self.own_id}
+
+    @property
+    def protect_versions(self) -> frozenset[str]:
+        """Die Versionen, deren Schutz-Tag `remove_protect_tag` entfernen darf."""
+        journal, slot = self.journal, self.slot
+        from_slot = {slot.from_version} if slot is not None else set()
+        if journal is None:
+            return frozenset(from_slot)
+        if journal.step != "committed":
+            # Vor dem Commit nur im Rueckbau: vorwaerts bleibt das Schutz-Tag dieses Vorgangs liegen.
+            return frozenset({journal.old.version}) if self.undo else frozenset()
+        if journal.action == "rollback":
+            return frozenset({journal.old.version} | ({journal.new.version} if journal.new is not None else set()))
+        return frozenset(from_slot - {journal.old.version})
 
 
 class EngineError(Exception):
@@ -198,6 +334,8 @@ class Engine:
         self._repository = repository
         self._timeout = call_timeout
         self.api_version: tuple[int, int] | None = None
+        self._binding: Binding | None = None
+        """Die zuletzt mit `bind` angelegte Bindung: nur sie gilt."""
 
     # --- Aushandlung --------------------------------------------------------
 
@@ -272,54 +410,75 @@ class Engine:
         return self._object("GET", "/distribution/{repository}:{tag}/json",
                             params={"repository": self._repository, "tag": tag})
 
-    # --- Aendern (fuer den Ablauf) ------------------------------------------
+    # --- Aendern (fuer den Ablauf; jeder Aufruf mit Bindung) -----------------
 
-    def create_container(self, name: str, body: dict[str, Any]) -> tuple[str, int]:
+    def bind(self, journal: Journal | None, own_id: str, *, slot: Slot | None = None, pull_digest: str | None = None,
+             undo: bool = False) -> Binding:
+        """Die Bindung fuer die aendernden Aufrufe dieses Stands des Journals (Regeln im Kopf des Moduls). Wirft
+        `NotBound`, wenn die Teile nicht zusammenpassen (ungueltiges Journal oder Slot, die eigene ID im Journal,
+        neuer gleich altem Container, Rueckbau nach dem Commit, `pull_digest` oder `undo` ohne Journal).
+
+        Der Name des Ziels kommt aus dem Journal (`old.name`), nicht als eigener Parameter: zwei Quellen fuer denselben
+        Namen koennten auseinanderlaufen.
+
+        Ab jetzt gilt nur die neue Bindung; jede fruehere dieser Engine ist ungueltig, auch wenn `bind` scheitert."""
+        self._binding = None
+        binding = Binding(own_id=own_id, journal=journal, slot=slot, pull_digest=pull_digest, undo=undo,
+                          repository=self._repository)
+        self._binding = binding
+        return binding
+
+    def create_container(self, name: str, body: dict[str, Any], *, binding: Binding) -> tuple[str, int]:
         """`POST /containers/create?name=<name>`; gibt `(Id, Anzahl Warnungen)` zurueck."""
-        result = self._object("POST", "/containers/create", query={"name": name}, body=body, ok=(201,))
+        result = self._object("POST", "/containers/create", query={"name": name}, body=body, ok=(201,),
+                              binding=binding)
         new_id = result.get("Id")
         if not policy.is_container_id(new_id):
             raise EngineError("bad_response")
         warnings = result.get("Warnings")
         return new_id, len(warnings) if isinstance(warnings, list) else 0
 
-    def connect_network(self, network_id: str, container_id: str, endpoint: dict[str, Any]) -> None:
+    def connect_network(self, network_id: str, container_id: str, endpoint: dict[str, Any], *,
+                        binding: Binding) -> None:
         self._expect("POST", "/networks/{id}/connect", params={"id": network_id},
-                     body={"Container": container_id, "EndpointConfig": endpoint}, ok=(200,))
+                     body={"Container": container_id, "EndpointConfig": endpoint}, ok=(200,), binding=binding)
 
-    def start_container(self, container_id: str) -> bool:
+    def start_container(self, container_id: str, *, binding: Binding) -> bool:
         """`True`, wenn gestartet; `False` bei 304 (lief schon)."""
-        return self._expect("POST", "/containers/{id}/start", params={"id": container_id}, ok=(204, 304)) == 204
+        return self._expect("POST", "/containers/{id}/start", params={"id": container_id}, ok=(204, 304),
+                            binding=binding) == 204
 
-    def stop_container(self, container_id: str, t: int) -> bool:
+    def stop_container(self, container_id: str, t: int, *, binding: Binding) -> bool:
         """`True`, wenn gestoppt; `False` bei 304 (stand schon). Wartet bis `t + 30` s auf die Antwort."""
         timeout = float(t + STOP_GRACE_S) if type(t) is int else None  # ungueltiges `t` lehnt `_query_for` ab
         return self._expect("POST", "/containers/{id}/stop", params={"id": container_id}, query={"t": t},
-                            ok=(204, 304), timeout=timeout) == 204
+                            ok=(204, 304), timeout=timeout, binding=binding) == 204
 
-    def rename_container(self, container_id: str, name: str) -> None:
+    def rename_container(self, container_id: str, name: str, *, binding: Binding) -> None:
         self._expect("POST", "/containers/{id}/rename", params={"id": container_id}, query={"name": name},
-                     ok=(204,))
+                     ok=(204,), binding=binding)
 
-    def set_restart_policy(self, container_id: str, name: str, maximum_retry_count: int = 0) -> None:
+    def set_restart_policy(self, container_id: str, name: str, maximum_retry_count: int = 0, *,
+                           binding: Binding) -> None:
         body = {"RestartPolicy": {"Name": name, "MaximumRetryCount": maximum_retry_count}}
-        self._expect("POST", "/containers/{id}/update", params={"id": container_id}, body=body, ok=(200,))
+        self._expect("POST", "/containers/{id}/update", params={"id": container_id}, body=body, ok=(200,),
+                     binding=binding)
 
-    def remove_container(self, container_id: str) -> None:
+    def remove_container(self, container_id: str, *, binding: Binding) -> None:
         """`DELETE /containers/{id}?v=0&force=0` -- nie mit Volumes, nie erzwungen."""
         self._expect("DELETE", "/containers/{id}", params={"id": container_id}, query={"v": "0", "force": "0"},
-                     ok=(204,))
+                     ok=(204,), binding=binding)
 
-    def tag_image(self, image_id: str, repo: str, tag: str) -> None:
+    def tag_image(self, image_id: str, repo: str, tag: str, *, binding: Binding) -> None:
         self._expect("POST", "/images/{image_id}/tag", params={"image_id": image_id},
-                     query={"repo": repo, "tag": tag}, ok=(200, 201))
+                     query={"repo": repo, "tag": tag}, ok=(200, 201), binding=binding)
 
-    def remove_protect_tag(self, version: str) -> None:
+    def remove_protect_tag(self, version: str, *, binding: Binding) -> None:
         """Entfernt nur das eigene Schutz-Tag `nodvard-deck-previous:<version>` (ohne `force`)."""
         self._expect("DELETE", "/images/{protect}:{version}",
-                     params={"protect": PREVIOUS_REPOSITORY, "version": version}, ok=(200,))
+                     params={"protect": PREVIOUS_REPOSITORY, "version": version}, ok=(200,), binding=binding)
 
-    def pull(self, digest: str) -> int:
+    def pull(self, digest: str, *, binding: Binding) -> int:
         """`POST /images/create?fromImage=<repository>&tag=<digest>` und den Strom bis zum Ende lesen.
 
         Fehler kommen als HTTP-Status vor dem Strom **oder** als `error`/`errorDetail` mitten im 200-Strom
@@ -327,7 +486,7 @@ class Engine:
         deadline = time.monotonic() + PULL_TIMEOUT_S
         status, _, data = self._request(
             "POST", "/images/create", query={"fromImage": self._repository, "tag": digest},
-            timeout=PULL_IDLE_S, deadline=deadline, stream=True)
+            timeout=PULL_IDLE_S, deadline=deadline, stream=True, binding=binding)
         if status != 200:
             raise EngineError("http", status=status, message=_error_message(data))
         return data  # type: ignore[return-value]
@@ -368,19 +527,30 @@ class Engine:
         api_version: tuple[int, int] | None = None,
         expect_json: bool = True,
         stream: bool = False,
+        binding: Binding | None = None,
     ) -> tuple[int, dict[str, str], Any]:
         """Der einzige Weg zur Engine. Prueft Methode + Muster gegen `ENDPOINTS`, die Pfadteile, die Abfrage und
-        den Body (`NotAllowed`), schickt die Anfrage und liest die Antwort mit Groessen- und Zeitgrenzen.
+        den Body (`NotAllowed`) und bei aendernden Endpunkten danach die Bindung (`NotBound`), schickt die Anfrage und
+        liest die Antwort mit Groessen- und Zeitgrenzen.
 
         Gibt `(status, headers, data)` zurueck: `data` ist das JSON der Antwort (oder `None` ohne Body bzw. ohne
         JSON), beim Strom die Zahl der Meldungen. `api_version` ersetzt fuer diesen einen Aufruf die ausgehandelte
-        Version (nur die Aushandlung selbst braucht das, solange sie noch nicht abgeschlossen ist)."""
+        Version (nur die Aushandlung selbst braucht das, solange sie noch nicht abgeschlossen ist): erlaubt nur fuer
+        `/version` und nur innerhalb der Spanne; ohne Versionspraefix (`versioned=False`) geht nur `/_ping`."""
         name = _ALLOWED.get((method, pattern))
         if name is None:
             raise NotAllowed("Endpunkt nicht in der Allowlist")
+        if versioned != (name != "ping"):
+            # Ohne Praefix antwortet der Docker-Dienst mit seiner neuesten API-Version: das braucht nur `/_ping`.
+            raise NotAllowed("nur /_ping geht ohne Versionspraefix")
+        if api_version is not None and (name != "version" or not isinstance(api_version, tuple)
+                                        or not API_MIN <= api_version <= API_MAX):
+            raise NotAllowed("eigene API-Version nur fuer /version in der Aushandlung")
         path = self._path_for(pattern, params or {})
         query_text = self._query_for(name, query or {})
         payload = self._body_for(name, body)
+        if name in BOUND_ENDPOINTS:
+            self._check_binding(name, binding, params or {}, query or {}, body)
         if versioned:
             version = api_version or self.api_version
             if version is None:
@@ -428,6 +598,89 @@ class Engine:
         elif raw and response.status >= 400:
             data = {"message": raw[:MESSAGE_MAX_CHARS * 2].decode("utf-8", "replace")}
         return response.status, response_headers, data
+
+    def _check_binding(self, name: str, binding: object, params: Mapping[str, Any], query: Mapping[str, Any],
+                       body: Any) -> None:
+        """Die Regeln der Bindung (Kopf des Moduls). Laeuft nach den Pruefungen der Form: Pfadteile, Abfrage und Body
+        haben hier schon die erwartete Gestalt."""
+        if type(binding) is not Binding:
+            raise NotBound(f"{name}: ohne Bindung")
+        if binding is not self._binding:
+            raise NotBound(f"{name}: nicht die zuletzt angelegte Bindung dieser Engine")
+        if binding.repository != self._repository:
+            raise NotBound(f"{name}: Bindung einer anderen Engine")
+        if name == "remove_protect_tag":
+            if params["version"] not in binding.protect_versions:
+                raise NotBound("remove_protect_tag: Version nicht aus Journal bzw. Slot")
+            return
+        journal = binding.journal
+        if journal is None:
+            raise NotBound(f"{name}: ohne Journal")
+        old, new, step, undo = journal.old, journal.new, journal.step, binding.undo
+        new_id = new.id if new is not None else None
+
+        def forward(announced: str) -> bool:
+            """Vorwaerts nur in dem Schritt, den das Journal schon angekuendigt hat."""
+            return not undo and step == announced
+
+        if name == "pull_image":
+            digest = binding.pull_digest
+            if journal.action == "rollback":
+                # Der Rueckweg zieht nur den Vorgaenger aus dem Slot nach (nach `image prune -a`).
+                slot = binding.slot
+                prefix = binding.repository + "@"
+                if slot is None or not slot.repo_digest.startswith(prefix) or digest != slot.repo_digest[len(prefix):]:
+                    raise NotBound("pull: beim Rueckweg nur der Digest des Slots")
+            if not forward("begin") or digest is None or query["tag"] != digest:
+                raise NotBound("pull: nur im Schritt begin und nur der aufgeloeste Digest")
+        elif name == "tag_image":
+            image_id, repo, tag = params["image_id"], query["repo"], query["tag"]
+            if repo == PREVIOUS_REPOSITORY:
+                allowed = forward("protected") and image_id == old.image_id and tag == old.version
+            else:
+                # Gegen das Repository der Bindung: dagegen ist das Journal beim Anlegen geprueft worden.
+                floating = policy.floating_tag(old.tag_text, repository=binding.repository)
+                if undo:
+                    allowed = image_id == old.image_id
+                else:
+                    allowed = forward("tagged") and new is not None and image_id == new.image_id
+                allowed = allowed and tag == floating
+            if not allowed:
+                raise NotBound("tag: Image, Tag oder Schritt nicht aus dem Journal")
+        elif name == "create_container":
+            if not forward("creating") or query["name"] != old.name or body.get("Image") != old.tag_text:
+                raise NotBound("create: nur im Schritt creating, mit Name und Tag-Text des Ziels")
+        elif name == "connect_network":
+            if not forward("created") or new_id is None or body["Container"] != new_id:
+                raise NotBound("connect: nur der neue Container aus dem Journal, nur im Schritt created")
+        elif name in ("start_container", "stop_container", "rename_container", "update_container",
+                      "remove_container"):
+            container_id = params["id"]
+            if container_id == binding.own_id or container_id not in binding.container_ids:
+                raise NotBound(f"{name}: Container nicht aus dem Journal")
+            if name == "start_container":
+                # Nie zwei Dashboards zugleich: der neue erst, wenn das Journal den alten als gestoppt fuehrt; der
+                # alte nur im Rueckbau.
+                allowed = container_id == old.id if undo else (forward("started") and container_id == new_id)
+            elif name == "stop_container":
+                allowed = container_id == new_id if undo else (forward("old_stopped") and container_id == old.id)
+            elif name == "rename_container":
+                wanted_name = old.name if undo else old.name + PREVIOUS_SUFFIX
+                allowed = (container_id == old.id and query["name"] == wanted_name
+                           and (undo or forward("renamed")))
+            elif name == "update_container":
+                restart = body["RestartPolicy"]
+                wanted_policy = (restart["Name"], restart["MaximumRetryCount"])
+                expected = old.restart_policy if undo else ("no", 0)
+                allowed = container_id == old.id and wanted_policy == expected and (undo or forward("old_stopped"))
+            else:
+                # Vor dem Commit nur der neue (im Rueckbau), ab dem Commit nur der alte Container.
+                allowed = (container_id == old.id if step == "committed"
+                           else undo and new_id is not None and container_id == new_id)
+            if not allowed:
+                raise NotBound(f"{name}: Container, Name, Restart-Policy oder Schritt passen nicht zum Journal")
+        else:
+            raise NotBound(f"{name}: keine Regel fuer die Bindung")
 
     def _path_for(self, pattern: str, params: Mapping[str, str]) -> str:
         names = _PLACEHOLDER_RE.findall(pattern)

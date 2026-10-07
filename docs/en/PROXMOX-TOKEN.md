@@ -43,7 +43,9 @@ against VE 8). Special cases for Proxmox VE 8 and older versions are listed unde
 | Create and change backup jobs | no | yes, with an extra role for the backup storage |
 
 ¹ Proxmox only returns the list of pending updates with `Sys.Modify` – even though Nodvard Deck
-only reads it. The tile then shows "Not available: … HTTP 403" („Nicht abrufbar: … HTTP 403“).
+only reads it. The tile then shows "Not available: … HTTP 403: the token lacks a privilege for this query"
+(„Nicht abrufbar: … HTTP 403: Dem Token fehlt ein Recht für diese Abfrage.“), followed by the reason Proxmox gives
+(„Grund laut Proxmox: …“).
 ² Proxmox only shows guest disks in the storage content with `VM.Config.Disk`.
 ³ Proxmox only shows existing backups to someone who may back up the guest (`VM.Backup`) and
 may allocate space on the storage (`Datastore.AllocateSpace`). With read-only privileges the
@@ -210,8 +212,12 @@ Good to know:
   of the same address (upper/lower case in the host name, `:443` with `https://`, trailing `/`) does
   not count as a change.
 - **No redirects:** Nodvard Deck never follows redirects when calling Proxmox, not even when opening
-  the console. So enter the final address of the node (`https://…:8006`), not a reverse proxy that redirects.
-  Otherwise queries and the console fail with an error message.
+  the console. So enter the final address of the node (`https://…:8006`, not `http://`), not a reverse proxy that
+  redirects. Otherwise queries, "Test connection" („Verbindung testen“) and the console fail with "Der Server hat die
+  Verbindung auf eine andere Adresse umgeleitet …" (the server redirected the connection to another address).
+- **No proxy from the environment:** Nodvard Deck always connects directly to the address you entered, also when
+  opening the console. A proxy set in the environment of Nodvard Deck (`HTTP_PROXY`, `HTTPS_PROXY` etc.) is never used
+  for this, so the address must be directly reachable from the machine running Nodvard Deck.
 - **Temporarily switching a server off** without losing the token: Proxmox or Backups page →
   "Manage connections" („Verbindungen verwalten“) → click the "active" („aktiv“) button (it
   changes to "disabled" („deaktiviert“)).
@@ -219,8 +225,9 @@ Good to know:
 ## Certificate: what "Allow self-signed certificate" does
 
 - Proxmox ships with a self-signed certificate. Nodvard Deck normally checks certificates
-  strictly, so with the default certificate every connection fails (error with
-  `CERTIFICATE_VERIFY_FAILED`).
+  strictly, so with the default certificate every connection fails ("Das Zertifikat von Proxmox wird nicht
+  akzeptiert. …" – the Proxmox certificate is not accepted; with a self-signed certificate, switch on "Allow
+  self-signed certificate" in the settings).
 - The checkbox (on the Proxmox page the column is called "Do not verify certificate"
   („Zertifikat nicht prüfen“))
   **turns the check off completely for exactly this connection**. Nodvard Deck cannot check against

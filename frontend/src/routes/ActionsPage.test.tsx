@@ -53,7 +53,7 @@ function loginAsAdmin() {
 
 /** approve antwortet mit 202 'executing', GET /actions/a1 liefert der
  * Reihe nach `pollStatuses` (der letzte bleibt stehen). */
-function mockBackgroundFetch(pollStatuses: Record<string, unknown>[], counters: { polls: number; lists: number }) {
+function mockBackgroundFetch(pollStatuses: Record<string, unknown>[], counters: { polls: number; lists: number }, base: Record<string, unknown> = PROPOSED_ACTION) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -61,14 +61,14 @@ function mockBackgroundFetch(pollStatuses: Record<string, unknown>[], counters: 
     if (url.endsWith("/api/v1/actions/a1") && method === "GET") {
       const body = pollStatuses[Math.min(counters.polls, pollStatuses.length - 1)];
       counters.polls += 1;
-      return new Response(JSON.stringify({ ...PROPOSED_ACTION, ...body }), { status: 200 });
+      return new Response(JSON.stringify({ ...base, ...body }), { status: 200 });
     }
     if (url.includes("/api/v1/actions") && method === "GET") {
       counters.lists += 1;
-      return new Response(JSON.stringify([PROPOSED_ACTION]), { status: 200 });
+      return new Response(JSON.stringify([base]), { status: 200 });
     }
     if (url.endsWith("/api/v1/actions/a1/approve") && method === "POST") {
-      return new Response(JSON.stringify({ ...PROPOSED_ACTION, status: "executing" }), { status: 202 });
+      return new Response(JSON.stringify({ ...base, status: "executing" }), { status: 202 });
     }
     throw new Error(`Unerwarteter Fetch: ${method} ${url}`);
   });
@@ -121,15 +121,15 @@ describe("ActionsPage", () => {
 
   it("zeigt bei „Vorgeschlagen von“ den Namen und die rohe Kennung nur als Tooltip", async () => {
     useAuthStore.setState({ accessToken: "tok", status: "authenticated", mfaToken: null, user: { id: "u1", username: "admin", display_name: null, email: null, is_owner: true, locale: "de", permissions: [] } });
-    const byExtension = { ...PROPOSED_ACTION, id: "a2", proposed_by_type: "extension", proposed_by_id: "nexus-soc", proposed_by_label: "Nodvard Shield" };
+    const byExtension = { ...PROPOSED_ACTION, id: "a2", proposed_by_type: "extension", proposed_by_id: "shield", proposed_by_label: "Nodvard Shield" };
     vi.stubGlobal("fetch", mockFetch(undefined, [PROPOSED_ACTION, byExtension]));
     render(<ActionsPage />);
 
     const name = await screen.findByText("nico");
     expect(name).toHaveAttribute("title", "user/u1");
-    expect(screen.getByText("Nodvard Shield")).toHaveAttribute("title", "extension/nexus-soc");
+    expect(screen.getByText("Nodvard Shield")).toHaveAttribute("title", "extension/shield");
     expect(screen.queryByText("user/u1")).not.toBeInTheDocument();
-    expect(screen.queryByText("extension/nexus-soc")).not.toBeInTheDocument();
+    expect(screen.queryByText("extension/shield")).not.toBeInTheDocument();
   });
 
   it("zeigt ohne aufgelösten Namen (älteres Backend, gelöschter Nutzer) den rohen Wert", async () => {
@@ -532,11 +532,11 @@ describe("ActionsPage", () => {
   });
 
   describe("mehrere Freigaben gleichzeitig", () => {
-    const A = { ...PROPOSED_ACTION, id: "a1", ext_id: "nexus-soc", action_type: "updates.apply", reason: "Updates", gate_decision: {}, result: {} };
+    const A = { ...PROPOSED_ACTION, id: "a1", ext_id: "shield", action_type: "updates.apply", reason: "Updates", gate_decision: {}, result: {} };
     const B = { ...PROPOSED_ACTION, id: "a2", action_type: "container.restart", reason: "Neustart", gate_decision: {}, result: {} };
 
     /** Freigabe von A haengt, bis der Test sie mit `releaseA` beantwortet; B scheitert sofort. */
-    function mockTwoFetch() {
+    function mockTwoFetch(a: Record<string, unknown> = A, b: Record<string, unknown> = B) {
       const state = { releaseA: (_res: Response) => {} };
       const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = typeof input === "string" ? input : input.toString();
@@ -546,10 +546,10 @@ describe("ActionsPage", () => {
           return new Promise<Response>((resolve) => { state.releaseA = resolve; });
         }
         if (url.endsWith("/api/v1/actions/a2/approve") && method === "POST") {
-          return new Response(JSON.stringify({ ...B, status: "failed", result: { success: false, error: "Container nicht gefunden" } }), { status: 200 });
+          return new Response(JSON.stringify({ ...b, status: "failed", result: { success: false, error: "Container nicht gefunden" } }), { status: 200 });
         }
-        if (url.includes("/api/v1/actions/a1") && method === "GET") return new Response(JSON.stringify({ ...A, status: "executing" }), { status: 200 });
-        if (url.includes("/api/v1/actions") && method === "GET") return new Response(JSON.stringify([A, B]), { status: 200 });
+        if (url.includes("/api/v1/actions/a1") && method === "GET") return new Response(JSON.stringify({ ...a, status: "executing" }), { status: 200 });
+        if (url.includes("/api/v1/actions") && method === "GET") return new Response(JSON.stringify([a, b]), { status: 200 });
         throw new Error(`Unerwarteter Fetch: ${method} ${url}`);
       });
       return { fetchMock, state };
@@ -600,6 +600,24 @@ describe("ActionsPage", () => {
       await waitFor(() => expect(screen.getAllByRole("button", { name: "Bestätigen" })[0]).not.toBeDisabled());
       expect(screen.getByText("container.restart: Fehlgeschlagen: Container nicht gefunden")).toBeInTheDocument();
       expect(screen.getByText("updates.apply: Fehler: Zeitüberschreitung")).toBeInTheDocument();
+    });
+
+    it("der späte Fehler der älteren Freigabe nennt die Aktion mit ihrem Namen", async () => {
+      loginAsAdmin();
+      const { fetchMock, state } = mockTwoFetch({ ...A, ext_name: "Nodvard Shield", action_label: "Updates einspielen" });
+      vi.stubGlobal("fetch", fetchMock);
+      render(<ActionsPage />);
+
+      await screen.findByText("Updates");
+      fireEvent.click(screen.getAllByRole("button", { name: "Bestätigen" })[0]!);
+      fireEvent.click(screen.getAllByRole("button", { name: "Bestätigen" })[1]!);
+      await screen.findByText("container.restart: Fehlgeschlagen: Container nicht gefunden");
+
+      await act(async () => {
+        state.releaseA(new Response(JSON.stringify({ detail: "Zeitüberschreitung" }), { status: 500 }));
+      });
+      expect(await screen.findByText("Updates einspielen: Fehler: Zeitüberschreitung")).toBeInTheDocument();
+      expect(screen.queryByText(/updates\.apply/)).toBeNull();
     });
 
     it("scheitert die ältere Freigabe erst nach einer neueren erfolgreichen, steht ihr Grund da, auch wenn ihre Zeile aus dem Filter fällt", async () => {
@@ -984,5 +1002,177 @@ describe("ActionsPage", () => {
       expect(await screen.findByText("2 verworfen")).toBeInTheDocument();
       expect(calls).toEqual(["/actions/b1/dismiss", "/actions/b3/dismiss"]);
     });
+  });
+});
+
+/**
+ * Namen statt Kennungen: das Backend liefert `ext_name` (Name der Erweiterung, auch zu einer alten Kennung einer
+ * umbenannten) und `action_label` (Name der Aktionsart) mit. Fehlt einer, steht seine rohe Kennung da.
+ */
+describe("ActionsPage: Namen statt Kennungen", () => {
+  const SHIELD_ACTION = {
+    ...PROPOSED_ACTION, id: "a1", ext_id: "shield", action_type: "nexus_soc.upgrade",
+    ext_name: "Nodvard Shield", action_label: "Updates einspielen", reason: "Updates", gate_decision: {}, result: {},
+  };
+
+  it("zeigt in der Tabelle Erweiterung und Aktion mit Namen, die Kennungen nur als Tooltip", async () => {
+    loginAsAdmin();
+    vi.stubGlobal("fetch", mockFetch(undefined, [SHIELD_ACTION]));
+    render(<ActionsPage />);
+
+    const title = await screen.findByText("Nodvard Shield · Updates einspielen");
+    expect(title).toHaveAttribute("title", "shield/nexus_soc.upgrade");
+    expect(screen.queryByText(/nexus_soc\.upgrade/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Auswählen: Nodvard Shield · Updates einspielen auf Proxmox-Knoten pve2" })).toBeInTheDocument();
+  });
+
+  it("ersetzt einen fehlenden Namen durch die Kennung", async () => {
+    loginAsAdmin();
+    const onlyExtension = { ...SHIELD_ACTION, id: "a1", action_label: null };
+    const onlyLabel = { ...SHIELD_ACTION, id: "a2", ext_name: null, reason: "Nur Aktion" };
+    vi.stubGlobal("fetch", mockFetch(undefined, [onlyExtension, onlyLabel]));
+    render(<ActionsPage />);
+
+    expect(await screen.findByText("Nodvard Shield · nexus_soc.upgrade")).toBeInTheDocument();
+    expect(screen.getByText("shield · Updates einspielen")).toBeInTheDocument();
+  });
+
+  it("ohne beide Namen (Erweiterung entfernt, älteres Backend) steht wie bisher ext_id/action_type da", async () => {
+    loginAsAdmin();
+    const { ext_name: _a, action_label: _b, ...plain } = SHIELD_ACTION;
+    vi.stubGlobal("fetch", mockFetch(undefined, [plain]));
+    render(<ActionsPage />);
+
+    const cell = await screen.findByText("shield/nexus_soc.upgrade");
+    expect(cell).not.toHaveAttribute("title");
+  });
+
+  it("Befehle von der Server-Seite (ext_id core) zeigen nur den Namen der Aktion, „core“ steht nur im Tooltip", async () => {
+    loginAsAdmin();
+    const fromHostPage = { ...SHIELD_ACTION, ext_id: "core", action_type: "shell.exec", action_label: "Shell-Befehl ausführen", ext_name: null };
+    vi.stubGlobal("fetch", mockFetch(undefined, [fromHostPage]));
+    render(<ActionsPage />);
+
+    const title = await screen.findByText("Shell-Befehl ausführen");
+    expect(title).toHaveAttribute("title", "core/shell.exec");
+    expect(screen.queryByText(/core ·/)).toBeNull();
+    expect(screen.getByRole("checkbox", { name: "Auswählen: Shell-Befehl ausführen auf Proxmox-Knoten pve2" })).toBeInTheDocument();
+  });
+
+  it("meldet das Ergebnis einer Freigabe mit dem Namen der Aktion", async () => {
+    loginAsAdmin();
+    vi.stubGlobal("fetch", mockFetch(undefined, [SHIELD_ACTION]));
+    render(<ActionsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Bestätigen" }));
+
+    expect(await screen.findByText("Updates einspielen: Ausgeführt")).toBeInTheDocument();
+    expect(screen.queryByText(/nexus_soc\.upgrade/)).toBeNull();
+  });
+
+  it("fragt beim Ablehnen und Verwerfen mit dem Namen der Aktion", async () => {
+    loginAsAdmin();
+    vi.stubGlobal("fetch", mockFetch(undefined, [SHIELD_ACTION]));
+    render(<><ActionsPage /><GlobalDialogs /></>);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Ablehnen" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent('Ablehnen von "Updates einspielen" – Begründung:');
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Verwerfen" }));
+    expect(await screen.findByRole("dialog")).toHaveTextContent('"Updates einspielen" verwerfen, ohne sie auszuführen?');
+  });
+
+  it("meldet „läuft im Hintergrund“ und danach das Ergebnis mit dem Namen der Aktion", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    loginAsAdmin();
+    const counters = { polls: 0, lists: 0 };
+    vi.stubGlobal("fetch", mockBackgroundFetch([
+      { status: "executing" },
+      { status: "failed", result: { success: false, error: "Paketquelle nicht erreichbar" } },
+    ], counters, SHIELD_ACTION));
+    render(<ActionsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Bestätigen" }));
+    expect(await screen.findByText(/^Updates einspielen: Läuft im Hintergrund/)).toBeInTheDocument();
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    await act(() => vi.advanceTimersByTimeAsync(3000));
+    expect(await screen.findByText("Updates einspielen: Fehlgeschlagen: Paketquelle nicht erreichbar")).toBeInTheDocument();
+    expect(screen.queryByText(/nexus_soc\.upgrade/)).toBeNull();
+  });
+
+  it("nennt die Aktion auch bei „wurde schon bestätigt“ und beim Aufgeben nach einer Stunde mit ihrem Namen", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    loginAsAdmin();
+    const counters = { polls: 0, lists: 0 };
+    const background = mockBackgroundFetch([{ status: "executing" }], counters, SHIELD_ACTION);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/approve") && init?.method === "POST") {
+        return new Response(JSON.stringify({ detail: "Vorschlag ist nicht mehr im Zustand 'proposed' (jetzt: 'executing')." }), { status: 409 });
+      }
+      return background(input, init);
+    }));
+    render(<ActionsPage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Bestätigen" }));
+    expect(await screen.findByText(/^Updates einspielen: Wurde schon bestätigt\. Läuft im Hintergrund/)).toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 3000));
+    expect(await screen.findByText(/^Updates einspielen: Läuft seit über einer Stunde/)).toBeInTheDocument();
+  });
+
+  it("zeigt in der Rückfrage zur Sammel-Freigabe den Namen der Aktion vor ihrem Befehl", async () => {
+    loginAsAdmin();
+    const withCommand = { ...SHIELD_ACTION, risk: "medium", payload: { command: "apt-get upgrade -y" } };
+    vi.stubGlobal("fetch", mockFetch(undefined, [withCommand]));
+    render(<><ActionsPage /><GlobalDialogs /></>);
+
+    await screen.findByText("Updates");
+    fireEvent.click(screen.getByLabelText("Alle auswählen"));
+    fireEvent.click(screen.getByRole("button", { name: "Ausgewählte freigeben (1)" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Updates einspielen auf Proxmox-Knoten pve2: apt-get upgrade -y");
+    expect(dialog).not.toHaveTextContent("nexus_soc.upgrade");
+  });
+
+  it("nennt bei einer Sammel-Freigabe, die an einer fehlenden Berechtigung scheitert, die Aktion mit Namen", async () => {
+    loginAsAdmin();
+    const row = { ...SHIELD_ACTION, risk: "medium" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      if (url.endsWith("/api/v1/actions/a1/approve?wait=0") && method === "POST") {
+        return new Response(JSON.stringify({ detail: "Berechtigung 'actions.approve:medium' fehlt." }), { status: 403 });
+      }
+      if (url.includes("/api/v1/actions") && method === "GET") return new Response(JSON.stringify([row]), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${method} ${url}`);
+    }));
+    render(<><ActionsPage /><GlobalDialogs /></>);
+
+    await screen.findByText("Updates");
+    fireEvent.click(screen.getByLabelText("Alle auswählen"));
+    fireEvent.click(screen.getByRole("button", { name: "Ausgewählte freigeben (1)" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Freigeben" }));
+
+    expect(await screen.findByText(/1 gesperrt: Nodvard Shield · Updates einspielen: Berechtigung 'actions\.approve:medium' fehlt\./)).toBeInTheDocument();
+  });
+
+  it("nennt in der Rückfrage zur Sammel-Freigabe die Aktion mit Namen", async () => {
+    loginAsAdmin();
+    const second = { ...SHIELD_ACTION, id: "a2", reason: "Noch mehr Updates", risk: "medium" };
+    vi.stubGlobal("fetch", mockFetch(undefined, [{ ...SHIELD_ACTION, risk: "medium" }, second]));
+    render(<><ActionsPage /><GlobalDialogs /></>);
+
+    await screen.findByText("Updates");
+    fireEvent.click(screen.getByLabelText("Alle auswählen"));
+    fireEvent.click(screen.getByRole("button", { name: "Ausgewählte freigeben (2)" }));
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent("Nodvard Shield · Updates einspielen ×2");
+    expect(dialog).not.toHaveTextContent("shield");
   });
 });

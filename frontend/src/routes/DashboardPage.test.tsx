@@ -31,6 +31,8 @@ const WIDGET_B = {
 };
 
 let layoutItems: unknown[];
+/** Jede gespeicherte Fassung des Layouts (PUT), die erste ist die der Auto-Platzierung. */
+let puts: unknown[][];
 
 /** Was tatsaechlich auf dem Dashboard steht -- entfernte Widgets bleiben als
  * `config.hidden` im gespeicherten Layout (siehe lib/dashboard.ts). */
@@ -55,6 +57,7 @@ function mockFetch(catalog: unknown[] = [WIDGET_A, WIDGET_B]) {
     if (url.endsWith("/api/v1/dashboard/layouts/layout-1") && method === "PUT") {
       const body = JSON.parse(init!.body as string);
       layoutItems = body.items;
+      puts.push(body.items);
       return new Response(
         JSON.stringify({ id: "layout-1", name: "Standard", is_default: true, items: layoutItems, created_at: "", updated_at: "" }),
         { status: 200 },
@@ -62,6 +65,9 @@ function mockFetch(catalog: unknown[] = [WIDGET_A, WIDGET_B]) {
     }
     if (url.endsWith("/api/v1/ext/backups/widgets/summary") && method === "GET") {
       return new Response(JSON.stringify({ data: { count: 2 }, meta: {} }), { status: 200 });
+    }
+    if (url.endsWith("/api/v1/ext/renamed/widgets/summary") && method === "GET") {
+      return new Response(JSON.stringify({ data: { count: 5 }, meta: {} }), { status: 200 });
     }
     if (url.endsWith("/api/v1/ext/proxmox/widgets/overview") && method === "GET") {
       return new Response(JSON.stringify({ data: { count: 7 }, meta: {} }), { status: 200 });
@@ -92,6 +98,7 @@ beforeEach(() => {
     { widget_id: "summary", ext_id: "backups", x: 0, y: 0, w: 2, h: 2, config: {} },
     { widget_id: "overview", ext_id: "proxmox", x: 2, y: 0, w: 2, h: 2, config: {} },
   ];
+  puts = [];
 });
 
 afterEach(() => {
@@ -250,6 +257,109 @@ describe("DashboardPage + WidgetPickerDialog", () => {
     await waitFor(() => expect(visible().map((i) => i.widget_id)).toEqual(["overview"]));
     expect(layoutItems).toHaveLength(2);
     expect(screen.queryByText("Jobs")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Eine umbenannte Erweiterung (`legacy_ext_ids` im Katalog): ihr Dashboard-Eintrag unter der alten Kennung
+ * zieht mit um, statt dass ihr Widget als neu unten angehaengt wird.
+ */
+describe("DashboardPage: Widgets einer umbenannten Erweiterung", () => {
+  const RENAMED = { ...WIDGET_A, ext_id: "renamed", legacy_ext_ids: ["old"] };
+  // Rechts oben (x=6, y=0): das Raster schiebt Karten nur nach oben/links zusammen, diese Stelle bleibt also stehen.
+  const OLD_ENTRY = { widget_id: "summary", ext_id: "old", x: 6, y: 0, w: 5, h: 3, config: { farbe: "blau" } };
+  const OTHER_ENTRY = { widget_id: "overview", ext_id: "proxmox", x: 0, y: 0, w: 2, h: 2, config: {} };
+
+  const hasRenamed = (items: unknown[]) => items.some((i) => (i as { ext_id: string }).ext_id === "renamed");
+  /** Die erste gespeicherte Fassung, in der das Widget unter der heutigen Kennung steht. Die Reihenfolge der Speichervorgänge
+   * ist nicht fest: das Raster meldet beim Einhängen zusätzlich sein eigenes Layout. */
+  async function savedWithRenamed(): Promise<unknown[]> {
+    await waitFor(() => expect(puts.some(hasRenamed)).toBe(true));
+    return puts.find(hasRenamed)!;
+  }
+
+  it("übernimmt Position, Größe und Einstellungen des alten Eintrags; der alte Eintrag bleibt in den Daten", async () => {
+    layoutItems = [OLD_ENTRY, OTHER_ENTRY];
+    vi.stubGlobal("fetch", mockFetch([RENAMED, WIDGET_B]));
+    renderDashboard();
+
+    expect(await screen.findByText("Jobs")).toBeInTheDocument();
+    expect(await savedWithRenamed()).toEqual([OLD_ENTRY, OTHER_ENTRY, { ...OLD_ENTRY, ext_id: "renamed" }]);
+    // Der Eintrag unter der alten Kennung bleibt für den Rückweg auf die alte Version erhalten, in jeder gespeicherten Fassung.
+    for (const saved of puts) expect(saved).toContainEqual(OLD_ENTRY);
+    // Das Widget steht genau einmal auf dem Dashboard: der alte Eintrag wird nicht gezeigt.
+    expect(screen.getAllByText("Backup-Center")).toHaveLength(1);
+    expect(screen.getAllByText("Jobs")).toHaveLength(1);
+    // Und es holt seine Daten unter der heutigen Kennung.
+    const urls = (fetch as unknown as { mock: { calls: unknown[][] } }).mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => url.endsWith("/api/v1/ext/renamed/widgets/summary"))).toBe(true);
+  });
+
+  it("ein dort entferntes Widget bleibt entfernt (config.hidden wird mitgenommen) und kommt nicht neu dazu", async () => {
+    layoutItems = [{ ...OLD_ENTRY, config: { hidden: true } }];
+    vi.stubGlobal("fetch", mockFetch([RENAMED]));
+    renderDashboard();
+
+    await screen.findByText(/Keine Widgets auf dem Dashboard/);
+    expect(await savedWithRenamed()).toEqual([
+      { ...OLD_ENTRY, config: { hidden: true } },
+      { ...OLD_ENTRY, ext_id: "renamed", config: { hidden: true } },
+    ]);
+    expect(screen.queryByText("Backup-Center")).toBeNull();
+  });
+
+  it("steht der Zwilling schon im Layout (nächstes Laden), kommt kein weiterer Eintrag dazu", async () => {
+    const twin = { ...OLD_ENTRY, ext_id: "renamed" };
+    layoutItems = [OLD_ENTRY, OTHER_ENTRY, twin];
+    vi.stubGlobal("fetch", mockFetch([RENAMED, WIDGET_B]));
+    renderDashboard();
+
+    await screen.findByText("Jobs");
+    await screen.findByText("Hosts");
+    expect(screen.getAllByText("Jobs")).toHaveLength(1);
+    for (const saved of puts) expect(saved).toHaveLength(3);
+    expect(layoutItems).toHaveLength(3);
+  });
+
+  it("bei mehreren früheren Kennungen gilt die Reihenfolge der Liste", async () => {
+    const mid = { ...OLD_ENTRY, ext_id: "mid", w: 4, h: 2, config: { aus: "mid" } };
+    layoutItems = [OLD_ENTRY, mid];
+    vi.stubGlobal("fetch", mockFetch([{ ...RENAMED, legacy_ext_ids: ["mid", "old"] }]));
+    renderDashboard();
+
+    await screen.findByText("Jobs");
+    expect(await savedWithRenamed()).toEqual([OLD_ENTRY, mid, { ...mid, ext_id: "renamed" }]);
+  });
+
+  it("nimmt aus mehreren Einträgen der alten Erweiterung den zum Widget gehörenden", async () => {
+    const andere = { widget_id: "andere", ext_id: "old", x: 6, y: 0, w: 4, h: 2, config: { aus: "andere" } };
+    layoutItems = [andere, OLD_ENTRY];
+    vi.stubGlobal("fetch", mockFetch([RENAMED]));
+    renderDashboard();
+
+    await screen.findByText("Jobs");
+    expect(await savedWithRenamed()).toEqual([andere, OLD_ENTRY, { ...OLD_ENTRY, ext_id: "renamed" }]);
+  });
+
+  it("nimmt keinen Eintrag mit gleicher widget_id von einer fremden Erweiterung (nicht in der Liste)", async () => {
+    const fremd = { ...OLD_ENTRY, ext_id: "fremd" };
+    layoutItems = [fremd];
+    vi.stubGlobal("fetch", mockFetch([RENAMED]));
+    renderDashboard();
+
+    await screen.findByText("Jobs");
+    // Neu platziert wie jedes neue Widget: ganz links, unter allem anderen, ohne die Einstellungen des fremden Eintrags.
+    expect(await savedWithRenamed()).toEqual([fremd, { widget_id: "summary", ext_id: "renamed", x: 0, y: 3, w: 2, h: 2, config: {} }]);
+  });
+
+  it("ohne `legacy_ext_ids` im Katalog (keine Umbenennung, älteres Backend) wird ein neues Widget wie bisher neu platziert", async () => {
+    layoutItems = [OLD_ENTRY];
+    const { legacy_ext_ids: _unused, ...withoutLegacy } = RENAMED;
+    vi.stubGlobal("fetch", mockFetch([withoutLegacy]));
+    renderDashboard();
+
+    await screen.findByText("Jobs");
+    expect(await savedWithRenamed()).toEqual([OLD_ENTRY, { widget_id: "summary", ext_id: "renamed", x: 0, y: 3, w: 2, h: 2, config: {} }]);
   });
 });
 

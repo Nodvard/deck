@@ -280,8 +280,10 @@ class CapabilitiesHandle:
     async def query(self, protocol: type) -> list[Any]:
         """Nur Capabilities von Extensions, die in `requires` deklariert sind
         (docs/02 §2: 'andere Extensions nur ueber ctx.events und deklarierte
-        requires')."""
-        return self._runtime.capabilities.query(protocol, allowed_ext_ids=self._allowed)
+        requires'). Eine alte Kennung in `requires` gilt fuer die umbenannte Erweiterung
+        (`legacy_ids`) -- aufgeloest erst hier, weil die andere Erweiterung spaeter laden kann."""
+        allowed = self._allowed | {self._runtime.canonical(ext_id) for ext_id in self._allowed}
+        return self._runtime.capabilities.query(protocol, allowed_ext_ids=allowed)
 
 
 class HostsHandle:
@@ -653,19 +655,21 @@ class SecretsHandle:
 
 
 class SettingsHandle:
-    def __init__(self, loaded: LoadedExtension, ext_id: str) -> None:
+    def __init__(self, loaded: LoadedExtension, ext_id: str, *, store_id: str | None = None) -> None:
         self._loaded = loaded
         self._ext_id = ext_id
+        # Die Registry-Zeile, in der die Einstellungen liegen (siehe `LoadedExtension.store_id`).
+        self._store_id = store_id or ext_id
         self._notifying = False
 
     def declare(self, schema: dict[str, Any]) -> None:
         self._loaded.settings_schema = schema
 
     async def get(self) -> dict[str, Any]:
-        from ..models import ExtensionRecord
+        from ..services.extensions import get_record
 
         async with session_scope() as session:
-            record = await session.get(ExtensionRecord, self._ext_id)
+            record = await get_record(session, self._store_id)
             return dict(record.settings) if record else {}
 
     async def set(self, values: dict[str, Any]) -> None:
@@ -673,10 +677,10 @@ class SettingsHandle:
         dieser Runde -- das braucht eine `jsonschema`-Abhaengigkeit, die noch niemand
         sonst im Projekt zieht. Persistiert unvalidiert; die Validierung nachzuruesten
         ist risikofrei moeglich (reiner Zusatz-Check vor dem Schreiben)."""
-        from ..models import ExtensionRecord
+        from ..services.extensions import get_record
 
         async with session_scope() as session:
-            record = await session.get(ExtensionRecord, self._ext_id)
+            record = await get_record(session, self._store_id)
             if record is not None:
                 record.settings = values
                 await session.flush()
@@ -724,10 +728,15 @@ class SchedulerHandle:
     protokollkonform. hello-world ruft entsprechend `await ctx.scheduler.
     register_job(...)` auf."""
 
-    def __init__(self, perm: _PermissionChecker, ext_id: str, runtime: ExtensionRuntime) -> None:
+    def __init__(
+        self, perm: _PermissionChecker, ext_id: str, runtime: ExtensionRuntime, *, store_id: str | None = None
+    ) -> None:
         self._perm = perm
         self._ext_id = ext_id
         self._runtime = runtime
+        # Jobs haengen an der Speicher-Kennung (`jobs.ext_id`, Handler-Bestand): nach einer Umbenennung
+        # laufen dieselben Jobzeilen samt Verlauf weiter.
+        self._store_id = store_id or ext_id
 
     async def register_job(self, spec: JobSpec) -> None:
         from ..services import jobs as jobs_service
@@ -736,16 +745,22 @@ class SchedulerHandle:
         self._perm.require("schedule.register")
         async with session_scope() as session:
             row = await jobs_service.upsert_job(
-                session, ext_id=self._ext_id, ext_job_key=spec.id, name=spec.name, kind="ext",
+                session, ext_id=self._store_id, ext_job_key=spec.id, name=spec.name, kind="ext",
                 schedule=spec.schedule, params=spec.params, enabled=spec.enabled,
             )
             job_id = row.id
 
-        self._runtime.scheduler.register(self._ext_id, spec.id, spec.handler)
+        self._runtime.scheduler.register(self._store_id, spec.id, spec.handler)
 
         async with session_scope() as session:
             job = await jobs_service.get_job(session, job_id)
             await get_scheduler_service().schedule(job, spec.handler)
+
+    def validate_schedule(self, schedule: str) -> None:
+        """Siehe SDK: dieselbe Pruefung wie beim Anmelden (`core.cron.cron_trigger`), ohne Nebenwirkung."""
+        from ..core.cron import cron_trigger
+
+        cron_trigger(schedule)
 
     async def trigger(self, job_id: str, **params: Any) -> str:
         """`job_id` ist `spec.id` (der von der Extension selbst gewaehlte Schluessel,
@@ -758,12 +773,12 @@ class SchedulerHandle:
         from nodvard_sdk.errors import NodvardError
 
         self._perm.require("schedule.register")
-        handler = self._runtime.scheduler.get(self._ext_id, job_id)
+        handler = self._runtime.scheduler.get(self._store_id, job_id)
         if handler is None:
             raise NodvardError(f"Job '{job_id}' ist für Extension '{self._ext_id}' nicht registriert.")
 
         async with session_scope() as session:
-            job = await jobs_service.get_job_by_key(session, ext_id=self._ext_id, ext_job_key=job_id)
+            job = await jobs_service.get_job_by_key(session, ext_id=self._store_id, ext_job_key=job_id)
         if job is None:
             raise NodvardError(f"Job '{job_id}' existiert nicht (mehr) in der DB.")
 
@@ -839,6 +854,18 @@ class NotifyHandle:
             return await notifications_service.would_suppress(session, payload)
 
 
+CORE_AUDIT_PREFIXES = ("mfa.", "auth.", "login.", "system.", "user.")
+"""Namensraeume im Protokoll, die nur der Kern beschreibt. Der Kern liest solche Eintraege wieder und
+entscheidet danach: `mfa.failed` und `auth.totp_check_failed` (`services.auth.CODE_FAILURE_ACTIONS`) holen beim
+Start die Sperre nach falschen Zwei-Faktor-Codes zurueck, ein gefaelschter Eintrag mit dem Konto als Ziel
+sperrte den Owner bis zu 24 Stunden aus; `login.failed`/`login.locked` bestimmen, welche Namen das Protokoll
+verbirgt (`services.audit.hide_typed_names`); `system.update.*` des Update-Helfers entscheidet, ob dessen Ergebnis
+schon festgehalten ist (`services.update_helper._already_logged`) und belegt, wer ein Update angestossen hat;
+`user.*` (`api/v1/users.py`: Konto angelegt, geaendert, geloescht, Zwei-Faktor zurueckgesetzt) ist die Spur der
+Kontenverwaltung -- ein gefaelschter Eintrag (mit `actor=` sogar im Namen eines Benutzers) verfaelschte, wer wann
+ein Konto oder Rechte geaendert hat. `AuditHandle.log()` lehnt diese Namen ab; Erweiterungen schreiben unter eigenem Namen (`<kennung>.<ereignis>`)."""
+
+
 class AuditHandle:
     def __init__(self, perm: _PermissionChecker, ext_id: str) -> None:
         self._perm = perm
@@ -858,8 +885,18 @@ class AuditHandle:
     ) -> None:
         """`actor` (D-15): der Mensch hinter dem Klick, aus `ctx.api.current_actor`. Dann
         steht ER im Audit-Log, die Extension nur als `detail.via` -- sonst wie bisher
-        die Extension selbst."""
+        die Extension selbst.
+
+        Aktionen aus `CORE_AUDIT_PREFIXES` (`mfa.`, `auth.`, `login.`, `system.`, `user.`) schreibt nur der Kern:
+        `ValueError`, nichts wird geschrieben. Gross-/Kleinschreibung und umgebende Leerzeichen zaehlen
+        nicht (die Abfrage des Kerns unterscheidet Schreibweisen teils nicht)."""
         self._perm.require("audit.write")
+        if str(action).strip().casefold().startswith(CORE_AUDIT_PREFIXES):
+            raise ValueError(
+                f"Die Aktion '{str(action)[:60]}' ist dem Kern vorbehalten (Namen mit "
+                f"{', '.join(repr(p) for p in CORE_AUDIT_PREFIXES)} am Anfang). Eine Erweiterung schreibt "
+                "Einträge unter eigenem Namen, etwa '<kennung>.<ereignis>'."
+            )
         actor_type, actor_id = "extension", self._ext_id
         if actor is not None and getattr(actor, "type", None) is not None:
             actor_type = getattr(actor.type, "value", str(actor.type))
@@ -881,18 +918,28 @@ class AuditHandle:
 
 
 class WsHandle:
-    def __init__(self, ext_id: str) -> None:
+    def __init__(self, ext_id: str, legacy_ids: Callable[[], Sequence[str]] | None = None) -> None:
         self._ext_id = ext_id
+        # Alte Kennungen (`legacy_ids`), bei jedem Senden nach dem letzten Scan gefragt (`ExtensionRuntime.legacy_ids_of`).
+        self._legacy_ids = legacy_ids
 
     async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
+        """Sendet auf `ext.<Kennung>.<Kanal>` und, nach einer Umbenennung, genauso auf den Kanaelen der alten
+        Kennungen: eine noch offene Seite mit altem Katalog (`ws_channel` eines Widgets) hat ihren Kanal unter der
+        alten Kennung abonniert und bekommt so weiter ihre Nachrichten."""
         from ..core.ws_hub import get_ws_hub
 
-        await get_ws_hub().publish(f"ext.{self._ext_id}.{channel}", payload)
+        hub = get_ws_hub()
+        for ext_id in (self._ext_id, *(self._legacy_ids() if self._legacy_ids else ())):
+            await hub.publish(f"ext.{ext_id}.{channel}", payload)
 
 
 class ConnectorsHandle:
-    def __init__(self, ext_id: str) -> None:
+    def __init__(self, ext_id: str, *, own_ids: Sequence[str] = ()) -> None:
         self._ext_id = ext_id
+        # Instanzen liegen unter der Kennung, mit der sie angelegt wurden: nach einer Umbenennung
+        # (`legacy_ids`) also auch unter den alten. Ohne alte Kennungen genau `{ext_id}`.
+        self._own_ids = sorted({ext_id, *own_ids})
         self._types: dict[str, ConnectorType] = {}
 
     def register_type(self, connector_type: ConnectorType) -> None:
@@ -902,7 +949,7 @@ class ConnectorsHandle:
         from ..models import ConnectorInstance
 
         async with session_scope() as session:
-            stmt = select(ConnectorInstance).where(ConnectorInstance.ext_id == self._ext_id)
+            stmt = select(ConnectorInstance).where(ConnectorInstance.ext_id.in_(self._own_ids))
             if type_id:
                 stmt = stmt.where(ConnectorInstance.type_id == type_id)
             result = await session.execute(stmt)
@@ -922,11 +969,17 @@ class ActionsHandle:
     weil nur es die GRANTED_PERMISSIONS der jeweiligen Extension kennt; das Gate selbst
     kennt keine Extensions, nur Aktionen (Schritte 3-6)."""
 
-    def __init__(self, perm: _PermissionChecker, ext_id: str, runtime: ExtensionRuntime, settings: Any) -> None:
+    def __init__(
+        self, perm: _PermissionChecker, ext_id: str, runtime: ExtensionRuntime, settings: Any,
+        *, own_ids: Sequence[str] = (),
+    ) -> None:
         self._perm = perm
         self._ext_id = ext_id
         self._runtime = runtime
         self._settings = settings
+        # Kennungen, unter denen DIESE Erweiterung Aktionen vorgeschlagen hat: die heutige und nach
+        # einer Umbenennung auch die alten (`legacy_ids`, Speicher-Kennung). Neue tragen die heutige.
+        self._own_ids = sorted({ext_id, *own_ids})
 
     def register(self, spec: ActionSpec) -> None:
         self._runtime.actions.register(self._ext_id, spec)
@@ -976,7 +1029,7 @@ class ActionsHandle:
         `correlation_id` (z. B. alle Laeufe eines Skripts) -- wie `result()` nie fremde."""
         from sqlalchemy import select
 
-        stmt = select(Action).where(Action.ext_id == self._ext_id)
+        stmt = select(Action).where(Action.ext_id.in_(self._own_ids))
         if correlation_id is not None:
             stmt = stmt.where(Action.correlation_id == correlation_id)
         stmt = stmt.order_by(Action.created_at.desc()).limit(max(1, min(limit, 200)))
@@ -1000,7 +1053,7 @@ class ActionsHandle:
         out = {row.id: raw_actor(row.proposed_by_type, row.proposed_by_id) for row in rows}
         if not out:
             return {}
-        stmt = select(Action).where(Action.id.in_(list(out)), Action.ext_id == self._ext_id)
+        stmt = select(Action).where(Action.id.in_(list(out)), Action.ext_id.in_(self._own_ids))
         async with session_scope() as session:
             own = list((await session.execute(stmt)).scalars().all())
             labels = await load_actor_labels(session, own, viewer=None)
@@ -1014,7 +1067,7 @@ class ActionsHandle:
         Cross-Extension-Sicht ausser ueber `requires`+Capabilities)."""
         async with session_scope() as session:
             row = await session.get(Action, action_id)
-            if row is None or row.ext_id != self._ext_id:
+            if row is None or row.ext_id not in self._own_ids:
                 return None
             return row
 
@@ -1099,7 +1152,12 @@ class HttpHandle:
     Schreibweisen) werden also nicht gelesen. Die Zielpruefung oben sieht nur die URL; ginge
     die Anfrage ueber einen Proxy aus der Umgebung, bekaeme dieser den Header
     `Authorization` und das Ziel, ohne dass die Erweiterung dafuer freigegeben wurde. Die
-    Verbindung geht immer direkt zum geprueften Ziel."""
+    Verbindung geht immer direkt zum geprueften Ziel.
+
+    **Keine Weiterleitungen:** der Client folgt keiner 3xx-Antwort (httpx-Vorgabe) und `follow_redirects=True`
+    wird nicht durchgereicht, sondern mit `ValueError` abgelehnt -- bei `get()`, `post()`, `request()` und
+    `stream()`, auch mit `insecure_tls`. Die Zielpruefung kennt nur die Adresse des Aufrufs; das Ziel einer
+    Weiterleitung hat sie nie gesehen (`websocket()` verhaelt sich ebenso)."""
 
     def __init__(self, perm: _PermissionChecker, granted_permissions: list[str]) -> None:
         self._perm = perm
@@ -1138,16 +1196,37 @@ class HttpHandle:
             self._insecure_client = httpx.AsyncClient(transport=_direct_transport(verify=False))
         return self._insecure_client
 
+    @staticmethod
+    def _refuse_redirects(kwargs: dict[str, Any]) -> None:
+        """Weiterleitungen folgt der Handle nie. `_require_target_allowed()` sieht nur die Adresse des Aufrufs;
+        folgte httpx einer 3xx-Antwort (`follow_redirects=True`), ginge die naechste Anfrage an ein Ziel, das
+        die Pruefung nie gesehen hat -- ein Server koennte eine Erweiterung so auf eine Adresse ausserhalb
+        ihrer `net.outbound:<cidr>`-Bereiche lenken (samt `Authorization`-Header). Ein Aufruf mit
+        `follow_redirects=True` scheitert deshalb sofort, bevor etwas gesendet wird, auch mit `insecure_tls`
+        und bei `stream()`. Ohne die Angabe, mit `False` oder mit `httpx.USE_CLIENT_DEFAULT` (= `False`)
+        kommt die 3xx-Antwort unveraendert zurueck, die Erweiterung entscheidet dann selbst, was sie damit tut."""
+        value = kwargs.get("follow_redirects", False)
+        if value is httpx.USE_CLIENT_DEFAULT or not value:
+            return
+        raise ValueError(
+            "ctx.http folgt keinen Weiterleitungen, follow_redirects=True ist nicht erlaubt: das Ziel einer "
+            "Weiterleitung würde nie gegen die erlaubten Adressen (net.outbound) geprüft. Eine Antwort mit "
+            "Status 3xx kommt unverändert zurück; die Erweiterung fragt die neue Adresse selbst ab."
+        )
+
     async def get(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
         self._require_target_allowed(url)
+        self._refuse_redirects(kwargs)
         return await self._client_for(insecure_tls=insecure_tls).get(url, **kwargs)
 
     async def post(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
         self._require_target_allowed(url)
+        self._refuse_redirects(kwargs)
         return await self._client_for(insecure_tls=insecure_tls).post(url, **kwargs)
 
     async def request(self, method: str, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
         self._require_target_allowed(url)
+        self._refuse_redirects(kwargs)
         return await self._client_for(insecure_tls=insecure_tls).request(method, url, **kwargs)
 
     def stream(self, method: str, url: str, *, insecure_tls: bool = False, **kwargs: Any):  # noqa: ANN201 - httpx.AsyncClient.stream()s eigener Typ
@@ -1165,6 +1244,7 @@ class HttpHandle:
         genau wie `get`/`post`/`request` es fuer die nicht-streamende Variante schon
         sind -- deshalb sofort ergaenzt statt zurueckgestellt."""
         self._require_target_allowed(url)
+        self._refuse_redirects(kwargs)
         return self._client_for(insecure_tls=insecure_tls).stream(method, url, **kwargs)
 
     def websocket(
@@ -1243,7 +1323,9 @@ class DbHandle:
     ist eine Vertrauens-, keine Sandbox-Grenze, genau wie `ctx.exec` fuer
     Extension-Code generell (docs/02 §3: Extensions sind vertrauenswuerdiger Code)."""
 
-    def __init__(self, ext_id: str, table_prefix: str) -> None:
+    def __init__(self, ext_id: str, table_prefix: str | tuple[str, ...]) -> None:
+        """`table_prefix`: ein Praefix oder mehrere (`ExtensionManifest.table_prefixes`: nach einer
+        Umbenennung zusaetzlich die der alten Kennungen)."""
         self._ext_id = ext_id
         self._table_prefix = table_prefix
 
@@ -1334,6 +1416,10 @@ def build_context(
     ext_data_dir: Path,
     settings: Any,
 ) -> Context:
+    """Einstellungen und Jobs haengen an der Speicher-Kennung `loaded.store_id` (nach einer Umbenennung
+    die Zeile der alten Kennung, sonst die Kennung). Alles andere (Routen, Seiten, Aktionen, Meldungen,
+    Protokoll, Logger) laeuft immer unter der Kennung `manifest.id`."""
+    store = loaded.store_id or manifest.id
     perm = _PermissionChecker(manifest.id, granted_permissions)
     ext_data_dir.mkdir(parents=True, exist_ok=True)
     return Context(
@@ -1342,19 +1428,19 @@ def build_context(
         data_dir=PurePosixPath(str(ext_data_dir)),
         api=ApiHandle(loaded),
         ui=UiHandle(runtime, manifest.id),
-        connectors=ConnectorsHandle(manifest.id),
+        connectors=ConnectorsHandle(manifest.id, own_ids=[store, *manifest.legacy_ids]),
         capabilities=CapabilitiesHandle(runtime, manifest.id, manifest.requires),
-        actions=ActionsHandle(perm, manifest.id, runtime, settings),
+        actions=ActionsHandle(perm, manifest.id, runtime, settings, own_ids=[store, *manifest.legacy_ids]),
         hosts=HostsHandle(perm, manifest.id),
         exec=ExecHandle(perm, settings),
         secrets=SecretsHandle(perm, manifest.id, settings),
-        settings=SettingsHandle(loaded, manifest.id),
-        scheduler=SchedulerHandle(perm, manifest.id, runtime),
+        settings=SettingsHandle(loaded, manifest.id, store_id=store),
+        scheduler=SchedulerHandle(perm, manifest.id, runtime, store_id=store),
         events=EventsHandle(manifest.id),
         notify=NotifyHandle(perm, manifest.id),
         audit=AuditHandle(perm, manifest.id),
-        ws=WsHandle(manifest.id),
-        db=DbHandle(manifest.id, manifest.table_prefix),
+        ws=WsHandle(manifest.id, lambda: runtime.legacy_ids_of(manifest.id)),
+        db=DbHandle(manifest.id, manifest.table_prefixes),
         http=HttpHandle(perm, granted_permissions),
         logger=logging.getLogger(f"nodvard_deck.ext.{manifest.id}"),
         _loaded=loaded,

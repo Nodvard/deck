@@ -17,6 +17,11 @@ Szenario, vor dem `is_owner` schon schuetzt. Das eigene Konto kann sich niemand
 ueber `DELETE /users/{id}` selbst entziehen (verhindert versehentliches
 Selbst-Aussperren mitten in einer Session).
 
+**Protokoll:** Anlegen, Aendern und Loeschen eines Kontos stehen im Audit-Protokoll
+(`user.created`, `user.updated`, `user.deleted`, dazu `user.2fa_reset`). Bei einer Aenderung
+nennt `detail` nur, was sich geaendert hat; Passwort, E-Mail-Adresse und Anzeigename stehen
+nie mit Wert darin.
+
 **Rollen-Zuweisung, D-12-sicher (docs/00-DECISIONS.md):** bei einem BRANDNEUEN
 `User` wird `.roles` als normale Python-Liste gesetzt, BEVOR das Objekt der
 Session uebergeben wird (unkritisch -- das ORM hat die Collection noch nicht
@@ -29,6 +34,7 @@ das etablierte, bereits mehrfach bewiesene Muster (`ensure_builtin_roles()`,
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field, field_validator
@@ -119,6 +125,17 @@ async def _resolve_roles(session: SessionDep, role_ids: list[str]) -> list[Role]
     return list(rows)
 
 
+async def _audit_user(
+    session: SessionDep, actor: User, action: str, target: User, detail: dict[str, Any]
+) -> None:
+    """Eine Zeile im Protokoll zu einem Konto (`user.created`, `user.updated`, `user.deleted`).
+    Wer handelt, ist `actor`. Passwoerter und E-Mail-Adressen stehen nie in `detail`."""
+    await audit_service.log(
+        session, actor_type="user", actor_id=actor.id, action=action, outcome="success",
+        target_type="user", target_id=target.id, detail=detail,
+    )
+
+
 @router.get("/roles", dependencies=[Depends(require_permission("users.read"))])
 async def list_roles(session: SessionDep) -> list[RoleOut]:
     rows = (await session.execute(select(Role).order_by(Role.name))).scalars().all()
@@ -140,7 +157,7 @@ async def get_user(user_id: str, session: SessionDep) -> UserOut:
 
 
 @router.post("/users", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("users.write"))])
-async def create_user(payload: UserCreate, session: SessionDep) -> UserOut:
+async def create_user(payload: UserCreate, session: SessionDep, current_user: CurrentUser) -> UserOut:
     existing = (await session.execute(select(User).where(func.lower(User.username) == payload.username))).scalar_one_or_none()
     if existing is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=f"Benutzername '{payload.username}' existiert bereits.")
@@ -155,6 +172,10 @@ async def create_user(payload: UserCreate, session: SessionDep) -> UserOut:
     user.roles = roles
     session.add(user)
     await session.flush()
+    await _audit_user(
+        session, current_user, "user.created", user,
+        {"username": user.username, "roles": sorted(r.name for r in roles)},
+    )
     return _user_out(user)
 
 
@@ -185,11 +206,21 @@ async def update_user(
                 detail="Das Passwort des Inhabers kann nur der Inhaber selbst ändern (unter „Mein Konto“). Notfalls geht es auf dem Server mit dem Notfall-Befehl.",
             )
 
+    # Was sich wirklich aendert, steht danach im Protokoll (E-Mail und Anzeigename nur als
+    # "geaendert", nie mit Wert; das Passwort nur als Merker `password_reset`).
+    changes: dict[str, Any] = {}
+    old_role_names = sorted(r.name for r in user.roles)
     if payload.display_name is not None:
+        if payload.display_name != user.display_name:
+            changes["display_name_changed"] = True
         user.display_name = payload.display_name
     if payload.email is not None:
+        if payload.email != user.email:
+            changes["email_changed"] = True
         user.email = payload.email
     if payload.is_active is not None:
+        if payload.is_active != user.is_active:
+            changes["is_active"] = {"old": user.is_active, "new": payload.is_active}
         user.is_active = payload.is_active
     if payload.is_active is False:
         # Alle Anmeldungen enden mit dem Deaktivieren. Sonst wuerden die alten Geraete (Cookie,
@@ -204,6 +235,9 @@ async def update_user(
 
     if payload.role_ids is not None:
         roles = await _resolve_roles(session, payload.role_ids)
+        new_role_names = sorted(r.name for r in roles)
+        if old_role_names != new_role_names:
+            changes["roles"] = {"old": old_role_names, "new": new_role_names}
         # Bereits persistenter User -- KEIN `.roles`-Zugriff zum Schreiben
         # (D-12), stattdessen die Assoziationstabelle direkt beschreiben.
         await session.execute(user_roles.delete().where(user_roles.c.user_id == user.id))
@@ -213,6 +247,11 @@ async def update_user(
 
     await session.flush()
     await refresh_relationships(session, user, "roles")
+    if changes or payload.password is not None:
+        await _audit_user(
+            session, current_user, "user.updated", user,
+            {"username": user.username, "password_reset": payload.password is not None, **changes},
+        )
     return _user_out(user)
 
 
@@ -225,6 +264,10 @@ async def delete_user(user_id: str, current_user: CurrentUser, session: SessionD
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Der Owner-Account kann nicht gelöscht werden.")
     if user.id == current_user.id:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Das eigene Konto kann nicht über diese API gelöscht werden.")
+    await _audit_user(
+        session, current_user, "user.deleted", user,
+        {"username": user.username, "roles": sorted(r.name for r in user.roles)},
+    )
     await settings_service.delete_user_settings(session, user.id)
     await session.delete(user)
 

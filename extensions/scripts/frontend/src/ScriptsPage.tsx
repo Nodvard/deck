@@ -373,6 +373,36 @@ export function StandingApprovalPanel({
   );
 }
 
+/** Wie Parameter im Skript stehen und was mit `$` passiert (params.py im Backend): Ersetzt
+ * werden nur deklarierte Parameter, `$$` wird zu einem `$`, alles andere bleibt. */
+export function ParamsHint({ names }: { names: string[] }): JSX.Element {
+  const code = "rounded bg-white/[0.06] px-1 font-mono text-[11px] text-white/75";
+  return (
+    <p className="mt-2 flex items-start gap-1.5 text-xs text-white/55" data-testid="params-hint">
+      <Icon name="code" size={12} className="mt-0.5 flex-none" />
+      <span>
+        {names.length > 0 && (
+          <>
+            Parameter dieses Skripts:{" "}
+            {names.map((n, i) => (
+              <span key={n}>{i > 0 && ", "}<code className={code}>{`$${n}`}</code></span>
+            ))}
+            .{" "}
+          </>
+        )}
+        Parameter schreibst du als <code className={code}>$name</code> oder <code className={code}>{"${name}"}</code>,
+        ohne Anführungszeichen drumherum – das Dashboard setzt den Wert schon sicher ein. Alles andere mit{" "}
+        <code className={code}>$</code> (z. B.{" "}
+        <code className={code}>$HOME</code>, <code className={code}>{'"$f"'}</code>, <code className={code}>$(date)</code>)
+        bleibt, wie es ist. Nur <code className={code}>$$</code> wird zu einem einzelnen <code className={code}>$</code>:
+        Für ein <code className={code}>$</code> direkt vor einem Parameternamen schreibst du{" "}
+        <code className={code}>$$</code>, für die Prozessnummer <code className={code}>$$</code> schreibst du{" "}
+        <code className={code}>$$$$</code>.
+      </span>
+    </p>
+  );
+}
+
 function targetLabel(target: ScriptOut["target"], hosts: HostRow[], groups: { id: string; name: string }[]): string {
   if (target.kind === "all") return "Alle Server";
   if (target.kind === "group") return groups.find((g) => g.id === target.group_id)?.name ?? "Gruppe";
@@ -856,6 +886,7 @@ export function ScriptsPage(): JSX.Element {
                     onChange={(e) => setDraft({ ...draft, content: e.target.value })}
                   />
                 </div>
+                <ParamsHint names={Object.keys(draft.params_schema ?? {})} />
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
                   <Button variant="primary" disabled={busy || missingTarget !== null} onClick={() => void save()}>Speichern</Button>

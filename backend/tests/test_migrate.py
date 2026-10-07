@@ -45,7 +45,7 @@ def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: P
     location_names = {str(loc).replace("\\", "/") for loc in locations}
     assert any(name.endswith("extensions/inventory/migrations/versions") for name in location_names)
     assert any(name.endswith("extensions/documents/migrations/versions") for name in location_names)
-    assert any(name.endswith("extensions/nexus-soc/migrations/versions") for name in location_names)
+    assert any(name.endswith("extensions/shield/migrations/versions") for name in location_names)
 
     db = sqlite3.connect(str(tmp_path / "test.db"))
     try:
@@ -67,9 +67,9 @@ def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: P
         assert {
             "ext_documents_tags", "ext_documents_documents", "ext_documents_document_tags",
         } <= tables
-        # Vorfalls-Historie: nexus-soc hat jetzt ebenfalls einen eigenen Branch.
+        # Vorfalls-Historie: Nodvard Shield hat jetzt ebenfalls einen eigenen Branch (Label bleibt `nexus-soc`, Tabellen `ext_nexus_soc_*`).
         assert "ext_nexus_soc_incidents" in tables
-        # Virenschutz: zweite nexus-soc-Revision auf demselben Branch.
+        # Virenschutz: zweite Shield-Revision auf demselben Branch.
         assert {"ext_nexus_soc_scans", "ext_nexus_soc_findings", "ext_nexus_soc_audits"} <= tables
         assert {"ext_nexus_soc_update_runs", "ext_nexus_soc_baselines", "ext_nexus_soc_events"} <= tables
         cols = {r[1] for r in db.execute("PRAGMA table_info(ext_nexus_soc_update_runs)").fetchall()}
@@ -90,7 +90,7 @@ def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: P
         # exakten Wert -- der wandert mit jeder neuen Kern-Migration, unabhaengig
         # vom hier getesteten Multi-Branch-Mechanismus.
         assert len(heads) == 4
-        # nexus-soc: b8c9d0e1f2a3 (dauerhafte Vorfalls-Warteschlange) auf a7b8c9d0e1f2
+        # Shield (Branch-Label `nexus-soc`): b8c9d0e1f2a3 (dauerhafte Vorfalls-Warteschlange) auf a7b8c9d0e1f2
         # (remote_id der Update-Laeufe).
         assert {"a1b2c3d4e5f6", "9f1e2d3c4b5a", "b8c9d0e1f2a3"} <= heads
     finally:
@@ -117,3 +117,39 @@ def test_upgrade_heads_is_idempotent(tmp_path: Path, monkeypatch):
 
     upgrade_heads()
     upgrade_heads()  # darf nicht werfen
+
+
+def _repo_with_extensions(root: Path, folders: dict[str, str]) -> Path:
+    """Ein kleiner Repo-Baum: `extensions/<ordner>/migrations/versions/0001_x.py` mit je einer Revision."""
+    (root / "backend" / "migrations" / "versions").mkdir(parents=True)
+    for folder, revision in folders.items():
+        versions = root / "extensions" / folder / "migrations" / "versions"
+        versions.mkdir(parents=True)
+        (versions / "0001_x.py").write_text(
+            f'revision = "{revision}"\ndown_revision = None\nbranch_labels = ("{folder}",)\n', encoding="utf-8"
+        )
+    return root
+
+
+def test_same_revision_in_two_extension_folders_gives_a_clear_message(tmp_path: Path):
+    """Liegt nach einer Umbenennung der alte Ordner noch neben dem neuen, stehen dieselben Migrationen
+    zweimal da. Statt der unverstaendlichen Alembic-Meldung nennt der Start beide Ordner und sagt, was zu tun ist."""
+    from nodvard_deck import migrate
+
+    root = _repo_with_extensions(tmp_path, {"old-ext": "aaaa11112222", "renamed-ext": "aaaa11112222", "other": "bbbb3333"})
+
+    with pytest.raises(migrate.DuplicateRevisions) as raised:
+        migrate.known_revisions(root)
+    message = str(raised.value)
+    assert "„old-ext“ und „renamed-ext“" in message and "alten Ordner" in message
+    assert str(tmp_path) not in message, "die Meldung kommt auf die Notseite: ohne Pfade"
+    with pytest.raises(migrate.DuplicateRevisions):
+        migrate.alembic_config("sqlite:///x.db", repo_root=root)
+
+
+def test_distinct_revisions_in_extension_folders_are_fine(tmp_path: Path):
+    from nodvard_deck import migrate
+
+    root = _repo_with_extensions(tmp_path, {"old-ext": "aaaa11112222", "other": "bbbb3333"})
+    _cfg, locations = migrate.alembic_config(repo_root=root)
+    assert [p.parent.parent.name for p in locations[1:]] == ["old-ext", "other"]

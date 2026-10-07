@@ -6,19 +6,29 @@
  * - Schalter „täglich suchen“ und Kanal (`system.update_check.enabled`/`.channel`) nur mit `settings.write`.
  *   Solange gesucht oder gespeichert wird, sind Schalter, Kanal und Knopf gesperrt: Sonst überschriebe die
  *   Antwort der einen Anfrage das Ergebnis der anderen.
- * - Reiter mit Anleitungen je Umgebung. Eingespielt wird nicht von hier: das macht die Umgebung selbst
- *   (Compose, Portainer …). Vor einem Umbau der Datenbank legt Nodvard Deck beim Start eine Kopie an (nur bei
- *   SQLite, der Standard-Datenbank). `GET /system/info` (freiwillig, ohne Fehlermeldung) liefert dazu die Datenbank
- *   und die Kopien vor Updates; daraus kommt nach einem Update die Version von vorher für den Rückweg.
+ * - Update-Helfer (`GET /system/updates/helper`, lib/updater.ts): sein Zustand (nicht eingerichtet, bereit, nicht
+ *   bereit, antwortet nicht) und der Knopf „Jetzt aktualisieren“. Den gibt es nur, wenn alles passt: Helfer bereit,
+ *   Update verfügbar, offizielles Image, fertige Version (keine Vorabversion), Version nicht fest eingetragen, das
+ *   Tag der Compose-Datei passt zur Version, du bist der Owner (wie im Backend), und du bist nicht gerade per Rückweg
+ *   von genau dieser Version gekommen (die sperrt der Helfer 24 Stunden). Sonst steht da, warum nicht, wo das
+ *   weiterhilft. Danach Fortschritt und Ergebnis (UpdateHelper.tsx); den Rückweg bietet „Kopien vor Updates“. Bei einem
+ *   selbst gebauten Image lädt die Karte nicht ein, den Helfer einzurichten: Er arbeitet nur mit dem offiziellen.
+ * - Reiter mit Anleitungen je Umgebung, für alle ohne Helfer (Compose, Portainer …). Vor einem Umbau der Datenbank
+ *   legt Nodvard Deck beim Start eine Kopie an (nur bei SQLite, der Standard-Datenbank). `GET /system/info`
+ *   (freiwillig, ohne Fehlermeldung) liefert dazu die Datenbank und die Kopien vor Updates; daraus kommt nach einem
+ *   Update die Version von vorher für den Rückweg.
  */
 import { ArrowUpCircle, CheckCircle2, ExternalLink, Info, RefreshCw, WifiOff } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { api } from "../../lib/api";
 import { formatWhen } from "../../lib/backups";
+import { requestUpdate, tagFitsVersion, useUpdateHelper, type HelperView } from "../../lib/updater";
 import { useAuthStore } from "../../state/auth";
 import type { PreUpdateCopy } from "./UpdateCopiesCard";
+import { ConfirmForm, FollowPanel, HelperStatusLine, LastResultLine, formatUnix, useHelperView } from "./UpdateHelper";
 import { Button, Card, NoticeLine, Toggle, errorText, inputClass, type Notice } from "./ui";
+import { HELPER_CODE_TEXTS } from "./updaterTexts";
 
 export interface UpdateStatus {
   current: string;
@@ -221,6 +231,110 @@ function previousVersion(info: SystemInfo | null, current: string): string | nul
   return copy?.from_version && copy.from_version !== current ? copy.from_version : null;
 }
 
+/**
+ * Gibt es den Knopf „Jetzt aktualisieren“? `{ ok: true }` oder der Grund dagegen -- als Satz nur, wo er weiterhilft
+ * (`why: null`: es gibt nichts zu tun oder die Zeile zum Helfer sagt schon alles).
+ */
+export function applyBlock(status: UpdateStatus, view: HelperView | null, isOwner: boolean): { ok: true } | { ok: false; why: string | null } {
+  const target = status.available ? status.latest : null;
+  if (!target || !view?.present || !view.ready || !view.target) return { ok: false, why: null };
+  if (!status.official_image) return { ok: false, why: null }; // sagt der Absatz zum selbst gebauten Image
+  if (isPrerelease(target)) {
+    return { ok: false, why: "Vorabversionen spielt der Update-Helfer nicht ein. Nimm dafür die Anleitung unten." };
+  }
+  if (view.target.pinned || !view.target.floating_tag) return { ok: false, why: HELPER_CODE_TEXTS.pinned_version };
+  if (!tagFitsVersion(view.target.floating_tag, target)) {
+    const [major, minor] = target.split(".");
+    return {
+      ok: false,
+      why: `In der Compose-Datei steht die Reihe „:${view.target.floating_tag}“, Version ${target} kommt darüber nicht. Trag „:latest“ (oder „:${major}.${minor}“) ein und führ „docker compose up -d“ aus.`,
+    };
+  }
+  if (!isOwner) return { ok: false, why: "Per Knopf aktualisieren kann nur der Inhaber dieser Installation (Owner)." };
+  const blockedUntil = blockedAfterRollback(view, target);
+  if (blockedUntil !== null) {
+    return {
+      ok: false,
+      why: `Von Version ${target} bist du vor Kurzem zurückgegangen. Der Update-Helfer spielt sie deshalb erst ab ${formatUnix(blockedUntil)} wieder ein.`,
+    };
+  }
+  return { ok: true };
+}
+
+/** So lange sperrt der Helfer nach einem Rückweg die verlassene Version (`blocked_version`, policy.BLOCK_AFTER_ROLLBACK_S). */
+export const BLOCK_AFTER_ROLLBACK_S = 24 * 3600;
+
+/**
+ * Bis wann (Unix-Zeit) der Helfer `target` sperrt, wenn der letzte Vorgang genau der Rückweg von dieser Version war;
+ * sonst `null`. So kostet der Versuch kein Passwort und keinen Code, die der Helfer danach ohnehin ablehnte.
+ */
+function blockedAfterRollback(view: HelperView, target: string): number | null {
+  const last = view.last_result;
+  if (!last || last.action !== "rollback" || last.outcome !== "reverted" || last.from !== target) return null;
+  const until = last.finished_at + BLOCK_AFTER_ROLLBACK_S;
+  return until > Date.now() / 1000 ? until : null;
+}
+
+/** Der Teil der Karte zum Update-Helfer: Zustand, Knopf mit Bestätigung, Fortschritt, letztes Ergebnis. */
+function HelperSection({ status, sqlite, database }: { status: UpdateStatus; sqlite: boolean; database?: string }) {
+  const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
+  const { view, follow } = useHelperView();
+  const startFollow = useUpdateHelper((s) => s.startFollow);
+  const [confirming, setConfirming] = useState(false);
+  // Folgt die Karte einem Vorgang (auch einem aus einem anderen Tab), ist die Bestätigung erledigt.
+  useEffect(() => {
+    if (follow) setConfirming(false);
+  }, [follow]);
+  if (!view) return null;
+  if (follow && follow.action === "update") {
+    return (
+      <div className="mt-4" data-testid="helper-section">
+        <FollowPanel follow={follow} />
+      </div>
+    );
+  }
+  // Selbst gebautes Image: Der Helfer arbeitet nur mit dem offiziellen, die Karte lädt also nicht ein, ihn einzurichten.
+  if (!status.official_image && !view.present && (view.reason ?? "missing") === "missing") return null;
+  const block = follow ? ({ ok: false, why: null } as const) : applyBlock(status, view, isOwner);
+  const target = status.latest ?? "";
+  return (
+    <div className="mt-4 space-y-2" data-testid="helper-section">
+      <HelperStatusLine view={view} />
+      {block.ok && !confirming && (
+        <Button variant="primary" onClick={() => setConfirming(true)}>
+          <ArrowUpCircle size={14} /> Jetzt aktualisieren auf {target}
+        </Button>
+      )}
+      {!block.ok && block.why && <p className="text-xs text-white/55" data-testid="helper-why-not">{block.why}</p>}
+      {block.ok && confirming && (
+        <ConfirmForm
+          title={`Auf Version ${target} aktualisieren`}
+          submitLabel="Jetzt aktualisieren"
+          variant="primary"
+          send={(password, code) => requestUpdate(target, password, code)}
+          onSent={(requested) => {
+            setConfirming(false);
+            startFollow({ requestId: requested.request_id, action: "update", from: requested.from, to: requested.to });
+          }}
+          onCancel={() => setConfirming(false)}
+        >
+          <ul className="list-disc space-y-1 pl-5 text-xs text-white/60">
+            <li>Der Update-Helfer lädt die neue Version und schaltet um. Nodvard Deck ist dabei ein paar Minuten nicht erreichbar.</li>
+            {sqlite ? (
+              <li>Vorher wird automatisch eine Kopie der Datenbank angelegt, falls die neue Version sie umbauen muss (siehe „Kopien vor Updates“).</li>
+            ) : (
+              <li>Bei deiner Datenbank ({database}) legt Nodvard Deck vorher keine Kopie an. Sichere sie vorher selbst.</li>
+            )}
+            <li>Startet die neue Version nicht richtig, schaltet der Helfer von selbst auf die bisherige zurück.</li>
+            <li>Nach einem gelungenen Update kannst du 7 Tage lang per Knopf zurück (Karte „Kopien vor Updates“).</li>
+          </ul>
+        </ConfirmForm>
+      )}
+      {!follow && view.last_result && <LastResultLine result={view.last_result} ready={view.present && view.ready} />}
+    </div>
+  );
+}
+
 export function UpdatesCard(): JSX.Element {
   const canWrite = useAuthStore((s) => s.hasPermission("settings.write"));
   const [status, setStatus] = useState<UpdateStatus | null>(null);
@@ -353,6 +467,8 @@ export function UpdatesCard(): JSX.Element {
           </span>
         </p>
       )}
+
+      <HelperSection status={status} sqlite={!info?.database || info.database === "sqlite"} database={info?.database} />
 
       {!status.official_image && (
         <p className="mt-4 text-xs text-white/55">

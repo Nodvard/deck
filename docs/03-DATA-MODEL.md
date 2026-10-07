@@ -43,7 +43,8 @@ secrets.read:ssh-*    secrets.write
 audit.read            settings.write      extensions.manage
 system.read           apps.write
 actions.approve       actions.approve:high
-ext.nexus-soc.read    ext.nexus-soc.remediate
+soc.read              soc.manage          (Nodvard Shield)
+inventory.read        inventory.write     (Inventar)
 ```
 
 `*` als Suffix-Wildcard im Scope ist erlaubt (`secrets.read:ssh-*`), sonst exakter
@@ -224,7 +225,7 @@ für **alle** Extensions, weil es im Kern sitzt.
 ### `extensions`
 | Spalte | Anmerkung |
 |---|---|
-| id | = Manifest-ID, PK |
+| id | = Manifest-ID, PK. Nach einer Umbenennung (`legacy_ids`, [02 §1](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)) bleibt die Zeile unter der alten Kennung (**Speicher-Kennung**), z. B. `nexus-soc` für Nodvard Shield auf Installationen von vor 0.7; neue Installationen legen die Zeile mit der neuen Kennung an |
 | version, api_version | |
 | state | `enabled` \| `disabled` \| `error` \| `incompatible` \| `uninstalling` |
 | source | `bundled` \| `local` \| `pip` \| `marketplace` |
@@ -243,7 +244,7 @@ enabled, health_status, health_message, last_check_at`.
 ## 7. Zeitplan und Läufe
 
 ### `jobs`
-`id, ext_id (null = Kern), name, kind, schedule (Cron), timezone, target (JSON: host/group),
+`id, ext_id (null = Kern, sonst die Speicher-Kennung der Extension), name, kind, schedule (Cron), timezone, target (JSON: host/group),
 params (JSON), enabled, next_run_at, created_by_user_id`
 
 `schedule` ist normales 5-Felder-Crontab (Minute Stunde Tag Monat Wochentag) in der Zeitzone des Jobs.

@@ -5,6 +5,11 @@
  * den Refresh ab, wird der Nutzer als abgemeldet markiert -- kein Retry-Loop. Antwortet
  * der Server gar nicht (Neustart nach einem Deploy), bleibt die Anmeldung bestehen und
  * nur diese Anfrage schlaegt mit einer verstaendlichen Meldung fehl.
+ *
+ * Dieselbe Erneuerung gibt es fuer Aufrufe, die keine JSON-Antwort lesen (Datei laden,
+ * Protokoll exportieren): `apiFetchResponse` liefert die rohe Antwort, und wer einen Upload
+ * mit eigenem XMLHttpRequest schickt, nimmt `refreshAfterUnauthorized` und
+ * `apiErrorFromBody`. `apiFetch` baut auf genau diesen Teilen auf.
  */
 import { SERVER_UNAVAILABLE_TEXT, ServerUnavailableError, useAuthStore } from "../state/auth";
 import { validationText } from "./validation";
@@ -43,8 +48,7 @@ async function doFetch(path: string, init: RequestInit): Promise<Response> {
 /** Antworten, die ein Proxy schickt, solange der Server nicht (fertig) laeuft. */
 const SERVER_DOWN_STATUS = new Set([502, 503, 504]);
 
-async function readErrorDetail(res: Response): Promise<unknown> {
-  const text = await res.text().catch(() => "");
+function parseErrorBody(text: string): unknown {
   if (!text) return undefined;
   try {
     return JSON.parse(text);
@@ -72,6 +76,61 @@ function errorMessage(body: unknown): string | undefined {
 }
 
 /**
+ * Der Fehler zu einer abgelehnten Antwort aus Status und Antworttext -- fuer Aufrufer, die
+ * den Text selbst in der Hand haben (XMLHttpRequest). Text aus `detail`, sonst "HTTP <Status>";
+ * 502/503/504 ohne lesbaren Text (Fehlerseite vom Proxy) heissen wie bei fehlender Verbindung.
+ */
+export function apiErrorFromBody(status: number, text: string): ApiError {
+  const detail = parseErrorBody(text);
+  const fallback = SERVER_DOWN_STATUS.has(status) ? SERVER_UNAVAILABLE_TEXT : `HTTP ${status}`;
+  return new ApiError(status, errorMessage(detail) ?? fallback, detail);
+}
+
+/** Wie `apiErrorFromBody`, liest den Text aus der Antwort. */
+export async function apiErrorFromResponse(res: Response): Promise<ApiError> {
+  return apiErrorFromBody(res.status, await res.text().catch(() => ""));
+}
+
+/**
+ * Erneuert die Anmeldung still ueber das Cookie -- fuer den zweiten Versuch nach einem 401.
+ * `true` = neues Token liegt im Store, `false` = der Server lehnt ab (abgemeldet).
+ * Antwortet der Server nicht, wirft das einen ApiError (damit Aufrufer `err.message` zeigen
+ * koennen und Abfrage-Schleifen wie bei jedem 5xx einfach weiterfragen). Hat der Server
+ * geantwortet (z. B. 507 "Speicherplatz voll"), gilt sein Status und Text; sonst 503
+ * "nicht erreichbar".
+ */
+export async function refreshAfterUnauthorized(): Promise<boolean> {
+  try {
+    return await useAuthStore.getState().refresh();
+  } catch (err) {
+    if (err instanceof ServerUnavailableError) {
+      throw err.status !== undefined ? new ApiError(err.status, err.message, err.detail) : new ApiError(503, err.message);
+    }
+    throw err;
+  }
+}
+
+/**
+ * Die rohe Antwort (auch bei einem Fehlerstatus), mit derselben Erneuerung bei 401 wie
+ * `apiFetch`: einmal still erneuern, dann wiederholen. `skipAuthRetry` und der Pfad
+ * `/auth/refresh` verhindern eine Endlosschleife, wenn der Refresh selbst 401 liefert.
+ * Wer eine Antwort mit Status >= 400 bekommt, baut den Fehler mit `apiErrorFromResponse`.
+ */
+export async function apiFetchResponse(
+  path: string,
+  init: RequestInit = {},
+  skipAuthRetry = false,
+): Promise<Response> {
+  let res = await doFetch(path, init);
+  if (res.status === 401 && !skipAuthRetry && path !== "/auth/refresh") {
+    if (await refreshAfterUnauthorized()) {
+      res = await doFetch(path, init);
+    }
+  }
+  return res;
+}
+
+/**
  * `skipAuthRetry` verhindert eine Endlosschleife, wenn der stille Refresh selbst
  * 401 liefert (abgelaufener/fehlender Refresh-Cookie).
  */
@@ -80,33 +139,9 @@ export async function apiFetch<T>(
   init: RequestInit = {},
   skipAuthRetry = false,
 ): Promise<T> {
-  let res = await doFetch(path, init);
+  const res = await apiFetchResponse(path, init, skipAuthRetry);
 
-  if (res.status === 401 && !skipAuthRetry && path !== "/auth/refresh") {
-    let refreshed: boolean;
-    try {
-      refreshed = await useAuthStore.getState().refresh();
-    } catch (err) {
-      // Als ApiError, damit Aufrufer `err.message` zeigen koennen und Abfrage-Schleifen
-      // (lib/actions.ts) wie bei jedem 5xx einfach weiterfragen. Hat der Server geantwortet
-      // (z. B. 507 "Speicherplatz voll"), gilt sein Status und Text; sonst 503 "nicht erreichbar".
-      if (err instanceof ServerUnavailableError) {
-        throw err.status !== undefined ? new ApiError(err.status, err.message, err.detail) : new ApiError(503, err.message);
-      }
-      throw err;
-    }
-    if (refreshed) {
-      res = await doFetch(path, init);
-    }
-  }
-
-  if (!res.ok) {
-    const detail = await readErrorDetail(res);
-    // 502/503/504 kommen meist als HTML vom Proxy, ohne lesbaren Text: dann dieselbe
-    // Meldung wie bei fehlender Verbindung statt "HTTP 502".
-    const fallback = SERVER_DOWN_STATUS.has(res.status) ? SERVER_UNAVAILABLE_TEXT : `HTTP ${res.status}`;
-    throw new ApiError(res.status, errorMessage(detail) ?? fallback, detail);
-  }
+  if (!res.ok) throw await apiErrorFromResponse(res);
 
   if (res.status === 204) return undefined as T;
   const text = await res.text();

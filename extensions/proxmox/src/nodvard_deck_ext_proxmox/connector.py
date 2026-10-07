@@ -35,12 +35,25 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from .transport import (
+    carries_foreign_text,
+    http_error_text,
+    json_body,
+    redirect_text,
+    transport_text,
+    unexpected_format_text,
+)
+
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
 
 class ProxmoxApiError(Exception):
-    pass
+    """`status_code`: der HTTP-Status der Antwort, falls es eine gab (sonst `None`)."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class ProxmoxVncSession:
@@ -94,13 +107,16 @@ class ProxmoxConnector:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._base_url}/api2/json{path}"
         headers = {**self._auth_header, **kwargs.pop("headers", {})}
-        # Live gefunden (WP-8-Boot-Test, Nachtrag): ein NETZWERK-Fehler (Proxmox nicht
-        # erreichbar -- Verbindung abgelehnt, Timeout, DNS) wurde bisher gar nicht
-        # abgefangen, nur ein HTTP-Fehlerstatus. `node_load_widget_data()` (siehe
-        # __init__.py) faengt ausschliesslich `ProxmoxApiError`/`RuntimeError` ab --
-        # eine rohe `httpx`-Exception lief ungefangen bis zu FastAPI durch und ergab
-        # einen 500 statt eines sauberen "Metrik nicht verfuegbar". Jetzt einheitlich
-        # an EINER Stelle normalisiert, statt in jedem Aufrufer einzeln nachzuruesten.
+        # Ein NETZWERK-Fehler (Proxmox nicht erreichbar -- Verbindung abgelehnt, Timeout, DNS) wird hier
+        # einheitlich in `ProxmoxApiError` uebersetzt, nicht in jedem Aufrufer einzeln: `node_load_widget_data()`
+        # (siehe __init__.py) faengt ausschliesslich `ProxmoxApiError`/`RuntimeError` ab, eine rohe
+        # `httpx`-Exception liefe bis zu FastAPI durch und ergaebe einen 500.
+        # In die Meldung kommt nie der Text der Ausnahme oder der Antwort (siehe transport.py), und der Fehler
+        # wird erst ausserhalb des `except`-Blocks geworfen: sonst hinge die Ausnahme von httpx (mit Teilen der
+        # fremden Antwort im Text) als `__context__` an der Meldung.
+        problem: str | None = None
+        cause: BaseException | None = None
+        response: Any = None
         try:
             response = await self._ctx.http.request(
                 method, url, headers=headers, insecure_tls=self._tls_insecure_skip_verify, **kwargs
@@ -108,12 +124,19 @@ class ProxmoxConnector:
         except ProxmoxApiError:
             raise
         except Exception as exc:  # noqa: BLE001 - jeder Netzwerkfehler wird hier vereinheitlicht
-            # Live gefunden: httpx' Timeouts haben einen LEEREN Text -- die Meldung
-            # lautete woertlich "POST /nodes/pve1/qemu/<vmid>/vncproxy -> ".
-            raise ProxmoxApiError(f"{method} {path} -> {str(exc) or type(exc).__name__}") from exc
+            problem = transport_text(exc, url)
+            cause = None if carries_foreign_text(exc) else exc
+        if problem is not None:
+            raise ProxmoxApiError(f"{method} {path} -> {problem}") from cause
         if response.status_code >= 400:
-            raise ProxmoxApiError(f"{method} {path} -> HTTP {response.status_code}: {response.text[:200]}")
-        body = response.json()
+            raise ProxmoxApiError(http_error_text(method, path, response), status_code=response.status_code)
+        if 300 <= response.status_code < 400:
+            # `ctx.http` folgt keinen Weiterleitungen: die 3xx-Antwort kommt hier an. Die Adresse
+            # steht bewusst nicht im Text (sie stammt vom Server).
+            raise ProxmoxApiError(redirect_text(response.status_code), status_code=response.status_code)
+        body = json_body(response)
+        if not isinstance(body, dict):
+            raise ProxmoxApiError(unexpected_format_text(response.status_code))
         return body.get("data")
 
     async def version(self) -> dict[str, Any]:
@@ -317,6 +340,7 @@ class ProxmoxConnector:
 
         url = self.vncwebsocket_url(node, kind, vmid, port=port, ticket=str(ticket))
         stack = AsyncExitStack()
+        problem: str | None = None
         try:
             ws = await stack.enter_async_context(
                 self._ctx.http.websocket(
@@ -327,8 +351,12 @@ class ProxmoxConnector:
                 )
             )
         except Exception as exc:  # noqa: BLE001 - wie `_request()`: einheitlich als ProxmoxApiError
+            # Nie der Text der Ausnahme: `websockets` nennt in `InvalidURI` die ganze Adresse samt
+            # `vncticket` und zitiert bei einer kaputten Antwort Kopfzeilen des Servers.
+            problem = transport_text(exc, url)
+        if problem is not None:
             await stack.aclose()
-            raise ProxmoxApiError(f"vncwebsocket -> {exc}") from exc
+            raise ProxmoxApiError(f"vncwebsocket -> {problem}")
         return ProxmoxVncSession(ws, stack, password=str(data.get("password") or ticket))
 
     async def task_status(self, node: str, upid: str) -> dict[str, Any]:

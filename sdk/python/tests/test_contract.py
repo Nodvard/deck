@@ -72,15 +72,55 @@ def test_manifest_rejects_unknown_permission():
 
 def test_manifest_derives_table_and_api_prefix():
     m = sdk.ExtensionManifest(
-        id="nexus-soc",
+        id="shield",
         name="x",
         version="0.1.0",
         api_version="0.1",
         entrypoint="m:E",
         permissions=["hosts.execute"],
     )
-    assert m.table_prefix == "ext_nexus_soc_"
-    assert m.api_prefix == "/api/v1/ext/nexus-soc"
+    assert m.table_prefix == "ext_shield_"
+    assert m.api_prefix == "/api/v1/ext/shield"
+
+
+def _renamed_manifest(**extra):
+    return sdk.ExtensionManifest(
+        id="renamed-ext", name="x", version="0.1.0", api_version="0.1", entrypoint="m:E", **extra
+    )
+
+
+def test_manifest_without_legacy_ids_keeps_one_table_prefix():
+    m = _renamed_manifest()
+    assert m.legacy_ids == []
+    assert m.table_prefixes == ("ext_renamed_ext_",)
+    assert m.table_prefix == "ext_renamed_ext_"
+
+
+def test_manifest_legacy_ids_add_old_table_prefixes_after_the_own_one():
+    m = _renamed_manifest(legacy_ids=["old-ext", "older-ext"])
+    assert m.table_prefixes == ("ext_renamed_ext_", "ext_old_ext_", "ext_older_ext_")
+    assert m.table_prefix == "ext_renamed_ext_"
+    assert m.api_prefix == "/api/v1/ext/renamed-ext"
+
+
+@pytest.mark.parametrize(
+    "legacy_ids",
+    [["renamed-ext"], ["Old-Ext"], ["old_ext"], ["x"], ["old-ext", "old-ext"]],
+)
+def test_manifest_rejects_invalid_legacy_ids(legacy_ids):
+    """Eine alte Kennung muss eine gueltige Kennung sein, darf nicht die eigene sein und nicht doppelt
+    vorkommen -- sonst waere unklar, welche gespeicherte Zeile gilt."""
+    with pytest.raises(ValidationError):
+        _renamed_manifest(legacy_ids=legacy_ids)
+
+
+def test_load_manifest_reads_legacy_ids(tmp_path):
+    (tmp_path / "extension.toml").write_text(
+        '[extension]\nid = "renamed-ext"\nname = "x"\nversion = "0.1.0"\napi_version = "0.1"\n'
+        'entrypoint = "m:E"\nlegacy_ids = ["old-ext"]\n',
+        encoding="utf-8",
+    )
+    assert sdk.load_manifest(tmp_path / "extension.toml").legacy_ids == ["old-ext"]
 
 
 def test_sdk_compatibility_check():

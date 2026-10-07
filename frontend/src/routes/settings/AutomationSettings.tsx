@@ -70,10 +70,60 @@ async function putSetting(key: string, value: unknown) {
   await api.put(`/settings/${key}`, { value });
 }
 
+interface Autonomy {
+  mode: string;
+  maxRisk: string;
+}
+
+type AutonomyStep = { key: "autonomy.mode" | "autonomy.max_risk"; value: string };
+
+/**
+ * Die Selbstständigkeit besteht aus zwei Einstellungen, die der Server einzeln speichert (Modus und
+ * Risikostufe). Bricht die Verbindung dazwischen ab, bleibt ein Zwischenstand stehen. Damit der nie mehr
+ * erlaubt als der Stand vorher und der Stand nachher, wird zuerst der Schritt geschrieben, der nichts lockert:
+ *
+ * - auf „Selbstständig handeln“: erst die Risikostufe (der Modus steht noch auf „Nur vorschlagen“, es läuft
+ *   also nichts ohne Rückfrage), dann der Modus;
+ * - auf „Nur vorschlagen“: erst der Modus (danach läuft nichts mehr ohne Rückfrage), dann die Risikostufe;
+ * - bleibt der Modus: nur die Risikostufe.
+ *
+ * Was sich nicht geändert hat, wird nicht geschrieben.
+ */
+export function autonomySteps(saved: Autonomy, next: Autonomy): AutonomyStep[] {
+  const mode: AutonomyStep[] = next.mode !== saved.mode ? [{ key: "autonomy.mode", value: next.mode }] : [];
+  const risk: AutonomyStep[] = next.maxRisk !== saved.maxRisk ? [{ key: "autonomy.max_risk", value: next.maxRisk }] : [];
+  const loosening = next.mode === "full" && saved.mode !== "full";
+  return loosening ? [...risk, ...mode] : [...mode, ...risk];
+}
+
+/** Der gespeicherte Stand in Worten, z. B. „Selbstständig handeln, bis Risikostufe Mittel“. */
+function describeAutonomy({ mode, maxRisk }: Autonomy): string {
+  const title = MODES.find((m) => m.value === mode)?.title ?? mode;
+  if (mode !== "full") return title;
+  return `${title}, bis Risikostufe ${RISKS.find((r) => r.value === maxRisk)?.label ?? maxRisk}`;
+}
+
+/** Holt den Stand vom Server; `null`, wenn das nicht klappt. */
+async function loadAutonomy(): Promise<Autonomy | null> {
+  try {
+    const rows = await api.get<{ key: string; value: unknown }[]>("/settings");
+    const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const mode = byKey["autonomy.mode"];
+    const maxRisk = byKey["autonomy.max_risk"];
+    return typeof mode === "string" && typeof maxRisk === "string" ? { mode, maxRisk } : null;
+  } catch {
+    return null;
+  }
+}
+
+function endSentence(text: string): string {
+  return /[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`;
+}
+
 function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: string; maxRisk: string }) {
   const [mode, setMode] = useState(initialMode);
   const [maxRisk, setMaxRisk] = useState(initialRisk);
-  const [saved, setSaved] = useState({ mode: initialMode, maxRisk: initialRisk });
+  const [saved, setSaved] = useState<Autonomy>({ mode: initialMode, maxRisk: initialRisk });
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const dirty = mode !== saved.mode || maxRisk !== saved.maxRisk;
@@ -82,12 +132,21 @@ function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: strin
     setBusy(true);
     setNotice(null);
     try {
-      await putSetting("autonomy.mode", mode);
-      await putSetting("autonomy.max_risk", maxRisk);
+      for (const step of autonomySteps(saved, { mode, maxRisk })) await putSetting(step.key, step.value);
       setSaved({ mode, maxRisk });
       setNotice({ kind: "ok", text: "Gespeichert." });
     } catch (err) {
-      setNotice({ kind: "error", text: errorText(err) });
+      // Ein Schritt kann schon durch sein: nicht den Entwurf stehen lassen, sondern zeigen, was der Server wirklich hat.
+      const stored = await loadAutonomy();
+      if (stored) {
+        setMode(stored.mode);
+        setMaxRisk(stored.maxRisk);
+        setSaved(stored);
+      }
+      const state = stored
+        ? `Aktuell gespeichert: ${describeAutonomy(stored)}.`
+        : "Ob etwas davon gespeichert wurde, ist unklar. Lade die Seite neu und prüfe die Einstellung.";
+      setNotice({ kind: "error", text: `${endSentence(errorText(err))} ${state}` });
     } finally {
       setBusy(false);
     }

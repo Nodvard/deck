@@ -38,6 +38,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...core import gate as gate_service
 from ...core.action_output import OUTPUT_PERMISSION, hide_result, visible_payload
+from ...ext.runtime import ExtensionRuntime, get_extension_runtime
 from ...models import Action, User
 from ...services.actor_labels import ActorLabels, load_actor_labels, raw_actor
 from ...services.auth import user_has_permission
@@ -84,6 +85,13 @@ class ActionOut(BaseModel):
     idempotency_key: str | None
     expires_at: datetime | None
     created_at: datetime
+    action_label: str | None = None
+    """Lesbarer Name der Aktionsart (`label` der `ActionSpec`, z. B. „Neu starten“), solange die Erweiterung,
+    die sie anbietet, geladen ist; sonst `None` (dann `action_type` zeigen)."""
+    ext_name: str | None = None
+    """Name der installierten Erweiterung zu `ext_id` (aus ihrem Manifest, auch fuer eine alte Kennung einer
+    umbenannten Erweiterung); `None`, wenn es keine solche Erweiterung gibt (z. B. `ext_id` = `core` oder
+    eine entfernte Erweiterung)."""
 
     @classmethod
     def from_model(
@@ -92,9 +100,12 @@ class ActionOut(BaseModel):
         """`labels` kommt aus `load_actor_labels()`; ohne sie stehen die rohen Werte da.
         `show_output=False` laesst Ausgabe und Fehlertext des Ergebnisses weg. Bewusst ohne
         Standardwert: wer es vergisst, bekommt einen Fehler statt Ausgabe fuer alle.
-        `show_payload=False` reduziert den `payload` auf harmlose Kennungen (ebenso ohne Standardwert)."""
+        `show_payload=False` reduziert den `payload` auf harmlose Kennungen (ebenso ohne Standardwert).
+        `action_label` und `ext_name` kommen aus dem Bestand der Laufzeit, ohne Datenbankabfrage."""
         result, output_hidden = (a.result, False) if show_output else hide_result(a.result)
         payload, payload_hidden = (a.payload, False) if show_payload else visible_payload(a.payload)
+        runtime = get_extension_runtime()
+        registered = runtime.actions.get(a.action_type)
         return cls(
             id=a.id, ext_id=a.ext_id, action_type=a.action_type, host_id=a.host_id,
             payload=payload, payload_hidden=payload_hidden, risk=a.risk, status=a.status,
@@ -110,7 +121,16 @@ class ActionOut(BaseModel):
             output_hidden=output_hidden,
             correlation_id=a.correlation_id, idempotency_key=a.idempotency_key,
             expires_at=a.expires_at, created_at=a.created_at,
+            action_label=registered[1].label if registered is not None else None,
+            ext_name=_extension_name(runtime, a.ext_id),
         )
+
+
+def _extension_name(runtime: ExtensionRuntime, ext_id: str) -> str | None:
+    """Anzeigename einer installierten Erweiterung (heutige oder alte Kennung, `legacy_ids`), sonst `None`."""
+    manifest = getattr(runtime.discovered.get(runtime.canonical(ext_id)), "manifest", None)
+    name = getattr(manifest, "name", None)
+    return name.strip() if isinstance(name, str) and name.strip() else None
 
 
 def may_see_payload(viewer: User, action: Action) -> bool:

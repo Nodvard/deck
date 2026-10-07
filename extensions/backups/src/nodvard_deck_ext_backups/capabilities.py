@@ -373,7 +373,7 @@ class BackupActionExecutor:
             try:
                 upid = await connector.run_vzdump(node, vmid, storage=req.payload.get("storage"), options=options)
             except ProxmoxBackupApiError as exc:
-                if "HTTP 403" not in str(exc):
+                if exc.status_code != 403:
                     raise
                 # Die Aufbewahrung geht immer mit (auch `keep-all=1`), dafuer verlangt Proxmox
                 # `Datastore.Allocate` auf dem Speicher -- ohne Hinweis sieht man nur "HTTP 403".

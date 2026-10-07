@@ -11,7 +11,8 @@
 #
 # Das Image entsteht fuer linux/amd64 (normale PCs/NAS) und linux/arm64 (Raspberry Pi) und
 # landet in der GitHub-Container-Registry. Nutzer ziehen es mit der Datei
-# deploy/compose.standalone.yml, ohne das Repository zu kennen.
+# deploy/compose.standalone.yml, ohne das Repository zu kennen. Der Job `updater-image` baut danach das Image des
+# Update-Helfers (deploy/updater/Dockerfile) fuer deploy/compose.standalone-mit-helfer.yml.
 #
 # Die Actions sind auf eine Commit-SHA festgelegt (Version als Kommentar), damit ein verschobenes Tag
 # keinen fremden Code in den Lauf mit Schreibrecht auf die Registry bringt.
@@ -124,3 +125,114 @@ jobs:
             IMAGE=${{ env.IMAGE_NAME }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # Image des Update-Helfers (deploy/updater), Name: IMAGE_NAME mit "-updater". Erst nach dem Dashboard-Image (`needs`):
+  # So gibt es keinen Helfer zu einem Tag, das der Schritt "Tag passt zu version.py" oben abgelehnt hat.
+  # Getaggt mit der genauen Version und mit "1" (alle Helfer mit derselben Schnittstelle; das nimmt
+  # deploy/compose.standalone-mit-helfer.yml). "1" wandert erst, wenn der Selbsttest auf beiden Plattformen am
+  # veroeffentlichten Digest bestanden ist, und nie fuer eine Vorabversion (wie `latest` beim Dashboard).
+  updater-image:
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
+
+      - name: Version aus dem Tag
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "VERSION=${REF_NAME#v}" >> "$GITHUB_ENV"
+
+      # Wie "Tag passt zu version.py" im Job oben, nur fuer die Version des Helfers (`__version__` in
+      # deploy/updater/nodvard_deck_updater/__init__.py, im Status `helper_version`): Eine fertige Version muss genau sie
+      # sein, bei einer Vorabversion zaehlt der Teil vor dem "-" (groesser oder gleich, nie kleiner). Sonst meldete der
+      # Helfer im Dashboard eine andere Version als sein Image. Gelesen ueber den Syntaxbaum, ohne das Paket auszufuehren.
+      - name: Tag passt zur Version des Helfers
+        run: |
+          code="$(python3 -c 'import ast
+          tree = ast.parse(open("deploy/updater/nodvard_deck_updater/__init__.py", encoding="utf-8").read())
+          found = [n.value.value for n in tree.body if isinstance(n, ast.Assign) and isinstance(n.value, ast.Constant)
+                   and [getattr(x, "id", None) for x in n.targets] == ["__version__"]]
+          print(found[0] if len(found) == 1 else "")')"
+          base="${VERSION%%-*}"
+          if [ "$base" = "$VERSION" ]; then
+            [ -n "$code" ] && [ "$VERSION" = "$code" ] && ok=1 || ok=0
+          else
+            python3 -c 'import re, sys
+          def key(v):
+              m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", v)
+              return tuple(map(int, m.groups())) if m else None
+          num = r"(0|[1-9][0-9]{0,8})"
+          pre = num + r"\." + num + r"\." + num + r"-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*"
+          full_ok = re.fullmatch(pre, sys.argv[3], re.ASCII) is not None
+          base, code = key(sys.argv[1]), key(sys.argv[2])
+          sys.exit(0 if full_ok and base and code and base >= code else 1)' "$base" "$code" "$VERSION" && ok=1 || ok=0
+          fi
+          if [ "$ok" != 1 ]; then
+            echo "Tag v$VERSION passt nicht zur Version des Update-Helfers ($code) in deploy/updater/nodvard_deck_updater/__init__.py." >&2
+            echo "Fertige Version: zuerst python scripts/release.py <version> mergen (hebt beide an), dann taggen." >&2
+            exit 1
+          fi
+          echo "Tag v$VERSION passt zur Version des Helfers ($code)."
+
+      - uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130  # v3.7.0
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Tags und Labels festlegen
+        id: meta
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051  # v5.10.0
+        with:
+          images: ${{ env.IMAGE_NAME }}-updater
+          flavor: |
+            latest=false
+          tags: |
+            type=semver,pattern={{version}}
+          labels: |
+            org.opencontainers.image.title=Nodvard Deck Update-Helfer
+            org.opencontainers.image.description=Aktualisiert Nodvard Deck auf Wunsch aus dem Dashboard (Compose-Installationen).
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.licenses=PolyForm-Noncommercial-1.0.0
+            org.opencontainers.image.version=${{ env.VERSION }}
+
+      # Ohne Build-Cache: Das Image ist klein und in Sekunden gebaut, und es laeuft mit Zugriff auf Docker.
+      - name: Bauen und veroeffentlichen
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: .
+          file: deploy/updater/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            VERSION=${{ env.VERSION }}
+
+      # Genau das veroeffentlichte Image (per Digest) so starten wie im Betrieb: ohne Netz, nur lesbar, ohne Rechte,
+      # mit der Prozessgrenze der Compose-Datei. Die Speichergrenze prueft nur der CI-Job `updater` (ohne Emulator):
+      # Unter QEMU (arm64) zaehlte der Emulator selbst mit, und ein Fehlalarm hielte das Tag 1 auf.
+      # Image und Digest kommen ueber die Umgebung, nichts wird in den Befehl eingesetzt.
+      - name: Selbsttest am Digest (amd64 und arm64)
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}-updater
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            docker run --rm --platform "$platform" --network none --read-only --cap-drop ALL \
+              --security-opt no-new-privileges --pids-limit 32 "$IMAGE@$DIGEST" --selftest
+          done
+
+      - name: Tag 1 setzen
+        if: ${{ !contains(github.ref_name, '-') }}
+        env:
+          IMAGE: ${{ env.IMAGE_NAME }}-updater
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: docker buildx imagetools create --tag "$IMAGE:1" "$IMAGE@$DIGEST"

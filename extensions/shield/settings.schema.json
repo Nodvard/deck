@@ -1,0 +1,348 @@
+{
+  "type": "object",
+  "properties": {
+    "auto_quarantine": {
+      "type": "boolean",
+      "default": true,
+      "title": "Funde automatisch in Quarantäne verschieben",
+      "description": "Gefundene Schadsoftware wird sofort unschädlich gemacht (umkehrbar). Aus: Funde warten auf deine Entscheidung."
+    },
+    "realtime_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Echtzeit-Wächter",
+      "description": "Prüft regelmäßig alle neu angelegten oder geänderten Dateien in den überwachten Ordnern."
+    },
+    "watch_interval_min": {
+      "type": "integer",
+      "default": 10,
+      "title": "Wächter-Intervall (Minuten)",
+      "description": "Wie oft der Wächter nach neuen Dateien sucht (2–59)."
+    },
+    "watch_use_clamdscan": {
+      "type": "boolean",
+      "default": false,
+      "title": "Echtzeit-Wächter mit clamdscan (wenn clamd läuft)",
+      "description": "Der Wächter fragt den laufenden ClamAV-Dienst (clamd), statt bei jedem Lauf die ganze Signaturdatenbank neu zu laden (spart je Lauf rund 20 Sekunden CPU und 1 GB Arbeitsspeicher). Läuft clamd nicht oder ist clamdscan nicht installiert, nimmt der Wächter wie bisher clamscan. Beachte: clamd hält die Datenbank dauerhaft im Speicher (rund 1 GB) – lohnt sich vor allem dort, wo der Dienst ohnehin läuft. Wichtig: Über clamd gelten dessen eigene Größengrenzen aus der clamd.conf (MaxFileSize, bei Debian/Proxmox 25 MB) – größere Dateien werden dann ohne Hinweis als sauber gewertet, auch wenn bei \"Maximale Dateigröße\" mehr eingestellt ist. Schnell- und Tiefenscan bleiben unverändert.",
+      "x-advanced": true
+    },
+    "watch_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/home",
+        "/root",
+        "/opt"
+      ],
+      "title": "Überwachte Ordner",
+      "description": "Hier legt Schadsoftware typischerweise Dateien ab."
+    },
+    "quick_scan_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Täglicher Schnellscan"
+    },
+    "quick_scan_cron": {
+      "type": "string",
+      "default": "0 2 * * *",
+      "title": "Schnellscan-Zeitplan",
+      "x-widget": "schedule"
+    },
+    "quick_scan_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "/tmp",
+        "/var/tmp",
+        "/dev/shm",
+        "/home",
+        "/root"
+      ],
+      "title": "Ordner für den Schnellscan",
+      "x-advanced": true
+    },
+    "deep_scan_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Wöchentlicher Tiefenscan"
+    },
+    "deep_scan_cron": {
+      "type": "string",
+      "default": "30 3 * * 0",
+      "title": "Tiefenscan-Zeitplan",
+      "description": "Prüft das ganze System und kann Stunden dauern – am besten nachts.",
+      "x-widget": "schedule"
+    },
+    "deep_scan_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "/"
+      ],
+      "title": "Ordner für den Tiefenscan",
+      "x-advanced": true
+    },
+    "audit_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Tägliches Härtungs-Audit (Lynis)"
+    },
+    "audit_cron": {
+      "type": "string",
+      "default": "0 1 * * *",
+      "title": "Audit-Zeitplan",
+      "x-widget": "schedule"
+    },
+    "briefing_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Morgen-Briefing aufs Handy",
+      "description": "Kurzer Lagebericht als Push-Nachricht: Server, Virenschutz, Bedrohungen, Härtung."
+    },
+    "briefing_cron": {
+      "type": "string",
+      "default": "0 7 * * *",
+      "title": "Briefing-Zeitpunkt",
+      "x-widget": "schedule"
+    },
+    "updates_check_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Täglich nach Updates suchen",
+      "description": "Prüft alle Server auf anstehende Paket-Updates, Sicherheitsupdates und nötige Neustarts."
+    },
+    "updates_check_cron": {
+      "type": "string",
+      "default": "0 6 * * *",
+      "title": "Update-Prüfung",
+      "x-widget": "schedule"
+    },
+    "updates_notify": {
+      "type": "boolean",
+      "default": true,
+      "title": "Über offene Updates benachrichtigen",
+      "description": "Push-Nachricht nach der Prüfung, wenn Updates oder Neustarts anstehen."
+    },
+    "auto_updates_enabled": {
+      "type": "boolean",
+      "default": false,
+      "title": "Updates automatisch einspielen",
+      "description": "Spielt Updates nach Zeitplan ohne Rückfrage ein – Server für Server nacheinander. Jeder Lauf steht im Protokoll."
+    },
+    "auto_updates_mode": {
+      "type": "string",
+      "enum": [
+        "security",
+        "all"
+      ],
+      "default": "security",
+      "title": "Was automatisch einspielen?",
+      "x-enum-labels": {
+        "security": "Nur Sicherheitsupdates (empfohlen)",
+        "all": "Alle Updates"
+      }
+    },
+    "auto_updates_cron": {
+      "type": "string",
+      "default": "30 3 * * *",
+      "title": "Zeitpunkt für automatische Updates",
+      "x-widget": "schedule"
+    },
+    "auto_reboot": {
+      "type": "boolean",
+      "default": false,
+      "title": "Danach automatisch neu starten, wenn nötig",
+      "description": "Nur wenn ein Update (z. B. ein neuer Kernel) einen Neustart verlangt. Vorsicht bei Servern, auf denen andere Dienste laufen."
+    },
+    "auto_updates_host_tag": {
+      "type": "string",
+      "title": "Nur Server mit dieser Markierung automatisch aktualisieren",
+      "description": "Leer lassen = alle Server. Beispiel: „auto-update“ – dann nur Server, die diese Markierung tragen.",
+      "x-advanced": true,
+      "x-widget": "host-tag",
+      "x-empty-label": "alle Server"
+    },
+    "proxmox_dist_upgrade": {
+      "type": "boolean",
+      "default": false,
+      "title": "Proxmox: „Alle Updates“ als dist-upgrade",
+      "description": "Für „Alle Updates“, das du selbst auslöst und freigibst, auf Proxmox-Servern (erkannt am Programm pveversion): statt „apt-get upgrade“ läuft „apt-get dist-upgrade“, wie Proxmox es für Updates verlangt. Das schließt auch Updates ein, die andere Pakete ersetzen oder entfernen müssen – sonst bleiben diese Pakete „zurückgehalten“ und stehen dauerhaft als offen da. Auf allen anderen Servern ändert sich nichts. Automatische Updates nehmen weiterhin nur „upgrade“ (entfernt nie Pakete), auch wenn das hier an ist. Die Wahl steht im Freigabe-Vorschlag. Weil dist-upgrade Pakete entfernen kann, gilt die Aktion dann als „Hoch“ (wie ein Neustart): Auch bei „Selbstständig handeln“ (Einstellungen › Automatik) wartet sie auf deine Freigabe, solange dort nicht ausdrücklich bis „Hoch“ erlaubt ist.",
+      "x-advanced": true
+    },
+    "guard_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Einbruchschutz",
+      "description": "Prüft regelmäßig fehlgeschlagene SSH-Anmeldungen, Anmeldungen von neuen Adressen, Fail2ban und neu geöffnete Ports."
+    },
+    "guard_interval_min": {
+      "type": "integer",
+      "default": 15,
+      "minimum": 5,
+      "maximum": 59,
+      "title": "Prüfabstand (Minuten)"
+    },
+    "bruteforce_threshold": {
+      "type": "integer",
+      "default": 20,
+      "minimum": 3,
+      "title": "Warnen ab so vielen Fehlversuchen einer Adresse (24 Std.)",
+      "description": "Adressen, die Fail2ban schon gesperrt hat, lösen keine Warnung aus."
+    },
+    "guard_notify_new_login": {
+      "type": "boolean",
+      "default": true,
+      "title": "Bei Anmeldung von neuer Adresse benachrichtigen",
+      "description": "Meldet, wenn sich jemand erfolgreich von einer IP-Adresse anmeldet, die vorher noch nie gesehen wurde."
+    },
+    "file_watch_enabled": {
+      "type": "boolean",
+      "default": true,
+      "title": "Datei-Wächter",
+      "description": "Meldet Änderungen an wichtigen Systemdateien (Benutzer, sudo, SSH-Schlüssel, Cronjobs …) und prüft Programme wie sudo oder sshd gegen die Prüfsummen ihres Pakets (Rootkit-Erkennung)."
+    },
+    "guard_watch_files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "Überwachte Dateien",
+      "description": "Leer lassen = Standardliste. Platzhalter wie /home/*/.ssh/authorized_keys sind erlaubt.",
+      "x-advanced": true
+    },
+    "guard_dynamic_processes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "title": "Weitere Programme mit wechselnden Ports",
+      "description": "Diese Programme wählen nach jedem Neustart zufällige Ports. Solche Ports melden dann nicht jedes Mal „Neuer offener Port“, sondern zählen zusammen als ein Eintrag. Schon eingebaut (hier nicht nötig): tailscaled, rpc.mountd, rpc.statd, rpcbind, avahi-daemon, dhclient, dhcpcd und chronyd. Weil sich jedes Programm jeden Namen geben kann, gilt das bei den eingebauten nur für UDP-Ports; TCP-Ports nur bei rpc.mountd und rpc.statd und bei tailscaled nur auf der Tailscale-Adresse. Trag hier nur weitere Programme ein, denen du vertraust; Programmnamen so, wie sie in der Portliste stehen (höchstens 15 Zeichen, so zeigt der Server sie an). Gilt nur für hohe Portnummern; Programme auf festen Ports melden weiterhin. Außerdem funktioniert das nur, wenn das Dashboard auf dem Server root bzw. sudo hat; sonst sind die Programmnamen nicht lesbar. Dann werden zufällige UDP-Ports ohne Programmnamen als ein Eintrag gemeldet, TCP-Ports behalten ihre Nummer.",
+      "x-advanced": true
+    },
+    "exclude_paths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "Ausgenommene Ordner",
+      "description": "Werden nie gescannt, z. B. große Medienarchive.",
+      "x-advanced": true
+    },
+    "max_filesize_mb": {
+      "type": "integer",
+      "default": 50,
+      "title": "Maximale Dateigröße (MB)",
+      "description": "Größere Dateien werden übersprungen.",
+      "x-advanced": true
+    },
+    "av_host_tag": {
+      "type": "string",
+      "title": "Nur Server mit Markierung",
+      "description": "Leer = alle Linux-Server mit SSH-Zugang werden geschützt.",
+      "x-advanced": true,
+      "x-widget": "host-tag",
+      "x-empty-label": "alle Server"
+    },
+    "ollama_url": {
+      "type": "string",
+      "title": "Nodvard KI: Server (Ollama)",
+      "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.42:11434",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    },
+    "ollama_model": {
+      "type": "string",
+      "default": "qwen2.5:7b",
+      "title": "Nodvard KI: Modell",
+      "description": "Name des Modells auf dem Ollama-Server. Die Liste kommt vom gespeicherten Server – nach einer neuen Adresse erst speichern, dann neu laden.",
+      "x-widget": "remote-select",
+      "x-options-url": "/ext/shield/ai/models?which=primary"
+    },
+    "ollama_failover_url": {
+      "type": "string",
+      "title": "Nodvard KI: Ersatz-Server (optional)",
+      "description": "Wird nur gefragt, wenn der erste Server nicht antwortet.",
+      "pattern": "^https?://\\S+$",
+      "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    },
+    "ollama_failover_model": {
+      "type": "string",
+      "default": "qwen2.5:0.5b",
+      "title": "Nodvard KI: Ersatz-Modell",
+      "description": "Meist ein kleineres, schnelleres Modell.",
+      "x-widget": "remote-select",
+      "x-options-url": "/ext/shield/ai/models?which=failover"
+    },
+    "docker_host_tag": {
+      "type": "string",
+      "default": "docker",
+      "title": "Überwachte Server",
+      "description": "Server mit dieser Markierung (Tag) werden auf abgestürzte Container überwacht.",
+      "x-widget": "host-tag",
+      "x-empty-label": "Standard (docker)"
+    },
+    "incident_batch_delay_s": {
+      "type": "number",
+      "default": 60,
+      "title": "Sammelzeit (Sekunden)",
+      "description": "So lange werden Vorfälle gesammelt, bevor die KI eine Einschätzung abgibt. Bewusst kürzer als früher (300 Sekunden), weil Vorfälle jetzt sofort gespeichert werden und nach einem Neustart des Dashboards nicht verloren gehen. Schon gesetzte Werte bleiben unverändert.",
+      "x-advanced": true
+    },
+    "host_target_cooldown_s": {
+      "type": "number",
+      "default": 1800,
+      "title": "Ruhezeit je Container (Sekunden)",
+      "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.",
+      "x-advanced": true
+    },
+    "suppressed_hosts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "Ignorierte Server",
+      "description": "Vorfälle dieser Server werden nie gemeldet, z. B. absichtlich pausierte Systeme.",
+      "x-advanced": true,
+      "x-widget": "host"
+    },
+    "forbidden_host_keywords": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [
+        "pve",
+        "proxmox",
+        "host",
+        "server",
+        "node",
+        "router",
+        "gateway",
+        "nas"
+      ],
+      "title": "Schutzwörter",
+      "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.",
+      "x-advanced": true
+    }
+  },
+  "required": [],
+  "x-secrets": [
+    {
+      "label": "nexus-soc-ollama-key",
+      "x-secret-bound-to": ["ollama_url", "ollama_failover_url"],
+      "title": "Nodvard KI: API-Schlüssel des Servers (optional)",
+      "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt.",
+      "optional": true
+    }
+  ]
+}

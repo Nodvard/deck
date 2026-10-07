@@ -16,7 +16,7 @@ vi.mock("../../state/dialogs", () => ({ confirmDialog: vi.fn(async () => true), 
 const ONE_LINER = "S=; [ \"$(id -u)\" = 0 ] || S=sudo; $S sh -c 'set -e; U=lattice'";
 
 const REQUIREMENTS = [
-  { ext_id: "nexus-soc", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne", order: 50 },
+  { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne", order: 50 },
   { ext_id: "service-matrix", id: "docker-group", label: "Docker ohne sudo (Service-Matrix)", check_command: "docker ps -q", ok_text: "", fail_hint: "", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
 ];
 

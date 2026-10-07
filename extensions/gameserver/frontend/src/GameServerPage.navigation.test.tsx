@@ -1,7 +1,7 @@
 /**
  * Ende-zu-Ende durch die echte Kette Router -> ExtensionPage (Kern) -> GameServerPage: ein Link
  * von der Server-Seite stellt den Server nach vorn und scrollt hin -- auch dann, wenn die Seite
- * schon offen ist und derselbe Link noch einmal kommt. Vorbild: nexus-soc SocPage.navigation.test.tsx.
+ * schon offen ist und derselbe Link noch einmal kommt. Vorbild: extensions/shield SocPage.navigation.test.tsx.
  */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

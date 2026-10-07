@@ -4,7 +4,7 @@
 Tabellen + JSON-Schema pro Skript":** Es gibt noch keinen Alembic-Branch-pro-Extension
 (siehe `ext/tables.py`-Docstring -- der Mechanismus fehlt bis heute im Kern). Eine eigene
 Tabelle nur fuer diese WP zu bauen waere ausser Proportion -- dieselbe Abwaegung wie
-nexus-socs In-Memory-`IncidentStore` (WP-9). Metadaten UND Inhalt leben stattdessen als
+der In-Memory-`IncidentStore` von Nodvard Shield (WP-9). Metadaten UND Inhalt leben stattdessen als
 Dateien IM SELBEN Git-Repo, das ohnehin fuer die Versionierung noetig ist
 (`<script_id>/script.sh` + `<script_id>/meta.json`) -- eine Metadatenaenderung (Name,
 Zeitplan, Parameter) landet dadurch im selben Commit-Verlauf wie eine Inhaltsaenderung,

@@ -642,3 +642,17 @@ async def test_failed_write_on_ssh_source_is_still_logged(client, db_session, se
     entries = [e for e in await _audit_actions(db_session) if e.action.startswith("files.")]
     assert [(e.action, e.outcome, e.target_id) for e in entries] == [("files.upload", "failure", SSH_SOURCE)]
     assert entries[0].detail == {"path": BROKEN_PATH, "status": 502}
+
+
+@pytest.mark.asyncio
+async def test_failed_download_from_ssh_source_is_logged_as_failure_not_as_a_success(client, db_session, setup_sources):
+    """Scheitert das Lesen gleich am Anfang, bekommt die Person einen Fehler statt einer leeren Datei, und das
+    Protokoll nennt den Zugriff als gescheitert (nicht als erfolgreichen Download)."""
+    headers = await _owner(client)
+    res = await client.get(f"/api/v1/files/{SSH_SOURCE}/download?path={BROKEN_PATH}", headers=headers)
+    assert res.status_code == 502, res.text
+    assert "Zugriff auf die Quelle fehlgeschlagen" in res.json()["detail"]
+
+    entries = [e for e in await _audit_actions(db_session) if e.action.startswith("files.")]
+    assert [(e.action, e.outcome, e.target_id) for e in entries] == [("files.download", "failure", SSH_SOURCE)]
+    assert entries[0].detail == {"path": BROKEN_PATH, "status": 502}

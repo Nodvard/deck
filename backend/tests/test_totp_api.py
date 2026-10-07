@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import pyotp
 import pytest
+from totp_helpers import setup_confirm_code
 
 
 async def _bootstrap_and_login(client, username="nico", password="correct-horse-battery"):
@@ -47,13 +48,14 @@ async def test_totp_full_lifecycle(client):
 
     setup = (await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))).json()
     secret = setup["secret"]
-    code = pyotp.TOTP(secret).now()
+    code = setup_confirm_code(secret)
 
     confirm = await client.post(
         "/api/v1/me/totp/confirm", json={"code": code}, headers=_auth_header(token)
     )
     assert confirm.status_code == 200
     assert len(confirm.json()["recovery_codes"]) == 10
+    recovery_code = confirm.json()["recovery_codes"][0]
 
     me = await client.get("/api/v1/me", headers=_auth_header(token))
     assert me.json()["totp_enabled"] is True
@@ -79,8 +81,11 @@ async def test_totp_full_lifecycle(client):
     assert mfa_ok.json()["access_token"]
     new_token = mfa_ok.json()["access_token"]
 
+    # Abschalten verlangt ausser dem Passwort einen Code; der App-Code von eben gilt nur einmal, also ein
+    # Wiederherstellungs-Code.
     disable = await client.request(
-        "DELETE", "/api/v1/me/totp", json={"current_password": "correct-horse-battery"}, headers=_auth_header(new_token)
+        "DELETE", "/api/v1/me/totp", json={"current_password": "correct-horse-battery", "totp_code": recovery_code},
+        headers=_auth_header(new_token),
     )
     assert disable.status_code == 204
 
@@ -100,7 +105,7 @@ async def test_mfa_token_cannot_be_used_as_access_token(client):
     MFA-Zwischentoken faelschlich als Bearer-Access-Token akzeptiert wird."""
     token = await _bootstrap_and_login(client)
     setup = (await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))).json()
-    code = pyotp.TOTP(setup["secret"]).now()
+    code = setup_confirm_code(setup["secret"])
     await client.post("/api/v1/me/totp/confirm", json={"code": code}, headers=_auth_header(token))
 
     login = await client.post(

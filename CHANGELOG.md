@@ -10,6 +10,33 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.7.0] – 2026-10-07
+
+Update helper, Shield under its own name and more protection.
+
+- **New:** an optional update helper (switched on with its own Compose file). With it, the owner
+  installs future versions from Settings → System → Updates with password and two-factor code,
+  follows every step, and goes back once within 7 days if needed. A new version that does not
+  start is rolled back automatically. The first update by button is the step from 0.7.0 to the
+  next version.
+- **New:** "Propose all updates" and "Propose all security updates" in the Nodvard Shield update
+  center, each still approved under "Actions".
+- **Security:** turning off two-factor login and creating new recovery codes need password and
+  code; with two-factor on, downloading and restoring a backup need the code too. The lockout after
+  wrong codes survives a restart. User accounts, autonomy, blocked commands and maintenance windows
+  are written to the audit log. Extensions follow no redirects and cannot write the core's own
+  audit entries.
+- **Fixed:** redirects and unexpected answers from Pi-hole, Nginx Proxy Manager, ntfy, Nextcloud,
+  Proxmox and the AI server show a clear sentence instead of raw text or a false "works". The
+  hardening audit also finishes on servers where Lynis needs more than an hour, shows "running
+  since …" right away and never starts twice. Ignored or restored findings stay out of quarantine.
+  Scripts keep `$HOME`, `$(date)` and similar, and a failed scheduled run counts as failed. Broken
+  schedules can no longer be saved and no longer stop Shield or Scripts. Automatic updates restart
+  the dashboard's own server last.
+- **Improved:** Nodvard Shield uses `shield` as its internal name; old links, settings and
+  findings keep working, and extensions can be renamed later without losing data. Names instead
+  of internal IDs on the actions page, in notifications and in the audit log.
+
 ## [0.6.2] – 2026-10-02
 
 Security and polish release.

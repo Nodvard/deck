@@ -380,10 +380,16 @@ def inspect_db(path: Path) -> DbFacts:
 
 
 def installed_extension_ids(extensions_dir: Path | None) -> set[str] | None:
-    """Ordnernamen der hier installierten Erweiterungen; `None`, wenn nicht feststellbar."""
+    """Kennungen der hier installierten Erweiterungen: Ordnername, Kennung und alte Kennungen
+    (`legacy_ids`, siehe `snapshot.extension_ids`); `None`, wenn nicht feststellbar. Eine Sicherung mit
+    der Zeile einer alten Kennung gilt so nicht als "Erweiterung fehlt"."""
     if extensions_dir is None or not extensions_dir.is_dir():
         return None
-    return {p.name for p in extensions_dir.iterdir() if p.is_dir() and not p.name.startswith(("_", "."))}
+    out: set[str] = set()
+    for path in extensions_dir.iterdir():
+        if path.is_dir() and not path.name.startswith(("_", ".")):
+            out.update(snapshot.extension_ids(path))
+    return out
 
 
 def check_compatible(

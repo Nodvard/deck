@@ -13,17 +13,17 @@ This document is the specification. The matching, importable contract lives in
 ## 1. Anatomy of an extension
 
 ```
-extensions/nexus-soc/
+extensions/shield/
 ├─ extension.toml            ← manifest, readable without importing code
 ├─ pyproject.toml            ← optional; for pip-installable extensions
-├─ src/nodvard_deck_ext_nexus_soc/
+├─ src/nodvard_deck_ext_shield/
 │  ├─ __init__.py            ← contains  class Extension(NodvardExtension)
 │  ├─ api.py                 ← APIRouter
 │  ├─ connectors.py          ← Ollama and ntfy connector types
 │  ├─ capabilities.py        ← ActionExecutor, AIProvider …
 │  ├─ widgets.py             ← declarative WidgetSpecs
 │  ├─ pipeline.py            ← incident queue/batching
-│  ├─ models.py              ← own tables (prefix ext_nexus_soc_)
+│  ├─ models.py              ← own tables (prefix ext_shield_; older: ext_nexus_soc_)
 │  └─ migrations/            ← own Alembic branch
 └─ frontend/
    ├─ package.json
@@ -34,14 +34,15 @@ extensions/nexus-soc/
 
 ```toml
 [extension]
-id          = "nexus-soc"          # stable, lowercase, namespace for everything
+id          = "shield"             # stable, lowercase, namespace for everything
+legacy_ids  = ["nexus-soc"]        # optional: earlier IDs, see "Renaming an extension"
 name        = "Nodvard Shield"
 version     = "0.1.0"
 api_version = "1.0"                # SemVer against nodvard_sdk.API_VERSION
 author      = "…"
 description = "Autonomous diagnosis and remediation for your own fleet."
 icon        = "shield-check"
-entrypoint  = "nodvard_deck_ext_nexus_soc:Extension"
+entrypoint  = "nodvard_deck_ext_shield:Extension"
 frontend    = "frontend/dist/index.js"    # optional
 requires    = ["terminal>=0.1"]           # other extensions, optional
 enable_on   = ["host_credential"]         # optional: see below
@@ -65,7 +66,7 @@ schema = "settings.schema.json"
 ```
 
 **Package name (`entrypoint`):** The Python packages of the bundled extensions are called
-`nodvard_deck_ext_<id>` (hyphens in the ID become `_`, so `nodvard_deck_ext_nexus_soc`) and live
+`nodvard_deck_ext_<id>` (hyphens in the ID become `_`, so `service-matrix` becomes `nodvard_deck_ext_service_matrix`) and live
 under `extensions/<id>/src/`. This is the convention for new extensions; the core does not enforce
 it. It imports exactly the module named in `entrypoint` and reads the manifest fresh from disk on
 every start. **Third-party extensions that follow the old convention `lattice_ext_<id>` (or use any
@@ -101,6 +102,94 @@ the manifests of all extensions — including disabled and broken ones — witho
 their code. An import is code execution; a broken or switched-off extension must not run
 just because it is shown in the registry.
 
+### Renaming an extension: `legacy_ids`
+
+The ID (`id`) is the namespace for everything. If an extension still needs a new ID, it lists the earlier one in
+`legacy_ids` (this is how Nodvard Shield moved from `nexus-soc` to `shield` in 0.7):
+
+```toml
+[extension]
+id         = "new-name"
+legacy_ids = ["old-name"]
+```
+
+After several renames, all earlier IDs are listed, the most recent first (`["middle-name", "old-name"]`). Without
+`legacy_ids` (the normal case) nothing changes.
+
+**Basic idea: the ID changes, the stored data does not.** Nothing is copied, renamed or migrated. A way back to the old
+image finds its data unchanged.
+
+**Rules in the manifest:** every old ID is a valid ID (`a-z`, `0-9`, `-`), none appears twice, and the extension's own
+`id` is not in the list. Otherwise the extension does not load.
+
+**Storage ID.** The core looks for the registry row like this:
+1. If there is a row with the new ID, that one applies.
+2. Otherwise the first existing row in the order of `legacy_ids` applies. The log says
+   "Erweiterung 'neuer-name' nutzt den gespeicherten Stand von 'alter-name'." (extension 'new-name' uses the stored
+   state of 'old-name').
+3. If there is none, a row with the new ID is created, as for any new extension.
+
+The `id` of that row is the **storage ID**. Everything that is stored permanently and read again after a way back
+hangs on it:
+- settings, state and permissions (the registry row itself),
+- the markers `extension.untouched.<storage ID>` and `extension.test.<storage ID>`,
+- the schedules (`jobs.ext_id` and with it the run history); no duplicate jobs are created,
+- the data folder (see below).
+
+Everything else runs under the **new** ID: addresses `/api/v1/ext/<id>/…`, pages, widgets, capabilities, new actions,
+notifications, audit entries, loggers and live channels.
+
+**What still works with the old name:**
+- **Addresses:** the core additionally mounts the routes under every old ID (`/api/v1/ext/<old>/…`, same login check,
+  marked as deprecated in the OpenAPI schema, throughout 1.x). The core addresses `/api/v1/extensions/<old>/…` and the
+  bundle resolve the old ID. Saved links, open tabs with an old bundle and the app keep working without changes.
+  `request.url_for` always builds the new address. New code only uses the new ID; the API names the old ones in
+  `legacy_ids` and `legacy_ext_ids` ([API, section 7](../04-API.md#7-kompatibilität), in German).
+- **Interface:** the web interface follows the rename by itself. `/ext/<old>/<page>` and `/settings/extensions/<old>`
+  redirect to the new ID, replacing the history entry (query and anchor are kept). Dashboard widgets keep their
+  position, size and visibility. Notifications, audit log and actions show the extension's name, also for entries under
+  the old ID.
+- **Tables:** the prefixes of all IDs are allowed (`ext_new_name_*`, `ext_old_name_*`). Existing tables keep their
+  name, new ones get the new prefix. The tables belong to all IDs together.
+- **Migrations:** shipped revisions, their branch name and their file names stay unchanged; only the folder moves.
+- **Actions:** `ctx.actions.list()`, `result()` and `proposer_labels()` also see proposals under an old ID. Action
+  types do not change; execution goes by type.
+- **Live messages:** `ctx.ws.broadcast` also sends on `ext.<old>.<channel>`, so open pages with an old state keep
+  receiving messages.
+- **`requires`:** if another extension still names the old ID, it keeps seeing the capabilities of the renamed one.
+- **Data folder:** `data/ext/<storage ID>`. If it is missing, the first existing folder of the new or an old ID is used.
+  If there is none, `data/ext/<storage ID>` is created. Nothing is moved.
+- **Backups:** extensions are also recognized under their old IDs. A backup with the old row does not produce a
+  "does not exist here" warning when restored.
+- **Secrets:** they are found by their label. Labels and permission patterns such as `secrets.read:old-name-*` stay.
+
+**Conflicts:**
+- **Old extension still installed:** if a folder with the old ID is still there (even with a broken manifest), or the
+  old extension is installed as a package with a readable manifest, the new one is not loaded. The log says
+  "Erweiterung '…' wird nicht geladen: Die alte Kennung „…“ gehört noch zu einer installierten Erweiterung …"
+  (the old ID still belongs to an installed extension). The old one keeps loading as long as its manifest is
+  readable. Fix: remove the old folder or package.
+- **Duplicate migrations:** if the same migrations are in two extension folders (for example after unpacking over an
+  old state), startup stops with "Die Migrationen der Erweiterungsordner „…“ und „…“ sind doppelt …" (the migrations
+  of the extension folders … are duplicated). The message is also on the rescue page. So empty `extensions/` before
+  unpacking over an old state.
+- **Shared old ID:** if two extensions name the same old ID, neither is loaded.
+
+**Orphaned twin.** After "fresh install with the new ID → way back to the old image → new again", or with several old
+rows, only one row applies (order as above). Any other one stays untouched and is never loaded, never switched on
+automatically, never changed and not listed in `GET /extensions`. Changing calls through the old core address
+(`/api/v1/extensions/<old>/…`) then answer with `409`; reading still works. The log says "Erweiterung 'neuer-name'
+nutzt die Zeile '…'; die Zeile der alten Kennung '…' bleibt unverändert liegen und wird nicht geladen." What was set up
+under the old ID during the way-back period (settings, schedules) does not come along.
+
+**Limits:**
+- **Server providers:** an extension that creates servers (`hosts.write`, `ctx.hosts.upsert_discovered()`) cannot be
+  renamed yet: the servers and their tags carry the provider's ID (`provider_ext_id`, `managed_by_ext_id`). The core
+  refuses `legacy_ids` together with `hosts.write` during discovery ("Erweiterungen, die Server anlegen, können noch
+  nicht umbenannt werden (legacy_ids zusammen mit hosts.write)."); the extension is not loaded, and the reason is in
+  the log and in the extension's row. All other permissions work.
+- `GET /jobs?ext_id=` filters by the storage ID, `GET /capabilities` only names the new ID.
+
 ### Settings schema: `settings.schema.json` and the `x-*` additions
 
 From the JSON Schema, the core builds the extension's settings page (Settings → Extensions –
@@ -114,11 +203,11 @@ and `pattern`. In addition, these additions (all optional; unknown ones are igno
 | `x-hidden` | field | Is not displayed (internal state). At the top level, `PUT /extensions/{id}/settings` ignores the field; it belongs to the extension's own routes (`ctx.settings.set()`). |
 | `x-item-title` | list of objects | What an entry is called ("Add server" – „Server hinzufügen“). |
 | `x-enum-labels` | field with `enum` | Readable texts per value: `{"all": "Alle Updates"}` ("All updates"). |
-| `x-widget: "schedule"` | text (cron) | Schedule picker instead of a cron field. |
+| `x-widget: "schedule"` | text (cron) | Schedule picker instead of a cron field. `PUT /extensions/{id}/settings` checks the expression like registering the job does and rejects an invalid one with `422`; empty stays allowed (then the extension's default applies). |
 | `x-widget: "host"` | text or list of texts | Choice from the servers (value = server name, from `GET /hosts`). List: chips with "Add server" („Server hinzufügen“). Without a server list: a text field or word list. |
 | `x-widget: "host-tag"` | text or list of texts | Like `host`, but a choice from the servers' tags, with a count. A stored tag that no longer exists stays visible. |
 | `x-widget: "remote-select"` | text | Selection list that the extension supplies itself (e.g. the models of an AI server). Needs `x-options-url`. If the query fails or the list is empty, a text field and the reason appear. |
-| `x-options-url` | `remote-select` | Path under `/api/v1`, e.g. `/ext/nexus-soc/ai/models?which=primary`. The interface sends no form values along; the extension only asks for what is stored (no address parameter – otherwise the route would be a way to send requests to arbitrary addresses, including the key). After entering a new address: save, then "Reload" („Neu laden“). Response: `{"options": [{"value": "…", "label": "…"}], "error": null}`; on problems `options: []` and `error` as a German sentence (no error status). |
+| `x-options-url` | `remote-select` | Path under `/api/v1`, e.g. `/ext/shield/ai/models?which=primary`. The interface sends no form values along; the extension only asks for what is stored (no address parameter – otherwise the route would be a way to send requests to arbitrary addresses, including the key). After entering a new address: save, then "Reload" („Neu laden“). Response: `{"options": [{"value": "…", "label": "…"}], "error": null}`; on problems `options: []` and `error` as a German sentence (no error status). |
 | `x-empty-label` | selection | Text for "nothing selected" (default "– nicht gesetzt –", i.e. "– not set –"), e.g. "alle Server" ("all servers"). |
 | `pattern` | text, words of a list | Regular expression (as in JSON Schema, not anchored). The interface shows the message at the field and disables "Save"; the backend checks the same (`422`). Empty values are always allowed. |
 | `x-pattern-message` | next to `pattern` | German message when the pattern does not match (default: "Das Format stimmt nicht.", i.e. "The format is not correct."). |
@@ -137,7 +226,7 @@ rules as for `x-secret-bound-to`; the interface computes the same in
 („Verbindung testen“) in the interface (`POST /extensions/{id}/test`). For this, the core calls the
 extension's `health()` (and `test()` of its `NotificationChannel`, if it provides one) and
 translates technical errors into understandable German sentences (no response, credentials
-rejected, certificate, address not found …). For good messages it is enough to leave the HTTP
+rejected, certificate, address not found, redirect (3xx) …). For good messages it is enough to leave the HTTP
 client's error text in `HealthReport.message`; with several connections, `HealthReport.details`
 returns `{"name": {"healthy": bool, "error": "…"}}` per connection – this becomes the list "Result
 per connection" („Ergebnis je Verbindung“). Secrets never belong in `message` or `details`; the
@@ -190,17 +279,17 @@ permission-checked and writes to the audit log where needed.
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (live output, e.g. live logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
 | `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it) | `secrets.read:<label>` |
 | `ctx.vault_use` | context manager that materializes a value in memory only | same |
-| `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables | — |
+| `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables (after a rename also on the prefixes of the old IDs, see section 1 "Renaming an extension") | — |
 | `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
-| `ctx.scheduler` | `register_job(JobSpec)` | `schedule.register` |
+| `ctx.scheduler` | `register_job(JobSpec)`; `validate_schedule(schedule)` checks a cron expression exactly like `register_job()` does, without registering anything (`ValueError` with a German message): for schedules that an extension stores itself (such as a script's), check first, then store, because a stored broken schedule would make `register_job()` fail on the next start. Older cores do not have the method. If a job handler reports an expected failure with `NodvardError`, the run is shown as failed with that text, without a traceback (in the run log and in the container log); any other exception comes with a traceback | `schedule.register` |
 | `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
 | `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – with `raise_on_failure=True` it raises `NotificationNotDelivered` if there were channels and none delivered (for "try again"); `would_suppress(host_id=…, host_ids=…)` only asks whether a maintenance window would currently silence a notification (see below) | `notify.send` |
-| `ctx.audit` | `log(entry)` | `audit.write` |
-| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` do not follow them by default either | `net.outbound:<cidr>` |
-| `ctx.ws` | `broadcast(channel, payload)` on `ext.<id>.*` | — |
+| `ctx.audit` | `log(entry)`. Extensions write under their own name, for example `<id>.<event>`. Actions whose name starts with `mfa.`, `auth.`, `login.`, `system.` or `user.` (case and surrounding spaces do not matter) are written only by the core, because it reads them back and decides on them: the call then raises `ValueError` and writes nothing | `audit.write` |
+| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` never follow them either: a response with status 3xx comes back unchanged, and the extension queries the new address itself. `follow_redirects=True` (or any other true value) raises `ValueError` before a request goes out, also with `insecure_tls=True`; `follow_redirects=False` is still allowed. Reason: the check of allowed addresses (`net.outbound`) only knows the address of the call and would never see the target of a redirect. `ctx.http` never uses a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, for `websocket()` also `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`), every connection goes directly to the checked address; `SSL_CERT_FILE` and `SSL_CERT_DIR` still apply | `net.outbound:<cidr>` |
+| `ctx.ws` | `broadcast(channel, payload)` on `ext.<id>.*` (after a rename also on `ext.<old>.*`) | — |
 | `ctx.spawn` | supervised background task with restart policy | — |
 | `ctx.logger` | structured logger, pre-tagged with the extension ID | — |
-| `ctx.data_dir` | the extension's own writable folder (in the image `/app/data/ext/<id>/`). Files belong here: the code in the image belongs to root and is read-only, including the extension's own package folder. New files are readable only by the user `lattice` | — |
+| `ctx.data_dir` | the extension's own writable folder (in the image `/app/data/ext/<id>/`; after a rename the folder of the storage ID, see section 1). Files belong here: the code in the image belongs to root and is read-only, including the extension's own package folder. New files are readable only by the user `lattice` | — |
 
 Deliberately not available on the context: direct access to core tables, the `asyncio`
 loop object, other extensions (only via `ctx.events` and declared `requires` +
@@ -246,8 +335,8 @@ its data as a stream or keep its own checks. Among the bundled extensions, `docu
 `inventory` (5 MB per image) use it.
 
 Pages in the frontend bundle send the token along for these routes (`Authorization: Bearer …` with
-the token from `window.__nodvardDeck.getAccessToken()`, like `HelloPage.tsx` in hello-world; the
-other bundled extensions use `authedFetch`, see section 5).
+the token from `window.__nodvardDeck.getAccessToken()`). The bundled extensions use `authedFetch` for this, which
+refreshes the token on a 401 (see section 5); `HelloPage.tsx` in hello-world shows it as a template.
 
 ### Notifications and maintenance windows
 
@@ -320,7 +409,7 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | the graphical console (`/console/:hostId`, noVNC) |
 | `FileSource` | files-sftp, nextcloud, truenas, syncthing | the **one** file manager with sidebar |
 | `ActionExecutor` | terminal (SSH exec), proxmox (API actions) | execution behind the gate |
-| `AIProvider` | nexus-soc (Ollama), others in the future | chat, diagnosis, summaries |
+| `AIProvider` | shield (Ollama), others in the future | chat, diagnosis, summaries |
 | `NotificationChannel` | ntfy, email, webhook | the notification center |
 | `MetricsProvider` | proxmox, docker, node-exporter | tiles and history charts |
 | `ServiceCatalog` | service-matrix (Docker API) | the app launcher |
@@ -492,8 +581,8 @@ ctx.ui.register_widget(WidgetSpec(
     title="Vorfälle",                         # "Incidents"
     icon="siren",
     size=GridSize(w=2, h=2, min_w=1, min_h=1),
-    refresh=Refresh(interval_s=60, ws_channel="ext.nexus-soc.incidents"),
-    data_endpoint="widgets/incidents",        # relative to /api/v1/ext/nexus-soc/
+    refresh=Refresh(interval_s=60, ws_channel="ext.shield.incidents"),
+    data_endpoint="widgets/incidents",        # relative to /api/v1/ext/shield/
     permissions=["soc.read"],
     view=ListView(
         item=ListItem(
@@ -552,7 +641,7 @@ the web-only imbalance this rule is meant to prevent.
 ```python
 ctx.ui.register_page(PageSpec(
     id="soc",
-    path="/soc",                      # becomes /ext/nexus-soc/soc
+    path="/soc",                      # becomes /ext/shield/soc
     title="Nodvard Shield",
     icon="shield-check",
     nav_section="Sicherheit",         # "Security"
@@ -744,7 +833,7 @@ export { IncidentFeed } from "./IncidentFeed";
 ```
 
 A real, minimal example is in `extensions/hello-world/frontend/src/`: one page
-(`HelloPage.tsx`), built with `extensions/hello-world/frontend/build.mjs`.
+(`HelloPage.tsx`, using `authedFetch` and the UI kit), built with `extensions/hello-world/frontend/build.mjs`.
 
 ---
 
@@ -776,7 +865,8 @@ host with a tag, not a JSON entry that quietly goes stale.
 
 ## 7. Data, migrations, namespaces
 
-- An extension's tables must be named `ext_<id>_<name>` (with `-` → `_`).
+- An extension's tables must be named `ext_<id>_<name>` (with `-` → `_`; after a rename the prefix of every old ID
+  is allowed too, see section 1 "Renaming an extension").
   The core checks this on load and otherwise refuses the extension.
 - Every extension has its **own Alembic branch**
   (`alembic upgrade heads` brings up the core plus all extensions).
@@ -816,7 +906,7 @@ guests, what a container is.
 | Component | Implementation |
 |---|---|
 | Versioning | own Git repo under `/data/ext/scripts/repo`, `pygit2`/`dulwich`; the extension sets the Git settings itself on every start, and hooks, filters and signing never run (from `.git`, a backup only carries the history) |
-| Metadata, parameters | own tables + a JSON Schema per script |
+| Metadata, parameters | own tables + a JSON Schema per script. In the script, parameters are written as `$name` or `${name}`. Only declared parameters are replaced (value via `shlex.quote`), `$$` becomes `$`, every other `$` (`$HOME`, `"$f"`, `$(date)`) stays for the shell; so the shell's process ID is written `$$$$` |
 | "Run now" | `ctx.actions.propose(ActionSpec("script.run"))` → the same SSH layer as the terminal (no second execution path) |
 | Fleet-wide schedule | `ctx.scheduler` — **one** view, because there is **one** scheduler |
 | Scheduled runs without a click | standing approval per script, stored in `ctx.data_dir` (not in the Git repo: resetting the script does not revive an expired approval). Only real scheduled runs (`current_job_trigger() == "schedule"`) send it as `ActionRequest.standing_approval`. Beforehand the extension checks that content, parameters, target, schedule and the servers' account, address and SSH port are still as they were when it was granted; the core gate checks that the person who granted it is still allowed to |
@@ -889,3 +979,12 @@ manifest does not load there) and leave routes without `permission=` open; if yo
 The same goes for the request size: the core rejects any request over 1 MiB on extension routes with `413`; a route that
 accepts larger uploads needs `max_body_bytes` for that (see section 2). Older cores do not know the name (the import
 fails there) and have no general limit.
+
+The same goes for redirects: `ctx.http` refuses `follow_redirects=True` with `ValueError` (see section 2); older cores pass
+it on to httpx and then follow the redirect. And for the audit log: `ctx.audit.log()` refuses actions starting with
+`mfa.`, `auth.`, `login.`, `system.` or `user.`; older cores write them.
+
+The same goes for the network: `ctx.http` does not use a proxy from the environment (see section 2). A target that the
+machine can only reach through such a proxy is therefore out of reach for the extension. Older cores use a proxy from
+`HTTP_PROXY`, `HTTPS_PROXY` or `ALL_PROXY` for `get()`, `post()`, `request()` and `stream()`, and for `websocket()`
+(with websockets 15 or later) one from `HTTP_PROXY`, `HTTPS_PROXY`, `WS_PROXY`, `WSS_PROXY` or `SOCKS_PROXY`.

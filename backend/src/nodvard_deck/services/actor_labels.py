@@ -30,11 +30,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core.rbac import has_permission
-from ..models import Action, ExtensionRecord, User
+from ..models import Action, User
 from .auth import user_permissions
+from .extensions import get_records
 
 # Akteure ohne eigene Kennung, die sich nachschlagen liesse.
 FIXED_LABELS = {"system": "System", "scheduler": "Zeitplan", "ai": "KI"}
+
+# Feste Kennungen unter der Art `system`, die einen eigenen Namen haben (z. B. Ergebnisse des Update-Helfers,
+# `services.update_helper`: Akteur `system`/`updater`).
+SYSTEM_LABELS = {"updater": "Update-Helfer"}
 
 
 def raw_actor(actor_type: str, actor_id: str) -> str:
@@ -64,6 +69,8 @@ class ActorLabels:
             name = self._users.get(actor_id)
         elif actor_type == "extension":
             name = self._extensions.get(actor_id)
+        elif actor_type == "system" and actor_id in SYSTEM_LABELS:
+            name = SYSTEM_LABELS[actor_id]
         else:
             name = FIXED_LABELS.get(actor_type)
         return name or raw_actor(actor_type, actor_id)
@@ -112,11 +119,10 @@ async def load_actor_labels(
 
     extensions: dict[str, str] = {}
     if extension_ids:
-        rows = await session.execute(
-            select(ExtensionRecord.id, ExtensionRecord.manifest).where(ExtensionRecord.id.in_(extension_ids))
-        )
-        for ext_id, manifest in rows.all():
-            name = (manifest or {}).get("name")
+        # Die Kennung stammt aus der gespeicherten Aktion und kann die einer frueheren Version sein (nach einer
+        # Umbenennung, `legacy_ids`): `get_records` findet die Zeile fuer die heutige wie fuer jede alte Kennung.
+        for ext_id, record in (await get_records(session, extension_ids)).items():
+            name = (record.manifest or {}).get("name")
             if isinstance(name, str) and name.strip():
                 extensions[ext_id] = name.strip()
 

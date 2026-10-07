@@ -60,7 +60,7 @@ from nodvard_sdk.errors import ActionBlocked, NodvardError
 from pydantic import BaseModel
 
 from .params import ParamError, substitute_params
-from .promotion import MAX_COUNT, RecurringFixTracker
+from .promotion import MAX_COUNT, RecurringFixTracker, draft_content
 from .repo import Script, ScriptMeta, ScriptRepo
 from .skipnotice import MAX_SEND_TRIES, SkipNotices
 from .standing import (
@@ -415,10 +415,38 @@ class _ScriptJobSpec:
     async def handler(self, **_: Any) -> dict[str, Any]:
         # Nur ein echter Zeitplan-Lauf darf eine Dauerfreigabe nutzen; "Jetzt ausfuehren"
         # ueber die Jobs-Schnittstelle (manual) bleibt ein normaler Vorschlag.
-        return await run_script(
+        result = await run_script(
             self._ctx, self._repo, self._script_id, param_overrides={},
             scheduled=current_job_trigger() == "schedule",
         )
+        problem = _run_problem(result)
+        if problem is not None:
+            # Der Kern-Scheduler zaehlt einen Lauf nur als fehlgeschlagen, wenn der Handler
+            # wirft -- sonst stuende ein Lauf, der nichts getan hat, als "erfolgreich" da.
+            raise NodvardError(problem)
+        return result
+
+
+def _run_problem(result: dict[str, Any]) -> str | None:
+    """Warum ein Lauf als fehlgeschlagen gilt, obwohl `run_script()` normal zurueckkam:
+    ein Ziel mit Fehler (z. B. ein Parameter ohne Wert) oder gar kein Ziel. Uebersprungene
+    Server eines Sammelziels sind fuer sich kein Fehler (dafuer gibt es den Hinweis aus
+    `_notify_skipped`); wurden aber alle uebersprungen, lief das Skript nirgends.
+
+    Nur fuer den Job-Handler: "Jetzt ausfuehren" auf der Skripte-Seite
+    (`POST /scripts/{id}/run`) zeigt die Ergebnisse je Server selbst an."""
+    results: list[dict[str, Any]] = result.get("results") or []
+    failed = [r for r in results if "error" in r]
+    if failed:
+        names = ", ".join(str(r.get("host_name") or r.get("host_id")) for r in failed)
+        reasons = "; ".join(dict.fromkeys(str(r["error"]) for r in failed))
+        return f"Nicht ausgeführt auf {names}: {reasons}"
+    if not result.get("targets"):
+        skipped = [f"{r.get('host_name') or r.get('host_id')} ({r['skipped']})" for r in results if "skipped" in r]
+        if skipped:
+            return "Das Skript lief auf keinem Server, alle wurden übersprungen: " + ", ".join(skipped) + "."
+        return "Das Skript lief auf keinem Server: Es gibt keinen passenden Zielserver."
+    return None
 
 
 async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> list[SdkHost]:
@@ -463,7 +491,7 @@ async def _runnable_targets(
 
 def _skip_reason(host: SdkHost) -> str | None:
     """Warum ein Host bei 'Alle Server'/'Gruppe' nicht als Ziel taugt
-    -- dieselben Kriterien wie nexus-socs `target_hosts()`. Ein Lauf dort wuerde
+    -- dieselben Kriterien wie `target_hosts()` in Nodvard Shield. Ein Lauf dort wuerde
     garantiert scheitern und nur die Aktionen-Liste zumuellen."""
     if not host.is_managed:
         return "nicht verwaltet"
@@ -482,7 +510,7 @@ async def run_script(
     auf und schlaegt EINE `script.run`-Aktion PRO Ziel-Host vor. Wird sowohl vom
     Kern-Scheduler (geplanter Lauf, ueber `_ScriptJobSpec.handler`) als auch von
     `POST /scripts/{id}/run` (manueller Lauf mit optionalen Ueberschreibungen)
-    aufgerufen -- derselbe Pfad, unabhaengig vom Ausloeser, exakt wie nexus-socs
+    aufgerufen -- derselbe Pfad, unabhaengig vom Ausloeser, exakt wie in Nodvard Shield
     `_propose_from_response()` fuer Chat UND Vorfall-Batches denselben Pfad nutzt.
 
     `wait_s` (nur von der HTTP-Route) ist EIN Zeitbudget fuer alle Ziel-Hosts
@@ -731,13 +759,51 @@ def _target_problem(target: dict[str, Any]) -> str | None:
 
 
 class Extension(NodvardExtension):
+    async def _register_script_job(self, ctx: ExtensionContext, script: Script) -> None:
+        """Beim Start. Ein Skript mit kaputtem Zeitplan (gespeichert von einer Version, die ihn noch nicht
+        pruefte) legte frueher die ganze Erweiterung lahm: `register_job()` warf, `setup()` brach ab, kein
+        Skript lief mehr. Jetzt wird nur dieses Skript ohne Zeitplan angemeldet, mit Warnung (ohne Traceback:
+        die Deploy-Pruefung sucht im Container-Log danach) und Meldung; die anderen laufen wie geplant."""
+        meta = script.meta
+        schedule = meta.schedule or _NEVER
+        enabled = bool(meta.enabled and meta.schedule)
+        if meta.schedule:
+            try:
+                ctx.scheduler.validate_schedule(meta.schedule)
+            except ValueError as exc:
+                _log.warning("script_schedule_invalid script=%s schedule=%r error=%s", meta.id, meta.schedule, exc)
+                if enabled:
+                    await self._notify_invalid_schedule(ctx, meta, str(exc))
+                schedule, enabled = _NEVER, False
+        await ctx.scheduler.register_job(
+            _ScriptJobSpec(ctx, self._repo, meta.id, schedule=schedule, enabled=enabled)
+        )
+
+    async def _notify_invalid_schedule(self, ctx: ExtensionContext, meta: ScriptMeta, why: str) -> None:
+        try:
+            await ctx.notify.send(
+                Notification(
+                    title=f"Skript „{meta.name}“: Zeitplan ungültig",
+                    body=(
+                        f"Der Zeitplan „{meta.schedule}“ von „{meta.name}“ lässt sich nicht planen ({why}). "
+                        "Das Skript läuft vorerst nicht nach Zeitplan. Bitte korrigiere den Zeitplan auf der "
+                        "Skripte-Seite."
+                    ),
+                    severity=Severity.WARNING,
+                    correlation_id=f"scripts-schedule:{meta.id}",
+                    payload={"path": "/ext/scripts/scripts"},
+                )
+            )
+        except Exception:  # noqa: BLE001 - eine ausgefallene Meldung darf den Start nicht stoppen
+            _log.warning("script_schedule_notice_failed script=%s", meta.id)
+
     async def setup(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
         self._repo = ScriptRepo(_repo_path(ctx))
         self._tracker = RecurringFixTracker()
         # Bewusst KEIN vorab angelegtes Skript mehr: das fruehere
         # Lynis-Seed kam nach jedem Loeschen beim naechsten Start zurueck, lief ohne
-        # sudo und doppelte nexus-socs eigenes Haertungs-Audit.
+        # sudo und doppelte das eigene Haertungs-Audit von Nodvard Shield.
 
         ctx.capabilities.provide(_ScriptActionExecutor(ctx, self._repo))
         ctx.actions.register(
@@ -757,15 +823,7 @@ class Extension(NodvardExtension):
         )
 
         for script in self._repo.list_all():
-            await ctx.scheduler.register_job(
-                _ScriptJobSpec(
-                    ctx,
-                    self._repo,
-                    script.meta.id,
-                    schedule=script.meta.schedule or _NEVER,
-                    enabled=bool(script.meta.enabled and script.meta.schedule),
-                )
-            )
+            await self._register_script_job(ctx, script)
 
         router = APIRouter()
 
@@ -889,6 +947,16 @@ class Extension(NodvardExtension):
             problem = _target_problem(payload.target)
             if problem:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=problem)
+            if payload.schedule:
+                # Vor dem Speichern: ein kaputter Zeitplan landete sonst im Repo, und der naechste Start
+                # der Erweiterung scheiterte daran (siehe `_register_script_job`).
+                try:
+                    ctx.scheduler.validate_schedule(payload.schedule)
+                except ValueError as exc:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=f"Der Zeitplan „{payload.schedule}“ ist ungültig: {exc}",
+                    ) from exc
             is_new = self._repo.get(script_id) is None
             if create and not is_new:
                 raise HTTPException(
@@ -1174,7 +1242,7 @@ class Extension(NodvardExtension):
                     schedule=None,
                     enabled=False,
                 ),
-                f"#!/bin/sh\n{command}\n",
+                draft_content(command),
                 commit_message=f"scripts: automatischer Entwurf nach {MAX_COUNT}x Wiederholung",
             )
             # Der Befehl selbst steht nur im Entwurf (Skripte-Seite, `hosts.execute`): Meldungen

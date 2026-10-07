@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { navigateTo } from "../../../_shared/frontend/src/testShell";
 
-import { ScriptsPage, describeSchedule } from "./ScriptsPage";
+import { ParamsHint, ScriptsPage, describeSchedule } from "./ScriptsPage";
 
 const SCRIPT = {
   id: "uptime", name: "Uptime", description: "", content: "uptime\n", params_schema: {},
@@ -369,6 +369,27 @@ describe("ScriptsPage Zeitplan", () => {
     await screen.findByText("Noch keine Skripte");
     expect(document.body.textContent).not.toContain("automatisch auf allen Servern");
     expect(document.body.textContent).toContain("Freigabe unter „Aktionen“");
+  });
+});
+
+describe("ScriptsPage Parameter und $", () => {
+  it("erklärt im Editor, wie Parameter geschrieben werden und was aus $$ wird", async () => {
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<ScriptsPage />);
+    fireEvent.click(await screen.findByText("Uptime"));
+    const hint = await screen.findByTestId("params-hint");
+    const text = hint.textContent ?? "";
+    expect(text).toContain("Parameter schreibst du als $name oder ${name}, ohne Anführungszeichen drumherum");
+    expect(text).toContain("Alles andere mit $ (z. B. $HOME, \"$f\", $(date)) bleibt, wie es ist.");
+    expect(text).toContain("Nur $$ wird zu einem einzelnen $: Für ein $ direkt vor einem Parameternamen schreibst du $$");
+    expect(text).toContain("für die Prozessnummer $$ schreibst du $$$$.");
+    // Ohne deklarierte Parameter keine leere Liste.
+    expect(text).not.toContain("Parameter dieses Skripts");
+  });
+
+  it("nennt die Parameter des Skripts", () => {
+    render(<ParamsHint names={["level", "ziel"]} />);
+    expect(screen.getByTestId("params-hint").textContent).toContain("Parameter dieses Skripts: $level, $ziel. Parameter schreibst du");
   });
 });
 

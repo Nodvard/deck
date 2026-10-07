@@ -113,7 +113,7 @@ async def _record(db_session, state="enabled", settings=None):
         ("GET /version -> ConnectTimeout", "timeout"),
         ("ReadTimeout: timed out", "timeout"),
         ("GET /x -> HTTP 401: {\"errors\":1}", "auth"),
-        ("PROPFIND / -> HTTP 403: Forbidden", "auth"),
+        ("PROPFIND / -> HTTP 403: Forbidden", "forbidden"),
         ("ConnectError: [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: self-signed certificate", "tls"),
         ("ConnectError: [Errno -2] Name or service not known", "dns"),
         ("ConnectError: [Errno 111] Connection refused", "refused"),
@@ -121,6 +121,9 @@ async def _record(db_session, state="enabled", settings=None):
         ("GET /x -> HTTP 502: bad gateway", "server_error"),
         ("SecretUnavailable: Secret 'x' existiert nicht.", "secret_missing"),
         ("Keine Verbindung konfiguriert.", "setup"),
+        ("Der Server hat die Verbindung auf eine andere Adresse umgeleitet (HTTP 302). Prüfe …", "redirect"),
+        ("HTTPStatusError: Redirect response '301 Moved Permanently' for url 'http://x' | HTTP 301", "redirect"),
+        ("Die Antwort von Proxmox hat nicht das erwartete Format (HTTP 200). Stimmt die Adresse?", "invalid_answer"),
         ("völlig unbekannter Fehler", "unknown"),
     ],
 )
@@ -135,6 +138,29 @@ def test_translate_texts_are_german_and_helpful():
     tls = extension_test.translate("SSLCertVerificationError", tls_hint="Selbstsigniertes Zertifikat erlauben").message
     assert tls.startswith("Zertifikat wird nicht vertraut") and "Selbstsigniertes Zertifikat erlauben" in tls
     assert extension_test.translate("ConnectError: Name or service not known").message.startswith("Adresse nicht gefunden")
+
+
+@pytest.mark.parametrize("code", [300, 301, 302, 304, 307, 308, 399])
+def test_translate_redirect_is_the_finished_sentence_without_location(code):
+    """Eine Weiterleitung ergibt denselben Satz wie bei der Konsole, ohne den Vorspann
+    „Technische Meldung“ und ohne die Zieladresse aus der rohen Meldung."""
+    from nodvard_deck.ext.context import WebSocketRedirectRefused
+
+    raw = (
+        f"HTTPStatusError: Redirect response '{code} Found' for url 'http://192.168.2.10:8006/x' "
+        f"Redirect location: 'https://192.168.2.99/andere-seite' | HTTP {code}"
+    )
+    t = extension_test.translate(raw)
+    assert t.kind == "redirect"
+    assert t.message == str(WebSocketRedirectRefused(code))
+    assert "Technische Meldung" not in t.message and "andere-seite" not in t.message
+
+
+def test_translate_invalid_answer_keeps_the_german_sentence():
+    text = "Die Antwort von Proxmox hat nicht das erwartete Format (HTTP 200). Stimmt die Adresse?"
+    t = extension_test.translate(text)
+    assert t.kind == "invalid_answer"
+    assert t.message == text
 
 
 def test_scrub_removes_known_values_and_patterns():
@@ -327,7 +353,7 @@ async def test_channel_test_is_part_of_connection_test_and_message_mode(client, 
 
     channel.send_exc = RuntimeError("HTTP 403: forbidden")
     r = await client.post("/api/v1/extensions/demo/test", json={"mode": "message"}, headers=headers)
-    assert r.json()["ok"] is False and r.json()["message"].startswith("Zugangsdaten abgelehnt")
+    assert r.json()["ok"] is False and r.json()["message"].startswith("Zugriff verweigert")
 
 
 @pytest.mark.asyncio

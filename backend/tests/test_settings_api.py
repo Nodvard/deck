@@ -236,10 +236,10 @@ async def test_put_timezone_roundtrip_and_moves_jobs(client, db_session):
         return "ok"
 
     job = await jobs_service.upsert_job(
-        db_session, ext_id="nexus-soc", ext_job_key="defender-briefing", name="Briefing", kind="ext",
+        db_session, ext_id="shield", ext_job_key="defender-briefing", name="Briefing", kind="ext",
         schedule="0 7 * * *", params={}, enabled=True,
     )
-    get_extension_runtime().scheduler.register("nexus-soc", "defender-briefing", handler)
+    get_extension_runtime().scheduler.register("shield", "defender-briefing", handler)
     await get_scheduler_service().schedule(job, handler)
     await db_session.refresh(job)
     before = job.next_run_at

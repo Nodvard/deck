@@ -455,3 +455,101 @@ async def test_other_spellings_of_the_same_address_keep_the_secret(client, db_se
     await fresh_secret()
     assert await put_url("https://anderer.hole:8443/admin/") == []  # nur ein Schlussstrich
     assert (await _secret_state(client, headers))["bound-pw"] is True
+
+
+SCHEDULE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "scan_cron": {"type": "string", "title": "Scan-Zeitplan", "default": "0 2 * * *", "x-widget": "schedule"},
+        "other_cron": {"type": "string", "x-widget": "schedule"},
+        "note": {"type": "string"},
+    },
+}
+
+
+@pytest.fixture
+def schedule_extension():
+    runtime = get_extension_runtime()
+    runtime.discovered["sched"] = SimpleNamespace(manifest=SimpleNamespace(settings_schema=SCHEDULE_SCHEMA), ok=True)
+    yield
+    runtime.discovered.pop("sched", None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", ["@daily", "0 24 * * *", "60 * * * *", "0 3 * * 8", "* * * *", "abc * * * *", "   ", "*/0 * * * *"])
+async def test_an_invalid_schedule_is_refused_and_nothing_is_stored(client, db_session, schedule_extension, bad):
+    """Ein Zeitplan, den der Planer nicht annimmt, legte die Erweiterung beim naechsten Start lahm
+    und wurde trotzdem als gespeichert gemeldet. Jetzt: 422 mit deutschem Text, nichts gespeichert."""
+    db_session.add(ExtensionRecord(
+        id="sched", version="1", api_version="0.1.0", state="disabled", settings={"scan_cron": "0 3 * * *", "note": "alt"},
+    ))
+    await db_session.flush()
+    headers = await _owner(client)
+
+    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": bad, "note": "neu"}}, headers=headers)
+    assert r.status_code == 422, r.text
+    detail = r.json()["detail"]
+    assert detail.startswith("„Scan-Zeitplan“: Der Zeitplan „") and "ist ungültig" in detail
+    assert "Minute" in detail  # sagt, wie es richtig aussieht
+
+    stored = (await client.get("/api/v1/extensions/sched/settings", headers=headers)).json()["values"]
+    assert stored == {"scan_cron": "0 3 * * *", "note": "alt"}  # auch das gleichzeitig geschickte Feld bleibt
+
+
+@pytest.mark.asyncio
+async def test_a_schedule_field_without_title_names_the_field_in_the_message(client, db_session, schedule_extension):
+    db_session.add(ExtensionRecord(id="sched", version="1", api_version="0.1.0", state="disabled", settings={}))
+    await db_session.flush()
+    headers = await _owner(client)
+    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"other_cron": "@weekly"}}, headers=headers)
+    assert r.status_code == 422
+    assert "other_cron" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_valid_schedules_empty_and_null_still_save(client, db_session, schedule_extension):
+    db_session.add(ExtensionRecord(id="sched", version="1", api_version="0.1.0", state="disabled", settings={"scan_cron": "0 3 * * *"}))
+    await db_session.flush()
+    headers = await _owner(client)
+
+    for good in ("30 4 * * *", "0 3 * * 0", "0 3 * * 7", "0 3 * * mon-fri", "*/15 * * * *", "0 6 1 * *"):
+        r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": good}}, headers=headers)
+        assert r.status_code == 200, (good, r.text)
+        assert r.json()["values"]["scan_cron"] == good
+    # leer = nicht gesetzt (die Erweiterung nimmt ihren Standard), null entfernt den Wert
+    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": ""}}, headers=headers)
+    assert r.status_code == 200, r.text
+    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": None}}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert "scan_cron" not in r.json()["values"]
+
+
+@pytest.mark.asyncio
+async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client, db_session):
+    """Gegen die echten Schemas: jede der sechs Shield-Einstellungen mit Zeitplan und die der
+    Service-Matrix lehnt einen ungueltigen Wert ab."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "extensions"
+    runtime = get_extension_runtime()
+    headers = await _owner(client)
+    found = 0
+    try:
+        for ext_id in ("shield", "service-matrix"):
+            schema = json.loads((root / ext_id / "settings.schema.json").read_text(encoding="utf-8"))
+            runtime.discovered[ext_id] = SimpleNamespace(manifest=SimpleNamespace(settings_schema=schema), ok=True)
+            db_session.add(ExtensionRecord(id=ext_id, version="1", api_version="0.1.0", state="disabled", settings={}))
+            await db_session.flush()
+            for key, spec in schema["properties"].items():
+                if spec.get("x-widget") != "schedule":
+                    continue
+                found += 1
+                bad = await client.put(f"/api/v1/extensions/{ext_id}/settings", json={"values": {key: "@daily"}}, headers=headers)
+                assert bad.status_code == 422, (ext_id, key, bad.text)
+                good = await client.put(f"/api/v1/extensions/{ext_id}/settings", json={"values": {key: "0 4 * * *"}}, headers=headers)
+                assert good.status_code == 200, (ext_id, key, good.text)
+    finally:
+        runtime.discovered.pop("shield", None)
+        runtime.discovered.pop("service-matrix", None)
+    assert found == 7  # sechs bei Shield, eine bei der Service-Matrix

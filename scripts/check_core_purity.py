@@ -5,7 +5,11 @@ Docs: docs/01-ARCHITECTURE.md §1.
 
 Durchsucht `backend/src/nodvard_deck/**/*.py` nach Woertern, die auf eine konkrete
 Extension/Fremdsoftware hindeuten (Proxmox, Shield, Ollama, ntfy, Nextcloud, TrueNAS,
-Syncthing, Teleport, Docker als Produktbegriff). Kommentare und
+Syncthing, Teleport, Docker als Produktbegriff, dazu der alte Produktname in der
+Schreibweise "nexus") und nach dem Praefix `nodvard_deck_ext_` der Extension-Pakete:
+der Kern importiert keine Extension. "Shield" gilt nur als eigenes Wort ohne `-` oder
+`(` dahinter: `asyncio.shield(...)` und Symbolnamen wie "shield-check" (Icon-Auswahl)
+sind keine Abhaengigkeit von Nodvard Shield. Kommentare und
 String-Literal-Anweisungen (Modul-/Klassen-/Funktions-Docstrings UND die in diesem
 Codebase durchgaengig genutzten "Attribut-Docstrings" -- ein freistehender
 Dreifach-String direkt nach einer Feldzuweisung) sind ausgenommen: verboten ist die
@@ -39,13 +43,23 @@ FORBIDDEN_WORDS = [
     "docker",
 ]
 
+# Verbotene Muster mit eigener Regel (Name -> Regex-Quelltext), wenn ein einfaches Wort nicht reicht.
+FORBIDDEN_PATTERNS: dict[str, str] = {
+    # Der Name der Extension "Nodvard Shield". Ausgenommen sind `asyncio.shield(...)` (Aufruf, `(` dahinter) und Symbolnamen
+    # mit Bindestrich wie "shield-check" (Icons in services/custom_apps.py und core/demo_seed.py). Jede dieser Ausnahmen ist
+    # in backend/tests/test_core_purity.py an der echten Fundstelle belegt.
+    "shield": r"\bshield\b(?![-(])",
+    # Python-Pakete der Extensions heissen `nodvard_deck_ext_<id>`: der Kern importiert und nennt keine.
+    "nodvard_deck_ext_": r"\bnodvard_deck_ext_",
+}
+
 # Datei -> Woerter, die dort ausdruecklich erlaubt sind (mit Begruendung im Docstring
 # der jeweiligen Datei).
 ALLOWLIST: dict[str, set[str]] = {}
 
-WORD_RE = re.compile(
-    r"\b(" + "|".join(re.escape(w) for w in FORBIDDEN_WORDS) + r")\b",
-    re.IGNORECASE,
+RULES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    *((word, re.compile(rf"\b{re.escape(word)}\b", re.IGNORECASE)) for word in FORBIDDEN_WORDS),
+    *((name, re.compile(pattern, re.IGNORECASE)) for name, pattern in FORBIDDEN_PATTERNS.items()),
 )
 
 
@@ -97,11 +111,13 @@ def check_file(path: Path) -> list[tuple[int, str, str]]:
     findings: list[tuple[int, str, str]] = []
     for lineno, line in enumerate(code.splitlines(), start=1):
         stripped = _strip_comments(line)
-        for match in WORD_RE.finditer(stripped):
-            word = match.group(1).lower()
-            if word in allowed:
-                continue
-            findings.append((lineno, line.rstrip(), word))
+        hits = [
+            (match.start(), word)
+            for word, rule in RULES
+            if word not in allowed
+            for match in rule.finditer(stripped)
+        ]
+        findings.extend((lineno, line.rstrip(), word) for _pos, word in sorted(hits))
     return findings
 
 

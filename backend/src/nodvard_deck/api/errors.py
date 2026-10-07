@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
@@ -75,3 +75,21 @@ def install_validation_error_handler(app: FastAPI) -> None:
             msg = _german_message(str(item.get("type", "")), item.get("ctx") or {}, msg)
             errors.append({"type": item.get("type"), "loc": list(item.get("loc", ())), "msg": msg})
         return JSONResponse(status_code=422, content={"detail": errors})
+
+
+class CodedHTTPException(HTTPException):
+    """HTTP-Fehler mit festem Bezeichner: Die Antwort ist `{detail, code}` (`install_coded_error_handler`), damit die
+    Oberflaeche und Apps ihn erkennen, ohne den Text zu vergleichen."""
+
+    def __init__(self, status_code: int, detail: str, code: str, headers: dict[str, str] | None = None) -> None:
+        super().__init__(status_code=status_code, detail=detail, headers=headers)
+        self.code = code
+
+    def response(self) -> JSONResponse:
+        return JSONResponse({"detail": self.detail, "code": self.code}, status_code=self.status_code, headers=self.headers)
+
+
+def install_coded_error_handler(app: FastAPI) -> None:
+    @app.exception_handler(CodedHTTPException)
+    async def _coded_error(_request: Request, exc: CodedHTTPException) -> JSONResponse:
+        return exc.response()

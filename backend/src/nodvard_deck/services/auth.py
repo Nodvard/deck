@@ -13,9 +13,9 @@ import hmac
 import logging
 import re
 import time
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import pyotp
 from sqlalchemy import delete, func, select, update
@@ -26,7 +26,7 @@ from ..config import Settings
 from ..core import login_limit, security, setup_code, vault
 from ..core.rbac import BUILTIN_ROLES, has_permission
 from ..db import new_id, refresh_relationships, utcnow
-from ..models import RecoveryCode, RefreshToken, Role, RolePermission, User
+from ..models import AuditEntry, RecoveryCode, RefreshToken, Role, RolePermission, User
 from . import audit as audit_service
 from . import settings as settings_service
 
@@ -76,6 +76,18 @@ frischen Access-Token bekommt (zwei Tabs, die fast gleichzeitig aktualisieren)."
 
 SENSITIVE_ATTEMPT_KEY = "passwortabfrage"
 """Pseudo-Benutzername fuer die Drosselung falscher Passwoerter bei empfindlichen Aktionen."""
+
+RECOVERY_ATTEMPT_KEY = "wiederherstellungscode"
+"""Pseudo-Benutzername fuer falsche Wiederherstellungs-Codes bei Bestaetigungen (`require_current_totp`), je Konto.
+Ein eigener Zaehler wie beim Anmelden (dort je Adresse und Name, 10 in 5 Minuten): Den der Passwortabfrage setzt das
+richtige Passwort davor bei jeder Bestaetigung wieder zurueck."""
+
+
+def _account_key(user_id: str) -> str:
+    """Pseudo-Adresse fuer die Zaehler, die an einem Konto haengen statt an einer Adresse (Passwortabfrage,
+    Wiederherstellungs-Codes bei Bestaetigungen): `konto:<id>`."""
+    return f"konto:{user_id}"
+
 
 SETUP_ATTEMPT_KEY = "einrichtung"
 """Pseudo-Benutzername fuer die Drosselung falscher Einrichtungscodes (je IP)."""
@@ -133,6 +145,24 @@ async def _verify_password(
         raise
 
 
+def _lock_windows(scopes: list[str]) -> dict[str, int]:
+    """Fenster der Grenzen, die eine Sperre ausgeloest haben, fuer `detail` im Protokoll. Passwoerter und Anmeldungen
+    (Scopes `user`, `ip`) zaehlen in `WINDOW_SECONDS`. Die Grenze je Konto fuer den zweiten Faktor hat zwei Fenster;
+    ist sie dabei, stehen beide immer drin (`account_window_seconds`, `day_window_seconds`) -- aus den Scopes allein
+    sieht man nicht, welches der beiden gegriffen hat. Das gilt auch, wenn sie zusammen mit einer anderen Grenze
+    greift: beim Anmelden von einer Adresse zaehlen falsche Codes fuer (Adresse, Name) und fuer das Konto, beide
+    Grenzen erreichen ihre 10 also mit demselben Versuch. `window_seconds` ist das Fenster der Grenze fuer
+    Passwoerter und Anmeldungen; nur wenn allein die Grenze je Konto greift, ihr kurzes Fenster."""
+    if login_limit.SCOPE_ACCOUNT not in scopes:
+        return {"window_seconds": login_limit.WINDOW_SECONDS}
+    short = login_limit.ACCOUNT_WINDOW_SECONDS if scopes == [login_limit.SCOPE_ACCOUNT] else login_limit.WINDOW_SECONDS
+    return {
+        "window_seconds": short,
+        "account_window_seconds": login_limit.ACCOUNT_WINDOW_SECONDS,
+        "day_window_seconds": login_limit.ACCOUNT_DAY_SECONDS,
+    }
+
+
 async def _record_failure(
     session: AsyncSession,
     attempt: login_limit.Attempt,
@@ -159,6 +189,23 @@ async def _record_failure(
     if not scopes:
         return []
     if sensitive_user_id is not None:
+        # Je Grenze, die gerade greift, ein Satz: die Grenze je Konto fuer den zweiten Faktor (`require_current_totp`),
+        # sonst die der Sicherheitsabfragen. Deren Zaehler je Nutzer (Passwoerter bzw. Wiederherstellungs-Codes) hat
+        # 10 Versuche; der fuer alle Abfragen des Kontos zusammen (Scope `ip`, Schluessel `konto:<id>`) eine eigene,
+        # hoehere Grenze. Ihn setzt kein richtiges Passwort zurueck.
+        minutes = login_limit.WINDOW_SECONDS // 60
+        parts: list[str] = []
+        if login_limit.SCOPE_USER in scopes:
+            parts.append(f"{login_limit.MAX_FAILURES_PER_USER} Fehlversuche in {minutes} Minuten")
+        elif login_limit.SCOPE_IP in scopes:
+            parts.append(f"{login_limit.MAX_FAILURES_PER_IP} Fehlversuche in {minutes} Minuten")
+        if login_limit.SCOPE_ACCOUNT in scopes:
+            parts.append(
+                "zu viele falsche Zwei-Faktor-Codes für dieses Konto "
+                f"({login_limit.MAX_MFA_FAILURES_PER_ACCOUNT} in {login_limit.ACCOUNT_WINDOW_SECONDS // 60} Minuten "
+                f"oder {login_limit.MAX_MFA_FAILURES_PER_ACCOUNT_DAY} in 24 Stunden, Anmeldung und Bestätigung zusammen)"
+            )
+        why = "; ".join(parts)
         await audit_service.log(
             session,
             actor_type="user",
@@ -167,11 +214,8 @@ async def _record_failure(
             outcome="failure",
             target_type="user",
             target_id=sensitive_user_id,
-            reason=(
-                "Sicherheitsabfragen (Passwort, Zwei-Faktor-Code) vorübergehend gesperrt: "
-                f"{login_limit.MAX_FAILURES_PER_USER} Fehlversuche in {login_limit.WINDOW_SECONDS // 60} Minuten."
-            ),
-            detail={"window_seconds": login_limit.WINDOW_SECONDS},
+            reason=f"Sicherheitsabfragen (Passwort, Zwei-Faktor-Code) vorübergehend gesperrt: {why}.",
+            detail={"scopes": scopes, **_lock_windows(scopes)},
             ip=sensitive_ip,
             user_agent=user_agent,
         )
@@ -201,7 +245,7 @@ async def _record_failure(
         detail={
             "scopes": scopes,
             **(username_detail if username_detail is not None else {"username": attempt.username}),
-            "window_seconds": login_limit.WINDOW_SECONDS,
+            **_lock_windows(scopes),
         },
         ip=attempt.ip,
         user_agent=user_agent,
@@ -280,6 +324,103 @@ class IssuedTokens:
     der Anwesenheit eines Body-Felds zurueckzuraten."""
     session_id: str | None = None
     """Kennung der neu angelegten Refresh-Token-Zeile (= `sid` im Access-Token)."""
+
+
+# ---------------------------------------------------------------------------
+# Grenzen fuer Zwei-Faktor-Codes nach einem Neustart
+# ---------------------------------------------------------------------------
+
+
+CODE_FAILURE_ACTIONS = ("mfa.failed", "auth.totp_check_failed")
+"""Protokoll-Eintraege fuer falsche Zwei-Faktor-Codes: beim Anmelden (`verify_mfa`) und bei Bestaetigungen
+(`require_current_totp`). Jeder Fehlversuch, der auf die Grenze je Konto zaehlt, schreibt genau einen davon, mit dem
+Konto als `target_id` und ohne `detail.via` -- falsche Wiederherstellungs-Codes stehen mit `via: "recovery_code"` darin
+und zaehlen dort nicht. Wer einen neuen Weg mit Code baut, muss sich daran halten, sonst vergisst die Grenze dessen
+Fehlversuche bei jedem Neustart."""
+
+
+async def _recent_code_failures(
+    session: AsyncSession,
+    *,
+    actions: Sequence[str],
+    recovery: bool,
+    window: float,
+    per_account: int,
+    now_wall: float,
+) -> dict[str, list[float]]:
+    """Konto -> Zeitpunkte (Sekunden seit 1970) der juengsten `per_account` falschen Codes in `window` Sekunden vor
+    `now_wall`: Wiederherstellungs-Codes (`recovery`) oder alle anderen. Begrenzt in der Abfrage selbst (je Konto),
+    damit auch ein sehr volles Protokoll den Start nicht aufhaelt."""
+    via = func.coalesce(AuditEntry.detail["via"].as_string(), "")
+    ranked = (
+        select(
+            AuditEntry.target_id.label("account"),
+            AuditEntry.ts.label("ts"),
+            func.row_number()
+            .over(partition_by=AuditEntry.target_id, order_by=(AuditEntry.ts.desc(), AuditEntry.id.desc()))
+            .label("rank"),
+        )
+        .where(
+            AuditEntry.action.in_(actions),
+            AuditEntry.outcome == "failure",
+            AuditEntry.target_type == "user",
+            AuditEntry.target_id.is_not(None),
+            AuditEntry.ts >= datetime.fromtimestamp(now_wall - window, UTC),
+            AuditEntry.ts <= datetime.fromtimestamp(now_wall + login_limit.RESTORE_FUTURE_SECONDS, UTC),
+            (via == VIA_RECOVERY) if recovery else (via != VIA_RECOVERY),
+        )
+        .subquery()
+    )
+    rows = await session.execute(select(ranked.c.account, ranked.c.ts).where(ranked.c.rank <= per_account))
+    found: dict[str, list[float]] = {}
+    for account, ts in rows:
+        found.setdefault(account, []).append(ts.timestamp())
+    return found
+
+
+async def restore_code_limits(session: AsyncSession, *, now_wall: float | None = None) -> int:
+    """Beim Start (vor der ersten Anfrage): die Zaehler fuer falsche Zwei-Faktor-Codes aus dem Protokoll wieder
+    eintragen, die sonst nur im Speicher stehen (`core.login_limit`). Ohne das finge die Grenze nach jedem Neustart von
+    vorn an: Wer Sitzung und Passwort hat, koennte raten, Nodvard Deck neu starten (Owner mit Passwort) und weiter
+    raten. So gilt sie ueber jeden Neustart hinweg (Neustart auf Wunsch, Update, Rueckweg, Einspielen einer
+    Sicherung, Absturz).
+
+    - Grenze je Konto (`login_limit.MAX_MFA_FAILURES_PER_ACCOUNT`/`..._DAY`): `CODE_FAILURE_ACTIONS` der letzten 24
+      Stunden ohne `via: "recovery_code"`, Anmeldung und Bestaetigung zusammen wie im Speicher.
+    - Falsche Wiederherstellungs-Codes bei Bestaetigungen (`RECOVERY_ATTEMPT_KEY`, je Konto): `auth.totp_check_failed`
+      mit `via: "recovery_code"` der letzten 5 Minuten. Ein richtiger Wiederherstellungs-Code setzt diesen Zaehler im
+      Speicher zurueck; nach einem Neustart zaehlen die Fehlversuche davor bis zum Ende ihres Fensters weiter (strenger,
+      nie lockerer, hoechstens 5 Minuten lang).
+
+    Bewusst fluechtig bleiben die Zaehler je Adresse und Name (Anmeldung, Passwortabfrage), je `mfa_token` und die
+    schon benutzten Codes (`login_limit._totp_steps`): Die Grenze je Konto deckt das Raten des zweiten Faktors ab,
+    egal von wo. Es zaehlt, was im Protokoll steht: nach dem Einspielen einer Sicherung deren Stand. Die
+    Aufbewahrung des Protokolls (mindestens 7 Tage) loescht nichts aus den 24 Stunden. Gibt die Zahl der
+    eingetragenen Fehlversuche zurueck."""
+    if now_wall is None:
+        now_wall = time.time()
+    restored = 0
+    per_account = await _recent_code_failures(
+        session,
+        actions=CODE_FAILURE_ACTIONS,
+        recovery=False,
+        window=login_limit.ACCOUNT_DAY_SECONDS,
+        per_account=login_limit.MAX_MFA_FAILURES_PER_ACCOUNT_DAY,
+        now_wall=now_wall,
+    )
+    recovery = await _recent_code_failures(
+        session,
+        actions=("auth.totp_check_failed",),
+        recovery=True,
+        window=login_limit.WINDOW_SECONDS,
+        per_account=login_limit.MAX_FAILURES_PER_USER,
+        now_wall=now_wall,
+    )
+    for account, times in per_account.items():
+        restored += login_limit.restore_account_failures(account, times, now_wall=now_wall)
+    for account, times in recovery.items():
+        restored += login_limit.restore_failures(_account_key(account), RECOVERY_ATTEMPT_KEY, times, now_wall=now_wall)
+    return restored
 
 
 # ---------------------------------------------------------------------------
@@ -822,7 +963,7 @@ async def verify_mfa(
     )
     login_limit.succeeded(attempt)
     if via_recovery:
-        await _report_recovery_use(session, user, ip=payload.get("ip"), user_agent=payload.get("user_agent"))
+        await report_recovery_use(session, user, ip=payload.get("ip"), user_agent=payload.get("user_agent"))
     return tokens
 
 
@@ -839,8 +980,9 @@ async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
             body=(
                 f"Für „{user.username}“ wurden zu viele falsche Zwei-Faktor-Codes eingegeben; weitere "
                 "Versuche sind für eine Weile gesperrt. Wer so oft rät, kennt vermutlich das "
-                "Passwort. Wenn du das nicht warst, ändere das Passwort. Mit einem "
-                "Wiederherstellungs-Code kommst du auch während der Sperre hinein."
+                "Passwort. Wenn du das nicht warst, ändere gleich dein Passwort, das geht auch während der "
+                "Sperre. Anmelden kannst du dich in der Zeit mit einem Wiederherstellungs-Code. Bestätigungen "
+                "mit Zwei-Faktor-Code (zum Beispiel für ein Update) gehen erst wieder, wenn die Sperre vorbei ist."
             ),
             severity="warning",
             payload={"path": "/settings/account", "tags": ["warning", "key"]},
@@ -865,12 +1007,37 @@ def _totp_now() -> float:
     return time.time()
 
 
-async def _report_recovery_use(
-    session: AsyncSession, user: User, *, ip: str | None, user_agent: str | None
+RECOVERY_USE_LOGIN = "anmeldung"
+"""`action` von `report_recovery_use` fuer die Anmeldung; sonst die `action` der Bestaetigung (`require_current_totp`)."""
+
+_RECOVERY_USE_TEXTS = {
+    RECOVERY_USE_LOGIN: ("bei der Anmeldung", None, "ändere sofort das Passwort und erzeuge neue Codes"),
+    "codes_erneuern": (
+        "beim Erzeugen neuer Wiederherstellungs-Codes",
+        "Es gibt jetzt einen neuen Satz, die bisherigen Codes gelten nicht mehr.",
+        "ändere sofort das Passwort und erzeuge mit dem Code aus deiner App neue Codes",
+    ),
+    "2fa_abschalten": (
+        "beim Abschalten der Zwei-Faktor-Anmeldung",
+        "Die Zwei-Faktor-Anmeldung ist damit aus.",
+        "ändere sofort das Passwort und schalte die Zwei-Faktor-Anmeldung wieder ein",
+    ),
+}
+
+
+async def report_recovery_use(
+    session: AsyncSession,
+    user: User,
+    *,
+    ip: str | None,
+    user_agent: str | None,
+    action: str = RECOVERY_USE_LOGIN,
 ) -> None:
     """Ein Wiederherstellungs-Code ersetzt den zweiten Faktor -- das soll nie unbemerkt
-    bleiben: eigener Audit-Eintrag und eine Meldung (Meldungen-Seite, bei eingerichtetem
-    Push-Kanal auch aufs Handy). Die Meldung darf die Anmeldung nie kippen."""
+    bleiben, egal wofuer (Anmeldung, neue Codes, Abschalten): eigener Audit-Eintrag und eine
+    Meldung (Meldungen-Seite, bei eingerichtetem Push-Kanal auch aufs Handy). Erst aufrufen,
+    wenn die Aktion durch ist, damit `remaining` stimmt. Die Meldung darf die Aktion nie kippen."""
+    where, outcome_text, advice = _RECOVERY_USE_TEXTS.get(action, _RECOVERY_USE_TEXTS[RECOVERY_USE_LOGIN])
     remaining = await recovery_codes_remaining(session, user.id)
     await audit_service.log(
         session,
@@ -880,30 +1047,31 @@ async def _report_recovery_use(
         outcome="success",
         target_type="user",
         target_id=user.id,
-        detail={"remaining": remaining},
+        detail={"remaining": remaining} | ({} if action == RECOVERY_USE_LOGIN else {"aktion": action}),
         ip=ip,
         user_agent=user_agent,
     )
     try:
         from . import notifications as notifications_service
 
-        rest = (
-            f"Es sind noch {remaining} Codes übrig."
-            if remaining
-            else "Es sind keine Codes mehr übrig – bitte unter Mein Konto neue erzeugen."
-        )
+        if outcome_text is None:
+            outcome_text = (
+                f"Es sind noch {remaining} Codes übrig."
+                if remaining
+                else "Es sind keine Codes mehr übrig – bitte unter Mein Konto neue erzeugen."
+            )
         await notifications_service.send(
             session,
             title="Wiederherstellungs-Code benutzt",
             body=(
-                f"Für „{user.username}“ wurde bei der Anmeldung ein Wiederherstellungs-Code "
-                f"statt des Authenticator-Codes verwendet. {rest} "
-                "Warst du das nicht, ändere sofort das Passwort und erzeuge neue Codes."
+                f"Für „{user.username}“ wurde {where} ein Wiederherstellungs-Code "
+                f"statt des Authenticator-Codes verwendet. {outcome_text} "
+                f"Warst du das nicht, {advice}."
             ),
             severity="warning",
             payload={"path": "/settings/account", "tags": ["warning", "key"]},
         )
-    except Exception:  # noqa: BLE001 - die Anmeldung selbst ist laengst gelungen
+    except Exception:  # noqa: BLE001 - die Aktion selbst ist laengst gelungen
         _log.warning("Meldung zum Wiederherstellungs-Code nicht zugestellt", exc_info=True)
 
 
@@ -1196,7 +1364,9 @@ async def confirm_totp_setup(
 
     Nur fuer eine NOCH NICHT bestaetigte Einrichtung: bei schon aktiver 2FA gaebe dieser Weg
     sonst ohne Passwort einen frischen Satz Codes aus (dafuer gibt es `POST /me/recovery-codes`
-    mit Passwort). Falsche Codes werden wie falsche Passwoerter je Nutzer gedrosselt."""
+    mit Passwort). Falsche Codes werden wie falsche Passwoerter je Nutzer gedrosselt. Der Code,
+    der die Einrichtung bestaetigt, gilt danach nicht noch einmal (`login_limit.remember_totp_step`):
+    Sonst schaltete er die Zwei-Faktor-Anmeldung in den naechsten Sekunden gleich wieder ab."""
     if user.totp_secret_id is not None and user.totp_confirmed_at is not None:
         raise AuthError("Zwei-Faktor ist schon aktiv.")
     if user.totp_secret_id is None:
@@ -1204,10 +1374,12 @@ async def confirm_totp_setup(
             "Die Zwei-Faktor-Einrichtung wurde noch nicht gestartet."
         )
 
-    attempt = _begin_attempt(f"konto:{user.id}", SENSITIVE_ATTEMPT_KEY)
+    attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY)
     keyring = vault.load_keyring(settings)
     raw_secret = await vault.read_secret_plaintext(session, keyring, user.totp_secret_id)
-    if not pyotp.TOTP(raw_secret).verify("".join(code.split()), valid_window=1):
+    compact = "".join(code.split())
+    totp_step = match_totp_step(raw_secret, compact) if security.is_totp_code(compact) else None
+    if totp_step is None:
         await audit_service.log(
             session,
             actor_type="user",
@@ -1227,10 +1399,15 @@ async def confirm_totp_setup(
         await _commit_before_raising(session)
         raise InvalidMfaCode("Ungültiger Code. Die Zwei-Faktor-Anmeldung ist noch nicht aktiv.")
     login_limit.succeeded(attempt)
+    login_limit.remember_totp_step(user.id, totp_step)
 
+    # Die Hashes der ersten Codes (auf einem Pi Sekunden) vor dem ersten Schreibzugriff rechnen: ab dem flush haelt die
+    # Anfrage die Schreibsperre der Datenbank bis zu ihrem Ende.
+    code_set = new_recovery_code_set()
+    await code_set.hash()
     user.totp_confirmed_at = utcnow()
     await session.flush()
-    return await issue_recovery_codes(session, user)
+    return await issue_recovery_codes(session, user, code_set)
 
 
 async def disable_totp(session: AsyncSession, user: User) -> None:
@@ -1275,7 +1452,7 @@ async def require_current_password(
     429) und als `auth.password_check_failed` protokolliert. Der Zaehler haengt an der
     Nutzerkennung, nicht an der IP -- sonst liesse sich die Sperre mit wechselnden Adressen
     umgehen, und ein Angreifer mit gestohlener Sitzung kaeme trotz Drosselung weiter."""
-    attempt = _begin_attempt(f"konto:{user.id}", SENSITIVE_ATTEMPT_KEY)
+    attempt = _begin_attempt(_account_key(user.id), SENSITIVE_ATTEMPT_KEY)
     if not await _verify_password(attempt, password, user.password_hash, signed_in=True):
         await audit_service.log(
             session,
@@ -1299,26 +1476,186 @@ async def require_current_password(
     login_limit.succeeded(attempt)
 
 
-async def issue_recovery_codes(session: AsyncSession, user: User) -> list[str]:
-    """Erzeugt einen neuen Satz (`RECOVERY_CODE_COUNT` Codes) und ersetzt alle bisherigen --
-    benutzte wie unbenutzte werden geloescht, alte Codes sind damit sofort ungueltig. Gibt
-    die Klartext-Codes zurueck: das ist das EINZIGE Mal, dass sie existieren."""
+TOTP_REQUIRED_MESSAGE = "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code aus deiner App ein."
+TOTP_OR_RECOVERY_REQUIRED_MESSAGE = (
+    "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code aus deiner App oder einen Wiederherstellungs-Code ein."
+)
+WRONG_TOTP_MESSAGE = "Der Zwei-Faktor-Code stimmt nicht."
+WRONG_RECOVERY_MESSAGE = (
+    "Der Code stimmt nicht. Gib den sechsstelligen Code aus deiner App oder einen noch unbenutzten "
+    "Wiederherstellungs-Code ein."
+)
+RECOVERY_STILL_WORKS_HINT = "Mit einem noch unbenutzten Wiederherstellungs-Code geht es auch jetzt."
+
+VIA_TOTP = "totp"
+VIA_RECOVERY = "recovery_code"
+
+
+class TotpRequired(AuthError):
+    """Zwei-Faktor ist an, aber es kam kein Code mit (API: 403)."""
+
+
+class WrongTotp(AuthError):
+    """Der Zwei-Faktor-Code zur Bestaetigung stimmt nicht oder wurde schon benutzt (API: 400). `code` ist der feste
+    Bezeichner fuer die Antwort: `totp_used` fuer einen schon benutzten Code aus der App, sonst `totp_wrong` (auch fuer
+    einen schon verbrauchten Wiederherstellungs-Code: den kennt die Datenbank nicht mehr)."""
+
+    def __init__(self, message: str, *, used: bool = False) -> None:
+        super().__init__(message)
+        self.code = "totp_used" if used else "totp_wrong"
+
+
+async def require_current_totp(
+    session: AsyncSession,
+    settings: Settings,
+    user: User,
+    code: str,
+    *,
+    action: str,
+    ip: str | None = None,
+    user_agent: str | None = None,
+    allow_recovery: bool = False,
+    before_claim: Callable[[], Awaitable[object]] | None = None,
+) -> str | None:
+    """Ist Zwei-Faktor an, verlangt eine empfindliche Aktion (`action`) zusaetzlich zum Passwort den aktuellen Code
+    aus der App. Ohne Zwei-Faktor passiert nichts (`None`); sonst kommt zurueck, womit bestaetigt wurde (`VIA_TOTP`
+    bzw. `VIA_RECOVERY`).
+
+    Dieselben Bausteine wie beim Anmelden (`verify_mfa`): `match_totp_step` (aktueller Zeitschritt, einer davor und
+    danach) und `login_limit.claim_success` -- ein Code gilt je Konto nur einmal, auch quer zwischen Anmeldung und
+    Bestaetigung. Wirksam gedrosselt wird nur ueber die IP-unabhaengige Grenze je Konto fuer den zweiten Faktor
+    (`login_limit.MAX_MFA_FAILURES_PER_ACCOUNT` bzw. `..._DAY`), die sich Anmeldung (`verify_mfa`) und Bestaetigung
+    teilen: Der Zaehler der Passwortabfrage zaehlt falsche Codes zwar mit, aber das richtige Passwort davor
+    (`require_current_password`) setzt ihn bei jeder Bestaetigung wieder zurueck.
+
+    Wiederherstellungs-Codes nur mit `allow_recovery` (Zwei-Faktor abschalten, neue Codes erzeugen: wer das Handy
+    verloren hat, soll das mit einem Code aus seiner Liste koennen). Wie beim Anmelden: alles ausser sechs Ziffern ist
+    ein Wiederherstellungs-Code; er wird verbraucht (`consume_recovery_code`, mit der Anfrage gespeichert -- scheitert
+    sie danach, ist er wieder frei), und fuer ihn gilt die Grenze je Konto nicht, er zaehlt auch nicht darauf (sonst
+    kaeme der Besitzer waehrend einer Sperre, die jemand mit seinem Passwort ausgeloest hat, auch damit nicht weiter).
+    Falsche Wiederherstellungs-Codes zaehlen stattdessen wie beim Anmelden auf einen eigenen Zaehler (10 in 5 Minuten,
+    `RECOVERY_ATTEMPT_KEY`, je Konto statt je Adresse), den das richtige Passwort davor nicht zuruecksetzt, und auf den
+    aller Sicherheitsabfragen des Kontos (`konto:<id>`, siehe `require_current_password`). Ohne `allow_recovery` gilt jede
+    Eingabe ausser sechs Ziffern als falscher Code: Wiederherstellungs-Codes sind dann fuer den Notfall beim Anmelden
+    da und sollen hier nicht verbraucht werden.
+
+    `before_claim` laeuft nur bei einem richtigen Wiederherstellungs-Code, kurz bevor er als benutzt markiert wird (siehe
+    `consume_recovery_code`): fuer lange Arbeit der Aktion, die nicht in der Schreibsperre der Datenbank laufen soll.
+
+    Falsche Codes stehen als `auth.totp_check_failed` im Protokoll (nie der Code selbst)."""
+    if not two_factor_enabled(user):
+        return None
+    compact = "".join((code or "").split())
+    if not compact:
+        raise TotpRequired(TOTP_OR_RECOVERY_REQUIRED_MESSAGE if allow_recovery else TOTP_REQUIRED_MESSAGE)
+    via_recovery = allow_recovery and not security.is_totp_code(compact)
+    try:
+        attempt = _begin_attempt(
+            _account_key(user.id),
+            RECOVERY_ATTEMPT_KEY if via_recovery else SENSITIVE_ATTEMPT_KEY,
+            account=None if via_recovery else user.id,
+        )
+    except TooManyAttempts as exc:
+        if not allow_recovery or via_recovery:
+            raise
+        # Die Passwortabfrage davor ging durch: Gesperrt hat die Grenze je Konto fuer Codes aus der App. Fuer
+        # Wiederherstellungs-Codes gilt sie nicht (wie beim Anmelden) -- das soll der Besitzer erfahren.
+        raise TooManyAttempts(f"{exc} {RECOVERY_STILL_WORKS_HINT}", retry_after=exc.retry_after) from None
+    totp_step: int | None = None
+    if via_recovery:
+        try:
+            valid = await consume_recovery_code(session, user, compact, before_claim=before_claim)
+        except security.HashingBusy:
+            login_limit.release(attempt)
+            raise
+    else:
+        if security.is_totp_code(compact):
+            keyring = vault.load_keyring(settings)
+            totp_secret = await vault.read_secret_plaintext(session, keyring, user.totp_secret_id)
+            totp_step = match_totp_step(totp_secret, compact)
+        valid = totp_step is not None
+    replayed = valid and not login_limit.claim_success(attempt, totp_step=totp_step)
+    if replayed:
+        valid = False
+    if not valid:
+        await audit_service.log(
+            session,
+            actor_type="user",
+            actor_id=user.id,
+            action="auth.totp_check_failed",
+            outcome="failure",
+            target_type="user",
+            target_id=user.id,
+            reason=(
+                "Wiederherstellungs-Code zur Bestätigung falsch eingegeben."
+                if via_recovery
+                else "Zwei-Faktor-Code zur Bestätigung falsch eingegeben."
+            ),
+            detail={"aktion": action}
+            | ({"via": VIA_RECOVERY} if via_recovery else {})
+            | ({"replayed": True} if replayed else {}),
+            ip=ip,
+            user_agent=user_agent,
+        )
+        scopes = await _record_failure(
+            session, attempt, actor_id=user.id, user_agent=user_agent,
+            sensitive_ip=ip, sensitive_user_id=user.id,
+        )
+        if login_limit.SCOPE_ACCOUNT in scopes:
+            await _report_mfa_guessing(session, user)
+        await _commit_before_raising(session)
+        if via_recovery:
+            raise WrongTotp(WRONG_RECOVERY_MESSAGE)
+        raise WrongTotp(TOTP_CODE_USED_MESSAGE if replayed else WRONG_TOTP_MESSAGE, used=replayed)
+    login_limit.succeeded(attempt)
+    return VIA_RECOVERY if via_recovery else VIA_TOTP
+
+
+@dataclass
+class RecoveryCodeSet:
+    """Ein neuer Satz Wiederherstellungs-Codes (`new_recovery_code_set`), noch nicht gespeichert. `hash()` rechnet die
+    Hashes (Argon2, absichtlich langsam: 10 Hashes dauern auf einem Pi Sekunden), `issue_recovery_codes` speichert. So
+    laesst sich das Rechnen vor einen Schreibzugriff ziehen: Wer neue Codes mit einem Wiederherstellungs-Code bestaetigt,
+    haelt ab dessen Verbrauch die Schreibsperre der Datenbank, bis die Anfrage fertig ist (`before_claim` von
+    `require_current_totp`); beim Einschalten von Zwei-Faktor ab dem Schreiben der Bestaetigung (`confirm_totp_setup`)."""
+
+    codes: list[str]
+    hashes: list[str] | None = None
+
+    async def hash(self) -> list[str]:
+        if self.hashes is None:
+            codes = list(self.codes)
+            # Nicht im Event-Loop rechnen, sonst steht waehrenddessen das ganze Dashboard.
+            self.hashes = await security.run_hashing(
+                lambda: [security.hash_password(security.normalize_recovery_code(c)) for c in codes],
+                signed_in=True,
+            )
+        return self.hashes
+
+
+def new_recovery_code_set() -> RecoveryCodeSet:
     codes: list[str] = []
     while len(codes) < RECOVERY_CODE_COUNT:
         candidate = security.generate_recovery_code()
         if candidate not in codes:
             codes.append(candidate)
-    # Argon2 ist absichtlich langsam (10 Hashes: auf dem Pi Sekunden) -- nicht im
-    # Event-Loop rechnen, sonst steht waehrenddessen das ganze Dashboard.
-    hashes = await security.run_hashing(
-        lambda: [security.hash_password(security.normalize_recovery_code(c)) for c in codes],
-        signed_in=True,
-    )
+    return RecoveryCodeSet(codes=codes)
+
+
+async def issue_recovery_codes(
+    session: AsyncSession, user: User, code_set: RecoveryCodeSet | None = None
+) -> list[str]:
+    """Speichert einen neuen Satz (`RECOVERY_CODE_COUNT` Codes; ohne `code_set` einen frischen) und ersetzt alle
+    bisherigen -- benutzte wie unbenutzte werden geloescht, alte Codes sind damit sofort ungueltig. Gibt
+    die Klartext-Codes zurueck: das ist das EINZIGE Mal, dass sie existieren."""
+    if code_set is None:
+        code_set = new_recovery_code_set()
+    hashes = await code_set.hash()
     await session.execute(delete(RecoveryCode).where(RecoveryCode.user_id == user.id))
     for code_hash in hashes:
         session.add(RecoveryCode(user_id=user.id, code_hash=code_hash))
     await session.flush()
-    return codes
+    return code_set.codes
 
 
 async def recovery_codes_remaining(session: AsyncSession, user_id: str) -> int:
@@ -1330,11 +1667,21 @@ async def recovery_codes_remaining(session: AsyncSession, user_id: str) -> int:
     return int(count or 0)
 
 
-async def consume_recovery_code(session: AsyncSession, user: User, code: str) -> bool:
+async def consume_recovery_code(
+    session: AsyncSession,
+    user: User,
+    code: str,
+    *,
+    before_claim: Callable[[], Awaitable[object]] | None = None,
+) -> bool:
     """Loest einen Wiederherstellungs-Code ein: `True` und als benutzt markiert, wenn er zu
     einem noch unbenutzten Code des Nutzers passt. Das Markieren ist atomar (nur wer die Zeile
     von "unbenutzt" auf "benutzt" setzt, gewinnt) -- zwei gleichzeitige Anmeldungen mit
     demselben Code kommen nicht beide durch.
+
+    Das Markieren haelt die Schreibsperre der Datenbank, bis der Aufrufer seine Anfrage festschreibt (scheitert sie,
+    ist der Code wieder frei). Lange Arbeit danach gehoert darum vor das Markieren: `before_claim` laeuft, wenn der
+    Code passt, unmittelbar davor (z. B. die Hashes neuer Codes, `RecoveryCodeSet.hash`).
 
     Achtung: schreibt `session` vor der langen Pruefung fest (`commit()`, damit die Verbindung
     frei wird). Wer hier etwas Ungespeichertes in der Session hat, speichert es damit mit."""
@@ -1364,6 +1711,8 @@ async def consume_recovery_code(session: AsyncSession, user: User, code: str) ->
     matched_id = await security.run_hashing(_find)
     if matched_id is None:
         return False
+    if before_claim is not None:
+        await before_claim()
     # Wurde das Konto in der Zwischenzeit deaktiviert, das Passwort geaendert oder Zwei-Faktor
     # ausgeschaltet, gilt der Code nicht mehr -- und wird nicht verbraucht.
     if await _reload_unchanged(session, user.id, password_hash=checked_hash, two_factor=True) is None:

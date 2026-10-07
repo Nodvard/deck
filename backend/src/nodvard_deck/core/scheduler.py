@@ -29,6 +29,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from nodvard_sdk.context import _JOB_TRIGGER
+from nodvard_sdk.errors import NodvardError
 
 from ..db import utcnow
 from ..db.session import session_scope
@@ -156,6 +157,13 @@ class SchedulerService:
         except asyncio.CancelledError:
             status, exit_code, error = "failed", 1, "Abgebrochen (POST /runs/{id}/cancel)."
             lines.append(f"[{utcnow().isoformat()}] {error}")
+        except NodvardError as exc:
+            # Ein Fehlschlag, den der Handler selbst mit Klartext meldet (z. B. "Das Skript lief auf keinem
+            # Server"): kein Programmfehler, deshalb ohne Traceback -- weder im Lauf-Protokoll noch im
+            # Container-Log, dessen Traceback-Pruefung nach einem Deploy sonst faelschlich zurueckrollt.
+            status, exit_code, error = "failed", 1, str(exc)
+            lines.append(f"[{utcnow().isoformat()}] Fehler: {error}")
+            logger.warning("job_run_failed job_id=%s run_id=%s error=%s", job_id, run_id, error)
         except Exception as exc:  # noqa: BLE001 - siehe Modul-Docstring: darf das Protokoll nie verschlucken
             status, exit_code, error = "failed", 1, str(exc)
             lines.append(f"[{utcnow().isoformat()}] Fehler: {error}\n{traceback.format_exc()}")

@@ -70,7 +70,7 @@ def _clean_runtime_and_modules():
 def test_the_known_built_in_extensions_are_all_there():
     expected = {
         "backups", "documents", "gameserver", "hello-world", "inventory", "network", "nextcloud",
-        "nexus-soc", "ntfy", "proxmox", "scripts", "service-matrix", "system", "terminal",
+        "ntfy", "proxmox", "scripts", "service-matrix", "shield", "system", "terminal",
     }
     assert expected <= set(BUILT_IN), expected - set(BUILT_IN)
 

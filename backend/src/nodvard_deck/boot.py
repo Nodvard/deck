@@ -433,6 +433,8 @@ def ensure_current(settings: Settings, layout: restore.Layout) -> None:
         state = bootstate.read_state(data_dir)
         try:
             known, script_heads = migrate.known_revisions()
+        except migrate.DuplicateRevisions as exc:
+            raise BootFailure("unexpected", str(exc)) from exc
         except Exception as exc:
             raise BootFailure("unexpected", f"Die Migrationen dieses Images ließen sich nicht lesen ({type(exc).__name__}).") from exc
         try:

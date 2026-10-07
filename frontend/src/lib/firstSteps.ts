@@ -18,8 +18,12 @@ import { type HostOut } from "./overview";
 export const PUSH_EXTENSION_ID = "ntfy";
 
 export interface ExtensionInfo {
+  /** Die heutige Kennung. */
   id: string;
   name: string | null;
+  /** Frühere Kennungen einer umbenannten Erweiterung. Alte Meldungen, Protokolleinträge und Aufträge tragen
+   * sie weiter; fehlt bei einem älteren Backend und ohne Umbenennung. */
+  legacy_ids?: string[];
   state: string;
   has_settings?: boolean;
   needs_setup?: boolean;

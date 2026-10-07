@@ -41,7 +41,8 @@ VE 8). Besonderheiten von Proxmox VE 8 und älteren Versionen stehen unter
 | Backup-Jobs anlegen und ändern | nein | ja, mit Zusatzrolle für den Backup-Speicher |
 
 ¹ Proxmox gibt die Liste wartender Updates nur mit `Sys.Modify` heraus – obwohl Nodvard Deck
-sie nur liest. Die Kachel zeigt dann „Nicht abrufbar: … HTTP 403“.
+sie nur liest. Die Kachel zeigt dann „Nicht abrufbar: … HTTP 403: Dem Token fehlt ein Recht für diese
+Abfrage.“, dahinter den Grund, den Proxmox nennt („Grund laut Proxmox: …“).
 ² Gast-Disks im Speicherinhalt zeigt Proxmox nur mit `VM.Config.Disk`.
 ³ Vorhandene Sicherungen zeigt Proxmox nur, wer den Gast sichern darf (`VM.Backup`) und auf
 dem Speicher Platz belegen darf (`Datastore.AllocateSpace`). Mit reinen Leserechten bleibt
@@ -202,8 +203,12 @@ Gut zu wissen:
   Adresse (Groß-/Kleinschreibung im Rechnernamen, `:443` bei `https://`, `/` am Ende) zählt nicht
   als Änderung.
 - **Keine Weiterleitungen:** Nodvard Deck folgt bei Aufrufen an Proxmox keinen Weiterleitungen, auch nicht
-  beim Aufbau der Konsole. Trag deshalb die endgültige Adresse des Knotens ein (`https://…:8006`), keinen
-  Reverse-Proxy, der weiterleitet. Sonst scheitern Abfragen und Konsole mit einer Fehlermeldung.
+  beim Aufbau der Konsole. Trag deshalb die endgültige Adresse des Knotens ein (`https://…:8006`, nicht
+  `http://`), keinen Reverse-Proxy, der weiterleitet. Sonst scheitern Abfragen, „Verbindung testen“ und Konsole
+  mit „Der Server hat die Verbindung auf eine andere Adresse umgeleitet …“.
+- **Kein Proxy aus der Umgebung:** Nodvard Deck verbindet sich immer direkt mit der eingetragenen Adresse, auch beim
+  Aufbau der Konsole. Ein Proxy, der in der Umgebung von Nodvard Deck eingetragen ist (`HTTP_PROXY`, `HTTPS_PROXY` usw.),
+  wird dafür nie benutzt; die Adresse muss vom Rechner mit Nodvard Deck also direkt erreichbar sein.
 - **Einen Server vorübergehend abschalten**, ohne das Token zu verlieren: Proxmox- bzw.
   Backups-Seite → „Verbindungen verwalten“ → Knopf „aktiv“ anklicken (wird zu
   „deaktiviert“).
@@ -211,8 +216,9 @@ Gut zu wissen:
 ## Zertifikat: was „Selbstsigniertes Zertifikat erlauben“ macht
 
 - Proxmox bringt ein selbst ausgestelltes Zertifikat mit. Nodvard Deck prüft Zertifikate
-  normalerweise streng, mit dem Standardzertifikat scheitert jede Verbindung (Fehler mit
-  `CERTIFICATE_VERIFY_FAILED`).
+  normalerweise streng, mit dem Standardzertifikat scheitert jede Verbindung („Das Zertifikat von
+  Proxmox wird nicht akzeptiert. Bei einem selbstsignierten Zertifikat in den Einstellungen
+  „Selbstsigniertes Zertifikat erlauben“ einschalten.“).
 - Der Haken (auf der Proxmox-Seite heißt die Spalte „Zertifikat nicht prüfen“) schaltet die Prüfung
   **für genau diese Verbindung ganz ab**. Einen Abgleich mit einem Fingerabdruck gibt es in
   Nodvard Deck nicht – nur an oder aus.

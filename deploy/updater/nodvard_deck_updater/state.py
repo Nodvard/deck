@@ -8,9 +8,13 @@ Grundlage dieses Ordners und der Engine -- nie aus `status.json`, dem Kanal (aus
 * `lock` -- `flock`: hoechstens ein Helfer arbeitet. Ein zweiter bekommt `second_instance` und tut nichts.
   Die Sperre gilt je geoeffneter Datei und endet mit dem Prozess, auch bei einem Absturz.
 * `state.json` -- `slot` (Rueckweg, `policy.Slot`), `actions` (Zeitpunkte angenommener Aktionen),
-  `blocked` (`{version: bis}`, 24 h nach einem Rueckweg), `seen` (`{id: zeit}`, 1 h) und `hold_until`.
+  `blocked` (`{version: bis}`, 24 h nach einem Rueckweg), `seen` (`{id: zeit}`, 1 h), `hold_until` und `results` (die
+  letzten Ergebnisse fuer `status.results`: der Ablauf haelt ein Ergebnis hier fest, bevor er das Journal loescht, so
+  geht es auch bei einem Absturz dazwischen nicht verloren).
 * `journal.json` -- der laufende Vorgang. **Write-ahead:** der Ablauf schreibt den naechsten Schritt,
-  *bevor* er ihn ausfuehrt; jedes Schreiben endet mit fsync auf Datei **und** Ordner.
+  *bevor* er ihn ausfuehrt; jedes Schreiben endet mit fsync auf Datei **und** Ordner. Ebenso kuendigt er einen
+  Rueckbau an (`undo`, mit dem Grund in `code`), bevor er den ersten Teil davon ausfuehrt: So weiss die
+  Wiederaufnahme nach einem Absturz, ob ein halb zurueckgebauter Stand von ihm selbst stammt oder von aussen.
 
 Geschrieben wird immer atomar: Zufallsname mit `O_CREAT|O_EXCL|O_NOFOLLOW`, fsync, `os.replace`, fsync des
 Ordners. Gelesen wird ueber den Ordner-Deskriptor mit `O_NOFOLLOW|O_NONBLOCK`, danach `fstat`: regulaere Datei,
@@ -274,7 +278,7 @@ def _require_int(value: object, where: str, *, minimum: int = 0) -> int:
 # state.json
 # ---------------------------------------------------------------------------
 
-STATE_KEYS = ("format", "slot", "actions", "blocked", "seen", "hold_until")
+STATE_KEYS = ("format", "slot", "actions", "blocked", "seen", "hold_until", "results")
 
 
 @dataclass
@@ -286,6 +290,8 @@ class State:
     blocked: dict[str, int] = field(default_factory=dict)
     seen: dict[str, int] = field(default_factory=dict)
     hold_until: int | None = None
+    results: list[dict[str, Any]] = field(default_factory=list)
+    """Die letzten Ergebnisse (`policy.is_result`), hoechstens `policy.RESULTS_MAX`, eins je Anforderungs-ID."""
 
     # --- Aenderungen --------------------------------------------------------
 
@@ -312,6 +318,19 @@ class State:
         if len(self.blocked) > MAX_BLOCKED:
             latest = sorted(self.blocked.items(), key=lambda item: (item[1], item[0]), reverse=True)[:MAX_BLOCKED]
             self.blocked = dict(latest)
+
+    def record_result(self, entry: dict[str, Any]) -> bool:
+        """Merkt das Ergebnis eines Vorgangs (ein Eintrag je ID, die letzten `policy.RESULTS_MAX`). `False`, wenn fuer
+        diese ID schon dasselbe Ergebnis mit demselben Code dasteht (eine Wiederaufnahme schreibt es nicht noch einmal,
+        der erste Zeitpunkt bleibt)."""
+        if not policy.is_result(entry):
+            raise ValueError("kein Ergebnis")
+        for known in self.results:
+            if known["id"] == entry["id"] and (known["outcome"], known["code"]) == (entry["outcome"], entry["code"]):
+                return False
+        self.results = [known for known in self.results if known["id"] != entry["id"]] + [dict(entry)]
+        self.results = self.results[-policy.RESULTS_MAX:]
+        return True
 
     def commit_update(self, slot: policy.Slot) -> None:
         """Commit eines Updates: der neue Slot ersetzt einen alten."""
@@ -368,6 +387,7 @@ class State:
             "blocked": dict(self.blocked),
             "seen": dict(self.seen),
             "hold_until": self.hold_until,
+            "results": [dict(entry) for entry in self.results],
         }
 
     @classmethod
@@ -400,7 +420,13 @@ class State:
         hold_until = obj["hold_until"]
         if hold_until is not None:
             _require_int(hold_until, "state: hold_until")
-        return cls(slot=slot, actions=list(actions), blocked=dict(blocked), seen=dict(seen), hold_until=hold_until)
+        results = obj["results"]
+        if not isinstance(results, list) or len(results) > policy.RESULTS_MAX \
+                or not all(policy.is_result(entry) for entry in results) \
+                or len({entry["id"] for entry in results}) != len(results):
+            raise ValueError("state: results")
+        return cls(slot=slot, actions=list(actions), blocked=dict(blocked), seen=dict(seen), hold_until=hold_until,
+                   results=[dict(entry) for entry in results])
 
 
 # ---------------------------------------------------------------------------
@@ -410,16 +436,24 @@ class State:
 RESTART_POLICIES = ("", "no", "always", "unless-stopped", "on-failure")
 CONTAINER_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", re.ASCII)
 """Containername ohne den fuehrenden `/` aus dem Inspect."""
+PREVIOUS_SUFFIX = "-previous"
+"""Endung, unter der der alte Container waehrend eines Vorgangs weiterlaeuft (`<name>-previous`)."""
 
-JOURNAL_KEYS = ("format", "request_id", "action", "step", "started_at", "deadline", "old", "new")
-OLD_KEYS = ("id", "name", "image_id", "version", "restart_policy", "tag_text")
+JOURNAL_KEYS = ("format", "request_id", "action", "step", "started_at", "deadline", "old", "new", "undo", "code")
+OLD_KEYS = ("id", "name", "image_id", "version", "restart_policy", "tag_text", "repo_digest")
 NEW_KEYS = ("id", "image_id", "digest", "version")
 RESTART_KEYS = ("Name", "MaximumRetryCount")
 
 
 @dataclass(frozen=True)
 class OldContainer:
-    """Das Ziel vor dem Vorgang. `tag_text` ist `Config.Image` unveraendert."""
+    """Das Ziel vor dem Vorgang. `tag_text` ist `Config.Image` unveraendert.
+
+    `repo_digest` ist `<repository>@sha256:...` des alten Images aus der Vorpruefung, fuer den Rueckweg-Slot nach dem
+    Update. Er steht im Journal, bevor sich etwas aendert: Mit dem containerd-Image-Store (Standard einer neuen
+    Installation von Docker 29) leitet der Docker-Dienst `RepoDigests` aus den Namen eines Images ab -- zeigt das
+    bewegliche Tag schon auf das neue Image, nennt er den Digest des alten oft nicht mehr, und ein Commit, den erst die
+    Wiederaufnahme macht, fragte vergeblich."""
 
     id: str
     name: str
@@ -427,6 +461,7 @@ class OldContainer:
     version: str
     restart_policy: tuple[str, int]
     tag_text: str
+    repo_digest: str
 
 
 @dataclass(frozen=True)
@@ -444,6 +479,11 @@ class NewImage:
 class Journal:
     """Der laufende Vorgang. Unveraenderlich; der naechste Stand entsteht mit `advance()`.
 
+    `undo`: der Rueckbau ist angekuendigt (vor dem Commit, nie danach). Ab dann geht es nicht mehr vorwaerts
+    (`advance` erlaubt nur noch das Eintragen des eigenen, schon angelegten Containers von `creating` nach
+    `created`), und `Engine.bind` laesst nur noch Aufrufe des Rueckbaus zu. `code` ist der Grund dafuer (ein Code aus
+    `policy.CODES`, oder `None`, wenn die Wiederaufnahme nach einem Absturz zurueckbaut); ohne `undo` immer `None`.
+
     `repository` ist das Repository, gegen das `old.tag_text` geprueft wird (Vorgabe: die Konstante
     `policy.REPOSITORY`; nur Tests geben ein anderes mit, nie die Umgebung). Es steht nicht in der Datei
     (`to_json`) und zaehlt nicht beim Vergleich; `from_json` und `StateStore` setzen es, damit `validate`,
@@ -456,6 +496,8 @@ class Journal:
     deadline: int
     old: OldContainer
     new: NewImage | None = None
+    undo: bool = False
+    code: str | None = None
     repository: str = field(default=policy.REPOSITORY, compare=False, repr=False)
 
     @property
@@ -464,10 +506,24 @@ class Journal:
         return policy.floating_tag(self.old.tag_text, repository=self.repository)
 
     def advance(self, step: str, **changes: Any) -> Journal:
-        """Naechster Stand (geprueft). Schritte gehen nur vorwaerts."""
+        """Naechster Stand (geprueft). Schritte gehen nur vorwaerts, im Rueckbau gar nicht mehr (ausser `creating` ->
+        `created`: der Rueckbau traegt den eigenen, schon angelegten Container ein, um ihn entfernen zu duerfen)."""
         if step not in policy.STEPS or policy.STEPS.index(step) < policy.STEPS.index(self.step):
             raise ValueError("journal: Schritt rueckwaerts")
+        if self.undo and (self.step, step) != ("creating", "created"):
+            raise ValueError("journal: im Rueckbau geht es nicht mehr vorwaerts")
+        if {"undo", "code"} & set(changes):
+            raise ValueError("journal: den Rueckbau kuendigt nur start_undo an")
         journal = dataclasses.replace(self, step=step, **changes)
+        journal.validate()
+        return journal
+
+    def start_undo(self, code: str | None) -> Journal:
+        """Der Stand mit angekuendigtem Rueckbau (`undo`) und seinem Grund (`code`). Ist er schon angekuendigt, bleibt
+        es beim ersten Grund. Nach dem Commit gibt es keinen Rueckbau (`ValueError`)."""
+        if self.undo:
+            return self
+        journal = dataclasses.replace(self, undo=True, code=code)
         journal.validate()
         return journal
 
@@ -499,6 +555,14 @@ class Journal:
             policy.floating_tag(old.tag_text, repository=repository)
         except Refusal:
             raise ValueError("journal: old.tag_text") from None
+        if policy.registry_digests([old.repo_digest], repository=repository) != [old.repo_digest]:
+            raise ValueError("journal: old.repo_digest")
+        if type(self.undo) is not bool:
+            raise ValueError("journal: undo")
+        if self.code is not None and (not self.undo or not policy.is_code(self.code)):
+            raise ValueError("journal: code")
+        if self.undo and self.step == "committed":
+            raise ValueError("journal: Rueckbau nach dem Commit")
         index = policy.STEPS.index(self.step)
         new = self.new
         if index < policy.STEPS.index("pulled"):
@@ -536,10 +600,13 @@ class Journal:
                 "version": old.version,
                 "restart_policy": {"Name": old.restart_policy[0], "MaximumRetryCount": old.restart_policy[1]},
                 "tag_text": old.tag_text,
+                "repo_digest": old.repo_digest,
             },
             "new": None if new is None else {
                 "id": new.id, "image_id": new.image_id, "digest": new.digest, "version": new.version,
             },
+            "undo": self.undo,
+            "code": self.code,
         }
 
     @classmethod
@@ -557,6 +624,7 @@ class Journal:
         old = OldContainer(
             id=raw_old["id"], name=raw_old["name"], image_id=raw_old["image_id"], version=raw_old["version"],
             restart_policy=(restart["Name"], restart["MaximumRetryCount"]), tag_text=raw_old["tag_text"],
+            repo_digest=raw_old["repo_digest"],
         )
         raw_new = obj["new"]
         new = None
@@ -568,7 +636,7 @@ class Journal:
             )
         journal = cls(
             request_id=obj["request_id"], action=obj["action"], step=obj["step"], started_at=obj["started_at"],
-            deadline=obj["deadline"], old=old, new=new, repository=repository,
+            deadline=obj["deadline"], old=old, new=new, undo=obj["undo"], code=obj["code"], repository=repository,
         )
         journal.validate()
         return journal

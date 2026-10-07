@@ -167,7 +167,7 @@ class Extension(NodvardExtension):
                 # Kanal aus (core/events.py) -- ctx.ws.broadcast() zusaetzlich, damit
                 # das Widget genau den in seinem Refresh.ws_channel genannten,
                 # themenspezifischen Kanal abonnieren kann (docs/02 §4s Beispiel
-                # "ext.nexus-soc.incidents" folgt demselben Muster).
+                # "ext.shield.incidents" folgt demselben Muster).
                 await ctx.ws.broadcast("tick", {"count": self._tick_count})
                 await asyncio.sleep(2.0)
 

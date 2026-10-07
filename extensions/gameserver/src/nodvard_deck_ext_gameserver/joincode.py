@@ -1,6 +1,6 @@
 """Extrahiert den aktuellen Join-Code aus Log-Text -- reine, testbare
 Textverarbeitung ohne `ctx`-Abhaengigkeit, wie
-`nodvard_deck_ext_nexus_soc.parsing`.
+`nodvard_deck_ext_shield.parsing`.
 
 **Konkreter Anlass:** Valheims PlayFab-Crossplay-Join-Code aendert sich bei JEDEM
 Neustart des Server-*Prozesses* (nicht auf einem Timer) -- und der Prozess ueberlebt

@@ -8,8 +8,8 @@ Verbindung zu stdin/stdout/stderr des Kanals) und kehrt sofort zurueck. Die Ausg
 landet in `<JOB_DIR>/<run_id>.log`, der Rueckgabecode in `<run_id>.rc`, die Prozess-ID
 in `<run_id>.pid`. Das Dashboard fragt danach alle paar Sekunden kurz nach (`poll_command`).
 
-Aufbau wie `nodvard_deck_ext_nexus_soc/detached.py` -- bewusst KEIN Import von dort: keine
-Extension importiert eine andere (nexus-soc kann ausgeschaltet sein), und die dortige
+Aufbau wie `nodvard_deck_ext_shield/detached.py` -- bewusst KEIN Import von dort: keine
+Extension importiert eine andere (Shield kann ausgeschaltet sein), und die dortige
 Fassung ist auf root, systemd-run und apt/dpkg zugeschnitten. Hier: ohne root, im
 Home-Ordner des SSH-Benutzers, nur setsid. Spaeter besser gemeinsam im SDK.
 
@@ -75,7 +75,7 @@ def wrapper_command(run_id: str, script: str, lock: str | None = None) -> str:
     um das Skript ist noetig, weil es mit `exit N` enden kann -- sonst kaeme der Wrapper
     nie bis zur rc-Datei.
 
-    Kein systemd-run, deshalb ist das `$$`-Verdoppeln aus nexus-soc hier nicht
+    Kein systemd-run, deshalb ist das `$$`-Verdoppeln aus Shield hier nicht
     noetig: die Shell selbst wertet `$$` aus.
 
     Mit `lock` (Projektname): die Sperre `lock-<projekt>` (vom Start angelegt) bekommt zuerst

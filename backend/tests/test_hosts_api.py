@@ -581,7 +581,7 @@ async def test_trigger_host_action_under_full_autonomy_runs_long_actions_in_back
 
 @pytest.mark.asyncio
 async def test_trigger_host_action_rejects_specs_that_are_not_host_bound(client, db_session):
-    """Eine Aktion mit host_bound=False (Beispiel: `nexus_soc.ban`, deren
+    """Eine Aktion mit host_bound=False (Beispiel: eine IP-Sperre, deren
     Befehl die Extension selbst aus geprueften Feldern baut) steht nicht auf der
     Server-Seite -- und darf sich auch per POST nicht mit einem frei gewaehlten
     `command` ausloesen lassen. Sie verhaelt sich wie eine unbekannte Aktion (404)."""
@@ -594,19 +594,19 @@ async def test_trigger_host_action_rejects_specs_that_are_not_host_bound(client,
         await client.post("/api/v1/hosts", json={"name": "a", "address": "1.1.1.1"}, headers=_auth_header(token))
     ).json()
     get_extension_runtime().actions.register(
-        "nexus-soc",
+        "demo-ext",
         ActionSpec(
-            action_type="nexus_soc.ban", label="IP sperren", default_risk=Risk.LOW, host_bound=False,
+            action_type="demo.ban", label="IP sperren", default_risk=Risk.LOW, host_bound=False,
             permissions=["hosts.execute"], command_field="command",
         ),
     )
     _register_shell_exec_spec()
 
     listed = await client.get(f"/api/v1/hosts/{host['id']}/actions", headers=_auth_header(token))
-    assert "nexus_soc.ban" not in {s["action_type"] for s in listed.json()}
+    assert "demo.ban" not in {s["action_type"] for s in listed.json()}
 
     r = await client.post(
-        f"/api/v1/hosts/{host['id']}/actions/nexus_soc.ban",
+        f"/api/v1/hosts/{host['id']}/actions/demo.ban",
         json={"payload": {"command": "id; cat /etc/shadow"}, "reason": "Test"}, headers=_auth_header(token),
     )
     assert r.status_code == 404, r.text

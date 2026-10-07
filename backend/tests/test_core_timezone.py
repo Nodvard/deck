@@ -106,7 +106,7 @@ async def test_switching_the_zone_moves_next_run_of_core_and_extension_jobs(db_s
     # nur in der Warteschlange und zeigt per get_job() noch den alten.
     get_scheduler_service().start()
     core = await _register(db_session, ext_id=None, key="audit-retention-purge")
-    ext = await _register(db_session, ext_id="nexus-soc", key="defender-briefing")
+    ext = await _register(db_session, ext_id="shield", key="defender-briefing")
     await db_session.commit()
     before = {}
     for job in (core, ext):

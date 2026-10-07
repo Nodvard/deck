@@ -15,7 +15,13 @@ from ...services import audit as audit_service
 from ...services import auth as auth_service
 from ...services import settings as settings_service
 from ..deps import CurrentSessionId, CurrentUser, SessionDep, SettingsDep
-from .auth import _client_ip, _too_many_attempts, confirm_current_password
+from .auth import (
+    TotpMissing,
+    _client_ip,
+    _too_many_attempts,
+    confirm_current_password,
+    confirm_current_totp,
+)
 
 router = APIRouter(prefix="/me", tags=["me"])
 
@@ -43,10 +49,17 @@ class RecoveryCodesOut(BaseModel):
 
 class RecoveryCodesRequest(BaseModel):
     current_password: str
+    totp_code: str = Field(default="", max_length=64)
+    """Pflicht, wenn Zwei-Faktor an ist (sonst gibt es ohnehin keine Codes): der aktuelle Code aus der App oder einer
+    der bisherigen Wiederherstellungs-Codes. Fehlt er: 403 mit `code: "totp_missing"`."""
 
 
 class TotpDisableRequest(BaseModel):
     current_password: str
+    totp_code: str = Field(default="", max_length=64)
+    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der Authenticator-App (sechs Ziffern) oder ein
+    Wiederherstellungs-Code (`ABCDE-FGHJK`, Schreibweise egal; wird dabei verbraucht). Fehlt er: 403 mit
+    `code: "totp_missing"`. Im Schema optional, damit aeltere Aufrufer diese Antwort bekommen statt eines 422."""
 
 
 class TotpSetupRequest(BaseModel):
@@ -205,39 +218,72 @@ async def totp_confirm(
     return RecoveryCodesOut(recovery_codes=codes)
 
 
-@router.post("/recovery-codes")
+@router.post("/recovery-codes", response_model=RecoveryCodesOut)
 async def regenerate_recovery_codes(
-    payload: RecoveryCodesRequest, request: Request, user: CurrentUser, session: SessionDep
-) -> RecoveryCodesOut:
+    payload: RecoveryCodesRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
+):
     """Neue Wiederherstellungs-Codes; die bisherigen (auch unbenutzte) sind sofort ungueltig.
     Verlangt das aktuelle Passwort -- eine gestohlene Sitzung allein soll sich keinen
-    frischen Satz holen koennen."""
+    frischen Satz holen koennen -- und dazu einen Code (`totp_code`) wie beim Abschalten: den aktuellen aus der App
+    oder einen der bisherigen Wiederherstellungs-Codes. Sonst holte sich, wer nur das Passwort kennt, frische Codes
+    und kaeme damit an jeder Code-Pflicht vorbei (Anmelden, Abschalten, Update). Antworten wie bei `DELETE /me/totp`."""
     if not auth_service.two_factor_enabled(user):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Die Zwei-Faktor-Anmeldung ist nicht aktiv – Wiederherstellungs-Codes gibt es nur dann.",
         )
     await confirm_current_password(request, session, user, payload.current_password, "codes_erneuern")
-    codes = await auth_service.issue_recovery_codes(session, user)
+    # Die Hashes der neuen Codes dauern (auf einem Pi Sekunden). Mit einem Wiederherstellungs-Code bestaetigt, rechnen
+    # sie, bevor er verbraucht wird: ab da haelt die Anfrage die Schreibsperre der Datenbank.
+    fresh = auth_service.new_recovery_code_set()
+    try:
+        via = await confirm_current_totp(
+            request, session, settings, user, payload.totp_code, "codes_erneuern", allow_recovery=True,
+            before_claim=fresh.hash,
+        )
+    except TotpMissing as exc:
+        return exc.response()
+    codes = await auth_service.issue_recovery_codes(session, user, fresh)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="auth.recovery_codes_generated",
-        outcome="success", target_type="user", target_id=user.id, detail={"reason": "renewed"},
+        outcome="success", target_type="user", target_id=user.id,
+        detail={"reason": "renewed"} | ({"via": via} if via else {}),
     )
+    if via == auth_service.VIA_RECOVERY:
+        await auth_service.report_recovery_use(
+            session, user, action="codes_erneuern", ip=_client_ip(request), user_agent=request.headers.get("user-agent")
+        )
     return RecoveryCodesOut(recovery_codes=codes)
 
 
 @router.delete("/totp", status_code=status.HTTP_204_NO_CONTENT)
 async def totp_disable(
-    payload: TotpDisableRequest, request: Request, user: CurrentUser, session: SessionDep,
+    payload: TotpDisableRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
     current_session_id: CurrentSessionId,
-) -> None:
-    """Zwei-Faktor abschalten -- verlangt das aktuelle Passwort (Body `{current_password}`),
-    damit eine gestohlene Sitzung allein den zweiten Faktor nicht entfernen kann."""
+):
+    """Zwei-Faktor abschalten -- verlangt das aktuelle Passwort (Body `{current_password}`), damit eine gestohlene
+    Sitzung allein den zweiten Faktor nicht entfernen kann, und dazu einen Code (`totp_code`): den aktuellen aus der
+    App oder einen Wiederherstellungs-Code. Sonst kaeme, wer nur das Passwort kennt, durch Abschalten an jeder
+    Code-Pflicht vorbei (z. B. beim Update). Reihenfolge: erst das Passwort (falsch: 400, der Code bleibt
+    unangetastet), dann der Code (fehlt: 403 `totp_missing`, zaehlt nicht; falsch oder schon benutzt: 400 und
+    zaehlt wie beim Anmelden; zu viele: 429). Ist Zwei-Faktor aus, reicht das Passwort wie bisher."""
     await confirm_current_password(request, session, user, payload.current_password, "2fa_abschalten")
+    try:
+        via = await confirm_current_totp(
+            request, session, settings, user, payload.totp_code, "2fa_abschalten", allow_recovery=True
+        )
+    except TotpMissing as exc:
+        return exc.response()
     await auth_service.disable_totp(session, user)
     # Wie beim Passwortwechsel: andere Anmeldungen enden, die aktuelle bleibt.
     revoked = await auth_service.revoke_refresh_tokens(session, user.id, except_token_id=current_session_id)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="auth.2fa_disabled",
-        outcome="success", target_type="user", target_id=user.id, detail={"signed_out_sessions": revoked},
+        outcome="success", target_type="user", target_id=user.id,
+        detail={"signed_out_sessions": revoked} | ({"via": via} if via else {}),
     )
+    if via == auth_service.VIA_RECOVERY:
+        await auth_service.report_recovery_use(
+            session, user, action="2fa_abschalten", ip=_client_ip(request), user_agent=request.headers.get("user-agent")
+        )
+    return None

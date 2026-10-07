@@ -8,7 +8,9 @@ Erweiterungen -> Konfigurieren).
   Extension (z. B. `acknowledged_unprotected` bei backups) bleiben unangetastet.
   Felder mit `x-hidden` gehoeren den eigenen Routen der Extension und werden hier nie
   uebernommen; was nicht mitgeschickt wird, bleibt wie gespeichert, ein `null` entfernt
-  den Wert (dann gilt wieder der Standard). Aendert sich ein Ziel, an das ein Geheimnis
+  den Wert (dann gilt wieder der Standard). Felder mit `x-widget: "schedule"` muessen ein
+  gueltiger Cron-Ausdruck sein (sonst 422): ein kaputter Zeitplan wuerde die Extension beim
+  naechsten Start lahmlegen. Aendert sich ein Ziel, an das ein Geheimnis
   gebunden ist (`x-secrets[].x-secret-bound-to`), wird dieses Geheimnis geloescht (auch bei
   einer ersten Adresse und wenn nur eines von mehreren gebundenen Feldern wechselt).
   Laeuft die Extension, geht das Speichern ueber `ctx.settings.set()`, damit ihr
@@ -22,6 +24,9 @@ Erweiterungen -> Konfigurieren).
 - `POST /extensions/{id}/test` prueft die Verbindung (`health()` der Extension bzw. bei
   Benachrichtigungskanaelen eine Testnachricht) und antwortet `{ok, message, details?}`
   auf Deutsch, ohne Geheimnisse im Text. Hoechstens 10 Tests je Minute und Nutzer.
+
+`{id}` darf auch eine alte Kennung einer umbenannten Erweiterung sein (`legacy_ids`); alles laeuft dann
+ueber die heutige Kennung und die Zeile der Speicher-Kennung (`extensions.resolve_extension`).
 """
 
 from __future__ import annotations
@@ -35,11 +40,13 @@ from sqlalchemy import select
 
 from ...branding import load_branding
 from ...core import rate_limit, vault
+from ...core.cron import cron_trigger
 from ...ext.runtime import get_extension_runtime
 from ...models import ExtensionRecord, Secret
 from ...services import audit as audit_service
 from ...services import extension_setup, extension_test
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from .extensions import resolve_extension
 
 router = APIRouter(
     prefix="/extensions",
@@ -113,7 +120,8 @@ _test_window = rate_limit.SlidingWindow(_TEST_LIMIT, _TEST_WINDOW_S)
 def schema_for(ext_id: str) -> dict[str, Any] | None:
     """`settings.schema.json` zuerst -- dort stehen Titel, Beschreibungen und
     `x-secrets` fuer die Oberflaeche. `ctx.settings.declare()` nur als Rueckfall
-    fuer Extensions ohne Schema-Datei."""
+    fuer Extensions ohne Schema-Datei. `ext_id` ist die heutige Kennung (nicht die
+    Speicher-Kennung `ExtensionRecord.id`, die nach einer Umbenennung eine alte sein kann)."""
     runtime = get_extension_runtime()
     manifest = getattr(runtime.discovered.get(ext_id), "manifest", None)
     if getattr(manifest, "settings_schema", None):
@@ -162,6 +170,27 @@ def _pattern_matches(pattern: str, value: str) -> bool:
         return True  # ein kaputtes Muster im Schema darf das Speichern nie verhindern
 
 
+_SCHEDULE_HINT = (
+    "Erlaubt sind fünf Angaben: Minute (0–59), Stunde (0–23), Tag (1–31), Monat (1–12) und Wochentag (0–7), "
+    "zum Beispiel „0 2 * * *“ für täglich um 2 Uhr."
+)
+
+
+def _check_schedule(value: str, schema: dict[str, Any], path: str) -> None:
+    """Ein Zeitplan-Feld (`x-widget: "schedule"`) muss sich wirklich planen lassen -- dieselbe
+    Pruefung wie beim Anmelden des Jobs (`core.cron.cron_trigger`). Leer bleibt erlaubt: dann
+    gilt der Standard der Extension."""
+    if value == "":
+        return
+    try:
+        cron_trigger(value)
+    except ValueError as exc:
+        title = schema.get("title") if isinstance(schema.get("title"), str) and schema.get("title") else path
+        raise HTTPException(
+            status_code=422, detail=f"„{title}“: Der Zeitplan „{value}“ ist ungültig. {_SCHEDULE_HINT}"
+        ) from exc
+
+
 _TYPES: dict[str, tuple[type, ...]] = {
     "string": (str,),
     "boolean": (bool,),
@@ -173,7 +202,8 @@ _TYPES: dict[str, tuple[type, ...]] = {
 
 
 def _check(value: Any, schema: dict[str, Any], path: str) -> None:
-    """Bewusst schmal (keine jsonschema-Abhaengigkeit): Typ, Pflichtfelder, Enum, `pattern`."""
+    """Bewusst schmal (keine jsonschema-Abhaengigkeit): Typ, Pflichtfelder, Enum, `pattern`,
+    Zeitplan-Felder (`x-widget: "schedule"`)."""
     expected = schema.get("type")
     if value is None:
         return
@@ -192,6 +222,8 @@ def _check(value: Any, schema: dict[str, Any], path: str) -> None:
                 status_code=422,
                 detail=f"„{path}“: {schema.get('x-pattern-message') or 'Das Format stimmt nicht.'}",
             )
+    if isinstance(value, str) and schema.get("x-widget") == "schedule":
+        _check_schedule(value, schema, path)
     if expected == "object" and isinstance(value, dict):
         props = schema.get("properties") or {}
         for key in schema.get("required") or []:
@@ -205,11 +237,9 @@ def _check(value: Any, schema: dict[str, Any], path: str) -> None:
             _check(item, schema["items"], f"{path}[{i + 1}]")
 
 
-async def _record(session, ext_id: str) -> ExtensionRecord:  # noqa: ANN001 - AsyncSession
-    record = await session.get(ExtensionRecord, ext_id)
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Erweiterung.")
-    return record
+async def _record(session, ext_id: str, *, change: bool = False) -> tuple[str, ExtensionRecord]:  # noqa: ANN001
+    """(heutige Kennung, Registry-Zeile) zur Kennung aus der Adresse, siehe `resolve_extension`."""
+    return await resolve_extension(session, ext_id, change=change, not_found="Unbekannte Erweiterung.")
 
 
 async def _settings_out(
@@ -228,7 +258,7 @@ async def _settings_out(
 
 @router.get("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
 async def get_extension_settings(ext_id: str, session: SessionDep) -> ExtensionSettingsOut:
-    record = await _record(session, ext_id)
+    ext_id, record = await _record(session, ext_id)
     return await _settings_out(session, ext_id, dict(record.settings or {}))
 
 
@@ -236,7 +266,7 @@ async def get_extension_settings(ext_id: str, session: SessionDep) -> ExtensionS
 async def put_extension_settings(
     ext_id: str, payload: ExtensionSettingsIn, session: SessionDep, user: CurrentUser
 ) -> ExtensionSettingsOut:
-    record = await _record(session, ext_id)
+    ext_id, record = await _record(session, ext_id, change=True)
     schema = schema_for(ext_id)
     if not schema or not schema.get("properties"):
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Diese Erweiterung hat keine Einstellungen.")
@@ -293,7 +323,7 @@ async def put_extension_settings(
 async def put_extension_secret(
     ext_id: str, payload: SecretIn, session: SessionDep, settings: SettingsDep, user: CurrentUser
 ) -> None:
-    record = await _record(session, ext_id)
+    ext_id, record = await _record(session, ext_id, change=True)
     schema = schema_for(ext_id)
     values = dict(record.settings or {})
     slot = next((s for s in _secret_slots_spec(schema, values) if s["label"] == payload.label), None)
@@ -327,7 +357,7 @@ async def put_extension_secret(
 async def delete_extension_secret(ext_id: str, label: str, session: SessionDep, user: CurrentUser) -> None:
     """Entfernt ein Geheimnis der Erweiterung (nur Labels aus `x-secrets`). Idempotent:
     ein nicht gesetztes Geheimnis ist kein Fehler."""
-    record = await _record(session, ext_id)
+    ext_id, record = await _record(session, ext_id, change=True)
     allowed = {s["label"] for s in _secret_slots_spec(schema_for(ext_id), dict(record.settings or {}))}
     if label not in allowed:
         raise HTTPException(status_code=422, detail="Dieses Geheimnis gehört nicht zu dieser Erweiterung.")
@@ -369,7 +399,7 @@ async def test_extension(
     """Verbindung der Erweiterung pruefen. Gleiches Recht wie beim Bearbeiten der
     Einstellungen (`extensions.manage`). Das Ergebnis wird als „letzter Test“ gemerkt
     (`needs_setup` in der Erweiterungsliste) und im Protokoll vermerkt."""
-    record = await _record(session, ext_id)
+    ext_id, record = await _record(session, ext_id, change=True)
     runtime = get_extension_runtime()
     loaded = runtime.loaded.get(ext_id)
     if loaded is None:

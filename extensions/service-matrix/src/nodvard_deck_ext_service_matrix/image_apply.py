@@ -162,16 +162,57 @@ def _bad_field(field: str) -> NotUpdatable:
 
 # Bildnamen (letzter Teil des Repositorys), an denen das Dashboard sich selbst erkennt.
 SELF_IMAGE_NAMES = frozenset({"lattice", "nodvard-deck", "nodvard"})
-# Kuenftiges Registry-Image: `<registry>/nodvard/deck` (Repo `deck` unter `nodvard/`).
-SELF_IMAGE_PATHS = (("nodvard", "deck"),)
+# Registry-Images: `<registry>/nodvard/deck` (das Dashboard) und `<registry>/nodvard/deck-updater` (sein
+# Update-Helfer). Den Helfer tauscht die Service-Matrix nie aus: Er hat Zugriff auf Docker, und mitten in einem
+# Update des Dashboards neu angelegt, liesse er es halb fertig liegen.
+OFFICIAL_IMAGE_PATH = ("nodvard", "deck")
+HELPER_IMAGE_PATH = ("nodvard", "deck-updater")
+SELF_IMAGE_PATHS = (OFFICIAL_IMAGE_PATH, HELPER_IMAGE_PATH)
+OFFICIAL_REGISTRY = "ghcr.io"
+LABEL_IMAGE_TITLE = "org.opencontainers.image.title"
+HELPER_IMAGE_TITLE = "Nodvard Deck Update-Helfer"
+"""Titel im Image des Update-Helfers (`deploy/updater/Dockerfile`, `release.yml`). Docker uebernimmt die Labels des
+Images in die des Containers (`.Config.Labels`): So wird der Helfer auch erkannt, wenn sein Image gespiegelt unter
+einem anderen Namen liegt (eigene Registry, Proxy-Cache)."""
+
+SELF_WHY = "Das ist Nodvard Deck selbst – Update über das Deploy-Skript (scripts/deploy_pi.sh)."
+SELF_WHY_OFFICIAL = "Das ist Nodvard Deck selbst – Updates findest du unter Einstellungen → System → Updates."
+SELF_WHY_HELPER = (
+    "Das ist der Update-Helfer von Nodvard Deck – ihn aktualisierst du auf dem Server mit "
+    "„docker compose pull updater“ und danach „docker compose up -d updater“."
+)
+
+
+def _repo_parts(image: str) -> list[str] | None:
+    if not is_valid_ref(image):
+        return None
+    return canonical_repo(split_ref(image)[0]).split("/")
 
 
 def is_self_image(image: str) -> bool:
-    """Ist `image` das Dashboard selbst? Nur nach dem Repository-Namen, nie nach Tag oder Registry."""
-    if not is_valid_ref(image):
+    """Ist `image` das Dashboard selbst (oder sein Update-Helfer)? Nur nach dem Repository-Namen, nie nach Tag oder
+    Registry."""
+    parts = _repo_parts(image)
+    if parts is None:
         return False
-    parts = canonical_repo(split_ref(image)[0]).split("/")
     return parts[-1] in SELF_IMAGE_NAMES or tuple(parts[-2:]) in SELF_IMAGE_PATHS
+
+
+def is_helper_labels(labels: dict[str, str] | None) -> bool:
+    """Traegt der Container den Titel aus dem Image des Update-Helfers (`HELPER_IMAGE_TITLE`)?"""
+    return bool(labels) and labels.get(LABEL_IMAGE_TITLE) == HELPER_IMAGE_TITLE
+
+
+def self_why(image: str, labels: dict[str, str] | None = None) -> str:
+    """Der Grund ohne Knopf fuer Nodvard Deck selbst: beim Helfer (nach Name oder Label), wie man ihn aktualisiert;
+    beim offiziellen Image (`ghcr.io/nodvard/deck`) der Weg zu den Updates im Dashboard; sonst (selbst gebaut) das
+    Deploy-Skript."""
+    parts = _repo_parts(image) or []
+    if tuple(parts[-2:]) == HELPER_IMAGE_PATH or is_helper_labels(labels):
+        return SELF_WHY_HELPER
+    if parts == [OFFICIAL_REGISTRY, *OFFICIAL_IMAGE_PATH]:
+        return SELF_WHY_OFFICIAL
+    return SELF_WHY
 
 
 def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable:
@@ -183,9 +224,10 @@ def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable
     name = str(info.get("name") or "").lstrip("/")
 
     # 1. Das Dashboard selbst: nie ueber sich selbst aktualisieren. Bildname `lattice` (alt),
-    # `nodvard-deck` (neu), `nodvard` (Tippvariante) und `<registry>/nodvard/deck` (spaeter).
-    if own or is_self_image(image):
-        return _why("self", "Das ist Nodvard Deck selbst – Update über das Deploy-Skript (scripts/deploy_pi.sh).")
+    # `nodvard-deck` (neu), `nodvard` (Tippvariante), `<registry>/nodvard/deck` und sein Helfer
+    # `<registry>/nodvard/deck-updater` -- der Helfer auch an seinem Label, falls sein Image anders heisst.
+    if own or is_self_image(image) or is_helper_labels(labels):
+        return _why("self", self_why(image, labels))
     # 2. Swarm.
     if any(labels.get(key) for key in LABEL_SWARM):
         return _why("swarm", "Swarm-Dienst – bitte mit „docker service update“ auf dem Manager aktualisieren.")

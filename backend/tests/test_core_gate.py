@@ -477,7 +477,7 @@ async def test_action_executed_subscriber_writing_via_own_session_is_not_blocked
 
 async def _add_action(session, *, status: str) -> Action:
     row = Action(
-        ext_id="nexus-soc", action_type="nexus_soc.upgrade", host_id=None, payload={}, risk="medium",
+        ext_id="demo-ext", action_type="demo.upgrade", host_id=None, payload={}, risk="medium",
         status=status, proposed_by_type="user", proposed_by_id="user-1", reason="Test",
         gate_decision={"rule": "autonomy:propose"}, correlation_id=f"corr-{status}",
     )

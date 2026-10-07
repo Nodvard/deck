@@ -29,7 +29,7 @@ from starlette.types import Scope
 
 from .api import api_v1_router
 from .api.body_limit import BodyLimitMiddleware
-from .api.errors import install_validation_error_handler
+from .api.errors import install_coded_error_handler, install_validation_error_handler
 from .config import get_settings
 from .core import bootstate
 from .core.demo_seed import DemoBlockedError, seed_demo_data
@@ -44,7 +44,8 @@ from .core.scheduler import get_scheduler_service, register_core_jobs
 from .core.security import HashingBusy
 from .core.ssh import SshError
 from .db.session import get_engine, session_scope
-from .services.auth import ensure_builtin_roles, prepare_setup_code
+from .services import update_helper
+from .services.auth import ensure_builtin_roles, prepare_setup_code, restore_code_limits
 from .services.extensions import discover_and_sync, load_enabled_from_registry
 from .services.jobs import mark_interrupted_on_boot
 from .services.restore import record_result as record_restore_result
@@ -187,6 +188,27 @@ async def _keep_marking_started_ok(settings) -> None:
             return
 
 
+async def _restore_code_limits() -> None:
+    """Zaehler fuer falsche Zwei-Faktor-Codes aus dem Protokoll wieder eintragen (`services.auth.restore_code_limits`).
+    Klappt das nicht, startet Nodvard Deck trotzdem, mit leeren Zaehlern (wie frueher nach jedem Neustart) und einer
+    Warnung im Protokoll. Der Start darf daran nie scheitern (sonst Notseite oder Rueckweg auf die alte Version), und
+    jedes Konto vorsorglich zu sperren, saehe den Besitzer bis zu einem Tag lang von allem aus, was einen Code verlangt
+    (Update, Sicherung, Abschalten). Ausloesen laesst sich der Fehler von aussen nicht: Gelesen werden nur Eintraege,
+    die Nodvard Deck selbst geschrieben hat.
+
+    Die Warnung ist eine kurze Zeile ohne Traceback: Die Pruefung nach einem Deploy (`scripts/deploy_pi.sh`) wertet jeden
+    Traceback in den Logs als Fehler und schaltet zurueck -- genau das soll dieser Fehler nicht ausloesen."""
+    try:
+        async with session_scope() as session:
+            restored = await restore_code_limits(session)
+    except Exception as exc:  # noqa: BLE001 - nie ein Grund, nicht zu starten
+        first_line = next(iter(str(exc).splitlines()), "")[:200]
+        _boot_logger.warning("code_limits_restore_failed error=%s: %s", type(exc).__name__, first_line)
+        return
+    if restored:
+        _boot_logger.info("code_limits_restored entries=%d", restored)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
@@ -216,9 +238,18 @@ async def _lifespan_body(app: FastAPI):
     async with session_scope() as session:
         await prepare_setup_code(session, settings)
 
+    # Die Grenzen fuer falsche Zwei-Faktor-Codes gelten ueber einen Neustart hinweg (vor der ersten Anfrage).
+    await _restore_code_limits()
+
     # Ergebnis einer Wiederherstellung (von `nodvard_deck.boot` vor dem Start geschrieben) ins Audit-Protokoll
     # der jetzt gueltigen Datenbank eintragen und Aufgegebenes in restore/ wegraeumen.
     await record_restore_result(settings)
+
+    # Ergebnisse des Update-Helfers (ein Update oder ein Rueckweg hat gerade diesen Start ausgeloest) ins Audit-Protokoll
+    # und als Meldung, genau einmal je Anforderung. Ist der Helfer noch beschaeftigt (er wartet z. B. auf das erste
+    # "gesund" dieses Starts), schaut ein kleiner Nachlauf alle 30 s nach, hoechstens 30 Minuten.
+    await update_helper.record_results(settings)
+    helper_follow_up = update_helper.start_follow_up(settings)
 
     # D-10 ("Demo-Image zum Selbst-Antesten"): NODVARD_DECK_DEMO_MODE=1 legt dieselben Beispieldaten
     # an wie der Knopf "Mit Beispieldaten ansehen" -- idempotent, und nie auf einer Installation, die
@@ -265,6 +296,7 @@ async def _lifespan_body(app: FastAPI):
 
     yield
 
+    await update_helper.stop_follow_up(helper_follow_up)
     if retry_mark is not None:
         retry_mark.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -300,6 +332,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(api_v1_router)
     install_validation_error_handler(app)
+    install_coded_error_handler(app)
     # Obergrenze fuer die Groesse jeder Anfrage, bevor irgendein Handler sie liest (api/body_limit.py).
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
 

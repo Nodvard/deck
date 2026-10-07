@@ -74,7 +74,7 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
     expected = {
         "nextcloud": {"nextcloud-app-password": ["base_url"]},
         "network": {"network-pihole-password": ["pihole.url"], "network-npm-password": ["npm.url"]},
-        "nexus-soc": {"nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"]},
+        "shield": {"nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"]},
         "backups": {"backups-token:{name}": ["base_url"]},
         "proxmox": {"proxmox-token:{name}": ["base_url"]},
         "ntfy": {"ntfy-token": ["server_url"]},
@@ -189,13 +189,13 @@ async def test_gameserver_profiles_survive_the_settings_page(client, db_session,
 
 
 @pytest.mark.asyncio
-async def test_nexus_soc_key_goes_with_both_ai_servers(client, db_session, test_settings):
+async def test_shield_key_goes_with_both_ai_servers(client, db_session, test_settings):
     """Der Schluessel gilt fuer Haupt- UND Ersatzserver der Nodvard KI. Wer den Ersatzserver neu
     einrichtet, darf den Schluessel nicht an einen eigenen Server schicken lassen; vorher gibt es
     keinen Schluessel ohne gespeicherte Adresse."""
     headers = await _owner_with(client, db_session, test_settings)
     label = "nexus-soc-ollama-key"
-    base = "/api/v1/extensions/nexus-soc"
+    base = "/api/v1/extensions/shield"
 
     early = await client.put(f"{base}/secrets", json={"label": label, "value": "key-geheim"}, headers=headers)
     assert early.status_code == 409, early.text

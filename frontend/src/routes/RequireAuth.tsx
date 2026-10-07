@@ -109,7 +109,7 @@ export function RequireAuth() {
       <p className="p-6 text-sm opacity-60">Lade …</p>
     );
   }
-  // Mit Abfrage und Anker: ntfy-Links wie /ext/nexus-soc/soc?tab=guard&host=... sollen
+  // Mit Abfrage und Anker: ntfy-Links wie /ext/shield/soc?tab=guard&host=... sollen
   // nach der Anmeldung im richtigen Reiter landen.
   if (status !== "authenticated") {
     return <Navigate to="/login" state={{ from: returnAddress(location) }} replace />;

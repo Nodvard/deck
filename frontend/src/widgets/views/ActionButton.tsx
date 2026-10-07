@@ -36,7 +36,7 @@ interface ProposeResult extends ActionOutcomeSource {
 }
 
 /** Status, bei denen die direkte Antwort sicher ein Aktionsergebnis ist -- andere
- * Endpunkte liefern ebenfalls `status` (z. B. nexus-soc-Vorfaelle "dismissed"). */
+ * Endpunkte liefern ebenfalls `status` (z. B. Shield-Vorfaelle "dismissed"). */
 const DIRECT_FAILURE = new Set(["failed", "denied"]);
 
 /** Fehlermeldung zu einer gescheiterten/gesperrten Aktion. Extensions

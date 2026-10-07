@@ -1,7 +1,7 @@
 /**
  * Ende-zu-Ende durch die echte Kette Router -> ExtensionPage (Kern) -> BackupsPage: der
  * Server-Filter folgt Links aus der Server-Seite auch dann, wenn die Seite schon offen ist und
- * man ihn zwischendurch entfernt hat. Vorbild: nexus-soc SocPage.navigation.test.tsx.
+ * man ihn zwischendurch entfernt hat. Vorbild: extensions/shield SocPage.navigation.test.tsx.
  */
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";

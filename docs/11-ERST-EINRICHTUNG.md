@@ -1,6 +1,6 @@
 # Erst-Einrichtung – Schritt für Schritt
 
-Stand 01.10.2026. Für eine frische Installation, in dieser Reihenfolge. Wo Nodvard Deck noch
+Stand 07.10.2026 (Version 0.7). Für eine frische Installation, in dieser Reihenfolge. Wo Nodvard Deck noch
 eine Lücke hat, steht das dabei. Ohne Oberfläche (nur mit der API) geht es über den
 [Anhang](#anhang-ohne-oberfläche).
 
@@ -193,18 +193,33 @@ Passwortmanager oder ausgedruckt, **nicht** nur auf dem Handy, das ja verloren g
   Wiederherstellungs-Code verwenden“ klicken und einen Code eintippen. Jeder Code gilt
   **genau einmal**; Nodvard Deck trägt die Benutzung ins Protokoll ein und schickt eine
   Meldung (Meldungen-Seite, bei eingerichtetem ntfy auch als Push).
-- **Codes aus der App** gelten je Konto nur **einmal**; ist einer schon benutzt, auf den
-  nächsten warten. Nach 10 falschen Codes in 15 Minuten (oder 20 in 24 Stunden), egal von
-  welchem Gerät, ist die Code-Eingabe für das Konto eine Weile gesperrt, und Nodvard Deck
-  schickt eine Meldung. Wer so oft rät, kennt vermutlich das Passwort – warst du es nicht,
-  ändere es. Mit einem Wiederherstellungs-Code kommst du auch während der Sperre hinein.
+- **Codes aus der App** gelten je Konto nur **einmal** (auch der, mit dem du die Einrichtung
+  bestätigt hast); ist einer schon benutzt, auf den nächsten warten. Nach 10 falschen Codes in
+  15 Minuten (oder 20 in 24 Stunden), egal von welchem Gerät, ist die Code-Eingabe für das Konto
+  eine Weile gesperrt, und Nodvard Deck schickt eine Meldung. Die Sperre gilt auch nach einem
+  Neustart von Nodvard Deck weiter. Wer so oft rät, kennt vermutlich das Passwort. Warst du es
+  nicht, ändere gleich dein Passwort, das geht auch während der Sperre. Anmelden kannst du dich in
+  der Zeit mit einem Wiederherstellungs-Code. Bestätigungen mit Zwei-Faktor-Code (etwa für ein
+  Update) gehen erst wieder, wenn die Sperre vorbei ist.
 - **Wie viele übrig sind**, steht unter Mein Konto. Bei wenigen oder keinen: „Neue
-  Wiederherstellungs-Codes erzeugen“ (verlangt das aktuelle Passwort; die alten Codes sind
-  danach sofort ungültig).
+  Wiederherstellungs-Codes erzeugen“. Dafür brauchst du dein Passwort und einen Code: den aktuellen
+  aus der App oder einen deiner bisherigen Wiederherstellungs-Codes. Die alten Codes sind danach
+  sofort ungültig.
+- **Abschalten** (Mein Konto → „Abschalten“) geht nur mit Passwort **und** Code: dem aktuellen aus
+  der App oder einem Wiederherstellungs-Code, der dabei verbraucht wird. Wer nur dein Passwort kennt,
+  kann die Zwei-Faktor-Anmeldung so nicht abschalten. Ältere Apps fragen den Code noch nicht ab; dort
+  gehen Abschalten, neue Codes und Sicherungen erst nach einem Update der App, im Browser sofort.
+- Wird beim Abschalten oder beim Erzeugen neuer Codes ein Wiederherstellungs-Code benutzt, steht das
+  wie bei der Anmeldung im Protokoll, und Nodvard Deck schickt eine Meldung.
+- **Sicherung herunterladen oder einspielen** verlangt bei eingeschalteter Zwei-Faktor-Anmeldung
+  ebenfalls den Code aus der App (hier kein Wiederherstellungs-Code): Eine Sicherung enthält alle
+  Schlüssel, auch den der Zwei-Faktor-Anmeldung. Das Feld dafür erscheint gleich mit. Vertippst du
+  dich, bleiben die Passwörter stehen, nur der Code muss neu.
 - Nodvard Deck speichert nur Prüfsummen, keine Codes – ein verlorener Satz lässt sich nicht
   nachschlagen, nur ersetzen.
 - Wer schon vor dieser Funktion Zwei-Faktor eingerichtet hatte, hat noch keine Codes:
-  unter Mein Konto einmal „Neue Wiederherstellungs-Codes erzeugen“.
+  unter Mein Konto einmal „Neue Wiederherstellungs-Codes erzeugen“ (mit Passwort und dem Code aus
+  der App).
 - Verliert jemand Handy **und** Codes: siehe [12.](#12-ausgesperrt-notfall-befehle).
 
 ## 3. Weitere Benutzer
@@ -520,7 +535,17 @@ passenden Haken selbst, weil die Erweiterungen melden, was sie brauchen.
   - **Nodvard Shield, Virenschutz:** Datei in Quarantäne verschieben, wiederherstellen oder löschen,
     Lynis-Härtungsaudit, Werkzeuge installieren (ClamAV, Lynis, Signaturen, Fail2ban,
     automatische Updates). Scans laufen auch ohne root, prüfen dann aber nur Dateien, die der
-    Benutzer lesen darf.
+    Benutzer lesen darf. Ob ClamAV und Lynis installiert sind, erkennt Nodvard Shield auch ohne root
+    (Lynis liegt bei Debian und dem Betriebssystem des Pi unter `/usr/sbin`); nach einer Installation fragt es den
+    Server gleich neu ab. Das **Härtungs-Audit** läuft auf dem Server im Hintergrund mit niedriger
+    Priorität und kann je nach Server einige Minuten bis über eine Stunde dauern (Obergrenze 3 Stunden).
+    Nach dem Klick steht sofort „Audit läuft seit …“ beim Server, ein zweiter Klick startet kein zweites
+    Audit, und das Dashboard darf währenddessen neu starten. Die Protokolle liegen auf dem Server unter
+    `/var/lib/nodvard-shield-audit/`. Scans und Echtzeit-Wächter laufen auf einem Server nie
+    gleichzeitig; für diese Sperre legt Shield dort einen kleinen Ordner an: `/run/nodvard-shield` (als
+    root) bzw. `~/.nodvard-shield`. Einen Fund, den du ignoriert oder wiederhergestellt hast, verschiebt
+    der nächste Scan nicht noch einmal in die Quarantäne (außer ClamAV meldet dieselbe Datei mit einer
+    anderen Signatur).
   - **Update-Zentrale:** Updates einspielen und neu starten. Das Neuladen der Paketlisten vor der
     Prüfung braucht root – ohne bleibt es beim zuletzt geladenen Stand. Updates laufen auf dem
     Server im Hintergrund (mit systemd als `lattice-upgrade-…`, sonst per `setsid`) und laufen
@@ -592,7 +617,9 @@ Ausführlich in **[docs/10-PROXMOX-TOKEN.md](10-PROXMOX-TOKEN.md)**. Kurzfassung
 Einstellungen → Erweiterungen → **„ntfy-Benachrichtigungen“** einschalten →
 „Konfigurieren“:
 
-- **ntfy-Server:** z. B. `https://ntfy.sh` oder dein eigener.
+- **ntfy-Server:** z. B. `https://ntfy.sh` oder dein eigener. Nodvard Deck verbindet sich immer direkt damit, nie über
+  einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`). Kommt der Rechner mit Nodvard Deck nur über einen Proxy ins
+  Internet, ist `ntfy.sh` nicht erreichbar; nimm dann einen ntfy-Server im eigenen Netz.
 - **Thema (Topic):** der Kanal, den du in der ntfy-App abonnierst. Bei ntfy.sh schwer
   erratbar wählen, denn dort kann jeder ein Thema mitlesen, der den Namen kennt.
 - **Adresse des Dashboards (optional):** `http://192.168.1.10:8080`. Dann öffnet ein Tipp
@@ -656,7 +683,16 @@ Einstellungen → **Automatik & Sicherheit**:
 **Automatische Updates** (Nodvard Shield): Einstellungen → Erweiterungen → „Nodvard Shield“ →
 „Updates automatisch einspielen“ ist ab Werk **aus**, ebenso „Danach automatisch neu
 starten, wenn nötig“. Erst einschalten, wenn die Update-Zentrale eine Weile sauber
-gelaufen ist.
+gelaufen ist. Den Server, auf dem Nodvard Deck selbst läuft, nimmt die Runde als letzten; sein Neustart
+kommt erst, nachdem die Zusammenfassung verschickt ist (mit einer eigenen kurzen Meldung).
+
+**Alle Updates auf einmal vorschlagen:** In der Update-Zentrale legen „Alle Sicherheitsupdates
+vorschlagen“ bzw. „Alle Updates vorschlagen“ für jeden passenden Server einen Vorschlag an; vorher
+nennt eine Rückfrage die Server. Server mit einem offenen Update-Vorschlag oder einem laufenden
+Einspielen werden übersprungen. Freigegeben wird danach unter „Aktionen“, gesammelt mit „Ausgewählte
+freigeben“; Vorschläge mit hohem Risiko (bei „Proxmox: Alle Updates als dist-upgrade“) einzeln. Steht
+die Selbstständigkeit auf „Selbstständig handeln“, laufen die Vorschläge bis zur eingestellten
+Risikostufe ohne Rückfrage an.
 
 ## 10. Das Dashboard selbst sichern
 
@@ -849,7 +885,8 @@ bei ghcr.io nach, wo die fertigen Images liegen; mit **„Jetzt suchen“** geht
   unter `:latest`: Zum Einspielen trägst du bei `image:` genau `ghcr.io/nodvard/deck:0.7.0-rc1` ein.
 - **Ohne Internet** steht dort „Konnte nicht prüfen (offline?)“ und der letzte bekannte Stand; das ist kein Fehler. „Keine gefunden“ heißt:
   Die Abfrage hat geklappt, aber im gewählten Kanal gibt es noch keine Version.
-- **Einspielen** macht nicht das Dashboard selbst, sondern deine Umgebung. Die Karte hat Anleitungen als Reiter: Docker Compose, Docker Desktop,
+- **Einspielen** macht ohne Update-Helfer nicht das Dashboard selbst, sondern deine Umgebung (mit Helfer per Knopf, siehe
+  [10.6](#106-update-per-knopf-update-helfer)). Die Karte hat Anleitungen als Reiter: Docker Compose, Docker Desktop,
   Portainer („Update the stack“ mit „Re-pull image“), Synology Container Manager, Unraid („Check for Updates“ → „Apply update“) und
   `scripts/deploy_pi.sh`. Mit Compose (Installation wie in [1.1](#11-installation-ohne-das-repo)) im Ordner mit der `compose.yml`:
 
@@ -870,11 +907,42 @@ bei ghcr.io nach, wo die fertigen Images liegen; mit **„Jetzt suchen“** geht
   [13](#13-nodvard-deck-startet-nicht-die-notseite).
 - Läuft ein **selbst gebautes** Image (z. B. vom PC über `scripts/deploy_pi.sh`), sagt die Karte das; aktualisiert wird dann auf demselben Weg.
 
+### 10.6 Update per Knopf (Update-Helfer)
+
+Mit dem **Update-Helfer** spielst du Updates unter Einstellungen → System → „Updates“ per Knopf ein und kannst danach
+7 Tage lang einmal per Knopf zurück. Der Helfer ist ein kleiner eigener Dienst in derselben Compose-Datei, den du bewusst
+einschaltest. Er hat Zugriff auf Docker, das ist so viel wie root auf diesem Rechner. Einrichten, aktualisieren und
+entfernen: [deploy/README.md, Abschnitt „Update-Helfer“](../deploy/README.md#update-helfer).
+
+- **Zustand:** Die Karte „Updates“ zeigt „Update-Helfer: nicht eingerichtet“ (mit Link zur Anleitung), „bereit“ (mit
+  Version und letztem Lebenszeichen), „nicht bereit“ (mit dem Grund und was hilft) oder „antwortet nicht“.
+- **Voraussetzungen für den Knopf:** Helfer bereit, eine neuere fertige Version ist da, es läuft das offizielle Image
+  `ghcr.io/nodvard/deck` mit `:latest` oder einer passenden Reihe wie `:0.7` (keine feste Version), und du bist Inhaber
+  der Installation. Der Helfer nimmt erst Versionen ab 0.7.0 an; das erste Update per Knopf geht also von 0.7.0 auf die
+  Version danach. Fehlt etwas, sagt die Karte, warum, wo es hilft.
+- **Update:** „Jetzt aktualisieren auf X“, dann Passwort und, wenn Zwei-Faktor an ist, den Code aus der App eingeben.
+  Baut die neue Version die Datenbank um, legt Nodvard Deck vorher wie immer eine Kopie an ([10.4](#104-updates-die-kopie-vor-der-migration)).
+  Die Karte zeigt die Schritte; du kannst die Seite dabei schließen, der Helfer arbeitet ohne sie weiter. Beim Umschalten
+  ist das Dashboard ein paar Minuten weg; die Seite fragt weiter nach und lädt nach dem Erfolg neu. Dauert es länger als
+  30 Minuten (langsamer Download), fragt die Karte weiter nach und zeigt das Ergebnis, sobald es da ist.
+- **Klappt es nicht** (die neue Version beendet sich, startet immer wieder neu, zeigt die Notseite oder ist nach 15
+  Minuten nicht bereit), schaltet der Helfer von selbst auf die alte Version zurück. Die Karte sagt, warum und was du tun
+  kannst; wichtige Ergebnisse kommen zusätzlich als Meldung.
+- **Rückweg:** In der Karte „Kopien vor Updates“ steht 7 Tage lang „Zurück zu Version X“, einmal. Hat die neue Version
+  die Datenbank umgebaut, gehen die Daten mit zurück: Die Karte nennt vorher den Zeitpunkt, seit dem alles verloren geht,
+  und verlangt ein Häkchen. Der ersetzte Stand bleibt 30 Tage unter `restore/replaced-…`. Ist unklar, was mit den Daten
+  passiert, gibt es keinen Knopf, nur die Erklärung. Nach einem Rückweg spielt der Helfer die verlassene Version 24 Stunden
+  lang nicht wieder ein; die Karte sagt, ab wann es wieder geht. Ist ein Rückweg gescheitert, der die Daten mitnehmen
+  sollte, steht in der Meldung (Glocke), ob die Datenbank schon zurückgesetzt war.
+- Update und Rückweg zusammen gehen höchstens einmal in 10 Minuten. Ohne Helfer gelten die Anleitungen aus
+  [10.5](#105-neue-version-finden-und-einspielen).
+
 ## 11. Wenn etwas hakt
 
 **„HTTP 401“ oder „Nicht authentifiziert“ auf einer Erweiterungsseite** (Proxmox, Backups,
-Skripte …): Im sichtbaren Tab erneuert Nodvard Deck die Anmeldung selbst. Lag der Tab lange im
-Hintergrund, kann es noch passieren – Seite neu laden (F5).
+Skripte …): Im sichtbaren Tab erneuert Nodvard Deck die Anmeldung selbst. Erweiterungsseiten, Herunter- und
+Hochladen auf der Dateien-Seite, Sicherung hochladen und der Export des Protokolls erneuern sie bei einer
+abgelaufenen Anmeldung auch selbst und versuchen es einmal neu. Kommt die Meldung trotzdem, Seite neu laden (F5).
 
 **Irgendwo „HTTP 500“:** Log ansehen (im Ordner mit der Compose-Datei), dort steht der Grund:
 
@@ -890,19 +958,52 @@ das Log (siehe oben) hilft weiter.
 **Proxmox nicht erreichbar** (Push „Proxmox 'pve1' nicht erreichbar“, Kacheln mit „nicht
 erreichbar“ oder „Nicht abrufbar: …“) – die Fehlermeldung verrät meist den Grund:
 
-- `All connection attempts failed` oder Zeitüberschreitung: Server aus, falsche Adresse
+- „Proxmox ist nicht erreichbar (Verbindung abgelehnt oder kein Weg dorthin). Läuft der Server, und stimmen Adresse und
+  Port?“ oder „Proxmox antwortet nicht (Zeitüberschreitung). Prüfe Adresse und Port.“: Server aus, falsche Adresse
   oder Port. Die Adresse braucht `https://` und `:8006`.
-- `CERTIFICATE_VERIFY_FAILED`: Haken „Selbstsigniertes Zertifikat erlauben“ fehlt
+- „Das Zertifikat von Proxmox wird nicht akzeptiert …“: Haken „Selbstsigniertes Zertifikat erlauben“ fehlt
   ([docs/10](10-PROXMOX-TOKEN.md#zertifikat-was-selbstsigniertes-zertifikat-erlauben-macht)).
-- `HTTP 401`: Token-ID oder Geheimnis falsch, oder Token in Proxmox gelöscht.
-- `HTTP 403 … Permission check failed`: Recht fehlt – Tabelle in
-  [docs/10](10-PROXMOX-TOKEN.md#nachschlagen-welcher-aufruf-welches-recht-braucht).
-  Fehlen einzelne VMs ganz, fehlt ihnen `VM.Audit`.
+- „HTTP 401: Proxmox hat den Zugang abgelehnt. Prüfe Token-ID und Geheimnis in den Einstellungen.“: Token-ID oder
+  Geheimnis falsch, oder Token in Proxmox gelöscht.
+- „HTTP 403: Dem Token fehlt ein Recht für diese Abfrage. Grund laut Proxmox: Permission check failed (…)“: Recht
+  fehlt – Tabelle in [docs/10](10-PROXMOX-TOKEN.md#nachschlagen-welcher-aufruf-welches-recht-braucht). Den Zusatz
+  „Grund laut Proxmox“ gibt es nur, wenn Proxmox einen Grund nennt. „Verbindung testen“ sagt dazu allgemein „Zugriff
+  verweigert – dem Konto oder Token fehlt ein Recht auf dem Server …“. Fehlen einzelne VMs ganz, fehlt ihnen
+  `VM.Audit`.
+- „Der Server hat die Verbindung auf eine andere Adresse umgeleitet …“: Meist steht `http://` statt `https://` in der
+  Adresse, oder ein Proxy davor leitet um. Nodvard Deck folgt Weiterleitungen nicht – die Adresse des Knotens direkt
+  eintragen: `https://<adresse>:8006`.
+- „Die Antwort von Proxmox hat nicht das erwartete Format (HTTP 200). Stimmt die Adresse?“: Unter der Adresse antwortet
+  etwas anderes als die Proxmox-API, etwa die Anmeldeseite eines Proxys. Adresse prüfen. „Verbindung testen“ zeigt
+  beide Sätze genauso an.
 - Testen vom Rechner mit Nodvard Deck aus: der `curl`-Befehl in
   [docs/10](10-PROXMOX-TOKEN.md#prüfen-bevor-du-es-in-nodvard-deck-einträgst).
 - Ein ausgefallener Proxmox (z. B. pve2 aus) bremst die anderen nicht mehr, er steht nur
   als „nicht erreichbar“ da. Ist er länger aus: auf der Proxmox- und der Backups-Seite unter
   „Verbindungen verwalten“ auf „deaktiviert“ schalten, dann kommen auch keine Meldungen.
+
+**„… leitet auf eine andere Adresse um“** (Netzwerk mit Pi-hole oder Nginx Proxy Manager, ntfy, Nextcloud): Der Server hat
+statt der Antwort eine Weiterleitung geschickt (HTTP 301, 302, 303, 307 oder 308). Nodvard Deck folgt dem nie, weil sonst
+Passwort oder Token an eine Adresse gingen, die niemand eingetragen hat, und nennt auch die Zieladresse nicht. Meist
+steht in den Einstellungen `http://` statt `https://` (oder umgekehrt), oder ein Proxy davor leitet um. Abhilfe: in den
+Einstellungen die endgültige Adresse eintragen, so wie sie im Browser nach der Weiterleitung steht. Andere Fehler der
+Nextcloud erscheinen als fester Satz, etwa „Nextcloud ist gerade nicht bereit (HTTP 503), zum Beispiel im
+Wartungsmodus.“ oder „In der Nextcloud ist kein Speicherplatz mehr frei (HTTP 507).“
+
+**„Der Zeitplan „…“ ist ungültig“** beim Speichern (Einstellungen einer Erweiterung, Skripte): Ein eigener Zeitplan
+(Auswahl „Eigener“) braucht genau fünf Angaben: Minute (0–59), Stunde (0–23), Tag (1–31), Monat (1–12) und Wochentag
+(0–7), zum Beispiel `0 2 * * *` für täglich um 2 Uhr. Kürzel wie `@daily` gehen nicht. Stammt ein kaputter Zeitplan
+noch aus einer älteren Version, läuft Nodvard Shield mit seinem Standard-Zeitplan weiter bzw. das Skript vorerst nicht
+nach Zeitplan; eine Meldung „Zeitplan … ist ungültig“ sagt, welcher es ist.
+
+**Virenscan von Nodvard Shield fehlgeschlagen:** Die Liste der Scans nennt einen verständlichen Grund: ob der Server
+nicht erreichbar war, die Verbindung mitten im Scan abgebrochen ist, der Scan sein Zeitlimit überschritten hat (mit
+Dauer) oder welche Meldung ClamAV geschrieben hat, etwa „Input/output error“ bei einer defekten Platte. Wurden neue
+Dateien vor dem Scan des Echtzeit-Wächters wieder gelöscht, gilt das nicht als Fehler. Läuft auf einem Server gerade ein
+Scan, setzt der Wächter still aus und prüft beim nächsten Lauf die ausgelassene Zeit mit (bis zu 6 Stunden zurück); kann
+er länger nicht prüfen, steht das als Fehler in der Liste. Ein Scan wartet bis zu 6 Minuten auf einen laufenden
+Wächter, und ein hängender Lauf wird vom Server kurz vor dem Zeitlimit beendet. Das braucht auf dem Server `flock` und
+`timeout` (util-linux, coreutils); fehlen sie, läuft alles wie früher.
 
 **Server fehlt im Terminal / „Noch kein Server prüfbar“ oder „Keine Linux-Server mit SSH-Zugang gefunden“ bei Nodvard Shield:** Kein
 SSH-Zugang hinterlegt: Einstellungen → Server & Zugänge ([5.2](#52-ssh-zugang-einrichten--drei-wege)). Nodvard Shield nimmt außerdem nur Server, die als `linux`

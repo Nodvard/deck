@@ -211,6 +211,11 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
     """Alles Zustandsbehaftete lebt hier: DB, Master-Key, Extension-Daten, Run-Logs."""
 
+    updater_dir: Path = Path("/app/updater")
+    """Kanal zum Update-Helfer (`core.updater_client`): ein eigenes Volume, das der Helfer einrichtet und das root
+    gehoert. Bewusst ein fester Pfad ohne Eintrag im Image: Fehlt der Ordner (Entwicklung, Tests, Installation ohne
+    Helfer), gibt es eben keinen Helfer. Nur fuer Tests aendern."""
+
     database_url: str = "sqlite+aiosqlite:///./data/lattice.db"
     """SQLite ist der Default (D-02). postgresql+asyncpg://... funktioniert ohne
     Codeaenderung, solange die Disziplin-Regeln aus D-02 eingehalten werden."""

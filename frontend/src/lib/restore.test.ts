@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { useAuthStore } from "../state/auth";
+import { SERVER_UNAVAILABLE_TEXT, ServerUnavailableError, useAuthStore } from "../state/auth";
+import { ApiError } from "./api";
 import {
   bootstrapAfterRestart,
   cancelRestore,
@@ -104,6 +105,16 @@ describe("Hochladen", () => {
     expect(refresh).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[1][0].headers.Authorization).toBe("Bearer neu");
   });
+
+  it("Owner: antwortet der Server beim Erneuern nicht, kommt ein ApiError mit Klartext und kein zweiter Upload", async () => {
+    const send = vi.spyOn(uploadTransport, "send").mockResolvedValueOnce({ status: 401, text: "{}" });
+    const refresh = vi.fn(async () => { throw new ServerUnavailableError(); });
+    useAuthStore.setState({ refresh } as never);
+    const result = uploadBackup(file, { mode: "owner", accountPassword: "x" }, { onProgress: vi.fn() });
+    await expect(result).rejects.toBeInstanceOf(ApiError);
+    await expect(result).rejects.toMatchObject({ status: 503, message: SERVER_UNAVAILABLE_TEXT });
+    expect(send).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("Aufrufe", () => {
@@ -167,6 +178,30 @@ describe("Warten auf den Neustart", () => {
     vi.spyOn(restartProbe, "health").mockImplementation(async () => (answers.length ? answers.shift()! : { status: "ok", uptime_s: 3 }));
     restartTiming.timeoutMs = 5000;
     expect(await waitForRestart(null)).toBe(true);
+  });
+
+  it("eigene Frist: ohne Angabe gilt weiter restartTiming, sonst die übergebene", async () => {
+    vi.spyOn(restartProbe, "health").mockResolvedValue(null);
+    restartTiming.timeoutMs = 40;
+    let started = Date.now();
+    expect(await waitForRestart(1)).toBe(false);
+    expect(Date.now() - started).toBeLessThan(1000);
+    restartTiming.timeoutMs = 10;
+    started = Date.now();
+    expect(await waitForRestart(1, { timeoutMs: 120 })).toBe(false);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(110);
+  });
+
+  it("mit eigener Erkennung zählt jede gesunde Antwort, für die sie zutrifft, auch ohne Ausfall", async () => {
+    const answers: ({ status: string; uptime_s: number; version?: string } | null)[] = [
+      { status: "rescue", uptime_s: 1 }, { status: "ok", uptime_s: 900, version: "0.7.0" }, { status: "ok", uptime_s: 901, version: "0.7.1" },
+    ];
+    vi.spyOn(restartProbe, "health").mockImplementation(async () => (answers.length ? answers.shift()! : null));
+    restartTiming.timeoutMs = 5000;
+    const seen: string[] = [];
+    expect(await waitForRestart(null, { ready: (h) => { seen.push(h.version ?? "?"); return h.version === "0.7.1"; } })).toBe(true);
+    expect(seen).toEqual(["0.7.0", "0.7.1"]);
+    expect(answers).toHaveLength(0);
   });
 
   it("bricht auf Wunsch ab", async () => {

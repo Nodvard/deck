@@ -424,6 +424,59 @@ async def test_pihole_unreachable_and_wrong_password_are_clean_states(client, db
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("location", "sentence"),
+    [
+        ("https://angreifer.example/login", "leitet auf eine andere Adresse um (HTTP 302)."),
+        # Ungueltiger Punycode-Name: httpx scheitert beim Zusammenbauen der Weiterleitung mit einem
+        # `ValueError` (idna), dessen Text Teile des fremden Namens nennt.
+        ("http://xn--angreifer-ey9f.example/login", "leitet auf eine andere Adresse um."),
+    ],
+)
+async def test_redirects_are_clean_states_and_never_show_the_foreign_address(
+    client, db_session, test_settings, caplog, location, sentence
+):
+    caplog.set_level(logging.INFO)
+    headers, _ = await _enable(client, db_session, test_settings)
+    await _configure(client, headers)
+    seen: list[httpx.Request] = []
+
+    def redirect(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(302, headers={"Location": location})
+
+    loaded = get_extension_runtime().loaded["network"]
+    http = loaded.ctx.http
+    http._client = http._insecure_client = httpx.AsyncClient(transport=httpx.MockTransport(redirect))
+
+    pihole_res = await client.get("/api/v1/ext/network/pihole", headers=headers)
+    npm_res = await client.get("/api/v1/ext/network/npm", headers=headers)
+    assert pihole_res.status_code == 200 and npm_res.status_code == 200, (pihole_res.text, npm_res.text)
+    pihole, npm = pihole_res.json(), npm_res.json()
+    for body, service in ((pihole, "Pi-hole"), (npm, "Nginx Proxy Manager")):
+        assert body["state"] == "unreachable"
+        assert body["message"].startswith(f"{service} {sentence}")
+    widgets = []
+    for name in ("pihole", "certificates"):
+        res = await client.get(f"/api/v1/ext/network/widgets/{name}", headers=headers)
+        assert res.status_code == 200, (name, res.text)
+        assert "leitet auf eine andere Adresse um" in res.text, name
+        widgets.append(res.text)
+    proposed = (await client.post("/api/v1/ext/network/pihole/pause", json={"minutes": 5}, headers=headers)).json()
+    approved = await _approve(client, headers, proposed["action_id"])
+    assert approved["status"] == "failed"
+    assert "leitet auf eine andere Adresse um" in approved["result"]["error"]
+    health = await loaded.instance.health(loaded.ctx)
+    assert health.healthy is False
+    watch = await get_extension_runtime().scheduler.get("network", "cert-watch")()
+    assert "leitet auf eine andere Adresse um" in watch["skipped"]
+    everything = json.dumps([pihole, npm, widgets, approved["result"], health.message, watch]) + caplog.text
+    assert "angreifer" not in everything.lower()
+    assert "Traceback" not in caplog.text
+    assert all(r.url.host != "angreifer.example" for r in seen)
+
+
+@pytest.mark.asyncio
 async def test_changing_the_address_logs_the_old_session_out(client, db_session, test_settings):
     headers, fake = await _enable(client, db_session, test_settings)
     await _configure(client, headers, npm=False)

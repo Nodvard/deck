@@ -32,6 +32,8 @@ COPY extensions/ extensions/
 # `tsc -b` prueft auch die Tests mit; frontend/src/lib/targetAddress.test.ts liest dieselben
 # Beispiele wie das SDK (sdk/python/tests/vectors/same_target.json). Ohne sie scheitert der Build.
 COPY sdk/python/tests/vectors/ sdk/python/tests/vectors/
+# Ebenso liest frontend/src/routes/settings/updaterTexts.test.ts die Protokoll- und Status-Vektoren des Update-Helfers.
+COPY deploy/updater/tests/vectors/ deploy/updater/tests/vectors/
 RUN cd frontend && npm run build
 
 # Extension-Frontend-Bundles sind laut .gitignore committete Fixtures (keine

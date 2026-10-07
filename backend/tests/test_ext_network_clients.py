@@ -12,6 +12,12 @@ from pathlib import Path
 
 import httpx
 import pytest
+from raw_http_helpers import (
+    BROKEN_ANSWERS,
+    REDIRECT_ANSWERS,
+    raw_http_server,
+    whole_chain,
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "network" / "src"))
 
@@ -246,12 +252,106 @@ async def test_pihole_wrong_address_says_so():
         await client.summary()
 
 
+EVIL_LOCATION = "https://angreifer.example/login?x=geheim"
+
+
+def _assert_redirect_text(text: str, service: str, code: int) -> None:
+    assert text.startswith(f"{service} leitet auf eine andere Adresse um (HTTP {code}).")
+    assert "endgültige Adresse" in text
+    # Der Location-Header kommt vom fremden Server und darf nirgends im Text stehen.
+    assert "angreifer" not in text.lower()
+    assert "geheim" not in text
+
+
 @pytest.mark.asyncio
-async def test_pihole_redirect_names_the_right_address_and_is_not_followed():
-    client, http, _ = _pihole(lambda request: httpx.Response(301, headers={"Location": "https://pihole.test/api/auth"}))
-    with pytest.raises(PiholeError, match="leitet auf https://pihole.test weiter"):
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+async def test_pihole_login_redirect_never_names_the_foreign_address_and_is_not_followed(code):
+    client, http, _ = _pihole(lambda request: httpx.Response(code, headers={"Location": EVIL_LOCATION}))
+    with pytest.raises(PiholeError) as exc:
         await client.summary()
+    _assert_redirect_text(str(exc.value), "Pi-hole", code)
     assert http.paths() == ["POST /api/auth"]
+
+
+@pytest.mark.asyncio
+async def test_pihole_redirect_without_location_gives_the_same_sentence():
+    client, _, _ = _pihole(lambda request: httpx.Response(302))
+    with pytest.raises(PiholeError) as exc:
+        await client.summary()
+    _assert_redirect_text(str(exc.value), "Pi-hole", 302)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location",
+    [
+        "javascript:alert(1)",
+        "http://pihole.test:angreifer-text/",
+        "http://angreifer.example:99999999/x",
+        "http://xn--angreifer-ey9f.example/login",
+        "http://xn--angreifer-.example/",
+    ],
+)
+async def test_pihole_unusable_location_is_no_crash_and_never_in_the_text(location):
+    """httpx baut die Weiterleitung auch, wenn es ihr nicht folgt: ein kaputter `Location`-Header
+    wirft dort `InvalidURL` (keine `HTTPError`), `RemoteProtocolError` mit Teilen des Headers oder,
+    bei einem ungueltigen Punycode-Namen, einen `ValueError` (idna) mit Teilen des Namens."""
+    client, http, _ = _pihole(lambda request: httpx.Response(302, headers={"Location": location}))
+    with pytest.raises(PiholeError) as exc:
+        await client.summary()
+    text = str(exc.value)
+    assert text.startswith("Pi-hole leitet auf eine andere Adresse um")
+    chain = whole_chain(exc.value)
+    assert "angreifer" not in chain.lower() and "alert" not in chain
+    assert exc.value.state == "unreachable"
+    assert http.paths() == ["POST /api/auth"]
+
+
+@pytest.mark.asyncio
+async def test_pihole_invalid_own_address_is_named_as_such():
+    http = FakeHttp(FakePihole())
+    client = PiholeClient(http, base_url="http://pihole.test:abc", password=Password("geheim"))
+    with pytest.raises(PiholeError, match="eingetragene Adresse ist ungültig"):
+        await client.summary()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["summary", "blocking", "pause"])
+async def test_pihole_redirect_after_login_is_an_error_even_with_a_json_body(call):
+    """Nach der Anmeldung leitet der Server um (z. B. ein Proxy davor). Auch mit einem
+    brauchbar aussehenden JSON-Koerper ist das kein Erfolg."""
+    fake = FakePihole()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path in ("/api/stats/summary", "/api/dns/blocking"):
+            return httpx.Response(302, headers={"Location": EVIL_LOCATION}, json={**SUMMARY, "blocking": "enabled"})
+        return fake(request)
+
+    client, http, _ = _pihole(handler)
+    with pytest.raises(PiholeError) as exc:
+        if call == "summary":
+            await client.summary()
+        elif call == "blocking":
+            await client.blocking()
+        else:
+            await client.set_blocking(False, timer_s=300)
+    _assert_redirect_text(str(exc.value), "Pi-hole", 302)
+    assert http.paths()[-1].split(" ")[1] in ("/api/stats/summary", "/api/dns/blocking"), "dem Ziel wurde nicht gefolgt"
+    assert not any(r.url.host == "angreifer.example" for r in http.requests)
+
+
+@pytest.mark.asyncio
+async def test_pihole_deeply_nested_json_is_an_error_not_a_crash():
+    fake = FakePihole()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/stats/summary":
+            return httpx.Response(200, content=b"[" * 200_000 + b"]" * 200_000, headers={"Content-Type": "application/json"})
+        return fake(request)
+
+    client, _, _ = _pihole(handler)
+    with pytest.raises(PiholeError, match="keine gültige Antwort"):
+        await client.summary()
 
 
 @pytest.mark.asyncio
@@ -497,11 +597,126 @@ async def test_npm_wrong_address_and_unreachable():
 
 
 @pytest.mark.asyncio
-async def test_npm_redirect_names_the_right_address():
-    client, http, _ = _npm(lambda request: httpx.Response(302, headers={"Location": "https://npm.test/login"}))
-    with pytest.raises(NpmError, match="leitet auf https://npm.test weiter"):
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+async def test_npm_login_redirect_never_names_the_foreign_address_and_is_not_followed(code):
+    client, http, _ = _npm(lambda request: httpx.Response(code, headers={"Location": EVIL_LOCATION}))
+    with pytest.raises(NpmError) as exc:
         await client.certificates()
+    _assert_redirect_text(str(exc.value), "Nginx Proxy Manager", code)
     assert http.paths() == ["POST /api/tokens"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call", ["certificates", "proxy_hosts", "enable_host"])
+async def test_npm_redirect_after_login_is_an_error_even_with_a_json_body(call):
+    """Eine 3xx-Antwort auf einen Abruf nach der Anmeldung ist kein Erfolg -- auch nicht,
+    wenn der Koerper wie eine Liste oder `true` aussieht."""
+    fake = FakeNpm()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.startswith("/api/nginx/"):
+            return httpx.Response(302, headers={"Location": EVIL_LOCATION}, json=True if request.method == "POST" else [])
+        return fake(request)
+
+    client, http, _ = _npm(handler)
+    with pytest.raises(NpmError) as exc:
+        if call == "certificates":
+            await client.certificates()
+        elif call == "proxy_hosts":
+            await client.proxy_hosts()
+        else:
+            await client.set_host_enabled(7, True)
+    _assert_redirect_text(str(exc.value), "Nginx Proxy Manager", 302)
+    assert not any(r.url.host == "angreifer.example" for r in http.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "location", ["javascript:alert(1)", "http://npm.test:angreifer-text/", "http://xn--angreifer-ey9f.example/login"]
+)
+async def test_npm_unusable_location_is_no_crash_and_never_in_the_text(location):
+    client, http, _ = _npm(lambda request: httpx.Response(301, headers={"Location": location}))
+    with pytest.raises(NpmError) as exc:
+        await client.certificates()
+    text = str(exc.value)
+    assert text.startswith("Nginx Proxy Manager leitet auf eine andere Adresse um")
+    chain = whole_chain(exc.value)
+    assert "angreifer" not in chain.lower() and "alert" not in chain
+    assert http.paths() == ["POST /api/tokens"]
+
+
+class RealHttp:
+    """Steht fuer `ctx.http`, aber mit einem echten httpx-Client (samt h11) und ohne Proxy aus der Umgebung."""
+
+    def __init__(self) -> None:
+        self._client = httpx.AsyncClient(trust_env=False)
+
+    async def request(self, method: str, url: str, *, insecure_tls: bool = False, **kwargs):
+        return await self._client.request(method, url, **kwargs)
+
+
+RAW_CASES = [(name, "leitet auf eine andere Adresse um.") for name in REDIRECT_ANSWERS] + [
+    (name, "hat die Verbindung abgebrochen oder eine fehlerhafte Antwort geschickt.") for name in BROKEN_ANSWERS
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("service", ["Pi-hole", "Nginx Proxy Manager"])
+@pytest.mark.parametrize(("answer", "sentence"), RAW_CASES)
+async def test_broken_answers_of_the_real_parser_never_reach_a_text(service, answer, sentence):
+    """Kaputte Kopfzeilen scheitern schon in h11, und dessen Text zitiert die Zeile (auch einen
+    `Location`-Header). Der Satz ist fest, die Ursachenkette leer."""
+    answers = {**REDIRECT_ANSWERS, **BROKEN_ANSWERS}
+    async with raw_http_server(answers[answer]) as base:
+        if service == "Pi-hole":
+            client = PiholeClient(RealHttp(), base_url=base, password=Password("geheim"))
+            error, call = PiholeError, client.summary
+        else:
+            client = NpmClient(RealHttp(), base_url=base, identity="admin@example.com", password=Password("geheim"))
+            error, call = NpmError, client.certificates
+        with pytest.raises(error) as exc:
+            await call()
+    assert str(exc.value).startswith(f"{service} {sentence}")
+    assert exc.value.state == "unreachable"
+    chain = whole_chain(exc.value)
+    assert "angreifer" not in chain.lower() and "bytearray" not in chain
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raised", "sentence"),
+    [
+        (httpx.LocalProtocolError("Illegal header value b'sid-geheim\\n'"), "Die Anfrage an Pi-hole ließ sich nicht senden."),
+        (httpx.RemoteProtocolError("Server disconnected without sending a response."), "Pi-hole hat die Verbindung abgebrochen"),
+        (httpx.RemoteProtocolError("illegal header line: bytearray(b'Location: https://angreifer.example/')"), "Pi-hole leitet auf eine andere Adresse um."),
+    ],
+)
+async def test_protocol_errors_get_a_fixed_sentence_without_their_text(raised, sentence):
+    """Bei der eigenen Anfrage nennt h11 den kaputten Header samt Wert (hier: die Sitzung)."""
+
+    def boom(request: httpx.Request) -> httpx.Response:
+        raise raised
+
+    client, _, _ = _pihole(boom)
+    with pytest.raises(PiholeError) as exc:
+        await client.summary()
+    assert str(exc.value).startswith(sentence)
+    chain = whole_chain(exc.value)
+    assert "geheim" not in chain and "angreifer" not in chain and "disconnected" not in chain
+
+
+@pytest.mark.asyncio
+async def test_npm_deeply_nested_json_is_an_error_not_a_crash():
+    fake = FakeNpm()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/nginx/certificates":
+            return httpx.Response(200, content=b"[" * 200_000 + b"]" * 200_000, headers={"Content-Type": "application/json"})
+        return fake(request)
+
+    client, _, _ = _npm(handler)
+    with pytest.raises(NpmError, match="keine gültige Antwort"):
+        await client.certificates()
 
 
 @pytest.mark.asyncio

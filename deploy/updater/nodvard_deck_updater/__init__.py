@@ -23,12 +23,13 @@ Module:
 * `engine` -- die Engine-API ueber `AF_UNIX`: feste Allowlist der Endpunkte, API-Version, Grenzen.
 * `target` -- eigene ID, Ziel finden, Vorpruefung (nur lesend).
 * `clone` -- reine Funktionen: `create`-Body aus dem Inspect, Nachkontrolle.
-* `__main__` -- Schleife (Anforderungen alle 5 s), Heartbeat (30 s), Vorpruefung, `--selftest`. In diesem Stand
-  werden Anforderungen nur vorgeprueft und mit `not_implemented` beantwortet; den Ablauf (`flow`) bringt ein
-  eigener Schritt.
+* `flow` -- der Ablauf: Update und Rueckweg mit Journal, Beobachten bis zum ersten `healthy`, Rueckbau vor dem Commit,
+  Wiederaufnahme nach einem Absturz (`Flow.recover`). Nur dieses Modul veraendert etwas an der Engine.
+* `__main__` -- Schleife alle 5 s: zuerst einen liegen gebliebenen Vorgang wieder aufnehmen, dann Vorpruefung,
+  Anforderungen pruefen und mit `flow` ausfuehren, Status schreiben; dazu der Heartbeat (30 s) und `--selftest`.
 """
 
-__version__ = "0.6.2"
+__version__ = "0.7.0"
 """Version des Helfers (`status.helper_version`): dieselbe wie das Dashboard-Release, mit dem er gebaut wird.
 `scripts/release.py` hebt sie zusammen mit `version.py` an, und `backend/tests/test_release_script.py` sorgt dafuer,
 dass beide nie auseinanderlaufen. Von Hand nie aendern."""

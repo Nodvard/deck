@@ -341,7 +341,7 @@ STATUS_KEYS = (
 TARGET_KEYS = ("current_version", "floating_tag", "pinned")
 BUSY_KEYS = ("id", "action", "step", "since")
 PREVIOUS_KEYS = ("version", "until")
-RESULT_KEYS = ("id", "action", "from", "to", "outcome", "code", "finished_at")
+RESULT_KEYS = policy.RESULT_KEYS
 
 
 def _keys(obj: object, keys: tuple[str, ...], where: str) -> dict[str, Any]:

@@ -24,6 +24,7 @@ from __future__ import annotations
 import posixpath
 import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
+from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
@@ -42,6 +43,111 @@ class WebDavError(Exception):
     der Text wird der Person gezeigt und im Protokoll ohne Traceback vermerkt."""
 
     readable = True
+
+
+def redirect_text(status_code: int | None = None) -> str:
+    """Der Satz fuer jede Weiterleitung. Der `Location`-Header kommt vom fremden Server und steht
+    darum nirgends im Text, auch nicht als Adressvorschlag: ein Angreifer koennte sich sonst eine
+    Adresse aussuchen, die die Person dann in die Einstellungen uebernimmt."""
+    code = f" (HTTP {status_code})" if status_code else ""
+    return (
+        f"Nextcloud leitet auf eine andere Adresse um{code}. "
+        "Solchen Umleitungen folgt Nodvard Deck aus Sicherheitsgründen nicht. "
+        "Meist ist http:// statt https:// eingetragen (oder umgekehrt), oder ein Proxy davor leitet um. "
+        "Trage in den Einstellungen die endgültige Adresse ein."
+    )
+
+
+def _url_is_valid(url: str) -> bool:
+    try:
+        _ = httpx.URL(url).host  # `.host` entschluesselt Punycode und scheitert an einem kaputten Namen
+    except (httpx.InvalidURL, ValueError):
+        return False
+    return True
+
+
+# Die Schritte, in denen httpx eine Weiterleitung zusammenbaut (siehe `_came_from_redirect`).
+_REDIRECT_STEPS = frozenset(
+    {"_build_redirect_request", "_redirect_url", "_redirect_method", "_redirect_headers", "_redirect_stream"}
+)
+
+
+def _came_from_redirect(exc: BaseException) -> bool:
+    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand (erkannt an der Stelle im Traceback,
+    ersatzweise am Wort "location" im Text). Waehlt nur zwischen festen Saetzen."""
+    tb = exc.__traceback__
+    while tb is not None:
+        if tb.tb_frame.f_code.co_name in _REDIRECT_STEPS:
+            return True
+        tb = tb.tb_next
+    return "location" in str(exc).lower()
+
+
+def _quotes_the_answer(exc: BaseException) -> bool:
+    """Ob der Text von `exc` die fremde Antwort (oder den eigenen Header samt Wert) zitieren kann. Solche
+    Ausnahmen haengen nie als Ursache an einer Meldung: wer die Ursachenkette abschreibt, truege ihren Text
+    sonst weiter."""
+    return isinstance(exc, (httpx.ProtocolError, httpx.InvalidURL, ValueError))
+
+
+def _transport_problem(method: str, path: str, url: str, exc: BaseException) -> str:
+    """Satz zu einem Fehler beim Senden oder Empfangen. httpx baut eine Weiterleitung auch dann, wenn es
+    ihr nicht folgt, und scheitert an einem kaputten `Location`-Header mit `InvalidURL` (keine
+    `HTTPError`), mit einem Punycode-Fehler (`ValueError`) oder, schon beim Lesen der Kopfzeilen, mit
+    einem `ProtocolError`. Deren Text zitiert die fremde Antwort (bzw. den eigenen Header samt Wert) und
+    kommt darum nie in den Satz."""
+    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+        # httpx-Zeitueberschreitungen haben keinen Text: ohne diesen Zweig stuende nur "PROPFIND / -> ".
+        return "Nextcloud antwortet nicht (Zeitüberschreitung)."
+    if isinstance(exc, httpx.ProtocolError):
+        if _came_from_redirect(exc):
+            return redirect_text()
+        if isinstance(exc, httpx.LocalProtocolError):
+            return "Die Anfrage an die Nextcloud ließ sich nicht senden. Prüfe die Einstellungen."
+        return (
+            "Nextcloud hat die Verbindung abgebrochen oder eine fehlerhafte Antwort geschickt. "
+            "Prüfe die Adresse in den Einstellungen (http:// oder https://, Port)."
+        )
+    if isinstance(exc, (httpx.InvalidURL, ValueError)):
+        if not _url_is_valid(url):
+            return "Die Adresse der Nextcloud ist ungültig. Prüfe sie in den Einstellungen."
+        if _came_from_redirect(exc):
+            return redirect_text()
+        return "Die Anfrage an die Nextcloud ließ sich nicht senden. Prüfe die Einstellungen."
+    return f"{method} {path} -> {str(exc).strip() or type(exc).__name__}"
+
+
+def _status_problem(method: str, path: str, status_code: int) -> str | None:
+    """`None` bei 2xx. Eine 3xx-Antwort ist nie ein Erfolg (PUT, MKCOL, MOVE und DELETE wuerden sonst als
+    erledigt gelten, obwohl nichts passiert ist), und sie nennt nie ihr Ziel. Feste Saetze ohne den
+    Antworttext: der kommt vom Server, und ein Satz wie "Neue Adresse: ... bitte eintragen" darin stuende
+    sonst unveraendert im Dateimanager."""
+    if 200 <= status_code < 300:
+        return None
+    if 300 <= status_code < 400:
+        return redirect_text(status_code)
+    where = path if path.startswith("/") else f"/{path}"
+    if status_code == 401:
+        return "Nextcloud hat die Anmeldung abgelehnt (HTTP 401). Prüfe Benutzername und App-Passwort in den Einstellungen."
+    if status_code == 403:
+        return f"Nextcloud verweigert den Zugriff auf {where} (HTTP 403)."
+    if status_code == 404:
+        return f"Nextcloud findet {where} nicht (HTTP 404). Prüfe auch Adresse und Benutzernamen in den Einstellungen."
+    if status_code == 405 and method == "MKCOL":
+        return f"Den Ordner {where} gibt es schon (HTTP 405)."
+    if status_code == 412 and method == "MOVE":
+        return "Am Ziel gibt es schon eine Datei oder einen Ordner mit diesem Namen (HTTP 412)."
+    if status_code == 423:
+        return f"{where} ist in der Nextcloud gerade gesperrt (HTTP 423). Versuche es später erneut."
+    if status_code == 503:
+        return "Nextcloud ist gerade nicht bereit (HTTP 503), zum Beispiel im Wartungsmodus. Versuche es später erneut."
+    if status_code == 507:
+        return "In der Nextcloud ist kein Speicherplatz mehr frei (HTTP 507)."
+    if status_code >= 500:
+        return f"Die Nextcloud meldet einen Fehler (HTTP {status_code}). Versuche es später erneut."
+    if status_code >= 400:
+        return f"Nextcloud hat die Anfrage abgelehnt ({method} {where}, HTTP {status_code})."
+    return f"Nextcloud hat unerwartet geantwortet ({method} {where}, HTTP {status_code})."
 
 
 class InvalidPathError(WebDavError, FileNotFoundError):
@@ -155,6 +261,36 @@ def _unquote_path_segment(value: str) -> str:
     return unquote(value)
 
 
+class Download:
+    """Die geoeffnete Datei aus `NextcloudConnector.open_read()`. `aiter_bytes()` uebersetzt Fehler beim
+    Lesen (Verbindung weg, kaputter Koerper) in `WebDavError`. Das geschieht hier und nicht im
+    Context-Manager: dort liefe die Ausnahme durch `__aexit__`, und die neue Meldung truege die alte (samt
+    Teilen der fremden Antwort im Text) als `__context__` mit."""
+
+    def __init__(self, response: Any, path: str, url: str) -> None:
+        self._response = response
+        self._path = path
+        self._url = url
+        self.status_code: int = response.status_code
+        self.headers = response.headers
+
+    async def aiter_bytes(self, chunk_size: int | None = None) -> AsyncIterator[bytes]:
+        chunks = self._response.aiter_bytes(chunk_size)
+        problem: str | None = None
+        while problem is None:
+            try:
+                chunk = await chunks.__anext__()
+            except StopAsyncIteration:
+                return
+            except (httpx.HTTPError, TimeoutError) as exc:
+                problem = _transport_problem("GET", self._path, self._url, exc)
+                if not _quotes_the_answer(exc):
+                    raise WebDavError(problem) from exc
+            else:
+                yield chunk
+        raise WebDavError(problem)
+
+
 class NextcloudConnector:
     def __init__(
         self,
@@ -201,19 +337,23 @@ class NextcloudConnector:
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = self._dav_url(path)
+        problem: str | None = None
         try:
             response = await self._ctx.http.request(
                 method, url, auth=self._auth, insecure_tls=self._tls_insecure_skip_verify, **kwargs
             )
         except WebDavError:
             raise
-        except (httpx.TimeoutException, TimeoutError) as exc:
-            # httpx-Zeitueberschreitungen haben keinen Text: ohne diesen Zweig stuende nur "PROPFIND / -> ".
-            raise WebDavError("Nextcloud antwortet nicht (Zeitüberschreitung).") from exc
         except Exception as exc:  # noqa: BLE001 - jeder Netzwerkfehler wird hier vereinheitlicht (wie ProxmoxConnector)
-            raise WebDavError(f"{method} {path} -> {str(exc).strip() or type(exc).__name__}") from exc
-        if response.status_code >= 400:
-            raise WebDavError(f"{method} {path} -> HTTP {response.status_code}: {response.text[:200]}")
+            problem = _transport_problem(method, path, url, exc)
+            if not _quotes_the_answer(exc):
+                raise WebDavError(problem) from exc
+        else:
+            problem = _status_problem(method, path, response.status_code)
+        if problem is not None:
+            # Ausserhalb des `except`-Blocks: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
+            # Antwort im Text) als `__context__` an der Meldung.
+            raise WebDavError(problem)
         return response
 
     _PROPFIND_BODY = (
@@ -223,22 +363,54 @@ class NextcloudConnector:
         "<d:getcontenttype/></d:prop></d:propfind>"
     )
 
+    @staticmethod
+    def _parsed(body: bytes, *, skip_href: str | None, strip_prefix: str) -> list[WebDavEntry]:
+        try:
+            return _parse_propfind(body, skip_href=skip_href, strip_prefix=strip_prefix)
+        except (ET.ParseError, ValueError) as exc:
+            # Z. B. eine Anmeldeseite (HTML) oder ein Proxy-Fehler mit Status 200 statt der WebDAV-Antwort.
+            raise WebDavError(
+                "Nextcloud hat keine gültige WebDAV-Antwort geschickt. Prüfe die Adresse in den Einstellungen "
+                "(die Adresse der Nextcloud, ohne /remote.php/dav)."
+            ) from exc
+
     async def list_children(self, path: str) -> list[WebDavEntry]:
         response = await self._request("PROPFIND", path, headers={"Depth": "1"}, content=self._PROPFIND_BODY)
-        return _parse_propfind(response.content, skip_href=self._dav_href_path(path), strip_prefix=self._dav_prefix())
+        return self._parsed(response.content, skip_href=self._dav_href_path(path), strip_prefix=self._dav_prefix())
 
     async def stat_one(self, path: str) -> WebDavEntry:
         response = await self._request("PROPFIND", path, headers={"Depth": "0"}, content=self._PROPFIND_BODY)
-        parsed = _parse_propfind(response.content, skip_href=None, strip_prefix=self._dav_prefix())
+        parsed = self._parsed(response.content, skip_href=None, strip_prefix=self._dav_prefix())
         if not parsed:
             raise WebDavError(f"'{path}' nicht gefunden.")
         return parsed[0]
 
-    def open_read(self, path: str, *, offset: int = 0):  # noqa: ANN201 - async Context-Manager von ctx.http.stream()
+    @asynccontextmanager
+    async def open_read(self, path: str, *, offset: int = 0) -> AsyncIterator[Download]:
+        """Streamt die Datei. Die Antwort wird erst geprueft, dann herausgegeben: eine Fehlerseite oder
+        eine Weiterleitung waere sonst der "Inhalt" der Datei. Fehler beim Lesen uebersetzt `Download`."""
+        url = self._dav_url(path)
         headers = {"Range": f"bytes={offset}-"} if offset else {}
-        return self._ctx.http.stream(
-            "GET", self._dav_url(path), auth=self._auth, headers=headers, insecure_tls=self._tls_insecure_skip_verify
-        )
+        problem: str | None = None
+        async with AsyncExitStack() as stack:
+            try:
+                response = await stack.enter_async_context(
+                    self._ctx.http.stream(
+                        "GET", url, auth=self._auth, headers=headers, insecure_tls=self._tls_insecure_skip_verify
+                    )
+                )
+            except WebDavError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - wie in `_request`
+                problem = _transport_problem("GET", path, url, exc)
+                if not _quotes_the_answer(exc):
+                    raise WebDavError(problem) from exc
+            else:
+                problem = _status_problem("GET", path, response.status_code)
+            if problem is not None:
+                # Ausserhalb des `except`-Blocks, aus demselben Grund wie in `_request`.
+                raise WebDavError(problem)
+            yield Download(response, path, url)
 
     async def upload(self, path: str, stream: AsyncIterator[bytes]) -> None:
         await self._request("PUT", path, content=stream)

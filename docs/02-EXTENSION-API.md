@@ -11,17 +11,17 @@ Dieses Dokument ist die Spezifikation. Der zugehörige, importierbare Vertrag li
 ## 1. Anatomie einer Extension
 
 ```
-extensions/nexus-soc/
+extensions/shield/
 ├─ extension.toml            ← Manifest, ohne Code-Import lesbar
 ├─ pyproject.toml            ← optional; für pip-installierbare Extensions
-├─ src/nodvard_deck_ext_nexus_soc/
+├─ src/nodvard_deck_ext_shield/
 │  ├─ __init__.py            ← enthält  class Extension(NodvardExtension)
 │  ├─ api.py                 ← APIRouter
 │  ├─ connectors.py          ← Ollama-, ntfy-Connector-Typen
 │  ├─ capabilities.py        ← ActionExecutor, AIProvider …
 │  ├─ widgets.py             ← deklarative WidgetSpecs
 │  ├─ pipeline.py            ← Incident-Queue/Batching
-│  ├─ models.py              ← eigene Tabellen (Präfix ext_nexus_soc_)
+│  ├─ models.py              ← eigene Tabellen (Präfix ext_shield_; ältere: ext_nexus_soc_)
 │  └─ migrations/            ← eigener Alembic-Branch
 └─ frontend/
    ├─ package.json
@@ -32,14 +32,15 @@ extensions/nexus-soc/
 
 ```toml
 [extension]
-id          = "nexus-soc"          # stabil, kleinschreibung, Namensraum für alles
+id          = "shield"             # stabil, kleinschreibung, Namensraum für alles
+legacy_ids  = ["nexus-soc"]        # optional: frühere Kennungen, siehe „Erweiterung umbenennen“
 name        = "Nodvard Shield"
 version     = "0.1.0"
 api_version = "1.0"                # SemVer gegen nodvard_sdk.API_VERSION
 author      = "…"
 description = "Autonome Diagnose und Remediation für die eigene Flotte."
 icon        = "shield-check"
-entrypoint  = "nodvard_deck_ext_nexus_soc:Extension"
+entrypoint  = "nodvard_deck_ext_shield:Extension"
 frontend    = "frontend/dist/index.js"    # optional
 requires    = ["terminal>=0.1"]           # andere Extensions, optional
 enable_on   = ["host_credential"]         # optional: siehe unten
@@ -63,7 +64,7 @@ schema = "settings.schema.json"
 ```
 
 **Paketname (`entrypoint`):** Die Python-Pakete der mitgelieferten Erweiterungen heißen
-`nodvard_deck_ext_<id>` (Bindestriche der ID werden zu `_`, also `nodvard_deck_ext_nexus_soc`) und
+`nodvard_deck_ext_<id>` (Bindestriche der ID werden zu `_`, aus `service-matrix` wird `nodvard_deck_ext_service_matrix`) und
 liegen unter `extensions/<id>/src/`. Das ist die Konvention für neue Erweiterungen, der Kern
 erzwingt sie nicht: Er importiert genau das Modul, das `entrypoint` nennt, und liest das Manifest
 bei jedem Start frisch von der Platte. **Erweiterungen von Dritten mit der alten Konvention
@@ -101,6 +102,93 @@ Manifeste aller — auch der deaktivierten und der kaputten — Extensions lesen
 ohne deren Code zu importieren. Ein Import ist Codeausführung; eine defekte oder
 abgeschaltete Extension darf nicht laufen, nur weil sie in der Registry angezeigt wird.
 
+### Erweiterung umbenennen: `legacy_ids`
+
+Die Kennung (`id`) ist der Namensraum für alles. Soll eine Erweiterung trotzdem eine neue Kennung bekommen,
+trägt sie die frühere in `legacy_ids` ein (so ist Nodvard Shield seit 0.7 von `nexus-soc` zu `shield` umgezogen):
+
+```toml
+[extension]
+id         = "neuer-name"
+legacy_ids = ["alter-name"]
+```
+
+Nach mehreren Umbenennungen stehen alle früheren Kennungen darin, die jüngste zuerst
+(`["mittlerer-name", "alter-name"]`). Ohne `legacy_ids` (der Normalfall) ändert sich nichts.
+
+**Grundidee: Die Kennung wechselt, die gespeicherten Daten nicht.** Nichts wird kopiert, umbenannt oder migriert.
+Ein Rückweg aufs alte Image findet seine Daten unverändert vor.
+
+**Regeln im Manifest:** Jede alte Kennung ist eine gültige Kennung (`a-z`, `0-9`, `-`), keine kommt doppelt vor, und
+die eigene `id` steht nicht darin. Sonst lädt die Erweiterung nicht.
+
+**Speicher-Kennung.** Der Kern sucht die Registry-Zeile so:
+1. Gibt es eine Zeile mit der neuen Kennung, gilt sie.
+2. Sonst gilt die erste vorhandene Zeile in der Reihenfolge von `legacy_ids`. Das Protokoll meldet
+   „Erweiterung 'neuer-name' nutzt den gespeicherten Stand von 'alter-name'.“
+3. Gibt es keine, entsteht wie bei jeder neuen Erweiterung eine Zeile mit der neuen Kennung.
+
+Die `id` dieser Zeile ist die **Speicher-Kennung**. Daran hängt alles, was dauerhaft gespeichert ist und nach einem
+Rückweg gelesen wird:
+- Einstellungen, Zustand und Rechte (die Registry-Zeile selbst),
+- die Merker `extension.untouched.<Speicher-Kennung>` und `extension.test.<Speicher-Kennung>`,
+- die Zeitpläne (`jobs.ext_id` und damit der Laufverlauf); es entstehen keine doppelten Jobs,
+- der Datenordner (siehe unten).
+
+Alles andere läuft unter der **neuen** Kennung: Adressen `/api/v1/ext/<id>/…`, Seiten, Kacheln, Fähigkeiten, neue
+Aktionen, Meldungen, Protokolleinträge, Logger und Live-Kanäle.
+
+**Was mit dem alten Namen weiter gilt:**
+- **Adressen:** Der Kern hängt die Routen zusätzlich unter jeder alten Kennung ein (`/api/v1/ext/<alt>/…`, gleiche
+  Anmeldeprüfung, im OpenAPI-Schema als veraltet markiert, in allen 1.x). Die Kern-Adressen `/api/v1/extensions/<alt>/…`
+  und das Bundle lösen die alte Kennung auf. Gespeicherte Links, offene Tabs mit altem Bundle und die App laufen so ohne
+  Änderung weiter. `request.url_for` baut immer die neue Adresse. Neuer Code nutzt nur die neue Kennung; die alten nennt
+  die API in `legacy_ids` bzw. `legacy_ext_ids` ([04 §7](04-API.md#7-kompatibilität)).
+- **Oberfläche:** Die Web-Oberfläche folgt der Umbenennung selbst. `/ext/<alt>/<Seite>` und
+  `/settings/extensions/<alt>` leiten ersetzend auf die neue Kennung weiter (Abfrage und Anker bleiben). Dashboard-Kacheln
+  behalten Platz, Größe und Sichtbarkeit. Meldungen, Protokoll und Aktionen zeigen den Namen der Erweiterung, auch zu
+  Einträgen unter der alten Kennung.
+- **Tabellen:** Erlaubt sind die Präfixe aller Kennungen (`ext_neuer_name_*`, `ext_alter_name_*`). Bestehende Tabellen
+  behalten ihren Namen, neue bekommen den neuen Präfix. Die Tabellen gehören allen Kennungen gemeinsam.
+- **Migrationen:** Ausgelieferte Revisionen, ihr Zweigname und ihre Dateinamen bleiben unverändert, nur der Ordner zieht
+  mit um.
+- **Aktionen:** `ctx.actions.list()`, `result()` und `proposer_labels()` sehen auch Vorschläge unter einer alten Kennung.
+  Aktionsarten ändern sich nicht; ausgeführt wird über die Art.
+- **Live-Nachrichten:** `ctx.ws.broadcast` sendet zusätzlich auf `ext.<alt>.<kanal>`, damit offene Seiten mit altem
+  Stand weiter Nachrichten bekommen.
+- **`requires`:** Nennt eine andere Erweiterung noch die alte Kennung, sieht sie die Fähigkeiten der umbenannten weiter.
+- **Datenordner:** `data/ext/<Speicher-Kennung>`. Fehlt er, gilt der erste vorhandene Ordner der neuen oder einer alten
+  Kennung. Gibt es keinen, wird `data/ext/<Speicher-Kennung>` angelegt. Verschoben wird nichts.
+- **Sicherungen:** Erweiterungen werden auch unter ihren alten Kennungen erkannt. Eine Sicherung mit der alten Zeile
+  ergibt beim Einspielen keine Warnung „gibt es hier nicht“.
+- **Geheimnisse:** Gefunden werden sie über ihr Label. Labels und Rechte-Muster wie `secrets.read:alter-name-*` bleiben
+  stehen.
+
+**Konflikte:**
+- **Alte Erweiterung noch installiert:** Liegt noch ein Ordner mit der alten Kennung da (auch mit kaputtem Manifest) oder
+  ist die alte Erweiterung als Paket mit lesbarem Manifest installiert, wird die neue nicht geladen. Im Protokoll steht
+  „Erweiterung '…' wird nicht geladen: Die alte Kennung „…“ gehört noch zu einer installierten Erweiterung …“. Die alte
+  lädt weiter, solange ihr Manifest lesbar ist. Lösung: alten Ordner bzw. altes Paket entfernen.
+- **Doppelte Migrationen:** Liegen dieselben Migrationen in zwei Erweiterungsordnern (etwa nach dem Auspacken über einen
+  alten Stand), bricht der Start mit „Die Migrationen der Erweiterungsordner „…“ und „…“ sind doppelt …“ ab. Die Meldung
+  steht auch auf der Notseite. Vor dem Auspacken über einen alten Stand deshalb `extensions/` leeren.
+- **Gemeinsame alte Kennung:** Nennen zwei Erweiterungen dieselbe alte Kennung, werden beide nicht geladen.
+
+**Verwaister Zwilling.** Nach „Neuinstallation mit neuer Kennung → Rückweg aufs alte Image → wieder neu“ oder bei
+mehreren alten Zeilen gilt nur eine Zeile (Reihenfolge wie oben). Jede weitere bleibt unverändert liegen und wird nie
+geladen, nie automatisch eingeschaltet, nie geändert und nicht in `GET /extensions` gelistet. Ändernde Aufrufe über die
+alte Kern-Adresse (`/api/v1/extensions/<alt>/…`) antworten dann mit `409`, lesen geht weiter. Das Protokoll meldet:
+„Erweiterung 'neuer-name' nutzt die Zeile '…'; die Zeile der alten Kennung '…' bleibt unverändert liegen und wird nicht
+geladen.“ Was in der Rückweg-Zeit unter der alten Kennung eingestellt wurde (Einstellungen, Zeitpläne), kommt nicht mit.
+
+**Grenzen:**
+- **Server-Anbieter:** Eine Erweiterung, die Server anlegt (`hosts.write`, `ctx.hosts.upsert_discovered()`), kann noch
+  nicht umbenannt werden: Die Server und ihre Markierungen tragen die Kennung des Anbieters (`provider_ext_id`,
+  `managed_by_ext_id`). Der Kern lehnt `legacy_ids` zusammen mit `hosts.write` beim Entdecken ab („Erweiterungen, die
+  Server anlegen, können noch nicht umbenannt werden (legacy_ids zusammen mit hosts.write).“); die Erweiterung wird nicht
+  geladen, der Grund steht im Protokoll und in der Zeile der Erweiterung. Alle anderen Berechtigungen gehen.
+- `GET /jobs?ext_id=` filtert nach der Speicher-Kennung, `GET /capabilities` nennt nur die neue Kennung.
+
 ### Einstellungs-Schema: `settings.schema.json` und die `x-*`-Zusätze
 
 Der Kern baut aus dem JSON-Schema die Einstellungsseite der Extension (Einstellungen →
@@ -114,11 +202,11 @@ Erweiterungen). Unterstützt sind `type` (`string`, `integer`, `number`, `boolea
 | `x-hidden` | Feld | Wird nicht angezeigt (interner Zustand). Auf der obersten Ebene übernimmt `PUT /extensions/{id}/settings` das Feld nie; es gehört den eigenen Routen der Extension (`ctx.settings.set()`). |
 | `x-item-title` | Liste von Objekten | Wie ein Eintrag heißt („Server hinzufügen“). |
 | `x-enum-labels` | Feld mit `enum` | Lesbare Texte je Wert: `{"all": "Alle Updates"}`. |
-| `x-widget: "schedule"` | Text (Cron) | Zeitplan-Wähler statt Cron-Feld. |
+| `x-widget: "schedule"` | Text (Cron) | Zeitplan-Wähler statt Cron-Feld. `PUT /extensions/{id}/settings` prüft den Ausdruck wie beim Anmelden des Jobs und lehnt einen ungültigen mit `422` ab; leer bleibt erlaubt (dann gilt der Standard der Erweiterung). |
 | `x-widget: "host"` | Text oder Liste von Texten | Auswahl aus den Servern (Wert = Servername, aus `GET /hosts`). Liste: Chips mit „Server hinzufügen“. Ohne Serverliste: Textfeld bzw. Wortliste. |
 | `x-widget: "host-tag"` | Text oder Liste von Texten | Wie `host`, aber Auswahl aus den Markierungen (Tags) der Server, mit Anzahl. Eine gespeicherte Markierung, die es nicht mehr gibt, bleibt sichtbar. |
 | `x-widget: "remote-select"` | Text | Auswahlliste, die die Extension selbst liefert (z. B. die Modelle eines KI-Servers). Braucht `x-options-url`. Schlägt die Abfrage fehl oder ist die Liste leer, erscheint ein Textfeld und der Grund. |
-| `x-options-url` | `remote-select` | Pfad unter `/api/v1`, z. B. `/ext/nexus-soc/ai/models?which=primary`. Die Oberfläche schickt keine Formularwerte mit; die Extension fragt nur, was gespeichert ist (kein Adress-Parameter – sonst wäre die Route ein Weg für Anfragen an beliebige Adressen, samt Schlüssel). Nach einer neuen Adresse: speichern, dann „Neu laden“. Antwort: `{"options": [{"value": "…", "label": "…"}], "error": null}`; bei Problemen `options: []` und `error` als deutscher Satz (kein Fehlerstatus). |
+| `x-options-url` | `remote-select` | Pfad unter `/api/v1`, z. B. `/ext/shield/ai/models?which=primary`. Die Oberfläche schickt keine Formularwerte mit; die Extension fragt nur, was gespeichert ist (kein Adress-Parameter – sonst wäre die Route ein Weg für Anfragen an beliebige Adressen, samt Schlüssel). Nach einer neuen Adresse: speichern, dann „Neu laden“. Antwort: `{"options": [{"value": "…", "label": "…"}], "error": null}`; bei Problemen `options: []` und `error` als deutscher Satz (kein Fehlerstatus). |
 | `x-empty-label` | Auswahl | Text für „nichts gewählt“ (Standard „– nicht gesetzt –“), z. B. „alle Server“. |
 | `pattern` | Text, Wörter einer Liste | Regulärer Ausdruck (wie JSON-Schema, nicht verankert). Die Oberfläche zeigt die Meldung am Feld und sperrt „Speichern“; das Backend prüft dasselbe (`422`). Leere Werte sind immer erlaubt. |
 | `x-pattern-message` | neben `pattern` | Deutsche Meldung, wenn das Muster nicht passt (Standard: „Das Format stimmt nicht.“). |
@@ -137,7 +225,7 @@ nach denselben Regeln wie bei `x-secret-bound-to`; die Oberfläche rechnet dasse
 „Verbindung testen“ (`POST /extensions/{id}/test`). Der Kern ruft dafür `health()` der
 Extension auf (und `test()` ihres `NotificationChannel`, falls sie einen bereitstellt) und
 übersetzt technische Fehler in verständliche deutsche Sätze (keine Antwort, Zugangsdaten
-abgelehnt, Zertifikat, Adresse nicht gefunden …). Für gute Meldungen genügt es, in
+abgelehnt, Zertifikat, Adresse nicht gefunden, Weiterleitung (3xx) …). Für gute Meldungen genügt es, in
 `HealthReport.message` den Fehlertext des HTTP-Clients zu lassen; bei mehreren Verbindungen
 liefert `HealthReport.details` je Verbindung `{"name": {"healthy": bool, "error": "…"}}` – daraus
 entsteht die Liste „Ergebnis je Verbindung“. Geheimnisse gehören nie in `message` oder
@@ -190,17 +278,17 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (laufende Ausgabe, z. B. Live-Logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
 | `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht) | `secrets.read:<label>` |
 | `ctx.vault_use` | Context-Manager, der einen Wert nur im Speicher materialisiert | dito |
-| `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen | — |
+| `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen (nach einer Umbenennung auch auf die Präfixe der alten Kennungen, siehe §1 „Erweiterung umbenennen“) | — |
 | `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
-| `ctx.scheduler` | `register_job(JobSpec)` | `schedule.register` |
+| `ctx.scheduler` | `register_job(JobSpec)`; `validate_schedule(schedule)` prüft einen Cron-Ausdruck genau so wie `register_job()`, ohne etwas anzumelden (`ValueError` mit deutscher Meldung): für Zeitpläne, die eine Erweiterung selbst speichert (etwa den eines Skripts), erst prüfen, dann speichern, denn ein gespeicherter kaputter Zeitplan ließe `register_job()` beim nächsten Start scheitern. Ältere Kerne haben die Methode nicht. Meldet ein Job-Handler einen erwarteten Fehlschlag mit `NodvardError`, steht der Lauf als fehlgeschlagen mit diesem Text da, ohne Traceback (im Lauf-Protokoll und im Container-Log); jede andere Ausnahme kommt mit Traceback | `schedule.register` |
 | `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
 | `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – mit `raise_on_failure=True` wirft `NotificationNotDelivered`, wenn es Kanäle gab und keiner zugestellt hat (für „erneut versuchen“); `would_suppress(host_id=…, host_ids=…)` fragt nur, ob ein Wartungsfenster gerade still schalten würde (siehe unten) | `notify.send` |
-| `ctx.audit` | `log(entry)` | `audit.write` |
-| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen standardmäßig ebenfalls nicht | `net.outbound:<cidr>` |
-| `ctx.ws` | `broadcast(channel, payload)` auf `ext.<id>.*` | — |
+| `ctx.audit` | `log(entry)`. Erweiterungen schreiben unter eigenem Namen, zum Beispiel `<kennung>.<ereignis>`. Aktionen, deren Name mit `mfa.`, `auth.`, `login.`, `system.` oder `user.` beginnt (Groß-/Kleinschreibung und Leerzeichen am Rand zählen nicht), schreibt nur der Kern, weil er sie wieder liest und danach entscheidet: Der Aufruf wirft dann `ValueError` und schreibt nichts | `audit.write` |
+| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen ebenfalls nie: Eine Antwort mit Status 3xx kommt unverändert zurück, und die Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` (oder ein anderer Wahrheitswert) wirft `ValueError`, bevor eine Anfrage hinausgeht, auch mit `insecure_tls=True`; `follow_redirects=False` bleibt erlaubt. Grund: Die Prüfung der erlaubten Adressen (`net.outbound`) kennt nur die Adresse des Aufrufs, das Ziel einer Weiterleitung sähe sie nie. Einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, bei `websocket()` auch `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`) benutzt `ctx.http` nie, jede Verbindung geht direkt an die geprüfte Adresse; `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter | `net.outbound:<cidr>` |
+| `ctx.ws` | `broadcast(channel, payload)` auf `ext.<id>.*` (nach einer Umbenennung zusätzlich auf `ext.<alt>.*`) | — |
 | `ctx.spawn` | überwachter Hintergrundtask mit Neustart-Politik | — |
 | `ctx.logger` | strukturierter Logger, vorgetaggt mit der Extension-ID | — |
-| `ctx.data_dir` | eigener, beschreibbarer Ordner der Extension (im Image `/app/data/ext/<id>/`). Dateien gehören hierher: Der Code im Image gehört root und ist schreibgeschützt, auch der eigene Paketordner. Neue Dateien sind nur für den Benutzer `lattice` lesbar | — |
+| `ctx.data_dir` | eigener, beschreibbarer Ordner der Extension (im Image `/app/data/ext/<id>/`, nach einer Umbenennung der Ordner der Speicher-Kennung, siehe §1). Dateien gehören hierher: Der Code im Image gehört root und ist schreibgeschützt, auch der eigene Paketordner. Neue Dateien sind nur für den Benutzer `lattice` lesbar | — |
 
 Nicht am Kontext und bewusst nicht verfügbar: direkter Zugriff auf Kern-Tabellen, das
 `asyncio`-Loop-Objekt, andere Extensions (nur über `ctx.events` und deklarierte
@@ -245,8 +333,8 @@ nur an; unter die allgemeine Grenze senken lässt sie sich nicht. Die Route soll
 eigene Prüfungen behalten. Mitgeliefert nutzen das `documents` (20 MB je Dokument) und `inventory` (5 MB je Bild).
 
 Seiten im Frontend-Bundle schicken für diese Routen das Token mit (`Authorization: Bearer …` mit
-dem Token aus `window.__nodvardDeck.getAccessToken()`, wie `HelloPage.tsx` in hello-world; die
-übrigen mitgelieferten Erweiterungen nehmen `authedFetch`, siehe §5).
+dem Token aus `window.__nodvardDeck.getAccessToken()`). Die mitgelieferten Erweiterungen nehmen dafür `authedFetch`,
+das das Token bei 401 erneuert (siehe §5); `HelloPage.tsx` in hello-world zeigt es als Vorlage.
 
 ### Meldungen und Wartungsfenster
 
@@ -314,7 +402,7 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | die grafische Konsole (`/console/:hostId`, noVNC) |
 | `FileSource` | files-sftp, nextcloud, truenas, syncthing | den **einen** Dateimanager mit Seitenleiste |
 | `ActionExecutor` | terminal (SSH-Exec), proxmox (API-Aktionen) | die Ausführung hinter dem Gate |
-| `AIProvider` | nexus-soc (Ollama), künftig andere | Chat, Diagnose, Zusammenfassungen |
+| `AIProvider` | shield (Ollama), künftig andere | Chat, Diagnose, Zusammenfassungen |
 | `NotificationChannel` | ntfy, E-Mail, Webhook | das Notification-Center |
 | `MetricsProvider` | proxmox, docker, node-exporter | Kacheln und Verlaufsgrafiken |
 | `ServiceCatalog` | service-matrix (Docker-API) | den App-Launcher |
@@ -482,8 +570,8 @@ ctx.ui.register_widget(WidgetSpec(
     title="Vorfälle",
     icon="siren",
     size=GridSize(w=2, h=2, min_w=1, min_h=1),
-    refresh=Refresh(interval_s=60, ws_channel="ext.nexus-soc.incidents"),
-    data_endpoint="widgets/incidents",        # relativ zu /api/v1/ext/nexus-soc/
+    refresh=Refresh(interval_s=60, ws_channel="ext.shield.incidents"),
+    data_endpoint="widgets/incidents",        # relativ zu /api/v1/ext/shield/
     permissions=["soc.read"],
     view=ListView(
         item=ListItem(
@@ -541,7 +629,7 @@ die Web-only-Schieflage, die diese Regel verhindern soll.
 ```python
 ctx.ui.register_page(PageSpec(
     id="soc",
-    path="/soc",                      # wird zu /ext/nexus-soc/soc
+    path="/soc",                      # wird zu /ext/shield/soc
     title="Nodvard Shield",
     icon="shield-check",
     nav_section="Sicherheit",
@@ -731,7 +819,7 @@ export { IncidentFeed } from "./IncidentFeed";
 ```
 
 Ein echtes, minimales Beispiel steht in `extensions/hello-world/frontend/src/`: eine Seite
-(`HelloPage.tsx`), gebaut mit `extensions/hello-world/frontend/build.mjs`.
+(`HelloPage.tsx`, mit `authedFetch` und dem UI-Kit), gebaut mit `extensions/hello-world/frontend/build.mjs`.
 
 ---
 
@@ -762,7 +850,8 @@ Tag, nicht ein JSON-Eintrag, der unbemerkt veraltet.
 
 ## 7. Daten, Migrationen, Namensräume
 
-- Tabellen einer Extension heißen zwingend `ext_<id>_<name>` (mit `-` → `_`).
+- Tabellen einer Extension heißen zwingend `ext_<id>_<name>` (mit `-` → `_`; nach einer Umbenennung ist auch der
+  Präfix jeder alten Kennung erlaubt, siehe §1 „Erweiterung umbenennen“).
   Der Kern prüft das beim Laden und verweigert die Extension sonst.
 - Jede Extension hat einen **eigenen Alembic-Branch**
   (`alembic upgrade heads` fährt Kern + alle Extensions hoch).
@@ -802,7 +891,7 @@ was ein Container ist.
 | Baustein | Umsetzung |
 |---|---|
 | Versionierung | eigenes Git-Repo unter `/data/ext/scripts/repo`, `pygit2`/`dulwich`; die Git-Einstellungen setzt die Extension bei jedem Start selbst, und Hooks, Filter und Signieren laufen nie (aus `.git` bringt eine Sicherung nur den Verlauf mit) |
-| Metadaten, Parameter | eigene Tabellen + JSON-Schema pro Skript |
+| Metadaten, Parameter | eigene Tabellen + JSON-Schema pro Skript. Im Skript stehen Parameter als `$name` oder `${name}`. Ersetzt werden nur deklarierte Parameter (Wert per `shlex.quote`), `$$` wird zu `$`, jedes andere `$` (`$HOME`, `"$f"`, `$(date)`) bleibt für die Shell; die Prozessnummer der Shell schreibt man deshalb `$$$$` |
 | „Jetzt ausführen" | `ctx.actions.propose(ActionSpec("script.run"))` → derselbe SSH-Layer wie das Terminal (kein zweiter Ausführungsweg) |
 | Fleet-weiter Zeitplan | `ctx.scheduler` — **eine** Ansicht, weil es **einen** Scheduler gibt |
 | Geplante Läufe ohne Klick | Dauerfreigabe je Skript, gespeichert in `ctx.data_dir` (nicht im Git-Repo: ein Zurücksetzen des Skripts belebt eine erloschene Freigabe nicht wieder). Nur echte Zeitplan-Läufe (`current_job_trigger() == "schedule"`) schicken sie als `ActionRequest.standing_approval` mit. Die Extension prüft vorher, ob Inhalt, Parameter, Ziel, Zeitplan sowie Konto, Adresse und SSH-Port der Server noch wie bei der Freigabe sind, das Kern-Gate, ob die freigebende Person noch darf |
@@ -876,3 +965,12 @@ mit `api.public` im Manifest lädt dort nicht) und lassen Routen ohne `permissio
 Ebenso bei der Größe einer Anfrage: Der Kern weist an Erweiterungsrouten jede Anfrage über 1 MiB mit `413` ab; eine
 Route, die größere Uploads annimmt, braucht dafür `max_body_bytes` (siehe §2). Ältere Kerne kennen den Namen nicht (der
 Import scheitert dort) und haben keine allgemeine Grenze.
+
+Ebenso bei Weiterleitungen: `ctx.http` lehnt `follow_redirects=True` mit `ValueError` ab (siehe §2); ältere Kerne reichen
+die Angabe an httpx weiter und folgen dann der Weiterleitung. Und beim Protokoll: `ctx.audit.log()` lehnt Aktionen mit
+`mfa.`, `auth.`, `login.`, `system.` oder `user.` am Anfang ab; ältere Kerne schreiben sie.
+
+Ebenso beim Netz: `ctx.http` benutzt keinen Proxy aus der Umgebung (siehe §2). Ein Ziel, das der Rechner nur über so
+einen Proxy erreicht, erreicht die Erweiterung damit nicht. Ältere Kerne nehmen bei `get()`, `post()`, `request()` und
+`stream()` einen Proxy aus `HTTP_PROXY`, `HTTPS_PROXY` oder `ALL_PROXY`, bei `websocket()` (ab websockets 15) einen aus
+`HTTP_PROXY`, `HTTPS_PROXY`, `WS_PROXY`, `WSS_PROXY` oder `SOCKS_PROXY`.

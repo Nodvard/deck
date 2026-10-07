@@ -14,9 +14,11 @@ from __future__ import annotations
 import asyncio
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, Header, Request
+from raw_http_helpers import BROKEN_ANSWERS, REDIRECT_ANSWERS, raw_http_server
 
 from nodvard_deck.ext.context import build_context
 from nodvard_deck.ext.runtime import ExtensionRuntime, LoadedExtension
@@ -244,6 +246,250 @@ async def test_token_endpoint_requires_secrets_write_permission_and_is_idempoten
     assert duplicate.status_code == 409
 
 
+EVIL_LOCATION = "https://angreifer.example/phish?x=geheim"
+
+
+@pytest.fixture
+async def scripted_ntfy_server():
+    """Lokaler Server, der jede Anfrage mit einem vorgegebenen Status und Headern beantwortet."""
+    import socket
+
+    import uvicorn
+    from fastapi import Response
+
+    app = FastAPI()
+    script: dict = {"status": 200, "headers": {}, "calls": []}
+
+    @app.api_route("/{path:path}", methods=["GET", "POST"])
+    async def anything(path: str, request: Request):
+        script["calls"].append(f"{request.method} /{path}")
+        return Response(content=b'{"error":"geheim-text-vom-server"}', status_code=script["status"], headers=script["headers"], media_type="application/json")
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning", lifespan="off"))
+    serve_task = asyncio.ensure_future(server.serve())
+    for _ in range(200):
+        if server.started:
+            break
+        await asyncio.sleep(0.01)
+    try:
+        yield f"http://127.0.0.1:{port}", script
+    finally:
+        server.should_exit = True
+        try:
+            await asyncio.wait_for(serve_task, timeout=5.0)
+        except asyncio.TimeoutError:
+            serve_task.cancel()
+
+
+async def _channel(db_session, tmp_path, test_settings, server_url: str):
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    runtime, ctx, _ext = await _setup_ntfy_extension(db_session, tmp_path, test_settings, server_url=server_url)
+    return runtime.capabilities.query(NotificationChannel)[0], ctx
+
+
+def _note():
+    from nodvard_sdk import Notification, Severity
+
+    return Notification(title="T", body="B", severity=Severity.INFO)
+
+
+def _whole_chain(exc: BaseException) -> str:
+    """Alles, was ein Fehlertext aus der Ursachenkette abschreiben koennte (wie `describe_exception`)."""
+    parts, seen = [], set()
+    current = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        parts.append(f"{type(current).__name__}: {current}")
+        current = current.__cause__ or current.__context__
+    return " | ".join(parts)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [301, 302, 303, 307, 308])
+async def test_send_redirect_is_a_readable_error_without_the_foreign_address(
+    scripted_ntfy_server, db_session, tmp_path, test_settings, code
+):
+    server_url, script = scripted_ntfy_server
+    script.update(status=code, headers={"Location": EVIL_LOCATION})
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    with pytest.raises(RuntimeError) as exc:
+        await channel.send(_note())
+
+    text = str(exc.value)
+    assert text.startswith(f"ntfy leitet auf eine andere Adresse um (HTTP {code}).")
+    assert "endgültige Adresse" in text
+    chain = _whole_chain(exc.value)
+    assert "angreifer" not in chain.lower() and "geheim" not in chain and server_url not in chain
+    assert script["calls"] == ["POST /"], "der Weiterleitung wird nicht gefolgt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("location", ["javascript:alert(1)", "http://127.0.0.1:angreifer-text/"])
+async def test_send_unusable_location_header_never_reaches_the_error(scripted_ntfy_server, db_session, tmp_path, test_settings, location):
+    server_url, script = scripted_ntfy_server
+    script.update(status=302, headers={"Location": location})
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    with pytest.raises(RuntimeError) as exc:
+        await channel.send(_note())
+
+    assert str(exc.value).startswith("ntfy leitet auf eine andere Adresse um")
+    chain = _whole_chain(exc.value)
+    assert "angreifer" not in chain.lower() and "alert" not in chain
+
+
+@pytest.mark.asyncio
+async def test_send_with_unusable_own_address_says_so(db_session, tmp_path, test_settings):
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, "http://127.0.0.1:abc")
+    with pytest.raises(RuntimeError, match="Adresse des ntfy-Servers ist ungültig"):
+        await channel.send(_note())
+    result = await channel.test()
+    assert result.ok is False and "ungültig" in result.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "expected"),
+    [
+        (401, "Zugang abgelehnt (HTTP 401)"),
+        (403, "Zugang abgelehnt (HTTP 403)"),
+        (404, "antwortet kein ntfy-Server (HTTP 404)"),
+        (429, "zu viele Anfragen"),
+        (400, "nicht angenommen (HTTP 400)"),
+        (500, "meldet einen Fehler (HTTP 500)"),
+        (503, "meldet einen Fehler (HTTP 503)"),
+    ],
+)
+async def test_send_error_statuses_are_readable_and_show_neither_url_nor_server_text(
+    scripted_ntfy_server, db_session, tmp_path, test_settings, code, expected
+):
+    server_url, script = scripted_ntfy_server
+    script.update(status=code)
+    channel, ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    await ctx.secrets.create(label="ntfy-token", kind="generic", value="token-geheim-123")
+
+    with pytest.raises(RuntimeError) as exc:
+        await channel.send(_note())
+
+    chain = _whole_chain(exc.value)
+    assert expected in str(exc.value)
+    assert server_url not in chain and "127.0.0.1" not in chain, "keine Adresse im Text (sie kann Zugangsdaten tragen)"
+    assert "geheim" not in chain
+    assert "httpx" not in chain.lower() and "For more information" not in chain
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [200, 201, 204])
+async def test_send_accepts_every_2xx(scripted_ntfy_server, db_session, tmp_path, test_settings, code):
+    server_url, script = scripted_ntfy_server
+    script.update(status=code)
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    await channel.send(_note())
+
+
+@pytest.mark.asyncio
+async def test_test_does_not_call_a_redirect_a_working_connection(scripted_ntfy_server, db_session, tmp_path, test_settings):
+    server_url, script = scripted_ntfy_server
+    script.update(status=302, headers={"Location": EVIL_LOCATION})
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    result = await channel.test()
+
+    assert result.ok is False
+    assert result.message.startswith("ntfy leitet auf eine andere Adresse um (HTTP 302).")
+    assert "angreifer" not in result.message.lower() and "127.0.0.1" not in result.message
+    assert script["calls"] == ["GET /v1/health"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("code", [401, 404, 503])
+async def test_test_reports_error_statuses_as_not_ok(scripted_ntfy_server, db_session, tmp_path, test_settings, code):
+    server_url, script = scripted_ntfy_server
+    script.update(status=code)
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    result = await channel.test()
+    assert result.ok is False
+    assert f"HTTP {code}" in result.message and "127.0.0.1" not in result.message
+
+
+@pytest.mark.asyncio
+async def test_test_message_flow_of_the_settings_page_never_shows_the_redirect_target(
+    scripted_ntfy_server, db_session, tmp_path, test_settings
+):
+    """Der Weg hinter „Testnachricht senden“: `describe_exception` schreibt die ganze Ursachenkette ab."""
+    from nodvard_deck.services.extension_test import run_connection_test, send_test_message
+
+    server_url, script = scripted_ntfy_server
+    script.update(status=302, headers={"Location": EVIL_LOCATION})
+    channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+
+    sent = await send_test_message(channel=channel, settings={"server_url": server_url}, schema=None, secrets=[], product_name="Nodvard Deck")
+    assert sent.ok is False
+    assert "angreifer" not in sent.message.lower() and "geheim" not in sent.message
+    assert "andere Adresse" in sent.message
+
+    async def health(_ctx):
+        from nodvard_sdk import HealthReport
+
+        result = await channel.test()
+        return HealthReport(healthy=result.ok, message=result.message)
+
+    loaded = SimpleNamespace(instance=SimpleNamespace(health=health), ctx=None)
+    checked = await run_connection_test(loaded, settings={"server_url": server_url}, schema=None, secrets=[], channel=channel)
+    assert checked.ok is False
+    assert "angreifer" not in checked.message.lower()
+
+
+RAW_CASES = [(name, "ntfy leitet auf eine andere Adresse um.") for name in REDIRECT_ANSWERS] + [
+    (name, "Der ntfy-Server hat die Verbindung abgebrochen oder eine fehlerhafte Antwort geschickt.") for name in BROKEN_ANSWERS
+]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("answer", "sentence"), RAW_CASES)
+async def test_broken_answers_of_the_real_parser_never_reach_the_error(db_session, tmp_path, test_settings, answer, sentence):
+    """Kaputte Kopfzeilen scheitern schon in h11, dessen Text die Zeile zitiert (auch einen `Location`-Header);
+    ein ungueltiger Punycode-Name in der Weiterleitung scheitert in httpx mit einem `ValueError` (idna).
+    Weder das Zustellprotokoll (`str(exc)` von `send`) noch die Verbindungspruefung bekommt davon etwas mit."""
+    from nodvard_deck.services.extension_test import send_test_message
+
+    async with raw_http_server({**REDIRECT_ANSWERS, **BROKEN_ANSWERS}[answer]) as server_url:
+        channel, _ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+        with pytest.raises(RuntimeError) as exc:
+            await channel.send(_note())
+        result = await channel.test()
+        sent = await send_test_message(channel=channel, settings={"server_url": server_url}, schema=None, secrets=[], product_name="Nodvard Deck")
+
+    assert str(exc.value).startswith(sentence)
+    assert result.ok is False and result.message.startswith(sentence)
+    assert sent.ok is False
+    for text in (_whole_chain(exc.value), result.message, sent.message):
+        assert "angreifer" not in text.lower() and "bytearray" not in text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("token", ["tk_geheim_123\nX-Extra: 1", "tk_geheim_\u00e4123"])
+async def test_a_broken_token_never_shows_up_in_the_error(scripted_ntfy_server, db_session, tmp_path, test_settings, token):
+    """Ein Zeilenumbruch im Token (etwa beim Einfuegen mitkopiert): h11 lehnt den Header ab und nennt ihn
+    samt Wert (`Illegal header value b'Bearer ...'`); ein Umlaut scheitert schon beim Kodieren."""
+    server_url, script = scripted_ntfy_server
+    channel, ctx = await _channel(db_session, tmp_path, test_settings, server_url)
+    await ctx.secrets.create(label="ntfy-token", kind="generic", value=token)
+
+    with pytest.raises(RuntimeError) as exc:
+        await channel.send(_note())
+
+    assert str(exc.value).startswith("Die Anfrage an ntfy ließ sich nicht senden.")
+    assert "tk_geheim" not in _whole_chain(exc.value)
+    assert script["calls"] == []
+
+
 @pytest.mark.asyncio
 async def test_test_reports_unhealthy_when_server_unreachable(db_session, tmp_path, test_settings):
     _runtime, ctx, _ext = await _setup_ntfy_extension(
@@ -263,11 +509,11 @@ def test_build_message_links_to_the_dashboard_and_adds_symbols():
 
     n = Notification(
         title="Neuer offener Port", body="4444/tcp", severity=Severity.WARNING,
-        payload={"path": "/ext/nexus-soc/soc?tab=guard", "actions": [{"label": "Einbruchschutz", "path": "ext/nexus-soc/soc?tab=guard"}, {"label": "kaputt"}]},
+        payload={"path": "/ext/shield/soc?tab=guard", "actions": [{"label": "Einbruchschutz", "path": "ext/shield/soc?tab=guard"}, {"label": "kaputt"}]},
     )
     body = build_message(n, "t", "http://192.168.1.72:8080/")
-    assert body["click"] == "http://192.168.1.72:8080/ext/nexus-soc/soc?tab=guard"
-    assert body["actions"] == [{"action": "view", "label": "Einbruchschutz", "url": "http://192.168.1.72:8080/ext/nexus-soc/soc?tab=guard"}]
+    assert body["click"] == "http://192.168.1.72:8080/ext/shield/soc?tab=guard"
+    assert body["actions"] == [{"action": "view", "label": "Einbruchschutz", "url": "http://192.168.1.72:8080/ext/shield/soc?tab=guard"}]
     assert body["tags"] == ["warning"] and body["priority"] == 4
 
     plain = build_message(Notification(title="x", body="y", payload={"tags": ["coffee"]}), "t", None)

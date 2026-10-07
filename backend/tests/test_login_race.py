@@ -11,13 +11,13 @@ from __future__ import annotations
 import asyncio
 import threading
 
-import pyotp
 import pytest
 from argon2 import PasswordHasher
 from nodvard_deck.core import security
 from nodvard_deck.models import AuditEntry, RecoveryCode, RefreshToken, User
 from nodvard_deck.services import auth as auth_service
 from sqlalchemy import select, update
+from totp_helpers import setup_confirm_code
 
 PASSWORD = "correct-horse-battery"
 OTHER_PASSWORD = "ein-ganz-anderes-passwort"
@@ -227,7 +227,7 @@ async def _owner_with_recovery_codes(client) -> list[str]:
     secret = (
         await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))
     ).json()["secret"]
-    confirm = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token))
+    confirm = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_h(token))
     assert confirm.status_code == 200, confirm.text
     return confirm.json()["recovery_codes"]
 

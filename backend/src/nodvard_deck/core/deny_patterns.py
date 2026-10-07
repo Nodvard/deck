@@ -113,7 +113,7 @@ DEFAULT_DENY_PATTERNS: tuple[DenyPattern, ...] = (
 # (FORBIDDEN_KEYWORDS -- fest verdrahtete Flotten-Hostnamen). Sie faengt den real
 # beobachteten Fehlschluss "Host offline -> docker restart <hostname>_server", ist aber
 # an konkrete Hostnamen EINER Installation gebunden -- keine generische Kern-Regel.
-# Sie gehoert in die nexus-soc-Extension,
+# Sie gehoert in die Erweiterung Nodvard Shield,
 # nicht in den Kern. Eine erste Fassung stand faelschlich in diesem Modul --
 # scripts/check_core_purity.py hat den Platzierungsfehler aufgedeckt, bevor er sich
 # festsetzen konnte.

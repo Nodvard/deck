@@ -9,6 +9,12 @@ vergleicht den Stand mit `alembic_revisions.json` (aufgenommen vor der Umbenennu
 * Es kommen keine zusaetzlichen Koepfe dazu: jede Wurzel (Kern, `documents`, `inventory`, `nexus-soc`) hat genau einen Kopf,
   und jeder Kopf des Schnappschusses ist entweder noch Kopf oder wurde durch eine neue Migration fortgesetzt.
 
+**Ordner verschoben, Revisionen gleich:** Der Ordner einer Erweiterung heisst wie ihre Kennung. Zog eine Erweiterung
+um (`nexus-soc` -> `shield`), liegen ihre Revisionen im neuen Ordner; Revisions-Nummern, Vorgaengerinnen, Branch-Labels
+und Dateinamen bleiben, nur der Ordner davor wechselt. Der Schnappschuss bleibt als Aufnahme des Standes davor
+unveraendert; `VERSCHOBEN` ordnet seinen alten Ordner dem neuen zu, bevor verglichen wird. Das Branch-Label heisst
+weiter `nexus-soc`: eine ausgelieferte Revision aendert sich nie.
+
 **Neue Migrationen brauchen hier keinen Eintrag**: Der Schnappschuss ist eine Untergrenze. Nur wer eine bestehende
 Revision aendert (verboten), muss ihn anfassen.
 """
@@ -24,6 +30,18 @@ from nodvard_deck.migrate import alembic_config
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SNAPSHOT = json.loads((Path(__file__).resolve().parent / "alembic_revisions.json").read_text(encoding="utf-8"))
+
+VERSCHOBEN = {"extensions/nexus-soc/": "extensions/shield/"}
+"""Alter Ordner im Schnappschuss -> heutiger Ordner (Ordner = Kennung der Erweiterung, Revisionen unveraendert)."""
+
+
+def _expected(revision: str) -> dict:
+    """Der Eintrag des Schnappschusses, mit dem heutigen Ordner statt eines verschobenen."""
+    item = dict(SNAPSHOT["revisionen"][revision])
+    for old, new in VERSCHOBEN.items():
+        if item["datei"].startswith(old):
+            item["datei"] = new + item["datei"][len(old):]
+    return item
 
 
 def _current() -> tuple[dict[str, dict], set[str], ScriptDirectory]:
@@ -64,7 +82,7 @@ def test_the_snapshot_is_not_empty_and_has_the_known_branches():
 def test_a_shipped_revision_is_unchanged(revision):
     current, _, _ = _current()
     assert revision in current, f"Revision {revision} fehlt (eine Datenbank mit diesem Stand kaeme nicht mehr weiter)"
-    assert current[revision] == SNAPSHOT["revisionen"][revision]
+    assert current[revision] == _expected(revision)
 
 
 def test_the_heads_are_the_same_or_were_continued_by_new_migrations():
@@ -84,3 +102,12 @@ def test_every_branch_has_exactly_one_head():
         ancestors = _ancestors(current, head)
         roots_of_heads.append(frozenset(rev for rev in ancestors if not current[rev]["down_revision"]))
     assert len(set(roots_of_heads)) == len(roots_of_heads), "zwei Koepfe auf derselben Wurzel (ein verwaister zweiter Kopf)"
+
+
+def test_every_moved_folder_in_the_snapshot_is_really_mapped():
+    """Kein Eintrag des Schnappschusses zeigt auf einen Ordner, den es nicht mehr gibt (ausser er ist in
+    `VERSCHOBEN` aufgefuehrt), und die alten Ordner sind weg."""
+    for revision in SNAPSHOT["revisionen"]:
+        assert (REPO_ROOT / _expected(revision)["datei"]).is_file(), revision
+    for old in VERSCHOBEN:
+        assert not (REPO_ROOT / old).exists(), f"{old} ist liegen geblieben (alter Ordner loeschen)"

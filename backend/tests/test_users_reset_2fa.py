@@ -6,6 +6,7 @@ import pyotp
 import pytest
 from nodvard_deck.models import AuditEntry, RecoveryCode, RefreshToken, User
 from sqlalchemy import select
+from totp_helpers import setup_confirm_code
 
 PASSWORD = "correct-horse-battery"
 
@@ -22,7 +23,7 @@ async def _login(client, username):
 
 async def _enable_2fa(client, token) -> tuple[str, list[str]]:
     secret = (await client.post("/api/v1/me/totp/setup", json={"current_password": PASSWORD}, headers=_h(token))).json()["secret"]
-    r = await client.post("/api/v1/me/totp/confirm", json={"code": pyotp.TOTP(secret).now()}, headers=_h(token))
+    r = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=_h(token))
     assert r.status_code == 200, r.text
     return secret, r.json()["recovery_codes"]
 
@@ -112,7 +113,7 @@ async def test_owner_2fa_cannot_be_reset_by_an_admin(client, db_session):
 @pytest.mark.asyncio
 async def test_owner_can_reset_others_but_own_goes_through_me(client, db_session):
     owner, ids = await _world(client)
-    await _enable_2fa(client, owner)
+    owner_secret, _ = await _enable_2fa(client, owner)
     viewer_token = await _login(client, "viewer1")
     await _enable_2fa(client, viewer_token)
     owner_row = (await db_session.execute(select(User).where(User.is_owner.is_(True)))).scalar_one()
@@ -121,8 +122,9 @@ async def test_owner_can_reset_others_but_own_goes_through_me(client, db_session
     own = await client.post(f"/api/v1/users/{owner_row.id}/reset-2fa", json={"current_password": PASSWORD}, headers=_h(owner))
     assert own.status_code == 409
     assert "Mein Konto" in own.json()["detail"]
-    # Der Inhaber selbst schaltet seine eigene ueber /me/totp ab.
-    assert (await client.request("DELETE", "/api/v1/me/totp", json={"current_password": PASSWORD}, headers=_h(owner))).status_code == 204
+    # Der Inhaber selbst schaltet seine eigene ueber /me/totp ab (mit Passwort und Code).
+    body = {"current_password": PASSWORD, "totp_code": pyotp.TOTP(owner_secret).now()}
+    assert (await client.request("DELETE", "/api/v1/me/totp", json=body, headers=_h(owner))).status_code == 204
 
 
 @pytest.mark.asyncio

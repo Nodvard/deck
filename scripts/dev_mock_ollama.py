@@ -1,6 +1,6 @@
 """Reiner Dev-/Demo-Helfer (kein Teil des Kerns/der Tests, siehe
 scripts/dev_mock_proxmox.py fuer dasselbe Muster) -- ein winziger lokaler Ollama-
-API-Mock fuer die manuelle Live-Verifikation der nexus-soc-Extension (WP-9).
+API-Mock fuer die manuelle Live-Verifikation der Erweiterung Nodvard Shield (WP-9).
 
     python scripts/dev_mock_ollama.py --port 11500
 """

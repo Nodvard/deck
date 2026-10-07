@@ -6,6 +6,7 @@ Dateien -> definierter sicherer Zustand, Journal (Write-ahead, Schritte nur vorw
 
 from __future__ import annotations
 
+import dataclasses
 import errno
 import inspect
 import json
@@ -16,7 +17,7 @@ import sys
 import textwrap
 
 import pytest
-from nodvard_deck_updater import policy, state
+from nodvard_deck_updater import channel, policy, state
 from nodvard_deck_updater.policy import Refusal
 from nodvard_deck_updater.state import (
     Journal,
@@ -25,7 +26,7 @@ from nodvard_deck_updater.state import (
     State,
     StateStore,
 )
-from updater_support import NOW, UPDATER_DIR, fake_owner, needs_root
+from updater_support import NOW, UPDATER_DIR, fake_owner, load_vectors, needs_root
 
 RID = "6f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60"
 RID2 = "0f1c2b0e-9a4d-4c1e-8f00-1b2c3d4e5f60"
@@ -34,6 +35,8 @@ CID_NEW = "b" * 64
 IMG_OLD = "sha256:" + "1" * 64
 IMG_NEW = "sha256:" + "2" * 64
 DIGEST = "sha256:" + "3" * 64
+OLD_DIGEST = "sha256:" + "4" * 64
+"""Der Digest des alten Images in der Registry (aus der Vorpruefung, fuer den Slot)."""
 
 
 @pytest.fixture
@@ -71,7 +74,8 @@ def make_request(action="update", version="0.7.1", rid=RID) -> policy.Request:
 
 def make_journal(step="begin", action="update") -> Journal:
     old = OldContainer(id=CID_OLD, name="nodvard-deck-nodvard-deck-1", image_id=IMG_OLD, version="0.7.0",
-                       restart_policy=("unless-stopped", 0), tag_text="ghcr.io/nodvard/deck:latest")
+                       restart_policy=("unless-stopped", 0), tag_text="ghcr.io/nodvard/deck:latest",
+                       repo_digest="ghcr.io/nodvard/deck@" + OLD_DIGEST)
     journal = Journal(request_id=RID, action=action, step="begin", started_at=NOW, deadline=NOW + 900, old=old)
     journal.validate()
     if step == "begin":
@@ -909,8 +913,13 @@ def test_journal_steps_only_go_forward():
         journal.advance("unbekannt")
 
 
+OLD_REF = "ghcr.io/nodvard/deck@" + OLD_DIGEST
+
+
 def test_journal_consistency_rules():
     begin = make_journal("begin")
+    assert begin.advance("begin", old=OldContainer(CID_OLD, "n", IMG_OLD, "0.7.0", ("no", 0), "ghcr.io/nodvard/deck",
+                                                   OLD_REF)).old.name == "n"  # Gegenprobe: so geht es
     new = NewImage(image_id=IMG_NEW, digest=DIGEST, version="0.7.1")
     with_id = NewImage(image_id=IMG_NEW, digest=DIGEST, version="0.7.1", id=CID_NEW)
     bad = [
@@ -923,13 +932,16 @@ def test_journal_consistency_rules():
         lambda: begin.advance("begin", deadline=-1),
         lambda: begin.advance("begin", action="downgrade"),
         lambda: begin.advance("begin", old=OldContainer(CID_OLD, "/mit-schraegstrich", IMG_OLD, "0.7.0",
-                                                         ("no", 0), "ghcr.io/nodvard/deck")),
+                                                         ("no", 0), "ghcr.io/nodvard/deck", OLD_REF)),
         lambda: begin.advance("begin", old=OldContainer(CID_OLD, "n", IMG_OLD, "0.7.0", ("no", 0),
-                                                         "ghcr.io/nodvard/deck:0.7.0")),  # gepinnt
+                                                         "ghcr.io/nodvard/deck:0.7.0", OLD_REF)),  # gepinnt
         lambda: begin.advance("begin", old=OldContainer(CID_OLD, "n", IMG_OLD, "0.7.0", ("sometimes", 0),
-                                                         "ghcr.io/nodvard/deck")),
+                                                         "ghcr.io/nodvard/deck", OLD_REF)),
         lambda: begin.advance("begin", old=OldContainer(CID_OLD[:12], "n", IMG_OLD, "0.7.0", ("no", 0),
-                                                         "ghcr.io/nodvard/deck")),
+                                                         "ghcr.io/nodvard/deck", OLD_REF)),
+        # Registry-Digest des alten Images: nur `<repository>@sha256:<64 hex>` genau dieses Repositorys
+        *[lambda digest=digest: begin.advance("begin", old=dataclasses.replace(begin.old, repo_digest=digest))
+          for digest in (OLD_DIGEST, "docker.io/evil/deck@" + OLD_DIGEST, "ghcr.io/nodvard/deck:latest", None)],
     ]
     for make in bad:
         with pytest.raises((ValueError, TypeError)):
@@ -937,12 +949,126 @@ def test_journal_consistency_rules():
     assert begin.floating_tag == "latest"
 
 
+@pytest.mark.parametrize(("name", "valid"), [
+    ("Deck-1", True), ("DECK.prod_2", True), ("n", True), ("a" * 128, True),
+    ("déck", False), ("deck\u0661", False), ("\uff44eck", False), ("dec\u212a", False), ("deck\u200b", False),
+    ("-deck", False), ("a" * 129, False), ("", False),
+])
+def test_container_names_in_the_journal_upper_case_yes_other_scripts_no(name, valid):
+    # Der Docker-Dienst erlaubt Grossbuchstaben im Namen, aber nur ASCII; Ziffern und Buchstaben aus anderen Schriften
+    # (auch das Kelvin-Zeichen, das ohne `re.ASCII` wie ein `k` passen koennte) gehen nie durch.
+    begin = make_journal("begin")
+    old = dataclasses.replace(begin.old, name=name)
+    if valid:
+        assert begin.advance("begin", old=old).old.name == name
+    else:
+        with pytest.raises(ValueError):
+            begin.advance("begin", old=old)
+
+
+def test_announced_undo_keeps_its_reason_and_never_goes_forward_again():
+    started = make_journal("started")
+    undo = started.start_undo(policy.TIMEOUT)
+    assert (undo.undo, undo.code, undo.step) == (True, policy.TIMEOUT, "started")
+    assert not started.undo and started.code is None  # unveraenderlich: der alte Stand bleibt, wie er war
+    assert undo.start_undo(policy.EXITED) is undo  # schon angekuendigt: der erste Grund bleibt
+    assert make_journal("old_stopped").start_undo(None).code is None  # Wiederaufnahme ohne Fehler
+    with pytest.raises(ValueError):
+        undo.advance("committed")  # nach der Ankuendigung geht es nicht mehr vorwaerts
+    with pytest.raises(ValueError):
+        make_journal("committed").start_undo(policy.TIMEOUT)  # nach dem Commit gibt es keinen Rueckbau
+    with pytest.raises(ValueError):
+        started.advance("committed", undo=True)  # ankuendigen nur ueber start_undo
+    # Einzige Ausnahme: im Rueckbau den eigenen, schon angelegten Container eintragen (creating -> created).
+    creating = make_journal("creating").start_undo(policy.CREATE_FAILED)
+    created = creating.advance("created", new=NewImage(image_id=IMG_NEW, digest=DIGEST, version="0.7.1", id=CID_NEW))
+    assert (created.step, created.undo, created.code) == ("created", True, policy.CREATE_FAILED)
+    with pytest.raises(ValueError):
+        created.advance("old_stopped")
+
+
+@pytest.mark.parametrize("changes", [
+    {"undo": 1},                                   # kein Wahrheitswert
+    {"undo": False, "code": policy.TIMEOUT},       # Grund ohne Rueckbau
+    {"undo": True, "code": "kaputt"},              # kein fester Code
+    {"undo": True, "code": "Docker antwortet nicht"},
+])
+def test_undo_fields_are_checked(changes):
+    with pytest.raises(ValueError):
+        dataclasses.replace(make_journal("started"), **changes).validate()
+
+
+def test_announced_undo_survives_the_disk(store):
+    journal = make_journal("old_stopped").start_undo(policy.STOP_FAILED)
+    store.write_journal(journal)
+    loaded = store.load_journal(NOW)
+    assert loaded == journal and (loaded.undo, loaded.code) == (True, policy.STOP_FAILED)
+    assert journal.to_json()["undo"] is True and journal.to_json()["code"] == policy.STOP_FAILED
+
+
+def _result(rid=RID, outcome="applied", code=None, at=NOW) -> dict:
+    return {"id": rid, "action": "update", "from": "0.7.0", "to": "0.7.1", "outcome": outcome, "code": code,
+            "finished_at": at}
+
+
+def test_results_are_kept_once_per_request_and_only_the_latest():
+    st = State()
+    assert st.record_result(_result()) is True
+    assert st.record_result(_result(at=NOW + 50)) is False  # dasselbe Ergebnis: der erste Zeitpunkt bleibt
+    assert st.results == [_result()]
+    assert st.record_result(_result(outcome="rolled_back", code=policy.TIMEOUT, at=NOW + 60)) is True
+    assert st.results == [_result(outcome="rolled_back", code=policy.TIMEOUT, at=NOW + 60)]  # eins je ID
+    ids = [f"{n:08x}-9a4d-4c1e-8f00-1b2c3d4e5f60" for n in range(policy.RESULTS_MAX + 3)]
+    for rid in ids:
+        st.record_result(_result(rid=rid))
+    assert [entry["id"] for entry in st.results] == ids[-policy.RESULTS_MAX:]
+    with pytest.raises(ValueError):
+        st.record_result({**_result(), "message": "Docker antwortet nicht"})
+    assert State.from_json(st.to_json()).results == st.results
+
+
+@pytest.mark.parametrize("results", [
+    [_result(), _result()],                                         # zweimal dieselbe ID
+    [{**_result(), "outcome": "fertig"}],
+    [{**_result(), "code": "kaputt"}],
+    [{**_result(), "x": 1}],
+    [_result(rid=f"{n:08x}-9a4d-4c1e-8f00-1b2c3d4e5f60") for n in range(policy.RESULTS_MAX + 1)],
+    {"id": RID},
+])
+def test_results_in_state_json_are_checked(results):
+    with pytest.raises(ValueError):
+        State.from_json({**State().to_json(), "results": results})
+
+
+def test_results_follow_the_same_rules_as_the_status():
+    # Was `state.json` als Ergebnis annimmt, nimmt auch der Status an -- und umgekehrt (an den Vektoren des Status).
+    vectors = load_vectors("status.json")
+    template = vectors["valid"][0]["doc"]
+    checked = 0
+    for vector in vectors["valid"] + vectors["invalid"]:
+        doc = vector["doc"]
+        results = doc.get("results") if isinstance(doc, dict) else None
+        for entry in results if isinstance(results, list) else []:
+            try:
+                channel.validate_status({**template, "results": [entry]})
+            except ValueError:
+                status_ok = False
+            else:
+                status_ok = True
+            assert policy.is_result(entry) == status_ok, (vector["name"], entry)
+            checked += 1
+    assert checked >= 20
+    assert any(not policy.is_result(entry) for vector in vectors["invalid"] if isinstance(vector["doc"], dict)
+               for entry in vector["doc"].get("results") or [])
+
+
 TEST_REPO = "registry.test/nd/deck"
 
 
 def make_test_repo_journal(step="begin") -> Journal:
     old = OldContainer(id=CID_OLD, name="nodvard-deck-nodvard-deck-1", image_id=IMG_OLD, version="0.7.0",
-                       restart_policy=("unless-stopped", 0), tag_text=TEST_REPO + ":0.9")
+                       restart_policy=("unless-stopped", 0), tag_text=TEST_REPO + ":0.9",
+                       repo_digest=TEST_REPO + "@" + OLD_DIGEST)
     journal = Journal(request_id=RID, action="update", step="begin", started_at=NOW, deadline=NOW + 900, old=old,
                       repository=TEST_REPO)
     journal.validate()
@@ -979,7 +1105,7 @@ def test_journal_roundtrip_through_a_store_with_a_test_repository(state_dir, uid
 def test_journal_with_the_default_repository_still_refuses_foreign_images():
     # Gegenprobe: ohne Test-Repository gilt die Konstante, und ein fremdes Image bleibt fremd.
     foreign = OldContainer(id=CID_OLD, name="n", image_id=IMG_OLD, version="0.7.0", restart_policy=("no", 0),
-                           tag_text=TEST_REPO + ":0.9")
+                           tag_text=TEST_REPO + ":0.9", repo_digest=TEST_REPO + "@" + OLD_DIGEST)
     journal = Journal(request_id=RID, action="update", step="begin", started_at=NOW, deadline=NOW + 900, old=foreign)
     with pytest.raises(ValueError):
         journal.validate()
@@ -999,6 +1125,10 @@ def corrupt_journals() -> dict[str, bytes]:
         "Schritt unbekannt": json.dumps({**good, "step": "fertig"}).encode(),
         "format 2": json.dumps({**good, "format": 2}).encode(),
         "fremdes Image": json.dumps({**good, "old": {**good["old"], "tag_text": "docker.io/evil/deck"}}).encode(),
+        "Digest des alten Images fehlt": json.dumps(
+            {**good, "old": {k: v for k, v in good["old"].items() if k != "repo_digest"}}).encode(),
+        "Digest des alten Images fremd": json.dumps(
+            {**good, "old": {**good["old"], "repo_digest": "docker.io/evil/deck@" + OLD_DIGEST}}).encode(),
         "Restart-Policy kaputt": json.dumps({**good, "old": {**good["old"], "restart_policy": {"Name": "no"}}}).encode(),
         "neue ID fehlt": json.dumps({**good, "new": {**good["new"], "id": None}}).encode(),
         "Digest kaputt": json.dumps({**good, "new": {**good["new"], "digest": "sha256:abc"}}).encode(),

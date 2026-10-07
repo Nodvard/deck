@@ -91,7 +91,7 @@ async def _host_with_credential(db_session, settings, name, **fields):
 @pytest.mark.asyncio
 async def test_setup_registers_action_spec_and_seeds_no_script(tmp_path, db_session, settings_bound):
     """Frueher legte setup() ein Lynis-Skript (Ziel "Alle Server", jede
-    Nacht, ohne sudo) an -- doppelt zu nexus-socs eigenem Haertungs-Audit. Eine
+    Nacht, ohne sudo) an -- doppelt zum eigenen Haertungs-Audit von Nodvard Shield. Eine
     frische Installation hat jetzt KEIN Skript."""
     runtime, _ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
 
@@ -898,13 +898,158 @@ async def test_scheduled_job_handler_is_registered_and_runnable(tmp_path, db_ses
         commit_message="nightly angelegt",
     )
     runtime, _ctx, _ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    # Mit einem Server: ein Lauf ganz ohne Ziel gilt als fehlgeschlagen
+    # (test_scheduled_run_without_any_target_fails_but_skipped_hosts_alone_do_not).
+    await _host_with_credential(db_session, settings_bound, "pve1")
+    await db_session.commit()
 
     handler = runtime.scheduler.get("scripts", "script-nightly")
     assert handler is not None
 
     result = await handler()
     assert result["script_id"] == "nightly"
-    assert result["targets"] == 0  # keine Hosts angelegt in diesem Test
+    assert result["targets"] == 1
+    assert result["results"][0]["status"] == "proposed"
+
+
+async def _run_as_scheduled(job_key: str, handler, tmp_path):
+    """Laesst den Job ueber den echten Kern-Scheduler laufen, wie es der Zeitplan tut, und
+    liefert Status und Fehler der `job_runs`-Zeile."""
+    from nodvard_deck.core.scheduler import SchedulerService
+    from nodvard_deck.db.session import session_scope
+    from nodvard_deck.models import JobRun
+
+    async with session_scope() as session:
+        job = (
+            await session.execute(select(Job).where(Job.ext_id == "scripts", Job.ext_job_key == job_key))
+        ).scalar_one()
+        job_id = job.id
+    service = SchedulerService()
+    service.configure(tmp_path / "runs")
+    run_id = await service._run_job(job_id=job_id, ext_id="scripts", handler=handler, params={}, trigger_kind="schedule")
+    async with session_scope() as session:
+        run = await session.get(JobRun, run_id)
+        return run.status, run.error
+
+
+@pytest.mark.asyncio
+async def test_scheduled_run_with_normal_shell_syntax_proposes_the_script_as_written(
+    tmp_path, db_session, settings_bound
+):
+    """`$HOME`, `"$f"`, `$(date)`, `$?` sind Shell, keine Parameter. Frueher scheiterte der
+    Lauf daran, und der Zeitplan meldete ihn trotzdem als erfolgreich."""
+    _runtime, ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    from nodvard_deck_ext_scripts import _ScriptJobSpec
+    from nodvard_deck_ext_scripts.repo import ScriptMeta
+
+    host = await _host_with_credential(db_session, settings_bound, "pve1")
+    await db_session.commit()
+    content = (
+        '#!/bin/sh\nfor f in /var/log/*.log; do gzip "$f"; done\n'
+        'echo "$(date +%F) $HOME $1" >> $ziel; echo $?\necho $$$$ ${ziel}\n'
+    )
+    ext._repo.save(
+        ScriptMeta(
+            id="logs", name="Logs packen", params_schema={"ziel": {"type": "string", "default": "/tmp/log ok"}},
+            target={"kind": "host", "host_id": host.id}, schedule="0 3 * * *", enabled=True,
+        ),
+        content,
+        commit_message="logs angelegt",
+    )
+    spec = _ScriptJobSpec(ctx, ext._repo, "logs", schedule="0 3 * * *", enabled=True)
+    await ctx.scheduler.register_job(spec)
+
+    status, error = await _run_as_scheduled("script-logs", spec.handler, tmp_path)
+
+    assert (status, error) == ("succeeded", None)
+    actions = (await db_session.execute(select(Action).where(Action.action_type == "script.run"))).scalars().all()
+    assert len(actions) == 1
+    assert actions[0].payload["command"] == (
+        '#!/bin/sh\nfor f in /var/log/*.log; do gzip "$f"; done\n'
+        "echo \"$(date +%F) $HOME $1\" >> '/tmp/log ok'; echo $?\necho $$ '/tmp/log ok'\n"
+    )
+
+
+@pytest.mark.asyncio
+async def test_scheduled_run_that_could_not_start_is_a_failed_run_but_run_now_still_lists_it(
+    tmp_path, db_session, settings_bound
+):
+    """Konnte der Lauf auf einem Ziel gar nicht anfangen (hier: Parameter ohne Wert), ist der
+    Zeitplan-Lauf fehlgeschlagen -- frueher stand er als "erfolgreich" da, obwohl nichts lief.
+    "Jetzt ausfuehren" auf der Skripte-Seite (`POST /scripts/{id}/run`) bleibt, wie es war:
+    keine Ausnahme, der Fehler steht je Server im Ergebnis."""
+    from nodvard_sdk import Actor
+    from nodvard_sdk.errors import NodvardError
+
+    _runtime, ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    from nodvard_deck_ext_scripts import _ScriptJobSpec, run_script
+    from nodvard_deck_ext_scripts.repo import ScriptMeta
+
+    host = await _host_with_credential(db_session, settings_bound, "pve1")
+    await db_session.commit()
+    ext._repo.save(
+        ScriptMeta(
+            id="sicherung", name="Sicherung", params_schema={"ziel": {"type": "string"}},
+            target={"kind": "host", "host_id": host.id}, schedule="0 3 * * *", enabled=True,
+        ),
+        "tar czf $ziel /etc\n",
+        commit_message="sicherung angelegt",
+    )
+    spec = _ScriptJobSpec(ctx, ext._repo, "sicherung", schedule="0 3 * * *", enabled=True)
+    await ctx.scheduler.register_job(spec)
+
+    status, error = await _run_as_scheduled("script-sicherung", spec.handler, tmp_path)
+    assert status == "failed"
+    assert error == "Nicht ausgeführt auf pve1: Parameter 'ziel' fehlt (kein Default in params_schema)."
+
+    with pytest.raises(NodvardError, match="Nicht ausgeführt auf pve1"):
+        await spec.handler()
+
+    by_hand = await run_script(ctx, ext._repo, "sicherung", param_overrides={}, actor=Actor.user("u1"), wait_s=0)
+    assert by_hand["results"] == [
+        {"host_id": host.id, "host_name": "pve1", "error": "Parameter 'ziel' fehlt (kein Default in params_schema)."}
+    ]
+    assert (await db_session.execute(select(Action))).scalars().all() == []
+
+
+@pytest.mark.asyncio
+async def test_scheduled_run_without_any_target_fails_but_skipped_hosts_alone_do_not(
+    tmp_path, db_session, settings_bound
+):
+    """Uebersprungene Server (ohne SSH-Zugang, Windows, nicht verwaltet) sind fuer sich kein
+    Fehler, solange das Skript irgendwo laeuft. Bleibt kein Ziel uebrig oder gibt es gar
+    keins, hat der Lauf nichts getan und gilt als fehlgeschlagen."""
+    from nodvard_sdk.errors import NodvardError
+
+    ctx, ext, _no_cred, _windows = await _fleet_setup(tmp_path, db_session, settings_bound)
+    from nodvard_deck_ext_scripts import _ScriptJobSpec
+    from nodvard_deck_ext_scripts.repo import ScriptMeta
+
+    handler = _ScriptJobSpec(ctx, ext._repo, "fleet-script", schedule="0 3 * * *", enabled=True).handler
+    result = await handler()
+    assert result["targets"] == 1
+    assert len([r for r in result["results"] if "skipped" in r]) == 2
+
+    # Der einzige passende Server verliert seine Zugangsdaten: alle werden uebersprungen.
+    docker = next(h for h in await hosts_service.list_hosts(db_session) if h.name == "docker")
+    for cred in await hosts_service.list_credentials(db_session, docker.id):
+        await hosts_service.delete_credential(db_session, docker.id, cred.id)
+    await db_session.commit()
+    with pytest.raises(NodvardError) as excinfo:
+        await handler()
+    assert str(excinfo.value).startswith("Das Skript lief auf keinem Server, alle wurden übersprungen: ")
+    for part in ("docker (keine SSH-Zugangsdaten)", "ki-server (keine SSH-Zugangsdaten)", "game-win (Windows-Server)"):
+        assert part in str(excinfo.value)
+
+    # Ein Zielserver, den es nicht mehr gibt: kein Ziel, kein Erfolg.
+    ext._repo.save(
+        ScriptMeta(id="weg", name="Weg", target={"kind": "host", "host_id": "geloescht"}, schedule="0 3 * * *", enabled=True),
+        "echo hi\n",
+        commit_message="weg angelegt",
+    )
+    gone = _ScriptJobSpec(ctx, ext._repo, "weg", schedule="0 3 * * *", enabled=True).handler
+    with pytest.raises(NodvardError, match="^Das Skript lief auf keinem Server: Es gibt keinen passenden Zielserver.$"):
+        await gone()
 
 
 @pytest.mark.asyncio
@@ -912,7 +1057,7 @@ async def test_recurring_action_executed_events_promote_a_disabled_draft_script(
     """docs/02 Paragraph 6, letzte Zeile: `ctx.events.subscribe('action.executed')`
     soll nach mehrfacher identischer Ausfuehrung einen Skript-Entwurf anlegen -- ueber
     den Event-Bus, ohne dass diese Extension die vorschlagende Extension (z. B.
-    nexus-soc) kennt."""
+    Nodvard Shield) kennt."""
     _runtime, ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
     from nodvard_deck_ext_scripts.promotion import MAX_COUNT
 
@@ -947,6 +1092,40 @@ async def test_recurring_action_executed_events_promote_a_disabled_draft_script(
         )
     )
     assert set(ext._repo.list_ids()) - before == new_ids
+
+
+@pytest.mark.asyncio
+async def test_promoted_draft_runs_exactly_the_repeated_command(tmp_path, db_session, settings_bound):
+    """Der Entwurf fuehrt nach dem Einschalten Zeichen fuer Zeichen den Befehl aus, der
+    wiederholt lief -- auch mit `$`. Frueher stand der Befehl roh im Entwurf: Jedes `$HOME`
+    oder `"$f"` liess den Lauf scheitern, ein `$$` waere zu `$` geworden."""
+    _runtime, ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    from nodvard_deck_ext_scripts import run_script
+    from nodvard_deck_ext_scripts.promotion import MAX_COUNT
+
+    host = await _host_with_credential(db_session, settings_bound, "pve1")
+    await db_session.commit()
+    command = 'for f in $HOME/*.log; do gzip "$f"; done; kill -HUP $(cat /run/app.pid); echo $$ $?'
+    before = set(ext._repo.list_ids())
+    for _ in range(MAX_COUNT):
+        await get_event_bus().publish(
+            Event(
+                name="action.executed",
+                payload={
+                    "action_type": "shell.exec", "host_id": host.id, "outcome": "success",
+                    "payload": {"command": command},
+                },
+            )
+        )
+    (draft_id,) = set(ext._repo.list_ids()) - before
+    draft = ext._repo.get(draft_id)
+    ext._repo.save(dataclasses.replace(draft.meta, enabled=True), draft.content, commit_message="geprueft")
+
+    result = await run_script(ctx, ext._repo, draft_id, param_overrides={})
+
+    assert "error" not in result["results"][0]
+    action = await db_session.get(Action, result["results"][0]["action_id"])
+    assert action.payload["command"] == f"#!/bin/sh\n{command}\n"
 
 
 @pytest.mark.asyncio
@@ -1393,3 +1572,53 @@ async def test_secret_never_shows_in_actions_api_events_or_runs_over_http(
         assert stored.status == "succeeded"
     finally:
         reset_extension_runtime()
+
+
+@pytest.mark.asyncio
+async def test_a_script_with_an_invalid_schedule_is_refused_before_it_is_stored(client, db_session, test_settings):
+    """Frueher landete das Skript im Repo, und erst `register_job()` warf (500): beim naechsten Start
+    der Erweiterung scheiterte `setup()` an genau diesem Skript, und kein Skript lief mehr."""
+    token = await _enable_scripts(client, db_session, test_settings)
+    headers = _auth_header(token)
+    body = {"name": "Nachts", "content": "uptime\n", "enabled": True, "target": {"kind": "all"}, "schedule": "@daily"}
+    r = await client.put("/api/v1/ext/scripts/scripts/nachts", json=body, headers=headers)
+    assert r.status_code == 422, r.text
+    assert "Der Zeitplan „@daily“ ist ungültig" in r.json()["detail"]
+    assert (await client.get("/api/v1/ext/scripts/scripts/nachts", headers=headers)).status_code == 404
+
+    ok = await client.put("/api/v1/ext/scripts/scripts/nachts", json={**body, "schedule": "0 1 * * *"}, headers=headers)
+    assert ok.status_code == 200, ok.text
+    again = await client.put(
+        "/api/v1/ext/scripts/scripts/nachts", json={**body, "content": "neu\n", "schedule": "0 24 * * *"}, headers=headers
+    )
+    assert again.status_code == 422
+    saved = (await client.get("/api/v1/ext/scripts/scripts/nachts", headers=headers)).json()
+    assert (saved["content"], saved["schedule"]) == ("uptime\n", "0 1 * * *")  # nichts vom zweiten Versuch
+
+
+@pytest.mark.asyncio
+async def test_setup_survives_a_script_with_an_invalid_schedule(tmp_path, db_session, settings_bound):
+    """Ein kaputter Zeitplan aus einer aelteren Version legte beim Start die ganze Erweiterung lahm.
+    Jetzt laeuft nur dieses Skript nicht nach Zeitplan, mit Meldung; die anderen wie geplant."""
+    from nodvard_deck.models import Notification as NotificationRow
+
+    _runtime, _ctx, ext = await _setup_scripts_extension(tmp_path, settings_bound)
+    from nodvard_deck_ext_scripts.repo import (
+        ScriptMeta,  # erst nach dem Setup im Suchpfad
+    )
+
+    ext._repo.save(ScriptMeta(id="kaputt", name="Kaputt", target={"kind": "all"}, schedule="@daily", enabled=True), "echo 1\n", commit_message="test")
+    ext._repo.save(ScriptMeta(id="heil", name="Heil", target={"kind": "all"}, schedule="0 1 * * *", enabled=True), "echo 2\n", commit_message="test")
+
+    runtime2, _ctx2, _ext2 = await _setup_scripts_extension(tmp_path, settings_bound, runtime=ExtensionRuntime())
+
+    assert runtime2.scheduler.get("scripts", "script-heil") is not None
+    assert runtime2.scheduler.get("scripts", "script-kaputt") is not None  # angemeldet, nur ohne Zeitplan
+    jobs = {j.ext_job_key: j for j in (await db_session.execute(select(Job).where(Job.ext_id == "scripts"))).scalars()}
+    assert (jobs["script-heil"].enabled, jobs["script-heil"].schedule) == (True, "0 1 * * *")
+    assert jobs["script-kaputt"].enabled is False
+    rows = (
+        await db_session.execute(select(NotificationRow).where(NotificationRow.correlation_id == "scripts-schedule:kaputt"))
+    ).scalars().all()
+    assert len(rows) == 1
+    assert "Kaputt" in rows[0].title and "@daily" in rows[0].body and "Skripte-Seite" in rows[0].body

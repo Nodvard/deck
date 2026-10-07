@@ -1,14 +1,15 @@
 /**
  * Access-Token vorab erneuern.
  *
- * Nur `apiFetch` (lib/api.ts) erneuert bei 401 -- Extension-Bundles bekommen ueber
- * `window.__nodvardDeck.getAccessToken()` das aktuelle Token, Upload/Download im
- * Dateimanager und der Protokoll-Export machten eigene fetch-Aufrufe ohne zweiten
- * Versuch. Nach 15 min (config.py access_token_ttl_seconds) bekamen die alle
- * "Nicht authentifiziert". Deshalb holt die Shell das neue Token selbst, kurz
- * BEVOR das alte ablaeuft. Das gemeinsame `authedFetch` der Extensions (UI-Kit,
- * api.ts) erneuert zusaetzlich bei einem 401 einmal ueber `refreshAccessTokenResult`
- * (lib/extensionToken.ts) -- als Absicherung, nicht als Takt.
+ * Bei einem 401 erneuern auch die Aufrufe selbst, einmal still, dann folgt ein zweiter
+ * Versuch: `apiFetch` und `apiFetchResponse` (Datei laden, Protokoll-Export), der Upload im
+ * Dateimanager (routes/FilesPage.tsx) und der Upload einer Sicherung (lib/restore.ts), alle
+ * ueber `refreshAfterUnauthorized` aus lib/api.ts, dazu das gemeinsame `authedFetch` der
+ * Extensions (UI-Kit, api.ts, ueber `refreshAccessTokenResult` aus lib/extensionToken.ts). Das ist die
+ * Absicherung, nicht der Takt: Nach 15 min (config.py access_token_ttl_seconds) laeuft das
+ * Token ab, deshalb holt die Shell das neue selbst, kurz BEVOR das alte ablaeuft, und es
+ * gibt im Normalfall gar keinen 401. Ein Tab im Hintergrund oder ein Rechner im
+ * Ruhezustand verpasst diesen Takt -- dort greift der zweite Versuch.
  *
  * Nur im SICHTBAREN Tab: services/auth.py rotiert das Refresh-Token bei jeder
  * Einloesung ohne Gnadenfrist -- ein fester Takt in jedem offenen Tab liesse zwei

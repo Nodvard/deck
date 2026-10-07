@@ -21,7 +21,7 @@
                      │  window.__nodvardDeck + UI-Kit (React-Vertrag)
 ┌────────────────────▼─────────────────────────────────────────┐
 │  EXTENSIONS — alles Infrastruktur-Spezifische                │
-│  proxmox · nexus-soc · terminal · files · scripts ·          │
+│  proxmox · shield · terminal · files · scripts ·             │
 │  service-matrix · backups · gameserver · …                   │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -34,7 +34,10 @@ kennt keinen Extension-Namen. Der Kern kennt nur *Fähigkeiten* (Protokolle), ni
 Das ist maschinell prüfbar und wird geprüft — `scripts/check_core_purity.py` läuft in CI
 und schlägt fehl, wenn im Code von `backend/src/nodvard_deck/` ein Wort aus einer Sperrliste
 (`proxmox`, `nexus`, `ollama`, `ntfy`, `nextcloud`, `truenas`, `syncthing`,
-`teleport`, `docker`) auftaucht.
+`teleport`, `docker`, dazu `shield` als eigenes Wort) oder das Paket-Präfix der Extensions
+(`nodvard_deck_ext_`) auftaucht. Bei `shield` zählen `asyncio.shield(…)` und Symbolnamen mit
+Bindestrich wie `shield-check` nicht; jede dieser Ausnahmen ist in `backend/tests/test_core_purity.py`
+an ihrer Fundstelle belegt.
 Kommentare und Docstrings sind ausgenommen: verboten ist die *Abhängigkeit*, nicht die
 Erwähnung — ein Protokoll darf und soll in seiner Dokumentation Beispiele nennen.
 
@@ -244,7 +247,9 @@ Das Projekt hieß früher „Lattice“. Die technischen Namen sind auf **Nodvar
 Damit bestehende Installationen, alte Browser-Tabs und Erweiterungen von Dritten weiterlaufen,
 gelten viele alte Namen **parallel** weiter; einige bleiben **bewusst** ganz stehen. Der Wächter
 `scripts/check_legacy_names.py` (läuft als Test) sorgt dafür, dass kein alter Name neu eingeführt
-wird; seine Positivliste `KEPT_NAMES` ist die maßgebliche Liste mit Begründung je Eintrag.
+wird. Er hat zwei Positivlisten, beide mit Begründung je Eintrag: `KEPT_NAMES` für „Lattice“ und
+`KEPT_SHIELD` für die alte Kennung von Nodvard Shield (dort nennt jeder Eintrag zusätzlich die Dateien, in denen er
+gilt; ein Test prüft, dass jede Angabe noch gebraucht wird). Diese beiden Listen sind maßgeblich.
 
 **Umbenannt – der alte Name funktioniert weiter (Übergang):**
 
@@ -272,4 +277,36 @@ wird; seine Positivliste `KEPT_NAMES` ist die maßgebliche Liste mit Begründung
 | Namen auf verwalteten Servern (systemd-Einheiten `lattice-upgrade-*`, Rollback-Tags, Zustandsordner) | Fortsetzen und Zurückrollen von Updates hängen daran |
 | Import-Map-Pfad `/lattice-shim/` | Alte Tabs verweisen darauf |
 | API-Wert `source: "lattice"` | Dokumentierter Wert, Clients werten ihn aus |
-| Kennung `nexus-soc` der Erweiterung **Nodvard Shield** (bis 0.6 „Nexus SOC“), Paket `nodvard_deck_ext_nexus_soc`, Tabellen `ext_nexus_soc_*`, Rechte `ext.nexus-soc.*`, Adressen `/ext/nexus-soc/…`, Pfade auf den Servern (`/var/lib/nexus-quarantine`, `nexus-updates`, `nexus-rc`) | Nur der sichtbare Name ist umgestellt; die technische Umstellung kommt mit Version 0.7, damit Daten, Rechte und Lesezeichen weiterlaufen |
+
+### Nodvard Shield: `nexus-soc` → `shield` (seit 0.7)
+
+Die Erweiterung **Nodvard Shield** (bis 0.6 „Nexus SOC“) hatte die technische Kennung `nexus-soc`. Seit 0.7
+heißt sie `shield`, im Manifest steht `legacy_ids = ["nexus-soc"]` (Mechanik:
+[02 „Erweiterung umbenennen“](02-EXTENSION-API.md#erweiterung-umbenennen-legacy_ids)). Es gibt **keine Migration**:
+Gespeichertes wird weder kopiert noch umbenannt, ein Rückweg aufs alte Image findet alles unverändert vor.
+
+**Umbenannt – der alte Name funktioniert weiter (Übergang, in allen 1.x):**
+
+| Neu | Alt | Wie der alte weiterlebt |
+|---|---|---|
+| Kennung `shield` (`extension.toml`) | `nexus-soc` | `legacy_ids`. Bei bestehenden Installationen bleibt die Registry-Zeile `nexus-soc` die **Speicher-Kennung**: Einstellungen, Zustand, Rechte und Zeitpläne hängen weiter an ihr. Neue Installationen legen `shield` an |
+| Ordner `extensions/shield/`, Paket `nodvard_deck_ext_shield` | `extensions/nexus-soc/`, `nodvard_deck_ext_nexus_soc` | Kein Alias (Erweiterungen importieren einander nicht). Liegt der alte Ordner noch da, wird Shield nicht geladen ([deploy/README](../deploy/README.md)) |
+| Adressen `/api/v1/ext/shield/…` | `/api/v1/ext/nexus-soc/…` | Dieselben Routen hängen zusätzlich unter der alten Adresse, gleiche Anmeldeprüfung, im OpenAPI-Schema `deprecated` ([04 §7](04-API.md#7-kompatibilität)) |
+| Kern-Adressen `/api/v1/extensions/shield/…` (Einstellungen, Geheimnisse, Test, Bundle) | `/api/v1/extensions/nexus-soc/…` | Die alte Kennung wird aufgelöst, Antworten nennen in `id` die neue |
+| Seiten `/ext/shield/soc`, `/settings/extensions/shield` | `/ext/nexus-soc/soc`, `/settings/extensions/nexus-soc` | Die Oberfläche leitet weiter (Abfrage und Anker bleiben). Gespeicherte Links in Meldungen, Push und Lesezeichen gehen so weiter |
+| Dashboard-Kacheln unter `shield` | Einträge unter `nexus-soc` | Behalten Platz, Größe und Sichtbarkeit; der alte Eintrag bleibt für einen Rückweg im Layout |
+| Neue Protokoll-Einträge `shield.*` (z. B. `shield.incident`), Akteur `shield` | `nexus_soc.*`, `nexus-soc` | Alte Einträge bleiben, die Oberfläche zeigt bei beiden den Namen. Der Filter `GET /audit?action=shield.incident` findet die älteren `nexus_soc.incident` nicht |
+| Logger `nodvard_deck.ext.shield`, Live-Kanäle `ext.shield.*`, Links in neuen Meldungen (`/ext/shield/soc`) | `…nexus-soc…` | Live-Nachrichten gehen zusätzlich an die alten Kanäle, damit offene Tabs mit altem Stand sie bekommen |
+
+**Bleiben bewusst** (gespeichert oder auf den Servern; ein Rückweg hängt daran, wie bei `lattice.db`):
+
+| Name | Warum |
+|---|---|
+| Registry-Zeile `nexus-soc` bestehender Installationen | Darin liegen alle Einstellungen; das alte Image findet sie nach einem Rückweg unverändert |
+| Tabellen `ext_nexus_soc_*` und ihre Indizes `ix_ext_nexus_soc_*` | Umbenennen bräuchte eine Migration; der Rückweg ginge dann nur noch über die Notseite |
+| Alembic-Revisionen der Erweiterung, ihre Dateinamen und der Zweig `nexus-soc` (Kopf `b8c9d0e1f2a3`) | Ausgelieferte Revisionen ändern sich nie; nur der Ordner ist mit umgezogen |
+| Aktionsarten `nexus_soc.{restore,delete,install,upgrade,reboot,ban}` | Offene Vorschläge und Freigaben tragen sie, und das Gate findet den Ausführer nur über die Art. Die Oberfläche zeigt statt der Art ihren Namen |
+| Geheimnis `nexus-soc-ollama-key` und das Recht `secrets.read:nexus-soc-*` | Der Schlüssel für Nodvard KI wird nur über sein Label gefunden |
+| Rechte `soc.read` und `soc.manage` | Können in eigenen Rollen stehen; die Rechteprüfung kennt keinen Alias |
+| Ordner auf den Servern: `/var/lib/nexus-quarantine` (Quarantäne), `/var/lib/nexus-updates` (laufende Updates) | Die Pfade stehen in gespeicherten Funden, und laufende Updates werden über den Ordner fortgesetzt |
+| Alte Einträge in Protokoll, Meldungen, Läufen und Aktionen | Verlauf, wird nicht umgeschrieben |

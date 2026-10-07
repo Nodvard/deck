@@ -137,6 +137,28 @@ def test_self_inspect_returns_another_id(lab):
     assert code(lab.run()) == policy.SELF_UNKNOWN
 
 
+@pytest.mark.parametrize(("value", "expected"), [
+    ("2026-10-01T19:44:58.5Z", 1790883898.5),
+    ("2026-10-01T21:44:58+02:00", 1790883898.0),
+    (..., None),  # fehlt
+    ("0001-01-01T00:00:00Z", None),  # nie gestartet
+    ("gestern", None),
+    (1790883898, None),
+])
+def test_self_inspect_reads_when_the_helper_was_started(lab, value, expected):
+    # Der eigene Start (`State.StartedAt`) zeigt der Wiederaufnahme, ob der Docker-Dienst den Helfer zusammen mit dem
+    # neuen Container gestartet hat. Fehlt er oder ist er unbrauchbar, ist er unbekannt.
+    if value is ...:
+        del lab.helper["State"]["StartedAt"]
+    else:
+        lab.helper["State"]["StartedAt"] = value
+    with FakeEngine(lab.world) as fake:
+        engine = E.Engine(fake.path)
+        engine.negotiate()
+        me = target.inspect_self(engine, lab.helper["Id"])
+    assert me.id == lab.helper["Id"] and me.started_at == expected
+
+
 @pytest.mark.parametrize("project", [None, "", "Bad Name", "../x", "x" * 200])
 def test_not_compose(lab, project):
     labels = lab.helper["Config"]["Labels"]
@@ -314,8 +336,25 @@ def test_minor_tag(lab):
 
 @pytest.mark.parametrize("digests", [[], None, ["nodvard-deck@sha256:" + "a" * 64], ["ghcr.io/nodvard/deck@sha1:x"]])
 def test_not_from_registry(lab, digests):
+    # `[]`: im alten Store ein selbst gebautes Image (dort schreibt nur ein Pull `RepoDigests`), im containerd-Store ein
+    # Image ohne Namen im Repository (das bewegliche Tag liegt schon auf einem anderen).
     lab.image["RepoDigests"] = digests
     assert code(lab.run()) == policy.NOT_FROM_REGISTRY
+
+
+def test_containerd_store_names_a_digest_even_for_a_self_built_image():
+    # Aufnahme einer echten Engine mit containerd-Store: Das Image des Dashboards ist dort selbst gebaut
+    # (`u2live/deck-old:0.7.0`) und nur zusaetzlich als ghcr getaggt; die Registry kennt seinen Digest nicht. Die Engine
+    # leitet `RepoDigests` trotzdem aus den Namen ab: je Name derselbe Digest, der Digest des Images selbst. Fuer die
+    # Vorpruefung sieht es darum aus wie ein gezogenes Image, und sie ist bereit -- unterscheiden koennte es die
+    # Registry, die wertet die Vorpruefung aber nicht aus (siehe `policy.require_registry_digest`).
+    lab = Lab("docker29-api154-anon")
+    digest = lab.image["Descriptor"]["digest"]
+    assert lab.image["Id"] == digest
+    assert sorted(lab.image["RepoTags"]) == [policy.REPOSITORY + ":latest", "u2live/deck-old:0.7.0"]
+    assert sorted(lab.image["RepoDigests"]) == [f"{policy.REPOSITORY}@{digest}", f"u2live/deck-old@{digest}"]
+    result = lab.run()
+    assert result.ready and result.target.repo_digests == (f"{policy.REPOSITORY}@{digest}",)
 
 
 @pytest.mark.parametrize("version", [None, "", "0.7", "0.7.0-rc1", "v0.7.0", "0.7.١"])
@@ -619,6 +658,19 @@ def test_name_taken(lab):
     assert code(lab.run()) == policy.NAME_TAKEN
 
 
+@pytest.mark.parametrize(("name", "ready"), [
+    ("/Deck-1", True), ("/DECK.prod_2", True),
+    ("/déck", False), ("/deck\u0661", False), ("/\uff44eck", False), ("/dec\u212a", False), ("/deck\u200b", False),
+])
+def test_target_names_upper_case_yes_other_scripts_no(lab, name, ready):
+    lab.target["Name"] = name
+    result = lab.run()
+    if ready:
+        assert result.ready and result.target.name == name[1:]
+    else:
+        assert (code(result), result.detail) == (policy.UNKNOWN_FIELD, "name")
+
+
 def test_name_too_long_for_previous(lab):
     long_name = "/" + "n" * 125
     lab.target["Name"] = long_name
@@ -682,7 +734,7 @@ def test_own_id_from_docker_mountinfo():
 
 @pytest.mark.parametrize("root", [
     f"/containers/{ID}/hostname",                                   # /var/lib/docker als eigenes Dateisystem
-    f"/home/nico/.local/share/docker/containers/{ID}/hostname",     # rootless
+    f"/home/user/.local/share/docker/containers/{ID}/hostname",     # rootless
     f"/data/docker/containers/{ID}/hostname",                       # anderes data-root
 ])
 def test_own_id_from_other_roots(root):

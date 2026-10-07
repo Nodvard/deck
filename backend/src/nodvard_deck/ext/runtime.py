@@ -261,6 +261,14 @@ class LoadedExtension:
     mounted_routes: list[BaseRoute] = field(default_factory=list)
     tasks: list[SupervisedTask] = field(default_factory=list)
     settings_schema: dict[str, Any] | None = None
+    store_id: str | None = None
+    """Speicher-Kennung: die `id` der Registry-Zeile, an der Einstellungen und Zeitplaene haengen.
+    Gleich der Kennung (`manifest.id`), ausser die Erweiterung nutzt nach einer Umbenennung noch den
+    Stand einer alten Kennung (`legacy_ids`). Ohne Angabe die Kennung."""
+
+    def __post_init__(self) -> None:
+        if not self.store_id:
+            self.store_id = self.manifest.id
 
 
 # ---------------------------------------------------------------------------
@@ -276,11 +284,52 @@ class ExtensionRuntime:
         self.actions = ActionRegistry()
         self.scheduler = SchedulerRegistry()
         self.discovered: dict[str, Any] = {}  # ext_id -> DiscoveredExtension, vom letzten Scan
+        self.legacy_owner: dict[str, str] = {}
+        """Alte Kennung -> Kennung der Erweiterung, die sie in `legacy_ids` nennt (vom letzten Scan)."""
+        self.store_ids: dict[str, str] = {}
+        """Kennung -> Speicher-Kennung (`id` der Registry-Zeile), vom letzten Scan. Ohne alte
+        Kennungen steht hier dieselbe Kennung."""
+        self.refused: dict[str, str] = {}
+        """Kennung -> Grund, warum die Erweiterung wegen einer alten Kennung nicht geladen wird (vom
+        letzten Scan, siehe `discovery.resolve_legacy`). Ohne `legacy_ids` immer leer."""
+        self.refused_old: dict[str, str] = {}
+        """Alte Kennung -> Grund, warum ihre neue Version nicht geladen wird (vom letzten Scan, siehe
+        `discovery.LegacyResolution.refused_old`). Fuer die Zeile der alten Kennung nach einem Update."""
 
-    def mount_router(self, app: FastAPI, ext_id: str, router: APIRouter) -> list[BaseRoute]:
+    def canonical(self, ext_id: str) -> str:
+        """Die heutige Kennung zu `ext_id` (eine alte wird aufgeloest, alles andere bleibt)."""
+        return self.legacy_owner.get(ext_id, ext_id)
+
+    def store_id(self, ext_id: str) -> str:
+        """Die `id` der Registry-Zeile, die fuer `ext_id` (alte oder heutige Kennung) gilt. Ohne
+        Umbenennung (oder vor dem ersten Scan) ist das die Kennung selbst."""
+        canonical = self.canonical(ext_id)
+        return self.store_ids.get(canonical, canonical)
+
+    def is_stale_twin(self, row_id: str) -> bool:
+        """Eine Registry-Zeile mit alter Kennung, waehrend die Erweiterung eine andere Zeile nutzt
+        (entsteht nur nach Neuinstallation, Rueckweg aufs alte Image und erneutem Update). Sie wird
+        nie angefasst und nie geladen."""
+        owner = self.legacy_owner.get(row_id)
+        return owner is not None and self.store_ids.get(owner, owner) != row_id
+
+    def legacy_ids_of(self, ext_id: str) -> list[str]:
+        """Die alten Kennungen der Erweiterung `ext_id` (heutige Kennung), unter denen sie zusaetzlich
+        erreichbar ist (alte Adressen, siehe `services.extensions.enable_extension`), in der Reihenfolge
+        ihres Manifests. Nur die, die ihr laut letztem Scan auch gehoeren; ohne `legacy_ids` leer."""
+        manifest = getattr(self.discovered.get(ext_id), "manifest", None)
+        return [old for old in getattr(manifest, "legacy_ids", None) or [] if self.legacy_owner.get(old) == ext_id]
+
+    def mount_router(
+        self, app: FastAPI, ext_id: str, router: APIRouter, *, deprecated: bool = False
+    ) -> list[BaseRoute]:
         """Montiert unter /api/v1/ext/<id>/... und merkt sich die HINZUGEFUEGTEN
         Route-Objekte, damit `unmount_router` exakt sie wieder entfernen kann --
         `app.include_router()` selbst kennt kein Gegenstueck zum Entfernen.
+
+        `deprecated=True` markiert alle so montierten Routen im OpenAPI-Schema als veraltet (fuer die
+        alten Adressen einer umbenannten Erweiterung, `ExtensionManifest.legacy_ids`); sie bleiben im
+        Schema und antworten wie die Routen unter der heutigen Kennung.
 
         Fuegt bewusst an `app.state.ext_mount_index` EIN, nicht ans Ende von
         `app.router.routes`: main.py mountet dort spaeter (nur wenn `frontend/dist`
@@ -305,7 +354,7 @@ class ExtensionRuntime:
         `Depends()` fuer etwas Ueberschreibbares benutzt hat."""
         scratch = APIRouter()
         scratch.dependency_overrides_provider = app
-        scratch.include_router(router, prefix=f"/api/v1/ext/{ext_id}")
+        scratch.include_router(router, prefix=f"/api/v1/ext/{ext_id}", deprecated=deprecated)
         new_routes = list(scratch.routes)
         index = getattr(app.state, "ext_mount_index", len(app.router.routes))
         app.router.routes[index:index] = new_routes

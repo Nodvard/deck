@@ -256,6 +256,27 @@ describe("Cockpit", () => {
     expect(screen.queryByTestId("first-steps")).toBeNull();
   });
 
+  it("„Braucht Aufmerksamkeit“ nennt zur Quelle den Namen der Erweiterung, auch bei der alten Kennung einer umbenannten", async () => {
+    const overview = {
+      ...(respond("/api/v1/overview", "GET") as object),
+      attention: [
+        { id: "n1", ts: new Date().toISOString(), severity: "warning", title: "Lagebericht der Container-Wache", source_ext_id: "nexus-soc" },
+        { id: "n2", ts: new Date().toISOString(), severity: "warning", title: "Speicher fast voll", source_ext_id: "proxmox" },
+      ],
+    };
+    const extensions = [
+      { id: "shield", name: "Nodvard Shield", legacy_ids: ["nexus-soc"], state: "enabled" },
+      { id: "proxmox", name: "Proxmox VE", state: "enabled" },
+    ];
+    vi.stubGlobal("fetch", mockFetch({ "/overview": overview, "/extensions": extensions }));
+    renderCockpit();
+
+    const attention = await screen.findByTestId("attention");
+    await waitFor(() => expect(attention.textContent).toContain("Nodvard Shield"));
+    expect(attention.textContent).toContain("Proxmox VE");
+    expect(attention.textContent).not.toContain("nexus-soc");
+  });
+
   it("ohne Recht auf Server und Module: keine Schritte dafür (und keine Abfragen dazu)", async () => {
     login(["notifications.read"], false);
     const fetchMock = mockFetch({ "/dashboard/layouts": [{ id: "l1", name: "Standard", is_default: true, items: [], created_at: "", updated_at: "" }] });

@@ -19,7 +19,8 @@ und Wartungsfenster, Vorgabe aus `NODVARD_DECK_TIMEZONE`/`TZ`) und `audit.retent
 Tage, Vorgabe 30: wie lange Job-Laeufe samt Protokolldateien stehen bleiben, `services.job_retention`).
 `system.update_check.enabled`/`.channel` steuern "Nach Updates suchen" (`services.update_check`). Die Zeitzone hat einen Nebeneffekt
 (`core.timezone.set_timezone`: Jobs umstellen, neu planen); alle landen als
-`system.settings.changed` im Protokoll.
+`system.settings.changed` im Protokoll. Ebenso die vier Schluessel, die das Freigabe-Gate steuern
+(`autonomy.mode`, `autonomy.max_risk`, `security.deny_patterns`, `maintenance.windows`).
 
 Permission: `settings.write` fuer BEIDE Richtungen -- docs/03 §1 listet nur diesen
 einen Schluessel (kein separates `settings.read`), Lesen und Schreiben globaler
@@ -28,6 +29,7 @@ Einstellungen ist in dieser Runde eine einheitlich administrative Angelegenheit.
 
 from __future__ import annotations
 
+import json
 from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -79,15 +81,29 @@ _DEFAULTS: dict[str, Any] = {
 """Feste Vorgaben. `system.timezone` und `audit.retention_days` haben keine feste: ihre Vorgabe
 kommt aus der Umgebung (`_default_for`)."""
 _AUDITED_KEYS = {
+    "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
     "system.timezone", "audit.retention_days", "jobs.run_retention_days", "hosts.reachability.enabled",
     "hosts.reachability.interval_minutes", "system.update_check.enabled", "system.update_check.channel",
     "ssh.confirm_new_host_keys",
 }
-"""Diese Einstellungen landen mit altem und neuem Wert im Protokoll (`system.settings.changed`)."""
+"""Diese Einstellungen landen mit altem und neuem Wert im Protokoll (`system.settings.changed`).
+Dazu gehoeren die vier, die das Freigabe-Gate steuern: wer die Autonomie lockert oder Sperrmuster
+und Wartungsfenster aendert, hinterlaesst eine Spur."""
+_AUDIT_MAX_JSON_CHARS = 8000
+"""Laenger darf eine Liste im Protokoll nicht werden (JSON-Zeichen)."""
 _REACHABILITY_KEYS = {"hosts.reachability.enabled", "hosts.reachability.interval_minutes"}
 _UPDATE_CHECK_JOB_KEYS = {"system.update_check.enabled"}
 _VALID_AUTONOMY_MODES = {"propose", "full"}
 _VALID_RISKS = {"low", "medium", "high", "critical"}
+
+
+def _audit_value(value: Any) -> Any:
+    """Der Wert fuers Protokoll. Sperrmuster und Wartungsfenster sind Listen ohne Obergrenze; eine
+    sehr lange steht nur mit ihrer Laenge da (`{"truncated": true, "count": n}`), damit eine einzelne
+    Zeile nicht beliebig waechst. Alle anderen Werte sind kurz und bleiben, wie sie sind."""
+    if isinstance(value, list) and len(json.dumps(value, ensure_ascii=False)) > _AUDIT_MAX_JSON_CHARS:
+        return {"truncated": True, "count": len(value)}
+    return value
 
 
 def _validate_maintenance_windows(value: list) -> None:
@@ -247,7 +263,7 @@ async def put_setting(
             await session.commit()
             await update_check_service.sync_job()
     if key in _AUDITED_KEYS:
-        detail: dict[str, Any] = {"key": key, "old": previous, "new": payload.value}
+        detail: dict[str, Any] = {"key": key, "old": _audit_value(previous), "new": _audit_value(payload.value)}
         if changed_jobs is not None:
             detail["jobs_rescheduled"] = changed_jobs
         await audit_service.log(
