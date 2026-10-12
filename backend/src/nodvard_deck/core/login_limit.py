@@ -33,14 +33,18 @@ Zwei-Faktor-Codes der letzten 24 Stunden aus dem Protokoll wieder ein (`restore_
 `restore_failures`). Sonst finge die Grenze je Konto nach jedem Neustart von vorn an, und wer
 Sitzung und Passwort hat, koennte im Wechsel raten und neu starten.
 
-Die Client-IP kommt aus `request.client.host`; hinter einem spaeteren
-Reverse-Proxy saehen alle Anfragen gleich aus -- dann muss die Proxy-IP-Erkennung
-(uvicorn `--proxy-headers`/`--forwarded-allow-ips`) passend gesetzt werden.
+IPv6-Adressen zaehlen je /64-Netz (`ip_bucket`): Ein Anschluss bekommt meist ein ganzes /64 und koennte sonst mit
+jeder neuen Adresse wieder von vorn raten. IPv4 zaehlt je Adresse. Ins Protokoll kommt weiter die echte Adresse.
+
+Die Client-IP kommt aus `request.client.host`. Hinter einem Reverse-Proxy ist das die echte Adresse nur, wenn
+der Proxy unter `system.trusted_proxies` eingetragen ist (`api/proxy_headers.py`); sonst saehen alle Anfragen
+gleich aus und teilten sich die Grenze je IP.
 """
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import math
 import threading
 import time
@@ -114,13 +118,41 @@ def lockout_message(retry_after: int) -> str:
     return f"Zu viele Fehlversuche. Bitte in {minutes} {unit} erneut versuchen."
 
 
+IPV6_BUCKET_PREFIX = 64
+"""IPv6-Adressen zaehlen je Netz dieser Groesse."""
+
+
+def ip_bucket(ip: str | None) -> str:
+    """Wofuer die Grenzen je Adresse zaehlen: IPv4 je Adresse, IPv6 je /64 (`2001:db8:1:2::/64`). Eine IPv4-Adresse in
+    IPv6-Schreibweise (`::ffff:192.0.2.1`) zaehlt als IPv4. Was keine Adresse ist (`unbekannt`, Schluessel wie
+    `konto:<id>`), bleibt, wie es ist."""
+    if not ip:
+        return _UNKNOWN_IP
+    try:
+        addr = ipaddress.ip_address(ip.split("%", 1)[0])
+    except ValueError:
+        return ip
+    if isinstance(addr, ipaddress.IPv6Address):
+        if addr.ipv4_mapped is not None:
+            return str(addr.ipv4_mapped)
+        return str(ipaddress.IPv6Network((addr, IPV6_BUCKET_PREFIX), strict=False))
+    return str(addr)
+
+
 @dataclass
 class Attempt:
     ip: str
+    """Die echte Adresse (fuers Protokoll)."""
     username: str
     ts: float
     mfa_key: str | None = None
     account: str | None = None
+    bucket: str = ""
+    """Wofuer gezaehlt wird (`ip_bucket`)."""
+
+    def __post_init__(self) -> None:
+        if not self.bucket:
+            self.bucket = ip_bucket(self.ip)
 
 
 _lock = threading.Lock()
@@ -227,7 +259,8 @@ def begin(
     `Locked` und zaehlt den Versuch sonst sofort mit. `account` (Konto-Kennung) nur beim
     zweiten Faktor angeben: dann gilt zusaetzlich die IP-unabhaengige Grenze je Konto."""
     ip = ip or _UNKNOWN_IP
-    user_key = (ip, username)
+    bucket = ip_bucket(ip)
+    user_key = (bucket, username)
     with _lock:
         now = _now()
         mfa_key = None
@@ -239,7 +272,7 @@ def begin(
                 raise MfaExhausted()
 
         user_dq = _pruned(_by_user, user_key, now)
-        ip_dq = _pruned(_by_ip, ip, now)
+        ip_dq = _pruned(_by_ip, bucket, now)
         wait_user = _retry_after(user_dq, MAX_FAILURES_PER_USER, now)
         wait_ip = _retry_after(ip_dq, MAX_FAILURES_PER_IP, now)
         wait_account = 0
@@ -251,19 +284,19 @@ def begin(
         if not wait_user:
             _announced.discard((SCOPE_USER, *user_key))
         if not wait_ip:
-            _announced.discard((SCOPE_IP, ip))
+            _announced.discard((SCOPE_IP, bucket))
         if wait_user or wait_ip or wait_account:
             raise Locked(max(wait_user, wait_ip, wait_account))
 
         _by_user.setdefault(user_key, deque()).append(now)
-        _by_ip.setdefault(ip, deque()).append(now)
+        _by_ip.setdefault(bucket, deque()).append(now)
         if account is not None:
             _by_account.setdefault(account, deque()).append(now)
         if mfa_key is not None:
             _mfa.setdefault(mfa_key, (0, now))
         if len(_by_user) + len(_by_ip) + len(_mfa) + len(_by_account) + len(_mfa_used) > _SWEEP_THRESHOLD:
             _sweep(now)
-        return Attempt(ip=ip, username=username, ts=now, mfa_key=mfa_key, account=account)
+        return Attempt(ip=ip, username=username, ts=now, mfa_key=mfa_key, account=account, bucket=bucket)
 
 
 def failed(attempt: Attempt) -> list[str]:
@@ -277,8 +310,8 @@ def failed(attempt: Attempt) -> list[str]:
             count, first = _mfa.get(attempt.mfa_key, (0, now))
             _mfa[attempt.mfa_key] = (count + 1, first)
         checks = (
-            (SCOPE_USER, _by_user, (attempt.ip, attempt.username), MAX_FAILURES_PER_USER),
-            (SCOPE_IP, _by_ip, attempt.ip, MAX_FAILURES_PER_IP),
+            (SCOPE_USER, _by_user, (attempt.bucket, attempt.username), MAX_FAILURES_PER_USER),
+            (SCOPE_IP, _by_ip, attempt.bucket, MAX_FAILURES_PER_IP),
         )
         for scope, store, key, limit in checks:
             marker = (scope, *key) if isinstance(key, tuple) else (scope, key)
@@ -314,8 +347,8 @@ def release(attempt: Attempt) -> None:
     """Der Versuch zaehlt nicht (Passwort richtig, der zweite Faktor folgt noch) --
     die bisherigen Fehlversuche bleiben aber stehen, bis die Anmeldung ganz klappt."""
     with _lock:
-        _discard(_by_user.get((attempt.ip, attempt.username)), attempt.ts)
-        _discard(_by_ip.get(attempt.ip), attempt.ts)
+        _discard(_by_user.get((attempt.bucket, attempt.username)), attempt.ts)
+        _discard(_by_ip.get(attempt.bucket), attempt.ts)
         if attempt.account is not None:
             _discard(_by_account.get(attempt.account), attempt.ts)
 
@@ -324,9 +357,9 @@ def succeeded(attempt: Attempt) -> None:
     """Anmeldung komplett: Zaehler fuer (IP, Benutzername) und das `mfa_token` weg; beim
     IP-Zaehler faellt nur dieser eine Versuch heraus (andere Namen bleiben gezaehlt)."""
     with _lock:
-        _by_user.pop((attempt.ip, attempt.username), None)
-        _announced.discard((SCOPE_USER, attempt.ip, attempt.username))
-        _discard(_by_ip.get(attempt.ip), attempt.ts)
+        _by_user.pop((attempt.bucket, attempt.username), None)
+        _announced.discard((SCOPE_USER, attempt.bucket, attempt.username))
+        _discard(_by_ip.get(attempt.bucket), attempt.ts)
         if attempt.account is not None:
             _discard(_by_account.get(attempt.account), attempt.ts)
         if attempt.mfa_key is not None:
@@ -407,5 +440,5 @@ def restore_failures(ip: str, username: str, wall_times: Iterable[float], *, now
             now=_now(),
             now_wall=_wall_now() if now_wall is None else now_wall,
         )
-        _merge(_by_user, (ip, username), restored)
+        _merge(_by_user, (ip_bucket(ip), username), restored)
         return len(restored)

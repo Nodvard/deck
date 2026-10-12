@@ -22,7 +22,6 @@ Opt-in ueber `net.outbound.insecure_tls` wie bei `ProxmoxConnector`."""
 from __future__ import annotations
 
 import posixpath
-import xml.etree.ElementTree as ET
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import datetime
@@ -31,6 +30,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, unquote, urlsplit
 
 import httpx
+from defusedxml import ElementTree as SafeET
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -208,7 +208,9 @@ def _parse_propfind(body: bytes, *, skip_href: str | None, strip_prefix: str) ->
     einen nicht existierenden, doppelt verschachtelten Pfad (404). `strip_prefix`
     macht `entry.path` zum LOGISCHEN, wurzel-relativen Pfad, den auch `stat()`/
     `list_dir()`/`open_read()` etc. selbst entgegennehmen -- rundtrip-faehig."""
-    root = ET.fromstring(body)
+    # defusedxml: Die Antwort kommt vom Server aus den Einstellungen, dem vertrauen wir nicht blind. Eine WebDAV-Antwort
+    # hat nie eine DTD oder Entitaeten; so etwas (XXE, Entity-Bombe) lehnt der Parser ab, statt es aufzuloesen.
+    root = SafeET.fromstring(body, forbid_dtd=True)
     entries: list[WebDavEntry] = []
     for response in root.findall(f"{_DAV}response"):
         href_el = response.find(f"{_DAV}href")
@@ -367,7 +369,8 @@ class NextcloudConnector:
     def _parsed(body: bytes, *, skip_href: str | None, strip_prefix: str) -> list[WebDavEntry]:
         try:
             return _parse_propfind(body, skip_href=skip_href, strip_prefix=strip_prefix)
-        except (ET.ParseError, ValueError) as exc:
+        # LookupError: unbekannte Kodierung im XML-Kopf (`encoding="..."`), UnicodeError: Bytes passen nicht dazu.
+        except (SafeET.ParseError, ValueError, LookupError, UnicodeError) as exc:
             # Z. B. eine Anmeldeseite (HTML) oder ein Proxy-Fehler mit Status 200 statt der WebDAV-Antwort.
             raise WebDavError(
                 "Nextcloud hat keine gültige WebDAV-Antwort geschickt. Prüfe die Adresse in den Einstellungen "

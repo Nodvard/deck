@@ -1,6 +1,7 @@
 """network-Extension ("Netzwerk") -- Pi-hole (v6) und Nginx Proxy Manager im Dashboard.
 
-- Lesen (`hosts.read`): `GET /pihole`, `GET /npm`, die beiden Kachel-Endpunkte.
+- Lesen (`hosts.read`): `GET /pihole`, `GET /npm`, die beiden Kachel-Endpunkte und der Adress-Check
+  `GET /npm/address-check` (welcher Container hinter jedem Proxy-Host steckt, `address_check.py`).
 - Aendern (`hosts.execute`): Blockierung pausieren/fortsetzen, Proxy-Host ein/aus --
   immer als Vorschlag ans Aktions-Gate (`ctx.actions.propose`), ausgefuehrt erst nach
   Freigabe durch `NetworkActionExecutor` (actions.py). Die Seite gibt selbst frei,
@@ -50,6 +51,7 @@ from .certwatch import CertWatchJob
 from .config import NotConfigured
 from .npm import NpmError
 from .service import NetworkService
+from .suggestions import NpmAppSuggestions
 from .widgets import certificate_rows, pihole_rows
 
 _WIDGET_ITEM = ListItem(title="{{ title }}", subtitle="{{ subtitle }}", badge=Badge(text="{{ label }}", tone="{{ tone }}"))
@@ -66,6 +68,8 @@ class Extension(NodvardExtension):
         service = self._service
 
         ctx.capabilities.provide(NetworkActionExecutor(service))
+        # Proxy-Hosts als Vorschlaege fuer App-Kacheln (Seite "Apps"), nur lesend.
+        ctx.capabilities.provide(NpmAppSuggestions(service))
         for spec in ACTION_SPECS:
             ctx.actions.register(spec)
 
@@ -96,6 +100,10 @@ class Extension(NodvardExtension):
         @read_router.get("/npm")
         async def npm_overview() -> dict[str, Any]:
             return await service.npm_status()
+
+        @read_router.get("/npm/address-check")
+        async def npm_address_check() -> dict[str, Any]:
+            return await service.address_check()
 
         @read_router.get("/widgets/pihole")
         async def pihole_widget() -> dict[str, Any]:

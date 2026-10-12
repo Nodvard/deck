@@ -25,7 +25,9 @@ class Secret(Base, IdMixin, TimestampMixin):
     1. Kein API-Endpunkt gibt `ciphertext` oder Klartext zurueck. Nie, auch nicht fuer den
        Owner. Schreiben und Ersetzen ja, Lesen nein.
     2. Extensions bekommen ein Handle; der Klartext lebt nur in `ctx.vault_use(...)`.
-    3. Jede Materialisierung schreibt eine Audit-Zeile (Label + Verwender, ohne Wert).
+    3. Materialisierungen werden protokolliert (Label + Verwender, ohne Wert), gebuendelt: hoechstens
+       eine Audit-Zeile je Stunde und Verwender (`core.vault.USE_NOTE_INTERVAL`). Module fragen regelmaessig
+       ab; eine Zeile je Zugriff flutete das Protokoll.
     4. Der Master-Key liegt nie in der Datenbank.
     """
 
@@ -45,6 +47,27 @@ class Secret(Base, IdMixin, TimestampMixin):
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     secret_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     """Nie sensibel — z. B. der Fingerprint eines Public Keys."""
+    expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    """Wann der Zugang ablaeuft oder erneuert werden soll (z. B. ein Token mit Ablaufdatum). Nur Angabe,
+    das Dashboard sperrt nichts danach."""
+
+
+class SecretUsage(Base):
+    """Wer ein Secret tatsaechlich benutzt hat und wann zuletzt -- je Verwender eine Zeile.
+
+    Geschrieben von `core.vault.vault_use()`, gedrosselt wie `Secret.last_used_at` (hoechstens einmal je
+    Stunde und Verwender). Feste Bindungen (Besitzer-Modul, Server-Zugang, Zwei-Faktor) stehen nicht hier,
+    sondern werden beim Lesen aus `owner_ext_id`, `host_credentials` und `users` abgeleitet."""
+
+    __tablename__ = "secret_usages"
+
+    secret_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("secrets.id", ondelete="CASCADE"), primary_key=True
+    )
+    consumer_type: Mapped[str] = mapped_column(String(16), primary_key=True)  # extension | user | ...
+    consumer_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    first_used_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class SecretGrant(Base):

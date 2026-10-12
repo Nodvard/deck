@@ -151,6 +151,14 @@ describe("Karte Sicherung", () => {
     expect(screen.getByRole("button", { name: /Eingebundener Ordner \/backups/ })).toBeDisabled();
   });
 
+  it("Ordner nicht eingebunden: der Satz verlinkt den Abschnitt zum Sichern in der Anleitung", async () => {
+    mockApi({ "GET /system/backups": () => overview() });
+    render(<BackupCard />);
+    const link = await screen.findByTestId("external-guide");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#101-in-der-oberfläche-empfohlen");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
   it("Ordner eingebunden: kein Erklärsatz, der Knopf geht", async () => {
     const base = overview();
     mockApi({ "GET /system/backups": () => overview({ target: { ...base.target, external_available: true } }) });

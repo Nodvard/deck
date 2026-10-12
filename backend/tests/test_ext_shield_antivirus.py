@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "shi
 
 from nodvard_deck.core.deny_patterns import match_deny_patterns  # noqa: E402
 from nodvard_deck_ext_shield import antivirus as av  # noqa: E402
+from nodvard_deck_ext_shield import audit_job as aj  # noqa: E402
 
 # Eine feste Marke fuer die Tests, die Befehl und Auswertung selbst verbinden (im Betrieb zieht der
 # Defender je Lauf eine neue: `av.new_rc_mark()`).
@@ -67,6 +68,53 @@ def test_the_mark_is_random_per_run_and_has_the_agreed_format():
     assert all(len(f) == 1 for f in found), found
     assert len({f[0] for f in found}) == len(commands)
     assert not any("nexus-rc" in c for c in commands)
+
+
+@pytest.mark.parametrize(
+    ("folder", "expected"),
+    [
+        ("/srv/backup", "^/srv/backup(/|$)"),
+        ("/srv/backup/", "^/srv/backup(/|$)"),
+        ("//srv/./medien//", "^/srv/medien(/|$)"),
+        ("/srv/a+b (alt)/[x]", "^/srv/a\\+b \\(alt\\)/\\[x\\](/|$)"),
+        ("/srv/backup/*", "^/srv/backup(/|$)"),
+        ("/srv/backup/**/", "^/srv/backup(/|$)"),
+        ("/srv/media*", "^/srv/media\\*(/|$)"),
+        ("/*", None),
+        ("/home/../etc", None),
+        ("/srv/a/..", None),
+        ("/srv/a..b", "^/srv/a\\.\\.b(/|$)"),
+        ("/srv/a\x00b", None),
+        ("/" + "a" * 510, "^/" + "a" * 510 + "(/|$)"),
+        ("/" + "a" * 511, None),
+        ("/" + "ä" * 256, None),  # 513 Bytes, auch wenn es nur 257 Zeichen sind
+        ("/opt/v1.2/*?{}|^$\\", "^/opt/v1\\.2/\\*\\?\\{\\}\\|\\^\\$\\\\(/|$)"),
+        ("/", None),
+        ("medien", None),
+        ("", None),
+        ("/srv/a\nb", None),
+        (5, None),
+    ],
+)
+def test_scan_exclusions_are_exact_folders(folder, expected):
+    assert av.scan_exclude_regex(folder) == expected
+
+
+def test_scan_exclusions_do_not_catch_neighbours():
+    """Vorher galt `^/srv/backup` als Praefix: `/srv/backups-wichtig` blieb ungeprueft, ebenso `/devel` wegen `/dev`.
+    Fuer die maskierten Zeichen verhalten sich POSIX ERE und Pythons `re` gleich."""
+    backup = re.compile(av.scan_exclude_regex("/srv/backup"))
+    assert backup.search("/srv/backup") and backup.search("/srv/backup/2026")
+    assert not backup.search("/srv/backups-wichtig")
+    odd = re.compile(av.scan_exclude_regex("/srv/a+b (alt)"))
+    assert odd.search("/srv/a+b (alt)/x") and not odd.search("/srv/aab (alt)")
+    dev = re.compile(av.scan_exclude_regex("/dev"))
+    assert dev.search("/dev/shm") and not dev.search("/devel")
+
+    cmd = av.build_scan_command(["/"], exclude=["/srv/backup/", "relativ", "/"])
+    assert "--exclude-dir='^/srv/backup(/|$)'" in cmd
+    assert "--exclude-dir='^/dev(/|$)'" in cmd and "--exclude-dir='^/proc(/|$)'" in cmd
+    assert "relativ" not in cmd and "--exclude-dir='^/(/|$)'" not in cmd
 
 
 @pytest.mark.parametrize("bad", ["@@nexus-rc=", "@@scan-rc-XYZ=", "@@scan-rc-0123456789abcdef", 'x"; rm -rf /; echo "', ""])
@@ -517,7 +565,8 @@ def test_commands_pass_the_deny_list_and_quote_paths():
         av.quarantine_command("/tmp/eicar.com", "f_1_eicar.com"),
         av.restore_command("/var/lib/nexus-quarantine/f_1_eicar.com", "/tmp/eicar.com", "644"),
         av.delete_command("/var/lib/nexus-quarantine/f_1_eicar.com"),
-        av.LYNIS_COMMAND,
+        # Das Audit selbst (entkoppelt, `audit_job`); der alte Direktbefehl `LYNIS_COMMAND` ist weg.
+        aj.lynis_command("audit_0123456789abcdef"),
         av.STATUS_COMMAND,
     ]
     for cmd in commands[1:]:
@@ -1742,6 +1791,200 @@ async def test_scan_finding_is_quarantined_notified_and_audited():
     await engine.dispose()
 
 
+def _widget_rows(defender) -> list[dict]:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from nodvard_deck_ext_shield.defender_api import build_routers
+
+    read, _ = build_routers(SimpleNamespace(api=SimpleNamespace(current_actor=lambda: None)), defender)
+    app = FastAPI()
+    app.include_router(read)
+    return TestClient(app).get("/defender/widgets/protection").json()["data"]
+
+
+CLAM_STATUS = "@@clam\nClamAV 1.4.3/27800/Wed Oct  7 08:23:12 2026\n@@fresh\nactive\n@@lynis\nnone\n@@quarantine\n0\n@@os\ndebian\n@@end\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("auto_quarantine", [True, False])
+async def test_widget_rows_and_header_agree_after_quarantine_and_delete_without_a_new_scan(auto_quarantine):
+    """Fehler in 0.7.0: Nach Fund, Quarantaene und endgueltigem Loeschen stand oben "keine Bedrohung",
+    in der Zeile des Servers aber rot "Bedrohung". Kopfzeile, Zeile und Schutzwert kommen jetzt aus denselben Funden."""
+    import asyncio
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
+        "echo @@clam": CLAM_STATUS, "clamscan -r": CLAM_INFECTED, "mv -f": "@@mode=755\n",
+    })
+
+    async def _settings():
+        return {"auto_quarantine": auto_quarantine}
+
+    ctx.settings = SimpleNamespace(get=_settings)
+    defender = Defender(ctx)
+    await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="manual")
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if not defender.is_running("h1", "quick"):
+            break
+    findings = await defender.list_findings()
+    assert len(findings) == 2
+
+    if not auto_quarantine:
+        # Funde offen: oben und in der Zeile dieselbe Zahl, beide rot.
+        rows = _widget_rows(defender)
+        assert (rows[0]["label"], rows[0]["tone"]) == ("2 Bedrohungen", "danger")
+        assert (rows[1]["title"], rows[1]["label"], rows[1]["tone"]) == ("Raspberry Pi", "2 Bedrohungen", "danger")
+        for f in findings:
+            ok, _ = await defender.quarantine(f["id"], actor=None)
+            assert ok
+
+    # In Quarantaene: keine Bedrohung mehr, die Zeile sagt es statt rot "Bedrohung".
+    overview = await defender.overview()
+    assert overview["summary"]["open_threats"] == 0 and overview["summary"]["quarantined"] == 2
+    assert overview["hosts"][0]["open_findings"] == 0 and overview["hosts"][0]["last_scan_outcome"] == "quarantined"
+    rows = _widget_rows(defender)
+    assert rows[0]["label"] == "keine Bedrohung" and rows[0]["tone"] != "danger"
+    assert (rows[1]["label"], rows[1]["tone"]) == ("in Quarantäne", "warn")
+
+    # Endgueltig geloescht (ueber die Freigabe): "bereinigt", ohne neuen Scan.
+    for f in findings:
+        await defender.apply_action_result(f["id"], "delete", True, "")
+    overview = await defender.overview()
+    assert overview["summary"]["quarantined"] == 0 and overview["hosts"][0]["last_scan_outcome"] == "cleaned"
+    assert overview["hosts"][0]["last_scan"]["status"] == "infected", "der Scan selbst bleibt, wie er war"
+    rows = _widget_rows(defender)
+    assert (rows[0]["label"], rows[1]["label"], rows[1]["tone"]) == ("keine Bedrohung", "bereinigt", "good")
+    assert sum("clamscan -r" in c for c in ctx.commands) == 1, "kein neuer Scan noetig"
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_open_finding_of_the_watch_shows_in_the_row_even_after_a_clean_scan():
+    """Ein offener Fund des Waechters zaehlt oben als Bedrohung: die Zeile darf dann nicht "sauber" sagen."""
+    import asyncio
+    from datetime import UTC, datetime
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, FindingRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
+        "echo @@clam": CLAM_STATUS, "clamscan -r": f"Scanned files: 3\nInfected files: 0\n{MARK}0\n",
+    })
+    defender = Defender(ctx)
+    await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="manual")
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if not defender.is_running("h1", "quick"):
+            break
+    async with ctx._session() as session:
+        session.add(FindingRecord(id="w1", scan_id="watch-1", host_id="h1", host_name="Raspberry Pi", path="/tmp/eicar.com",
+                                  signature="Win.Test.EICAR_HC-1", status="detected", detected_at=datetime.now(UTC)))
+    rows = _widget_rows(defender)
+    assert (rows[0]["label"], rows[0]["tone"]) == ("1 Bedrohung", "danger")
+    assert (rows[1]["label"], rows[1]["tone"]) == ("1 Bedrohung", "danger")
+    await engine.dispose()
+
+
+def test_widget_row_labels_for_accepted_findings_and_stale_signatures():
+    class _Def:
+        async def overview(self):
+            infected = {"status": "infected"}
+            return {"summary": {"score": 70, "protected": 3, "hosts": 3, "quarantined": 1, "open_threats": 0},
+                    "hosts": [
+                        {"host_name": "harmlos", "clamav_installed": True, "last_scan": infected, "open_findings": 0,
+                         "last_scan_outcome": "accepted"},
+                        # In Quarantaene, aber Signaturen veraltet: der Hinweis, der etwas zu tun gibt, geht vor.
+                        {"host_name": "alt", "clamav_installed": True, "signature_stale": True, "last_scan": infected,
+                         "open_findings": 0, "last_scan_outcome": "quarantined"},
+                        # ClamAV inzwischen entfernt: das sagt die Zeile, nicht "bereinigt".
+                        {"host_name": "ohne", "clamav_installed": False, "last_scan": infected, "open_findings": 0,
+                         "last_scan_outcome": "cleaned"},
+                    ]}
+
+    rows = _widget_rows(_Def())
+    assert (rows[1]["label"], rows[1]["tone"]) == ("als harmlos markiert", "neutral")
+    assert (rows[2]["label"], rows[2]["tone"]) == ("Signaturen veraltet", "warn")
+    assert (rows[3]["label"], rows[3]["tone"]) == ("ohne Virenschutz", "warn")
+
+
+@pytest.mark.asyncio
+async def test_a_finding_the_watch_finds_again_still_counts_for_the_last_scan():
+    """Der Waechter findet denselben offenen Fund wieder und haengt ihn an sich. Wird er danach in Quarantaene gelegt,
+    darf die Zeile nicht wieder rot "Bedrohung" sagen, waehrend oben "keine Bedrohung" steht."""
+    import asyncio
+    from datetime import UTC, datetime, timedelta
+
+    from sqlalchemy import select
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, FindingRecord, ScanRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {
+        "echo @@clam": CLAM_STATUS, "clamscan -r": CLAM_INFECTED, "mv -f": "@@mode=755\n",
+    })
+
+    async def _settings():
+        return {"auto_quarantine": False}
+
+    ctx.settings = SimpleNamespace(get=_settings)
+    defender = Defender(ctx)
+    await defender.start_scans(await defender.target_hosts(), "quick", paths=None, trigger="manual")
+    for _ in range(50):
+        await asyncio.sleep(0.02)
+        if not defender.is_running("h1", "quick"):
+            break
+    # Wie `_run_scan` beim Waechter: ein spaeterer Lauf findet dieselben offenen Funde und haengt sie an sich.
+    async with ctx._session() as session:
+        session.add(ScanRecord(id="watch-1", host_id="h1", host_name="Raspberry Pi", kind="watch", paths=["/tmp"],
+                               trigger="schedule", status="infected", infected=2, started_at=datetime.now(UTC) + timedelta(minutes=1)))
+        for row in (await session.execute(select(FindingRecord))).scalars():
+            row.scan_id = "watch-1"
+    findings = await defender.list_findings()
+    assert len(findings) == 2 and {f["scan_id"] for f in findings} == {"watch-1"}
+    for f in findings:
+        ok, _ = await defender.quarantine(f["id"], actor=None)
+        assert ok
+    rows = _widget_rows(defender)
+    assert rows[0]["label"] == "keine Bedrohung"
+    assert (rows[1]["label"], rows[1]["tone"]) == ("in Quarantäne", "warn")
+    await engine.dispose()
+
+
+def test_widget_row_keeps_the_threat_when_no_finding_was_stored():
+    """Befallener Scan ohne gespeicherten Fund (etwa abgeschnittene Ausgabe): nie eine Entwarnung raten."""
+    from nodvard_deck_ext_shield.defender import scan_outcome
+
+    assert scan_outcome(None) is None and scan_outcome({}) is None
+    assert scan_outcome({"detected": 1, "quarantined": 1}) == "open"
+    assert scan_outcome({"quarantined": 1, "deleted": 2}) == "quarantined"
+    assert scan_outcome({"deleted": 2}) == "cleaned"
+    # Ignoriert oder wiederhergestellt: die Datei liegt noch da -- nicht "bereinigt".
+    assert scan_outcome({"deleted": 1, "restored": 1}) == "accepted"
+    assert scan_outcome({"ignored": 1}) == "accepted"
+
+    class _Def:
+        async def overview(self):
+            return {"summary": {"score": 70, "protected": 1, "hosts": 1, "quarantined": 0, "open_threats": 0},
+                    "hosts": [{"host_name": "pve", "clamav_installed": True, "last_scan": {"status": "infected"},
+                               "open_findings": 0, "last_scan_outcome": None}]}
+
+    rows = _widget_rows(_Def())
+    assert (rows[1]["label"], rows[1]["tone"]) == ("Bedrohung", "danger")
+
+
 async def _scan_once(ctx, kind: str = "quick"):
     import asyncio
 
@@ -2099,6 +2342,127 @@ def test_morgen_briefing_fasst_zusammen() -> None:
     assert build_briefing(overview, hosts)[2] == "critical"
 
 
+def test_briefing_names_waiting_approvals_and_container_crashes() -> None:
+    from types import SimpleNamespace
+
+    from nodvard_deck_ext_shield.defender import build_briefing
+
+    overview = {
+        "summary": {"score": 90, "protected": 1, "hosts": 1, "open_threats": 0, "quarantined": 0, "findings_30d": 0,
+                    "avg_hardening": None},
+        "hosts": [{"host_name": "pi", "reachable": True, "clamav_installed": True, "freshclam_active": True, "last_scan": None}],
+    }
+    hosts = [SimpleNamespace(name="pi", display_name=None, status=SimpleNamespace(value="up"))]
+    assert build_briefing(overview, hosts)[2] == "info"
+
+    title, body, level = build_briefing(overview, hosts, waiting=2)
+    assert level == "warning" and "etwas zu tun" in title
+    assert "Freigaben: 2 Vorschläge warten auf deine Bestätigung (unter „Aktionen“)" in body
+    assert "Freigaben: 1 Vorschlag wartet auf deine Bestätigung" in build_briefing(overview, hosts, waiting=1)[1]
+    assert "Freigaben" not in build_briefing(overview, hosts, waiting=0)[1]
+
+    crashes = [{"host": "docker", "target": "nginx", "count": 3, "open": False},
+               {"host": "docker", "target": "redis", "count": 1, "open": False}]
+    title, body, level = build_briefing(overview, hosts, crashes=crashes)
+    assert "Container-Abstürze (24 h): nginx auf docker 3×, redis auf docker 1×" in body
+    assert level == "info", "erledigte Abstürze stehen da, machen den Bericht aber nicht gelb"
+    crashes[1]["open"] = True
+    title, body, level = build_briefing(overview, hosts, crashes=crashes)
+    assert "redis auf docker 1× (noch offen)" in body and level == "warning"
+    many = [{"host": "h", "target": f"c{i}", "count": 1, "open": False} for i in range(6)]
+    assert "c3 auf h 1× und 2 weitere" in build_briefing(overview, hosts, crashes=many)[1]
+
+
+@pytest.mark.asyncio
+async def test_send_briefing_counts_crashes_of_the_last_day_and_links_the_approvals():
+    from datetime import UTC, datetime, timedelta
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, IncidentRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    sm = async_sessionmaker(engine, expire_on_commit=False)
+    now = datetime.now(UTC)
+    async with sm() as s:
+        for i, (target, status, age_h, crash, details) in enumerate([
+            ("nginx", "resolved", 1, True, {}), ("nginx", "proposed", 2, True, {}), ("redis", "resolved", 30, True, {}),
+            ("db", "open", 1, False, {}),
+            # Ein zusammengefasster Vorfall (Absturzschleife) zaehlt mit allen Wiederholungen.
+            ("worker", "resolved", 3, True, {"occurrences": 12}),
+            # Die KI war nicht erreichbar ("geprueft", aber niemand hat ihn angesehen): gilt als offen.
+            ("cron", "reviewed", 4, True, {}),
+        ]):
+            s.add(IncidentRecord(id=f"i{i}", host_id="h1", host_name="docker", target=target, message="x", is_crash=crash,
+                                 details=details, status=status, created_at=now - timedelta(hours=age_h)))
+        await s.commit()
+    ctx = _FakeCtx(sm, {})
+
+    async def waiting_count():
+        return 1
+
+    ctx.actions = SimpleNamespace(waiting_count=waiting_count)
+    result = await Defender(ctx).send_briefing()
+    assert (
+        "Container-Abstürze (24 h): nginx auf docker 2× (noch offen), cron auf docker 1× (noch offen), worker auf docker 12×"
+        in result["body"]
+    ), "noch offene zuerst, dann die meisten"
+    assert "redis" not in result["body"], "älter als 24 Stunden"
+    assert "Freigaben: 1 Vorschlag wartet" in result["body"]
+    labels = [a["label"] for a in ctx.notes[0].payload["actions"]]
+    assert labels == ["Freigaben", "Container-Wache", "Updates"], "was wartet, steht vor den festen Reitern"
+    await engine.dispose()
+
+
+def test_briefing_buttons_put_what_waits_first() -> None:
+    from nodvard_deck_ext_shield.defender import briefing_buttons
+
+    crash = [{"host": "h", "target": "c", "count": 1, "open": True}]
+    assert [b["label"] for b in briefing_buttons(None, None)] == ["Updates", "Einbruchschutz"]
+    assert [b["label"] for b in briefing_buttons(0, crash)] == ["Container-Wache", "Updates", "Einbruchschutz"]
+    assert [b["label"] for b in briefing_buttons(2, crash)] == ["Freigaben", "Container-Wache", "Updates"]
+
+
+@pytest.mark.asyncio
+async def test_send_briefing_arrives_even_if_the_crash_list_cannot_be_read():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base, IncidentRecord
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    tables = [t for t in Base.metadata.sorted_tables if t.name != IncidentRecord.__tablename__]
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=tables))
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {})
+
+    async def waiting_count():
+        return 0
+
+    ctx.actions = SimpleNamespace(waiting_count=waiting_count)
+    result = await Defender(ctx).send_briefing()
+    assert result["title"].startswith("Lagebericht") and "Container-Abstürze" not in result["body"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_send_briefing_without_the_waiting_count_still_arrives():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {})
+
+    async def broken():
+        raise RuntimeError("alter Kern")
+
+    ctx.actions = SimpleNamespace(waiting_count=broken)
+    result = await Defender(ctx).send_briefing()
+    assert result["title"].startswith("Lagebericht") and "Freigaben" not in result["body"]
+    await engine.dispose()
+
+
 # --- Lagebericht ("Briefing senden"): ehrliche Rueckmeldung, Titel ohne Tageszeit ---------
 
 
@@ -2165,6 +2529,9 @@ def test_push_state_tells_the_truth_about_the_phone() -> None:
     assert push_state(NotifyResult(notification_id="n", delivered=True)) == "sent"
     assert push_state(NotifyResult(notification_id="n", delivered=False)) == "not_delivered"
     assert push_state(NotifyResult(notification_id="n", delivered=False, suppressed=True)) == "suppressed"
+    # Unter der Mindest-Stufe von ntfy: nicht "zugestellt" und auch kein Fehler beim Einrichten.
+    assert push_state(NotifyResult(notification_id="n", delivered=False, skipped=True)) == "skipped"
+    assert push_state(NotifyResult(notification_id="n", delivered=True, skipped=False)) == "sent"
     assert push_state(NotifyResult(notification_id="n")) == "unknown", "ältere Kerne wissen es nicht"
     assert push_state(None) == "unknown"
 
@@ -2299,7 +2666,7 @@ def test_protection_widget_shows_open_threats_when_no_server_is_checkable(hosts_
     app.include_router(read)
     rows = TestClient(app).get("/defender/widgets/protection").json()["data"]
     assert len(rows) == 1 and "Schutzwert" not in rows[0]["title"]
-    assert (rows[0]["label"], rows[0]["tone"]) == ("3 Bedrohung(en)", "danger")
+    assert (rows[0]["label"], rows[0]["tone"]) == ("3 Bedrohungen", "danger")
 
 
 @pytest.mark.asyncio
@@ -3611,3 +3978,94 @@ async def test_an_ignored_or_restored_finding_is_not_quarantined_again_by_the_ne
     assert len(ctx.notes) == notes + 1
     assert "1 Fund(e)" in ctx.notes[-1].body and "1 bekannte(r) Fund(e) ausgelassen" in ctx.notes[-1].body
     await engine.dispose()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+def test_the_watcher_leaves_out_the_excluded_folders_like_the_scan(tmp_path):
+    """Die "Ausgenommenen Ordner" galten nur fuer Schnell- und Tiefenscan; der Echtzeit-Waechter pruefte dort weiter.
+    Jetzt betritt `find` sie gar nicht. Ein Name mit Glob-Zeichen gilt woertlich, ein aehnlicher Name daneben nicht."""
+    watched = tmp_path / "w"
+    for rel in ("keep.txt", "media/film.mkv", "media/sub/x.bin", "media2/y.bin", "a[1]/z.bin", "a1/kept.bin", "spiele/s.bin"):
+        (watched / rel).parent.mkdir(parents=True, exist_ok=True)
+        (watched / rel).write_text("x")
+    _raw_name_clamscan(tmp_path / "bin")
+    mark = av.new_rc_mark()
+    skip = [f"{watched}/media/", f"{watched}/a[1]", f"{watched}/spiele", "relativ/pfad", f"{watched}/kaputt\nname"]
+    out = _run_raw(tmp_path, av.build_watch_command([str(watched)], minutes=5, mark=mark, skip_folders=skip))
+    res = av.parse_scan_output(out, mark)
+    assert sorted(path for path, _sig in res.findings) == sorted(
+        str(watched / rel) for rel in ("keep.txt", "media2/y.bin", "a1/kept.bin")
+    ), out
+
+    everything = _run_raw(tmp_path, av.build_watch_command([str(watched)], minutes=5, mark=mark))
+    assert av.parse_scan_output(everything, mark).files_scanned == 7  # ohne Ausnahmen wie bisher
+
+
+def test_the_prune_expression_takes_only_absolute_paths_and_quotes_them():
+    import shlex
+
+    assert av._prune_expression([]) == ""
+    assert av._prune_expression([
+        "relativ", "", "/a\nb", "/a\rb", "/a\x00b", "/", "/*", "//./", "/a/../b", "/home/../etc", "/a/..",
+    ]) == ""
+    hostile = "/x'; rm -rf /tmp/y"
+    # `/` nimmt nie alles aus; ein angehaengtes `/*` meint den Ordner selbst (wie beim Scan, `exclude_folder`).
+    assert shlex.split(av._prune_expression(["/srv/media/", hostile, "/", "/srv/backup/**"])) == [
+        "(", "-path", "/srv/media", "-o", "-path", "/srv/media/*",
+        "-o", "-path", hostile, "-o", "-path", hostile + "/*",
+        "-o", "-path", "/srv/backup", "-o", "-path", "/srv/backup/*", ")", "-prune", "-o",
+    ]
+    assert av._find_literal("/a[1]/*?\\") == "/a\\[1\\]/\\*\\?\\\\"
+    # `find` nennt Pfade mit einfachen Schraegstrichen: doppelte und `/./` griffen sonst nie.
+    assert shlex.split(av._prune_expression(["/srv//media/./filme/", "//daten"])) == [
+        "(", "-path", "/srv/media/filme", "-o", "-path", "/srv/media/filme/*",
+        "-o", "-path", "/daten", "-o", "-path", "/daten/*", ")", "-prune", "-o",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_the_defender_hands_the_excluded_folders_to_the_watcher():
+    ctx = _FakeCtx(None, {"find -H": f"Scanned files: 0\n{MARK}0\n"})
+
+    async def _settings():
+        return {"exclude_paths": ["/srv/archiv"]}
+
+    ctx.settings = SimpleNamespace(get=_settings)
+    await _scan_once(ctx, kind="watch")
+    watch = [c for c in ctx.commands if "find -H" in c]
+    # Der Befehl steckt in Sperre und `as_root` (dort noch einmal gequotet): Ordner und `-prune` stehen darin.
+    assert watch and all("-path /srv/archiv -o -path " in c and "-prune -o -type f" in c for c in watch), watch
+
+    ctx = _FakeCtx(None, {"find -H": f"Scanned files: 0\n{MARK}0\n"})
+    await _scan_once(ctx, kind="watch")
+    assert not any("-prune" in c for c in ctx.commands if "find -H" in c)  # ohne Ausnahmen wie bisher
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine POSIX-Shell und find")
+def test_the_watcher_also_checks_files_copied_with_an_old_modification_time(tmp_path):
+    """Per Samba, Nextcloud-Sync, `cp -p` oder `rsync -a` kopierte Dateien behalten ihre alte Aenderungszeit (mtime). Der
+    Waechter nimmt deshalb auch die Zeit des Eintrags (ctime) dazu, die das System beim Anlegen setzt."""
+    import time
+
+    watched = tmp_path / "freigabe"
+    watched.mkdir()
+    copied = watched / "rechnung.pdf.exe"
+    copied.write_text("x")
+    week_ago = time.time() - 7 * 24 * 3600
+    os.utime(copied, (week_ago, week_ago))  # wie `cp -p`: mtime alt, ctime jetzt
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "clamscan").write_text(
+        "#!/bin/sh\n"
+        'for a in "$@"; do case "$a" in --file-list=*) list="${a#--file-list=}";; esac; done\n'
+        'n=$(wc -l < "$list" | tr -d " "); sed "s/$/: Win.Test.EICAR_HC-1 FOUND/" "$list"\n'
+        'echo "Scanned files: $n"; exit 1\n'
+    )
+    (bin_dir / "clamscan").chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ.get('PATH', '/usr/bin:/bin')}"}
+    mark = av.new_rc_mark()
+    cmd = av.build_watch_command([str(watched)], minutes=5, mark=mark)
+    assert "\\( -mmin -5 -o -cmin -5 \\)" in cmd
+    out = subprocess.run(["/bin/sh", "-c", cmd], capture_output=True, text=True, env=env, timeout=60, check=False)
+    res = av.parse_scan_output(out.stdout, mark)
+    assert [path for path, _sig in res.findings] == [str(copied)], out.stdout + out.stderr

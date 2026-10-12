@@ -17,10 +17,11 @@
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { SchedulePicker, describeSchedule } from "../../../../frontend/src/components/SchedulePicker";
+import { SchedulePicker, describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
 import { isActionRunning, waitForAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
+import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { Badge, Button, Card, EmptyState, Field, Icon, Notice, Page, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
@@ -410,6 +411,18 @@ function targetLabel(target: ScriptOut["target"], hosts: HostRow[], groups: { id
   return host ? host.display_name || host.name : "Ein Server";
 }
 
+type HistoryEntry = { sha: string; message: string; commit_time: number };
+
+/** Eine Liste unter dem gewaehlten Skript: Eintraege (`null`: wird noch geladen), oder warum sie sich nicht laden
+ * liess. Nie "Noch keine Läufe", solange das nicht feststeht -- das waere eine falsche Auskunft. */
+type Listed<T> = { items: T[] | null; error: string | null };
+const NOTHING: Listed<never> = { items: [], error: null };
+const LOADING: Listed<never> = { items: null, error: null };
+
+function listed<T>(promise: Promise<T[]>): Promise<Listed<T>> {
+  return promise.then((items) => ({ items, error: null }), (err: unknown) => ({ items: [], error: errorMessage(err) }));
+}
+
 export function ScriptsPage(): JSX.Element {
   // Sprung von der Server-Seite des Kerns (`?host=`): Skripte dieses Hosts, und ein
   // neues Skript zielt gleich auf ihn. Der Filter folgt der Adresszeile (location.ts): ein
@@ -418,8 +431,10 @@ export function ScriptsPage(): JSX.Element {
   const hostFilter = urlParams.get("host") || null;
   const [scripts, setScripts] = useState<ScriptOut[] | null>(null);
   const [jobs, setJobs] = useState<JobOut[]>([]);
+  const [jobsError, setJobsError] = useState<string | null>(null);
   const [hosts, setHosts] = useState<HostRow[]>([]);
   const [groups, setGroups] = useState<{ id: string; name: string }[]>([]);
+  const [targetsError, setTargetsError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<ScriptOut>(() => emptyDraft(hostFilter));
@@ -432,38 +447,73 @@ export function ScriptsPage(): JSX.Element {
   useEffect(() => () => { runSeq.current += 1; }, []);
   const unmountSignal = useUnmountSignal();
   const [message, setMessage] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
-  const [runs, setRuns] = useState<RunOut[]>([]);
-  const [executions, setExecutions] = useState<ExecutionOut[]>([]);
-  const [history, setHistory] = useState<{ sha: string; message: string; commit_time: number }[]>([]);
+  const [runs, setRuns] = useState<Listed<RunOut>>(NOTHING);
+  const [executions, setExecutions] = useState<Listed<ExecutionOut>>(NOTHING);
+  const [history, setHistory] = useState<Listed<HistoryEntry>>(NOTHING);
+  // Skript, dessen Läufe und Versionen gerade angezeigt werden: eine späte Antwort zu einem
+  // anderen Skript (schnell weitergeklickt) wird verworfen.
+  const shownId = useRef<string | null>(null);
 
   const loadExecutions = useCallback((scriptId: string) => {
-    authedFetch(`/ext/scripts/scripts/${scriptId}/runs`)
-      .then((res) => (res.ok ? (res.json() as Promise<ExecutionOut[]>) : []))
-      .then(setExecutions)
-      .catch(() => setExecutions([]));
+    void listed(fetchJson<ExecutionOut[]>(`/ext/scripts/scripts/${scriptId}/runs`)).then((next) => {
+      if (shownId.current === scriptId) setExecutions(next);
+    });
+  }, []);
+
+  const loadHistory = useCallback((scriptId: string) => {
+    void listed(fetchJson<HistoryEntry[]>(`/ext/scripts/scripts/${scriptId}/history`)).then((next) => {
+      if (shownId.current === scriptId) setHistory(next);
+    });
+  }, []);
+
+  /** Zeitplan-Läufe kommen über den Job des Kerns. `jobList` null: die Jobs erst (neu) holen. */
+  const loadRuns = useCallback(async (script: ScriptOut, jobList: JobOut[] | null) => {
+    const show = (next: Listed<RunOut>) => { if (shownId.current === script.id) setRuns(next); };
+    let list = jobList;
+    if (list === null) {
+      try {
+        list = await fetchJson<JobOut[]>("/jobs?ext_id=scripts");
+        setJobs(list);
+        setJobsError(null);
+      } catch (err) {
+        show({ items: [], error: errorMessage(err) });
+        return;
+      }
+    }
+    const job = list.find((j) => j.ext_job_key === script.job_id);
+    show(job ? await listed(fetchJson<RunOut[]>(`/jobs/${job.id}/runs?limit=10`)) : NOTHING);
   }, []);
 
   const load = useCallback(() => {
     setError(null);
     Promise.all([
-      authedFetch("/ext/scripts/scripts").then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<ScriptOut[]>;
-      }),
-      authedFetch("/jobs?ext_id=scripts").then((res) => (res.ok ? (res.json() as Promise<JobOut[]>) : [])),
+      fetchJson<ScriptOut[]>("/ext/scripts/scripts"),
+      // Ohne Jobs gibt es nur keine Zeitplan-Läufe -- die Skripte selbst bleiben bedienbar.
+      fetchJson<JobOut[]>("/jobs?ext_id=scripts").then(
+        (list) => ({ list, error: null as string | null }),
+        (err: unknown) => ({ list: [] as JobOut[], error: errorMessage(err) as string | null }),
+      ),
     ])
       .then(([s, j]) => {
+        // Zusammen setzen: scheitert die Skriptliste, bleibt der alte Stand der Zeitpläne samt Fehler stehen.
         setScripts(s);
-        setJobs(j);
+        setJobs(j.list);
+        setJobsError(j.error);
       })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setError(errorMessage(err)));
+  }, []);
+
+  const loadTargets = useCallback(() => {
+    setTargetsError(null);
+    const fail = (err: unknown) => setTargetsError(errorMessage(err));
+    fetchJson<HostRow[]>("/hosts").then(setHosts).catch(fail);
+    fetchJson<{ id: string; name: string }[]>("/host-groups").then(setGroups).catch(fail);
   }, []);
 
   useEffect(() => {
     load();
-    authedFetch("/hosts").then((r) => (r.ok ? (r.json() as Promise<HostRow[]>) : [])).then(setHosts).catch(() => setHosts([]));
-    authedFetch("/host-groups").then((r) => (r.ok ? r.json() : [])).then(setGroups).catch(() => setGroups([]));
-  }, [load]);
+    loadTargets();
+  }, [load, loadTargets]);
 
   function selectScript(script: ScriptOut) {
     setSelectedId(script.id);
@@ -471,20 +521,16 @@ export function ScriptsPage(): JSX.Element {
     setIsNew(false);
     setMessage(null);
     runSeq.current += 1;
-    const job = jobs.find((j) => j.ext_job_key === script.job_id);
-    if (job) {
-      authedFetch(`/jobs/${job.id}/runs?limit=10`)
-        .then((res) => (res.ok ? (res.json() as Promise<RunOut[]>) : []))
-        .then(setRuns)
-        .catch(() => setRuns([]));
-    } else {
-      setRuns([]);
+    // Ein anderes Skript: bis die Antworten da sind "Lade …". Dasselbe noch einmal: die Listen bleiben stehen.
+    if (shownId.current !== script.id) {
+      setRuns(LOADING);
+      setExecutions(LOADING);
+      setHistory(LOADING);
     }
+    shownId.current = script.id;
+    void loadRuns(script, jobsError ? null : jobs);
     loadExecutions(script.id);
-    authedFetch(`/ext/scripts/scripts/${script.id}/history`)
-      .then((res) => (res.ok ? res.json() : []))
-      .then(setHistory)
-      .catch(() => setHistory([]));
+    loadHistory(script.id);
   }
 
   function selectNew() {
@@ -494,9 +540,10 @@ export function ScriptsPage(): JSX.Element {
     setIdTouched(false);
     setMessage(null);
     runSeq.current += 1;
-    setRuns([]);
-    setExecutions([]);
-    setHistory([]);
+    shownId.current = null;
+    setRuns(NOTHING);
+    setExecutions(NOTHING);
+    setHistory(NOTHING);
   }
 
   async function save() {
@@ -513,6 +560,8 @@ export function ScriptsPage(): JSX.Element {
     setBusy(true);
     setMessage(null);
     runSeq.current += 1;
+    // Waehrend des Speicherns ein anderes Skript gewaehlt: danach nichts mehr an Auswahl und Entwurf aendern.
+    const seq = runSeq.current;
     try {
       const res = await authedFetch(`/ext/scripts/scripts/${draft.id}${isNew ? "?create=true" : ""}`, {
         method: "PUT",
@@ -528,6 +577,10 @@ export function ScriptsPage(): JSX.Element {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      if (runSeq.current !== seq) {
+        load();
+        return;
+      }
       // Speichern kann die Dauerfreigabe aufheben -- den neuen Stand gleich anzeigen.
       setDraft((prev) => ({
         ...prev,
@@ -539,6 +592,9 @@ export function ScriptsPage(): JSX.Element {
       setMessage({ kind: "ok", text: "Gespeichert." });
       setIsNew(false);
       setSelectedId(draft.id);
+      shownId.current = draft.id;
+      // Jedes Speichern ist eine neue Version.
+      loadHistory(draft.id);
       load();
     } catch (err) {
       setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
@@ -554,7 +610,7 @@ export function ScriptsPage(): JSX.Element {
     setBusy(true);
     try {
       const res = await authedFetch(`/ext/scripts/scripts/${selectedId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok && res.status !== 204) throw new Error(errorFromBody(await res.json().catch(() => ({})), res.status));
       selectNew();
       load();
     } catch (err) {
@@ -718,7 +774,7 @@ export function ScriptsPage(): JSX.Element {
       description="Eigene Befehle zentral pflegen und auf einem, mehreren oder allen Servern ausführen – sofort oder nach Zeitplan."
       actions={<Button variant="primary" onClick={selectNew}><Icon name="plus" size={14} /> Neues Skript</Button>}
     >
-      {error && <Notice text={`Fehler: ${error}`} />}
+      {error && <LoadError what="Die Liste der Skripte" error={error} onRetry={load} />}
       <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
         <aside className="lg:w-72 lg:flex-none">
           <Card title={`Skripte${scripts ? ` (${visibleScripts?.length ?? 0})` : ""}`} padded={false}>
@@ -765,7 +821,8 @@ export function ScriptsPage(): JSX.Element {
 
         <div className="min-w-0 flex-1 space-y-5">
           {!showEditor ? (
-            <EmptyState
+            // Erst nach dem Laden: vorher (oder bei einem Ladefehler) waere "Noch keine Skripte" falsch.
+            scripts && <EmptyState
               icon="code"
               title="Noch keine Skripte"
               text="Lege z. B. ein Update-, Aufräum- oder Prüfskript an und starte es per Klick auf einem oder allen Servern – oder plane es: Dann erscheint jeder Lauf zur Freigabe unter „Aktionen“."
@@ -835,6 +892,9 @@ export function ScriptsPage(): JSX.Element {
                           <option value="">Gruppe wählen …</option>
                           {groups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
                         </select>
+                      )}
+                      {targetsError && draft.target.kind !== "all" && (
+                        <LoadError compact what="Die Liste der Server und Gruppen" error={targetsError} onRetry={loadTargets} />
                       )}
                     </div>
                   </Field>
@@ -907,7 +967,11 @@ export function ScriptsPage(): JSX.Element {
                   description="Die letzten Läufe mit Ausgabe. Aufklappen zeigt, was das Skript ausgegeben hat."
                   actions={<Button small variant="ghost" onClick={() => selectedId && loadExecutions(selectedId)}><Icon name="refresh" size={12} /> Aktualisieren</Button>}
                 >
-                  <Executions items={executions} />
+                  {executions.error
+                    ? <LoadError compact what="Die Liste der Ausführungen" error={executions.error} onRetry={() => selectedId && loadExecutions(selectedId)} />
+                    : executions.items === null
+                      ? <p className="text-sm text-white/45">Lade …</p>
+                      : <Executions items={executions.items} />}
                 </Card>
               )}
 
@@ -915,8 +979,14 @@ export function ScriptsPage(): JSX.Element {
                 <div className="grid gap-5 md:grid-cols-2">
                   <Card title="Zeitplan-Läufe">
                     <ul className="space-y-1.5 text-sm">
-                      {runs.length === 0 && <li className="text-white/45">Noch keine Läufe.</li>}
-                      {runs.map((r) => (
+                      {runs.error && (
+                        <li>
+                          <LoadError compact what="Die Liste der Zeitplan-Läufe" error={runs.error} onRetry={() => savedScript && void loadRuns(savedScript, null)} />
+                        </li>
+                      )}
+                      {!runs.error && runs.items === null && <li className="text-white/45">Lade …</li>}
+                      {!runs.error && runs.items?.length === 0 && <li className="text-white/45">Noch keine Läufe.</li>}
+                      {(runs.items ?? []).map((r) => (
                         <li key={r.id} className="flex flex-wrap items-center gap-2">
                           <Badge tone={r.status === "succeeded" ? "good" : r.status === "failed" ? "bad" : "neutral"}>
                             {r.status === "succeeded" ? "erfolgreich" : r.status === "failed" ? "fehlgeschlagen" : r.status}
@@ -930,8 +1000,14 @@ export function ScriptsPage(): JSX.Element {
                   </Card>
                   <Card title="Versionen" description="Jede Änderung wird gespeichert.">
                     <ul className="space-y-1.5 text-sm">
-                      {history.length === 0 && <li className="text-white/45">Keine Versionen.</li>}
-                      {history.map((h) => (
+                      {history.error && (
+                        <li>
+                          <LoadError compact what="Die Liste der Versionen" error={history.error} onRetry={() => selectedId && loadHistory(selectedId)} />
+                        </li>
+                      )}
+                      {!history.error && history.items === null && <li className="text-white/45">Lade …</li>}
+                      {!history.error && history.items?.length === 0 && <li className="text-white/45">Keine Versionen.</li>}
+                      {(history.items ?? []).map((h) => (
                         <li key={h.sha} className="flex items-baseline gap-2">
                           <code className="text-[11px] text-white/35">{h.sha.slice(0, 7)}</code>
                           <span className="min-w-0 flex-1 truncate text-white/75">{h.message}</span>

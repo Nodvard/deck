@@ -363,6 +363,7 @@ class _SshFileSource:
 
     def __init__(self, ctx: ExtensionContext, host_id: str, *, label: str | None = None) -> None:
         self.source_id = f"ssh-sftp:{host_id}"
+        self.host_id = host_id  # optional laut SDK: der Dateimanager zeigt Status und System des Servers
         self.label = label or "SSH (SFTP)"
         self.icon = "server"
         self.caps = FileSourceCaps(write=True, rename=True, remove=True, mkdir=True, search=True, range_read=True)

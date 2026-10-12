@@ -3,17 +3,22 @@
  * Ein Klick schaltet das Modul ein oder aus (`POST /extensions/{id}/enable|disable`, dieselben
  * Endpunkte wie Einstellungen -> Erweiterungen). Kein Modul ist Pflicht.
  *
- * Gruppe und Reihenfolge kommen aus dem Manifest der Module (`category`, `sort_order`); der Kern
- * kennt kein Modul beim Namen. Die Angaben, die ein Modul braucht (Adressen, Zugangsdaten), kommen
- * erst danach unter Einstellungen -> Erweiterungen -- die Kachel sagt es.
+ * Gruppe und Reihenfolge kommen aus dem Manifest der Module (`category`, `sort_order`, siehe
+ * `lib/moduleGroups.ts`); der Kern kennt kein Modul beim Namen. Die Angaben, die ein Modul braucht
+ * (Adressen, Zugangsdaten), kommen erst danach unter Einstellungen -> Erweiterungen -- die Kachel sagt es.
  */
 import { AlertTriangle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
+import { BetaBadge, BetaExplainer, isBeta } from "../../components/BetaBadge";
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
+import { forEveryone, groupModules } from "../../lib/moduleGroups";
 import { Button, NoticeLine, Toggle, errorText, type Notice } from "../settings/ui";
 import { StepNav } from "./StepNav";
+
+// Gruppen und Auswahl liegen in `lib/moduleGroups.ts` (dieselben unter Einstellungen → Erweiterungen).
+export { forEveryone, groupModules };
 
 interface ExtensionRow {
   id: string;
@@ -24,24 +29,10 @@ interface ExtensionRow {
   last_error: string | null;
   category?: string | null;
   sort_order?: number;
+  /** `beta`: Abzeichen „Beta“; `stable` oder fehlend: nichts. */
+  stage?: string;
   /** Nur bei eingeschalteten Modulen: Pflichtangaben fehlen. */
   needs_setup?: boolean;
-}
-
-/** Reihenfolge und Überschrift der Gruppen; alles Unbekannte kommt unter „Weitere Module“. */
-const GROUPS: { id: string; title: string; hint?: string }[] = [
-  { id: "servers", title: "Für deine Server", hint: "Zustand, Zugriff und Verwaltung deiner Rechner und Dienste." },
-  { id: "security", title: "Sicherheit" },
-  { id: "tools", title: "Werkzeuge" },
-  { id: "connections", title: "Verbindungen zu anderen Diensten" },
-  { id: "example", title: "Zum Ausprobieren" },
-];
-const OTHER_GROUP = { id: "other", title: "Weitere Module" };
-
-/** Beispiel-Module für Entwickler (z. B. „Hello World“) gehören nicht in den Assistenten: Wer neu anfängt, würde sich
- * fragen, wozu sie da sind. Unter Einstellungen → Erweiterungen bleiben sie sichtbar. */
-export function forEveryone(rows: ExtensionRow[]): ExtensionRow[] {
-  return rows.filter((r) => r.category !== "example");
 }
 
 /**
@@ -63,18 +54,6 @@ export function shortDescription(text: string | null): string {
   }
   const colon = first.indexOf(": ");
   return colon >= 20 ? `${first.slice(0, colon)}.` : first;
-}
-
-export function groupModules(rows: ExtensionRow[]): { id: string; title: string; hint?: string; rows: ExtensionRow[] }[] {
-  const known = new Set(GROUPS.map((g) => g.id));
-  const byName = (a: ExtensionRow, b: ExtensionRow) =>
-    (a.sort_order ?? 100) - (b.sort_order ?? 100) || (a.name ?? a.id).localeCompare(b.name ?? b.id);
-  return [...GROUPS, OTHER_GROUP]
-    .map((g) => ({
-      ...g,
-      rows: rows.filter((r) => (known.has(r.category ?? "") ? r.category === g.id : g.id === "other")).sort(byName),
-    }))
-    .filter((g) => g.rows.length > 0);
 }
 
 export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: () => void }) {
@@ -148,7 +127,10 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
                           <Icon name={ext.icon} size={17} />
                         </span>
                         <span className="min-w-0 flex-1">
-                          <span className="block text-sm font-medium">{label}</span>
+                          <span className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                            {label}
+                            {isBeta(ext.stage) && <BetaBadge />}
+                          </span>
                           {ext.description && (
                             <span title={ext.description} className="mt-0.5 block break-words text-xs text-white/55">
                               {shortDescription(ext.description)}
@@ -175,6 +157,7 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
               </ul>
             </section>
           ))}
+          {groups.some((g) => g.rows.some((r) => isBeta(r.stage))) && <BetaExplainer />}
         </div>
       )}
 

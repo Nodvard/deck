@@ -1,4 +1,4 @@
-"""Dienst neu starten -- die einzige verändernde Aktion der System-Erweiterung.
+"""Dienst neu starten -- die einzige verändernde Aktion des Moduls „Server-Zustand“ (Kennung `system`).
 
 Läuft durch das Aktions-Gate des Kerns: die Seite schlägt vor (`ctx.actions.propose`),
 wer freigeben darf, gibt selbst frei, erst dann ruft der Kern `SystemActionExecutor`.
@@ -7,13 +7,22 @@ Der Payload (`host_id` + `unit`) steht zwischen Vorschlag und Ausführung in der
 Datenbank und wird deshalb im Executor NOCHMAL streng geprüft. Der Befehl entsteht
 nur hier, aus dem geprüften Einheitennamen (mit `shlex.quote`) -- nie aus einem
 Text, den jemand mitgeschickt hat.
+
+Prüfung nach der Aktion (`check_after_restart`): `systemctl restart` meldet Erfolg, sobald
+der Dienst gestartet ist. Stürzt er Sekunden später ab, fiel das bisher nicht auf. Deshalb
+liest der Executor danach bis zu `CHECK_TIMEOUT_S` lang den Zustand (`systemctl show`, nur
+lesend, ohne root): Ein laufender Dienst gilt erst nach zwei Lesungen `CHECK_STABLE_S`
+auseinander ohne neuen Start (`NRestarts`, `MainPID`) als stabil.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
 import shlex
 import socket
+import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
@@ -183,7 +192,11 @@ def own_container_probe(container_id: str) -> str:
 
 
 async def is_dashboard_host(ctx: ExtensionContext, host: Host) -> bool | None:
-    """Läuft das Dashboard auf `host`? `True`/`False`, `None` wenn nicht feststellbar."""
+    """Läuft das Dashboard auf `host`? `True`/`False`, `None` wenn nicht feststellbar.
+
+    Dieselbe Erkennung steht in Nodvard Shield (`patching.UpdateCenter._is_dashboard_host`). Bewusst doppelt:
+    Erweiterungen importieren einander nicht, und ein Hilfsding gehört nicht in den festen Vertrag des SDK.
+    Wer eine Stelle ändert, ändert die andere mit."""
     if any(tag in DASHBOARD_HOST_TAGS for tag in host.tags):
         return True
     own = socket.gethostname().strip()
@@ -222,6 +235,143 @@ def parse_restart_output(stdout: str) -> tuple[int | None, str]:
         elif seen_rc and line:
             state = line
     return rc, state
+
+
+CHECK_TIMEOUT_S = 45
+CHECK_INTERVAL_S = 3
+CHECK_STABLE_S = 10
+CHECK_CALL_TIMEOUT_S = 20
+STATE_PROPS = "ActiveState,SubState,Result,NRestarts,MainPID,ExecMainStatus,Type"
+LOG_HINT = "Das Protokoll des Dienstes zeigt den Grund."
+CRASH_LOOP_TEXT = f"startet aber immer wieder neu (stürzt ab, systemd startet ihn erneut). {LOG_HINT}"
+ONE_RESTART_NOTE = " Dabei ist er einmal neu gestartet (vielleicht war etwas noch nicht bereit)."
+
+
+def state_command(unit: str) -> str:
+    """Zustand der Einheit, nur lesend (braucht kein root)."""
+    return f"systemctl show -p {STATE_PROPS} -- {shlex.quote(validate_unit(unit))}"
+
+
+@dataclass(frozen=True)
+class UnitState:
+    active: str
+    sub: str
+    result: str
+    restarts: int | None
+    """`NRestarts` (ab systemd 235; bei Sockets und Timern gibt es den Wert nicht)."""
+    main_pid: int | None
+    exit_status: int | None
+    type: str = ""
+
+
+def _int(value: str | None) -> int | None:
+    return int(value) if value is not None and value.isdigit() else None
+
+
+def parse_state(stdout: str) -> UnitState | None:
+    """`Schlüssel=Wert` je Zeile (`systemctl show`). `None`, wenn `ActiveState` fehlt."""
+    values: dict[str, str] = {}
+    for line in (stdout or "").splitlines():
+        key, sep, value = line.partition("=")
+        if sep:
+            values[key.strip()] = value.strip()
+    if not values.get("ActiveState"):
+        return None
+    return UnitState(
+        active=values["ActiveState"].lower(), sub=values.get("SubState", "").lower(), result=values.get("Result", "").lower(),
+        restarts=_int(values.get("NRestarts")), main_pid=_int(values.get("MainPID")), exit_status=_int(values.get("ExecMainStatus")),
+        type=values.get("Type", "").lower(),
+    )
+
+
+def _failure_detail(st: UnitState) -> str:
+    """Warum der Hauptprozess endete, kurz. `ExecMainStatus` ist bei einem Signal die Signalnummer, kein Exit-Code."""
+    if st.result == "oom-kill":
+        return "Speicher voll, vom System beendet"
+    if st.result in ("signal", "core-dump"):
+        return f"Signal {st.exit_status}" if st.exit_status else "durch ein Signal beendet"
+    if st.result in ("timeout", "start-limit-hit"):
+        return "Zeitüberschreitung beim Start" if st.result == "timeout" else "zu viele Startversuche"
+    return f"Exit-Code {st.exit_status}" if st.exit_status else ""
+
+
+def judge_state(st: UnitState, final: bool) -> tuple[bool, str] | None:
+    """(läuft wie gewollt?, Satz) oder `None`, solange noch nicht klar ist, wie es ausgeht. Die Sätze schließen an
+    „… neu gestartet –“ bzw. „… wurde neu gestartet,“ an."""
+    if st.active == "failed":
+        detail = _failure_detail(st)
+        return False, f"ist aber gleich wieder ausgefallen (Zustand: failed{', ' + detail if detail else ''}). {LOG_HINT}"
+    if st.active == "activating" and st.sub == "auto-restart":
+        # Zwischen zwei Versuchen: einmal kann eine Abhaengigkeit noch nicht bereit sein. Bleibt es so, ist es eine Schleife.
+        return (False, CRASH_LOOP_TEXT) if final else None
+    if st.active == "active":
+        if st.sub == "exited":
+            return True, "hat seine Aufgabe erledigt (aktiv, ohne laufenden Prozess)."
+        return True, "läuft stabil."
+    if st.active == "inactive":
+        if st.result in ("success", ""):
+            if st.type == "oneshot":
+                return True, "hat seine Aufgabe erledigt (Dienst für einmalige Aufgaben)."
+            return True, "hat sich gleich wieder ohne Fehler beendet. Soll er dauerhaft laufen, zeigt das Protokoll den Grund."
+        detail = _failure_detail(st)
+        return False, f"ist aber nicht mehr aktiv (Ergebnis: {st.result}{', ' + detail if detail else ''}). {LOG_HINT}"
+    if not final:
+        return None
+    if st.active == "deactivating":
+        return False, f"fährt aber gerade herunter (Zustand: deactivating). {LOG_HINT}"
+    return True, f"startet noch (Zustand: {st.active}) – bitte später nachsehen."
+
+
+async def check_after_restart(ctx: ExtensionContext, host: Host, unit: str) -> tuple[bool, str] | None:
+    """Läuft der Dienst nach dem Neustart wie gewollt -- und bleibt er dabei? `None`: nicht prüfbar (keine Antwort).
+
+    Gezählt werden automatische Neustarts seit der ersten Lesung (`NRestarts`; fehlt der Wert, ein Wechsel von
+    `MainPID`). Einer wird hingenommen (die ruhige Beobachtung beginnt dann neu), erst der zweite ist eine Schleife."""
+    deadline = time.monotonic() + CHECK_TIMEOUT_S
+    first: tuple[UnitState, float, int] | None = None  # erste ruhige Lesung, Zeit, Neustarts bis dahin
+    baseline: UnitState | None = None
+    last_pid: int | None = None
+    pid_changes = 0
+    while True:
+        try:
+            res = await ctx.exec.run(host, state_command(unit), timeout_s=CHECK_CALL_TIMEOUT_S)
+            st = parse_state(res.stdout)
+        except Exception:  # noqa: BLE001 - kurzer Aussetzer: weiter versuchen
+            st = None
+        now = time.monotonic()
+        final = now >= deadline
+        if st is not None:
+            baseline = baseline or st
+            if st.restarts is not None and baseline.restarts is not None:
+                seen = max(0, st.restarts - baseline.restarts)
+            else:  # alte systemd-Versionen: der Hauptprozess wechselt bei jedem Neustart
+                if st.main_pid and last_pid and st.main_pid != last_pid:
+                    pid_changes += 1
+                seen = pid_changes
+            if st.main_pid:
+                last_pid = st.main_pid
+            if seen >= 2:
+                return False, CRASH_LOOP_TEXT
+            if first is not None and seen > first[2]:
+                first = None  # dazwischen neu gestartet: noch einmal ruhig beobachten
+            verdict = judge_state(st, final)
+            if verdict is not None and verdict[0] and seen:
+                verdict = (True, verdict[1] + ONE_RESTART_NOTE)
+            if verdict is not None:
+                running = verdict[0] and st.active == "active" and st.sub != "exited"
+                if not running:
+                    return verdict
+                if first is None:
+                    first = (st, now, seen)  # erste ruhige Lesung: mindestens eine zweite muss folgen
+                    if final:
+                        return verdict
+                elif now - first[1] >= CHECK_STABLE_S or final:
+                    return verdict
+            else:
+                first = None
+        elif final:
+            return None
+        await asyncio.sleep(CHECK_INTERVAL_S)
 
 
 class SystemActionExecutor:
@@ -263,12 +413,16 @@ class SystemActionExecutor:
             reason = (result.stderr or "").strip()[-500:] or f"systemctl meldet Fehler {rc if rc is not None else '(keine Antwort)'}"
             return ActionResult(success=False, exit_code=result.exit_code, error=f"{unit} auf {where} ließ sich nicht neu starten: {reason}", detail=detail)
         if state == "failed":
-            return ActionResult(success=False, exit_code=result.exit_code, error=f"{unit} auf {where} wurde neu gestartet, ist aber gleich wieder ausgefallen (Zustand: failed). Das Protokoll des Dienstes zeigt den Grund.", detail=detail)
-        if state in ("active", "activating", "reloading"):
-            text = f"{unit} auf {where} neu gestartet – Zustand jetzt: {state}."
-        else:
-            text = f"{unit} auf {where} neu gestartet – Zustand jetzt: {state or 'unbekannt'} (bei Diensten, die nur einmal etwas erledigen, ist das normal)."
-        return ActionResult(success=True, exit_code=result.exit_code, output=text, detail=detail)
+            return ActionResult(success=False, exit_code=result.exit_code, error=f"{unit} auf {where} wurde neu gestartet, ist aber gleich wieder ausgefallen (Zustand: failed). {LOG_HINT}", detail=detail)
+        check = await check_after_restart(self._ctx, host, unit)
+        if check is None:
+            text = f"{unit} auf {where} neu gestartet – Zustand jetzt: {state or 'unbekannt'}. Prüfung danach nicht möglich (keine Antwort)."
+            return ActionResult(success=True, exit_code=result.exit_code, output=text, detail=detail)
+        ok, why = check
+        detail["check"] = {"ok": ok, "text": why}
+        if not ok:
+            return ActionResult(success=False, exit_code=result.exit_code, error=f"{unit} auf {where} wurde neu gestartet, {why}", detail=detail)
+        return ActionResult(success=True, exit_code=result.exit_code, output=f"{unit} auf {where} neu gestartet – Prüfung danach: {why}", detail=detail)
 
     async def dry_run(self, req: ActionRequest) -> DryRunReport | None:
         if req.action_type != SERVICE_RESTART:
@@ -314,7 +468,7 @@ def build_action_router(ctx: ExtensionContext) -> APIRouter:
                 host_ref=host.id,
                 risk=Risk.MEDIUM,
                 proposed_by=actor,
-                reason=f"Dienst {unit} auf {host_name(host)} über die System-Seite neu gestartet.",
+                reason=f"Dienst {unit} auf {host_name(host)} über die Seite „Server-Zustand“ neu gestartet.",
                 correlation_id="system:restart",  # höchstens 36 Zeichen; Server und Dienst stehen im Payload
             ),
             wait_s=REQUEST_WAIT_S,

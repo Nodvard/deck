@@ -29,6 +29,8 @@ function mockFetch(overrides: { items?: unknown[]; onCreate?: (body: unknown) =>
     if (url.endsWith("/ext/inventory/locations") && method === "GET") {
       return new Response(JSON.stringify(LOCATIONS), { status: 200 });
     }
+    if (url.endsWith("/ext/inventory/projects") && method === "GET") return new Response("[]", { status: 200 });
+    if (url.endsWith("/hosts") && method === "GET") return new Response("[]", { status: 200 });
     if (url.endsWith("/ext/inventory/items") && method === "POST") {
       const body = JSON.parse(init?.body as string);
       overrides.onCreate?.(body);
@@ -137,8 +139,7 @@ describe("InventoryPage", () => {
     fireEvent.click(screen.getByRole("button", { name: "Details anzeigen" }));
 
     const file = new File(["bild"], "foto.png", { type: "image/png" });
-    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.change(screen.getByLabelText("Foto zu Bohrmaschine hochladen"), { target: { files: [file] } });
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/items/item-1/images"), expect.objectContaining({ method: "POST" })),
@@ -210,7 +211,55 @@ describe("InventoryPage", () => {
     const csv = inventoryCsv([{ ...ITEMS[0], notes: 'Regal "oben"; links' }], () => "Elektronik", () => "Keller");
     const [header, row] = csv.replace(/^\ufeff/, "").split("\r\n");
     expect(csv.startsWith("\ufeff")).toBe(true);
-    expect(header).toBe("Name;Kategorie;Standort;Menge;Kaufdatum;Preis (EUR);Garantie bis;Beschreibung;Notizen");
-    expect(row).toBe('Bohrmaschine;Elektronik;Keller;2;2024-01-15;89,99;2099-01-01;Bosch;"Regal ""oben""; links"');
+    // Neue Spalten hinten angehängt, damit vorhandene Auswertungen weiter passen.
+    expect(header).toBe("Name;Kategorie;Standort;Menge;Kaufdatum;Preis (EUR);Garantie bis;Beschreibung;Notizen;Hersteller;Modell;Seriennummer;Produktlink");
+    expect(row).toBe('Bohrmaschine;Elektronik;Keller;2;2024-01-15;89,99;2099-01-01;Bosch;"Regal ""oben""; links";;;;');
+    // Text, den Excel für eine Formel hielte, bekommt einen Apostroph davor (eingelesen fällt er wieder weg).
+    const risky = inventoryCsv([{ ...ITEMS[0], name: '=HYPERLINK("http://x")', notes: "@SUMME", description: "-5 % Rabatt" }], () => "", () => "");
+    expect(risky.split("\r\n")[1]).toBe(`"'=HYPERLINK(""http://x"")";;;2;2024-01-15;89,99;2099-01-01;'-5 % Rabatt;'@SUMME;;;;`);
+  });
+});
+
+describe("InventoryPage: Ladefehler", () => {
+  it("Löschen scheitert: der Grund steht da, statt still nichts zu tun", async () => {
+    const ok = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).match(/\/items\/item-1$/) && init?.method === "DELETE") return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      return ok(input, init);
+    }));
+    render(<InventoryPage />);
+    await screen.findByText("Bohrmaschine");
+    fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
+    expect(await screen.findByText("Fehler: Datenbank gesperrt")).toBeInTheDocument();
+  });
+
+  it("scheitert erst ein späteres Laden (Suche), bleibt die Seite stehen und der Grund steht darüber", async () => {
+    const ok = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("q=Bohr")) return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      return ok(input, init);
+    }));
+    render(<InventoryPage />);
+    await screen.findByText("Bohrmaschine");
+    fireEvent.change(screen.getByLabelText(/Suche/), { target: { value: "Bohr" } });
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Das Inventar ließ sich gerade nicht laden: Datenbank gesperrt");
+    expect(screen.getByText("Bohrmaschine")).toBeInTheDocument();
+  });
+
+  it("eine Liste kommt nicht an: der Grund und „Erneut versuchen“ statt einer kaputten Seite", async () => {
+    let fail = true;
+    const ok = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (fail && String(input).endsWith("/ext/inventory/categories")) return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      return ok(input, init);
+    }));
+    render(<InventoryPage />);
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Das Inventar ließ sich gerade nicht laden: Datenbank gesperrt");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByText("Bohrmaschine")).toBeInTheDocument();
+    expect(screen.queryByTestId("load-error")).toBeNull();
   });
 });

@@ -27,7 +27,7 @@ export interface ImageApply {
   service?: string;
 }
 
-export type ApplyPhase = "start" | "pull" | "up" | "verify";
+export type ApplyPhase = "start" | "pull" | "up" | "verify" | "rollback";
 export interface ApplyingState {
   phase: ApplyPhase;
   started_at: string;
@@ -56,14 +56,17 @@ export interface UpdatePlan {
   rollback: string;
   risk: "low" | "medium" | "high";
   warnings: string[];
+  /** Startet die neue Version nicht sauber, geht es automatisch zurück (fehlt bei älteren Servern). */
+  auto_rollback?: boolean;
 }
 type PlanReply = UpdatePlan | { ok: false; kind: string; reason: string };
 
-const PHASE_TEXT: Record<ApplyPhase, string> = {
+export const PHASE_TEXT: Record<ApplyPhase, string> = {
   start: "startet …",
   pull: "lädt Image …",
   up: "erstellt Container neu …",
   verify: "prüft Start …",
+  rollback: "neue Version startet nicht – zurück zur alten …",
 };
 const DOWNTIME_TEXT = "Der Container wird neu erstellt und ist dabei kurz nicht erreichbar (meist unter einer Minute; das Herunterladen vorher kann dauern).";
 
@@ -235,6 +238,12 @@ export function UpdatePanel({
           </dl>
           <div className="rounded border border-amber-500/40 bg-amber-500/10 p-2 text-amber-200">
             <p>{DOWNTIME_TEXT}</p>
+            {plan.auto_rollback && (
+              <p className="mt-1">
+                Stürzt die neue Version beim Start ab oder lässt sich der Container nicht erstellen, geht Nodvard Deck in der
+                Regel automatisch auf die alte zurück.
+              </p>
+            )}
             {plan.warnings.length > 0 && (
               <ul className="mt-1 list-disc space-y-0.5 pl-4">
                 {plan.warnings.map((w) => <li key={w} className={w.startsWith("Datenbank") ? "font-medium text-red-300" : undefined}>{w}</li>)}

@@ -47,10 +47,13 @@ async def _renew(client, token, password):
     return await client.post("/api/v1/me/recovery-codes", json=body, headers=_h(token))
 
 
-async def _change(client, token, password):
-    return await client.post(
-        "/api/v1/me/password", json={"current_password": password, "new_password": "ganz-neues-passwort"}, headers=_h(token)
-    )
+async def _change(client, token, password, code=None):
+    """Passwort aendern. Mit Zwei-Faktor an verlangt der Server dafuer auch einen Code (Pruefung in
+    test_password_change_code.py); die Tests hier, die das Passwort pruefen, scheitern vorher am Passwort."""
+    body = {"current_password": password, "new_password": "ganz-neues-passwort"}
+    if code is not None:
+        body["totp_code"] = code
+    return await client.post("/api/v1/me/password", json=body, headers=_h(token))
 
 
 @pytest.mark.asyncio
@@ -142,7 +145,7 @@ async def test_success_clears_the_counter(client):
 @pytest.mark.asyncio
 async def test_password_change_still_works_with_the_right_password(client):
     token = await _setup(client)
-    assert (await _change(client, token, PASSWORD)).status_code == 204
+    assert (await _change(client, token, PASSWORD, pyotp.TOTP(_SECRETS[token]).now())).status_code == 204
 
 
 async def _start_totp(client, username="nico"):

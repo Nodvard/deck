@@ -10,5 +10,10 @@ category    = "tools"
 sort_order  = 20
 entrypoint  = "nodvard_deck_ext_documents:Extension"
 frontend    = "frontend/dist/index.js"
+# Nur für den Nextcloud-Ordner als Eingang (inbox.py): ohne "nextcloud" fehlt nur dieser Teil.
+requires    = ["nextcloud"]
 
-permissions = []
+permissions = ["schedule.register"]
+
+[settings]
+schema = "settings.schema.json"

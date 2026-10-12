@@ -31,6 +31,7 @@ ueber die heutige Kennung und die Zeile der Speicher-Kennung (`extensions.resolv
 
 from __future__ import annotations
 
+import math
 import re
 from typing import Annotated, Any, Literal
 
@@ -185,10 +186,48 @@ def _check_schedule(value: str, schema: dict[str, Any], path: str) -> None:
     try:
         cron_trigger(value)
     except ValueError as exc:
-        title = schema.get("title") if isinstance(schema.get("title"), str) and schema.get("title") else path
         raise HTTPException(
-            status_code=422, detail=f"„{title}“: Der Zeitplan „{value}“ ist ungültig. {_SCHEDULE_HINT}"
+            status_code=422, detail=f"„{_field_name(schema, path)}“: Der Zeitplan „{value}“ ist ungültig. {_SCHEDULE_HINT}"
         ) from exc
+
+
+def _field_name(schema: dict[str, Any], path: str) -> str:
+    title = schema.get("title")
+    return title if isinstance(title, str) and title else path
+
+
+def _bound(schema: dict[str, Any], key: str) -> float | None:
+    value = schema.get(key)
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) else None
+
+
+def _number_text(value: float) -> str:
+    """Zahl fuer eine Meldung: ganze Zahlen ohne Nachkommastellen, sonst mit deutschem Komma (wie die Oberflaeche)."""
+    if isinstance(value, float) and value.is_integer():
+        value = int(value)
+    return str(value).replace(".", ",")
+
+
+def _range_text(low: float | None, high: float | None) -> str:
+    if low is not None and high is not None:
+        return f"Erlaubt sind Werte von {_number_text(low)} bis {_number_text(high)}."
+    if low is not None:
+        return f"Erlaubt sind Werte ab {_number_text(low)}."
+    return f"Erlaubt sind Werte bis {_number_text(high)}."
+
+
+def _check_number(value: float, schema: dict[str, Any], path: str) -> None:
+    """Zahlenfelder: `minimum` und `maximum` (Grenzen eingeschlossen, wie JSON-Schema). Die Oberflaeche prueft
+    dasselbe (`rangeError` in SchemaForm.tsx). `NaN` und unendlich (der JSON-Leser von Python nimmt sie an) waeren
+    gespeichert kein gueltiges JSON mehr, die Seite liesse sich dann nicht mehr laden -- sie fallen immer heraus."""
+    if not math.isfinite(value):
+        raise HTTPException(status_code=422, detail=f"„{_field_name(schema, path)}“: Bitte eine Zahl eintragen.")
+    low, high = _bound(schema, "minimum"), _bound(schema, "maximum")
+    if (low is not None and value < low) or (high is not None and value > high):
+        raise HTTPException(
+            status_code=422,
+            detail=f"„{_field_name(schema, path)}“: {_range_text(low, high)} Eingetragen ist {_number_text(value)}.",
+        )
 
 
 _TYPES: dict[str, tuple[type, ...]] = {
@@ -203,7 +242,7 @@ _TYPES: dict[str, tuple[type, ...]] = {
 
 def _check(value: Any, schema: dict[str, Any], path: str) -> None:
     """Bewusst schmal (keine jsonschema-Abhaengigkeit): Typ, Pflichtfelder, Enum, `pattern`,
-    Zeitplan-Felder (`x-widget: "schedule"`)."""
+    Zeitplan-Felder (`x-widget: "schedule"`), `minimum`/`maximum` bei Zahlen, `maxItems` bei Listen."""
     expected = schema.get("type")
     if value is None:
         return
@@ -211,8 +250,13 @@ def _check(value: Any, schema: dict[str, Any], path: str) -> None:
         ok = isinstance(value, _TYPES[expected]) and not (expected in ("integer", "number") and isinstance(value, bool))
         if not ok:
             raise HTTPException(status_code=422, detail=f"„{path}“ hat den falschen Typ (erwartet {expected}).")
+        if expected in ("integer", "number"):
+            _check_number(value, schema, path)
     if "enum" in schema and value not in schema["enum"]:
-        raise HTTPException(status_code=422, detail=f"„{path}“ muss einer dieser Werte sein: {', '.join(map(str, schema['enum']))}.")
+        raise HTTPException(
+            status_code=422,
+            detail=f"„{_field_name(schema, path)}“ muss einer dieser Werte sein: {', '.join(map(str, schema['enum']))}.",
+        )
     if isinstance(value, str) and value != "" and isinstance(schema.get("pattern"), str):
         limit = schema["maxLength"] if isinstance(schema.get("maxLength"), int) and schema["maxLength"] > 0 else _PATTERN_MAX_LENGTH
         if len(value) > limit:
@@ -232,6 +276,9 @@ def _check(value: Any, schema: dict[str, Any], path: str) -> None:
         for key, sub in props.items():
             if key in value:
                 _check(value[key], sub, f"{path}.{key}")
+    max_items = schema.get("maxItems")
+    if expected == "array" and isinstance(value, list) and isinstance(max_items, int) and len(value) > max_items:
+        raise HTTPException(status_code=422, detail=f"„{_field_name(schema, path)}“: höchstens {max_items} Einträge.")
     if expected == "array" and isinstance(value, list) and isinstance(schema.get("items"), dict):
         for i, item in enumerate(value):
             _check(item, schema["items"], f"{path}[{i + 1}]")

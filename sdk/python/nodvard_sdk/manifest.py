@@ -49,6 +49,10 @@ KNOWN_PERMISSIONS = frozenset(
 )
 
 
+KNOWN_STAGES = ("stable", "beta")
+"""Reifegrad einer Erweiterung (`stage` im Manifest): `stable` (Vorgabe) oder `beta` (funktioniert, ist aber
+noch nicht so gruendlich erprobt wie der Rest; die Oberflaeche kennzeichnet sie)."""
+
 KNOWN_ENABLE_TRIGGERS = frozenset({"host_credential"})
 """Anlaesse, bei denen der Kern eine noch unberuehrte Erweiterung von selbst einschaltet
 (`enable_on` im Manifest). `host_credential`: ein Server hat einen SSH-Zugang bekommen."""
@@ -77,6 +81,10 @@ class ExtensionManifest(BaseModel):
     fehlender Wert landet unter „Weitere Module“."""
     sort_order: int = 100
     """Reihenfolge innerhalb der Gruppe (kleiner = weiter oben), bei Gleichstand nach Name."""
+    stage: str = "stable"
+    """Reifegrad: `stable` (Vorgabe, wenn das Feld fehlt) oder `beta`. Die Oberflaeche zeigt bei `beta` ein
+    ruhiges Abzeichen „Beta“ (Modul-Liste, Assistent, Menue, Seitenkopf). Ein anderer Wert ist ein Fehler
+    beim Laden des Manifests, damit ein Tippfehler nicht still als `stable` gilt."""
     legacy_ids: list[str] = Field(default_factory=list)
     """Fruehere Kennungen dieser Erweiterung, z. B. `["alt-name"]` nach einer Umbenennung. Der Kern
     nimmt dann den gespeicherten Stand der alten Kennung weiter (Einstellungen, Zeitplaene, Daten)
@@ -118,6 +126,14 @@ class ExtensionManifest(BaseModel):
                     f"{', '.join(sorted(KNOWN_ENABLE_TRIGGERS))}"
                 )
         return v
+
+    @field_validator("stage")
+    @classmethod
+    def _known_stage(cls, v: str) -> str:
+        """Ein unbekannter Wert ist kein Ladefehler, sondern gilt als `beta`: Eine Erweiterung fuer einen neueren Kern
+        darf einen Reifegrad nennen, den dieser Kern noch nicht kennt, und soll trotzdem laden (das Feld steuert nur
+        die Anzeige). `beta` statt `stable`, damit ein Tippfehler nicht still als erprobt gilt."""
+        return v if v in KNOWN_STAGES else "beta"
 
     @field_validator("legacy_ids")
     @classmethod

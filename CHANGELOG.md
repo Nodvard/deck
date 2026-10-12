@@ -10,6 +10,39 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.8.0] – 2026-10-12
+
+Proxmox in one step, an Apps page, the inventory as a homelab builder, and security updates.
+
+- **New:** connect Proxmox in one step: enter address and password, Nodvard Deck sets up the rest
+  and remembers the certificate. Alerts for nearly full Proxmox storage, missing recent backups,
+  degraded ZFS pools and hot disks. Restore a guest from a backup as a copy, with a summary and
+  checks before anything is created.
+- **New:** an "Apps" page with all tiles in one place, folders and drag and drop, plus suggestions
+  from Nginx Proxy Manager and detected containers. The address behind "Open" can be set per container.
+- **New:** the inventory as a homelab builder: manufacturer, model, serial number and product link
+  per device, build projects with what has been spent, racks with height units, reading the parts
+  of a Linux server, and importing an order list (for example your Amazon order history). Documents
+  can be attached to inventory items and picked up from a Nextcloud folder.
+- **New:** push notifications also via Telegram, Discord, Gotify, Pushover, Matrix, Slack and
+  Mattermost, with a minimum level. Servers can be set up once with a password instead of a command
+  on the server. A shell into running containers, a file viewer and "important places" per server.
+- **New:** the vault shows which module, server or account uses a secret and when it was last
+  used, with an optional expiry date.
+- **Security:** script IDs from requests can no longer point outside the script store. SVG uploads
+  and Nextcloud (WebDAV) answers are read with a hardened XML parser. Checking a crafted backup
+  before a restore always finishes quickly. Proxmox errors no longer show internal details in the
+  browser. The password for server setup only goes to a host whose key or certificate is confirmed.
+  With two-factor login on, changing your password needs the code; the login lockout counts IPv6
+  addresses per /64 network; only the owner can change trusted proxies; extensions can only replace
+  their own vault entries. Build tool dependencies updated.
+- **Improved:** a clearer Proxmox page, picking servers by tiles, a Shield score that also counts
+  open security updates, Fail2ban and SSH settings, restarts that are checked to keep running, and
+  clearer module names ("Proxmox backups", "Push notifications", "Server status").
+- **Fixed:** lists that fail to load show the reason and "Try again" instead of looking empty. App
+  tiles open the right address. The Shield score no longer drops during a scan. A backup with
+  warnings no longer counts as failed.
+
 ## [0.7.0] – 2026-10-07
 
 Update helper, Shield under its own name and more protection.

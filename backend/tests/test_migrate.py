@@ -14,12 +14,27 @@ fuer einen realistischen End-zu-Ende-Beweis (dieselbe Haltung wie
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
 import pytest
 
 from nodvard_deck import config
+
+
+@pytest.fixture(autouse=True)
+def _keep_logging_setup():
+    """`migrations/env.py` laedt die Logging-Einstellung der `alembic.ini` und schaltet dabei alle
+    schon vorhandenen Logger ab. Das darf nicht in Tests durchsickern, die danach Logmeldungen
+    pruefen (`caplog`). Vorlage: `test_audit_names_migration.py`."""
+    loggers = [logging.getLogger(), *(lg for lg in logging.root.manager.loggerDict.values() if isinstance(lg, logging.Logger))]
+    saved = [(lg, lg.disabled, lg.level, lg.propagate, list(lg.handlers)) for lg in loggers]
+    yield
+    for lg, disabled, level, propagate, handlers in saved:
+        lg.disabled, lg.propagate = disabled, propagate
+        lg.setLevel(level)
+        lg.handlers[:] = handlers
 
 
 def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: Path, monkeypatch):
@@ -63,9 +78,11 @@ def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: P
         assert {
             "ext_inventory_categories", "ext_inventory_locations",
             "ext_inventory_items", "ext_inventory_item_images",
+            "ext_inventory_projects", "ext_inventory_racks",
         } <= tables
         assert {
-            "ext_documents_tags", "ext_documents_documents", "ext_documents_document_tags",
+            "ext_documents_tags", "ext_documents_documents", "ext_documents_document_tags", "ext_documents_item_links",
+            "ext_documents_inbox_files",
         } <= tables
         # Vorfalls-Historie: Nodvard Shield hat jetzt ebenfalls einen eigenen Branch (Label bleibt `nexus-soc`, Tabellen `ext_nexus_soc_*`).
         assert "ext_nexus_soc_incidents" in tables
@@ -91,8 +108,9 @@ def test_upgrade_heads_migrates_core_and_inventory_branches_together(tmp_path: P
         # vom hier getesteten Multi-Branch-Mechanismus.
         assert len(heads) == 4
         # Shield (Branch-Label `nexus-soc`): b8c9d0e1f2a3 (dauerhafte Vorfalls-Warteschlange) auf a7b8c9d0e1f2
-        # (remote_id der Update-Laeufe).
-        assert {"a1b2c3d4e5f6", "9f1e2d3c4b5a", "b8c9d0e1f2a3"} <= heads
+        # (remote_id der Update-Laeufe). Inventar: c7d8e9f0a1b2 (Homelab-Baukasten) auf a1b2c3d4e5f6.
+        # Dokumente: a7b8c9d0e1f4 (Nextcloud-Ordner als Eingang) auf e2f3a4b5c6d7 (Verknüpfung mit Gegenständen).
+        assert {"c7d8e9f0a1b2", "a7b8c9d0e1f4", "b8c9d0e1f2a3"} <= heads
     finally:
         db.close()
 

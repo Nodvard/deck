@@ -59,11 +59,17 @@ const ACTION_LABELS: Record<string, string> = {
   "action.dismissed": "Aktion verworfen",
   "action.executed": "Aktion ausgeführt",
   "action.expired": "Aktion abgelaufen",
+  "action.proposed": "Aktion vorgeschlagen",
   "scripts.standing_approval.granted": "Dauerfreigabe erteilt",
   "scripts.standing_approval.revoked": "Dauerfreigabe zurückgezogen",
   "scripts.standing_approval.expired": "Dauerfreigabe erloschen",
+  "backups.restore_copy": "Gast aus Sicherung als Kopie wiederhergestellt",
+  "service_matrix.image_update": "Container-Image aktualisiert",
+  "hello.started": "Hello World gestartet",
   "exec.denied": "Befehl gesperrt",
   "console.open": "Konsole geöffnet",
+  "terminal.open": "Terminal geöffnet",
+  "terminal.close": "Terminal geschlossen",
   "files.access": "Zugriff auf Dateien eines Servers",
   "files.download": "Datei heruntergeladen",
   "files.upload": "Datei hochgeladen",
@@ -83,11 +89,41 @@ const ACTION_LABELS: Record<string, string> = {
   "system.backup.downloaded": "Sicherung heruntergeladen",
   "system.backup.verified": "Sicherung geprüft",
   "system.backup.deleted": "Sicherung gelöscht",
+  "system.restore.uploaded": "Sicherung zum Wiederherstellen hochgeladen",
+  "system.restore.upload_failed": "Hochladen zum Wiederherstellen fehlgeschlagen",
+  "system.restore.inspected": "Sicherung vor dem Wiederherstellen geprüft",
+  "system.restore.inspect_failed": "Prüfung vor dem Wiederherstellen fehlgeschlagen",
+  "system.restore.scheduled": "Wiederherstellung vorgemerkt",
+  "system.restore.schedule_failed": "Wiederherstellung konnte nicht vorgemerkt werden",
+  "system.restore.cancelled": "Wiederherstellung abgebrochen",
+  "system.restore.applied": "Wiederherstellung durchgeführt",
+  "system.restore.failed": "Wiederherstellung fehlgeschlagen",
+  "system.restore.replaced_deleted": "Alten Stand nach der Wiederherstellung gelöscht",
+  "system.restart.requested": "Neustart von Nodvard Deck angefordert",
+  "system.update.requested": "Update angefordert",
+  "system.update.request_refused": "Update-Anforderung abgelehnt",
+  "system.update.rollback_requested": "Rückweg auf die vorige Version angefordert",
+  "system.update.rollback_refused": "Rückweg abgelehnt",
+  "system.update.applied": "Update eingespielt",
+  "system.update.reverted": "Zurück auf die vorige Version",
+  "system.update.rolled_back": "Update zurückgenommen",
+  "system.update.refused": "Update vom Update-Helfer abgelehnt",
+  "system.update.aborted": "Update abgebrochen",
+  "system.update.failed_manual": "Update: bitte von Hand nachsehen",
+  "system.update.external_change": "Update abgebrochen: Container von außen geändert",
+  "system.demo.seeded": "Beispieldaten angelegt",
+  "system.demo.removed": "Beispieldaten entfernt",
   "extension.settings": "Erweiterung eingerichtet",
+  "extension.test": "Erweiterung getestet",
   "extension.secret_set": "Zugangsdaten hinterlegt",
+  "extension.secret_removed": "Zugangsdaten gelöscht",
   "extension.enabled": "Erweiterung eingeschaltet",
   "extension.disabled": "Erweiterung ausgeschaltet",
   "extension.auto_enabled": "Erweiterung automatisch eingeschaltet",
+  "proxmox.connect_with_password": "Proxmox mit Passwort verbinden",
+  "backups.connection_received": "Proxmox-Backups: Zugang übernommen",
+  "proxmox.certificate_confirmed": "Proxmox: Fingerabdruck des Zertifikats bestätigt",
+  "backups.certificate_confirmed": "Proxmox-Backups: Fingerabdruck des Zertifikats bestätigt",
   "host.created": "Server angelegt",
   "host.updated": "Server geändert",
   "host.deleted": "Server gelöscht",
@@ -98,12 +134,49 @@ const ACTION_LABELS: Record<string, string> = {
   "host.known_key_pinned": "Server-Schlüssel bestätigt",
   "host.known_key_forgotten": "Server-Schlüssel vergessen",
   "host.connection_checked": "Verbindung geprüft",
+  "host.setup_with_password": "Server mit Passwort einrichten",
   "host.group_changed": "Gruppe geändert",
+  "shield.finding_ignored": "Fund ignoriert",
+  "shield.malware_found": "Schadsoftware gefunden",
+  "shield.quarantine": "Datei in Quarantäne verschoben",
+  "shield.guard_bruteforce": "Angriff auf SSH erkannt",
+  "shield.guard_new_login_ip": "Anmeldung von neuer Adresse bemerkt",
+  "shield.guard_new_port": "Neuer offener Port bemerkt",
+  "shield.guard_file_changed": "Wichtige Datei geändert",
+  "shield.guard_fail2ban_down": "Fail2ban läuft nicht",
+  "shield.guard_acknowledged": "Sicherheitsereignis bestätigt",
+  "shield.updates_all": "Alle Updates eingespielt",
+  "shield.updates_security": "Sicherheitsupdates eingespielt",
+  "shield.updates_cleanup": "Aufräumen nach Updates ausgeführt",
+  "shield.updates_reboot": "Server neu gestartet",
+  "shield.updates_proposed_all": "Updates für alle Server vorgeschlagen",
+  "shield.incident": "Vorfall erfasst und von Nodvard KI bewertet",
+  "shield.incident_status": "Status eines Vorfalls geändert",
+  "shield.proposal_rejected": "Vorschlag von Nodvard KI abgelehnt",
+  "shield.watch_path_added": "Ordner zum Echtzeit-Wächter hinzugefügt",
+  "inventory.hardware_scan": "Inventar: Teile vom Server ausgelesen",
+  "service_matrix.tile_url": "Service-Matrix: eigene Kachel-Adresse gespeichert",
   "app.created": "App angelegt",
   "app.updated": "App geändert",
   "app.deleted": "App gelöscht",
   "app.reordered": "Apps umsortiert",
+  "notifications.deleted": "Meldung gelöscht",
 };
+
+/** Bis 0.6 hieß Nodvard Shield `nexus_soc`; ältere Einträge tragen das noch als Vorsilbe und bleiben bis zum Ende der
+ * Aufbewahrungsfrist im Protokoll stehen. Sie bekommen dieselbe Beschriftung wie die neuen (`shield.<Vorgang>`). */
+const LEGACY_ACTION_PREFIXES: Record<string, string> = { "nexus_soc.": "shield." };
+
+/** Die deutsche Beschriftung eines Vorgangs; `undefined`, wenn es keine gibt (dann zeigt die Tabelle den Namen roh).
+ * Der Test `backend/tests/test_audit_labels.py` sorgt dafür, dass jeder Vorgang, den der Code auslöst, eine hat. */
+export function auditActionLabel(action: string): string | undefined {
+  const direct = ACTION_LABELS[action];
+  if (direct) return direct;
+  for (const [legacy, current] of Object.entries(LEGACY_ACTION_PREFIXES)) {
+    if (action.startsWith(legacy)) return ACTION_LABELS[current + action.slice(legacy.length)];
+  }
+  return undefined;
+}
 
 const OUTCOME_TONE: Record<string, "good" | "bad" | "warn" | "neutral"> = {
   success: "good", succeeded: "good", failure: "bad", failed: "bad", denied: "bad", error: "bad",
@@ -114,7 +187,9 @@ const OUTCOME_LABELS: Record<string, string> = { success: "Erfolgreich", failure
 /** Was ein Eintrag betrifft, in Worten (die API nennt die Art englisch: `user`, `host` ...). */
 const TARGET_LABELS: Record<string, string> = {
   user: "Benutzer", host: "Server", host_group: "Servergruppe", action: "Aktion", extension: "Erweiterung", backup: "Sicherung",
+  file_source: "Dateiquelle", script: "Skript",
   restore: "Wiederherstellung", system: "System", setting: "Einstellung", secret: "Zugangsdaten", container: "Container", app: "App",
+  notification: "Meldung",
 };
 
 const UUID_START = /^[0-9a-f]{8}-[0-9a-f]{4}-/i;
@@ -131,10 +206,13 @@ export function targetText(
   // Ein gelöschtes Konto steht nicht mehr in der Benutzerliste; sein Name steht im Eintrag selbst
   // (`user.created`, `user.updated`, `user.deleted`).
   const recorded = e.action?.startsWith("user.") && typeof e.detail?.username === "string" ? e.detail.username : undefined;
+  // Eine gelöschte Meldung gibt es nicht mehr; ihr Titel steht im Eintrag selbst (`notifications.deleted`).
+  const title = e.target_type === "notification" && typeof e.detail?.title === "string" ? e.detail.title : undefined;
   const name =
     e.target_type === "user" ? names.users[e.target_id] ?? recorded
     : e.target_type === "host" ? names.hosts[e.target_id]
     : e.target_type === "extension" ? names.extension(e.target_id)
+    : e.target_type === "notification" ? title
     : undefined;
   if (name) return `${kind} · ${name}`;
   return UUID_START.test(e.target_id) ? kind : `${kind} · ${e.target_id}`;
@@ -201,7 +279,7 @@ export function AuditSettings(): JSX.Element {
     const needle = search.trim().toLowerCase();
     if (!needle) return entries;
     return entries.filter((e) =>
-      [e.action, ACTION_LABELS[e.action], e.actor_id, userNames[e.actor_id], e.target_type, e.target_id, e.target_id ? userNames[e.target_id] ?? hostNames[e.target_id] : null, e.reason, e.ip, JSON.stringify(e.detail)]
+      [e.action, auditActionLabel(e.action), e.actor_id, userNames[e.actor_id], e.target_type, e.target_id, e.target_id ? userNames[e.target_id] ?? hostNames[e.target_id] : null, e.reason, e.ip, JSON.stringify(e.detail)]
         .some((v) => v?.toLowerCase().includes(needle)),
     );
   }, [entries, search, userNames, hostNames]);
@@ -283,7 +361,7 @@ export function AuditSettings(): JSX.Element {
                   <td className="whitespace-nowrap px-3 py-2 tabular-nums text-white/60">{new Date(e.ts).toLocaleString("de-DE")}</td>
                   <td className="px-3 py-2">
                     {/* Der technische Name (`login.succeeded`) steht nur noch im Tooltip und in den Einzelheiten. */}
-                    <span className="block" title={ACTION_LABELS[e.action] ? e.action : undefined}>{ACTION_LABELS[e.action] ?? e.action}</span>
+                    <span className="block" title={auditActionLabel(e.action) ? e.action : undefined}>{auditActionLabel(e.action) ?? e.action}</span>
                   </td>
                   <td className="px-3 py-2 text-white/70">{actorName(e)}</td>
                   <td className="max-w-[16rem] truncate px-3 py-2 text-white/60" title={e.target_id ?? undefined}>{targetText(e, { users: userNames, hosts: hostNames, extension: extensionLabel })}</td>

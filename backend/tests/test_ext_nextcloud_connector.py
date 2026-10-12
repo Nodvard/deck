@@ -188,6 +188,41 @@ async def test_list_children_skips_the_url_encoded_self_entry(folder, encoded):
     assert [(e.name, e.path, e.is_dir) for e in entries] == [("notiz.txt", f"{folder}/notiz.txt", False)]
 
 
+_MULTISTATUS = (
+    '<d:multistatus xmlns:d="DAV:"><d:response><d:href>{href}</d:href><d:propstat><d:prop><d:resourcetype/>'
+    "</d:prop></d:propstat></d:response></d:multistatus>"
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "head,href",
+    [
+        ('<!DOCTYPE d [<!ENTITY x SYSTEM "file:///etc/passwd">]>', "&x;"),  # XXE
+        ('<!DOCTYPE d [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>', "&b;"),  # Entity-Bombe
+        ("<!DOCTYPE d:multistatus>", "/remote.php/dav/files/alice/x"),  # eine DTD hat eine WebDAV-Antwort nie
+    ],
+)
+async def test_a_webdav_answer_with_dtd_or_entities_is_refused(head, href):
+    """Sicherheitsfund (XML): Die Antwort kommt vom Server aus den Einstellungen. Entitaeten werden nicht aufgeloest,
+    sondern die Antwort gilt als ungueltig -- dieselbe Meldung wie bei einer Anmeldeseite statt WebDAV."""
+    body = ('<?xml version="1.0"?>' + head + _MULTISTATUS.format(href=href)).encode()
+    connector = NextcloudConnector(ctx=_FakeCtx(body), base_url="https://cloud.example.com", username="alice", password="x")
+
+    with pytest.raises(WebDavError, match="keine gültige WebDAV-Antwort"):
+        await connector.list_children("/")
+
+
+@pytest.mark.asyncio
+async def test_a_webdav_answer_with_an_unknown_encoding_is_refused_not_a_crash():
+    """Eine unbekannte Kodierung im XML-Kopf wirft `LookupError` statt `ParseError` -- sonst ein 500."""
+    body = ('<?xml version="1.0" encoding="bogus"?>' + _MULTISTATUS.format(href="/x")).encode()
+    connector = NextcloudConnector(ctx=_FakeCtx(body), base_url="https://cloud.example.com", username="alice", password="x")
+
+    with pytest.raises(WebDavError, match="keine gültige WebDAV-Antwort"):
+        await connector.list_children("/")
+
+
 class _RecordingHttp:
     """Merkt sich jede Anfrage; antwortet auf alles mit 207/leerem Inhalt."""
 

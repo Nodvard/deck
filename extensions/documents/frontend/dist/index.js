@@ -1,5 +1,5 @@
 // src/DocumentsPage.tsx
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
@@ -235,8 +235,51 @@ function Loading() {
   return /* @__PURE__ */ jsx("div", { className: "p-6 text-sm text-white/50", children: "Lade \u2026" });
 }
 
+// ../../_shared/frontend/src/loadError.tsx
+import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+var UNREADABLE_ANSWER_TEXT = "Die Antwort des Servers lie\xDF sich nicht lesen.";
+async function fetchJson(path, init) {
+  const res = await authedFetch(path, init);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(errorFromBody(body, res.status));
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(UNREADABLE_ANSWER_TEXT);
+  }
+}
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function LoadError({ what, error, onRetry, hint, compact = false }) {
+  if (compact) {
+    return /* @__PURE__ */ jsxs2("div", { role: "alert", "data-testid": "load-error", className: "text-sm", children: [
+      /* @__PURE__ */ jsxs2("p", { className: "text-red-300", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/50", children: hint }),
+      onRetry && /* @__PURE__ */ jsx2("button", { type: "button", onClick: onRetry, className: "mt-1 text-xs text-white/70 underline underline-offset-2 hover:text-white", children: "Erneut versuchen" })
+    ] });
+  }
+  return /* @__PURE__ */ jsxs2("div", { role: "alert", "data-testid": "load-error", className: "mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm", children: [
+    /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsxs2("p", { className: "text-red-200", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/55", children: hint })
+    ] }),
+    onRetry && /* @__PURE__ */ jsx2(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" })
+  ] });
+}
+
 // src/DocumentsPage.tsx
-import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
 function formatSize(bytes) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -273,30 +316,30 @@ function TagPanel({ tags, onChanged }) {
     await authedFetch(`/ext/documents/tags/${id}`, { method: "DELETE" });
     onChanged();
   }
-  return /* @__PURE__ */ jsxs2(
+  return /* @__PURE__ */ jsxs3(
     Card,
     {
       title: "Tags",
       description: "Mit Auto-Stichwort wird ein Tag automatisch vergeben, sobald das Wort im erkannten Text vorkommt (z. B. \u201ERechnung\u201C).",
       className: "mb-5",
       children: [
-        message && /* @__PURE__ */ jsx2(Notice, { text: message, onClose: () => setMessage(null) }),
-        /* @__PURE__ */ jsxs2("div", { className: "mb-4 flex flex-wrap gap-1.5", children: [
-          tags.map((t) => /* @__PURE__ */ jsxs2("span", { className: "inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] py-1 pl-2.5 pr-1.5 text-sm", children: [
-            /* @__PURE__ */ jsx2(Icon, { name: "tag", size: 12, className: "text-[var(--color-accent)]" }),
+        message && /* @__PURE__ */ jsx3(Notice, { text: message, onClose: () => setMessage(null) }),
+        /* @__PURE__ */ jsxs3("div", { className: "mb-4 flex flex-wrap gap-1.5", children: [
+          tags.map((t) => /* @__PURE__ */ jsxs3("span", { className: "inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] py-1 pl-2.5 pr-1.5 text-sm", children: [
+            /* @__PURE__ */ jsx3(Icon, { name: "tag", size: 12, className: "text-[var(--color-accent)]" }),
             t.name,
-            t.match_keyword && /* @__PURE__ */ jsxs2("span", { className: "text-xs text-white/40", children: [
+            t.match_keyword && /* @__PURE__ */ jsxs3("span", { className: "text-xs text-white/40", children: [
               "\u201E",
               t.match_keyword,
               "\u201C"
             ] }),
-            /* @__PURE__ */ jsx2("button", { type: "button", "aria-label": `Tag ${t.name} l\xF6schen`, onClick: () => void removeTag(t.id), className: "rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white", children: /* @__PURE__ */ jsx2(Icon, { name: "x", size: 12 }) })
+            /* @__PURE__ */ jsx3("button", { type: "button", "aria-label": `Tag ${t.name} l\xF6schen`, onClick: () => void removeTag(t.id), className: "rounded p-0.5 text-white/40 hover:bg-white/10 hover:text-white", children: /* @__PURE__ */ jsx3(Icon, { name: "x", size: 12 }) })
           ] }, t.id)),
-          tags.length === 0 && /* @__PURE__ */ jsx2("span", { className: "text-sm text-white/40", children: "Noch keine Tags." })
+          tags.length === 0 && /* @__PURE__ */ jsx3("span", { className: "text-sm text-white/40", children: "Noch keine Tags." })
         ] }),
-        /* @__PURE__ */ jsxs2("form", { onSubmit: (e) => void addTag(e), className: "flex flex-wrap gap-2", children: [
-          /* @__PURE__ */ jsx2("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Neuer Tag", "aria-label": "Neuer Tag", className: `${inputClass} flex-1` }),
-          /* @__PURE__ */ jsx2(
+        /* @__PURE__ */ jsxs3("form", { onSubmit: (e) => void addTag(e), className: "flex flex-wrap gap-2", children: [
+          /* @__PURE__ */ jsx3("input", { value: name, onChange: (e) => setName(e.target.value), placeholder: "Neuer Tag", "aria-label": "Neuer Tag", className: `${inputClass} flex-1` }),
+          /* @__PURE__ */ jsx3(
             "input",
             {
               value: matchKeyword,
@@ -306,14 +349,110 @@ function TagPanel({ tags, onChanged }) {
               className: `${inputClass} flex-1`
             }
           ),
-          /* @__PURE__ */ jsxs2(Button, { type: "submit", children: [
-            /* @__PURE__ */ jsx2(Icon, { name: "plus", size: 14 }),
+          /* @__PURE__ */ jsxs3(Button, { type: "submit", children: [
+            /* @__PURE__ */ jsx3(Icon, { name: "plus", size: 14 }),
             " Tag anlegen"
           ] })
         ] })
       ]
     }
   );
+}
+function inboxSummary(run) {
+  if (!run.ok) return run.message ?? "Der Abruf hat nicht geklappt.";
+  const parts = [
+    run.imported === 0 ? "Keine neuen Dateien." : run.imported === 1 ? "1 neues Dokument \xFCbernommen." : `${run.imported} neue Dokumente \xFCbernommen.`
+  ];
+  if (run.too_large.length) parts.push(`Zu gro\xDF (\xFCber 20 MB), \xFCbersprungen: ${run.too_large.join(", ")}.`);
+  if (run.wrong_content.length) parts.push(`Inhalt passt nicht zur Endung, \xFCbersprungen: ${run.wrong_content.join(", ")}.`);
+  if (run.failed.length) parts.push(`Nicht lesbar, beim n\xE4chsten Abruf neuer Versuch: ${run.failed.join(", ")}.`);
+  if (run.more_waiting) parts.push("Weitere Dateien folgen beim n\xE4chsten Abruf.");
+  return parts.join(" ");
+}
+var POLL_MS = 1500;
+var POLL_LIMIT = 400;
+function timeOf(iso) {
+  return new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+}
+function InboxPanel({ status, onFetched }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+  const alive = useRef(true);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, []);
+  const onFetchedRef = useRef(onFetched);
+  useEffect(() => {
+    onFetchedRef.current = onFetched;
+  }, [onFetched]);
+  const waiting = useRef(false);
+  const waitUntilDone = useCallback(async () => {
+    if (waiting.current) return;
+    waiting.current = true;
+    try {
+      for (let i = 0; i < POLL_LIMIT && alive.current; i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, POLL_MS));
+        if (!alive.current) return;
+        try {
+          if (!(await fetchJson("/ext/documents/inbox")).running) break;
+        } catch {
+        }
+      }
+      if (alive.current) onFetchedRef.current();
+    } finally {
+      waiting.current = false;
+    }
+  }, []);
+  useEffect(() => {
+    if (!status.running) return;
+    setBusy(true);
+    void waitUntilDone().finally(() => {
+      if (alive.current) setBusy(false);
+    });
+  }, [status.running, waitUntilDone]);
+  if (!status.folder && !status.folder_error) return null;
+  async function fetchNow() {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch("/ext/documents/inbox/fetch", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      if (body.running) await waitUntilDone();
+      else onFetched();
+    } catch (err) {
+      if (alive.current) setError(errorMessage(err));
+    } finally {
+      if (alive.current) setBusy(false);
+    }
+  }
+  const last = status.last_run;
+  let line;
+  if (status.folder_error) line = status.folder_error;
+  else if (!status.nextcloud_ready) line = "Nextcloud ist noch nicht eingerichtet. Bitte zuerst die Erweiterung \u201ENextcloud\u201C einrichten.";
+  else if (last) {
+    line = `Zuletzt abgeholt um ${timeOf(last.at)}: ${inboxSummary(last)}`;
+    if (status.last_checked_at && status.last_checked_at !== last.at) line += ` Zuletzt nachgesehen um ${timeOf(status.last_checked_at)}.`;
+  } else line = "Neue PDFs und Bilder kommen alle 15 Minuten von selbst. Die Dateien bleiben in der Nextcloud.";
+  return /* @__PURE__ */ jsxs3("div", { className: "mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.06] px-4 py-3 text-sm", children: [
+    /* @__PURE__ */ jsxs3("div", { className: "min-w-0", children: [
+      /* @__PURE__ */ jsxs3("div", { className: "font-medium", children: [
+        /* @__PURE__ */ jsx3(Icon, { name: "folder", size: 14 }),
+        " Nextcloud-Ordner ",
+        status.folder ?? ""
+      ] }),
+      /* @__PURE__ */ jsx3("div", { role: "status", className: last && !last.ok ? "text-red-300" : "text-zinc-400", children: line }),
+      error && /* @__PURE__ */ jsx3("div", { role: "alert", className: "text-red-300", children: error })
+    ] }),
+    status.folder && status.nextcloud_ready && /* @__PURE__ */ jsxs3(Button, { onClick: () => void fetchNow(), disabled: busy, children: [
+      /* @__PURE__ */ jsx3(Icon, { name: "download", size: 14 }),
+      " ",
+      busy ? "Holt ab \u2026" : "Jetzt abholen"
+    ] })
+  ] });
 }
 function DocumentsPage() {
   const [documents, setDocuments] = useState(null);
@@ -328,26 +467,44 @@ function DocumentsPage() {
   const [copied, setCopied] = useState(null);
   const [uploading, setUploading] = useState(false);
   const [attachTagId, setAttachTagId] = useState({});
+  const [itemFilter, setItemFilter] = useState("");
+  const [linkItemId, setLinkItemId] = useState({});
+  const [linking, setLinking] = useState(null);
+  const [items, setItems] = useState(null);
+  const [inbox, setInbox] = useState(null);
+  const loadInbox = useCallback(() => {
+    fetchJson("/ext/documents/inbox").then(setInbox).catch(() => setInbox(null));
+  }, []);
   const load = useCallback(() => {
     setError(null);
     const params = new URLSearchParams();
     if (search) params.set("q", search);
     if (tagFilter) params.set("tag_id", tagFilter);
+    if (itemFilter) params.set("item_id", itemFilter);
     const qs = params.toString() ? `?${params.toString()}` : "";
     Promise.all([
-      authedFetch(`/ext/documents/documents${qs}`).then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      }),
-      authedFetch("/ext/documents/tags").then((r) => r.json())
+      // Beide mit Statusprüfung: sonst landete bei einem Fehler die Fehlerantwort als „Liste“ in der Seite.
+      fetchJson(`/ext/documents/documents${qs}`),
+      fetchJson("/ext/documents/tags")
     ]).then(([docsData, tagsData]) => {
       setDocuments(docsData);
       setTags(tagsData);
-    }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [search, tagFilter]);
+    }).catch((err) => setError(errorMessage(err)));
+  }, [search, tagFilter, itemFilter]);
   useEffect(() => {
     load();
   }, [load]);
+  useEffect(() => {
+    loadInbox();
+  }, [loadInbox]);
+  const afterInbox = useCallback(() => {
+    load();
+    loadInbox();
+  }, [load, loadInbox]);
+  useEffect(() => {
+    if (!deck().hasPermission("inventory.read")) return;
+    fetchJson("/ext/inventory/items").then(setItems).catch(() => setItems(null));
+  }, []);
   async function uploadFile(file) {
     setUploading(true);
     setMessage(null);
@@ -371,24 +528,51 @@ function DocumentsPage() {
   async function removeDocument(doc) {
     const ok = await deck().confirmDialog(`"${doc.original_filename}" wirklich l\xF6schen?`, { danger: true, confirmLabel: "L\xF6schen" });
     if (!ok) return;
-    await authedFetch(`/ext/documents/documents/${doc.id}`, { method: "DELETE" });
+    const res = await authedFetch(`/ext/documents/documents/${doc.id}`, { method: "DELETE" });
+    if (!res.ok) await showError(res);
     load();
   }
   async function attachTag(doc) {
     const tagId = attachTagId[doc.id];
     if (!tagId) return;
-    await authedFetch(`/ext/documents/documents/${doc.id}/tags/${tagId}`, { method: "POST" });
-    setAttachTagId({ ...attachTagId, [doc.id]: "" });
+    const res = await authedFetch(`/ext/documents/documents/${doc.id}/tags/${tagId}`, { method: "POST" });
+    if (!res.ok) await showError(res);
+    else setAttachTagId({ ...attachTagId, [doc.id]: "" });
     load();
   }
   async function detachTag(doc, tagId) {
-    await authedFetch(`/ext/documents/documents/${doc.id}/tags/${tagId}`, { method: "DELETE" });
+    const res = await authedFetch(`/ext/documents/documents/${doc.id}/tags/${tagId}`, { method: "DELETE" });
+    if (!res.ok) await showError(res);
     load();
+  }
+  async function linkItem(doc) {
+    const itemId = linkItemId[doc.id];
+    if (!itemId || linking) return;
+    setLinking(doc.id);
+    try {
+      const res = await authedFetch(`/ext/documents/documents/${doc.id}/items/${encodeURIComponent(itemId)}`, { method: "POST" });
+      if (!res.ok) await showError(res);
+      else setLinkItemId({ ...linkItemId, [doc.id]: "" });
+    } catch (err) {
+      setMessage(`Fehler: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setLinking(null);
+    }
+    load();
+  }
+  async function unlinkItem(doc, itemId) {
+    const res = await authedFetch(`/ext/documents/documents/${doc.id}/items/${encodeURIComponent(itemId)}`, { method: "DELETE" });
+    if (!res.ok) await showError(res);
+    load();
+  }
+  async function showError(res) {
+    const body = await res.json().catch(() => ({}));
+    setMessage(`Fehler: ${errorFromBody(body, res.status)}`);
   }
   async function fetchBlob(doc) {
     const res = await authedFetch(`/ext/documents/documents/${doc.id}/download`);
     if (!res.ok) {
-      setMessage(`Fehler: HTTP ${res.status}`);
+      await showError(res);
       return null;
     }
     return res.blob();
@@ -431,7 +615,7 @@ function DocumentsPage() {
   async function downloadDocument(doc) {
     const res = await authedFetch(`/ext/documents/documents/${doc.id}/download`);
     if (!res.ok) {
-      setMessage(`Fehler: HTTP ${res.status}`);
+      await showError(res);
       return;
     }
     const blob = await res.blob();
@@ -442,13 +626,13 @@ function DocumentsPage() {
     a.click();
     URL.revokeObjectURL(url);
   }
-  if (!documents && !error) return /* @__PURE__ */ jsx2(Loading, {});
-  if (error) return /* @__PURE__ */ jsx2(Page, { title: "Dokumente", children: /* @__PURE__ */ jsx2(Notice, { text: `Fehler: ${error}` }) });
-  const uploadButton = (label) => /* @__PURE__ */ jsxs2("label", { className: `${buttonClass("primary")} cursor-pointer`, children: [
-    /* @__PURE__ */ jsx2(Icon, { name: "upload", size: 14 }),
+  if (!documents && !error) return /* @__PURE__ */ jsx3(Loading, {});
+  if (error && !documents) return /* @__PURE__ */ jsx3(Page, { title: "Dokumente", children: /* @__PURE__ */ jsx3(LoadError, { what: "Die Liste der Dokumente", error, onRetry: load }) });
+  const uploadButton = (label) => /* @__PURE__ */ jsxs3("label", { className: `${buttonClass("primary")} cursor-pointer`, children: [
+    /* @__PURE__ */ jsx3(Icon, { name: "upload", size: 14 }),
     " ",
     uploading ? "L\xE4dt hoch \u2026" : label,
-    /* @__PURE__ */ jsx2(
+    /* @__PURE__ */ jsx3(
       "input",
       {
         type: "file",
@@ -466,23 +650,26 @@ function DocumentsPage() {
   const totalBytes = docs.reduce((sum, d) => sum + d.size_bytes, 0);
   const ocrFailed = docs.filter((d) => d.ocr_status === "error").length;
   const untagged = docs.filter((d) => d.tags.length === 0).length;
-  const filtering = Boolean(search || tagFilter);
-  return /* @__PURE__ */ jsxs2(
+  const filtering = Boolean(search || tagFilter || itemFilter);
+  const itemName = (id) => items?.find((i) => i.id === id)?.name ?? null;
+  return /* @__PURE__ */ jsxs3(
     Page,
     {
       title: "Dokumente",
       description: "Rechnungen, Vertr\xE4ge und Handb\xFCcher als PDF oder Scan \u2013 mit Texterkennung und Volltextsuche.",
-      actions: /* @__PURE__ */ jsxs2(Fragment2, { children: [
-        /* @__PURE__ */ jsxs2(Button, { onClick: () => setShowTags((v) => !v), pressed: showTags, children: [
-          /* @__PURE__ */ jsx2(Icon, { name: "tag", size: 14 }),
+      actions: /* @__PURE__ */ jsxs3(Fragment2, { children: [
+        /* @__PURE__ */ jsxs3(Button, { onClick: () => setShowTags((v) => !v), pressed: showTags, children: [
+          /* @__PURE__ */ jsx3(Icon, { name: "tag", size: 14 }),
           " Tags verwalten"
         ] }),
         uploadButton("Dokument hochladen")
       ] }),
       children: [
-        showTags && /* @__PURE__ */ jsx2(TagPanel, { tags, onChanged: load }),
-        message && /* @__PURE__ */ jsx2(Notice, { text: message, onClose: () => setMessage(null) }),
-        docs.length === 0 && !filtering ? /* @__PURE__ */ jsx2(
+        showTags && /* @__PURE__ */ jsx3(TagPanel, { tags, onChanged: load }),
+        inbox && /* @__PURE__ */ jsx3(InboxPanel, { status: inbox, onFetched: afterInbox }),
+        error && /* @__PURE__ */ jsx3(LoadError, { what: "Die Liste der Dokumente", error, onRetry: load, hint: "Angezeigt wird der letzte geladene Stand." }),
+        message && /* @__PURE__ */ jsx3(Notice, { text: message, onClose: () => setMessage(null) }),
+        docs.length === 0 && !filtering ? /* @__PURE__ */ jsx3(
           EmptyState,
           {
             icon: "file",
@@ -490,28 +677,34 @@ function DocumentsPage() {
             text: "Lade PDFs oder Fotos von Dokumenten hoch. Der Text wird automatisch erkannt, damit du sp\xE4ter per Suche alles wiederfindest.",
             action: uploadButton("Erstes Dokument hochladen")
           }
-        ) : /* @__PURE__ */ jsxs2(Fragment2, { children: [
-          /* @__PURE__ */ jsxs2("div", { className: "mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
-            /* @__PURE__ */ jsx2(Stat, { label: "Dokumente", value: docs.length }),
-            /* @__PURE__ */ jsx2(Stat, { label: "Speicher", value: formatSize(totalBytes) }),
-            /* @__PURE__ */ jsx2(Stat, { label: "Ohne Tag", value: untagged }),
-            /* @__PURE__ */ jsx2(Stat, { label: "Texterkennung fehlgeschlagen", value: ocrFailed, tone: ocrFailed ? "warn" : void 0 })
+        ) : /* @__PURE__ */ jsxs3(Fragment2, { children: [
+          /* @__PURE__ */ jsxs3("div", { className: "mb-5 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
+            /* @__PURE__ */ jsx3(Stat, { label: "Dokumente", value: docs.length }),
+            /* @__PURE__ */ jsx3(Stat, { label: "Speicher", value: formatSize(totalBytes) }),
+            /* @__PURE__ */ jsx3(Stat, { label: "Ohne Tag", value: untagged }),
+            /* @__PURE__ */ jsx3(Stat, { label: "Texterkennung fehlgeschlagen", value: ocrFailed, tone: ocrFailed ? "warn" : void 0 })
           ] }),
-          /* @__PURE__ */ jsxs2("div", { className: "mb-3 flex flex-wrap gap-2", children: [
-            /* @__PURE__ */ jsx2(SearchInput, { value: search, onChange: setSearch, placeholder: "Volltextsuche \u2026", label: "Volltextsuche" }),
-            /* @__PURE__ */ jsxs2("select", { value: tagFilter, onChange: (e) => setTagFilter(e.target.value), "aria-label": "Nach Tag filtern", className: `${inputClass} w-auto`, children: [
-              /* @__PURE__ */ jsx2("option", { value: "", children: "Alle Tags" }),
-              tags.map((t) => /* @__PURE__ */ jsx2("option", { value: t.id, children: t.name }, t.id))
+          /* @__PURE__ */ jsxs3("div", { className: "mb-3 flex flex-wrap gap-2", children: [
+            /* @__PURE__ */ jsx3(SearchInput, { value: search, onChange: setSearch, placeholder: "Volltextsuche \u2026", label: "Volltextsuche" }),
+            /* @__PURE__ */ jsxs3("select", { value: tagFilter, onChange: (e) => setTagFilter(e.target.value), "aria-label": "Nach Tag filtern", className: `${inputClass} w-auto`, children: [
+              /* @__PURE__ */ jsx3("option", { value: "", children: "Alle Tags" }),
+              tags.map((t) => /* @__PURE__ */ jsx3("option", { value: t.id, children: t.name }, t.id))
+            ] }),
+            items && items.length > 0 && /* @__PURE__ */ jsxs3("select", { value: itemFilter, onChange: (e) => setItemFilter(e.target.value), "aria-label": "Nach Gegenstand filtern", className: `${inputClass} w-auto`, children: [
+              /* @__PURE__ */ jsx3("option", { value: "", children: "Alle Gegenst\xE4nde" }),
+              items.map((i) => /* @__PURE__ */ jsx3("option", { value: i.id, children: i.name }, i.id))
             ] })
           ] }),
-          /* @__PURE__ */ jsxs2("ul", { className: "panel divide-y divide-white/[0.06]", children: [
-            docs.length === 0 && /* @__PURE__ */ jsx2("li", { className: "px-5 py-8 text-center text-sm text-white/45", children: "Keine Treffer." }),
+          /* @__PURE__ */ jsxs3("ul", { className: "panel divide-y divide-white/[0.06]", children: [
+            docs.length === 0 && /* @__PURE__ */ jsx3("li", { className: "px-5 py-8 text-center text-sm text-white/45", children: "Keine Treffer." }),
             docs.map((doc) => {
               const isExpanded = expanded === doc.id;
               const attachableTags = tags.filter((t) => !doc.tags.some((dt) => dt.id === t.id));
-              return /* @__PURE__ */ jsxs2("li", { "data-testid": `document-${doc.id}`, className: "px-4 py-3", children: [
-                /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-3", children: [
-                  /* @__PURE__ */ jsx2(
+              const linkedIds = doc.item_ids ?? [];
+              const linkableItems = (items ?? []).filter((i) => !linkedIds.includes(i.id));
+              return /* @__PURE__ */ jsxs3("li", { "data-testid": `document-${doc.id}`, className: "px-4 py-3", children: [
+                /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-3", children: [
+                  /* @__PURE__ */ jsx3(
                     "button",
                     {
                       type: "button",
@@ -519,54 +712,65 @@ function DocumentsPage() {
                       "aria-label": isExpanded ? "Details ausblenden" : "Details anzeigen",
                       "aria-expanded": isExpanded,
                       className: "rounded p-1 text-white/40 hover:bg-white/[0.06] hover:text-white",
-                      children: /* @__PURE__ */ jsx2(Icon, { name: isExpanded ? "chevron-down" : "chevron-right", size: 15 })
+                      children: /* @__PURE__ */ jsx3(Icon, { name: isExpanded ? "chevron-down" : "chevron-right", size: 15 })
                     }
                   ),
-                  /* @__PURE__ */ jsx2("span", { className: "grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/[0.05] text-[var(--color-accent)]", children: /* @__PURE__ */ jsx2(Icon, { name: "file", size: 18 }) }),
-                  /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1", children: [
-                    /* @__PURE__ */ jsx2("p", { className: "truncate text-sm font-medium", children: doc.original_filename }),
-                    /* @__PURE__ */ jsxs2("p", { className: "text-xs text-white/50", children: [
+                  /* @__PURE__ */ jsx3("span", { className: "grid h-11 w-11 flex-none place-items-center rounded-lg bg-white/[0.05] text-[var(--color-accent)]", children: /* @__PURE__ */ jsx3(Icon, { name: "file", size: 18 }) }),
+                  /* @__PURE__ */ jsxs3("div", { className: "min-w-0 flex-1", children: [
+                    /* @__PURE__ */ jsx3("p", { className: "truncate text-sm font-medium", children: doc.original_filename }),
+                    /* @__PURE__ */ jsxs3("p", { className: "text-xs text-white/50", children: [
                       typeLabel(doc.content_type),
                       doc.page_count ? ` \xB7 ${doc.page_count} Seite(n)` : "",
                       " \xB7 ",
                       formatSize(doc.size_bytes)
                     ] }),
-                    /* @__PURE__ */ jsxs2("div", { className: "mt-1 flex flex-wrap gap-1", children: [
-                      doc.ocr_status === "error" && /* @__PURE__ */ jsx2(Badge, { tone: "warn", children: "Texterkennung fehlgeschlagen" }),
-                      doc.tags.map((t) => /* @__PURE__ */ jsxs2(Badge, { tone: "accent", children: [
+                    /* @__PURE__ */ jsxs3("div", { className: "mt-1 flex flex-wrap gap-1", children: [
+                      doc.ocr_status === "error" && /* @__PURE__ */ jsx3(Badge, { tone: "warn", children: "Texterkennung fehlgeschlagen" }),
+                      doc.tags.map((t) => /* @__PURE__ */ jsxs3(Badge, { tone: "accent", children: [
                         t.name,
-                        /* @__PURE__ */ jsx2("button", { type: "button", onClick: () => void detachTag(doc, t.id), "aria-label": `Tag ${t.name} entfernen`, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx2(Icon, { name: "x", size: 10 }) })
-                      ] }, t.id))
+                        /* @__PURE__ */ jsx3("button", { type: "button", onClick: () => void detachTag(doc, t.id), "aria-label": `Tag ${t.name} entfernen`, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx3(Icon, { name: "x", size: 10 }) })
+                      ] }, t.id)),
+                      linkedIds.map((id) => {
+                        const known = itemName(id);
+                        const name = known ?? (items ? "Gegenstand nicht mehr da" : "Gegenstand im Inventar");
+                        const label = known ? `Zuordnung zu ${known} l\xF6sen` : items ? "Zuordnung zu einem gel\xF6schten Gegenstand l\xF6sen" : "Zuordnung zu diesem Gegenstand l\xF6sen";
+                        return /* @__PURE__ */ jsxs3(Badge, { tone: "info", children: [
+                          /* @__PURE__ */ jsx3(Icon, { name: "package", size: 10 }),
+                          " ",
+                          name,
+                          /* @__PURE__ */ jsx3("button", { type: "button", onClick: () => void unlinkItem(doc, id), "aria-label": label, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx3(Icon, { name: "x", size: 10 }) })
+                        ] }, id);
+                      })
                     ] })
                   ] }),
-                  /* @__PURE__ */ jsxs2("div", { className: "flex w-full flex-wrap items-center gap-1 sm:w-auto sm:flex-none", children: [
-                    /* @__PURE__ */ jsxs2(Button, { small: true, onClick: () => void togglePreview(doc), pressed: preview?.id === doc.id, children: [
-                      /* @__PURE__ */ jsx2(Icon, { name: "eye", size: 13 }),
+                  /* @__PURE__ */ jsxs3("div", { className: "flex w-full flex-wrap items-center gap-1 sm:w-auto sm:flex-none", children: [
+                    /* @__PURE__ */ jsxs3(Button, { small: true, onClick: () => void togglePreview(doc), pressed: preview?.id === doc.id, children: [
+                      /* @__PURE__ */ jsx3(Icon, { name: "eye", size: 13 }),
                       " ",
                       preview?.id === doc.id ? "Vorschau schlie\xDFen" : "Ansehen"
                     ] }),
-                    /* @__PURE__ */ jsxs2(Button, { small: true, onClick: () => void renameDocument(doc), children: [
-                      /* @__PURE__ */ jsx2(Icon, { name: "edit", size: 13 }),
+                    /* @__PURE__ */ jsxs3(Button, { small: true, onClick: () => void renameDocument(doc), children: [
+                      /* @__PURE__ */ jsx3(Icon, { name: "edit", size: 13 }),
                       " Umbenennen"
                     ] }),
-                    /* @__PURE__ */ jsxs2(Button, { small: true, onClick: () => void downloadDocument(doc), children: [
-                      /* @__PURE__ */ jsx2(Icon, { name: "download", size: 13 }),
+                    /* @__PURE__ */ jsxs3(Button, { small: true, onClick: () => void downloadDocument(doc), children: [
+                      /* @__PURE__ */ jsx3(Icon, { name: "download", size: 13 }),
                       " Herunterladen"
                     ] }),
-                    /* @__PURE__ */ jsxs2(Button, { small: true, variant: "danger", onClick: () => void removeDocument(doc), children: [
-                      /* @__PURE__ */ jsx2(Icon, { name: "trash", size: 13 }),
+                    /* @__PURE__ */ jsxs3(Button, { small: true, variant: "danger", onClick: () => void removeDocument(doc), children: [
+                      /* @__PURE__ */ jsx3(Icon, { name: "trash", size: 13 }),
                       " L\xF6schen"
                     ] })
                   ] })
                 ] }),
-                isExpanded && /* @__PURE__ */ jsxs2("div", { className: "ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
-                  preview?.id === doc.id && /* @__PURE__ */ jsx2("div", { "data-testid": `preview-${doc.id}`, children: preview.type.startsWith("image/") ? /* @__PURE__ */ jsx2("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : /* @__PURE__ */ jsx2("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-white" }) }),
-                  doc.ocr_error && /* @__PURE__ */ jsxs2("p", { className: "text-amber-300", children: [
+                isExpanded && /* @__PURE__ */ jsxs3("div", { className: "ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
+                  preview?.id === doc.id && /* @__PURE__ */ jsx3("div", { "data-testid": `preview-${doc.id}`, children: preview.type.startsWith("image/") ? /* @__PURE__ */ jsx3("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : /* @__PURE__ */ jsx3("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-white" }) }),
+                  doc.ocr_error && /* @__PURE__ */ jsxs3("p", { className: "text-amber-300", children: [
                     "Texterkennung: ",
                     doc.ocr_error
                   ] }),
-                  /* @__PURE__ */ jsxs2("div", { className: "flex max-w-md items-center gap-2", children: [
-                    /* @__PURE__ */ jsxs2(
+                  /* @__PURE__ */ jsxs3("div", { className: "flex max-w-md items-center gap-2", children: [
+                    /* @__PURE__ */ jsxs3(
                       "select",
                       {
                         value: attachTagId[doc.id] ?? "",
@@ -574,23 +778,39 @@ function DocumentsPage() {
                         onChange: (e) => setAttachTagId({ ...attachTagId, [doc.id]: e.target.value }),
                         className: inputClass,
                         children: [
-                          /* @__PURE__ */ jsx2("option", { value: "", children: "Tag hinzuf\xFCgen \u2026" }),
-                          attachableTags.map((t) => /* @__PURE__ */ jsx2("option", { value: t.id, children: t.name }, t.id))
+                          /* @__PURE__ */ jsx3("option", { value: "", children: "Tag hinzuf\xFCgen \u2026" }),
+                          attachableTags.map((t) => /* @__PURE__ */ jsx3("option", { value: t.id, children: t.name }, t.id))
                         ]
                       }
                     ),
-                    /* @__PURE__ */ jsx2(Button, { onClick: () => void attachTag(doc), disabled: !attachTagId[doc.id], children: "Anh\xE4ngen" })
+                    /* @__PURE__ */ jsx3(Button, { onClick: () => void attachTag(doc), disabled: !attachTagId[doc.id], children: "Anh\xE4ngen" })
                   ] }),
-                  /* @__PURE__ */ jsxs2("div", { children: [
-                    /* @__PURE__ */ jsxs2("div", { className: "mb-1.5 flex items-center justify-between", children: [
-                      /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/45", children: "Erkannter Text" }),
-                      doc.ocr_text && /* @__PURE__ */ jsxs2(Button, { small: true, variant: "ghost", onClick: () => void copyText(doc), children: [
-                        /* @__PURE__ */ jsx2(Icon, { name: "copy", size: 12 }),
+                  linkableItems.length > 0 && /* @__PURE__ */ jsxs3("div", { className: "flex max-w-md items-center gap-2", children: [
+                    /* @__PURE__ */ jsxs3(
+                      "select",
+                      {
+                        value: linkItemId[doc.id] ?? "",
+                        "aria-label": `${doc.original_filename} einem Gegenstand zuordnen`,
+                        onChange: (e) => setLinkItemId({ ...linkItemId, [doc.id]: e.target.value }),
+                        className: inputClass,
+                        children: [
+                          /* @__PURE__ */ jsx3("option", { value: "", children: "Geh\xF6rt zu Gegenstand \u2026" }),
+                          linkableItems.map((i) => /* @__PURE__ */ jsx3("option", { value: i.id, children: i.name }, i.id))
+                        ]
+                      }
+                    ),
+                    /* @__PURE__ */ jsx3(Button, { onClick: () => void linkItem(doc), disabled: !linkItemId[doc.id] || linking === doc.id, children: linking === doc.id ? "Ordne zu \u2026" : "Zuordnen" })
+                  ] }),
+                  /* @__PURE__ */ jsxs3("div", { children: [
+                    /* @__PURE__ */ jsxs3("div", { className: "mb-1.5 flex items-center justify-between", children: [
+                      /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/45", children: "Erkannter Text" }),
+                      doc.ocr_text && /* @__PURE__ */ jsxs3(Button, { small: true, variant: "ghost", onClick: () => void copyText(doc), children: [
+                        /* @__PURE__ */ jsx3(Icon, { name: "copy", size: 12 }),
                         " ",
                         copied === doc.id ? "Kopiert \u2713" : "Text kopieren"
                       ] })
                     ] }),
-                    /* @__PURE__ */ jsx2("pre", { className: "max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs text-white/75", children: doc.ocr_text || "(kein Text erkannt)" })
+                    /* @__PURE__ */ jsx3("pre", { className: "max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-black/30 p-3 font-mono text-xs text-white/75", children: doc.ocr_text || "(kein Text erkannt)" })
                   ] })
                 ] })
               ] }, doc.id);
@@ -602,5 +822,6 @@ function DocumentsPage() {
   );
 }
 export {
-  DocumentsPage
+  DocumentsPage,
+  inboxSummary
 };

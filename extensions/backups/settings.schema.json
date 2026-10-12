@@ -30,11 +30,19 @@
             "pattern": "^\\S+@\\S+!\\S+$",
             "x-pattern-message": "Das Format ist benutzer@realm!tokenname, z. B. root@pam!dashboard."
           },
+          "tls_fingerprint_sha256": {
+            "type": "string",
+            "title": "Fingerabdruck des Zertifikats (SHA-256)",
+            "description": "Nodvard Deck spricht dann nur mit dem Server, der genau dieses Zertifikat zeigt. Steht er hier, braucht es „Selbstsigniertes Zertifikat erlauben“ nicht. Du findest ihn in Proxmox unter Knoten → System → Zertifikate, oder du bestätigst ihn unter „Verbindungen verwalten“.",
+            "pattern": "^\\s*([0-9A-Fa-f]{2}[:\\t -]?){31}[0-9A-Fa-f]{2}\\s*$|^\\s*$",
+            "x-pattern-message": "64 Zeichen aus 0–9 und A–F, gern mit Doppelpunkten (z. B. AB:CD:…)."
+          },
           "tls_insecure_skip_verify": {
             "type": "boolean",
             "default": false,
             "title": "Selbstsigniertes Zertifikat erlauben",
-            "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."
+            "description": "Veraltet: besser den Fingerabdruck eintragen oder unter „Verbindungen verwalten“ bestätigen. Schaltet jede Prüfung des Zertifikats ab; gilt nicht, solange ein Fingerabdruck eingetragen ist.",
+            "x-advanced": true
           }
         },
         "required": [
@@ -43,6 +51,23 @@
           "token_id"
         ]
       }
+    },
+    "backup_max_age_days": {
+      "type": "integer",
+      "default": 3,
+      "minimum": 2,
+      "maximum": 60,
+      "title": "Warnung, wenn das letzte Backup älter ist als (Tage)",
+      "description": "Ist die jüngste erfolgreiche Sicherung einer VM oder eines Containers älter als das, meldet Nodvard Deck es einmal, z. B. „Backup zu alt: webserver“. Das fängt auch Fälle ab, in denen nichts fehlschlägt: gelöschter oder abgeschalteter Job, Ziel nicht erreichbar, Server lange aus. Sobald wieder eine Sicherung gelingt, kommt die Entwarnung. VMs ohne Job und ohne Sicherung werden nicht gemeldet. Läuft der Backup-Job einer VM seltener (z. B. nur samstags), nimmt Nodvard Deck automatisch dessen Abstand, wenn er größer ist. Auf jede Frist kommen 6 Stunden dazu, und solange gerade eine Sicherung läuft, kommt keine Warnung."
+    },
+    "backup_age_skip": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "VMs ohne Warnung „Backup zu alt“",
+      "description": "VM-Nummern (z. B. 105) oder Namen von VMs und Containern, die nie gemeldet werden sollen, etwa eine Test-VM. Gibt es dieselbe Nummer an mehreren Proxmox-Verbindungen, schreib „Name der Verbindung/Nummer“, z. B. „pve1/105“.",
+      "x-advanced": true
     }
   },
   "x-secrets": [

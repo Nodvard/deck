@@ -5,7 +5,8 @@
  *
  * Jede Karte nennt ihr Recht: „Sicherung“ und „Updates“ brauchen `system.read` (Aendern nur der Owner
  * bzw. die Schalter der Updates mit `settings.write`),
- * „Zeit & Protokoll“ weiter `settings.write` (liest GET /settings). Der Reiter erscheint mit
+ * „Zeit & Protokoll“ weiter `settings.write` (liest GET /settings). „Vertrauenswürdiger Proxy“ braucht beide:
+ * `settings.write` zum Ansehen (Ändern nur der Owner), `system.read` für die Zeile, wie die Anfrage gerade ankommt. Der Reiter erscheint mit
  * einem der beiden Rechte, gezeigt werden nur die passenden Karten.
  */
 import { useEffect, useState, type ComponentType } from "react";
@@ -15,6 +16,7 @@ import { useAuthStore } from "../../state/auth";
 import { BackupCard } from "./BackupCard";
 import { RestoreCard } from "./RestoreCard";
 import { TimeAndLogCard } from "./TimeAndLogCard";
+import { TrustedProxyCard } from "./TrustedProxyCard";
 import { UpdateCopiesCard } from "./UpdateCopiesCard";
 import { UpdatesCard } from "./UpdatesCard";
 import { NoticeLine, PageHeader, errorText } from "./ui";
@@ -29,18 +31,19 @@ export interface SystemCardProps {
   settings: SettingRow[];
 }
 
-const CARDS: { id: string; permission: string; needsSettings: boolean; Component: ComponentType<SystemCardProps> }[] = [
+const CARDS: { id: string; permission: string; alsoNeeds?: string; needsSettings: boolean; Component: ComponentType<SystemCardProps> }[] = [
   { id: "backup", permission: "system.read", needsSettings: false, Component: BackupCard },
   { id: "restore", permission: "system.read", needsSettings: false, Component: RestoreCard },
   { id: "updates", permission: "system.read", needsSettings: false, Component: UpdatesCard },
   { id: "update-copies", permission: "system.read", needsSettings: false, Component: UpdateCopiesCard },
   { id: "time", permission: "settings.write", needsSettings: true, Component: TimeAndLogCard },
+  { id: "proxy", permission: "settings.write", alsoNeeds: "system.read", needsSettings: true, Component: TrustedProxyCard },
 ];
 
 export function SystemSettings(): JSX.Element {
   const hasPermission = useAuthStore((s) => s.hasPermission);
   useAuthStore((s) => s.user);
-  const cards = CARDS.filter((c) => hasPermission(c.permission));
+  const cards = CARDS.filter((c) => hasPermission(c.permission) && (!c.alsoNeeds || hasPermission(c.alsoNeeds)));
   const needSettings = cards.some((c) => c.needsSettings);
   const [settings, setSettings] = useState<SettingRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);

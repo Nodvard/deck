@@ -41,8 +41,8 @@ NOT_SENT_SENTENCE = "Die Anfrage an Proxmox ließ sich nicht senden. Prüfe die 
 NOT_SENT_SHORT = "Die Anfrage an Proxmox ließ sich nicht senden. Prüfe die Einstellungen."
 BAD_ADDRESS_SENTENCE = "Die eingetragene Adresse ist ungültig. Bitte in den Einstellungen prüfen."
 TLS_SENTENCE = (
-    "Das Zertifikat von Proxmox wird nicht akzeptiert. Bei einem selbstsignierten Zertifikat in den "
-    "Einstellungen „Selbstsigniertes Zertifikat erlauben“ einschalten."
+    "Das Zertifikat von Proxmox wird nicht akzeptiert. Bei einem selbstsignierten Zertifikat vergleiche seinen "
+    "Fingerabdruck und merk ihn dir unter „Verbindungen verwalten“ (Knopf „Zertifikat“)."
 )
 
 
@@ -518,7 +518,8 @@ DIFFERENT_ON_PURPOSE = {
     "carries_foreign_text": "Fehler des WebSocket-Aufbaus nur bei Proxmox",
 }
 # Nur in einer der beiden Dateien (je Erweiterung eine Menge):
-ONLY_IN_ONE = {"proxmox": {"task_outcome"}, "backups": set()}
+# proxmox_reason: Text zum Ausgang einer Wiederherstellung, braucht nur Backups.
+ONLY_IN_ONE = {"proxmox": {"task_outcome"}, "backups": {"proxmox_reason"}}
 
 
 def _definitions(path: Path) -> dict[str, str]:

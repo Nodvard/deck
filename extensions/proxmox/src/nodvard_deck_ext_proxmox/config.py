@@ -11,7 +11,7 @@ ist aber derselbe Tausch, den ntfy schon eingeht.
 EIN JSON-Blob pro Extension-ID -- keine eingebaute Mehrfachkonfiguration. Statt den
 Kern dafuer zu aendern (neues Datenmodell, neue Runtime-Semantik, betrifft JEDE
 Extension), traegt `settings.connections` jetzt eine LISTE benannter Proxmox-
-Verbindungen (`{name, base_url, token_id, tls_insecure_skip_verify}`) -- pve1 UND
+Verbindungen (`{name, base_url, token_id, tls_insecure_skip_verify, tls_fingerprint_sha256}`) -- pve1 UND
 pve2 gleichzeitig, ohne dass der Kern von "mehreren Instanzen einer Extension"
 je erfaehrt. Jede Verbindung bekommt ihr eigenes Token-Secret unter dem Label
 `f"{TOKEN_LABEL}:{name}"` (siehe `POST .../connections/{name}/token` in
@@ -33,6 +33,15 @@ TOKEN_LABEL = "proxmox-token"
 
 def _token_label(name: str) -> str:
     return f"{TOKEN_LABEL}:{name}"
+
+
+def foreign_secret_text(label: str) -> str:
+    """Satz fuer ein Geheimnis unter dem Label einer Verbindung, das nicht von dieser Erweiterung stammt."""
+    return (
+        f"Im Tresor liegt schon ein Geheimnis „{label}“, das nicht von Proxmox VE stammt (etwa von Hand angelegt). "
+        "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst über "
+        "die Tresor-Schnittstelle (DELETE /api/v1/secrets/{id})."
+    )
 
 
 async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxConnector]:
@@ -65,8 +74,17 @@ async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxConnecto
                 token_id=str(token_id),
                 token_secret=token_secret,
                 tls_insecure_skip_verify=bool(conn.get("tls_insecure_skip_verify") or False),
+                # Roh weiter: der Connector prueft ihn, ein ungueltiger sperrt die Verbindung (nie "nicht pruefen").
+                tls_fingerprint_sha256=conn.get("tls_fingerprint_sha256"),
             )
     return result
+
+
+class ConnectionMissing(RuntimeError):
+    """Die Verbindung gibt es nicht (mehr). `readable`: der Text ist ein Satz der Erweiterung und darf so in die
+    Oberflaeche (siehe `ProxmoxApiError`)."""
+
+    readable = True
 
 
 async def build_connector(ctx: "ExtensionContext", name: str) -> ProxmoxConnector:
@@ -75,5 +93,5 @@ async def build_connector(ctx: "ExtensionContext", name: str) -> ProxmoxConnecto
     connectors = await build_connectors(ctx)
     connector = connectors.get(name)
     if connector is None:
-        raise RuntimeError(f"Proxmox-Verbindung '{name}' ist nicht (mehr) konfiguriert.")
+        raise ConnectionMissing(f"Proxmox-Verbindung '{name}' ist nicht (mehr) konfiguriert.")
     return connector

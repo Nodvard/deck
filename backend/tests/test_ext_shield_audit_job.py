@@ -182,11 +182,16 @@ def test_at_the_limit_timeout_ends_lynis_and_its_children_on_the_server(tmp_path
 
 
 @posix
-def test_without_timeout_the_stop_command_ends_lynis_and_its_children(tmp_path):
-    """Ohne `timeout` aus den coreutils (z. B. BusyBox) beendet das Dashboard den Lauf nach der Obergrenze selbst."""
+@pytest.mark.parametrize("pkill", [True, False], ids=["mit-pkill", "ohne-procps"])
+def test_without_timeout_the_stop_command_ends_lynis_and_its_children(tmp_path, pkill):
+    """Ohne `timeout` aus den coreutils (z. B. BusyBox) beendet das Dashboard den Lauf nach der Obergrenze selbst. Auch
+    ohne `pkill` und `pgrep` (procps fehlt): dann reicht das Beenden der Prozessgruppe, auch mit dem `kill` von dash."""
     bindir = tmp_path / "bin"
     _lynis_stub(bindir, tmp_path, sleep_s=60)
     _stub(bindir, "timeout", "exit 1\n")  # kein coreutils-timeout: `--version` nennt es nicht
+    if not pkill:
+        _stub(bindir, "pkill", f'echo "$*" >>{tmp_path}/pkill.calls\nexit 127\n')
+        _stub(bindir, "pgrep", "exit 127\n")
     _stub(bindir, "systemctl", f'echo "$*" >>{tmp_path}/systemctl.calls\nexit 1\n')
     env = _env(bindir)
     launch = _launch(tmp_path, env, _command(tmp_path, limit_s=2))
@@ -203,11 +208,43 @@ def test_without_timeout_the_stop_command_ends_lynis_and_its_children(tmp_path):
     for pid in (launch.pid, lynis_pid, child_pid):
         _wait_for(lambda pid=pid: not _alive(pid), timeout=10)
     assert f"stop --no-block nodvard-shield-audit-{RID}.service" in (tmp_path / "systemctl.calls").read_text()
+    if not pkill:
+        assert (tmp_path / "pkill.calls").exists()  # der Ersatz wurde wirklich statt des echten `pkill` gefragt
     assert _poll(tmp_path, env, timeout=0).state == "lost"
     # Ein zweites Mal: nichts mehr zu beenden.
     again = subprocess.run(["/bin/sh", "-c", aj.stop_command(RID, base_dir=str(tmp_path / "jobs"))], capture_output=True,
                            text=True, timeout=60, env=env, check=False)
     assert again.stdout.split() == ["@@notrunning"]
+
+
+@posix
+def test_lynis_killed_long_before_the_limit_is_not_called_too_long(tmp_path):
+    """Exit 137 vor der Obergrenze (Kernel bei Speichermangel, `kill -9`): nicht „hat länger als 3 Stunden gedauert“,
+    sondern was wirklich los war."""
+    bindir = tmp_path / "bin"
+    _stub(bindir, "lynis", "kill -9 $$\n")
+    out = _run_inner(tmp_path, _env(bindir))
+    assert "@@killed" in out and "@@timeout" not in out, out
+    res = aj.parse_result(out)
+    assert (res.status, res.error) == ("error", aj.KILLED_MESSAGE)
+    assert "Rückgabecode 137" in res.error and "Arbeitsspeicher" in res.error
+
+
+@posix
+@pytest.mark.skipif(shutil.which("timeout") is None, reason="braucht timeout aus den coreutils")
+def test_lynis_that_ignores_term_and_is_killed_at_the_limit_is_still_too_long(tmp_path, monkeypatch):
+    """Ignoriert Lynis das TERM an der Obergrenze, schiesst `timeout -k` nachher KILL (Exit 137): das bleibt „zu lange“."""
+    monkeypatch.setattr(aj, "KILL_AFTER_S", 1)
+    bindir = tmp_path / "bin"
+    _stub(bindir, "lynis", "trap '' TERM\nsleep 30\n")
+    out = _run_inner(tmp_path, _env(bindir), limit_s=2)
+    assert "@@timeout" in out and "@@killed" not in out, out
+    assert aj.parse_result(out).error == aj.too_long_message()
+
+
+def test_the_marks_of_a_run_give_the_right_message():
+    assert aj.parse_result("@@prio=normal\n@@killed\n").error == aj.KILLED_MESSAGE
+    assert aj.parse_result("@@prio=normal\n@@timeout\n").error == aj.too_long_message()
 
 
 @posix

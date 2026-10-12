@@ -21,6 +21,7 @@ import { useHosts } from "../lib/overview";
 import { useAuthStore } from "../state/auth";
 import { DemoSeedButton } from "./DemoSeedButton";
 import { ButtonLink } from "./EmptyState";
+import { GuideLink } from "./GuideLink";
 
 const stepButton =
   "inline-flex flex-none items-center justify-center rounded-lg px-2.5 py-1 text-xs font-medium transition accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110";
@@ -126,7 +127,10 @@ export function FirstStepsCard() {
           Ausblenden
         </button>
       </div>
-      <p className="-mt-0.5 text-xs text-white/50">So ist Nodvard Deck startklar – ein Schritt nach dem anderen.</p>
+      <p className="-mt-0.5 text-xs text-white/50">
+        So ist Nodvard Deck startklar – ein Schritt nach dem anderen.{" "}
+        <GuideLink testId="first-steps-guide">Ausführlich erklärt in der Anleitung</GuideLink>
+      </p>
       <div className="mt-3 flex items-center gap-3">
         <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/10" aria-hidden>
           <div className="accent-gradient h-full rounded-full transition-all" style={{ width: `${(done / steps.length) * 100}%` }} />

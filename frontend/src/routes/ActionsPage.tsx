@@ -11,7 +11,9 @@
  * Extension einen Vorschlag erzeugt hat.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useInRouterContext, useLocation } from "react-router-dom";
 
+import { LoadError } from "../components/LoadError";
 import { actionReason, describeActionOutcome, OUTCOME_TEXT_CLASS, OUTPUT_HIDDEN_HINT, type ActionOutcome } from "../lib/actionOutcome";
 import {
   ACTION_POLL_INTERVAL_MS,
@@ -59,6 +61,8 @@ interface ActionOut {
   output_hidden?: boolean;
   finished_at: string | null;
   created_at: string;
+  /** Bis wann ein Vorschlag bestätigt werden kann (danach „Abgelaufen“); null bei sofort ausgeführten Aktionen. */
+  expires_at?: string | null;
 }
 
 interface HostOut {
@@ -103,6 +107,33 @@ function commandOf(a: ActionOut): string | null {
 }
 
 const COMMAND_HIDDEN_HINT = "Befehl nur für Nutzer mit Server-Rechten sichtbar";
+
+const EXPIRY_TICK_MS = 30_000;
+
+/** `?action=<id>` aus dem Link einer Meldung (etwa der Container-Wache): diese Aktion hervorheben. Nur eine Kennung,
+ * kein Geheimnis; angemeldet sein muss man trotzdem. Alles andere als eine schlichte Kennung wird ignoriert. */
+export function focusedActionId(search: string): string | null {
+  const id = new URLSearchParams(search).get("action");
+  return id && /^[A-Za-z0-9-]{1,64}$/.test(id) ? id : null;
+}
+
+export const RISK_LABEL: Record<string, string> = { low: "niedrig", medium: "mittel", high: "hoch", critical: "kritisch" };
+
+/** Wie lange ein Vorschlag noch bestätigt werden kann, als kurzer Text. `null` ohne Frist oder wenn sie nicht lesbar ist. */
+export function expiryText(expiresAt: string | null | undefined, nowMs: number): { text: string; soon: boolean } | null {
+  if (!expiresAt) return null;
+  const at = Date.parse(expiresAt);
+  if (Number.isNaN(at)) return null;
+  // Der Ablauf-Job räumt nur stündlich auf: bis dahin steht ein abgelaufener Vorschlag noch als offen da,
+  // bestätigen lehnt der Kern aber schon ab.
+  if (at <= nowMs) return { text: "abgelaufen – kann nicht mehr bestätigt werden", soon: true };
+  const minutes = Math.floor((at - nowMs) / 60000);
+  if (minutes < 1) return { text: "läuft gleich ab", soon: true };
+  if (minutes < 60) return { text: `läuft ab in ${minutes} Min.`, soon: true };
+  const hours = Math.floor(minutes / 60);
+  if (hours < 48) return { text: `läuft ab in ${hours} Std.`, soon: false };
+  return { text: `läuft ab in ${Math.floor(hours / 24)} Tagen`, soon: false };
+}
 
 /** „Vorgeschlagen von“: der Name, den das Backend aufgelöst hat; sonst der rohe Wert. */
 function proposedByText(a: ActionOut): string {
@@ -174,10 +205,27 @@ function summarizeFinished(finished: ActionOut[]): { text: string; failed: boole
 /** So viele spaete Fehlschlaege aelterer Freigaben stehen hoechstens da. */
 const MAX_LATE_ERRORS = 5;
 
+/** Die Seite folgt der Adresse (`?action=`), auch wenn sich die Abfrage bei offener Seite aendert (Klick auf eine
+ * Meldung). Ohne Router (Tests, Vorschau) liest sie die Adresse des Fensters. */
 export function ActionsPage(): JSX.Element {
+  return useInRouterContext() ? <RoutedActionsPage /> : <ActionsContent />;
+}
+
+function RoutedActionsPage(): JSX.Element {
+  const { search } = useLocation();
+  return <ActionsContent search={search} />;
+}
+
+function ActionsContent({ search }: { search?: string }): JSX.Element {
   const hasPermission = useAuthStore((s) => s.hasPermission);
   const [statusFilter, setStatusFilter] = useState("proposed");
   const [actions, setActions] = useState<ActionOut[] | null>(null);
+  // Die Restzeit offener Vorschläge läuft mit, auch wenn die Seite lange offen bleibt.
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), EXPIRY_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
   const [hostNames, setHostNames] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
   // Mehrere Freigaben koennen gleichzeitig laufen (die Antwort dauert bis zu 20 s) --
@@ -199,6 +247,21 @@ export function ActionsPage(): JSX.Element {
   // Laufende Nachfragen zu Aktionen im Hintergrund enden mit der Seite.
   const pollAbort = useRef<AbortController | null>(null);
 
+  // Die Aktion aus dem Link einer Meldung: auch zeigen, wenn sie nicht (mehr) im Filter steht, etwa schon erledigt ist.
+  // `search` kommt vom Router (`RoutedActionsPage`), damit ein Klick auf eine Meldung auch dann wirkt, wenn die Seite
+  // schon offen ist.
+  const focusId = focusedActionId(search ?? window.location.search);
+  const [focused, setFocused] = useState<ActionOut | null>(null);
+  const [focusMissing, setFocusMissing] = useState(false);
+  const [focusError, setFocusError] = useState<string | null>(null);
+  const focusScrolled = useRef(false);
+  useEffect(() => {
+    setFocused(null);
+    setFocusMissing(false);
+    setFocusError(null);
+    focusScrolled.current = false;
+  }, [focusId]);
+
   const load = useCallback(() => {
     setError(null);
     const query = statusFilter ? `?status_=${encodeURIComponent(statusFilter)}` : "";
@@ -206,7 +269,27 @@ export function ActionsPage(): JSX.Element {
       .get<ActionOut[]>(`/actions${query}`)
       .then(setActions)
       .catch((err: unknown) => setError(err instanceof ApiError ? err.message : String(err)));
-  }, [statusFilter]);
+    if (focusId) {
+      api
+        .get<ActionOut>(`/actions/${encodeURIComponent(focusId)}`)
+        .then((a) => {
+          setFocused(a);
+          setFocusMissing(false);
+          setFocusError(null);
+        })
+        .catch((err: unknown) => {
+          // Nur "gibt es nicht" oder "darfst du nicht sehen" heisst: die Aktion ist weg. Ein Netz- oder Serverfehler
+          // laesst die zuletzt geladene Zeile stehen und sagt, was los ist.
+          if (err instanceof ApiError && (err.status === 404 || err.status === 403)) {
+            setFocused(null);
+            setFocusMissing(true);
+            setFocusError(null);
+          } else {
+            setFocusError(err instanceof Error ? err.message : String(err));
+          }
+        });
+    }
+  }, [statusFilter, focusId]);
 
   useEffect(() => {
     load();
@@ -218,9 +301,13 @@ export function ActionsPage(): JSX.Element {
     return () => controller.abort();
   }, []);
 
+  // Die Aktion aus dem Link steht oben, wenn der Filter sie nicht zeigt (sonst an ihrer Stelle in der Liste).
+  const rows = actions && focused && !actions.some((a) => a.id === focused.id) ? [focused, ...actions] : actions;
+  const listedIds = new Set((actions ?? []).map((a) => a.id));
+
   // Solange eine Zeile noch läuft (auch aus einem anderen Tab gestartet),
   // die Liste regelmäßig neu laden, damit „Läuft …“ von selbst zum Ergebnis wird.
-  const hasRunning = (actions ?? []).some((a) => isActionRunning(a.status));
+  const hasRunning = (rows ?? []).some((a) => isActionRunning(a.status));
   useEffect(() => {
     if (!hasRunning) return;
     const timer = setInterval(load, ACTION_POLL_INTERVAL_MS);
@@ -582,16 +669,22 @@ export function ActionsPage(): JSX.Element {
         </p>
       )}
 
-      {error && <p className="text-sm text-red-400">Fehler: {error}</p>}
+      {error && <LoadError what="Die Liste der Aktionen" error={error} onRetry={load} />}
       {message && <p className={`mb-2 text-sm ${OUTCOME_TEXT_CLASS[message.tone]}`}>{message.text}</p>}
       {lateErrors.map((late) => (
         <p key={late.text} className={`mb-2 text-sm ${OUTCOME_TEXT_CLASS.error}`}>{late.text}</p>
       ))}
       {!actions && !error && <p className="text-sm opacity-60">Lade …</p>}
-      {actions && actions.length === 0 && <p className="text-sm opacity-60">Keine Aktionen in diesem Filter.</p>}
+      {focusMissing && (
+        <p className="mb-2 text-sm text-amber-300" role="status">Die Aktion aus dem Link gibt es nicht (mehr) oder du darfst sie nicht sehen.</p>
+      )}
+      {focusError && (
+        <p className="mb-2 text-sm text-amber-300" role="status">Die Aktion aus dem Link ließ sich gerade nicht laden: {focusError}</p>
+      )}
+      {rows && rows.length === 0 && <p className="text-sm opacity-60">Keine Aktionen in diesem Filter.</p>}
 
       {/* Handy: die Tabelle scrollt in sich, die Seite bleibt schmal. */}
-      {actions && actions.length > 0 && (
+      {rows && rows.length > 0 && (
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
@@ -610,14 +703,26 @@ export function ActionsPage(): JSX.Element {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {actions.map((a) => {
+              {rows.map((a) => {
                 const canDecide = hasPermission(`actions.approve:${a.risk}`);
                 const why = actionReason(a);
                 const decided = a.status === "proposed" ? null : decidedByText(a);
+                const isFocus = a.id === focusId;
                 return (
-                  <tr key={a.id}>
+                  <tr
+                    key={a.id}
+                    data-testid={isFocus ? "focused-action" : undefined}
+                    className={isFocus ? "bg-sky-500/10 outline outline-1 outline-sky-400/50" : undefined}
+                    ref={isFocus ? (el) => {
+                      if (el && !focusScrolled.current) {
+                        focusScrolled.current = true;
+                        el.scrollIntoView?.({ block: "center" });
+                      }
+                    } : undefined}
+                  >
                     <td className="py-1.5 pr-2">
-                      {a.status === "proposed" && canDecide && (
+                      {/* Nur Zeilen aus der Liste: die angeheftete Aktion aus dem Link zaehlt die Sammel-Freigabe nicht mit. */}
+                      {a.status === "proposed" && canDecide && listedIds.has(a.id) && (
                         <input
                           type="checkbox"
                           checked={selected.has(a.id)}
@@ -644,7 +749,7 @@ export function ActionsPage(): JSX.Element {
                       )}
                     </td>
                     <td className="py-1.5">{hostLabel(a.host_id)}</td>
-                    <td className="py-1.5 opacity-70">{a.risk}</td>
+                    <td className="py-1.5 opacity-70" title={a.risk}>{RISK_LABEL[a.risk] ?? a.risk}</td>
                     <td className="py-1.5">
                       <span className={`rounded border px-1.5 py-0.5 text-xs ${STATUS_CLASS[a.status] ?? "bg-white/10 opacity-70"}`}>
                         {STATUS_LABEL[a.status] ?? a.status}
@@ -662,6 +767,18 @@ export function ActionsPage(): JSX.Element {
                           {decided.text}
                         </p>
                       )}
+                      {a.status === "proposed" && (() => {
+                        const expiry = expiryText(a.expires_at, nowMs);
+                        return expiry && (
+                          <p
+                            className={`mt-1 text-xs ${expiry.soon ? "text-amber-300" : "opacity-60"}`}
+                            title={a.expires_at ? `Danach kann der Vorschlag nicht mehr bestätigt werden (${new Date(a.expires_at).toLocaleString()}).` : undefined}
+                            data-testid={`expires-${a.id}`}
+                          >
+                            {expiry.text}
+                          </p>
+                        );
+                      })()}
                     </td>
                     <td className="py-1.5 opacity-70">
                       {/* Die rohe Kennung bleibt als Tooltip erreichbar (z. B. zum Nachschlagen im Protokoll). */}

@@ -20,7 +20,7 @@ import asyncssh
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
-from nodvard_sdk.errors import HostUnreachable
+from nodvard_sdk.errors import HostUnreachable, SecretNotOwned
 from nodvard_sdk.errors import PermissionDenied as ExtensionPermissionDenied
 from nodvard_sdk.types import Event
 from sqlalchemy.exc import OperationalError as SqlOperationalError
@@ -30,8 +30,9 @@ from starlette.types import Scope
 from .api import api_v1_router
 from .api.body_limit import BodyLimitMiddleware
 from .api.errors import install_coded_error_handler, install_validation_error_handler
+from .api.proxy_headers import ProxyHeadersMiddleware
 from .config import get_settings
-from .core import bootstate
+from .core import bootstate, trusted_proxies
 from .core.demo_seed import DemoBlockedError, seed_demo_data
 from .core.error_text import describe_connection_error
 from .core.events import get_event_bus
@@ -188,6 +189,20 @@ async def _keep_marking_started_ok(settings) -> None:
             return
 
 
+async def _load_trusted_proxies(settings) -> None:
+    """Vertrauenswuerdige Proxys (`core.trusted_proxies`) vor der ersten Anfrage laden. Klappt das nicht, bleibt die
+    Liste leer: dann gilt niemand als Proxy (wie vor der Einstellung), und der Start geht weiter."""
+    try:
+        async with session_scope() as session:
+            loaded = await trusted_proxies.load(session, settings)
+    except Exception as exc:  # noqa: BLE001 - nie ein Grund, nicht zu starten
+        trusted_proxies.reset()
+        _boot_logger.warning("trusted_proxies_load_failed error=%s", type(exc).__name__)
+        return
+    if loaded.entries:
+        _boot_logger.info("trusted_proxies source=%s entries=%d", loaded.source, len(loaded.entries))
+
+
 async def _restore_code_limits() -> None:
     """Zaehler fuer falsche Zwei-Faktor-Codes aus dem Protokoll wieder eintragen (`services.auth.restore_code_limits`).
     Klappt das nicht, startet Nodvard Deck trotzdem, mit leeren Zaehlern (wie frueher nach jedem Neustart) und einer
@@ -227,6 +242,9 @@ async def _lifespan_body(app: FastAPI):
     settings = get_settings()
     install_access_log_filters()  # falls das Logging nach dem Import neu eingerichtet wurde
     app.state.started_at = time.monotonic()
+
+    # Wem `X-Forwarded-For`/`-Proto` geglaubt wird (api/proxy_headers.py), steht vor der ersten Anfrage fest.
+    await _load_trusted_proxies(settings)
 
     # Idempotent -- sicher bei jedem Start (eingebaute Rollen muessen
     # existieren, bevor irgendjemand eine davon zugewiesen bekommen kann).
@@ -335,6 +353,9 @@ def create_app() -> FastAPI:
     install_coded_error_handler(app)
     # Obergrenze fuer die Groesse jeder Anfrage, bevor irgendein Handler sie liest (api/body_limit.py).
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
+    # Echte Client-Adresse und echtes Schema hinter einem vertrauenswuerdigen Proxy (api/proxy_headers.py). Zuletzt
+    # hinzugefuegt = ganz aussen: alles danach (auch die Routen) sieht schon die echte Adresse.
+    app.add_middleware(ProxyHeadersMiddleware)
 
     # Live gefunden (Backup-Job-Editor): schlaegt eine Extension eine Aktion vor, fuer
     # die ihr selbst eine Berechtigung fehlt, kam beim Nutzer nur "HTTP 500" an. Das
@@ -343,6 +364,20 @@ def create_app() -> FastAPI:
     async def _extension_permission_denied(_request: Request, exc: ExtensionPermissionDenied) -> JSONResponse:
         logging.getLogger("nodvard_deck.ext").warning("Extension-Berechtigung fehlt: %s", exc)
         return JSONResponse(status_code=500, content={"detail": f"Einer Erweiterung fehlt eine Berechtigung: {exc}"})
+
+    # Eine Erweiterung wollte ein Geheimnis ersetzen oder loeschen, das nicht ihr gehoert (ext/context.py,
+    # `SecretsHandle`): kein Programmfehler und keine fehlende Berechtigung, sondern ein Zustand im Tresor, den der
+    # Nutzer aufloesen kann. Das Geheimnis bleibt unveraendert.
+    @app.exception_handler(SecretNotOwned)
+    async def _secret_not_owned(_request: Request, exc: SecretNotOwned) -> JSONResponse:
+        logging.getLogger("nodvard_deck.ext").warning(
+            "Erweiterung %s: fremdes Geheimnis nicht angefasst (%s)", exc.ext_id, exc.label,
+        )
+        detail = str(exc) if exc.login_secret else (
+            f"{exc} Es bleibt unverändert. Wurde es von Hand angelegt, lösch es selbst über die Tresor-Schnittstelle "
+            "(DELETE /api/v1/secrets/{id}) – oder nimm einen anderen Namen."
+        )
+        return JSONResponse(status_code=409, content={"detail": detail})
 
     # Passwort-Pruefungen rechnen in wenigen Threads (`security.run_hashing`); stauen sich dahinter
     # zu viele, kommt ein ehrliches "gleich nochmal" statt einer Warteschlange ohne Ende.

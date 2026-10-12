@@ -106,6 +106,10 @@ class MeUpdate(BaseModel):
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=255)
+    totp_code: str = Field(default="", max_length=64)
+    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der Authenticator-App (sechs Ziffern) oder ein
+    Wiederherstellungs-Code (`ABCDE-FGHJK`, Schreibweise egal; wird dabei verbraucht). Fehlt er: 403 mit
+    `code: "totp_missing"`. Im Schema optional, damit aeltere Aufrufer diese Antwort bekommen statt eines 422."""
 
 
 @router.patch("")
@@ -150,21 +154,49 @@ async def update_preferences(payload: PreferencesUpdate, user: CurrentUser, sess
 
 @router.post("/password", status_code=status.HTTP_204_NO_CONTENT)
 async def change_password(
-    payload: PasswordChange, request: Request, user: CurrentUser, session: SessionDep, current_session_id: CurrentSessionId
-) -> None:
-    """Eigenes Passwort aendern -- nur mit dem aktuellen Passwort. Alle ANDEREN
-    Anmeldungen werden dabei abgemeldet (sonst holte sich z. B. ein
-    verlorenes Handy noch 30 Tage lang neue Tokens), die aktuelle bleibt."""
+    payload: PasswordChange, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
+    current_session_id: CurrentSessionId,
+):
+    """Eigenes Passwort aendern -- mit dem aktuellen Passwort und, wenn Zwei-Faktor an ist, einem Code (`totp_code`):
+    dem aktuellen aus der App oder einem Wiederherstellungs-Code. Sonst kaeme, wer nur das alte Passwort kennt, mit
+    einem neuen an jeder Code-Pflicht vorbei und sperrte den Besitzer aus. Alle ANDEREN Anmeldungen werden dabei
+    abgemeldet (sonst holte sich z. B. ein verlorenes Handy noch 30 Tage lang neue Tokens), die aktuelle bleibt.
+
+    Reihenfolge wie bei `DELETE /me/totp`: erst das Passwort (falsch: 400, der Code bleibt unangetastet), dann der Code
+    (fehlt: 403 `totp_missing` mit einem Satz, der auch in einer aelteren App fuer sich verstaendlich ist, zaehlt nicht;
+    falsch oder schon benutzt: 400 und zaehlt wie beim Anmelden; zu viele: 429). Ist das neue Passwort das alte, gibt es
+    vorher 422 -- dafuer wird kein Code verbraucht. Ist Zwei-Faktor aus, reicht das Passwort wie bisher."""
     await confirm_current_password(request, session, user, payload.current_password, "passwort_aendern")
     if payload.new_password == payload.current_password:
         raise HTTPException(status_code=422, detail="Das neue Passwort muss sich vom alten unterscheiden.")
-    user.password_hash = await security.hash_password_async(payload.new_password, signed_in=True)
+    # Der Hash des neuen Passworts dauert (auf einem Pi Sekunden). Mit einem Wiederherstellungs-Code bestaetigt, rechnet
+    # er, bevor der Code verbraucht wird: ab da haelt die Anfrage die Schreibsperre der Datenbank.
+    new_hash: str | None = None
+
+    async def hash_new_password() -> None:
+        nonlocal new_hash
+        new_hash = await security.hash_password_async(payload.new_password, signed_in=True)
+
+    try:
+        via = await confirm_current_totp(
+            request, session, settings, user, payload.totp_code, "passwort_aendern", allow_recovery=True,
+            before_claim=hash_new_password,
+        )
+    except TotpMissing as exc:
+        return exc.response()
+    user.password_hash = new_hash or await security.hash_password_async(payload.new_password, signed_in=True)
     await session.flush()
     revoked = await auth_service.revoke_refresh_tokens(session, user.id, except_token_id=current_session_id)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="auth.password_change", outcome="success",
-        target_type="user", target_id=user.id, detail={"signed_out_sessions": revoked},
+        target_type="user", target_id=user.id,
+        detail={"signed_out_sessions": revoked} | ({"via": via} if via else {}),
     )
+    if via == auth_service.VIA_RECOVERY:
+        await auth_service.report_recovery_use(
+            session, user, action="passwort_aendern", ip=_client_ip(request), user_agent=request.headers.get("user-agent")
+        )
+    return None
 
 
 TOTP_SETUP_PASSWORD_REQUIRED = (

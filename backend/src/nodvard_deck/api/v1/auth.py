@@ -111,7 +111,7 @@ def _cookie_secure(request: Request, settings: Settings) -> bool:
     Frueher hing das Flag an `env == "prod"`; eine Installation im Heimnetz laeuft aber
     oft mit env=prod ueber reines HTTP (z. B. http://192.168.2.40:8080), und jeder
     Neuladen landete wieder auf der Login-Seite. Deshalb zaehlt das echte Schema der Anfrage (hinter einem
-    TLS-Proxy: uvicorn --proxy-headers/--forwarded-allow-ips), und
+    TLS-Proxy dessen `X-Forwarded-Proto`, wenn er unter `system.trusted_proxies` steht: api/proxy_headers.py), und
     `settings.cookie_secure` ueberschreibt es bei Bedarf. Automatisierte Tests (httpx)
     bemerken das nicht von selbst, weil ihr Cookie-Jar die Browser-Regel nicht
     durchsetzt -- siehe test_auth_api.py."""
@@ -165,8 +165,9 @@ def _too_many_attempts(exc: auth_service.TooManyAttempts) -> HTTPException:
 
 
 def _client_ip(request: Request) -> str | None:
-    """Direkt die Gegenstelle der Verbindung -- bewusst NICHT `X-Forwarded-For`, das
-    koennte jeder Client selbst setzen und sich so aus der Drosselung herausrechnen."""
+    """Die Gegenstelle der Verbindung. `X-Forwarded-For` liest hier niemand selbst (das koennte jeder Client setzen
+    und sich so aus der Drosselung herausrechnen): Nur wenn die Gegenstelle ein eingetragener Proxy ist
+    (`system.trusted_proxies`), hat `api/proxy_headers.py` `request.client` vorher durch die echte Adresse ersetzt."""
     return request.client.host if request.client else None
 
 
@@ -211,8 +212,8 @@ async def confirm_current_password(
 
 class TotpMissing(CodedHTTPException):
     """403: Zwei-Faktor ist an, aber es kam kein Code. Die Antwort ist `{detail, code: "totp_missing"}` (`response()`,
-    beim Werfen ebenso). Wer Fehler selbst beantwortet (`/system/updates/*`, `/me/totp`, `/me/recovery-codes`),
-    erkennt sie daran."""
+    beim Werfen ebenso). Wer Fehler selbst beantwortet (`/system/updates/*`, `/me/password`, `/me/totp`,
+    `/me/recovery-codes`), erkennt sie daran."""
 
     def __init__(self, detail: str) -> None:
         super().__init__(status.HTTP_403_FORBIDDEN, detail, "totp_missing")

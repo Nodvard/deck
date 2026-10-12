@@ -3133,8 +3133,12 @@ def test_pi_switch_loaded_waits_for_a_line_that_the_docker_log_shows_late(machin
 
 @needs_bash
 def test_pi_switch_loaded_gives_up_after_the_time_and_says_none(machine):
+    # 3 s statt 1 s: Bash zaehlt `SECONDS` nur ganzzahlig. Mit 1 s blieb je nach Sekundenbruchteil beim Start
+    # fast keine Wartezeit, und unter Last kam es nur zu einem Leseversuch (Test wackelte in der vollen Testreihe).
     machine.set(images={}, containers={NEW_C: _running(NEW, volume=VOL)})
-    result = machine.switch("loaded", "1", LOADED_POLL_SLEEP_S="0", STUB_LOG_LATE=f"{NEW_C}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}))
+    result = machine.switch(
+        "loaded", "3", LOADED_POLL_SLEEP_S="0.2", STUB_LOG_LATE=f"{NEW_C}:100000", **_logs({NEW: f"{LOADED_LINE}a-ext\n"}),
+    )
     assert result.returncode == 0 and result.stdout.strip() == "none"
     assert len(_log_reads(machine, NEW_C)) >= 2, "es wurde wiederholt"
 

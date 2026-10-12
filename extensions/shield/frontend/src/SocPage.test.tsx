@@ -106,7 +106,7 @@ describe("Nodvard Shield Virenschutz", () => {
     vi.stubGlobal("fetch", mockFetch([]));
     render(<SocPage />);
     const side = within(await screen.findByTestId("side-summary"));
-    expect(side.getByText("2 Sicherheitsupdate(s) offen")).toBeInTheDocument();
+    expect(side.getByText("2 Sicherheitsupdates offen")).toBeInTheDocument();
     expect(side.getByText(/ruhig · 57 SSH-Fehlversuche/)).toBeInTheDocument();
     expect(within(screen.getByRole("tab", { name: /Updates/ })).getByTitle("Sicherheitsupdates")).toHaveTextContent("2");
   });

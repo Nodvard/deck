@@ -177,6 +177,17 @@ async def schedule_zone(ctx: ExtensionContext) -> tzinfo:
     return UTC
 
 
+def _reboot_skip_names(settings: dict[str, Any]) -> set[str]:
+    return {s.strip().lower() for s in settings.get("auto_reboot_skip_hosts") or [] if isinstance(s, str) and s.strip()}
+
+
+def no_auto_reboot(host: Any, settings: dict[str, Any]) -> bool:
+    """Steht der Server in "Diese Server nie automatisch neu starten" (Name, Anzeigename oder Kennung, wie bei den
+    ausgenommenen Servern der System-Warnungen)? Updates bekommt er trotzdem, nur der Neustart faellt weg."""
+    names = _reboot_skip_names(settings)
+    return bool(names & {host.id.lower(), host.name.lower(), (host.display_name or "").lower()})
+
+
 def run_out(r: UpdateRunRecord) -> dict[str, Any]:
     from .defender import _ts
 
@@ -523,6 +534,7 @@ class UpdateCenter:
                 "auto_mode": settings.get("auto_updates_mode") or "security",
                 "auto_cron": settings.get("auto_updates_cron") or DEFAULT_UPDATE_CRONS["auto"],
                 "auto_reboot": settings.get("auto_reboot", False),
+                "auto_reboot_skip": sorted(_reboot_skip_names(settings)),
                 "auto_tag": (settings.get("auto_updates_host_tag") or "").strip() or None,
                 # "Alle Updates" von Hand laeuft auf Proxmox als dist-upgrade: die Seite
                 # sagt das in der Rueckfrage, bevor sie freigibt.
@@ -813,7 +825,9 @@ class UpdateCenter:
             else:
                 lines.append(f"- {name}: aktuell")
             if settings.get("auto_reboot", False) and st.get("reboot_required") and not st.get("reboot_pending_since"):
-                if host.id in own_ids:
+                if no_auto_reboot(host, settings):
+                    lines.append("  ↳ Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu starten.")
+                elif host.id in own_ids:
                     reboot_last.append(host)
                     lines.append("  ↳ Neustart folgt nach dieser Meldung (hier läuft das Dashboard).")
                 else:
@@ -855,7 +869,7 @@ class UpdateCenter:
 
 DEFAULT_UPDATE_CRONS = {"check": "0 6 * * *", "auto": "30 3 * * *"}
 
-# Der Server, auf dem das Dashboard selbst laeuft -- dieselbe Erkennung wie in der System-Erweiterung
+# Der Server, auf dem das Dashboard selbst laeuft -- dieselbe Erkennung wie im Modul „Server-Zustand“ (`system`)
 # (`actions.is_dashboard_host`): eine Markierung des Servers oder ein Container mit unserem Hostnamen
 # (das Dashboard laeuft als Docker-Container, dessen Hostname die kurze Container-ID ist).
 DASHBOARD_HOST_TAGS = ("dashboard", "lattice", "nodvard-deck")

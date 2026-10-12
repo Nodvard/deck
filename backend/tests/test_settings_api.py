@@ -35,12 +35,16 @@ async def test_list_settings_returns_defaults_when_unset(client):
         "system.timezone": "Europe/Berlin", "audit.retention_days": 90,
         # Job-Verlauf: 30 Tage.
         "jobs.run_retention_days": 30,
+        # Meldungen: 90 Tage.
+        "notifications.retention_days": 90,
         # Erreichbarkeitspruefung: an, alle 2 Minuten.
         "hosts.reachability.enabled": True, "hosts.reachability.interval_minutes": 2,
         # Nach Updates suchen: an, nur fertige Versionen.
         "system.update_check.enabled": True, "system.update_check.channel": "stable",
         # Neue Server-Schluessel bestaetigen: die Test-Einstellungen legen die Umgebungsvariable auf aus fest.
         "ssh.confirm_new_host_keys": False,
+        # Vertrauenswuerdige Proxys: keine, wie vor der Einstellung.
+        "system.trusted_proxies": [],
     }
 
 
@@ -165,9 +169,10 @@ async def test_list_settings_survives_saved_branding(client):
     assert r.status_code == 200, r.text
     assert {row["key"] for row in r.json()} == {
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
-        "system.timezone", "audit.retention_days", "jobs.run_retention_days",
+        "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
         "hosts.reachability.enabled", "hosts.reachability.interval_minutes",
         "system.update_check.enabled", "system.update_check.channel", "ssh.confirm_new_host_keys",
+        "system.trusted_proxies",
     }
 
 
@@ -354,6 +359,59 @@ async def test_changing_job_run_retention_is_written_to_the_audit_log(client):
 
 
 @pytest.mark.asyncio
+async def test_put_notification_retention_roundtrip(client):
+    token = await _bootstrap_owner(client)
+    before = await client.get("/api/v1/settings", headers=_auth_header(token))
+    assert {r["key"]: r["value"] for r in before.json()}["notifications.retention_days"] == 90
+
+    put = await client.put("/api/v1/settings/notifications.retention_days", json={"value": 365}, headers=_auth_header(token))
+    assert put.status_code == 200, put.text
+    assert put.json() == {"key": "notifications.retention_days", "value": 365}
+    after = await client.get("/api/v1/settings", headers=_auth_header(token))
+    assert {r["key"]: r["value"] for r in after.json()}["notifications.retention_days"] == 365
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [0, -1, 3651, 100000, "90", 90.5, True, False, None, [90]])
+async def test_put_notification_retention_rejects_invalid_values_with_422(client, bad):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/settings/notifications.retention_days", json={"value": bad}, headers=_auth_header(token))
+    assert r.status_code == 422, (bad, r.text)
+    assert "notifications.retention_days" in r.json()["detail"]
+    after = await client.get("/api/v1/settings", headers=_auth_header(token))
+    assert {r["key"]: r["value"] for r in after.json()}["notifications.retention_days"] == 90  # nichts gespeichert
+
+
+@pytest.mark.asyncio
+async def test_put_notification_retention_range_error_is_a_german_sentence(client):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/settings/notifications.retention_days", json={"value": 0}, headers=_auth_header(token))
+    assert r.status_code == 422
+    assert r.json()["detail"] == "notifications.retention_days muss zwischen 1 und 3650 Tagen liegen."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("good", [1, 3650])
+async def test_put_notification_retention_accepts_both_limits(client, good):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/settings/notifications.retention_days", json={"value": good}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_changing_notification_retention_is_written_to_the_audit_log(client):
+    token = await _bootstrap_owner(client)
+    await client.put("/api/v1/settings/notifications.retention_days", json={"value": 30}, headers=_auth_header(token))
+    await client.put("/api/v1/settings/notifications.retention_days", json={"value": 180}, headers=_auth_header(token))
+    await client.put("/api/v1/settings/notifications.retention_days", json={"value": 0}, headers=_auth_header(token))  # 422
+    entries = (await client.get("/api/v1/audit?action=system.settings.changed", headers=_auth_header(token))).json()
+    details = [e["detail"] for e in entries if e["target_id"] == "notifications.retention_days"]
+    assert sorted((d["old"], d["new"]) for d in details) == [(30, 180), (90, 30)]
+    assert all(d["key"] == "notifications.retention_days" for d in details)
+    assert all(e["outcome"] == "success" and e["target_type"] == "setting" for e in entries)
+
+
+@pytest.mark.asyncio
 async def test_changing_system_settings_is_written_to_the_audit_log(client):
     token = await _bootstrap_owner(client)
     await client.put("/api/v1/settings/audit.retention_days", json={"value": 30}, headers=_auth_header(token))
@@ -378,6 +436,9 @@ async def test_system_settings_keep_the_settings_write_permission(client, db_ses
     await db_session.flush()
     login = await client.post("/api/v1/auth/login", json={"username": "viewer2", "password": "whatever123"})
     token = login.json()["access_token"]
-    for key, value in (("system.timezone", "UTC"), ("audit.retention_days", 30), ("jobs.run_retention_days", 10)):
+    for key, value in (
+        ("system.timezone", "UTC"), ("audit.retention_days", 30), ("jobs.run_retention_days", 10),
+        ("notifications.retention_days", 10),
+    ):
         r = await client.put(f"/api/v1/settings/{key}", json={"value": value}, headers=_auth_header(token))
         assert r.status_code == 403

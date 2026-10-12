@@ -28,9 +28,12 @@ import { DemoSeedButton } from "../components/DemoSeedButton";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { FirstStepsCard } from "../components/FirstStepsCard";
 import { Icon } from "../components/Icon";
+import { LoadError } from "../components/LoadError";
+import { ProviderBadge } from "../components/ProviderBadge";
 import { usePages } from "../lib/catalog";
 import { useExtensionLabel } from "../lib/extensionNames";
-import { NEW_HOST_TARGET } from "../lib/firstSteps";
+import { NEW_HOST_TARGET, useExtensions } from "../lib/firstSteps";
+import { hostProvider, type HostProvider } from "../lib/hostProvider";
 import { neverAnswered } from "../lib/hosts";
 import {
   formatAge,
@@ -50,6 +53,9 @@ import {
   useTerminalHosts,
 } from "../lib/overview";
 import { useAuthStore } from "../state/auth";
+
+/** Grund, wenn eine Abfrage ohne Fehler wartet: das Gerät hat gerade kein Netz. */
+const OFFLINE_TEXT = "Dieses Gerät ist gerade offline. Sobald es wieder Netz hat, lädt die Seite von selbst.";
 
 const KIND_LABEL: Record<string, string> = { vm: "VM", lxc: "Container", hypervisor: "Knoten", node: "Knoten" };
 
@@ -143,7 +149,7 @@ interface CardData {
 
 /** Eine Karte fuer Hypervisor-Knoten UND Linux-Server mit Messwerten -- gleiches Aussehen, nur die Quelle
  * der Zahlen unterscheidet sich (Knoten: live vom Anbieter, Server: letzter Wert aus dem Verlauf). */
-function HostCard({ host, data, testId, canTerminal }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean }) {
+function HostCard({ host, data, testId, canTerminal, provider }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean; provider?: HostProvider }) {
   const health = hostHealth(host.status);
   const offline = data.state === "offline";
   const dim = data.state !== "live";
@@ -156,6 +162,7 @@ function HostCard({ host, data, testId, canTerminal }: { host: HostOut; data: Ca
           <p className="flex items-center gap-2 font-medium">
             <span className={`status-dot ${health}`} title={hostStatusText(host)} />
             <Link to={`/hosts/${host.id}`} className="min-w-0 break-words hover:underline">{host.display_name}</Link>
+            <ProviderBadge provider={provider} testId={`${testId}-provider-off`} />
           </p>
           <p className="break-words text-xs text-white/50">
             {host.address}{uptime ? ` · läuft seit ${formatUptime(uptime)}` : ""}
@@ -190,7 +197,7 @@ function HostCard({ host, data, testId, canTerminal }: { host: HostOut; data: Ca
 }
 
 /** Hypervisor-Knoten: Werte live vom Anbieter (eine Abfrage je Knoten, kein SSH). */
-function NodeCard({ host, canTerminal }: { host: HostOut; canTerminal: boolean }) {
+function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal: boolean; provider?: HostProvider }) {
   const { data, isError } = useHostMetrics(host.id);
   const v = data?.values ?? {};
   const memPct = v.mem_total_bytes ? (100 * (v.mem_used_bytes ?? 0)) / v.mem_total_bytes : null;
@@ -200,6 +207,7 @@ function NodeCard({ host, canTerminal }: { host: HostOut; canTerminal: boolean }
       host={host}
       testId={`node-${host.id}`}
       canTerminal={canTerminal}
+      provider={provider}
       data={{
         state: offline ? "offline" : "live",
         cpu: isError ? null : (v.cpu_percent ?? null),
@@ -214,7 +222,7 @@ function NodeCard({ host, canTerminal }: { host: HostOut; canTerminal: boolean }
 
 /** Linux-Server mit Messwerten aus dem Verlauf (`GET /hosts/metrics/latest`, ohne SSH-Aufruf). Ein
  * nicht erreichbarer Server zeigt keine alten Werte als aktuell; ein zu alter Wert heisst „veraltet“. */
-function ServerCard({ host, latest, unconfirmed, canTerminal }: { host: HostOut; latest: HostLatestMetrics; unconfirmed: boolean; canTerminal: boolean }) {
+function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host: HostOut; latest: HostLatestMetrics; unconfirmed: boolean; canTerminal: boolean; provider?: HostProvider }) {
   const offline = hostHealth(host.status) === "problem";
   const stale = latest.stale || unconfirmed;
   return (
@@ -222,6 +230,7 @@ function ServerCard({ host, latest, unconfirmed, canTerminal }: { host: HostOut;
       host={host}
       testId={`server-${host.id}`}
       canTerminal={canTerminal}
+      provider={provider}
       data={{
         state: offline ? "offline" : stale ? "stale" : "live",
         cpu: latest.cpu,
@@ -238,7 +247,7 @@ function ServerCard({ host, latest, unconfirmed, canTerminal }: { host: HostOut;
   );
 }
 
-function MachineRow({ host, canTerminal, hint }: { host: HostOut; canTerminal: boolean; hint?: string | null }) {
+function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canTerminal: boolean; hint?: string | null; provider?: HostProvider }) {
   const health = hostHealth(host.status);
   return (
     <div className="panel flex items-center gap-3 px-3 py-2.5" data-testid={`machine-${host.id}`}>
@@ -248,6 +257,7 @@ function MachineRow({ host, canTerminal, hint }: { host: HostOut; canTerminal: b
         <p className="break-words text-[11px] text-white/45">
           {KIND_LABEL[host.kind ?? ""] ?? "Server"} · {host.address}
         </p>
+        {provider?.problem && <p className="mt-1"><ProviderBadge provider={provider} testId={`machine-${host.id}-provider-off`} /></p>}
         {hint && <p className="break-words text-[11px] text-white/40" data-testid={`machine-${host.id}-hint`}>{hint}</p>}
       </div>
       {hasConsole(host) && health === "online" && (
@@ -277,7 +287,7 @@ function metricsHint(host: HostOut, systemModuleOn: boolean | null): string | nu
   if (host.os_family !== "linux" || host.provider_ext_id || isNode(host) || hasConsole(host)) return null;
   if (!host.credential) return "Keine Auslastung: noch kein SSH-Zugang";
   if (!host.enabled) return "Keine Auslastung: Messwerte für diesen Server sind aus";
-  if (systemModuleOn === false) return "Keine Auslastung: Modul „System“ ist aus";
+  if (systemModuleOn === false) return "Keine Auslastung: Modul „Server-Zustand“ ist aus";
   // Hat der Server nie geantwortet, kommt auch nichts mehr nach: erst die Verbindung klaeren, nicht auf Kurven warten.
   if (hostHealth(host.status) === "problem" && neverAnswered(host)) return "Noch keine Verbindung: prüfe zuerst den Zugang";
   if (systemModuleOn && hostHealth(host.status) !== "problem") return "Noch keine Messwerte";
@@ -290,12 +300,16 @@ export function Cockpit() {
   const canExecute = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const canWriteHosts = useAuthStore((s) => s.hasPermission("hosts.write"));
   const canWriteApps = useAuthStore((s) => s.hasPermission("apps.write"));
-  const { data: hosts, isLoading: hostsLoading } = useHosts(canReadHosts);
-  const { data: overview, isLoading: overviewLoading } = useOverview(canReadHosts);
+  const hostsQuery = useHosts(canReadHosts);
+  const overviewQuery = useOverview(canReadHosts);
+  const { data: hosts, isLoading: hostsLoading } = hostsQuery;
+  const { data: overview, isLoading: overviewLoading } = overviewQuery;
   const { data: terminalHosts } = useTerminalHosts(canExecute);
   const { data: latest, isLoading: latestLoading, isError: latestError } = useLatestMetrics(canReadHosts);
   const { data: pages } = usePages();
   const extensionLabel = useExtensionLabel((overview?.attention ?? []).some((a) => a.source_ext_id));
+  // Welches Modul einen Server eingelesen hat und ob es noch läuft (sonst kennzeichnet ihn das Cockpit).
+  const { data: extensions } = useExtensions(canReadHosts);
 
   const nodes = useMemo(() => (hosts ?? []).filter(isNode), [hosts]);
   // Server mit einem letzten Messwert (aus dem Verlauf) bekommen eine Karte wie die Knoten, alle anderen
@@ -339,6 +353,22 @@ export function Cockpit() {
   // Ohne einen einzigen Server gibt es nichts, was "rund laufen" koennte -- stattdessen zeigt das
   // Cockpit, was als Naechstes zu tun ist.
   const noHosts = canReadHosts && !loading && hosts !== undefined && allHosts.length === 0;
+  // Eine gescheiterte Abfrage ist keine Auskunft: ohne Serverliste kein „Alles läuft rund“, ohne Übersicht
+  // (Dienste, Backups, Meldungen, Freigaben) kein „Nichts offen“. Scheitert nur das Nachladen, bleiben die
+  // letzten Werte stehen, aber als „nicht aktuell“ gekennzeichnet. „Ohne Daten und lädt nicht“ ist auch
+  // eine wartende Abfrage (Gerät offline, etwa die installierte App ohne Netz): dort gibt es keinen Fehler.
+  const hostsFailed = canReadHosts && !hostsLoading && hosts === undefined;
+  const overviewFailed = canReadHosts && !overviewLoading && overview === undefined;
+  const stale = canReadHosts && !hostsFailed && !overviewFailed && (hostsQuery.isError || overviewQuery.isError);
+  // Der Grund passt zur Überschrift im Kasten (gleiche Reihenfolge wie dort).
+  const failedQuery = hostsFailed ? hostsQuery : overviewFailed ? overviewQuery
+    : hostsQuery.isError ? hostsQuery : overviewQuery.isError ? overviewQuery : null;
+  const loadFailure = failedQuery ? (failedQuery.error ?? OFFLINE_TEXT) : null;
+  const retryLoad = () => {
+    if (hostsFailed || hostsQuery.isError) void hostsQuery.refetch();
+    if (overviewFailed || overviewQuery.isError) void overviewQuery.refetch();
+  };
+  const unavailable = "gerade nicht abrufbar";
 
   return (
     <section className="relative isolate" aria-label="Cockpit">
@@ -356,10 +386,25 @@ export function Cockpit() {
           <p className="mt-2 flex items-center gap-2 text-sm text-white/70" data-testid="cockpit-status">
             {loading ? (
               <span className="opacity-60">Lagebild wird geladen …</span>
+            ) : hostsFailed ? (
+              <>
+                <AlertTriangle size={16} className="text-amber-400" />
+                Lagebild gerade nicht abrufbar. Der Zustand der Server ist unbekannt.
+              </>
             ) : noHosts ? (
               <>
                 <Server size={16} className="text-white/55" />
                 Noch kein Server eingerichtet.
+              </>
+            ) : issues === 0 && overviewFailed ? (
+              <>
+                <Server size={16} className="text-white/55" />
+                Keine Störung bei den Servern bekannt, {online} von {allHosts.length} online. Dienste, Backups und Meldungen sind {unavailable}.
+              </>
+            ) : issues === 0 && stale ? (
+              <>
+                <Server size={16} className="text-white/55" />
+                Zuletzt keine Störung bekannt, {online} von {allHosts.length} Servern online. Der Stand ist nicht aktuell.
               </>
             ) : issues === 0 && unknownHosts.length > 0 ? (
               <>
@@ -382,31 +427,43 @@ export function Cockpit() {
         )}
       </div>
 
+      {canReadHosts && !loading && loadFailure != null && (
+        <div className="px-4 pt-3 sm:px-6" data-testid="cockpit-load-error">
+          <LoadError
+            what={hostsFailed ? "Die Server-Liste" : overviewFailed ? "Die Übersicht (Dienste, Backups, Meldungen)" : "Der aktuelle Stand"}
+            error={loadFailure}
+            onRetry={retryLoad}
+          />
+        </div>
+      )}
+
       <FirstStepsCard />
 
       {canReadHosts && (
         <div className="grid grid-cols-2 gap-3 px-4 pt-5 sm:px-6 md:grid-cols-3 xl:grid-cols-5">
           <StatCard
-            icon={<Server size={16} />} label="Server" value={loading ? "…" : noHosts ? "0" : `${online}/${allHosts.length}`}
+            icon={<Server size={16} />} label="Server" value={loading ? "…" : hostsFailed ? "–" : noHosts ? "0" : `${online}/${allHosts.length}`}
             sub={
-              problemHosts.length ? `${problemHosts.length} nicht erreichbar`
+              hostsFailed ? unavailable
+                : problemHosts.length ? `${problemHosts.length} nicht erreichbar`
                 : noHosts ? "noch keiner angelegt"
                 : unknownHosts.length ? `online · ${unknownHosts.length} noch nicht geprüft`
                 : "online"
             }
-            tone={problemHosts.length ? "danger" : noHosts || unknownHosts.length ? "neutral" : "good"}
+            tone={hostsFailed ? "warn" : problemHosts.length ? "danger" : noHosts || unknownHosts.length ? "neutral" : "good"}
           />
           <StatCard
             icon={<Boxes size={16} />} label="Dienste"
-            value={overview ? (services.length === 0 ? "–" : `${overview.services_running}/${services.length}`) : "…"}
+            value={overview ? (services.length === 0 ? "–" : `${overview.services_running}/${services.length}`) : overviewFailed ? "–" : "…"}
             sub={
-              servicesDown.length && services.length === 0 ? `unbekannt · ${servicesDownText}`
+              overviewFailed ? unavailable
+                : servicesDown.length && services.length === 0 ? `unbekannt · ${servicesDownText}`
                 : servicesDown.length ? `Container laufen · ${servicesDownText}`
                 : overview && services.length === 0 ? "noch keine erfasst"
                 : "Container laufen"
             }
             tone={
-              servicesDown.length ? "warn"
+              overviewFailed || servicesDown.length ? "warn"
                 : noHosts || services.length === 0 ? "neutral"
                 : overview && overview.services_running < services.length ? "warn" : "good"
             }
@@ -420,12 +477,13 @@ export function Cockpit() {
             />
           )}
           <StatCard
-            to="/notifications" icon={<Bell size={16} />} label="Meldungen" value={overview ? String(overview.unread_notifications) : "…"}
-            sub="ungelesen" tone={attention.length ? "warn" : "neutral"}
+            to="/notifications" icon={<Bell size={16} />} label="Meldungen" value={overview ? String(overview.unread_notifications) : overviewFailed ? "–" : "…"}
+            sub={overviewFailed ? unavailable : "ungelesen"} tone={overviewFailed || attention.length ? "warn" : "neutral"}
           />
           <StatCard
-            to="/actions" icon={<ShieldCheck size={16} />} label="Freigaben" value={overview ? String(overview.pending_actions) : "…"}
-            sub={overview?.pending_actions ? "warten auf dich" : "nichts offen"} tone={overview?.pending_actions ? "warn" : "neutral"}
+            to="/actions" icon={<ShieldCheck size={16} />} label="Freigaben" value={overview ? String(overview.pending_actions) : overviewFailed ? "–" : "…"}
+            sub={overviewFailed ? unavailable : overview?.pending_actions ? "warten auf dich" : "nichts offen"}
+            tone={overviewFailed || overview?.pending_actions ? "warn" : "neutral"}
           />
         </div>
       )}
@@ -436,7 +494,7 @@ export function Cockpit() {
             <SectionTitle icon={<Server size={15} />}>Infrastruktur</SectionTitle>
             {nodes.length + servers.length > 0 && (
               <div className="mb-3 grid gap-3 sm:grid-cols-2 2xl:grid-cols-3" data-testid="host-cards">
-                {nodes.map((node) => <NodeCard key={node.id} host={node} canTerminal={terminalIds.has(node.id)} />)}
+                {nodes.map((node) => <NodeCard key={node.id} host={node} canTerminal={terminalIds.has(node.id)} provider={hostProvider(node, extensions)} />)}
                 {servers.map((host) => (
                   <ServerCard
                     key={host.id}
@@ -444,6 +502,7 @@ export function Cockpit() {
                     latest={latest!.hosts[host.id]}
                     unconfirmed={latestError}
                     canTerminal={terminalIds.has(host.id)}
+                    provider={hostProvider(host, extensions)}
                   />
                 ))}
               </div>
@@ -451,7 +510,7 @@ export function Cockpit() {
             {!latestLoading && (
               <div className="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
                 {machines.map((host) => (
-                  <MachineRow key={host.id} host={host} canTerminal={terminalIds.has(host.id)} hint={metricsHint(host, systemModuleOn)} />
+                  <MachineRow key={host.id} host={host} canTerminal={terminalIds.has(host.id)} hint={metricsHint(host, systemModuleOn)} provider={hostProvider(host, extensions)} />
                 ))}
               </div>
             )}
@@ -483,11 +542,22 @@ export function Cockpit() {
             <div>
               <SectionTitle icon={<AlertTriangle size={15} />}>Braucht Aufmerksamkeit</SectionTitle>
               <div className="panel divide-y divide-white/[0.06]" data-testid="attention">
-                {!loading && issues === 0 && (
+                {!loading && (hostsFailed || overviewFailed) && (
+                  <p className="p-4 text-sm text-white/60" data-testid="attention-unknown">
+                    {issues === 0
+                      ? "Unbekannt: Die Daten dafür ließen sich gerade nicht laden."
+                      : "Vielleicht nicht vollständig: Ein Teil der Daten ließ sich gerade nicht laden."}
+                  </p>
+                )}
+                {!loading && issues === 0 && !hostsFailed && !overviewFailed && (stale ? (
+                  <p className="p-4 text-sm text-white/60" data-testid="attention-stale">
+                    Zuletzt war nichts offen. Der Stand ist nicht aktuell.
+                  </p>
+                ) : (
                   <p className="flex items-center gap-2 p-4 text-sm text-white/60">
                     <CheckCircle2 size={16} className="text-emerald-400" /> Nichts offen – genieß die Ruhe.
                   </p>
-                )}
+                ))}
                 {problemHosts.map((h) => (
                   <p key={h.id} className="flex items-center gap-2 px-4 py-3 text-sm">
                     <span className="status-dot problem" /> {h.display_name} ist nicht erreichbar

@@ -11,9 +11,14 @@
     "topic": {
       "type": "string",
       "title": "Thema (Topic)",
-      "description": "Name des Kanals, den du in der ntfy-App abonnierst. Bei ntfy.sh schwer erratbar wählen.",
+      "description": "Name des Kanals, den du in der ntfy-App abonnierst. Bei ntfy.sh kann jeder ein Thema mitlesen, dessen Namen er kennt – nimm einen zufälligen Namen (Knopf „Zufällig wählen“).",
       "pattern": "^[A-Za-z0-9_-]{1,64}$",
-      "x-pattern-message": "Nur Buchstaben, Zahlen, Bindestrich und Unterstrich, höchstens 64 Zeichen."
+      "x-pattern-message": "Nur Buchstaben, Zahlen, Bindestrich und Unterstrich, höchstens 64 Zeichen.",
+      "x-generate": {
+        "label": "Zufällig wählen",
+        "prefix": "nodvard-",
+        "length": 20
+      }
     },
     "dashboard_url": {
       "type": "string",
@@ -21,11 +26,135 @@
       "description": "z. B. http://192.168.2.31:8080 – dann öffnet ein Tipp auf eine Nachricht direkt die passende Seite im Dashboard.",
       "pattern": "^https?://\\S+$",
       "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+    },
+    "min_severity": {
+      "type": "string",
+      "title": "Mindest-Stufe für Push-Nachrichten",
+      "description": "Meldungen unterhalb dieser Stufe kommen nicht aufs Handy. Du findest sie weiterhin im Dashboard unter „Meldungen“. Die Testnachricht kommt immer an.",
+      "enum": [
+        "info",
+        "warning",
+        "critical"
+      ],
+      "default": "info",
+      "x-enum-labels": {
+        "info": "Alles (Info, Warnung, Kritisch)",
+        "warning": "Ab Warnung",
+        "critical": "Nur Kritisch"
+      }
+    },
+    "priority_info": {
+      "type": "string",
+      "title": "Lautstärke bei Info",
+      "description": "Wie auffällig eine Meldung der Stufe „Info“ auf dem Handy ankommt.",
+      "enum": [
+        "min",
+        "low",
+        "default",
+        "high",
+        "max"
+      ],
+      "default": "default",
+      "x-enum-labels": {
+        "min": "1 – ohne Ton",
+        "low": "2 – leise",
+        "default": "3 – normal",
+        "high": "4 – laut",
+        "max": "5 – sehr laut (bei „Nicht stören“ nur, wenn du das am Handy erlaubt hast)"
+      }
+    },
+    "priority_warning": {
+      "type": "string",
+      "title": "Lautstärke bei Warnung",
+      "description": "Wie auffällig eine Meldung der Stufe „Warnung“ auf dem Handy ankommt.",
+      "enum": [
+        "min",
+        "low",
+        "default",
+        "high",
+        "max"
+      ],
+      "default": "high",
+      "x-enum-labels": {
+        "min": "1 – ohne Ton",
+        "low": "2 – leise",
+        "default": "3 – normal",
+        "high": "4 – laut",
+        "max": "5 – sehr laut (bei „Nicht stören“ nur, wenn du das am Handy erlaubt hast)"
+      }
+    },
+    "priority_critical": {
+      "type": "string",
+      "title": "Lautstärke bei Kritisch",
+      "description": "Wie auffällig eine Meldung der Stufe „Kritisch“ auf dem Handy ankommt.",
+      "enum": [
+        "min",
+        "low",
+        "default",
+        "high",
+        "max"
+      ],
+      "default": "max",
+      "x-enum-labels": {
+        "min": "1 – ohne Ton",
+        "low": "2 – leise",
+        "default": "3 – normal",
+        "high": "4 – laut",
+        "max": "5 – sehr laut (bei „Nicht stören“ nur, wenn du das am Handy erlaubt hast)"
+      }
+    },
+    "channels": {
+      "type": "array",
+      "title": "Weitere Kanäle",
+      "description": "Zusätzlich zu ntfy (oder statt ntfy): Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost oder eine eigene Apprise-API für alle anderen Dienste. Nach dem Speichern trägst du unten unter „Zugangsdaten“ die Adresse jedes Kanals ein.",
+      "x-item-title": "Kanal",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Frei wählbar, z. B. „telegram“ oder „discord-familie“.",
+            "pattern": "^(?![Nn][Tt][Ff][Yy]$)[A-Za-z0-9_.-]{1,40}$",
+            "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich, höchstens 40 Zeichen. „ntfy“ ist schon vergeben."
+          },
+          "min_severity": {
+            "type": "string",
+            "title": "Mindest-Stufe",
+            "description": "Meldungen unterhalb dieser Stufe gehen nicht an diesen Kanal. Die Testnachricht kommt immer an.",
+            "enum": [
+              "info",
+              "warning",
+              "critical"
+            ],
+            "default": "warning",
+            "x-enum-labels": {
+              "info": "Alles (Info, Warnung, Kritisch)",
+              "warning": "Ab Warnung",
+              "critical": "Nur Kritisch"
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Aktiv",
+            "default": true
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "maxItems": 10
     }
   },
-  "required": [
-    "server_url",
-    "topic"
+  "x-required-any": [
+    [
+      "server_url",
+      "topic"
+    ],
+    [
+      "channels"
+    ]
   ],
   "x-secrets": [
     {
@@ -34,7 +163,14 @@
       "title": "Zugriffstoken (optional)",
       "description": "Nur nötig, wenn dein ntfy-Server eine Anmeldung verlangt.",
       "optional": true
+    },
+    {
+      "label": "push-kanal:{name}",
+      "per_item": "channels",
+      "title": "Adresse des Kanals",
+      "description": "Mit Zugangsdaten, deshalb nur hier im Tresor. Schreibweise wie bei Apprise: tgram://BOT-TOKEN/CHAT-ID, discord://WEBHOOK-ID/WEBHOOK-TOKEN (oder die Webhook-Adresse von Discord), gotifys://SERVER/APP-TOKEN, pover://USER-KEY@APP-TOKEN, matrixs://ZUGRIFFSTOKEN@SERVER/!RAUM:SERVER, slack://T…/B…/X… (oder die Webhook-Adresse von Slack), mmosts://SERVER/WEBHOOK-ID, apprises://SERVER/SCHLÜSSEL für eine eigene Apprise-API."
     }
   ],
+  "x-qr-url": "/ext/ntfy/subscribe-link",
   "x-test-message": true
 }

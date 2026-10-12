@@ -26,15 +26,23 @@
           "token_id": {
             "type": "string",
             "title": "API-Token-ID",
-            "description": "Format benutzer@realm!tokenname, z. B. nodvard@pve!dashboard. Erstellen unter Rechenzentrum → Berechtigungen → API-Token.",
+            "description": "Format benutzer@realm!tokenname, z. B. nodvard@pve!dashboard. Erstellen unter Rechenzentrum → Rechte → API-Token.",
             "pattern": "^\\S+@\\S+!\\S+$",
             "x-pattern-message": "Das Format ist benutzer@realm!tokenname, z. B. root@pam!dashboard."
+          },
+          "tls_fingerprint_sha256": {
+            "type": "string",
+            "title": "Fingerabdruck des Zertifikats (SHA-256)",
+            "description": "Nodvard Deck spricht dann nur mit dem Server, der genau dieses Zertifikat zeigt. Steht er hier, braucht es „Selbstsigniertes Zertifikat erlauben“ nicht. Du findest ihn in Proxmox unter Knoten → System → Zertifikate, oder du bestätigst ihn unter „Verbindungen verwalten“.",
+            "pattern": "^\\s*([0-9A-Fa-f]{2}[:\\t -]?){31}[0-9A-Fa-f]{2}\\s*$|^\\s*$",
+            "x-pattern-message": "64 Zeichen aus 0–9 und A–F, gern mit Doppelpunkten (z. B. AB:CD:…)."
           },
           "tls_insecure_skip_verify": {
             "type": "boolean",
             "default": false,
             "title": "Selbstsigniertes Zertifikat erlauben",
-            "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."
+            "description": "Veraltet: besser den Fingerabdruck eintragen oder unter „Verbindungen verwalten“ bestätigen. Schaltet jede Prüfung des Zertifikats ab; gilt nicht, solange ein Fingerabdruck eingetragen ist.",
+            "x-advanced": true
           }
         },
         "required": [
@@ -43,6 +51,31 @@
           "token_id"
         ]
       }
+    },
+    "storage_warn_percent": {
+      "type": "integer",
+      "default": 90,
+      "minimum": 50,
+      "maximum": 99,
+      "title": "Speicher: Warnung ab Belegung (%)",
+      "description": "Ab dieser Belegung meldet Nodvard Deck einen Speicher, z. B. „Speicher local-lvm auf pve1 fast voll: 92 %“. Ab 98 % ist die Meldung „kritisch“. Wieder in Ordnung gilt der Speicher erst, wenn er mindestens 5 Prozentpunkte darunter liegt."
+    },
+    "disk_temp_warn_c": {
+      "type": "integer",
+      "minimum": 40,
+      "maximum": 95,
+      "title": "Datenträger: Warnung ab Temperatur (°C)",
+      "description": "Leer lassen für die Vorgabe: Festplatten ab 55 °C, SSD ab 65 °C, NVMe ab 70 °C. Gemeldet wird erst, wenn ein Datenträger 10 bis 15 Minuten so warm bleibt; wieder normal gilt er 5 Grad darunter. Die Knotenseite färbt mit derselben Schwelle.",
+      "x-advanced": true
+    },
+    "storage_skip": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "title": "Speicher ohne Warnung",
+      "description": "Namen von Speichern, die nie gemeldet werden sollen, z. B. eine absichtlich volle Ablage für ISO-Dateien. Der Name gilt auf allen Knoten.",
+      "x-advanced": true
     }
   },
   "required": [

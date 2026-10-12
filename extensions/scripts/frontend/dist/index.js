@@ -1,7 +1,7 @@
 // src/ScriptsPage.tsx
 import { useCallback as useCallback2, useEffect as useEffect4, useRef as useRef2, useState as useState3 } from "react";
 
-// ../../../frontend/src/components/SchedulePicker.tsx
+// ../../_shared/frontend/src/SchedulePicker.tsx
 import { useEffect, useState } from "react";
 
 // ../../../frontend/src/lib/deckTimezone.ts
@@ -46,7 +46,7 @@ function foreignDeckTimezone(deck2) {
   return deck2 && deck2 !== browserTimeZone() ? deck2 : null;
 }
 
-// ../../../frontend/src/components/SchedulePicker.tsx
+// ../../_shared/frontend/src/SchedulePicker.tsx
 import { jsx, jsxs } from "react/jsx-runtime";
 var DAY_SHORT = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 var DAY_LONG = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
@@ -425,42 +425,6 @@ function useUnmountSignal() {
   return useRef(() => ref.current.signal).current;
 }
 
-// ../../_shared/frontend/src/location.ts
-import { useCallback, useEffect as useEffect3, useMemo, useState as useState2 } from "react";
-function useUrlParams() {
-  const [search, setSearch] = useState2(() => window.location.search);
-  const [visits, setVisits] = useState2(0);
-  useEffect3(() => {
-    const sync = () => setSearch(window.location.search);
-    const visit = () => {
-      sync();
-      setVisits((n) => n + 1);
-    };
-    const onPopState = () => {
-      if (!findDeck()?.navigateEvents) visit();
-    };
-    sync();
-    const navigateEvent = deckEventName("navigate");
-    window.addEventListener("popstate", onPopState);
-    window.addEventListener(navigateEvent, visit);
-    return () => {
-      window.removeEventListener("popstate", onPopState);
-      window.removeEventListener(navigateEvent, visit);
-    };
-  }, []);
-  const params = useMemo(() => new URLSearchParams(search), [search]);
-  const update = useCallback((changes) => {
-    const url = new URL(window.location.href);
-    for (const [key, value] of Object.entries(changes)) {
-      if (value === null) url.searchParams.delete(key);
-      else url.searchParams.set(key, value);
-    }
-    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
-    setSearch(window.location.search);
-  }, []);
-  return [params, update, visits];
-}
-
 // ../../_shared/frontend/src/ui.tsx
 import { Fragment, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 var inputClass = "w-full rounded-lg border border-white/10 bg-black/25 px-3 py-2 text-sm text-white placeholder:text-white/30 outline-none transition focus:border-[var(--color-accent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--color-accent)_30%,transparent)] disabled:opacity-50";
@@ -608,8 +572,87 @@ function Field({ label, children, className = "" }) {
   ] });
 }
 
+// ../../_shared/frontend/src/loadError.tsx
+import { jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+var UNREADABLE_ANSWER_TEXT = "Die Antwort des Servers lie\xDF sich nicht lesen.";
+async function fetchJson(path, init) {
+  const res = await authedFetch(path, init);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(errorFromBody(body, res.status));
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(UNREADABLE_ANSWER_TEXT);
+  }
+}
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function LoadError({ what, error, onRetry, hint, compact = false }) {
+  if (compact) {
+    return /* @__PURE__ */ jsxs3("div", { role: "alert", "data-testid": "load-error", className: "text-sm", children: [
+      /* @__PURE__ */ jsxs3("p", { className: "text-red-300", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/50", children: hint }),
+      onRetry && /* @__PURE__ */ jsx3("button", { type: "button", onClick: onRetry, className: "mt-1 text-xs text-white/70 underline underline-offset-2 hover:text-white", children: "Erneut versuchen" })
+    ] });
+  }
+  return /* @__PURE__ */ jsxs3("div", { role: "alert", "data-testid": "load-error", className: "mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm", children: [
+    /* @__PURE__ */ jsxs3("div", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsxs3("p", { className: "text-red-200", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/55", children: hint })
+    ] }),
+    onRetry && /* @__PURE__ */ jsx3(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" })
+  ] });
+}
+
+// ../../_shared/frontend/src/location.ts
+import { useCallback, useEffect as useEffect3, useMemo, useState as useState2 } from "react";
+function useUrlParams() {
+  const [search, setSearch] = useState2(() => window.location.search);
+  const [visits, setVisits] = useState2(0);
+  useEffect3(() => {
+    const sync = () => setSearch(window.location.search);
+    const visit = () => {
+      sync();
+      setVisits((n) => n + 1);
+    };
+    const onPopState = () => {
+      if (!findDeck()?.navigateEvents) visit();
+    };
+    sync();
+    const navigateEvent = deckEventName("navigate");
+    window.addEventListener("popstate", onPopState);
+    window.addEventListener(navigateEvent, visit);
+    return () => {
+      window.removeEventListener("popstate", onPopState);
+      window.removeEventListener(navigateEvent, visit);
+    };
+  }, []);
+  const params = useMemo(() => new URLSearchParams(search), [search]);
+  const update = useCallback((changes) => {
+    const url = new URL(window.location.href);
+    for (const [key, value] of Object.entries(changes)) {
+      if (value === null) url.searchParams.delete(key);
+      else url.searchParams.set(key, value);
+    }
+    window.history.replaceState(window.history.state, "", url.pathname + url.search + url.hash);
+    setSearch(window.location.search);
+  }, []);
+  return [params, update, visits];
+}
+
 // src/ScriptsPage.tsx
-import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs3 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx4, jsxs as jsxs4 } from "react/jsx-runtime";
 var EXEC_STATUS = {
   proposed: { label: "wartet auf Freigabe", tone: "warn" },
   executing: { label: "l\xE4uft", tone: "info" },
@@ -628,33 +671,33 @@ function triggeredBy(e) {
   return e.proposed_by.startsWith("extension/") ? `Zeitplan \xB7 ${name}` : name;
 }
 function Executions({ items }) {
-  if (items.length === 0) return /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/45", children: "Noch nicht ausgef\xFChrt." });
-  return /* @__PURE__ */ jsx3("ul", { className: "space-y-2", "data-testid": "executions", children: items.map((e) => {
+  if (items.length === 0) return /* @__PURE__ */ jsx4("p", { className: "text-sm text-white/45", children: "Noch nicht ausgef\xFChrt." });
+  return /* @__PURE__ */ jsx4("ul", { className: "space-y-2", "data-testid": "executions", children: items.map((e) => {
     const st = EXEC_STATUS[e.status] ?? { label: e.status, tone: "neutral" };
     const hasOutput = Boolean(e.output || e.error);
-    return /* @__PURE__ */ jsx3("li", { className: "rounded-lg border border-white/[0.08] bg-black/15 text-sm", children: /* @__PURE__ */ jsxs3("details", { open: e === items[0] && hasOutput, children: [
-      /* @__PURE__ */ jsxs3("summary", { className: "flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2", children: [
-        /* @__PURE__ */ jsx3(Badge, { tone: st.tone, children: st.label }),
-        /* @__PURE__ */ jsx3("span", { className: "font-medium", children: e.host_name ?? "\u2013" }),
-        e.exit_code != null && /* @__PURE__ */ jsxs3("span", { className: "text-xs text-white/45", children: [
+    return /* @__PURE__ */ jsx4("li", { className: "rounded-lg border border-white/[0.08] bg-black/15 text-sm", children: /* @__PURE__ */ jsxs4("details", { open: e === items[0] && hasOutput, children: [
+      /* @__PURE__ */ jsxs4("summary", { className: "flex cursor-pointer flex-wrap items-center gap-2 px-3 py-2", children: [
+        /* @__PURE__ */ jsx4(Badge, { tone: st.tone, children: st.label }),
+        /* @__PURE__ */ jsx4("span", { className: "font-medium", children: e.host_name ?? "\u2013" }),
+        e.exit_code != null && /* @__PURE__ */ jsxs4("span", { className: "text-xs text-white/45", children: [
           "Exit ",
           e.exit_code
         ] }),
-        e.duration_ms != null && /* @__PURE__ */ jsxs3("span", { className: "text-xs text-white/45", children: [
+        e.duration_ms != null && /* @__PURE__ */ jsxs4("span", { className: "text-xs text-white/45", children: [
           (e.duration_ms / 1e3).toFixed(1),
           " s"
         ] }),
-        !hasOutput && e.status === "failed" && /* @__PURE__ */ jsx3("span", { className: "text-xs text-red-300", children: "ohne Fehlermeldung" }),
-        /* @__PURE__ */ jsxs3("span", { className: "ml-auto text-xs text-white/40", title: e.standing_approval ? e.reason : e.proposed_by, children: [
+        !hasOutput && e.status === "failed" && /* @__PURE__ */ jsx4("span", { className: "text-xs text-red-300", children: "ohne Fehlermeldung" }),
+        /* @__PURE__ */ jsxs4("span", { className: "ml-auto text-xs text-white/40", title: e.standing_approval ? e.reason : e.proposed_by, children: [
           e.created_at ? new Date(e.created_at).toLocaleString("de-DE") : "",
           " \xB7 ",
           triggeredBy(e)
         ] })
       ] }),
-      /* @__PURE__ */ jsx3("div", { className: "border-t border-white/[0.06] px-3 py-2", children: hasOutput ? /* @__PURE__ */ jsxs3(Fragment2, { children: [
-        e.output && /* @__PURE__ */ jsx3("pre", { className: "max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-black/50 p-2.5 font-mono text-[11px] text-white/80", children: e.output }),
-        e.error && /* @__PURE__ */ jsx3("pre", { className: "mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-red-950/40 p-2.5 font-mono text-[11px] text-red-200", children: e.error })
-      ] }) : /* @__PURE__ */ jsx3("p", { className: "text-xs text-white/45", children: e.status === "proposed" ? "Wird erst nach der Freigabe ausgef\xFChrt." : "Keine Ausgabe." }) })
+      /* @__PURE__ */ jsx4("div", { className: "border-t border-white/[0.06] px-3 py-2", children: hasOutput ? /* @__PURE__ */ jsxs4(Fragment2, { children: [
+        e.output && /* @__PURE__ */ jsx4("pre", { className: "max-h-72 overflow-auto whitespace-pre-wrap rounded-md bg-black/50 p-2.5 font-mono text-[11px] text-white/80", children: e.output }),
+        e.error && /* @__PURE__ */ jsx4("pre", { className: "mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded-md bg-red-950/40 p-2.5 font-mono text-[11px] text-red-200", children: e.error })
+      ] }) : /* @__PURE__ */ jsx4("p", { className: "text-xs text-white/45", children: e.status === "proposed" ? "Wird erst nach der Freigabe ausgef\xFChrt." : "Keine Ausgabe." }) })
     ] }) }, e.action_id);
   }) });
 }
@@ -745,9 +788,9 @@ function StandingApprovalPanel({
   const standing = script.standing_approval ?? null;
   const on = Boolean(standing);
   const blocked = !canGrant || busy || !on && (dirty || !script.enabled);
-  return /* @__PURE__ */ jsxs3("div", { className: "mt-3 rounded-lg border border-white/[0.08] bg-black/15 p-3 text-sm", "data-testid": "standing-approval", children: [
-    /* @__PURE__ */ jsxs3("label", { className: "flex items-start gap-2.5", children: [
-      /* @__PURE__ */ jsx3(
+  return /* @__PURE__ */ jsxs4("div", { className: "mt-3 rounded-lg border border-white/[0.08] bg-black/15 p-3 text-sm", "data-testid": "standing-approval", children: [
+    /* @__PURE__ */ jsxs4("label", { className: "flex items-start gap-2.5", children: [
+      /* @__PURE__ */ jsx4(
         "input",
         {
           type: "checkbox",
@@ -758,15 +801,15 @@ function StandingApprovalPanel({
           onChange: () => on ? onRevoke() : onGrant()
         }
       ),
-      /* @__PURE__ */ jsxs3("span", { children: [
-        /* @__PURE__ */ jsx3("span", { className: "font-medium", children: "Ohne Freigabe nach Zeitplan" }),
-        /* @__PURE__ */ jsx3("span", { className: "mt-0.5 block text-xs text-white/55", children: "L\xE4uft nach Zeitplan ohne Freigabe, solange du das Skript nicht \xE4nderst. Jede \xC4nderung an Inhalt, Parametern, Ziel oder Zeitplan hebt das auf, dann fragt das Dashboard wieder nach. Jeder Lauf steht weiter unter \u201EAktionen\u201C." })
+      /* @__PURE__ */ jsxs4("span", { children: [
+        /* @__PURE__ */ jsx4("span", { className: "font-medium", children: "Ohne Freigabe nach Zeitplan" }),
+        /* @__PURE__ */ jsx4("span", { className: "mt-0.5 block text-xs text-white/55", children: "L\xE4uft nach Zeitplan ohne Freigabe, solange du das Skript nicht \xE4nderst. Jede \xC4nderung an Inhalt, Parametern, Ziel oder Zeitplan hebt das auf, dann fragt das Dashboard wieder nach. Jeder Lauf steht weiter unter \u201EAktionen\u201C." })
       ] })
     ] }),
-    standing && /* @__PURE__ */ jsxs3("div", { className: "mt-2.5 space-y-1.5 border-t border-white/[0.06] pt-2.5 text-xs", "data-testid": "standing-state", children: [
-      /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-2", children: [
-        standing.active ? /* @__PURE__ */ jsx3(Badge, { tone: "good", children: "Dauerfreigabe gilt" }) : /* @__PURE__ */ jsx3(Badge, { tone: "warn", children: "gilt nicht mehr" }),
-        /* @__PURE__ */ jsxs3("span", { className: "text-white/60", children: [
+    standing && /* @__PURE__ */ jsxs4("div", { className: "mt-2.5 space-y-1.5 border-t border-white/[0.06] pt-2.5 text-xs", "data-testid": "standing-state", children: [
+      /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap items-center gap-2", children: [
+        standing.active ? /* @__PURE__ */ jsx4(Badge, { tone: "good", children: "Dauerfreigabe gilt" }) : /* @__PURE__ */ jsx4(Badge, { tone: "warn", children: "gilt nicht mehr" }),
+        /* @__PURE__ */ jsxs4("span", { className: "text-white/60", children: [
           "erteilt von ",
           standing.granted_by_label,
           " am ",
@@ -775,72 +818,72 @@ function StandingApprovalPanel({
           " ",
           standing.hosts.map(describeStandingHost).join(", ") || "\u2013"
         ] }),
-        canGrant && /* @__PURE__ */ jsx3(Button, { small: true, variant: "ghost", disabled: busy, onClick: onRevoke, children: "Freigabe zur\xFCckziehen" })
+        canGrant && /* @__PURE__ */ jsx4(Button, { small: true, variant: "ghost", disabled: busy, onClick: onRevoke, children: "Freigabe zur\xFCckziehen" })
       ] }),
-      !standing.active && standing.problem && /* @__PURE__ */ jsxs3("p", { className: "text-amber-300", children: [
+      !standing.active && standing.problem && /* @__PURE__ */ jsxs4("p", { className: "text-amber-300", children: [
         "Gilt nicht mehr: ",
         standing.problem,
         " Geplante L\xE4ufe warten auf deine Freigabe, beim n\xE4chsten Lauf erlischt sie."
       ] }),
-      standing.active && (standing.new_hosts?.length ?? 0) > 0 && /* @__PURE__ */ jsxs3("p", { className: "text-white/55", children: [
+      standing.active && (standing.new_hosts?.length ?? 0) > 0 && /* @__PURE__ */ jsxs4("p", { className: "text-white/55", children: [
         "Neu dabei: ",
         standing.new_hosts.join(", "),
         ". Dort fragt das Dashboard weiter nach, bis du neu freigibst."
       ] }),
-      standing.active && dirty && /* @__PURE__ */ jsx3("p", { className: "text-amber-300", children: "Wenn du deine \xC4nderungen speicherst, erlischt die Dauerfreigabe." })
+      standing.active && dirty && /* @__PURE__ */ jsx4("p", { className: "text-amber-300", children: "Wenn du deine \xC4nderungen speicherst, erlischt die Dauerfreigabe." })
     ] }),
-    !standing && !dirty && (script.standing_preview?.length ?? 0) > 0 && /* @__PURE__ */ jsxs3("p", { className: "mt-2 text-xs text-white/55", "data-testid": "standing-preview", children: [
+    !standing && !dirty && (script.standing_preview?.length ?? 0) > 0 && /* @__PURE__ */ jsxs4("p", { className: "mt-2 text-xs text-white/55", "data-testid": "standing-preview", children: [
       "W\xFCrde gelten f\xFCr: ",
       script.standing_preview.map(describeStandingHost).join(", ")
     ] }),
-    !standing && !canGrant && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Einschalten k\xF6nnen nur Owner oder Admin." }),
-    !standing && canGrant && dirty && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Speichere zuerst deine \xC4nderungen." }),
-    !standing && canGrant && !dirty && !script.enabled && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-xs text-white/45", children: "Das Skript ist aus \u2013 schalte es zuerst auf \u201Eaktiv\u201C und speichere." })
+    !standing && !canGrant && /* @__PURE__ */ jsx4("p", { className: "mt-2 text-xs text-white/45", children: "Einschalten k\xF6nnen nur Owner oder Admin." }),
+    !standing && canGrant && dirty && /* @__PURE__ */ jsx4("p", { className: "mt-2 text-xs text-white/45", children: "Speichere zuerst deine \xC4nderungen." }),
+    !standing && canGrant && !dirty && !script.enabled && /* @__PURE__ */ jsx4("p", { className: "mt-2 text-xs text-white/45", children: "Das Skript ist aus \u2013 schalte es zuerst auf \u201Eaktiv\u201C und speichere." })
   ] });
 }
 function ParamsHint({ names }) {
   const code = "rounded bg-white/[0.06] px-1 font-mono text-[11px] text-white/75";
-  return /* @__PURE__ */ jsxs3("p", { className: "mt-2 flex items-start gap-1.5 text-xs text-white/55", "data-testid": "params-hint", children: [
-    /* @__PURE__ */ jsx3(Icon, { name: "code", size: 12, className: "mt-0.5 flex-none" }),
-    /* @__PURE__ */ jsxs3("span", { children: [
-      names.length > 0 && /* @__PURE__ */ jsxs3(Fragment2, { children: [
+  return /* @__PURE__ */ jsxs4("p", { className: "mt-2 flex items-start gap-1.5 text-xs text-white/55", "data-testid": "params-hint", children: [
+    /* @__PURE__ */ jsx4(Icon, { name: "code", size: 12, className: "mt-0.5 flex-none" }),
+    /* @__PURE__ */ jsxs4("span", { children: [
+      names.length > 0 && /* @__PURE__ */ jsxs4(Fragment2, { children: [
         "Parameter dieses Skripts:",
         " ",
-        names.map((n, i) => /* @__PURE__ */ jsxs3("span", { children: [
+        names.map((n, i) => /* @__PURE__ */ jsxs4("span", { children: [
           i > 0 && ", ",
-          /* @__PURE__ */ jsx3("code", { className: code, children: `$${n}` })
+          /* @__PURE__ */ jsx4("code", { className: code, children: `$${n}` })
         ] }, n)),
         ".",
         " "
       ] }),
       "Parameter schreibst du als ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$name" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$name" }),
       " oder ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "${name}" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "${name}" }),
       ", ohne Anf\xFChrungszeichen drumherum \u2013 das Dashboard setzt den Wert schon sicher ein. Alles andere mit",
       " ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$" }),
       " (z. B.",
       " ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$HOME" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$HOME" }),
       ", ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: '"$f"' }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: '"$f"' }),
       ", ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$(date)" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$(date)" }),
       ") bleibt, wie es ist. Nur ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$$" }),
       " wird zu einem einzelnen ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$" }),
       ": F\xFCr ein ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$" }),
       " direkt vor einem Parameternamen schreibst du",
       " ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$$" }),
       ", f\xFCr die Prozessnummer ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$$" }),
       " schreibst du",
       " ",
-      /* @__PURE__ */ jsx3("code", { className: code, children: "$$$$" }),
+      /* @__PURE__ */ jsx4("code", { className: code, children: "$$$$" }),
       "."
     ] })
   ] });
@@ -851,13 +894,20 @@ function targetLabel(target, hosts, groups) {
   const host = hosts.find((h) => h.id === target.host_id);
   return host ? host.display_name || host.name : "Ein Server";
 }
+var NOTHING = { items: [], error: null };
+var LOADING = { items: null, error: null };
+function listed(promise) {
+  return promise.then((items) => ({ items, error: null }), (err) => ({ items: [], error: errorMessage(err) }));
+}
 function ScriptsPage() {
   const [urlParams, updateUrl] = useUrlParams();
   const hostFilter = urlParams.get("host") || null;
   const [scripts, setScripts] = useState3(null);
   const [jobs, setJobs] = useState3([]);
+  const [jobsError, setJobsError] = useState3(null);
   const [hosts, setHosts] = useState3([]);
   const [groups, setGroups] = useState3([]);
+  const [targetsError, setTargetsError] = useState3(null);
   const [error, setError] = useState3(null);
   const [selectedId, setSelectedId] = useState3(null);
   const [draft, setDraft] = useState3(() => emptyDraft(hostFilter));
@@ -870,44 +920,78 @@ function ScriptsPage() {
   }, []);
   const unmountSignal = useUnmountSignal();
   const [message, setMessage] = useState3(null);
-  const [runs, setRuns] = useState3([]);
-  const [executions, setExecutions] = useState3([]);
-  const [history, setHistory] = useState3([]);
+  const [runs, setRuns] = useState3(NOTHING);
+  const [executions, setExecutions] = useState3(NOTHING);
+  const [history, setHistory] = useState3(NOTHING);
+  const shownId = useRef2(null);
   const loadExecutions = useCallback2((scriptId) => {
-    authedFetch(`/ext/scripts/scripts/${scriptId}/runs`).then((res) => res.ok ? res.json() : []).then(setExecutions).catch(() => setExecutions([]));
+    void listed(fetchJson(`/ext/scripts/scripts/${scriptId}/runs`)).then((next) => {
+      if (shownId.current === scriptId) setExecutions(next);
+    });
+  }, []);
+  const loadHistory = useCallback2((scriptId) => {
+    void listed(fetchJson(`/ext/scripts/scripts/${scriptId}/history`)).then((next) => {
+      if (shownId.current === scriptId) setHistory(next);
+    });
+  }, []);
+  const loadRuns = useCallback2(async (script, jobList) => {
+    const show = (next) => {
+      if (shownId.current === script.id) setRuns(next);
+    };
+    let list = jobList;
+    if (list === null) {
+      try {
+        list = await fetchJson("/jobs?ext_id=scripts");
+        setJobs(list);
+        setJobsError(null);
+      } catch (err) {
+        show({ items: [], error: errorMessage(err) });
+        return;
+      }
+    }
+    const job = list.find((j) => j.ext_job_key === script.job_id);
+    show(job ? await listed(fetchJson(`/jobs/${job.id}/runs?limit=10`)) : NOTHING);
   }, []);
   const load = useCallback2(() => {
     setError(null);
     Promise.all([
-      authedFetch("/ext/scripts/scripts").then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
-      }),
-      authedFetch("/jobs?ext_id=scripts").then((res) => res.ok ? res.json() : [])
+      fetchJson("/ext/scripts/scripts"),
+      // Ohne Jobs gibt es nur keine Zeitplan-Läufe -- die Skripte selbst bleiben bedienbar.
+      fetchJson("/jobs?ext_id=scripts").then(
+        (list) => ({ list, error: null }),
+        (err) => ({ list: [], error: errorMessage(err) })
+      )
     ]).then(([s, j]) => {
       setScripts(s);
-      setJobs(j);
-    }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      setJobs(j.list);
+      setJobsError(j.error);
+    }).catch((err) => setError(errorMessage(err)));
+  }, []);
+  const loadTargets = useCallback2(() => {
+    setTargetsError(null);
+    const fail = (err) => setTargetsError(errorMessage(err));
+    fetchJson("/hosts").then(setHosts).catch(fail);
+    fetchJson("/host-groups").then(setGroups).catch(fail);
   }, []);
   useEffect4(() => {
     load();
-    authedFetch("/hosts").then((r) => r.ok ? r.json() : []).then(setHosts).catch(() => setHosts([]));
-    authedFetch("/host-groups").then((r) => r.ok ? r.json() : []).then(setGroups).catch(() => setGroups([]));
-  }, [load]);
+    loadTargets();
+  }, [load, loadTargets]);
   function selectScript(script) {
     setSelectedId(script.id);
     setDraft(script);
     setIsNew(false);
     setMessage(null);
     runSeq.current += 1;
-    const job = jobs.find((j) => j.ext_job_key === script.job_id);
-    if (job) {
-      authedFetch(`/jobs/${job.id}/runs?limit=10`).then((res) => res.ok ? res.json() : []).then(setRuns).catch(() => setRuns([]));
-    } else {
-      setRuns([]);
+    if (shownId.current !== script.id) {
+      setRuns(LOADING);
+      setExecutions(LOADING);
+      setHistory(LOADING);
     }
+    shownId.current = script.id;
+    void loadRuns(script, jobsError ? null : jobs);
     loadExecutions(script.id);
-    authedFetch(`/ext/scripts/scripts/${script.id}/history`).then((res) => res.ok ? res.json() : []).then(setHistory).catch(() => setHistory([]));
+    loadHistory(script.id);
   }
   function selectNew() {
     setSelectedId(null);
@@ -916,9 +1000,10 @@ function ScriptsPage() {
     setIdTouched(false);
     setMessage(null);
     runSeq.current += 1;
-    setRuns([]);
-    setExecutions([]);
-    setHistory([]);
+    shownId.current = null;
+    setRuns(NOTHING);
+    setExecutions(NOTHING);
+    setHistory(NOTHING);
   }
   async function save() {
     if (!draft.id.trim()) {
@@ -932,6 +1017,7 @@ function ScriptsPage() {
     setBusy(true);
     setMessage(null);
     runSeq.current += 1;
+    const seq = runSeq.current;
     try {
       const res = await authedFetch(`/ext/scripts/scripts/${draft.id}${isNew ? "?create=true" : ""}`, {
         method: "PUT",
@@ -947,6 +1033,10 @@ function ScriptsPage() {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(errorFromBody(body, res.status));
+      if (runSeq.current !== seq) {
+        load();
+        return;
+      }
       setDraft((prev) => ({
         ...prev,
         fingerprint: body.fingerprint,
@@ -957,6 +1047,8 @@ function ScriptsPage() {
       setMessage({ kind: "ok", text: "Gespeichert." });
       setIsNew(false);
       setSelectedId(draft.id);
+      shownId.current = draft.id;
+      loadHistory(draft.id);
       load();
     } catch (err) {
       setMessage({ kind: "error", text: `Fehler: ${err instanceof Error ? err.message : String(err)}` });
@@ -971,7 +1063,7 @@ function ScriptsPage() {
     setBusy(true);
     try {
       const res = await authedFetch(`/ext/scripts/scripts/${selectedId}`, { method: "DELETE" });
-      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok && res.status !== 204) throw new Error(errorFromBody(await res.json().catch(() => ({})), res.status));
       selectNew();
       load();
     } catch (err) {
@@ -1101,72 +1193,75 @@ function ScriptsPage() {
   const dirty = savedScript ? approvalRelevant(savedScript) !== approvalRelevant(draft) : true;
   const missingTarget = targetHint(draft.target);
   const showEditor = !isNew || selectedId !== null || (scripts?.length ?? 0) > 0 || draft.id !== "" || draft.name !== "";
-  return /* @__PURE__ */ jsxs3(
+  return /* @__PURE__ */ jsxs4(
     Page,
     {
       title: "Skripte",
       description: "Eigene Befehle zentral pflegen und auf einem, mehreren oder allen Servern ausf\xFChren \u2013 sofort oder nach Zeitplan.",
-      actions: /* @__PURE__ */ jsxs3(Button, { variant: "primary", onClick: selectNew, children: [
-        /* @__PURE__ */ jsx3(Icon, { name: "plus", size: 14 }),
+      actions: /* @__PURE__ */ jsxs4(Button, { variant: "primary", onClick: selectNew, children: [
+        /* @__PURE__ */ jsx4(Icon, { name: "plus", size: 14 }),
         " Neues Skript"
       ] }),
       children: [
-        error && /* @__PURE__ */ jsx3(Notice, { text: `Fehler: ${error}` }),
-        /* @__PURE__ */ jsxs3("div", { className: "flex flex-col gap-5 lg:flex-row lg:items-start", children: [
-          /* @__PURE__ */ jsx3("aside", { className: "lg:w-72 lg:flex-none", children: /* @__PURE__ */ jsxs3(Card, { title: `Skripte${scripts ? ` (${visibleScripts?.length ?? 0})` : ""}`, padded: false, children: [
-            hostFilter && /* @__PURE__ */ jsxs3("div", { className: "flex items-center justify-between gap-2 border-b border-white/[0.06] px-4 py-2 text-xs", "data-testid": "host-filter", children: [
-              /* @__PURE__ */ jsx3("span", { className: "text-white/60", children: "Nur Skripte f\xFCr diesen Server" }),
-              /* @__PURE__ */ jsx3("button", { type: "button", onClick: () => updateUrl({ host: null }), "aria-label": "Filter entfernen", className: "text-white/40 hover:text-white", children: /* @__PURE__ */ jsx3(Icon, { name: "x", size: 13 }) })
+        error && /* @__PURE__ */ jsx4(LoadError, { what: "Die Liste der Skripte", error, onRetry: load }),
+        /* @__PURE__ */ jsxs4("div", { className: "flex flex-col gap-5 lg:flex-row lg:items-start", children: [
+          /* @__PURE__ */ jsx4("aside", { className: "lg:w-72 lg:flex-none", children: /* @__PURE__ */ jsxs4(Card, { title: `Skripte${scripts ? ` (${visibleScripts?.length ?? 0})` : ""}`, padded: false, children: [
+            hostFilter && /* @__PURE__ */ jsxs4("div", { className: "flex items-center justify-between gap-2 border-b border-white/[0.06] px-4 py-2 text-xs", "data-testid": "host-filter", children: [
+              /* @__PURE__ */ jsx4("span", { className: "text-white/60", children: "Nur Skripte f\xFCr diesen Server" }),
+              /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => updateUrl({ host: null }), "aria-label": "Filter entfernen", className: "text-white/40 hover:text-white", children: /* @__PURE__ */ jsx4(Icon, { name: "x", size: 13 }) })
             ] }),
-            !scripts && !error && /* @__PURE__ */ jsx3("p", { className: "px-4 py-3 text-sm text-white/45", children: "Lade \u2026" }),
-            scripts && visibleScripts?.length === 0 && /* @__PURE__ */ jsx3("p", { className: "px-4 py-4 text-sm text-white/45", children: hostFilter ? "Noch kein Skript f\xFCr diesen Server \u2013 \u201ENeues Skript\u201C legt eins an." : "Noch keine Skripte." }),
-            /* @__PURE__ */ jsx3("ul", { className: "divide-y divide-white/[0.05]", children: visibleScripts?.map((s) => /* @__PURE__ */ jsx3("li", { children: /* @__PURE__ */ jsxs3(
+            !scripts && !error && /* @__PURE__ */ jsx4("p", { className: "px-4 py-3 text-sm text-white/45", children: "Lade \u2026" }),
+            scripts && visibleScripts?.length === 0 && /* @__PURE__ */ jsx4("p", { className: "px-4 py-4 text-sm text-white/45", children: hostFilter ? "Noch kein Skript f\xFCr diesen Server \u2013 \u201ENeues Skript\u201C legt eins an." : "Noch keine Skripte." }),
+            /* @__PURE__ */ jsx4("ul", { className: "divide-y divide-white/[0.05]", children: visibleScripts?.map((s) => /* @__PURE__ */ jsx4("li", { children: /* @__PURE__ */ jsxs4(
               "button",
               {
                 type: "button",
                 onClick: () => selectScript(s),
                 className: `flex w-full items-start gap-2.5 px-4 py-3 text-left transition ${selectedId === s.id ? "bg-white/[0.07]" : "hover:bg-white/[0.03]"}`,
                 children: [
-                  /* @__PURE__ */ jsx3(Icon, { name: "code", size: 15, className: `mt-0.5 ${selectedId === s.id ? "text-[var(--color-accent)]" : "text-white/40"}` }),
-                  /* @__PURE__ */ jsxs3("span", { className: "min-w-0 flex-1", children: [
-                    /* @__PURE__ */ jsx3("span", { className: "block truncate text-sm font-medium", children: s.name }),
-                    /* @__PURE__ */ jsxs3("span", { className: "mt-0.5 block text-xs text-white/45", children: [
-                      /* @__PURE__ */ jsx3(Icon, { name: "clock", size: 11, className: "mr-1 inline -mt-px align-middle" }),
+                  /* @__PURE__ */ jsx4(Icon, { name: "code", size: 15, className: `mt-0.5 ${selectedId === s.id ? "text-[var(--color-accent)]" : "text-white/40"}` }),
+                  /* @__PURE__ */ jsxs4("span", { className: "min-w-0 flex-1", children: [
+                    /* @__PURE__ */ jsx4("span", { className: "block truncate text-sm font-medium", children: s.name }),
+                    /* @__PURE__ */ jsxs4("span", { className: "mt-0.5 block text-xs text-white/45", children: [
+                      /* @__PURE__ */ jsx4(Icon, { name: "clock", size: 11, className: "mr-1 inline -mt-px align-middle" }),
                       describeSchedule(s.schedule),
                       " \xB7 ",
                       targetLabel(s.target, hosts, groups)
                     ] })
                   ] }),
-                  s.standing_approval?.active && /* @__PURE__ */ jsx3(Badge, { tone: "info", children: "ohne Klick" }),
-                  !s.enabled && /* @__PURE__ */ jsx3(Badge, { children: "aus" })
+                  s.standing_approval?.active && /* @__PURE__ */ jsx4(Badge, { tone: "info", children: "ohne Klick" }),
+                  !s.enabled && /* @__PURE__ */ jsx4(Badge, { children: "aus" })
                 ]
               }
             ) }, s.id)) })
           ] }) }),
-          /* @__PURE__ */ jsx3("div", { className: "min-w-0 flex-1 space-y-5", children: !showEditor ? /* @__PURE__ */ jsx3(
-            EmptyState,
-            {
-              icon: "code",
-              title: "Noch keine Skripte",
-              text: "Lege z. B. ein Update-, Aufr\xE4um- oder Pr\xFCfskript an und starte es per Klick auf einem oder allen Servern \u2013 oder plane es: Dann erscheint jeder Lauf zur Freigabe unter \u201EAktionen\u201C.",
-              action: /* @__PURE__ */ jsxs3(Button, { variant: "primary", onClick: () => setDraft({ ...emptyDraft(hostFilter), name: "Neues Skript", id: "neues-skript" }), children: [
-                /* @__PURE__ */ jsx3(Icon, { name: "plus", size: 14 }),
-                " Erstes Skript anlegen"
-              ] })
-            }
-          ) : /* @__PURE__ */ jsxs3(Fragment2, { children: [
-            message && /* @__PURE__ */ jsx3(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
-            /* @__PURE__ */ jsxs3(
+          /* @__PURE__ */ jsx4("div", { className: "min-w-0 flex-1 space-y-5", children: !showEditor ? (
+            // Erst nach dem Laden: vorher (oder bei einem Ladefehler) waere "Noch keine Skripte" falsch.
+            scripts && /* @__PURE__ */ jsx4(
+              EmptyState,
+              {
+                icon: "code",
+                title: "Noch keine Skripte",
+                text: "Lege z. B. ein Update-, Aufr\xE4um- oder Pr\xFCfskript an und starte es per Klick auf einem oder allen Servern \u2013 oder plane es: Dann erscheint jeder Lauf zur Freigabe unter \u201EAktionen\u201C.",
+                action: /* @__PURE__ */ jsxs4(Button, { variant: "primary", onClick: () => setDraft({ ...emptyDraft(hostFilter), name: "Neues Skript", id: "neues-skript" }), children: [
+                  /* @__PURE__ */ jsx4(Icon, { name: "plus", size: 14 }),
+                  " Erstes Skript anlegen"
+                ] })
+              }
+            )
+          ) : /* @__PURE__ */ jsxs4(Fragment2, { children: [
+            message && /* @__PURE__ */ jsx4(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
+            /* @__PURE__ */ jsxs4(
               Card,
               {
                 title: isNew ? "Neues Skript" : draft.name || draft.id,
-                actions: /* @__PURE__ */ jsxs3("label", { className: "flex items-center gap-2 text-xs text-white/60", children: [
-                  /* @__PURE__ */ jsx3("input", { type: "checkbox", checked: draft.enabled, onChange: (e) => setDraft({ ...draft, enabled: e.target.checked }) }),
+                actions: /* @__PURE__ */ jsxs4("label", { className: "flex items-center gap-2 text-xs text-white/60", children: [
+                  /* @__PURE__ */ jsx4("input", { type: "checkbox", checked: draft.enabled, onChange: (e) => setDraft({ ...draft, enabled: e.target.checked }) }),
                   "aktiv"
                 ] }),
                 children: [
-                  /* @__PURE__ */ jsxs3("div", { className: "grid gap-4 md:grid-cols-2", children: [
-                    /* @__PURE__ */ jsx3(Field, { label: "Name", children: /* @__PURE__ */ jsx3(
+                  /* @__PURE__ */ jsxs4("div", { className: "grid gap-4 md:grid-cols-2", children: [
+                    /* @__PURE__ */ jsx4(Field, { label: "Name", children: /* @__PURE__ */ jsx4(
                       "input",
                       {
                         className: inputClass,
@@ -1175,7 +1270,7 @@ function ScriptsPage() {
                         onChange: (e) => setDraft({ ...draft, name: e.target.value, id: isNew && !idTouched ? slugify(e.target.value) : draft.id })
                       }
                     ) }),
-                    /* @__PURE__ */ jsx3(Field, { label: "Kennung", children: /* @__PURE__ */ jsx3(
+                    /* @__PURE__ */ jsx4(Field, { label: "Kennung", children: /* @__PURE__ */ jsx4(
                       "input",
                       {
                         className: `${inputClass} font-mono`,
@@ -1188,8 +1283,8 @@ function ScriptsPage() {
                         }
                       }
                     ) }),
-                    /* @__PURE__ */ jsx3(Field, { label: "Ausf\xFChren auf", children: /* @__PURE__ */ jsxs3("div", { className: "flex gap-2", children: [
-                      /* @__PURE__ */ jsxs3(
+                    /* @__PURE__ */ jsx4(Field, { label: "Ausf\xFChren auf", children: /* @__PURE__ */ jsxs4("div", { className: "flex gap-2", children: [
+                      /* @__PURE__ */ jsxs4(
                         "select",
                         {
                           className: `${inputClass} w-auto`,
@@ -1197,13 +1292,13 @@ function ScriptsPage() {
                           value: draft.target.kind ?? "host",
                           onChange: (e) => setDraft({ ...draft, target: { kind: e.target.value } }),
                           children: [
-                            /* @__PURE__ */ jsx3("option", { value: "host", children: "Einem Server" }),
-                            /* @__PURE__ */ jsx3("option", { value: "group", children: "Einer Gruppe" }),
-                            /* @__PURE__ */ jsx3("option", { value: "all", children: "Allen Servern" })
+                            /* @__PURE__ */ jsx4("option", { value: "host", children: "Einem Server" }),
+                            /* @__PURE__ */ jsx4("option", { value: "group", children: "Einer Gruppe" }),
+                            /* @__PURE__ */ jsx4("option", { value: "all", children: "Allen Servern" })
                           ]
                         }
                       ),
-                      draft.target.kind === "host" && /* @__PURE__ */ jsxs3(
+                      draft.target.kind === "host" && /* @__PURE__ */ jsxs4(
                         "select",
                         {
                           className: inputClass,
@@ -1211,13 +1306,13 @@ function ScriptsPage() {
                           value: draft.target.host_id ?? "",
                           onChange: (e) => setDraft({ ...draft, target: { kind: "host", host_id: e.target.value || null } }),
                           children: [
-                            /* @__PURE__ */ jsx3("option", { value: "", children: "Server w\xE4hlen \u2026" }),
-                            hosts.map((h) => /* @__PURE__ */ jsx3("option", { value: h.id, children: h.display_name || h.name }, h.id)),
-                            draft.target.host_id && !hosts.some((h) => h.id === draft.target.host_id) && /* @__PURE__ */ jsx3("option", { value: draft.target.host_id, children: draft.target.host_id })
+                            /* @__PURE__ */ jsx4("option", { value: "", children: "Server w\xE4hlen \u2026" }),
+                            hosts.map((h) => /* @__PURE__ */ jsx4("option", { value: h.id, children: h.display_name || h.name }, h.id)),
+                            draft.target.host_id && !hosts.some((h) => h.id === draft.target.host_id) && /* @__PURE__ */ jsx4("option", { value: draft.target.host_id, children: draft.target.host_id })
                           ]
                         }
                       ),
-                      draft.target.kind === "group" && /* @__PURE__ */ jsxs3(
+                      draft.target.kind === "group" && /* @__PURE__ */ jsxs4(
                         "select",
                         {
                           className: inputClass,
@@ -1225,15 +1320,16 @@ function ScriptsPage() {
                           value: draft.target.group_id ?? "",
                           onChange: (e) => setDraft({ ...draft, target: { kind: "group", group_id: e.target.value || null } }),
                           children: [
-                            /* @__PURE__ */ jsx3("option", { value: "", children: "Gruppe w\xE4hlen \u2026" }),
-                            groups.map((g) => /* @__PURE__ */ jsx3("option", { value: g.id, children: g.name }, g.id))
+                            /* @__PURE__ */ jsx4("option", { value: "", children: "Gruppe w\xE4hlen \u2026" }),
+                            groups.map((g) => /* @__PURE__ */ jsx4("option", { value: g.id, children: g.name }, g.id))
                           ]
                         }
-                      )
+                      ),
+                      targetsError && draft.target.kind !== "all" && /* @__PURE__ */ jsx4(LoadError, { compact: true, what: "Die Liste der Server und Gruppen", error: targetsError, onRetry: loadTargets })
                     ] }) }),
-                    /* @__PURE__ */ jsxs3("div", { className: "md:col-span-2", children: [
-                      /* @__PURE__ */ jsx3("p", { className: "mb-1.5 text-sm text-white/70", children: "Zeitplan" }),
-                      /* @__PURE__ */ jsx3(
+                    /* @__PURE__ */ jsxs4("div", { className: "md:col-span-2", children: [
+                      /* @__PURE__ */ jsx4("p", { className: "mb-1.5 text-sm text-white/70", children: "Zeitplan" }),
+                      /* @__PURE__ */ jsx4(
                         SchedulePicker,
                         {
                           label: "Zeitplan",
@@ -1243,11 +1339,11 @@ function ScriptsPage() {
                           onChange: (cron) => setDraft({ ...draft, schedule: cron || null })
                         }
                       ),
-                      draft.schedule && /* @__PURE__ */ jsxs3("p", { className: "mt-2 flex items-start gap-1.5 text-xs text-white/55", "data-testid": "schedule-hint", children: [
-                        /* @__PURE__ */ jsx3(Icon, { name: "clock", size: 12, className: "mt-0.5 flex-none" }),
-                        /* @__PURE__ */ jsx3("span", { children: "Geplante L\xE4ufe erscheinen als Vorschlag unter \u201EAktionen\u201C und m\xFCssen dort freigegeben werden, sonst verfallen sie nach 24 Stunden. Ohne R\xFCckfrage laufen sie nur mit einer Dauerfreigabe (Schalter darunter) oder wenn unter Einstellungen \u2192 Automatik \u201ESelbstst\xE4ndig handeln\u201C bis Risikostufe \u201EHoch\u201C oder \u201EKritisch\u201C erlaubt ist." })
+                      draft.schedule && /* @__PURE__ */ jsxs4("p", { className: "mt-2 flex items-start gap-1.5 text-xs text-white/55", "data-testid": "schedule-hint", children: [
+                        /* @__PURE__ */ jsx4(Icon, { name: "clock", size: 12, className: "mt-0.5 flex-none" }),
+                        /* @__PURE__ */ jsx4("span", { children: "Geplante L\xE4ufe erscheinen als Vorschlag unter \u201EAktionen\u201C und m\xFCssen dort freigegeben werden, sonst verfallen sie nach 24 Stunden. Ohne R\xFCckfrage laufen sie nur mit einer Dauerfreigabe (Schalter darunter) oder wenn unter Einstellungen \u2192 Automatik \u201ESelbstst\xE4ndig handeln\u201C bis Risikostufe \u201EHoch\u201C oder \u201EKritisch\u201C erlaubt ist." })
                       ] }),
-                      !isNew && (draft.schedule || draft.standing_approval) && /* @__PURE__ */ jsx3(
+                      !isNew && (draft.schedule || draft.standing_approval) && /* @__PURE__ */ jsx4(
                         StandingApprovalPanel,
                         {
                           script: draft,
@@ -1260,15 +1356,15 @@ function ScriptsPage() {
                       )
                     ] })
                   ] }),
-                  /* @__PURE__ */ jsxs3("div", { className: "mt-4 overflow-hidden rounded-lg border border-white/10 bg-black/40", children: [
-                    /* @__PURE__ */ jsxs3("div", { className: "flex items-center justify-between border-b border-white/[0.06] px-3 py-1.5 text-[11px] text-white/40", children: [
-                      /* @__PURE__ */ jsx3("span", { children: "Shell-Skript" }),
-                      /* @__PURE__ */ jsxs3("span", { children: [
+                  /* @__PURE__ */ jsxs4("div", { className: "mt-4 overflow-hidden rounded-lg border border-white/10 bg-black/40", children: [
+                    /* @__PURE__ */ jsxs4("div", { className: "flex items-center justify-between border-b border-white/[0.06] px-3 py-1.5 text-[11px] text-white/40", children: [
+                      /* @__PURE__ */ jsx4("span", { children: "Shell-Skript" }),
+                      /* @__PURE__ */ jsxs4("span", { children: [
                         lines,
                         " Zeilen"
                       ] })
                     ] }),
-                    /* @__PURE__ */ jsx3(
+                    /* @__PURE__ */ jsx4(
                       "textarea",
                       {
                         "aria-label": "Skript-Inhalt",
@@ -1279,18 +1375,18 @@ function ScriptsPage() {
                       }
                     )
                   ] }),
-                  /* @__PURE__ */ jsx3(ParamsHint, { names: Object.keys(draft.params_schema ?? {}) }),
-                  /* @__PURE__ */ jsxs3("div", { className: "mt-4 flex flex-wrap items-center gap-2", children: [
-                    /* @__PURE__ */ jsx3(Button, { variant: "primary", disabled: busy || missingTarget !== null, onClick: () => void save(), children: "Speichern" }),
-                    missingTarget && /* @__PURE__ */ jsx3("span", { className: "text-xs text-amber-300", children: missingTarget }),
-                    !isNew && /* @__PURE__ */ jsxs3(Fragment2, { children: [
-                      /* @__PURE__ */ jsxs3(Button, { disabled: busy, onClick: () => void runNow(), children: [
-                        /* @__PURE__ */ jsx3(Icon, { name: "play", size: 13 }),
+                  /* @__PURE__ */ jsx4(ParamsHint, { names: Object.keys(draft.params_schema ?? {}) }),
+                  /* @__PURE__ */ jsxs4("div", { className: "mt-4 flex flex-wrap items-center gap-2", children: [
+                    /* @__PURE__ */ jsx4(Button, { variant: "primary", disabled: busy || missingTarget !== null, onClick: () => void save(), children: "Speichern" }),
+                    missingTarget && /* @__PURE__ */ jsx4("span", { className: "text-xs text-amber-300", children: missingTarget }),
+                    !isNew && /* @__PURE__ */ jsxs4(Fragment2, { children: [
+                      /* @__PURE__ */ jsxs4(Button, { disabled: busy, onClick: () => void runNow(), children: [
+                        /* @__PURE__ */ jsx4(Icon, { name: "play", size: 13 }),
                         " Jetzt ausf\xFChren"
                       ] }),
-                      /* @__PURE__ */ jsx3("span", { className: "flex-1" }),
-                      /* @__PURE__ */ jsxs3(Button, { variant: "danger", disabled: busy, onClick: () => void remove(), children: [
-                        /* @__PURE__ */ jsx3(Icon, { name: "trash", size: 13 }),
+                      /* @__PURE__ */ jsx4("span", { className: "flex-1" }),
+                      /* @__PURE__ */ jsxs4(Button, { variant: "danger", disabled: busy, onClick: () => void remove(), children: [
+                        /* @__PURE__ */ jsx4(Icon, { name: "trash", size: 13 }),
                         " L\xF6schen"
                       ] })
                     ] })
@@ -1298,34 +1394,38 @@ function ScriptsPage() {
                 ]
               }
             ),
-            !isNew && /* @__PURE__ */ jsx3(
+            !isNew && /* @__PURE__ */ jsx4(
               Card,
               {
                 title: "Ausf\xFChrungen",
                 description: "Die letzten L\xE4ufe mit Ausgabe. Aufklappen zeigt, was das Skript ausgegeben hat.",
-                actions: /* @__PURE__ */ jsxs3(Button, { small: true, variant: "ghost", onClick: () => selectedId && loadExecutions(selectedId), children: [
-                  /* @__PURE__ */ jsx3(Icon, { name: "refresh", size: 12 }),
+                actions: /* @__PURE__ */ jsxs4(Button, { small: true, variant: "ghost", onClick: () => selectedId && loadExecutions(selectedId), children: [
+                  /* @__PURE__ */ jsx4(Icon, { name: "refresh", size: 12 }),
                   " Aktualisieren"
                 ] }),
-                children: /* @__PURE__ */ jsx3(Executions, { items: executions })
+                children: executions.error ? /* @__PURE__ */ jsx4(LoadError, { compact: true, what: "Die Liste der Ausf\xFChrungen", error: executions.error, onRetry: () => selectedId && loadExecutions(selectedId) }) : executions.items === null ? /* @__PURE__ */ jsx4("p", { className: "text-sm text-white/45", children: "Lade \u2026" }) : /* @__PURE__ */ jsx4(Executions, { items: executions.items })
               }
             ),
-            !isNew && /* @__PURE__ */ jsxs3("div", { className: "grid gap-5 md:grid-cols-2", children: [
-              /* @__PURE__ */ jsx3(Card, { title: "Zeitplan-L\xE4ufe", children: /* @__PURE__ */ jsxs3("ul", { className: "space-y-1.5 text-sm", children: [
-                runs.length === 0 && /* @__PURE__ */ jsx3("li", { className: "text-white/45", children: "Noch keine L\xE4ufe." }),
-                runs.map((r) => /* @__PURE__ */ jsxs3("li", { className: "flex flex-wrap items-center gap-2", children: [
-                  /* @__PURE__ */ jsx3(Badge, { tone: r.status === "succeeded" ? "good" : r.status === "failed" ? "bad" : "neutral", children: r.status === "succeeded" ? "erfolgreich" : r.status === "failed" ? "fehlgeschlagen" : r.status }),
-                  /* @__PURE__ */ jsx3("span", { className: "text-white/70", children: new Date(r.started_at).toLocaleString("de-DE") }),
-                  /* @__PURE__ */ jsx3("span", { className: "text-xs text-white/40", children: r.trigger === "schedule" ? "Zeitplan" : r.trigger }),
-                  r.error && /* @__PURE__ */ jsx3("span", { className: "w-full text-xs text-red-300", children: r.error })
+            !isNew && /* @__PURE__ */ jsxs4("div", { className: "grid gap-5 md:grid-cols-2", children: [
+              /* @__PURE__ */ jsx4(Card, { title: "Zeitplan-L\xE4ufe", children: /* @__PURE__ */ jsxs4("ul", { className: "space-y-1.5 text-sm", children: [
+                runs.error && /* @__PURE__ */ jsx4("li", { children: /* @__PURE__ */ jsx4(LoadError, { compact: true, what: "Die Liste der Zeitplan-L\xE4ufe", error: runs.error, onRetry: () => savedScript && void loadRuns(savedScript, null) }) }),
+                !runs.error && runs.items === null && /* @__PURE__ */ jsx4("li", { className: "text-white/45", children: "Lade \u2026" }),
+                !runs.error && runs.items?.length === 0 && /* @__PURE__ */ jsx4("li", { className: "text-white/45", children: "Noch keine L\xE4ufe." }),
+                (runs.items ?? []).map((r) => /* @__PURE__ */ jsxs4("li", { className: "flex flex-wrap items-center gap-2", children: [
+                  /* @__PURE__ */ jsx4(Badge, { tone: r.status === "succeeded" ? "good" : r.status === "failed" ? "bad" : "neutral", children: r.status === "succeeded" ? "erfolgreich" : r.status === "failed" ? "fehlgeschlagen" : r.status }),
+                  /* @__PURE__ */ jsx4("span", { className: "text-white/70", children: new Date(r.started_at).toLocaleString("de-DE") }),
+                  /* @__PURE__ */ jsx4("span", { className: "text-xs text-white/40", children: r.trigger === "schedule" ? "Zeitplan" : r.trigger }),
+                  r.error && /* @__PURE__ */ jsx4("span", { className: "w-full text-xs text-red-300", children: r.error })
                 ] }, r.id))
               ] }) }),
-              /* @__PURE__ */ jsx3(Card, { title: "Versionen", description: "Jede \xC4nderung wird gespeichert.", children: /* @__PURE__ */ jsxs3("ul", { className: "space-y-1.5 text-sm", children: [
-                history.length === 0 && /* @__PURE__ */ jsx3("li", { className: "text-white/45", children: "Keine Versionen." }),
-                history.map((h) => /* @__PURE__ */ jsxs3("li", { className: "flex items-baseline gap-2", children: [
-                  /* @__PURE__ */ jsx3("code", { className: "text-[11px] text-white/35", children: h.sha.slice(0, 7) }),
-                  /* @__PURE__ */ jsx3("span", { className: "min-w-0 flex-1 truncate text-white/75", children: h.message }),
-                  /* @__PURE__ */ jsx3("span", { className: "text-xs text-white/35", children: new Date(h.commit_time * 1e3).toLocaleDateString("de-DE") })
+              /* @__PURE__ */ jsx4(Card, { title: "Versionen", description: "Jede \xC4nderung wird gespeichert.", children: /* @__PURE__ */ jsxs4("ul", { className: "space-y-1.5 text-sm", children: [
+                history.error && /* @__PURE__ */ jsx4("li", { children: /* @__PURE__ */ jsx4(LoadError, { compact: true, what: "Die Liste der Versionen", error: history.error, onRetry: () => selectedId && loadHistory(selectedId) }) }),
+                !history.error && history.items === null && /* @__PURE__ */ jsx4("li", { className: "text-white/45", children: "Lade \u2026" }),
+                !history.error && history.items?.length === 0 && /* @__PURE__ */ jsx4("li", { className: "text-white/45", children: "Keine Versionen." }),
+                (history.items ?? []).map((h) => /* @__PURE__ */ jsxs4("li", { className: "flex items-baseline gap-2", children: [
+                  /* @__PURE__ */ jsx4("code", { className: "text-[11px] text-white/35", children: h.sha.slice(0, 7) }),
+                  /* @__PURE__ */ jsx4("span", { className: "min-w-0 flex-1 truncate text-white/75", children: h.message }),
+                  /* @__PURE__ */ jsx4("span", { className: "text-xs text-white/35", children: new Date(h.commit_time * 1e3).toLocaleDateString("de-DE") })
                 ] }, h.sha))
               ] }) })
             ] })

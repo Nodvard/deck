@@ -6,7 +6,7 @@
  * Die Pruefung hier ist nur Komfort (sofortige, verstaendliche Rueckmeldung): massgeblich ist immer das Backend
  * (`services/custom_apps.py`) -- gleiche Regeln, gleiche Meldungen. Der Server ruft die Adressen nie selbst ab.
  */
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "./api";
 import { isAppIconName } from "./appIcons";
@@ -348,6 +348,7 @@ export function useAppActions() {
       }
     });
     void queryClient.invalidateQueries({ queryKey: ["overview"] });
+    void queryClient.invalidateQueries({ queryKey: ["apps", "suggestions"] });
   }
 
   return {
@@ -388,4 +389,48 @@ export function useAppActions() {
       });
     },
   };
+}
+
+// --- Seite „Apps“: Vorschlaege und Ziehen --------------------------------------------------------------------------
+
+/** Ein Vorschlag aus `GET /apps/suggestions`: eine Adresse, die eine Erweiterung schon kennt. */
+export interface AppSuggestionOut {
+  name: string;
+  url: string;
+  /** Woher er stammt (Name der Quelle oder der Erweiterung, z. B. „Nginx Proxy Manager“). */
+  source: string;
+  host?: string | null;
+}
+
+export interface AppSuggestionsOut {
+  suggestions: AppSuggestionOut[];
+  /** Je Quelle, die nicht antwortete, ein Satz. */
+  errors?: string[];
+}
+
+/** Vorschlaege nur fuer Nutzer, die Apps anlegen duerfen (`apps.write`). Nach jeder Aenderung an den Apps neu (die
+ * uebernommenen fallen dann weg). */
+export function useAppSuggestions(enabled: boolean) {
+  return useQuery({
+    queryKey: ["apps", "suggestions"],
+    queryFn: () => api.get<AppSuggestionsOut>("/apps/suggestions"),
+    enabled,
+    staleTime: 60_000,
+  });
+}
+
+/** Verschiebt `dragged` vor `target` (beide Kennungen in `ids`); unbekannte Kennungen aendern nichts. */
+export function moveBefore(ids: string[], dragged: string, target: string): string[] {
+  if (dragged === target || !ids.includes(dragged) || !ids.includes(target)) return ids;
+  const rest = ids.filter((id) => id !== dragged);
+  rest.splice(rest.indexOf(target), 0, dragged);
+  return rest;
+}
+
+/** Verschiebt `dragged` ans Ende der Apps, die zu `members` gehoeren (Ordner); ohne Mitglieder ans Ende. */
+export function moveToEndOf(ids: string[], dragged: string, members: string[]): string[] {
+  const rest = ids.filter((id) => id !== dragged);
+  const last = Math.max(-1, ...members.filter((m) => m !== dragged).map((m) => rest.indexOf(m)));
+  rest.splice(last < 0 ? rest.length : last + 1, 0, dragged);
+  return rest;
 }

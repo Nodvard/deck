@@ -31,6 +31,23 @@ from nodvard_deck_ext_system import actions as sa  # noqa: E402
 RESTART_OK = "@@rc=0\nactive\n"
 
 
+def _state(active: str = "active", sub: str = "running", result: str = "success", restarts: int | None = 0, pid: int = 4242,
+           status: int = 0, type_: str = "simple") -> str:
+    nrestarts = "" if restarts is None else f"NRestarts={restarts}\n"  # alte systemd-Versionen kennen den Wert nicht
+    return (f"ActiveState={active}\nSubState={sub}\nResult={result}\n{nrestarts}MainPID={pid}\n"
+            f"ExecMainStatus={status}\nType={type_}\n")
+
+
+STATE_RUNNING = _state()
+
+
+@pytest.fixture(autouse=True)
+def _quick_check(monkeypatch):
+    """Die Pruefung nach dem Neustart wartet sonst 10 s auf die zweite ruhige Lesung."""
+    monkeypatch.setattr(sa, "CHECK_STABLE_S", 0)
+    monkeypatch.setattr(sa, "CHECK_INTERVAL_S", 0)
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_sys_path():
     before = list(sys.path)
@@ -236,6 +253,8 @@ class _Ctx:
         self.proposals: list[ActionRequest] = []
         self.waits: list[float | None] = []
         self.replies: list[SimpleNamespace] = []  # nacheinander verbraucht; sonst RESTART_OK
+        # Antworten auf die Pruefung danach (`systemctl show`), nacheinander; die letzte bleibt stehen.
+        self.states: list[str | Exception] = [STATE_RUNNING]
         self.probe_reply: SimpleNamespace | Exception = SimpleNamespace(exit_code=0, stdout="@@other\n", stderr="", duration_ms=1)
         self._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2", tags=tags or [], os_family=os_family)
         self.api = SimpleNamespace(current_actor=lambda: Actor.user("u1", "nico"))
@@ -252,6 +271,11 @@ class _Ctx:
             if isinstance(self.probe_reply, Exception):
                 raise self.probe_reply
             return self.probe_reply
+        if command.startswith("systemctl show "):
+            state = self.states.pop(0) if len(self.states) > 1 else self.states[0]
+            if isinstance(state, Exception):
+                raise state
+            return SimpleNamespace(exit_code=0, stdout=state, stderr="", duration_ms=2)
         if self.replies:
             return self.replies.pop(0)
         return SimpleNamespace(exit_code=0, stdout=RESTART_OK, stderr="", duration_ms=5)
@@ -276,10 +300,12 @@ def _req(unit="nginx.service", host_id="h1", host_ref="h1", **extra) -> ActionRe
 async def test_executor_builds_the_exact_command_and_reports_the_state():
     ctx = _Ctx()
     result = await sa.SystemActionExecutor(ctx).execute(_req())
-    assert ctx.commands == [sa.as_root(sa.restart_command("nginx.service"))]
+    assert ctx.commands[0] == sa.as_root(sa.restart_command("nginx.service"))
+    assert ctx.commands[1:] == [sa.state_command("nginx.service")] * 2, "zwei ruhige Lesungen"
     assert result.success is True
-    assert result.output == "nginx.service auf Raspberry Pi neu gestartet – Zustand jetzt: active."
-    assert result.detail == {"host_id": "h1", "unit": "nginx.service", "state": "active"}
+    assert result.output == "nginx.service auf Raspberry Pi neu gestartet – Prüfung danach: läuft stabil."
+    assert result.detail == {"host_id": "h1", "unit": "nginx.service", "state": "active",
+                             "check": {"ok": True, "text": "läuft stabil."}}
 
 
 @pytest.mark.asyncio
@@ -403,8 +429,10 @@ async def test_executor_reports_failures_honestly():
 
     ctx = _Ctx()
     ctx.replies = [SimpleNamespace(exit_code=3, stdout="@@rc=0\ninactive\n", stderr="", duration_ms=1)]
+    ctx.states = [_state("inactive", "dead", type_="oneshot")]
     oneshot = await sa.SystemActionExecutor(ctx).execute(_req())
-    assert oneshot.success is True and "Zustand jetzt: inactive" in oneshot.output and "einmal" in oneshot.output
+    assert oneshot.success is True
+    assert oneshot.output.endswith("Prüfung danach: hat seine Aufgabe erledigt (Dienst für einmalige Aufgaben).")
 
     ctx = _Ctx()
     ctx.replies = [SimpleNamespace(exit_code=255, stdout="", stderr="", duration_ms=1)]
@@ -507,9 +535,16 @@ async def _enable(client, db_session, test_settings, monkeypatch) -> tuple[dict,
         commands.append(command)
         if "@@own" in command:
             return SimpleNamespace(exit_code=0, stdout="@@other\n", stderr="", duration_ms=1)
+        if command.startswith("systemctl show "):
+            return SimpleNamespace(exit_code=0, stdout=STATE_RUNNING, stderr="", duration_ms=1)
         return SimpleNamespace(exit_code=0, stdout=RESTART_OK, stderr="", duration_ms=1)
 
     monkeypatch.setattr(get_extension_runtime().loaded["system"].ctx.exec, "run", fake_run)
+    # Der Kern laedt die Erweiterung womoeglich frisch (eigenes Modul-Objekt): die Pruefung auch dort schnell stellen.
+    runtime_actions = sys.modules.get("nodvard_deck_ext_system.actions")
+    assert runtime_actions is not None, "der Kern hat die System-Erweiterung nicht geladen"
+    monkeypatch.setattr(runtime_actions, "CHECK_STABLE_S", 0)
+    monkeypatch.setattr(runtime_actions, "CHECK_INTERVAL_S", 0)
     return headers, host, commands
 
 
@@ -528,9 +563,9 @@ async def test_restart_goes_through_the_gate_and_reaches_the_server(client, db_s
     assert approved.status_code == 200, approved.text
     done = approved.json()
     assert done["status"] == "succeeded", done
-    assert done["result"]["output"].endswith("neu gestartet – Zustand jetzt: active.")
+    assert done["result"]["output"].endswith("neu gestartet – Prüfung danach: läuft stabil.")
     assert done["payload"] == {"host_id": host["id"], "unit": "nginx.service"}
-    assert commands == [sa.as_root(sa.restart_command("nginx.service"))]
+    assert commands == [sa.as_root(sa.restart_command("nginx.service"))] + [sa.state_command("nginx.service")] * 2
 
     row = (await db_session.execute(select(Action))).scalars().one()
     assert row.action_type == "system.service_restart" and row.host_id == host["id"]
@@ -658,3 +693,121 @@ async def test_forged_payloads_fail_in_the_executor(client, db_session, test_set
     assert approved.json()["status"] == "failed", approved.json()
     assert error in approved.json()["result"]["error"]
     assert commands == []
+
+
+@pytest.mark.parametrize(("state", "final", "expected"), [
+    (_state(), False, (True, "läuft stabil.")),
+    (_state(sub="exited"), False, (True, "hat seine Aufgabe erledigt (aktiv, ohne laufenden Prozess).")),
+    (_state("failed", "failed", "exit-code", status=1), False,
+     (False, f"ist aber gleich wieder ausgefallen (Zustand: failed, Exit-Code 1). {sa.LOG_HINT}")),
+    (_state("failed", "failed", "signal", status=11), False,
+     (False, f"ist aber gleich wieder ausgefallen (Zustand: failed, Signal 11). {sa.LOG_HINT}")),
+    (_state("failed", "failed", "oom-kill", status=9), False,
+     (False, f"ist aber gleich wieder ausgefallen (Zustand: failed, Speicher voll, vom System beendet). {sa.LOG_HINT}")),
+    (_state("activating", "auto-restart", "exit-code", restarts=2), False, None),
+    (_state("activating", "auto-restart", "exit-code", restarts=2), True, (False, sa.CRASH_LOOP_TEXT)),
+    (_state("inactive", "dead", "exit-code"), False, (False, f"ist aber nicht mehr aktiv (Ergebnis: exit-code). {sa.LOG_HINT}")),
+    (_state("inactive", "dead"), False,
+     (True, "hat sich gleich wieder ohne Fehler beendet. Soll er dauerhaft laufen, zeigt das Protokoll den Grund.")),
+    (_state("deactivating", "stop-sigterm"), False, None),
+    (_state("deactivating", "stop-sigterm"), True, (False, f"fährt aber gerade herunter (Zustand: deactivating). {sa.LOG_HINT}")),
+    (_state("active", "listening", restarts=None, pid=0), False, (True, "läuft stabil.")),
+    (_state("active", "waiting", restarts=None, pid=0), False, (True, "läuft stabil.")),
+    (_state("activating", "start"), False, None),
+    (_state("activating", "start"), True, (True, "startet noch (Zustand: activating) – bitte später nachsehen.")),
+])
+def test_judge_state(state, final, expected):
+    st = sa.parse_state(state)
+    assert st is not None and sa.judge_state(st, final) == expected
+
+
+def test_parse_state_and_command():
+    assert sa.parse_state("") is None and sa.parse_state("Fehler\n") is None
+    st = sa.parse_state("ActiveState=active\nSubState=running\nNRestarts=\nMainPID=0\n")
+    assert st == sa.UnitState("active", "running", "", None, 0, None)
+    assert sa.state_command("nginx.service") == (
+        "systemctl show -p ActiveState,SubState,Result,NRestarts,MainPID,ExecMainStatus,Type -- nginx.service"
+    )
+    with pytest.raises(sa.PayloadError):
+        sa.state_command("x; reboot")
+
+
+@pytest.mark.asyncio
+async def test_a_service_that_crashes_right_after_the_restart_fails_the_action():
+    ctx = _Ctx()
+    ctx.states = [_state(), _state("failed", "failed", "exit-code", status=203)]
+    result = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert result.success is False
+    assert result.error == (
+        "nginx.service auf Raspberry Pi wurde neu gestartet, ist aber gleich wieder ausgefallen "
+        f"(Zustand: failed, Exit-Code 203). {sa.LOG_HINT}"
+    )
+    assert result.detail["check"]["ok"] is False
+
+
+@pytest.mark.asyncio
+async def test_one_automatic_restart_is_tolerated_two_are_a_loop():
+    ctx = _Ctx()
+    ctx.states = [_state(restarts=0), _state("activating", "auto-restart", "exit-code", restarts=1, pid=0),
+                  _state(restarts=1, pid=4343)]
+    once = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert once.success is True
+    assert once.output.endswith("Prüfung danach: läuft stabil." + sa.ONE_RESTART_NOTE)
+    ctx = _Ctx()
+    ctx.states = [_state(restarts=0), _state(restarts=1, pid=4343), _state(restarts=2, pid=4444)]
+    twice = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert twice.success is False and twice.error.endswith(sa.CRASH_LOOP_TEXT)
+
+
+@pytest.mark.asyncio
+async def test_a_new_main_process_alone_is_no_crash_when_systemd_counts_restarts():
+    """Ein Reload mit neuem Hauptprozess (nginx-Binary-Upgrade, haproxy) ist kein Absturz, solange NRestarts gleich bleibt."""
+    ctx = _Ctx()
+    ctx.states = [_state(pid=100), _state(pid=200), _state(pid=300)]
+    result = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert result.success is True and result.output.endswith("Prüfung danach: läuft stabil.")
+
+
+@pytest.mark.asyncio
+async def test_without_nrestarts_the_main_process_counts():
+    ctx = _Ctx()
+    ctx.states = [_state(restarts=None, pid=100), _state(restarts=None, pid=200), _state(restarts=None, pid=300)]
+    result = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert result.success is False and result.error.endswith(sa.CRASH_LOOP_TEXT)
+
+
+@pytest.mark.asyncio
+async def test_sockets_and_timers_without_a_main_process_are_fine():
+    for sub in ("listening", "waiting"):
+        ctx = _Ctx()
+        ctx.states = [_state("active", sub, restarts=None, pid=0)]
+        result = await sa.SystemActionExecutor(ctx).execute(_req(unit="nginx.socket" if sub == "listening" else "nginx.timer"))
+        assert result.success is True and result.output.endswith("Prüfung danach: läuft stabil."), sub
+
+
+@pytest.mark.asyncio
+async def test_a_flicker_restarts_the_quiet_observation():
+    ctx = _Ctx()
+    ctx.states = [_state(), _state("activating", "start"), _state(), _state()]
+    result = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert result.success is True
+    assert len([c for c in ctx.commands if c.startswith("systemctl show")]) == 4
+
+
+@pytest.mark.asyncio
+async def test_without_an_answer_the_restart_still_counts_but_says_so(monkeypatch):
+    monkeypatch.setattr(sa, "CHECK_TIMEOUT_S", 0.05)
+    ctx = _Ctx()
+    ctx.states = [OSError("weg")]
+    result = await sa.SystemActionExecutor(ctx).execute(_req())
+    assert result.success is True
+    assert result.output == "nginx.service auf Raspberry Pi neu gestartet – Zustand jetzt: active. Prüfung danach nicht möglich (keine Antwort)."
+    assert "check" not in result.detail
+
+
+@pytest.mark.asyncio
+async def test_the_check_only_reads_and_runs_without_root():
+    ctx = _Ctx()
+    await sa.SystemActionExecutor(ctx).execute(_req())
+    checks = [c for c in ctx.commands if c.startswith("systemctl show")]
+    assert checks and all("sudo" not in c and "restart" not in c for c in checks)

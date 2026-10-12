@@ -157,6 +157,54 @@ async def test_notify_handle_passes_raise_on_failure_through(db_session):
         await handle.send(SdkNotification(title="T", body="B"), raise_on_failure=True)
 
 
+class _SkippingChannel(_RecordingChannel):
+    async def send(self, notification: SdkNotification) -> None:
+        from nodvard_sdk.errors import NotificationSkipped
+
+        raise NotificationSkipped("Unter der eingestellten Mindest-Stufe.")
+
+
+@pytest.mark.asyncio
+async def test_a_channel_that_skips_on_purpose_is_neither_delivered_nor_failed(db_session):
+    """Ein Kanal, der eine Meldung bewusst nicht weitergibt (z. B. unter der Mindest-Stufe von ntfy), stand bisher als
+    "zugestellt" da -- das Shield-Briefing sagte dann "auch als Push zugestellt". Jetzt: Zustellung `skipped`,
+    `NotifyResult.skipped`, kein `delivered`, und `raise_on_failure` versucht nichts erneut."""
+    from nodvard_deck.ext.context import NotifyHandle, _PermissionChecker
+
+    _provide(_SkippingChannel("ntfy"))
+    handle = NotifyHandle(_PermissionChecker("shield", ["notify.send"]), "shield")
+    result = await handle.send(SdkNotification(title="Alles ruhig", body="B"), raise_on_failure=True)
+    assert (result.delivered, result.skipped, result.suppressed) == (False, True, False)
+    rows = (
+        await db_session.execute(select(NotificationDelivery).where(NotificationDelivery.notification_id == result.notification_id))
+    ).scalars().all()
+    assert [(r.channel_id, r.status, r.error) for r in rows] == [("ntfy", "skipped", None)]
+
+    # Liefert ein anderer Kanal zu, gilt die Meldung als zugestellt und nicht als uebersprungen.
+    _provide(_RecordingChannel("matrix"), ext_id="ext-b")
+    both = await handle.send(SdkNotification(title="T", body="B"))
+    assert (both.delivered, both.skipped) == (True, False)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_channel_next_to_a_skipping_one_is_not_reported_as_skipped(db_session):
+    """Ist neben dem uebersprungenen Kanal ein anderer ausgefallen, darf `skipped` nicht `True` sein: Das
+    Shield-Briefing meldete sonst gruen "liegt unter der Mindest-Stufe" und versteckte den Ausfall."""
+    from nodvard_deck.ext.context import NotifyHandle, _PermissionChecker
+    from nodvard_deck_ext_shield.defender import push_state
+
+    _provide(_SkippingChannel("ntfy"))
+    _provide(_RecordingChannel("matrix", fail=True), ext_id="ext-b")
+    handle = NotifyHandle(_PermissionChecker("shield", ["notify.send"]), "shield")
+    result = await handle.send(SdkNotification(title="Alles ruhig", body="B"))
+    assert (result.delivered, result.skipped, result.suppressed) == (False, False, False)
+    rows = (
+        await db_session.execute(select(NotificationDelivery).where(NotificationDelivery.notification_id == result.notification_id))
+    ).scalars().all()
+    assert sorted(r.status for r in rows) == ["failed", "skipped"]
+    assert push_state(result) == "not_delivered"
+
+
 @pytest.mark.asyncio
 async def test_notification_with_no_channels_still_creates_the_row(db_session):
     row = await notifications_service.send(db_session, title="T", body="B")
@@ -353,6 +401,133 @@ async def test_list_and_mark_read(db_session):
 
     # Ein zweites Mal denselben markieren zaehlt nicht erneut.
     assert await notifications_service.mark_read(db_session, [a.id]) == 0
+
+
+class _DeletingChannel(_RecordingChannel):
+    """Waehrend der Zustellung loescht jemand die Meldung (von Hand, Sammel-Loeschen oder Aufraeum-Job)."""
+
+    def __init__(self, channel_id: str, notification_title: str) -> None:
+        super().__init__(channel_id)
+        self.notification_title = notification_title
+
+    async def send(self, notification: SdkNotification) -> None:
+        from nodvard_deck.db.session import session_scope
+        from nodvard_deck.models import Notification
+
+        async with session_scope() as other:
+            row = (
+                await other.execute(select(Notification).where(Notification.title == self.notification_title))
+            ).scalar_one()
+            await notifications_service.delete_notifications(other, [row.id])
+            await other.commit()
+        await super().send(notification)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("foreign_keys", [False, True])
+async def test_deleting_a_notification_while_it_is_delivered_does_not_break_the_delivery(db_session, foreign_keys):
+    """Die Kanaele brauchen Sekunden, die Meldung steht schon in der Liste: wer sie in der Zwischenzeit loescht,
+    bricht den Versand nicht ab, und es bleibt keine verwaiste Zeile im Zustellprotokoll (mit und ohne
+    Fremdschluessel-Pruefung der Verbindung -- im Betrieb ist sie an)."""
+    from sqlalchemy import func, text
+
+    from nodvard_deck.models import Notification
+
+    if foreign_keys:
+        await db_session.execute(text("PRAGMA foreign_keys=ON"))
+        assert (await db_session.execute(text("PRAGMA foreign_keys"))).scalar_one() == 1
+    channel = _DeletingChannel("chan-a", "Wird geloescht")
+    other = _RecordingChannel("chan-b")
+    _provide(channel, ext_id="ext-a")
+    _provide(other, ext_id="ext-b")
+
+    row, suppressed = await notifications_service.deliver(db_session, title="Wird geloescht", body="B")
+
+    assert suppressed is False
+    assert row.title == "Wird geloescht"
+    assert len(channel.received) == 1 and len(other.received) == 1  # der Versand lief zu Ende
+    assert (await db_session.execute(select(func.count()).select_from(Notification))).scalar_one() == 0
+    assert (await db_session.execute(select(func.count()).select_from(NotificationDelivery))).scalar_one() == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_helpers_remove_deliveries_and_only_the_named_notifications(db_session):
+    channel = _RecordingChannel("chan-a")
+    _provide(channel)
+    a = await notifications_service.send(db_session, title="A", body="x")
+    b = await notifications_service.send(db_session, title="B", body="y")
+
+    assert await notifications_service.delete_notification(db_session, "gibt-es-nicht") is None
+    assert await notifications_service.delete_notification(db_session, a.id) == "A"
+    await db_session.commit()
+
+    assert [n.id for n in await notifications_service.list_notifications(db_session)] == [b.id]
+    remaining = (await db_session.execute(select(NotificationDelivery.notification_id))).scalars().all()
+    assert remaining == [b.id]
+    assert await notifications_service.delete_notifications(db_session, [a.id, b.id, "x"]) == 1  # a gibt es nicht mehr
+
+
+@pytest.mark.asyncio
+async def test_delete_read_keeps_the_unread_ones(db_session):
+    a = await notifications_service.send(db_session, title="A", body="x")
+    b = await notifications_service.send(db_session, title="B", body="y")
+    c = await notifications_service.send(db_session, title="C", body="z")
+    await notifications_service.mark_read(db_session, [a.id, b.id])
+
+    assert await notifications_service.delete_read(db_session) == 2
+    assert [n.id for n in await notifications_service.list_notifications(db_session)] == [c.id]
+    assert await notifications_service.delete_read(db_session) == 0
+
+
+@pytest.mark.asyncio
+async def test_delete_read_commits_after_every_chunk(db_session, monkeypatch):
+    """In einer einzigen Transaktion hielte ein grosser Bestand die Schreibsperre so lange, dass andere Schreiber mit
+    "database is locked" scheitern. Darum wie der naechtliche Job: Haeppchen mit Commit dazwischen."""
+    rows = [await notifications_service.send(db_session, title=f"M{i}", body="x") for i in range(7)]
+    keep = await notifications_service.send(db_session, title="ungelesen", body="x")
+    await notifications_service.mark_read(db_session, [r.id for r in rows])
+    commits = 0
+    real_commit = db_session.commit
+
+    async def counting_commit():
+        nonlocal commits
+        commits += 1
+        await real_commit()
+
+    monkeypatch.setattr(db_session, "commit", counting_commit)
+    assert await notifications_service.delete_read(db_session, chunk_size=3, pause=0) == 7
+    assert commits == 3  # 3 + 3 + 1
+    assert [n.id for n in await notifications_service.list_notifications(db_session)] == [keep.id]
+
+
+@pytest.mark.asyncio
+async def test_delete_read_reports_its_progress_even_when_a_later_chunk_fails(db_session, monkeypatch):
+    rows = [await notifications_service.send(db_session, title=f"M{i}", body="x") for i in range(7)]
+    await notifications_service.mark_read(db_session, [r.id for r in rows])
+    await db_session.commit()
+    real_delete = notifications_service.delete_notifications
+    calls = 0
+
+    async def flaky(session, ids):
+        nonlocal calls
+        calls += 1
+        if calls == 3:
+            raise RuntimeError("Festplatte voll")
+        return await real_delete(session, ids)
+
+    progress = notifications_service.DeleteProgress()
+    with monkeypatch.context() as faulty:
+        faulty.setattr(notifications_service, "delete_notifications", flaky)
+        with pytest.raises(RuntimeError, match="Festplatte voll"):
+            await notifications_service.delete_read(db_session, chunk_size=3, pause=0, progress=progress)
+    assert progress.deleted == 6, "zwei Haeppchen zu je 3 waren schon committet"
+    await db_session.rollback()
+    assert len(await notifications_service.list_notifications(db_session)) == 1
+
+    # Ohne Fehler zaehlt es am Ende alles.
+    done = notifications_service.DeleteProgress()
+    assert await notifications_service.delete_read(db_session, chunk_size=3, pause=0, progress=done) == 1
+    assert done.deleted == 1
 
 
 @pytest.mark.asyncio

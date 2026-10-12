@@ -85,6 +85,21 @@
     "204": null
    }
   },
+  "DELETE /api/v1/ext/documents/documents/{document_id}/items/{item_id}": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
   "DELETE /api/v1/ext/documents/documents/{document_id}/tags/{tag_id}": {
    "params": {
     "path:document_id": {
@@ -151,6 +166,28 @@
   "DELETE /api/v1/ext/inventory/locations/{location_id}": {
    "params": {
     "path:location_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/inventory/projects/{project_id}": {
+   "params": {
+    "path:project_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/ext/inventory/racks/{rack_id}": {
+   "params": {
+    "path:rack_id": {
      "required": true,
      "type": "string"
     }
@@ -300,6 +337,17 @@
       }
      },
      "type": "object"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
+  "DELETE /api/v1/notifications/{notification_id}": {
+   "params": {
+    "path:notification_id": {
+     "required": true,
+     "type": "string"
     }
    },
    "responses": {
@@ -725,6 +773,41 @@
     }
    }
   },
+  "GET /api/v1/apps/suggestions": {
+   "responses": {
+    "200": {
+     "fields": {
+      "errors": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "suggestions": {
+       "items": {
+        "fields": {
+         "host": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "source": {
+          "type": "string"
+         },
+         "url": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/audit": {
    "params": {
     "query:action": {
@@ -1069,6 +1152,12 @@
        "name": {
         "type": "string"
        },
+       "tls_fingerprint_invalid": {
+        "type": "boolean"
+       },
+       "tls_fingerprint_sha256": {
+        "type": "null|string"
+       },
        "tls_insecure_skip_verify": {
         "type": "boolean"
        },
@@ -1079,6 +1168,19 @@
       "type": "object"
      },
      "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/connections/{name}/certificate": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
     }
    }
   },
@@ -1112,6 +1214,22 @@
     }
    }
   },
+  "GET /api/v1/ext/backups/jobs/{job_ref}/failure": {
+   "params": {
+    "path:job_ref": {
+     "required": true,
+     "type": "string"
+    },
+    "query:upid": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/backups/jobs/{job_ref}/history": {
    "params": {
     "path:job_ref": {
@@ -1125,6 +1243,43 @@
       "type": "object"
      },
      "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/restore/backups": {
+   "params": {
+    "query:connection": {
+     "required": true,
+     "type": "string"
+    },
+    "query:kind": {
+     "type": "null|string"
+    },
+    "query:vmid": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/backups/restore/options": {
+   "params": {
+    "query:connection": {
+     "required": true,
+     "type": "string"
+    },
+    "query:volid": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
     }
    }
   },
@@ -1144,6 +1299,9 @@
   },
   "GET /api/v1/ext/documents/documents": {
    "params": {
+    "query:item_id": {
+     "type": "null|string"
+    },
     "query:q": {
      "type": "null|string"
     },
@@ -1163,6 +1321,12 @@
        },
        "id": {
         "type": "string"
+       },
+       "item_ids": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
        },
        "ocr_error": {
         "type": "null|string"
@@ -1231,6 +1395,12 @@
       "id": {
        "type": "string"
       },
+      "item_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
       "ocr_error": {
        "type": "null|string"
       },
@@ -1287,6 +1457,68 @@
    "responses": {
     "200": {
      "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/ext/documents/inbox": {
+   "responses": {
+    "200": {
+     "fields": {
+      "folder": {
+       "type": "null|string"
+      },
+      "folder_error": {
+       "type": "null|string"
+      },
+      "last_checked_at": {
+       "type": "null|string"
+      },
+      "last_run": {
+       "fields": {
+        "at": {
+         "type": "string"
+        },
+        "failed": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "imported": {
+         "type": "integer"
+        },
+        "message": {
+         "type": "null|string"
+        },
+        "more_waiting": {
+         "type": "boolean"
+        },
+        "ok": {
+         "type": "boolean"
+        },
+        "too_large": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "wrong_content": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "type": "null|object"
+      },
+      "nextcloud_ready": {
+       "type": "boolean"
+      },
+      "running": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
     }
    }
   },
@@ -1420,10 +1652,19 @@
     "query:category_id": {
      "type": "null|string"
     },
+    "query:host_id": {
+     "type": "null|string"
+    },
     "query:location_id": {
      "type": "null|string"
     },
+    "query:project_id": {
+     "type": "null|string"
+    },
     "query:q": {
+     "type": "null|string"
+    },
+    "query:rack_id": {
      "type": "null|string"
     }
    },
@@ -1438,6 +1679,9 @@
         "type": "string"
        },
        "description": {
+        "type": "null|string"
+       },
+       "host_id": {
         "type": "null|string"
        },
        "id": {
@@ -1472,10 +1716,22 @@
        "location_id": {
         "type": "null|string"
        },
+       "manufacturer": {
+        "type": "null|string"
+       },
+       "model": {
+        "type": "null|string"
+       },
        "name": {
         "type": "string"
        },
        "notes": {
+        "type": "null|string"
+       },
+       "product_url": {
+        "type": "null|string"
+       },
+       "project_id": {
         "type": "null|string"
        },
        "purchase_date": {
@@ -1486,6 +1742,18 @@
        },
        "quantity": {
         "type": "integer"
+       },
+       "rack_id": {
+        "type": "null|string"
+       },
+       "rack_position": {
+        "type": "integer|null"
+       },
+       "rack_units": {
+        "type": "integer|null"
+       },
+       "serial_number": {
+        "type": "null|string"
        },
        "updated_at": {
         "type": "string"
@@ -1517,6 +1785,9 @@
        "type": "string"
       },
       "description": {
+       "type": "null|string"
+      },
+      "host_id": {
        "type": "null|string"
       },
       "id": {
@@ -1551,10 +1822,22 @@
       "location_id": {
        "type": "null|string"
       },
+      "manufacturer": {
+       "type": "null|string"
+      },
+      "model": {
+       "type": "null|string"
+      },
       "name": {
        "type": "string"
       },
       "notes": {
+       "type": "null|string"
+      },
+      "product_url": {
+       "type": "null|string"
+      },
+      "project_id": {
        "type": "null|string"
       },
       "purchase_date": {
@@ -1565,6 +1848,18 @@
       },
       "quantity": {
        "type": "integer"
+      },
+      "rack_id": {
+       "type": "null|string"
+      },
+      "rack_position": {
+       "type": "integer|null"
+      },
+      "rack_units": {
+       "type": "integer|null"
+      },
+      "serial_number": {
+       "type": "null|string"
       },
       "updated_at": {
        "type": "string"
@@ -1621,6 +1916,81 @@
     }
    }
   },
+  "GET /api/v1/ext/inventory/projects": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "budget_cents": {
+        "type": "integer|null"
+       },
+       "created_at": {
+        "type": "string"
+       },
+       "description": {
+        "type": "null|string"
+       },
+       "id": {
+        "type": "string"
+       },
+       "item_count": {
+        "type": "integer"
+       },
+       "name": {
+        "type": "string"
+       },
+       "spent_cents": {
+        "type": "integer"
+       },
+       "status": {
+        "type": "string"
+       },
+       "unpriced_count": {
+        "type": "integer"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/inventory/racks": {
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "created_at": {
+        "type": "string"
+       },
+       "height_units": {
+        "type": "integer"
+       },
+       "id": {
+        "type": "string"
+       },
+       "location_id": {
+        "type": "null|string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "notes": {
+        "type": "null|string"
+       },
+       "updated_at": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
+    }
+   }
+  },
   "GET /api/v1/ext/inventory/widgets/warranty": {
    "responses": {
     "200": {
@@ -1629,6 +1999,13 @@
    }
   },
   "GET /api/v1/ext/network/npm": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/network/npm/address-check": {
    "responses": {
     "200": {
      "type": "object"
@@ -1759,6 +2136,13 @@
     }
    }
   },
+  "GET /api/v1/ext/nexus-soc/defender/watch-templates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/nexus-soc/defender/widgets/protection": {
    "responses": {
     "200": {
@@ -1852,6 +2236,24 @@
     }
    }
   },
+  "GET /api/v1/ext/ntfy/subscribe-link": {
+   "responses": {
+    "200": {
+     "fields": {
+      "error": {
+       "type": "null|string"
+      },
+      "text": {
+       "type": "null|string"
+      },
+      "url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/proxmox/connections": {
    "responses": {
     "200": {
@@ -1869,6 +2271,12 @@
        "name": {
         "type": "string"
        },
+       "tls_fingerprint_invalid": {
+        "type": "boolean"
+       },
+       "tls_fingerprint_sha256": {
+        "type": "null|string"
+       },
        "tls_insecure_skip_verify": {
         "type": "boolean"
        },
@@ -1879,6 +2287,32 @@
       "type": "object"
      },
      "type": "array"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/connections/{name}/certificate": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/proxmox/connections/{name}/old-tokens": {
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
     }
    }
   },
@@ -2479,6 +2913,13 @@
     }
    }
   },
+  "GET /api/v1/ext/shield/defender/watch-templates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/shield/defender/widgets/protection": {
    "responses": {
     "200": {
@@ -2670,6 +3111,9 @@
        "source": {
         "type": "string"
        },
+       "stage": {
+        "type": "string"
+       },
        "state": {
         "type": "string"
        },
@@ -2753,6 +3197,9 @@
       "source": {
        "type": "string"
       },
+      "stage": {
+       "type": "string"
+      },
       "state": {
        "type": "string"
       },
@@ -2827,6 +3274,36 @@
       }
      },
      "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/files/places": {
+   "params": {
+    "query:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "items": {
+      "fields": {
+       "hint": {
+        "type": "null|string"
+       },
+       "icon": {
+        "type": "string"
+       },
+       "label": {
+        "type": "string"
+       },
+       "path": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "type": "array"
     }
    }
   },
@@ -2919,6 +3396,9 @@
          }
         },
         "type": "object"
+       },
+       "host_id": {
+        "type": "null|string"
        },
        "icon": {
         "type": "string"
@@ -4182,6 +4662,9 @@
        "show_in_nav": {
         "type": "boolean"
        },
+       "stage": {
+        "type": "string"
+       },
        "title": {
         "type": "string"
        }
@@ -4204,6 +4687,9 @@
         "type": "string"
        },
        "is_builtin": {
+        "type": "boolean"
+       },
+       "manages_users": {
         "type": "boolean"
        },
        "name": {
@@ -4291,6 +4777,9 @@
        "description": {
         "type": "string"
        },
+       "expires_at": {
+        "type": "null|string"
+       },
        "id": {
         "type": "string"
        },
@@ -4311,6 +4800,26 @@
        },
        "rotated_at": {
         "type": "null|string"
+       },
+       "used_by": {
+        "items": {
+         "fields": {
+          "id": {
+           "type": "string"
+          },
+          "last_used_at": {
+           "type": "null|string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "type": {
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
        }
       },
       "type": "object"
@@ -4380,6 +4889,43 @@
    "responses": {
     "200": {
      "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/system/connection": {
+   "responses": {
+    "200": {
+     "fields": {
+      "client": {
+       "type": "null|string"
+      },
+      "forwarded_headers": {
+       "type": "boolean"
+      },
+      "peer": {
+       "type": "null|string"
+      },
+      "scheme": {
+       "type": "string"
+      },
+      "trusted_proxies": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "trusted_proxies_source": {
+       "enum": [
+        "env",
+        "setting"
+       ],
+       "type": "string"
+      },
+      "via_trusted_proxy": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
     }
    }
   },
@@ -4673,6 +5219,9 @@
           "is_builtin": {
            "type": "boolean"
           },
+          "manages_users": {
+           "type": "boolean"
+          },
           "name": {
            "type": "string"
           }
@@ -4738,6 +5287,9 @@
           "type": "string"
          },
          "is_builtin": {
+          "type": "boolean"
+         },
+         "manages_users": {
           "type": "boolean"
          },
          "name": {
@@ -5227,6 +5779,12 @@
       "id": {
        "type": "string"
       },
+      "item_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
       "ocr_error": {
        "type": "null|string"
       },
@@ -5581,12 +6139,98 @@
     }
    }
   },
+  "PATCH /api/v1/secrets/{secret_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "description": {
+       "type": "null|string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:secret_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "created_by_user_id": {
+       "type": "null|string"
+      },
+      "description": {
+       "type": "string"
+      },
+      "expires_at": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "key_version": {
+       "type": "integer"
+      },
+      "kind": {
+       "type": "string"
+      },
+      "label": {
+       "type": "string"
+      },
+      "last_used_at": {
+       "type": "null|string"
+      },
+      "owner_ext_id": {
+       "type": "null|string"
+      },
+      "rotated_at": {
+       "type": "null|string"
+      },
+      "used_by": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "last_used_at": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "type": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "PATCH /api/v1/users/{user_id}": {
    "body": {
     "content_type": "application/json",
     "required": true,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
       "display_name": {
        "type": "null|string"
       },
@@ -5604,6 +6248,9 @@
         "type": "string"
        },
        "type": "array|null"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -5652,6 +6299,9 @@
           "type": "string"
          },
          "is_builtin": {
+          "type": "boolean"
+         },
+         "manages_users": {
           "type": "boolean"
          },
          "name": {
@@ -6369,6 +7019,9 @@
        "required": true,
        "type": "string"
       },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
+      },
       "tls_insecure_skip_verify": {
        "type": "boolean"
       },
@@ -6395,6 +7048,12 @@
       "name": {
        "type": "string"
       },
+      "tls_fingerprint_invalid": {
+       "type": "boolean"
+      },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
+      },
       "tls_insecure_skip_verify": {
        "type": "boolean"
       },
@@ -6403,6 +7062,32 @@
       }
      },
      "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/backups/connections/{name}/certificate": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "sha256": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
     }
    }
   },
@@ -6484,6 +7169,20 @@
     }
    }
   },
+  "POST /api/v1/ext/backups/restore": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/backups/unprotected/{connection}/{vmid}/job": {
    "body": {
     "content_type": "application/json",
@@ -6522,6 +7221,9 @@
     "query:filename": {
      "required": true,
      "type": "string"
+    },
+    "query:item_id": {
+     "type": "null|string"
     }
    },
    "responses": {
@@ -6535,6 +7237,12 @@
       },
       "id": {
        "type": "string"
+      },
+      "item_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
       },
       "ocr_error": {
        "type": "null|string"
@@ -6582,6 +7290,21 @@
     }
    }
   },
+  "POST /api/v1/ext/documents/documents/{document_id}/items/{item_id}": {
+   "params": {
+    "path:document_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:item_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "204": null
+   }
+  },
   "POST /api/v1/ext/documents/documents/{document_id}/tags/{tag_id}": {
    "params": {
     "path:document_id": {
@@ -6595,6 +7318,68 @@
    },
    "responses": {
     "204": null
+   }
+  },
+  "POST /api/v1/ext/documents/inbox/fetch": {
+   "responses": {
+    "202": {
+     "fields": {
+      "folder": {
+       "type": "null|string"
+      },
+      "folder_error": {
+       "type": "null|string"
+      },
+      "last_checked_at": {
+       "type": "null|string"
+      },
+      "last_run": {
+       "fields": {
+        "at": {
+         "type": "string"
+        },
+        "failed": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "imported": {
+         "type": "integer"
+        },
+        "message": {
+         "type": "null|string"
+        },
+        "more_waiting": {
+         "type": "boolean"
+        },
+        "ok": {
+         "type": "boolean"
+        },
+        "too_large": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "wrong_content": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "type": "null|object"
+      },
+      "nextcloud_ready": {
+       "type": "boolean"
+      },
+      "running": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
    }
   },
   "POST /api/v1/ext/documents/tags": {
@@ -6739,6 +7524,19 @@
     }
    }
   },
+  "POST /api/v1/ext/inventory/hosts/{host_id}/scan": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/inventory/items": {
    "body": {
     "content_type": "application/json",
@@ -6751,7 +7549,16 @@
       "description": {
        "type": "null|string"
       },
+      "host_id": {
+       "type": "null|string"
+      },
       "location_id": {
+       "type": "null|string"
+      },
+      "manufacturer": {
+       "type": "null|string"
+      },
+      "model": {
        "type": "null|string"
       },
       "name": {
@@ -6759,6 +7566,12 @@
        "type": "string"
       },
       "notes": {
+       "type": "null|string"
+      },
+      "product_url": {
+       "type": "null|string"
+      },
+      "project_id": {
        "type": "null|string"
       },
       "purchase_date": {
@@ -6769,6 +7582,18 @@
       },
       "quantity": {
        "type": "integer"
+      },
+      "rack_id": {
+       "type": "null|string"
+      },
+      "rack_position": {
+       "type": "integer|null"
+      },
+      "rack_units": {
+       "type": "integer|null"
+      },
+      "serial_number": {
+       "type": "null|string"
       },
       "warranty_until": {
        "type": "null|string"
@@ -6787,6 +7612,9 @@
        "type": "string"
       },
       "description": {
+       "type": "null|string"
+      },
+      "host_id": {
        "type": "null|string"
       },
       "id": {
@@ -6821,10 +7649,22 @@
       "location_id": {
        "type": "null|string"
       },
+      "manufacturer": {
+       "type": "null|string"
+      },
+      "model": {
+       "type": "null|string"
+      },
       "name": {
        "type": "string"
       },
       "notes": {
+       "type": "null|string"
+      },
+      "product_url": {
+       "type": "null|string"
+      },
+      "project_id": {
        "type": "null|string"
       },
       "purchase_date": {
@@ -6835,6 +7675,18 @@
       },
       "quantity": {
        "type": "integer"
+      },
+      "rack_id": {
+       "type": "null|string"
+      },
+      "rack_position": {
+       "type": "integer|null"
+      },
+      "rack_units": {
+       "type": "integer|null"
+      },
+      "serial_number": {
+       "type": "null|string"
       },
       "updated_at": {
        "type": "string"
@@ -6910,6 +7762,119 @@
        "type": "string"
       },
       "parent_id": {
+       "type": "null|string"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/inventory/projects": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "budget_cents": {
+       "type": "integer|null"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "budget_cents": {
+       "type": "integer|null"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "item_count": {
+       "type": "integer"
+      },
+      "name": {
+       "type": "string"
+      },
+      "spent_cents": {
+       "type": "integer"
+      },
+      "status": {
+       "type": "string"
+      },
+      "unpriced_count": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/inventory/racks": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "height_units": {
+       "type": "integer"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "201": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "height_units": {
+       "type": "integer"
+      },
+      "id": {
+       "type": "string"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "notes": {
        "type": "null|string"
       },
       "updated_at": {
@@ -7326,6 +8291,26 @@
     }
    }
   },
+  "POST /api/v1/ext/nexus-soc/defender/watch-paths": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/nexus-soc/incidents/{incident_id}/confirm": {
    "params": {
     "path:incident_id": {
@@ -7414,6 +8399,101 @@
     "204": null
    }
   },
+  "POST /api/v1/ext/proxmox/connect": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "access": {
+       "enum": [
+        "full",
+        "read"
+       ],
+       "type": "string"
+      },
+      "backups": {
+       "type": "boolean|null"
+      },
+      "base_url": {
+       "required": true,
+       "type": "string"
+      },
+      "fingerprint": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "null|string"
+      },
+      "password": {
+       "required": true,
+       "type": "string"
+      },
+      "username": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/ext/proxmox/connect/certificate": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "base_url": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/ext/proxmox/connect/tfa": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "code": {
+       "required": true,
+       "type": "string"
+      },
+      "flow": {
+       "required": true,
+       "type": "string"
+      },
+      "kind": {
+       "enum": [
+        "recovery",
+        "totp",
+        "yubico"
+       ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
   "POST /api/v1/ext/proxmox/connections": {
    "body": {
     "content_type": "application/json",
@@ -7430,6 +8510,9 @@
       "name": {
        "required": true,
        "type": "string"
+      },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
       },
       "tls_insecure_skip_verify": {
        "type": "boolean"
@@ -7457,6 +8540,12 @@
       "name": {
        "type": "string"
       },
+      "tls_fingerprint_invalid": {
+       "type": "boolean"
+      },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
+      },
       "tls_insecure_skip_verify": {
        "type": "boolean"
       },
@@ -7465,6 +8554,32 @@
       }
      },
      "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/proxmox/connections/{name}/certificate": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "sha256": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:name": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
     }
    }
   },
@@ -8031,6 +9146,26 @@
     }
    }
   },
+  "POST /api/v1/ext/shield/defender/watch-paths": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "path": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/shield/incidents/{incident_id}/confirm": {
    "params": {
     "path:incident_id": {
@@ -8197,6 +9332,9 @@
       "source": {
        "type": "string"
       },
+      "stage": {
+       "type": "string"
+      },
       "state": {
        "type": "string"
       },
@@ -8276,6 +9414,9 @@
        "type": "integer"
       },
       "source": {
+       "type": "string"
+      },
+      "stage": {
        "type": "string"
       },
       "state": {
@@ -9141,12 +10282,160 @@
     }
    }
   },
+  "POST /api/v1/hosts/{host_id}/credentials/{credential_id}/setup-with-password": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "groups": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "login_user": {
+       "type": "string"
+      },
+      "password": {
+       "required": true,
+       "type": "string"
+      },
+      "sudo": {
+       "type": "boolean"
+      },
+      "sudo_password_same": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:credential_id": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "check": {
+       "fields": {
+        "checked_at": {
+         "type": "string"
+        },
+        "credential_id": {
+         "type": "null|string"
+        },
+        "host_key": {
+         "fields": {
+          "expected": {
+           "type": "null|string"
+          },
+          "fingerprint": {
+           "type": "string"
+          },
+          "key_type": {
+           "type": "string"
+          },
+          "status": {
+           "enum": [
+            "changed",
+            "known",
+            "new"
+           ],
+           "type": "string"
+          }
+         },
+         "type": "null|object"
+        },
+        "items": {
+         "items": {
+          "fields": {
+           "detail": {
+            "type": "string"
+           },
+           "hint": {
+            "type": "string"
+           },
+           "id": {
+            "type": "string"
+           },
+           "label": {
+            "type": "string"
+           },
+           "status": {
+            "enum": [
+             "confirm",
+             "fail",
+             "ok",
+             "skipped",
+             "warn"
+            ],
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "ok": {
+         "type": "boolean"
+        },
+        "os": {
+         "fields": {
+          "arch": {
+           "type": "null|string"
+          },
+          "model": {
+           "type": "null|string"
+          },
+          "pretty_name": {
+           "type": "null|string"
+          }
+         },
+         "type": "null|object"
+        }
+       },
+       "type": "null|object"
+      },
+      "made_default": {
+       "type": "boolean"
+      },
+      "messages": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "notes": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "ok": {
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/hosts/{host_id}/known-hosts": {
    "body": {
     "content_type": "application/json",
     "required": true,
     "schema": {
      "fields": {
+      "credential_id": {
+       "type": "null|string"
+      },
       "fingerprint": {
        "required": true,
        "type": "string"
@@ -9249,6 +10538,9 @@
       "new_password": {
        "required": true,
        "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -9344,6 +10636,13 @@
     }
    }
   },
+  "POST /api/v1/notifications/delete-read": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/notifications/read": {
    "body": {
     "content_type": "application/json",
@@ -9396,6 +10695,9 @@
       "description": {
        "type": "string"
       },
+      "expires_at": {
+       "type": "null|string"
+      },
       "kind": {
        "enum": [
         "api_token",
@@ -9431,6 +10733,9 @@
       "description": {
        "type": "string"
       },
+      "expires_at": {
+       "type": "null|string"
+      },
       "id": {
        "type": "string"
       },
@@ -9451,6 +10756,26 @@
       },
       "rotated_at": {
        "type": "null|string"
+      },
+      "used_by": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "last_used_at": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "type": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
       }
      },
      "type": "object"
@@ -9785,8 +11110,14 @@
        "required": true,
        "type": "string"
       },
+      "ref": {
+       "type": "null|string"
+      },
       "rows": {
        "type": "integer"
+      },
+      "scope": {
+       "type": "null|string"
       },
       "user": {
        "type": "null|string"
@@ -9815,6 +11146,9 @@
     "required": true,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
       "display_name": {
        "type": "string"
       },
@@ -9830,6 +11164,9 @@
         "type": "string"
        },
        "type": "array"
+      },
+      "totp_code": {
+       "type": "string"
       },
       "username": {
        "required": true,
@@ -9878,6 +11215,9 @@
          "is_builtin": {
           "type": "boolean"
          },
+         "manages_users": {
+          "type": "boolean"
+         },
          "name": {
           "type": "string"
          }
@@ -9905,6 +11245,9 @@
      "fields": {
       "current_password": {
        "required": true,
+       "type": "string"
+      },
+      "totp_code": {
        "type": "string"
       }
      },
@@ -10159,6 +11502,9 @@
       "enabled": {
        "type": "boolean|null"
       },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
+      },
       "tls_insecure_skip_verify": {
        "type": "boolean|null"
       },
@@ -10189,6 +11535,12 @@
       },
       "name": {
        "type": "string"
+      },
+      "tls_fingerprint_invalid": {
+       "type": "boolean"
+      },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
       },
       "tls_insecure_skip_verify": {
        "type": "boolean"
@@ -10269,7 +11621,16 @@
       "description": {
        "type": "null|string"
       },
+      "host_id": {
+       "type": "null|string"
+      },
       "location_id": {
+       "type": "null|string"
+      },
+      "manufacturer": {
+       "type": "null|string"
+      },
+      "model": {
        "type": "null|string"
       },
       "name": {
@@ -10277,6 +11638,12 @@
        "type": "string"
       },
       "notes": {
+       "type": "null|string"
+      },
+      "product_url": {
+       "type": "null|string"
+      },
+      "project_id": {
        "type": "null|string"
       },
       "purchase_date": {
@@ -10287,6 +11654,18 @@
       },
       "quantity": {
        "type": "integer"
+      },
+      "rack_id": {
+       "type": "null|string"
+      },
+      "rack_position": {
+       "type": "integer|null"
+      },
+      "rack_units": {
+       "type": "integer|null"
+      },
+      "serial_number": {
+       "type": "null|string"
       },
       "warranty_until": {
        "type": "null|string"
@@ -10311,6 +11690,9 @@
        "type": "string"
       },
       "description": {
+       "type": "null|string"
+      },
+      "host_id": {
        "type": "null|string"
       },
       "id": {
@@ -10345,10 +11727,22 @@
       "location_id": {
        "type": "null|string"
       },
+      "manufacturer": {
+       "type": "null|string"
+      },
+      "model": {
+       "type": "null|string"
+      },
       "name": {
        "type": "string"
       },
       "notes": {
+       "type": "null|string"
+      },
+      "product_url": {
+       "type": "null|string"
+      },
+      "project_id": {
        "type": "null|string"
       },
       "purchase_date": {
@@ -10360,11 +11754,148 @@
       "quantity": {
        "type": "integer"
       },
+      "rack_id": {
+       "type": "null|string"
+      },
+      "rack_position": {
+       "type": "integer|null"
+      },
+      "rack_units": {
+       "type": "integer|null"
+      },
+      "serial_number": {
+       "type": "null|string"
+      },
       "updated_at": {
        "type": "string"
       },
       "warranty_until": {
        "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/inventory/projects/{project_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "budget_cents": {
+       "type": "integer|null"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "status": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:project_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "budget_cents": {
+       "type": "integer|null"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "description": {
+       "type": "null|string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "item_count": {
+       "type": "integer"
+      },
+      "name": {
+       "type": "string"
+      },
+      "spent_cents": {
+       "type": "integer"
+      },
+      "status": {
+       "type": "string"
+      },
+      "unpriced_count": {
+       "type": "integer"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "PUT /api/v1/ext/inventory/racks/{rack_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "height_units": {
+       "type": "integer"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "required": true,
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:rack_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "created_at": {
+       "type": "string"
+      },
+      "height_units": {
+       "type": "integer"
+      },
+      "id": {
+       "type": "string"
+      },
+      "location_id": {
+       "type": "null|string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "notes": {
+       "type": "null|string"
+      },
+      "updated_at": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -10382,6 +11913,9 @@
       },
       "enabled": {
        "type": "boolean|null"
+      },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
       },
       "tls_insecure_skip_verify": {
        "type": "boolean|null"
@@ -10413,6 +11947,12 @@
       },
       "name": {
        "type": "string"
+      },
+      "tls_fingerprint_invalid": {
+       "type": "boolean"
+      },
+      "tls_fingerprint_sha256": {
+       "type": "null|string"
       },
       "tls_insecure_skip_verify": {
        "type": "boolean"
@@ -10577,6 +12117,36 @@
     }
    }
   },
+  "PUT /api/v1/ext/service-matrix/containers/{host_id}/{container}/url": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "url": {
+       "required": true,
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/extensions/{ext_id}/secrets": {
    "body": {
     "content_type": "application/json",
@@ -10719,9 +12289,11 @@
       "hosts.reachability.interval_minutes",
       "jobs.run_retention_days",
       "maintenance.windows",
+      "notifications.retention_days",
       "security.deny_patterns",
       "ssh.confirm_new_host_keys",
       "system.timezone",
+      "system.trusted_proxies",
       "system.update_check.channel",
       "system.update_check.enabled"
      ],

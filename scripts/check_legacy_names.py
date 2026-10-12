@@ -309,13 +309,21 @@ KEPT_SHIELD: tuple[Kept, ...] = (
         "`nexus_soc.proposal_rejected` und werden nicht umgeschrieben (Verlauf). Neue Eintraege heissen `shield.*`; nur die Beschriftung der "
         "Container-Wache kennt beide Namen.",
         [*_f("extensions/shield/frontend/src/ContainerWatch.tsx", "extensions/shield/frontend/src/ContainerWatch.test.tsx")]),
+    _ks("Shield: alte Vorsilbe der Audit-Namen in der Protokoll-Seite",
+        r"nexus_soc(?:\.|`)",
+        "Die Protokoll-Seite ordnet Eintraegen mit der alten Vorsilbe `nexus_soc.` (bis 0.6) die Beschriftung der neuen (`shield.`) zu; "
+        "die Eintraege selbst werden nicht umgeschrieben. Die Vorsilbe steht dort an einer Stelle (`LEGACY_ACTION_PREFIXES`); "
+        "die Alias-Tests nennen sie als Eingabe.",
+        [*_f("frontend/src/routes/settings/AuditSettings.tsx"), LEGACY_TEST_WHERE]),
     _ks("Shield: Server-Ordner",
         r"lib\\?/nexus-(?:quarantine|updates)\b",
         "Auf den verwalteten Servern liegen `/var/lib/nexus-quarantine` (Quarantaene) und `/var/lib/nexus-updates` (laufende Updates). Der "
         "volle Pfad steht in `ext_nexus_soc_findings.quarantine_path`, die Loesch-Pruefung und die Wiederaufnahme laufender Updates "
         "haengen am Ordner: ein Umzug gaebe falsche \"geloescht\"-Faelle und abgebrochene Laeufe.",
         [*_f("extensions/shield/src/nodvard_deck_ext_shield/antivirus.py", "extensions/shield/src/nodvard_deck_ext_shield/detached.py",
-             "backend/tests/test_shield_legacy_ids.py", "extensions/shield/frontend/src/SocPage.test.tsx"),
+             "backend/tests/test_shield_legacy_ids.py", "extensions/shield/frontend/src/SocPage.test.tsx",
+             # Testdaten der Design-Vorschau: ein Fund in Quarantäne zeigt den echten Ordner auf dem Server.
+             "frontend/src/preview/fixtures.ts"),
          _SHIELD_OWN_TESTS]),
     _ks("Shield: alte feste Scan-Marke",
         r"nexus-rc\b",

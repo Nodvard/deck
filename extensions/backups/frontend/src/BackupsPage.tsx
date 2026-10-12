@@ -16,20 +16,28 @@
  * (ActionsPage.tsx im Kern) zur Freigabe stehen. `POST .../retry` liefert dafuer
  * zusaetzlich `risk` mit (siehe __init__.py).
  */
-import { Fragment, useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ACTION_STATUS_LABEL, isActionRunning, RUNNING_IN_BACKGROUND, settleAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
+import { CertificateStatus, ConnectionCertificate } from "../../../_shared/frontend/src/certificate";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
+import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { deck } from "../../../_shared/frontend/src/deck";
+
+import { FailureCause } from "./FailureCause";
+import { RestoreCopyPanel } from "./RestoreCopy";
 
 interface ConnectionOut {
   name: string;
   base_url: string;
   token_id: string;
   tls_insecure_skip_verify: boolean;
+  /** Gemerkter Fingerabdruck des Zertifikats (`AB:CD:…`), sonst null. */
+  tls_fingerprint_sha256?: string | null;
+  tls_fingerprint_invalid?: boolean;
   enabled: boolean;
   has_token: boolean;
 }
@@ -74,20 +82,25 @@ function formatSize(bytes: number): string {
   return `${Math.round(bytes / 1e6)} MB`;
 }
 
-/** Was tatsaechlich auf den Backup-Speichern liegt -- einmal laden, je Gast nachschlagen. */
-function useInventory(): { inventory: Inventory | null; orphans: OrphanEntry[] } {
+/** Was tatsaechlich auf den Backup-Speichern liegt -- einmal laden, je Gast nachschlagen. Scheitert das Lesen, bleibt
+ * `inventory` leer (`null`) und `error` nennt den Grund: sonst stuende bei jedem Gast "keine Sicherung vorhanden". */
+function useInventory(): { inventory: Inventory | null; orphans: OrphanEntry[]; error: string | null; reload: () => void } {
   const [inventory, setInventory] = useState<Inventory | null>(null);
   const [orphans, setOrphans] = useState<OrphanEntry[]>([]);
-  useEffect(() => {
-    authedFetch("/ext/backups/inventory")
-      .then((res) => (res.ok ? (res.json() as Promise<{ guests: InventoryEntry[]; orphans?: OrphanEntry[] }>) : { guests: [], orphans: [] }))
+  const [error, setError] = useState<string | null>(null);
+  const reload = useCallback(() => {
+    setError(null);
+    fetchJson<{ guests: InventoryEntry[]; orphans?: OrphanEntry[] }>("/ext/backups/inventory")
       .then((body) => {
-        setInventory(new Map(body.guests.map((g) => [`${g.connection}/${g.vmid}`, g])));
+        setInventory(new Map((body.guests ?? []).map((g) => [`${g.connection}/${g.vmid}`, g])));
         setOrphans(body.orphans ?? []);
       })
-      .catch(() => setInventory(new Map()));
+      .catch((err: unknown) => setError(errorMessage(err)));
   }, []);
-  return { inventory, orphans };
+  useEffect(() => {
+    reload();
+  }, [reload]);
+  return { inventory, orphans, error, reload };
 }
 
 function inventoryText(entry: InventoryEntry | undefined): string {
@@ -160,16 +173,32 @@ function NewJobForm({ guest, defaultStorage, onDone }: { guest: UnprotectedGuest
   );
 }
 
+/** "Als Kopie wiederherstellen" nur, wenn es eine Sicherung gibt und der Nutzer Aktionen ausloesen darf. */
+function canRestore(entry: InventoryEntry | undefined): boolean {
+  return !!entry && entry.count > 0 && deck().hasPermission("hosts.execute");
+}
+
+function RestoreButton({ open, onClick }: { open: boolean; onClick: () => void }): JSX.Element {
+  return (
+    <button type="button" onClick={onClick} className="ml-2 px-1.5 py-0.5 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
+      {open ? "Wiederherstellen schließen" : "Als Kopie wiederherstellen"}
+    </button>
+  );
+}
+
 function UnprotectedSection({ inventory, defaultStorage = "", onChanged }: { inventory: Inventory | null; defaultStorage?: string; onChanged?: () => void }): JSX.Element | null {
   const [creating, setCreating] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
   const [data, setData] = useState<{ guests: UnprotectedGuest[]; errors: { connection: string; error: string }[] } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  // Nicht ladbar: sagen statt den Abschnitt still wegzulassen -- das saehe aus wie "alle Gaeste haben einen Backup-Job".
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    authedFetch("/ext/backups/unprotected")
-      .then((res) => (res.ok ? (res.json() as Promise<{ guests: UnprotectedGuest[]; errors: { connection: string; error: string }[] }>) : null))
-      .then(setData)
-      .catch(() => setData(null));
+    setLoadError(null);
+    fetchJson<{ guests: UnprotectedGuest[]; errors: { connection: string; error: string }[] }>("/ext/backups/unprotected")
+      .then((body) => setData({ guests: body.guests ?? [], errors: body.errors ?? [] }))
+      .catch((err: unknown) => setLoadError(errorMessage(err)));
   }, []);
 
   useEffect(() => {
@@ -195,6 +224,13 @@ function UnprotectedSection({ inventory, defaultStorage = "", onChanged }: { inv
     load();
   }
 
+  if (loadError && !data) {
+    return (
+      <section className="mb-4 rounded border border-white/10 p-3" data-testid="unprotected">
+        <LoadError compact what="Die Liste der Gäste ohne Backup-Job" error={loadError} onRetry={load} />
+      </section>
+    );
+  }
   if (!data || (data.guests.length === 0 && data.errors.length === 0)) return null;
   const open = data.guests.filter((g) => !g.acknowledged);
   const accepted = data.guests.filter((g) => g.acknowledged);
@@ -225,6 +261,20 @@ function UnprotectedSection({ inventory, defaultStorage = "", onChanged }: { inv
               <button type="button" onClick={() => void acknowledge(g)} className="ml-2 px-1.5 py-0.5 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
                 Bewusst so lassen
               </button>
+            )}
+            {inventory && canRestore(inventory.get(`${g.connection}/${g.vmid}`)) && (
+              <RestoreButton
+                open={restoring === `${g.connection}-${g.vmid}`}
+                onClick={() => setRestoring(restoring === `${g.connection}-${g.vmid}` ? null : `${g.connection}-${g.vmid}`)}
+              />
+            )}
+            {restoring === `${g.connection}-${g.vmid}` && (
+              <div className="my-1">
+                <RestoreCopyPanel target={{ connection: g.connection, vmid: g.vmid, name: g.name }} onDone={(text) => {
+                  setRestoring(null);
+                  if (text) setMessage(text);
+                }} />
+              </div>
             )}
             {creating === `${g.connection}-${g.vmid}` && (
               <NewJobForm guest={g} defaultStorage={defaultStorage} onDone={(text) => {
@@ -277,6 +327,13 @@ interface HistoryEntry {
   status: string;
   started_at: number | null;
   finished_at: number | null;
+  /** Geklappt, aber mit so vielen Warnungen (`status` ist dann "ok"). */
+  warnings?: number;
+}
+
+function historyLabel(h: HistoryEntry): string {
+  if (h.status === "ok" && h.warnings) return "OK, mit Warnungen";
+  return STATUS_LABEL[h.status] ?? h.status;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -331,6 +388,7 @@ function ConnectionsPanel(): JSX.Element {
   const [newTokenId, setNewTokenId] = useState("");
   const [newTlsInsecure, setNewTlsInsecure] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  const [certificateFor, setCertificateFor] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -457,7 +515,7 @@ function ConnectionsPanel(): JSX.Element {
               <tr className="border-b border-white/10 text-left uppercase opacity-60">
                 <th className="py-1">Name</th>
                 <th className="py-1">Adresse</th>
-                <th className="py-1">Zertifikat nicht prüfen</th>
+                <th className="py-1">Zertifikat</th>
                 <th className="py-1">Token</th>
                 <th className="py-1">Aktiv</th>
                 <th className="py-1">Aktionen</th>
@@ -468,7 +526,7 @@ function ConnectionsPanel(): JSX.Element {
                 <tr key={c.name}>
                   <td className="py-1.5">{c.name}</td>
                   <td className="py-1.5 opacity-70">{c.base_url}</td>
-                  <td className="py-1.5 opacity-70">{c.tls_insecure_skip_verify ? "ja" : "nein"}</td>
+                  <td className="py-1.5 whitespace-nowrap"><CertificateStatus connection={c} /></td>
                   <td className="py-1.5">{c.has_token ? "gesetzt" : <span className="text-amber-400">fehlt</span>}</td>
                   <td className="py-1.5">
                     <button
@@ -492,6 +550,14 @@ function ConnectionsPanel(): JSX.Element {
                       </button>
                       <button
                         type="button"
+                        aria-pressed={certificateFor === c.name}
+                        onClick={() => setCertificateFor(certificateFor === c.name ? null : c.name)}
+                        className="px-2 py-1 whitespace-nowrap border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition"
+                      >
+                        Zertifikat
+                      </button>
+                      <button
+                        type="button"
                         disabled={pending === `remove:${c.name}`}
                         onClick={() => void removeConnection(c.name)}
                         className="px-2 py-1 disabled:opacity-40 border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25 rounded-lg"
@@ -504,6 +570,12 @@ function ConnectionsPanel(): JSX.Element {
               ))}
             </tbody>
           </table>
+        )}
+        {certificateFor && connections?.some((c) => c.name === certificateFor) && (
+          <ConnectionCertificate
+            extId="backups" connection={certificateFor} onSaved={load}
+            unchecked={connections?.find((c) => c.name === certificateFor)?.tls_insecure_skip_verify ?? false}
+          />
         )}
 
         {!showAddForm && (
@@ -535,9 +607,9 @@ function ConnectionsPanel(): JSX.Element {
                 placeholder="root@pam!dashboard" className="w-40 px-2 py-1 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]"
               />
             </label>
-            <label className="flex items-center gap-1">
+            <label className="flex items-center gap-1" title="Veraltet: besser nach dem Anlegen unter „Zertifikat“ den Fingerabdruck merken.">
               <input type="checkbox" checked={newTlsInsecure} onChange={(e) => setNewTlsInsecure(e.target.checked)} />
-              Zertifikat nicht prüfen
+              Zertifikat nicht prüfen (veraltet)
             </label>
             <button type="submit" disabled={pending === "add"} className="px-2 py-1 disabled:opacity-40 accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium">
               Anlegen
@@ -695,10 +767,16 @@ export function BackupsPage(): JSX.Element {
   const [allJobs, setJobs] = useState<JobOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  // `null`: wird geladen. Scheitert das Laden, steht der Grund da statt "Keine Läufe bekannt.".
+  const [history, setHistory] = useState<HistoryEntry[] | null>([]);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const expandedRef = useRef<string | null>(null);
+  // Für welchen fehlgeschlagenen Lauf der Grund gezeigt wird (null: der neueste).
+  const [causeFor, setCauseFor] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
+  const [restoring, setRestoring] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -722,8 +800,24 @@ export function BackupsPage(): JSX.Element {
       return;
     }
     setExpanded(job.job_ref);
-    const res = await authedFetch(`/ext/backups/jobs/${encodeURIComponent(job.job_ref)}/history`);
-    setHistory(res.ok ? ((await res.json()) as HistoryEntry[]) : []);
+    setCauseFor(null);
+    await loadHistory(job.job_ref);
+  }
+
+  async function loadHistory(jobRef: string) {
+    expandedRef.current = jobRef;
+    setHistory(null);
+    setHistoryError(null);
+    try {
+      const entries = await fetchJson<HistoryEntry[]>(`/ext/backups/jobs/${encodeURIComponent(jobRef)}/history`);
+      if (expandedRef.current === jobRef) setHistory(entries);
+    } catch (err) {
+      // Inzwischen einen anderen Job aufgeklappt: diese Antwort gehoert nicht mehr zur Anzeige.
+      if (expandedRef.current === jobRef) {
+        setHistory([]);
+        setHistoryError(errorMessage(err));
+      }
+    }
   }
 
   async function retry(job: JobOut) {
@@ -756,12 +850,12 @@ export function BackupsPage(): JSX.Element {
   const unreachable = allJobs?.filter((j) => j.last_status === "unreachable") ?? [];
   const jobs = allJobs ? allJobs.filter((j) => j.last_status !== "unreachable") : null;
   const failing = jobs?.filter((j) => j.last_status === "failed" || j.last_status === "unknown").length ?? 0;
-  const { inventory, orphans } = useInventory();
+  const { inventory, orphans, error: inventoryError, reload: reloadInventory } = useInventory();
   const visibleJobs = jobs && hostFilter ? jobs.filter((j) => j.host_id === hostFilter) : jobs;
 
   return (
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
-      <h2 className="mb-1 font-semibold text-xl tracking-tight">Backups</h2>
+      <h2 className="mb-1 font-semibold text-xl tracking-tight">Proxmox-Backups</h2>
       <p className="mb-3 text-sm opacity-70" data-testid="backups-scope">
         Hier stehen die Backup-Jobs deiner Proxmox-Server. Ohne Proxmox brauchst du dieses Modul nicht und kannst es ausgeschaltet lassen.
         Nodvard Deck selbst sicherst du unter Einstellungen → System.
@@ -771,6 +865,9 @@ export function BackupsPage(): JSX.Element {
         <p className="mb-4 text-sm opacity-70">
           {jobs.length} Job(s) – {failing > 0 ? `${failing} ohne bestätigtes erfolgreiches Backup` : "alle zuletzt erfolgreich"}
         </p>
+      )}
+      {inventoryError && (
+        <LoadError what="Die Übersicht der vorhandenen Sicherungen" error={inventoryError} onRetry={reloadInventory} />
       )}
       <UnprotectedSection
         inventory={inventory}
@@ -836,7 +933,7 @@ export function BackupsPage(): JSX.Element {
                   </td>
                   <td className="py-1.5 opacity-70">{formatEpoch(job.last_run_at)}</td>
                   <td className="py-1.5 text-xs opacity-70" data-testid={`inventory-${job.job_ref}`}>
-                    {inventory ? inventoryText(inventory.get(`${job.connection}/${job.vmid}`)) : "…"}
+                    {inventory ? inventoryText(inventory.get(`${job.connection}/${job.vmid}`)) : inventoryError ? "gerade nicht lesbar" : "…"}
                   </td>
                   <td className="py-1.5">
                     <div className="flex gap-1.5">
@@ -861,9 +958,25 @@ export function BackupsPage(): JSX.Element {
                           Job bearbeiten
                         </button>
                       )}
+                      {inventory && canRestore(inventory.get(`${job.connection}/${job.vmid}`)) && (
+                        <button type="button" onClick={() => setRestoring(restoring === job.job_ref ? null : job.job_ref)}
+                          className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
+                          {restoring === job.job_ref ? "Wiederherstellen schließen" : "Als Kopie wiederherstellen"}
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
+                {restoring === job.job_ref && (
+                  <tr>
+                    <td colSpan={7} className="bg-black/20 py-2">
+                      <RestoreCopyPanel target={{ connection: job.connection, vmid: job.vmid, name: job.name }} onDone={(text) => {
+                        setRestoring(null);
+                        if (text) setMessage(text);
+                      }} />
+                    </td>
+                  </tr>
+                )}
                 {editing === job.job_ref && (
                   <tr>
                     <td colSpan={7} className="bg-black/20 py-2">
@@ -884,11 +997,29 @@ export function BackupsPage(): JSX.Element {
                 {expanded === job.job_ref && (
                   <tr>
                     <td colSpan={7} className="bg-black/20 py-2">
+                      {(job.last_status === "failed" || causeFor) && (
+                        <FailureCause key={causeFor ?? "neuester"} jobRef={job.job_ref} upid={causeFor} />
+                      )}
+                      {historyError && (
+                        <LoadError compact what="Die Liste der Läufe" error={historyError} onRetry={() => void loadHistory(job.job_ref)} />
+                      )}
                       <ul className="text-xs opacity-80">
-                        {history.length === 0 && <li>Keine Läufe bekannt.</li>}
-                        {history.map((h) => (
+                        {history === null && <li>Lade …</li>}
+                        {!historyError && history?.length === 0 && <li>Keine Läufe bekannt.</li>}
+                        {(history ?? []).map((h) => (
                           <li key={h.upid}>
-                            {formatEpoch(h.started_at)} – {STATUS_LABEL[h.status] ?? h.status} ({h.node ?? "?"})
+                            {formatEpoch(h.started_at)} – {historyLabel(h)} ({h.node ?? "?"})
+                            {h.status === "failed" && (
+                              <button
+                                type="button"
+                                onClick={() => setCauseFor(h.upid)}
+                                aria-label={`Warum ist der Lauf vom ${formatEpoch(h.started_at)} fehlgeschlagen?`}
+                                aria-pressed={causeFor === h.upid}
+                                className="ml-2 rounded bg-white/10 px-1.5 py-0.5 hover:bg-white/20"
+                              >
+                                Warum?
+                              </button>
+                            )}
                           </li>
                         ))}
                       </ul>
@@ -911,6 +1042,23 @@ export function BackupsPage(): JSX.Element {
             {orphans.map((o) => (
               <li key={`${o.connection}-${o.vmid}-${o.kind ?? ""}`}>
                 {o.kind === "lxc" ? "Container" : "VM"} {o.vmid} (gesehen über {o.connection}) · {inventoryText(o)}
+                {canRestore(o) && (
+                  <RestoreButton
+                    open={restoring === `orphan-${o.connection}-${o.vmid}-${o.kind ?? ""}`}
+                    onClick={() => setRestoring(restoring === `orphan-${o.connection}-${o.vmid}-${o.kind ?? ""}` ? null : `orphan-${o.connection}-${o.vmid}-${o.kind ?? ""}`)}
+                  />
+                )}
+                {restoring === `orphan-${o.connection}-${o.vmid}-${o.kind ?? ""}` && (
+                  <div className="my-1">
+                    <RestoreCopyPanel
+                      target={{ connection: o.connection, vmid: o.vmid, name: `${o.kind === "lxc" ? "Container" : "VM"} ${o.vmid}`, kind: o.kind }}
+                      onDone={(text) => {
+                        setRestoring(null);
+                        if (text) setMessage(text);
+                      }}
+                    />
+                  </div>
+                )}
               </li>
             ))}
           </ul>

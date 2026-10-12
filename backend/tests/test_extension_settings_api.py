@@ -553,3 +553,222 @@ async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client,
         runtime.discovered.pop("shield", None)
         runtime.discovered.pop("service-matrix", None)
     assert found == 7  # sechs bei Shield, eine bei der Service-Matrix
+
+
+NUMBER_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "interval": {"type": "integer", "title": "Prüfabstand", "default": 10, "minimum": 2, "maximum": 59},
+        "ratio": {"type": "number", "minimum": 0.5, "maximum": 10},
+        "threshold": {"type": "integer", "title": "Schwelle", "minimum": 3},
+        "free": {"type": "number"},
+        "note": {"type": "string"},
+        "limits": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 5}},
+    },
+}
+
+
+@pytest.fixture
+def number_extension():
+    runtime = get_extension_runtime()
+    runtime.discovered["zahl"] = SimpleNamespace(manifest=SimpleNamespace(settings_schema=NUMBER_SCHEMA), ok=True)
+    yield
+    runtime.discovered.pop("zahl", None)
+
+
+async def _put_raw(client, headers, body: str):
+    return await client.put(
+        "/api/v1/extensions/zahl/settings", content=body, headers={**headers, "Content-Type": "application/json"},
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad", [-5, 0, 1, 60, 1000])
+async def test_a_number_outside_its_bounds_is_refused_and_nothing_is_stored(client, db_session, number_extension, bad):
+    """Bisher liess sich 0 oder -5 speichern; die Erweiterung rechnete dann damit (bis in Befehle auf dem Server)."""
+    db_session.add(ExtensionRecord(
+        id="zahl", version="1", api_version="0.1.0", state="disabled", settings={"interval": 10, "note": "alt"},
+    ))
+    await db_session.flush()
+    headers = await _owner(client)
+
+    r = await client.put("/api/v1/extensions/zahl/settings", json={"values": {"interval": bad, "note": "neu"}}, headers=headers)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == f"„Prüfabstand“: Erlaubt sind Werte von 2 bis 59. Eingetragen ist {bad}."
+    stored = (await client.get("/api/v1/extensions/zahl/settings", headers=headers)).json()["values"]
+    assert stored == {"interval": 10, "note": "alt"}
+
+
+@pytest.mark.asyncio
+async def test_number_bounds_are_inclusive_and_empty_still_means_default(client, db_session, number_extension):
+    db_session.add(ExtensionRecord(id="zahl", version="1", api_version="0.1.0", state="disabled", settings={}))
+    await db_session.flush()
+    headers = await _owner(client)
+    for values in ({"interval": 2}, {"interval": 59}, {"ratio": 0.5}, {"ratio": 10}, {"threshold": 3},
+                   {"threshold": 10**6}, {"free": -12.5}, {"limits": [1, 5]}):
+        r = await client.put("/api/v1/extensions/zahl/settings", json={"values": values}, headers=headers)
+        assert r.status_code == 200, (values, r.text)
+    r = await client.put("/api/v1/extensions/zahl/settings", json={"values": {"interval": None}}, headers=headers)
+    assert r.status_code == 200, r.text
+    assert "interval" not in r.json()["values"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("values", "detail"), [
+    ({"ratio": 0.25}, "„Einstellungen.ratio“: Erlaubt sind Werte von 0,5 bis 10. Eingetragen ist 0,25."),
+    ({"threshold": 2}, "„Schwelle“: Erlaubt sind Werte ab 3. Eingetragen ist 2."),
+    ({"limits": [1, 6]}, "„Einstellungen.limits[2]“: Erlaubt sind Werte von 1 bis 5. Eingetragen ist 6."),
+])
+async def test_the_message_names_the_field_and_the_allowed_range(client, db_session, number_extension, values, detail):
+    db_session.add(ExtensionRecord(id="zahl", version="1", api_version="0.1.0", state="disabled", settings={}))
+    await db_session.flush()
+    headers = await _owner(client)
+    r = await client.put("/api/v1/extensions/zahl/settings", json={"values": values}, headers=headers)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == detail
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+async def test_nan_and_infinity_are_never_stored(client, db_session, number_extension, raw):
+    """Pythons JSON-Leser nimmt `NaN` an. Gespeichert waere das kein gueltiges JSON mehr: Die Einstellungsseite der
+    Erweiterung liesse sich danach nicht mehr laden. Gilt auch fuer Zahlenfelder ohne Grenzen."""
+    db_session.add(ExtensionRecord(id="zahl", version="1", api_version="0.1.0", state="disabled", settings={"free": 1}))
+    await db_session.flush()
+    headers = await _owner(client)
+    r = await _put_raw(client, headers, '{"values": {"free": ' + raw + '}}')
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "„Einstellungen.free“: Bitte eine Zahl eintragen."
+    assert (await client.get("/api/v1/extensions/zahl/settings", headers=headers)).json()["values"] == {"free": 1}
+
+
+def test_every_number_field_of_the_shipped_extensions_has_bounds_around_its_default():
+    """Jedes Zahlenfeld einer mitgelieferten Erweiterung hat `minimum` und `maximum`, und der Standard liegt dazwischen.
+    Ein neues Feld ohne Grenzen faellt hier auf."""
+    import json
+    from pathlib import Path
+
+    def numbers(schema, path):
+        if schema.get("type") in ("integer", "number"):
+            yield path, schema
+        for key, sub in (schema.get("properties") or {}).items():
+            yield from numbers(sub, f"{path}.{key}")
+        if isinstance(schema.get("items"), dict):
+            yield from numbers(schema["items"], f"{path}[]")
+
+    root = Path(__file__).resolve().parents[2] / "extensions"
+    found = []
+    for path in sorted(root.glob("*/settings.schema.json")):
+        for where, spec in numbers(json.loads(path.read_text(encoding="utf-8")), path.parent.name):
+            found.append(where)
+            assert isinstance(spec.get("minimum"), (int, float)) and isinstance(spec.get("maximum"), (int, float)), where
+            assert spec["minimum"] <= spec.get("default", spec["minimum"]) <= spec["maximum"], where
+    assert len(found) >= 9, found  # Shield und System
+
+
+def test_every_minute_interval_of_the_shipped_extensions_offers_only_divisors_of_60():
+    """Abstaende laufen als `*/N`: nur Teiler von 60 laufen gleichmaessig. Jede Auswahl hat lesbare Texte."""
+    import json
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2] / "extensions"
+    found = []
+    for path in sorted(root.glob("*/settings.schema.json")):
+        for key, spec in json.loads(path.read_text(encoding="utf-8"))["properties"].items():
+            if not key.endswith("_interval_min"):
+                continue
+            found.append(f"{path.parent.name}.{key}")
+            assert spec["enum"] and all(60 % v == 0 for v in spec["enum"]), key
+            assert spec["default"] in spec["enum"], key
+            assert (spec["minimum"], spec["maximum"]) == (min(spec["enum"]), max(spec["enum"])), key
+            assert set(spec["x-enum-labels"]) == {str(v) for v in spec["enum"]}, key
+    assert sorted(found) == ["shield.guard_interval_min", "shield.watch_interval_min", "system.warn_interval_min"]
+
+
+@pytest.mark.asyncio
+async def test_an_enum_message_names_the_field_by_its_title(client, db_session):
+    runtime = get_extension_runtime()
+    schema = {"type": "object", "properties": {"step": {"type": "integer", "title": "Abstand", "enum": [5, 10]}}}
+    runtime.discovered["wahl"] = SimpleNamespace(manifest=SimpleNamespace(settings_schema=schema), ok=True)
+    try:
+        db_session.add(ExtensionRecord(id="wahl", version="1", api_version="0.1.0", state="disabled", settings={}))
+        await db_session.flush()
+        headers = await _owner(client)
+        bad = await client.put("/api/v1/extensions/wahl/settings", json={"values": {"step": 7}}, headers=headers)
+        assert bad.status_code == 422
+        assert bad.json()["detail"] == "„Abstand“ muss einer dieser Werte sein: 5, 10."
+        good = await client.put("/api/v1/extensions/wahl/settings", json={"values": {"step": 10}}, headers=headers)
+        assert good.status_code == 200, good.text
+    finally:
+        runtime.discovered.pop("wahl", None)
+
+
+@pytest.mark.asyncio
+async def test_the_additions_x_generate_and_x_qr_url_do_not_get_in_the_way_of_saving(client, db_session):
+    """Reine Oberflaechen-Zusaetze wie `x-hidden`: das Backend reicht sie im Schema durch und prueft nur, was es kennt.
+    Ein Wert, den der Knopf "Zufaellig waehlen" erzeugt, ist ein ganz normaler Text und muss zum `pattern` passen."""
+    schema = {
+        "type": "object",
+        "properties": {
+            "topic": {
+                "type": "string", "title": "Thema", "pattern": "^[a-z0-9-]{1,64}$",
+                "x-generate": {"label": "Zufällig wählen", "prefix": "nodvard-", "length": 20},
+            },
+        },
+        "x-qr-url": "/ext/zufall/subscribe-link",
+    }
+    runtime = get_extension_runtime()
+    runtime.discovered["zufall"] = SimpleNamespace(manifest=SimpleNamespace(settings_schema=schema), ok=True)
+    try:
+        db_session.add(ExtensionRecord(id="zufall", version="1", api_version="0.1.0", state="disabled", settings={}))
+        await db_session.flush()
+        headers = await _owner(client)
+        read = await client.get("/api/v1/extensions/zufall/settings", headers=headers)
+        assert read.json()["schema"]["x-qr-url"] == "/ext/zufall/subscribe-link"
+        assert read.json()["schema"]["properties"]["topic"]["x-generate"]["prefix"] == "nodvard-"
+        good = await client.put("/api/v1/extensions/zufall/settings", json={"values": {"topic": "nodvard-k3j9x0a8s7d6f5g4h3j2"}}, headers=headers)
+        assert good.status_code == 200, good.text
+        bad = await client.put("/api/v1/extensions/zufall/settings", json={"values": {"topic": "Nodvard Gross"}}, headers=headers)
+        assert bad.status_code == 422
+    finally:
+        runtime.discovered.pop("zufall", None)
+
+
+def test_every_generated_field_and_qr_address_of_the_shipped_extensions_is_usable():
+    """`x-generate`: Prefix plus Zufallszeichen (a-z, 0-9) muss das `pattern` des Felds erfuellen und in `maxLength`
+    passen, sonst bietet die Oberflaeche einen Knopf an, dessen Ergebnis sich nicht speichern laesst. `x-qr-url`
+    ist ein Pfad unter /api/v1 in der eigenen Erweiterung."""
+    import json
+    from pathlib import Path
+
+    from nodvard_deck.api.v1.extension_settings import _pattern_matches
+
+    root = Path(__file__).resolve().parents[2] / "extensions"
+    generated, qr = [], []
+
+    def walk(ext_id, schema, path):
+        spec = schema.get("x-generate")
+        if spec is not None:
+            generated.append(f"{ext_id}.{path}")
+            assert schema.get("type") == "string" and not schema.get("enum"), path
+            assert isinstance(spec.get("label"), str) and spec["label"], path
+            prefix, length = spec.get("prefix", ""), spec["length"]
+            assert isinstance(prefix, str) and isinstance(length, int) and 8 <= length <= 64, path
+            limit = schema.get("maxLength") or 2000
+            assert len(prefix) + length <= limit, path
+            for filler in ("a", "m", "z", "0", "9"):
+                value = prefix + filler * length
+                assert _pattern_matches(schema.get("pattern", ""), value), (path, value)
+        for key, sub in (schema.get("properties") or {}).items():
+            walk(ext_id, sub, f"{path}.{key}" if path else key)
+        if isinstance(schema.get("items"), dict):
+            walk(ext_id, schema["items"], f"{path}[]")
+
+    for file in sorted(root.glob("*/settings.schema.json")):
+        schema = json.loads(file.read_text(encoding="utf-8"))
+        ext_id = file.parent.name
+        walk(ext_id, schema, "")
+        if "x-qr-url" in schema:
+            qr.append(ext_id)
+            assert schema["x-qr-url"].startswith(f"/ext/{ext_id}/"), ext_id
+    assert generated == ["ntfy.topic"] and qr == ["ntfy"]

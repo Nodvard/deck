@@ -19,6 +19,15 @@ def _token_label(name: str) -> str:
     return f"{TOKEN_LABEL}:{name}"
 
 
+def foreign_secret_text(label: str) -> str:
+    """Satz fuer ein Geheimnis unter dem Label einer Verbindung, das nicht von dieser Erweiterung stammt."""
+    return (
+        f"Im Tresor liegt schon ein Geheimnis „{label}“, das nicht von Proxmox-Backups stammt (etwa von Hand angelegt). "
+        "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst über "
+        "die Tresor-Schnittstelle (DELETE /api/v1/secrets/{id})."
+    )
+
+
 async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxBackupConnector]:
     settings = await ctx.settings.get()
     connections: list[dict[str, Any]] = settings.get("connections") or []
@@ -46,6 +55,8 @@ async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxBackupCo
                 token_id=str(token_id),
                 token_secret=token_secret,
                 tls_insecure_skip_verify=bool(conn.get("tls_insecure_skip_verify") or False),
+                # Roh weiter: der Connector prueft ihn, ein ungueltiger sperrt die Verbindung (nie "nicht pruefen").
+                tls_fingerprint_sha256=conn.get("tls_fingerprint_sha256"),
             )
     return result
 

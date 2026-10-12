@@ -99,6 +99,17 @@ def _reset_login_limit():
     rate_limit.reset_all()
 
 
+@pytest.fixture(autouse=True)
+def _reset_trusted_proxies():
+    """Die Liste vertrauenswuerdiger Proxys liegt im Prozess (`core.trusted_proxies`): ein Test, der sie setzt, darf
+    sie nicht an den naechsten weitergeben (sonst saehe der eine falsche Client-Adresse)."""
+    from nodvard_deck.core import trusted_proxies
+
+    trusted_proxies.reset()
+    yield
+    trusted_proxies.reset()
+
+
 @pytest_asyncio.fixture
 async def db_session() -> AsyncIterator[AsyncSession]:
     # `poolclass` bewusst nicht StaticPool: jeder Test bekommt seine eigene
@@ -409,6 +420,15 @@ async def _fake_docker(process) -> None:  # noqa: ANN001
 
     if sub == "ps" and "-q" in parts:
         await _out("".join(f"{FAKE_DOCKER['ids'][c][:12]}\n" for c, st in containers.items() if st == "running"))
+        return
+    if parts[1:3] == ["container", "inspect"] and '"restarts"' in parts[4]:  # Pruefung nach der Aktion: Name oder ID
+        import json as _json
+
+        refs = {c: c for c in containers} | {FAKE_DOCKER["ids"][c]: c for c in containers}
+        await _out("".join(_json.dumps({
+            "name": f"/{refs[r]}", "image_id": f"sha256:{'c' * 64}", "status": containers[refs[r]], "exit_code": 0,
+            "health": None, "restarts": 0, "started": "2026-09-24T07:00:00Z",
+        }) + "\n" for r in parts[5:] if r in refs))
         return
     if parts[1:3] == ["container", "inspect"]:  # --format FORMAT id...
         by_id = {FAKE_DOCKER["ids"][c][:12]: c for c in containers}

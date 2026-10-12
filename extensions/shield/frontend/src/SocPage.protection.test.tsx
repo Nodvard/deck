@@ -89,6 +89,20 @@ describe("Nodvard Shield: Signaturen und Härtung", () => {
     await waitFor(() => expect(calls.some((c) => c.endsWith("/actions/a1/approve"))).toBe(true));
   });
 
+  it("nennt beim Schutzwert, was ihn senkt (Updates, Fail2ban, SSH …), und ohne Gründe keine Liste", async () => {
+    const reasons = ["Sicherheitsupdates offen auf 1 von 3 Servern (−5)", "Fail2ban fehlt oder läuft nicht auf 2 von 3 Servern (−7)"];
+    stubFetch([], { ...OVERVIEW, summary: { ...OVERVIEW.summary, score_reasons: reasons } });
+    const { unmount } = render(<SocPage />);
+    const list = await screen.findByTestId("score-reasons");
+    expect(within(list).getAllByRole("listitem").map((li) => li.textContent)).toEqual(reasons.map((r) => `– ${r}`));
+    expect(screen.getByText(/offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen/)).toBeInTheDocument();
+    unmount();
+    stubFetch();
+    render(<SocPage />);
+    await screen.findByText("Schutzwert");
+    expect(screen.queryByTestId("score-reasons")).toBeNull();
+  });
+
   it("mit ?host= stehen nur Hinweise zu diesem Server da", async () => {
     window.history.replaceState(null, "", "/ext/shield/soc?host=h-ok");
     stubFetch();

@@ -1,0 +1,12 @@
+{
+  "type": "object",
+  "properties": {
+    "nextcloud_folder": {
+      "type": "string",
+      "default": "",
+      "maxLength": 500,
+      "title": "Nextcloud-Ordner für neue Dokumente",
+      "description": "PDFs und Bilder aus diesem Ordner deiner Nextcloud werden alle 15 Minuten zu Dokumenten, z. B. /Scans für eine Scanner-App. Beim ersten Mal kommen auch die Dateien dazu, die schon im Ordner liegen. Unterordner werden nicht durchsucht. Die Dateien bleiben in der Nextcloud. Leer lassen = aus. Braucht die eingerichtete Erweiterung „Nextcloud“."
+    }
+  }
+}

@@ -615,11 +615,27 @@ def test_briefing_mentions_updates():
     assert "pve2: 2 Sicherheitsupdate(s)" in body and level == "warning"
 
 
+@pytest.mark.parametrize(("line", "expected"), [
+    ("E: Failed to fetch https://enterprise.proxmox.com/debian/pve/dists/bookworm/InRelease  401  Unauthorized", True),
+    ("Err:5 https://ENTERPRISE.proxmox.com/debian/ceph-quincy bookworm InRelease", True),
+    ("Err:5 https://enterprise.proxmox.com:443/debian/pve bookworm InRelease", True),
+    # Teilstring an anderer Stelle: kein Proxmox-Enterprise-Fehler.
+    ("Err:1 https://enterprise.proxmox.com.example.net/debian stable InRelease", False),
+    ("Err:1 https://mirror.example.org/enterprise.proxmox.com/debian stable InRelease", False),
+    ("E: enterprise.proxmox.com ist nicht erreichbar", False),
+    ("Err:1 https://[::1 kaputt", False),
+])
+def test_proxmox_enterprise_is_recognized_by_the_host_of_the_address(line, expected):
+    assert up._names_host(line, up.PROXMOX_ENTERPRISE_HOST) is expected
+
+
 def test_refresh_errors_name_the_real_cause():
     base = "@@pm\napt\n@@refresh\n{}\n@@list\n@@reboot\nno\n@@end"
     pve = up.parse_status(base.format(
         "E: Failed to fetch https://enterprise.proxmox.com/debian/pve/dists/bookworm/InRelease  401  Unauthorized [IP: 1.2.3.4 443]"))
     assert "Abo" in pve.refresh_error
+    lookalike = up.parse_status(base.format("Err:1 https://enterprise.proxmox.com.example.net/debian stable InRelease  404"))
+    assert lookalike.refresh_error.startswith("Nicht alle Paketquellen erreichbar")
     other = up.parse_status(base.format("Err:1 http://deb.example.org stable InRelease\n  Temporary failure resolving 'deb.example.org'"))
     assert other.refresh_error.startswith("Nicht alle Paketquellen erreichbar: Err:1")
     root = up.parse_status(base.format("E: Could not open lock file /var/lib/apt/lists/lock - open (13: Permission denied)"))
@@ -1820,6 +1836,45 @@ async def test_auto_update_handles_the_dashboard_host_last_and_reboots_it_after_
     ]
     assert "Neustart folgt nach dieser Meldung (hier läuft das Dashboard)" in ctx.notes[0].body
     assert ctx.notes[-1].payload["host_id"] == "h1" and "Dashboard" in ctx.notes[-1].body
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_auto_update_never_reboots_a_server_from_the_no_reboot_list():
+    """Updates kommen auch dort, nur der Neustart faellt weg; die Meldung sagt, dass einer noetig ist. Der Name zaehlt
+    wie bei den System-Warnungen ohne Gross-/Kleinschreibung, auch der Anzeigename."""
+    import re
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+    from nodvard_sdk import Host
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True,
+                    "auto_reboot_skip_hosts": [" NAS-Box ", ""]})
+    ctx._host = Host(id="h1", name="pve1", display_name="pve1", address="10.0.0.2", tags=["auto-update"])
+    nas = Host(id="h2", name="nas", display_name="nas-box", address="10.0.0.3", tags=["auto-update"])
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, nas)
+    reboots: list[str] = []
+    run_orig = ctx.exec.run
+
+    async def run(host, command, timeout_s=60):
+        if "shutdown" in command:
+            reboots.append(host.id)
+        res = await run_orig(host, command, timeout_s)
+        if "@@pm" in command:  # beide Server brauchen einen Neustart
+            res.stdout = re.sub(r"@@reboot\n\w+", "@@reboot\nyes\nlinux-image-6.1.0-26-amd64", res.stdout)
+        return res
+
+    ctx.exec.run = run
+    center = UpdateCenter(ctx, Defender(ctx))
+    res = await center.auto_update()
+
+    assert res == {"hosts": 2, "failed": 0}
+    assert reboots == ["h1"]
+    body = ctx.notes[0].body
+    assert "- nas-box: " in body and "Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu starten." in body
+    assert (await center.overview())["config"]["auto_reboot_skip"] == ["nas-box"]
     await engine.dispose()
 
 

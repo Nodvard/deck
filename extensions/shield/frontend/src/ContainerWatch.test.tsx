@@ -63,6 +63,13 @@ beforeEach(() => {
 });
 
 describe("SocPage", () => {
+  it("zeigt bei einem von selbst erledigten Vorfall, seit wann der Container wieder läuft", async () => {
+    const done = { ...INCIDENTS[0], status: "resolved", status_label: "Erledigt", auto_resolved: "Läuft wieder seit 04:12 – von selbst erledigt." };
+    vi.stubGlobal("fetch", mockFetch({ incidents: [done] }));
+    render(<SocPage />);
+    expect(await screen.findByTestId("auto-resolved-inc-1")).toHaveTextContent("Läuft wieder seit 04:12 – von selbst erledigt.");
+  });
+
   it("zeigt Status-Statistiken statt eines Chat-Eingabefelds", async () => {
     vi.stubGlobal("fetch", mockFetch());
     render(<SocPage />);

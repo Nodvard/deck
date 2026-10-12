@@ -358,6 +358,27 @@ async def test_actions_proposer_labels_name_the_proposer_of_own_rows_only(tmp_pa
 
 
 @pytest.mark.asyncio
+async def test_actions_waiting_count_counts_all_proposals_but_says_nothing_else(tmp_path, db_session):
+    """`ctx.actions.waiting_count()` ist die Zahl der wartenden Vorschlaege aller Module (wie die Uebersicht) --
+    eigene und fremde, ohne Inhalte."""
+    _, _, ctx = _build(tmp_path, permissions=["hosts.execute", "hosts.read"])
+    _, _, other_ctx = _build(tmp_path, ext_id="other-ext", permissions=["hosts.execute"])
+    with pytest.raises(PermissionDenied):
+        await other_ctx.actions.waiting_count()
+    assert await ctx.actions.waiting_count() == 0
+    for handle in (ctx, other_ctx, other_ctx):
+        await handle.actions.propose(ActionRequest(action_type="shell.exec", proposed_by=Actor.ai("qwen"), reason="Test"))
+    assert await ctx.actions.waiting_count() == 3
+    from nodvard_deck.db.session import session_scope
+
+    first = (await other_ctx.actions.list())[0]
+    async with session_scope() as session:
+        row = await session.get(Action, first.id)
+        row.status = "denied"
+    assert await ctx.actions.waiting_count() == 2
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("store_id", ["old-ext", None], ids=["bestand", "eigene-zeile"])
 async def test_actions_of_a_renamed_extension_include_those_under_its_old_id(tmp_path, db_session, store_id):
     """Nach einer Umbenennung sieht die Erweiterung auch ihre Vorschlaege von vorher (`ext_id` = alte
@@ -567,6 +588,133 @@ async def test_secrets_delete_removes_only_own_scope_and_is_idempotent(tmp_path,
 
     rows = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "extension.secret_removed"))).scalars().all()
     assert [(r.actor_type, r.detail) for r in rows] == [("extension", {"label": "demo-secret"})]
+
+
+@pytest.mark.asyncio
+async def test_secrets_replace_swaps_the_value_in_one_step_and_keeps_it_on_failure(tmp_path, db_session, monkeypatch):
+    from nodvard_sdk.errors import SecretUnavailable
+
+    from nodvard_deck.core import vault
+
+    _, _, ctx = _build(tmp_path, permissions=["secrets.read:demo-*"])
+    first = await ctx.secrets.create(label="demo-secret", kind="generic", value="alt")
+
+    with pytest.raises(PermissionDenied):
+        await ctx.secrets.replace(label="fremdes-secret", value="x")
+    with pytest.raises(SecretUnavailable):
+        await ctx.secrets.replace(label="demo-fehlt", value="x")
+
+    handle = await ctx.secrets.replace(label="demo-secret", value="neu")
+    assert handle.id == first.id
+    async with ctx.vault_use(handle) as value:
+        assert value == "neu"
+
+    async def broken(*_args, **_kwargs):
+        raise RuntimeError("Schreiben gescheitert")
+
+    monkeypatch.setattr(vault, "replace_secret_value", broken)
+    with pytest.raises(RuntimeError):
+        await ctx.secrets.replace(label="demo-secret", value="kaputt")
+    async with ctx.vault_use(handle) as value:
+        assert value == "neu"
+
+    from sqlalchemy import select
+
+    from nodvard_deck.models import AuditEntry
+
+    rows = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "extension.secret_set"))).scalars().all()
+    assert [(r.actor_type, r.detail) for r in rows] == [("extension", {"label": "demo-secret", "replaced": True})]
+
+
+async def _foreign_secret(db_session, tmp_path, *, label: str, owner: str | None, value: str = "fremd"):
+    from nodvard_deck.core import vault
+
+    keyring = vault.load_keyring(_isolated_settings(tmp_path))
+    secret = await vault.create_secret(
+        db_session, keyring, label=label, kind="generic", plaintext=value, owner_ext_id=owner,
+    )
+    await db_session.commit()
+    return secret
+
+
+async def _value_of(db_session, tmp_path, secret_id: str) -> str:
+    """Der gespeicherte Wert, frisch aus der Datenbank (der Kontext schreibt in eigenen Sitzungen)."""
+    from sqlalchemy import select
+
+    from nodvard_deck.core import vault
+    from nodvard_deck.models import Secret
+
+    row = (await db_session.execute(
+        select(Secret).where(Secret.id == secret_id).execution_options(populate_existing=True)
+    )).scalar_one()
+    keyring = vault.load_keyring(_isolated_settings(tmp_path))
+    return vault.decrypt_str(vault.fernet_for_version(keyring, row.key_version), row.ciphertext)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("owner", ["andere-ext", None])
+async def test_secrets_replace_and_delete_refuse_a_secret_of_someone_else(tmp_path, db_session, owner):
+    """Ein weites Muster (`secrets.read:*`) erlaubt das Lesen -- ersetzen oder loeschen darf eine Erweiterung aber nur
+    ihre eigenen Geheimnisse, nicht die einer anderen Erweiterung (`andere-ext`) oder von Hand bzw. vom Kern angelegte
+    (`None`)."""
+    from nodvard_sdk.errors import SecretNotOwned
+
+    _, _, ctx = _build(tmp_path, permissions=["secrets.read:*"])
+    foreign = await _foreign_secret(db_session, tmp_path, label="andere-ext-token:pve1", owner=owner)
+
+    with pytest.raises(SecretNotOwned) as caught:
+        await ctx.secrets.replace(label="andere-ext-token:pve1", value="untergeschoben")
+    assert isinstance(caught.value, PermissionDenied)
+    assert "gehört nicht der Erweiterung" in str(caught.value)
+    with pytest.raises(SecretNotOwned):
+        await ctx.secrets.delete("andere-ext-token:pve1")
+
+    assert await ctx.secrets.exists("andere-ext-token:pve1")
+    assert await _value_of(db_session, tmp_path, foreign.id) == "fremd"
+    # Lesen bleibt mit dem Recht erlaubt (gemeinsam genutzte Zugaenge).
+    handle = await ctx.secrets.get_handle("andere-ext-token:pve1")
+    assert handle.id == foreign.id
+
+
+@pytest.mark.asyncio
+async def test_secrets_of_the_extension_and_of_its_former_name_may_be_replaced_and_deleted(tmp_path, db_session):
+    _, _, ctx = _build(tmp_path, ext_id="neu-ext", permissions=["secrets.read:alt-*"], legacy_ids=["alt-ext"])
+    old = await _foreign_secret(db_session, tmp_path, label="alt-token", owner="alt-ext")
+    await _foreign_secret(db_session, tmp_path, label="alt-zweiter", owner="neu-ext")
+
+    handle = await ctx.secrets.replace(label="alt-token", value="neu")
+    assert handle.id == old.id
+    assert await _value_of(db_session, tmp_path, old.id) == "neu"
+    assert await ctx.secrets.delete("alt-zweiter") is True
+    assert await ctx.secrets.delete("alt-token") is True
+
+
+@pytest.mark.asyncio
+async def test_two_factor_secrets_of_accounts_are_never_reachable_for_extensions(tmp_path, db_session):
+    """Auch mit `secrets.read:*` und selbst wenn der Eintrag der Erweiterung zugeschrieben waere: der Schluessel der
+    Zwei-Faktor-Anmeldung eines Kontos laesst sich ueber `ctx.secrets` weder lesen noch ersetzen noch loeschen
+    (sonst liesse sich ein eigener Authenticator fuer ein fremdes Konto unterschieben)."""
+    from nodvard_sdk.errors import SecretNotOwned
+
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+
+    _, _, ctx = _build(tmp_path, permissions=["secrets.read:*"])
+    by_label = await _foreign_secret(db_session, tmp_path, label="totp:nutzer-1:abcd1234", owner="test-ext")
+    linked = await _foreign_secret(db_session, tmp_path, label="anmeldung-zwei", owner="test-ext")
+    db_session.add(User(username="mit2fa", password_hash=security.hash_password("whatever123"), totp_secret_id=linked.id))
+    await db_session.commit()
+
+    for label, secret in (("totp:nutzer-1:abcd1234", by_label), ("anmeldung-zwei", linked)):
+        with pytest.raises(SecretNotOwned) as caught:
+            await ctx.secrets.replace(label=label, value="eigener-authenticator")
+        assert caught.value.login_secret is True
+        assert "Zwei-Faktor" in str(caught.value)
+        with pytest.raises(SecretNotOwned):
+            await ctx.secrets.delete(label)
+        with pytest.raises(SecretNotOwned):
+            await ctx.secrets.get_handle(label)
+        assert await _value_of(db_session, tmp_path, secret.id) == "fremd"
 
 
 @pytest.mark.asyncio
@@ -1697,6 +1845,50 @@ async def test_exec_handle_stream_blocks_deny_pattern_before_touching_the_host(t
 
     rows = (await db_session.execute(select(AuditEntry).where(AuditEntry.action == "exec.denied"))).scalars().all()
     assert [r.outcome for r in rows] == ["denied"]
+
+
+@pytest.mark.asyncio
+async def test_exec_handle_open_shell_with_a_command_checks_the_deny_list_first(tmp_path, db_session):
+    """Mit `command` (z. B. Shell in einem Container) gilt dieselbe Sperrliste wie bei `run()`/`stream()`, vor jedem
+    Host-Zugriff."""
+    from nodvard_sdk.errors import ActionBlocked
+
+    _, _, ctx = _build(tmp_path, permissions=["hosts.execute"])
+    with pytest.raises(ActionBlocked):
+        async with ctx.exec.open_shell(None, cols=80, rows=24, command="rm -rf /"):
+            pass
+
+
+def test_exec_handle_open_shell_refuses_an_empty_command(tmp_path):
+    """Ein leeres Kommando ist keine Login-Shell durch die Hintertuer."""
+    _, _, ctx = _build(tmp_path, permissions=["hosts.execute"])
+    with pytest.raises(ValueError):
+        ctx.exec.open_shell(None, cols=80, rows=24, command="  ")
+
+
+@pytest.mark.asyncio
+async def test_ssh_open_shell_passes_a_command_only_when_given():
+    from nodvard_deck.core import ssh
+
+    calls: list[tuple] = []
+
+    class _Process:
+        def close(self) -> None:
+            calls.append(("close",))
+
+    class _Conn:
+        async def create_process(self, *args, **kwargs):
+            calls.append((args, kwargs["term_type"], kwargs["term_size"]))
+            return _Process()
+
+    async with ssh.open_shell(_Conn(), cols=90, rows=20):
+        pass
+    async with ssh.open_shell(_Conn(), cols=90, rows=20, command="docker exec -it web sh"):
+        pass
+    assert calls == [
+        ((), "xterm", (90, 20)), ("close",),
+        (("docker exec -it web sh",), "xterm", (90, 20)), ("close",),
+    ]
 
 
 @pytest.mark.asyncio

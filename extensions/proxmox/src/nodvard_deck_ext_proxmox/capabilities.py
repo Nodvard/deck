@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, Any
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from nodvard_sdk.types import DiscoveredHost, Host as SdkHost, HostStatus, Risk
 
-from .config import build_connectors
+from .config import ConnectionMissing, build_connectors
 from .connector import ProxmoxApiError, ProxmoxConnector
 from .guest_edit import ConfigEditError, build_update, describe, pending_keys
 from .transport import task_outcome
@@ -209,7 +209,7 @@ async def _connector_for(ctx: "ExtensionContext", connection: str):
     connectors = await build_connectors(ctx)
     connector = connectors.get(connection)
     if connector is None:
-        raise RuntimeError(f"Proxmox-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
+        raise ConnectionMissing(f"Proxmox-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
     return connector
 
 

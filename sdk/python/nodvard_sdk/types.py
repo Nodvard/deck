@@ -152,6 +152,29 @@ class SourceInfo(BaseModel):
     details: dict[str, Any] = Field(default_factory=dict)
 
 
+class FilePlace(BaseModel):
+    """Ein wichtiger Ort auf einem Server, den der Dateimanager als Abkürzung anbietet (Projektordner,
+    Protokolle, Sicherungen). `path` ist ein absoluter Pfad mit `/` am Anfang, `label` eine kurze deutsche
+    Beschriftung, `hint` ein Satz dazu. `icon` ist ein Symbolname wie bei `PageSpec.icon`."""
+
+    label: str
+    path: str
+    icon: str = "folder"
+    hint: str | None = None
+
+
+class AppSuggestion(BaseModel):
+    """Ein Vorschlag fuer eine App-Kachel (`AppSuggestionProvider`): Name und Adresse, die eine Erweiterung schon kennt
+    (etwa ein Proxy-Host im Nginx Proxy Manager). `source` nennt kurz, woher er stammt ("Nginx Proxy Manager"), `host`
+    optional den Server. Der Kern prueft und kuerzt alles wie bei einer von Hand angelegten App und zeigt nur Adressen mit
+    `http://` oder `https://`; uebernommen wird ein Vorschlag erst, wenn ein Nutzer ihn speichert."""
+
+    name: str
+    url: str
+    source: str
+    host: str | None = None
+
+
 class Page(BaseModel, Generic[T]):
     items: list[T]
     next_cursor: str | None = None
@@ -182,6 +205,10 @@ class NotifyResult(BaseModel):
     notification_id: str
     suppressed: bool = False
     delivered: bool | None = None
+    skipped: bool | None = None
+    """`True`, wenn kein Kanal zugestellt hat, mindestens einer die Meldung bewusst übersprungen hat
+    (`NotificationSkipped`, z. B. unter der Mindest-Stufe von ntfy) und keiner ausgefallen ist. Ist daneben ein
+    Kanal ausgefallen, ist es `False` (der Ausfall geht vor). `None`: unbekannt (ältere Kerne)."""
 
 
 class Event(BaseModel):
@@ -210,3 +237,23 @@ class ExecResult(BaseModel):
     stderr: str
     duration_ms: int
     truncated: bool = False
+
+
+class PeerCertificate(BaseModel):
+    """Das Zertifikat, das ein Server beim Verbindungsaufbau zeigt (`ctx.http.peer_certificate()`).
+
+    `sha256`: Fingerabdruck ueber das ganze Zertifikat in der ueblichen Schreibweise (Grossbuchstaben, je zwei
+    Zeichen durch Doppelpunkte getrennt) -- so zeigen ihn auch `openssl x509 -fingerprint -sha256` und viele
+    Oberflaechen (z. B. Proxmox VE unter Knoten -> System -> Zertifikate). `trusted`: Das Zertifikat gilt nach den
+    Zertifizierungsstellen, denen auch ein normaler `ctx.http`-Aufruf vertraut, und passt zum Rechnernamen; ein
+    Aufruf ohne `insecure_tls` und ohne `pinned_sha256` klappt dann. Die uebrigen Felder sind nur zum Anzeigen
+    (kommen vom Server, ungeprueft, gekuerzt): Inhaber, Aussteller, Ablauf (ISO 8601, UTC) und weitere Namen."""
+
+    model_config = {"frozen": True}
+
+    sha256: str
+    trusted: bool
+    subject: str | None = None
+    issuer: str | None = None
+    not_after: str | None = None
+    alt_names: tuple[str, ...] = ()

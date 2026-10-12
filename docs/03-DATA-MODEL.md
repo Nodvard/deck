@@ -20,7 +20,7 @@ Konventionen:
 |---|---|---|
 | id | str(36) PK | |
 | username | str(64) unique | Login |
-| email | str(255) null | optional, nur für Benachrichtigungen |
+| email | str(255) null | optional, eine Angabe zum Konto; Nodvard Deck verschickt keine E-Mails |
 | display_name | str(128) | |
 | password_hash | str(255) | Argon2id |
 | totp_secret_id | FK secrets.id null | 2FA-Secret liegt im Vault, nicht hier |
@@ -290,6 +290,14 @@ erfüllt, keine eigene Tabelle. `notification_deliveries(notification_id, channe
 status, error, sent_at)` protokolliert, ob der Versand geklappt hat — ohne diese
 Rückmeldung fällt ein Kanal, der ins Leere meldet, unter Umständen wochenlang nicht auf.
 
+**Aufräumen** (`services/notification_retention.py`, Kern-Job `notifications-retention`, nachts 03:30): Meldungen, deren
+`ts` älter ist als `notifications.retention_days` Tage (Vorgabe 90, 1–3650), werden samt ihren Zustellprotokollen
+gelöscht – gelesen oder ungelesen, nur eine **ungelesene kritische** Meldung (`severity` `critical`, `read_at` leer)
+bleibt stehen, bis jemand sie liest –, in Häppchen zu 5000 Zeilen mit Commit dazwischen. Die Zustellprotokolle gehen
+ausdrücklich mit (nicht nur über `ON DELETE CASCADE`, denn `PRAGMA foreign_keys` hängt an der Verbindung). Von Hand
+löschen geht über `DELETE /notifications/{id}` und `POST /notifications/delete-read` (docs/04-API.md); eine Zustellung,
+die gerade läuft, schreibt ihr Protokoll nur, solange die Meldung noch da ist (`services.notifications._log_deliveries`).
+
 ---
 
 ## 9. Einstellungen und Branding
@@ -303,7 +311,7 @@ branding.product_name      branding.short_name     branding.logo_url
 branding.favicon_url       branding.colors         branding.login_subtitle
 autonomy.mode              autonomy.max_risk       autonomy.window
 audit.retention_days       maintenance.windows     security.deny_patterns
-jobs.run_retention_days
+jobs.run_retention_days    notifications.retention_days
 locale.default             notifications.defaults     system.timezone
 backup.config              backup.key              backup.last_run
 system.instance_id         hosts.reachability.enabled
@@ -325,7 +333,8 @@ selbst, siehe docs/04-API.md „System und Sicherungen“.
 
 `system.timezone` (IANA-Name, Vorgabe aus `NODVARD_DECK_TIMEZONE`/`TZ`, sonst Europe/Berlin) und
 `audit.retention_days` (7–3650, Rückfall die Umgebungsvariable) und `jobs.run_retention_days` (1–3650, Vorgabe 30;
-Aufbewahrung der Job-Läufe, siehe §7 `job_runs`) sind über `PUT /settings/{key}` setzbar, siehe
+Aufbewahrung der Job-Läufe, siehe §7 `job_runs`) und `notifications.retention_days` (1–3650, Vorgabe 90; Aufbewahrung der
+Meldungen, siehe §8) sind über `PUT /settings/{key}` setzbar, siehe
 docs/04-API.md §3 „Einstellungen“.
 
 Erreichbarkeitsprüfung (`services/reachability.py`): `hosts.reachability.enabled` (Vorgabe `true`) und

@@ -213,6 +213,15 @@ describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => 
     expect(note.compareDocumentPosition(howto) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("unter dem Einrichtungsbefehl steht der Link zum Abschnitt über die Rechte in der Anleitung", async () => {
+    mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withNotes }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const link = within(screen.getByTestId("setup-guide")).getByRole("link", { name: /Root-Rechte ohne Passwort und Gruppe docker/ });
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#6-root-rechte-ohne-passwort-und-gruppe-docker");
+  });
+
   it("ohne root-Rechte entfällt der Satz ganz (er gilt nur dafür)", async () => {
     mockHostsApi(routes({ "GET /hosts/h1/credentials": [credentialFixture()], "GET /hosts/h1/credentials/c1/setup": withNotes }));
     renderDetail();
@@ -726,6 +735,36 @@ describe("Server-Detail: bearbeiten und löschen", () => {
     fireEvent.click(within(danger.closest("section") as HTMLElement).getByRole("button", { name: "Server löschen" }));
     await waitFor(() => expect(promptDialog).toHaveBeenCalled());
     expect(vi.mocked(promptDialog).mock.calls[0][0]).toContain("taucht beim nächsten Abgleich wieder auf – dann ohne SSH-Zugang.");
+  });
+
+  it("ein eingelesener Server nennt das Modul beim Namen; ist es aus, steht das da und der Löschen-Dialog verspricht kein Wiederkommen", async () => {
+    mockHostsApi(routes({
+      "GET /hosts/h1": hostFixture({ provider_ext_id: "proxmox", kind: "vm" }),
+      "GET /extensions": [{ id: "proxmox", name: "Proxmox VE", state: "disabled" }],
+    }));
+    renderDetail();
+    expect(await screen.findByText(/Dieser Server wurde von der Erweiterung „Proxmox VE“ eingelesen \(Virtuelle Maschine\)\. Die Erweiterung läuft nicht mehr/)).toBeInTheDocument();
+    const danger = await screen.findByRole("heading", { name: "Gefahrenbereich", level: 3 });
+    vi.mocked(promptDialog).mockResolvedValueOnce(null);
+    fireEvent.click(within(danger.closest("section") as HTMLElement).getByRole("button", { name: "Server löschen" }));
+    await waitFor(() => expect(promptDialog).toHaveBeenCalled());
+    const text = String(vi.mocked(promptDialog).mock.calls[0][0]);
+    expect(text).toContain("ist aus; der Server kommt nicht wieder, solange es aus bleibt.");
+    expect(text).not.toContain("taucht");
+  });
+
+  it("läuft das Modul, heißt es „wird automatisch eingelesen“ und der Server kommt nach dem Löschen wieder", async () => {
+    mockHostsApi(routes({
+      "GET /hosts/h1": hostFixture({ provider_ext_id: "proxmox", kind: "vm" }),
+      "GET /extensions": [{ id: "proxmox", name: "Proxmox VE", state: "enabled" }],
+    }));
+    renderDetail();
+    expect(await screen.findByText(/Dieser Server wird automatisch von der Erweiterung „Proxmox VE“ eingelesen/)).toBeInTheDocument();
+    const danger = await screen.findByRole("heading", { name: "Gefahrenbereich", level: 3 });
+    vi.mocked(promptDialog).mockResolvedValueOnce(null);
+    fireEvent.click(within(danger.closest("section") as HTMLElement).getByRole("button", { name: "Server löschen" }));
+    await waitFor(() => expect(promptDialog).toHaveBeenCalled());
+    expect(String(vi.mocked(promptDialog).mock.calls[0][0])).toContain("taucht beim nächsten Abgleich wieder auf");
   });
 
   it("läuft gerade eine Aktion, zeigt die Seite die Antwort des Servers (409)", async () => {

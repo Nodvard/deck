@@ -235,21 +235,6 @@ function formatBytes(n, options = {}) {
   return `${value.toFixed(value < 10 && i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-// ../../_shared/frontend/src/lifecycle.ts
-import { useEffect, useRef } from "react";
-function useUnmountSignal() {
-  const ref = useRef(null);
-  if (!ref.current) ref.current = new AbortController();
-  useEffect(() => {
-    if (ref.current?.signal.aborted) ref.current = new AbortController();
-    return () => ref.current?.abort();
-  }, []);
-  return useRef(() => ref.current.signal).current;
-}
-
-// ../../_shared/frontend/src/links.tsx
-import { useEffect as useEffect2, useState } from "react";
-
 // ../../_shared/frontend/src/ui.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 var PATHS = {
@@ -326,6 +311,19 @@ var BUTTON_STYLES = {
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
 };
 var buttonClass = (variant = "secondary", small = false) => `inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${small ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-sm"} ${BUTTON_STYLES[variant]}`;
+function Button({
+  children,
+  onClick,
+  variant = "secondary",
+  type = "button",
+  disabled,
+  small,
+  title,
+  ariaLabel,
+  pressed
+}) {
+  return /* @__PURE__ */ jsx("button", { type, onClick, disabled, title, "aria-label": ariaLabel, "aria-pressed": pressed, className: buttonClass(variant, small), children });
+}
 function EmptyState({ icon, title, text, action }) {
   return /* @__PURE__ */ jsxs("div", { className: "panel flex flex-col items-center px-6 py-14 text-center", children: [
     /* @__PURE__ */ jsx("span", { className: "mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-white/[0.06] text-[var(--color-accent)]", children: /* @__PURE__ */ jsx(Icon, { name: icon, size: 22 }) }),
@@ -335,8 +333,64 @@ function EmptyState({ icon, title, text, action }) {
   ] });
 }
 
+// ../../_shared/frontend/src/loadError.tsx
+import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+var UNREADABLE_ANSWER_TEXT = "Die Antwort des Servers lie\xDF sich nicht lesen.";
+async function fetchJson(path, init) {
+  const res = await authedFetch(path, init);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(errorFromBody(body, res.status));
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(UNREADABLE_ANSWER_TEXT);
+  }
+}
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function LoadError({ what, error, onRetry, hint, compact = false }) {
+  if (compact) {
+    return /* @__PURE__ */ jsxs2("div", { role: "alert", "data-testid": "load-error", className: "text-sm", children: [
+      /* @__PURE__ */ jsxs2("p", { className: "text-red-300", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/50", children: hint }),
+      onRetry && /* @__PURE__ */ jsx2("button", { type: "button", onClick: onRetry, className: "mt-1 text-xs text-white/70 underline underline-offset-2 hover:text-white", children: "Erneut versuchen" })
+    ] });
+  }
+  return /* @__PURE__ */ jsxs2("div", { role: "alert", "data-testid": "load-error", className: "mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm", children: [
+    /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsxs2("p", { className: "text-red-200", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/55", children: hint })
+    ] }),
+    onRetry && /* @__PURE__ */ jsx2(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" })
+  ] });
+}
+
+// ../../_shared/frontend/src/lifecycle.ts
+import { useEffect, useRef } from "react";
+function useUnmountSignal() {
+  const ref = useRef(null);
+  if (!ref.current) ref.current = new AbortController();
+  useEffect(() => {
+    if (ref.current?.signal.aborted) ref.current = new AbortController();
+    return () => ref.current?.abort();
+  }, []);
+  return useRef(() => ref.current.signal).current;
+}
+
 // ../../_shared/frontend/src/links.tsx
-import { jsx as jsx2 } from "react/jsx-runtime";
+import { useEffect as useEffect2, useState } from "react";
+import { jsx as jsx3 } from "react/jsx-runtime";
 function SettingsLink({
   to,
   permission,
@@ -344,7 +398,7 @@ function SettingsLink({
   children
 }) {
   if (!deck().hasPermission(permission)) return null;
-  return /* @__PURE__ */ jsx2("a", { href: to, className: buttonClass(variant), children });
+  return /* @__PURE__ */ jsx3("a", { href: to, className: buttonClass(variant), children });
 }
 function useSettingText(extId, key, fallback) {
   const [value, setValue] = useState(fallback);
@@ -400,7 +454,7 @@ function useUrlParams() {
 
 // src/BulkPropose.tsx
 import { useState as useState3 } from "react";
-import { Fragment as Fragment2, jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
+import { Fragment as Fragment2, jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
 var ACTIONS_PATH = "/actions";
 var BUTTON = "px-2 py-0.5 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition disabled:opacity-40";
 var isDatabaseWarning = (w) => w.startsWith("Datenbank");
@@ -476,8 +530,8 @@ function BulkProposeButton({
     }
   }
   if (n < 2 && !result && !error && !progress) return null;
-  return /* @__PURE__ */ jsxs2(Fragment2, { children: [
-    (n >= 2 || progress) && /* @__PURE__ */ jsx3(
+  return /* @__PURE__ */ jsxs3(Fragment2, { children: [
+    (n >= 2 || progress) && /* @__PURE__ */ jsx4(
       "button",
       {
         type: "button",
@@ -488,18 +542,18 @@ function BulkProposeButton({
         children: progress ?? `Alle Updates vorschlagen (${n})`
       }
     ),
-    (result || error) && /* @__PURE__ */ jsxs2("p", { className: "basis-full text-xs", role: "status", "data-testid": `bulk-result-${hostId}`, children: [
-      error && /* @__PURE__ */ jsxs2("span", { className: "text-red-400", children: [
+    (result || error) && /* @__PURE__ */ jsxs3("p", { className: "basis-full text-xs", role: "status", "data-testid": `bulk-result-${hostId}`, children: [
+      error && /* @__PURE__ */ jsxs3("span", { className: "text-red-400", children: [
         "Fehler: ",
         error
       ] }),
-      result && (result.created > 0 ? /* @__PURE__ */ jsxs2("span", { className: "text-emerald-300", children: [
+      result && (result.created > 0 ? /* @__PURE__ */ jsxs3("span", { className: "text-emerald-300", children: [
         result.created === 1 ? "1 Vorschlag" : `${result.created} Vorschl\xE4ge`,
         " angelegt \u2013 freigeben unter \u201E",
-        /* @__PURE__ */ jsx3("a", { href: ACTIONS_PATH, className: "underline", children: "Aktionen" }),
+        /* @__PURE__ */ jsx4("a", { href: ACTIONS_PATH, className: "underline", children: "Aktionen" }),
         "\u201C"
-      ] }) : /* @__PURE__ */ jsx3("span", { className: "text-amber-300", children: "Keine Vorschl\xE4ge angelegt." })),
-      result && result.skipped.length > 0 && /* @__PURE__ */ jsxs2("span", { className: "block break-words opacity-80", children: [
+      ] }) : /* @__PURE__ */ jsx4("span", { className: "text-amber-300", children: "Keine Vorschl\xE4ge angelegt." })),
+      result && result.skipped.length > 0 && /* @__PURE__ */ jsxs3("span", { className: "block break-words opacity-80", children: [
         "\xDCbersprungen: ",
         result.skipped.map((s) => `${s.name} (${s.reason})`).join("; ")
       ] })
@@ -509,12 +563,13 @@ function BulkProposeButton({
 
 // src/ImageUpdateApply.tsx
 import { useEffect as useEffect4, useState as useState4 } from "react";
-import { Fragment as Fragment3, jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
+import { Fragment as Fragment3, jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
 var PHASE_TEXT = {
   start: "startet \u2026",
   pull: "l\xE4dt Image \u2026",
   up: "erstellt Container neu \u2026",
-  verify: "pr\xFCft Start \u2026"
+  verify: "pr\xFCft Start \u2026",
+  rollback: "neue Version startet nicht \u2013 zur\xFCck zur alten \u2026"
 };
 var DOWNTIME_TEXT = "Der Container wird neu erstellt und ist dabei kurz nicht erreichbar (meist unter einer Minute; das Herunterladen vorher kann dauern).";
 function timeOf(iso) {
@@ -533,7 +588,7 @@ function ImageUpdateAction({
 }) {
   const parts = [];
   if (applying) {
-    parts.push(/* @__PURE__ */ jsxs3("span", { className: "block text-amber-300", role: "status", children: [
+    parts.push(/* @__PURE__ */ jsxs4("span", { className: "block text-amber-300", role: "status", children: [
       "Update l\xE4uft \u2013 ",
       PHASE_TEXT[applying.phase] ?? PHASE_TEXT.start
     ] }, "run"));
@@ -541,20 +596,20 @@ function ImageUpdateAction({
     if (applied) {
       const at = timeOf(applied.finished_at);
       parts.push(
-        applied.ok ? /* @__PURE__ */ jsxs3("span", { className: "block text-emerald-300", title: applied.summary, children: [
+        applied.ok ? /* @__PURE__ */ jsxs4("span", { className: "block text-emerald-300", title: applied.summary, children: [
           "\u2713 eingespielt ",
           at
-        ] }, "done") : /* @__PURE__ */ jsxs3("span", { className: "block text-red-300", title: applied.summary, children: [
+        ] }, "done") : /* @__PURE__ */ jsxs4("span", { className: "block text-red-300", title: applied.summary, children: [
           "Update fehlgeschlagen ",
           at
         ] }, "failed")
       );
     }
     if (offer && apply?.mode === "none") {
-      parts.push(/* @__PURE__ */ jsx4("span", { className: "mt-0.5 block max-w-[15rem] whitespace-normal break-words text-[11px] opacity-60", title: apply.why ?? void 0, children: apply.why }, "why"));
+      parts.push(/* @__PURE__ */ jsx5("span", { className: "mt-0.5 block max-w-[15rem] whitespace-normal break-words text-[11px] opacity-60", title: apply.why ?? void 0, children: apply.why }, "why"));
     } else if (offer) {
       parts.push(
-        /* @__PURE__ */ jsx4(
+        /* @__PURE__ */ jsx5(
           "button",
           {
             type: "button",
@@ -570,7 +625,7 @@ function ImageUpdateAction({
     }
   }
   if (parts.length === 0) return null;
-  return /* @__PURE__ */ jsx4("div", { className: "mt-1", "data-testid": `image-action-${entryId}`, children: parts });
+  return /* @__PURE__ */ jsx5("div", { className: "mt-1", "data-testid": `image-action-${entryId}`, children: parts });
 }
 function UpdatePanel({
   hostId,
@@ -649,30 +704,30 @@ function UpdatePanel({
       setRun({ state: "error", message: err instanceof Error ? err.message : String(err), conflict: false });
     }
   }
-  return /* @__PURE__ */ jsxs3("div", { className: "sticky left-0 max-w-[calc(100vw-3rem)] text-xs sm:max-w-none", "data-testid": `update-panel-${hostId}:${container}`, children: [
-    error && /* @__PURE__ */ jsxs3("p", { className: "text-red-400", children: [
+  return /* @__PURE__ */ jsxs4("div", { className: "sticky left-0 max-w-[calc(100vw-3rem)] text-xs sm:max-w-none", "data-testid": `update-panel-${hostId}:${container}`, children: [
+    error && /* @__PURE__ */ jsxs4("p", { className: "text-red-400", children: [
       "\xDCbersicht nicht abrufbar: ",
       error
     ] }),
-    !plan && !error && /* @__PURE__ */ jsx4("p", { className: "opacity-60", children: "Lade \xDCbersicht \u2026" }),
-    plan && !plan.ok && /* @__PURE__ */ jsxs3("div", { children: [
-      /* @__PURE__ */ jsx4("p", { className: "opacity-90", children: plan.reason }),
-      /* @__PURE__ */ jsx4("button", { type: "button", onClick: onClose, className: `mt-2 ${BUTTON2}`, children: "Schlie\xDFen" })
+    !plan && !error && /* @__PURE__ */ jsx5("p", { className: "opacity-60", children: "Lade \xDCbersicht \u2026" }),
+    plan && !plan.ok && /* @__PURE__ */ jsxs4("div", { children: [
+      /* @__PURE__ */ jsx5("p", { className: "opacity-90", children: plan.reason }),
+      /* @__PURE__ */ jsx5("button", { type: "button", onClick: onClose, className: `mt-2 ${BUTTON2}`, children: "Schlie\xDFen" })
     ] }),
-    plan?.ok && /* @__PURE__ */ jsxs3("div", { className: "flex flex-col gap-2", children: [
-      /* @__PURE__ */ jsxs3("p", { className: "text-sm font-medium", children: [
+    plan?.ok && /* @__PURE__ */ jsxs4("div", { className: "flex flex-col gap-2", children: [
+      /* @__PURE__ */ jsxs4("p", { className: "text-sm font-medium", children: [
         "Update f\xFCr \u201E",
         plan.container,
         "\u201C einspielen"
       ] }),
-      /* @__PURE__ */ jsxs3("dl", { className: "grid gap-x-6 gap-y-1 opacity-85 sm:grid-cols-2", children: [
-        /* @__PURE__ */ jsxs3("div", { children: [
-          /* @__PURE__ */ jsx4("dt", { className: "opacity-60", children: "Image" }),
-          /* @__PURE__ */ jsx4("dd", { className: "break-words", children: plan.image })
+      /* @__PURE__ */ jsxs4("dl", { className: "grid gap-x-6 gap-y-1 opacity-85 sm:grid-cols-2", children: [
+        /* @__PURE__ */ jsxs4("div", { children: [
+          /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Image" }),
+          /* @__PURE__ */ jsx5("dd", { className: "break-words", children: plan.image })
         ] }),
-        /* @__PURE__ */ jsxs3("div", { children: [
-          /* @__PURE__ */ jsx4("dt", { className: "opacity-60", children: "Version" }),
-          /* @__PURE__ */ jsxs3("dd", { children: [
+        /* @__PURE__ */ jsxs4("div", { children: [
+          /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Version" }),
+          /* @__PURE__ */ jsxs4("dd", { children: [
             "Image-ID ",
             plan.current_short,
             " \xB7 neue Version bei der Registry (Pr\xFCfsumme ",
@@ -681,33 +736,34 @@ function UpdatePanel({
             plan.registry_at ? `, Stand ${new Date(plan.registry_at).toLocaleString()}` : ""
           ] })
         ] }),
-        /* @__PURE__ */ jsxs3("div", { children: [
-          /* @__PURE__ */ jsx4("dt", { className: "opacity-60", children: "Compose" }),
-          /* @__PURE__ */ jsxs3("dd", { className: "break-words", children: [
+        /* @__PURE__ */ jsxs4("div", { children: [
+          /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Compose" }),
+          /* @__PURE__ */ jsxs4("dd", { className: "break-words", children: [
             plan.project,
             "/",
             plan.service
           ] })
         ] }),
-        plan.affected.length > 1 && /* @__PURE__ */ jsxs3("div", { children: [
-          /* @__PURE__ */ jsx4("dt", { className: "opacity-60", children: "Betrifft" }),
-          /* @__PURE__ */ jsx4("dd", { className: "break-words", children: plan.affected.join(", ") })
+        plan.affected.length > 1 && /* @__PURE__ */ jsxs4("div", { children: [
+          /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Betrifft" }),
+          /* @__PURE__ */ jsx5("dd", { className: "break-words", children: plan.affected.join(", ") })
         ] })
       ] }),
-      /* @__PURE__ */ jsxs3("div", { className: "rounded border border-amber-500/40 bg-amber-500/10 p-2 text-amber-200", children: [
-        /* @__PURE__ */ jsx4("p", { children: DOWNTIME_TEXT }),
-        plan.warnings.length > 0 && /* @__PURE__ */ jsx4("ul", { className: "mt-1 list-disc space-y-0.5 pl-4", children: plan.warnings.map((w) => /* @__PURE__ */ jsx4("li", { className: w.startsWith("Datenbank") ? "font-medium text-red-300" : void 0, children: w }, w)) })
+      /* @__PURE__ */ jsxs4("div", { className: "rounded border border-amber-500/40 bg-amber-500/10 p-2 text-amber-200", children: [
+        /* @__PURE__ */ jsx5("p", { children: DOWNTIME_TEXT }),
+        plan.auto_rollback && /* @__PURE__ */ jsx5("p", { className: "mt-1", children: "St\xFCrzt die neue Version beim Start ab oder l\xE4sst sich der Container nicht erstellen, geht Nodvard Deck in der Regel automatisch auf die alte zur\xFCck." }),
+        plan.warnings.length > 0 && /* @__PURE__ */ jsx5("ul", { className: "mt-1 list-disc space-y-0.5 pl-4", children: plan.warnings.map((w) => /* @__PURE__ */ jsx5("li", { className: w.startsWith("Datenbank") ? "font-medium text-red-300" : void 0, children: w }, w)) })
       ] }),
-      /* @__PURE__ */ jsxs3("details", { open: true, children: [
-        /* @__PURE__ */ jsx4("summary", { className: "cursor-pointer opacity-70", children: "Befehl auf dem Server" }),
-        /* @__PURE__ */ jsx4("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: plan.command })
+      /* @__PURE__ */ jsxs4("details", { open: true, children: [
+        /* @__PURE__ */ jsx5("summary", { className: "cursor-pointer opacity-70", children: "Befehl auf dem Server" }),
+        /* @__PURE__ */ jsx5("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: plan.command })
       ] }),
-      /* @__PURE__ */ jsxs3("details", { children: [
-        /* @__PURE__ */ jsx4("summary", { className: "cursor-pointer opacity-70", children: "Zur\xFCck zur alten Version" }),
-        /* @__PURE__ */ jsx4("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: plan.rollback })
+      /* @__PURE__ */ jsxs4("details", { children: [
+        /* @__PURE__ */ jsx5("summary", { className: "cursor-pointer opacity-70", children: "Zur\xFCck zur alten Version" }),
+        /* @__PURE__ */ jsx5("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: plan.rollback })
       ] }),
-      run.state === "idle" && /* @__PURE__ */ jsxs3("div", { className: "flex flex-col gap-2 sm:flex-row sm:items-center", children: [
-        deck().hasPermission(`actions.approve:${plan.risk}`) ? /* @__PURE__ */ jsx4(
+      run.state === "idle" && /* @__PURE__ */ jsxs4("div", { className: "flex flex-col gap-2 sm:flex-row sm:items-center", children: [
+        deck().hasPermission(`actions.approve:${plan.risk}`) ? /* @__PURE__ */ jsx5(
           "button",
           {
             type: "button",
@@ -715,35 +771,35 @@ function UpdatePanel({
             className: `rounded px-3 py-1.5 text-xs font-medium ${plan.risk === "high" ? "bg-red-500/80 hover:bg-red-500" : "bg-[var(--color-accent)] hover:opacity-90"}`,
             children: "Jetzt einspielen"
           }
-        ) : /* @__PURE__ */ jsxs3(Fragment3, { children: [
-          /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => void start(plan), className: BUTTON2, children: "Vorschlagen" }),
-          /* @__PURE__ */ jsx4("span", { className: "opacity-70", children: "Ein Admin muss unter \u201EAktionen\u201C freigeben." })
+        ) : /* @__PURE__ */ jsxs4(Fragment3, { children: [
+          /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => void start(plan), className: BUTTON2, children: "Vorschlagen" }),
+          /* @__PURE__ */ jsx5("span", { className: "opacity-70", children: "Ein Admin muss unter \u201EAktionen\u201C freigeben." })
         ] }),
-        /* @__PURE__ */ jsx4("button", { type: "button", onClick: onClose, className: BUTTON2, children: "Abbrechen" })
+        /* @__PURE__ */ jsx5("button", { type: "button", onClick: onClose, className: BUTTON2, children: "Abbrechen" })
       ] }),
-      run.state === "posting" && /* @__PURE__ */ jsxs3("p", { className: "text-amber-300", role: "status", children: [
+      run.state === "posting" && /* @__PURE__ */ jsxs4("p", { className: "text-amber-300", role: "status", children: [
         "L\xE4uft \u2026 ",
         applying ? PHASE_TEXT[applying.phase] : "wird gestartet \u2026"
       ] }),
-      run.state === "proposed" && /* @__PURE__ */ jsx4("p", { role: "status", children: "Vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe \u201EAktionen\u201C." }),
-      run.state === "done" && /* @__PURE__ */ jsxs3("div", { role: "status", children: [
-        /* @__PURE__ */ jsx4("p", { className: run.ok ? "text-emerald-300" : "text-red-300", children: run.text }),
-        run.output && (run.ok ? /* @__PURE__ */ jsxs3("details", { className: "mt-1", children: [
-          /* @__PURE__ */ jsx4("summary", { className: "cursor-pointer opacity-70", children: "Protokoll und R\xFCckweg" }),
-          /* @__PURE__ */ jsx4("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: run.output })
-        ] }) : /* @__PURE__ */ jsx4("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: run.output }))
+      run.state === "proposed" && /* @__PURE__ */ jsx5("p", { role: "status", children: "Vorgeschlagen \u2013 Freigabe durch einen Admin n\xF6tig, siehe \u201EAktionen\u201C." }),
+      run.state === "done" && /* @__PURE__ */ jsxs4("div", { role: "status", children: [
+        /* @__PURE__ */ jsx5("p", { className: run.ok ? "text-emerald-300" : "text-red-300", children: run.text }),
+        run.output && (run.ok ? /* @__PURE__ */ jsxs4("details", { className: "mt-1", children: [
+          /* @__PURE__ */ jsx5("summary", { className: "cursor-pointer opacity-70", children: "Protokoll und R\xFCckweg" }),
+          /* @__PURE__ */ jsx5("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: run.output })
+        ] }) : /* @__PURE__ */ jsx5("pre", { className: "mt-1 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded bg-black/60 p-2 font-mono text-[11px]", children: run.output }))
       ] }),
-      run.state === "error" && /* @__PURE__ */ jsxs3("div", { role: "alert", children: [
-        /* @__PURE__ */ jsx4("p", { className: "text-red-300", children: run.message }),
-        run.conflict && /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => setReload((n) => n + 1), className: `mt-2 ${BUTTON2}`, children: "Neu laden" })
+      run.state === "error" && /* @__PURE__ */ jsxs4("div", { role: "alert", children: [
+        /* @__PURE__ */ jsx5("p", { className: "text-red-300", children: run.message }),
+        run.conflict && /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => setReload((n) => n + 1), className: `mt-2 ${BUTTON2}`, children: "Neu laden" })
       ] }),
-      (run.state === "proposed" || run.state === "done" || run.state === "error") && /* @__PURE__ */ jsx4("div", { children: /* @__PURE__ */ jsx4("button", { type: "button", onClick: onClose, className: BUTTON2, children: "Schlie\xDFen" }) })
+      (run.state === "proposed" || run.state === "done" || run.state === "error") && /* @__PURE__ */ jsx5("div", { children: /* @__PURE__ */ jsx5("button", { type: "button", onClick: onClose, className: BUTTON2, children: "Schlie\xDFen" }) })
     ] })
   ] });
 }
 
 // src/ServiceMatrixPage.tsx
-import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
 var MEASURING_HINT = "CPU/RAM werden gemessen \u2013 das braucht je Server ein paar Sekunden.";
 var MEM_UNKNOWN_HINT = "Der Server meldet keinen Speicherverbrauch je Container (auf dem Raspberry Pi ist die cgroup-Speicherabrechnung standardm\xE4\xDFig aus).";
 var TONE_CLASS = {
@@ -856,28 +912,28 @@ function summarizeImages(images, checking) {
 function StaleNote({ result }) {
   if (!result.stale) return null;
   const at = result.registry_at ? ` Letzte Antwort der Registry: ${new Date(result.registry_at).toLocaleString()}.` : "";
-  return /* @__PURE__ */ jsx5("span", { className: "mt-0.5 block text-[11px] opacity-60", title: `${result.reason ?? ""}${at}`, children: "alter Stand" });
+  return /* @__PURE__ */ jsx6("span", { className: "mt-0.5 block text-[11px] opacity-60", title: `${result.reason ?? ""}${at}`, children: "alter Stand" });
 }
 function NeutralBadge({ label, reason }) {
-  return /* @__PURE__ */ jsxs4("span", { title: reason ?? void 0, children: [
-    /* @__PURE__ */ jsx5("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.neutral}`, children: label }),
-    reason && /* @__PURE__ */ jsx5("span", { className: "mt-0.5 block max-w-[15rem] whitespace-normal break-words text-[11px] opacity-60", children: reason })
+  return /* @__PURE__ */ jsxs5("span", { title: reason ?? void 0, children: [
+    /* @__PURE__ */ jsx6("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.neutral}`, children: label }),
+    reason && /* @__PURE__ */ jsx6("span", { className: "mt-0.5 block max-w-[15rem] whitespace-normal break-words text-[11px] opacity-60", children: reason })
   ] });
 }
 function ImageUpdateBadge({ result, checking = false, running = true }) {
   if (!result) {
-    return checking ? /* @__PURE__ */ jsx5("span", { className: "text-xs opacity-60", children: "pr\xFCft \u2026" }) : /* @__PURE__ */ jsx5("span", { className: "text-xs opacity-40", title: running ? "Noch nicht gepr\xFCft." : "Gestoppte Container werden nicht gepr\xFCft.", children: "\u2013" });
+    return checking ? /* @__PURE__ */ jsx6("span", { className: "text-xs opacity-60", children: "pr\xFCft \u2026" }) : /* @__PURE__ */ jsx6("span", { className: "text-xs opacity-40", title: running ? "Noch nicht gepr\xFCft." : "Gestoppte Container werden nicht gepr\xFCft.", children: "\u2013" });
   }
   if (result.status === "current") {
-    return /* @__PURE__ */ jsxs4("span", { children: [
-      /* @__PURE__ */ jsx5("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.good}`, title: result.image, children: "aktuell" }),
-      /* @__PURE__ */ jsx5(StaleNote, { result })
+    return /* @__PURE__ */ jsxs5("span", { children: [
+      /* @__PURE__ */ jsx6("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.good}`, title: result.image, children: "aktuell" }),
+      /* @__PURE__ */ jsx6(StaleNote, { result })
     ] });
   }
   if (result.status === "update") {
     const short = result.remote_digest?.replace("sha256:", "").slice(0, 12);
-    return /* @__PURE__ */ jsxs4("span", { children: [
-      /* @__PURE__ */ jsx5(
+    return /* @__PURE__ */ jsxs5("span", { children: [
+      /* @__PURE__ */ jsx6(
         "span",
         {
           className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS.warn}`,
@@ -885,16 +941,29 @@ function ImageUpdateBadge({ result, checking = false, running = true }) {
           children: "Update verf\xFCgbar"
         }
       ),
-      /* @__PURE__ */ jsx5(StaleNote, { result })
+      /* @__PURE__ */ jsx6(StaleNote, { result })
     ] });
   }
-  return /* @__PURE__ */ jsx5(NeutralBadge, { label: result.status === "local" ? "selbst gebaut" : "nicht pr\xFCfbar", reason: result.reason });
+  return /* @__PURE__ */ jsx6(NeutralBadge, { label: result.status === "local" ? "selbst gebaut" : "nicht pr\xFCfbar", reason: result.reason });
+}
+function afterCheckText(action) {
+  const check = action.result?.detail?.check;
+  return typeof check?.text === "string" && check.text ? check.text : null;
 }
 var VERB_TEXT = {
   start: { label: "Starten", done: "gestartet" },
   stop: { label: "Stoppen", done: "gestoppt", confirm: "wirklich stoppen? Der Dienst ist danach nicht erreichbar." },
-  restart: { label: "Neustart", done: "neu gestartet", confirm: "wirklich neu starten?" }
+  restart: { label: "Neustart", done: "neu gestartet", confirm: "wirklich neu starten?" },
+  remove: {
+    label: "L\xF6schen",
+    done: "gel\xF6scht",
+    confirm: "wirklich l\xF6schen? Volumes und das Image bleiben, aber was nur im Container selbst lag, ist weg."
+  }
 };
+function consoleHref(hostId, container) {
+  return `/terminal?${new URLSearchParams({ host: hostId, scope: "container", ref: container }).toString()}`;
+}
+var REMOVABLE_STATES = /* @__PURE__ */ new Set(["exited", "created", "dead"]);
 var TAIL_OPTIONS = [100, 200, 500, 2e3];
 var MAX_LINES = 5e3;
 var ANSI_RE = /\x1b\[[0-9;?]*[ -/]*[@-~]/g;
@@ -949,25 +1018,25 @@ function StoragePanel({ hostId }) {
       setBusy(null);
     }
   }
-  if (error) return /* @__PURE__ */ jsxs4("p", { className: "text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs5("p", { className: "text-xs text-red-400", children: [
     "Docker-Speicher nicht abrufbar: ",
     error
   ] });
-  if (!data) return /* @__PURE__ */ jsx5("p", { className: "text-xs opacity-60", children: "Lade Docker-Speicher \u2026 (docker system df braucht ein paar Sekunden)" });
+  if (!data) return /* @__PURE__ */ jsx6("p", { className: "text-xs opacity-60", children: "Lade Docker-Speicher \u2026 (docker system df braucht ein paar Sekunden)" });
   const canRun = deck().hasPermission("hosts.execute");
-  return /* @__PURE__ */ jsxs4("div", { className: "text-xs", "data-testid": `storage-${hostId}`, children: [
-    /* @__PURE__ */ jsx5("div", { className: "mb-2 flex flex-wrap gap-2", children: data.disk.map((d) => /* @__PURE__ */ jsxs4("div", { className: "px-2.5 py-1.5 panel", children: [
-      /* @__PURE__ */ jsxs4("span", { className: "block opacity-60", children: [
+  return /* @__PURE__ */ jsxs5("div", { className: "text-xs", "data-testid": `storage-${hostId}`, children: [
+    /* @__PURE__ */ jsx6("div", { className: "mb-2 flex flex-wrap gap-2", children: data.disk.map((d) => /* @__PURE__ */ jsxs5("div", { className: "px-2.5 py-1.5 panel", children: [
+      /* @__PURE__ */ jsxs5("span", { className: "block opacity-60", children: [
         d.label,
         d.total != null ? ` (${d.active ?? "?"}/${d.total} aktiv)` : ""
       ] }),
-      /* @__PURE__ */ jsx5("span", { className: "text-sm font-medium", children: d.size != null ? formatBytes(d.size) : "?" }),
-      d.reclaimable ? /* @__PURE__ */ jsxs4("span", { className: "ml-1.5 text-amber-300", children: [
+      /* @__PURE__ */ jsx6("span", { className: "text-sm font-medium", children: d.size != null ? formatBytes(d.size) : "?" }),
+      d.reclaimable ? /* @__PURE__ */ jsxs5("span", { className: "ml-1.5 text-amber-300", children: [
         formatBytes(d.reclaimable),
         " frei machbar"
       ] }) : null
     ] }, d.type)) }),
-    canRun && /* @__PURE__ */ jsx5("div", { className: "mb-2 flex flex-wrap gap-1.5", children: PRUNE_ACTIONS.map((a) => /* @__PURE__ */ jsx5(
+    canRun && /* @__PURE__ */ jsx6("div", { className: "mb-2 flex flex-wrap gap-1.5", children: PRUNE_ACTIONS.map((a) => /* @__PURE__ */ jsx6(
       "button",
       {
         type: "button",
@@ -978,23 +1047,23 @@ function StoragePanel({ hostId }) {
       },
       a.type
     )) }),
-    message && /* @__PURE__ */ jsx5("p", { className: "mb-2 opacity-90", role: "status", children: message }),
-    data.images.length > 0 && /* @__PURE__ */ jsxs4("table", { className: "w-full", children: [
-      /* @__PURE__ */ jsx5("thead", { children: /* @__PURE__ */ jsxs4("tr", { className: "border-b border-white/10 text-left uppercase opacity-60", children: [
-        /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Image" }),
-        /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Gr\xF6\xDFe" }),
-        /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Erstellt" }),
-        /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Genutzt" })
+    message && /* @__PURE__ */ jsx6("p", { className: "mb-2 opacity-90", role: "status", children: message }),
+    data.images.length > 0 && /* @__PURE__ */ jsxs5("table", { className: "w-full", children: [
+      /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs5("tr", { className: "border-b border-white/10 text-left uppercase opacity-60", children: [
+        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Image" }),
+        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Gr\xF6\xDFe" }),
+        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Erstellt" }),
+        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Genutzt" })
       ] }) }),
-      /* @__PURE__ */ jsx5("tbody", { className: "divide-y divide-white/5", children: data.images.map((img) => /* @__PURE__ */ jsxs4("tr", { children: [
-        /* @__PURE__ */ jsx5("td", { className: "py-1 break-words", children: img.name ?? /* @__PURE__ */ jsxs4("span", { className: "opacity-60", children: [
+      /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: data.images.map((img) => /* @__PURE__ */ jsxs5("tr", { children: [
+        /* @__PURE__ */ jsx6("td", { className: "py-1 break-words", children: img.name ?? /* @__PURE__ */ jsxs5("span", { className: "opacity-60", children: [
           "ohne Namen (",
           img.id,
           ")"
         ] }) }),
-        /* @__PURE__ */ jsx5("td", { className: "py-1 whitespace-nowrap", children: img.size != null ? formatBytes(img.size) : "?" }),
-        /* @__PURE__ */ jsx5("td", { className: "py-1 opacity-70", children: img.created ?? "" }),
-        /* @__PURE__ */ jsx5("td", { className: `py-1 ${img.in_use === false ? "text-amber-300" : "opacity-70"}`, children: img.in_use == null ? "?" : img.in_use ? "ja" : "nein" })
+        /* @__PURE__ */ jsx6("td", { className: "py-1 whitespace-nowrap", children: img.size != null ? formatBytes(img.size) : "?" }),
+        /* @__PURE__ */ jsx6("td", { className: "py-1 opacity-70", children: img.created ?? "" }),
+        /* @__PURE__ */ jsx6("td", { className: `py-1 ${img.in_use === false ? "text-amber-300" : "opacity-70"}`, children: img.in_use == null ? "?" : img.in_use ? "ja" : "nein" })
       ] }, img.id)) })
     ] })
   ] });
@@ -1023,64 +1092,64 @@ function DetailsPanel({ entry }) {
       cancelled = true;
     };
   }, [entry.host_id, entry.container]);
-  if (error) return /* @__PURE__ */ jsxs4("p", { className: "text-xs text-red-400", children: [
+  if (error) return /* @__PURE__ */ jsxs5("p", { className: "text-xs text-red-400", children: [
     "Details nicht abrufbar: ",
     error
   ] });
-  if (!data) return /* @__PURE__ */ jsx5("p", { className: "text-xs opacity-60", children: "Lade Details \u2026" });
+  if (!data) return /* @__PURE__ */ jsx6("p", { className: "text-xs opacity-60", children: "Lade Details \u2026" });
   const d = data;
   const since = d.running ? d.started_at : d.finished_at;
-  return /* @__PURE__ */ jsxs4("div", { className: "text-xs", "data-testid": `inspect-${entry.id}`, children: [
-    /* @__PURE__ */ jsxs4("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-85 sm:grid-cols-4", children: [
-      /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Image" }),
-        /* @__PURE__ */ jsxs4("dd", { className: "break-words", children: [
+  return /* @__PURE__ */ jsxs5("div", { className: "text-xs", "data-testid": `inspect-${entry.id}`, children: [
+    /* @__PURE__ */ jsxs5("dl", { className: "grid grid-cols-2 gap-x-6 gap-y-1 opacity-85 sm:grid-cols-4", children: [
+      /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("dt", { className: "opacity-60", children: "Image" }),
+        /* @__PURE__ */ jsxs5("dd", { className: "break-words", children: [
           d.image ?? "?",
           d.image_id ? ` (${d.image_id})` : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: d.running ? "L\xE4uft seit" : "Beendet" }),
-        /* @__PURE__ */ jsxs4("dd", { children: [
+      /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("dt", { className: "opacity-60", children: d.running ? "L\xE4uft seit" : "Beendet" }),
+        /* @__PURE__ */ jsxs5("dd", { children: [
           since ? new Date(since).toLocaleString() : "\u2013",
           !d.running && d.exit_code != null ? ` \xB7 Exit ${d.exit_code}` : "",
           d.oom_killed ? " \xB7 Speicher voll (OOM)" : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Neustart-Regel" }),
-        /* @__PURE__ */ jsxs4("dd", { children: [
+      /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("dt", { className: "opacity-60", children: "Neustart-Regel" }),
+        /* @__PURE__ */ jsxs5("dd", { children: [
           RESTART_LABEL[d.restart_policy] ?? d.restart_policy,
           d.restart_count ? ` \xB7 ${d.restart_count}\xD7 neu gestartet` : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Zustand" }),
-        /* @__PURE__ */ jsxs4("dd", { children: [
+      /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("dt", { className: "opacity-60", children: "Zustand" }),
+        /* @__PURE__ */ jsxs5("dd", { children: [
           d.health ? HEALTH_LABEL[d.health] ?? d.health : "kein Healthcheck",
           d.privileged ? " \xB7 privilegiert" : ""
         ] })
       ] }),
-      d.compose && /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "Compose" }),
-        /* @__PURE__ */ jsxs4("dd", { className: "break-words", children: [
+      d.compose && /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("dt", { className: "opacity-60", children: "Compose" }),
+        /* @__PURE__ */ jsxs5("dd", { className: "break-words", children: [
           d.compose.project,
           d.compose.service ? ` / ${d.compose.service}` : "",
           d.compose.working_dir ? ` \xB7 ${d.compose.working_dir}` : ""
         ] })
       ] }),
-      d.memory_limit ? /* @__PURE__ */ jsxs4("div", { children: [
-        /* @__PURE__ */ jsx5("dt", { className: "opacity-60", children: "RAM-Limit" }),
-        /* @__PURE__ */ jsx5("dd", { children: formatBytes(d.memory_limit) })
+      d.memory_limit ? /* @__PURE__ */ jsxs5("div", { children: [
+        /* @__PURE__ */ jsx6("dt", { className: "opacity-60", children: "RAM-Limit" }),
+        /* @__PURE__ */ jsx6("dd", { children: formatBytes(d.memory_limit) })
       ] }) : null
     ] }),
-    /* @__PURE__ */ jsx5("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Ports" }),
-    /* @__PURE__ */ jsx5("p", { className: "opacity-85", children: d.ports.length === 0 ? d.network_mode === "host" ? "Host-Netz (alle Ports direkt)" : "keine" : d.ports.map((p) => `${p.published.length ? p.published.join(", ") : "intern"} \u2192 ${p.container}`).join(" \xB7 ") }),
-    /* @__PURE__ */ jsx5("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Speicher" }),
-    /* @__PURE__ */ jsxs4("ul", { className: "space-y-0.5 opacity-85", children: [
-      d.mounts.length === 0 && /* @__PURE__ */ jsx5("li", { children: "keine Mounts" }),
-      d.mounts.map((m) => /* @__PURE__ */ jsxs4("li", { className: "break-words", children: [
-        /* @__PURE__ */ jsx5("span", { className: "opacity-60", children: m.type === "volume" ? "Volume" : m.type === "bind" ? "Ordner" : m.type }),
+    /* @__PURE__ */ jsx6("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Ports" }),
+    /* @__PURE__ */ jsx6("p", { className: "opacity-85", children: d.ports.length === 0 ? d.network_mode === "host" ? "Host-Netz (alle Ports direkt)" : "keine" : d.ports.map((p) => `${p.published.length ? p.published.join(", ") : "intern"} \u2192 ${p.container}`).join(" \xB7 ") }),
+    /* @__PURE__ */ jsx6("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Speicher" }),
+    /* @__PURE__ */ jsxs5("ul", { className: "space-y-0.5 opacity-85", children: [
+      d.mounts.length === 0 && /* @__PURE__ */ jsx6("li", { children: "keine Mounts" }),
+      d.mounts.map((m) => /* @__PURE__ */ jsxs5("li", { className: "break-words", children: [
+        /* @__PURE__ */ jsx6("span", { className: "opacity-60", children: m.type === "volume" ? "Volume" : m.type === "bind" ? "Ordner" : m.type }),
         " ",
         m.source,
         " \u2192 ",
@@ -1088,14 +1157,63 @@ function DetailsPanel({ entry }) {
         m.read_only ? " (nur lesen)" : ""
       ] }, `${m.destination}`))
     ] }),
-    /* @__PURE__ */ jsx5("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Netze" }),
-    /* @__PURE__ */ jsx5("p", { className: "opacity-85", children: d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" \xB7 ") || "keine" }),
-    /* @__PURE__ */ jsxs4("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: [
+    /* @__PURE__ */ jsx6("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: "Netze" }),
+    /* @__PURE__ */ jsx6("p", { className: "opacity-85", children: d.networks.map((n) => `${n.name}${n.ip ? ` (${n.ip})` : ""}`).join(" \xB7 ") || "keine" }),
+    /* @__PURE__ */ jsxs5("p", { className: "mt-2 mb-0.5 font-medium opacity-60", children: [
       "Umgebungsvariablen (",
       d.env_keys.length,
       ")"
     ] }),
-    /* @__PURE__ */ jsx5("p", { className: "break-words opacity-70", title: "Werte werden bewusst nicht angezeigt \u2013 dort stehen oft Passw\xF6rter.", children: d.env_keys.join(", ") || "keine" })
+    /* @__PURE__ */ jsx6("p", { className: "break-words opacity-70", title: "Werte werden bewusst nicht angezeigt \u2013 dort stehen oft Passw\xF6rter.", children: d.env_keys.join(", ") || "keine" })
+  ] });
+}
+function UrlPanel({ entry, onSaved, onClose }) {
+  const current = entry.url_custom ? entry.url ?? "" : "";
+  const [value, setValue] = useState5(current);
+  const [busy, setBusy] = useState5(false);
+  const [error, setError] = useState5(null);
+  const save = async (url) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(`/ext/service-matrix/containers/${encodeURIComponent(entry.host_id)}/${encodeURIComponent(entry.container)}/url`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      if (!res.ok) throw new Error(await errorText(res));
+      onSaved();
+      onClose();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return /* @__PURE__ */ jsxs5("form", { className: "space-y-2 text-xs", onSubmit: (e) => {
+    e.preventDefault();
+    if (value.trim() !== current) void save(value.trim() || null);
+  }, children: [
+    /* @__PURE__ */ jsxs5("label", { className: "block", children: [
+      /* @__PURE__ */ jsx6("span", { className: "mb-1 block opacity-70", children: "Adresse, die \u201E\xD6ffnen\u201C und die Kachel aufrufen" }),
+      /* @__PURE__ */ jsx6(
+        "input",
+        {
+          type: "url",
+          value,
+          onChange: (e) => setValue(e.target.value),
+          placeholder: entry.url_detected ?? "http://192.0.2.10:8080",
+          className: "w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 sm:max-w-md"
+        }
+      )
+    ] }),
+    /* @__PURE__ */ jsx6("p", { className: "opacity-60", children: entry.url_detected ? `Erkannt: ${entry.url_detected}` : "Nodvard Deck hat f\xFCr diesen Container keine Weboberfl\xE4che erkannt." }),
+    error && /* @__PURE__ */ jsx6("p", { role: "alert", className: "text-red-400", children: error }),
+    /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap gap-1.5", children: [
+      /* @__PURE__ */ jsx6("button", { type: "submit", disabled: busy || value.trim() === current, className: `rounded bg-emerald-500/20 px-2 py-1 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 ${TOUCH}`, children: busy ? "\u2026" : "Speichern" }),
+      entry.url_custom && /* @__PURE__ */ jsx6("button", { type: "button", disabled: busy, onClick: () => void save(null), className: `rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-40 ${TOUCH}`, children: "Erkannte nehmen" }),
+      /* @__PURE__ */ jsx6("button", { type: "button", onClick: onClose, className: `rounded px-2 py-1 opacity-70 hover:opacity-100 ${TOUCH}`, children: "Abbrechen" })
+    ] })
   ] });
 }
 function LogPanel({ entry, onClose }) {
@@ -1154,19 +1272,19 @@ function LogPanel({ entry, onClose }) {
     const needle = filter.toLowerCase();
     return lines.filter((l) => l.toLowerCase().includes(needle));
   }, [lines, filter]);
-  return /* @__PURE__ */ jsxs4("div", { className: "flex flex-col gap-2", "data-testid": "log-panel", children: [
-    /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap items-center gap-2 text-xs", children: [
-      /* @__PURE__ */ jsxs4("span", { className: "font-medium", children: [
+  return /* @__PURE__ */ jsxs5("div", { className: "flex flex-col gap-2", "data-testid": "log-panel", children: [
+    /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap items-center gap-2 text-xs", children: [
+      /* @__PURE__ */ jsxs5("span", { className: "font-medium", children: [
         "Logs: ",
         entry.name
       ] }),
-      /* @__PURE__ */ jsx5("span", { className: `rounded-full px-2 py-0.5 ${running && !ended && !error ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-70"}`, children: error ? "Fehler" : !running ? "angehalten" : ended ? "beendet" : "live" }),
-      /* @__PURE__ */ jsxs4("label", { className: "flex items-center gap-1", children: [
+      /* @__PURE__ */ jsx6("span", { className: `rounded-full px-2 py-0.5 ${running && !ended && !error ? "bg-emerald-500/20 text-emerald-300" : "bg-white/10 opacity-70"}`, children: error ? "Fehler" : !running ? "angehalten" : ended ? "beendet" : "live" }),
+      /* @__PURE__ */ jsxs5("label", { className: "flex items-center gap-1", children: [
         "Letzte",
-        /* @__PURE__ */ jsx5("select", { value: tail, onChange: (e) => setTail(Number(e.target.value)), className: "px-1 py-0.5 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]", children: TAIL_OPTIONS.map((n) => /* @__PURE__ */ jsx5("option", { value: n, children: n }, n)) }),
+        /* @__PURE__ */ jsx6("select", { value: tail, onChange: (e) => setTail(Number(e.target.value)), className: "px-1 py-0.5 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]", children: TAIL_OPTIONS.map((n) => /* @__PURE__ */ jsx6("option", { value: n, children: n }, n)) }),
         "Zeilen"
       ] }),
-      /* @__PURE__ */ jsx5(
+      /* @__PURE__ */ jsx6(
         "input",
         {
           value: filter,
@@ -1176,18 +1294,18 @@ function LogPanel({ entry, onClose }) {
           className: "w-40 px-2 py-0.5 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]"
         }
       ),
-      /* @__PURE__ */ jsxs4("label", { className: "flex items-center gap-1", children: [
-        /* @__PURE__ */ jsx5("input", { type: "checkbox", checked: follow, onChange: (e) => setFollow(e.target.checked) }),
+      /* @__PURE__ */ jsxs5("label", { className: "flex items-center gap-1", children: [
+        /* @__PURE__ */ jsx6("input", { type: "checkbox", checked: follow, onChange: (e) => setFollow(e.target.checked) }),
         "Mitlaufen"
       ] }),
-      /* @__PURE__ */ jsxs4("div", { className: "ml-auto flex gap-1.5", children: [
-        /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => setRunning((r) => !r), className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: running ? "Anhalten" : "Fortsetzen" }),
-        /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => setLines([]), className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Leeren" }),
-        /* @__PURE__ */ jsx5("button", { type: "button", onClick: onClose, className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Schlie\xDFen" })
+      /* @__PURE__ */ jsxs5("div", { className: "ml-auto flex gap-1.5", children: [
+        /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => setRunning((r) => !r), className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: running ? "Anhalten" : "Fortsetzen" }),
+        /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => setLines([]), className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Leeren" }),
+        /* @__PURE__ */ jsx6("button", { type: "button", onClick: onClose, className: "px-2 py-0.5 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Schlie\xDFen" })
       ] })
     ] }),
-    error && /* @__PURE__ */ jsx5("p", { className: "text-xs text-red-400", children: error }),
-    /* @__PURE__ */ jsx5(
+    error && /* @__PURE__ */ jsx6("p", { className: "text-xs text-red-400", children: error }),
+    /* @__PURE__ */ jsx6(
       "pre",
       {
         ref: boxRef,
@@ -1199,15 +1317,15 @@ function LogPanel({ entry, onClose }) {
 }
 function NoContainers() {
   const tag = useSettingText("service-matrix", "docker_host_tag", "docker");
-  return /* @__PURE__ */ jsx5(
+  return /* @__PURE__ */ jsx6(
     EmptyState,
     {
       icon: "package",
       title: "Noch kein Server mit Docker",
       text: `Lege unter Server & Zug\xE4nge einen Server an und gib ihm die Markierung \u201E${tag}\u201C. L\xE4uft dort Docker, erscheinen seine Container hier von selbst. Die Markierung l\xE4sst sich in den Einstellungen des Moduls \xE4ndern.`,
-      action: /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap justify-center gap-2", children: [
-        /* @__PURE__ */ jsx5(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" }),
-        /* @__PURE__ */ jsx5(SettingsLink, { to: "/settings/extensions/service-matrix", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" })
+      action: /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap justify-center gap-2", children: [
+        /* @__PURE__ */ jsx6(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" }),
+        /* @__PURE__ */ jsx6(SettingsLink, { to: "/settings/extensions/service-matrix", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" })
       ] })
     }
   );
@@ -1223,6 +1341,7 @@ function ServiceMatrixPage() {
   const setLogsFor = (id) => updateUrl({ logs: id });
   const hostFilter = urlParams.get("host") || null;
   const [detailsFor, setDetailsFor] = useState5(null);
+  const [urlFor, setUrlFor] = useState5(null);
   const [updateFor, setUpdateFor] = useState5(null);
   const [storageFor, setStorageFor] = useState5(null);
   const [query, setQuery] = useState5("");
@@ -1241,12 +1360,11 @@ function ServiceMatrixPage() {
   }, []);
   const reloadImages = useCallback2(() => void loadImages(unmountSignal()), [loadImages, unmountSignal]);
   const load = useCallback2(() => {
-    setError(null);
     void loadImages(unmountSignal());
-    authedFetch("/ext/service-matrix/widgets/matrix").then((res) => {
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      return res.json();
-    }).then((body) => setServices(body.data)).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    fetchJson("/ext/service-matrix/widgets/matrix").then((body) => {
+      setServices(body.data);
+      setError(null);
+    }).catch((err) => setError(errorMessage(err)));
   }, [loadImages, unmountSignal]);
   useEffect5(() => {
     load();
@@ -1282,9 +1400,9 @@ function ServiceMatrixPage() {
   async function trigger(entry, verb) {
     const text = VERB_TEXT[verb];
     if (text.confirm) {
-      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg." : "";
+      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst \u2013 die Oberfl\xE4che ist kurz weg." : verb === "remove" && entry.compose_project ? ` Er geh\xF6rt zum Compose-Projekt \u201E${entry.compose_project}\u201C: Beim n\xE4chsten \u201Edocker compose up\u201C (auch beim Einspielen eines Updates) legt Docker ihn wieder an.` : "";
       const ok = await deck().confirmDialog(`"${entry.name}" ${text.confirm}${extra}`, {
-        danger: verb === "stop",
+        danger: verb === "stop" || verb === "remove",
         confirmLabel: text.label
       });
       if (!ok) return;
@@ -1302,8 +1420,9 @@ function ServiceMatrixPage() {
       }
       const status = action.status ?? "?";
       const failure = action.result?.error;
+      const check = afterCheckText(action);
       setMessage(
-        status === "succeeded" ? `"${entry.name}" ${text.done}.` : `"${entry.name}": ${text.label} -> ${ACTION_STATUS_LABEL[status] ?? status}${failure ? ` (${failure})` : ""}.`
+        status === "succeeded" ? `"${entry.name}" ${text.done}.${check ? ` Pr\xFCfung danach: ${check}` : ""}` : `"${entry.name}": ${text.label} -> ${ACTION_STATUS_LABEL[status] ?? status}${failure ? ` (${failure})` : ""}.`
       );
       load();
     } catch (err) {
@@ -1359,11 +1478,8 @@ function ServiceMatrixPage() {
       setPending(null);
     }
   }
-  if (!services && !error) return /* @__PURE__ */ jsx5("div", { className: "p-6 text-sm opacity-60", children: "Lade \u2026" });
-  if (error) return /* @__PURE__ */ jsxs4("div", { className: "p-6 text-sm text-red-400", children: [
-    "Fehler: ",
-    error
-  ] });
+  if (!services && !error) return /* @__PURE__ */ jsx6("div", { className: "p-6 text-sm opacity-60", children: "Lade \u2026" });
+  if (error && !services) return /* @__PURE__ */ jsx6("div", { className: "p-4 sm:p-6", children: /* @__PURE__ */ jsx6(LoadError, { what: "Die Liste der Container", error, onRetry: load }) });
   const imageSummary = summarizeImages(visibleImages, imagesChecking);
   const needle = query.trim().toLowerCase();
   const byHost = /* @__PURE__ */ new Map();
@@ -1374,10 +1490,10 @@ function ServiceMatrixPage() {
     list.push(s);
     byHost.set(s.host, list);
   }
-  return /* @__PURE__ */ jsxs4("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
-    /* @__PURE__ */ jsxs4("div", { className: "mb-4 flex flex-wrap items-center gap-3", children: [
-      /* @__PURE__ */ jsx5("h2", { className: "font-semibold text-xl tracking-tight", children: "Service-Matrix" }),
-      /* @__PURE__ */ jsx5(
+  return /* @__PURE__ */ jsxs5("div", { className: "mx-auto w-full max-w-7xl p-4 sm:p-6", children: [
+    /* @__PURE__ */ jsxs5("div", { className: "mb-4 flex flex-wrap items-center gap-3", children: [
+      /* @__PURE__ */ jsx6("h2", { className: "font-semibold text-xl tracking-tight", children: "Service-Matrix" }),
+      /* @__PURE__ */ jsx6(
         "input",
         {
           value: query,
@@ -1387,8 +1503,8 @@ function ServiceMatrixPage() {
           className: "w-56 px-2 py-1 text-sm rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]"
         }
       ),
-      /* @__PURE__ */ jsx5("button", { type: "button", onClick: load, className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Aktualisieren" }),
-      deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && /* @__PURE__ */ jsx5(
+      /* @__PURE__ */ jsx6("button", { type: "button", onClick: load, className: "px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Aktualisieren" }),
+      deck().hasPermission("hosts.execute") && (services ?? []).length > 0 && /* @__PURE__ */ jsx6(
         "button",
         {
           type: "button",
@@ -1399,17 +1515,18 @@ function ServiceMatrixPage() {
           children: imagesChecking ? "Pr\xFCfe Images \u2026" : "Image-Updates pr\xFCfen"
         }
       ),
-      hostFilter && /* @__PURE__ */ jsxs4("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5 text-xs", "data-testid": "host-filter", children: [
+      hostFilter && /* @__PURE__ */ jsxs5("span", { className: "accent-soft flex items-center gap-1 rounded px-2 py-0.5 text-xs", "data-testid": "host-filter", children: [
         "Nur ",
         (services ?? []).find((s) => s.host_id === hostFilter)?.host ?? "dieser Server",
-        /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => updateUrl({ host: null }), "aria-label": "Filter entfernen", className: "opacity-70 hover:opacity-100", children: "\u2715" })
+        /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => updateUrl({ host: null }), "aria-label": "Filter entfernen", className: "opacity-70 hover:opacity-100", children: "\u2715" })
       ] })
     ] }),
-    message && /* @__PURE__ */ jsx5("p", { className: "mb-3 text-sm opacity-80", children: message }),
-    (imageSummary || imageMessage) && /* @__PURE__ */ jsxs4("p", { className: "mb-3 flex flex-wrap items-center gap-x-3 text-xs opacity-80", "aria-live": "polite", "data-testid": "image-summary", children: [
-      imageSummary && /* @__PURE__ */ jsx5("span", { children: imageSummary }),
-      imageMessage && /* @__PURE__ */ jsx5("span", { className: "text-red-400", children: imageMessage }),
-      !imagesChecking && imageSummary && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx5(
+    error && /* @__PURE__ */ jsx6(LoadError, { what: "Der aktuelle Stand", error, onRetry: load, hint: "Die Tabelle zeigt den letzten bekannten Stand." }),
+    message && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-sm opacity-80", children: message }),
+    (imageSummary || imageMessage) && /* @__PURE__ */ jsxs5("p", { className: "mb-3 flex flex-wrap items-center gap-x-3 text-xs opacity-80", "aria-live": "polite", "data-testid": "image-summary", children: [
+      imageSummary && /* @__PURE__ */ jsx6("span", { children: imageSummary }),
+      imageMessage && /* @__PURE__ */ jsx6("span", { className: "text-red-400", children: imageMessage }),
+      !imagesChecking && imageSummary && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx6(
         "button",
         {
           type: "button",
@@ -1420,12 +1537,12 @@ function ServiceMatrixPage() {
         }
       )
     ] }),
-    (services ?? []).length === 0 && /* @__PURE__ */ jsx5(NoContainers, {}),
-    (services ?? []).length > 0 && byHost.size === 0 && /* @__PURE__ */ jsx5("p", { className: "mb-3 text-sm opacity-70", "data-testid": "no-match", children: needle ? "Kein Container passt zu deiner Suche." : "F\xFCr diesen Filter gibt es keine Container." }),
-    [...byHost.entries()].map(([host, entries]) => /* @__PURE__ */ jsxs4("section", { className: "mb-6 overflow-x-auto", children: [
-      /* @__PURE__ */ jsxs4("div", { className: "mb-2 flex flex-wrap items-center gap-3", children: [
-        /* @__PURE__ */ jsx5("h3", { className: "text-sm font-medium uppercase tracking-wide opacity-60", children: host }),
-        entries[0]?.host_id && entries[0].state !== "error" && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx5(
+    (services ?? []).length === 0 && /* @__PURE__ */ jsx6(NoContainers, {}),
+    (services ?? []).length > 0 && byHost.size === 0 && /* @__PURE__ */ jsx6("p", { className: "mb-3 text-sm opacity-70", "data-testid": "no-match", children: needle ? "Kein Container passt zu deiner Suche." : "F\xFCr diesen Filter gibt es keine Container." }),
+    [...byHost.entries()].map(([host, entries]) => /* @__PURE__ */ jsxs5("section", { className: "mb-6 overflow-x-auto", children: [
+      /* @__PURE__ */ jsxs5("div", { className: "mb-2 flex flex-wrap items-center gap-3", children: [
+        /* @__PURE__ */ jsx6("h3", { className: "text-sm font-medium uppercase tracking-wide opacity-60", children: host }),
+        entries[0]?.host_id && entries[0].state !== "error" && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx6(
           "button",
           {
             type: "button",
@@ -1435,7 +1552,7 @@ function ServiceMatrixPage() {
             children: "Docker-Speicher"
           }
         ),
-        entries[0]?.host_id && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx5(
+        entries[0]?.host_id && deck().hasPermission("hosts.execute") && /* @__PURE__ */ jsx6(
           BulkProposeButton,
           {
             hostId: entries[0].host_id,
@@ -1445,33 +1562,33 @@ function ServiceMatrixPage() {
           }
         )
       ] }),
-      entries[0]?.host_id && images?.hosts[entries[0].host_id]?.error && /* @__PURE__ */ jsxs4("p", { className: "mb-2 text-xs text-red-400", "data-testid": `image-error-${entries[0].host_id}`, children: [
+      entries[0]?.host_id && images?.hosts[entries[0].host_id]?.error && /* @__PURE__ */ jsxs5("p", { className: "mb-2 text-xs text-red-400", "data-testid": `image-error-${entries[0].host_id}`, children: [
         "Image-Pr\xFCfung: ",
         images.hosts[entries[0].host_id].error
       ] }),
-      storageFor && storageFor === entries[0]?.host_id && /* @__PURE__ */ jsx5("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx5(StoragePanel, { hostId: storageFor }) }),
-      /* @__PURE__ */ jsxs4("table", { role: "table", className: "w-full text-sm max-md:block", children: [
-        /* @__PURE__ */ jsx5("thead", { className: "max-md:hidden", children: /* @__PURE__ */ jsxs4("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
-          /* @__PURE__ */ jsx5("th", { className: "py-1 w-1/4", children: "Container" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 whitespace-nowrap", children: "Zustand" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Status" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 whitespace-nowrap", children: "Image-Update" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 whitespace-nowrap", children: "CPU" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 whitespace-nowrap", children: "RAM" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1", children: "Aktionen" })
+      storageFor && storageFor === entries[0]?.host_id && /* @__PURE__ */ jsx6("div", { className: "mb-3 bg-black/20 p-2 panel", children: /* @__PURE__ */ jsx6(StoragePanel, { hostId: storageFor }) }),
+      /* @__PURE__ */ jsxs5("table", { role: "table", className: "w-full text-sm max-md:block", children: [
+        /* @__PURE__ */ jsx6("thead", { className: "max-md:hidden", children: /* @__PURE__ */ jsxs5("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
+          /* @__PURE__ */ jsx6("th", { className: "py-1 w-1/4", children: "Container" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 whitespace-nowrap", children: "Zustand" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Status" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 whitespace-nowrap", children: "Image-Update" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 whitespace-nowrap", children: "CPU" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 whitespace-nowrap", children: "RAM" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Aktionen" })
         ] }) }),
-        /* @__PURE__ */ jsx5("tbody", { role: "rowgroup", className: "divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0", children: entries.map((s) => {
+        /* @__PURE__ */ jsx6("tbody", { role: "rowgroup", className: "divide-y divide-white/5 max-md:block max-md:space-y-2 max-md:divide-y-0", children: entries.map((s) => {
           const manageable = Boolean(s.host_id && s.container) && s.state !== "error";
           const isRunning = s.state === "running" || s.state === "restarting";
           const logsOpen = logsFor === s.id;
           const busy = (verb) => pending === `${s.id}:${verb}`;
           const imageShown = Boolean(images?.data[s.id]) || Boolean(s.host_id && images?.hosts[s.host_id]?.checking);
-          return /* @__PURE__ */ jsxs4(Fragment4, { children: [
-            /* @__PURE__ */ jsxs4("tr", { role: "row", className: CARD_ROW, "data-testid": `row-${s.id}`, children: [
-              /* @__PURE__ */ jsxs4("td", { role: "cell", className: "py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base", children: [
+          return /* @__PURE__ */ jsxs5(Fragment4, { children: [
+            /* @__PURE__ */ jsxs5("tr", { role: "row", className: CARD_ROW, "data-testid": `row-${s.id}`, children: [
+              /* @__PURE__ */ jsxs5("td", { role: "cell", className: "py-1.5 break-words max-md:w-full max-md:py-0 max-md:text-base", children: [
                 s.name,
-                s.is_self && /* @__PURE__ */ jsx5("span", { className: "ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70", children: "Nodvard Deck" }),
-                s.compose_project && /* @__PURE__ */ jsx5(
+                s.is_self && /* @__PURE__ */ jsx6("span", { className: "ml-1.5 rounded bg-white/10 px-1 text-[10px] opacity-70", children: "Nodvard Deck" }),
+                s.compose_project && /* @__PURE__ */ jsx6(
                   "button",
                   {
                     type: "button",
@@ -1482,13 +1599,13 @@ function ServiceMatrixPage() {
                     children: s.compose_project
                   }
                 ),
-                s.image && /* @__PURE__ */ jsx5("span", { className: "block text-xs opacity-50", children: s.image })
+                s.image && /* @__PURE__ */ jsx6("span", { className: "block text-xs opacity-50", children: s.image })
               ] }),
-              /* @__PURE__ */ jsx5("td", { role: "cell", className: "py-1.5 max-md:py-0", children: /* @__PURE__ */ jsx5("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`, children: STATE_LABEL[s.state] ?? s.state }) }),
-              /* @__PURE__ */ jsx5("td", { role: "cell", className: "py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs", title: s.status !== statusText(s.status) ? s.status : void 0, children: statusText(s.status) }),
-              /* @__PURE__ */ jsxs4("td", { role: "cell", className: `py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`, children: [
-                /* @__PURE__ */ jsx5("div", { "data-testid": `image-${s.id}`, children: manageable && /* @__PURE__ */ jsx5(ImageUpdateBadge, { result: images?.data[s.id], checking: Boolean(s.host_id && images?.hosts[s.host_id]?.checking), running: isRunning }) }),
-                manageable && /* @__PURE__ */ jsx5(
+              /* @__PURE__ */ jsx6("td", { role: "cell", className: "py-1.5 max-md:py-0", children: /* @__PURE__ */ jsx6("span", { className: `rounded border px-1.5 py-0.5 text-xs ${TONE_CLASS[s.tone] ?? TONE_CLASS.neutral}`, children: STATE_LABEL[s.state] ?? s.state }) }),
+              /* @__PURE__ */ jsx6("td", { role: "cell", className: "py-1.5 break-words opacity-70 max-md:min-w-0 max-md:flex-1 max-md:py-0 max-md:text-xs", title: s.status !== statusText(s.status) ? s.status : void 0, children: statusText(s.status) }),
+              /* @__PURE__ */ jsxs5("td", { role: "cell", className: `py-1.5 text-xs max-md:w-full max-md:py-0 ${imageShown ? "" : "max-md:hidden"}`, children: [
+                /* @__PURE__ */ jsx6("div", { "data-testid": `image-${s.id}`, children: manageable && /* @__PURE__ */ jsx6(ImageUpdateBadge, { result: images?.data[s.id], checking: Boolean(s.host_id && images?.hosts[s.host_id]?.checking), running: isRunning }) }),
+                manageable && /* @__PURE__ */ jsx6(
                   ImageUpdateAction,
                   {
                     entryId: s.id,
@@ -1501,10 +1618,10 @@ function ServiceMatrixPage() {
                   }
                 )
               ] }),
-              /* @__PURE__ */ jsx5("td", { role: "cell", "data-label": "CPU", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `cpu-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx5("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id]?.cpu_percent != null ? `${stats[s.id].cpu_percent.toFixed(1)} %` : "\u2013" }),
-              /* @__PURE__ */ jsx5("td", { role: "cell", "data-label": "RAM", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `mem-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx5("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id] ? stats[s.id].mem_used != null ? formatBytes(stats[s.id].mem_used) : /* @__PURE__ */ jsx5("span", { title: MEM_UNKNOWN_HINT, children: "n. v." }) : "\u2013" }),
-              /* @__PURE__ */ jsx5("td", { role: "cell", className: "py-1.5 max-md:w-full max-md:py-0", children: /* @__PURE__ */ jsxs4("div", { className: "flex flex-wrap gap-1.5", children: [
-                manageable && !isRunning && /* @__PURE__ */ jsx5(
+              /* @__PURE__ */ jsx6("td", { role: "cell", "data-label": "CPU", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `cpu-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx6("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id]?.cpu_percent != null ? `${stats[s.id].cpu_percent.toFixed(1)} %` : "\u2013" }),
+              /* @__PURE__ */ jsx6("td", { role: "cell", "data-label": "RAM", className: `py-1.5 whitespace-nowrap text-xs opacity-80 max-md:py-0 ${CARD_LABEL}`, "data-testid": `mem-${s.id}`, children: !statsLoaded ? /* @__PURE__ */ jsx6("span", { title: MEASURING_HINT, children: "\u2026" }) : stats[s.id] ? stats[s.id].mem_used != null ? formatBytes(stats[s.id].mem_used) : /* @__PURE__ */ jsx6("span", { title: MEM_UNKNOWN_HINT, children: "n. v." }) : "\u2013" }),
+              /* @__PURE__ */ jsx6("td", { role: "cell", className: "py-1.5 max-md:w-full max-md:py-0", children: /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap gap-1.5", children: [
+                manageable && !isRunning && /* @__PURE__ */ jsx6(
                   "button",
                   {
                     type: "button",
@@ -1514,7 +1631,17 @@ function ServiceMatrixPage() {
                     children: busy("start") ? "\u2026" : "Starten"
                   }
                 ),
-                manageable && isRunning && /* @__PURE__ */ jsx5(
+                manageable && REMOVABLE_STATES.has(s.state) && !s.is_self && /* @__PURE__ */ jsx6(
+                  "button",
+                  {
+                    type: "button",
+                    disabled: busy("remove"),
+                    onClick: () => void trigger(s, "remove"),
+                    className: `rounded px-2 py-1 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-40 ${TOUCH}`,
+                    children: busy("remove") ? "\u2026" : "L\xF6schen"
+                  }
+                ),
+                manageable && isRunning && /* @__PURE__ */ jsx6(
                   "button",
                   {
                     type: "button",
@@ -1524,7 +1651,7 @@ function ServiceMatrixPage() {
                     children: busy("restart") ? "\u2026" : "Neustart"
                   }
                 ),
-                manageable && isRunning && /* @__PURE__ */ jsx5(
+                manageable && isRunning && /* @__PURE__ */ jsx6(
                   "button",
                   {
                     type: "button",
@@ -1535,7 +1662,7 @@ function ServiceMatrixPage() {
                     children: busy("stop") ? "\u2026" : "Stoppen"
                   }
                 ),
-                manageable && /* @__PURE__ */ jsx5(
+                manageable && /* @__PURE__ */ jsx6(
                   "button",
                   {
                     type: "button",
@@ -1545,7 +1672,16 @@ function ServiceMatrixPage() {
                     children: "Details"
                   }
                 ),
-                manageable && /* @__PURE__ */ jsx5(
+                manageable && isRunning && !s.is_self && s.host_id && s.container && deck().hasPermission("hosts.execute") && // Shell im Container über das Terminal des Kerns (scope/ref, siehe shell.py).
+                /* @__PURE__ */ jsx6(
+                  "a",
+                  {
+                    href: consoleHref(s.host_id, s.container),
+                    className: `rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 ${TOUCH}`,
+                    children: "Konsole"
+                  }
+                ),
+                manageable && /* @__PURE__ */ jsx6(
                   "button",
                   {
                     type: "button",
@@ -1555,11 +1691,23 @@ function ServiceMatrixPage() {
                     children: "Logs"
                   }
                 ),
-                s.url && /* @__PURE__ */ jsx5("a", { href: s.url, target: "_blank", rel: "noreferrer", className: "px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2", children: "\xD6ffnen" })
+                s.url && /* @__PURE__ */ jsx6("a", { href: s.url, target: "_blank", rel: "noreferrer", className: "px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2", children: "\xD6ffnen" }),
+                manageable && s.host_id && s.container && deck().hasPermission("apps.write") && /* @__PURE__ */ jsx6(
+                  "button",
+                  {
+                    type: "button",
+                    onClick: () => setUrlFor(urlFor === s.id ? null : s.id),
+                    "aria-expanded": urlFor === s.id,
+                    title: s.url_custom ? "Eigene Adresse \u2013 hier \xE4ndern oder die erkannte wieder nehmen." : "Adresse f\xFCr \u201E\xD6ffnen\u201C selbst festlegen.",
+                    className: `px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2`,
+                    children: s.url_custom ? "Adresse (eigene)" : "Adresse"
+                  }
+                )
               ] }) })
             ] }),
-            detailsFor === s.id && /* @__PURE__ */ jsx5("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx5("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx5(DetailsPanel, { entry: s }) }) }),
-            updateFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx5("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx5("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx5(
+            urlFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx6("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx6("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx6(UrlPanel, { entry: s, onSaved: load, onClose: () => setUrlFor(null) }) }) }),
+            detailsFor === s.id && /* @__PURE__ */ jsx6("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx6("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx6(DetailsPanel, { entry: s }) }) }),
+            updateFor === s.id && s.host_id && s.container && /* @__PURE__ */ jsx6("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx6("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx6(
               UpdatePanel,
               {
                 hostId: s.host_id,
@@ -1570,7 +1718,7 @@ function ServiceMatrixPage() {
                 onClose: () => setUpdateFor(null)
               }
             ) }) }),
-            logsOpen && /* @__PURE__ */ jsx5("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx5("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx5(LogPanel, { entry: s, onClose: () => setLogsFor(null) }) }) })
+            logsOpen && /* @__PURE__ */ jsx6("tr", { role: "row", className: "max-md:block", children: /* @__PURE__ */ jsx6("td", { role: "cell", colSpan: 7, className: "bg-black/20 p-2 max-md:block", children: /* @__PURE__ */ jsx6(LogPanel, { entry: s, onClose: () => setLogsFor(null) }) }) })
           ] }, s.id);
         }) })
       ] })
@@ -1581,6 +1729,8 @@ export {
   ImageUpdateBadge,
   STATE_LABEL,
   ServiceMatrixPage,
+  afterCheckText,
+  consoleHref,
   scopeImages,
   statusText,
   summarizeImages

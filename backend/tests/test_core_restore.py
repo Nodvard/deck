@@ -1089,6 +1089,27 @@ def test_virtual_table_with_a_comment_in_its_sql_is_refused(layout, tmp_path):
         stage(layout, _backup_with_db(tmp_path, db))
 
 
+def test_schema_text_stored_as_blob_is_refused(layout, tmp_path):
+    """SQLite laedt das Schema auch aus einem BLOB; die Pruefung auf `CREATE VIRTUAL` sah nur Text und liess es durch."""
+    db = make_db(tmp_path / "blob-schema.db")
+    _hand_written_schema(db, "UPDATE sqlite_master SET sql = CAST(sql AS BLOB) WHERE name = 'users'", ())
+    rid = restore.new_id()
+    with pytest.raises(UnusableBackup, match="Schema-Eintrag"):
+        stage(layout, _backup_with_db(tmp_path, db), restore_id=rid)
+    _only_staging_removed(layout, rid)
+
+
+@pytest.mark.parametrize("sql,expected", [
+    (b"CREATE VIRTUAL TABLE v USING fts4(a)", "Schema-Eintrag"),
+    (b"CREATE TABLE t (a)", "Schema-Eintrag"),
+    (7, "Schema-Eintrag"),
+    (None, None),  # automatische Indizes (`sqlite_autoindex_*`) haben keinen SQL-Text
+    ("CREATE TABLE t (a)", None),
+])
+def test_only_text_or_no_schema_text_passes(sql, expected):
+    assert restore._foreign_schema_object("index", 3, sql) == expected
+
+
 def test_huge_gnu_long_name_header_is_refused_without_reading_it_into_memory(layout, tmp_path):
     # Ein GNU-Langname-Kopf, der 8 MiB "Name" verspricht: tarfile laese ihn sonst ganz in den Speicher
     # (als gzip winzig; mit einem Gigabyte wirft das einen Pi aus dem Speicher).
@@ -1206,3 +1227,31 @@ async def test_core_job_removes_old_states_every_day_without_touching_running_up
     assert result == {"removed": 1}
     assert not old.exists() and young.is_dir() and (lay.restore_dir / upload).is_dir(), "nur der alte Stand, kein Zwischenstand einer laufenden Wiederherstellung"
     reset_extension_runtime()
+
+
+@pytest.mark.parametrize(("sql", "expected"), [
+    ("CREATE VIRTUAL TABLE v USING fts5(a)", True),
+    ("create virtual table v using rtree(id, a, b)", True),
+    ("CREATE/**/VIRTUAL TABLE v USING rtree(id)", True),
+    ("  -- Kommentar\n/* noch einer */ CREATE -- x\n VIRTUAL TABLE v USING fts5(a)", True),
+    ("CREATE\tVIRTUAL", True),
+    ("CREATE TABLE t (a)", False),
+    ("CREATE VIRTUALX TABLE t (a)", False),
+    ("CREATEVIRTUAL TABLE t (a)", False),
+    ("CREATE VIRTUAL_ TABLE t (a)", False),
+    ("/* offen CREATE VIRTUAL TABLE v", False),
+    ("-- nur ein Kommentar CREATE VIRTUAL", False),
+    ("", False),
+])
+def test_create_virtual_is_recognized_like_before(sql, expected):
+    assert restore._is_create_virtual(sql) is expected
+
+
+def test_many_empty_comments_do_not_take_exponential_time():
+    """Sicherheitsfund: Der fruehere regulaere Ausdruck brauchte bei vielen `/**/` exponentiell lange (bei 22 schon
+    0,3 s, jeder weitere ungefaehr doppelt so lange). Der SQL-Text kommt aus einer fremden Sicherung."""
+    started = time.monotonic()
+    for sql in ("/**/" * 50_000 + "x", "CREATE" + "/**/" * 50_000 + "x", "/*" + "*/" * 50_000, "--\n" * 50_000):
+        assert restore._is_create_virtual(sql) is False
+        assert restore._foreign_schema_object("table", 2, sql) is None
+    assert time.monotonic() - started < 2.0

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pyotp
 import pytest
 from nodvard_deck.models import AuditEntry, RecoveryCode, RefreshToken, User
@@ -38,7 +40,7 @@ async def _world(client):
     ids = {}
     for name, role in (("admin1", "admin"), ("viewer1", "viewer"), ("viewer2", "viewer")):
         r = await client.post(
-            "/api/v1/users", json={"username": name, "password": PASSWORD, "role_ids": [roles[role]]}, headers=_h(owner)
+            "/api/v1/users", json={"username": name, "password": PASSWORD, "role_ids": [roles[role]], "current_password": PASSWORD}, headers=_h(owner)
         )
         ids[name] = r.json()["id"]
     return owner, ids
@@ -118,12 +120,17 @@ async def test_owner_can_reset_others_but_own_goes_through_me(client, db_session
     await _enable_2fa(client, viewer_token)
     owner_row = (await db_session.execute(select(User).where(User.is_owner.is_(True)))).scalar_one()
 
-    assert (await client.post(f"/api/v1/users/{ids['viewer1']}/reset-2fa", json={"current_password": PASSWORD}, headers=_h(owner))).status_code == 204
+    # Der Inhaber hat selbst Zwei-Faktor an: dazu kommt sein eigener Code aus der App.
+    code = pyotp.TOTP(owner_secret).now()
+    assert (await client.post(
+        f"/api/v1/users/{ids['viewer1']}/reset-2fa", json={"current_password": PASSWORD, "totp_code": code}, headers=_h(owner)
+    )).status_code == 204
     own = await client.post(f"/api/v1/users/{owner_row.id}/reset-2fa", json={"current_password": PASSWORD}, headers=_h(owner))
     assert own.status_code == 409
     assert "Mein Konto" in own.json()["detail"]
     # Der Inhaber selbst schaltet seine eigene ueber /me/totp ab (mit Passwort und Code).
-    body = {"current_password": PASSWORD, "totp_code": pyotp.TOTP(owner_secret).now()}
+    # Der Code dieses Zeitschritts ist schon verbraucht (oben), also der des naechsten.
+    body = {"current_password": PASSWORD, "totp_code": pyotp.TOTP(owner_secret).at(time.time() + 30)}
     assert (await client.request("DELETE", "/api/v1/me/totp", json=body, headers=_h(owner))).status_code == 204
 
 

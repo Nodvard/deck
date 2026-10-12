@@ -59,6 +59,15 @@ EXCEPTIONS: dict[tuple[str, str], Ausnahme] = {
             "Dateien). Steht nicht auf der Erlaubt-Liste, deshalb bewusst hier eingetragen."
         ),
     ),
+    ("python", "defusedxml"): Ausnahme(
+        version="0.7.1",
+        bewertet_als="PSF-2.0",
+        grund=(
+            "Die Metadaten nennen nur die Abkürzung 'PSFL'; Klassifikator und Lizenzdatei im Wheel sind die "
+            "Python Software Foundation License Version 2 (PSF-2.0, freizügig, kein Copyleft, steht auf der "
+            "Erlaubt-Liste). Nur die Schreibweise wird nicht erkannt."
+        ),
+    ),
     ("python", "pillow"): Ausnahme(
         version="12.3.0",
         bewertet_als="MIT-CMU (HPND-Familie, permissiv)",

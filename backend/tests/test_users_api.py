@@ -159,7 +159,7 @@ async def test_update_user_password_actually_changes_login(client):
     )
     user_id = created.json()["id"]
 
-    await client.patch(f"/api/v1/users/{user_id}", json={"password": "new-correct-horse-battery"}, headers=_auth_header(token))
+    await client.patch(f"/api/v1/users/{user_id}", json={"password": "new-correct-horse-battery", "current_password": "correct-horse-battery"}, headers=_auth_header(token))
 
     old_login = await client.post("/api/v1/auth/login", json={"username": "usr3", "password": "correct-horse-battery"})
     assert old_login.status_code == 401
@@ -203,7 +203,7 @@ async def test_admin_cannot_delete_their_own_account(client):
 
     created = await client.post(
         "/api/v1/users",
-        json={"username": "admin2", "password": "correct-horse-battery", "role_ids": [admin_id]},
+        json={"username": "admin2", "password": "correct-horse-battery", "role_ids": [admin_id], "current_password": "correct-horse-battery"},
         headers=_auth_header(owner_token),
     )
     admin2_id = created.json()["id"]
@@ -274,7 +274,7 @@ async def test_admin_password_reset_signs_out_all_sessions_of_that_user(client):
     refresh_a = session_a.json()["refresh_token"]
 
     r = await client.patch(
-        f"/api/v1/users/{user_id}", json={"password": "new-correct-horse-battery"}, headers=_auth_header(token)
+        f"/api/v1/users/{user_id}", json={"password": "new-correct-horse-battery", "current_password": "correct-horse-battery"}, headers=_auth_header(token)
     )
     assert r.status_code == 200, r.text
     assert (await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_a})).status_code == 401
@@ -286,7 +286,7 @@ async def test_own_password_cannot_be_set_via_patch(client):
     gedrosselt) -- sonst waere das Altpasswort-Erfordernis dort mit users.write umgehbar."""
     token, owner_id = await _bootstrap_owner(client)
     r = await client.patch(
-        f"/api/v1/users/{owner_id}", json={"password": "new-correct-horse-battery"}, headers=_auth_header(token)
+        f"/api/v1/users/{owner_id}", json={"password": "new-correct-horse-battery", "current_password": "correct-horse-battery"}, headers=_auth_header(token)
     )
     assert r.status_code == 409, r.text
     assert "Mein Konto" in r.json()["detail"]

@@ -8,6 +8,7 @@ Zeitpunkt der letzten Abfrage. Der Befehl braucht kein root und steht schon im S
 from __future__ import annotations
 
 import re
+import time
 from datetime import UTC, datetime
 from typing import Any
 
@@ -84,6 +85,16 @@ def signature_penalty(rows: list[dict[str, Any]]) -> int:
     return round(STALE_PENALTY_POINTS * stale / len(rows) + UNKNOWN_PENALTY_POINTS * unknown / len(rows))
 
 
+def signature_reasons(rows: list[dict[str, Any]]) -> list[str]:
+    """Der Abzug fuer Signaturen als kurzer Satz fuer die Liste der Gruende (leer, wenn nichts abgezogen wird)."""
+    points = signature_penalty(rows)
+    if not points:
+        return []
+    stale = sum(1 for r in rows if r.get("clamav_installed") and r.get("signature_stale") is True)
+    text = f"Virensignaturen veraltet auf {_servers(stale, len(rows))}" if stale else "Alter der Virensignaturen unbekannt"
+    return [f"{text} (−{points})"]
+
+
 def signature_problem(row: dict[str, Any]) -> str | None:
     """Kurzer Satz fuer das Morgen-Briefing, `None`, wenn nichts zu tun ist. Ein unbekanntes Alter ist nur ein
     Hinweis auf der Seite und loest keine Morgenmeldung aus."""
@@ -115,3 +126,100 @@ def attention_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "action_label": "Signaturen aktualisieren",
             })
     return items
+
+
+# Was der Schutzwert ausser dem Virenschutz mitzaehlt (`posture_penalty`), je anteilig nach der Zahl der Server. Ohne
+# diese Abzuege stand ein Server mit offenen Sicherheitsupdates, root-Anmeldung per Passwort und ohne Fail2ban als "Gut
+# geschuetzt" da, solange ClamAV lief. Gezaehlt wird nur, was aktuell gelesen wurde: ein Server ohne Update-Pruefung
+# oder ohne Blick des Einbruchschutzes kostet nichts (er steht dort ohnehin als "noch nicht geprueft"). Ist die letzte
+# Pruefung gescheitert oder aelter als `STALE_AFTER_S`, zaehlt der alte Stand nicht als Tatsache; das steht dann als
+# Grund ohne Abzug da, damit ein dauerhaft scheiternder Server den Wert nicht still verbessert.
+UPDATES_PENALTY_POINTS = 15
+"""Sicherheitsupdates offen."""
+REBOOT_PENALTY_POINTS = 5
+"""Neustart nach Updates noetig (der neue Kernel oder die neuen Bibliotheken laufen noch nicht)."""
+FAIL2BAN_PENALTY_POINTS = 10
+"""Fail2ban fehlt oder laeuft nicht. "nicht lesbar" (ohne root) zaehlt nicht."""
+SSH_ROOT_PASSWORD_POINTS = 10
+"""root darf sich per Passwort anmelden (SSH-Befund "kritisch")."""
+SSH_PASSWORD_POINTS = 5
+"""Anmeldung per Passwort erlaubt (SSH-Befund "Warnung")."""
+STALE_AFTER_S = 3 * 24 * 3600
+"""Aelter als drei Tage: der gespeicherte Stand zaehlt nicht mehr (Updates werden taeglich geprueft)."""
+EVENT_POINTS = 5
+EVENT_MAX_POINTS = 15
+"""Je offenes kritisches Sicherheitsereignis (z. B. Angriff auf SSH), hoechstens so viel."""
+
+
+def _share(points: int, count: int, total: int) -> int:
+    """Anteilig nach der Zahl der Server, aber mindestens 1 Punkt, sobald ein Server betroffen ist (bei vielen Servern
+    fiele er sonst durch die Rundung ganz weg und stuende auch nicht unter den Gruenden)."""
+    if not total or count <= 0:
+        return 0
+    return max(1, round(points * count / total))
+
+
+def _fresh(state: Any, now: float) -> bool:
+    """Zaehlt dieser gespeicherte Stand? Nur ohne Fehler und nicht aelter als `STALE_AFTER_S` (ohne Zeitstempel:
+    ja, aeltere Staende hatten keinen)."""
+    if not isinstance(state, dict) or state.get("error"):
+        return False
+    at = state.get("checked_at")
+    return not isinstance(at, int | float) or now - at <= STALE_AFTER_S
+
+
+def _unchecked(states: dict[str, dict[str, Any]], host_ids: list[str], now: float) -> int:
+    """Server mit einem Stand, der nicht zaehlt (Pruefung gescheitert oder veraltet). Ohne Stand (noch nie geprueft)
+    und "wird nicht unterstuetzt" zaehlen hier nicht."""
+    return sum(
+        1 for h in host_ids
+        if isinstance(states.get(h), dict) and not states[h].get("unsupported") and not _fresh(states[h], now)
+    )
+
+
+def _servers(count: int, total: int) -> str:
+    return f"{count} von {total} Servern" if total > 1 else "dem Server"
+
+
+def posture_penalty(
+    host_ids: list[str],
+    updates: dict[str, dict[str, Any]],
+    guard: dict[str, dict[str, Any]],
+    critical_events: int,
+    *,
+    now: float | None = None,
+) -> tuple[int, list[str]]:
+    """Abzug fuer offene Updates, Einbruchschutz und SSH-Einstellungen (siehe oben) und die Gruende als kurze Saetze mit
+    den Punkten. `updates`/`guard`: der gespeicherte Stand je Host (Baselines "updates" und "guard")."""
+    total = len(host_ids)
+    if not total:
+        return 0, []
+    now = time.time() if now is None else now
+    upd = [updates[h] for h in host_ids if _fresh(updates.get(h), now)]
+    grd = [guard[h] for h in host_ids if _fresh(guard.get(h), now)]
+    security = sum(1 for s in upd if int(s.get("security_count") or 0) > 0)
+    reboot = sum(1 for s in upd if s.get("reboot_required") and not s.get("reboot_pending_since"))
+    no_fail2ban = sum(1 for v in grd if v.get("fail2ban") in ("none", "stopped"))
+
+    def worst_ssh(view: dict[str, Any]) -> str | None:
+        severities = {f.get("severity") for f in view.get("ssh_findings") or [] if isinstance(f, dict)}
+        return "critical" if "critical" in severities else "warning" if "warning" in severities else None
+
+    ssh = [worst_ssh(v) for v in grd]
+    root_password, password = ssh.count("critical"), ssh.count("warning")
+    parts = [
+        (_share(UPDATES_PENALTY_POINTS, security, total), f"Sicherheitsupdates offen auf {_servers(security, total)}"),
+        (_share(REBOOT_PENALTY_POINTS, reboot, total), f"Neustart nötig auf {_servers(reboot, total)}"),
+        (_share(FAIL2BAN_PENALTY_POINTS, no_fail2ban, total), f"Fail2ban fehlt oder läuft nicht auf {_servers(no_fail2ban, total)}"),
+        (_share(SSH_ROOT_PASSWORD_POINTS, root_password, total),
+         f"Gefährliche SSH-Anmeldung erlaubt (root mit Passwort oder leeres Passwort) auf {_servers(root_password, total)}"),
+        (_share(SSH_PASSWORD_POINTS, password, total), f"Anmeldung per Passwort erlaubt auf {_servers(password, total)}"),
+        (min(EVENT_MAX_POINTS, EVENT_POINTS * max(0, critical_events)),
+         f"{critical_events} offene{'s' if critical_events == 1 else ''} kritische{'s' if critical_events == 1 else ''} Sicherheitsereignis{'' if critical_events == 1 else 'se'}"),
+    ]
+    points = sum(p for p, _text in parts)
+    reasons = [f"{text} (−{p})" for p, text in parts if p > 0]
+    for count, what in ((_unchecked(updates, host_ids, now), "Updates"), (_unchecked(guard, host_ids, now), "Einbruchschutz")):
+        if count:
+            reasons.append(f"{what} auf {_servers(count, total)} zuletzt nicht geprüft (ohne Abzug)")
+    return points, reasons

@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
-import { NetworkPage, type NpmStatus, type PiholeStatus } from "./NetworkPage";
+import { NetworkPage, type AddressCheckResult, type NpmStatus, type PiholeStatus } from "./NetworkPage";
 
 const NOT_CONFIGURED_PIHOLE: PiholeStatus = {
   state: "not_configured",
@@ -46,7 +46,19 @@ const NPM: NpmStatus = {
 
 type Call = { url: string; method: string; body: unknown };
 
-function mockFetch(calls: Call[], data: { pihole: PiholeStatus; npm: NpmStatus }, approveStatus = "succeeded", output = "Erledigt.") {
+const NO_CHECKS: AddressCheckResult = { state: "ok", message: null, checks: [], problems: 0 };
+const CHECKS: AddressCheckResult = {
+  state: "ok", message: null, problems: 1,
+  checks: [
+    { proxy_id: 1, status: "running", tone: "good", text: "Führt zum Container nextcloud auf docker – läuft.", container: "nextcloud", docker_host: "docker", docker_host_id: "h1", can_start: false },
+    { proxy_id: 2, status: "stopped", tone: "bad", text: "Führt zum Container immich_server auf docker – der ist gestoppt. Die Seite ist so vermutlich nicht erreichbar.", container: "immich_server", docker_host: "docker", docker_host_id: "h1", can_start: true },
+    { proxy_id: 3, status: "unknown", tone: "neutral", text: "Das Ziel ist kein bekannter Docker-Server. Vielleicht ein Dienst außerhalb von Docker.", container: null, docker_host: null, docker_host_id: null, can_start: false },
+  ],
+};
+
+function mockFetch(
+  calls: Call[], data: { pihole: PiholeStatus; npm: NpmStatus; checks?: AddressCheckResult }, approveStatus = "succeeded", output = "Erledigt.",
+) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
@@ -54,6 +66,8 @@ function mockFetch(calls: Call[], data: { pihole: PiholeStatus; npm: NpmStatus }
     const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
     if (url.endsWith("/ext/network/pihole")) return json(data.pihole);
     if (url.endsWith("/ext/network/npm")) return json(data.npm);
+    if (url.endsWith("/ext/network/npm/address-check")) return json(data.checks ?? NO_CHECKS);
+    if (url.endsWith("/hosts/h1/actions/container.start")) return json({ action_id: "a4", status: "proposed", risk: "low" });
     if (url.endsWith("/ext/network/pihole/pause")) return json({ action_id: "a1", status: "proposed", risk: "low" });
     if (url.endsWith("/ext/network/pihole/resume")) return json({ action_id: "a2", status: "proposed", risk: "low" });
     if (/\/ext\/network\/npm\/hosts\/\d+\/(enable|disable)$/.test(url)) return json({ action_id: "a3", status: "proposed", risk: "medium" });
@@ -212,5 +226,102 @@ describe("Netzwerk-Seite", () => {
     fireEvent.click(pihole.getByRole("button", { name: "Erneut versuchen" }));
     await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/ext/network/pihole")).length).toBe(before + 1));
     expect(within(screen.getByTestId("npm-problem")).getByRole("link", { name: "Einstellungen" })).toHaveAttribute("href", "/settings/extensions/network");
+  });
+});
+
+describe("Adress-Check", () => {
+  it("zeigt je Proxy-Host, wohin er führt, und zählt gestoppte Ziele", async () => {
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM, checks: CHECKS }));
+    render(<NetworkPage />);
+    expect(await screen.findByTestId("address-2")).toHaveTextContent("Führt zum Container immich_server auf docker – der ist gestoppt.");
+    expect(screen.getByTestId("address-1")).toHaveTextContent("nextcloud auf docker – läuft.");
+    expect(screen.getByTestId("address-summary")).toHaveTextContent("Adress-Check: Eine Adresse führt zu einem gestoppten Container.");
+    expect(within(screen.getByTestId("host-1")).queryByRole("button", { name: "Container starten" })).toBeNull();
+  });
+
+  it("startet den gestoppten Container über die Freigabe", async () => {
+    const calls: Call[] = [];
+    vi.stubGlobal("fetch", mockFetch(calls, { pihole: PIHOLE, npm: NPM, checks: CHECKS }));
+    render(<NetworkPage />);
+    fireEvent.click(within(await screen.findByTestId("host-2")).getByRole("button", { name: "Container starten" }));
+    await waitFor(() => expect(calls.some((c) => c.url.endsWith("/hosts/h1/actions/container.start"))).toBe(true));
+    expect(confirmDialog).toHaveBeenCalledWith(
+      "Container „immich_server“ auf docker starten? Dahinter liegt nas.home.example.",
+      expect.objectContaining({ confirmLabel: "Starten" }),
+    );
+    const start = calls.find((c) => c.url.endsWith("/hosts/h1/actions/container.start"))!;
+    expect(start.body).toEqual({ payload: { container: "immich_server" }, reason: "Über den Adress-Check der Netzwerk-Seite gestartet (nas.home.example)." });
+    await waitFor(() => expect(calls.filter((c) => c.url.endsWith("/npm/address-check")).length).toBe(2));
+  });
+
+  it("ohne Server-Recht gibt es keinen Start-Knopf", async () => {
+    permissions.delete("hosts.execute");
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM, checks: CHECKS }));
+    render(<NetworkPage />);
+    expect(await screen.findByTestId("address-2")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Container starten" })).toBeNull();
+  });
+
+  it("sagt, warum es keinen Check gibt, und meldet ein gutes Ergebnis", async () => {
+    const off: AddressCheckResult = { state: "no_catalog", message: "Für den Adress-Check braucht es die Service-Matrix.", checks: [], problems: 0 };
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM, checks: off }));
+    const { unmount } = render(<NetworkPage />);
+    expect(await screen.findByTestId("address-summary")).toHaveTextContent("Adress-Check: Für den Adress-Check braucht es die Service-Matrix.");
+    unmount();
+
+    // Nichts zugeordnet: keine grüne Entwarnung.
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM }));
+    const second = render(<NetworkPage />);
+    await waitFor(() => expect(screen.getByTestId("address-summary")).toHaveTextContent("Adress-Check: Kein Ziel ließ sich einem Container zuordnen."));
+    second.unmount();
+
+    const good: AddressCheckResult = { ...CHECKS, problems: 0, checks: [CHECKS.checks[0], CHECKS.checks[2]] };
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM, checks: good }));
+    render(<NetworkPage />);
+    await waitFor(() => expect(screen.getByTestId("address-summary")).toHaveTextContent(
+      "Adress-Check: Kein aktiver Proxy-Host führt sicher zu einem gestoppten Container (1 von 2 Zielen zugeordnet).",
+    ));
+    expect(screen.getByTestId("address-summary").className).toContain("text-emerald-300");
+  });
+
+  it("ein gestoppter Container hinter einem ausgeschalteten oder unsicheren Ziel nimmt die Entwarnung", async () => {
+    const unsure: AddressCheckResult = {
+      ...CHECKS, problems: 0, checks: [CHECKS.checks[0], { ...CHECKS.checks[1], tone: "neutral", can_start: false }],
+    };
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM, checks: unsure }));
+    render(<NetworkPage />);
+    await waitFor(() => expect(screen.getByTestId("address-summary")).toHaveTextContent("1 gestoppt, aber Proxy-Host aus oder Zuordnung unsicher"));
+    expect(screen.getByTestId("address-summary").className).not.toContain("text-emerald-300");
+  });
+
+  it("eine langsame ältere Antwort überschreibt nicht die neuere", async () => {
+    let releaseFirst: (r: Response) => void = () => undefined;
+    let checkCalls = 0;
+    const base = mockFetch([], { pihole: PIHOLE, npm: NPM, checks: CHECKS });
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/ext/network/npm/address-check") && ++checkCalls === 1) {
+        return new Promise<Response>((resolve) => { releaseFirst = resolve; });
+      }
+      return base(input, init);
+    }));
+    render(<NetworkPage />);
+    await waitFor(() => expect(checkCalls).toBe(1));
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    expect(await screen.findByTestId("address-summary")).toHaveTextContent("Eine Adresse führt zu einem gestoppten Container.");
+    releaseFirst(new Response(JSON.stringify(NO_CHECKS), { status: 200 }));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.getByTestId("address-summary")).toHaveTextContent("Eine Adresse führt zu einem gestoppten Container.");
+  });
+
+  it("sind alle Docker-Server weg, ist das keine Entwarnung", async () => {
+    const down: AddressCheckResult = {
+      state: "ok", message: null, problems: 0,
+      checks: [{ proxy_id: 1, status: "unreachable", tone: "warn", text: "docker ist gerade nicht erreichbar, das Ziel ließ sich nicht prüfen.", container: null, docker_host: "docker", docker_host_id: null, can_start: false }],
+    };
+    vi.stubGlobal("fetch", mockFetch([], { pihole: PIHOLE, npm: NPM, checks: down }));
+    render(<NetworkPage />);
+    await waitFor(() => expect(screen.getByTestId("address-summary")).toHaveTextContent("es ließ sich nichts prüfen"));
+    expect(screen.getByTestId("address-summary").className).not.toContain("text-emerald-300");
   });
 });

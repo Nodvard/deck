@@ -77,7 +77,8 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
         "shield": {"nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"]},
         "backups": {"backups-token:{name}": ["base_url"]},
         "proxmox": {"proxmox-token:{name}": ["base_url"]},
-        "ntfy": {"ntfy-token": ["server_url"]},
+        # Die Adresse eines weiteren Kanals ist selbst das Ziel: nichts, woran das Geheimnis haengen muesste.
+        "ntfy": {"ntfy-token": ["server_url"], "push-kanal:{name}": None},
     }
     for ext_id, labels in expected.items():
         schema = json.loads((REPO_EXTENSIONS_DIR / ext_id / "settings.schema.json").read_text(encoding="utf-8"))

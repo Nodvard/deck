@@ -16,8 +16,12 @@ hier mehr, als irgendein Aufrufer aktuell verlangt.
 **System (seit der Runde "Zeitzone und Aufbewahrung"):** `system.timezone` (Zeitzone aller Zeitplaene
 und Wartungsfenster, Vorgabe aus `NODVARD_DECK_TIMEZONE`/`TZ`) und `audit.retention_days` (7 bis
 3650 Tage, Rueckfall `NODVARD_DECK_AUDIT_RETENTION_DAYS`) sowie `jobs.run_retention_days` (1 bis 3650
-Tage, Vorgabe 30: wie lange Job-Laeufe samt Protokolldateien stehen bleiben, `services.job_retention`).
-`system.update_check.enabled`/`.channel` steuern "Nach Updates suchen" (`services.update_check`). Die Zeitzone hat einen Nebeneffekt
+Tage, Vorgabe 30: wie lange Job-Laeufe samt Protokolldateien stehen bleiben, `services.job_retention`) sowie
+`notifications.retention_days` (1 bis 3650 Tage, Vorgabe 90: ab wann der naechtliche Kern-Job alte Meldungen loescht;
+ungelesene kritische bleiben stehen, `services.notification_retention`).
+`system.update_check.enabled`/`.channel` steuern "Nach Updates suchen" (`services.update_check`).
+`system.trusted_proxies` (Liste von Adressen/Netzen, `core.trusted_proxies`) sagt, wessen `X-Forwarded-*` gelten; der
+neue Wert greift sofort (`api/proxy_headers.py` liest ihn aus dem Speicher). Die Zeitzone hat einen Nebeneffekt
 (`core.timezone.set_timezone`: Jobs umstellen, neu planen); alle landen als
 `system.settings.changed` im Protokoll. Ebenso die vier Schluessel, die das Freigabe-Gate steuern
 (`autonomy.mode`, `autonomy.max_risk`, `security.deny_patterns`, `maintenance.windows`).
@@ -38,9 +42,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import Settings
 from ...core import timezone as timezone_service
+from ...core import trusted_proxies as trusted_proxies_service
 from ...core.cron import cron_trigger
 from ...services import audit as audit_service
 from ...services import job_retention as job_retention_service
+from ...services import notification_retention as notification_retention_service
 from ...services import reachability as reachability_service
 from ...services import settings as settings_service
 from ...services import update_check as update_check_service
@@ -60,11 +66,13 @@ _MANAGED_KEYS: dict[str, type] = {
     "system.timezone": str,
     "audit.retention_days": int,
     "jobs.run_retention_days": int,
+    "notifications.retention_days": int,
     "hosts.reachability.enabled": bool,
     "hosts.reachability.interval_minutes": int,
     "system.update_check.enabled": bool,
     "system.update_check.channel": str,
     "ssh.confirm_new_host_keys": bool,
+    "system.trusted_proxies": list,
 }
 _DEFAULTS: dict[str, Any] = {
     "autonomy.mode": "propose",
@@ -72,19 +80,21 @@ _DEFAULTS: dict[str, Any] = {
     "security.deny_patterns": [],
     "maintenance.windows": [],
     "jobs.run_retention_days": job_retention_service.DEFAULT_RETENTION_DAYS,
+    "notifications.retention_days": notification_retention_service.DEFAULT_RETENTION_DAYS,
     "hosts.reachability.enabled": reachability_service.DEFAULT_ENABLED,
     "hosts.reachability.interval_minutes": reachability_service.DEFAULT_INTERVAL_MINUTES,
     "system.update_check.enabled": update_check_service.DEFAULT_ENABLED,
     "system.update_check.channel": update_check_service.DEFAULT_CHANNEL,
     "ssh.confirm_new_host_keys": False,
+    "system.trusted_proxies": [],
 }
 """Feste Vorgaben. `system.timezone` und `audit.retention_days` haben keine feste: ihre Vorgabe
 kommt aus der Umgebung (`_default_for`)."""
 _AUDITED_KEYS = {
     "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
-    "system.timezone", "audit.retention_days", "jobs.run_retention_days", "hosts.reachability.enabled",
-    "hosts.reachability.interval_minutes", "system.update_check.enabled", "system.update_check.channel",
-    "ssh.confirm_new_host_keys",
+    "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
+    "hosts.reachability.enabled", "hosts.reachability.interval_minutes", "system.update_check.enabled",
+    "system.update_check.channel", "ssh.confirm_new_host_keys", "system.trusted_proxies",
 }
 """Diese Einstellungen landen mit altem und neuem Wert im Protokoll (`system.settings.changed`).
 Dazu gehoeren die vier, die das Freigabe-Gate steuern: wer die Autonomie lockert oder Sperrmuster
@@ -189,6 +199,16 @@ def _validate(key: str, value: Any) -> None:
                 f"und {job_retention_service.RETENTION_MAX_DAYS} Tagen liegen."
             ),
         )
+    if key == "notifications.retention_days" and not (
+        notification_retention_service.RETENTION_MIN_DAYS <= value <= notification_retention_service.RETENTION_MAX_DAYS
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"notifications.retention_days muss zwischen {notification_retention_service.RETENTION_MIN_DAYS} "
+                f"und {notification_retention_service.RETENTION_MAX_DAYS} Tagen liegen."
+            ),
+        )
     if key == "system.update_check.channel" and value not in update_check_service.CHANNELS:
         raise HTTPException(
             status_code=422,
@@ -218,6 +238,8 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
     for key in _MANAGED_KEYS:
         if key == "ssh.confirm_new_host_keys" and settings.ssh_confirm_new_host_keys is not None:
             value = settings.ssh_confirm_new_host_keys  # Umgebungsvariable uebersteuert
+        elif key == trusted_proxies_service.SETTING_KEY and settings.trusted_proxies is not None:
+            value = trusted_proxies_service.env_entries(settings, warn=False)  # Umgebungsvariable uebersteuert
         else:
             value = stored[key] if key in stored else await _default_for(key, session, settings)
         out.append(SettingOut(key=key, value=value))
@@ -228,16 +250,39 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
 async def put_setting(
     key: Literal[
         "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
-        "system.timezone", "audit.retention_days", "jobs.run_retention_days", "hosts.reachability.enabled",
-        "hosts.reachability.interval_minutes", "system.update_check.enabled", "system.update_check.channel",
-        "ssh.confirm_new_host_keys",
+        "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
+        "hosts.reachability.enabled", "hosts.reachability.interval_minutes", "system.update_check.enabled",
+        "system.update_check.channel", "ssh.confirm_new_host_keys", "system.trusted_proxies",
     ],
     payload: SettingIn,
     session: SessionDep,
     settings: SettingsDep,
     user: CurrentUser,
 ) -> SettingOut:
+    if key == trusted_proxies_service.SETTING_KEY and not user.is_owner:
+        # Wer hier eintraegt, entscheidet, wessen Angaben zur Absender-Adresse gelten (Sperre, Protokoll, HTTPS):
+        # das ist Sache des Inhabers, nicht jedes Admins. Vor der Pruefung des Werts, damit es immer 403 ist.
+        await audit_service.log(
+            session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="denied",
+            target_type="setting", target_id=key, reason="Nur der Inhaber darf die Proxy-Liste ändern.",
+        )
+        await session.commit()
+        raise HTTPException(status_code=403, detail="Die Liste der vertrauenswürdigen Proxys ändert nur der Inhaber (Owner).")
     _validate(key, payload.value)
+    value = payload.value
+    if key == trusted_proxies_service.SETTING_KEY:
+        try:
+            value = trusted_proxies_service.normalize(value)
+        except trusted_proxies_service.InvalidEntry as exc:
+            raise HTTPException(status_code=422, detail=f"system.trusted_proxies: {exc}") from exc
+        if settings.trusted_proxies is not None:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Das ist über die Umgebungsvariable {trusted_proxies_service.ENV_NAME} festgelegt "
+                    "und lässt sich hier nicht ändern."
+                ),
+            )
     if key == "ssh.confirm_new_host_keys" and settings.ssh_confirm_new_host_keys is not None:
         raise HTTPException(
             status_code=409,
@@ -252,7 +297,7 @@ async def put_setting(
         # Nebeneffekt: Jobs mit der alten Standardzone umstellen und neu planen.
         changed_jobs = await timezone_service.set_timezone(session, payload.value, updated_by_user_id=user.id)
     else:
-        await settings_service.set_global(session, key, payload.value, updated_by_user_id=user.id)
+        await settings_service.set_global(session, key, value, updated_by_user_id=user.id)
         changed_jobs = None
         if key in _REACHABILITY_KEYS:
             # Schalter/Intervall betreffen den Kern-Job: neu planen. `schedule()` schreibt `next_run_at`
@@ -263,11 +308,15 @@ async def put_setting(
             await session.commit()
             await update_check_service.sync_job()
     if key in _AUDITED_KEYS:
-        detail: dict[str, Any] = {"key": key, "old": _audit_value(previous), "new": _audit_value(payload.value)}
+        detail: dict[str, Any] = {"key": key, "old": _audit_value(previous), "new": _audit_value(value)}
         if changed_jobs is not None:
             detail["jobs_rescheduled"] = changed_jobs
         await audit_service.log(
             session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="success",
             target_type="setting", target_id=key, detail=detail,
         )
-    return SettingOut(key=key, value=payload.value)
+    if key == trusted_proxies_service.SETTING_KEY:
+        # Erst gespeichert, dann gueltig: ohne Neustart, ab der naechsten Anfrage.
+        await session.commit()
+        trusted_proxies_service.apply(value)
+    return SettingOut(key=key, value=value)

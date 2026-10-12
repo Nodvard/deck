@@ -1,7 +1,8 @@
 /**
  * Karte "Zeit & Protokoll" (Einstellungen, System): Zeitzone fuer Zeitplaene und Wartungsfenster
- * (`system.timezone`), wie lange das Protokoll aufbewahrt wird (`audit.retention_days`) und wie lange
- * der Verlauf der Job-Läufe samt Protokolldateien (`jobs.run_retention_days`). GET/PUT /settings/{key}.
+ * (`system.timezone`), wie lange das Protokoll aufbewahrt wird (`audit.retention_days`), wie lange
+ * der Verlauf der Job-Läufe samt Protokolldateien (`jobs.run_retention_days`) und wie lange Meldungen
+ * (`notifications.retention_days`). GET/PUT /settings/{key}.
  */
 import { useMemo, useState } from "react";
 
@@ -15,6 +16,9 @@ export const RETENTION_MAX_DAYS = 3650;
 export const RUN_RETENTION_MIN_DAYS = 1;
 export const RUN_RETENTION_MAX_DAYS = 3650;
 export const RUN_RETENTION_DEFAULT_DAYS = 30;
+export const NOTIFICATION_RETENTION_MIN_DAYS = 1;
+export const NOTIFICATION_RETENTION_MAX_DAYS = 3650;
+export const NOTIFICATION_RETENTION_DEFAULT_DAYS = 90;
 
 /** Zeile von GET /settings. */
 interface SettingRow {
@@ -30,10 +34,16 @@ export function TimeAndLogCard({ settings }: { settings: SettingRow[] }): JSX.El
   const savedRunDays =
     typeof stored["jobs.run_retention_days"] === "number" ? (stored["jobs.run_retention_days"] as number) : RUN_RETENTION_DEFAULT_DAYS;
 
-  const [saved, setSaved] = useState({ zone: savedZone, days: savedDays, runDays: savedRunDays });
+  const savedNoteDays =
+    typeof stored["notifications.retention_days"] === "number"
+      ? (stored["notifications.retention_days"] as number)
+      : NOTIFICATION_RETENTION_DEFAULT_DAYS;
+
+  const [saved, setSaved] = useState({ zone: savedZone, days: savedDays, runDays: savedRunDays, noteDays: savedNoteDays });
   const [zone, setZone] = useState(savedZone);
   const [days, setDays] = useState(String(savedDays));
   const [runDays, setRunDays] = useState(String(savedRunDays));
+  const [noteDays, setNoteDays] = useState(String(savedNoteDays));
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
 
@@ -41,7 +51,13 @@ export function TimeAndLogCard({ settings }: { settings: SettingRow[] }): JSX.El
   const daysValid = parsedDays >= RETENTION_MIN_DAYS && parsedDays <= RETENTION_MAX_DAYS;
   const parsedRunDays = /^\d+$/.test(runDays.trim()) ? Number(runDays.trim()) : NaN;
   const runDaysValid = parsedRunDays >= RUN_RETENTION_MIN_DAYS && parsedRunDays <= RUN_RETENTION_MAX_DAYS;
-  const dirty = zone !== saved.zone || (daysValid && parsedDays !== saved.days) || (runDaysValid && parsedRunDays !== saved.runDays);
+  const parsedNoteDays = /^\d+$/.test(noteDays.trim()) ? Number(noteDays.trim()) : NaN;
+  const noteDaysValid = parsedNoteDays >= NOTIFICATION_RETENTION_MIN_DAYS && parsedNoteDays <= NOTIFICATION_RETENTION_MAX_DAYS;
+  const dirty =
+    zone !== saved.zone ||
+    (daysValid && parsedDays !== saved.days) ||
+    (runDaysValid && parsedRunDays !== saved.runDays) ||
+    (noteDaysValid && parsedNoteDays !== saved.noteDays);
 
   async function save() {
     setBusy(true);
@@ -61,6 +77,10 @@ export function TimeAndLogCard({ settings }: { settings: SettingRow[] }): JSX.El
         await api.put(`/settings/jobs.run_retention_days`, { value: parsedRunDays });
         next.runDays = parsedRunDays;
       }
+      if (noteDaysValid && parsedNoteDays !== saved.noteDays) {
+        await api.put(`/settings/notifications.retention_days`, { value: parsedNoteDays });
+        next.noteDays = parsedNoteDays;
+      }
       setSaved(next);
       setNotice({ kind: "ok", text: "Gespeichert." });
     } catch (err) {
@@ -75,7 +95,7 @@ export function TimeAndLogCard({ settings }: { settings: SettingRow[] }): JSX.El
   return (
     <Card
       title="Zeit & Protokoll"
-      description="Zeitzone der Zeitpläne und wie lange Protokoll und Job-Verlauf aufbewahrt werden."
+      description="Zeitzone der Zeitpläne und wie lange Protokoll, Job-Verlauf und Meldungen aufbewahrt werden."
       footer={<Button variant="primary" busy={busy} disabled={!dirty} onClick={() => void save()}>Speichern</Button>}
     >
       <NoticeLine notice={notice} />
@@ -137,6 +157,30 @@ export function TimeAndLogCard({ settings }: { settings: SettingRow[] }): JSX.El
         {!runDaysValid && (
           <p role="alert" className="-mt-3 text-xs text-red-300">
             Bitte eine ganze Zahl zwischen {RUN_RETENTION_MIN_DAYS} und {RUN_RETENTION_MAX_DAYS} eingeben.
+          </p>
+        )}
+
+        <Field
+          label="Meldungen aufbewahren (Tage)"
+          hint={`Zwischen ${NOTIFICATION_RETENTION_MIN_DAYS} und ${NOTIFICATION_RETENTION_MAX_DAYS} Tagen. Ältere Meldungen werden jede Nacht gelöscht, nur ungelesene kritische bleiben stehen.`}
+          className="max-w-xs"
+        >
+          <input
+            type="number"
+            inputMode="numeric"
+            min={NOTIFICATION_RETENTION_MIN_DAYS}
+            max={NOTIFICATION_RETENTION_MAX_DAYS}
+            step={1}
+            value={noteDays}
+            onChange={(e) => setNoteDays(e.target.value)}
+            aria-label="Meldungen aufbewahren (Tage)"
+            aria-invalid={!noteDaysValid}
+            className={inputClass}
+          />
+        </Field>
+        {!noteDaysValid && (
+          <p role="alert" className="-mt-3 text-xs text-red-300">
+            Bitte eine ganze Zahl zwischen {NOTIFICATION_RETENTION_MIN_DAYS} und {NOTIFICATION_RETENTION_MAX_DAYS} eingeben.
           </p>
         )}
       </div>

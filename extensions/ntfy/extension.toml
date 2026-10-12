@@ -1,10 +1,10 @@
 [extension]
 id          = "ntfy"
-name        = "ntfy-Benachrichtigungen"
+name        = "Push-Nachrichten"
 version     = "0.1.0"
 api_version = "0.1.0"
 author      = "Nodvard"
-description = "Schickt Meldungen von Nodvard Deck als Push-Nachricht aufs Handy über ntfy (ntfy.sh oder eigener Server)."
+description = "Schickt Meldungen von Nodvard Deck aufs Handy: über ntfy (ntfy.sh oder eigener Server), Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost oder eine eigene Apprise-API."
 icon        = "bell"
 category    = "connections"
 sort_order  = 10
@@ -13,6 +13,7 @@ entrypoint  = "nodvard_deck_ext_ntfy:Extension"
 permissions = [
   "net.outbound",
   "secrets.read:ntfy-token",
+  "secrets.read:push-kanal:*",
 ]
 
 [settings]

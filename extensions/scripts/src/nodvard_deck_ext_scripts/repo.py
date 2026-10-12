@@ -127,6 +127,24 @@ def _complete(git_dir: Path) -> None:
 
 _SCRIPT_FILE = "script.sh"
 _META_FILE = "meta.json"
+MAX_ID_LENGTH = 128
+
+
+class InvalidScriptId(ValueError):
+    """Die Kennung taugt nicht als Ordnername im Skript-Repository (`..`, Schraegstrich, absoluter Pfad ...)."""
+
+
+def safe_script_id(script_id: object) -> bool:
+    """Darf diese Kennung ein Ordner direkt unter dem Repository werden? Neue Skripte bekommen ohnehin nur `a-z0-9-`
+    (siehe `_valid_id` in `__init__.py`); hier geht es um jeden Weg, auf dem eine Kennung aus einer Anfrage zu einem
+    Dateipfad wird (lesen, Verlauf, loeschen): nie `..`, `.`, ein Schraegstrich, ein absoluter Pfad, ein Nullbyte oder
+    ein versteckter Ordner wie `.git`."""
+    return (
+        isinstance(script_id, str)
+        and 0 < len(script_id) <= MAX_ID_LENGTH
+        and not script_id.startswith(".")
+        and not any(ch in script_id for ch in ("/", "\\", "\x00", ":"))
+    )
 
 
 @dataclass
@@ -192,7 +210,14 @@ class ScriptRepo:
         _harden(self._root)
 
     def _dir(self, script_id: str) -> Path:
-        return self._root / script_id
+        """Ordner eines Skripts -- immer direkt unter dem Repository. Wirft `InvalidScriptId`, wenn die Kennung dort
+        hinaus fuehren wuerde oder der Ordner ein symbolischer Link ist (auch auf einen Nachbarn im Repository)."""
+        if not safe_script_id(script_id):
+            raise InvalidScriptId(script_id)
+        path = self._root / script_id
+        if path.is_symlink() or path.resolve().parent != self._root:
+            raise InvalidScriptId(script_id)
+        return path
 
     def list_ids(self) -> list[str]:
         return sorted(
@@ -202,7 +227,10 @@ class ScriptRepo:
         )
 
     def get(self, script_id: str) -> Script | None:
-        script_dir = self._dir(script_id)
+        try:
+            script_dir = self._dir(script_id)
+        except InvalidScriptId:
+            return None
         meta_path = script_dir / _META_FILE
         if not meta_path.exists():
             return None
@@ -233,8 +261,11 @@ class ScriptRepo:
             repo.close()
 
     def delete(self, script_id: str) -> bool:
-        script_dir = self._dir(script_id)
-        if not script_dir.exists():
+        try:
+            script_dir = self._dir(script_id)
+        except InvalidScriptId:
+            return False
+        if not script_dir.is_dir() or script_dir.is_symlink():
             return False
         paths = [str(p) for p in script_dir.iterdir() if p.is_file()]
         repo = _SafeRepo(str(self._root))
@@ -255,6 +286,8 @@ class ScriptRepo:
         return True
 
     def history(self, script_id: str, *, limit: int = 20) -> list[dict[str, Any]]:
+        if not safe_script_id(script_id):
+            return []
         repo = _SafeRepo(str(self._root))
         try:
             entries: list[dict[str, Any]] = []

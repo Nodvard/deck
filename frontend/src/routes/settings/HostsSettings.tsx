@@ -9,7 +9,12 @@ import { useMemo, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 
 import { DemoSeedButton } from "../../components/DemoSeedButton";
+import { GuideLink } from "../../components/GuideLink";
+import { LoadError } from "../../components/LoadError";
+import { ProviderBadge } from "../../components/ProviderBadge";
 import { api, ApiError } from "../../lib/api";
+import { useExtensions } from "../../lib/firstSteps";
+import { hostProvider } from "../../lib/hostProvider";
 import { checkSummary, loginOutcome, refreshHosts, type ConnectionCheck, type HostOut } from "../../lib/hosts";
 import { hostHealth, useHosts } from "../../lib/overview";
 import { AccessBadge } from "./hosts/AccessBadge";
@@ -45,6 +50,7 @@ function HostRow({ host }: { host: HostOut }) {
   const queryClient = useQueryClient();
   const [check, setCheck] = useState<RowCheck | null>(null);
   const health = hostHealth(host.status);
+  const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
 
   async function runCheck() {
     setCheck({ state: "busy" });
@@ -68,6 +74,7 @@ function HostRow({ host }: { host: HostOut }) {
         <div className="mt-2 flex flex-wrap gap-1.5">
           <AccessBadge host={host} login={check?.state === "done" ? loginOutcome(check.result) : null} />
           {host.provider_ext_id && <Badge>Automatisch eingelesen</Badge>}
+          <ProviderBadge provider={hostProvider(host, extensions)} testId={`host-${host.id}-provider-off`} />
         </div>
         {check && <div className="mt-2"><CheckLine check={check} hostId={host.id} /></div>}
       </div>
@@ -119,7 +126,12 @@ export function HostsSettings() {
     <>
       <PageHeader
         title="Server & Zugänge"
-        description="Hier legst du Server an und richtest den SSH-Zugang ein, mit dem sich Nodvard Deck verbindet."
+        description={
+          <>
+            Hier legst du Server an und richtest den SSH-Zugang ein, mit dem sich Nodvard Deck verbindet.{" "}
+            <GuideLink section="servers" testId="hosts-guide">Anleitung zu Servern und SSH-Zugang</GuideLink>
+          </>
+        }
         actions={!adding ? addButton : undefined}
       />
 
@@ -133,7 +145,7 @@ export function HostsSettings() {
       )}
 
       {hosts.isLoading && <p className="text-sm text-white/50">Lade Server …</p>}
-      {hosts.isError && <p role="alert" className="text-sm text-red-300">Die Server konnten nicht geladen werden.</p>}
+      {hosts.isError && <LoadError what="Die Server-Liste" error={hosts.error} onRetry={() => void hosts.refetch()} />}
 
       {hosts.data && hosts.data.length === 0 && !adding && (
         <div className="panel mb-5 p-6 text-center">

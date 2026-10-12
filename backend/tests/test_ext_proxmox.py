@@ -179,6 +179,10 @@ def _build_mock_proxmox_app() -> tuple[FastAPI, dict]:
             {"devpath": "/dev/sda", "model": "Example_SATA_SSD_128GB", "type": "ssd", "size": 128035676160,
              "health": "PASSED", "wearout": "N/A", "serial": "SERIAL-2", "used": "BIOS boot"},
         ],
+        "zfs": [
+            {"name": "rpool", "health": "ONLINE", "size": 960197124096, "alloc": 120259084288, "free": 839938039808,
+             "frag": 4, "dedup": 1.0},
+        ],
         "smart": {
             "/dev/nvme0n1": {"health": "PASSED", "type": "text", "wearout": 97, "text": (
                 "\nSMART/Health Information (NVMe Log 0x02, NSID 0xffffffff)\nCritical Warning:                   0x00\n"
@@ -278,6 +282,12 @@ def _build_mock_proxmox_app() -> tuple[FastAPI, dict]:
     @app.get("/api2/json/nodes/{node}/disks/list")
     async def disk_list(node: str, _: None = Depends(_check_auth)) -> dict:
         return {"data": state["disks"]}
+
+    @app.get("/api2/json/nodes/{node}/disks/zfs")
+    async def disk_zfs(node: str, _: None = Depends(_check_auth)) -> dict:
+        if state["zfs"] is None:
+            raise HTTPException(status_code=501, detail="zfs not available")
+        return {"data": state["zfs"]}
 
     @app.get("/api2/json/nodes/{node}/disks/smart")
     async def disk_smart(node: str, disk: str, _: None = Depends(_check_auth)) -> dict:
@@ -1359,6 +1369,7 @@ async def test_connections_crud_full_round_trip(client, db_session, test_setting
     assert body == {
         "name": "pve2", "base_url": "https://192.168.1.23:8006", "token_id": _TOKEN_ID,
         "tls_insecure_skip_verify": False, "enabled": True, "has_token": False,
+        "tls_fingerprint_sha256": None, "tls_fingerprint_invalid": False,
     }
 
     listed = await client.get("/api/v1/ext/proxmox/connections", headers=headers)
@@ -2337,6 +2348,7 @@ def test_disk_assessment_order_smart_then_wear_then_temperature():
     assert disk_assessment("PASSED", 5, 40) == ("5 % Rest", "danger")
     assert disk_assessment("PASSED", 25, 40) == ("25 % Rest", "warn")
     assert disk_assessment("PASSED", 80, 72) == ("72 °C", "warn")
+    assert disk_assessment("PASSED", 80, 58, 55) == ("58 °C", "warn") and disk_assessment("PASSED", 80, 58, 60)[1] == "good"
     assert disk_assessment("OK", None, None) == ("gesund", "good")
     assert disk_assessment(None, None, None) == ("unbekannt", "neutral")
     assert smart_details({"attributes": [{"name": "Airflow_Temperature_Cel", "raw": "41"}]}) == {"temperature_c": 41, "power_on_hours": None}
@@ -2345,6 +2357,16 @@ def test_disk_assessment_order_smart_then_wear_then_temperature():
 # ---------------------------------------------------------------------------
 # Zustandswaechter: meldet Wechsel, nicht Dauerzustaende; naechtlicher Neustart still
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _calm_storage_in_watch_tests(request):
+    """Der Mock hat einen zu 95 % vollen Speicher (andere Tests brauchen ihn). Die Waechter-Tests
+    `test_watch_*` sollen aber ohne Speicher-Meldung beginnen, sonst zaehlte jede ihrer Pruefungen
+    eine Meldung mehr. Die Speicher-Tests (`test_storage_watch_*`) stellen die Belegung selbst ein."""
+    if request.node.name.startswith("test_watch_") and "mock_proxmox" in request.fixturenames:
+        _url, state = request.getfixturevalue("mock_proxmox")
+        state["storage"][0]["used"] = 500
 
 
 async def _run_watch() -> dict:
@@ -2409,13 +2431,168 @@ async def test_watch_stays_silent_through_a_nightly_reboot_but_reports_a_real_ou
 
 @pytest.mark.asyncio
 async def test_watch_does_not_alert_on_temperature_alone(client, db_session, test_settings, mock_proxmox):
-    """Temperatur schwankt -- als Alarmgrund wuerde sie flattern. Sie steht im Widget,
-    nicht in den Meldungen."""
+    """Temperatur schwankt: eine einzelne heisse Messung meldet noch nichts (erst nach ~15 Minuten, siehe
+    test_watch_reports_a_hot_disk_only_after_15_minutes_and_calms_down_with_a_margin)."""
     base_url, state = mock_proxmox
     await _setup_proxmox(client, db_session, test_settings, base_url)
     state["smart"]["/dev/nvme0n1"]["text"] = state["smart"]["/dev/nvme0n1"]["text"].replace("34 Celsius", "75 Celsius")
 
     assert (await _run_watch())["notified"] == 0
+
+
+def _set_nvme_temperature(state: dict, celsius: int) -> None:
+    import re
+
+    text = state["smart"]["/dev/nvme0n1"]["text"]
+    state["smart"]["/dev/nvme0n1"]["text"] = re.sub(r"Temperature:\s+\d+ Celsius", f"Temperature:                        {celsius} Celsius", text)
+
+
+@pytest.mark.asyncio
+async def test_watch_reports_a_hot_disk_only_after_15_minutes_and_calms_down_with_a_margin(
+    client, db_session, test_settings, mock_proxmox
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    _set_nvme_temperature(state, 75)  # NVMe: Vorgabe 70 °C
+    assert [(await _run_watch())["notified"] for _ in range(3)] == [0, 0, 1], "erst nach drei Pruefungen in Folge"
+    _set_nvme_temperature(state, 68)  # unter 70, aber nicht 5 Grad darunter: noch zu heiss, keine neue Meldung
+    assert (await _run_watch())["notified"] == 0
+    _set_nvme_temperature(state, 60)
+    assert (await _run_watch())["notified"] == 1
+    assert await _watch_notifications(db_session) == [
+        ("warning", "Datenträger auf pve1 zu heiß: 75 °C"),
+        ("info", "Datenträger auf pve1 wieder normal warm: 60 °C"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_watch_temperature_threshold_is_configurable(client, db_session, test_settings, mock_proxmox):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    await _proxmox_settings(db_session, disk_temp_warn_c=50)
+    _set_nvme_temperature(state, 55)
+    assert [(await _run_watch())["notified"] for _ in range(3)] == [0, 0, 1]
+    assert (await _watch_notifications(db_session))[-1] == ("warning", "Datenträger auf pve1 zu heiß: 55 °C")
+
+
+@pytest.mark.asyncio
+async def test_watch_reports_a_degraded_zfs_pool_and_again_when_it_fails(client, db_session, test_settings, mock_proxmox):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    assert (await _run_watch())["notified"] == 0
+    state["zfs"][0]["health"] = "DEGRADED"
+    assert (await _run_watch())["notified"] == 1, "sofort, ZFS flattert nicht"
+    assert (await _run_watch())["notified"] == 0
+    state["zfs"][0]["health"] = "FAULTED"
+    assert (await _run_watch())["notified"] == 1, "schlimmer geworden: noch einmal, jetzt kritisch"
+    state["zfs"] = None  # Abfrage scheitert: aendert nichts
+    assert (await _run_watch())["notified"] == 0
+    state["zfs"] = [{"name": "rpool", "health": "ONLINE", "size": 1, "alloc": 0, "free": 1, "frag": 0}]
+    assert (await _run_watch())["notified"] == 1
+    assert await _watch_notifications(db_session) == [
+        ("warning", "ZFS-Pool rpool auf pve1: DEGRADED"),
+        ("critical", "ZFS-Pool rpool auf pve1: FAULTED"),
+        ("info", "ZFS-Pool rpool auf pve1 wieder ONLINE"),
+    ]
+
+
+def test_zfs_and_temperature_helpers():
+    from nodvard_deck_ext_proxmox.node_health import temperature_limit, zfs_assessment
+
+    assert zfs_assessment("ONLINE")[:2] == ("ONLINE", "good")
+    assert zfs_assessment("degraded")[:2] == ("DEGRADED", "warn") and "verringert" in zfs_assessment("DEGRADED")[2]
+    assert zfs_assessment("UNAVAIL")[1] == "danger" and zfs_assessment(None)[:2] == ("unbekannt", "neutral")
+    assert (temperature_limit("hdd", None), temperature_limit("nvme", None), temperature_limit("ssd", None)) == (55, 70, 65)
+    assert temperature_limit("unknown", None) == 55 and temperature_limit("usb", None) == 55
+    assert temperature_limit("nvme", 60) == 60
+
+
+def test_temperature_setting_accepts_only_whole_numbers_in_range():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path raeumt auf
+    from nodvard_deck_ext_proxmox.node_health import temperature_setting
+
+    assert [temperature_setting(v) for v in (60, 60.0, 40, 95)] == [60, 60, 40, 95]
+    assert [temperature_setting(v) for v in (None, 0, "", "60", True, 39, 96, 60.5, float("inf"))] == [None] * 9
+
+
+def test_implausible_temperatures_count_as_no_reading():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path raeumt auf
+    from nodvard_deck_ext_proxmox.node_health import smart_details
+
+    for raw in ("0", "200", "121"):
+        attrs = {"attributes": [{"name": "Temperature_Celsius", "raw": raw}]}
+        assert smart_details(attrs)["temperature_c"] is None, raw
+    assert smart_details({"attributes": [{"name": "Temperature_Celsius", "raw": "120"}]})["temperature_c"] == 120
+
+
+@pytest.mark.asyncio
+async def test_node_page_colours_temperature_with_the_same_threshold_as_the_alert(
+    client, db_session, test_settings, mock_proxmox
+):
+    """Knotenseite und Meldung nehmen dieselbe Schwelle: eine SSD bei 66 °C ist ab der Vorgabe 65 °C "warm",
+    mit eingestellten 80 °C wieder "gesund"."""
+    base_url, state = mock_proxmox
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    await _run_discovery()
+    node = (await db_session.execute(select(Host).where(Host.kind == "hypervisor"))).scalar_one()
+    for attr in state["smart"]["/dev/sda"]["attributes"]:
+        if attr["name"] == "Temperature_Celsius":
+            attr["raw"] = "66"
+
+    def sata(body: dict) -> dict:
+        return next(d for d in body["disks"] if d["devpath"] == "/dev/sda")
+
+    r = await client.get(f"/api/v1/ext/proxmox/nodes/{node.id}/health", headers=_auth_header(token))
+    assert (sata(r.json())["badge"], sata(r.json())["tone"]) == ("66 °C", "warn")
+    await _proxmox_settings(db_session, disk_temp_warn_c=80)
+    r = await client.get(f"/api/v1/ext/proxmox/nodes/{node.id}/health", headers=_auth_header(token))
+    assert (sata(r.json())["badge"], sata(r.json())["tone"]) == ("gesund", "good")
+    widget = (await client.get("/api/v1/ext/proxmox/widgets/disks", headers=_auth_header(token))).json()["data"]
+    assert next(row for row in widget if row["devpath"] == "/dev/sda")["tone"] == "good"
+
+
+@pytest.mark.asyncio
+async def test_watch_reports_a_vanished_zfs_pool_and_its_return(client, db_session, test_settings, mock_proxmox):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    rpool = dict(state["zfs"][0])
+    assert (await _run_watch())["notified"] == 0, "der Waechter merkt sich rpool"
+    state["zfs"] = []  # nach einem Neustart nicht eingebunden
+    assert (await _run_watch())["notified"] == 0, "erst nach zwei Pruefungen"
+    assert (await _run_watch())["notified"] == 1
+    assert (await _run_watch())["notified"] == 0, "nicht bei jeder Pruefung erneut"
+    state["zfs"] = None  # Abfrage scheitert: aendert nichts
+    assert (await _run_watch())["notified"] == 0
+    state["zfs"] = [rpool]
+    assert (await _run_watch())["notified"] == 1
+    assert await _watch_notifications(db_session) == [
+        ("critical", "ZFS-Pool rpool auf pve1 fehlt"),
+        ("info", "ZFS-Pool rpool auf pve1 wieder da"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_watch_never_reports_a_pool_it_has_not_seen_and_forgets_one_gone_for_a_week(
+    client, db_session, test_settings, mock_proxmox, monkeypatch
+):
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    state["zfs"] = None  # erste Abfrage scheitert: nichts gesehen, nichts fehlt
+    assert (await _run_watch())["notified"] == 0
+    state["zfs"] = []
+    assert [(await _run_watch())["notified"] for _ in range(3)] == [0, 0, 0], "einen nie gesehenen Pool vermisst niemand"
+
+    state["zfs"] = [{"name": "tank", "health": "ONLINE", "size": 1, "alloc": 0, "free": 1, "frag": 0}]
+    await _run_watch()
+    state["zfs"] = []
+    assert [(await _run_watch())["notified"] for _ in range(2)] == [0, 1]
+    watch = sys.modules["nodvard_deck_ext_proxmox.watch"]
+    later = watch._now() + watch.ZFS_FORGET_SECONDS + 60
+    monkeypatch.setattr(watch, "_now", lambda: later)
+    assert (await _run_watch())["notified"] == 0, "nach einer Woche vergessen, ohne Meldung"
+    state["zfs"] = [{"name": "tank", "health": "ONLINE", "size": 1, "alloc": 0, "free": 1, "frag": 0}]
+    assert (await _run_watch())["notified"] == 0, "kommt er zurueck, ist er einfach wieder bekannt"
+    assert await _watch_notifications(db_session) == [("critical", "ZFS-Pool tank auf pve1 fehlt")]
 
 
 async def _node_host_id(db_session, provider_ref: str = "primary/node/pve1") -> str:
@@ -2556,11 +2733,24 @@ def _api_down(state, bad: bool) -> None:
     state["api_down"] = bad
 
 
+def _storage_full(state, bad: bool) -> None:
+    state["storage"][0]["used"] = 950 if bad else 500
+
+
 _WINDOW_CASES = [
     pytest.param(_node_offline, 3, "Knoten pve1 offline", "Knoten pve1 wieder online", id="knoten"),
     pytest.param(_disk_failed, 1, "Datenträger auf pve1: SMART: FAILED", "Datenträger auf pve1 wieder unauffällig", id="datentraeger"),
     pytest.param(_api_down, 3, "Proxmox 'primary' nicht erreichbar", "Proxmox 'primary' wieder erreichbar", id="verbindung"),
+    pytest.param(
+        _storage_full, 2, "Speicher local-lvm auf pve1 fast voll: 95 %", "Speicher local-lvm auf pve1 wieder im grünen Bereich: 50 %",
+        id="speicher",
+    ),
 ]
+
+
+def _host_part(payload: dict) -> dict:
+    """Der Teil der Meldung, den das Wartungsfenster liest (`host_id`); `path` (Sprungziel) ist Zugabe."""
+    return {k: v for k, v in payload.items() if k != "path"}
 
 
 async def _watch_deliveries(db_session) -> list[tuple[str, str]]:
@@ -2606,7 +2796,7 @@ async def test_watch_announces_a_problem_from_the_window_once_after_it_if_it_per
         assert (await _run_watch())["notified"] == 0, "nach dem Fenster genau einmal"
     assert [n.title for n in channel.received] == [f"{alert_title} (seit dem Wartungsfenster)"]
     assert "Wartungsfenster" in channel.received[0].body
-    assert channel.received[0].payload == {"host_id": node_id}
+    assert _host_part(channel.received[0].payload) == {"host_id": node_id}
 
     make_bad(state, False)
     await _run_watch()
@@ -2709,7 +2899,7 @@ async def test_watch_all_clear_for_a_heard_alarm_comes_after_the_window(
     for _ in range(2):
         assert (await _run_watch())["notified"] == 0, "nach dem Fenster genau einmal"
     assert [n.title for n in channel.received][1:] == [f"{ok_title} (im Wartungsfenster)"]
-    assert channel.received[1].payload == {"host_id": node_id}
+    assert _host_part(channel.received[1].payload) == {"host_id": node_id}
     assert await _watch_deliveries(db_session) == [
         (alert_title, "sent"),
         (ok_title, "suppressed"),
@@ -2853,6 +3043,278 @@ async def test_watch_runs_against_an_older_core_without_the_new_answers(
     assert await _watch_deliveries(db_session) == [
         ("Knoten pve1 offline", "suppressed"), ("Knoten pve1 wieder online", "sent"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Zustandswaechter: Speicher-Pools (Belegung)
+# ---------------------------------------------------------------------------
+
+
+def _pool_used(state, used: int, index: int = 0) -> None:
+    """Belegung eines Pools im Mock (Groesse 1000, also `used` / 10 Prozent)."""
+    state["storage"][index]["used"] = used
+
+
+async def _proxmox_settings(db_session, **values) -> None:
+    record = await db_session.get(ExtensionRecord, "proxmox")
+    record.settings = {**record.settings, **values}
+    await db_session.flush()
+
+
+async def _storage_watch(client, db_session, test_settings, mock_proxmox, *, discover: bool = True, **settings):
+    """-> (Mock-Zustand, Host-ID des Knotens). Alle drei Pools des Mocks stehen auf ruhigen Werten."""
+    base_url, state = mock_proxmox
+    await _setup_proxmox(client, db_session, test_settings, base_url)
+    for index, used in enumerate((500, 400, 100)):
+        _pool_used(state, used, index)
+    if settings:
+        await _proxmox_settings(db_session, **settings)
+    node_id = None
+    if discover:
+        await _run_discovery()
+        node_id = await _node_host_id(db_session)
+    return state, node_id
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_reports_a_full_pool_once_and_the_all_clear_only_5_points_below_the_threshold(
+    client, db_session, test_settings, mock_proxmox
+):
+    state, node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox)
+    assert (await _run_watch())["notified"] == 0, "ruhige Pools melden nichts"
+
+    _pool_used(state, 920)
+    assert (await _run_watch())["notified"] == 0, "ein einzelner Ausreisser (z. B. waehrend eines Backups) bleibt still"
+    assert (await _run_watch())["notified"] == 1
+    for _ in range(3):
+        assert (await _run_watch())["notified"] == 0, "derselbe Zustand wird nicht erneut gemeldet"
+    title = "Speicher local-lvm auf pve1 fast voll: 92 %"
+    assert await _watch_notifications(db_session) == [("warning", title)]
+    payload = (await _watch_payloads(db_session))[title]
+    # Der Link oeffnet den Reiter "Speicher" und markiert dort die Pools des Knotens.
+    assert payload == {"host_id": node_id, "path": f"/ext/proxmox/nodes?tab=storage&host={node_id}"}
+    from nodvard_deck.models import Notification as NotificationRow
+
+    body = (await db_session.execute(select(NotificationRow.body).where(NotificationRow.title == title))).scalar_one()
+    assert "920 B von 1000 B belegt, noch 80 B frei. Warnung ab 90 %." in body
+
+    # Knapp unter der Schwelle (und bis 86 %) ist es noch keine Entwarnung.
+    for used in (890, 870, 860):
+        _pool_used(state, used)
+        assert (await _run_watch())["notified"] == 0, f"{used / 10} % liegt noch keine 5 Punkte unter 90 %"
+    assert len(await _watch_notifications(db_session)) == 1
+
+    # Pendelt er um die Schwelle, gibt es keine neue Meldung.
+    for used in (905, 880, 910, 870):
+        _pool_used(state, used)
+        assert (await _run_watch())["notified"] == 0
+
+    _pool_used(state, 850)
+    assert (await _run_watch())["notified"] == 1
+    assert await _watch_notifications(db_session) == [
+        ("warning", title), ("info", "Speicher local-lvm auf pve1 wieder im grünen Bereich: 85 %"),
+    ]
+    assert (await _watch_payloads(db_session))["Speicher local-lvm auf pve1 wieder im grünen Bereich: 85 %"]["host_id"] == node_id
+    assert (await _run_watch())["notified"] == 0
+
+    # Danach meldet ein neuer Anstieg wieder.
+    _pool_used(state, 930)
+    await _run_watch()
+    assert (await _run_watch())["notified"] == 1
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_calls_an_almost_completely_full_pool_critical(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox)
+    _pool_used(state, 984)
+    await _run_watch()
+    await _run_watch()
+    assert await _watch_notifications(db_session) == [("critical", "Speicher local-lvm auf pve1 kritisch voll: 98 %")]
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_announces_a_pool_that_gets_critical_later_once_more(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox)
+    _pool_used(state, 920)
+    await _run_watch()
+    await _run_watch()
+    _pool_used(state, 990)
+    assert (await _run_watch())["notified"] == 1, "schon gemeldet, aber jetzt kritisch: noch einmal, ohne Wartezeit"
+    for _ in range(3):
+        assert (await _run_watch())["notified"] == 0
+    # Zwischen 94 und 99 % bleibt es bei dieser Meldung ...
+    for used in (950, 990, 945, 985):
+        _pool_used(state, used)
+        assert (await _run_watch())["notified"] == 0
+    assert await _watch_notifications(db_session) == [
+        ("warning", "Speicher local-lvm auf pve1 fast voll: 92 %"),
+        ("critical", "Speicher local-lvm auf pve1 kritisch voll: 99 %"),
+    ]
+    # ... erst 5 Punkte unter der kritischen Marke gilt sie als aufgehoben, ohne dass das schon eine Entwarnung waere.
+    _pool_used(state, 930)
+    assert (await _run_watch())["notified"] == 0
+    _pool_used(state, 990)
+    assert (await _run_watch())["notified"] == 1
+    # Die Entwarnung kommt wie immer erst 5 Punkte unter der Warnschwelle.
+    _pool_used(state, 800)
+    assert (await _run_watch())["notified"] == 1
+    assert (await _watch_notifications(db_session))[-1] == ("info", "Speicher local-lvm auf pve1 wieder im grünen Bereich: 80 %")
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_counts_a_shared_pool_once_but_local_pools_per_node(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox, discover=False)
+    state["nodes"] = {"pve1": {"node": "pve1", "status": "online"}, "pve2": {"node": "pve2", "status": "online"}}
+    _pool_used(state, 950, 2)  # backup-pi: NFS, auf beiden Knoten sichtbar
+    for _ in range(2):
+        await _run_watch()
+    assert await _watch_notifications(db_session) == [("warning", "Speicher backup-pi (geteilt, primary) fast voll: 95 %")]
+
+    _pool_used(state, 100, 2)
+    await _run_watch()
+    _pool_used(state, 950, 1)  # local: knotenlokal, jeder Knoten hat seinen eigenen
+    for _ in range(2):
+        await _run_watch()
+    titles = [t for _s, t in await _watch_notifications(db_session)]
+    assert sorted(titles[2:]) == ["Speicher local auf pve1 fast voll: 95 %", "Speicher local auf pve2 fast voll: 95 %"]
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_ignores_inactive_and_unknown_pools_and_keeps_the_state(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox)
+    state["storage"].append({"storage": "nfs-weg", "type": "nfs", "content": "backup", "active": 0, "shared": 1})
+    state["storage"].append({"storage": "ohne-groesse", "type": "dir", "content": "iso", "active": 1, "shared": 0, "total": 0, "used": 0})
+    state["storage"].append({"storage": "abgeschaltet", "type": "dir", "content": "iso", "active": 1, "enabled": 0, "shared": 0, "total": 1000, "used": 990})
+    state["storage"][1].update({"active": 0, "used": 990})  # inaktiv, aber mit alten Zahlen
+    for _ in range(4):
+        assert (await _run_watch())["notified"] == 0
+
+    # Ein gemeldeter Pool, der kurz nichts liefert: weder Entwarnung noch zweite Meldung.
+    _pool_used(state, 950)
+    await _run_watch()
+    await _run_watch()
+    assert len(await _watch_notifications(db_session)) == 1
+    state["storage"][0].pop("used")
+    state["storage"][0]["active"] = 0
+    for _ in range(3):
+        assert (await _run_watch())["notified"] == 0
+    state["storage"][0].update({"active": 1, "used": 950})
+    assert (await _run_watch())["notified"] == 0
+    assert len(await _watch_notifications(db_session)) == 1
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_skips_pools_from_the_exception_list(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(
+        client, db_session, test_settings, mock_proxmox, storage_skip=["  LOCAL-LVM ", "", 7, "gibt-es-nicht"]
+    )
+    _pool_used(state, 995)
+    _pool_used(state, 970, 1)
+    for _ in range(3):
+        await _run_watch()
+    assert await _watch_notifications(db_session) == [("warning", "Speicher local auf pve1 fast voll: 97 %")]
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_forgets_a_pool_that_moves_to_the_exception_list_or_disappears(
+    client, db_session, test_settings, mock_proxmox
+):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox)
+    state_file = Path(str(get_extension_runtime().loaded["proxmox"].ctx.data_dir)) / "watch-state.json"
+    _pool_used(state, 950)
+    _pool_used(state, 960, 1)
+    for _ in range(2):
+        await _run_watch()
+    assert {k for k in json.loads(state_file.read_text(encoding="utf-8")) if k.startswith("storage:")} == {
+        "storage:primary/pve1/local-lvm", "storage:primary/pve1/local",
+    }
+
+    await _proxmox_settings(db_session, storage_skip=["local-lvm"])
+    state["storage"].pop(1)  # `local` ist weg
+    await _run_watch()
+    assert {k for k in json.loads(state_file.read_text(encoding="utf-8")) if k.startswith("storage:")} == set()
+
+    # Ist die Verbindung nicht erreichbar, ist "weg" nicht verlaesslich: der Zustand bleibt.
+    await _proxmox_settings(db_session, storage_skip=[])
+    for _ in range(2):
+        await _run_watch()
+    state["api_down"] = True
+    await _run_watch()
+    assert "storage:primary/pve1/local-lvm" in json.loads(state_file.read_text(encoding="utf-8"))
+    state["api_down"] = False
+    count = len(await _watch_notifications(db_session))
+    await _run_watch()
+    assert len(await _watch_notifications(db_session)) == count, "kein zweites Mal gemeldet"
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_state_survives_a_restart_without_a_flood(client, db_session, test_settings, mock_proxmox):
+    """Der Zustand steht in watch-state.json; jeder Lauf liest ihn neu (wie nach einem Neustart)."""
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox)
+    state_file = Path(str(get_extension_runtime().loaded["proxmox"].ctx.data_dir)) / "watch-state.json"
+    _pool_used(state, 930)
+    await _run_watch()
+    assert json.loads(state_file.read_text(encoding="utf-8"))["storage:primary/pve1/local-lvm"]["alerted"] is False
+    await _run_watch()
+    saved = json.loads(state_file.read_text(encoding="utf-8"))["storage:primary/pve1/local-lvm"]
+    assert (saved["alerted"], saved.get("muted")) == (True, False)
+    for _ in range(5):
+        assert (await _run_watch())["notified"] == 0
+    assert len(await _watch_notifications(db_session)) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", ["abc", "95", 40, 100, 0, -90, 90.5, True, None, [], {"a": 1}])
+async def test_storage_watch_uses_the_default_for_an_invalid_setting(
+    client, db_session, test_settings, mock_proxmox, bad_value
+):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox, storage_warn_percent=bad_value)
+    _pool_used(state, 880)
+    _pool_used(state, 920, 1)
+    for _ in range(3):
+        await _run_watch()
+    assert await _watch_notifications(db_session) == [("warning", "Speicher local auf pve1 fast voll: 92 %")]
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_follows_a_valid_threshold_and_names_it(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox, storage_warn_percent=70)
+    _pool_used(state, 720)
+    for _ in range(2):
+        await _run_watch()
+    from nodvard_deck.models import Notification as NotificationRow
+
+    row = (await db_session.execute(select(NotificationRow).where(NotificationRow.source_ext_id == "proxmox"))).scalar_one()
+    assert (row.title, "Warnung ab 70 %." in row.body) == ("Speicher local-lvm auf pve1 fast voll: 72 %", True)
+    _pool_used(state, 660)
+    assert (await _run_watch())["notified"] == 0, "65 % ist die Entwarnung, 66 % noch nicht"
+    _pool_used(state, 650)
+    assert (await _run_watch())["notified"] == 1
+
+
+@pytest.mark.asyncio
+async def test_storage_watch_without_a_node_host_sends_the_page_without_a_host(client, db_session, test_settings, mock_proxmox):
+    state, _node_id = await _storage_watch(client, db_session, test_settings, mock_proxmox, discover=False)
+    _pool_used(state, 920)
+    for _ in range(2):
+        await _run_watch()
+    assert await _watch_payloads(db_session) == {"Speicher local-lvm auf pve1 fast voll: 92 %": {"path": "/ext/proxmox/nodes?tab=storage"}}
+
+
+def test_storage_watch_setting_and_pool_helpers():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))
+    from nodvard_deck_ext_proxmox.watch import _pool_reading, _setting_int, _skip_names
+
+    assert [_setting_int(v, 90, 50, 99) for v in (50, 99, 75.0, 49, 100, "75", None, True, 75.5, float("inf"), float("nan"))] == [
+        50, 99, 75, 90, 90, 90, 90, 90, 90, 90, 90,
+    ]
+    assert _skip_names(["ISO", " iso ", "", 5, None]) == {"iso"} and _skip_names("iso") == set()
+    assert _pool_reading({"total": 1000, "used": 895}) == (90, 895.0, 1000.0), "89,5 % wird wie in der Meldung zu 90 %"
+    assert _pool_reading({"total": 1000, "used": 894})[0] == 89
+    assert _pool_reading({"total": 1000, "used": 10, "active": "0"}) is None
+    assert _pool_reading({"total": 1000, "used": 10, "active": 1, "enabled": 0}) is None
+    assert _pool_reading({"total": float("nan"), "used": 5}) is None and _pool_reading({"total": float("inf"), "used": 5}) is None
+    assert _pool_reading({"total": 0, "used": 0}) is None and _pool_reading({"used": 5}) is None and _pool_reading({"total": 5}) is None
 
 
 def test_os_family_from_proxmox_ostype():

@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { navigateTo } from "../../../_shared/frontend/src/testShell";
 
-import type { AppliedState, ApplyingState } from "./ImageUpdateApply";
-import { ImageUpdateBadge, ServiceMatrixPage, statusText, summarizeImages, type ImageResult } from "./ServiceMatrixPage";
+import { PHASE_TEXT, type AppliedState, type ApplyingState } from "./ImageUpdateApply";
+import { afterCheckText, ImageUpdateBadge, ServiceMatrixPage, statusText, summarizeImages, type ImageResult } from "./ServiceMatrixPage";
 
 const SERVICES = [
   { id: "h1:nginx", name: "nginx", host: "docker", host_id: "h1", container: "nginx", is_self: false, state: "running", status: "Up 2 hours", tone: "good", url: "http://10.0.0.5:8080" },
@@ -76,7 +76,27 @@ describe("ServiceMatrixPage", () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response("", { status: 500 })));
     render(<ServiceMatrixPage />);
 
-    await screen.findByText(/Fehler: HTTP 500/);
+    expect((await screen.findByTestId("load-error")).textContent).toContain("Die Liste der Container ließ sich gerade nicht laden: HTTP 500");
+  });
+
+  it("scheitert erst das Nachladen, bleibt die Tabelle mit dem letzten Stand stehen und der Grund steht darüber", async () => {
+    let fail = false;
+    const ok = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      if (fail && String(input).includes("/widgets/matrix")) return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      return ok(input);
+    }));
+    render(<ServiceMatrixPage />);
+    await screen.findByText("nginx");
+    fail = true;
+    fireEvent.click(screen.getByRole("button", { name: "Aktualisieren" }));
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Der aktuelle Stand ließ sich gerade nicht laden: Datenbank gesperrt");
+    expect(error.textContent).toContain("letzten bekannten Stand");
+    expect(screen.getByText("nginx")).toBeInTheDocument();
+    fail = false;
+    fireEvent.click(within(error).getByRole("button", { name: "Erneut versuchen" }));
+    await waitFor(() => expect(screen.queryByTestId("load-error")).toBeNull());
   });
 
   it.each([
@@ -86,7 +106,9 @@ describe("ServiceMatrixPage", () => {
     vi.stubGlobal("fetch", vi.fn(async () => reply()));
     render(<ServiceMatrixPage />);
 
-    expect(await screen.findByText("Fehler: Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.")).toBeInTheDocument();
+    expect((await screen.findByTestId("load-error")).textContent).toContain(
+      "Die Liste der Container ließ sich gerade nicht laden: Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.",
+    );
   });
 
   it("Handy: jede Zeile wird zur Karte (Tabelle ohne Spaltenköpfe, Werte mit Beschriftung, Knöpfe in der Karte)", async () => {
@@ -153,7 +175,9 @@ describe("ServiceMatrixPage", () => {
 });
 
 describe("ServiceMatrixPage -- Container-Verwaltung", () => {
-  function managedFetch(calls: { url: string; method: string; body?: unknown }[], logBody?: ReadableStream<Uint8Array>) {
+  function managedFetch(
+    calls: { url: string; method: string; body?: unknown }[], logBody?: ReadableStream<Uint8Array>, approvedResult: unknown = {},
+  ) {
     return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = init?.method ?? "GET";
@@ -165,7 +189,7 @@ describe("ServiceMatrixPage -- Container-Verwaltung", () => {
         return new Response(JSON.stringify({ id: "a1", status: "proposed", risk: "medium", result: {} }), { status: 202 });
       }
       if (url.endsWith("/actions/a1/approve")) {
-        return new Response(JSON.stringify({ id: "a1", status: "succeeded", result: {} }), { status: 200 });
+        return new Response(JSON.stringify({ id: "a1", status: "succeeded", result: approvedResult }), { status: 200 });
       }
       if (url.includes("/logs?")) {
         (init?.signal as AbortSignal | undefined)?.addEventListener("abort", () => calls.push({ url, method: "ABORT" }));
@@ -184,6 +208,75 @@ describe("ServiceMatrixPage -- Container-Verwaltung", () => {
     expect(screen.getAllByRole("button", { name: "Stoppen" })).toHaveLength(2);
     expect(screen.getAllByRole("button", { name: "Starten" })).toHaveLength(1);
     expect(screen.getAllByRole("button", { name: "Logs" })).toHaveLength(3);
+    // Löschen nur beim gestoppten worker.
+    expect(screen.getAllByRole("button", { name: "Löschen" })).toHaveLength(1);
+    expect(within(screen.getByTestId("row-h1:worker")).getByRole("button", { name: "Löschen" })).toBeInTheDocument();
+    // Konsole nur bei laufenden Containern, als Link auf die Terminal-Seite des Kerns -- nicht bei Nodvard Deck
+    // selbst (darin liegen Datenbank und Tresor-Schlüssel).
+    const consoles = screen.getAllByRole("link", { name: "Konsole" });
+    expect(consoles.map((a) => a.getAttribute("href"))).toEqual(["/terminal?host=h1&scope=container&ref=nginx"]);
+  });
+
+  it("ohne hosts.execute keine Konsole", async () => {
+    vi.stubGlobal("fetch", managedFetch([]));
+    (window.__lattice.hasPermission as ReturnType<typeof vi.fn>).mockImplementation((p: string) => p !== "hosts.execute");
+    render(<ServiceMatrixPage />);
+    await screen.findByText("nginx");
+    expect(screen.queryByRole("link", { name: "Konsole" })).toBeNull();
+  });
+
+  it("Löschen fragt nach (als Gefahr) und läuft über den Kern-Aktionsweg", async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    vi.stubGlobal("fetch", managedFetch(calls));
+    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    confirm.mockResolvedValue(true);
+    render(<ServiceMatrixPage />);
+    await screen.findByText("worker");
+
+    fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
+    await screen.findByText('"worker" gelöscht.');
+    expect(confirm.mock.calls[0][0]).toMatch(/Volumes und das Image bleiben/);
+    expect(confirm.mock.calls[0][1]).toMatchObject({ danger: true, confirmLabel: "Löschen" });
+    const post = calls.find((c) => c.url.includes("/actions/container.remove"));
+    expect(post?.url).toBe("/api/v1/hosts/h1/actions/container.remove");
+    expect((post?.body as { payload: unknown }).payload).toEqual({ container: "worker" });
+  });
+
+  it("Löschen eines Compose-Containers sagt, dass er wiederkommt", async () => {
+    const services = SERVICES.map((x) => (x.id === "h1:worker" ? { ...x, compose_project: "monitoring" } : x));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/widgets/matrix")) return new Response(JSON.stringify({ data: services, meta: {} }), { status: 200 });
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+    }));
+    const confirm = window.__lattice.confirmDialog as ReturnType<typeof vi.fn>;
+    confirm.mockResolvedValue(false);
+    render(<ServiceMatrixPage />);
+    await screen.findByText("worker");
+    fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
+    await waitFor(() => expect(confirm).toHaveBeenCalled());
+    expect(confirm.mock.calls[0][0]).toMatch(/Compose-Projekt „monitoring“.*wieder an/);
+  });
+
+  it("ohne Bestätigung wird nichts gelöscht", async () => {
+    const calls: { url: string; method: string }[] = [];
+    vi.stubGlobal("fetch", managedFetch(calls));
+    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    render(<ServiceMatrixPage />);
+    await screen.findByText("worker");
+    fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
+    await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalled());
+    expect(calls.some((c) => c.url.includes("/actions/container.remove"))).toBe(false);
+  });
+
+  it("nach dem Neustart steht der Satz der Prüfung danach in der Meldung", async () => {
+    const calls: { url: string; method: string; body?: unknown }[] = [];
+    vi.stubGlobal("fetch", managedFetch(calls, undefined, { success: true, detail: { check: { ok: true, text: "Container läuft stabil." } } }));
+    (window.__lattice.confirmDialog as ReturnType<typeof vi.fn>).mockResolvedValue(true);
+    render(<ServiceMatrixPage />);
+    await screen.findByText("nginx");
+    fireEvent.click(screen.getAllByRole("button", { name: "Neustart" })[0]);
+    expect(await screen.findByText('"nginx" neu gestartet. Prüfung danach: Container läuft stabil.')).toBeInTheDocument();
   });
 
   it("Neustart geht ueber den Kern-Aktionsweg (Nutzer als Ausloeser) und wird bei Berechtigung freigegeben", async () => {
@@ -805,6 +898,16 @@ describe("ServiceMatrixPage -- Image-Update einspielen", () => {
     expect(screen.getByRole("button", { name: "Einspielen" })).toBeInTheDocument();
   });
 
+  it("mit automatischem Rückweg steht das in der Übersicht", async () => {
+    await open({ data: { "h1:nginx": UPDATE }, plan: { ...PLAN, auto_rollback: true } });
+    fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
+    expect(await screen.findByText(/Stürzt die neue Version beim Start ab .* automatisch auf die alte zurück/)).toBeInTheDocument();
+  });
+
+  it("während des Rückwegs sagt die Spalte, was passiert", () => {
+    expect(PHASE_TEXT.rollback).toMatch(/zurück zur alten/);
+  });
+
   it("Klick zeigt zuerst die Übersicht: Image, Versionen, Befehl, Warnung und Rückweg -- ohne etwas auszulösen", async () => {
     const calls = await open({ data: { "h1:nginx": UPDATE } });
     fireEvent.click(screen.getByRole("button", { name: "Einspielen" }));
@@ -815,6 +918,7 @@ describe("ServiceMatrixPage -- Image-Update einspielen", () => {
     expect(screen.queryByText(/Jetzt:/)).toBeNull();
     expect(screen.getByText("web/nginx")).toBeInTheDocument();
     expect(screen.getByText(/ist dabei kurz nicht erreichbar/)).toBeInTheDocument();
+    expect(screen.queryByText(/automatisch auf die alte zurück/)).toBeNull(); // ältere Server sagen nichts dazu
     expect(screen.getByText(COMMAND).tagName).toBe("PRE");
     expect(screen.getByText(/docker tag lattice-rollback\/nginx:previous nginx:1.27/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Jetzt einspielen" })).toBeInTheDocument();
@@ -1046,6 +1150,15 @@ describe("ServiceMatrixPage ohne Container", () => {
   });
 });
 
+
+describe("afterCheckText (Prüfung nach der Aktion)", () => {
+  it("liest den Satz der Prüfung aus dem Ergebnis, sonst nichts", () => {
+    expect(afterCheckText({ result: { detail: { check: { ok: true, text: "Container läuft stabil." } } } })).toBe("Container läuft stabil.");
+    expect(afterCheckText({ result: { detail: {} } })).toBeNull();
+    expect(afterCheckText({ result: null })).toBeNull();
+    expect(afterCheckText({ result: { detail: { check: { text: 42 } } } })).toBeNull();
+  });
+});
 
 describe("statusText (Docker-Status auf Deutsch)", () => {
   it.each([

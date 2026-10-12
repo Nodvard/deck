@@ -7,8 +7,8 @@ import { useCallback, useContext, useEffect, useState } from "react";
 
 import { Badge, Button, Card, EmptyState, Icon, Notice, Stat, type Tone } from "../../../_shared/frontend/src/ui";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
-import { describeSchedule } from "../../../../frontend/src/components/SchedulePicker";
-import { API, ago, call, HostFilter, proposeAndApprove, useForHost, when } from "./api";
+import { describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
+import { API, ago, call, count, HostFilter, proposeAndApprove, useForHost, when } from "./api";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { ServerSetupLink } from "./ServerSetupLink";
 
@@ -77,6 +77,8 @@ export interface UpdatesOverview {
   config: {
     check_enabled: boolean; check_cron: string; auto_enabled: boolean; auto_mode: string; auto_cron: string;
     auto_reboot: boolean; auto_tag: string | null;
+    /** Einstellung „Diese Server nie automatisch neu starten“ (Feld fehlt bei aelteren Servern). */
+    auto_reboot_skip?: string[];
     /** Einstellung „Proxmox: Alle Updates als dist-upgrade“ (Feld fehlt bei aelteren Servern). */
     proxmox_dist_upgrade?: boolean;
   };
@@ -222,8 +224,8 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
     // Pakete entfernen und gilt als "hoch". Ob der Server Proxmox ist, weiss erst der Befehl selbst.
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
     const questions: Record<Mode, string> = {
-      security: `${st?.security_count ?? 0} Sicherheitsupdate(s) auf „${h.host_name}“ jetzt einspielen?`,
-      all: `Alle ${st?.count ?? 0} Update(s) auf „${h.host_name}“ jetzt einspielen? Das kann einige Minuten dauern.${
+      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?`,
+      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf „${h.host_name}“ jetzt einspielen? Das kann einige Minuten dauern.${
         distUpgrade ? " Ist es ein Proxmox-Server, läuft dabei „apt-get dist-upgrade“ – das kann Pakete entfernen oder ersetzen." : ""
       }`,
       cleanup: `Auf „${h.host_name}“ nicht mehr benötigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
@@ -287,7 +289,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
           ].filter(Boolean).join(" · ") || undefined} />
         <Stat label="Offene Updates" value={sm.packages} tone={sm.packages ? "warn" : "good"} />
         <Stat label="Sicherheitsupdates" value={sm.security} tone={sm.security ? "bad" : "good"} />
-        <Stat label="Neustart nötig" value={sm.reboot} tone={sm.reboot ? "warn" : undefined} hint={sm.errors ? `${sm.errors} Prüfung(en) fehlgeschlagen` : undefined} />
+        <Stat label="Neustart nötig" value={sm.reboot} tone={sm.reboot ? "warn" : undefined} hint={sm.errors ? `${count(sm.errors, "Prüfung", "Prüfungen")} fehlgeschlagen` : undefined} />
       </div>
 
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -295,7 +297,12 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
         <Badge tone={c.auto_enabled ? "good" : "neutral"}>
           Automatisch einspielen: {c.auto_enabled ? `${c.auto_mode === "all" ? "alle Updates" : "Sicherheitsupdates"} · ${describeSchedule(c.auto_cron, "aus")}${c.auto_tag ? ` · nur „${c.auto_tag}“` : ""}` : "aus"}
         </Badge>
-        {c.auto_enabled && <Badge tone={c.auto_reboot ? "warn" : "neutral"}>Neustart danach: {c.auto_reboot ? "automatisch" : "nein"}</Badge>}
+        {c.auto_enabled && (
+          <Badge tone={c.auto_reboot ? "warn" : "neutral"}>
+            Neustart danach: {c.auto_reboot ? "automatisch" : "nein"}
+            {c.auto_reboot && c.auto_reboot_skip?.length ? `, außer ${c.auto_reboot_skip.join(", ")}` : ""}
+          </Badge>
+        )}
         <span className="flex-1" />
         {canManage && !onlyHost && (["security", "all"] as const).map((mode) => {
           const n = proposable(mode).length;
@@ -309,6 +316,12 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
         })}
         {canManage && <Button onClick={() => void checkAll()}><Icon name="refresh" size={14} /> Alle jetzt prüfen</Button>}
       </div>
+      {/* Zwei Wege, die nebeneinander stehen: das Einspielen durch Nodvard Deck und unattended-upgrades auf dem Server. */}
+      <p className="-mt-2 mb-4 text-xs text-white/50" data-testid="auto-explain">
+        Updates automatisch einspielen geht auf zwei Wegen: Nodvard Deck spielt sie nach seinem Zeitplan ein („Updates
+        automatisch einspielen“ in den Einstellungen von Nodvard Shield), oder ein Debian- oder Ubuntu-Server spielt
+        Sicherheitsupdates jeden Tag selbst ein (unattended-upgrades). Einer der beiden Wege reicht.
+      </p>
 
       {proposed && <ProposedSummary result={proposed} onClose={() => setProposed(null)} />}
 
@@ -394,11 +407,18 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
                 </div>
               )}
 
-              {canManage && st?.manager === "apt" && st.unattended === false && (
+              {/* „Aufräumen“ für jeden apt-Server; der Tipp davor nur, wenn er noch etwas bringt. */}
+              {canManage && st?.manager === "apt" && (
                 <p className="mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50">
-                  Tipp: Der Server kann Sicherheitsupdates auch jeden Tag selbst einspielen.
-                  <button type="button" onClick={() => void installUnattended(h)} className="text-[var(--color-accent)] hover:underline">Einrichten</button>
-                  <span className="text-white/25">·</span>
+                  {/* Spielt Nodvard Deck selbst ein (für alle Server, ohne Markierung), braucht es den Tipp nicht. Mit
+                      Markierung ist hier nicht bekannt, ob dieser Server dazugehört: dann bleibt der Tipp. */}
+                  {st.unattended === false && !(c.auto_enabled && !c.auto_tag) && (
+                    <>
+                      Tipp: Der Server kann Sicherheitsupdates auch jeden Tag selbst einspielen.
+                      <button type="button" onClick={() => void installUnattended(h)} className="text-[var(--color-accent)] hover:underline">Einrichten</button>
+                      <span className="text-white/25">·</span>
+                    </>
+                  )}
                   <button type="button" onClick={() => void apply(h, "cleanup")} className="text-white/60 hover:text-white hover:underline">Aufräumen</button>
                 </p>
               )}

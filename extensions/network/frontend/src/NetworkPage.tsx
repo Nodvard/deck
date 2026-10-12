@@ -8,8 +8,11 @@
  * Aktionen gehen als Vorschlag ans Aktions-Gate; wer `actions.approve:<risk>` hat, gibt
  * den eigenen Vorschlag gleich frei (wie Backups/Nodvard Shield), alle anderen sehen
  * "wartet auf Freigabe".
+ *
+ * Adress-Check (`GET /npm/address-check`): je Proxy-Host, zu welchem Docker-Container das Ziel fuehrt und ob er
+ * laeuft. Ist er gestoppt, startet ihn ein Knopf ueber die Aktion `container.start` der Service-Matrix (Gate).
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
@@ -72,7 +75,32 @@ export interface NpmStatus {
   summary: { hosts: number; hosts_enabled: number; certificates: number; certificates_warn: number; certificates_expired: number } | null;
 }
 
+export interface AddressCheck {
+  proxy_id: number;
+  status: string;
+  tone: "good" | "bad" | "warn" | "neutral";
+  text: string;
+  container: string | null;
+  docker_host: string | null;
+  docker_host_id: string | null;
+  can_start: boolean;
+}
+
+export interface AddressCheckResult {
+  state: ServiceState | "no_catalog" | "docker_unreadable";
+  message: string | null;
+  checks: AddressCheck[];
+  problems: number;
+}
+
 type Message = { kind: "ok" | "error"; text: string } | null;
+
+const CHECK_TEXT_CLASS: Record<AddressCheck["tone"], string> = {
+  good: "text-emerald-300",
+  bad: "text-red-300",
+  warn: "text-amber-300",
+  neutral: "text-white/50",
+};
 
 async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await authedFetch(path, init);
@@ -239,19 +267,56 @@ function hostUrl(host: ProxyHost): string | null {
   return `${host.certificate_id ? "https" : "http"}://${domain}`;
 }
 
-function NpmSection({ data, canAct, busy, onToggle, onRetry }: {
+function addressSummary(result: AddressCheckResult | null, loading: boolean): { text: string; className: string } | null {
+  if (loading && !result) return { text: "Adress-Check läuft …", className: "text-white/45" };
+  if (!result) return null;
+  if (result.state !== "ok") return result.message ? { text: `Adress-Check: ${result.message}`, className: "text-white/45" } : null;
+  if (result.message) return { text: `Adress-Check: ${result.message}`, className: "text-white/45" };
+  if (result.problems === 1) return { text: "Adress-Check: Eine Adresse führt zu einem gestoppten Container.", className: "text-red-300" };
+  if (result.problems > 1) return { text: `Adress-Check: ${result.problems} Adressen führen zu gestoppten Containern.`, className: "text-red-300" };
+  // Entwarnung nur für das, was wirklich geprüft wurde: ohne zugeordnetes Ziel kein grünes Häkchen.
+  const assigned = result.checks.filter((c) => c.container).length;
+  const unchecked = result.checks.filter((c) => c.status === "unreachable").length;
+  if (assigned === 0) {
+    return {
+      text: unchecked
+        ? "Adress-Check: Die Docker-Server sind gerade nicht erreichbar, es ließ sich nichts prüfen."
+        : "Adress-Check: Kein Ziel ließ sich einem Container zuordnen.",
+      className: "text-white/45",
+    };
+  }
+  // Gestoppt, aber nicht rot: der Proxy-Host ist aus, oder die Zuordnung ist nur vermutet.
+  const unsure = result.checks.filter((c) => c.status === "stopped" && c.tone !== "bad").length;
+  const counts = [
+    `${assigned} von ${result.checks.length} Zielen zugeordnet`,
+    ...(unchecked ? [`${unchecked} nicht prüfbar`] : []),
+    ...(unsure ? [`${unsure} gestoppt, aber Proxy-Host aus oder Zuordnung unsicher`] : []),
+  ];
+  return {
+    text: `Adress-Check: Kein aktiver Proxy-Host führt sicher zu einem gestoppten Container (${counts.join(", ")}).`,
+    className: unchecked || unsure ? "text-white/45" : "text-emerald-300",
+  };
+}
+
+function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, onStart }: {
   data: NpmStatus;
   canAct: boolean;
   busy: string | null;
   onToggle: (host: ProxyHost) => void;
   onRetry: () => void;
+  checks: AddressCheckResult | null;
+  checking: boolean;
+  onStart: (host: ProxyHost, check: AddressCheck) => void;
 }) {
   const [search, setSearch] = useState("");
+  const byProxy = useMemo(() => new Map((checks?.checks ?? []).map((c) => [c.proxy_id, c])), [checks]);
   const hosts = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return data.hosts;
-    return data.hosts.filter((h) => h.domains.some((d) => d.toLowerCase().includes(q)) || (h.target ?? "").toLowerCase().includes(q));
-  }, [data.hosts, search]);
+    return data.hosts.filter((h) => h.domains.some((d) => d.toLowerCase().includes(q))
+      || (h.target ?? "").toLowerCase().includes(q)
+      || (byProxy.get(h.id)?.container ?? "").toLowerCase().includes(q));
+  }, [data.hosts, search, byProxy]);
 
   if (data.state === "not_configured") return <NotSetUp title="Nginx Proxy Manager" message={data.message} testId="npm-not-configured" />;
   if (data.state !== "ok" || !data.summary) {
@@ -259,6 +324,7 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry }: {
   }
   const s = data.summary;
   const urgent = data.certificates.filter((c) => c.status === "warn" || c.status === "expired");
+  const summary = addressSummary(checks, checking);
 
   return (
     <div className="space-y-4">
@@ -292,7 +358,12 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry }: {
         data.certificates.length > 0 && <p className="text-sm text-emerald-300">Alle Zertifikate sind noch mindestens 14 Tage gültig.</p>
       )}
 
-      <Card title="Proxy-Hosts" padded={false} actions={data.hosts.length > 5 ? <SearchInput value={search} onChange={setSearch} placeholder="Domain oder Ziel suchen" label="Proxy-Hosts durchsuchen" /> : undefined}>
+      <Card
+        title="Proxy-Hosts"
+        padded={false}
+        description={summary ? <span data-testid="address-summary" className={summary.className}>{summary.text}</span> : undefined}
+        actions={data.hosts.length > 5 ? <SearchInput value={search} onChange={setSearch} placeholder="Domain, Ziel oder Container suchen" label="Proxy-Hosts durchsuchen" /> : undefined}
+      >
         {hosts.length === 0 ? (
           <p className="px-5 py-6 text-center text-sm text-white/45">{data.hosts.length === 0 ? "Noch keine Proxy-Hosts angelegt." : "Kein Proxy-Host passt zur Suche."}</p>
         ) : (
@@ -300,6 +371,7 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry }: {
             {hosts.map((h) => {
               const warn = h.certificate && (h.certificate.status === "warn" || h.certificate.status === "expired");
               const url = hostUrl(h);
+              const check = byProxy.get(h.id);
               return (
                 <li
                   key={h.id}
@@ -311,8 +383,12 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry }: {
                       {url ? <a href={url} target="_blank" rel="noreferrer" className="hover:underline">{h.domains.join(", ")}</a> : h.domains.join(", ")}
                     </p>
                     <p className="break-words text-xs text-white/50">→ {h.target ?? "kein Ziel"}{h.nginx_online === false ? " · Nginx meldet einen Fehler" : ""}</p>
+                    {check && <p data-testid={`address-${h.id}`} className={`break-words text-xs ${CHECK_TEXT_CLASS[check.tone]}`}>{check.text}</p>}
                   </div>
                   <div className="flex flex-wrap items-center gap-1.5">
+                    {canAct && check?.can_start && check.docker_host_id && (
+                      <Button small variant="primary" disabled={busy !== null} onClick={() => onStart(h, check)}>Container starten</Button>
+                    )}
                     <CertBadge cert={h.certificate} />
                     {h.enabled ? <Badge tone="good">an</Badge> : <Badge tone="neutral">aus</Badge>}
                     {canAct && (
@@ -343,9 +419,29 @@ export function NetworkPage(): JSX.Element {
   const loadPihole = useCallback(() => {
     call<PiholeStatus>(`${API}/pihole`).then(setPihole).catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
   }, []);
-  const loadNpm = useCallback(() => {
-    call<NpmStatus>(`${API}/npm`).then(setNpm).catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
+  const [checks, setChecks] = useState<AddressCheckResult | null>(null);
+  const [checking, setChecking] = useState(false);
+  // Der Adress-Check fragt jeden Docker-Server per SSH und dauert deshalb laenger: getrennt laden, die Liste wartet nicht.
+  // Laeuft er mehrfach (Aktualisieren, Umschalten, Starten), gilt nur die letzte Anfrage.
+  const checkSeq = useRef(0);
+  const loadChecks = useCallback(() => {
+    const seq = ++checkSeq.current;
+    setChecking(true);
+    call<AddressCheckResult>(`${API}/npm/address-check`)
+      .then((result) => { if (seq === checkSeq.current) setChecks(result); })
+      .catch((err: unknown) => {
+        if (seq === checkSeq.current) setChecks({ state: "unreachable", message: err instanceof Error ? err.message : String(err), checks: [], problems: 0 });
+      })
+      .finally(() => { if (seq === checkSeq.current) setChecking(false); });
   }, []);
+  const loadNpm = useCallback(() => {
+    call<NpmStatus>(`${API}/npm`)
+      .then((status) => {
+        setNpm(status);
+        if (status.state === "ok") loadChecks();
+      })
+      .catch((err: unknown) => setLoadError(err instanceof Error ? err.message : String(err)));
+  }, [loadChecks]);
   const loadAll = useCallback(() => {
     setLoadError(null);
     loadPihole();
@@ -380,6 +476,21 @@ export function NetworkPage(): JSX.Element {
     await run("pihole", `${API}/pihole/resume`, undefined, loadPihole);
   }
 
+  async function startContainer(host: ProxyHost, check: AddressCheck) {
+    const name = host.domains[0] ?? `Proxy-Host ${host.id}`;
+    const ok = await deck().confirmDialog(
+      `Container „${check.container}“ auf ${check.docker_host} starten? Dahinter liegt ${name}.`,
+      { title: "Container starten", confirmLabel: "Starten" },
+    );
+    if (!ok) return;
+    await run(
+      `start-${host.id}`,
+      `/hosts/${encodeURIComponent(check.docker_host_id ?? "")}/actions/container.start`,
+      { payload: { container: check.container }, reason: `Über den Adress-Check der Netzwerk-Seite gestartet (${name}).` },
+      loadChecks,
+    );
+  }
+
   async function toggle(host: ProxyHost) {
     const name = host.domains.join(", ") || `Proxy-Host ${host.id}`;
     const ok = host.enabled
@@ -412,7 +523,10 @@ export function NetworkPage(): JSX.Element {
           !loadError && <Card title="Pi-hole"><p className="text-sm text-white/50">Lade …</p></Card>
         )}
         {npm ? (
-          <NpmSection data={npm} canAct={canAct} busy={busy} onToggle={(h) => void toggle(h)} onRetry={loadNpm} />
+          <NpmSection
+            data={npm} canAct={canAct} busy={busy} onToggle={(h) => void toggle(h)} onRetry={loadNpm}
+            checks={checks} checking={checking} onStart={(h, c) => void startContainer(h, c)}
+          />
         ) : (
           !loadError && <Card title="Nginx Proxy Manager"><p className="text-sm text-white/50">Lade …</p></Card>
         )}

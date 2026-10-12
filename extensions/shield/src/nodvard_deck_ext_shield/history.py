@@ -82,6 +82,8 @@ def record_out(r: IncidentRecord) -> dict[str, Any]:
         "ai_summary": r.ai_summary,
         "action_id": r.action_id,
         "is_crash": r.is_crash,
+        # Von selbst erledigt (der Container laeuft wieder): der Satz dazu, etwa "laeuft wieder seit 04:12".
+        "auto_resolved": details.get("auto_resolved") if isinstance(details.get("auto_resolved"), str) else None,
     }
 
 
@@ -89,9 +91,10 @@ class IncidentRepository:
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx
 
-    async def save(self, incident: "Incident") -> None:
+    async def save(self, incident: "Incident", *, status_changed: bool = False) -> None:
         """Einfuegen oder aktualisieren (ein Vorfall wird beim Batch-Abschluss
-        gespeichert; derselbe Datensatz bekommt spaeter nur noch Statuswechsel)."""
+        gespeichert; derselbe Datensatz bekommt spaeter nur noch Statuswechsel). `status_changed`:
+        der Status wurde gerade gewechselt (etwa von selbst erledigt), Zeitpunkt vermerken."""
         async with self._ctx.db.session() as session:
             row = await session.get(IncidentRecord, incident.id)
             if row is None:
@@ -109,6 +112,8 @@ class IncidentRepository:
             row.status = incident.status
             row.ai_summary = incident.ai_summary
             row.action_id = incident.action_id
+            if status_changed:
+                row.status_changed_at = datetime.now(UTC)
 
     async def merge_into_active(
         self,
@@ -165,6 +170,152 @@ class IncidentRepository:
                 return record_out(row)
         return None
 
+    async def resolve_recovered(
+        self,
+        *,
+        host_name: str,
+        target: str,
+        note: str,
+        waiting_note: str = "",
+        action_waiting: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Der Container laeuft wieder ruhig: alle noch nicht erledigten Vorfaelle dazu (offen, Aktion vorgeschlagen,
+        geprueft) auf "Erledigt", mit `note` in den Details (`auto_resolved`). Wartet die Aktion eines Vorfalls noch auf
+        Freigabe, haengt `waiting_note` an. Hatte noch niemand den Vorfall bearbeitet (wie in `merge_into_active`), steht
+        der alte Status in `auto_resolved_from` und der Vorfall darf wieder aufgehen, wenn der Container gleich wieder
+        abstuerzt (`reopen_auto_resolved`); einen von einem Menschen bestaetigten nie. Gibt die Vorfaelle mit
+        `previous_status` und `action_waiting` zurueck."""
+        out: list[dict[str, Any]] = []
+        async with self._ctx.db.session() as session:
+            rows = (
+                await session.execute(
+                    select(IncidentRecord).where(
+                        func.lower(IncidentRecord.host_name) == host_name.lower(),
+                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.status.in_(("open", "proposed", "reviewed")),
+                    )
+                )
+            ).scalars().all()
+            for row in rows:
+                waiting = bool(row.action_id) and action_waiting is not None and await action_waiting(row.action_id)
+                previous = row.status
+                unhandled = previous in ("open", "proposed") or row.status_changed_at is None
+                row.status = "resolved"
+                row.status_changed_at = datetime.now(UTC)
+                details = dict(row.details) if isinstance(row.details, dict) else {}
+                details["auto_resolved"] = note + (f" {waiting_note}" if waiting and waiting_note else "")
+                if unhandled:
+                    details["auto_resolved_from"] = previous
+                else:
+                    details.pop("auto_resolved_from", None)
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                item = record_out(row)
+                item["previous_status"] = previous
+                item["action_waiting"] = waiting
+                out.append(item)
+        return out
+
+    async def reopen_auto_resolved(
+        self,
+        *,
+        host_name: str,
+        target: str,
+        is_crash: bool,
+        seen_at: float,
+        window_s: float,
+        action_waiting: Callable[[str], Awaitable[bool]] | None = None,
+    ) -> dict[str, Any] | None:
+        """Stuerzt ein Container wieder ab, dessen Vorfall sich gerade von selbst erledigt hatte: diesen Vorfall wieder
+        oeffnen (alter Status aus `auto_resolved_from`) und den Absturz mitzaehlen -- statt ihn in der Ruhezeit zu
+        verlieren. Nur der juengste Vorfall des Containers kommt in Frage, und dieselben Regeln wie `merge_into_active`
+        gelten: nur Vorfaelle, die vor dem Selbst-Erledigen noch niemand
+        bearbeitet hatte (sonst fehlt `auto_resolved_from`), nie von Hand erledigte, und mit Aktion nur, solange sie
+        noch wartet (ist der Neustart gelaufen, ist der neue Absturz ein neuer Vorfall). Gibt den Vorfall mit
+        `previous_status` zurueck (oder `None`)."""
+        since = datetime.fromtimestamp(seen_at - window_s, UTC)
+        async with self._ctx.db.session() as session:
+            rows = (
+                await session.execute(
+                    select(IncidentRecord)
+                    .where(
+                        func.lower(IncidentRecord.host_name) == host_name.lower(),
+                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.is_crash == is_crash,
+                        IncidentRecord.created_at >= since,
+                    )
+                    .order_by(IncidentRecord.created_at.desc(), IncidentRecord.id.desc())
+                    .limit(1)
+                )
+            ).scalars().all()
+            # Nur der juengste Vorfall dieses Containers kommt in Frage: ein aelterer, selbst erledigter darf nicht wieder
+            # aufgehen, wenn danach schon ein neuerer kam (etwa mit gelaufenem Neustart) -- dann ist es ein neuer Vorfall.
+            for row in rows:
+                details = dict(row.details) if isinstance(row.details, dict) else {}
+                if row.status != "resolved" or not details.get("auto_resolved"):
+                    return None
+                if details.get("auto_resolved_from") not in ("open", "proposed", "reviewed"):
+                    return None
+                if row.action_id and (action_waiting is None or not await action_waiting(row.action_id)):
+                    return None
+                previous = details.pop("auto_resolved_from", None)
+                details.pop("auto_resolved", None)
+                details["occurrences"] = occurrences_of(details) + 1
+                details["last_seen"] = seen_at
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                row.status = previous if previous in ("open", "proposed", "reviewed") else "open"
+                row.status_changed_at = None
+                item = record_out(row)
+                item["previous_status"] = "resolved"
+                return item
+        return None
+
+    async def recently_auto_resolved(self, *, host_name: str, target: str, since: float) -> bool:
+        """Hat sich seit `since` (Unix-Zeit) ein Vorfall dieses Containers von selbst erledigt? Dann war das Letzte, was
+        man erfahren hat, "laeuft wieder" -- ein neuer Absturz darf nicht in der Ruhezeit verschwinden."""
+        async with self._ctx.db.session() as session:
+            rows = (
+                await session.execute(
+                    select(IncidentRecord)
+                    .where(
+                        func.lower(IncidentRecord.host_name) == host_name.lower(),
+                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.status == "resolved",
+                        IncidentRecord.status_changed_at >= datetime.fromtimestamp(since, UTC),
+                    )
+                    .order_by(IncidentRecord.status_changed_at.desc())
+                    .limit(5)
+                )
+            ).scalars().all()
+        return any(isinstance(row.details, dict) and row.details.get("auto_resolved") for row in rows)
+
+    async def recent_action_ids(self, *, host_name: str, target: str, limit: int = 5) -> list[tuple[str, bool]]:
+        """Die Aktionen der juengsten Vorfaelle dieses Containers (neueste zuerst, ohne Doppelte), je mit der Angabe, ob
+        sich der Vorfall danach von selbst erledigt hat (der Container lief also wieder ruhig)."""
+        async with self._ctx.db.session() as session:
+            rows = (
+                await session.execute(
+                    select(IncidentRecord)
+                    .where(
+                        func.lower(IncidentRecord.host_name) == host_name.lower(),
+                        func.lower(IncidentRecord.target) == target.lower(),
+                        IncidentRecord.action_id.is_not(None),
+                    )
+                    .order_by(IncidentRecord.created_at.desc(), IncidentRecord.id.desc())
+                    .limit(limit * 4)
+                )
+            ).scalars().all()
+        out: list[tuple[str, bool]] = []
+        seen: set[str] = set()
+        for row in rows:
+            if row.action_id in seen:
+                continue
+            seen.add(row.action_id)
+            details = row.details if isinstance(row.details, dict) else {}
+            out.append((row.action_id, bool(details.get("auto_resolved"))))
+            if len(out) >= limit:
+                break
+        return out
+
     async def get(self, incident_id: str) -> dict[str, Any] | None:
         async with self._ctx.db.session() as session:
             row = await session.get(IncidentRecord, incident_id)
@@ -178,6 +329,14 @@ class IncidentRepository:
             previous = row.status
             row.status = status
             row.status_changed_at = datetime.now(UTC)
+            # Von Hand geaendert: nie mehr von selbst wieder oeffnen, und nach "Wieder oeffnen" gilt der Satz
+            # "von selbst erledigt" nicht mehr (auch nicht als Erholung fuer `recent_action_ids`).
+            details = dict(row.details) if isinstance(row.details, dict) else {}
+            dropped = [key for key in ("auto_resolved_from",) + (("auto_resolved",) if status != "resolved" else ()) if key in details]
+            if dropped:
+                for key in dropped:
+                    details.pop(key)
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
             out = record_out(row)
             out["previous_status"] = previous
             return out

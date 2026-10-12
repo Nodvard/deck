@@ -16,8 +16,12 @@
     "watch_interval_min": {
       "type": "integer",
       "default": 10,
+      "minimum": 2,
+      "maximum": 30,
+      "enum": [2, 3, 4, 5, 6, 10, 12, 15, 20, 30],
+      "x-enum-labels": {"2": "alle 2 Minuten", "3": "alle 3 Minuten", "4": "alle 4 Minuten", "5": "alle 5 Minuten", "6": "alle 6 Minuten", "10": "alle 10 Minuten", "12": "alle 12 Minuten", "15": "alle 15 Minuten", "20": "alle 20 Minuten", "30": "alle 30 Minuten"},
       "title": "Wächter-Intervall (Minuten)",
-      "description": "Wie oft der Wächter nach neuen Dateien sucht (2–59)."
+      "description": "Wie oft der Wächter nach neuen Dateien sucht."
     },
     "watch_use_clamdscan": {
       "type": "boolean",
@@ -163,6 +167,13 @@
       "title": "Danach automatisch neu starten, wenn nötig",
       "description": "Nur wenn ein Update (z. B. ein neuer Kernel) einen Neustart verlangt. Vorsicht bei Servern, auf denen andere Dienste laufen."
     },
+    "auto_reboot_skip_hosts": {
+      "type": "array",
+      "items": {"type": "string"},
+      "title": "Diese Server nie automatisch neu starten",
+      "description": "Updates kommen dort trotzdem. Braucht so ein Server danach einen Neustart, sagt das die Meldung, und du startest ihn selbst neu.",
+      "x-widget": "host"
+    },
     "auto_updates_host_tag": {
       "type": "string",
       "title": "Nur Server mit dieser Markierung automatisch aktualisieren",
@@ -188,13 +199,16 @@
       "type": "integer",
       "default": 15,
       "minimum": 5,
-      "maximum": 59,
+      "maximum": 30,
+      "enum": [5, 6, 10, 12, 15, 20, 30],
+      "x-enum-labels": {"5": "alle 5 Minuten", "6": "alle 6 Minuten", "10": "alle 10 Minuten", "12": "alle 12 Minuten", "15": "alle 15 Minuten", "20": "alle 20 Minuten", "30": "alle 30 Minuten"},
       "title": "Prüfabstand (Minuten)"
     },
     "bruteforce_threshold": {
       "type": "integer",
       "default": 20,
       "minimum": 3,
+      "maximum": 1000,
       "title": "Warnen ab so vielen Fehlversuchen einer Adresse (24 Std.)",
       "description": "Adressen, die Fail2ban schon gesperrt hat, lösen keine Warnung aus."
     },
@@ -235,12 +249,14 @@
         "type": "string"
       },
       "title": "Ausgenommene Ordner",
-      "description": "Werden nie gescannt, z. B. große Medienarchive.",
+      "description": "Werden nie gescannt, auch nicht vom Echtzeit-Wächter, z. B. große Medienarchive. Volle Pfade wie /srv/medien; ein Ordner gilt samt Inhalt, Platzhalter wie * gibt es nicht.",
       "x-advanced": true
     },
     "max_filesize_mb": {
       "type": "integer",
       "default": 50,
+      "minimum": 1,
+      "maximum": 1000,
       "title": "Maximale Dateigröße (MB)",
       "description": "Größere Dateien werden übersprungen.",
       "x-advanced": true
@@ -294,6 +310,8 @@
     "incident_batch_delay_s": {
       "type": "number",
       "default": 60,
+      "minimum": 5,
+      "maximum": 3600,
       "title": "Sammelzeit (Sekunden)",
       "description": "So lange werden Vorfälle gesammelt, bevor die KI eine Einschätzung abgibt. Bewusst kürzer als früher (300 Sekunden), weil Vorfälle jetzt sofort gespeichert werden und nach einem Neustart des Dashboards nicht verloren gehen. Schon gesetzte Werte bleiben unverändert.",
       "x-advanced": true
@@ -301,6 +319,8 @@
     "host_target_cooldown_s": {
       "type": "number",
       "default": 1800,
+      "minimum": 60,
+      "maximum": 86400,
       "title": "Ruhezeit je Container (Sekunden)",
       "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.",
       "x-advanced": true

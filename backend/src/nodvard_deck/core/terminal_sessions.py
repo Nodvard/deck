@@ -27,6 +27,10 @@ class TerminalSessionTicket:
     aendert er sich, endet die Sitzung."""
     login_id: str | None = None
     """Anmeldung (`sid` im Zugangs-Token), aus der das Ticket stammt (`services.session_guard`)."""
+    scope: str | None = None
+    """Shell IN etwas auf dem Host (`ScopedTerminalTarget.scope`, z. B. ein Container), sonst `None`."""
+    ref: str | None = None
+    """Welches (`ScopedTerminalTarget`, z. B. der Name), nur mit `scope`."""
 
 
 class TerminalSessionRegistry:
@@ -35,12 +39,13 @@ class TerminalSessionRegistry:
 
     def create(
         self, *, host_id: str, user_id: str, cols: int, rows: int, stamp: str = "",
-        login_id: str | None = None,
+        login_id: str | None = None, scope: str | None = None, ref: str | None = None,
     ) -> TerminalSessionTicket:
         session_id = uuid.uuid4().hex
         ticket = TerminalSessionTicket(
             session_id=session_id, host_id=host_id, user_id=user_id,
             cols=cols, rows=rows, created_at=time.monotonic(), stamp=stamp, login_id=login_id,
+            scope=scope, ref=ref,
         )
         self._tickets[session_id] = ticket
         return ticket

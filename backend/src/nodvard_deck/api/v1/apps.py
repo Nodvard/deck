@@ -1,6 +1,6 @@
 """Eigene App-Kacheln ("+ App hinzufuegen") -- `GET/POST /apps`, `PATCH/DELETE /apps/{id}`,
-`PUT /apps/order` (docs/04-API.md "Eigene Apps"). Pruefung der Eingaben und Begruendung der
-Begrenzungen: `services/custom_apps.py`.
+`PUT /apps/order`, dazu `GET /apps/suggestions` (Vorschlaege aus den Erweiterungen) (docs/04-API.md "Eigene Apps").
+Pruefung der Eingaben und Begruendung der Begrenzungen: `services/custom_apps.py`.
 
 **Rechte:**
 
@@ -20,10 +20,13 @@ Der Server ruft die Adressen nie selbst ab (keine Statusabfrage, kein SSRF).
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from nodvard_sdk import AppSuggestionProvider, ServiceCatalog
 from pydantic import BaseModel, field_validator, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -218,6 +221,116 @@ def _http(exc: apps_service.AppServiceError) -> HTTPException:
 @router.get("", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_apps(session: SessionDep) -> list[CustomAppOut]:
     return await _out(session, await apps_service.list_apps(session))
+
+
+SUGGESTION_TIMEOUT_S = 12.0
+"""So lange darf jede Quelle fuer `GET /apps/suggestions` hoechstens brauchen (wie im Cockpit)."""
+MAX_SUGGESTIONS = 200
+
+
+class AppSuggestionOut(BaseModel):
+    name: str
+    url: str
+    source: str
+    """Woher der Vorschlag stammt (Name der Quelle oder der Erweiterung, z. B. "Nginx Proxy Manager")."""
+    host: str | None = None
+
+
+class AppSuggestionsOut(BaseModel):
+    suggestions: list[AppSuggestionOut]
+    errors: list[str] = []
+    """Je Quelle, die nicht antwortete, ein Satz (ohne Text aus der Quelle)."""
+
+
+def url_key(url: str) -> str:
+    """Vergleichswert einer Adresse: Schema und Rechner klein, ohne abschliessenden Schraegstrich."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return url.strip().lower()
+    host = (parts.hostname or "").lower()
+    path = parts.path.rstrip("/")
+    query = f"?{parts.query}" if parts.query else ""
+    return f"{parts.scheme.lower()}://{host}{f':{port}' if port else ''}{path}{query}"
+
+
+def _suggestion(name: Any, url: Any, source: str, host: Any) -> AppSuggestionOut | None:
+    """Prueft einen Vorschlag wie eine von Hand angelegte App; ein unbrauchbarer faellt still weg."""
+    if not isinstance(name, str) or not isinstance(url, str):
+        return None
+    try:
+        clean_url = apps_service.clean_url(url)
+        clean_name = apps_service.clean_name(name.strip()[: apps_service.NAME_MAX])
+    except apps_service.CustomAppError:
+        return None
+    host_text = host.strip()[:120] if isinstance(host, str) and host.strip() else None
+    return AppSuggestionOut(name=clean_name, url=clean_url, source=source[:60], host=host_text)
+
+
+def _source_name(ext_id: str) -> str:
+    from ...ext.runtime import get_extension_runtime
+
+    loaded = get_extension_runtime().loaded.get(ext_id)
+    name = getattr(getattr(loaded, "manifest", None), "name", None)
+    return str(name or ext_id)
+
+
+async def _from_provider(ext_id: str, provider: Any) -> tuple[list[AppSuggestionOut], str | None]:
+    try:
+        rows = await asyncio.wait_for(provider.app_suggestions(), timeout=SUGGESTION_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 - eine Quelle darf die anderen nicht verdecken; nie ihr Text
+        return [], f"Vorschläge von „{_source_name(ext_id)}“ ließen sich gerade nicht lesen."
+    out: list[AppSuggestionOut] = []
+    for row in rows or []:
+        item = _suggestion(getattr(row, "name", None), getattr(row, "url", None), str(getattr(row, "source", "") or _source_name(ext_id)), getattr(row, "host", None))
+        if item is not None:
+            out.append(item)
+    return out, None
+
+
+async def _from_catalog(ext_id: str, catalog: Any) -> tuple[list[AppSuggestionOut], str | None]:
+    """Erkannte Dienste (`ServiceCatalog`) mit Adresse, die gerade laufen; Quelle ist der Name der Erweiterung."""
+    try:
+        rows = await asyncio.wait_for(catalog.list_services(), timeout=SUGGESTION_TIMEOUT_S)
+    except Exception:  # noqa: BLE001
+        return [], f"Dienste von „{_source_name(ext_id)}“ ließen sich gerade nicht lesen."
+    out: list[AppSuggestionOut] = []
+    for row in rows or []:
+        if not isinstance(row, dict) or row.get("unreachable") is True or row.get("state") not in (None, "running"):
+            continue
+        item = _suggestion(row.get("name"), row.get("url"), _source_name(ext_id), row.get("host"))
+        if item is not None:
+            out.append(item)
+    return out, None
+
+
+@router.get("/suggestions", dependencies=[Depends(require_permission("apps.write"))])
+async def app_suggestions(session: SessionDep) -> AppSuggestionsOut:
+    """Vorschlaege fuer neue App-Kacheln: Proxy-Hosts, erkannte Dienste und alles, was eine Erweiterung als
+    `AppSuggestionProvider` nennt. Geprueft wie eine von Hand angelegte App; was es als App schon gibt (gleiche
+    Adresse), faellt weg, doppelte Adressen kommen einmal. Nur fuer Nutzer, die Apps anlegen duerfen. Ruft selbst keine
+    der Adressen ab."""
+    from ...ext.runtime import get_extension_runtime
+
+    registry = get_extension_runtime().capabilities
+    tasks = [_from_provider(ext_id, p) for ext_id, p in registry.query_named(AppSuggestionProvider)]
+    tasks += [_from_catalog(ext_id, c) for ext_id, c in registry.query_named(ServiceCatalog)]
+    results = await asyncio.gather(*tasks)
+    taken = {url_key(a.url) for a in await apps_service.list_apps(session) if a.url}
+    suggestions: list[AppSuggestionOut] = []
+    errors: list[str] = []
+    for rows, error in results:
+        if error:
+            errors.append(error)
+        for item in rows:
+            key = url_key(item.url)
+            if key in taken:
+                continue
+            taken.add(key)
+            suggestions.append(item)
+    suggestions.sort(key=lambda s: (s.source.lower(), s.name.lower()))
+    return AppSuggestionsOut(suggestions=suggestions[:MAX_SUGGESTIONS], errors=errors)
 
 
 @router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("apps.write"))])

@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../lib/api";
 import { useAuthStore } from "../../state/auth";
 import { RecoveryCodesPanel } from "./RecoveryCodesPanel";
-import { SecondFactorField, isTotpRejected } from "./SecondFactorField";
+import { SecondFactorField, isTotpMissing, isTotpRejected } from "./SecondFactorField";
 import { TotpEnroll, type TotpSetup } from "./TotpEnroll";
 import { TotpPasswordForm } from "./TotpPasswordForm";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
@@ -41,7 +41,7 @@ export function AccountSettings(): JSX.Element {
     <div>
       <PageHeader title="Mein Konto" description={`Angemeldet als ${me.username}${me.is_owner ? " (Inhaber)" : ""}.`} />
       <ProfileCard me={me} onSaved={setMe} />
-      <PasswordCard />
+      <PasswordCard totpEnabled={me.totp_enabled} onChanged={reload} />
       <TotpCard enabled={me.totp_enabled} username={me.username} remaining={me.recovery_codes_remaining ?? 0} onChanged={reload} />
       <FirstStepsPreferenceCard />
     </div>
@@ -84,7 +84,7 @@ function ProfileCard({ me, onSaved }: { me: Me; onSaved: (me: Me) => void }) {
         <Field label="Anzeigename">
           <input value={displayName} maxLength={128} onChange={(e) => setDisplayName(e.target.value)} className={inputClass} />
         </Field>
-        <Field label="E-Mail" hint="Optional, z. B. für Benachrichtigungen.">
+        <Field label="E-Mail" hint="Optional.">
           <input type="email" value={email} maxLength={255} onChange={(e) => setEmail(e.target.value)} className={inputClass} />
         </Field>
       </div>
@@ -131,12 +131,27 @@ function FirstStepsPreferenceCard() {
   );
 }
 
-function PasswordCard() {
+const PASSWORD_CODE_HINT =
+  "Den Code zeigt deine Authenticator-App, zum Beispiel Google Authenticator, Microsoft Authenticator oder Aegis. Hast du das Handy nicht zur Hand, nimm einen Wiederherstellungs-Code; er ist danach verbraucht.";
+
+/**
+ * Ist die Zwei-Faktor-Anmeldung an, verlangt der Server fürs Ändern des Passworts auch einen Code. Das Feld steht gleich
+ * da, wenn `GET /me` es sagt; wurde Zwei-Faktor gerade in einem anderen Fenster eingeschaltet, erscheint es nach der
+ * Rückfrage des Servers (`totp_missing`).
+ */
+function PasswordCard({ totpEnabled, onChanged }: { totpEnabled: boolean; onChanged?: () => void }) {
   const [current, setCurrent] = useState("");
   const [next, setNext] = useState("");
   const [repeat, setRepeat] = useState("");
+  const [code, setCode] = useState("");
+  const [askedForCode, setAskedForCode] = useState(false);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  const needsCode = totpEnabled || askedForCode;
+  // Zwei-Faktor wurde in dieser Seite abgeschaltet: Die Rückfrage von vorhin gilt nicht mehr.
+  useEffect(() => {
+    if (!totpEnabled) setAskedForCode(false);
+  }, [totpEnabled]);
 
   async function save() {
     setNotice(null);
@@ -144,13 +159,26 @@ function PasswordCard() {
     if (next !== repeat) return setNotice({ kind: "error", text: "Die beiden neuen Passwörter stimmen nicht überein." });
     setBusy(true);
     try {
-      await api.post("/me/password", { current_password: current, new_password: next });
+      await api.post("/me/password", needsCode
+        ? { current_password: current, new_password: next, totp_code: code.trim() }
+        : { current_password: current, new_password: next });
       setCurrent("");
       setNext("");
       setRepeat("");
+      setCode("");
       setNotice({ kind: "ok", text: "Passwort geändert." });
+      // Mit einem Wiederherstellungs-Code ist einer weniger übrig: die Zahl unter „Zwei-Faktor“ neu laden.
+      if (needsCode) onChanged?.();
     } catch (err) {
-      setNotice({ kind: "error", text: errorText(err) });
+      if (isTotpMissing(err)) {
+        setAskedForCode(true);
+        setNotice({ kind: "error", text: "Zum Ändern des Passworts brauchst du deinen Zwei-Faktor-Code. Trag ihn im Feld darunter ein." });
+      } else {
+        setNotice({ kind: "error", text: errorText(err) });
+      }
+      // Nur wenn der Code selbst abgelehnt wurde: Bei falschem Passwort prüft der Server ihn gar nicht erst, und ein
+      // abgetippter Wiederherstellungs-Code soll dann stehen bleiben.
+      if (isTotpRejected(err)) setCode("");
     } finally {
       setBusy(false);
     }
@@ -160,7 +188,11 @@ function PasswordCard() {
     <Card
       title="Passwort"
       description="Mindestens 8 Zeichen. Nimm ein Passwort, das du nirgends sonst verwendest."
-      footer={<Button variant="primary" busy={busy} disabled={!current || !next} onClick={() => void save()}>Passwort ändern</Button>}
+      footer={
+        <Button variant="primary" busy={busy} disabled={!current || !next || (needsCode && !code.trim())} onClick={() => void save()}>
+          Passwort ändern
+        </Button>
+      }
     >
       <NoticeLine notice={notice} />
       <div className="grid gap-4 sm:grid-cols-3">
@@ -174,6 +206,7 @@ function PasswordCard() {
           <input type="password" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} className={inputClass} />
         </Field>
       </div>
+      {needsCode && <SecondFactorField value={code} onChange={setCode} hint={PASSWORD_CODE_HINT} className="mt-4 sm:max-w-md" />}
     </Card>
   );
 }

@@ -34,8 +34,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import StreamingResponse
-from nodvard_sdk import FileEntry, FileSourceCaps, SourceInfo, max_body_bytes
-from nodvard_sdk.capabilities import FileSource, FileSourceProvider
+from nodvard_sdk import FileEntry, FilePlace, FileSourceCaps, SourceInfo, max_body_bytes
+from nodvard_sdk.capabilities import FilePlaceProvider, FileSource, FileSourceProvider
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.background import BackgroundTask
@@ -44,7 +44,7 @@ from ...config import get_settings
 from ...core.error_text import describe_connection_error, is_expected_connection_error
 from ...core.ws_hub import get_ws_hub
 from ...ext.runtime import get_extension_runtime
-from ...models import User
+from ...models import Host, User
 from ...services import audit as audit_service
 from ...services import jobs as jobs_service
 from ...services.auth import user_has_permission
@@ -54,6 +54,13 @@ from ..deps import CurrentUser, SessionDep, require_permission
 logger = logging.getLogger("nodvard_deck.files")
 
 router = APIRouter(tags=["files"])
+
+PLACES_TIMEOUT_S = 6.0
+"""So lange darf jeder Anbieter fuer `GET /files/places` hoechstens brauchen; ein haengender Anbieter
+kostet nur seine eigenen Orte, nicht die Seite."""
+MAX_PLACES = 30
+"""Mehr Orte zeigt die Seite nicht (zuerst die der zuerst angemeldeten Anbieter)."""
+_MAX_PLACE_PATH = 1024
 
 _PROGRESS_EVERY_BYTES = 1_048_576
 """Fortschritt wird nicht bei JEDEM Chunk ueber WS publiziert (koennte bei kleiner
@@ -65,6 +72,15 @@ class FileSourceOut(BaseModel):
     label: str
     icon: str
     caps: FileSourceCaps
+    # Server hinter der Quelle (SSH-Quellen), damit die Seite Status und Betriebssystem zeigen kann; sonst None.
+    host_id: str | None = None
+
+
+class FilePlaceOut(BaseModel):
+    label: str
+    path: str
+    icon: str = "folder"
+    hint: str | None = None
 
 
 class MkdirIn(BaseModel):
@@ -254,7 +270,75 @@ async def _primed_stream(stream: Any, first: Any) -> Any:
 @router.get("/files/sources", dependencies=[Depends(require_permission("files.read"))])
 async def list_sources(user: CurrentUser) -> list[FileSourceOut]:
     sources = [s for s in await _all_sources() if _may_use(user, s)]
-    return [FileSourceOut(source_id=s.source_id, label=s.label, icon=s.icon, caps=s.caps) for s in sources]
+    return [
+        FileSourceOut(source_id=s.source_id, label=s.label, icon=s.icon, caps=s.caps, host_id=_source_host_id(s))
+        for s in sources
+    ]
+
+
+@router.get(
+    "/files/places",
+    dependencies=[Depends(require_permission("files.read")), Depends(require_permission("hosts.read"))],
+)
+async def list_places(host_id: str, user: CurrentUser, session: SessionDep) -> list[FilePlaceOut]:
+    """Wichtige Orte eines Servers (Abkuerzungen im Dateimanager): gesammelt bei allen `FilePlaceProvider`,
+    gleichzeitig, mit Zeitgrenze je Anbieter. Ein Anbieter, der scheitert oder zu lange braucht, kostet nur
+    seine Orte. Entdoppelt nach Pfad, nur absolute Pfade, hoechstens `MAX_PLACES`.
+
+    Orte gibt es nur, wenn der Nutzer zu diesem Server auch eine Dateiquelle oeffnen darf: sonst fuehrten die
+    Abkuerzungen ins Leere, und die Ordner des Servers wuerden Leuten genannt, die sie nicht ansehen duerfen."""
+    host = await session.get(Host, host_id)
+    if host is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+    if not any(_source_host_id(s) == host.id and _may_use(user, s) for s in await _all_sources()):
+        return []
+    providers = get_extension_runtime().capabilities.query(FilePlaceProvider, allowed_ext_ids=None)
+    batches = await asyncio.gather(*(_places_of(provider, host.id) for provider in providers))
+    places: list[FilePlaceOut] = []
+    seen: set[str] = set()
+    for batch in batches:
+        for raw in batch:
+            place = _clean_place(raw)
+            if place is None or place.path in seen:
+                continue
+            seen.add(place.path)
+            places.append(place)
+    return places[:MAX_PLACES]
+
+
+async def _places_of(provider: FilePlaceProvider, host_id: str) -> list[Any]:
+    try:
+        found = await asyncio.wait_for(provider.places_for_host(host_id), timeout=PLACES_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 - ein Anbieter darf die anderen nicht verstecken
+        # Ohne Traceback: das Protokoll gilt beim Ausliefern als Fehlerzeichen, und jede Server-Seite fragt neu.
+        logger.warning("file_places_provider_failed provider=%r host=%s reason=%s", provider, host_id, str(exc) or type(exc).__name__)
+        return []
+    return list(found) if isinstance(found, list | tuple) else []
+
+
+def _clean_place(raw: Any) -> FilePlaceOut | None:
+    """Nimmt einen Ort eines Anbieters in die Antwort auf, oder `None`: kein brauchbarer Ort, Pfad nicht absolut
+    (oder mit `..`/NUL), Beschriftung leer. Der Pfad wird geglaettet (`//`, `/./`, Schraegstrich am Ende)."""
+    try:
+        place = FilePlace.model_validate(raw)
+    except ValueError:
+        return None
+    label = place.label.strip()
+    if not label or not place.path.startswith("/") or "\x00" in place.path or len(place.path) > _MAX_PLACE_PATH:
+        return None
+    parts = [part for part in place.path.split("/") if part and part != "."]
+    if ".." in parts:
+        return None
+    hint = (place.hint or "").strip()
+    return FilePlaceOut(
+        label=label[:60], path="/" + "/".join(parts), icon=(place.icon or "").strip()[:40] or "folder", hint=hint[:160] or None
+    )
+
+
+def _source_host_id(source: object) -> str | None:
+    """Optionales Attribut `host_id` einer Quelle (SDK, `FileSource`); nur ein nicht leerer String zaehlt."""
+    value = getattr(source, "host_id", None)
+    return value if isinstance(value, str) and value else None
 
 
 @router.get("/files/{source_id}/info", dependencies=[Depends(require_permission("files.read"))])

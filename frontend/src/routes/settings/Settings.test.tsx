@@ -140,6 +140,132 @@ describe("Einstellungen", () => {
     expect(calls.find((c) => c.path === "/me/password")?.body).toEqual({ current_password: "alt-passwort", new_password: "neues-passwort" });
   });
 
+  /** Mein Konto; `POST /me/password` antwortet der Reihe nach mit `answers` (danach 204). */
+  function mockPasswordChange(totpEnabled: boolean, answers: Response[] = []) {
+    const calls = mockApi({
+      "GET /me": () => ({ id: "u1", username: "nico", display_name: "", email: null, is_owner: false, locale: "de", permissions: [], totp_enabled: totpEnabled, recovery_codes_remaining: 4 }),
+    });
+    const base = globalThis.fetch as unknown as (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith("/me/password") && init?.method === "POST") {
+        calls.push({ method: "POST", path: "/me/password", body: JSON.parse(init.body as string) });
+        return answers.shift() ?? new Response(null, { status: 204 });
+      }
+      return base(input, init);
+    }));
+    return calls;
+  }
+
+  const CODE_LABEL = /^Code aus der App oder Wiederherstellungs-Code/;
+
+  function fillPasswords(current = "alt-passwort") {
+    fireEvent.change(screen.getByLabelText("Aktuelles Passwort"), { target: { value: current } });
+    fireEvent.change(screen.getByLabelText("Neues Passwort"), { target: { value: "neues-passwort" } });
+    fireEvent.change(screen.getByLabelText("Neues Passwort wiederholen"), { target: { value: "neues-passwort" } });
+  }
+
+  it("Mein Konto: Passwort ändern zeigt das Code-Feld nur mit Zwei-Faktor und schickt den Code mit", async () => {
+    const calls = mockPasswordChange(true);
+    render(<AccountSettings />);
+    const code = await screen.findByLabelText(CODE_LABEL);
+    expect(screen.getByText(/zum Beispiel Google Authenticator, Microsoft Authenticator oder Aegis/)).toBeInTheDocument();
+    expect(screen.getByText(/Hast du das Handy nicht zur Hand, nimm einen Wiederherstellungs-Code; er ist danach verbraucht\./)).toBeInTheDocument();
+    const button = screen.getByRole("button", { name: "Passwort ändern" });
+    fillPasswords();
+    // Ohne Code geht es nicht los: Der Server würde ohnehin 403 sagen.
+    expect(button).toBeDisabled();
+    fireEvent.change(code, { target: { value: " 123 456 " } });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await screen.findByText("Passwort geändert.");
+    expect(calls.find((c) => c.path === "/me/password")?.body).toEqual({
+      current_password: "alt-passwort", new_password: "neues-passwort", totp_code: "123 456",
+    });
+    // Nichts bleibt stehen: weder die Passwörter noch der (jetzt verbrauchte) Code.
+    expect(screen.getByLabelText("Aktuelles Passwort")).toHaveValue("");
+    expect(screen.getByLabelText(CODE_LABEL)).toHaveValue("");
+    // Mit einem Wiederherstellungs-Code ist einer weniger übrig: Das Konto wird neu geladen.
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.path === "/me")).toHaveLength(2));
+  });
+
+  it("Mein Konto: Passwort ändern ohne Zwei-Faktor hat kein Code-Feld und schickt keinen Code", async () => {
+    const calls = mockPasswordChange(false);
+    render(<AccountSettings />);
+    await screen.findByLabelText("Aktuelles Passwort");
+    expect(screen.queryByLabelText(CODE_LABEL)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Google Authenticator/)).not.toBeInTheDocument();
+    fillPasswords();
+    fireEvent.click(screen.getByRole("button", { name: "Passwort ändern" }));
+    await screen.findByText("Passwort geändert.");
+    expect(calls.find((c) => c.path === "/me/password")?.body).toEqual({ current_password: "alt-passwort", new_password: "neues-passwort" });
+  });
+
+  it("Mein Konto: Passwort ändern zeigt falsches Passwort, falschen Code und Sperre verständlich an", async () => {
+    const calls = mockPasswordChange(true, [
+      json(400, { detail: "Das aktuelle Passwort stimmt nicht." }),
+      json(400, { detail: "Der Zwei-Faktor-Code stimmt nicht.", code: "totp_wrong" }),
+      json(400, { detail: "Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt.", code: "totp_used" }),
+      json(429, { detail: LOCKED_WITH_HINT }, { "Retry-After": "900" }),
+    ]);
+    render(<AccountSettings />);
+    const code = await screen.findByLabelText(CODE_LABEL);
+    const button = screen.getByRole("button", { name: "Passwort ändern" });
+    fillPasswords("falsch");
+    fireEvent.change(code, { target: { value: "abcde-fghjk" } });
+    fireEvent.click(button);
+    await screen.findByText("Das aktuelle Passwort stimmt nicht.");
+    // Falsches Passwort: Den Code hat der Server gar nicht geprüft, er bleibt stehen (ein Wiederherstellungs-Code
+    // wäre sonst verloren, wenn er abgetippt war).
+    expect(screen.getByLabelText(CODE_LABEL)).toHaveValue("abcde-fghjk");
+    expect(screen.getByLabelText("Aktuelles Passwort")).toHaveValue("falsch");
+
+    fireEvent.change(screen.getByLabelText("Aktuelles Passwort"), { target: { value: "richtig" } });
+    fireEvent.change(screen.getByLabelText(CODE_LABEL), { target: { value: "000000" } });
+    fireEvent.click(button);
+    await screen.findByText("Der Zwei-Faktor-Code stimmt nicht.");
+    // Der Code wurde abgelehnt: Das Feld ist leer, die Passwörter bleiben stehen.
+    expect(screen.getByLabelText(CODE_LABEL)).toHaveValue("");
+    expect(screen.getByLabelText("Aktuelles Passwort")).toHaveValue("richtig");
+    expect(screen.getByLabelText("Neues Passwort")).toHaveValue("neues-passwort");
+    expect(button).toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(CODE_LABEL), { target: { value: "123456" } });
+    fireEvent.click(button);
+    await screen.findByText("Dieser Code wurde schon benutzt. Warte, bis die App einen neuen Code anzeigt.");
+    expect(screen.getByLabelText(CODE_LABEL)).toHaveValue("");
+
+    fireEvent.change(screen.getByLabelText(CODE_LABEL), { target: { value: "654321" } });
+    fireEvent.click(button);
+    // Gesperrt sind nur Codes aus der App: Die Meldung sagt, dass ein Wiederherstellungs-Code weiter geht.
+    await screen.findByText(LOCKED_WITH_HINT);
+    expect(screen.getByLabelText(CODE_LABEL)).toHaveValue("654321");
+    expect(calls.filter((c) => c.path === "/me/password")).toHaveLength(4);
+  });
+
+  it("Mein Konto: Passwort ändern fragt nach dem Code, wenn Zwei-Faktor erst anderswo eingeschaltet wurde", async () => {
+    // `GET /me` sagt „aus“, der Server verlangt trotzdem einen Code (403 `totp_missing`): Das Feld erscheint.
+    const calls = mockPasswordChange(false, [
+      json(403, { detail: "Zum Ändern des Passworts brauchst du jetzt deinen Zwei-Faktor-Code. Nutzt du die Handy-App und siehst kein Feld dafür, aktualisiere zuerst die App.", code: "totp_missing" }),
+    ]);
+    render(<AccountSettings />);
+    await screen.findByLabelText("Aktuelles Passwort");
+    expect(screen.queryByLabelText(CODE_LABEL)).not.toBeInTheDocument();
+    fillPasswords();
+    fireEvent.click(screen.getByRole("button", { name: "Passwort ändern" }));
+    const code = await screen.findByLabelText(CODE_LABEL);
+    // Im Browser ist der Hinweis auf die App-Aktualisierung fehl am Platz: Hier zeigt die Seite das Feld selbst.
+    expect(screen.getByText("Zum Ändern des Passworts brauchst du deinen Zwei-Faktor-Code. Trag ihn im Feld darunter ein.")).toBeInTheDocument();
+    expect(screen.queryByText(/aktualisiere zuerst die App/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Aktuelles Passwort")).toHaveValue("alt-passwort");
+    fireEvent.change(code, { target: { value: "123456" } });
+    fireEvent.click(screen.getByRole("button", { name: "Passwort ändern" }));
+    await screen.findByText("Passwort geändert.");
+    expect(calls.filter((c) => c.path === "/me/password").map((c) => c.body)).toEqual([
+      { current_password: "alt-passwort", new_password: "neues-passwort" },
+      { current_password: "alt-passwort", new_password: "neues-passwort", totp_code: "123456" },
+    ]);
+  });
+
   it("Mein Konto: ausgeblendete Erste Schritte lassen sich wieder anzeigen", async () => {
     const me = { id: "u1", username: "nico", display_name: "Nico", email: null, is_owner: false, locale: "de", permissions: ["*"], totp_enabled: false };
     const calls = mockApi({
@@ -539,6 +665,12 @@ describe("Einstellungen", () => {
       fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
       await screen.findByText("Gespeichert.");
       expect(puts(calls)).toEqual(["mode=propose", "max_risk=medium"]);
+    });
+
+    it("nennt bei der Stufe „Hoch“ auch das Wiederherstellen von Gästen aus Sicherungen", async () => {
+      autonomyServer({ mode: "full", risk: "low" });
+      render(<AutomationSettings />);
+      expect((await screen.findByRole("button", { name: /Hoch/ })).textContent).toContain("Gäste aus Sicherungen wiederherstellen");
     });
 
     it("schreibt nur, was sich geändert hat", async () => {
@@ -959,8 +1091,13 @@ describe("Protokoll", () => {
       ["host.key_generated", "SSH-Schlüssel erzeugt"], ["host.known_key_pinned", "Server-Schlüssel bestätigt"],
       ["host.known_key_forgotten", "Server-Schlüssel vergessen"], ["host.connection_checked", "Verbindung geprüft"],
       ["host.group_changed", "Gruppe geändert"], ["host.credential_made_default", "Standard-Zugang umgestellt"],
+      ["host.setup_with_password", "Server mit Passwort einrichten"],
       ["extension.enabled", "Erweiterung eingeschaltet"], ["extension.disabled", "Erweiterung ausgeschaltet"],
       ["extension.auto_enabled", "Erweiterung automatisch eingeschaltet"],
+      ["proxmox.connect_with_password", "Proxmox mit Passwort verbinden"],
+      ["backups.connection_received", "Proxmox-Backups: Zugang übernommen"],
+      ["proxmox.certificate_confirmed", "Proxmox: Fingerabdruck des Zertifikats bestätigt"],
+      ["backups.certificate_confirmed", "Proxmox-Backups: Fingerabdruck des Zertifikats bestätigt"],
     ];
     mockApi({
       "GET /audit": () => actions.map(([action], i) => ({
@@ -1078,6 +1215,11 @@ describe("Protokoll: Namen statt Codes und Nummern", () => {
     expect(targetText({ target_type: "setting", target_id: "system.timezone" }, names)).toBe("Einstellung · system.timezone");
     expect(targetText({ target_type: "action", target_id: "0c1b5f8e-aaaa-bbbb-cccc-000000000009" }, names)).toBe("Aktion");
     expect(targetText({ target_type: "backup", target_id: null }, names)).toBe("Sicherung");
+    // Gelöschte Meldung: der Titel steht im Eintrag, beim Sammel-Löschen gibt es keine Kennung.
+    expect(
+      targetText({ target_type: "notification", target_id: "01a115cab48f-45a6-d309-8219-4b4b8d24943e", action: "notifications.deleted", detail: { title: "Neue Login-IP" } }, names),
+    ).toBe("Meldung · Neue Login-IP");
+    expect(targetText({ target_type: "notification", target_id: null, action: "notifications.deleted", detail: { count: 3 } }, names)).toBe("Meldung");
     expect(targetText({ target_type: "gibtsnicht", target_id: "x" }, names)).toBe("gibtsnicht · x");
   });
 });
@@ -1097,6 +1239,7 @@ describe("System: Zeit & Protokoll", () => {
     { key: "system.timezone", value: SAVED },
     { key: "audit.retention_days", value: 90 },
     { key: "jobs.run_retention_days", value: 30 },
+    { key: "notifications.retention_days", value: 180 },
   ];
 
   it("zeigt die gespeicherten Werte und speichert Zone und Aufbewahrung", async () => {
@@ -1171,7 +1314,7 @@ describe("System: Zeit & Protokoll", () => {
     const runs = (await screen.findByLabelText("Job-Verlauf aufbewahren (Tage)")) as HTMLInputElement;
     expect(runs.value).toBe("45");
     expect(screen.getByLabelText("Protokoll aufbewahren (Tage)")).toHaveValue(90);
-    expect(screen.getByText(/Zwischen 1 und 3650 Tagen/)).toBeInTheDocument();
+    expect(screen.getByText(/Ältere Läufe der Zeitpläne/)).toHaveTextContent(/Zwischen 1 und 3650 Tagen/);
     expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
 
     fireEvent.change(runs, { target: { value: "7" } });
@@ -1228,6 +1371,84 @@ describe("System: Zeit & Protokoll", () => {
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     await waitFor(() => expect(puts).toHaveLength(3));
     expect(puts[2]).toBe("PUT /settings/jobs.run_retention_days");
+  });
+
+  it("zeigt die Meldungen als dritte Zahl und speichert sie einzeln", async () => {
+    const calls = mockApi({
+      "GET /settings": settingsRows,
+      "PUT /settings/notifications.retention_days": (_m, body) => ({
+        key: "notifications.retention_days", value: (body as { value: number }).value,
+      }),
+    });
+    render(<SystemSettings />);
+    const notes = (await screen.findByLabelText("Meldungen aufbewahren (Tage)")) as HTMLInputElement;
+    expect(notes.value).toBe("180");
+    expect(screen.getByLabelText("Protokoll aufbewahren (Tage)")).toHaveValue(90);
+    expect(screen.getByLabelText("Job-Verlauf aufbewahren (Tage)")).toHaveValue(30);
+    expect(screen.getByText(/Ältere Meldungen werden jede Nacht gelöscht, nur ungelesene kritische bleiben stehen\./)).toHaveTextContent(
+      "Zwischen 1 und 3650 Tagen.",
+    );
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+
+    fireEvent.change(notes, { target: { value: "14" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    await screen.findByText("Gespeichert.");
+
+    expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
+      ["/settings/notifications.retention_days", { value: 14 }],
+    ]);
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+  });
+
+  it("nimmt 90 Tage an, wenn der Server die Meldungen noch nicht meldet", async () => {
+    mockApi({ "GET /settings": () => settingsRows().filter((r) => r.key !== "notifications.retention_days") });
+    render(<SystemSettings />);
+    expect(await screen.findByLabelText("Meldungen aufbewahren (Tage)")).toHaveValue(90);
+    expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+  });
+
+  it("lässt bei den Meldungen nur 1 bis 3650 Tage zu", async () => {
+    const calls = mockApi({ "GET /settings": settingsRows });
+    render(<SystemSettings />);
+    const input = await screen.findByLabelText("Meldungen aufbewahren (Tage)");
+    for (const bad of ["0", "3651", "", "abc", "1,5", "-3"]) {
+      fireEvent.change(input, { target: { value: bad } });
+      expect(screen.getByRole("alert")).toHaveTextContent("zwischen 1 und 3650");
+      expect(input).toHaveAttribute("aria-invalid", "true");
+      expect(screen.getByRole("button", { name: "Speichern" })).toBeDisabled();
+    }
+    for (const good of ["1", "3650"]) {
+      fireEvent.change(input, { target: { value: good } });
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Speichern" })).toBeEnabled();
+    }
+    expect(calls.some((c) => c.method === "PUT")).toBe(false);
+  });
+
+  it("zeigt den Fehler des Servers bei den Meldungen je Feld und merkt sich, was schon gespeichert ist", async () => {
+    const puts: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input).replace(/^\/api\/v1/, "");
+      if (path === "/settings") return new Response(JSON.stringify(settingsRows()), { status: 200 });
+      puts.push(`${init?.method ?? "GET"} ${path}`);
+      if (path === "/settings/notifications.retention_days") {
+        return new Response(JSON.stringify({ detail: "notifications.retention_days muss zwischen 1 und 3650 Tagen liegen." }), { status: 422 });
+      }
+      return new Response(JSON.stringify({}), { status: 200 });
+    }));
+    render(<SystemSettings />);
+    fireEvent.change(await screen.findByLabelText("Protokoll aufbewahren (Tage)"), { target: { value: "120" } });
+    fireEvent.change(screen.getByLabelText("Job-Verlauf aufbewahren (Tage)"), { target: { value: "10" } });
+    fireEvent.change(screen.getByLabelText("Meldungen aufbewahren (Tage)"), { target: { value: "30" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("notifications.retention_days muss zwischen 1 und 3650");
+    expect(puts).toEqual([
+      "PUT /settings/audit.retention_days", "PUT /settings/jobs.run_retention_days", "PUT /settings/notifications.retention_days",
+    ]);
+    // Erneut speichern: Protokoll und Job-Verlauf sind schon gespeichert und gehen nicht noch einmal raus.
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    await waitFor(() => expect(puts).toHaveLength(4));
+    expect(puts[3]).toBe("PUT /settings/notifications.retention_days");
   });
 
   it("schlägt die Zone des Geräts vor", async () => {

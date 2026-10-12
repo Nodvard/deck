@@ -44,6 +44,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import shlex
+import time
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Protocol
 
@@ -54,6 +55,9 @@ logger = logging.getLogger(f"{LOGGER}.watcher")
 
 _STARTUP_DELAY_S = 60.0
 _TICK_S = 8.0
+RECOVERY_QUIET_S = 300.0
+"""So lange muss ein Container nach einer Stoerung (nicht laufend, oder neu gestartet) ruhig laufen, bis er als erholt
+gilt (`on_recovery`). Docker wartet zwischen zwei Neustarts einer Absturzschleife hoechstens eine Minute."""
 
 
 _STATE_KIND = "docker"
@@ -161,13 +165,24 @@ class DockerWatcher:
         *,
         on_transition: Callable[[ContainerTransition], Awaitable[None]],
         state_store: StateStore | None = None,
+        on_recovery: Callable[[Any, str, float], Awaitable[None]] | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        """`on_recovery(host, container, laeuft_seit)`: ein gestoerter Container laeuft wieder, und zwar seit
+        `RECOVERY_QUIET_S` ohne neuen Start (`laeuft_seit` als Unix-Zeit). Einmal je Erholung."""
         self._ctx = ctx
         self._on_transition = on_transition
         self._state_store = state_store
+        self._on_recovery = on_recovery
+        self._clock = clock
         self._prev_states: dict[str, str] = {}
         self._prev_restarts: dict[str, int] = {}
         self._prev_ids: dict[str, str] = {}
+        # Seit wann ein zuletzt gestoerter Container ruhig laeuft (Uhr `clock`); nur im Speicher: nach einem Neustart
+        # des Dashboards beginnt die Beobachtung neu, der Vorfall bleibt dann eben offen, bis man ihn selbst erledigt.
+        self._calm_since: dict[str, float] = {}
+        # Container, deren Erholung zuletzt nicht gespeichert werden konnte: nur der erste Fehler mit Traceback.
+        self._recovery_failed: set[str] = set()
         self._loaded_hosts: set[str] = set()
         self._saved: dict[str, dict[str, Any]] = {}
 
@@ -315,6 +330,7 @@ class DockerWatcher:
                     self._prev_restarts[key] = count
                     self._prev_ids[key] = container_id
 
+                await self._track_recovery(host, name, key, prev_state, state, restart_delta)
                 if prev_state is None:
                     continue  # erste Beobachtung: nur Baseline, siehe Modul-Docstring
                 if prev_state == state:
@@ -362,7 +378,7 @@ class DockerWatcher:
             # gleichnamiger, nicht laufender Container gilt als neu (Baseline), nicht als Absturz.
             prefix = f"{host.id}:"
             current = {f"{prefix}{name}" for name, _st, _s in rows}
-            for table in (self._prev_states, self._prev_restarts, self._prev_ids):
+            for table in (self._prev_states, self._prev_restarts, self._prev_ids, self._calm_since):
                 for key in [k for k in table if k.startswith(prefix) and k not in current]:
                     del table[key]
 
@@ -370,6 +386,34 @@ class DockerWatcher:
             # dauerhaft gemerkt). Stirbt der Prozess dazwischen, wird ein Wechsel nach dem
             # Start nochmal erkannt, statt still verloren zu gehen.
             await self._save_host_state(host)
+
+    async def _track_recovery(self, host: Any, name: str, key: str, prev_state: str | None, state: str, restart_delta: int) -> None:
+        """Erholung erkennen: nach einer Stoerung (vorher nicht laufend, oder ein Neustart durch Docker) muss der
+        Container `RECOVERY_QUIET_S` lang ruhig laufen. Erst dann `on_recovery` -- einmal, danach ist der Container
+        wieder normal. Jede neue Stoerung beginnt die Wartezeit neu."""
+        if self._on_recovery is None:
+            return
+        now = self._clock()
+        if state != "running":
+            self._calm_since.pop(key, None)
+            return
+        if (prev_state is not None and prev_state != "running") or restart_delta:
+            self._calm_since[key] = now
+            return
+        started = self._calm_since.get(key)
+        if started is None or now - started < RECOVERY_QUIET_S:
+            return
+        try:
+            await self._on_recovery(host, name, time.time() - (now - started))
+        except Exception as exc:  # noqa: BLE001 - eine Zugabe: der Waechter laeuft weiter und versucht es im naechsten Takt
+            if key in self._recovery_failed:
+                logger.warning("shield_watcher_recovery_failed_again target=%s error=%s", name, exc)
+            else:
+                self._recovery_failed.add(key)
+                logger.exception("shield_watcher_recovery_failed")
+            return
+        self._recovery_failed.discard(key)
+        self._calm_since.pop(key, None)
 
     async def run_forever(self) -> None:
         await asyncio.sleep(_STARTUP_DELAY_S)

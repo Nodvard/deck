@@ -15,7 +15,8 @@
 import { AlertTriangle, CheckCircle2, Copy, Download, HardDrive, KeyRound, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { SchedulePicker, describeSchedule } from "../../components/SchedulePicker";
+import { GuideLink } from "../../components/GuideLink";
+import { SchedulePicker, describeSchedule } from "../../../../extensions/_shared/frontend/src/SchedulePicker";
 import { api } from "../../lib/api";
 import {
   browserDownload,
@@ -378,7 +379,8 @@ function ScheduleSection({ overview, onSaved }: { overview: BackupOverview; onSa
       {!overview.target.external_available && (
         <p className="mt-2 text-xs text-white/50" data-testid="external-not-mounted">
           Der Ordner {overview.target.external_root} ist hier nicht eingebunden, darum ist der zweite Knopf gesperrt. Um Sicherungen auf einem anderen Laufwerk oder einem NAS abzulegen, muss dieser Ordner in
-          der Compose-Datei von Nodvard Deck unter „volumes“ eingebunden werden. Bis dahin bleibt „Im Datenordner“.
+          der Compose-Datei von Nodvard Deck unter „volumes“ eingebunden werden. Bis dahin bleibt „Im Datenordner“.{" "}
+          <GuideLink section="backup" testId="external-guide">Wie das geht, steht in der Anleitung.</GuideLink>
         </p>
       )}
       {!keepValid && <p role="alert" className="mt-2 text-xs text-red-300">Bitte eine ganze Zahl zwischen {keepMin} und {keepMax} eingeben.</p>}

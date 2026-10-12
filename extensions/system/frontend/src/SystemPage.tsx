@@ -1,15 +1,16 @@
 /**
- * System-Seite (Roadmap Punkt 3, "Linux-Hosts per SSH"): Zustand EINES Linux-Servers --
- * Betriebssystem, Auslastung, Platten, fehlgeschlagene Dienste, Updates. Erreichbar
- * ueber die Kachel "System-Monitor" auf der Server-Seite (`?host=`) oder direkt mit
- * Host-Auswahl.
+ * Seite „Server-Zustand“ (Modul-Kennung `system`, bis 0.8.0 hiess es „System“; Roadmap Punkt 3, "Linux-Hosts per
+ * SSH"): Zustand EINES Linux-Servers -- Betriebssystem, Auslastung, Platten, fehlgeschlagene Dienste, Updates.
+ * Erreichbar ueber die Kachel „Server-Zustand“ auf der Server-Seite (`?host=`) oder direkt mit Host-Auswahl.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorFromBody } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { SettingsLink } from "../../../_shared/frontend/src/links";
+import { HostPicker, type HostTile } from "../../../_shared/frontend/src/HostPicker";
+import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { Button, EmptyState, Notice } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
@@ -24,6 +25,26 @@ interface HostOut {
   status: string;
   /** Standard-Zugang, `null` ohne SSH-Zugang (ohne den es nichts zu messen gibt). */
   credential?: unknown;
+}
+
+/** Eine Zeile des Widgets "Server-Zustand" (`/ext/system/widgets/health`). */
+interface HealthRow {
+  host_id: string;
+  summary: string;
+  tone: string;
+  cpu_percent?: number | null;
+  mem_percent?: number | null;
+}
+
+/** Was eine Kachel aus dem Zustand zeigt: die Auslastung als Zusatz, einen Befund (gelb/rot) als Hinweis. */
+export function tileState(row: HealthRow | undefined): { extra: string | null; hint: string | null } {
+  if (!row) return { extra: null, hint: null };
+  const load = [
+    typeof row.cpu_percent === "number" ? `CPU ${Math.round(row.cpu_percent)} %` : null,
+    typeof row.mem_percent === "number" ? `RAM ${Math.round(row.mem_percent)} %` : null,
+  ].filter(Boolean).join(" · ");
+  const problem = row.tone === "warn" || row.tone === "danger" ? row.summary : null;
+  return { extra: load || (problem ? null : row.summary), hint: problem };
 }
 
 interface Disk { device: string; fstype: string; mount: string; size: number; used: number; available: number; percent: number; tone: string }
@@ -209,6 +230,11 @@ export function SystemPage(): JSX.Element {
   const hostId = urlParams.get("host") || null;
   // `null`: noch nicht geladen -- sonst gaebe es kurz den Leerzustand "kein Server".
   const [hosts, setHosts] = useState<HostOut[] | null>(null);
+  // Serverliste nicht abrufbar: nicht "Noch kein Linux-Server" zeigen, sondern den Grund.
+  const [hostsError, setHostsError] = useState<string | null>(null);
+  // Zustand je Server fuer die Kacheln der Auswahl (Widget "Server-Zustand", 5 min zwischengespeichert):
+  // Auslastung und der wichtigste Befund. Nicht zwingend -- die Auswahl geht auch ohne.
+  const [health, setHealth] = useState<Record<string, HealthRow>>({});
   const [info, setInfo] = useState<SystemInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -231,12 +257,26 @@ export function SystemPage(): JSX.Element {
     return body as LiveData;
   }, []);
 
-  useEffect(() => {
-    authedFetch("/hosts")
-      .then((res) => (res.ok ? (res.json() as Promise<HostOut[]>) : []))
+  const loadHosts = useCallback(() => {
+    setHosts(null);
+    setHostsError(null);
+    fetchJson<HostOut[]>("/hosts")
       .then((list) => setHosts(list.filter((h) => h.os_family === "linux")))
-      .catch(() => setHosts([]));
+      .catch((err: unknown) => {
+        setHosts([]);
+        setHostsError(errorMessage(err));
+      });
   }, []);
+
+  useEffect(() => {
+    loadHosts();
+    authedFetch("/ext/system/widgets/health")
+      .then((res) => (res.ok ? (res.json() as Promise<{ data?: HealthRow[] }>) : null))
+      .then((body) => {
+        if (body && Array.isArray(body.data)) setHealth(Object.fromEntries(body.data.map((r) => [r.host_id, r])));
+      })
+      .catch(() => undefined);
+  }, [loadHosts]);
 
   const load = useCallback(async (id: string) => {
     setLoading(true);
@@ -263,6 +303,15 @@ export function SystemPage(): JSX.Element {
   }, [hostId, tab, load]);
 
   const hostName = info?.host.name ?? (hosts ?? []).find((h) => h.id === hostId)?.display_name;
+  // Kacheln der Server-Auswahl: Name, Adresse, System, Status aus der Serverliste des Kerns.
+  const tiles = useMemo<HostTile[] | null>(
+    () => hosts === null ? null : hosts.map((h) => ({
+      id: h.id, name: h.display_name, address: h.address, os: h.os_family, status: h.status,
+      ...tileState(health[h.id]),
+      ...(h.credential === null ? { hint: "ohne SSH-Zugang" } : {}),
+    })),
+    [hosts, health],
+  );
 
   useEffect(() => { setMessage(null); }, [hostId]);
 
@@ -301,18 +350,7 @@ export function SystemPage(): JSX.Element {
   return (
     <div className="p-4 sm:p-6">
       <div className="mb-4 flex flex-wrap items-center gap-3">
-        <h2 className="text-2xl font-semibold tracking-tight">System{hostName ? `: ${hostName}` : ""}</h2>
-        <select
-          aria-label="Server wählen"
-          value={hostId ?? ""}
-          onChange={(e) => updateUrl({ host: e.target.value || null })}
-          className="rounded bg-white/10 px-2 py-1 text-sm"
-        >
-          <option value="">Server wählen …</option>
-          {(hosts ?? []).map((h) => (
-            <option key={h.id} value={h.id}>{h.display_name} ({h.address}){h.credential === null ? " – ohne SSH-Zugang" : ""}</option>
-          ))}
-        </select>
+        <h2 className="text-2xl font-semibold tracking-tight">Server-Zustand{hostName ? `: ${hostName}` : ""}</h2>
         {hostId && (
           <div className="flex overflow-hidden rounded-lg border border-white/10 text-xs" role="tablist" aria-label="Ansicht">
             {([["live", "Live"], ["info", "Zustand & Updates"]] as const).map(([key, label]) => (
@@ -329,16 +367,22 @@ export function SystemPage(): JSX.Element {
           </button>
         )}
       </div>
-      {!hostId && hosts !== null && hosts.length === 0 && (
+      {hostsError && <LoadError what="Die Server-Liste" error={hostsError} onRetry={loadHosts} />}
+      {!hostId && hosts !== null && hosts.length > 0 && (
+        <p className="mb-2 text-sm opacity-60">Einen Linux-Server wählen – oder auf dessen Server-Seite die Kachel „Server-Zustand“ öffnen.</p>
+      )}
+      {(hosts === null || hosts.length > 0) && (
+        <div className="mb-4">
+          <HostPicker hosts={tiles} value={hostId} onChange={(id) => updateUrl({ host: id })} storageKey="system" />
+        </div>
+      )}
+      {!hostId && hosts !== null && hosts.length === 0 && !hostsError && (
         <EmptyState
           icon="eye"
           title="Noch kein Linux-Server"
           text="Lege unter Server & Zugänge einen Linux-Server mit SSH-Zugang an. Dann siehst du hier seine Auslastung, Dienste und Updates."
           action={<SettingsLink to="/settings/hosts" permission="hosts.write">Server &amp; Zugänge öffnen</SettingsLink>}
         />
-      )}
-      {!hostId && hosts !== null && hosts.length > 0 && (
-        <p className="text-sm opacity-60">Einen Linux-Server wählen – oder über dessen Server-Seite „System-Monitor“ öffnen.</p>
       )}
       {hostId && tab === "live" && <LiveView hostId={hostId} fetchLive={fetchLive} />}
       {tab === "info" && error && <p className="text-sm text-red-400">Fehler: {error}</p>}

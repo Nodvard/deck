@@ -97,6 +97,16 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+describe("Karte Wiederherstellen: Anleitung", () => {
+  it("die Beschreibung verlinkt den Abschnitt „Wiederherstellen“ der Anleitung", async () => {
+    mockApi({ "GET /system/restore/status": () => status() });
+    render(<RestoreCard />);
+    const link = await screen.findByTestId("restore-guide");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#102-wiederherstellen-sicherung-einspielen");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+});
+
 describe("Karte Wiederherstellen: Ablauf", () => {
   it("Datei wählen, hochladen mit Fortschritt, prüfen, Zusammenfassung, einspielen, warten, zur Anmeldung", async () => {
     const calls = mockApi({

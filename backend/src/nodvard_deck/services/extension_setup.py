@@ -156,11 +156,20 @@ def _title(key: str, schema: dict[str, Any]) -> str:
     return str(schema.get("title") or key.replace("_", " "))
 
 
+def _wanted(key: str, sub: dict[str, Any]) -> str:
+    return f"einen Eintrag bei „{_title(key, sub)}“" if sub.get("type") == "array" else f"„{_title(key, sub)}“"
+
+
 def missing_fields(schema: dict[str, Any] | None, values: dict[str, Any]) -> list[str]:
     """Pflichtfelder ohne Wert (und ohne Standardwert im Schema): oben auf der Ebene der
-    Einstellungen und je Eintrag einer Liste von Einträgen (z. B. je Proxmox-Server)."""
+    Einstellungen und je Eintrag einer Liste von Einträgen (z. B. je Proxmox-Server). Dazu
+    `x-required-any` (Liste von Feldgruppen): mindestens eine Gruppe muss ganz ausgefüllt sein."""
     out: list[str] = []
     props = (schema or {}).get("properties") or {}
+    groups = [g for g in (schema or {}).get("x-required-any") or [] if isinstance(g, list) and g]
+    if groups and not any(all(not _is_empty(values.get(k)) for k in group) for group in groups):
+        options = [" und ".join(_wanted(k, props.get(k) or {}) for k in group) for group in groups]
+        out.append(f"Noch nicht eingerichtet: Trage {' – oder '.join(options)} ein.")
     for key in (schema or {}).get("required") or []:
         sub = props.get(key) or {}
         if _is_empty(values.get(key)) and sub.get("default") is None:

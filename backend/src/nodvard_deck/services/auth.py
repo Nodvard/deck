@@ -227,7 +227,8 @@ async def _record_failure(
             f"in {minutes} Minuten"
         ),
         login_limit.SCOPE_IP: (
-            f"{login_limit.MAX_FAILURES_PER_IP} Fehlversuche von dieser IP in {minutes} Minuten"
+            f"{login_limit.MAX_FAILURES_PER_IP} Fehlversuche "
+            f"{'aus diesem Netz (IPv6 zählt je /64)' if attempt.bucket != attempt.ip else 'von dieser IP'} in {minutes} Minuten"
         ),
         login_limit.SCOPE_ACCOUNT: (
             f"zu viele falsche Zwei-Faktor-Codes für dieses Konto "
@@ -246,6 +247,7 @@ async def _record_failure(
             "scopes": scopes,
             **(username_detail if username_detail is not None else {"username": attempt.username}),
             **_lock_windows(scopes),
+            **({"network": attempt.bucket} if attempt.bucket != attempt.ip else {}),
         },
         ip=attempt.ip,
         user_agent=user_agent,
@@ -980,9 +982,9 @@ async def _report_mfa_guessing(session: AsyncSession, user: User) -> None:
             body=(
                 f"Für „{user.username}“ wurden zu viele falsche Zwei-Faktor-Codes eingegeben; weitere "
                 "Versuche sind für eine Weile gesperrt. Wer so oft rät, kennt vermutlich das "
-                "Passwort. Wenn du das nicht warst, ändere gleich dein Passwort, das geht auch während der "
-                "Sperre. Anmelden kannst du dich in der Zeit mit einem Wiederherstellungs-Code. Bestätigungen "
-                "mit Zwei-Faktor-Code (zum Beispiel für ein Update) gehen erst wieder, wenn die Sperre vorbei ist."
+                "Passwort. Wenn du das nicht warst, ändere gleich dein Passwort. Dafür und fürs Anmelden brauchst "
+                "du in der Zeit einen Wiederherstellungs-Code. Bestätigungen mit dem Code aus der App (zum Beispiel "
+                "für ein Update) gehen erst wieder, wenn die Sperre vorbei ist."
             ),
             severity="warning",
             payload={"path": "/settings/account", "tags": ["warning", "key"]},
@@ -1021,6 +1023,14 @@ _RECOVERY_USE_TEXTS = {
         "beim Abschalten der Zwei-Faktor-Anmeldung",
         "Die Zwei-Faktor-Anmeldung ist damit aus.",
         "ändere sofort das Passwort und schalte die Zwei-Faktor-Anmeldung wieder ein",
+    ),
+    "passwort_aendern": (
+        "beim Ändern des Passworts",
+        None,
+        (
+            "lass dein Passwort sofort zurücksetzen („Passwort vergessen?“ auf der Anmeldeseite), denn deine "
+            "anderen Anmeldungen sind damit beendet, und erzeuge danach neue Codes"
+        ),
     ),
 }
 
@@ -1480,6 +1490,14 @@ TOTP_REQUIRED_MESSAGE = "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code au
 TOTP_OR_RECOVERY_REQUIRED_MESSAGE = (
     "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code aus deiner App oder einen Wiederherstellungs-Code ein."
 )
+PASSWORD_CHANGE_TOTP_REQUIRED_MESSAGE = (
+    "Zum Ändern des Passworts brauchst du jetzt deinen Zwei-Faktor-Code. "
+    "Nutzt du die Handy-App und siehst kein Feld dafür, aktualisiere zuerst die App."
+)
+"""Antwort auf `POST /me/password` ohne Code. Eine ältere Handy-App kennt das Feld noch nicht und zeigt nur dieses
+`detail`: Der Satz muss für sich verständlich sein und sagen, was zu tun ist."""
+_TOTP_REQUIRED_MESSAGE_BY_ACTION = {"passwort_aendern": PASSWORD_CHANGE_TOTP_REQUIRED_MESSAGE}
+"""Eigener Satz je Vorgang (`action` von `require_current_totp`); alle anderen nehmen den allgemeinen."""
 WRONG_TOTP_MESSAGE = "Der Zwei-Faktor-Code stimmt nicht."
 WRONG_RECOVERY_MESSAGE = (
     "Der Code stimmt nicht. Gib den sechsstelligen Code aus deiner App oder einen noch unbenutzten "
@@ -1528,9 +1546,9 @@ async def require_current_totp(
     teilen: Der Zaehler der Passwortabfrage zaehlt falsche Codes zwar mit, aber das richtige Passwort davor
     (`require_current_password`) setzt ihn bei jeder Bestaetigung wieder zurueck.
 
-    Wiederherstellungs-Codes nur mit `allow_recovery` (Zwei-Faktor abschalten, neue Codes erzeugen: wer das Handy
-    verloren hat, soll das mit einem Code aus seiner Liste koennen). Wie beim Anmelden: alles ausser sechs Ziffern ist
-    ein Wiederherstellungs-Code; er wird verbraucht (`consume_recovery_code`, mit der Anfrage gespeichert -- scheitert
+    Wiederherstellungs-Codes nur mit `allow_recovery` (Passwort aendern, Zwei-Faktor abschalten, neue Codes erzeugen:
+    wer das Handy verloren hat, soll das mit einem Code aus seiner Liste koennen). Wie beim Anmelden: alles ausser
+    sechs Ziffern ist ein Wiederherstellungs-Code; er wird verbraucht (`consume_recovery_code`, mit der Anfrage gespeichert -- scheitert
     sie danach, ist er wieder frei), und fuer ihn gilt die Grenze je Konto nicht, er zaehlt auch nicht darauf (sonst
     kaeme der Besitzer waehrend einer Sperre, die jemand mit seinem Passwort ausgeloest hat, auch damit nicht weiter).
     Falsche Wiederherstellungs-Codes zaehlen stattdessen wie beim Anmelden auf einen eigenen Zaehler (10 in 5 Minuten,
@@ -1542,12 +1560,18 @@ async def require_current_totp(
     `before_claim` laeuft nur bei einem richtigen Wiederherstellungs-Code, kurz bevor er als benutzt markiert wird (siehe
     `consume_recovery_code`): fuer lange Arbeit der Aktion, die nicht in der Schreibsperre der Datenbank laufen soll.
 
+    Fehlt der Code, ist die Meldung die allgemeine (`TOTP_OR_RECOVERY_REQUIRED_MESSAGE` bzw. `TOTP_REQUIRED_MESSAGE`),
+    ausser fuer Vorgaenge in `_TOTP_REQUIRED_MESSAGE_BY_ACTION` (Passwort aendern).
+
     Falsche Codes stehen als `auth.totp_check_failed` im Protokoll (nie der Code selbst)."""
     if not two_factor_enabled(user):
         return None
     compact = "".join((code or "").split())
     if not compact:
-        raise TotpRequired(TOTP_OR_RECOVERY_REQUIRED_MESSAGE if allow_recovery else TOTP_REQUIRED_MESSAGE)
+        raise TotpRequired(
+            _TOTP_REQUIRED_MESSAGE_BY_ACTION.get(action)
+            or (TOTP_OR_RECOVERY_REQUIRED_MESSAGE if allow_recovery else TOTP_REQUIRED_MESSAGE)
+        )
     via_recovery = allow_recovery and not security.is_totp_code(compact)
     try:
         attempt = _begin_attempt(

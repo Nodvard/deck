@@ -158,6 +158,15 @@ describe("LoginPage", () => {
     expect(screen.queryByText(/Notfall-Befehl auf dem Server/)).not.toBeInTheDocument();
   });
 
+  it("„Passwort vergessen?“ führt zum Abschnitt „Ausgesperrt?“ der Anleitung (neuer Tab)", () => {
+    renderLogin();
+    fireEvent.click(screen.getByRole("button", { name: "Passwort vergessen?" }));
+    const link = within(screen.getByTestId("forgot-guide")).getByRole("link", { name: /Ausgesperrt\? Notfall-Befehle/ });
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#12-ausgesperrt-notfall-befehle");
+    expect(link).toHaveAttribute("target", "_blank");
+    expect(link.getAttribute("rel")).toContain("noopener");
+  });
+
   it("„Passwort vergessen?“ zeigt auch den Weg ohne Befehlszeile: Konsole des Containers in Portainer, Docker Desktop, Synology", () => {
     renderLogin();
     fireEvent.click(screen.getByRole("button", { name: "Passwort vergessen?" }));

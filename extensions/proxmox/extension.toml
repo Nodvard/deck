@@ -10,6 +10,9 @@ category    = "servers"
 sort_order  = 40
 entrypoint  = "nodvard_deck_ext_proxmox:Extension"
 frontend    = "frontend/dist/index.js"
+# Nur fuer "Mit Passwort verbinden": ist "backups" an, bekommt es dabei gleich einen eigenen Zugang
+# (`nodvard_sdk.ConnectionReceiver`). Ohne "backups" fehlt nur dieser Teil -- `requires` macht es nicht zur Pflicht.
+requires    = ["backups"]
 
 permissions = [
   "net.outbound",
@@ -19,6 +22,7 @@ permissions = [
   "hosts.write",
   "schedule.register",
   "notify.send",
+  "audit.write",
 ]
 
 [settings]

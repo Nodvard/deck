@@ -4,6 +4,9 @@ Stand 07.10.2026 (Version 0.7). Für eine frische Installation, in dieser Reihen
 eine Lücke hat, steht das dabei. Ohne Oberfläche (nur mit der API) geht es über den
 [Anhang](#anhang-ohne-oberfläche).
 
+Im Dashboard öffnet **„Anleitung“** diese Seite in einem neuen Tab: unten in der Navigation der Einstellungen und über
+die Suche (Strg+K, „Anleitung“, „Hilfe“ oder „Doku“). An vielen Stellen steht ein Link direkt am passenden Abschnitt.
+
 1. [Container starten](#1-container-starten)
 2. [Einrichtungsassistent](#2-einrichtungsassistent-setup)
 3. [Weitere Benutzer](#3-weitere-benutzer)
@@ -140,7 +143,7 @@ geht später unter Einstellungen → System. Ohne Suche steht die gewählte Zone
 
 Alle mitgelieferten Module als Kacheln mit Schalter (außer dem Beispiel-Modul „Hello World“ für Entwickler, das nur
 unter Einstellungen → Erweiterungen steht), nach Themen sortiert: zuerst „Für deine Server“
-(System, Terminal, Service-Matrix, Proxmox VE …), dann Sicherheit, Werkzeuge, Verbindungen zu anderen
+(Server-Zustand, Terminal, Service-Matrix, Proxmox VE …), dann Sicherheit, Werkzeuge, Verbindungen zu anderen
 Diensten. Ein Klick auf die Kachel oder den Schalter schaltet das Modul ein oder wieder aus. Kein Modul
 ist Pflicht („Überspringen“). Module, die danach noch Angaben brauchen (Adresse, Zugangsdaten,
 Token), tragen den Hinweis „Braucht danach noch Angaben“; diese Angaben kommen **erst jetzt nach dem
@@ -198,9 +201,9 @@ Passwortmanager oder ausgedruckt, **nicht** nur auf dem Handy, das ja verloren g
   15 Minuten (oder 20 in 24 Stunden), egal von welchem Gerät, ist die Code-Eingabe für das Konto
   eine Weile gesperrt, und Nodvard Deck schickt eine Meldung. Die Sperre gilt auch nach einem
   Neustart von Nodvard Deck weiter. Wer so oft rät, kennt vermutlich das Passwort. Warst du es
-  nicht, ändere gleich dein Passwort, das geht auch während der Sperre. Anmelden kannst du dich in
-  der Zeit mit einem Wiederherstellungs-Code. Bestätigungen mit Zwei-Faktor-Code (etwa für ein
-  Update) gehen erst wieder, wenn die Sperre vorbei ist.
+  nicht, ändere gleich dein Passwort. Dafür und fürs Anmelden brauchst du in der Zeit einen
+  Wiederherstellungs-Code, denn die Codes aus der App sind gesperrt. Bestätigungen mit dem Code aus der
+  App (etwa für ein Update) gehen erst wieder, wenn die Sperre vorbei ist.
 - **Wie viele übrig sind**, steht unter Mein Konto. Bei wenigen oder keinen: „Neue
   Wiederherstellungs-Codes erzeugen“. Dafür brauchst du dein Passwort und einen Code: den aktuellen
   aus der App oder einen deiner bisherigen Wiederherstellungs-Codes. Die alten Codes sind danach
@@ -208,9 +211,14 @@ Passwortmanager oder ausgedruckt, **nicht** nur auf dem Handy, das ja verloren g
 - **Abschalten** (Mein Konto → „Abschalten“) geht nur mit Passwort **und** Code: dem aktuellen aus
   der App oder einem Wiederherstellungs-Code, der dabei verbraucht wird. Wer nur dein Passwort kennt,
   kann die Zwei-Faktor-Anmeldung so nicht abschalten. Ältere Apps fragen den Code noch nicht ab; dort
-  gehen Abschalten, neue Codes und Sicherungen erst nach einem Update der App, im Browser sofort.
-- Wird beim Abschalten oder beim Erzeugen neuer Codes ein Wiederherstellungs-Code benutzt, steht das
-  wie bei der Anmeldung im Protokoll, und Nodvard Deck schickt eine Meldung.
+  gehen Abschalten, neue Codes, Passwort ändern und Sicherungen erst nach einem Update der App, im Browser sofort.
+- **Passwort ändern** (Mein Konto → „Passwort“) verlangt bei eingeschalteter Zwei-Faktor-Anmeldung ebenfalls
+  den Code aus der App oder einen Wiederherstellungs-Code; das Feld dafür erscheint gleich mit. Sonst könnte
+  jemand, der nur dein altes Passwort kennt, ein neues setzen und dich aussperren. Eine ältere Handy-App
+  zeigt dafür den Hinweis, sich zuerst zu aktualisieren.
+- Wird beim Abschalten, beim Ändern des Passworts oder beim Erzeugen neuer Codes ein
+  Wiederherstellungs-Code benutzt, steht das wie bei der Anmeldung im Protokoll, und Nodvard Deck
+  schickt eine Meldung.
 - **Sicherung herunterladen oder einspielen** verlangt bei eingeschalteter Zwei-Faktor-Anmeldung
   ebenfalls den Code aus der App (hier kein Wiederherstellungs-Code): Eine Sicherung enthält alle
   Schlüssel, auch den der Zwei-Faktor-Anmeldung. Das Feld dafür erscheint gleich mit. Vertippst du
@@ -233,20 +241,23 @@ Einstellungen → Benutzer → **„Neuer Benutzer“**:
 - **Passwort:** mindestens 8 Zeichen. Der neue Benutzer kann es unter „Mein Konto“ ändern. (Das
   Passwort *anderer* Benutzer setzt man später unter „Bearbeiten“; das eigene und das des
   Inhabers lassen sich dort nicht setzen – eigenes unter „Mein Konto“.)
-- **Anzeigename**, **E-Mail (optional)**; eine eingetragene Adresse braucht ein `@` (z. B. `name@beispiel.de`).
+- **Anzeigename**, **E-Mail (optional)**; eine eingetragene Adresse braucht ein `@` (z. B. `name@beispiel.de`). Nodvard Deck
+  verschickt keine E-Mails: Die Adresse ist nur eine Angabe zum Konto (Benachrichtigungen kommen als Push über ntfy).
 - **Rollen:**
   - **Administrator** (`admin`) – Volle Verwaltung inkl. Benutzer und Einstellungen
   - **Bediener** (`operator`) – Server bedienen, Aktionen bis mittleres Risiko freigeben
   - **Betrachter** (`viewer`) – Nur ansehen, nichts ändern. Ohne das Recht `hosts.execute` (wie für Befehle) sieht der Betrachter
     keine Dateien auf Servern und weder Befehle noch Ausgabe von Aktionen (Text vom Server), auch nicht im Protokoll.
-    Meldungen kann `viewer` lesen, aber nicht als gelesen markieren (der Lesestatus gilt für alle Benutzer gemeinsam)
+    Meldungen kann `viewer` lesen, aber nicht als gelesen markieren oder löschen (beides gilt für alle Benutzer gemeinsam)
 - „Anlegen“. Passt eine Angabe nicht, steht oben gleich, was (z. B. „Passwort: Mindestens 8 Zeichen.“).
 
 **Zwei-Faktor eines Benutzers zurücksetzen:** Hat jemand Handy und Wiederherstellungs-Codes
 verloren, schaltet ein Benutzer mit Recht `users.write` (Rolle `admin`) unter Einstellungen →
 Benutzer → **„Zwei-Faktor zurücksetzen“** die Zwei-Faktor-Anmeldung dieser Person ab (zur
-Sicherheit wird dabei das eigene Passwort des Admins abgefragt). Die
-Person wird dabei überall abgemeldet; das Protokoll hält fest, wer es getan hat. Danach geht
+Sicherheit wird dabei das eigene Passwort des Admins abgefragt und, wenn er selbst Zwei-Faktor an hat, sein
+eigener Code aus der App). Dasselbe gilt, wenn ein Admin beim Bearbeiten ein neues Passwort für jemand anderen
+setzt, ein Konto mit Verwaltungsrechten (Rolle `admin`) anlegt oder einem Konto diese Rolle gibt. Die Person wird dabei überall abgemeldet; das Protokoll hält fest, wer es getan hat, und unter
+„Meldungen“ steht „Zugang von … geändert“. Danach geht
 die Anmeldung wieder nur mit Passwort, und sie kann Zwei-Faktor neu einrichten. **Beim
 Inhaber geht das nicht** – seine Zwei-Faktor-Anmeldung kann nur er selbst (unter Mein Konto)
 oder der Notfall-Befehl auf dem Server ([12.](#12-ausgesperrt-notfall-befehle)) abschalten.
@@ -272,10 +283,29 @@ Erweiterungen, mit dem Schalter rechts, „Konfigurieren“ öffnet die
 Einstellungen der Erweiterung („Einrichtung nötig“ heißt: es fehlen noch Angaben oder der
 letzte Verbindungstest ist fehlgeschlagen). Öffnest du die Seite eines ausgeschalteten Moduls (etwa über ein
 Lesezeichen), sagt sie das, und **„Einschalten“** schaltet es dort gleich ein (ohne das Recht dazu steht da, dass ein
-Administrator es einschalten kann). Ein guter Anfang für fast jedes Heimnetz: Terminal, System,
-Nodvard Shield und ntfy-Benachrichtigungen, dazu Service-Matrix, wenn auf einem Server Docker läuft, und
-Gameserver, wenn dort ein Spieleserver steht. **Proxmox VE und Backups brauchst du nur, wenn du Proxmox
+Administrator es einschalten kann). Ein guter Anfang für fast jedes Heimnetz: Terminal, Server-Zustand,
+Nodvard Shield und Push-Nachrichten, dazu Service-Matrix, wenn auf einem Server Docker läuft, und
+Gameserver, wenn dort ein Spieleserver steht. **Proxmox VE und Proxmox-Backups brauchst du nur, wenn du Proxmox
 nutzt** – sonst lass sie aus (siehe [4.1](#41-ohne-proxmox)). Der Rest nach Bedarf.
+
+Unter Einstellungen → Erweiterungen stehen die Module in denselben Gruppen wie im Assistenten; die Beispiel-Module
+für Entwickler („Hello World“) stehen ganz unten unter „Für Entwickler“. Hat ein Modul Server eingelesen (etwa Proxmox),
+nennt die Rückfrage beim Ausschalten ihre Zahl: Die Server bleiben in der Liste stehen, im Cockpit tragen sie
+„Modul aus“, und ihr Zustand wird nicht mehr aktualisiert. Löschen kannst du sie unter Einstellungen → Server & Zugänge.
+
+**„Beta“:** Gameserver und Netzwerk tragen das Kennzeichen „Beta“ (in den Einstellungen, im Assistenten, im Menü und über
+der Seite des Moduls). Sie funktionieren, sind aber noch nicht so gründlich erprobt wie der Rest. Rückmeldungen helfen.
+
+**Adress-Check (Netzwerk):** Auf der Seite „Netzwerk“ steht unter jedem Proxy-Host des Nginx Proxy Managers, zu welchem
+Docker-Container er führt und ob der läuft, etwa „Führt zum Container immich_server auf docker – der ist gestoppt.“
+Ist er gestoppt, startet ihn der Knopf „Container starten“ über die Freigabe (wer `hosts.execute` hat). Zugeordnet wird
+über die Server-Adresse mit Port (auch bei gestoppten Containern; nur an `127.0.0.1` gebundene Ports zählen nicht), über
+`host.docker.internal` auf dem Server, auf dem der Proxy Manager selbst läuft (`localhost` nur, wenn er im Host-Netz
+läuft, sonst ist das der Proxy Manager selbst), und über den Containernamen bzw. Compose-Dienst. Namen zählen nur auf dem Server des Proxy
+Managers (Docker kennt sie nur im eigenen Netz); ist der unbekannt, heißt es „vermutlich“, ohne Rot und ohne Knopf.
+Dafür muss die Service-Matrix eingeschaltet sein, sie kennt die Container. Ein Ziel, das zu keinem Container passt
+(etwa die Proxmox-Oberfläche), steht grau da und ist kein Fehler. Nicht erkannt werden Container im Host-Netz (sie
+zeigen keine Ports), Netzwerk-Aliase und zusätzliche Orte (`locations`) eines Proxy-Hosts.
 
 **Zugangsdaten gehören zur Adresse.** In den Einstellungen einer Erweiterung erst die Adresse eintragen
 und „Speichern“ drücken, dann in der Karte „Verbindung“ Token oder Passwort hinterlegen – vorher nimmt
@@ -290,7 +320,7 @@ Nodvard Deck braucht kein Proxmox. Ein Raspberry Pi, eine Debian-VM, ein NAS ode
 reichen. Was dann anders ist:
 
 - **Server legst du von Hand an** ([5.1](#51-server-anlegen)) und gibst jedem einen SSH-Zugang
-  ([5.2](#52-ssh-zugang-einrichten--drei-wege)). Die Module Proxmox VE und Backups bleiben aus; ihre Einträge
+  ([5.2](#52-ssh-zugang-einrichten--drei-wege)). Die Module Proxmox VE und Proxmox-Backups bleiben aus; ihre Einträge
   erscheinen dann weder im Menü noch im Cockpit.
 - **Zustand (online/offline):** Nodvard Deck prüft von Hand angelegte Server **von selbst alle 2 Minuten**
   (Einstellungen → Server & Zugänge → „Erreichbarkeit prüfen“; Schalter und Abstand von 1 bis 60 Minuten).
@@ -305,7 +335,7 @@ reichen. Was dann anders ist:
   Ein Server ohne SSH-Dienst (zum Beispiel ein Gerät, auf dem SSH aus ist) zeigt deshalb dauerhaft „nicht
   erreichbar“; wer das nicht will, schaltet ihn auf seiner Seite aus. „Verbindung prüfen“ gibt es weiter für den
   genauen Test mit Anmeldung. Das Cockpit zeigt bei ungeprüften Servern „noch nicht geprüft“.
-- **Auslastung und Verlauf** (CPU, Arbeitsspeicher, Platte, Netz, Temperatur) kommen vom Modul **System**
+- **Auslastung und Verlauf** (CPU, Arbeitsspeicher, Platte, Netz, Temperatur) kommen vom Modul **Server-Zustand** (bis Version 0.8.0 hieß es „System“)
   per SSH, nur für Linux-Server mit SSH-Zugang. Ohne dieses Modul zeigt die Server-Seite einen Hinweis statt
   der Ringe und Kurven. Der Verlauf wird alle 30 Sekunden gemessen und ist die ersten Minuten noch leer. Hat der
   Server noch nie geantwortet oder ist die Anmeldung noch nicht bestätigt, sagt die Server-Seite das, statt auf Kurven
@@ -317,9 +347,19 @@ reichen. Was dann anders ist:
   Server in einer einzigen Abfrage (`GET /hosts/metrics/latest`). Ist die letzte Messung älter als 2 Minuten, steht
   „veraltet“ mit dem Alter darunter und die Ringe sind gedämpft; nach 10 Minuten ohne Messung wird der Server wieder
   eine schlichte Zeile. Ein Server, der „nicht erreichbar“ ist, zeigt keine alten Werte als aktuell. Server ohne
-  Messwerte (Windows, ohne SSH-Zugang, Modul System aus, Messwerte für den Server abgeschaltet) bleiben eine Zeile,
+  Messwerte (Windows, ohne SSH-Zugang, Modul Server-Zustand aus, Messwerte für den Server abgeschaltet) bleiben eine Zeile,
   wo es passt mit einem Hinweis, warum.
-- **Docker-Container:** Service-Matrix, für Server mit der Markierung `docker`.
+- **Docker-Container:** Service-Matrix, für Server mit der Markierung `docker`. Dort startest, stoppst und löschst
+  du Container (gelöscht werden nur gestoppte; Volumes und Image bleiben), liest ihre Logs live, öffnest mit
+  „Konsole“ eine Shell im Container und spielst neuere Images ein („Einspielen“, nur bei Docker-Compose-Diensten). Stürzt
+  die neue Version beim Start ab, geht die Service-Matrix in der Regel von selbst auf die alte zurück – nie bei
+  Datenbanken und anderen Datenspeichern; abschaltbar unter „Konfigurieren“ („Bei Fehlstart automatisch zurück“).
+  Nach „Starten“, „Neustart“ und „Stack neu starten“ sieht Deck bis zu einer Minute lang nach, ob die Container
+  wirklich laufen und laufen bleiben (ohne Healthcheck: zweimal im Abstand von 15 Sekunden ohne neuen Start). Stürzt
+  ein Container gleich wieder ab, gilt die Aktion als fehlgeschlagen und sagt, warum (etwa „beendet, Exit-Code 1“).
+  Beim Stack zählen nur die Container, die vorher liefen. Ein einzelner Neustart (etwa weil eine Abhängigkeit noch
+  nicht bereit war) und ein Ende mit Exit-Code 0 (Container für einmalige Aufgaben) gelten nicht als Fehler, sie stehen
+  nur als Hinweis dabei; „ungesund“ zählt erst, wenn es bis zum Ende so bleibt.
 - **Apps im Cockpit ohne Service-Matrix:** Im Bereich „Apps“ legst du mit **+ App hinzufügen** eigene Kacheln an –
   Name, Adresse (`http://192.168.1.1`), Symbol (aus einer Auswahl oder ein Emoji), Farbe, Gruppe und auf Wunsch der
   Server dazu. So stehen auch Router, NAS-Oberfläche oder Pi-hole im Cockpit, ohne Code und ohne Container-Erkennung;
@@ -328,15 +368,47 @@ reichen. Was dann anders ist:
   Administratoren (Recht `apps.write`); sehen dürfen es alle, die Server sehen. Nodvard Deck ruft die Adressen nie
   selbst auf (es zeigt also kein „läuft/läuft nicht“ an), erlaubt nur `http://` und `https://` und keine Zugangsdaten
   in der Adresse; Symbole sind nie Bild-Adressen.
+- **Seite „Apps“** (links im Menü): alle Kacheln an einem Ort, eigene Apps in **Ordnern** (ihre Gruppe), die du
+  zuklappen kannst. Mit `apps.write` ziehst du eine Kachel auf eine andere (davor einsortiert) oder auf die Überschrift
+  eines Ordners (dort ans Ende); ohne Maus über das Menü (⋮). Unter **„Vorschläge“** stehen Adressen, die deine Module
+  schon kennen – zum Beispiel die Proxy-Hosts aus dem Nginx Proxy Manager oder erkannte Container mit Web-Oberfläche –
+  und die es als App noch nicht gibt; **„Übernehmen“** füllt den Dialog vor, angelegt wird erst mit „Speichern“.
 - **Updates, Virenschutz, Einbruchschutz:** Nodvard Shield, für alle Linux-Server mit SSH-Zugang. Die KI-Container-Wache
-  ist darin optional; ohne KI-Server zeigt sie abgestürzte Container trotzdem an. Mit KI schlägt sie höchstens den
+  ist darin optional; ohne KI-Server zeigt sie abgestürzte Container trotzdem an, mit der Ursache laut System (etwa
+  Speichermangel oder von außen beendet) und zwei festen Sätzen: was das heißt und was du tun kannst. Mit KI schlägt sie höchstens den
   Neustart eines abgestürzten Containers vor, du findest ihn unter „Aktionen“; andere Ideen der KI stehen nur als
   Text im Lagebericht der Container-Wache. Schlägt sie einen anderen Befehl vor, steht im Lagebericht nur ein Hinweis
   darauf; den Befehl selbst siehst du mit Server-Rechten (`hosts.execute`) im Protokoll.
+  Ein Klick auf die Push-Meldung des Lageberichts öffnet genau diesen Vorschlag unter „Aktionen“ (hervorgehoben, auch
+  wenn er schon erledigt ist); ohne Vorschlag öffnet er den Reiter „Container-Wache“. Anmelden musst du dich trotzdem.
+  Läuft ein Container nach einem Absturz wieder fünf Minuten ruhig, setzt die Container-Wache seinen Vorfall von selbst
+  auf „Erledigt“ („Läuft wieder seit 04:12 – von selbst erledigt.“, ohne Push-Meldung, mit Eintrag im Protokoll).
+  Wartet dazu noch ein vorgeschlagener Neustart unter „Aktionen“, steht dabei, dass er nicht mehr nötig ist; ablehnen
+  musst du ihn dort selbst. Stürzt der Container innerhalb der Ruhezeit wieder ab, ist derselbe Vorfall wieder offen,
+  sofern ihn noch niemand bearbeitet hatte und kein Neustart dazu schon gelaufen ist; sonst gibt es einen neuen Vorfall
+  mit Meldung, auch in der Ruhezeit (zuletzt hieß es ja „läuft wieder“). Die fünf
+  ruhigen Minuten zählt die Container-Wache nur, solange das Dashboard läuft: Nach einem Neustart des Dashboards bleibt
+  ein offener Vorfall offen, bis der Container wieder eine Störung hatte und danach ruhig lief, oder bis du ihn abhakst.
+  Stürzt ein Container innerhalb von sechs Stunden nach einem freigegebenen Neustart genau dieses Containers wieder ab
+  (und lief er dazwischen nicht ruhig), sagt die nächste Meldung: „nginx auf docker ist nach dem freigegebenen Neustart
+  um 03:10 wieder abgestürzt.“ – auch innerhalb der Ruhezeit, in der sonst keine neue Meldung kommt.
+- **Server wählen, Dateien:** Auf den Seiten „Server-Zustand“ und „Terminal“ stehen die Server als Kacheln mit Name, Adresse,
+  System und Status (Ampelpunkt). Auf „Server-Zustand“ zeigen sie auch die Auslastung („CPU 12 % · RAM 48 %“, bis zu 5 Minuten
+  alt) und einen Befund wie eine fast volle Platte als Hinweis; der zuletzt gewählte Server ist beim nächsten Besuch
+  vorgewählt (das merkt sich der Browser). Im Dateimanager steht jeder Server mit SSH-Zugang als Quelle (nur mit dem
+  Recht `hosts.execute`); die Leiste zeigt daneben, ob er erreichbar ist und welches System darauf läuft. Quellen ohne
+  Server, etwa Nextcloud, haben beides nicht. Ohne das Recht, Server zu sehen (`hosts.read`), fehlen nur Punkt und System.
+  Textdateien (Konfiguration, Logs, Skripte) und Bilder öffnest du mit **„Ansehen“** direkt über der Liste; bei großen
+  Dateien zeigt die Vorschau die ersten 256 KB. HTML erscheint als Text, SVG- und PDF-Dateien holst du mit „Laden“.
 - **Konsole im Browser** (Bildschirm eines Gasts) gibt es nur für Proxmox-Gäste. Für alle anderen Server
   nimmst du das **Terminal**.
-- **Sicherungen:** Das Modul Backups zeigt nur Proxmox-Backups. Das Dashboard selbst sicherst du unter
+- **Sicherungen:** Das Modul „Proxmox-Backups“ zeigt nur die Backups deiner Proxmox-Server. Das Dashboard selbst sicherst du unter
   Einstellungen → System ([10.](#10-das-dashboard-selbst-sichern)).
+  Mit „Als Kopie wiederherstellen“ holst du dort einen Gast aus einer Sicherung zurück: als neuen Gast mit neuer Nummer,
+  der nicht von selbst startet; das Original bleibt unberührt. Jede Kopie entsteht im Pool `nodvard-kopien` (nur dort
+  braucht der Zugang das Recht zum Anlegen; ab Proxmox VE 7.2 für VMs). Die Netzwerkkarten trennt Nodvard Deck, sobald
+  Proxmox fertig ist (sonst holt es der Backup-Wächter nach und meldet sich). Pool und Token-Rechte stehen in
+  [docs/10](10-PROXMOX-TOKEN.md#wiederherstellen-als-kopie-backups).
 
 **Die Karte „Erste Schritte“:** Auf der Startseite (Cockpit) führt oben eine Checkliste durch
 genau diese Schritte – Server anlegen, SSH-Zugang hinterlegen, Verbindung prüfen, Module
@@ -364,7 +436,7 @@ für das Handy gedacht und nur für Benutzer mit dem Recht `hosts.write` (Inhabe
   eingelesen“ in der Liste.
 - Alles andere – vor allem der **Rechner, auf dem Nodvard Deck läuft** (z. B. ein Raspberry Pi),
   wenn er kein Proxmox-Gast ist – legst du von Hand an.
-- Terminal, System, Service-Matrix, Nodvard Shield, Gameserver und Skripte brauchen für jeden
+- Terminal, Server-Zustand, Service-Matrix, Nodvard Shield, Gameserver und Skripte brauchen für jeden
   Server einen **SSH-Zugang** (Benutzer + Schlüssel oder Passwort). Den speichert Nodvard Deck
   verschlüsselt; der private Schlüssel verlässt den Tresor nie und wird nirgends angezeigt.
 
@@ -441,6 +513,46 @@ root direkt, sonst über `sudo` – er funktioniert also auf Proxmox (kein sudo)
 Debian oder dem Pi. Er lässt sich gefahrlos mehrfach ausführen: Einen schon eingetragenen Schlüssel erkennt er
 auch mit dem älteren Kommentar `lattice@…` und trägt ihn nicht doppelt ein.
 
+#### Mit Passwort einrichten (Nodvard Deck führt den Befehl aus)
+
+Du musst den Befehl nicht selbst einfügen: Im Kasten **„Server für diesen Schlüssel einrichten“** wählst du statt
+„Befehl selbst einfügen“ den zweiten Weg, **„Mit Passwort einrichten (Nodvard Deck führt den Befehl aus)“**. Das gibt
+es für Zugänge mit Schlüssel (erzeugt oder eigener) auf Linux-Servern. Es ist etwas anderes als der Zugang „Passwort
+eingeben“ aus [5.2](#52-ssh-zugang-einrichten--drei-wege): Hier brauchst du das Passwort nur für diese eine
+Einrichtung, und es wird nie gespeichert. Danach meldet sich Nodvard Deck mit dem Schlüssel an.
+
+- **Was du eingibst:** einmal das Konto (Vorgabe `root`) und sein Passwort. Das Konto muss sich per SSH mit Passwort
+  anmelden dürfen: `root` oder ein Konto mit sudo. Debian und Ubuntu lassen `root` meist nicht mit Passwort herein; nimm
+  dann ein Konto mit sudo (das Formular sagt das am Feld). Bei einem Konto ohne `root` nimmt sudo dasselbe Passwort;
+  nimmst du den Haken „Für sudo dasselbe Passwort nehmen“ weg, muss das Konto sudo ohne Passwort dürfen.
+- **Was passiert:** Nodvard Deck meldet sich damit **einmal** an, führt **genau denselben Befehl** aus wie in 5.3 (die
+  Haken „Root-Rechte ohne Passwort“ und „Gruppe docker“ darüber gelten auch hier), schließt die Verbindung und prüft
+  danach mit dem neuen Schlüssel wie bei „Verbindung prüfen“ ([5.4](#54-verbindung-prüfen)). Darunter stehen die
+  Meldungen des Befehls und das Ergebnis der Prüfung. Hatte der Server noch keinen Standard-Zugang, wird dieser Zugang
+  der Standard. Beim Ersetzen eines Zugangs ([5.5](#55-zugang-ersetzen-löschen-gruppen)) zählt die Prüfung wie „Neuen
+  Zugang prüfen“; danach kannst du „Neuen Zugang verwenden“ drücken.
+- **Das Passwort wird nie gespeichert:** nicht in der Datenbank, nicht im Tresor, nicht im Protokoll und nicht im Log.
+  Das Feld wird beim Absenden sofort geleert, und der Browser soll es nicht merken. Im Protokoll steht, dass es einen
+  Versuch gab („Server mit Passwort einrichten“, `host.setup_with_password`), mit Server, Konto und Ergebnis – nie das
+  Passwort.
+- **Der Server-Schlüssel muss bekannt sein.** Das Passwort geht nie an einen Server, dessen Fingerabdruck Nodvard Deck
+  noch nicht kennt oder der sich geändert hat. Kennt Nodvard Deck ihn noch nicht, zeigt das Formular den Fingerabdruck
+  zum Vergleichen und Bestätigen (wie in [5.4](#54-verbindung-prüfen)); danach gibst du das Passwort noch einmal ein.
+  Bei einem geänderten Schlüssel gibt es nur die Warnung, ohne Bestätigen-Knopf.
+- **Grenzen:** Du brauchst die Rechte `hosts.write` **und** `hosts.execute`, denn der Befehl läuft auf dem Server als
+  root, wie beim Terminal. Nodvard Deck bremst Versuche: je Adresse und Port höchstens 5, je Benutzer 10 in 10 Minuten
+  (dazu 30 Aufrufe je Benutzer in 5 Minuten), und je Server läuft nur eine Einrichtung gleichzeitig; dann steht „Zu
+  viele Versuche mit Passwort …“ bzw. „Für diesen Server läuft gerade schon eine Einrichtung …“. Die Zähler liegen im
+  Speicher und beginnen nach einem Neustart von vorn. Der Befehl bekommt bis zu 90 Sekunden. Reißt die Verbindung ab
+  oder läuft die Zeit aus, kann er auf dem Server trotzdem teilweise gelaufen sein: „Verbindung prüfen“ zeigt, was
+  schon da ist, und ein neuer Versuch ist gefahrlos, weil sich der Befehl mehrfach ausführen lässt.
+- **Ohne HTTPS** warnt dich das Formular, bevor du das Passwort abschickst: Es geht dann unverschlüsselt von deinem
+  Browser zu Nodvard Deck. Im eigenen Heimnetz ist das meist in Ordnung, in einem fremden Netz nicht; sicherer ist dann
+  „Befehl selbst einfügen“. Beim Aufruf direkt auf dem Rechner (`localhost`) erscheint die Warnung nicht. Gesperrt wird
+  nichts.
+- **Noch nicht möglich:** Proxmox per Passwort, Windows-Server (dafür gibt es keinen Einrichtungsbefehl) und der
+  Einrichtungsassistent.
+
 ### 5.4 Verbindung prüfen
 
 Karte **Verbindung prüfen** (bis zu 30 Sekunden). Die Seite zeigt Punkt für Punkt, was klappt
@@ -515,6 +627,8 @@ wieder als nicht bestätigt, bis sie das nächste Mal klappt.
   Verläufe in Nodvard Shield bleiben mit dem alten Namen stehen. Von Proxmox eingelesene Server
   tauchen beim nächsten Abgleich wieder auf – dann ohne SSH-Zugang. Läuft gerade eine Aktion auf
   dem Server, geht das Löschen nicht.
+  Ist das Modul, das den Server eingelesen hat, ausgeschaltet, sagt der Dialog
+  stattdessen, dass der Server nicht wiederkommt, solange das Modul aus bleibt.
 
 **Testen:** Im Menü „Terminal“ taucht der Server jetzt auf (die Terminal-Erweiterung schaltet sich mit dem
 ersten SSH-Zugang ein, falls du sie nicht selbst ausgeschaltet hattest).
@@ -529,7 +643,8 @@ scheitert die Funktion mit „Keine root-Rechte: Das Dashboard ist auf diesem Se
 als root angemeldet und darf sudo nicht ohne Passwort nutzen.“
 
 Den Einrichtungsbefehl (5.3) musst du dafür **nicht von Hand ändern**: Die Seite setzt die
-passenden Haken selbst, weil die Erweiterungen melden, was sie brauchen.
+passenden Haken selbst, weil die Erweiterungen melden, was sie brauchen. Dieselben Haken gelten, wenn du den Server
+mit Passwort einrichtest (Nodvard Deck führt dann denselben Befehl aus).
 
 - **„Root-Rechte ohne Passwort“** – nötig für (die Seite nennt es hinter dem Haken):
   - **Nodvard Shield, Virenschutz:** Datei in Quarantäne verschieben, wiederherstellen oder löschen,
@@ -540,12 +655,21 @@ passenden Haken selbst, weil die Erweiterungen melden, was sie brauchen.
     Server gleich neu ab. Das **Härtungs-Audit** läuft auf dem Server im Hintergrund mit niedriger
     Priorität und kann je nach Server einige Minuten bis über eine Stunde dauern (Obergrenze 3 Stunden).
     Nach dem Klick steht sofort „Audit läuft seit …“ beim Server, ein zweiter Klick startet kein zweites
-    Audit, und das Dashboard darf währenddessen neu starten. Die Protokolle liegen auf dem Server unter
+    Audit, und das Dashboard darf währenddessen neu starten. Die häufigsten Hinweise von Lynis stehen im Ergebnis mit
+    deutscher Überschrift; ein Klick darauf zeigt „Was heißt das?“ und „Was kannst du tun?“ (vieles ist für ein Heimnetz
+    bewusst nicht nötig, das steht dann dabei). Ganz oben stehen „Deine wichtigsten Baustellen“: höchstens fünf Hinweise
+    mit der größten Wirkung auf den angezeigten Servern, mit den Servern, auf denen sie vorkommen. Die Protokolle liegen auf dem Server unter
     `/var/lib/nodvard-shield-audit/`. Scans und Echtzeit-Wächter laufen auf einem Server nie
     gleichzeitig; für diese Sperre legt Shield dort einen kleinen Ordner an: `/run/nodvard-shield` (als
     root) bzw. `~/.nodvard-shield`. Einen Fund, den du ignoriert oder wiederhergestellt hast, verschiebt
     der nächste Scan nicht noch einmal in die Quarantäne (außer ClamAV meldet dieselbe Datei mit einer
     anderen Signatur).
+  - **Schutzwert** (0 bis 100, auf der Übersicht): zählt den Virenschutz (ClamAV, Signaturen, Scans, offene Funde),
+    die Härtung und außerdem offene Sicherheitsupdates, nötige Neustarts, Fail2ban, die SSH-Einstellungen (root oder
+    Anmeldung mit Passwort, nach der Zahl der betroffenen Server) und offene kritische Sicherheitsereignisse (je 5 Punkte,
+    höchstens 15). Darunter steht, was ihn gerade senkt und wie viele Punkte das kostet. Ist die letzte Update- oder
+    Einbruchschutz-Prüfung eines Servers gescheitert oder älter als drei Tage, zählt sein alter Stand nicht; das steht
+    dann als Grund „zuletzt nicht geprüft (ohne Abzug)“ da.
   - **Update-Zentrale:** Updates einspielen und neu starten. Das Neuladen der Paketlisten vor der
     Prüfung braucht root – ohne bleibt es beim zuletzt geladenen Stand. Updates laufen auf dem
     Server im Hintergrund (mit systemd als `lattice-upgrade-…`, sonst per `setsid`) und laufen
@@ -559,7 +683,9 @@ passenden Haken selbst, weil die Erweiterungen melden, was sie brauchen.
     SSH-Einstellungen, Prüfsummen von Dateien wie `/etc/shadow`. Ohne root nur eingeschränkt –
     Nodvard Deck sagt das dann dazu, statt falsch Entwarnung zu geben. IP-Adressen per Fail2ban
     sperren/entsperren geht nur mit root.
-  - **System:** Dienste (systemd) neu starten.
+  - **Server-Zustand:** Dienste (systemd) neu starten. Danach sieht Deck bis zu 45 Sekunden lang nach, ob der Dienst läuft
+    und laufen bleibt (zweimal im Abstand von 10 Sekunden ohne neuen Start; das Nachsehen braucht kein root). Fällt er
+    gleich wieder aus oder startet er immer wieder neu, gilt die Aktion als fehlgeschlagen und sagt das.
 - **„Zur Gruppe docker hinzufügen“** – nötig für Service-Matrix und die KI-Container-Wache von
   Nodvard Shield; sie rufen `docker` ohne sudo auf. Die Gruppe wird nur eingetragen, wenn es sie auf
   dem Server gibt.
@@ -600,54 +726,135 @@ und die alte fällt weg, wenn sie unverändert ist (siehe oben).
 ## 7. Proxmox verbinden
 
 **Nur wenn du Proxmox nutzt – sonst überspringst du diesen Abschnitt** (siehe [4.1](#41-ohne-proxmox)).
-Ausführlich in **[docs/10-PROXMOX-TOKEN.md](10-PROXMOX-TOKEN.md)**. Kurzfassung:
+Ausführlich in **[docs/10-PROXMOX-TOKEN.md](10-PROXMOX-TOKEN.md)**.
+
+Am einfachsten: Erweiterung „Proxmox VE“ einschalten, dann auf der Seite **„Proxmox“** → **„Mit Passwort
+verbinden“**. Adresse und Passwort von `root@pam` eingeben, Fingerabdruck des Zertifikats vergleichen (Nodvard Deck
+merkt ihn sich und prüft ihn danach bei jeder Anfrage) – Nodvard Deck
+legt Benutzer, Rolle und Token in Proxmox selbst an, liest gleich danach alles ein und vergisst das Passwort sofort
+([Schneller Weg](10-PROXMOX-TOKEN.md#schneller-weg-mit-passwort-verbinden)). Ist „Backups“ eingeschaltet, bekommt es
+dabei gleich einen eigenen Zugang (Schalter „Auch Proxmox-Backups verbinden“) – Schritt 3 unten entfällt dann. Je
+Proxmox-Server einmal. Von Hand geht es so:
 
 1. Auf jedem Proxmox-Server (im Beispiel pve1 **und** pve2) einen Benutzer `nodvard@pve` mit
    Token `dashboard` und passender Rolle anlegen.
 2. Einstellungen → Erweiterungen → „Proxmox VE“ → „Konfigurieren“ → „Server hinzufügen“
    (Kurzname `pve1`/`pve2`, Adresse `https://…:8006`, API-Token-ID
    `nodvard@pve!dashboard`) → „Speichern“ → unter „Zugangsdaten“ das Geheimnis eintragen.
-3. Dasselbe unter „Backups“ mit denselben Kurznamen.
+3. Dasselbe unter „Proxmox-Backups“ mit denselben Kurznamen.
 4. Nach spätestens 5 Minuten sind Knoten, VMs und Container da. VMs ohne Gast-Agent
    bekommen die Proxmox-Adresse als Platzhalter – die richtige IP unter Einstellungen →
    Server & Zugänge eintragen ([5.1](#51-server-anlegen)).
+5. Von selbst melden die Module außerdem, wenn ein Speicher fast voll ist (Proxmox VE, ab 90 %, einstellbar) und wenn
+   die letzte erfolgreiche Sicherung einer VM älter als 3 Tage ist (Backups, einstellbar, mindestens 2 Tage); beides
+   unter „Konfigurieren“ des jeweiligen Moduls. Läuft der Backup-Job einer VM seltener (z. B. nur samstags), gilt
+   automatisch dessen Abstand, wenn er größer ist; dazu kommen 6 Stunden Luft, und solange gerade eine Sicherung
+   läuft, kommt keine Warnung. Proxmox VE meldet außerdem einen ZFS-Pool, der nicht mehr ONLINE ist (eingeschränkt
+   als Warnung, ausgefallen als „kritisch“) oder ganz fehlt (etwa nach einem Neustart nicht eingebunden), und einen
+   Datenträger, der 10 bis 15 Minuten lang zu heiß ist (Festplatten ab 55 °C, SSD ab 65 °C, NVMe ab 70 °C, einstellbar
+   unter „Erweitert“). Die ZFS-Pools stehen auch beim Knoten unter
+   „Knotendetails“.
 
 ## 8. Push-Nachrichten (ntfy)
 
-Einstellungen → Erweiterungen → **„ntfy-Benachrichtigungen“** einschalten →
-„Konfigurieren“:
+Einstellungen → Erweiterungen → **„Push-Nachrichten“** (früher „ntfy-Benachrichtigungen“) einschalten →
+„Konfigurieren“. Für ntfy:
 
 - **ntfy-Server:** z. B. `https://ntfy.sh` oder dein eigener. Nodvard Deck verbindet sich immer direkt damit, nie über
   einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`). Kommt der Rechner mit Nodvard Deck nur über einen Proxy ins
   Internet, ist `ntfy.sh` nicht erreichbar; nimm dann einen ntfy-Server im eigenen Netz.
 - **Thema (Topic):** der Kanal, den du in der ntfy-App abonnierst. Bei ntfy.sh schwer
-  erratbar wählen, denn dort kann jeder ein Thema mitlesen, der den Namen kennt.
+  erratbar wählen, denn dort kann jeder ein Thema mitlesen, der den Namen kennt. Der Knopf
+  **„Zufällig wählen“** neben dem Feld trägt einen zufälligen Namen ein.
 - **Adresse des Dashboards (optional):** `http://192.168.1.10:8080`. Dann öffnet ein Tipp
   auf die Nachricht direkt die passende Seite. Muss mit `http://` oder `https://`
   anfangen, sonst wird sie ignoriert.
+- **Mindest-Stufe für Push-Nachrichten:** „Alles (Info, Warnung, Kritisch)“ ist der Standard. Mit
+  „Ab Warnung“ oder „Nur Kritisch“ kommen kleinere Meldungen nicht mehr aufs Handy; sie stehen
+  weiter unter „Meldungen“. Die Testnachricht kommt immer an.
+- **Lautstärke bei Info, Warnung und Kritisch:** wie auffällig eine Meldung der jeweiligen Stufe
+  auf dem Handy ankommt, von „1 – ohne Ton“ bis „5 – sehr laut“. Ob Stufe 5 auch bei „Nicht
+  stören“ durchkommt, entscheidet dein Handy.
 - „Speichern“.
 - **Zugangsdaten → „Zugriffstoken (optional)“:** nur, wenn dein ntfy-Server eine Anmeldung
   verlangt.
 
-In der ntfy-App auf dem Handy denselben Server und dasselbe Thema abonnieren.
+In der ntfy-App auf dem Handy denselben Server und dasselbe Thema abonnieren. Das Abtippen
+sparst du dir: Nach dem Speichern zeigt die Seite unter den Einstellungen einen **QR-Code**. Halte
+die Kamera deines Handys darauf, dann öffnet sich die ntfy-App und bietet an, das Thema zu
+abonnieren. Der Code enthält nur Server und Thema, nie das Zugriffstoken.
+
 **Testen:** Seite „Nodvard Shield“ → „Briefing senden“. Das Erstellen kann bis zu einer halben
 Minute dauern, wenn ein Server nicht antwortet. Danach sagt dir die Seite, ob der Lagebericht
 („Lagebericht – …“) auch als Push-Nachricht zugestellt wurde. Wenn nicht, ist ntfy noch nicht
 eingerichtet oder der ntfy-Server nicht erreichbar. Alle Nachrichten stehen außerdem im
-Dashboard unter „Meldungen“ – auch dann, wenn die Push-Nachricht nicht ankommt.
+Dashboard unter „Meldungen“ – auch dann, wenn die Push-Nachricht nicht ankommt. Dort kannst du eine Meldung mit dem
+Papierkorb löschen oder mit „Alle gelesenen löschen“ aufräumen. Von selbst löscht Nodvard Deck jede Nacht Meldungen, die
+älter als 90 Tage sind (ungelesene kritische Meldungen bleiben stehen, bis du sie liest); die Zahl stellst du unter
+Einstellungen → System → „Zeit & Protokoll“ um.
+
+**Was im Lagebericht steht:** Server, Schutzwert, Bedrohungen, Härtung, Updates, Einbruchschutz und – falls vorhanden – wie
+viele Vorschläge (aus allen Modulen) unter „Aktionen“ auf deine Bestätigung warten und welche Container in den letzten
+24 Stunden abgestürzt sind. Eine wartende Freigabe oder ein noch offener Absturz macht ihn zu „es gibt etwas zu tun“. Er
+kommt auch, wenn alles in Ordnung ist; bleibt er aus, ist Deck selbst vermutlich ausgefallen.
+
+Hast du die Mindest-Stufe auf „Ab Warnung“ oder „Nur Kritisch“ gestellt, teste lieber mit „Testnachricht
+senden“ (Karte „Verbindung“ unter den ntfy-Einstellungen): Ein Briefing ohne Probleme ist nur eine
+Info-Meldung und kommt dann nicht aufs Handy.
+
+### Weitere Kanäle (Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost)
+
+Statt ntfy oder zusätzlich (bis zu 10 Kanäle): Unter **„Weitere Kanäle“** auf „Kanal hinzufügen“ klicken, einen
+**Kurznamen** wählen (z. B. `telegram`), die **Mindest-Stufe** (Vorgabe „Ab Warnung“) und ob er **aktiv** ist →
+„Speichern“. Danach unten unter **Zugangsdaten** beim Eintrag „Adresse des Kanals“ mit diesem Kurznamen die Adresse
+eintragen. Sie enthält Zugangsdaten (Bot-Token, Webhook-Schlüssel) und liegt deshalb nur im Tresor. Benennst du einen
+Kanal um, ist seine Adresse weg und muss neu eingetragen werden. Geschrieben wird sie wie bei Apprise:
+
+| Dienst | Adresse |
+|---|---|
+| Telegram | `tgram://BOT-TOKEN/CHAT-ID` (mehrere Chats mit `/` getrennt; Kanäle als `@name`) |
+| Discord | `discord://WEBHOOK-ID/WEBHOOK-TOKEN` oder die Webhook-Adresse, die Discord anzeigt |
+| Gotify | `gotifys://SERVER/APP-TOKEN` (`gotify://` ohne HTTPS, Port mit `:`) |
+| Pushover | `pover://USER-KEY@APP-TOKEN` (optional `/GERÄT`) |
+| Matrix | `matrixs://ZUGRIFFSTOKEN@SERVER/!RAUM-ID:SERVER` oder `…/#raumname` (nur mit Zugriffstoken, nicht mit Passwort) |
+| Slack | `slack://T…/B…/X…` oder die Webhook-Adresse von Slack |
+| Mattermost | `mmosts://SERVER/WEBHOOK-ID` |
+| alles andere | `apprises://SERVER/SCHLÜSSEL` – eine eigene [Apprise-API](https://github.com/caronc/apprise-api) (eigener Container), die dann an jeden von Apprise unterstützten Dienst weitergibt |
+
+Nodvard Deck schickt die Nachrichten selbst und direkt an den Dienst (keine Zusatzsoftware, kein Proxy aus der
+Umgebung, keine Umleitungen). Telegram, Discord, Slack und Pushover brauchen dafür direkten Zugang ins Internet, und der
+Text jeder Meldung (z. B. Servernamen, Dateipfade, Adressen) geht an diesen Dienst. Sammel-Pings wie `@everyone`,
+`@channel`, `@all` oder `@room` aus einer Meldung bleiben nur Text. Ist die „Adresse des Dashboards“ oben
+eingetragen, steht unter jeder Nachricht ein Link dorthin.
+
+- **„Testnachricht senden“** schickt an ntfy und alle aktiven Kanäle gleichzeitig und nennt jeden, bei dem es nicht
+  geklappt hat.
+- **„Verbindung testen“** fragt jeden Dienst, ohne etwas zu senden: Bei Telegram, Discord, Pushover, Matrix und einer
+  Apprise-API prüft das Token bzw. den Schlüssel, bei Telegram auch, ob der Bot in jede Gruppe und jeden Kanal
+  schreiben darf, bei Matrix, ob das Konto in jedem Raum ist. Slack, Gotify und Mattermost erlauben das nicht (ebenso
+  private Telegram-Chats); dort steht ein Hinweis, und ein Fehler beim letzten Senden zählt mit.
+- Den Kurznamen „ntfy“ gibt es nicht, er steht für den ntfy-Server oben.
+- Fällt bei einer normalen Meldung ein Kanal (oder ein Chat eines Kanals) aus, bekommen die anderen sie trotzdem.
 
 ## 9. Automatik und Wartungsfenster
 
 Einstellungen → **Automatik & Sicherheit**:
 
 - **Selbstständigkeit:** „Nur vorschlagen“ ist der Standard und für den Anfang richtig –
-  jede Aktion wartet unter „Aktionen“ auf deine Freigabe. „Selbstständig handeln“ lässt
+  jede Aktion, die Nodvard Deck von sich aus vorschlägt, wartet unter „Aktionen“ auf deine Freigabe. „Selbstständig handeln“ lässt
   Aktionen bis zur gewählten Risikostufe („Ohne Rückfrage erlaubt bis Risikostufe“) ohne
   Rückfrage laufen. Unter „Aktionen“ steht der Befehl einer Aktion direkt in ihrer Zeile (ohne das Recht
   `hosts.execute` und ohne Freigaberecht für ihr Risiko steht dort nur ein Hinweis); unsichtbare oder umlenkende
   Zeichen darin (etwa eine umgekehrte Schreibrichtung) erscheinen als sichtbare Marke wie `⟦U+202E⟧`. „Ausgewählte
   freigeben“ zeigt in der Rückfrage alle Befehle ungekürzt, gibt aber Aktionen mit hohem oder kritischem Risiko nicht
   mit frei; die bestätigst du einzeln.
+- **Selbst ausgelöst:** Klickst du selbst einen Knopf wie „Endgültig löschen“ (Nodvard Shield) oder „Neustart“
+  (Service-Matrix) und hast das Freigaberecht für das Risiko der Aktion, ist deine Bestätigung im Dialog schon die
+  Freigabe: Die Aktion läuft sofort. Sie steht trotzdem unter „Aktionen“ und im Protokoll, nur nicht unter „Wartet auf
+  Bestätigung“, sondern unter „Alle“ bzw. „Läuft“, „Erfolgreich“, „Fehlgeschlagen“ oder (Sperrliste) „Abgelehnt“. Ohne
+  dieses Recht wartet sie unter „Wartet auf Bestätigung“ auf jemanden, der es hat. Ausnahmen: „Alle Updates
+  vorschlagen“ schlägt bewusst nur vor (die Vorschläge warten), beim Einspielen eines Image-Updates ist die Übersicht die
+  Bestätigung, und „In Quarantäne“ und „Ignorieren“ in Nodvard Shield laufen ohne Aktion (nur im Protokoll).
 - **Skripte ohne Klick:** Unabhängig davon kann ein aktives Skript mit Zeitplan eine Dauerfreigabe bekommen: auf der
   Skripte-Seite beim Skript den Schalter „Ohne Freigabe nach Zeitplan“ (nur Inhaber und `admin`). Vorher siehst du, für
   welche Server, unter welchem Konto und unter welcher Adresse sie gilt. Jede Änderung an Inhalt, Parametern, Ziel oder
@@ -655,20 +862,27 @@ Einstellungen → **Automatik & Sicherheit**:
   Server in einer Gruppe oder unter „Alle Server“ fragen weiter nach. Ist die Person, die freigegeben hat, gesperrt oder
   hat sie die Rechte dafür nicht mehr, warten die Läufe ebenfalls wieder auf deinen Klick. Jeder Lauf steht weiter unter
   „Aktionen“ und im Protokoll, „Freigabe zurückziehen“ wirkt sofort.
+- **Fehlgeschlagene Läufe nach Zeitplan:** Scheitert ein geplanter Skript-Lauf (auf dem Server mit einem Fehler, vom
+  Dashboard abgelehnt oder gar nicht erst gestartet), steht er im Verlauf des Skripts als fehlgeschlagen, und du
+  bekommst eine Meldung (Stufe Warnung, mit Link zur Skripte-Seite) – **einmal je Fehler**: Dieselbe Meldung kommt
+  erst wieder, wenn sich der Fehler ändert oder das Skript zwischendurch durchgelaufen ist, nicht bei jedem Lauf.
+  Der Text nennt die Server, aber nie die Ausgabe; die steht unter „Aktionen“. Wer ein Skript von Hand startet, sieht das
+  Ergebnis selbst, dafür gibt es keine Meldung. Lief ein Skript nirgends, weil alle Server übersprungen wurden, sagt das
+  schon die Meldung zu den übersprungenen Servern.
 - **Gesperrte Befehle:** eigene Muster (reguläre Ausdrücke), die nie ausgeführt werden. Die
   gefährlichen Standardfälle sind immer gesperrt.
 - **Wartungsfenster:** „Fenster hinzufügen“ → Beginn, Dauer, „Gilt für“ (Alle Server /
   Ausgewählte Server) → „Speichern“. Während des Fensters werden Push-Nachrichten zu diesen
   Servern stummgeschaltet; unter „Meldungen“ stehen sie trotzdem. Die Zeit gilt in der
   eingestellten Zeitzone (Einstellungen → System). Stummgeschaltet werden nur Meldungen, die
-  zu bestimmten Servern gehören: die von **Backups**, **Gameserver**, dem **Proxmox-Wächter** (Knoten, Datenträger,
+  zu bestimmten Servern gehören: die von **Proxmox-Backups**, **Gameserver**, dem **Proxmox-Wächter** (Knoten, Datenträger,
   Verbindung) und von **Nodvard Shield** (Updates, Härtungs-Audit, Einbruchschutz-Warnungen,
   Lagebericht der Container-Wache). Ein Bericht über mehrere Server bleibt hörbar, solange
   auch nur einer davon nicht im Fenster liegt.
   Immer hörbar bleiben **Schadsoftware-Funde** und **kritische Einbruchschutz-Ereignisse**
   (der Tiefenscan läuft ab Werk sonntags um 03:30, mitten im vorgeschlagenen Fenster), das
   **Morgen-Briefing** und die Meldungen von Zertifikatswächter und Skripten.
-  Gut zu wissen: Fällt bei Backups, Gameserver oder Proxmox-Wächter im Fenster etwas aus
+  Gut zu wissen: Fällt bei Proxmox-Backups, Gameserver oder Proxmox-Wächter im Fenster etwas aus
   und ist es nach dem Fenster immer noch so, kommt die Meldung **einmal als Push nach**,
   mit „(seit dem Wartungsfenster)“ im Titel. Das gilt auch für einen neuen Join-Code des
   Gameservers, der sich etwa bei einem nächtlichen Neustart ändert. Ist alles schon im Fenster
@@ -685,6 +899,12 @@ Einstellungen → **Automatik & Sicherheit**:
 starten, wenn nötig“. Erst einschalten, wenn die Update-Zentrale eine Weile sauber
 gelaufen ist. Den Server, auf dem Nodvard Deck selbst läuft, nimmt die Runde als letzten; sein Neustart
 kommt erst, nachdem die Zusammenfassung verschickt ist (mit einer eigenen kurzen Meldung).
+Einzelne Server kannst du vom automatischen Neustart ausnehmen: Direkt unter „Danach automatisch neu starten, wenn
+nötig“ wählst du bei „Diese Server nie automatisch neu starten“ die Server aus (zum Beispiel ein NAS oder einen
+Spieleserver). Sie bekommen ihre Updates trotzdem, nur der Neustart entfällt. Braucht so ein Server danach einen
+Neustart, sagt das die Zusammenfassung („Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu
+starten“), und du startest ihn selbst neu. Die Update-Zentrale nennt die Ausnahmen am Abzeichen („Neustart danach:
+automatisch, außer …“). Steht der Server von Nodvard Deck selbst in der Liste, startet auch er nicht neu.
 
 **Alle Updates auf einmal vorschlagen:** In der Update-Zentrale legen „Alle Sicherheitsupdates
 vorschlagen“ bzw. „Alle Updates vorschlagen“ für jeden passenden Server einen Vorschlag an; vorher
@@ -939,7 +1159,7 @@ entfernen: [deploy/README.md, Abschnitt „Update-Helfer“](../deploy/README.md
 
 ## 11. Wenn etwas hakt
 
-**„HTTP 401“ oder „Nicht authentifiziert“ auf einer Erweiterungsseite** (Proxmox, Backups,
+**„HTTP 401“ oder „Nicht authentifiziert“ auf einer Erweiterungsseite** (Proxmox, Proxmox-Backups,
 Skripte …): Im sichtbaren Tab erneuert Nodvard Deck die Anmeldung selbst. Erweiterungsseiten, Herunter- und
 Hochladen auf der Dateien-Seite, Sicherung hochladen und der Export des Protokolls erneuern sie bei einer
 abgelaufenen Anmeldung auch selbst und versuchen es einmal neu. Kommt die Meldung trotzdem, Seite neu laden (F5).
@@ -961,8 +1181,11 @@ erreichbar“ oder „Nicht abrufbar: …“) – die Fehlermeldung verrät meis
 - „Proxmox ist nicht erreichbar (Verbindung abgelehnt oder kein Weg dorthin). Läuft der Server, und stimmen Adresse und
   Port?“ oder „Proxmox antwortet nicht (Zeitüberschreitung). Prüfe Adresse und Port.“: Server aus, falsche Adresse
   oder Port. Die Adresse braucht `https://` und `:8006`.
-- „Das Zertifikat von Proxmox wird nicht akzeptiert …“: Haken „Selbstsigniertes Zertifikat erlauben“ fehlt
-  ([docs/10](10-PROXMOX-TOKEN.md#zertifikat-was-selbstsigniertes-zertifikat-erlauben-macht)).
+- „Das Zertifikat von Proxmox wird nicht akzeptiert …“: Fingerabdruck noch nicht gemerkt – Seite „Proxmox“, Reiter
+  „Verbindungen“ → „Zertifikat“ ([docs/10](10-PROXMOX-TOKEN.md#zertifikat-fingerabdruck-merken)).
+- „Der Server zeigt ein anderes Zertifikat als das gemerkte …“: Das Zertifikat in Proxmox hat sich geändert. Neuen
+  Fingerabdruck vergleichen und im Reiter „Verbindungen“ → „Zertifikat“ bestätigen – nur, wenn du den Wechsel
+  selbst kennst.
 - „HTTP 401: Proxmox hat den Zugang abgelehnt. Prüfe Token-ID und Geheimnis in den Einstellungen.“: Token-ID oder
   Geheimnis falsch, oder Token in Proxmox gelöscht.
 - „HTTP 403: Dem Token fehlt ein Recht für diese Abfrage. Grund laut Proxmox: Permission check failed (…)“: Recht
@@ -979,8 +1202,8 @@ erreichbar“ oder „Nicht abrufbar: …“) – die Fehlermeldung verrät meis
 - Testen vom Rechner mit Nodvard Deck aus: der `curl`-Befehl in
   [docs/10](10-PROXMOX-TOKEN.md#prüfen-bevor-du-es-in-nodvard-deck-einträgst).
 - Ein ausgefallener Proxmox (z. B. pve2 aus) bremst die anderen nicht mehr, er steht nur
-  als „nicht erreichbar“ da. Ist er länger aus: auf der Proxmox- und der Backups-Seite unter
-  „Verbindungen verwalten“ auf „deaktiviert“ schalten, dann kommen auch keine Meldungen.
+  als „nicht erreichbar“ da. Ist er länger aus: auf der Seite „Proxmox“ (Reiter „Verbindungen“) und
+  „Proxmox-Backups“ (unter „Verbindungen verwalten“) auf „deaktiviert“ schalten, dann kommen auch keine Meldungen.
 
 **„… leitet auf eine andere Adresse um“** (Netzwerk mit Pi-hole oder Nginx Proxy Manager, ntfy, Nextcloud): Der Server hat
 statt der Antwort eine Weiterleitung geschickt (HTTP 301, 302, 303, 307 oder 308). Nodvard Deck folgt dem nie, weil sonst
@@ -996,6 +1219,17 @@ Wartungsmodus.“ oder „In der Nextcloud ist kein Speicherplatz mehr frei (HTT
 noch aus einer älteren Version, läuft Nodvard Shield mit seinem Standard-Zeitplan weiter bzw. das Skript vorerst nicht
 nach Zeitplan; eine Meldung „Zeitplan … ist ungültig“ sagt, welcher es ist.
 
+**Backup fehlgeschlagen** (Proxmox-Backups): Klapp auf der Seite „Proxmox-Backups“ beim Job den „Verlauf“ auf. Oben
+steht in zwei Sätzen, was passiert ist und was du tun kannst, darunter die Zeile, die Proxmox geschrieben hat. Bekannt
+sind die häufigsten Gründe: Ziel voll, Verbindung zum Netzlaufwerk abgerissen, Ziel nicht eingehängt, Gast gesperrt,
+Backup-Server lehnt die Anmeldung ab, Gast-Agent antwortet nicht, fehlende Rechte (auf dem Ziel oder in Proxmox),
+Datenträgerfehler, Gast gelöscht, Lauf abgebrochen, Ziel nicht erreichbar. Bei einem Job für mehrere Gäste steht auch da,
+wenn dieser Gast gesichert wurde und nur ein anderer fehlschlug. Bei einem älteren Fehlschlag zeigt „Warum?“ neben dem Lauf seinen Grund. Die
+Meldung des Backup-Wächters nennt dieselben zwei Sätze, die Zeile von Proxmox aber nicht (sie kann Pfade und Adressen
+enthalten). Ohne das Recht `Sys.Audit` liest Nodvard Deck das Protokoll des Laufs nicht und erklärt nur dessen
+Ergebnis. Ein Lauf mit Warnungen („WARNINGS“ in Proxmox) gilt als gelungen, die Sicherung ist da; im Verlauf steht „OK,
+mit Warnungen“.
+
 **Virenscan von Nodvard Shield fehlgeschlagen:** Die Liste der Scans nennt einen verständlichen Grund: ob der Server
 nicht erreichbar war, die Verbindung mitten im Scan abgebrochen ist, der Scan sein Zeitlimit überschritten hat (mit
 Dauer) oder welche Meldung ClamAV geschrieben hat, etwa „Input/output error“ bei einer defekten Platte. Wurden neue
@@ -1004,6 +1238,34 @@ Scan, setzt der Wächter still aus und prüft beim nächsten Lauf die ausgelasse
 er länger nicht prüfen, steht das als Fehler in der Liste. Ein Scan wartet bis zu 6 Minuten auf einen laufenden
 Wächter, und ein hängender Lauf wird vom Server kurz vor dem Zeitlimit beendet. Das braucht auf dem Server `flock` und
 `timeout` (util-linux, coreutils); fehlen sie, läuft alles wie früher.
+
+**Ordner vom Virenscan ausnehmen** (Nodvard Shield, etwa ein großes Medienarchiv, das den Scan bremst): Einstellungen →
+Erweiterungen → „Nodvard Shield“ → „Erweitert“ → „Ausgenommene Ordner“, dort volle Pfade wie `/srv/medien`. Sie gelten
+für den Schnell- und den Tiefenscan **und** für den Echtzeit-Wächter, der dort weder nach neuen Dateien sucht noch etwas
+prüft. Ein Eintrag gilt genau für diesen Ordner samt Inhalt: `/srv/backup` nimmt nicht nebenbei `/srv/backups-wichtig`
+aus, und der eingebaute Ausschluss von `/dev` trifft nicht `/devel`. Platzhalter wie `*` gibt es nicht, sie zählen als
+normale Zeichen; nur ein `/*` oder `/**` am Ende ist erlaubt und meint denselben Ordner (`/srv/backup/*` wirkt wie
+`/srv/backup`). Doppelte Schrägstriche, `/./` und ein Schrägstrich am Ende fallen weg. Einträge, die nicht gelten,
+werden übergangen: Pfade, die nicht mit `/` beginnen, Pfade mit einem Zeilenumbruch, Pfade mit `..` (der Eintrag
+würde sonst einen ganz anderen Ordner treffen) und `/` allein; beim Virenscan außerdem Pfade über 511 Bytes. Ist ein
+überwachter Ordner selbst ein Link (etwa `/home` → `/data/home`), trag den Ausschluss mit dem Pfad
+darunter ein (`/home/…`), nicht mit dem Ziel des Links. Liegt ein ausgenommener Ordner über einem geprüften Ordner,
+fällt dessen Prüfung ganz weg.
+
+**Freigaben und Nextcloud vom Echtzeit-Wächter prüfen lassen** (Nodvard Shield → Reiter „Scans“ → „Wächter-Vorlagen“):
+Der Wächter prüft von sich aus nur Orte, an denen Schadsoftware typischerweise abgelegt wird (`/tmp`, `/home` …).
+Was andere hochladen, landet oft woanders. „Auf den Servern suchen“ liest auf jedem prüfbaren Server die Samba-Freigaben
+(`path =` bzw. `directory =` in `/etc/samba/smb.conf`, ohne Drucker und `[homes]`), die NFS-Freigaben (`/etc/exports`,
+auch mit Anführungszeichen oder `\040`) und den Datenordner einer Nextcloud (aus ihrer `config.php` oder ein
+Docker-Volume mit „nextcloud“ im Namen, auch Nextcloud AIO) und ändert dabei nichts. Ohne root bzw. `sudo -n` fehlt
+meist die Nextcloud. „Zum Wächter hinzufügen“ hängt den Ordner an „Überwachte Ordner“ an (braucht das Recht,
+Einstellungen zu ändern; steht im Protokoll). Die Liste gilt für alle Server, auf einem Server ohne diesen Ordner kostet
+sie nichts. Systemordner (`/etc`, `/var` …, `/proc`, `/sys`, `/dev`, `/run`, `/boot` samt allem darunter) und
+Samba-Platzhalter wie `%U` werden nicht vorgeschlagen. Liegt ein Fund in einem „ausgenommenen Ordner“, steht er als
+„ausgenommen“ da und lässt sich nicht hinzufügen (dort prüft der Wächter nicht). Ein sehr großer Ordner kostet bei jedem
+Wächterlauf etwas Zeit; entfernen geht in den Einstellungen unter „Überwachte Ordner“. Der Wächter prüft neue und
+geänderte Dateien, auch solche, die mit alter Änderungszeit hineinkopiert wurden (Samba, Nextcloud-Sync, `cp -p`,
+`rsync -a`): Er schaut außer auf die Änderungszeit auch darauf, wann die Datei dort angelegt wurde.
 
 **Server fehlt im Terminal / „Noch kein Server prüfbar“ oder „Keine Linux-Server mit SSH-Zugang gefunden“ bei Nodvard Shield:** Kein
 SSH-Zugang hinterlegt: Einstellungen → Server & Zugänge ([5.2](#52-ssh-zugang-einrichten--drei-wege)). Nodvard Shield nimmt außerdem nur Server, die als `linux`

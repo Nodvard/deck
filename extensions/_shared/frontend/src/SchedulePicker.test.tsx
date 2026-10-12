@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
-import { browserTimeZone, setDeckTimezone } from "../lib/deckTimezone";
+import { browserTimeZone, setDeckTimezone } from "../../../../frontend/src/lib/deckTimezone";
 import { SchedulePicker, describeSchedule, nextRun, parseCron, toCron } from "./SchedulePicker";
 
 describe("Zeitplan", () => {

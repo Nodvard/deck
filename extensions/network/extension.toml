@@ -8,8 +8,11 @@ description = "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blo
 icon        = "activity"
 category    = "servers"
 sort_order  = 70
+stage       = "beta"
 entrypoint  = "nodvard_deck_ext_network:Extension"
 frontend    = "frontend/dist/index.js"
+# Nur lesend, fuer den Adress-Check: die Docker-Container der Service-Matrix (`ServiceCatalog`).
+requires    = ["service-matrix"]
 
 permissions = [
   "net.outbound",

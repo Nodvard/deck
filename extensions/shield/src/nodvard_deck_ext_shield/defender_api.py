@@ -14,9 +14,9 @@ from pydantic import BaseModel, Field
 
 from . import antivirus as av
 from . import updates as up
-from .defender import DEFAULT_CRONS, Defender, _describe
+from .defender import DEFAULT_CRONS, Defender, _describe, watch_interval_min
 from . import intrusion as ix
-from .guard import Guard
+from .guard import Guard, guard_interval_min
 from .ids import ACTION_BAN, ACTION_DELETE, ACTION_INSTALL, ACTION_REBOOT, ACTION_RESTORE, ACTION_UPGRADE, EXT_ID, LOGGER, SOC_PATH
 from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter
 
@@ -73,8 +73,8 @@ async def register_jobs(ctx: ExtensionContext, defender: Defender, updates: Upda
     async def updates_auto() -> dict:
         return await updates.auto_update()
 
-    interval = max(2, min(59, int(s.get("watch_interval_min") or 10)))
-    guard_interval = max(5, min(59, int(s.get("guard_interval_min") or 15)))
+    interval = watch_interval_min(s)
+    guard_interval = guard_interval_min(s)
     jobs = [
         _JobSpec("defender-quick", "Virenschutz: Schnellscan", s.get("quick_scan_cron") or DEFAULT_CRONS["quick"], s.get("quick_scan_enabled", True), quick, fallback=DEFAULT_CRONS["quick"]),
         _JobSpec("defender-deep", "Virenschutz: Tiefenscan", s.get("deep_scan_cron") or DEFAULT_CRONS["deep"], s.get("deep_scan_enabled", True), deep, fallback=DEFAULT_CRONS["deep"]),
@@ -368,6 +368,11 @@ def _already_open_reason(action: Any) -> str:
     return f"„{label}“ ist schon freigegeben und läuft."
 
 
+def _threats(n: int) -> str:
+    """"1 Bedrohung", "3 Bedrohungen" -- statt "Bedrohung(en)"."""
+    return "1 Bedrohung" if n == 1 else f"{n} Bedrohungen"
+
+
 def build_routers(
     ctx: ExtensionContext, defender: Defender, updates: UpdateCenter | None = None, guard: Guard | None = None,
 ) -> tuple[APIRouter, APIRouter]:
@@ -457,23 +462,34 @@ def build_routers(
                 subtitle = "Füge zuerst einen Server hinzu (Einstellungen → Server & Zugänge)."
             # Offene Funde aus frueheren Scans bleiben offen, auch wenn der Server inzwischen fehlt -- die Kachel zeigt sie.
             threats = sm.get("open_threats", 0)
-            label, tone = (f"{threats} Bedrohung(en)", "danger") if threats else ("nichts zu bewerten", "neutral")
+            label, tone = (_threats(threats), "danger") if threats else ("nichts zu bewerten", "neutral")
             return {"data": [{"title": title, "subtitle": subtitle, "label": label, "tone": tone}], "meta": {}}
         rows = [{
             "title": f"Schutzwert {sm['score']} / 100",
             "subtitle": f"{sm['protected']}/{sm['hosts']} Server geschützt · {sm['quarantined']} in Quarantäne",
-            "label": f"{sm['open_threats']} Bedrohung(en)" if sm["open_threats"] else "keine Bedrohung",
+            "label": _threats(sm["open_threats"]) if sm["open_threats"] else "keine Bedrohung",
             "tone": "danger" if sm["open_threats"] else ("good" if sm["score"] >= 80 else "warn"),
         }]
         for h in o["hosts"]:
             scan = h.get("last_scan") or {}
             status = scan.get("status")
-            if not h.get("clamav_installed"):
+            # Offene Funde und was aus den Funden des letzten Scans wurde, kommen aus derselben Quelle wie die Kopfzeile
+            # (`overview`): nach Quarantaene oder Loeschen steht hier nicht mehr "Bedrohung", ein offener Fund des
+            # Waechters dagegen auch dann, wenn der letzte Scan sauber war.
+            open_findings = int(h.get("open_findings") or 0)
+            outcome = h.get("last_scan_outcome")
+            done = status == "infected" and outcome in ("quarantined", "accepted", "cleaned")
+            if open_findings:
+                label, tone = _threats(open_findings), "danger"
+            elif not h.get("clamav_installed"):
                 label, tone = "ohne Virenschutz", "warn"
-            elif status == "infected":
+            elif status == "infected" and not done:
                 label, tone = "Bedrohung", "danger"
-            elif status == "clean" and h.get("signature_stale") is True:
+            elif (status == "clean" or done) and h.get("signature_stale") is True:
                 label, tone = "Signaturen veraltet", "warn"
+            elif done:
+                label, tone = {"quarantined": ("in Quarantäne", "warn"), "accepted": ("als harmlos markiert", "neutral")}.get(
+                    outcome, ("bereinigt", "good"))
             elif status == "clean":
                 label, tone = "sauber", "good"
             elif status == "running" or h.get("scanning"):
@@ -565,7 +581,7 @@ def build_routers(
     async def acknowledge(event_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
         assert guard is not None
         if not await guard.acknowledge(event_id, actor):
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ereignis unbekannt oder schon bestätigt.")
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Ereignis unbekannt oder schon erledigt.")
         return {"ok": True}
 
     @manage.post("/hosts/{host_id}/ban")

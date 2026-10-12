@@ -8,14 +8,17 @@ Es gilt eine **Erlaubnisliste**: nur bekannte Zeichen-Elemente, keine Skripte,
 keine Animationen (`<set>`/`<animate>` können Adressen umschreiben), kein `<foreignObject>`.
 Verweise (`href`, `url(...)`) sind nur auf Teile derselben Datei erlaubt, dazu eingebettete
 PNG-/JPEG-/GIF-/WebP-Bilder als `data:`-Adresse. Eine DOCTYPE-Angabe mit eigenen Entitäten
-wird abgelehnt (Schutz vor Entity-Bomben), dafür reicht die Standardbibliothek.
+wird abgelehnt (Schutz vor Entity-Bomben). Gelesen wird der Baum mit `defusedxml`: Auch wenn die
+Vorprüfung mit expat einmal etwas durchließe, löst der Parser weder Entitäten noch externe
+Verweise auf (XXE).
 """
 
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from xml.parsers import expat
+
+from defusedxml import ElementTree as SafeET
 
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
@@ -127,11 +130,12 @@ def check_svg(content: bytes) -> None:
     guard.ProcessingInstructionHandler = _pi_not_allowed
     try:
         guard.Parse(content, True)
-        root = ET.fromstring(content)
+        root = SafeET.fromstring(content, forbid_dtd=False, forbid_entities=True, forbid_external=True)
     except UnsafeSvg:
         raise
     # `LookupError`: unbekannte Zeichenkodierung in der Kopfzeile (`encoding='bogus'`).
-    except (expat.ExpatError, ET.ParseError, ValueError, UnicodeError, LookupError) as exc:
+    # `ValueError` umfasst auch die Ablehnungen von defusedxml (`DefusedXmlException`).
+    except (expat.ExpatError, SafeET.ParseError, ValueError, UnicodeError, LookupError) as exc:
         raise UnsafeSvg("Das ist keine gültige SVG-Datei.") from exc
 
     if _local(root.tag) != (SVG_NS, "svg"):

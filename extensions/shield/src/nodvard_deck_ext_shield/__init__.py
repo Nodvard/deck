@@ -36,6 +36,7 @@ import shlex
 import time
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from nodvard_sdk import (
@@ -64,13 +65,14 @@ from .defender import Defender
 from .defender_api import ACTION_SPECS, DefenderExecutor, build_routers, register_jobs
 from .guard import Guard
 from .hostscope import host_scope
-from .patching import UpdateCenter
+from .patching import UpdateCenter, schedule_zone
 from .history import STATUS_LABEL, STATUSES, IncidentRepository
-from .ids import EXT_ID, LOGGER
+from .ids import EXT_ID, LOGGER, SOC_PATH
 from .incident_queue import MAX_ATTEMPTS, IncidentQueueRepository
 from .incidents import Incident, IncidentStore, new_incident_id
 from .models import Base as HistoryBase
 from .remediation import (
+    cause_advice,
     cause_notice,
     cause_prompt_line,
     build_restart_command,
@@ -86,6 +88,7 @@ from .remediation import (
 from .ollama import OllamaConnectorType, OllamaProvider
 from .parsing import ParsedActionKind, parse_ai_response, strip_decision_block
 from .prompts import MAX_INSPECT_TEXT_CHARS, MAX_LOG_CHARS, SYSTEM_PROMPT, build_chat_prompt, build_incident_prompt
+from .watch_templates import build_routers as build_template_routers
 from .watcher import (
     BaselineStateStore,
     ContainerTransition,
@@ -101,6 +104,7 @@ INCIDENT_MERGE_WINDOW_S = 24 * 3600.0
 noch unbearbeiteten Vorfall mit; danach beginnt ein neuer Vorfall (und eine neue Meldung).
 Hoechstens eine Meldung je Container und Tag, aber nie dauerhaft still."""
 _WAITING_ACTION_STATUSES = frozenset({"proposed", "approved", "executing"})
+"""Die Aktion eines Vorfalls ist noch nicht durch: Der Vorfall zaehlt weitere Abstuerze mit (`merge_into_active`)."""
 
 
 def _flush_backoff_s(failures: int) -> float:
@@ -108,7 +112,33 @@ def _flush_backoff_s(failures: int) -> float:
     return float(min(300, 5 * 2 ** max(0, failures - 1)))
 
 
+RESTART_HELP_WINDOW_S = 6 * 3600
+"""Stuerzt ein Container innerhalb dieser Zeit nach einem freigegebenen Neustart wieder ab, sagt die Meldung das."""
+RESTART_SETTLE_S = 15.0
+"""Ein Absturz so kurz nach dem freigegebenen Neustart ist der Neustart selbst (ein Container, der SIGTERM ignoriert,
+endet bei `docker restart` mit Exit 137; der Waechter sieht ihn im naechsten Takt, alle 8 s) und kein Zeichen, dass er
+nicht geholfen hat. Knapp gehalten: Wer 20 s nach dem Neustart wieder umfaellt, soll als "hat nicht geholfen" gelten."""
+RECOVERY_MEMORY_S = 3600.0
+"""So lange merkt sich die Erweiterung eine Erholung fuer Vorfaelle, die gerade noch geprueft werden (KI-Abfrage)."""
+WAITING_RESTART_NOTE = "Der vorgeschlagene Neustart unter „Aktionen“ ist nicht mehr nötig, dort einfach ablehnen."
+"""Nur solange die Aktion noch auf Freigabe wartet (`proposed`): danach laesst sie sich nicht mehr ablehnen."""
+
 _SEVERITY_BY_STATUS = {"open": "critical", "proposed": "warning", "reviewed": "warning", "resolved": "info", "dismissed": "info"}
+
+
+def recovery_note(since: str) -> str:
+    return f"Läuft wieder seit {since} – von selbst erledigt."
+
+
+def container_watch_links(action_id: str | None) -> dict[str, Any]:
+    """Wohin ein Klick auf die Meldung der Container-Wache fuehrt: zur vorgeschlagenen Aktion auf der Seite "Aktionen"
+    (`?action=<id>` hebt sie dort hervor; nur die Kennung, kein Geheimnis, anmelden muss man sich trotzdem), sonst zum
+    Reiter "Container-Wache"."""
+    watch = f"{SOC_PATH}?tab=containers"
+    if not action_id:
+        return {"path": watch}
+    approve = f"/actions?action={quote(action_id, safe='')}"
+    return {"path": approve, "actions": [{"label": "Aktion öffnen", "path": approve}, {"label": "Container-Wache", "path": watch}]}
 
 
 class _ChatIn(BaseModel):
@@ -132,6 +162,9 @@ class StatsOut(BaseModel):
 class Extension(NodvardExtension):
     def __init__(self) -> None:
         self._store = IncidentStore()
+        self._recovered: dict[tuple[str, str], float] = {}
+        """(Server, Container) kleingeschrieben -> (laeuft wieder seit, Satz): die letzte Erholung, fuer Vorfaelle, die
+        bei der Erholung noch geprueft wurden (`_finish_group`). Nur im Speicher, wie die Erholung selbst."""
         self._history: IncidentRepository | None = None
         self._queue: IncidentQueueRepository | None = None
         self._ai: OllamaProvider | None = None
@@ -173,7 +206,9 @@ class Extension(NodvardExtension):
             }
         )
 
-        self._watcher = DockerWatcher(ctx, on_transition=self._on_transition, state_store=BaselineStateStore(ctx))
+        self._watcher = DockerWatcher(
+            ctx, on_transition=self._on_transition, state_store=BaselineStateStore(ctx), on_recovery=self._on_recovery,
+        )
 
         # Virenschutz: ClamAV, Quarantaene, Lynis.
         self._defender = Defender(ctx)
@@ -186,6 +221,11 @@ class Extension(NodvardExtension):
         defender_read, defender_manage = build_routers(ctx, self._defender, self._updates, self._guard)
         ctx.api.include_router(defender_read, permission="soc.read")
         ctx.api.include_router(defender_manage, permission="soc.manage")
+        # Waechter-Vorlagen: suchen (liest auf den Servern) wie andere Shield-Aufgaben mit `soc.manage`; uebernehmen
+        # aendert die Einstellungen und braucht `settings.write` wie die Einstellungsseite.
+        templates_read, templates_change = build_template_routers(ctx, self._defender)
+        ctx.api.include_router(templates_read, permission="soc.manage")
+        ctx.api.include_router(templates_change, permission="settings.write")
 
         router = APIRouter()
 
@@ -474,7 +514,77 @@ class Extension(NodvardExtension):
         result = await self._ai.health()
         return HealthReport(healthy=result.ok, message=result.message, details={"pending_incidents": self._store.pending_count()})
 
+    async def _restart_that_did_not_help(self, host: Any, target: str, *, crashed_at: float) -> float | None:
+        """Hat ein freigegebener Neustart GENAU diesen Container auf diesem Server neu gestartet (Server und Befehl der
+        Aktion stimmen, sie lief erfolgreich, hoechstens `RESTART_HELP_WINDOW_S` her), und stuerzt er jetzt wieder ab --
+        mehr als `RESTART_SETTLE_S` danach und ohne dass der Vorfall sich zwischendurch von selbst erledigt hatte? Dann
+        die Zeit des Neustarts (Unix-Zeit), sonst `None`. Eine Aktion haengt an allen Vorfaellen ihres Batches, deshalb
+        zaehlt nur, was der Befehl wirklich traf."""
+        try:
+            expected = build_restart_command(target)
+        except ValueError:
+            return None
+        try:
+            candidates = await self._history.recent_action_ids(host_name=host.name, target=target)
+            for action_id, recovered in candidates:
+                if recovered:
+                    return None  # der Container lief nach dem Neustart wieder ruhig: der Neustart hat geholfen
+                row = await self._ctx.actions.result(action_id)
+                if row is None or str(getattr(row, "status", "")) != "succeeded":
+                    continue
+                payload = getattr(row, "payload", None)
+                command = str(payload.get("command") or "") if isinstance(payload, dict) else ""
+                if getattr(row, "host_id", None) != host.id or command.strip().lower() != expected.lower():
+                    continue
+                finished = getattr(row, "finished_at", None)
+                if not isinstance(finished, datetime):
+                    continue
+                finished_ts = finished.timestamp()
+                if crashed_at - finished_ts < RESTART_SETTLE_S:
+                    return None  # das ist der juengste Neustart selbst -- kein aelterer bekommt die Schuld
+                if time.time() - finished_ts > RESTART_HELP_WINDOW_S:
+                    continue
+                return finished_ts
+        except Exception:  # noqa: BLE001 - nur ein Hinweis in der Meldung
+            logging.getLogger(LOGGER).warning("shield_restart_help_check_failed", exc_info=True)
+        return None
+
+    async def _on_recovery(self, host: Any, target: str, running_since: float) -> None:
+        """Der Container laeuft wieder ruhig (`DockerWatcher`, `RECOVERY_QUIET_S`): offene Vorfaelle dazu von selbst
+        erledigen -- kein Abhaken von Hand, keine Meldung (Ruhe statt Laerm). Wartet ein vorgeschlagener Neustart noch
+        unter "Aktionen", sagt der Satz am Vorfall, dass er nicht mehr noetig ist (verworfen wird er nicht von hier).
+        Vorfaelle, die gerade noch geprueft werden (KI-Abfrage), erledigt `_finish_group` mit derselben Erholung."""
+        # Vor dem ersten `await` merken: `_finish_group` kann sonst genau dazwischen pruefen und die Erholung verpassen.
+        now = time.time()
+        self._recovered = {k: v for k, v in self._recovered.items() if now - v < RECOVERY_MEMORY_S}
+        self._recovered[(host.name.lower(), target.lower())] = running_since
+        zone = await schedule_zone(self._ctx)
+        since = datetime.fromtimestamp(running_since, zone).strftime("%H:%M")
+        resolved = await self._history.resolve_recovered(
+            host_name=host.name, target=target, note=recovery_note(since), waiting_note=WAITING_RESTART_NOTE,
+            action_waiting=self._action_proposed,
+        )
+        for item in resolved:
+            try:
+                await self._log_auto_resolved(item, since)
+            except Exception:  # erledigt ist gespeichert; ein fehlender Protokolleintrag haelt die anderen nicht auf
+                logging.getLogger(LOGGER).exception("shield_auto_resolved_log_failed")
+
+    async def _log_auto_resolved(self, item: dict[str, Any], since: str) -> None:
+        reason = f"{STATUS_LABEL.get(item['previous_status'], item['previous_status'])} -> {STATUS_LABEL['resolved']} (läuft wieder seit {since})"
+        if item.get("action_waiting"):
+            reason += "; der vorgeschlagene Neustart wartet noch unter „Aktionen“ und ist nicht mehr nötig"
+        await self._ctx.audit.log(
+            action=f"{EXT_ID}.incident_status", outcome="success", target_type="host", target_id=item["host_id"],
+            reason=reason, detail={"from": item["previous_status"], "to": "resolved", "target": item["target"], "auto": True},
+            correlation_id=item["id"],
+        )
+        await self._ctx.ws.broadcast("incidents", {"changed": item["id"]})
+
     async def _on_transition(self, transition: ContainerTransition) -> None:
+        # Der Container hat sich wieder geruehrt: eine gemerkte Erholung gilt nicht mehr (sonst erledigte
+        # `_finish_group` einen Vorfall, dessen Container laengst wieder abgestuerzt ist).
+        self._recovered.pop((transition.host.name.lower(), transition.target.lower()), None)
         settings = await self._ctx.settings.get()
         log = logging.getLogger(LOGGER)
         is_crash = bool(transition.details.get("is_crash"))
@@ -500,16 +610,54 @@ class Extension(NodvardExtension):
         if merged is not None:
             await self._ctx.ws.broadcast("incidents", {"changed": merged["id"]})
             return
+        # Hatte sich der Vorfall gerade von selbst erledigt, und der Container stuerzt in der Ruhezeit wieder ab:
+        # denselben Vorfall wieder oeffnen und mitzaehlen (sonst ginge der Absturz in der Ruhezeit verloren und er stuende
+        # auf "Erledigt"). Geht das nicht (ein Mensch hatte ihn bestaetigt, oder der Neustart ist schon gelaufen), ist es
+        # ein neuer Vorfall mit Meldung, auch in der Ruhezeit: zuletzt hiess es ja "laeuft wieder". Nach der Ruhezeit
+        # ohnehin ein neuer Vorfall.
         cooldown_s = settings.get("host_target_cooldown_s") or 1800
-        if self._store.is_in_cooldown(transition.host.name, transition.target, cooldown_s=cooldown_s):
+        in_cooldown = self._store.is_in_cooldown(transition.host.name, transition.target, cooldown_s=cooldown_s)
+        reopened = None
+        said_recovered = False
+        if in_cooldown:
+            try:
+                reopened = await self._history.reopen_auto_resolved(
+                    host_name=transition.host.name, target=transition.target, is_crash=is_crash,
+                    seen_at=seen_at, window_s=INCIDENT_MERGE_WINDOW_S, action_waiting=self._action_waiting,
+                )
+                if reopened is None:
+                    said_recovered = await self._history.recently_auto_resolved(
+                        host_name=transition.host.name, target=transition.target, since=seen_at - cooldown_s,
+                    )
+            except Exception:  # lieber ein weiterer Vorfall als ein verlorenes Ereignis
+                log.exception("shield_incident_reopen_failed")
+                said_recovered = True
+        if reopened is not None:
+            await self._ctx.audit.log(
+                action=f"{EXT_ID}.incident_status", outcome="success", target_type="host", target_id=reopened["host_id"],
+                reason=f"{STATUS_LABEL['resolved']} -> {STATUS_LABEL.get(reopened['status'], reopened['status'])} (wieder abgestürzt)",
+                detail={"from": "resolved", "to": reopened["status"], "target": reopened["target"], "auto": True},
+                correlation_id=reopened["id"],
+            )
+            await self._ctx.ws.broadcast("incidents", {"changed": reopened["id"]})
             return
+        # Lief zuletzt ein freigegebener Neustart, und der Container stuerzt wieder ab: das muss man erfahren, auch
+        # innerhalb der Ruhezeit (sonst verschluckte sie genau den Fall "Neustart hat nicht geholfen").
+        restarted_at = (
+            await self._restart_that_did_not_help(transition.host, transition.target, crashed_at=seen_at) if is_crash else None
+        )
+        if restarted_at is None and in_cooldown and not said_recovered:
+            return
+        details: dict[str, Any] = {**transition.details, "occurrences": 1, "last_seen": seen_at}
+        if restarted_at is not None:
+            details["after_restart"] = restarted_at
         incident = Incident(
             id=new_incident_id(),
             host_id=transition.host.id,
             host_name=transition.host.name,
             target=transition.target,
             message=transition.message,
-            details={**transition.details, "occurrences": 1, "last_seen": seen_at},
+            details=details,
         )
         # Sofort dauerhaft merken: ein Neustart im Sammelfenster darf den Vorfall nicht verlieren.
         try:
@@ -524,6 +672,11 @@ class Extension(NodvardExtension):
         """Wartet die Aktion eines Vorfalls noch auf Freigabe oder laeuft sie gerade?"""
         row = await self._ctx.actions.result(action_id)
         return row is not None and str(getattr(row, "status", "")) in _WAITING_ACTION_STATUSES
+
+    async def _action_proposed(self, action_id: str) -> bool:
+        """Wartet die Aktion noch auf Freigabe (laesst sie sich also noch ablehnen)?"""
+        row = await self._ctx.actions.result(action_id)
+        return row is not None and str(getattr(row, "status", "")) == "proposed"
 
     async def _resume_open_incidents(self) -> None:
         log = logging.getLogger(LOGGER)
@@ -621,7 +774,7 @@ class Extension(NodvardExtension):
                     "(keine Einschätzung von Nodvard KI). Bitte im Dashboard und im Protokoll nachsehen:\n" + lines
                 ),
                 severity=Severity.WARNING,
-                payload=host_scope(i.host_id for i in failed),
+                payload={**host_scope(i.host_id for i in failed), **container_watch_links(None)},
             )
         )
 
@@ -795,7 +948,9 @@ class Extension(NodvardExtension):
             display_text, list(fact_map.values()), expected=len(causes), tags={c.tag for _t, _h, c in causes.values()}
         )
         # Ursache und Fakten laut System stehen als feste Zeilen VOR dem KI-Text, was immer die KI schreibt.
-        fixed = "\n".join(part for part in (cause_notice(causes), facts_notice(causes, fact_map)) if part)
+        fixed = "\n".join(
+            part for part in (cause_notice(causes), facts_notice(causes, fact_map), cause_advice(causes)) if part
+        )
         display_text = fixed + ("\n\n" + display_text if display_text else "")
         notice = contradiction_notice(dropped)
         if notice:
@@ -815,12 +970,29 @@ class Extension(NodvardExtension):
         proposed: bool,
     ) -> None:
         has_crash = any(i.details.get("is_crash") for i in batch)
+        waiting = bool(proposed and action_id) and await self._action_proposed(str(action_id))
+        zone = await schedule_zone(ctx)
+        recovered_now: list[tuple[Incident, str, str]] = []
         for incident in batch:
             incident.ai_summary = ai_summary
             incident.action_id = action_id
             if incident.status == "open":
                 incident.status = "proposed" if proposed else "reviewed"
-            await self._history.save(incident)
+            # Lief der Container schon wieder ruhig, waehrend dieser Vorfall noch geprueft wurde: gleich erledigt. Jeder
+            # neue Zustandswechsel loescht die gemerkte Erholung (`_on_transition`), sie ist also juenger als der Absturz.
+            running_since = self._recovered.get((incident.host_name.lower(), incident.target.lower()))
+            auto_resolved = running_since is not None and incident.status in ("proposed", "reviewed")
+            if auto_resolved:
+                previous = incident.status
+                since = datetime.fromtimestamp(running_since, zone).strftime("%H:%M")
+                incident.status = "resolved"
+                incident.details["auto_resolved"] = recovery_note(since) + (f" {WAITING_RESTART_NOTE}" if waiting else "")
+                incident.details["auto_resolved_from"] = previous
+                recovered_now.append((incident, previous, since))
+            if auto_resolved:
+                await self._history.save(incident, status_changed=True)
+            else:
+                await self._history.save(incident)
             # Live gefunden (vor WP-10): ohne diesen Eintrag war ein
             # "AKTION: KEINE"-Vorfall NIRGENDS dauerhaft sichtbar, und ein
             # abgeschlossener Vorschlag nur ueber eine rein prozessinterne
@@ -847,6 +1019,22 @@ class Extension(NodvardExtension):
 
         resumed = sum(1 for i in batch if i.resumed)
         notify_body = ai_summary
+        failed_restarts = [i for i in batch if isinstance(i.details.get("after_restart"), (int, float))]
+        if failed_restarts:
+            notes = [
+                f"Hinweis: {i.target} auf {i.host_name} ist nach dem freigegebenen Neustart um "
+                f"{datetime.fromtimestamp(float(i.details['after_restart']), zone).strftime('%H:%M')} wieder abgestürzt."
+                for i in failed_restarts
+            ]
+            notify_body = "\n".join(notes) + "\n\n" + notify_body
+        for incident, previous, since in recovered_now:
+            notify_body += f"\n\nInzwischen läuft {incident.target} auf {incident.host_name} wieder (seit {since}), der Vorfall ist erledigt."
+            if waiting:
+                notify_body += " " + WAITING_RESTART_NOTE
+            await self._log_auto_resolved(
+                {"id": incident.id, "host_id": incident.host_id, "target": incident.target, "previous_status": previous, "action_waiting": waiting},
+                since,
+            )
         if resumed:
             notify_body += (
                 "\n\nHinweis: Nach einem Neustart des Dashboards wieder aufgenommen "
@@ -858,7 +1046,7 @@ class Extension(NodvardExtension):
                 title=f"Lagebericht der Container-Wache ({len(batch)} Ereignis{'se' if len(batch) != 1 else ''})",
                 body=notify_body,
                 severity=Severity.WARNING if has_crash else Severity.INFO,
-                payload=host_scope(i.host_id for i in batch),
+                payload={**host_scope(i.host_id for i in batch), **container_watch_links(action_id if proposed else None)},
             )
         )
         # Erst jetzt ist der Batch gemeldet: die dauerhafte Warteschlange freigeben.

@@ -325,6 +325,17 @@ describe("SetupPage", () => {
     expect(screen.queryByText("Docker Desktop")).not.toBeInTheDocument();
   });
 
+  it("die Hilfe zum Einrichtungscode verweist auf den Abschnitt zum Assistenten in der Anleitung", async () => {
+    makeBackend();
+    renderSetup();
+    await screen.findByText("Willkommen");
+    expect(screen.queryByTestId("setup-code-guide")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Wo finde ich den Code?" }));
+    const link = within(screen.getByTestId("setup-code-guide")).getByRole("link", { name: /Anleitung/ });
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#2-einrichtungsassistent-setup");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
   describe("Schritt Zeitzone", () => {
     it("ist mit der Zone des Geräts vorbelegt und speichert sie über die Einstellungen", async () => {
       deviceZone("America/New_York");
@@ -614,6 +625,9 @@ describe("SetupPage", () => {
       expect(screen.getByText("docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password <benutzername>")).toBeInTheDocument();
       expect(document.body).toHaveTextContent(/Statt <benutzername> schreibst du deinen eigenen Benutzernamen, zum Beispiel admin/);
       expect(sessionStorage.getItem("deck.setup.step")).toBe("done");
+      // Die Anleitung steht als Ganzes im Text oben und beim Notfall-Befehl am Abschnitt „Ausgesperrt?“.
+      expect(screen.getByTestId("finish-guide")).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md");
+      expect(screen.getByRole("link", { name: /Ausgesperrt\? Notfall-Befehle/ })).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#12-ausgesperrt-notfall-befehle");
 
       fireEvent.click(screen.getByRole("button", { name: "Weiter zum Dashboard" }));
       expect((await screen.findByTestId("where")).textContent).toBe("/");

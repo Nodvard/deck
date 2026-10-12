@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { respond } from "../preview/fixtures";
 import { useAuthStore } from "../state/auth";
@@ -59,6 +59,30 @@ describe("matches", () => {
   });
 });
 
+describe("CommandPalette: Anleitung", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.each(["hilfe", "anleitung", "doku"])("„%s“ findet die Anleitung und Enter öffnet sie in einem neuen Tab", async (word) => {
+    const open = vi.spyOn(window, "open").mockImplementation(() => null);
+    renderHarness();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const input = await screen.findByLabelText("Suchen");
+    fireEvent.change(input, { target: { value: word } });
+    await screen.findByRole("option", { name: /Anleitung/ });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(open).toHaveBeenCalledWith("https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md", "_blank", "noopener,noreferrer");
+    // bleibt auf der Seite: die Palette navigiert nicht
+    expect(screen.getByTestId("where").textContent).toBe("/");
+  });
+
+  it("steht auch ohne Suchwort in der Liste der Seiten, mit dem Hinweis auf den neuen Tab", async () => {
+    renderHarness();
+    fireEvent.keyDown(window, { key: "k", ctrlKey: true });
+    const option = await screen.findByRole("option", { name: /Anleitung/ });
+    expect(option.textContent).toContain("öffnet in neuem Tab");
+  });
+});
+
 describe("CommandPalette", () => {
   it("Strg+K öffnet, Suche findet die Konsole eines Gasts, Enter springt hin", async () => {
     renderHarness();
@@ -85,7 +109,7 @@ describe("CommandPalette", () => {
     fireEvent.keyDown(window, { key: "k", metaKey: true });
     const input = await screen.findByLabelText("Suchen");
     fireEvent.change(input, { target: { value: "backup" } });
-    const option = await screen.findByRole("option", { name: /^Backups/ });
+    const option = await screen.findByRole("option", { name: /^Proxmox-Backups/ });
     expect(option).toHaveAttribute("aria-selected", "true");
     fireEvent.keyDown(input, { key: "Enter" });
     await waitFor(() => expect(screen.getByTestId("where").textContent).toBe("/ext/backups/backups"));

@@ -37,6 +37,9 @@ class PageOut(PageSpec):
     legacy_ext_ids: list[str] = Field(default_factory=list)
     """Fruehere Kennungen der Erweiterung (`legacy_ids` im Manifest), z. B. um gespeicherte Links mit
     `/ext/<alt>/...` auf `/ext/<ext_id>/...` umzuleiten. Ohne Umbenennung leer."""
+    stage: str = "stable"
+    """Reifegrad der Erweiterung (`stable` oder `beta`, siehe `ExtensionManifest.stage`): Menue und Seitenkopf
+    zeigen bei `beta` ein Abzeichen. Fehlt die Angabe im Manifest, steht hier `stable`."""
 
 
 class WidgetOut(WidgetSpec):
@@ -50,7 +53,7 @@ class WidgetOut(WidgetSpec):
 async def list_pages(user: CurrentUser) -> list[PageOut]:
     runtime = get_extension_runtime()
     return [
-        PageOut(ext_id=ext_id, legacy_ext_ids=runtime.legacy_ids_of(ext_id), **spec.model_dump())
+        PageOut(ext_id=ext_id, legacy_ext_ids=runtime.legacy_ids_of(ext_id), stage=runtime.stage_of(ext_id), **spec.model_dump())
         for ext_id, spec in runtime.ui.all_pages()
         if spec.show_in_nav and _visible(user, spec.permissions)
     ]

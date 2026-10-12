@@ -112,7 +112,7 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(screen.getByTestId("attention").textContent).toContain("NAS ist nicht erreichbar");
   });
 
-  it("Server ohne Messwerte bleiben eine Zeile, mit Hinweis wenn das Modul System läuft", async () => {
+  it("Server ohne Messwerte bleiben eine Zeile, mit Hinweis wenn das Modul Server-Zustand läuft", async () => {
     vi.stubGlobal("fetch", mockFetch({ "/hosts/metrics/latest": { hosts: {}, stale_after_s: 120 } }));
     renderCockpit();
     const deb = await screen.findByTestId("machine-m-deb");
@@ -121,12 +121,12 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(deb.textContent).toContain("192.168.2.40");
   });
 
-  it("ohne das Modul System sagt die Zeile warum", async () => {
-    // Modul aus: keine Seite „System“ im Katalog und keine Werte.
+  it("ohne das Modul Server-Zustand sagt die Zeile warum", async () => {
+    // Modul aus: keine Seite „Server-Zustand“ im Katalog und keine Werte.
     const pages = (respond("/api/v1/pages", "GET") as { ext_id: string }[]).filter((p) => p.ext_id !== "system");
     vi.stubGlobal("fetch", mockFetch({ "/pages": pages, "/hosts/metrics/latest": { hosts: {}, stale_after_s: 120 } }));
     renderCockpit();
-    expect(await screen.findByTestId("machine-m-deb-hint")).toHaveTextContent("Modul „System“ ist aus");
+    expect(await screen.findByTestId("machine-m-deb-hint")).toHaveTextContent("Modul „Server-Zustand“ ist aus");
     expect(screen.queryByTestId("host-cards")).toBeNull();
   });
 

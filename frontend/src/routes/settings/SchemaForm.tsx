@@ -8,13 +8,15 @@
  * (unter "Erweitert" eingeklappt), `x-hidden` (nicht anzeigen), `x-item-title`,
  * `x-enum-labels` (lesbare Texte fuer die Werte einer Auswahl), `x-widget`
  * ("schedule", "host", "host-tag", "remote-select"), `x-empty-label`,
- * `x-options-url` (remote-select), `pattern` und `x-pattern-message`.
+ * `x-options-url` (remote-select), `pattern` und `x-pattern-message`, bei Zahlen `minimum`/`maximum`,
+ * `x-generate` (Knopf "Zufaellig waehlen" neben einem Textfeld). Auf der obersten Ebene zeigt
+ * `x-qr-url` die Seite der Erweiterung (siehe QrLinkCard.tsx), nicht dieses Formular.
  * Alle Zusaetze sind in docs/02-EXTENSION-API.md beschrieben.
  */
-import { ChevronDown, ChevronRight, Plus, Trash2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Dices, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
 
-import { SchedulePicker } from "../../components/SchedulePicker";
+import { SchedulePicker } from "../../../../extensions/_shared/frontend/src/SchedulePicker";
 import { HostWidget, RemoteSelect } from "./SchemaWidgets";
 import { Button, Toggle, inputClass } from "./ui";
 
@@ -48,8 +50,15 @@ export interface JsonSchema {
   maxLength?: number;
   /** Deutsche Meldung, wenn `pattern` nicht passt. */
   "x-pattern-message"?: string;
+  /** Kleinster und groesster erlaubter Wert eines Zahlenfelds (eingeschlossen, wie im Backend). */
+  minimum?: number;
+  maximum?: number;
   /** Kopfebene: die Erweiterung kann Nachrichten senden -> Knopf "Testnachricht senden". */
   "x-test-message"?: boolean;
+  /** Textfeld: Knopf, der `prefix` plus `length` zufaellige Zeichen (a-z, 0-9) einsetzt; das Ergebnis muss zum `pattern` passen. */
+  "x-generate"?: { label?: string; prefix?: string; length?: number };
+  /** Kopfebene: Pfad unter /api/v1, der `{url, text, error}` liefert -> Karte mit QR-Code unter dem Formular. */
+  "x-qr-url"?: string;
 }
 
 const GENERIC_PATTERN_MESSAGE = "Das Format stimmt nicht.";
@@ -68,14 +77,46 @@ export function patternError(schema: JsonSchema, value: unknown): string | null 
   }
 }
 
-/** Alle Musterverstoesse in `values` als Liste lesbarer Meldungen (leer = alles in Ordnung). */
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Zahl fuer eine Meldung, mit deutschem Komma (wie das Backend). */
+function numberText(value: number): string {
+  return String(value).replace(".", ",");
+}
+
+/** Die Meldung, wenn eine Zahl ausserhalb von `minimum`/`maximum` liegt, sonst `null`. Gleiche Saetze wie im
+ * Backend (`_check_number` in api/v1/extension_settings.py). Leere Felder sind erlaubt (dann gilt der Standard). */
+export function rangeError(schema: JsonSchema, value: unknown): string | null {
+  if ((schema.type !== "number" && schema.type !== "integer") || typeof value !== "number") return null;
+  if (!Number.isFinite(value)) return "Bitte eine Zahl eintragen.";
+  if (schema.type === "integer" && !Number.isInteger(value)) return "Bitte eine ganze Zahl eintragen.";
+  const low = finiteOrNull(schema.minimum);
+  const high = finiteOrNull(schema.maximum);
+  if ((low === null || value >= low) && (high === null || value <= high)) return null;
+  if (low !== null && high !== null) return `Erlaubt sind Werte von ${numberText(low)} bis ${numberText(high)}.`;
+  return low !== null ? `Erlaubt sind Werte ab ${numberText(low)}.` : `Erlaubt sind Werte bis ${numberText(high as number)}.`;
+}
+
+/** Ein gespeicherter Wert, den die Auswahl (`enum`) nicht mehr anbietet (z. B. ein Abstand von 7 Minuten von frueher). */
+export function enumError(schema: JsonSchema, value: unknown): string | null {
+  if (!schema.enum || value === undefined || value === null || value === "") return null;
+  return schema.enum.includes(value) ? null : "Diesen Wert gibt es nicht mehr, bitte einen der angebotenen wählen.";
+}
+
+function fieldError(schema: JsonSchema, value: unknown): string | null {
+  return enumError(schema, value) ?? patternError(schema, value) ?? rangeError(schema, value);
+}
+
+/** Alle Verstoesse (Muster, Zahlengrenzen) in `values` als Liste lesbarer Meldungen (leer = alles in Ordnung). */
 export function validateValues(schema: JsonSchema, values: Values, prefix = ""): string[] {
   const out: string[] = [];
   for (const [key, sub] of Object.entries(schema.properties ?? {})) {
     if (sub["x-hidden"]) continue;
     const value = values[key];
     const name = `${prefix}${labelOf(key, sub)}`;
-    const message = patternError(sub, value);
+    const message = fieldError(sub, value);
     if (message) out.push(`${name}: ${message}`);
     if (sub.type === "object" && sub.properties && value && typeof value === "object" && !Array.isArray(value)) {
       out.push(...validateValues(sub, value as Values, `${name} › `));
@@ -87,13 +128,44 @@ export function validateValues(schema: JsonSchema, values: Values, prefix = ""):
           const who = String((item as Values).name ?? "") || String(i + 1);
           out.push(...validateValues(sub.items, item as Values, `${name} › ${itemTitle} ${who} › `));
         } else if (sub.items) {
-          const itemMessage = patternError(sub.items, item);
+          const itemMessage = fieldError(sub.items, item);
           if (itemMessage) out.push(`${name}: „${String(item)}“ – ${itemMessage}`);
         }
       });
     }
   }
   return out;
+}
+
+const GENERATE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
+const GENERATE_DEFAULT_LENGTH = 16;
+const GENERATE_MAX_LENGTH = 128;
+
+/** `count` zufaellige Zeichen aus a-z und 0-9 vom Zufall des Browsers (`crypto.getRandomValues`, nie `Math.random`).
+ * Gleichverteilt: Bytes ab 252 werden verworfen (256 geht nicht glatt durch 36). `null` ohne sicheren Zufall. */
+function randomChars(count: number): string | null {
+  const source = globalThis.crypto;
+  if (!source || typeof source.getRandomValues !== "function") return null;
+  const limit = 256 - (256 % GENERATE_ALPHABET.length);
+  let out = "";
+  while (out.length < count) {
+    for (const byte of source.getRandomValues(new Uint8Array(count * 2))) {
+      if (byte < limit && out.length < count) out += GENERATE_ALPHABET[byte % GENERATE_ALPHABET.length];
+    }
+  }
+  return out;
+}
+
+/** Der Wert fuer `x-generate`: `prefix` plus zufaellige Zeichen. `null`, wenn es keinen Zufall gibt oder das Ergebnis
+ * nicht zum `pattern` (oder zu `maxLength`) des Felds passt: ein Wert, der sich nicht speichern liesse, wird nie eingesetzt. */
+export function generateText(schema: JsonSchema): string | null {
+  const spec = schema["x-generate"];
+  if (!spec) return null;
+  const length = typeof spec.length === "number" && Number.isInteger(spec.length) && spec.length > 0 ? Math.min(spec.length, GENERATE_MAX_LENGTH) : GENERATE_DEFAULT_LENGTH;
+  const random = randomChars(length);
+  if (random === null) return null;
+  const value = (typeof spec.prefix === "string" ? spec.prefix : "") + random;
+  return patternError(schema, value) === null ? value : null;
 }
 
 type Values = Record<string, unknown>;
@@ -176,13 +248,25 @@ function FieldFor({
   const fallback = schema.default;
 
   if (schema.enum) {
+    // Zahlen bleiben Zahlen (das Backend prueft den Typ); ein alter Wert, den es nicht mehr gibt, bleibt sichtbar.
+    const numeric = schema.type === "integer" || schema.type === "number";
+    const stale = enumError(schema, value);
     return (
       <div>
         {head}
-        <select id={id} value={String(value ?? fallback ?? "")} onChange={(e) => onChange(e.target.value || undefined)} className={inputClass}>
+        <select
+          id={id}
+          value={String(value ?? fallback ?? "")}
+          aria-invalid={stale ? true : undefined}
+          aria-describedby={stale ? `${id}-error` : undefined}
+          onChange={(e) => onChange(e.target.value === "" ? undefined : numeric ? Number(e.target.value) : e.target.value)}
+          className={`${inputClass} ${stale ? "!border-red-500/60" : ""}`}
+        >
           {!required && fallback === undefined && <option value="">– nicht gesetzt –</option>}
+          {stale && <option value={String(value)}>{String(value)} (nicht mehr wählbar)</option>}
           {schema.enum.map((opt) => <option key={String(opt)} value={String(opt)}>{schema["x-enum-labels"]?.[String(opt)] ?? String(opt)}</option>)}
         </select>
+        {stale && <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-300">{stale}</p>}
       </div>
     );
   }
@@ -251,15 +335,7 @@ function FieldFor({
       return (
         <div>
           {head}
-          <input
-            id={id}
-            type="number"
-            step={schema.type === "integer" ? 1 : "any"}
-            value={typeof value === "number" ? value : ""}
-            placeholder={typeof fallback === "number" ? `Standard: ${fallback}` : undefined}
-            onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
-            className={`${inputClass} max-w-xs`}
-          />
+          <NumberInput id={id} schema={schema} value={value} fallback={fallback} onChange={onChange} />
         </div>
       );
     case "boolean": {
@@ -302,20 +378,63 @@ function FieldFor({
   return <JsonField id={id} head={head} value={value} onChange={onChange} />;
 }
 
-/** Einzeiliges Textfeld mit Musterpruefung (`pattern`). */
-function TextInput({ id, schema, value, fallback, onChange }: { id: string; schema: JsonSchema; value: unknown; fallback: unknown; onChange: (v: unknown) => void }) {
-  const error = patternError(schema, value);
+/** Zahlenfeld mit `minimum`/`maximum`: der Browser begrenzt die Pfeile, die Meldung erklaert einen getippten Wert. */
+function NumberInput({ id, schema, value, fallback, onChange }: { id: string; schema: JsonSchema; value: unknown; fallback: unknown; onChange: (v: unknown) => void }) {
+  const error = rangeError(schema, value);
   return (
     <>
       <input
         id={id}
-        value={typeof value === "string" ? value : ""}
-        placeholder={typeof fallback === "string" ? `Standard: ${fallback}` : undefined}
+        type="number"
+        step={schema.type === "integer" ? 1 : "any"}
+        min={finiteOrNull(schema.minimum) ?? undefined}
+        max={finiteOrNull(schema.maximum) ?? undefined}
+        value={typeof value === "number" && Number.isFinite(value) ? value : ""}
+        placeholder={typeof fallback === "number" ? `Standard: ${fallback}` : undefined}
         aria-invalid={error ? true : undefined}
         aria-describedby={error ? `${id}-error` : undefined}
-        onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
-        className={`${inputClass} ${error ? "!border-red-500/60" : ""}`}
+        onChange={(e) => onChange(e.target.value === "" ? undefined : Number(e.target.value))}
+        className={`${inputClass} max-w-xs ${error ? "!border-red-500/60" : ""}`}
       />
+      {error && <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-300">{error}</p>}
+    </>
+  );
+}
+
+/** Einzeiliges Textfeld mit Musterpruefung (`pattern`); mit `x-generate` daneben der Knopf "Zufaellig waehlen". */
+function TextInput({ id, schema, value, fallback, onChange }: { id: string; schema: JsonSchema; value: unknown; fallback: unknown; onChange: (v: unknown) => void }) {
+  const [generateFailed, setGenerateFailed] = useState(false);
+  const error = patternError(schema, value);
+  const generate = schema["x-generate"];
+  const input = (
+    <input
+      id={id}
+      value={typeof value === "string" ? value : ""}
+      placeholder={typeof fallback === "string" ? `Standard: ${fallback}` : undefined}
+      aria-invalid={error ? true : undefined}
+      aria-describedby={error ? `${id}-error` : undefined}
+      onChange={(e) => onChange(e.target.value === "" ? undefined : e.target.value)}
+      className={`${inputClass} ${generate ? "min-w-0 flex-1" : ""} ${error ? "!border-red-500/60" : ""}`}
+    />
+  );
+  return (
+    <>
+      {generate ? (
+        <div className="flex gap-2">
+          {input}
+          <Button
+            className="flex-none"
+            onClick={() => {
+              const next = generateText(schema);
+              setGenerateFailed(next === null);
+              if (next !== null) onChange(next);
+            }}
+          >
+            <Dices size={14} /> {generate.label || "Zufällig wählen"}
+          </Button>
+        </div>
+      ) : input}
+      {generateFailed && <p role="alert" className="mt-1 text-xs text-red-300">Der Zufallswert ließ sich nicht erzeugen.</p>}
       {error && <p id={`${id}-error`} role="alert" className="mt-1 text-xs text-red-300">{error}</p>}
     </>
   );

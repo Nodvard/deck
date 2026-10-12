@@ -26,20 +26,27 @@ from nodvard_sdk import (
     PageSpec,
     Refresh,
     Risk,
+    SecretNotOwned,
     WidgetAction,
     WidgetSpec,
     same_target,
 )
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from nodvard_sdk.errors import NodvardError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .capabilities import BackupActionExecutor, ProxmoxBackupProvider, job_vmids
-from .config import TOKEN_LABEL, build_connectors
+from .certificate import FIELD as FINGERPRINT_FIELD
+from .certificate import MAX_INPUT as MAX_FINGERPRINT_INPUT
+from .certificate import build_certificate_router, connection_pin, normalize_fingerprint
+from .config import TOKEN_LABEL, build_connectors, foreign_secret_text
 from .connector import ProxmoxBackupApiError
 from .job_edit import JobEditError, build_job_create, build_job_update, current_values, job_snapshot
+from .receiver import ProxmoxConnectionReceiver
+from .restore import follow_up_open_copies
+from .restore import register as register_restore
 from .space import check_backup_space
-from .watch import run_backup_watch
+from .watch import InventoryCache, run_backup_watch
 
 
 _LAST_STATUS_LABEL = {
@@ -78,7 +85,13 @@ class _ConnectionIn(BaseModel):
     base_url: str
     token_id: str
     tls_insecure_skip_verify: bool = False
+    tls_fingerprint_sha256: str | None = Field(default=None, max_length=MAX_FINGERPRINT_INPUT)
     enabled: bool = True
+
+    @field_validator("tls_fingerprint_sha256")
+    @classmethod
+    def _fingerprint(cls, value: str | None) -> str | None:
+        return normalize_fingerprint(value)
 
 
 class _AcknowledgeIn(BaseModel):
@@ -89,7 +102,14 @@ class _ConnectionPatch(BaseModel):
     base_url: str | None = None
     token_id: str | None = None
     tls_insecure_skip_verify: bool | None = None
+    tls_fingerprint_sha256: str | None = Field(default=None, max_length=MAX_FINGERPRINT_INPUT)
+    """Leer oder `null` nimmt den gemerkten Fingerabdruck weg."""
     enabled: bool | None = None
+
+    @field_validator("tls_fingerprint_sha256")
+    @classmethod
+    def _fingerprint(cls, value: str | None) -> str | None:
+        return normalize_fingerprint(value)
 
 
 class _ConnectionOut(BaseModel):
@@ -99,10 +119,15 @@ class _ConnectionOut(BaseModel):
     tls_insecure_skip_verify: bool
     enabled: bool
     has_token: bool
+    tls_fingerprint_sha256: str | None = None
+    """Der gemerkte Fingerabdruck (`AB:CD:...`), sonst `None`."""
+    tls_fingerprint_invalid: bool = False
+    """Im Feld steht etwas, das kein Fingerabdruck ist -- die Verbindung ist dann gesperrt, bis es stimmt."""
 
 
 class _BackupWatchJobSpec:
-    """Backup-Waechter (watch.py): alle 15 Minuten, meldet nur Zustandswechsel."""
+    """Backup-Waechter (watch.py): alle 15 Minuten, meldet nur Zustandswechsel. Richtet vorher offene Kopien aus
+    "Als Kopie wiederherstellen" fertig ein, deren Aktion vorher endete (restore.py, ohne Vermerk kein Aufruf)."""
 
     id = "watch"
     name = "Backup-Wächter"
@@ -110,12 +135,16 @@ class _BackupWatchJobSpec:
     params: dict[str, Any] = {}
     enabled = True
 
-    def __init__(self, ctx: ExtensionContext, provider: ProxmoxBackupProvider) -> None:
+    def __init__(self, ctx: ExtensionContext, provider: ProxmoxBackupProvider, connectors_factory: Any = None) -> None:  # noqa: ANN401
         self._ctx = ctx
         self._provider = provider
+        self._connectors_factory = connectors_factory
+        self._inventory_cache = InventoryCache()
 
     async def handler(self, **_: Any) -> dict[str, int]:
-        return await run_backup_watch(self._ctx, self._provider)
+        if self._connectors_factory is not None:
+            await follow_up_open_copies(self._ctx, self._connectors_factory)
+        return await run_backup_watch(self._ctx, self._provider, self._inventory_cache)
 
 
 class Extension(NodvardExtension):
@@ -129,6 +158,8 @@ class Extension(NodvardExtension):
         executor = BackupActionExecutor(_connectors_factory)
         ctx.capabilities.provide(self._provider)
         ctx.capabilities.provide(executor)
+        # "Proxmox VE" traegt beim Verbinden mit Passwort hier gleich einen eigenen Backup-Zugang ein (receiver.py).
+        ctx.capabilities.provide(ProxmoxConnectionReceiver(ctx))
 
         ctx.actions.register(
             ActionSpec(
@@ -177,11 +208,14 @@ class Extension(NodvardExtension):
                                 "base_url": {"type": "string"},
                                 "token_id": {"type": "string"},
                                 "tls_insecure_skip_verify": {"type": "boolean"},
+                                "tls_fingerprint_sha256": {"type": ["string", "null"]},
                                 "enabled": {"type": "boolean"},
                             },
                             "required": ["name", "base_url", "token_id"],
                         },
                     },
+                    "backup_max_age_days": {"type": "integer", "minimum": 2, "maximum": 60, "default": 3},
+                    "backup_age_skip": {"type": "array", "items": {"type": "string"}},
                     "acknowledged_unprotected": {
                         "type": "array",
                         "items": {
@@ -211,8 +245,20 @@ class Extension(NodvardExtension):
                 )
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 
+        async def _drop_secret_or_refuse(label: str) -> None:
+            """Das Geheimnis einer Verbindung loeschen, bevor sich etwas aendert -- ist es nicht von dieser Erweiterung
+            (etwa von Hand im Tresor angelegt), bleibt es, und die Anfrage endet mit 409 und dem Weg, es aufzuloesen."""
+            foreign = False
+            try:
+                await ctx.secrets.delete(label)
+            except SecretNotOwned:
+                foreign = True
+            if foreign:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=foreign_secret_text(label))
+
         async def _connection_out(conn: dict[str, Any]) -> _ConnectionOut:
             name = str(conn.get("name") or "")
+            pin, pin_invalid = connection_pin(conn)
             return _ConnectionOut(
                 name=name,
                 base_url=str(conn.get("base_url") or ""),
@@ -220,6 +266,8 @@ class Extension(NodvardExtension):
                 tls_insecure_skip_verify=bool(conn.get("tls_insecure_skip_verify") or False),
                 enabled=conn.get("enabled") is not False,
                 has_token=await ctx.secrets.exists(f"{TOKEN_LABEL}:{name}") if name else False,
+                tls_fingerprint_sha256=pin,
+                tls_fingerprint_invalid=pin_invalid,
             )
 
         @router.get("/connections")
@@ -242,12 +290,18 @@ class Extension(NodvardExtension):
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
             # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen (etwa von
-            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse.
-            await ctx.secrets.delete(f"{TOKEN_LABEL}:{payload.name}")
-            connections.append(payload.model_dump())
+            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse. Ein fremdes (nicht von dieser
+            # Erweiterung, etwa von Hand im Tresor) bleibt -- dann wird nichts angelegt.
+            await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{payload.name}")
+            entry = payload.model_dump()
+            if entry.get(FINGERPRINT_FIELD) is None:
+                entry.pop(FINGERPRINT_FIELD, None)
+            else:
+                entry["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
+            connections.append(entry)
             settings["connections"] = connections
             await ctx.settings.set(settings)
-            return await _connection_out(payload.model_dump())
+            return await _connection_out(entry)
 
         @router.put("/connections/{name}")
         async def update_connection(name: str, payload: _ConnectionPatch) -> _ConnectionOut:
@@ -259,9 +313,18 @@ class Extension(NodvardExtension):
                 updates = payload.model_dump(exclude_unset=True)
                 old_url = conn.get("base_url")
                 conn.update(updates)
+                if FINGERPRINT_FIELD in updates:
+                    if updates[FINGERPRINT_FIELD] is None:
+                        conn.pop(FINGERPRINT_FIELD, None)
+                    elif "tls_insecure_skip_verify" not in updates:
+                        conn["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
                 if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
-                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue.
-                    await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
+                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue. Vor dem Speichern: ein
+                    # fremdes Geheimnis laesst die Adresse unveraendert.
+                    await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{name}")
+                    if FINGERPRINT_FIELD not in updates:
+                        # Der gemerkte Fingerabdruck gehoert zum alten Server.
+                        conn.pop(FINGERPRINT_FIELD, None)
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
                 return await _connection_out(conn)
@@ -276,9 +339,15 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
             settings["connections"] = filtered
             await ctx.settings.set(settings)
-            await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
+            try:
+                await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
+            except SecretNotOwned:
+                # Die Verbindung ist weg; ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberuehrt.
+                ctx.logger.warning("Backups: Verbindung %s entfernt, fremdes Geheimnis im Tresor bleibt", name)
 
         ctx.api.include_router(router, permission="secrets.write")
+        # Fingerabdruck des Zertifikats ansehen und bestaetigen (certificate.py): aendert die Verbindung wie PUT oben.
+        ctx.api.include_router(build_certificate_router(ctx), permission="secrets.write")
 
         data_router = APIRouter()
 
@@ -295,6 +364,20 @@ class Extension(NodvardExtension):
                 return await self._provider.job_history(job_ref)
             except (RuntimeError, NodvardError, ProxmoxBackupApiError) as exc:
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+        @data_router.get("/jobs/{job_ref}/failure")
+        async def job_failure(job_ref: str, upid: str | None = None) -> dict[str, Any]:
+            """Warum ist der neueste (oder der genannte) Lauf fehlgeschlagen? In Klartext (failure_text.py), dazu die
+            Zeile von Proxmox. 404, wenn es keinen solchen fehlgeschlagenen Lauf gibt."""
+            if job_ref.count("--") < 2:  # kein gueltiger job_ref (<Verbindung>--<Job>--<VMID>)
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Backup-Job.")
+            try:
+                cause = await self._provider.failure_cause(job_ref, upid)
+            except (RuntimeError, NodvardError, ProxmoxBackupApiError) as exc:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+            if cause is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kein fehlgeschlagener Lauf gefunden.")
+            return cause
 
         @data_router.get("/unprotected")
         async def unprotected_guests() -> dict[str, Any]:
@@ -370,7 +453,7 @@ class Extension(NodvardExtension):
                 payload={"connection": connection, "job_id": job_id, "changes": changes, "expected": job_snapshot(job)},
                 risk=Risk.HIGH if destructive else Risk.MEDIUM,
                 proposed_by=actor,
-                reason=f"Backup-Job '{job_id}' über die Backups-Seite geändert: " + ", ".join(d["label"] for d in diff),
+                reason=f"Backup-Job '{job_id}' über die Seite „Proxmox-Backups“ geändert: " + ", ".join(d["label"] for d in diff),
                 correlation_id=job_ref,
             )
             decision = await ctx.actions.propose(request, wait_s=REQUEST_WAIT_S)
@@ -403,7 +486,7 @@ class Extension(NodvardExtension):
                 payload={"connection": connection, "vmid": vmid, "values": values},
                 risk=Risk.LOW,
                 proposed_by=actor,
-                reason=f"Backup-Job für VMID {vmid} über die Backups-Seite angelegt.",
+                reason=f"Backup-Job für VMID {vmid} über die Seite „Proxmox-Backups“ angelegt.",
                 correlation_id=f"{connection}/{vmid}",
             )
             decision = await ctx.actions.propose(request, wait_s=REQUEST_WAIT_S)
@@ -507,12 +590,14 @@ class Extension(NodvardExtension):
         ctx.api.include_router(retry_router, permission="hosts.execute")
         ctx.api.include_router(ack_router, permission="settings.write")
         ctx.api.include_router(edit_router, permission="settings.write")
+        # Gast aus einer Sicherung als Kopie wiederherstellen (restore.py): eigene Aktion, eigene Routen.
+        register_restore(ctx, _connectors_factory)
 
         ctx.ui.register_page(
             PageSpec(
                 id="backups",
                 path="/backups",
-                title="Backups",
+                title="Proxmox-Backups",
                 icon="database-backup",
                 nav_section="Infrastruktur",
                 nav_order=20,
@@ -557,12 +642,12 @@ class Extension(NodvardExtension):
         )
 
         ctx.ui.register_host_tool(HostToolSpec(
-            id="backups", title="Backups", icon="database-backup", category="data",
+            id="backups", title="Proxmox-Backups", icon="database-backup", category="data",
             description="Backup-Jobs, letzter Lauf, vorhandene Sicherungen", path="/backups?host={host_id}",
             kinds=["vm", "lxc"],
         ))
 
-        await ctx.scheduler.register_job(_BackupWatchJobSpec(ctx, self._provider))
+        await ctx.scheduler.register_job(_BackupWatchJobSpec(ctx, self._provider, _connectors_factory))
 
     async def on_start(self, ctx: ExtensionContext) -> None:
         return None
@@ -592,6 +677,9 @@ class Extension(NodvardExtension):
                 summaries.append(f"{name}: ok")
             except Exception as exc:  # noqa: BLE001 - Health darf nie werfen
                 details[name] = {"healthy": False, "error": str(exc)}
+                code = getattr(exc, "code", None) if isinstance(exc, ProxmoxBackupApiError) else None
+                if code:
+                    details[name]["code"] = code  # z. B. "certificate_changed": die Oberflaeche bietet das Bestaetigen an
                 summaries.append(f"{name}: FEHLER: {exc}")
                 all_healthy = False
 

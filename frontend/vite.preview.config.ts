@@ -1,7 +1,7 @@
-import path from "node:path";
-
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+
+import { kitDedupe, kitFsAllow } from "./kit.resolve";
 
 /**
  * NUR fuer die Design-Vorschau (preview.html): wie vite.config.ts, dazu dieselbe
@@ -15,14 +15,6 @@ export default defineConfig({
   plugins: [react()],
   build: { target: "es2022" },
   optimizeDeps: { esbuildOptions: { target: "es2022" } },
-  server: { fs: { allow: [path.resolve(__dirname, "..")] } },
-  resolve: {
-    alias: {
-      "react-dom/client": path.resolve(__dirname, "node_modules/react-dom/client"),
-      "react-dom": path.resolve(__dirname, "node_modules/react-dom"),
-      "react/jsx-runtime": path.resolve(__dirname, "node_modules/react/jsx-runtime"),
-      "react/jsx-dev-runtime": path.resolve(__dirname, "node_modules/react/jsx-dev-runtime"),
-      react: path.resolve(__dirname, "node_modules/react"),
-    },
-  },
+  server: { fs: { allow: kitFsAllow } },
+  resolve: { dedupe: kitDedupe },
 });

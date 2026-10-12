@@ -175,5 +175,7 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=300s --retries=3 \
 ENTRYPOINT ["/entrypoint.sh"]
 # `--ws-max-size`: groesste WebSocket-Nachricht (uvicorn-Standard waeren 16 MiB, auch von Clients ohne Konto im
 # 10-Sekunden-Anmeldefenster von /ws). 1 MiB reicht fuer Anmeldung, Terminal-Eingaben und Ereignisse bei Weitem.
+# `--no-proxy-headers`: uvicorn glaubt sonst vorab still jeder Anfrage von 127.0.0.1 ihr `X-Forwarded-For`. Wem
+# geglaubt wird, entscheidet allein die Einstellung "Vertrauenswuerdiger Proxy" (api/proxy_headers.py).
 # Der Entrypoint liest aus dem Startbefehl nur --host und --port.
-CMD ["uvicorn", "nodvard_deck.main:app", "--host", "0.0.0.0", "--port", "8080", "--ws-max-size", "1048576"]
+CMD ["uvicorn", "nodvard_deck.main:app", "--host", "0.0.0.0", "--port", "8080", "--ws-max-size", "1048576", "--no-proxy-headers"]

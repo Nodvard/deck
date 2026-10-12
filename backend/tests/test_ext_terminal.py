@@ -499,6 +499,7 @@ async def test_file_source_provider_returns_one_source_per_host_with_credentials
 
     sources = await provider.file_sources()
     assert {s.source_id for s in sources} == {f"ssh-sftp:{host_with_creds.id}"}
+    assert [s.host_id for s in sources] == [host_with_creds.id]  # der Dateimanager zeigt Status und System
     assert f"ssh-sftp:{host_without_creds.id}" not in {s.source_id for s in sources}
 
     from pathlib import PurePosixPath

@@ -27,13 +27,13 @@ from .platform import (
     NotificationDelivery,
     Setting,
 )
-from .security import Action, ActionFlapHistory, AuditEntry, Secret, SecretGrant
+from .security import Action, ActionFlapHistory, AuditEntry, Secret, SecretGrant, SecretUsage
 
 __all__ = [
     "Base",
     "User", "Role", "RolePermission", "RefreshToken", "RecoveryCode", "ApiToken", "user_roles",
     "Host", "HostTag", "HostGroup", "HostCredential", "KnownHostKey", "host_group_members",
-    "Secret", "SecretGrant", "AuditEntry", "Action", "ActionFlapHistory",
+    "Secret", "SecretGrant", "SecretUsage", "AuditEntry", "Action", "ActionFlapHistory",
     "ExtensionRecord", "ConnectorInstance", "CustomApp", "Job", "JobRun",
     "Notification", "NotificationDelivery", "Setting", "DashboardLayout",
 ]

@@ -15,6 +15,7 @@ import "@xterm/xterm/css/xterm.css";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
+import { HostPicker, type HostTile } from "../../../extensions/_shared/frontend/src/HostPicker";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { api } from "../lib/api";
 import { loadOnce } from "../lib/chunkLoad";
@@ -29,6 +30,7 @@ interface HostOut {
   status: string;
   /** Standard-Zugang, `null` ohne Zugang. */
   credential?: { kind: string } | null;
+  os_family?: string;
 }
 
 interface TerminalSessionOut {
@@ -38,11 +40,29 @@ interface TerminalSessionOut {
 
 type TabStatus = "connecting" | "connected" | "closed" | "error";
 
+/** Shell IN etwas auf dem Server statt auf dem Server selbst (z. B. in einem Container): `scope` = worin, `ref` = welches. */
+interface ShellScope {
+  scope: string;
+  ref: string;
+}
+
 interface Tab {
   key: string;
   hostId: string;
   title: string;
   status: TabStatus;
+  inside?: ShellScope;
+}
+
+const SCOPE_PATTERN = /^[a-z][a-z0-9_-]{0,31}$/;
+const REF_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,254}$/;
+
+/** `?scope=…&ref=…` aus der Adresse, nur in gültiger Form (wie im Backend). */
+export function shellScopeFrom(params: URLSearchParams): ShellScope | null {
+  const scope = params.get("scope");
+  const ref = params.get("ref");
+  if (!scope || !ref || !SCOPE_PATTERN.test(scope) || !REF_PATTERN.test(ref)) return null;
+  return { scope, ref };
 }
 
 const STATUS_DOT: Record<TabStatus, string> = {
@@ -55,7 +75,7 @@ const STATUS_DOT: Record<TabStatus, string> = {
 /** Close-Codes aus api/v1/terminal.py -- in Worte gefasst statt nur als Zahl. */
 const CLOSE_REASON: Record<number, string> = {
   4404: "Sitzungsticket unbekannt oder abgelaufen.",
-  4501: "Für diesen Server bietet kein Modul ein Terminal an.",
+  4501: "Dafür bietet kein Modul ein Terminal an.",
   4500: "Sitzung konnte nicht geöffnet werden.",
   4401: "Die Sitzung wurde beendet: Konto, Berechtigung oder Anmeldung gelten nicht mehr.",
   4408: "Die Sitzung wurde wegen Leerlauf beendet.",
@@ -72,10 +92,12 @@ export function terminalSocketUrl(wsPath: string, loc: Pick<Location, "protocol"
 
 function TerminalView({
   hostId,
+  inside,
   visible,
   onStatus,
 }: {
   hostId: string;
+  inside?: ShellScope;
   visible: boolean;
   onStatus: (status: TabStatus) => void;
 }) {
@@ -124,6 +146,7 @@ function TerminalView({
         host_id: hostId,
         cols: term.cols,
         rows: term.rows,
+        ...(inside ? { scope: inside.scope, ref: inside.ref } : {}),
       });
       if (disposed) return;
 
@@ -193,7 +216,7 @@ function TerminalView({
       fitRef.current = null;
       termRef.current = null;
     };
-  }, [hostId, attempt]);
+  }, [hostId, inside?.scope, inside?.ref, attempt]);
 
   // Beim Einblenden und bei jeder Groessenaenderung neu einpassen -- xterm misst
   // in einem ausgeblendeten Container 0x0.
@@ -283,7 +306,7 @@ export function TerminalPage() {
   const [terminalIds, setTerminalIds] = useState<Set<string>>(new Set());
   const [consoleIds, setConsoleIds] = useState<Set<string>>(new Set());
   const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
+  const [linkError, setLinkError] = useState<string | null>(null);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [active, setActive] = useState<string | null>(null);
   const counter = useRef(0);
@@ -304,26 +327,35 @@ export function TerminalPage() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, []);
 
-  const openTab = useCallback((host: HostOut) => {
+  const openTab = useCallback((host: HostOut, inside?: ShellScope) => {
     counter.current += 1;
     const key = `${host.id}:${counter.current}`;
     setTabs((prev) => {
-      const same = prev.filter((t) => t.hostId === host.id).length;
-      const base = host.display_name || host.name;
-      return [...prev, { key, hostId: host.id, title: same > 0 ? `${base} (${same + 1})` : base, status: "connecting" }];
+      const base = inside ? `${inside.ref} @ ${host.display_name || host.name}` : host.display_name || host.name;
+      const same = prev.filter((t) => t.hostId === host.id && t.inside?.ref === inside?.ref && t.inside?.scope === inside?.scope).length;
+      return [...prev, { key, hostId: host.id, title: same > 0 ? `${base} (${same + 1})` : base, status: "connecting", inside }];
     });
     setActive(key);
   }, []);
 
-  // `?host=<id>` (z. B. von einer Host- oder Proxmox-Seite) oeffnet direkt einen Tab.
+  // `?host=<id>` (z. B. von einer Host- oder Proxmox-Seite) oeffnet direkt einen Tab; mit `&scope=…&ref=…`
+  // (z. B. „Konsole“ eines Containers) eine Shell darin -- ob es die gibt, entscheidet das Backend.
   useEffect(() => {
     const wanted = searchParams.get("host");
     if (!wanted || !hosts) return;
     const host = hosts.find((h) => h.id === wanted);
-    if (host && terminalIds.has(host.id)) openTab(host);
+    const inside = shellScopeFrom(searchParams);
+    if (!inside && (searchParams.has("scope") || searchParams.has("ref"))) {
+      // Ein halber oder ungültiger Link auf eine Shell IN etwas: nichts öffnen -- nie stattdessen die Shell des Servers.
+      setLinkError("Der Link auf diese Konsole ist unvollständig oder ungültig. Es wurde nichts geöffnet.");
+    } else if (host && (inside || terminalIds.has(host.id))) {
+      openTab(host, inside ?? undefined);
+    }
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
       next.delete("host");
+      next.delete("scope");
+      next.delete("ref");
       return next;
     }, { replace: true });
   }, [hosts, terminalIds, searchParams, setSearchParams, openTab]);
@@ -339,13 +371,15 @@ export function TerminalPage() {
     setTabs((prev) => prev.map((t) => (t.key === key && t.status !== status ? { ...t, status } : t)));
   }, []);
 
-  const shownHosts = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return (hosts ?? [])
+  // Kacheln der gemeinsamen Server-Auswahl, als Starter: je Server "Terminal öffnen" und, wo es sie gibt, "Konsole".
+  const tiles = useMemo<HostTile[] | null>(() => {
+    if (!hosts) return null;
+    return hosts
       .filter((h) => terminalIds.has(h.id) || consoleIds.has(h.id))
-      .filter((h) => !needle || `${h.display_name} ${h.name} ${h.address}`.toLowerCase().includes(needle))
-      .sort((a, b) => (a.display_name || a.name).localeCompare(b.display_name || b.name));
-  }, [hosts, terminalIds, consoleIds, query]);
+      .sort((a, b) => (a.display_name || a.name).localeCompare(b.display_name || b.name))
+      .map((h) => ({ id: h.id, name: h.display_name || h.name, address: h.address, os: h.os_family, status: h.status }));
+  }, [hosts, terminalIds, consoleIds]);
+  const hostById = useMemo(() => new Map((hosts ?? []).map((h) => [h.id, h])), [hosts]);
 
   const hasUsable = (hosts ?? []).some((h) => terminalIds.has(h.id) || consoleIds.has(h.id));
 
@@ -357,15 +391,7 @@ export function TerminalPage() {
     <div className="flex h-full flex-col gap-4 p-4 lg:flex-row">
       <aside className="flex w-full shrink-0 flex-col gap-2 lg:w-60">
         <h2 className="text-lg font-semibold">Terminal</h2>
-        <input
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Server suchen …"
-          aria-label="Server suchen"
-          className="rounded bg-white/10 px-2 py-1 text-sm"
-        />
-        {!hosts && <p className="text-sm opacity-60">Lade Server …</p>}
-        {hosts && shownHosts.length === 0 && hasUsable && <p className="text-sm opacity-60">Kein Server passt zur Suche.</p>}
+        {linkError && <p role="alert" className="text-sm text-red-400">{linkError}</p>}
         {hosts && !hasUsable && (
           <NoTerminalHosts
             hasHosts={hosts.length > 0}
@@ -374,16 +400,20 @@ export function TerminalPage() {
             canManageExtensions={canManageExtensions}
           />
         )}
-        <ul className="flex max-h-48 min-h-0 flex-col gap-1 overflow-auto lg:max-h-none">
-          {shownHosts.map((h) => (
-            <li key={h.id} className="rounded border border-white/10 px-2 py-1.5">
-              <p className="break-words text-sm font-medium">{h.display_name || h.name}</p>
-              <p className="break-words text-xs opacity-60">{h.address}</p>
-              <div className="mt-1 flex flex-wrap gap-1.5">
+        <div className="max-h-48 min-h-0 overflow-auto lg:max-h-none">
+          <HostPicker
+            hosts={tiles}
+            value={null}
+            onChange={() => undefined}
+            storageKey="terminal"
+            searchFrom={2}
+            gridClass="grid-cols-1"
+            actions={(h) => (
+              <>
                 {terminalIds.has(h.id) && (
                   <button
                     type="button"
-                    onClick={() => openTab(h)}
+                    onClick={() => { const host = hostById.get(h.id); if (host) openTab(host); }}
                     className="accent-soft rounded px-2 py-0.5 text-xs hover:brightness-125"
                   >
                     Terminal öffnen
@@ -394,10 +424,10 @@ export function TerminalPage() {
                     Konsole
                   </Link>
                 )}
-              </div>
-            </li>
-          ))}
-        </ul>
+              </>
+            )}
+          />
+        </div>
       </aside>
 
       <section className="flex min-h-[20rem] min-w-0 flex-1 flex-col lg:min-h-0">
@@ -424,6 +454,7 @@ export function TerminalPage() {
           <TerminalView
             key={t.key}
             hostId={t.hostId}
+            inside={t.inside}
             visible={active === t.key}
             onStatus={(s) => setTabStatus(t.key, s)}
           />

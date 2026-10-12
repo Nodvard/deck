@@ -110,8 +110,8 @@ if (scenario === "new" || scenario === "changed" || scenario === "error") previe
 if (scenario === "empty") previewState.noHosts = true;
 // ?scenario=demo: frische Installation, auf der die Beispieldaten schon angelegt sind.
 if (scenario === "demo") { previewState.noHosts = true; previewState.demo = true; }
-// ?scenario=ohne-proxmox (System, Service-Matrix & Co. an) bzw. ohne-proxmox-min (nur Terminal/Dateien):
-// von Hand angelegte Server mit SSH-Zugang, Proxmox und Backups aus.
+// ?scenario=ohne-proxmox (Server-Zustand, Service-Matrix & Co. an) bzw. ohne-proxmox-min (nur Terminal/Dateien):
+// von Hand angelegte Server mit SSH-Zugang, Proxmox VE und Proxmox-Backups aus.
 if (scenario === "ohne-proxmox" || scenario === "ohne-proxmox-min" || scenario === "ohne-proxmox-viele") {
   applyOhneProxmox(scenario === "ohne-proxmox-min", scenario === "ohne-proxmox-viele");
 }

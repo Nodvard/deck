@@ -58,6 +58,57 @@ def describe_transition(*, kind: str, state: str, status: str) -> str:
     return _with_code("Container abgestürzt", status)
 
 
+CAUSE_TEXTS: dict[str, dict[str, str]] = {
+    "shield.cause.paused": {
+        "what": "Der Container ist angehalten (pausiert), nicht abgestürzt. Er belegt weiter Speicher, arbeitet aber nicht.",
+        "todo": "War das nicht gewollt, auf dem Server mit `docker unpause <Name>` fortsetzen.",
+    },
+    "shield.cause.unknown": {
+        "what": "Warum der Container beendet wurde, ließ sich nicht feststellen: Der Server hat die Angaben dazu nicht geliefert.",
+        "todo": "Die letzten Zeilen im Protokoll des Containers ansehen (`docker logs <Name>`). Läuft er nicht mehr, neu starten.",
+    },
+    "shield.cause.oom": {
+        "what": "Der Arbeitsspeicher hat nicht gereicht, deshalb hat Linux den Container beendet.",
+        "todo": "Nachsehen, ob der Server dauerhaft knapp an Speicher ist, und die Speichergrenze des Containers erhöhen (falls "
+                "eine gesetzt ist) oder andere Dienste entlasten. Ein Neustart hilft nur kurz, solange der Speicher knapp bleibt.",
+    },
+    "shield.cause.stopped": {
+        "what": "Der Container wurde sauber beendet: absichtlich gestoppt (von Hand, durch ein Update, beim Herunterfahren) "
+                "oder das Programm hat seine Aufgabe erledigt.",
+        "todo": "Nichts zu tun, wenn das geplant war. Sonst den Container wieder starten.",
+    },
+    "shield.cause.crash_signal": {
+        "what": "Das Programm im Container ist selbst abgestürzt, zum Beispiel durch einen Speicherzugriffsfehler. Bei Exit-Code "
+                "132 fehlt oft ein Befehlssatz der CPU, etwa in einer VM mit einfachem CPU-Typ.",
+        "todo": "Die letzten Zeilen im Protokoll des Containers ansehen. Passiert es öfter, liegt es meist am Image: ein Update "
+                "oder die vorige Version probieren.",
+    },
+    "shield.cause.killed": {
+        "what": "Der Container wurde von außen beendet, nicht wegen Speichermangel: zum Beispiel mit `docker kill`, oder mit "
+                "`docker stop`, wenn das Programm nicht rechtzeitig von selbst endete.",
+        "todo": "Nachsehen, wer oder was ihn beendet hat (ein Skript, ein Update, ein anderes Programm). Ein Neustart ist möglich; "
+                "Nodvard Deck stuft ihn trotzdem hoch ein, weil der Container absichtlich beendet worden sein kann.",
+    },
+    "shield.cause.loop": {
+        "what": "Der Container beendet sich immer wieder, und Docker startet ihn jedes Mal neu.",
+        "todo": "Die letzten Zeilen im Protokoll (`docker logs <Name>`) zeigen den Grund; oft fehlt eine Einstellung oder eine "
+                "Datenbank ist nicht erreichbar. Ein Neustart von Hand hilft hier nicht.",
+    },
+    "shield.cause.crash": {
+        "what": "Das Programm im Container hat sich mit einem Fehler beendet.",
+        "todo": "Die letzten Zeilen im Protokoll des Containers (`docker logs <Name>`) zeigen meist den Grund, etwa eine fehlende "
+                "Einstellung, ein falsches Passwort oder eine Datenbank, die nicht erreichbar ist.",
+    },
+}
+"""Je Art der festen Einordnung (`remediation.Cause.key`) zwei feste Saetze: "Was heisst das?" und "Was kannst du tun?".
+Sie stimmen immer, auch ohne Nodvard KI. Nur hier stehen sie (eine englische Oberflaeche uebersetzt diese Sammlung)."""
+
+
+def cause_texts(key: str) -> dict[str, str] | None:
+    """Die beiden Saetze zu einer Einordnung oder None (unbekannte Art)."""
+    return CAUSE_TEXTS.get(f"shield.cause.{key}") if key else None
+
+
 def describe_restart_loop(restarts: int) -> str:
     return f"Container abgestürzt (Absturzschleife: {restarts}x neu gestartet seit der letzten Prüfung)"
 

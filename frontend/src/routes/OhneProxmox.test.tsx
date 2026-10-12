@@ -1,6 +1,6 @@
 /**
  * Der Test „ohne Proxmox“ (Pflicht vor jeder Veröffentlichung): eine Installation
- * mit nur von Hand angelegten Servern, Proxmox und Backups aus. Die Daten kommen aus dem Vorschau-Szenario
+ * mit nur von Hand angelegten Servern, Proxmox VE und Proxmox-Backups aus. Die Daten kommen aus dem Vorschau-Szenario
  * `?scenario=ohne-proxmox`. Eigene Datei, weil das Szenario die gemeinsamen Testdaten umstellt.
  */
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -77,7 +77,7 @@ describe("Cockpit ohne Proxmox", () => {
     expect(screen.getByTestId("stat-Dienste").textContent).toContain("5/5");
     expect(screen.queryByTestId("stat-Backups")).toBeNull();
 
-    // Linux-Server mit Messwerten (System per SSH) bekommen eine Karte, der Windows-PC bleibt eine Zeile.
+    // Linux-Server mit Messwerten (Server-Zustand per SSH) bekommen eine Karte, der Windows-PC bleibt eine Zeile.
     for (const id of ["m-pi", "m-deb", "m-nas"]) expect(await screen.findByTestId(`server-${id}`)).toBeInTheDocument();
     expect(await screen.findByTestId("machine-m-win")).toBeInTheDocument();
     expect(document.querySelector('[data-testid^="node-"]')).toBeNull();
@@ -107,7 +107,7 @@ describe("Cockpit ohne Proxmox", () => {
 });
 
 describe("Server-Seite ohne Proxmox", () => {
-  it("Server, den noch nie jemand geprüft hat: „noch nicht geprüft“, Auslastung kommt per SSH vom Modul System", async () => {
+  it("Server, den noch nie jemand geprüft hat: „noch nicht geprüft“, Auslastung kommt per SSH vom Modul Server-Zustand", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderHost("m-deb");
     expect(await screen.findByRole("heading", { name: "Debian-VM" })).toBeInTheDocument();
@@ -117,12 +117,12 @@ describe("Server-Seite ohne Proxmox", () => {
     expect(screen.queryByTestId("host-provider-off")).toBeNull();
   });
 
-  it("ohne das Modul System: ein Hinweis mit Knopf statt einer stillen Lücke", async () => {
+  it("ohne das Modul Server-Zustand: ein Hinweis mit Knopf statt einer stillen Lücke", async () => {
     previewState.ohneProxmoxMin = true;
     vi.stubGlobal("fetch", mockFetch());
     renderHost("m-deb");
     const hint = await screen.findByTestId("host-metrics-hint");
-    expect(hint.textContent).toContain("Modul „System“");
+    expect(hint.textContent).toContain("Modul „Server-Zustand“");
     expect(within(hint).getByRole("link", { name: "Module ansehen" })).toHaveAttribute("href", "/settings/extensions");
     expect(screen.queryByTestId("host-metrics")).toBeNull();
   });

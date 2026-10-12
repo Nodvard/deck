@@ -51,7 +51,7 @@ async def test_creating_a_user_is_audited_with_name_and_roles(client, db_session
     created = await client.post(
         "/api/v1/users",
         json={"username": "hintertuer", "password": NEW_PASSWORD, "email": "geheim@example.org",
-              "role_ids": [roles["admin"], roles["viewer"]]},
+              "role_ids": [roles["admin"], roles["viewer"]], "current_password": PASSWORD},
         headers=_h(token),
     )
     assert created.status_code == 201, created.text
@@ -83,7 +83,8 @@ async def test_updating_a_user_is_audited_with_the_changed_fields(client, db_ses
 
     r = await client.patch(
         f"/api/v1/users/{user_id}",
-        json={"role_ids": [roles["admin"]], "is_active": False, "email": "neu@example.org", "display_name": "Neuer Name"},
+        json={"role_ids": [roles["admin"]], "is_active": False, "email": "neu@example.org", "display_name": "Neuer Name",
+              "current_password": PASSWORD},
         headers=_h(token),
     )
     assert r.status_code == 200, r.text
@@ -110,7 +111,7 @@ async def test_a_password_reset_is_audited_without_the_password(client, db_sessi
     token, _ = await _owner(client)
     user_id = (await client.post("/api/v1/users", json={"username": "gast", "password": PASSWORD}, headers=_h(token))).json()["id"]
 
-    r = await client.patch(f"/api/v1/users/{user_id}", json={"password": NEW_PASSWORD}, headers=_h(token))
+    r = await client.patch(f"/api/v1/users/{user_id}", json={"password": NEW_PASSWORD, "current_password": PASSWORD}, headers=_h(token))
     assert r.status_code == 200, r.text
 
     (entry,) = await _entries(db_session, "user.updated")
@@ -148,7 +149,7 @@ async def test_deleting_a_user_is_audited_with_the_name(client, db_session):
     token, owner_id = await _owner(client)
     roles = await _role_ids(client, token)
     user_id = (await client.post(
-        "/api/v1/users", json={"username": "hintertuer", "password": PASSWORD, "role_ids": [roles["admin"]]}, headers=_h(token)
+        "/api/v1/users", json={"username": "hintertuer", "password": PASSWORD, "role_ids": [roles["admin"]], "current_password": PASSWORD}, headers=_h(token)
     )).json()["id"]
 
     r = await client.delete(f"/api/v1/users/{user_id}", headers=_h(token))
@@ -167,9 +168,9 @@ async def test_the_whole_backdoor_story_is_visible_in_the_audit_log(client):
     token, _ = await _owner(client)
     roles = await _role_ids(client, token)
     user_id = (await client.post(
-        "/api/v1/users", json={"username": "hintertuer", "password": PASSWORD, "role_ids": [roles["admin"]]}, headers=_h(token)
+        "/api/v1/users", json={"username": "hintertuer", "password": PASSWORD, "role_ids": [roles["admin"]], "current_password": PASSWORD}, headers=_h(token)
     )).json()["id"]
-    await client.patch(f"/api/v1/users/{user_id}", json={"password": NEW_PASSWORD}, headers=_h(token))
+    await client.patch(f"/api/v1/users/{user_id}", json={"password": NEW_PASSWORD, "current_password": PASSWORD}, headers=_h(token))
     await client.put("/api/v1/settings/autonomy.mode", json={"value": "full"}, headers=_h(token))
     await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "critical"}, headers=_h(token))
     await client.delete(f"/api/v1/users/{user_id}", headers=_h(token))

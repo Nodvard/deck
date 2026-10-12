@@ -724,3 +724,157 @@ def test_run_root_does_not_add_the_key_again_when_it_is_there_with_the_old_comme
     done = _run(_script("root", key=KEY.replace("lattice@", "nodvard@")), bin_dir)
     assert done.returncode == 0, done.stderr
     assert authorized.read_text() == f"restrict,pty {KEY}\n"
+
+
+# ---------------------------------------------------------------------------
+# Nodvard Deck fuehrt den Befehl selbst aus (Einrichten mit Passwort)
+# ---------------------------------------------------------------------------
+
+SECRET = "Pw-nur-einmal-4711"
+
+
+@pytest.mark.parametrize("as_root,with_password,prefix", [
+    (True, False, ["sh", "-c"]),
+    (False, True, ["env", "LC_ALL=C", "sudo", "-S", "-p", "", "sh", "-c"]),
+    (False, False, ["env", "LC_ALL=C", "sudo", "-n", "sh", "-c"]),
+])
+def test_remote_command_wraps_the_unchanged_script(as_root, with_password, prefix):
+    script = _script(groups=("docker",), sudo=True)
+    command = host_setup.remote_setup_command(script, as_root=as_root, sudo_with_password=with_password)
+    parts = shlex.split(command)
+    assert parts[:-1] == prefix
+    # Davor nur: Standardeingabe zu, Marke. Danach das Skript Zeichen fuer Zeichen.
+    assert parts[-1] == f"exec </dev/null; echo {host_setup.SETUP_STARTED}\n{script}"
+
+
+def _sudo_stub(bin_dir: Path, log: Path, *, needs_password: bool) -> None:
+    """Wie sudo: mit -S liest es EINE Zeile von der Standardeingabe als Passwort (nur wenn es eins braucht),
+    dann startet es den Befehl (`sh -c ...`)."""
+    check = (
+        f'IFS= read -r pw; [ "$pw" = "{SECRET}" ] || {{ echo "Sorry, try again." >&2; echo "sudo: 1 incorrect password attempt" >&2; exit 1; }}'
+        if needs_password else ":"
+    )
+    _stub(bin_dir / "sudo", f'''echo "sudo $*" >> "{log}"
+case "$1" in -S) {check};; -n) {'echo "sudo: a password is required" >&2; exit 1' if needs_password else ':'};; esac
+while [ "$1" != "sh" ]; do shift; done
+exec "$@"
+''')
+
+
+def _useradd_reading_stdin(bin_dir: Path, tmp_path: Path, log: Path) -> Path:
+    """`useradd`, das wie ein unachtsamer Befehl seine Standardeingabe liest -- dort darf nie das Passwort stehen."""
+    seen = tmp_path / "useradd-stdin"
+    _stub(bin_dir / "useradd", f'echo "useradd $*" >> "{log}"; cat > "{seen}"; touch "{tmp_path / "created"}"\n')
+    return seen
+
+
+@needs_sh
+@pytest.mark.parametrize("sudo_needs_password", [True, False])
+def test_remote_run_via_sudo_reads_the_password_from_stdin_and_the_script_never_sees_it(tmp_path, sudo_needs_password):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    _sudo_stub(bin_dir, log, needs_password=sudo_needs_password)
+    seen = _useradd_reading_stdin(bin_dir, tmp_path, log)
+    command = host_setup.remote_setup_command(_script(), as_root=False, sudo_with_password=True)
+    assert SECRET not in command
+
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
+    done = subprocess.run(["sh", "-c", command], input=f"{SECRET}\n", capture_output=True, text=True, env=env, timeout=30, check=False)
+    assert done.returncode == 0, done.stderr
+    assert (home / ".ssh" / "authorized_keys").read_text() == f"restrict,pty {KEY}\n", "das Skript lief wirklich"
+    assert seen.read_text() == "", "das Skript bekommt das Passwort nie zu lesen, auch wenn sudo es nicht braucht"
+    assert "sudo -S -p  sh -c" in log.read_text() and SECRET not in log.read_text()
+    run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=True, sudo_with_password=True)
+    assert run.outcome == "ok" and run.messages == ["Benutzer lattice angelegt."]
+
+
+@needs_sh
+def test_remote_run_with_a_wrong_sudo_password_never_starts_the_script(tmp_path):
+    bin_dir, home, log = _sandbox(tmp_path, existing_user=False)
+    _sudo_stub(bin_dir, log, needs_password=True)
+    command = host_setup.remote_setup_command(_script(), as_root=False, sudo_with_password=True)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
+    done = subprocess.run(["sh", "-c", command], input="falsch\n", capture_output=True, text=True, env=env, timeout=30, check=False)
+    assert done.returncode == 1
+    assert not (home / ".ssh").exists()
+    run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=True, sudo_with_password=True)
+    assert (run.outcome, run.reason, run.messages) == ("sudo_failed", "sudo hat das Passwort nicht angenommen.", [])
+
+
+@needs_sh
+def test_remote_run_as_root_runs_the_script_directly(tmp_path):
+    bin_dir, home, _log = _sandbox(tmp_path, user="root")
+    command = host_setup.remote_setup_command(_script("root"), as_root=True, sudo_with_password=False)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
+    done = subprocess.run(["sh", "-c", command], input="", capture_output=True, text=True, env=env, timeout=30, check=False)
+    assert done.returncode == 0, done.stderr
+    assert (home / ".ssh" / "authorized_keys").read_text() == f"restrict,pty {KEY}\n"
+    run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=False, sudo_with_password=False)
+    assert run.outcome == "ok" and run.messages == []
+
+
+@needs_sh
+def test_remote_run_reports_a_failing_script_with_its_own_lines(tmp_path):
+    bin_dir, _home, _log = _sandbox(tmp_path, user="root")
+    (tmp_path / "home").rmdir()  # das Home fehlt: das Skript bricht mit FEHLER ab
+    command = host_setup.remote_setup_command(_script("root"), as_root=True, sudo_with_password=False)
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "LC_ALL": "C.UTF-8"}
+    done = subprocess.run(["sh", "-c", command], input="", capture_output=True, text=True, env=env, timeout=30, check=False)
+    run = host_setup.evaluate_setup_run(done.returncode, done.stdout, done.stderr, via_sudo=False, sudo_with_password=False)
+    assert run.outcome == "setup_failed"
+    assert len(run.messages) == 1 and run.messages[0].startswith("FEHLER: Das Home-Verzeichnis ")
+
+
+@pytest.mark.parametrize("stderr,code,with_password,reason", [
+    ("Sorry, user admin is not allowed to execute '/bin/sh' as root on pve1.", 1, True, "Das Anmelde-Konto darf kein sudo"),
+    ("admin is not in the sudoers file.  This incident will be reported.", 1, True, "Das Anmelde-Konto darf kein sudo"),
+    ("sudo: a password is required", 1, False, "sudo verlangt ein Passwort. Setze den Haken"),
+    ("sudo: no tty present and no askpass program specified", 1, True, "sudo verlangt auf diesem Server ein Terminal"),
+    ("sh: 1: sudo: not found", 127, True, "sudo ist auf dem Server nicht installiert"),
+    ("etwas ganz anderes", 1, True, "sudo hat nicht geklappt"),
+])
+def test_sudo_failures_are_fixed_sentences(stderr, code, with_password, reason):
+    run = host_setup.evaluate_setup_run(code, "", stderr, via_sudo=True, sudo_with_password=with_password)
+    assert run.outcome == "sudo_failed" and run.reason.startswith(reason) and run.messages == []
+    assert stderr not in run.reason
+
+
+def test_without_the_marker_as_root_the_command_did_not_start():
+    run = host_setup.evaluate_setup_run(126, "", "sh: permission denied", via_sudo=False, sudo_with_password=False)
+    assert (run.outcome, run.reason) == ("setup_failed", "Der Befehl ließ sich auf dem Server nicht starten.")
+
+
+def test_a_failed_script_without_own_lines_does_not_point_to_messages_below():
+    # Gestartet (Marke da), Ausgang 1, aber nur Fremdes in der Ausgabe: unten steht nichts zu lesen.
+    stdout = f"{host_setup.SETUP_STARTED}\nuseradd: Fehler beim Anlegen\n"
+    run = host_setup.evaluate_setup_run(1, stdout, "useradd: kaputt", via_sudo=False, sudo_with_password=False)
+    assert run.outcome == "setup_failed" and run.messages == []
+    assert "unten" not in run.reason, "es gibt keine Meldungen, auf die der Satz verweisen koennte"
+    assert "keine Meldung hinterlassen" in run.reason and "Befehl selbst einfügen" in run.reason
+    assert "useradd" not in run.reason, "nie Text vom Server"
+    # Mit eigenen Zeilen bleibt es beim Verweis.
+    own = f"{host_setup.SETUP_STARTED}\nFEHLER: Das Home-Verzeichnis /home/x gibt es nicht.\n"
+    run = host_setup.evaluate_setup_run(1, own, "", via_sudo=False, sudo_with_password=False)
+    assert run.outcome == "setup_failed" and "Die Meldungen unten sagen, woran es lag." in run.reason
+
+
+def test_setup_messages_keep_only_the_scripts_own_lines():
+    stdout = "\n".join([
+        host_setup.SETUP_STARTED,
+        "Benutzer nodvard angelegt.",
+        "useradd: warning: something",
+        "Zur Gruppe docker hinzugefügt.",
+        "Zur Gruppe docker hinzugefügt.",
+        "Hinweis: sudo ist nicht installiert (als root: apt install sudo).",
+        "FEHLER: x\x1b[31m rot",
+        "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken.",
+        "irgendwas anderes",
+        "FEHLER: " + "y" * 1000,
+    ])
+    assert host_setup.setup_messages(stdout) == [
+        "Benutzer nodvard angelegt.",
+        "Zur Gruppe docker hinzugefügt.",
+        "Hinweis: sudo ist nicht installiert (als root: apt install sudo).",
+        "FEHLER: x[31m rot",
+        "FEHLER: " + "y" * 292,
+    ]
+    assert len(host_setup.setup_messages("\n".join(f"FEHLER: {i}" for i in range(100)))) == 20

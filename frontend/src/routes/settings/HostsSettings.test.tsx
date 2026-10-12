@@ -118,6 +118,14 @@ describe("Server & Zugänge: Liste", () => {
     expect(screen.queryByText("Anmeldung noch nicht bestätigt")).toBeNull();
   });
 
+  it("der Kopf der Seite verlinkt den Abschnitt zu Servern und SSH-Zugang in der Anleitung", async () => {
+    mockHostsApi({ "GET /hosts": [PI], "GET /host-groups": [] });
+    renderPage();
+    const link = await screen.findByTestId("hosts-guide");
+    expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#5-server-und-ssh-zugang");
+    expect(link).toHaveAttribute("target", "_blank");
+  });
+
   it("zeigt jeden Server mit Namen, Adresse und der Art seines Zugangs", async () => {
     mockHostsApi({ "GET /hosts": [PI, ZABBIX, KI], "GET /host-groups": [] });
     renderPage();
@@ -131,6 +139,29 @@ describe("Server & Zugänge: Liste", () => {
     expect(screen.getAllByRole("link", { name: "Einrichten" })[0]).toHaveAttribute("href", "/settings/hosts/h1");
     // Bei wenigen Servern braucht es keine Suche.
     expect(screen.queryByPlaceholderText("Server suchen …")).not.toBeInTheDocument();
+  });
+
+  it("kennzeichnet einen eingelesenen Server mit „Modul aus“, wenn das Modul ausgeschaltet ist", async () => {
+    mockHostsApi({
+      "GET /hosts": [PI, ZABBIX], "GET /host-groups": [],
+      "GET /extensions": [{ id: "proxmox", name: "Proxmox VE", state: "disabled" }],
+    });
+    renderPage();
+    const badge = await screen.findByTestId("host-h2-provider-off");
+    expect(badge.textContent).toBe("Modul aus");
+    expect(badge.getAttribute("title")).toContain("Eingelesen vom Modul „Proxmox VE“");
+    expect(screen.queryByTestId("host-h1-provider-off")).toBeNull();
+  });
+
+  it("läuft das Modul, steht kein Kennzeichen da", async () => {
+    mockHostsApi({
+      "GET /hosts": [PI, ZABBIX], "GET /host-groups": [],
+      "GET /extensions": [{ id: "proxmox", name: "Proxmox VE", state: "enabled" }],
+    });
+    renderPage();
+    await screen.findByText("Zabbix");
+    await waitFor(() => expect(screen.queryByTestId("host-h2-provider-off")).toBeNull());
+    expect(screen.queryByText("Modul aus")).toBeNull();
   });
 
   it("Suchfeld erst bei mehr als acht Servern, und es filtert", async () => {
@@ -298,5 +329,20 @@ describe("Server & Zugänge: Gruppen", () => {
     mockHostsApi({ "GET /hosts": [PI], "GET /host-groups": [] });
     renderPage();
     expect(await screen.findByText("Noch keine Gruppen.")).toBeInTheDocument();
+  });
+});
+
+describe("Server & Zugänge: Ladefehler", () => {
+  it("nennt den Grund und lädt mit „Erneut versuchen“ nach", async () => {
+    let fail = true;
+    mockHostsApi({ "GET /hosts": () => (fail ? reply(500, { detail: "Datenbank gesperrt" }) : [PI]), "GET /host-groups": [] });
+    renderPage();
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Die Server-Liste ließ sich gerade nicht laden: Datenbank gesperrt");
+    expect(screen.queryByText("Noch keine Server.")).toBeNull();
+    fail = false;
+    fireEvent.click(within(error).getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByText("Bastel-Pi")).toBeInTheDocument();
+    expect(screen.queryByTestId("load-error")).toBeNull();
   });
 });

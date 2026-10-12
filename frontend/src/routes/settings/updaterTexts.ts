@@ -12,12 +12,14 @@
  * neueren Helfers bekommt bis dahin `fallbackText`.
  */
 
+import { repoFile } from "../../lib/docs";
+
 export type HelperOutcome = "applied" | "reverted" | "rolled_back" | "refused" | "aborted" | "failed_manual" | "external_change";
 export type HelperAction = "update" | "rollback";
 export type PresenceReason = "missing" | "stale" | "unsafe" | "proto" | "invalid";
 
 /** Wo die Einrichtung des Helfers beschrieben ist (Abschnitt „Update-Helfer“ in deploy/README.md). */
-export const HELPER_GUIDE_URL = "https://github.com/nodvard/deck/blob/main/deploy/README.md#update-helfer";
+export const HELPER_GUIDE_URL = repoFile("deploy/README.md", "update-helfer");
 export const HELPER_GUIDE_LABEL = "Anleitung: deploy/README.md, Abschnitt „Update-Helfer“";
 /** Kurzer Satz in der Zeile „Update-Helfer: nicht eingerichtet.“, dahinter steht der Link zur Anleitung. */
 export const HELPER_MISSING_LEAD = "Mit ihm spielst du Updates hier per Knopf ein.";

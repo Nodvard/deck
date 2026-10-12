@@ -2,6 +2,7 @@ import { createBrowserRouter, type RouteObject } from "react-router-dom";
 
 import { ActionsPage } from "./ActionsPage";
 import { AppShell } from "./AppShell";
+import { AppsPage } from "./AppsPage";
 import { ConsolePage } from "./ConsolePage";
 import { DashboardPage } from "./DashboardPage";
 import { NotFoundPage, RouteErrorPage } from "./ErrorPages";
@@ -56,6 +57,7 @@ export const routes: RouteObject[] = [
                   // Kern-Seite wie Dashboard -- KEINE PageSpec, der Dateimanager
                   // kennt keine einzelne Extension namentlich (docs/04 Paragraph 3).
                   { path: "/files/*", element: <FilesPage /> },
+                  { path: "/apps", element: <AppsPage /> },
                   { path: "/actions", element: <ActionsPage /> },
                   // Konsole: Bildschirm einer VM/eines Containers -- Kern-Seite ohne
                   // PageSpec (kennt keinen Hypervisor, nur die ConsoleTarget-Capability).

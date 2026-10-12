@@ -23,9 +23,17 @@ auch fuer sie zuerst, damit ein Test beweisen kann, dass die Reihenfolge stimmt.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import functools
+import hashlib
+import hmac
+import http.cookiejar
 import ipaddress
 import logging
+import ssl
+import unicodedata
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -56,14 +64,16 @@ from nodvard_sdk import (
 )
 from nodvard_sdk.actions import ActionRequest, ActionSpec
 from nodvard_sdk.context import SecretHandleRef
-from nodvard_sdk.errors import HostUnreachable, PermissionDenied
+from nodvard_sdk.errors import CertificateMismatch, HostUnreachable, PermissionDenied
+from nodvard_sdk.http import sha256_fingerprint
+from nodvard_sdk.types import PeerCertificate
 from sqlalchemy import select
 
 from ..core import rbac, ssh, vault
 from ..core.events import get_event_bus
 from ..db.base import refresh_relationships
 from ..db.session import session_scope
-from ..models import Action, Host, HostTag, NotificationDelivery, Setting
+from ..models import Action, Host, HostTag, NotificationDelivery, Secret, Setting, User
 from ..services import audit as audit_service
 from ..services.hosts import host_to_sdk as _host_to_sdk
 from .runtime import ExtensionRuntime, LoadedExtension, SpawnTarget, SupervisedTask
@@ -575,13 +585,18 @@ class ExecHandle:
 
         return _cm()
 
-    def open_shell(self, host: SdkHost, *, cols: int, rows: int) -> Any:
+    def open_shell(self, host: SdkHost, *, cols: int, rows: int, command: str | None = None) -> Any:
         self._perm.require("hosts.execute")
+
+        if command is not None and not command.strip():
+            raise ValueError("open_shell: leeres Kommando (ohne Kommando `command` weglassen).")
 
         @asynccontextmanager
         async def _cm():
+            if command is not None:
+                await self._reject_denied(command)
             conn = await self._connection(host)
-            async with ssh.open_shell(conn, cols=cols, rows=rows) as process:
+            async with ssh.open_shell(conn, cols=cols, rows=rows, command=command) as process:
                 yield process
 
         return _cm()
@@ -602,21 +617,54 @@ class ExecHandle:
         return _cm()
 
 
+async def _is_login_secret(session: Any, secret: Secret) -> bool:
+    """Gehoert das Geheimnis zur Zwei-Faktor-Anmeldung eines Kontos? Wie `api/v1/secrets.py::_refuse_login_secret`
+    ueber `User.totp_secret_id`, dazu das Label, unter dem der Kern solche Geheimnisse anlegt (`totp:<Nutzer>:...`):
+    auch ein noch nicht bestaetigter oder verwaister Eintrag bleibt so unberuehrt."""
+    if secret.label.startswith("totp:"):
+        return True
+    owner_of = await session.execute(select(User.id).where(User.totp_secret_id == secret.id).limit(1))
+    return owner_of.first() is not None
+
+
 class SecretsHandle:
-    def __init__(self, perm: _PermissionChecker, ext_id: str, settings: Any) -> None:
+    """`own_ids`: die Kennungen, unter denen Geheimnisse als eigene gelten (`Secret.owner_ext_id`) -- die eigene,
+    die Speicher-Kennung und fruehere Kennungen (`legacy_ids`): nach einer Umbenennung tragen alte Geheimnisse noch
+    die alte. Lesen geht nach dem Recht `secrets.read:<label>`; ersetzen und loeschen nur eigene (`SecretNotOwned`),
+    und ein Geheimnis der Zwei-Faktor-Anmeldung eines Kontos weder lesen noch aendern noch loeschen -- wie ueber die
+    Tresor-Endpunkte (`_refuse_login_secret`). Sonst koennte eine Erweiterung mit einem weiten Muster
+    (`secrets.read:*`) den Zugang eines anderen Moduls oder den Authenticator eines Kontos austauschen."""
+
+    def __init__(self, perm: _PermissionChecker, ext_id: str, settings: Any, *, own_ids: Sequence[str] = ()) -> None:
         self._perm = perm
         self._ext_id = ext_id
         self._settings = settings
+        self._own_ids = {ext_id, *own_ids}
+
+    async def _secret(self, session: Any, label: str, *, change: bool) -> Secret | None:
+        """Die Zeile zum Label, mit den Pruefungen oben; `change`: ersetzen oder loeschen (nur eigene)."""
+        from nodvard_sdk.errors import SecretNotOwned
+
+        secret = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
+        if secret is None:
+            return None
+        if await _is_login_secret(session, secret):
+            logger.warning("Erweiterung %s: Zugriff auf ein Anmelde-Geheimnis abgelehnt (%s)", self._ext_id, label)
+            raise SecretNotOwned(self._ext_id, label, login_secret=True)
+        if change and secret.owner_ext_id not in self._own_ids:
+            logger.warning("Erweiterung %s: fremdes Geheimnis nicht geaendert (%s)", self._ext_id, label)
+            raise SecretNotOwned(self._ext_id, label)
+        return secret
 
     async def get_handle(self, label: str) -> SecretHandleRef:
         self._perm.require(f"secrets.read:{label}")
         async with session_scope() as session:
-            handle = await vault.get_handle(session, label)
-            if handle is None:
+            secret = await self._secret(session, label, change=False)
+            if secret is None:
                 from nodvard_sdk.errors import SecretUnavailable
 
                 raise SecretUnavailable(f"Secret '{label}' existiert nicht.")
-            return handle
+            return vault.SecretHandle(id=secret.id, label=secret.label, kind=secret.kind)
 
     async def create(self, *, label: str, kind: str, value: str, description: str | None = None) -> SecretHandleRef:
         self._perm.require(f"secrets.read:{label}")
@@ -637,13 +685,33 @@ class SecretsHandle:
         async with session_scope() as session:
             return await vault.get_handle(session, label) is not None
 
+    async def replace(self, *, label: str, value: str) -> SecretHandleRef:
+        """Neuer Wert in derselben Zeile und derselben Transaktion (`vault.replace_secret_value`): scheitert etwas,
+        bleibt der alte Wert. Im Protokoll steht wie beim Ersetzen ueber die Einstellungsseite nur das Label."""
+        self._perm.require(f"secrets.read:{label}")
+        async with session_scope() as session:
+            secret = await self._secret(session, label, change=True)
+            if secret is None:
+                from nodvard_sdk.errors import SecretUnavailable
+
+                raise SecretUnavailable(f"Secret '{label}' existiert nicht.")
+            handle = vault.SecretHandle(id=secret.id, label=secret.label, kind=secret.kind)
+            keyring = vault.load_keyring(self._settings)
+            await vault.replace_secret_value(session, keyring, handle.id, value)
+            await audit_service.log(
+                session, actor_type="extension", actor_id=self._ext_id, action="extension.secret_set",
+                outcome="success", target_type="extension", target_id=self._ext_id,
+                detail={"label": label, "replaced": True},
+            )
+            return handle
+
     async def delete(self, label: str) -> bool:
         self._perm.require(f"secrets.read:{label}")
         async with session_scope() as session:
-            handle = await vault.get_handle(session, label)
-            if handle is None:
+            secret = await self._secret(session, label, change=True)
+            if secret is None:
                 return False
-            await vault.delete_secret(session, handle.id)
+            await vault.delete_secret(session, secret.id)
             await session.flush()
             # Wie beim Entfernen ueber die Einstellungsseite: im Protokoll steht, welches
             # Geheimnis weg ist (nur das Label, nie der Wert).
@@ -834,9 +902,11 @@ class NotifyHandle:
                     select(NotificationDelivery.status).where(NotificationDelivery.notification_id == row.id)
                 )
             ).scalars().all()
-        return NotifyResult(
-            notification_id=row.id, suppressed=suppressed, delivered=any(s == "sent" for s in statuses),
-        )
+        delivered = any(s == "sent" for s in statuses)
+        # "Übersprungen" nur, wenn das der ganze Grund ist: Ist daneben ein Kanal ausgefallen, wäre
+        # `skipped=True` eine Entwarnung ("liegt nur unter der Mindest-Stufe"), die den Ausfall versteckt.
+        skipped = not delivered and any(s == "skipped" for s in statuses) and not any(s == "failed" for s in statuses)
+        return NotifyResult(notification_id=row.id, suppressed=suppressed, delivered=delivered, skipped=skipped)
 
     async def would_suppress(self, *, host_id: str | None = None, host_ids: Sequence[str] | None = None) -> bool:
         """Nur lesen: dieselbe Pruefung wie in `send()`, ohne Verlaufseintrag."""
@@ -1036,6 +1106,16 @@ class ActionsHandle:
         async with session_scope() as session:
             return list((await session.execute(stmt)).scalars().all())
 
+    async def waiting_count(self) -> int:
+        """Alle Aktionen mit Status `proposed`, gleich welcher Erweiterung -- nur die Zahl (wie `GET /overview`).
+        Braucht `hosts.read`, wie jeder andere lesende Blick ueber die eigene Erweiterung hinaus."""
+        from sqlalchemy import func
+
+        self._perm.require("hosts.read")
+        async with session_scope() as session:
+            stmt = select(func.count()).select_from(Action).where(Action.status == "proposed")
+            return int((await session.execute(stmt)).scalar_one())
+
     async def proposer_labels(self, rows: list[Action]) -> dict[str, str]:
         """`{action_id: Name des Vorschlagenden}` -- mit je einer Abfrage fuer
         Nutzer und Erweiterungen. Aufgeloest werden nur Zeilen DIESER Extension, und zwar
@@ -1108,7 +1188,7 @@ def _websocket_connect_class() -> type:
     return _ConnectWithoutRedirects
 
 
-def _direct_transport(*, verify: bool = True) -> httpx.AsyncHTTPTransport:
+def _direct_transport(*, verify: bool | ssl.SSLContext = True) -> httpx.AsyncHTTPTransport:
     """Transport ohne Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`).
 
     httpx liest Proxys nur, wenn der Client den Transport selbst anlegt
@@ -1120,6 +1200,147 @@ def _direct_transport(*, verify: bool = True) -> httpx.AsyncHTTPTransport:
     (`http1`, kein `http2`, Standard-`Limits`, keine Wiederholungen); Weiterleitungen werden
     weiter nicht verfolgt (Client-Vorgabe `follow_redirects=False`)."""
     return httpx.AsyncHTTPTransport(verify=verify)
+
+
+def _format_sha256(digest: bytes) -> str:
+    return ":".join(f"{b:02X}" for b in digest)
+
+
+def _pin_digest(value: str) -> bytes:
+    """`pinned_sha256` als 32 Bytes; `ValueError` mit deutschem Satz, wenn es kein SHA-256-Fingerabdruck ist."""
+    return bytes.fromhex(sha256_fingerprint(value).replace(":", ""))
+
+
+def _pinned_sslobject_class(expected: bytes) -> type[ssl.SSLObject]:
+    """`ssl.SSLObject`, das nach dem Handshake den Fingerabdruck des Server-Zertifikats mit `expected` vergleicht.
+
+    Die TLS-Schichten von asyncio (`websockets`) und anyio (`httpx`/`httpcore`) bauen ihre Verbindung ueber
+    `SSLContext.wrap_bio()`, und das liefert eine Instanz von `SSLContext.sslobject_class` -- laut Python-Doku genau
+    fuer eigene Unterklassen gedacht. Beide rufen erst `do_handshake()` und schreiben erst danach Anwendungsdaten:
+    Passt das Zertifikat nicht, scheitert schon der Handshake (`CertificateMismatch`, ein `ssl.SSLError`), und kein
+    Byte der Anfrage (Kopf, Zugangsdaten, Koerper) hat die Maschine verlassen. `write()` verweigert zusaetzlich alles,
+    solange kein passendes Zertifikat gesehen wurde -- falls eine Schicht je ohne eigenen Handshake-Aufruf schriebe."""
+
+    class _PinnedSSLObject(ssl.SSLObject):
+        _nodvard_pin_ok = False
+
+        def do_handshake(self) -> None:
+            super().do_handshake()
+            der = self.getpeercert(binary_form=True)
+            actual = hashlib.sha256(der).digest() if der else b""
+            if not der or not hmac.compare_digest(actual, expected):
+                raise CertificateMismatch(_format_sha256(expected), _format_sha256(actual) if der else "")
+            self._nodvard_pin_ok = True
+
+        def write(self, data: Any) -> int:
+            if not self._nodvard_pin_ok:
+                raise CertificateMismatch(_format_sha256(expected), "")
+            return super().write(data)
+
+    return _PinnedSSLObject
+
+
+def _pinned_ssl_context(expected: bytes) -> ssl.SSLContext:
+    """TLS-Kontext, der genau ein Zertifikat annimmt: keine Pruefung ueber Zertifizierungsstellen und Rechnernamen
+    (ein selbstsigniertes Zertifikat haette dort keine Chance), stattdessen der Fingerabdruck-Vergleich im Handshake
+    (`_pinned_sslobject_class`). Bewusst ein einfacher `ssl.SSLContext` (keine Unterklasse): anyio ruft `wrap_bio()`
+    nur fuer genau diese Klasse direkt auf."""
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    context.sslobject_class = _pinned_sslobject_class(expected)
+    return context
+
+
+def _unverified_ssl_context() -> ssl.SSLContext:
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
+
+_CERT_TEXT_LIMIT = 200
+_CERT_MAX_NAMES = 10
+
+
+def _cert_text(value: Any, limit: int = _CERT_TEXT_LIMIT) -> str | None:
+    """Einzeilig, ohne Steuer- und Formatzeichen, gekuerzt: die Felder kommen ungeprueft vom Server."""
+    if not isinstance(value, str):
+        return None
+    text = "".join(" " if unicodedata.category(ch).startswith("C") else ch for ch in value)
+    text = " ".join(text.split())
+    if not text:
+        return None
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def _describe_certificate(der: bytes, *, trusted: bool) -> PeerCertificate:
+    """Fingerabdruck immer; Inhaber, Aussteller, Ablauf und weitere Namen nur, soweit sich das Zertifikat lesen
+    laesst (sonst leer -- der Fingerabdruck allein reicht zum Vergleichen)."""
+    sha256 = _format_sha256(hashlib.sha256(der).digest())
+    subject = issuer = not_after = None
+    names: list[str] = []
+    try:
+        from cryptography import x509
+
+        cert = x509.load_der_x509_certificate(der)
+        subject = _cert_text(cert.subject.rfc4514_string())
+        issuer = _cert_text(cert.issuer.rfc4514_string())
+        not_after = cert.not_valid_after_utc.isoformat()
+        try:
+            alt = cert.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+        except x509.ExtensionNotFound:
+            alt = None
+        if alt is not None:
+            for entry in alt:
+                value = getattr(entry, "value", None)
+                text = _cert_text(str(value), 100) if value is not None else None
+                if text and len(names) < _CERT_MAX_NAMES:
+                    names.append(text)
+    except Exception:  # noqa: BLE001, S110 - nur Anzeige; ein ungewoehnliches Zertifikat bleibt beim Fingerabdruck
+        pass
+    return PeerCertificate(
+        sha256=sha256, trusted=trusted, subject=subject, issuer=issuer, not_after=not_after, alt_names=tuple(names)
+    )
+
+
+async def _read_peer_certificate(host: str, port: int, context: ssl.SSLContext, timeout_s: float) -> bytes:
+    """Nur der TLS-Handshake: Verbindung auf, Zertifikat lesen, Verbindung zu. Es geht keine Anfrage hinaus."""
+
+    async def _handshake() -> bytes:
+        _reader, writer = await asyncio.open_connection(
+            host, port, ssl=context, server_hostname=host, ssl_handshake_timeout=timeout_s
+        )
+        try:
+            ssl_object = writer.get_extra_info("ssl_object")
+            der = ssl_object.getpeercert(binary_form=True) if ssl_object is not None else None
+        finally:
+            writer.close()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(writer.wait_closed(), timeout=2.0)
+        if not der:
+            raise ssl.SSLError("Der Server hat kein Zertifikat gezeigt.")
+        return der
+
+    return await asyncio.wait_for(_handshake(), timeout=timeout_s)
+
+
+_MAX_PINNED_CLIENTS = 8
+"""So viele Clients mit gepinntem Zertifikat haelt ein Handle offen (je Fingerabdruck einer); der aelteste geht zu."""
+
+
+class _NoCookies(http.cookiejar.DefaultCookiePolicy):
+    """Kein Cookie wird gemerkt oder mitgeschickt. Ein Client mit gepinntem Zertifikat ist fuer Aufrufe da, bei
+    denen etwas Geheimes hinausgeht (etwa eine einmalige Anmeldung). Merkte er sich ein `Set-Cookie` des Servers
+    (z. B. eine Sitzung nach der Anmeldung), truege jede spaetere Anfrage mit demselben Fingerabdruck sie mit --
+    auch die einer anderen Stelle der Erweiterung, die davon nichts weiss. Wer ein Cookie braucht, setzt den Kopf
+    selbst je Anfrage."""
+
+    def set_ok(self, cookie: http.cookiejar.Cookie, request: Any) -> bool:
+        return False
+
+    def return_ok(self, cookie: http.cookiejar.Cookie, request: Any) -> bool:
+        return False
 
 
 class HttpHandle:
@@ -1157,7 +1378,18 @@ class HttpHandle:
     **Keine Weiterleitungen:** der Client folgt keiner 3xx-Antwort (httpx-Vorgabe) und `follow_redirects=True`
     wird nicht durchgereicht, sondern mit `ValueError` abgelehnt -- bei `get()`, `post()`, `request()` und
     `stream()`, auch mit `insecure_tls`. Die Zielpruefung kennt nur die Adresse des Aufrufs; das Ziel einer
-    Weiterleitung hat sie nie gesehen (`websocket()` verhaelt sich ebenso)."""
+    Weiterleitung hat sie nie gesehen (`websocket()` verhaelt sich ebenso).
+
+    **Gepinntes Zertifikat (`pinned_sha256`):** Zwischen "streng" und "gar nicht pruefen" fehlte ein Weg fuer
+    Ziele mit selbstsigniertem Zertifikat, an die etwas wirklich Geheimes geht (etwa ein Administrator-Passwort,
+    das nur einmal benutzt wird). Mit `pinned_sha256` nimmt der Aufruf genau ein Zertifikat an: Der Fingerabdruck
+    wird im TLS-Handshake verglichen (`_pinned_sslobject_class`), vor dem ersten Byte der Anfrage; passt er nicht,
+    scheitert die Verbindung mit `CertificateMismatch`. Je Fingerabdruck ein eigener Client (hoechstens
+    `_MAX_PINNED_CLIENTS`), damit keine Verbindung aus dem Pool eines anderen Fingerabdrucks wiederverwendet wird.
+    Weil damit die Pruefung ueber Zertifizierungsstellen entfaellt, braucht es wie `insecure_tls` die Berechtigung
+    `net.outbound.insecure_tls`. `peer_certificate()` liest das Zertifikat vorher, ohne etwas zu senden. Gepinnte
+    Clients merken sich keine Cookies (`_NoCookies`): eine Sitzung, die der Server nach einer Anmeldung setzt, ginge
+    sonst mit jeder spaeteren Anfrage an denselben Fingerabdruck mit."""
 
     def __init__(self, perm: _PermissionChecker, granted_permissions: list[str]) -> None:
         self._perm = perm
@@ -1168,6 +1400,8 @@ class HttpHandle:
         ]
         self._client = httpx.AsyncClient(transport=_direct_transport())
         self._insecure_client: httpx.AsyncClient | None = None
+        self._pinned_clients: OrderedDict[bytes, httpx.AsyncClient] = OrderedDict()
+        self._closing: set[asyncio.Future[Any]] = set()
 
     def _require_target_allowed(self, url: str) -> None:
         if not self._cidrs:
@@ -1188,13 +1422,47 @@ class HttpHandle:
                 return
         raise PermissionDenied(self._perm.ext_id, f"net.outbound:{host}")
 
-    def _client_for(self, *, insecure_tls: bool) -> httpx.AsyncClient:
+    def _client_for(self, *, insecure_tls: bool, pinned_sha256: str | None = None, url: str = "") -> httpx.AsyncClient:
+        if pinned_sha256 is not None:
+            return self._pinned_client(url, pinned_sha256, insecure_tls=insecure_tls)
         if not insecure_tls:
             return self._client
         self._perm.require("net.outbound.insecure_tls")
         if self._insecure_client is None:
             self._insecure_client = httpx.AsyncClient(transport=_direct_transport(verify=False))
         return self._insecure_client
+
+    @staticmethod
+    def _check_pin_use(url: str, *, insecure_tls: bool, schemes: tuple[str, ...]) -> None:
+        if insecure_tls:
+            raise ValueError(
+                "pinned_sha256 und insecure_tls schliessen sich aus: mit einem gepinnten Zertifikat wird genau "
+                "dieses geprueft, insecure_tls wuerde jede Pruefung abschalten."
+            )
+        if urlsplit(url).scheme.lower() not in schemes:
+            raise ValueError("pinned_sha256 geht nur mit einer verschluesselten Adresse (https:// bzw. wss://).")
+
+    def _pinned_client(self, url: str, pinned_sha256: str, *, insecure_tls: bool) -> httpx.AsyncClient:
+        """Client, der nur das Zertifikat mit diesem Fingerabdruck annimmt -- je Fingerabdruck einer, die
+        aeltesten gehen zu, wenn es mehr als `_MAX_PINNED_CLIENTS` werden."""
+        self._check_pin_use(url, insecure_tls=insecure_tls, schemes=("https",))
+        expected = _pin_digest(pinned_sha256)
+        self._perm.require("net.outbound.insecure_tls")
+        client = self._pinned_clients.get(expected)
+        if client is not None:
+            self._pinned_clients.move_to_end(expected)
+            return client
+        client = httpx.AsyncClient(
+            transport=_direct_transport(verify=_pinned_ssl_context(expected)),
+            cookies=http.cookiejar.CookieJar(policy=_NoCookies()),
+        )
+        self._pinned_clients[expected] = client
+        while len(self._pinned_clients) > _MAX_PINNED_CLIENTS:
+            _old_key, old = self._pinned_clients.popitem(last=False)
+            closing = asyncio.ensure_future(old.aclose())
+            self._closing.add(closing)
+            closing.add_done_callback(self._closing.discard)
+        return client
 
     @staticmethod
     def _refuse_redirects(kwargs: dict[str, Any]) -> None:
@@ -1214,22 +1482,47 @@ class HttpHandle:
             "Status 3xx kommt unverändert zurück; die Erweiterung fragt die neue Adresse selbst ab."
         )
 
-    async def get(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
+    async def get(self, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any) -> Any:
         self._require_target_allowed(url)
         self._refuse_redirects(kwargs)
-        return await self._client_for(insecure_tls=insecure_tls).get(url, **kwargs)
+        return await self._client_for(insecure_tls=insecure_tls, pinned_sha256=pinned_sha256, url=url).get(url, **kwargs)
 
-    async def post(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
+    async def post(self, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any) -> Any:
         self._require_target_allowed(url)
         self._refuse_redirects(kwargs)
-        return await self._client_for(insecure_tls=insecure_tls).post(url, **kwargs)
+        return await self._client_for(insecure_tls=insecure_tls, pinned_sha256=pinned_sha256, url=url).post(url, **kwargs)
 
-    async def request(self, method: str, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any:
+    async def request(
+        self, method: str, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
+    ) -> Any:
         self._require_target_allowed(url)
         self._refuse_redirects(kwargs)
-        return await self._client_for(insecure_tls=insecure_tls).request(method, url, **kwargs)
+        client = self._client_for(insecure_tls=insecure_tls, pinned_sha256=pinned_sha256, url=url)
+        return await client.request(method, url, **kwargs)
 
-    def stream(self, method: str, url: str, *, insecure_tls: bool = False, **kwargs: Any):  # noqa: ANN201 - httpx.AsyncClient.stream()s eigener Typ
+    async def peer_certificate(self, url: str, *, timeout_s: float = 10.0) -> PeerCertificate:
+        """Siehe SDK: nur der Handshake, erst streng (dieselben Zertifizierungsstellen wie `self._client`, also
+        `httpx.create_ssl_context()` samt `SSL_CERT_FILE`/`SSL_CERT_DIR`), sonst ohne Pruefung nur zum Lesen.
+        Direkte Verbindung, kein Proxy aus der Umgebung."""
+        self._require_target_allowed(url)
+        parts = urlsplit(url)
+        if parts.scheme.lower() not in ("https", "wss"):
+            raise ValueError("Ein Zertifikat gibt es nur bei verschluesselten Adressen (https:// oder wss://).")
+        host = parts.hostname
+        if not host:
+            raise ValueError("Die Adresse nennt keinen Rechner.")
+        port = parts.port or 443
+        try:
+            der = await _read_peer_certificate(host, port, httpx.create_ssl_context(), timeout_s)
+            trusted = True
+        except ssl.SSLCertVerificationError:
+            der = await _read_peer_certificate(host, port, _unverified_ssl_context(), timeout_s)
+            trusted = False
+        return _describe_certificate(der, trusted=trusted)
+
+    def stream(  # noqa: ANN201 - httpx.AsyncClient.stream()s eigener Typ
+        self, method: str, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
+    ):
         """Fehlte bisher komplett (WP-9 Nachtrag: `AIProvider.stream()` musste
         deshalb das VOLLSTAENDIGE Ergebnis als einen Chunk liefern) -- die
         nextcloud-Extension (WP-11) braucht echtes Antwort-Streaming fuer
@@ -1245,7 +1538,7 @@ class HttpHandle:
         sind -- deshalb sofort ergaenzt statt zurueckgestellt."""
         self._require_target_allowed(url)
         self._refuse_redirects(kwargs)
-        return self._client_for(insecure_tls=insecure_tls).stream(method, url, **kwargs)
+        return self._client_for(insecure_tls=insecure_tls, pinned_sha256=pinned_sha256, url=url).stream(method, url, **kwargs)
 
     def websocket(
         self,
@@ -1255,6 +1548,7 @@ class HttpHandle:
         subprotocols: list[str] | None = None,
         insecure_tls: bool = False,
         open_timeout_s: float = 10.0,
+        pinned_sha256: str | None = None,
     ):  # noqa: ANN201 - AsyncContextManager[websockets ClientConnection]
         """Ausgehender WebSocket (fuer die Konsole: eine Hypervisor-Konsole ist nur
         ueber einen WebSocket erreichbar, httpx kann keine WebSockets). Dieselben
@@ -1279,12 +1573,18 @@ class HttpHandle:
         Ticket) ginge sonst an eine Stelle, die die Erweiterung nie freigegeben bekam. `proxy` gibt es
         erst ab websockets 15, deshalb steht in `backend/pyproject.toml` `websockets>=15`; in aelteren
         Versionen wuerde das Keyword an `loop.create_connection()` weitergereicht und mit einem
-        `TypeError` scheitern."""
-        import ssl
+        `TypeError` scheitern.
 
+        `pinned_sha256` wie bei den HTTP-Methoden (nur `wss://`): der Handshake scheitert mit
+        `CertificateMismatch`, bevor der WebSocket-Handshake samt Kopfzeilen gesendet wird."""
         self._require_target_allowed(url)
         ssl_context: ssl.SSLContext | None = None
-        if url.startswith("wss://"):
+        if pinned_sha256 is not None:
+            self._check_pin_use(url, insecure_tls=insecure_tls, schemes=("wss",))
+            expected = _pin_digest(pinned_sha256)
+            self._perm.require("net.outbound.insecure_tls")
+            ssl_context = _pinned_ssl_context(expected)
+        elif url.startswith("wss://"):
             if insecure_tls:
                 self._perm.require("net.outbound.insecure_tls")
                 ssl_context = ssl.create_default_context()
@@ -1308,6 +1608,11 @@ class HttpHandle:
         await self._client.aclose()
         if self._insecure_client is not None:
             await self._insecure_client.aclose()
+        while self._pinned_clients:
+            _key, client = self._pinned_clients.popitem(last=False)
+            await client.aclose()
+        if self._closing:
+            await asyncio.gather(*self._closing, return_exceptions=True)
 
 
 class DbHandle:
@@ -1433,7 +1738,7 @@ def build_context(
         actions=ActionsHandle(perm, manifest.id, runtime, settings, own_ids=[store, *manifest.legacy_ids]),
         hosts=HostsHandle(perm, manifest.id),
         exec=ExecHandle(perm, settings),
-        secrets=SecretsHandle(perm, manifest.id, settings),
+        secrets=SecretsHandle(perm, manifest.id, settings, own_ids=[store, *manifest.legacy_ids]),
         settings=SettingsHandle(loaded, manifest.id, store_id=store),
         scheduler=SchedulerHandle(perm, manifest.id, runtime, store_id=store),
         events=EventsHandle(manifest.id),

@@ -8,13 +8,16 @@ Wert nie), ein Wert mit Anfuehrungszeichen, `$`, Backtick, Backslash oder Zeilen
 gar nicht erst durch (`_dq`), und das ganze Skript wird fuer `sh -c` mit `shlex.quote`
 verpackt. Das Skript selbst enthaelt kein einfaches Hochkommas -- es liest sich so leichter und
 laesst sich in `sh -c '...'` einbetten.
+
+Beim Einrichten mit Passwort fuehrt Nodvard Deck dasselbe Skript selbst aus (`remote_setup_command`,
+ausgewertet mit `evaluate_setup_run`); die einmalige Anmeldung dafuer regelt `services/one_time_password.py`.
 """
 
 from __future__ import annotations
 
 import re
 import shlex
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
 import asyncssh
@@ -234,3 +237,144 @@ def setup_notes(user: str, *, groups: Iterable[str], sudo: bool) -> list[str]:
             "dass Nodvard Deck danach neu verbindet."
         )
     return notes
+
+
+# ---------------------------------------------------------------------------
+# Nodvard Deck fuehrt den Befehl selbst aus (Einrichten mit Passwort)
+# ---------------------------------------------------------------------------
+
+SETUP_STARTED = "@@nodvard-setup-started"
+"""Marke, die die Shell VOR dem Skript ausgibt: Fehlt sie in der Ausgabe, ist schon `sudo` (oder der
+Start der Shell) gescheitert, nicht das Skript."""
+
+_MESSAGE_PREFIXES = (
+    "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt",
+)
+"""Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberflaeche;
+`Fertig. ...` nicht, denn danach prueft Nodvard Deck die Verbindung selbst."""
+_MAX_MESSAGES = 20
+_MAX_MESSAGE_LENGTH = 300
+
+
+def remote_setup_command(script: str, *, as_root: bool, sudo_with_password: bool) -> str:
+    """Der Befehl, mit dem Nodvard Deck das Skript aus `build_setup_script` unveraendert selbst ausfuehrt.
+
+    - `as_root`: angemeldet als root, `sh -c` direkt.
+    - sonst ueber sudo: mit `sudo_with_password` liest `sudo -S` das Passwort von der Standardeingabe
+      (ohne Eingabeaufforderung, `-p ''`), sonst `sudo -n` (nur wenn das Konto sudo ohne Passwort darf).
+
+    **Das Passwort steht nie in diesem Befehl** -- die Befehlszeile ist auf dem Server fuer alle sichtbar
+    (`ps`) und steht in Fehlern von asyncssh. Vor dem Skript stehen nur zwei Dinge: `exec </dev/null`
+    (braucht sudo das Passwort gar nicht, laege es sonst noch in der Standardeingabe, wo das Skript es
+    lesen koennte) und die Marke `SETUP_STARTED`. `env LC_ALL=C`: sudo meldet sich auf Englisch, die
+    Meldung laesst sich so einordnen (`evaluate_setup_run`)."""
+    inner = f"exec </dev/null; echo {SETUP_STARTED}\n{script}"
+    if as_root:
+        return f"sh -c {shlex.quote(inner)}"
+    sudo = "sudo -S -p ''" if sudo_with_password else "sudo -n"
+    return f"env LC_ALL=C {sudo} sh -c {shlex.quote(inner)}"
+
+
+def setup_messages(stdout: str) -> list[str]:
+    """Die Meldungen des Skripts aus seiner Ausgabe: nur Zeilen, die das Skript selbst schreibt (feste
+    Anfaenge), nur druckbare Zeichen, gekuerzt. Alles andere (Ausgaben der Systembefehle, Fehler von
+    sudo) bleibt draussen."""
+    messages: list[str] = []
+    for raw in stdout.splitlines():
+        line = "".join(c for c in raw if c.isprintable()).strip()
+        if line.startswith(_MESSAGE_PREFIXES) and line not in messages:
+            messages.append(line[:_MAX_MESSAGE_LENGTH])
+        if len(messages) >= _MAX_MESSAGES:
+            break
+    return messages
+
+
+@dataclass(frozen=True)
+class SetupRun:
+    """Wie der Lauf des Skripts ausgegangen ist."""
+
+    outcome: str
+    """`ok`, `sudo_failed` (das Skript lief gar nicht erst) oder `setup_failed`."""
+    reason: str
+    """Fester deutscher Satz (leer bei `ok`)."""
+    messages: list[str]
+    """Meldungen des Skripts (`setup_messages`)."""
+
+
+def _marker_line(stdout: str, _stderr: str) -> bool:
+    # Nur als eigene Zeile in stdout: eine Meldung von sudo nennt den ganzen Befehl samt Marke (auf stderr).
+    return any(line.strip() == SETUP_STARTED for line in stdout.splitlines())
+
+
+def _in_stderr(*signs: str) -> Callable[[str, str], bool]:
+    return lambda _stdout, stderr: any(sign in stderr.lower() for sign in signs)
+
+
+SETUP_FLAGS: dict[str, Callable[[str, str], bool]] = {
+    "started": _marker_line,
+    # Fehlerausgabe von sudo (englisch, `LC_ALL=C`).
+    "sudo_not_allowed": _in_stderr("not in the sudoers", "may not run sudo", "is not allowed to"),
+    "sudo_needs_password": _in_stderr("a password is required"),
+    "sudo_wrong_password": _in_stderr("incorrect password", "try again", "no password was provided"),
+    "sudo_needs_tty": _in_stderr("terminal is required", "no tty present", "requiretty"),
+    "sudo_missing": _in_stderr("not found"),
+}
+"""Fuer `one_time_password.run_once(flags=SETUP_FLAGS)`: ausgewertet wird auf der UNVERAENDERTEN Ausgabe, bevor
+das Passwort unkenntlich gemacht wird -- sonst zerstoerte ein Passwort wie „setup“ die Marke. Zurueck kommen nur
+die Namen."""
+
+
+def setup_flags(stdout: str, stderr: str) -> frozenset[str]:
+    """Die Namen aus `SETUP_FLAGS`, die auf diese Ausgabe zutreffen."""
+    return frozenset(name for name, test in SETUP_FLAGS.items() if test(stdout, stderr))
+
+
+def _sudo_reason(code: int | None, flags: frozenset[str], *, sudo_with_password: bool) -> str:
+    if "sudo_not_allowed" in flags:
+        return "Das Anmelde-Konto darf kein sudo. Melde dich als root an oder nimm ein Konto mit sudo-Rechten."
+    if "sudo_needs_password" in flags and not sudo_with_password:
+        return "sudo verlangt ein Passwort. Setze den Haken „Für sudo dasselbe Passwort nehmen“."
+    if "sudo_wrong_password" in flags:
+        return "sudo hat das Passwort nicht angenommen."
+    if "sudo_needs_tty" in flags:
+        return (
+            "sudo verlangt auf diesem Server ein Terminal. Melde dich als root an oder füge den Befehl selbst "
+            "auf dem Server ein."
+        )
+    if code == 127 or "sudo_missing" in flags:
+        return "sudo ist auf dem Server nicht installiert. Melde dich als root an."
+    return "sudo hat nicht geklappt. Melde dich als root an oder füge den Befehl selbst auf dem Server ein."
+
+
+def evaluate_setup_run(
+    exit_status: int | None, stdout: str, stderr: str, *, via_sudo: bool, sudo_with_password: bool,
+    flags: frozenset[str] | None = None,
+) -> SetupRun:
+    """Ordnet den Lauf von `remote_setup_command` ein. Die Ausgabe des Servers wird nie weitergereicht,
+    nur feste Saetze und `setup_messages`. `flags` sind die Namen aus `SETUP_FLAGS`, ermittelt auf der
+    unveraenderten Ausgabe (`RemoteResult.flags`); ohne sie werden sie aus `stdout`/`stderr` gebildet."""
+    flags = setup_flags(stdout, stderr) if flags is None else flags
+    started = "started" in flags
+    messages = setup_messages(stdout)
+    if started and exit_status == 0:
+        return SetupRun("ok", "", messages)
+    if not started and via_sudo:
+        return SetupRun("sudo_failed", _sudo_reason(exit_status, flags, sudo_with_password=sudo_with_password), [])
+    if not started:
+        return SetupRun("setup_failed", "Der Befehl ließ sich auf dem Server nicht starten.", [])
+    if not messages:
+        # Das Skript bricht auch ohne eigene Zeile ab (z. B. wenn ein Systembefehl scheitert): dann gibt es unten nichts zu lesen.
+        return SetupRun(
+            "setup_failed",
+            (
+                "Der Einrichtungsbefehl ist auf dem Server fehlgeschlagen, hat aber keine Meldung hinterlassen. "
+                "Füge den Befehl stattdessen selbst auf dem Server ein („Befehl selbst einfügen“): "
+                "Dort siehst du die Fehlermeldung."
+            ),
+            messages,
+        )
+    return SetupRun(
+        "setup_failed",
+        "Der Einrichtungsbefehl ist auf dem Server fehlgeschlagen. Die Meldungen unten sagen, woran es lag.",
+        messages,
+    )

@@ -49,7 +49,7 @@ function errorMessage(err: unknown): string {
 }
 
 export function AppDialog({
-  open, onOpenChange, app, groups, hosts, onCloseAutoFocus,
+  open, onOpenChange, app, groups, hosts, onCloseAutoFocus, initial,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -57,6 +57,8 @@ export function AppDialog({
   onCloseAutoFocus?: (event: Event) => void;
   /** Gesetzt = bearbeiten, sonst neu anlegen. */
   app?: AppTileOut | null;
+  /** Nur beim Anlegen: vorbelegte Werte (z. B. aus einem Vorschlag auf der Seite „Apps“). */
+  initial?: Partial<AppFormValues>;
   /** Gruppen, die es schon gibt (Vorschlaege). */
   groups: string[];
   hosts: HostOut[];
@@ -71,10 +73,12 @@ export function AppDialog({
   // Beim Oeffnen frisch starten: leer (neu) oder mit den Werten der App (bearbeiten).
   useEffect(() => {
     if (!open) return;
-    setValues(app ? formFromApp(app) : EMPTY_FORM);
+    setValues(app ? formFromApp(app) : { ...EMPTY_FORM, ...initial });
     setErrors({});
     setFailure(null);
     setBusy(false);
+    // `initial` gilt nur beim Oeffnen; ein neues Objekt bei jedem Rendern soll die Eingaben nicht zuruecksetzen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, app]);
 
   function set<K extends keyof AppFormValues>(key: K, value: AppFormValues[K]) {

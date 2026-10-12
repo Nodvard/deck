@@ -18,6 +18,7 @@ import {
   type ChangelogEntry,
   type ChangelogVersion,
 } from "../../lib/changelog";
+import { REPO_URL } from "../../lib/docs";
 import { NOVNC_SOURCE_URL, NOVNC_VERSION, THIRD_PARTY_LICENSES_IMAGE_PATH, THIRD_PARTY_LICENSES_URL } from "../../lib/thirdParty";
 import { Badge, Card, NoticeLine, PageHeader, errorText } from "./ui";
 
@@ -137,7 +138,7 @@ export function AboutSettings(): JSX.Element {
       <Card title="Lizenz und Marken">
         <p className="text-sm leading-relaxed text-white/80">
           Nodvard Deck steht unter der PolyForm Noncommercial License 1.0.0: für private und andere nicht-kommerzielle Zwecke frei, kommerzielle Nutzung nur mit gesonderter Erlaubnis (Anfragen: kontakt@nodvard.com). Quellcode:{" "}
-          <a href="https://github.com/nodvard/deck" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">
+          <a href={REPO_URL} target="_blank" rel="noopener noreferrer" className="underline underline-offset-2 hover:text-white">
             github.com/nodvard/deck
           </a>
         </p>

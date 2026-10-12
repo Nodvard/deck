@@ -4,8 +4,10 @@
  * Image unter /app). Hier steht nur, was die Oberfläche selbst nennt.
  */
 
+import { repoFile } from "./docs";
+
 /** THIRD_PARTY_LICENSES im öffentlichen Quellcode. */
-export const THIRD_PARTY_LICENSES_URL = "https://github.com/nodvard/deck/blob/main/THIRD_PARTY_LICENSES";
+export const THIRD_PARTY_LICENSES_URL = repoFile("THIRD_PARTY_LICENSES");
 
 /** Wo dieselbe Datei im Docker-Image liegt (deploy/Dockerfile). */
 export const THIRD_PARTY_LICENSES_IMAGE_PATH = "/app/THIRD_PARTY_LICENSES";

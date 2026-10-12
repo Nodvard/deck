@@ -333,15 +333,50 @@ def _foreign_schema_object(kind: object, rootpage: object, sql: object) -> str |
     `type` -- mit `writable_schema` laesst sich ein Trigger als `type='TRIGGER'` (oder jede andere
     Schreibweise) eintragen, und er laeuft spaeter trotzdem. Darum: nur genau `table` und `index`,
     beide mit einer echten Seite (`rootpage > 0`; Ansichten, Trigger und virtuelle Tabellen haben
-    keine), und zusaetzlich kein `CREATE VIRTUAL` im Text (auch mit Kommentar dazwischen)."""
+    keine), und zusaetzlich kein `CREATE VIRTUAL` im Text (auch mit Kommentar dazwischen). Der Text muss Text sein:
+    SQLite liest das Schema auch aus einem BLOB, und daran ginge die Pruefung sonst vorbei."""
     if not isinstance(kind, str) or kind not in ("table", "index"):
         lowered = kind.lower() if isinstance(kind, str) else ""
         return {"trigger": "Trigger", "view": "Ansicht"}.get(lowered, "Schema-Eintrag")
     if not isinstance(rootpage, int) or isinstance(rootpage, bool) or rootpage <= 0:
         return "virtuelle Tabelle" if kind == "table" else "Schema-Eintrag"
-    if isinstance(sql, str) and re.match(r"(?:\s|/\*.*?\*/|--[^\n]*\n)*CREATE(?:\s|/\*.*?\*/|--[^\n]*\n)+VIRTUAL\b", sql, re.IGNORECASE | re.DOTALL):
+    if sql is not None and not isinstance(sql, str):
+        return "Schema-Eintrag"
+    if isinstance(sql, str) and _is_create_virtual(sql):
         return "virtuelle Tabelle"
     return None
+
+
+def _skip_sql_gap(sql: str, i: int) -> int:
+    """Ab `i` Leerraum und Kommentare (`/* ... */`, `-- ...` bis Zeilenende) ueberspringen. Ein offener Kommentar reicht
+    bis zum Ende. Ein einfacher Durchlauf statt eines regulaeren Ausdrucks: Der fruehere Ausdruck brauchte bei vielen
+    leeren Kommentaren (`/**/`) exponentiell lange, und der SQL-Text kommt aus einer fremden Sicherung."""
+    n = len(sql)
+    while i < n:
+        if sql[i].isspace():
+            i += 1
+        elif sql.startswith("/*", i):
+            end = sql.find("*/", i + 2)
+            i = n if end < 0 else end + 2
+        elif sql.startswith("--", i):
+            end = sql.find("\n", i + 2)
+            i = n if end < 0 else end + 1
+        else:
+            break
+    return i
+
+
+def _is_create_virtual(sql: str) -> bool:
+    """Beginnt der Text (nach Leerraum und Kommentaren) mit `CREATE`, Trenner, `VIRTUAL` als ganzem Wort? Gross- und
+    Kleinschreibung egal, auch ein Kommentar als Trenner (`CREATE/**/VIRTUAL`) zaehlt."""
+    i = _skip_sql_gap(sql, 0)
+    if sql[i:i + 6].upper() != "CREATE":
+        return False
+    j = _skip_sql_gap(sql, i + 6)
+    if j == i + 6 or sql[j:j + 7].upper() != "VIRTUAL":
+        return False
+    k = j + 7
+    return k >= len(sql) or not (sql[k].isalnum() or sql[k] == "_")
 
 
 def inspect_db(path: Path) -> DbFacts:

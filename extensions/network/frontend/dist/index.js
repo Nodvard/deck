@@ -1,5 +1,5 @@
 // src/NetworkPage.tsx
-import { useCallback, useEffect as useEffect2, useMemo, useState } from "react";
+import { useCallback, useEffect as useEffect2, useMemo, useRef as useRef2, useState } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 function findDeck() {
@@ -361,6 +361,12 @@ import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-run
 var API = "/ext/network";
 var SETTINGS_PATH = "/settings/extensions/network";
 var PAUSE_MINUTES = [5, 15, 60];
+var CHECK_TEXT_CLASS = {
+  good: "text-emerald-300",
+  bad: "text-red-300",
+  warn: "text-amber-300",
+  neutral: "text-white/50"
+};
 async function call(path, init = {}) {
   const res = await authedFetch(path, init);
   const body = await res.json().catch(() => ({}));
@@ -474,19 +480,47 @@ function hostUrl(host) {
   if (!domain || domain.includes("*")) return null;
   return `${host.certificate_id ? "https" : "http"}://${domain}`;
 }
-function NpmSection({ data, canAct, busy, onToggle, onRetry }) {
+function addressSummary(result, loading) {
+  if (loading && !result) return { text: "Adress-Check l\xE4uft \u2026", className: "text-white/45" };
+  if (!result) return null;
+  if (result.state !== "ok") return result.message ? { text: `Adress-Check: ${result.message}`, className: "text-white/45" } : null;
+  if (result.message) return { text: `Adress-Check: ${result.message}`, className: "text-white/45" };
+  if (result.problems === 1) return { text: "Adress-Check: Eine Adresse f\xFChrt zu einem gestoppten Container.", className: "text-red-300" };
+  if (result.problems > 1) return { text: `Adress-Check: ${result.problems} Adressen f\xFChren zu gestoppten Containern.`, className: "text-red-300" };
+  const assigned = result.checks.filter((c) => c.container).length;
+  const unchecked = result.checks.filter((c) => c.status === "unreachable").length;
+  if (assigned === 0) {
+    return {
+      text: unchecked ? "Adress-Check: Die Docker-Server sind gerade nicht erreichbar, es lie\xDF sich nichts pr\xFCfen." : "Adress-Check: Kein Ziel lie\xDF sich einem Container zuordnen.",
+      className: "text-white/45"
+    };
+  }
+  const unsure = result.checks.filter((c) => c.status === "stopped" && c.tone !== "bad").length;
+  const counts = [
+    `${assigned} von ${result.checks.length} Zielen zugeordnet`,
+    ...unchecked ? [`${unchecked} nicht pr\xFCfbar`] : [],
+    ...unsure ? [`${unsure} gestoppt, aber Proxy-Host aus oder Zuordnung unsicher`] : []
+  ];
+  return {
+    text: `Adress-Check: Kein aktiver Proxy-Host f\xFChrt sicher zu einem gestoppten Container (${counts.join(", ")}).`,
+    className: unchecked || unsure ? "text-white/45" : "text-emerald-300"
+  };
+}
+function NpmSection({ data, canAct, busy, onToggle, onRetry, checks, checking, onStart }) {
   const [search, setSearch] = useState("");
+  const byProxy = useMemo(() => new Map((checks?.checks ?? []).map((c) => [c.proxy_id, c])), [checks]);
   const hosts = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return data.hosts;
-    return data.hosts.filter((h) => h.domains.some((d) => d.toLowerCase().includes(q)) || (h.target ?? "").toLowerCase().includes(q));
-  }, [data.hosts, search]);
+    return data.hosts.filter((h) => h.domains.some((d) => d.toLowerCase().includes(q)) || (h.target ?? "").toLowerCase().includes(q) || (byProxy.get(h.id)?.container ?? "").toLowerCase().includes(q));
+  }, [data.hosts, search, byProxy]);
   if (data.state === "not_configured") return /* @__PURE__ */ jsx2(NotSetUp, { title: "Nginx Proxy Manager", message: data.message, testId: "npm-not-configured" });
   if (data.state !== "ok" || !data.summary) {
     return /* @__PURE__ */ jsx2(Problem, { title: "Nginx Proxy Manager", state: data.state, message: data.message, onRetry, testId: "npm-problem" });
   }
   const s = data.summary;
   const urgent = data.certificates.filter((c) => c.status === "warn" || c.status === "expired");
+  const summary = addressSummary(checks, checking);
   return /* @__PURE__ */ jsxs2("div", { className: "space-y-4", children: [
     /* @__PURE__ */ jsx2(
       Card,
@@ -520,33 +554,45 @@ function NpmSection({ data, canAct, busy, onToggle, onRetry }) {
         c.days_text
       ] })
     ] }, c.id)) }) }) : data.certificates.length > 0 && /* @__PURE__ */ jsx2("p", { className: "text-sm text-emerald-300", children: "Alle Zertifikate sind noch mindestens 14 Tage g\xFCltig." }),
-    /* @__PURE__ */ jsx2(Card, { title: "Proxy-Hosts", padded: false, actions: data.hosts.length > 5 ? /* @__PURE__ */ jsx2(SearchInput, { value: search, onChange: setSearch, placeholder: "Domain oder Ziel suchen", label: "Proxy-Hosts durchsuchen" }) : void 0, children: hosts.length === 0 ? /* @__PURE__ */ jsx2("p", { className: "px-5 py-6 text-center text-sm text-white/45", children: data.hosts.length === 0 ? "Noch keine Proxy-Hosts angelegt." : "Kein Proxy-Host passt zur Suche." }) : /* @__PURE__ */ jsx2("ul", { className: "divide-y divide-white/[0.06]", children: hosts.map((h) => {
-      const warn = h.certificate && (h.certificate.status === "warn" || h.certificate.status === "expired");
-      const url = hostUrl(h);
-      return /* @__PURE__ */ jsxs2(
-        "li",
-        {
-          "data-testid": `host-${h.id}`,
-          className: `flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3 ${warn ? h.certificate?.status === "expired" ? "bg-red-500/[0.06]" : "bg-amber-500/[0.06]" : ""}`,
-          children: [
-            /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1 basis-60", children: [
-              /* @__PURE__ */ jsx2("p", { className: "break-words text-sm font-medium", children: url ? /* @__PURE__ */ jsx2("a", { href: url, target: "_blank", rel: "noreferrer", className: "hover:underline", children: h.domains.join(", ") }) : h.domains.join(", ") }),
-              /* @__PURE__ */ jsxs2("p", { className: "break-words text-xs text-white/50", children: [
-                "\u2192 ",
-                h.target ?? "kein Ziel",
-                h.nginx_online === false ? " \xB7 Nginx meldet einen Fehler" : ""
-              ] })
-            ] }),
-            /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-1.5", children: [
-              /* @__PURE__ */ jsx2(CertBadge, { cert: h.certificate }),
-              h.enabled ? /* @__PURE__ */ jsx2(Badge, { tone: "good", children: "an" }) : /* @__PURE__ */ jsx2(Badge, { tone: "neutral", children: "aus" }),
-              canAct && /* @__PURE__ */ jsx2(Button, { small: true, variant: h.enabled ? "danger" : "secondary", disabled: busy !== null, onClick: () => onToggle(h), children: h.enabled ? "Ausschalten" : "Einschalten" })
-            ] })
-          ]
-        },
-        h.id
-      );
-    }) }) })
+    /* @__PURE__ */ jsx2(
+      Card,
+      {
+        title: "Proxy-Hosts",
+        padded: false,
+        description: summary ? /* @__PURE__ */ jsx2("span", { "data-testid": "address-summary", className: summary.className, children: summary.text }) : void 0,
+        actions: data.hosts.length > 5 ? /* @__PURE__ */ jsx2(SearchInput, { value: search, onChange: setSearch, placeholder: "Domain, Ziel oder Container suchen", label: "Proxy-Hosts durchsuchen" }) : void 0,
+        children: hosts.length === 0 ? /* @__PURE__ */ jsx2("p", { className: "px-5 py-6 text-center text-sm text-white/45", children: data.hosts.length === 0 ? "Noch keine Proxy-Hosts angelegt." : "Kein Proxy-Host passt zur Suche." }) : /* @__PURE__ */ jsx2("ul", { className: "divide-y divide-white/[0.06]", children: hosts.map((h) => {
+          const warn = h.certificate && (h.certificate.status === "warn" || h.certificate.status === "expired");
+          const url = hostUrl(h);
+          const check = byProxy.get(h.id);
+          return /* @__PURE__ */ jsxs2(
+            "li",
+            {
+              "data-testid": `host-${h.id}`,
+              className: `flex flex-wrap items-center gap-x-4 gap-y-2 px-5 py-3 ${warn ? h.certificate?.status === "expired" ? "bg-red-500/[0.06]" : "bg-amber-500/[0.06]" : ""}`,
+              children: [
+                /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1 basis-60", children: [
+                  /* @__PURE__ */ jsx2("p", { className: "break-words text-sm font-medium", children: url ? /* @__PURE__ */ jsx2("a", { href: url, target: "_blank", rel: "noreferrer", className: "hover:underline", children: h.domains.join(", ") }) : h.domains.join(", ") }),
+                  /* @__PURE__ */ jsxs2("p", { className: "break-words text-xs text-white/50", children: [
+                    "\u2192 ",
+                    h.target ?? "kein Ziel",
+                    h.nginx_online === false ? " \xB7 Nginx meldet einen Fehler" : ""
+                  ] }),
+                  check && /* @__PURE__ */ jsx2("p", { "data-testid": `address-${h.id}`, className: `break-words text-xs ${CHECK_TEXT_CLASS[check.tone]}`, children: check.text })
+                ] }),
+                /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-1.5", children: [
+                  canAct && check?.can_start && check.docker_host_id && /* @__PURE__ */ jsx2(Button, { small: true, variant: "primary", disabled: busy !== null, onClick: () => onStart(h, check), children: "Container starten" }),
+                  /* @__PURE__ */ jsx2(CertBadge, { cert: h.certificate }),
+                  h.enabled ? /* @__PURE__ */ jsx2(Badge, { tone: "good", children: "an" }) : /* @__PURE__ */ jsx2(Badge, { tone: "neutral", children: "aus" }),
+                  canAct && /* @__PURE__ */ jsx2(Button, { small: true, variant: h.enabled ? "danger" : "secondary", disabled: busy !== null, onClick: () => onToggle(h), children: h.enabled ? "Ausschalten" : "Einschalten" })
+                ] })
+              ]
+            },
+            h.id
+          );
+        }) })
+      }
+    )
   ] });
 }
 function NetworkPage() {
@@ -560,9 +606,26 @@ function NetworkPage() {
   const loadPihole = useCallback(() => {
     call(`${API}/pihole`).then(setPihole).catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
   }, []);
-  const loadNpm = useCallback(() => {
-    call(`${API}/npm`).then(setNpm).catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
+  const [checks, setChecks] = useState(null);
+  const [checking, setChecking] = useState(false);
+  const checkSeq = useRef2(0);
+  const loadChecks = useCallback(() => {
+    const seq = ++checkSeq.current;
+    setChecking(true);
+    call(`${API}/npm/address-check`).then((result) => {
+      if (seq === checkSeq.current) setChecks(result);
+    }).catch((err) => {
+      if (seq === checkSeq.current) setChecks({ state: "unreachable", message: err instanceof Error ? err.message : String(err), checks: [], problems: 0 });
+    }).finally(() => {
+      if (seq === checkSeq.current) setChecking(false);
+    });
   }, []);
+  const loadNpm = useCallback(() => {
+    call(`${API}/npm`).then((status) => {
+      setNpm(status);
+      if (status.state === "ok") loadChecks();
+    }).catch((err) => setLoadError(err instanceof Error ? err.message : String(err)));
+  }, [loadChecks]);
   const loadAll = useCallback(() => {
     setLoadError(null);
     loadPihole();
@@ -594,6 +657,20 @@ function NetworkPage() {
   async function resume() {
     await run("pihole", `${API}/pihole/resume`, void 0, loadPihole);
   }
+  async function startContainer(host, check) {
+    const name = host.domains[0] ?? `Proxy-Host ${host.id}`;
+    const ok = await deck().confirmDialog(
+      `Container \u201E${check.container}\u201C auf ${check.docker_host} starten? Dahinter liegt ${name}.`,
+      { title: "Container starten", confirmLabel: "Starten" }
+    );
+    if (!ok) return;
+    await run(
+      `start-${host.id}`,
+      `/hosts/${encodeURIComponent(check.docker_host_id ?? "")}/actions/container.start`,
+      { payload: { container: check.container }, reason: `\xDCber den Adress-Check der Netzwerk-Seite gestartet (${name}).` },
+      loadChecks
+    );
+  }
   async function toggle(host) {
     const name = host.domains.join(", ") || `Proxy-Host ${host.id}`;
     const ok = host.enabled ? await deck().confirmDialog(
@@ -617,7 +694,19 @@ function NetworkPage() {
         message && /* @__PURE__ */ jsx2(Notice, { text: message.text, kind: message.kind, onClose: () => setMessage(null) }),
         /* @__PURE__ */ jsxs2("div", { className: "space-y-6", children: [
           pihole ? /* @__PURE__ */ jsx2(PiholeSection, { data: pihole, canAct, busy, onPause: (m) => void pause(m), onResume: () => void resume(), onRetry: loadPihole }) : !loadError && /* @__PURE__ */ jsx2(Card, { title: "Pi-hole", children: /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) }),
-          npm ? /* @__PURE__ */ jsx2(NpmSection, { data: npm, canAct, busy, onToggle: (h) => void toggle(h), onRetry: loadNpm }) : !loadError && /* @__PURE__ */ jsx2(Card, { title: "Nginx Proxy Manager", children: /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) })
+          npm ? /* @__PURE__ */ jsx2(
+            NpmSection,
+            {
+              data: npm,
+              canAct,
+              busy,
+              onToggle: (h) => void toggle(h),
+              onRetry: loadNpm,
+              checks,
+              checking,
+              onStart: (h, c) => void startContainer(h, c)
+            }
+          ) : !loadError && /* @__PURE__ */ jsx2(Card, { title: "Nginx Proxy Manager", children: /* @__PURE__ */ jsx2("p", { className: "text-sm text-white/50", children: "Lade \u2026" }) })
         ] })
       ]
     }

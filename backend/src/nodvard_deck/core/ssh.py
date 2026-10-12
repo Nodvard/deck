@@ -125,7 +125,9 @@ class ConnectionTarget:
     port: int
     username: str
     kind: str  # "ssh_key" | "ssh_password"
-    secret_value: str
+    secret_value: str = field(repr=False)
+    """Passwort oder privater Schluessel im Klartext -- bewusst nicht im `repr`, damit er nie in einer
+    Meldung oder einem Traceback mit ausgegebenen Werten landet."""
     generation: int | None = None
     """`SshPool.generation(host_id)` VOR dem Lesen der Verbindungsdaten aus der DB. Hat
     `drop_host()` seitdem zugeschlagen, sind die Daten evtl. veraltet und `get()` lehnt
@@ -593,11 +595,15 @@ async def run(
 
 @asynccontextmanager
 async def open_shell(
-    conn: asyncssh.SSHClientConnection, *, cols: int = 80, rows: int = 24, term_type: str = "xterm"
+    conn: asyncssh.SSHClientConnection, *, cols: int = 80, rows: int = 24, term_type: str = "xterm",
+    command: str | None = None,
 ) -> AsyncIterator[asyncssh.SSHClientProcess]:
     """Interaktive PTY-Sitzung -- die Grundlage fuer das Web-Terminal
-    (docs/00-DECISIONS.md D-05)."""
-    process = await conn.create_process(term_type=term_type, term_size=(cols, rows), encoding=None)
+    (docs/00-DECISIONS.md D-05). Mit `command` laeuft statt der Login-Shell genau dieses Kommando (z. B. eine
+    Shell in einem Container)."""
+    # Ohne `command` genau wie bisher (kein Positionsargument: asyncssh nimmt dann seine Vorgabe, die Login-Shell).
+    args = (command,) if command is not None else ()
+    process = await conn.create_process(*args, term_type=term_type, term_size=(cols, rows), encoding=None)
     try:
         yield process
     finally:

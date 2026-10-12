@@ -7,10 +7,13 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, KeyRound, Lock, RotateCcw, Send
 import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 
+import { GuideLink } from "../../components/GuideLink";
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
+import { EXTENSION_GUIDE } from "../../lib/docs";
 import { sameTarget } from "../../lib/targetAddress";
 import { confirmDialog } from "../../state/dialogs";
+import { QrLinkCard } from "./QrLinkCard";
 import { SchemaFields, validateValues, type JsonSchema } from "./SchemaForm";
 import { Badge, Button, Card, ExtensionStateBadge, NoticeLine, errorText, inputClass, type Notice } from "./ui";
 
@@ -157,6 +160,8 @@ export function ExtensionConfigPage(): JSX.Element {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
+  // Zaehlt die gespeicherten Staende: danach rechnet die Erweiterung den QR-Code (`x-qr-url`) neu.
+  const [saves, setSaves] = useState(0);
   // Die Erweiterung, deren Seite gerade offen ist (`null`: Seite verlassen). Eine Antwort, die erst nach dem Verlassen
   // oder nach dem Wechsel auf eine andere Erweiterung ankommt, ändert nichts mehr und leitet vor allem nicht mehr um.
   const openExt = useRef<string | null>(null);
@@ -209,6 +214,7 @@ export function ExtensionConfigPage(): JSX.Element {
       if (!stillOpen(extId)) return;
       setData(d);
       setValues(d.values);
+      setSaves((n) => n + 1);
       const cleared = (d.secrets_cleared ?? []).map((label) => {
         const slot = d.secrets.find((x) => x.label === label);
         return slot ? slot.title + (slot.item ? ` (${slot.item})` : "") : label;
@@ -245,6 +251,11 @@ export function ExtensionConfigPage(): JSX.Element {
               {info && <ExtensionStateBadge state={info.state} />}
             </h2>
             {info?.description && <p className="mt-1 max-w-2xl text-sm text-white/55">{info.description}</p>}
+            {extId && EXTENSION_GUIDE[extId] && (
+              <p className="mt-1 text-xs text-white/55">
+                <GuideLink section={EXTENSION_GUIDE[extId]} testId="extension-guide">Anleitung zu „{name}“</GuideLink>
+              </p>
+            )}
           </div>
         </div>
         <div className="flex gap-2">
@@ -276,6 +287,9 @@ export function ExtensionConfigPage(): JSX.Element {
           <Card title="Einstellungen">
             <SchemaFields schema={data.schema} values={values} onChange={setValues} />
           </Card>
+          {data.schema["x-qr-url"] && (
+            <QrLinkCard path={data.schema["x-qr-url"]} enabled={(info?.state ?? "enabled") === "enabled"} reloadKey={saves} unsaved={dirty} />
+          )}
           <ConnectionCard
             extId={extId}
             slots={data.secrets}

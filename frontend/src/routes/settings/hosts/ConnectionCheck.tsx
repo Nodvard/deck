@@ -60,7 +60,8 @@ function withoutFingerprint(detail: string, fingerprint: string): string {
   return detail.replace(fingerprint, "").replace(/\s*Fingerabdruck:\s*$/, "").trim();
 }
 
-function KeyConfirm({
+/** Ein neuer Server-Schluessel: Fingerabdruck, Vergleichsbefehl und „bestaetigen“ (auch fuer „Mit Passwort einrichten“). */
+export function KeyConfirm({
   item, hostKey, busy, onConfirm,
 }: { item: CheckItem; hostKey: HostKeyInfo | null; busy: boolean; onConfirm: () => void }) {
   return (
@@ -81,7 +82,8 @@ function KeyConfirm({
   );
 }
 
-function KeyChanged({ item, hostKey }: { item: CheckItem; hostKey: HostKeyInfo | null }) {
+/** Ein geaenderter Server-Schluessel: deutliche Warnung, bewusst ohne Bestaetigen. */
+export function KeyChanged({ item, hostKey }: { item: CheckItem; hostKey: HostKeyInfo | null }) {
   return (
     <div className="mt-1 rounded-lg border border-red-500/40 bg-red-500/10 p-3" data-testid="key-changed">
       <p className="flex items-center gap-2 font-medium text-red-200">
@@ -101,6 +103,40 @@ function KeyChanged({ item, hostKey }: { item: CheckItem; hostKey: HostKeyInfo |
         <a href="#server-schluessel" className="underline underline-offset-2">Server-Schlüssel</a> vergessen.
       </p>
     </div>
+  );
+}
+
+/**
+ * Die Punkte eines Pruefergebnisses mit Symbol, Text und Hinweis. Ohne `onConfirmKey` erscheint bei einem neuen
+ * Server-Schluessel kein Bestaetigen-Knopf (z. B. nach „Mit Passwort einrichten“, dort kennt Nodvard Deck den Schluessel schon).
+ */
+export function CheckResultList({
+  result, confirming = false, onConfirmKey,
+}: { result: CheckResult; confirming?: boolean; onConfirmKey?: (key: HostKeyInfo) => void }) {
+  return (
+    <ul className="divide-y divide-white/[0.06] rounded-lg border border-white/[0.08]" aria-label="Ergebnis der Prüfung">
+      {result.items.map((item) => {
+        const changed = item.id === "host_key" && (item.status === "fail") && result.host_key?.status !== "known";
+        return (
+          <li key={item.id} className="flex gap-3 px-3 py-2.5 text-sm">
+            <span className="mt-0.5 flex-none">{ICON[item.status]}</span>
+            <div className="min-w-0 flex-1">
+              <p className="font-medium">{item.label}</p>
+              {item.status === "confirm" && item.id === "host_key" && onConfirmKey ? (
+                <KeyConfirm item={item} hostKey={result.host_key} busy={confirming} onConfirm={() => result.host_key && onConfirmKey(result.host_key)} />
+              ) : changed ? (
+                <KeyChanged item={item} hostKey={result.host_key} />
+              ) : (
+                <>
+                  {item.detail && <p className="break-words text-white/75">{item.detail}</p>}
+                  {item.hint && <p className="mt-1 text-xs text-white/50"><HintText text={item.hint} /></p>}
+                </>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 
@@ -141,7 +177,10 @@ export function ConnectionCheck({
     setNotice(null);
     try {
       // Genau der Fingerabdruck, den die Pruefung gerade gezeigt hat (das Backend vergleicht ihn mit seinem Merkzettel).
-      await api.post(`/hosts/${hostId}/known-hosts`, { key_type: key.key_type, fingerprint: key.fingerprint });
+      // Mit einem bestimmten Zugang geprueft: ihn mitschicken, gesehen wurde der Schluessel auf seinem Port.
+      await api.post(`/hosts/${hostId}/known-hosts`, {
+        key_type: key.key_type, fingerprint: key.fingerprint, ...(credentialId ? { credential_id: credentialId } : {}),
+      });
     } catch (err) {
       setNotice({ kind: "error", text: err instanceof ApiError ? err.message : String(err) });
       setConfirming(false);
@@ -167,29 +206,7 @@ export function ConnectionCheck({
       </div>
       <div className="mt-3"><NoticeLine notice={notice} /></div>
       {result && (
-        <ul className="divide-y divide-white/[0.06] rounded-lg border border-white/[0.08]" aria-label="Ergebnis der Prüfung">
-          {result.items.map((item) => {
-            const changed = item.id === "host_key" && (item.status === "fail") && result.host_key?.status !== "known";
-            return (
-              <li key={item.id} className="flex gap-3 px-3 py-2.5 text-sm">
-                <span className="mt-0.5 flex-none">{ICON[item.status]}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium">{item.label}</p>
-                  {item.status === "confirm" && item.id === "host_key" ? (
-                    <KeyConfirm item={item} hostKey={result.host_key} busy={confirming || busy} onConfirm={() => result.host_key && void confirmKey(result.host_key)} />
-                  ) : changed ? (
-                    <KeyChanged item={item} hostKey={result.host_key} />
-                  ) : (
-                    <>
-                      {item.detail && <p className="break-words text-white/75">{item.detail}</p>}
-                      {item.hint && <p className="mt-1 text-xs text-white/50"><HintText text={item.hint} /></p>}
-                    </>
-                  )}
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+        <CheckResultList result={result} confirming={confirming || busy} onConfirmKey={(key) => void confirmKey(key)} />
       )}
     </div>
   );

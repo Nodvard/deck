@@ -49,6 +49,27 @@ export interface SetupOut {
   sudo: boolean;
 }
 
+/** Antwort von `POST /hosts/{id}/credentials/{cid}/setup-with-password`. */
+export interface SetupWithPasswordOut {
+  /** Der Befehl ist gelaufen, und die Prüfung mit dem neuen Schlüssel hat keinen Fehler gefunden. */
+  ok: boolean;
+  /** „Verbindung prüfen“ mit dem neuen Schlüssel; `null`, wenn die Prüfung gerade nicht laufen konnte. */
+  check: ConnectionCheck | null;
+  notes: string[];
+  /** Meldungen des Einrichtungsbefehls (nur seine eigenen Zeilen). */
+  messages: string[];
+  /** Der Zugang ist jetzt der Standard (nur, wenn der Server noch keinen hatte). */
+  made_default: boolean;
+}
+
+/** Fehler-Body derselben Route: fester Satz, fester Code, je nach Fall Fingerabdruck oder Meldungen des Befehls. */
+export interface SetupWithPasswordError {
+  detail: string;
+  code: string;
+  host_key?: HostKeyInfo;
+  messages?: string[];
+}
+
 export interface RequirementOut {
   ext_id: string;
   id: string;
@@ -248,6 +269,23 @@ export function fieldErrors(err: unknown): Record<string, string> {
     if (typeof field === "string" && !(field in out)) out[field] = msg;
   }
   return out;
+}
+
+/**
+ * Geht ein Passwort, das hier eingetippt wird, unverschluesselt durchs Netz? Ja, wenn die Seite ueber `http:`
+ * laeuft -- ausser sie ist direkt auf diesem Rechner geoeffnet (localhost, 127.x.x.x, ::1). Hinter einem Proxy
+ * mit HTTPS sieht der Browser `https:` und es gibt keinen Hinweis.
+ */
+export function sendsInClear(location: Pick<Location, "protocol" | "hostname">): boolean {
+  if (location.protocol === "https:") return false;
+  const host = location.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return !(host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host));
+}
+
+/** Wo der oeffentliche Server-Schluessel dieses Typs auf dem Server liegt (zum Vergleichen des Fingerabdrucks). */
+export function hostKeyFile(keyType: string): string {
+  const kind = keyType.includes("ed25519") ? "ed25519" : keyType.includes("ecdsa") ? "ecdsa" : keyType.includes("rsa") ? "rsa" : "*";
+  return `/etc/ssh/ssh_host_${kind}_key.pub`;
 }
 
 /** Kurzfassung eines Pruefergebnisses fuer die Liste: „4 von 5 in Ordnung“. */

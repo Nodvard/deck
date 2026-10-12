@@ -93,6 +93,18 @@ describe("Update-Zentrale", () => {
     expect(pi.getAllByText("Sicherheit")).toHaveLength(2);
   });
 
+  it("nennt die Server, die nie automatisch neu starten", async () => {
+    const original = DATA.config;
+    DATA.config = { ...original, auto_reboot: true, auto_reboot_skip: ["nas-box", "pve2"] };
+    try {
+      vi.stubGlobal("fetch", mockFetch([]));
+      render(<UpdatesTab canManage />);
+      expect(await screen.findByText("Neustart danach: automatisch, außer nas-box, pve2")).toBeInTheDocument();
+    } finally {
+      DATA.config = original;
+    }
+  });
+
   it("ein Server ohne bekannten Paketmanager (z. B. NAS) steht als „nicht unterstützt“ da, nicht als Fehler", async () => {
     const nas = {
       host_id: "h-nas", host_name: "NAS", host_status: "unknown", checking: false, busy: null, last_run: null,
@@ -151,7 +163,7 @@ describe("Update-Zentrale", () => {
 
     fireEvent.click(pi.getByRole("button", { name: "Sicherheitsupdates einspielen" }));
     await waitFor(() => expect(screen.getByText("Raspberry Pi: Erledigt.")).toBeInTheDocument());
-    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("2 Sicherheitsupdate(s)"), expect.anything());
+    expect(confirmDialog).toHaveBeenCalledWith(expect.stringContaining("2 Sicherheitsupdates auf"), expect.anything());
     expect(calls.find((c) => c.url.endsWith("/hosts/h-pi/upgrade"))?.body).toEqual({ mode: "security" });
     expect(calls.some((c) => c.url.endsWith("/actions/a1/approve"))).toBe(true);
   });
@@ -638,5 +650,45 @@ describe("Update-Zentrale", () => {
     await screen.findByTestId("updates-h-pi");
     expect(screen.queryByRole("button", { name: "Sicherheitsupdates einspielen" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Alle jetzt prüfen/ })).toBeNull();
+  });
+});
+
+describe("Zwei Wege, Updates automatisch einzuspielen", () => {
+  function withConfig(config: Partial<UpdatesOverview["config"]>) {
+    const data = { ...DATA, config: { ...DATA.config, ...config } };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/defender/updates")) return new Response(JSON.stringify(data), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    }));
+  }
+
+  it("ein Satz erklärt den Unterschied zwischen Nodvard Deck und unattended-upgrades", async () => {
+    withConfig({});
+    render(<UpdatesTab canManage />);
+    const text = (await screen.findByTestId("auto-explain")).textContent ?? "";
+    expect(text).toContain("Nodvard Deck spielt sie nach seinem Zeitplan ein");
+    expect(text).toContain("unattended-upgrades");
+    expect(text).toContain("Einer der beiden Wege reicht.");
+  });
+
+  it("spielt Nodvard Deck für alle Server selbst ein, entfällt der Tipp; „Aufräumen“ bleibt", async () => {
+    withConfig({ auto_enabled: true, auto_tag: null });
+    render(<UpdatesTab canManage />);
+    await screen.findByText("Raspberry Pi");
+    expect(screen.queryByText(/Tipp: Der Server kann Sicherheitsupdates/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Einrichten" })).toBeNull();
+    // Auch beim Server mit unattended-upgrades (docker) gibt es „Aufräumen“ – vorher hing es am Tipp.
+    expect(screen.getAllByRole("button", { name: "Aufräumen" })).toHaveLength(2);
+  });
+
+  it("ohne eigenes Einspielen (oder nur für markierte Server) bleibt der Tipp beim Server ohne unattended-upgrades", async () => {
+    for (const config of [{ auto_enabled: false }, { auto_enabled: true, auto_tag: "updates" }]) {
+      withConfig(config);
+      const { unmount } = render(<UpdatesTab canManage />);
+      expect(await screen.findByText(/Tipp: Der Server kann Sicherheitsupdates/)).toBeInTheDocument();
+      expect(screen.getAllByRole("button", { name: "Einrichten" })).toHaveLength(1);
+      unmount();
+    }
   });
 });

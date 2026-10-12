@@ -551,6 +551,10 @@ def test_job_spec_follows_the_settings():
     assert (default.id, default.schedule, default.enabled) == ("warnung", "*/10 * * * *", True)
     assert _WarnJobSpec(None, {"warn_interval_min": 15}).schedule == "*/15 * * * *"
     assert _WarnJobSpec(None, {"warn_interval_min": 1}).schedule == "*/5 * * * *"
+    # Ein Abstand von frueher, der 60 nicht glatt teilt, laeuft mit dem naechstkleineren Teiler.
+    assert _WarnJobSpec(None, {"warn_interval_min": 7}).schedule == "*/6 * * * *"
+    assert _WarnJobSpec(None, {"warn_interval_min": 59}).schedule == "*/30 * * * *"
+    assert _WarnJobSpec(None, {"warn_interval_min": 25}).schedule == "*/20 * * * *"
     off = _WarnJobSpec(None, {"warn_disk_enabled": False, "warn_temp_enabled": False})
     assert off.enabled is False and off.schedule == "0 0 31 2 *"
     assert _WarnJobSpec(None, {"warn_disk_enabled": False}).enabled is True

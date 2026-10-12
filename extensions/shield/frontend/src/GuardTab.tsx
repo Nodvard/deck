@@ -81,7 +81,14 @@ const SEVERITY: Record<string, { label: string; tone: Tone }> = {
   info: { label: "Hinweis", tone: "info" },
 };
 
-const ACK_LABEL: Record<string, string> = { new_port: "Als bekannt übernehmen", file_changed: "Änderung übernehmen" };
+/** Neuer Port und geänderte Datei: „Ist in Ordnung“ übernimmt den neuen Stand (früher „Als bekannt übernehmen“ und
+ * „Änderung übernehmen“). Bei Angriff, Fail2ban oder neuer Anmelde-Adresse wird nichts übernommen, das Ereignis nur
+ * abgehakt: dort bleibt es bei „Zur Kenntnis genommen“ (ein „in Ordnung“ für einen Angriff wäre falsch). */
+const ACK_TAKES_OVER: Record<string, string> = {
+  new_port: "Der Port gilt danach als bekannt und meldet sich nicht wieder.",
+  file_changed: "Der neue Stand der Datei gilt danach als richtig.",
+};
+const ACK_HINT_OTHER = "Das Ereignis wird abgehakt. Gesperrt oder geändert wird dadurch nichts.";
 
 function EventDetail({ ev, onBan }: { ev: SecurityEvent; onBan: (ip: string) => void }) {
   const d = ev.detail as {
@@ -178,15 +185,18 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
   const acknowledge = (ev: SecurityEvent) =>
     run(ev.kind_label, async () => {
       await call(`${API}/events/${ev.id}/acknowledge`, { method: "POST" });
-      return ev.kind in ACK_LABEL ? "als bekannt übernommen." : "bestätigt.";
+      return ev.kind in ACK_TAKES_OVER ? "als in Ordnung markiert." : "zur Kenntnis genommen.";
     });
 
   const acknowledgeAll = () =>
     run("Ereignisse", async () => {
-      const ok = await deck().confirmDialog("Alle offenen Ereignisse bestätigen? Neue Ports und geänderte Dateien gelten danach als bekannt.", { confirmLabel: "Alle bestätigen" });
+      const ok = await deck().confirmDialog(
+        "Alle offenen Ereignisse abhaken? Neue Ports und geänderte Dateien gelten danach als bekannt. Gesperrt oder geändert wird dadurch nichts.",
+        { confirmLabel: "Alle abhaken" },
+      );
       if (!ok) return "abgebrochen.";
       const r = await call<{ acknowledged: number }>(`${API}/events/acknowledge-all`, { method: "POST" });
-      return `${r.acknowledged} bestätigt.`;
+      return `${r.acknowledged} abgehakt.`;
     });
 
   const ban = (hostId: string, hostName: string, ip: string, unban = false) =>
@@ -257,7 +267,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
             <label className="flex items-center gap-1.5 text-xs text-white/55">
               <input type="checkbox" checked={showAll} onChange={(e) => setShowAll(e.target.checked)} /> auch erledigte
             </label>
-            {canManage && shownEvents.some((e) => !e.acknowledged) && <Button small onClick={() => void acknowledgeAll()}>Alle bestätigen</Button>}
+            {canManage && shownEvents.some((e) => !e.acknowledged) && <Button small onClick={() => void acknowledgeAll()}>Alle abhaken</Button>}
           </div>
         }
       >
@@ -276,7 +286,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                   <button type="button" onClick={() => setOpen(open === ev.id ? null : ev.id)} className="text-xs text-white/50 hover:text-white">
                     {open === ev.id ? "weniger" : "Details"}
                   </button>
-                  {canManage && !ev.acknowledged && <Button small onClick={() => void acknowledge(ev)}>{ACK_LABEL[ev.kind] ?? "Zur Kenntnis genommen"}</Button>}
+                  {canManage && !ev.acknowledged && <Button small onClick={() => void acknowledge(ev)} title={ACK_TAKES_OVER[ev.kind] ?? ACK_HINT_OTHER}>{ev.kind in ACK_TAKES_OVER ? "Ist in Ordnung" : "Zur Kenntnis genommen"}</Button>}
                 </div>
                 {open === ev.id && <EventDetail ev={ev} onBan={(ip) => void ban(ev.host_id, ev.host_name, ip)} />}
               </li>
@@ -407,7 +417,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                     <section>
                       <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">Datei-Wächter</p>
                       {v.files_pending.length === 0 ? (
-                        <p className="text-xs text-emerald-300/80">{v.files_watched} Dateien überwacht – keine unbestätigten Änderungen.</p>
+                        <p className="text-xs text-emerald-300/80">{v.files_watched} Dateien überwacht – keine offenen Änderungen.</p>
                       ) : (
                         <ul className="space-y-0.5 text-xs">
                           {v.files_pending.map((p) => <li key={p} className="font-mono text-amber-200">{p}</li>)}

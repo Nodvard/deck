@@ -18,15 +18,23 @@ const USERS = [
   },
 ];
 
-function mockFetch(overrides: { users?: unknown[]; onCreate?: (body: unknown) => void; onPatch?: (id: string, body: unknown) => void; onDelete?: (id: string) => void; onReset?: (id: string) => void } = {}) {
+function mockFetch(overrides: {
+  users?: unknown[]; onCreate?: (body: unknown) => void; onPatch?: (id: string, body: unknown) => void; onDelete?: (id: string) => void;
+  onReset?: (id: string) => void; meTotp?: boolean; answers?: Response[]; roles?: unknown[];
+} = {}) {
   return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const method = init?.method ?? "GET";
+    if (url.endsWith("/api/v1/me") && method === "GET" && overrides.meTotp !== undefined) {
+      return new Response(JSON.stringify({ id: "user-owner", username: "owner1", totp_enabled: overrides.meTotp }), { status: 200 });
+    }
+    // Vorgegebene Antworten fuer Aenderungen (z. B. 403 totp_missing), der Reihe nach.
+    if (method !== "GET" && overrides.answers?.length) return overrides.answers.shift()!;
     if (url.endsWith("/api/v1/users") && method === "GET") {
       return new Response(JSON.stringify(overrides.users ?? USERS), { status: 200 });
     }
     if (url.endsWith("/api/v1/roles") && method === "GET") {
-      return new Response(JSON.stringify(ROLES), { status: 200 });
+      return new Response(JSON.stringify(overrides.roles ?? ROLES), { status: 200 });
     }
     if (url.endsWith("/api/v1/users") && method === "POST") {
       const body = JSON.parse(init?.body as string);
@@ -328,5 +336,111 @@ describe("UsersPage", () => {
 
     fireEvent.click(within(screen.getByTestId("user-user-x")).getByRole("button", { name: /Bearbeiten/ }));
     expect(screen.getByLabelText(/Neues Passwort setzen/)).toBeInTheDocument();
+  });
+
+  it("Zwei-Faktor zurücksetzen mit eigener Zwei-Faktor-Anmeldung: auch der eigene Code geht mit", async () => {
+    const onReset = vi.fn();
+    const users = [{ ...USERS[0], totp_enabled: true }, { ...USERS[1], totp_enabled: true }];
+    const fetchMock = mockFetch({ users, onReset, meTotp: true });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+    await screen.findByText("owner1");
+
+    fireEvent.click(within(screen.getByTestId("user-user-nico")).getByRole("button", { name: "Zwei-Faktor zurücksetzen" }));
+    const code = await screen.findByLabelText(/^Zwei-Faktor-Code/);
+    const confirm = screen.getByRole("button", { name: "Zurücksetzen" });
+    fireEvent.change(screen.getByLabelText(/^Dein eigenes Passwort/), { target: { value: "admin-passwort" } });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(code, { target: { value: " 123456 " } });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+
+    await waitFor(() => expect(onReset).toHaveBeenCalledWith("user-nico"));
+    const post = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/reset-2fa"))!;
+    expect(JSON.parse(post[1]!.body as string)).toEqual({ current_password: "admin-passwort", totp_code: "123456" });
+  });
+
+  it("Zwei-Faktor zurücksetzen: fragt der Server nach dem Code, erscheint das Feld", async () => {
+    const users = [{ ...USERS[0], totp_enabled: true }, { ...USERS[1], totp_enabled: true }];
+    const missing = new Response(JSON.stringify({ detail: "Bitte gib zusätzlich den aktuellen Zwei-Faktor-Code ein.", code: "totp_missing" }), { status: 403 });
+    vi.stubGlobal("fetch", mockFetch({ users, answers: [missing] }));
+    renderPage();
+    await screen.findByText("owner1");
+
+    fireEvent.click(within(screen.getByTestId("user-user-nico")).getByRole("button", { name: "Zwei-Faktor zurücksetzen" }));
+    await screen.findByText(/überall abgemeldet/);
+    expect(screen.queryByLabelText(/^Zwei-Faktor-Code/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^Dein eigenes Passwort/), { target: { value: "admin-passwort" } });
+    fireEvent.click(screen.getByRole("button", { name: "Zurücksetzen" }));
+
+    expect(await screen.findByLabelText(/^Zwei-Faktor-Code/)).toBeInTheDocument();
+    expect(screen.getByText("Gib zusätzlich deinen eigenen Zwei-Faktor-Code ein.")).toBeInTheDocument();
+  });
+
+  it("Fremdes Passwort setzen: verlangt das eigene Passwort und, bei eigener Zwei-Faktor-Anmeldung, den Code", async () => {
+    const onPatch = vi.fn();
+    const fetchMock = mockFetch({ onPatch, meTotp: true });
+    vi.stubGlobal("fetch", fetchMock);
+    renderPage();
+    await screen.findByText("owner1");
+
+    fireEvent.click(within(screen.getByTestId("user-user-nico")).getByRole("button", { name: /Bearbeiten/ }));
+    // Ohne neues Passwort keine Bestätigung nötig.
+    expect(screen.queryByLabelText(/^Dein eigenes Passwort/)).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/Neues Passwort setzen/), { target: { value: "neues-passwort-1" } });
+    const save = screen.getByRole("button", { name: "Speichern" });
+    expect(screen.getByText(/Unter „Meldungen“ steht danach/)).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Dein eigenes Passwort/), { target: { value: "admin-passwort" } });
+    expect(save).toBeDisabled();
+    fireEvent.change(await screen.findByLabelText(/^Zwei-Faktor-Code/), { target: { value: "654321" } });
+    expect(save).toBeEnabled();
+    fireEvent.click(save);
+
+    await waitFor(() => expect(onPatch).toHaveBeenCalled());
+    expect(onPatch.mock.calls[0][1]).toEqual({ password: "neues-passwort-1", current_password: "admin-passwort", totp_code: "654321" });
+  });
+
+  const ROLES_WITH_ADMIN_FLAG = [{ ...ROLES[0], manages_users: true }, { ...ROLES[1], manages_users: false }];
+
+  it("Neues Konto mit Verwaltungsrechten: verlangt das eigene Passwort und schickt es mit", async () => {
+    let created: unknown = null;
+    vi.stubGlobal("fetch", mockFetch({ onCreate: (body) => (created = body), roles: ROLES_WITH_ADMIN_FLAG }));
+    renderPage();
+    await screen.findByText("owner1");
+
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    fireEvent.change(screen.getByLabelText(/^Benutzername/), { target: { value: "frisch" } });
+    fireEvent.change(screen.getByLabelText(/^Passwort/), { target: { value: "correct-horse-battery" } });
+    expect(screen.queryByLabelText(/^Dein eigenes Passwort/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Administrator"));
+    expect(screen.getByText(/Diese Rolle darf andere Konten verwalten/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+    expect(await screen.findByText("Zur Bestätigung brauchst du dein eigenes Passwort.")).toBeInTheDocument();
+    expect(created).toBeNull();
+
+    fireEvent.change(screen.getByLabelText(/^Dein eigenes Passwort/), { target: { value: "admin-passwort" } });
+    fireEvent.click(screen.getByRole("button", { name: "Anlegen" }));
+    await waitFor(() => expect(created).not.toBeNull());
+    expect(created).toMatchObject({ role_ids: ["role-admin"], current_password: "admin-passwort" });
+  });
+
+  it("Verwaltungsrolle vergeben: verlangt beim Bearbeiten das eigene Passwort", async () => {
+    const onPatch = vi.fn();
+    vi.stubGlobal("fetch", mockFetch({ onPatch, roles: ROLES_WITH_ADMIN_FLAG }));
+    renderPage();
+    await screen.findByText("owner1");
+
+    fireEvent.click(within(screen.getByTestId("user-user-nico")).getByRole("button", { name: "Bearbeiten" }));
+    fireEvent.click(screen.getByLabelText("Administrator"));
+    const save = screen.getByRole("button", { name: "Speichern" });
+    expect(screen.getByText(/dass du sie „nico“ gegeben hast/)).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/^Dein eigenes Passwort/), { target: { value: "admin-passwort" } });
+    fireEvent.click(save);
+
+    await waitFor(() => expect(onPatch).toHaveBeenCalled());
+    expect(onPatch.mock.calls[0][1]).toEqual({ role_ids: ["role-viewer", "role-admin"], current_password: "admin-passwort" });
   });
 });

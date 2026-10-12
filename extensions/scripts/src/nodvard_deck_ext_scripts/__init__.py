@@ -55,13 +55,14 @@ from nodvard_sdk import (
     WidgetSpec,
     current_job_trigger,
 )
-from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec, GateOutcome
+from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec, ActionStatus, GateOutcome
 from nodvard_sdk.errors import ActionBlocked, NodvardError
 from pydantic import BaseModel
 
 from .params import ParamError, substitute_params
 from .promotion import MAX_COUNT, RecurringFixTracker, draft_content
-from .repo import Script, ScriptMeta, ScriptRepo
+from .repo import MAX_ID_LENGTH, Script, ScriptMeta, ScriptRepo
+from .failnotice import FailureNotices
 from .skipnotice import MAX_SEND_TRIES, SkipNotices
 from .standing import (
     StandingApprovals,
@@ -92,6 +93,10 @@ def _repo_path(ctx: ExtensionContext) -> Path:
 
 def _skip_notices(ctx: ExtensionContext) -> SkipNotices:
     return SkipNotices(Path(str(ctx.data_dir)) / "skip-notices.json")
+
+
+def _failure_notices(ctx: ExtensionContext) -> FailureNotices:
+    return FailureNotices(Path(str(ctx.data_dir)) / "failure-notices.json")
 
 
 def _standing_approvals(ctx: ExtensionContext) -> StandingApprovals:
@@ -420,11 +425,37 @@ class _ScriptJobSpec:
             scheduled=current_job_trigger() == "schedule",
         )
         problem = _run_problem(result)
-        if problem is not None:
-            # Der Kern-Scheduler zaehlt einen Lauf nur als fehlgeschlagen, wenn der Handler
-            # wirft -- sonst stuende ein Lauf, der nichts getan hat, als "erfolgreich" da.
-            raise NodvardError(problem)
-        return result
+        if problem is None:
+            _failure_notices(self._ctx).forget(self._script_id)
+            return result
+        if current_job_trigger() == "schedule" and not _only_skipped(result):
+            # Wer von Hand startet, sieht das Ergebnis selbst; uebersprungene Server meldet `_notify_skipped`.
+            await self._notify_failure(problem)
+        # Der Kern-Scheduler zaehlt einen Lauf nur als fehlgeschlagen, wenn der Handler
+        # wirft -- sonst stuende ein Lauf, der nichts getan hat, als "erfolgreich" da.
+        raise NodvardError(problem)
+
+    async def _notify_failure(self, problem: str) -> None:
+        """EINE Meldung je Fehler (`FailureNotices`); ein Fehler beim Senden darf den Lauf nicht kippen."""
+        if not _failure_notices(self._ctx).claim(self._script_id, problem):
+            return
+        script = self._repo.get(self._script_id)
+        name = script.meta.name if script is not None else self._script_id
+        try:
+            await self._ctx.notify.send(
+                Notification(
+                    title=f"Skript „{name}“ fehlgeschlagen",
+                    body=(
+                        f"Der geplante Lauf von „{name}“ ist fehlgeschlagen. {problem} Diese Meldung kommt erst wieder, "
+                        "wenn sich der Fehler ändert oder das Skript zwischendurch durchgelaufen ist."
+                    ),
+                    severity=Severity.WARNING,
+                    correlation_id=f"scripts-failed:{self._script_id}",
+                    payload={"path": "/ext/scripts/scripts"},
+                )
+            )
+        except Exception:  # noqa: BLE001 -- der Lauf selbst ist wichtiger als die Meldung
+            _log.warning("Skript %s: Meldung über den Fehlschlag nicht gesendet.", self._script_id, exc_info=True)
 
 
 def _run_problem(result: dict[str, Any]) -> str | None:
@@ -441,12 +472,29 @@ def _run_problem(result: dict[str, Any]) -> str | None:
         names = ", ".join(str(r.get("host_name") or r.get("host_id")) for r in failed)
         reasons = "; ".join(dict.fromkeys(str(r["error"]) for r in failed))
         return f"Nicht ausgeführt auf {names}: {reasons}"
+    # Der Zeitplan wartet, bis eine Aktion ohne Klick (Dauerfreigabe) fertig ist: Scheitert sie auf dem Server oder
+    # lehnt das Dashboard sie ab, ist der Lauf fehlgeschlagen. Die Ausgabe nennt der Satz nicht (sie kann Inhalte vom
+    # Server enthalten und steht nur in der Aktion).
+    problems = []
+    for wanted, text in ((ActionStatus.FAILED.value, "Auf {} ist das Skript fehlgeschlagen; die Ausgabe steht unter „Aktionen“."),
+                         (ActionStatus.DENIED.value, "Auf {} hat das Dashboard den Lauf abgelehnt (siehe „Aktionen“).")):
+        hosts = [str(r.get("host_name") or r.get("host_id")) for r in results if r.get("status") == wanted]
+        if hosts:
+            problems.append(text.format(", ".join(hosts)))
+    if problems:
+        return " ".join(problems)
     if not result.get("targets"):
         skipped = [f"{r.get('host_name') or r.get('host_id')} ({r['skipped']})" for r in results if "skipped" in r]
         if skipped:
             return "Das Skript lief auf keinem Server, alle wurden übersprungen: " + ", ".join(skipped) + "."
         return "Das Skript lief auf keinem Server: Es gibt keinen passenden Zielserver."
     return None
+
+
+def _only_skipped(result: dict[str, Any]) -> bool:
+    """Lief nirgends, weil alle Server uebersprungen wurden: das meldet schon `_notify_skipped` (einmal je Liste)."""
+    results: list[dict[str, Any]] = result.get("results") or []
+    return not result.get("targets") and any("skipped" in r for r in results)
 
 
 async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> list[SdkHost]:
@@ -742,7 +790,12 @@ _SLUG_ALLOWED = set("abcdefghijklmnopqrstuvwxyz0123456789-")
 
 
 def _valid_id(script_id: str) -> bool:
-    return bool(script_id) and set(script_id) <= _SLUG_ALLOWED and not script_id.startswith("-")
+    return (
+        bool(script_id)
+        and len(script_id) <= MAX_ID_LENGTH
+        and set(script_id) <= _SLUG_ALLOWED
+        and not script_id.startswith("-")
+    )
 
 
 def _target_problem(target: dict[str, Any]) -> str | None:
@@ -942,7 +995,7 @@ class Extension(NodvardExtension):
             if not _valid_id(script_id):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Skript-ID darf nur a-z, 0-9 und '-' enthalten.",
+                    detail=f"Skript-ID darf nur a-z, 0-9 und '-' enthalten (höchstens {MAX_ID_LENGTH} Zeichen).",
                 )
             problem = _target_problem(payload.target)
             if problem:
@@ -1019,6 +1072,7 @@ class Extension(NodvardExtension):
             )
             self._repo.delete(script_id)
             _skip_notices(ctx).forget(script_id)
+            _failure_notices(ctx).forget(script_id)
             await _expire_standing(
                 ctx, script_id, script.meta.name, "Das Skript wurde gelöscht.", actor=actor, notify=False
             )

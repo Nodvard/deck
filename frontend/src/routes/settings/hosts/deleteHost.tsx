@@ -7,16 +7,22 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api, ApiError } from "../../../lib/api";
+import { useExtensions } from "../../../lib/firstSteps";
+import { hostProvider, providerDeleteNote, type HostProvider } from "../../../lib/hostProvider";
 import type { HostOut } from "../../../lib/hosts";
 import { promptDialog } from "../../../state/dialogs";
 import { Button } from "../ui";
 
 export type DeleteOutcome = { status: "deleted" } | { status: "cancelled" } | { status: "mismatch" } | { status: "error"; text: string };
 
-export function deletePrompt(host: HostOut): string {
-  const extra = host.provider_ext_id
-    ? " Dieser Server wurde automatisch eingelesen und taucht beim nächsten Abgleich wieder auf – dann ohne SSH-Zugang."
-    : "";
+/** `provider`: das Modul, das den Server eingelesen hat (`hostProvider`). Läuft es, gleicht es weiter ab und der Server
+ * kommt wieder; ist es aus, nicht. Ist nichts über das Modul bekannt, gilt der Normalfall. */
+export function deletePrompt(host: HostOut, provider?: HostProvider): string {
+  const extra = !host.provider_ext_id
+    ? ""
+    : provider?.problem
+      ? ` ${providerDeleteNote(provider)}`
+      : " Dieser Server wurde automatisch eingelesen und taucht beim nächsten Abgleich wieder auf – dann ohne SSH-Zugang.";
   return (
     `Zum Löschen den Kurznamen „${host.name}“ eintippen. Gelöscht werden auch SSH-Zugang und gemerkter Server-Schlüssel. ` +
     "Verläufe in Nodvard Shield bleiben mit dem alten Namen stehen; Skripte, die nur auf diesem Server laufen sollten, laufen danach nirgends." +
@@ -24,8 +30,8 @@ export function deletePrompt(host: HostOut): string {
   );
 }
 
-export async function deleteHost(host: HostOut): Promise<DeleteOutcome> {
-  const typed = await promptDialog(deletePrompt(host));
+export async function deleteHost(host: HostOut, provider?: HostProvider): Promise<DeleteOutcome> {
+  const typed = await promptDialog(deletePrompt(host, provider));
   if (typed === null) return { status: "cancelled" };
   if (typed !== host.name) return { status: "mismatch" };
   try {
@@ -48,11 +54,13 @@ export function DeleteHostButton({
 }) {
   const queryClient = useQueryClient();
   const [busy, setBusy] = useState(false);
+  // Nur bei eingelesenen Servern nachsehen, ob das Modul noch läuft: davon hängt der Hinweis im Dialog ab.
+  const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
 
   async function run() {
     setBusy(true);
     try {
-      const outcome = await deleteHost(host);
+      const outcome = await deleteHost(host, hostProvider(host, extensions));
       if (outcome.status === "mismatch") {
         onMessage({ kind: "error", text: `Der Kurzname stimmte nicht mit „${host.name}“ überein – nichts gelöscht.` });
       } else if (outcome.status === "error") {

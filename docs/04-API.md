@@ -78,8 +78,8 @@ POST /api/v1/auth/mfa            → {mfa_token, code} → wie 200 oben
                                    nur für eine Anmeldung (danach 401), ein Authenticator-Code je Konto nur einmal
                                    (wiederholt: 401 „Dieser Code wurde schon benutzt. …“). Falsche 6-stellige
                                    Codes zählen außerdem je Konto, egal von welcher IP und zusammen mit den
-                                   falschen Codes bei Bestätigungen (Zwei-Faktor abschalten, neue
-                                   Wiederherstellungs-Codes, Sicherung laden und einspielen, Update und Rückweg;
+                                   falschen Codes bei Bestätigungen (Passwort ändern, Zwei-Faktor abschalten,
+                                   neue Wiederherstellungs-Codes, Sicherung laden und einspielen, Update und Rückweg;
                                    siehe §3 und „System und
                                    Sicherungen“): nach 10 in 15 Min oder 20 in 24 Std 429 mit `Retry-After` (auch
                                    mit richtigem Code), `login.locked` (beginnt die Sperre bei einer Bestätigung:
@@ -99,7 +99,7 @@ GET  /api/v1/auth/bootstrap      → {needed}: gibt es noch keinen Nutzer? Solan
 POST /api/v1/auth/bootstrap      → {username, password, setup_code} → 201 {id, username, is_owner}
                                    Erstinbetriebnahme: legt den Owner an. Der `setup_code` steht im
                                    Container-Protokoll (oder `NODVARD_DECK_SETUP_CODE`). Fehlt/falsch: 403;
-                                   zu viele Fehlversuche je IP: 429; es gibt schon einen Nutzer: 409;
+                                   zu viele Fehlversuche je IP (IPv6 je /64-Netz): 429; es gibt schon einen Nutzer: 409;
                                    zu viele Passwortprüfungen gleichzeitig: 503 wie bei `/auth/login`.
                                    Nach Erfolg wird der Code gelöscht.
                                    `username` wird getrimmt und klein geschrieben, hat 3 bis 64 Zeichen,
@@ -163,6 +163,23 @@ Installationen: ein generischer Client, eigene Server-URL pro Nutzer.
 GET    /me                          PATCH /me            POST /me/password
                                      → GET /me enthält `totp_enabled`, `recovery_codes_remaining` und
                                        `timezone` (Zeitzone des Dashboards, für jeden Angemeldeten)
+                                     → POST /me/password: Body {current_password, new_password, totp_code}; 204, meldet
+                                       alle ANDEREN Anmeldungen ab (die aktuelle bleibt). Ist Zwei-Faktor an, ist
+                                       `totp_code` Pflicht (im Schema optional, kein Bruch): der aktuelle Code aus der
+                                       App oder ein Wiederherstellungs-Code, Prüfung, Antworten und Zähler wie bei
+                                       DELETE /me/totp. Erst das Passwort (falsch: 400 ohne `code`), dann – nur wenn das
+                                       neue Passwort sich vom alten unterscheidet (sonst 422, ohne den Code zu
+                                       verbrauchen) – der Code: fehlt er 403 {detail, code: "totp_missing"}, kein
+                                       Fehlversuch. Dessen `detail` ist für diesen Vorgang ein eigener, für sich
+                                       verständlicher Satz („Zum Ändern des Passworts brauchst du jetzt deinen
+                                       Zwei-Faktor-Code. Nutzt du die Handy-App und siehst kein Feld dafür, aktualisiere
+                                       zuerst die App.“): Eine ältere App kennt das Feld nicht und zeigt nur diesen
+                                       Text. Falsch 400 `totp_wrong`, App-Code schon benutzt 400 `totp_used`, zu viele
+                                       429. Ohne Zwei-Faktor reicht das Passwort wie bisher (ein mitgeschickter Code
+                                       wird dann nicht geprüft). Audit `auth.password_change` mit `detail.via`
+                                       (`totp`/`recovery_code`, nur bei Zwei-Faktor); mit Wiederherstellungs-Code
+                                       zusätzlich `mfa.recovery_used` ({remaining, aktion: "passwort_aendern"}) und
+                                       eine Meldung wie bei DELETE /me/totp.
 GET    /me/sessions                 DELETE /me/sessions/{id}
 GET    /me/tokens                   POST /me/tokens      DELETE /me/tokens/{id}
 POST   /me/totp/setup               POST /me/totp/confirm   DELETE /me/totp
@@ -198,7 +215,9 @@ POST   /me/recovery-codes           → {current_password, totp_code} → 200 {r
                                        Wiederherstellungs-Codes), Antworten, Audit (`auth.recovery_codes_generated` mit
                                        `detail.via`) und Meldung wie bei DELETE /me/totp.
                                      → Sicherheitsabfragen (POST /me/password, POST /me/totp/setup, DELETE /me/totp,
-                                       POST /me/recovery-codes, POST /users/{id}/reset-2fa mit dem Passwort des Admins):
+                                       POST /me/recovery-codes; mit dem Passwort des Admins: POST /users/{id}/reset-2fa,
+                                       PATCH /users/{id} mit `password` oder Verwaltungsrollen, POST /users mit
+                                       Verwaltungsrollen):
                                        falsches `current_password` = 400 „Das aktuelle Passwort stimmt nicht.“ + Audit
                                        `auth.password_check_failed`. Dazu zählt auch ein falscher Code bei
                                        POST /me/totp/confirm (Audit `auth.totp_confirm_failed`). Gedrosselt je
@@ -219,13 +238,29 @@ GET    /app/changelog               → {current, build, unreleased[], versions[
                                        (jeder angemeldete Nutzer; Dateien unter backend/src/nodvard_deck/changelog/)
 
 GET    /users        POST /users     GET/PATCH/DELETE /users/{id}
+                                     → Verwaltungsrollen (`manages_users` in GET /roles: die Rolle hat `users.write` oder
+                                       `*`): POST mit solchen `role_ids` und PATCH mit solchen `role_ids` verlangen wie
+                                       PATCH mit `password` `current_password` und ggf. `totp_code` des Admins (Fehler
+                                       wie dort: fehlt → 403 `code: "password_missing"`). Danach eine Meldung „Neues
+                                       Konto mit Verwaltungsrechten: …“ bzw. „Verwaltungsrechte für …“ (nur, wenn das
+                                       Konto sie vorher nicht hatte). Geprüft wird das Passwort vor dem Ziel (404, 409,
+                                       403 erst danach; nur das eigene Konto bei `password` → 409 sofort), der Code
+                                       zuletzt. DELETE bleibt ohne Bestätigung.
                                      → POST: `username` wie bei `POST /auth/bootstrap` (getrimmt, klein, 3 bis 64
                                        Zeichen, nur `a-z 0-9 . - _`, vorne Buchstabe oder Ziffer; sonst 422). Die Regel
                                        gilt nur für neue Konten: `/auth/login` und der Notfall-Befehl nehmen weiter
                                        jeden Namen an, ältere Konten (etwa mit Leerzeichen im Namen) bleiben nutzbar.
                                        `email` (POST und PATCH) prüft der Server nicht.
                                      → PATCH: `password` setzt nur das Passwort ANDERER Nutzer; das eigene → 409
-                                       (nur über /me/password mit Altpasswort), das des Owners → 403 (nur er selbst)
+                                       (nur über /me/password mit Altpasswort), das des Owners → 403 (nur er selbst).
+                                       Mit `password` verlangt der Server zusätzlich `current_password` (Passwort des
+                                       handelnden Admins; fehlt → 403 `code: "password_missing"`, falsch → 400, zu oft
+                                       → 429) und, wenn der Admin
+                                       Zwei-Faktor an hat, `totp_code` (sein Code aus der App, kein
+                                       Wiederherstellungs-Code; fehlt → 403 `code: "totp_missing"`, falsch → 400
+                                       `totp_wrong`/`totp_used`). Beide Felder sind optional im Schema (nur ergänzt);
+                                       ohne `password` braucht PATCH keine Bestätigung. Danach eine Meldung
+                                       „Zugang von „<name>“ geändert“ (Stufe Warnung, Pfad `/settings/users`).
                                      → PATCH `is_active: false` (Owner → 409) und ein neues `password` melden den Nutzer
                                        überall ab (alle Refresh-Tokens widerrufen). Nach dem Wieder-Aktivieren gilt keine
                                        alte Anmeldung mehr, er muss sich neu anmelden; nur ein vorher ausgestellter, noch
@@ -236,10 +271,14 @@ GET    /users        POST /users     GET/PATCH/DELETE /users/{id}
                                        Änderungen (`roles`/`is_active` mit altem und neuem Wert,
                                        `display_name_changed`, `email_changed`, `password_reset`); nie ein Passwort
                                        oder eine E-Mail-Adresse.
-POST   /users/{id}/reset-2fa        → `users.write`, Body {current_password} = Passwort des handelnden Admins;
+POST   /users/{id}/reset-2fa        → `users.write`, Body {current_password, totp_code?}: Passwort und, wenn er
+                                       Zwei-Faktor an hat, Code aus der App des handelnden Admins (Fehler wie bei PATCH
+                                       mit `password`; geprüft wird das Passwort zuerst, der Code erst, wenn das Ziel
+                                       passt, eine Ablehnung wegen des Ziels verbraucht also keinen Code);
                                        schaltet 2FA eines ANDEREN Nutzers ab und meldet ihn
-                                       überall ab (204). Owner: 403 (nur er selbst); eigenes Konto: 409
-                                       (→ /me/totp); ohne 2FA: 409. GET /users enthält `totp_enabled`.
+                                       überall ab (204), danach dieselbe Meldung wie bei PATCH. Owner: 403 (nur er
+                                       selbst); eigenes Konto: 409 (→ /me/totp); ohne 2FA: 409. GET /users enthält
+                                       `totp_enabled`.
 GET    /roles        POST /roles     GET/PATCH/DELETE /roles/{id}
 GET    /permissions                  → Katalog inkl. der von Extensions beigesteuerten
 
@@ -251,6 +290,7 @@ POST   /hosts/{id}/actions/{action}  → geht durch das Gate, liefert ggf. 202 �
 GET    /hosts/{id}/credentials       POST /hosts/{id}/credentials   DELETE /hosts/{id}/credentials/{cid}
 POST   /hosts/{id}/credentials/generate-key           → SSH-Schlüssel erzeugen (privater Teil nur im Tresor)
 GET    /hosts/{id}/credentials/{cid}/setup            → Einrichtungsbefehl für den Server
+POST   /hosts/{id}/credentials/{cid}/setup-with-password → Server mit einem einmaligen Passwort einrichten (hosts.write + hosts.execute)
 POST   /hosts/{id}/credentials/{cid}/make-default     → Standard-Zugang umstellen
 GET    /hosts/{id}/requirements      → was Erweiterungen auf dem Server brauchen
 POST   /hosts/{id}/check             → Verbindung prüfen (erreichbar, Server-Schlüssel, Anmeldung, Root, Erweiterungen, OS)
@@ -318,11 +358,22 @@ POST   /runs/{id}/cancel
 GET    /notifications?unread=        POST /notifications/read
 GET    /notifications/{id}           POST /notifications/read-all
 GET    /notifications/unread-count   → {unread}
+DELETE /notifications/{id}           → 204, unbekannte Kennung 404
+POST   /notifications/delete-read    → {deleted}
 ```
 
 **Meldungen** (`notifications.read` zum Lesen und Zählen): Der Lesestatus (`read_at`) gilt für alle Nutzer gemeinsam.
 Als gelesen markieren (`POST /notifications/read` mit `{ids}`, `POST /notifications/read-all`) verlangt deshalb
 zusätzlich `notifications.write` (eingebaut: Bediener, Admin, Owner), sonst `403`.
+Löschen betrifft ebenfalls alle und verlangt `notifications.write`: `DELETE /notifications/{id}` entfernt eine Meldung
+samt ihren Zustellprotokollen (`204`, unbekannte Kennung `404`), `POST /notifications/delete-read` alle gelesenen auf
+einmal (`{"deleted": n}`, ungelesene bleiben, ohne Treffer `0`). Beides steht im Protokoll als `notifications.deleted`
+(`target_type` `notification`): einzeln mit der Kennung als `target_id` und dem `title` in den Einzelheiten, gesammelt
+mit `{"count": n}`; ein Aufruf ohne Treffer schreibt nichts. Gelöscht wird in Häppchen mit Commit dazwischen; scheitert
+ein späteres Häppchen, steht trotzdem ein Eintrag mit dem bisherigen Stand (`outcome` `failure`,
+`{"count": n, "interrupted": true}`) und der Fehler geht weiter. Ein Versand an die Kanäle, der gerade läuft, wenn seine
+Meldung gelöscht wird, läuft normal zu Ende (nur das Zustellprotokoll entfällt). Außerdem räumt der Kern-Job
+`notifications-retention` jede Nacht auf (Einstellung `notifications.retention_days`, siehe unten).
 
 **Server, Zugänge und Gruppen** (`hosts.read` zum Lesen, `hosts.write` zum Ändern; jede Änderung steht im
 Protokoll):
@@ -347,9 +398,10 @@ Protokoll):
 - `GET /hosts/{id}/metrics` (`hosts.read`) fragt die aktuellen Messwerte beim `MetricsProvider` des Servers ab →
   `{values, sampled_at}` (unbekannter Server oder kein Provider: `404`). Scheitert die Abfrage an der Verbindung
   (SSH-Fehler wie Server nicht erreichbar, Anmeldung abgelehnt oder Schlüssel nicht bestätigt, `HostUnreachable`,
-  Zeitüberschreitung oder ein anderer Netzfehler), kommt `502` mit dem Grund in `detail`. Jeder andere Fehler des
-  Providers bleibt `500`, auch ein Dateifehler oder ein eigener Fehler einer Erweiterung (so meldet die
-  Proxmox-Erweiterung einen nicht erreichbaren Proxmox).
+  Zeitüberschreitung oder ein anderer Netzfehler), kommt `502` mit dem Grund in `detail`. Ebenso bei einer Ausnahme,
+  deren Klasse `readable = True` trägt ([02](02-EXTENSION-API.md)): Die Proxmox-Erweiterung meldet so einen
+  Proxmox, der nicht oder mit einem Fehler antwortet. Jeder andere Fehler des Providers bleibt `500`, auch ein
+  Dateifehler.
 - `POST /hosts/{id}/credentials`: `username` `[A-Za-z0-9_][A-Za-z0-9_.@\ -]{0,63}` (auch Windows-Namen wie `Max Mustermann`, `user@domain`, `DOMAIN\user`; keine Steuerzeichen), `port` 1–65535; bei `kind = ssh_key`
   muss `secret_value` ein privater Schlüssel ohne Passphrase sein (sonst `422`: „Der Schlüssel ist mit einer Passphrase
   geschützt …“ bzw. „Das ist kein gültiger privater SSH-Schlüssel.“). Schlüssel und Passwörter kommen nie in einer
@@ -396,6 +448,49 @@ Protokoll):
   geprüft bzw. mit `shlex.quote` gequotet. `422` für Passwort-Zugänge, nicht-Linux-Server, einen Benutzernamen, der kein
   üblicher Linux-Name ist (`^[a-z_][a-z0-9_-]{0,31}$`), und einen nicht lesbaren Schlüssel. Ändert nichts (kein
   Protokolleintrag).
+- `POST /hosts/{id}/credentials/{cid}/setup-with-password` `{password, login_user = "root", sudo = false, groups = [],
+  sudo_password_same = true}` (`hosts.write` **und** `hosts.execute`) richtet den Server für diesen Schlüssel-Zugang ein,
+  ohne dass jemand den Befehl selbst einfügt: Nodvard Deck meldet sich **einmal** mit `login_user`/`password` an,
+  führt genau den Befehl von `GET .../setup` aus (`sudo` und `groups` wie dort; als `root` direkt, sonst über
+  `sudo -S`, das das Passwort über die Standardeingabe bekommt, mit `sudo_password_same = false` über `sudo -n`, das nur
+  geht, wenn das Konto sudo ohne Passwort darf), schließt die Verbindung und prüft danach mit dem neuen Schlüssel wie
+  `POST /hosts/{id}/check`. `login_user` ist das Konto für diese eine Anmeldung, nicht der Benutzer des Zugangs. Antwort
+  `200` `{ok, check, notes, messages, made_default}`: `ok` heißt, der Befehl ist gelaufen und die Prüfung hat keinen
+  Fehler gefunden (zeigt sie noch etwas, bleibt es bei `200` mit `ok: false`); `check` ist die Antwort von
+  `POST /hosts/{id}/check` oder `null`, wenn gerade nicht geprüft werden konnte (dann steht ein Hinweis in `notes`);
+  `messages` sind nur die eigenen Zeilen des Befehls („Benutzer … angelegt.“, Hinweise, `FEHLER: …`), nie die Ausgabe
+  von sudo oder des Servers; `made_default` ist `true`, wenn der Zugang dadurch Standard wurde (nur, wenn der Server
+  noch keinen hatte; sonst bleibt es beim Knopf `make-default`). Dieselben Vorbedingungen wie `GET .../setup`
+  (`404` unbekannter Zugang, `422` für Passwort-Zugänge, nicht-Linux-Server und ungültige Benutzernamen); `422` mit
+  festem Satz am Feld auch für ein leeres, über 512 Zeichen langes oder nicht sendbares Passwort (Zeilenumbruch,
+  NUL, einzelnes Surrogat) und ein ungültiges `login_user` – nie mit dem Wert.
+  **Das Passwort wird nie gespeichert, protokolliert oder zurückgegeben** (nicht in der Datenbank, im Tresor, im Log,
+  in einer Antwort, auch keiner `422`; in der Befehlszeile steht es nie). Es geht nur an die gespeicherte Adresse
+  und den Port des Zugangs, und nur, wenn Nodvard Deck den Server-Schlüssel schon kennt: sonst `409`
+  `host_key_unconfirmed` mit `host_key` (`{status, key_type, fingerprint, expected}`), ohne dass das Passwort benutzt
+  wurde und ohne dass es einen Versuch kostet; bestätigt wird mit `POST /hosts/{id}/known-hosts` und der `credential_id`
+  dieses Zugangs. **Die Route geht bewusst nicht durchs Aktions-Gate** (siehe
+  [01 §4](01-ARCHITECTURE.md#4-das-aktions-gate)): ein Vorschlag stünde samt Eingaben in `actions.payload`, und dort
+  darf das Passwort nie landen. Dafür verlangt sie `hosts.execute` zusätzlich zu `hosts.write` (der Befehl läuft als root
+  auf dem Server, wie bei Terminal und Konsole), und jeder Versuch steht im Protokoll.
+  Fehler haben die Form `{detail, code}` mit festem deutschen Satz (nie Text vom Server oder von der SSH-Bibliothek);
+  je nach Fall kommt `host_key` oder `messages` dazu: `wrong_password` (`400`, Anmeldung abgelehnt),
+  `sudo_failed` (`400`, der Befehl lief gar nicht erst, z. B. kein sudo-Recht oder falsches sudo-Passwort),
+  `invalid_password` (`400`), `host_key_unconfirmed` und `host_key_changed` (`409`, mit `host_key`; bei `changed` wurde
+  das Passwort ebenfalls nicht gesendet, `expected` ist der gemerkte Fingerabdruck; der geänderte Schlüssel wird nie zum
+  Bestätigen angeboten), `rate_limited` und `busy` (`429`, `rate_limited` mit `Retry-After`; `busy`: für diesen Server
+  läuft schon eine Einrichtung), `unreachable` (`502`, nicht erreichbar), `connection_failed` (`502`, die Verbindung kam
+  nicht zustande oder brach beim Anmelden ab; es ist nichts ausgeführt worden), `connection_lost` (`502`, die Verbindung
+  brach ab, nachdem der Befehl gestartet war: die Einrichtung kann teilweise gelaufen sein, mit „Verbindung prüfen“
+  nachsehen, ein neuer Versuch ist gefahrlos), `setup_failed` (`502`, der Befehl lief und scheiterte, mit
+  `messages`) und `timeout` (`504`, nach 90 s ohne Ende; er kann trotzdem durchgelaufen sein). Grenzen: je Ziel
+  (Adresse und Port) 5 und je Nutzer 10 Versuche in 10 Minuten (als Versuch zählt jeder Lauf, bei dem das Passwort an
+  den Server gehen könnte), dazu je Nutzer 30 Aufrufe in 5 Minuten, je Server nur ein Lauf gleichzeitig. Die Zähler
+  liegen im Speicher. Protokoll `host.setup_with_password` (`target_type` `host`; `outcome` `success`/`failure`;
+  `detail`: `credential_id`, `username`, `login_user`, `sudo`, `groups`, `result` (`ok` oder der Fehlercode), bei
+  Erfolg zusätzlich `check_ok` und `made_default`; nie das Passwort), dazu `host.connection_checked` für die Prüfung
+  und `host.credential_made_default`, wenn der Zugang Standard wurde. Eine Sperre (`rate_limited`) steht je Nutzer
+  nur einmal im Zeitfenster im Protokoll; Fehler vor dem Lauf (`403`, `404`, `422`) gar nicht.
 - `POST /hosts/{id}/credentials/{cid}/make-default` `{delete_previous = false}` (`hosts.write`; Body darf fehlen) macht
   den Zugang zum Standard. Mit `delete_previous` werden der bisherige Standard und sein Geheimnis in derselben
   Transaktion gelöscht und seine offenen SSH-Verbindungen sofort geschlossen; ohne `delete_previous` werden die
@@ -445,6 +540,12 @@ Protokoll):
   anderen Typs) → `409` („… Erst den alten vergessen.“): ein weiterer Schlüsseltyp wird nie per Bestätigen
   hinzugefügt. Protokoll `host.known_key_pinned`
   (`key_type`, `fingerprint`).
+- `credential_id` bei `POST /hosts/{id}/known-hosts` (optional, neu; ältere Aufrufer schicken es nicht): der SSH-Zugang
+  dieses Servers, mit dem die Prüfung den Schlüssel gesehen hat. Sein Port zählt als der der letzten Prüfung; ohne
+  Angabe gilt wie bisher der Port des Standard-Zugangs (ohne Zugang 22). Nötig, wenn ein weiterer Zugang auf einem
+  anderen Port als der Standard liegt, z. B. beim Einrichten mit Passwort für diesen Zugang. Ein Zugang eines anderen
+  Servers oder eine unbekannte Kennung → `404`, ein Zugang ohne SSH (z. B. `api_token`) → `422`; alles Weitere
+  (frischer Fingerabdruck, nur einmal, kein anderer Schlüssel schon gemerkt) gilt unverändert.
 - `DELETE /hosts/{id}/known-hosts/{key_type}` (`hosts.write`, `204`; kein gemerkter Schlüssel dieses Typs → `404`)
   vergisst einen gemerkten Server-Schlüssel und schließt offene SSH-Verbindungen des Servers. Danach merkt Nodvard Deck
   für diesen Server keinen Schlüssel mehr von allein (Terminal, Jobs, Status), egal wie `ssh.confirm_new_host_keys`
@@ -474,11 +575,13 @@ Schlüssel, Wert ungültig → `422`:
 | `system.timezone` | IANA-Name aus der Zonendatenbank (`Europe/Berlin`) | `NODVARD_DECK_TIMEZONE`, sonst `TZ`, sonst `Europe/Berlin` |
 | `audit.retention_days` | ganze Zahl 7 bis 3650 | `NODVARD_DECK_AUDIT_RETENTION_DAYS` (90) |
 | `jobs.run_retention_days` | ganze Zahl 1 bis 3650 | `30` |
+| `notifications.retention_days` | ganze Zahl 1 bis 3650 | `90` |
 | `hosts.reachability.enabled` | `true` oder `false` (nur echte Wahrheitswerte) | `true` |
 | `hosts.reachability.interval_minutes` | ganze Zahl 1 bis 60 | `2` |
 | `system.update_check.enabled` | `true` oder `false` | `true` |
 | `system.update_check.channel` | `stable` (nur fertige Versionen) oder `beta` (auch Vorabversionen) | `stable` |
 | `ssh.confirm_new_host_keys` | `true` oder `false` | `false`; neue Installationen `true` (gesetzt beim ersten Konto) |
+| `system.trusted_proxies` | Liste von IP-Adressen/Netzen (CIDR, IPv4/IPv6), höchstens 20, öffentliche IPv4-Netze ab `/24` (private Bereiche bis zur Größe des Bereichs, höchstens `/8`), IPv6 ab `/48` | `[]` (niemandem vertrauen); `NODVARD_DECK_TRUSTED_PROXIES` gewinnt |
 
 - `system.timezone` ist die Zeitzone aller Zeitpläne (`Job.timezone`, auch die der Erweiterungen) und der
   Wartungsfenster. Beim Setzen bekommen alle Jobs mit der bisherigen Standardzone die neue (eine ausdrücklich andere
@@ -498,6 +601,14 @@ Schlüssel, Wert ungültig → `422`:
   docs/03-DATA-MODEL.md §7). Das eigene, schärfere Aufräumen von `host-reachability` (24 Stunden) bleibt bestehen.
   Der Lauf meldet `{retention_days, runs_deleted, files_deleted, orphans_deleted, chunks}`. Ein gespeicherter Wert
   außerhalb von 1 bis 3650 zählt als nicht gesetzt (Vorgabe 30).
+- `notifications.retention_days`: Der nächtliche Kern-Job `notifications-retention` (03:30 Uhr in der eingestellten
+  Zone, eigene Minute neben den anderen Aufräum-Jobs) löscht Meldungen, die vor mehr als so vielen Tagen entstanden
+  (`notifications.ts`), gelesen oder ungelesen, samt ihren Zustellprotokollen (`notification_deliveries`). **Eine
+  ungelesene kritische Meldung (`severity` `critical`, noch nicht gelesen) bleibt stehen**, bis jemand sie liest; ist sie
+  gelesen, geht sie nach der Frist wie jede andere. Meldungen von heute sind nie betroffen (kleinster Wert: 1 Tag). Gelöscht wird in Häppchen zu 5000 Zeilen mit Commit dazwischen,
+  kein `VACUUM` (siehe docs/03-DATA-MODEL.md §7). Der Lauf meldet `{retention_days, deleted, chunks}`. Ein
+  gespeicherter Wert außerhalb von 1 bis 3650 zählt als nicht gesetzt (Vorgabe 90). Wer Meldungen länger behalten
+  will, stellt die Zahl hoch; ein einmal gelöschtes lässt sich nicht zurückholen.
 - `hosts.reachability.*`: Schalter und Abstand des Kern-Jobs `host-reachability` (Erreichbarkeitsprüfung, siehe
   docs/11-ERST-EINRICHTUNG.md §4.1). Jede Änderung plant den Job sofort neu (`Job.schedule` = `*/N * * * *` ab
   voller Stunde, 60 = stündlich; aus = der Job ist abgemeldet, die Zustände der Server bleiben stehen). Der Job gehört
@@ -519,6 +630,12 @@ Schlüssel, Wert ungültig → `422`:
   keinen Wert, es gilt `false`. Gemerkte Schlüssel betrifft das nie; nach `DELETE /hosts/{id}/known-hosts/{key_type}`
   ist die Bestätigung für diesen Server immer nötig. Ist `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` gesetzt
   (`true`/`false`, leer zählt als nicht gesetzt), meldet `GET /settings` deren Wert, und `PUT` antwortet mit `409`.
+- `system.trusted_proxies`: Nur von diesen Gegenstellen gelten `X-Forwarded-For` (rechteste Adresse, die selbst kein
+  eingetragener Proxy ist; trägt man ein ganzes Netz ein, kann jedes Gerät darin eine Adresse vorgeben) und
+  `X-Forwarded-Proto`, für HTTP und WebSocket; sonst bleiben sie unbeachtet. Gilt sofort. Ändern darf nur der Inhaber
+  (Owner); andere bekommen `403`, der Versuch steht als `denied` im Protokoll.
+  Gespeichert wird die einheitliche Schreibweise. Ist `NODVARD_DECK_TRUSTED_PROXIES` gesetzt (Komma-getrennt), meldet
+  `GET /settings` deren Liste, und `PUT` antwortet mit `409`. Anleitung: docs/12-REVERSE-PROXY.md.
 - Alle Änderungen dieser Tabelle ab `system.timezone` stehen mit altem und neuem Wert im Protokoll
   (`system.settings.changed`, `target_id` = Schlüssel). Ebenso die vier Schlüssel des Freigabe-Gates
   (`autonomy.mode`, `autonomy.max_risk`, `security.deny_patterns`, `maintenance.windows`). Eine Liste, die als JSON
@@ -543,6 +660,7 @@ zusätzlich `totp_code`, den aktuellen sechsstelligen Code aus der App (Wiederhe
 | `GET /system/updates/helper` | `system.read` | Zustand des Update-Helfers, ohne Anfrage ins Netz (siehe „Update-Helfer“ unten): `present` (eingerichtet und antwortet, Herzschlag höchstens 90 s alt), `reason` (warum nicht: `missing` nicht eingerichtet, `stale` antwortet nicht, `unsafe` Kanal nicht sicher, `proto` andere Protokollversion, `invalid` unlesbarer Status; sonst `null`), `ready` (könnte jetzt ein Update einspielen), `ready_reason` (fester Bezeichner des Helfers: warum er nicht bereit ist, oder ein Hinweis wie `channel_cluttered`; `finishing`: der letzte Vorgang ist entschieden, der Helfer räumt nur noch auf, `ready` ist dann `false` und `busy` `null`), `state` (`idle`/`busy`/`unsafe`/`error`), `helper_version`, `heartbeat_at`, `target` (`current_version`, `floating_tag` = `latest` oder `X.Y`, `null` bei fester Version; `pinned`: die Version steht fest in der Compose-Datei, `X.Y.Z` oder Digest), `busy` (`id`, `action` `update`/`rollback`, `step`, `since`), `previous` (Rückweg: `version`, `until`; nur solange er gilt; dazu `data_revert`: `true` = die laufende Version hat beim Start die Datenbank umgebaut, beim Rückweg geht alles seit `data_since` verloren und `accept_data_loss` ist Pflicht, `false` = die Daten bleiben, `null` = unklar, der Rückweg wird dann mit `data_unclear` abgelehnt – dieselbe Entscheidung wie bei `POST /system/updates/rollback`; `data_since`: Unix-Zeit des Umbaus, nur bei `data_revert: true`), `last_result` (`id`, `action`, `from`, `to`, `outcome`, `code`, `finished_at`), `pending` (eigene Anforderung ohne Ergebnis, höchstens 30 Minuten alt: `id`, `action`, `to`, `at`). Zeiten als Unix-Zeit in Sekunden, Gründe und Codes nur feste Bezeichner, nie Freitext. Ist `present` `false`, ist `ready` `false` und alle übrigen Felder außer `reason` sind `null`; nur `last_result` (bei `stale`) und `pending` können trotzdem gesetzt sein. Hält nebenbei neue Ergebnisse des Helfers im Protokoll fest |
 | `POST /system/updates/apply` | Owner [PW] [2FA] | `{version, current_password, totp_code?}`: Update auf `version` beim Update-Helfer anfordern → `202` `{request_id, action: "update", from, to, data_revert: false}` (`Cache-Control: no-store`); das Ergebnis steht danach in `GET /system/updates/helper`. `version` muss die neueste gefundene sein (`latest` aus `GET /system/updates`) und neuer als die laufende. `409`: Helfer fehlt oder antwortet nicht (`helper_missing`), räumt noch auf (`helper_finishing`), ist beschäftigt (`helper_busy`) oder nicht bereit (`helper_not_ready`), Kanal nicht sicher (`channel_unsafe`), schon eine Anforderung offen (`request_pending`), nicht das offizielle Image (`not_official_image`), Version in der Compose-Datei fest eingetragen (`pinned`); `422`: keine gültige Version (`bad_version`), Vorabversion (`prerelease`), nicht die neueste gefundene (`not_latest`), nicht neuer als die laufende (`not_newer`), passt nicht zum Tag der Compose-Datei (`tag_mismatch`); `429` (`rate_limited`) mit `Retry-After` |
 | `POST /system/updates/rollback` | Owner [PW] [2FA] | `{current_password, accept_data_loss?, totp_code?}`: Rückweg auf die Version vor dem letzten Update (`previous` in `GET /system/updates/helper`) anfordern → `202` wie bei `apply`, mit `action: "rollback"`. Hat die laufende Version beim Start die Datenbank umgebaut, gehen die Daten mit zurück (`data_revert: true`: alles seit dem Update geht für das Dashboard verloren, der ersetzte Stand liegt danach im Datenordner unter `restore/replaced-…`): dann ist `accept_data_loss: true` Pflicht (sonst `422` `accept_data_loss`), und vor der Anforderung wird die Vormerkung `.boot/rollback.json` geschrieben; scheitert danach das Schreiben der Anforderung oder endet der Rückweg mit `refused` oder `aborted`, wird sie wieder gelöscht. `409` wie bei `apply` außer `not_official_image` und `pinned`, dazu `no_previous` (kein Rückweg, oder er gilt nicht mehr), `data_unclear` (die Datenbank wurde umgebaut, aber der Eintrag passt nicht genau zu diesem Rückweg oder die Kopie fehlt), `marker_failed` (die Vormerkung ließ sich nicht speichern, nichts angefordert); `429` wie bei `apply` |
+| `GET /system/connection` | `system.read` | Wie diese Anfrage ankommt: `peer` (direkte Gegenstelle), `client` (verwendete Adresse), `scheme` (`http`/`https`), `via_trusted_proxy`, `forwarded_headers` (Anfrage trug `X-Forwarded-*`), `trusted_proxies`, `trusted_proxies_source` (`setting`/`env`) |
 | `GET /system/openapi.json` | `system.read` | Das vollständige OpenAPI-Dokument (alle Endpunkte samt mitgelieferter Erweiterungen); ersetzt das öffentliche `/openapi.json`, das es nur im Entwicklungsmodus oder mit `NODVARD_DECK_API_DOCS=1` gibt |
 | `GET /system/backups` | `system.read` | `config`, `key` (`key_id`, `created_at` – nie Schlüssel oder Passwort), `target` (`dir`, `default_dir`, `external_root`, `external_available`, `same_storage_as_data`, `free_bytes`, `error`), `backups[]` (`name`, `size`, `created_at`, `app_version`, `key_id`, `mode`, `status` `ok`/`ungeprueft`/`beschaedigt`, `checked_at`, `check_ok`, `key_current`), `last_run`, `running`, `sqlite`, `limits` |
 | `PUT /system/backups/config` | Owner, [PW] nur bei gefährlicher Änderung | `{enabled, schedule, keep, dir, include_runs, current_password?}`; `current_password` ist **optional** und nur nötig, wenn `keep` kleiner wird als bisher, `enabled` von an auf aus geht oder `dir` sich ändert (sonst `403` mit Text, welche Änderung das Passwort braucht; falsch `400`, zu oft `429` wie bei den anderen [PW]-Endpunkten; geprüft **vor** der Eingabeprüfung, ohne dass ein Ordner angelegt wird); `keep` 1–60, `schedule` Cron, `dir` nur `<Datenordner>/backups` oder `/backups` bzw. darunter (absolut, kein `..`, kein Symlink, `realpath` gleich, beschreibbar) → sonst `422`; `enabled` ohne Sicherungspasswort → `409`. Antwort wie `GET /system/backups` |
@@ -742,6 +860,10 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
 - Jeder Eintrag von `GET /extensions` enthält zusätzlich `bundled` (`true` bei Erweiterungen, die mit Nodvard Deck
   ausgeliefert werden, also `source == "bundled"`) und `display_version` (bei mitgelieferten die Programmversion,
   sonst die eigene `version`). `version` bleibt die Version aus `extension.toml`. `/capabilities` ist unverändert.
+- Jeder Eintrag von `GET /extensions` (und `GET /extensions/{id}`) enthält zusätzlich `stage` (`stable` oder `beta`, aus
+  `stage` im Manifest, siehe [02](02-EXTENSION-API.md#1-anatomie-einer-extension); fehlt es dort, steht `stable`). Auch jeder
+  Eintrag von `GET /pages` trägt `stage` seiner Erweiterung. Die Oberfläche kennzeichnet `beta` mit einem Abzeichen; für
+  Clients ist es nur eine Anzeige.
 - `POST /extensions/{id}/test` ruft `health()` der Erweiterung auf (bei
   Benachrichtigungskanälen zusätzlich `test()`); mit `{"mode": "message"}` sendet es stattdessen
   eine Testnachricht über den Kanal (`422`, wenn die Erweiterung keinen hat). Antwort
@@ -770,6 +892,14 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   Felder mit `x-widget: "schedule"` müssen ein gültiger Cron-Ausdruck sein (fünf Angaben, dieselbe Prüfung wie beim
   Anmelden des Jobs); sonst `422` „„<Feldtitel>“: Der Zeitplan „…“ ist ungültig. Erlaubt sind fünf Angaben: …“, und
   nichts wird gespeichert. Leer oder `null` bleibt erlaubt (dann gilt der Standard der Erweiterung).
+  Zahlenfelder (`integer`, `number`) prüft der Kern gegen `minimum` und `maximum` des Schemas (beide eingeschlossen,
+  [02 §1](02-EXTENSION-API.md#1-anatomie-einer-extension)); sonst `422`
+  „„<Feldtitel>“: Erlaubt sind Werte von 2 bis 59. Eingetragen ist -5.“, und es wird nichts gespeichert, auch kein
+  anderes Feld derselben Anfrage. `NaN` und unendlich lehnt er bei jedem Zahlenfeld ab („Bitte eine Zahl eintragen.“),
+  auch ohne Grenzen. Ein Wert außerhalb der Auswahl (`enum`) ergibt `422` „„<Feldtitel>“ muss einer dieser Werte sein: …“
+  (mit dem Titel des Felds, nicht seinem Pfad); bei Zahlen muss auch der Typ stimmen, `"10"` statt `10` wird abgelehnt.
+  Ein Wert, der schon vor einer neuen Grenze gespeichert war, bleibt stehen (keine Migration); die Erweiterung setzt ihn
+  beim Lesen selbst auf die Grenze.
 - `PUT /extensions/{id}/secrets` antwortet für ein gebundenes Geheimnis mit `409` („Erst die
   Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“),
   solange keines der Felder gespeichert einen Wert oder `default` hat.
@@ -780,7 +910,32 @@ Grenzen: Inhalt höchstens 4 KiB (sonst `413`), Anfragezeile und Kopfzeilen zusa
   `POST /ext/proxmox|backups/connections` ein altes unter demselben Namen, `PUT …/connections/{name}` eines, wenn
   `base_url` auf ein anderes Ziel zeigt (Vergleich mit `nodvard_sdk.same_target`, eine andere Schreibweise derselben
   Adresse zählt nicht), und `DELETE …/connections/{name}` das der entfernten Verbindung. Gab es eines, steht
-  `extension.secret_removed` im Protokoll.
+  `extension.secret_removed` im Protokoll. Ein Geheimnis unter dem Namen, das nicht von der Erweiterung stammt (etwa
+  über `POST /secrets` angelegt), bleibt immer unverändert: `POST` und `PUT` antworten dann `409` mit einem Satz, der
+  das Geheimnis nennt, bevor sich etwas ändert; `DELETE` entfernt die Verbindung und lässt das Geheimnis stehen.
+  Allgemein antwortet eine Erweiterungs-Route, die ein fremdes Geheimnis ersetzen oder löschen wollte
+  (`SecretNotOwned`), mit `409` und einem Satz dazu, nicht mit `500`.
+- **Fingerabdruck des Zertifikats** (`proxmox` und `backups`, ergänzt): Die Verbindungs-Routen nehmen zusätzlich
+  `tls_fingerprint_sha256` an (64 Hex-Zeichen, gern mit Doppelpunkten; gespeichert als `AB:CD:…`; ungültig → `422`;
+  leer oder `null` bei `PUT` nimmt ihn weg). Ein gesetzter Fingerabdruck schaltet `tls_insecure_skip_verify` aus; zeigt
+  `base_url` bei `PUT` auf ein anderes Ziel, fällt er weg. `GET …/connections` liefert dazu `tls_fingerprint_sha256`
+  (`null`, wenn keiner gemerkt ist) und `tls_fingerprint_invalid` (im Einstellungsfeld steht etwas Ungültiges; die
+  Verbindung ist dann gesperrt). Bestätigen nach einem Wechsel:
+
+  ```
+  GET  /ext/proxmox|backups/connections/{name}/certificate → 200 {sha256, trusted, subject, issuer, not_after,
+                                                                  stored, stored_invalid, matches}
+  POST /ext/proxmox|backups/connections/{name}/certificate {sha256} → 200 wie GET
+  ```
+
+  `GET` liest nur das Zertifikat (TLS-Handshake, nichts wird gesendet): `sha256` zeigt der Server jetzt, `stored` ist
+  der gemerkte Fingerabdruck, `matches` ob beide gleich sind. `POST` liest es erneut und speichert nur, wenn `sha256`
+  genau dem entspricht, was der Server in diesem Moment zeigt; sonst `409 {detail, code: "certificate_mismatch",
+  sha256}` mit dem aktuellen Wert. Dabei geht `tls_insecure_skip_verify` aus; Protokoll
+  `proxmox.certificate_confirmed` bzw. `backups.certificate_confirmed` mit Verbindung, Adresse, altem und neuem
+  Fingerabdruck. Beide brauchen `secrets.write`. `400` kein Fingerabdruck, `404` unbekannte Verbindung, `502` Server
+  nicht erreichbar. Eine Verbindung mit gemerktem Fingerabdruck, deren Server ein anderes Zertifikat zeigt, meldet im
+  Zustand (`details[<name>]`) `code: "certificate_changed"`, eine mit ungültigem `certificate_invalid`.
 
 ### Aktionen — der Bestätigungs-Workflow
 
@@ -940,6 +1095,273 @@ auch nach einem Neustart des Dashboards. `GET /ext/shield/defender/overview` nen
 
 Die alten Adressen `/ext/nexus-soc/…` antworten gleich (veraltet, siehe §7).
 
+### Proxmox mit Passwort verbinden (Erweiterung `proxmox`)
+
+```
+POST /ext/proxmox/connect/certificate            → 200 {base_url, certificate, backups_available}
+POST /ext/proxmox/connect                        → 200 {status: "connected", …} oder {status: "tfa_required", tfa}
+POST /ext/proxmox/connect/tfa                    → 200 wie /connect
+GET  /ext/proxmox/connections/{name}/old-tokens  → 200 {connection, users[], tokens[], privsep_off[], backups_checked}
+```
+
+Alle vier brauchen `secrets.write` (eingebaut: Admin und Owner). Das Passwort geht in genau eine Anmeldung bei Proxmox,
+nur an das bestätigte Zertifikat, und wird nie gespeichert; Ablauf und Rechte: [10](10-PROXMOX-TOKEN.md#schneller-weg-mit-passwort-verbinden).
+Jeder Versuch, bei dem Passwort oder Code hinausging, steht im Protokoll (`proxmox.connect_with_password`, ohne
+Geheimnisse).
+
+| Endpunkt | Feld | Bedeutung |
+|---|---|---|
+| `connect/certificate` | `base_url` | Adresse des Knotens; ohne Schema gilt `https://`, ohne Port 8006. Liest nur das Zertifikat, sendet nichts. |
+| `connect` | `base_url` | wie oben |
+| | `username` | Vorgabe `root@pam`, immer mit Bereich |
+| | `password` | höchstens 512 Zeichen |
+| | `name` | Kurzname der Verbindung, freiwillig (leer: Name des Clusters bzw. Knotens) |
+| | `fingerprint` | der verglichene SHA-256-Fingerabdruck; Pflicht, wenn `certificate.trusted` `false` ist |
+| | `access` | `full` (Vorgabe, „Ansehen und steuern“) oder `read` |
+| | `backups` | `true`: auch einen Zugang für Proxmox-Backups anlegen (ist das Modul aus, steht das in `notes`), `false`: nicht; ohne Angabe: wenn das Modul an ist |
+| `connect/tfa` | `flow` | aus `tfa.flow` der Antwort `tfa_required` (gilt 180 s, nur für den Nutzer, der begonnen hat) |
+| | `code`, `kind` | der Code; `kind` `totp` (Vorgabe), `recovery` oder `yubico` |
+
+**Antworten.** `certificate`: `{sha256, trusted, subject, issuer, not_after, alt_names}`; `backups_available`: ob das
+Modul Proxmox-Backups an ist. `tfa_required`: `tfa` = `{flow, kinds, expires_in_s}`. `connected`: `connection`
+(`name`, `base_url`, `token_id`, `tls_insecure_skip_verify` – jetzt immer `false`, `tls_fingerprint_sha256` – der
+bestätigte Fingerabdruck bei einem nicht anerkannten Zertifikat, sonst `null`, `tls_fingerprint_invalid`, `enabled`,
+`has_token`), `created` (was in Proxmox neu
+angelegt wurde, deutsche Sätze), `nodes`, `access`, `privileges` (Rechte der Rolle), `replaced_token_id` (bisheriger
+Token einer vorhandenen Verbindung oder `null`), `backups` (`null` oder `{name, token_id, replaced_token_id,
+privileges, storages, pool, tls_insecure_skip_verify, tls_fingerprint_sha256, enabled}`; Token von
+`nodvard-backup@pve`; eine vorhandene Verbindung wird bei der Zertifikatsprüfung nie abgeschwächt, merkt sich den
+bestätigten Fingerabdruck und bleibt aus, wenn sie aus war), `old_tokens` (wie bei
+`old-tokens`), `discovery` (`started`: das Einlesen läuft im Hintergrund, `not_started`), `notes` (deutsche Sätze).
+`old-tokens` liest mit dem gespeicherten Token der Verbindung (kein Passwort, ändert nichts): `users` die gelesenen
+Benutzer (`nodvard@pve`, dazu `nodvard-backup@pve`, wenn Proxmox-Backups gefragt werden konnte), `tokens` je
+`{token_id, user, name, privsep, command}` – nur Tokens dieser Benutzer mit den Namen, die Nodvard Deck vergibt
+(`deck…`), die keine Verbindung mehr benutzt; `command` ist der `pveum`-Befehl zum Löschen. `privsep_off`: Tokens
+dieser Benutzer ohne Privilegientrennung. `backups_checked`: ob Proxmox-Backups gefragt werden konnte (sonst zählen
+dessen Tokens nie als alt). `404` unbekannte Verbindung, `502` Proxmox nicht lesbar.
+
+**Fehler** (`connect…`): Body `{detail, code}`, dazu je nach Fall `certificate` (das Zertifikat, das der Server jetzt
+zeigt), `created` (was in Proxmox angelegt blieb), `leftover_token`/`leftover_tokens` (neue Tokens, die vielleicht in
+Proxmox liegen blieben – zum Selbstlöschen) und `retry_after` (auch als Header). `detail` ist immer ein fester
+deutscher Satz, nie Text von Proxmox.
+
+| `code` | Status | Bedeutung |
+|---|---|---|
+| `invalid_address`, `invalid_name`, `invalid_user`, `invalid_password`, `invalid_code`, `invalid_fingerprint` | 400 | Eingabe ungültig, nichts gesendet |
+| `https_required` | 400 | `http://`-Adresse, nichts gesendet |
+| `name_taken`, `already_connected` | 409 | Kurzname gehört zu einem anderen Server bzw. Adresse unter anderem Namen eingetragen |
+| `certificate_unconfirmed` | 409 | Zertifikat nicht anerkannt und kein `fingerprint`; Passwort nicht gesendet |
+| `certificate_changed` | 409 | anderes Zertifikat als bestätigt, vor der Anmeldung; Passwort nicht gesendet |
+| `certificate_changed_after_login` | 409 | anderes Zertifikat nach der Anmeldung; das Passwort ging nur an das bestätigte, danach Abbruch |
+| `wrong_password`, `login_rejected` | 400 | Anmeldung abgelehnt |
+| `tfa_unsupported` | 409 | zweiter Faktor ohne eintippbaren Code (WebAuthn/U2F) |
+| `tfa_wrong` | 400 | Code falsch; neu mit Passwort beginnen |
+| `tfa_expired` | 409 | Vorgang abgelaufen oder fremd |
+| `not_allowed` | 403 | das Proxmox-Konto darf keine Benutzer, Rollen oder Tokens anlegen |
+| `redirect` | 502 | Proxmox leitet um; Nodvard Deck folgt nicht |
+| `unreachable`, `no_tls`, `connection_failed` | 502 | Server nicht erreichbar, kein https, Verbindung abgebrochen |
+| `proxmox_error`, `probe_failed` | 502 | Fehler beim Anlegen bzw. neuer Zugang nicht benutzbar; nichts gespeichert |
+| `secret_foreign` | 409 | im Tresor liegt unter `proxmox-token:<Kurzname>` ein Geheimnis, das nicht von der Erweiterung stammt (etwa über `POST /secrets`); es bleibt unverändert, nichts gespeichert, neue Tokens wieder entfernt |
+| `save_failed` | 500 | Speichern in Nodvard Deck gescheitert; neue Tokens wieder entfernt |
+| `rate_limited`, `busy` | 429 | zu viele Versuche (`retry_after`) bzw. läuft schon |
+
+### Proxmox-Backups: Wiederherstellen als Kopie und Fehlerursache (Erweiterung `backups`)
+
+```
+GET  /ext/backups/restore/backups?connection=&vmid=&kind=   → 200 {vmid, name, kind, exists, backups[], errors[]}   Recht: hosts.execute
+GET  /ext/backups/restore/options?connection=&volid=        → 200 {kind, nodes[], suggested_vmid, suggested_name, blocked, refuse, warnings[], …}   Recht: hosts.execute
+POST /ext/backups/restore                                   → 200 {action_id, status, risk, warnings[]}   Recht: hosts.execute
+GET  /ext/backups/jobs/{job_ref}/failure?upid=              → 200 {upid, node, status, key, what, todo, detail, …}   Recht: hosts.read
+```
+
+**Wiederherstellen als Kopie.** Legt aus einer Proxmox-Sicherung einen **neuen** Gast (VM oder Container) an. Das Original
+wird nie angefasst und nie überschrieben. Die Kopie bekommt eine neue Nummer und neue MAC-Adressen und entsteht im festen
+Pool `nodvard-kopien`; Autostart ist aus, sie startet nicht von selbst. Alle drei Routen brauchen `hosts.execute`, weil die
+Auswahl feste Adressen und durchgereichte Geräte aus der Gast-Konfiguration zeigt. Was Proxmox dafür braucht (Version, Pool,
+Rechte des Tokens): [10](10-PROXMOX-TOKEN.md#wiederherstellen-als-kopie-backups). Zeiten (`ctime`, `backup_at`) sind
+Unix-Sekunden und Größen Bytes, beides so, wie Proxmox sie liefert (nicht ISO-8601).
+
+| Endpunkt | Feld | Bedeutung |
+|---|---|---|
+| `restore/backups` | `connection` | Name der Backups-Verbindung (Pflicht) |
+| | `vmid` | Nummer des Gastes, 100 bis 999999999 (Pflicht) |
+| | `kind` | `qemu` oder `lxc`, freiwillig. Ohne Angabe gilt die Art des Gastes, wie Proxmox ihn jetzt kennt; gibt es ihn nicht mehr, kommen beide Arten |
+| `restore/options` | `connection` | wie oben |
+| | `volid` | Kennung der Sicherung, aus `backups[].volid` (Pflicht) |
+| `restore` (Body) | `connection`, `volid` | wie oben |
+| | `node` | Zielknoten; muss online sein und die Sicherung sehen |
+| | `storage` | Zielspeicher auf diesem Knoten; muss VM-Platten bzw. Container aufnehmen dürfen, an sein und genug Platz haben |
+| | `vmid` | neue Nummer, 100 bis 999999999 (Zahl oder Text) |
+| | `name` | Name der Kopie: Buchstaben ohne Umlaute, Ziffern, Bindestriche und Punkte, höchstens 63 Zeichen, nicht mit einem Bindestrich anfangen oder enden |
+| | `link_down` | `true` (Vorgabe): die Netzwerkkarten der Kopie werden getrennt angelegt, weil sie im Gast dieselbe IP-Einstellung wie das Original hat; wieder verbinden geht in Proxmox. `false`: nicht trennen |
+
+**Antworten.** `restore/backups`: `vmid`, `name` (aktueller Name des Gastes oder `null`), `kind`, `exists` (ob es den Gast in
+Proxmox noch gibt), `backups[]` (neueste zuerst; je `volid`, `storage`, `kind`, `kind_label` – `VM` oder `Container` –,
+`ctime`, `size`, `notes` – einzeilig, höchstens 120 Zeichen oder `null` –, `protected`) und `errors[]` (je Backup-Speicher,
+der sich nicht lesen ließ, ein Satz „<Speicher>: <Grund>“; die übrigen Speicher stehen trotzdem in `backups`).
+
+`restore/options` ändert nichts und liefert, was ein Dialog braucht: `kind`, `kind_label`, `source_vmid`, `source_name`,
+`source_exists` (das Original), `backup_at`, `backup_size`, `disk_bytes` (grobe Obergrenze der Plattengröße laut Sicherung
+oder `null`), `nets[]` (Netzwerkkarten laut Sicherung: `key`, `bridge`, `tag`, `addresses[]` – feste Adressen, die die Kopie
+mitbekommt), `warnings[]` (Hinweise, etwa zu festen Adressen oder durchgereichten Geräten), `suggested_vmid` (eine freie
+Nummer, unter der weder alte Sicherungen liegen noch eine HA-Regel steht, sonst `null`), `suggested_name`, `pool` und
+`keep_hint` (Pool der Kopie und ein Satz, wie sie dauerhaft behalten wird), `default_node`, `default_storage` (`null`, wenn
+nichts passt) und `nodes[]`: je Knoten, der die Sicherung sehen kann, `node` und `storages[]` mit `storage`, `type`, `avail`,
+`total`, `need_bytes` (Mindestbedarf: Sicherung + 10 % + 2 GB, bei `lvm` mindestens Plattengröße + 2 GB; `null`, wenn die
+Größe der Sicherung unbekannt ist), `fits` (`avail` reicht dafür) und `warning` (Satz, wenn der Platz nur mit Thin
+Provisioning reicht). Passende Speicher stehen vorn, dann der mit dem meisten freien Platz. Zwei Felder sperren den Dialog,
+sonst sind sie `null`: `blocked` (Satz, wenn eine Kopie schon vor jeder Eingabe nicht geht: Proxmox zu alt – VMs brauchen
+VE 7.2, Container VE 6 –, oder der Pool bzw. ein Recht darauf fehlt) und `refuse` (Satz, wenn genau diese Sicherung nicht
+geht, weil sie Geräte oder Ordner des Servers durchreicht).
+
+**Vorschlag.** `POST /ext/backups/restore` prüft alles, was auch beim Ausführen geprüft wird (Knoten online, Sicherung lesbar,
+Proxmox-Version, Nummer frei und nicht die des Originals, keine alten Sicherungen und keine HA-Regel unter dieser Nummer,
+Zielspeicher und Platz, Rechte des Tokens), und legt dann einen Vorschlag mit **hohem Risiko** an (Aktion
+`backup.restore_copy`). Passt etwas nicht, entsteht gar kein Vorschlag. Die Route antwortet auch bei einem Vorschlag mit
+`200`: `action_id`, `status` (Stand der Aktion nach dem Gate, wie unter „Aktionen“; normal `proposed`, die Aktion wartet auf
+Freigabe), `risk` (`high`) und `warnings[]` (Hinweise aus den Prüfungen). Freigeben dürfen nur Rollen mit `actions.approve:high`
+(eingebaut: Admin und Owner), den Stand zeigt `GET /actions/{id}`.
+
+Beim Ausführen wird alles noch einmal frisch geprüft. Haben sich Art, Nummer des Originals oder Zeitpunkt der Sicherung seit
+dem Vorschlag geändert (die Sicherung wurde ersetzt), scheitert die Aktion, ohne etwas anzulegen. Nach dem Anlegen wartet sie
+auf die Proxmox-Aufgabe (höchstens 45 Minuten) und richtet die Kopie fertig ein (Netzwerkkarten trennen, Name und Autostart
+prüfen). Endet sie vorher (Zeitgrenze, keine Antwort von Proxmox, Neustart des Dashboards), holt der Backup-Wächter das
+Fertig-Einrichten nach. Je Kopie kommt genau eine Meldung; in Proxmox wird nie etwas gelöscht. Im Protokoll steht
+`backups.restore_copy` (`target_type` `restore`, `target_id` `<Verbindung>/<neue Nummer>`, `outcome` `success` oder `failure`).
+
+**Fehler** der drei Restore-Routen: `detail` ist ein deutscher Satz. Fehlt eine Pflichtangabe ganz (Query-Parameter
+oder Body nicht lesbar), kommt das übliche 422 von FastAPI, dort ist `detail` die Liste der Prüffehler.
+
+| Status | Bedeutung |
+|---|---|
+| 404 | Verbindung unbekannt (bei `POST` auch: `connection` fehlt) |
+| 422 | Eingabe ungültig (Nummer des Gastes, Kennung der Sicherung, Knoten, Speicher, neue Nummer, Name, `link_down`) |
+| 409 | Prüfung gescheitert, es wurde nichts angelegt: Proxmox nicht erreichbar; Sicherung von diesem Knoten aus nicht lesbar oder weg; Art nicht erkennbar oder sehr altes tar-Format; Proxmox zu alt; neue Nummer schon vergeben, gleich der des Originals oder mit alten Sicherungen bzw. einer HA-Regel belegt; Zielspeicher unpassend, ausgeschaltet oder zu voll; Geräte oder Ordner des Servers durchgereicht (`refuse`); Pool oder Recht fehlt |
+
+**Fehlerursache.** `GET /ext/backups/jobs/{job_ref}/failure` erklärt in Klartext, warum der neueste Lauf eines Backup-Jobs für
+einen Gast fehlgeschlagen ist. Proxmox meldet am Ende meist nur „job errors“; der Grund steht im Aufgabenprotokoll.
+
+| Feld | Bedeutung |
+|---|---|
+| `job_ref` (Pfad) | `<Verbindung>--<Job>--<VMID>`, so wie in den Zeilen von `GET /ext/backups/jobs` |
+| `upid` (Query) | freiwillig: ein bestimmter fehlgeschlagener Lauf (`upid` aus `GET /ext/backups/jobs/{job_ref}/history`); ohne Angabe der neueste fehlgeschlagene Lauf dieses Jobs für den Gast |
+
+Antwort: `upid`, `node`, `started_at`, `finished_at` (Unix-Sekunden), `status` (Ausgang laut Proxmox), `log_readable` (ob das
+Aufgabenprotokoll gelesen werden konnte; ohne das Proxmox-Recht `Sys.Audit` zählt nur der Status), `key` (Art der Ursache),
+`what` (was das heißt) und `todo` (was zu tun ist; beides feste deutsche Sätze) sowie `detail` (die Zeile von Proxmox, die
+den Fehler am besten beschreibt, auf 300 Zeichen gekürzt, sonst der Status; `null`, wenn nichts da ist). `key` ist einer von
+`no_space`, `target_lost`, `storage_offline`, `locked`, `pbs_auth`, `guest_agent`, `vm_timeout`, `missing_right`,
+`permission`, `io_error`, `guest_missing`, `aborted`, `unreachable`, `other_guest` (fehlgeschlagen ist ein anderer Gast im
+selben Job) oder `unknown` (keine Erklärung bekannt, es bleibt `detail`). `404`: `job_ref` ungültig oder kein
+fehlgeschlagener Lauf gefunden; `409`: Verbindung nicht (mehr) eingetragen oder Proxmox nicht lesbar.
+
+### Adress-Check für Proxy-Hosts (Erweiterung `network`)
+
+```
+GET /ext/network/npm/address-check   → 200 {state, message, checks[], problems}   Recht: hosts.read
+```
+
+Zu welchem Docker-Container führt das Ziel jedes Proxy-Hosts im Nginx Proxy Manager, und läuft er? Die Route liest nur, hat
+keine Parameter und antwortet immer mit `200`: Zustände wie „nicht eingerichtet“ stehen in `state`, nie als Fehlerstatus.
+Die Container kommen aus der Service-Matrix (Fähigkeit `ServiceCatalog`), die dafür jeden Docker-Server per SSH fragt.
+
+| `state` | Bedeutung |
+|---|---|
+| `ok` | geprüft; `checks` hat je Proxy-Host einen Eintrag. `message` ist `null` – außer wenn kein Server als Docker-Server markiert ist: dann steht dort ein Satz, und alle Einträge sind `unknown` |
+| `not_configured` | Nginx Proxy Manager ist nicht (vollständig) eingetragen; `message` sagt, was fehlt |
+| `no_catalog` | die Service-Matrix ist ausgeschaltet oder nicht geladen, es gibt keinen Check |
+| `unreachable`, `auth_failed` | der Nginx Proxy Manager antwortet nicht bzw. lehnt die Anmeldung ab |
+| `docker_unreadable` | die Service-Matrix lieferte gar keine Container-Liste (Fehler oder Zeitlimit); `message` nennt die Gründe. Sind einzelne oder alle Docker-Server nicht erreichbar, liefert die Service-Matrix dafür Platzhalter: dann bleibt es bei `ok` mit `unreachable`-Einträgen. Das Lesen darf je Anbieter der Container-Liste höchstens 45 Sekunden dauern, danach steht dort „Zeitüberschreitung nach 45 s“. Gelingt es nur teilweise, wird mit dem Gelesenen geprüft |
+
+Außer bei `ok` ist `checks` leer und `problems` `0`. Ein Eintrag von `checks[]` hat:
+
+| Feld | Bedeutung |
+|---|---|
+| `proxy_id` | ID des Proxy-Hosts (`hosts[].id` in `GET /ext/network/npm`) |
+| `status` | mit Container: sein Zustand (`running`, `stopped`, `restarting`, `paused`, `removing`; ein anderer Docker-Zustand steht wörtlich da, `unknown`, wenn er fehlt). Ohne Container: `unknown` (kein Ziel, kein Docker-Ziel oder nichts gefunden), `ambiguous` (mehrere Container passen) oder `unreachable` (der Server war nicht erreichbar, nicht geprüft) |
+| `tone` | `good` (läuft), `bad` (Container gestoppt), `warn` (startet ständig neu, ist angehalten, wird entfernt oder hat einen anderen Zustand; auch: Server nicht erreichbar), sonst `neutral` |
+| `text` | fertiger deutscher Satz |
+| `container` | Name des zugeordneten Containers oder `null` |
+| `docker_host` | Name des Servers oder `null` |
+| `docker_host_id` | Server-ID, nur wenn ein Container zugeordnet ist |
+| `can_start` | `true`, wenn der zugeordnete Container gestoppt ist (`exited`/`created`) und gestartet werden kann |
+
+`problems` zählt die Einträge mit `tone` `bad`. Ein ausgeschalteter Proxy-Host wird trotzdem zugeordnet, ist aber nie `bad`
+oder `warn` und bietet kein Starten an: Dass dahinter nichts läuft, ist dann meist gewollt. Ebenso bei einem nur vermuteten
+Treffer (ein Containername passt, aber der Server des Proxy Managers ist unbekannt; der Satz beginnt „Führt vermutlich …“).
+
+**Zuordnung**, in dieser Reihenfolge: (1) Ist das Ziel (`forward_host`) Adresse oder Name eines Docker-Servers, zählt der
+Container auf diesem Server, der `forward_port` veröffentlicht; läuft von mehreren genau einer, gewinnt er. (2)
+`host.docker.internal` und Docker-Gateways (`172.17.0.1` usw.) gelten als der Server, auf dem der Nginx Proxy Manager läuft;
+`localhost` nur, wenn er im Host-Netz läuft. (3) Sonst gilt das Ziel als Containername (oder Compose-Dienst) auf dem Server
+des Proxy Managers. Mehrere Treffer ergeben `ambiguous`, keiner `unknown`; das ist kein Fehler, das Ziel kann ein Dienst
+außerhalb von Docker sein. Zusätzliche Orte (`locations`) eines Proxy-Hosts werden nicht geprüft. Starten kann ein Client über
+den Aktionsweg des Servers: `POST /hosts/{docker_host_id}/actions/container.start` mit `{"payload": {"container": …},
+"reason": …}`, wie jede Aktion durch das Gate.
+
+### Wächter-Vorlagen für den Echtzeit-Wächter (Erweiterung `shield`)
+
+```
+GET  /ext/shield/defender/watch-templates   → 200 {suggestions[], errors[], watch_paths[]}   Recht: soc.manage
+POST /ext/shield/defender/watch-paths       → 200 {added, covered_by, watch_paths[]}          Recht: settings.write
+```
+
+Der Echtzeit-Wächter prüft ohne eigene Einstellung nur Orte, an denen Schadsoftware typischerweise landet (`/tmp`,
+`/var/tmp`, `/dev/shm`, `/home`, `/root`, `/opt`). Die Vorlagen finden Ordner, in denen fremde Dateien landen – Samba- und
+NFS-Freigaben und der Datenordner einer Nextcloud –, und tragen sie auf Klick in die Einstellung `watch_paths` ein. Die
+Einstellung gilt für alle Server; ein Ordner, den es auf einem Server nicht gibt, kostet dort nichts. Ein großer Ordner
+kostet bei jedem Lauf des Wächters Zeit.
+
+**`watch-templates`** hat keine Parameter, ändert nichts und antwortet mit `200`. Gesucht wird nur lesend auf den Servern, die
+der Virenschutz prüft (verwaltete Linux-Server mit Zugangsdaten, bei gesetzter Markierung nur diese): `smb.conf`,
+`/etc/exports`, die `config.php` einer Nextcloud und Docker-Volumes mit „nextcloud“ im Namen. Es läuft als root, wenn das ohne
+Passwort geht, sonst als normaler Benutzer (dann fehlt meist die Nextcloud); je Server höchstens 20 Sekunden, bis zu vier
+Server gleichzeitig. Aussortiert werden Samba-Drucker und `[homes]`, Pfade mit Platzhaltern (`%U`), ganze Systemordner
+(`/etc`, `/usr`, `/var` und ähnliche) und alles unter `/proc`, `/sys`, `/dev`, `/run` und `/boot`.
+
+- `suggestions[]`: je Ordner `path`, `kinds[]` (`samba`, `nfs`, `nextcloud`), `hosts[]` (Namen der Server, auf denen er
+  gefunden wurde), `covered_by` (der schon überwachte Ordner, der diesen enthält, sonst `null`) und `excluded_by` (der
+  „ausgenommene Ordner“, der ihn enthält – dort sucht der Wächter nicht –, sonst `null`). Zuerst kommen die Ordner, die weder
+  überwacht noch ausgenommen sind, dann die übrigen, jeweils nach Pfad sortiert.
+- `errors[]`: ein Satz je Server, bei dem nicht oder nur teilweise gesucht werden konnte (keine Antwort, Zeitlimit, Antwort
+  unvollständig). Die übrigen Server stehen trotzdem in `suggestions`.
+- `watch_paths[]`: die Ordner, die jetzt überwacht werden (die Standardorte, solange nichts eingestellt ist).
+
+**`watch-paths`** nimmt den Body `{"path": "/srv/samba/fotos"}` (1 bis 255 Zeichen) und hängt den Ordner an `watch_paths` an;
+steht dort noch nichts, werden die Standardorte mit dem neuen Ordner zusammen gespeichert. Der Pfad wird vereinfacht
+(Schlussstrich, `//`, ein angehängtes `/*` fällt weg). Antwort `200`: `added` (`true`: neu eingetragen; `false`: ein schon
+überwachter Ordner enthält ihn, nichts geändert), `covered_by` (dieser Ordner, sonst `null`) und `watch_paths` (die Liste
+danach). Gleichzeitige Aufrufe tragen nichts doppelt ein. Nur ein neu eingetragener Ordner steht im Protokoll
+(`shield.watch_path_added`, `detail.path`).
+
+| Status | Bedeutung |
+|---|---|
+| 400 | kein brauchbarer Ordnerpfad: beginnt nicht mit `/`, hat `..` als Pfadteil, enthält `%` oder Steuerzeichen, ist ein ganzer Systemordner, `/` selbst oder liegt unter `/proc`, `/sys`, `/dev`, `/run` oder `/boot` |
+| 409 | der Ordner liegt in einem ausgenommenen Ordner (`exclude_paths`); erst die Ausnahme in den Einstellungen entfernen |
+| 422 | Body ungültig, `path` fehlt, ist leer oder länger als 255 Zeichen |
+
+Die alten Adressen `/ext/nexus-soc/…` antworten gleich (veraltet, siehe §7).
+
+### Abo-Link für die ntfy-App (Erweiterung `ntfy`)
+
+```
+GET /ext/ntfy/subscribe-link   → 200 {url, text, error}   Recht: extensions.manage
+```
+
+Die Erweiterung `ntfy` heißt in der Oberfläche „Push-Nachrichten“. Die Route liefert den Link, mit dem die ntfy-App auf dem
+Handy das Thema des Dashboards abonniert; die Einstellungsseite macht daraus den QR-Code (`x-qr-url` in
+`settings.schema.json`). Die Route hat keine Parameter und rechnet aus den **gespeicherten** Einstellungen (`server_url`, `topic`),
+nicht aus ungespeicherten Eingaben. Der Link enthält nur Adresse, Port, Pfad und Thema, nie Zugangsdaten aus der Adresse, das
+Zugriffstoken oder ein anderes Geheimnis. Die Antwort ist immer `200`; lässt sich kein Link berechnen, steht ein Satz in
+`error` und kein Fehlerstatus.
+
+- `url`: `ntfy://<Server>[:<Port>][/<Pfad>]/<Thema>?display=Nodvard%20Deck`, bei einem `http://`-Server zusätzlich
+  `secure=false` (sonst nimmt die App https an). Beispiel: `ntfy://ntfy.example.com/deck-alarme?display=Nodvard%20Deck`.
+- `text`: ein Satz, was man mit dem Code tut (Kamera darauf halten, die ntfy-App bietet das Abonnieren an).
+- `error`: ein Satz, wenn kein Link möglich ist; dann sind `url` und `text` `null`. Gründe: Adresse des Servers und/oder Thema
+  fehlen noch, die Adresse ist ungültig (etwa weder `http` noch `https`), oder es sind nur weitere Kanäle eingerichtet (Telegram,
+  Discord usw.) und ntfy selbst nicht – der QR-Code gehört zu ntfy.
+
 ### Dashboard und Widgets
 
 ```
@@ -963,7 +1385,17 @@ PATCH  /apps/{id}                    → App       nur die genannten Felder; ico
 DELETE /apps/{id}                    → 204
 PUT    /apps/order                   → [App]     {ids: [...]}: diese zuerst, in dieser Reihenfolge; Rest dahinter
                                                  (bis 50 mehr als die Obergrenze, denn das Cockpit schickt immer alle)
+GET    /apps/suggestions             → {suggestions: [{name, url, source, host}], errors: [str]} (apps.write)
 ```
+
+`GET /apps/suggestions` (ergänzt) sammelt Vorschläge für neue Kacheln (Seite „Apps“): von jeder Erweiterung mit
+`AppSuggestionProvider` (z. B. Netzwerk: eingeschaltete Proxy-Hosts des Nginx Proxy Manager, `https://`, wenn ein
+Zertifikat dran ist) und aus erkannten Diensten (`ServiceCatalog`) mit Adresse, die gerade laufen (`source` ist dann
+der Name der Erweiterung). Jeder Vorschlag wird wie eine von Hand angelegte App geprüft (Name auf 60 Zeichen gekürzt;
+unbrauchbare Adressen fallen still weg); Adressen, die es als App schon gibt (gleiche Adresse, Groß-/Kleinschreibung
+von Schema und Rechner und ein abschließender `/` zählen nicht), und doppelte kommen nicht vor; höchstens 200. Jede
+Quelle hat 12 s; antwortet eine nicht, steht ein Satz in `errors` (ohne Text aus der Quelle), die anderen bleiben.
+Der Server ruft keine der Adressen auf; angelegt wird erst mit `POST /apps`.
 
 App = `{id, name, url, icon, color, group, sort_order, open_in_new_tab, host_id, host, created_at, updated_at}`
 (`host` = Anzeigename des Servers). Rechte: Lesen `hosts.read` (wie die erkannten Apps im Cockpit); Schreiben
@@ -1025,6 +1457,7 @@ dieselbe Funktion auf (Akteur `system`).
 
 ```
 GET    /files/sources                            → alle FileSources aller Extensions (ohne gesperrte, s. u.)
+GET    /files/places?host_id=                     → wichtige Orte eines Servers: [{label, path, icon, hint}]
 GET    /files/{source}/list?path=&cursor=
 GET    /files/{source}/stat?path=
 GET    /files/{source}/info                       → SourceInfo (Quota, Health, Deep-Link)
@@ -1036,8 +1469,22 @@ POST   /files/transfer                            → {from:{source,path}, to:{s
 GET    /files/search?q=&sources=                  → Fan-out, Ergebnisse gemischt
 ```
 
+`/files/places` sammelt bei allen `FilePlaceProvider` ([02 §3](02-EXTENSION-API.md#3-capabilities--der-kern-der-entkopplung))
+die Abkürzungen für einen Server. Jeder Anbieter hat sechs Sekunden und läuft gleichzeitig mit den anderen; scheitert
+einer oder braucht zu lange, fehlen nur seine Orte (eine Zeile im Container-Protokoll, ohne Traceback). Es kommen nur
+absolute Pfade ohne `..` an, geglättet und nach Pfad entdoppelt, höchstens 30. Rechte: `files.read` und `hosts.read`
+(sonst `403`); ein unbekannter Server ist `404`. Wer zu diesem Server keine Dateiquelle öffnen darf (der Server hat keine
+oder sie verlangt `hosts.execute`, s. u.), bekommt eine leere Liste.
+
 `/files/transfer` ist das Drag-&-Drop zwischen Quellen im Dateimanager: der Server streamt
 `open_read(A) → open_write(B)`, ohne dass die Datei über den Client läuft.
+
+`GET /files/sources` liefert je Quelle `source_id`, `label`, `icon`, `caps` und `host_id` (nur additiv): die Kennung des
+Servers, hinter dem die Quelle steht (die SSH-Quellen der Server), sonst `null`. Eine Quelle nennt sie über das
+optionale Attribut `host_id` ([02 §3](02-EXTENSION-API.md#3-capabilities--der-kern-der-entkopplung)); nur ein nicht leerer
+Text zählt, alles andere ergibt `null`. Der Dateimanager fragt damit `GET /hosts` ab (nur, wenn mindestens eine Quelle
+einen Server hat) und zeigt bei diesen Quellen Status und Betriebssystem des Servers. Ohne Leserecht auf Server (`hosts.read`)
+fehlen nur diese Angaben, die Quellen bleiben.
 
 Meinen Quelle und Ziel dieselbe Datei, antwortet `/files/transfer` mit `409` („Quelle und Ziel sind dieselbe
 Datei.“) und startet keinen Lauf. In derselben Quelle zählt der gleiche Pfad, bei einer Quelle mit
@@ -1179,10 +1626,20 @@ sind binär und voluminös; beides würde den Steuerkanal verstopfen.
 
 ```
 GET  /terminal/hosts                                    → [host_id, …]   (Hosts, für die eine Sitzung möglich ist)
-POST /terminal/sessions   {host_id, cols, rows, user?}  → {session_id, ws_url}
+POST /terminal/sessions   {host_id, cols, rows, user?, scope?, ref?}  → {session_id, ws_url}
 ```
 
 Die Kern-Seite `/terminal` (mehrere Tabs, je Tab eine Sitzung) baut darauf auf.
+`scope` und `ref` (nur zusammen, sonst `422`) öffnen eine Shell **in** etwas auf dem Server statt auf dem Server
+selbst, etwa `{"scope": "container", "ref": "nginx"}`. `scope` hat die Form `^[a-z][a-z0-9_-]{0,31}$`, `ref` beginnt
+mit Buchstabe oder Ziffer und enthält sonst nur `A–Z a–z 0–9 _ . : @ -` (höchstens 255 Zeichen, sonst `422`). Bietet
+kein Modul dafür eine Shell an (`ScopedTerminalTarget` mit diesem `scope`, das `ref` öffnen kann), antwortet der Server
+mit `404`; fällt der Anbieter bis zum Verbinden weg, endet der Socket mit `4501` (nie eine Shell auf dem Server
+selbst). Die Seite öffnet so einen Tab direkt über `/terminal?host=<id>&scope=…&ref=…` (z. B. „Konsole“ in der
+Service-Matrix). `terminal.open` und `terminal.close` tragen dann `scope` und `ref` in `detail`. Ein halber oder
+ungültiger Link öffnet auf der Seite gar nichts (nie ersatzweise die Shell des Servers). Die Container-Konsole der
+Service-Matrix hängt nur am Recht `hosts.execute`, gilt also auch, wenn das Modul „Terminal“ aus ist, läuft im
+Container als dessen Standard-Benutzer (oft root) und öffnet sich nie im Container von Nodvard Deck selbst.
 Scheitert das Öffnen, kommt vor dem Close-Frame `{"type":"error","message":…}`. `message` nennt den Grund
 und ist nie leer, bei Netzfehlern ein deutscher Satz („Server antwortet nicht (Zeitüberschreitung bei …). Ist er
 eingeschaltet und im Netz?“); derselbe Grund steht in `terminal.open` mit Ergebnis `failure` (in `reason`).
@@ -1307,11 +1764,15 @@ ohne Token mit `401` (früher war es ohne Anmeldung erreichbar). Ohne Anmeldung 
 `hosts.execute` noch `actions.approve:<risiko>` für das Risiko einer Aktion hat, bekommt ihren `payload` gekürzt
 (`payload_hidden`, siehe §3). Ebenso bei der Größe: Einen Body über 1 MiB (siehe §1) beantwortet ein
 Endpunkt, der ihn liest, mit `413` (früher gab es keine allgemeine Grenze); Uploads haben eigene, höhere Grenzen.
-Ebenso verlangen `DELETE /me/totp` und `POST /me/recovery-codes` bei eingeschalteter Zwei-Faktor-Anmeldung zusätzlich
-`totp_code` (App-Code oder Wiederherstellungs-Code), `POST /system/backups/download`, `POST /system/backups/{name}/ticket`
-und `POST /system/restore/{id}/schedule` den App-Code. Im Vertrag ist das Feld optional (kein Schema-Bruch). Ältere
-Clients, z. B. eine ältere Android-App, bekommen `403` mit `code: "totp_missing"` und können diese Aktionen erst nach
-einem Update ausführen. Fehler beim Code tragen zusätzlich `code` (`totp_wrong`, `totp_used`), auch bei Update und Rückweg.
+Ebenso verlangen `POST /me/password`, `DELETE /me/totp` und `POST /me/recovery-codes` bei eingeschalteter
+Zwei-Faktor-Anmeldung zusätzlich `totp_code` (App-Code oder Wiederherstellungs-Code), `POST /system/backups/download`,
+`POST /system/backups/{name}/ticket` und `POST /system/restore/{id}/schedule` den App-Code. Ebenso verlangen
+`PATCH /users/{id}` mit `password` oder Verwaltungsrollen und `POST /users` mit Verwaltungsrollen das eigene
+`current_password` des Admins (fehlt: `403` mit `code: "password_missing"`) und `POST /users/{id}/reset-2fa` zusätzlich
+den App-Code, wenn der Admin Zwei-Faktor an hat. Im Vertrag ist das Feld optional (kein Schema-Bruch). Ältere Clients,
+z. B. eine ältere Android-App, bekommen `403` mit `code: "totp_missing"` und können diese Aktionen erst nach einem Update
+ausführen; beim Passwort ändern erklärt das `detail` selbst, dass die App zuerst zu aktualisieren ist. Fehler beim Code
+tragen zusätzlich `code` (`totp_wrong`, `totp_used`), auch bei Update und Rückweg.
 Und bei Erweiterungen: `ctx.http` folgt keiner Weiterleitung mehr, auch nicht mit `follow_redirects=True`, und
 `ctx.audit.log()` schreibt keine Kern-Einträge (`mfa.*`, `auth.*`, `login.*`, `system.*`, `user.*`); beides in
 [02 §2](02-EXTENSION-API.md#2-der-extensioncontext).

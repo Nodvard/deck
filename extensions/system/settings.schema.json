@@ -33,7 +33,9 @@
       "type": "integer",
       "default": 10,
       "minimum": 5,
-      "maximum": 59,
+      "maximum": 30,
+      "enum": [5, 6, 10, 12, 15, 20, 30],
+      "x-enum-labels": {"5": "alle 5 Minuten", "6": "alle 6 Minuten", "10": "alle 10 Minuten", "12": "alle 12 Minuten", "15": "alle 15 Minuten", "20": "alle 20 Minuten", "30": "alle 30 Minuten"},
       "title": "Prüfabstand (Minuten)",
       "description": "Wie oft Platten und Temperaturen geprüft werden. Dieselbe Warnung kommt nur einmal; wieder erst, wenn der Wert mindestens 5 darunter lag, oder als Erinnerung nach 24 Stunden."
     },

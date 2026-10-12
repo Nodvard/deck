@@ -27,6 +27,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { ACTION_STATUS_LABEL, runAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorText } from "../../../_shared/frontend/src/api";
 import { formatBytes } from "../../../_shared/frontend/src/format";
+import { LoadError, errorMessage, fetchJson } from "../../../_shared/frontend/src/loadError";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { SettingsLink, useSettingText } from "../../../_shared/frontend/src/links";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
@@ -49,9 +50,12 @@ interface ServiceEntry {
   status: string;
   tone: string;
   url: string | null;
+  /** Von Nodvard Deck erkannte Adresse; `url` ist die eigene, wenn `url_custom`. */
+  url_detected?: string | null;
+  url_custom?: boolean;
 }
 
-type Verb = "start" | "stop" | "restart";
+type Verb = "start" | "stop" | "restart" | "remove";
 
 interface ContainerStats {
   cpu_percent: number | null;
@@ -276,11 +280,29 @@ export function ImageUpdateBadge({ result, checking = false, running = true }: {
   return <NeutralBadge label={result.status === "local" ? "selbst gebaut" : "nicht prüfbar"} reason={result.reason} />;
 }
 
+/** Ergebnis der Prüfung nach der Aktion (`after_check.py`): läuft der Container danach stabil? Nur bei Start/Neustart. */
+export function afterCheckText(action: { result?: { detail?: Record<string, unknown> | null } | null }): string | null {
+  const check = action.result?.detail?.check as { text?: unknown } | undefined;
+  return typeof check?.text === "string" && check.text ? check.text : null;
+}
+
 const VERB_TEXT: Record<Verb, { label: string; done: string; confirm?: string }> = {
   start: { label: "Starten", done: "gestartet" },
   stop: { label: "Stoppen", done: "gestoppt", confirm: "wirklich stoppen? Der Dienst ist danach nicht erreichbar." },
   restart: { label: "Neustart", done: "neu gestartet", confirm: "wirklich neu starten?" },
+  remove: {
+    label: "Löschen", done: "gelöscht",
+    confirm: "wirklich löschen? Volumes und das Image bleiben, aber was nur im Container selbst lag, ist weg.",
+  },
 };
+
+/** Shell im Container: die Terminal-Seite des Kerns mit `scope=container` (ScopedTerminalTarget in shell.py). */
+export function consoleHref(hostId: string, container: string): string {
+  return `/terminal?${new URLSearchParams({ host: hostId, scope: "container", ref: container }).toString()}`;
+}
+
+/** Nur gestoppte Container lassen sich löschen (wie `_REMOVABLE_STATES` im Backend). */
+const REMOVABLE_STATES = new Set(["exited", "created", "dead"]);
 
 const TAIL_OPTIONS = [100, 200, 500, 2000];
 const MAX_LINES = 5000;
@@ -473,6 +495,59 @@ function DetailsPanel({ entry }: { entry: ServiceEntry }): JSX.Element {
   );
 }
 
+/** Eigene Adresse fuer die Kachel (`PUT .../url`), z. B. wenn die erkannte auf den falschen Port zeigt. Bleibt
+ * gespeichert, auch wenn der Container neu erstellt wird; „Erkannte nehmen“ loescht sie wieder. Vorbelegt ist nur eine
+ * eigene Adresse, die erkannte steht als Platzhalter: Sonst wuerde „Speichern“ ohne Aenderung die erkannte als eigene
+ * festschreiben, und spaetere Verbesserungen der Erkennung kaemen nicht mehr an. */
+function UrlPanel({ entry, onSaved, onClose }: { entry: ServiceEntry; onSaved: () => void; onClose: () => void }): JSX.Element {
+  const current = entry.url_custom ? entry.url ?? "" : "";
+  const [value, setValue] = useState(current);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const save = async (url: string | null) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await authedFetch(`/ext/service-matrix/containers/${encodeURIComponent(entry.host_id!)}/${encodeURIComponent(entry.container!)}/url`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+      });
+      if (!res.ok) throw new Error(await errorText(res));
+      onSaved();
+      onClose();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="space-y-2 text-xs" onSubmit={(e) => { e.preventDefault(); if (value.trim() !== current) void save(value.trim() || null); }}>
+      <label className="block">
+        <span className="mb-1 block opacity-70">Adresse, die „Öffnen“ und die Kachel aufrufen</span>
+        <input type="url" value={value} onChange={(e) => setValue(e.target.value)} placeholder={entry.url_detected ?? "http://192.0.2.10:8080"}
+          className="w-full rounded border border-white/10 bg-black/30 px-2 py-1.5 sm:max-w-md" />
+      </label>
+      <p className="opacity-60">
+        {entry.url_detected ? `Erkannt: ${entry.url_detected}` : "Nodvard Deck hat für diesen Container keine Weboberfläche erkannt."}
+      </p>
+      {error && <p role="alert" className="text-red-400">{error}</p>}
+      <div className="flex flex-wrap gap-1.5">
+        <button type="submit" disabled={busy || value.trim() === current} className={`rounded bg-emerald-500/20 px-2 py-1 text-emerald-300 hover:bg-emerald-500/30 disabled:opacity-40 ${TOUCH}`}>
+          {busy ? "…" : "Speichern"}
+        </button>
+        {entry.url_custom && (
+          <button type="button" disabled={busy} onClick={() => void save(null)} className={`rounded bg-white/10 px-2 py-1 hover:bg-white/20 disabled:opacity-40 ${TOUCH}`}>
+            Erkannte nehmen
+          </button>
+        )}
+        <button type="button" onClick={onClose} className={`rounded px-2 py-1 opacity-70 hover:opacity-100 ${TOUCH}`}>Abbrechen</button>
+      </div>
+    </form>
+  );
+}
+
 function LogPanel({ entry, onClose }: { entry: ServiceEntry; onClose: () => void }): JSX.Element {
   const [lines, setLines] = useState<string[]>([]);
   const [tail, setTail] = useState(200);
@@ -617,6 +692,7 @@ export function ServiceMatrixPage(): JSX.Element {
   const setLogsFor = (id: string | null) => updateUrl({ logs: id });
   const hostFilter = urlParams.get("host") || null;
   const [detailsFor, setDetailsFor] = useState<string | null>(null);
+  const [urlFor, setUrlFor] = useState<string | null>(null);
   const [updateFor, setUpdateFor] = useState<string | null>(null);
   const [storageFor, setStorageFor] = useState<string | null>(null);
   const [query, setQuery] = useState("");
@@ -643,17 +719,13 @@ export function ServiceMatrixPage(): JSX.Element {
   const reloadImages = useCallback(() => void loadImages(unmountSignal()), [loadImages, unmountSignal]);
 
   const load = useCallback(() => {
-    setError(null);
+    // Der Hinweis auf einen Ladefehler verschwindet erst mit dem nächsten Erfolg (sonst blinkt er alle 30 s).
     // Auch der Stand der Image-Updates: Ergebnisse des Tagesjobs oder einer Prüfung in
     // einem anderen Tab erscheinen sonst erst nach einem Neuladen der Seite.
     void loadImages(unmountSignal());
-    authedFetch("/ext/service-matrix/widgets/matrix")
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<{ data: ServiceEntry[] }>;
-      })
-      .then((body) => setServices(body.data))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+    fetchJson<{ data: ServiceEntry[] }>("/ext/service-matrix/widgets/matrix")
+      .then((body) => { setServices(body.data); setError(null); })
+      .catch((err: unknown) => setError(errorMessage(err)));
   }, [loadImages, unmountSignal]);
 
   useEffect(() => {
@@ -701,9 +773,13 @@ export function ServiceMatrixPage(): JSX.Element {
   async function trigger(entry: ServiceEntry, verb: Verb) {
     const text = VERB_TEXT[verb];
     if (text.confirm) {
-      const extra = entry.is_self && verb === "restart" ? " Das ist Nodvard Deck selbst – die Oberfläche ist kurz weg." : "";
+      const extra = entry.is_self && verb === "restart"
+        ? " Das ist Nodvard Deck selbst – die Oberfläche ist kurz weg."
+        : verb === "remove" && entry.compose_project
+          ? ` Er gehört zum Compose-Projekt „${entry.compose_project}“: Beim nächsten „docker compose up“ (auch beim Einspielen eines Updates) legt Docker ihn wieder an.`
+          : "";
       const ok = await deck().confirmDialog(`"${entry.name}" ${text.confirm}${extra}`, {
-        danger: verb === "stop",
+        danger: verb === "stop" || verb === "remove",
         confirmLabel: text.label,
       });
       if (!ok) return;
@@ -721,9 +797,10 @@ export function ServiceMatrixPage(): JSX.Element {
       }
       const status = action.status ?? "?";
       const failure = action.result?.error;
+      const check = afterCheckText(action);
       setMessage(
         status === "succeeded"
-          ? `"${entry.name}" ${text.done}.`
+          ? `"${entry.name}" ${text.done}.${check ? ` Prüfung danach: ${check}` : ""}`
           : `"${entry.name}": ${text.label} -> ${ACTION_STATUS_LABEL[status] ?? status}${failure ? ` (${failure})` : ""}.`,
       );
       load();
@@ -786,7 +863,8 @@ export function ServiceMatrixPage(): JSX.Element {
   }
 
   if (!services && !error) return <div className="p-6 text-sm opacity-60">Lade …</div>;
-  if (error) return <div className="p-6 text-sm text-red-400">Fehler: {error}</div>;
+  // Scheitert erst das Nachladen (alle 30 s), bleibt die Tabelle mit dem letzten Stand stehen; der Hinweis steht darüber.
+  if (error && !services) return <div className="p-4 sm:p-6"><LoadError what="Die Liste der Container" error={error} onRetry={load} /></div>;
 
   const imageSummary = summarizeImages(visibleImages, imagesChecking);
 
@@ -830,6 +908,7 @@ export function ServiceMatrixPage(): JSX.Element {
           </span>
         )}
       </div>
+      {error && <LoadError what="Der aktuelle Stand" error={error} onRetry={load} hint="Die Tabelle zeigt den letzten bekannten Stand." />}
       {message && <p className="mb-3 text-sm opacity-80">{message}</p>}
       {(imageSummary || imageMessage) && (
         <p className="mb-3 flex flex-wrap items-center gap-x-3 text-xs opacity-80" aria-live="polite" data-testid="image-summary">
@@ -980,6 +1059,12 @@ export function ServiceMatrixPage(): JSX.Element {
                               {busy("start") ? "…" : "Starten"}
                             </button>
                           )}
+                          {manageable && REMOVABLE_STATES.has(s.state) && !s.is_self && (
+                            <button type="button" disabled={busy("remove")} onClick={() => void trigger(s, "remove")}
+                              className={`rounded px-2 py-1 text-xs text-red-300 hover:bg-red-500/20 disabled:opacity-40 ${TOUCH}`}>
+                              {busy("remove") ? "…" : "Löschen"}
+                            </button>
+                          )}
                           {manageable && isRunning && (
                             <button type="button" disabled={busy("restart")} onClick={() => void trigger(s, "restart")}
                               className={`px-2 py-1 text-xs disabled:opacity-40 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition ${TOUCH}`}>
@@ -999,6 +1084,13 @@ export function ServiceMatrixPage(): JSX.Element {
                               Details
                             </button>
                           )}
+                          {manageable && isRunning && !s.is_self && s.host_id && s.container && deck().hasPermission("hosts.execute") && (
+                            // Shell im Container über das Terminal des Kerns (scope/ref, siehe shell.py).
+                            <a href={consoleHref(s.host_id, s.container)}
+                              className={`rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 ${TOUCH}`}>
+                              Konsole
+                            </a>
+                          )}
                           {manageable && (
                             <button type="button" onClick={() => setLogsFor(logsOpen ? null : s.id)} aria-expanded={logsOpen}
                               className={`rounded px-2 py-1 text-xs hover:bg-white/20 ${TOUCH} ${logsOpen ? "bg-white/20" : "bg-white/10"}`}>
@@ -1010,9 +1102,23 @@ export function ServiceMatrixPage(): JSX.Element {
                               Öffnen
                             </a>
                           )}
+                          {manageable && s.host_id && s.container && deck().hasPermission("apps.write") && (
+                            <button type="button" onClick={() => setUrlFor(urlFor === s.id ? null : s.id)} aria-expanded={urlFor === s.id}
+                              title={s.url_custom ? "Eigene Adresse – hier ändern oder die erkannte wieder nehmen." : "Adresse für „Öffnen“ selbst festlegen."}
+                              className={`px-1 py-1 text-xs opacity-70 hover:opacity-100 hover:underline max-md:px-2 max-md:py-2`}>
+                              {s.url_custom ? "Adresse (eigene)" : "Adresse"}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
+                    {urlFor === s.id && s.host_id && s.container && (
+                      <tr role="row" className="max-md:block">
+                        <td role="cell" colSpan={7} className="bg-black/20 p-2 max-md:block">
+                          <UrlPanel entry={s} onSaved={load} onClose={() => setUrlFor(null)} />
+                        </td>
+                      </tr>
+                    )}
                     {detailsFor === s.id && (
                       <tr role="row" className="max-md:block">
                         <td role="cell" colSpan={7} className="bg-black/20 p-2 max-md:block">

@@ -3,6 +3,7 @@ import { LogOut, Menu, Search, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
+import { BetaBadge, isBeta } from "../components/BetaBadge";
 import { CommandPalette, useCommandPaletteHotkey } from "../components/CommandPalette";
 import { DemoBanner } from "../components/DemoBanner";
 import { GlobalDialogs } from "../components/GlobalDialogs";
@@ -48,11 +49,12 @@ function navClass({ isActive }: { isActive: boolean }) {
   }`;
 }
 
-function NavItem({ to, icon, label, end, badge }: { to: string; icon: string; label: string; end?: boolean; badge?: number }) {
+function NavItem({ to, icon, label, end, badge, beta }: { to: string; icon: string; label: string; end?: boolean; badge?: number; beta?: boolean }) {
   return (
     <NavLink to={to} end={end} className={navClass}>
       <Icon name={icon} className="opacity-80 group-hover:opacity-100" />
       <span className="flex-1 truncate">{label}</span>
+      {beta && <BetaBadge className="text-[10px] leading-none" spoken={false} />}
       {badge !== undefined && badge > 0 && (
         <span className="accent-gradient rounded-full px-1.5 text-[10px] font-semibold text-white" aria-label={`${badge} ungelesen`}>
           {badge > 99 ? "99+" : badge}
@@ -88,6 +90,7 @@ export function AppShell() {
   // Terminal-API (`hosts.execute`) -- ohne sie fuehrt der Menuepunkt ins Leere.
   const canUseTerminal = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const canReadNotifications = useAuthStore((s) => s.hasPermission("notifications.read"));
+  const canReadHosts = useAuthStore((s) => s.hasPermission("hosts.read"));
   const unreadNotifications = useUnreadNotifications(canReadNotifications);
   // Kleine Versionsnummer unten in der Seitenleiste (und damit im Handy-Menü); ein Klick
   // öffnet das Änderungsprotokoll, "Neu" erscheint, solange man den Stand noch nicht kennt.
@@ -193,6 +196,7 @@ export function AppShell() {
         <nav className="flex flex-1 flex-col gap-5 overflow-y-auto px-3 pb-4" aria-label="Hauptnavigation">
           <div className="flex flex-col gap-0.5">
             <NavItem to="/" end icon="layout-dashboard" label="Übersicht" />
+            {canReadHosts && <NavItem to="/apps" icon="boxes" label="Apps" />}
             <NavItem to="/files" icon="folder-open" label="Dateien" />
             {canUseTerminal && <NavItem to="/terminal" icon="terminal" label="Terminal" />}
             {canReadNotifications && <NavItem to="/notifications" icon="bell" label="Meldungen" badge={unreadNotifications} />}
@@ -203,7 +207,7 @@ export function AppShell() {
               {section && <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40">{section}</p>}
               <div className="flex flex-col gap-0.5">
                 {sectionPages.map((page) => (
-                  <NavItem key={`${page.ext_id}:${page.id}`} to={`/ext/${page.ext_id}${page.path}`} icon={page.icon ?? "box"} label={page.title} />
+                  <NavItem key={`${page.ext_id}:${page.id}`} to={`/ext/${page.ext_id}${page.path}`} icon={page.icon ?? "box"} label={page.title} beta={isBeta(page.stage)} />
                 ))}
               </div>
             </div>

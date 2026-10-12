@@ -46,6 +46,7 @@ requires    = ["terminal>=0.1"]           # andere Extensions, optional
 enable_on   = ["host_credential"]         # optional: siehe unten
 category    = "servers"                   # optional: Gruppe in der Modul-Auswahl des Einrichtungsassistenten
 sort_order  = 10                          # optional: Reihenfolge in der Gruppe (Standard 100)
+stage       = "beta"                      # optional: Reifegrad, "stable" (Standard) oder "beta"
 
 # Was die Extension vom Kern verlangt. Der Admin bestätigt das bei der Installation.
 # Der Kern erzwingt es bei JEDEM ctx-Aufruf.
@@ -87,6 +88,12 @@ als Kacheln, gruppiert nach `category` (bekannt: `servers`, `security`, `tools`,
 `sort_order` (kleiner = weiter oben, bei Gleichstand nach Name). Die Werte stehen auch in
 `GET /extensions`. Module mit `example` (Beispiele für Entwickler wie hello-world) zeigt der Assistent nicht; sie
 stehen nur unter Einstellungen → Erweiterungen.
+
+**`stage` (optional):** Reifegrad der Erweiterung, `stable` (Standard, wenn das Feld fehlt) oder `beta`. Bei `beta`
+zeigt die Oberfläche ein ruhiges Abzeichen „Beta“ (Einstellungen → Erweiterungen, Assistent, Menü und über der Seite
+der Erweiterung) mit dem Hinweis, dass das Modul funktioniert, aber noch nicht so gründlich erprobt ist wie der Rest.
+Die Erweiterung selbst muss dafür nichts tun. Ein unbekannter Wert (Tippfehler oder ein Reifegrad, den erst ein
+neuerer Kern kennt) gilt als `beta`; die Erweiterung lädt trotzdem.
 
 **`enable_on` (optional):** Anlässe, bei denen der Kern die Erweiterung von selbst einschaltet,
 damit sie für Einsteiger nicht erst in den Einstellungen gesucht werden muss. Bekannt ist
@@ -193,8 +200,9 @@ geladen.“ Was in der Rückweg-Zeit unter der alten Kennung eingestellt wurde (
 
 Der Kern baut aus dem JSON-Schema die Einstellungsseite der Extension (Einstellungen →
 Erweiterungen). Unterstützt sind `type` (`string`, `integer`, `number`, `boolean`, `array`,
-`object`), `title`, `description`, `default`, `enum`, `required`, `properties`, `items` und
-`pattern`. Dazu diese Zusätze (alle optional, unbekannte werden ignoriert):
+`object`), `title`, `description`, `default`, `enum`, `required`, `properties`, `items`,
+`pattern` und `maxItems` (Listen; mehr Einträge lehnt das Speichern mit `422` ab). Dazu diese Zusätze (alle optional,
+unbekannte werden ignoriert):
 
 | Zusatz | Wo | Wirkung |
 |---|---|---|
@@ -208,9 +216,14 @@ Erweiterungen). Unterstützt sind `type` (`string`, `integer`, `number`, `boolea
 | `x-widget: "remote-select"` | Text | Auswahlliste, die die Extension selbst liefert (z. B. die Modelle eines KI-Servers). Braucht `x-options-url`. Schlägt die Abfrage fehl oder ist die Liste leer, erscheint ein Textfeld und der Grund. |
 | `x-options-url` | `remote-select` | Pfad unter `/api/v1`, z. B. `/ext/shield/ai/models?which=primary`. Die Oberfläche schickt keine Formularwerte mit; die Extension fragt nur, was gespeichert ist (kein Adress-Parameter – sonst wäre die Route ein Weg für Anfragen an beliebige Adressen, samt Schlüssel). Nach einer neuen Adresse: speichern, dann „Neu laden“. Antwort: `{"options": [{"value": "…", "label": "…"}], "error": null}`; bei Problemen `options: []` und `error` als deutscher Satz (kein Fehlerstatus). |
 | `x-empty-label` | Auswahl | Text für „nichts gewählt“ (Standard „– nicht gesetzt –“), z. B. „alle Server“. |
+| `x-generate` | Text | Knopf neben dem Feld (Beschriftung `label`, Standard „Zufällig wählen“), der `prefix` plus `length` zufällige Zeichen aus `a-z0-9` einsetzt: `{"label": "Zufällig wählen", "prefix": "nodvard-", "length": 20}`. Der Zufall kommt von `crypto.getRandomValues` des Browsers. Das Ergebnis muss zum `pattern` des Felds passen (und in `maxLength`), sonst setzt die Oberfläche nichts ein; ein Test prüft das für die mitgelieferten Erweiterungen. |
+| `x-qr-url` | Kopfebene | Pfad unter `/api/v1`, z. B. `/ext/ntfy/subscribe-link`: Unter dem Formular erscheint eine Karte mit QR-Code und dem Link als Text. Antwort: `{"url": "…", "text": "…", "error": null}` (`url` steckt im Code, `text` sagt, was man damit tut); lässt sich kein Link berechnen, ist `url` leer und `error` ein deutscher Satz (kein Fehlerstatus). Wie bei `x-options-url` ohne Formularwerte: Die Extension rechnet aus den gespeicherten Einstellungen, die Oberfläche lädt nach jedem Speichern neu. Der Link darf kein Geheimnis enthalten. |
 | `pattern` | Text, Wörter einer Liste | Regulärer Ausdruck (wie JSON-Schema, nicht verankert). Die Oberfläche zeigt die Meldung am Feld und sperrt „Speichern“; das Backend prüft dasselbe (`422`). Leere Werte sind immer erlaubt. |
 | `x-pattern-message` | neben `pattern` | Deutsche Meldung, wenn das Muster nicht passt (Standard: „Das Format stimmt nicht.“). |
+| `minimum`, `maximum` | Zahl (`integer`, `number`) | Kleinster und größter erlaubter Wert, beide eingeschlossen. Die Oberfläche begrenzt das Feld und zeigt am Feld „Erlaubt sind Werte von 2 bis 59.“; `PUT /extensions/{id}/settings` prüft dasselbe (`422`). `NaN` und unendlich lehnt das Backend immer ab. Leer bleibt erlaubt (dann gilt `default`). Ein Wert, der vor der Grenze gespeichert wurde, bleibt stehen: Die Erweiterung sollte ihn beim Lesen selbst auf die Grenzen setzen. |
+| `enum` mit Zahlen | Zahl (`integer`, `number`) | Auswahlliste, die eine **Zahl** speichert, keinen Text; `x-enum-labels` nennt die Werte lesbar (`{"10": "alle 10 Minuten"}`). Ein gespeicherter Wert, den die Liste nicht mehr anbietet, bleibt sichtbar („7 (nicht mehr wählbar)“); das Feld meldet es und sperrt „Speichern“. Das Backend lehnt so einen Wert mit `422` ab und nennt dabei den **Titel** des Felds statt seines Pfads. Für Abstände in Minuten, die als Zeitplan `*/N` laufen, nur Teiler von 60 anbieten (z. B. 5, 6, 10, 12, 15, 20, 30): `*/7` liefe um :49, um :56 und gleich wieder um :00. Ein früher gespeicherter Wert läuft mit dem nächstkleineren Teiler (7 → 6, 25 → 20); das setzt die Erweiterung beim Lesen selbst (Nodvard Shield `steps.minute_step`, System `warn_interval_min`). |
 | `x-test-message` | Kopfebene | `true`, wenn die Extension einen `NotificationChannel` bereitstellt: die Verbindungskarte zeigt „Testnachricht senden“. |
+| `x-required-any` | Kopfebene | „Eines von beidem“: Liste von Feldgruppen, z. B. `[["server_url", "topic"], ["channels"]]`. Ist keine Gruppe ganz ausgefüllt (bei Listen: mindestens ein Eintrag), meldet `GET /extensions` `needs_setup` mit einem Grund, der alle Gruppen nennt. Für Pflichtfelder, die nur in einem von mehreren Wegen nötig sind (`required` verlangte sie immer, auch beim Speichern). |
 | `x-secrets` | Kopfebene | Liste der Geheimnisse (Tresor-Labels): `{"label": "proxmox-token:{name}", "title": "…", "description": "…", "per_item": "connections", "optional": true}`. `per_item` erzeugt je Eintrag der genannten Liste ein Geheimnis (über dessen `name`); fällt ein Eintrag beim Speichern über `PUT /extensions/{id}/settings` weg oder wird umbenannt, löscht der Kern sein Geheimnis, und ein neu angelegter Eintrag startet ohne (ein altes Geheimnis unter demselben Namen wird gelöscht). `optional: true`: die Extension arbeitet auch ohne; fehlt ein nicht-optionales Geheimnis oder ein `required`-Feld, meldet `GET /extensions` `needs_setup`. |
 | `x-secret-bound-to` | Eintrag in `x-secrets` | Felder, an die das Geheimnis gebunden ist: bei `per_item` Feldnamen des Eintrags (`["base_url"]`), sonst Pfade wie `pihole.url`. Ändert sich eines davon über `PUT /extensions/{id}/settings`, löscht der Kern das Geheimnis (Antwort `secrets_cleared`, Protokoll `detail.secrets_cleared`), auch bei der ersten Adresse (leer → Wert); ohne gespeicherten Wert zählt der `default` des Felds. Keine Änderung sind andere Schreibweisen derselben Adresse: Groß-/Kleinschreibung von Schema und Rechnername, Standardport (`:80` bei http, `:443` bei https), `/` am Ende, Fragment (`#…`), fehlendes Schema (= `http://`). Ein anderer Pfad oder eine andere Abfrage (`?…`) zählt als Änderung. `PUT /extensions/{id}/secrets` nimmt das Geheimnis erst an, wenn eines der Felder gespeichert einen Wert oder `default` hat, sonst `409` („Erst die Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“). |
 
@@ -219,7 +232,7 @@ etwa über eigene `/connections`-Routen), löscht der Kern keine Geheimnisse. Da
 `ctx.secrets.delete(label)` selbst auf, wenn eine Verbindung neu angelegt oder entfernt wird oder ihre
 Adresse wechselt. Für den Vergleich gibt es `nodvard_sdk.same_target(alt, neu)` (`True` = dasselbe Ziel,
 nach denselben Regeln wie bei `x-secret-bound-to`; die Oberfläche rechnet dasselbe in
-`frontend/src/lib/targetAddress.ts`). So machen es Proxmox VE und Backups.
+`frontend/src/lib/targetAddress.ts`). So machen es Proxmox VE und Proxmox-Backups.
 
 **Verbindung testen.** Jede Extension mit Einstellungen bekommt in der Oberfläche den Knopf
 „Verbindung testen“ (`POST /extensions/{id}/test`). Der Kern ruft dafür `health()` der
@@ -228,7 +241,12 @@ Extension auf (und `test()` ihres `NotificationChannel`, falls sie einen bereits
 abgelehnt, Zertifikat, Adresse nicht gefunden, Weiterleitung (3xx) …). Für gute Meldungen genügt es, in
 `HealthReport.message` den Fehlertext des HTTP-Clients zu lassen; bei mehreren Verbindungen
 liefert `HealthReport.details` je Verbindung `{"name": {"healthy": bool, "error": "…"}}` – daraus
-entsteht die Liste „Ergebnis je Verbindung“. Geheimnisse gehören nie in `message` oder
+entsteht die Liste „Ergebnis je Verbindung“. Ein gesunder Eintrag darf `"note": "…"` tragen (ein fertiger Satz, etwa was
+sich ohne Senden nicht prüfen ließ); er steht dann statt „Verbindung funktioniert.“ in der Liste, und die
+Zusammenfassung lautet „Keine Fehler gefunden – Hinweise unten.“. Ein Eintrag mit `"verbatim": true` zeigt seinen
+`error` unverändert (nur geschwärzt), statt ihn zu übersetzen. Kennzeichnet sich eine Ausnahme aus `send()` oder
+`test()` des `NotificationChannel` mit `readable = True` und `verbatim = True`, zeigt der Kern ihren Satz unverändert
+(für Sätze, die mehrere Ziele zusammenfassen; die Übersetzung nähme sonst den ersten HTTP-Code darin). Geheimnisse gehören nie in `message` oder
 `details`; der Kern schwärzt bekannte Werte trotzdem.
 
 ### Einstiegsklasse
@@ -273,10 +291,10 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 | `ctx.ui` | `register_page()`, `register_widget()`, `register_nav()` | — |
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protokoll_instanz)` | je Protokoll |
-| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optional mit `standing_approval`, siehe §3), `check_standing_approval(granted_by_user_id, risk=…)` (gälte eine Dauerfreigabe dieser Person heute noch? `None` = ja, sonst der Grund) | `hosts.execute` u. a.; Dauerfreigabe: `actions.standing_approval` |
+| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optional mit `standing_approval`, siehe §3), `check_standing_approval(granted_by_user_id, risk=…)` (gälte eine Dauerfreigabe dieser Person heute noch? `None` = ja, sonst der Grund), `waiting_count()` (wie viele Vorschläge aller Module auf eine Freigabe warten, nur die Zahl) | `hosts.execute` u. a.; Dauerfreigabe: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
 | `ctx.hosts` | `list()`, `get()`, `upsert_discovered()` | `hosts.read` / `hosts.write` |
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (laufende Ausgabe, z. B. Live-Logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
-| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht) | `secrets.read:<label>` |
+| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (löscht das Geheimnis; `True`, wenn es eines gab, sonst `False`; Protokoll `extension.secret_removed`; ältere Kerne haben es nicht), `replace(label=, value=)` (neuer Wert in einem Schritt, scheitert es, bleibt der alte; `SecretUnavailable`, wenn es keines gibt; Protokoll `extension.secret_set`; ältere Kerne haben es nicht). Ersetzen und löschen darf eine Erweiterung nur ihre **eigenen** Geheimnisse (angelegt unter ihrer Kennung oder einer früheren, über `create()` oder ihre Einstellungsseite); sonst `SecretNotOwned` (eine Art `PermissionDenied`), und das Geheimnis bleibt unverändert. Lesen geht weiter nach dem Recht. Ein Geheimnis der Zwei-Faktor-Anmeldung eines Kontos bekommt keine Erweiterung, auch nicht zum Lesen | `secrets.read:<label>` |
 | `ctx.vault_use` | Context-Manager, der einen Wert nur im Speicher materialisiert | dito |
 | `ctx.db` | AsyncSession-Factory, **nur** auf `ext_<id>_*`-Tabellen (nach einer Umbenennung auch auf die Präfixe der alten Kennungen, siehe §1 „Erweiterung umbenennen“) | — |
 | `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
@@ -284,7 +302,7 @@ permission-geprüft und schreibt bei Bedarf ins Audit-Log.
 | `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
 | `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – mit `raise_on_failure=True` wirft `NotificationNotDelivered`, wenn es Kanäle gab und keiner zugestellt hat (für „erneut versuchen“); `would_suppress(host_id=…, host_ids=…)` fragt nur, ob ein Wartungsfenster gerade still schalten würde (siehe unten) | `notify.send` |
 | `ctx.audit` | `log(entry)`. Erweiterungen schreiben unter eigenem Namen, zum Beispiel `<kennung>.<ereignis>`. Aktionen, deren Name mit `mfa.`, `auth.`, `login.`, `system.` oder `user.` beginnt (Groß-/Kleinschreibung und Leerzeichen am Rand zählen nicht), schreibt nur der Kern, weil er sie wieder liest und danach entscheidet: Der Aufruf wirft dann `ValueError` und schreibt nichts | `audit.write` |
-| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen ebenfalls nie: Eine Antwort mit Status 3xx kommt unverändert zurück, und die Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` (oder ein anderer Wahrheitswert) wirft `ValueError`, bevor eine Anfrage hinausgeht, auch mit `insecure_tls=True`; `follow_redirects=False` bleibt erlaubt. Grund: Die Prüfung der erlaubten Adressen (`net.outbound`) kennt nur die Adresse des Aufrufs, das Ziel einer Weiterleitung sähe sie nie. Einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, bei `websocket()` auch `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`) benutzt `ctx.http` nie, jede Verbindung geht direkt an die geprüfte Adresse; `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter | `net.outbound:<cidr>` |
+| `ctx.http` | vorkonfigurierter `httpx.AsyncClient` mit Zielprüfung, dazu `websocket(url, …)`. Die Zielprüfung gilt nur für die Start-Adresse: `websocket()` folgt Weiterleitungen (3xx) beim Verbindungsaufbau nie (`async with` wirft dann ein `ConnectionError` mit deutschem Text, eine zweite Verbindung entsteht nicht); `get()`, `post()`, `request()` und `stream()` folgen ihnen ebenfalls nie: Eine Antwort mit Status 3xx kommt unverändert zurück, und die Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` (oder ein anderer Wahrheitswert) wirft `ValueError`, bevor eine Anfrage hinausgeht, auch mit `insecure_tls=True`; `follow_redirects=False` bleibt erlaubt. Grund: Die Prüfung der erlaubten Adressen (`net.outbound`) kennt nur die Adresse des Aufrufs, das Ziel einer Weiterleitung sähe sie nie. Einen Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, bei `websocket()` auch `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`) benutzt `ctx.http` nie, jede Verbindung geht direkt an die geprüfte Adresse; `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter. `peer_certificate(url)` liest nur das Zertifikat eines `https://`-/`wss://`-Ziels (Fingerabdruck SHA-256, `trusted`: gilt nach den Zertifizierungsstellen), ohne eine Anfrage zu senden. `pinned_sha256=` an `get()`, `post()`, `request()`, `stream()` und `websocket()` nimmt genau das Zertifikat mit diesem Fingerabdruck an und bricht sonst im TLS-Handshake mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist (für selbstsignierte Zertifikate, wenn etwas Geheimes hinausgeht; braucht wie `insecure_tls` `net.outbound.insecure_tls`). Aufrufe mit `pinned_sha256` merken sich keine Cookies des Servers | `net.outbound:<cidr>` |
 | `ctx.ws` | `broadcast(channel, payload)` auf `ext.<id>.*` (nach einer Umbenennung zusätzlich auf `ext.<alt>.*`) | — |
 | `ctx.spawn` | überwachter Hintergrundtask mit Neustart-Politik | — |
 | `ctx.logger` | strukturierter Logger, vorgetaggt mit der Extension-ID | — |
@@ -351,11 +369,20 @@ schaltet ein Wartungsfenster stumm: Sie steht im Verlauf, geht aber an keinen Ka
   Extensions werten das wie `suppressed=False` und `delivered=None` aus (z. B.
   `getattr(result, "suppressed", False) is True`, `getattr(result, "delivered", None)`).
   Wer den Rückgabewert nicht braucht, ändert nichts.
+- `NotifyResult.skipped=True` heißt: Kein Kanal hat zugestellt, mindestens einer hat die Meldung bewusst
+  übersprungen (z. B. unter der Mindest-Stufe von ntfy), und keiner ist ausgefallen. Ist neben dem übersprungenen
+  ein Kanal ausgefallen, ist `skipped` `False`: Der Ausfall geht vor und darf nicht als „liegt nur unter der
+  Mindest-Stufe“ durchgehen. Ein Kanal (`NotificationChannel.send`) meldet das Überspringen mit der Ausnahme
+  `NotificationSkipped` aus `nodvard_sdk.errors`; der Kern verbucht die Zustellung dann als `skipped` (weder `sent`
+  noch `failed`), und `raise_on_failure` wirft deswegen nicht. Ältere Kerne haben die Klasse nicht, dort scheitert
+  schon der Import, und `skipped` ist `None`. Ein Kanal, der auch dort laufen soll, importiert sie so:
+  `try: from nodvard_sdk.errors import NotificationSkipped` / `except ImportError: NotificationSkipped = None` und
+  kehrt ohne die Klasse einfach zurück (ältere Kerne verbuchen das wie bisher als `sent`).
 - `would_suppress(host_id=None, host_ids=None) -> bool` prüft dieselbe Regel, legt aber
   nichts an. Ein einzelner String als `host_ids` gilt wie in `send()` als kaputte Liste
   (nie still). Braucht ebenfalls `notify.send`.
 
-**Muster für Zustandswächter** (Proxmox, Backups, Gameserver): Ein Wächter meldet nur
+**Muster für Zustandswächter** (Proxmox, Proxmox-Backups, Gameserver): Ein Wächter meldet nur
 Zustandswechsel und merkt sich „gemeldet“. War diese Meldung stumm, merkt er sich das
 zusätzlich („stumm gemeldet“) und fragt bei den folgenden Prüfungen nur
 `would_suppress()` – so entsteht im Fenster genau **ein** stummer Verlaufseintrag, nicht
@@ -398,9 +425,12 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | Protokoll | Wer implementiert es | Was der Kern damit baut |
 |---|---|---|
 | `HostProvider` | proxmox, docker, statisches Inventar | die Host-Liste, Node-Seite, Start/Stop-Aktionen |
-| `TerminalTarget` | terminal (SSH), künftig serielle/Container-Shells | das Web-Terminal |
+| `TerminalTarget` | terminal (SSH), künftig serielle Shells | das Web-Terminal |
+| `ScopedTerminalTarget` | service-matrix (`scope = "container"`, `docker exec`) | eine Shell **in** etwas auf einem Server, im selben Web-Terminal (`POST /terminal/sessions` mit `scope`/`ref`, [04 §4](04-API.md#4-websocket)); `ref` prüft der Anbieter selbst. Dafür nimmt `ctx.exec.open_shell(host, cols=, rows=, command=)` ein Kommando, das mit PTY statt der Login-Shell läuft, geprüft gegen dieselbe Sperrliste wie `run()` |
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | die grafische Konsole (`/console/:hostId`, noVNC) |
 | `FileSource` | files-sftp, nextcloud, truenas, syncthing | den **einen** Dateimanager mit Seitenleiste |
+| `FilePlaceProvider` | service-matrix, proxmox, system | „Wichtige Orte“ eines Servers im Dateimanager |
+| `AppSuggestionProvider` | network (Nginx Proxy Manager) | Vorschläge für App-Kacheln auf der Seite „Apps“ (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, nur vorhandenes Wissen; der Kern prüft, entdoppelt und lässt Bestehendes weg |
 | `ActionExecutor` | terminal (SSH-Exec), proxmox (API-Aktionen) | die Ausführung hinter dem Gate |
 | `AIProvider` | shield (Ollama), künftig andere | Chat, Diagnose, Zusammenfassungen |
 | `NotificationChannel` | ntfy, E-Mail, Webhook | das Notification-Center |
@@ -408,6 +438,22 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `ServiceCatalog` | service-matrix (Docker-API) | den App-Launcher |
 | `BackupProvider` | backups (Proxmox-Jobs, restic …) | das Backup-Center |
 | `SearchProvider` | beliebig | die globale Suche |
+| `ConnectionReceiver` | backups (Art `proxmox`) | nichts – nur zwischen Erweiterungen: proxmox legt beim Verbinden mit Passwort gleich einen Zugang für backups an |
+
+**`ConnectionReceiver` – Zugang für eine andere Erweiterung.** Erweiterungen importieren einander nicht, und Geheimnisse
+gehen nie über den Ereignis-Bus. Legt eine Erweiterung beim Server einen Zugang für eine andere an (etwa „Proxmox VE“
+beim Verbinden mit Passwort den für „Proxmox-Backups“), fragt sie deren `ConnectionReceiver` über
+`ctx.capabilities.query()` ab – sichtbar nur für Erweiterungen, die sie in `requires` nennt. `requires` macht die andere
+nicht zur Pflicht: Ist sie aus, ist die Liste leer, und der Teil fällt weg. Ablauf: `connection_conflict(name=,
+base_url=)` vor dem Anlegen (ein deutscher Satz oder `None`), dann `receive_connection(name=, base_url=, token_id=,
+token_secret=SecretStr, tls_insecure_skip_verify=, pinned_sha256=None)` – der Empfänger trägt die Verbindung ein wie sein
+Einstellungsformular und legt das Geheimnis in seinen eigenen Tresor-Eintrag. `pinned_sha256` (wahlweise, ergänzt): der
+Fingerabdruck des Zertifikats, den die Person beim Anbieter ausdrücklich bestätigt hat – der Empfänger merkt ihn sich
+(die Verbindung spricht dann nur mit genau diesem Zertifikat, „nicht prüfen“ gilt nicht) und ersetzt dabei einen alten;
+ohne ihn bleibt ein gemerkter stehen. Rückgabe `{name, replaced_token_id}`, wahlweise dazu `tls_insecure_skip_verify`, `tls_fingerprint_sha256` und `enabled` (was danach gilt: eine vorhandene Verbindung wird nie still abgeschwächt, eine ausgeschaltete bleibt aus). Angenommen wird nur, was auch von Hand eingetragen werden könnte; ein fremdes Geheimnis unter dem Namen bleibt unverändert (`SecretNotOwned`, nichts geändert).
+`received_token_ids()` nennt die Token-IDs aller seiner Verbindungen (nie ein Geheimnis). Der Empfänger prüft nicht, wer
+ihn aufruft; der Anbieter sichert seinen Weg selbst ab (Admin-Route, Protokoll). Gewählt statt eines Ereignisses (das
+Geheimnis käme sonst auf den Bus) und statt eines Kern-Dienstes (der Kern kennt keine Erweiterung).
 
 ### Beispiel: `FileSource` — die Schnittstelle hinter dem Dateimanager
 
@@ -460,6 +506,13 @@ sonst müssen außer `path` auch alle fünf Werte vorhanden sein und übereinsti
 dieselbe Kennung). Ohne `file_identity` erkennt der Kern nur den gleichen Pfad in derselben Quelle. Der Kern
 liest es mit `getattr(source, "file_identity", None)`; ältere Quellen ohne die Methode bleiben gültig.
 
+**Quellen, hinter denen ein Server steht:** Optional nennt eine Quelle `host_id: str | None`, die Kennung des
+Servers, für den sie steht (etwa SFTP auf einen Host; die SSH-Quellen der terminal-Extension setzen sie). Der Kern gibt
+sie in `GET /files/sources` als `host_id` weiter ([04 §3](04-API.md#dateien)), und der Dateimanager zeigt neben
+der Quelle die Status-Ampel und das Betriebssystem dieses Servers. Fehlt das Attribut oder ist der Wert kein
+nicht leerer Text, gilt `null`. Das Attribut ist wie `required_permission` kein Mitglied des Protokolls; der Kern liest
+es mit `getattr(source, "host_id", None)`, ältere Quellen ohne es bleiben gültig.
+
 **Quellen mit eigener Berechtigung:** Optional nennt eine Quelle `required_permission: str | None`
 (fehlt das Attribut, gilt `None`). Dann zeigt und öffnet der Kern sie nur Nutzern, die diese
 Berechtigung selbst haben; `files.read`/`files.write` allein reichen nicht. Gedacht ist das für
@@ -478,8 +531,18 @@ kein Weg zum Server) werden zu einem deutschen Satz, von einem anderen `OSError`
 Oberfläche, setzt die Quelle an der Klasse `readable = True` (wie `WebDavError` der Nextcloud-Quelle): Dann kommt ein
 nicht leerer Text unverändert an, und der Fall gilt wie ein Netzfehler als erwartbar (kein Traceback im
 Container-Protokoll). Das Attribut ist wie `required_permission` kein Mitglied des Protokolls, der Kern liest es mit
-`getattr`. Dasselbe gilt für Ausnahmen aus `TerminalTarget.open()`; dort steht der Grund in der Fehlermeldung des
+`getattr`. Dasselbe gilt für Ausnahmen aus `MetricsProvider.sample()` (dann `502` mit dem Satz, [04](04-API.md)) und
+aus `TerminalTarget.open()`; dort steht der Grund in der Fehlermeldung des
 Terminals ([04 §4](04-API.md#4-websocket)).
+
+**Wichtige Orte:** Ein `FilePlaceProvider` nennt für einen Server Abkürzungen im Dateimanager (Projektordner,
+Protokolle, Sicherungen). `async places_for_host(host_id) -> list[FilePlace]`; `FilePlace` hat `label` (kurz, deutsch),
+`path` (absolut, mit `/` am Anfang), `icon` und optional `hint`. Ein Anbieter nennt nur, was seine Erweiterung ohnehin weiß
+(Etiketten aus dem schon gelesenen `docker ps`, die Speicherliste eines Knotens, der Host-Eintrag), und stellt dem Server
+keine Fragen, nur um Orte zu raten; ohne Wissen liefert er eine leere Liste. Der Kern fragt alle Anbieter gleichzeitig
+(`GET /files/places`, [04 §3](04-API.md#dateien)), gibt jedem sechs Sekunden, lässt Fehler eines Anbieters nur dessen Orte
+kosten, entdoppelt nach Pfad und zeigt höchstens 30. Orte bekommt nur, wer zu diesem Server auch eine Dateiquelle öffnen
+darf. Neu in dieser Fassung, rein additiv; ältere Erweiterungen sind nicht betroffen.
 
 ### Beispiel: `ActionExecutor` — die Schnittstelle hinter Nodvard Shield und dem Script-Repository
 
@@ -618,6 +681,16 @@ einem expliziten `tone`-Feld.
 `{"data": …, "meta": {…}}`, geformt passend zum View-Typ. Der Kern validiert die Form
 gegen den View-Typ und meldet Abweichungen als Extension-Fehler statt als kaputtes UI.
 
+**Mehr Felder, als die Kachel zeigt:** Die Daten eines Widgets dürfen mehr Felder enthalten, als der View braucht;
+die Kachel ignoriert sie, die Seite der eigenen Erweiterung kann sie lesen. Neue Felder kommen nur hinzu, nichts fällt
+weg. Beispiel: „Server-Zustand“ der `system`-Extension (`GET /api/v1/ext/system/widgets/health`, ein SSH-Aufruf je
+Server, 5 Minuten zwischengespeichert) liefert je Server `name`, `host_id`, `summary`, `badge` und `tone` und bei einem
+Server, der antwortet, zusätzlich `cpu_percent` (CPU-Auslastung zur Zeit der Abfrage) und `mem_percent` (Arbeitsspeicher
+belegt in Prozent, aus `MemTotal` und `MemAvailable`); beide sind `null`, wenn der Wert unbekannt ist. Die Dashboard-Kachel
+zeigt davon weiter nur Name, Zusammenfassung und Abzeichen. Die Server-Kacheln der Seite „Server-Zustand“ machen daraus
+„CPU 12 % · RAM 48 %“ und setzen einen Befund (gelb oder rot, etwa „/mnt/daten zu 95 % voll“) als Hinweis darunter, ohne
+einen weiteren SSH-Aufruf. Die Zahlen können deshalb bis zu 5 Minuten alt sein; live zeigt sie der Reiter „Live“.
+
 **Grenze klar benennen:** `component` ist eine Aufwertung, kein Ersatz. Ein Widget, das
 nur als `component` existiert, wird beim Registrieren abgelehnt — sonst entsteht genau
 die Web-only-Schieflage, die diese Regel verhindern soll.
@@ -735,7 +808,7 @@ in der Query, und „Filter entfernen“ nimmt nur diesen einen Wert heraus. Ein
 Übersicht, kein Server-Filter), auch wenn der Router diese Adresse schon für aktuell hielt.
 
 **Alle mitgelieferten Seiten, die ihre Query lesen, nutzen den Hook:** Nodvard Shield (`?tab=`,
-`?host=`), Backups und Skripte (`?host=`), Service-Matrix (`?host=`, `?logs=`), System
+`?host=`), Proxmox-Backups und Skripte (`?host=`), Service-Matrix (`?host=`, `?logs=`), Server-Zustand
 (`?host=`, auch die Server-Auswahl schreibt es), Gameserver (`?host=`: nach vorn, hinscrollen)
 und der Proxmox-Knoten (`?host=`, `&tasks=1`: markieren, aufklappen, Verlauf filtern,
 hinscrollen). Eine neue Seite, die ihre Query nur einmal beim Mount liest
@@ -820,6 +893,63 @@ export { IncidentFeed } from "./IncidentFeed";
 
 Ein echtes, minimales Beispiel steht in `extensions/hello-world/frontend/src/`: eine Seite
 (`HelloPage.tsx`, mit `authedFetch` und dem UI-Kit), gebaut mit `extensions/hello-world/frontend/build.mjs`.
+
+### UI-Kit und Modul-Regel
+
+Das gemeinsame UI-Kit liegt unter `extensions/_shared/frontend/src/`. Es ist Quelltext, kein Paket: Jedes Bundle nimmt
+beim Bauen die Teile in sich auf, die es einbindet. Darin stehen:
+
+| Datei | Inhalt |
+|---|---|
+| `ui.tsx` | Bausteine für Seiten: `Page`, `Card`, `Button`, `Badge`, `Stat`, `EmptyState`, `Notice`, `Field`, `SearchInput`, `Loading`, Symbole |
+| `api.ts`, `actions.ts` | `authedFetch` mit Token-Erneuerung und die Fehlertexte; `runAction` (Aktion vorschlagen, freigeben, abfragen, siehe oben) |
+| `deck.ts`, `location.ts`, `lifecycle.ts` | Zugang zu `window.__nodvardDeck`, `useUrlParams()` (folgt der Adresszeile), Abbruch beim Verlassen der Seite |
+| `HostPicker.tsx` | die Server-Auswahl (siehe unten) |
+| `SchedulePicker.tsx`, `timezone.ts` | der Zeitplan-Wähler und die Zeitzone des Dashboards, die er braucht |
+| `testShell.tsx` | Helfer nur für Tests |
+
+**Server-Auswahl (`HostPicker`).** Wer auf einer Seite einen Server wählen lässt, nimmt diese Komponente statt einer
+eigenen Klappliste. Sie zeigt Kacheln: je Server Name, Adresse, Betriebssystem als Wort, den Status als Ampelpunkt
+(erreichbar, nicht erreichbar, unbekannt, aus dem Status des Kerns) und, wenn die Seite ihn kennt, einen kurzen Zusatz
+(`extra`, etwa die Auslastung) und einen Hinweis (`hint`, etwa „ohne SSH-Zugang“). Die Seite übergibt die Server als
+Liste von `HostTile` (`id`, `name`, `address`, `os`, `status`, `extra`, `hint`) und bleibt Herr über die Auswahl
+(`value`/`onChange`, zum Beispiel über `?host=` in der Adresszeile).
+
+- Ab sechs Servern (`searchFrom`) gibt es ein Suchfeld über Name, Adresse und System.
+- Der zuletzt gewählte Server wird je Seite (`storageKey`) im Browser gemerkt und beim nächsten Besuch vorgewählt,
+  aber nur, wenn die Seite noch keinen Server hat (ein `?host=` aus einem Link gewinnt) und es ihn noch gibt. Ohne
+  Browser-Speicher (privates Fenster) gibt es keine Vorauswahl.
+- Ist ein Server gewählt, schrumpft die Auswahl auf eine Zeile mit „Server wechseln“; „Abbrechen“ schließt die Kacheln
+  wieder.
+- Mit `actions` wird die Auswahl zum Starter (Terminal-Seite): Jede Kachel zeigt ihre Knöpfe, nichts wird gewählt oder
+  gemerkt. `gridClass` stellt die Spalten für schmale Seitenleisten ein.
+- `StatusDot` und `osLabel` (Ampel und Betriebssystem als Wort) sind einzeln nutzbar, der Dateimanager nimmt sie für
+  seine Server-Quellen.
+
+**Zeitplan-Wähler (`SchedulePicker`).** Der Wecker-Stil-Wähler (Häufigkeit, Uhrzeit, Wochentage, Klartext, nächster
+Lauf) liest und schreibt einen Cron-Ausdruck, passend zu `x-widget: "schedule"`. Die Zeitzone des Dashboards kommt über
+`timezone.ts`: Sie reicht `browserTimeZone`, `foreignDeckTimezone` und `useDeckTimezone` aus dem Kern weiter, ohne
+eine zweite Logik; der Wert liegt auf `window.__nodvardDeck.timezone`, so sehen Kern und Bundles dieselbe Zone, obwohl
+jedes Bundle seine eigene Modulkopie hat. Skripte und Nodvard Shield nehmen den Wähler aus dem Kit.
+
+**Die Modul-Regel: Eine Erweiterung bindet nur sich selbst und das UI-Kit ein.** Der Code unter
+`extensions/<id>/frontend/src` darf nur Dateien der eigenen Erweiterung und des Kits laden, nie Quelltext aus
+`frontend/` (der Kern) und nie eine andere Erweiterung. Sonst landete Kern-Code als Kopie im Bundle, und eine
+Erweiterung von Dritten könnte das nie nachbauen. Was Kern und Erweiterungen teilen, gehört deshalb ins Kit. Die Regel
+gilt **ohne Ausnahmen**; `backend/tests/test_extension_frontend_imports.py` prüft sie für jede mitgelieferte
+Erweiterung. Nicht geprüft werden Testdateien (`*.test.ts(x)`; sie laufen in der echten Kern-Shell und landen in keinem
+Bundle) und das Kit selbst: Es ist die eine Brücke zum Kern (`deck.ts` und `timezone.ts` reichen Teile aus
+`frontend/src/lib` weiter), `testShell.tsx` gibt es nur für Tests.
+
+**Wie der Kern das Kit nutzt.** Auch Kern-Seiten binden Teile des Kits ein (die Terminal-Seite den `HostPicker`, die
+Einstellungen den `SchedulePicker`, der Dateimanager `StatusDot` und `osLabel`). Das Kit liegt unter `extensions/`, das
+kein eigenes `node_modules` hat; damit React nur einmal geladen wird, gibt es dafür einen Ort: `frontend/kit.resolve.ts`.
+`kitDedupe` lässt Vite `react`, `react-dom`, `react-router-dom` und die Testing-Library immer aus
+`frontend/node_modules` laden, egal wo die importierende Datei liegt (dieselbe Kopie wie im Kern, kein zweites React).
+`kitFsAllow` erlaubt dem Dev-Server und den Tests, die Dateien des Kits auszuliefern. Genutzt wird es von
+`vite.config.ts` (Kern-Build), `vitest.config.ts` (Kern-Tests), `vitest.extensions.config.ts` (Erweiterungs-Tests) und
+`vite.preview.config.ts` (Design-Vorschau); für die Typen gilt dasselbe über `paths` in `frontend/tsconfig.json`
+und `extensions/tsconfig.json`.
 
 ---
 

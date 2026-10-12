@@ -60,20 +60,23 @@ export function useTwoFactorEnabled(enabled = true): boolean | null {
 }
 
 export function SecondFactorField({
-  value, onChange, allowRecovery = true, className = "",
+  value, onChange, allowRecovery = true, hint, className = "",
 }: {
   value: string;
   onChange: (value: string) => void;
   allowRecovery?: boolean;
+  /** Eigener Hinweis unter dem Feld statt des allgemeinen. */
+  hint?: string;
   className?: string;
 }): JSX.Element {
   return (
     <Field
       label={allowRecovery ? SECOND_FACTOR_LABEL : TOTP_LABEL}
       hint={
-        allowRecovery
+        hint ??
+        (allowRecovery
           ? "Die sechs Ziffern aus deiner Authenticator-App. Handy nicht zur Hand? Dann geht auch einer deiner Wiederherstellungs-Codes, er ist danach verbraucht."
-          : "Die sechs Ziffern aus deiner Authenticator-App. Jeder Code gilt nur einmal."
+          : "Die sechs Ziffern aus deiner Authenticator-App. Jeder Code gilt nur einmal.")
       }
       className={className}
     >

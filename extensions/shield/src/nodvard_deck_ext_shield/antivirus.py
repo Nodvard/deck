@@ -151,6 +151,44 @@ def _resolve_roots_command(paths: list[str], mark: str) -> str:
     )
 
 
+_ERE_SPECIAL = frozenset(".[]()*+?{}|^$\\")
+_TRAILING_WILDCARD_RE = re.compile(r"(/\*+)+/*$")
+_MAX_EXCLUDE_BYTES = 511
+"""ClamAV kuerzt den Pfad in `match_regex` auf 512 Bytes; ein laengerer Ausnahmepfad traefe nie, einer mit genau 512
+Bytes auch Nachbarn mit angehaengtem Zeichen."""
+
+
+def exclude_folder(folder: object) -> str | None:
+    """Ein Eintrag aus "Ausgenommene Ordner" (`exclude_paths`) als vereinfachter absoluter Pfad, oder `None`.
+
+    Gilt fuer Scan und Waechter gleich: nur absolute Pfade ohne Zeilenumbruch, Wagenruecklauf und NUL. Ein angehaengtes
+    `/*` oder `/**` ("der Inhalt dieses Ordners") faellt weg, andere Platzhalter stehen woertlich. Vereinfacht wird wie
+    bei `find` (Schlussstrich, `//`, `/./`). Ein `..` wird verworfen statt aufgeloest: `/home/../etc` naehme sonst `/etc`
+    aus, mehr als gemeint. `/` selbst zaehlt nie, sonst liefe gar nichts."""
+    if not isinstance(folder, str) or not folder.startswith("/") or any(ch in folder for ch in "\n\r\x00"):
+        return None
+    if ".." in folder.split("/"):
+        return None
+    folder = _TRAILING_WILDCARD_RE.sub("", folder) or "/"
+    folder = "/" + posixpath.normpath(folder).lstrip("/")
+    return None if folder == "/" else folder
+
+
+def scan_exclude_regex(folder: object) -> str | None:
+    """Ausdruck fuer `clamscan --exclude-dir`, der genau diesen Ordner samt Inhalt trifft, oder `None`.
+
+    ClamAV liest den Wert als regulaeren Ausdruck (POSIX ERE) und sucht ihn im Pfad jedes Ordners, den es betreten
+    will; der Anker `^` kommt aus dem Ausdruck selbst. Deshalb wird jedes Sonderzeichen maskiert (nicht nur der Punkt:
+    `/srv/a+b` oder `/srv/(alt)` traefen sonst andere oder gar keine Ordner), und hinter dem Namen muss ein `/` oder
+    das Ende folgen: `/srv/backup` nimmt sonst auch `/srv/backups-wichtig` aus, `/dev` auch `/devel`. Welche Eintraege
+    zaehlen, regelt `exclude_folder`; zu lange Pfade (`_MAX_EXCLUDE_BYTES`) werden nicht ausgenommen."""
+    folder = exclude_folder(folder)
+    if folder is None or len(folder.encode("utf-8", "replace")) > _MAX_EXCLUDE_BYTES:
+        return None
+    escaped = "".join("\\" + ch if ch in _ERE_SPECIAL else ch for ch in folder)
+    return f"^{escaped}(/|$)"
+
+
 def build_scan_command(
     paths: list[str], *, max_filesize_mb: int = 50, exclude: list[str] | None = None, mark: str | None = None,
 ) -> str:
@@ -163,7 +201,8 @@ def build_scan_command(
     excluded = [*_ALWAYS_EXCLUDED, *(exclude or [])]
     parts = ["clamscan", "-r", "-i", "--stdout", "--cross-fs=no" if paths == ["/"] else "",
              f"--max-filesize={max_filesize_mb}M", f"--max-scansize={max_filesize_mb * 4}M"]
-    parts += [f"--exclude-dir={_q('^' + p.replace('.', chr(92) + '.'))}" for p in excluded]
+    regexes = (scan_exclude_regex(p) for p in excluded)
+    parts += [f"--exclude-dir={_q(regex)}" for regex in regexes if regex]
     parts += [_q(p) for p in paths]
     cmd = " ".join(p for p in parts if p)
     return f"{_resolve_roots_command(paths, mark)}{cmd} 2>&1; echo \"{mark}$?\""
@@ -214,9 +253,31 @@ _SKIPPED_REPORT = (
 )
 
 
+def _find_literal(path: str) -> str:
+    """Ein Pfad als Muster fuer `find -path`, das nur genau ihn trifft: `*`, `?`, `[` und `\\` stehen woertlich."""
+    return "".join("\\" + ch if ch in "*?[]\\" else ch for ch in path)
+
+
+def _prune_expression(folders: list[str]) -> str:
+    """`find`-Ausdruck, der die Ordner samt Inhalt gar nicht erst betritt (`-prune`), oder leer.
+
+    Die Ordner kommen aus der Einstellung "Ausgenommene Ordner" (`exclude_paths`), dieselben wie beim Scan; welche
+    zaehlen und wie sie vereinfacht werden, regelt `exclude_folder` (`find` nennt Pfade mit einfachen Schraegstrichen:
+    `/a//b` oder `/a/./b` griffe sonst nie). `find` vergleicht den Pfad so, wie er unter der angegebenen Wurzel heisst
+    (bei einer Wurzel, die selbst eine Verknuepfung ist, also mit ihrem Namen, nicht dem Ziel)."""
+    tests: list[str] = []
+    for entry in folders:
+        folder = exclude_folder(entry)
+        if folder is None:
+            continue
+        literal = _find_literal(folder)
+        tests += [f"-path {_q(literal)}", f"-path {_q(literal.rstrip('/') + '/*')}"]
+    return f"\\( {' -o '.join(tests)} \\) -prune -o " if tests else ""
+
+
 def build_watch_command(
     paths: list[str], *, minutes: int, max_filesize_mb: int = 50, exclude: list[str] | None = None,
-    use_clamd: bool = False, mark: str | None = None,
+    use_clamd: bool = False, mark: str | None = None, skip_folders: list[str] | None = None,
 ) -> str:
     """Nur Dateien, die in den letzten `minutes` Minuten neu oder geaendert wurden --
     der kurze Waechter-Lauf. Ohne Treffer wird clamscan gar nicht erst gestartet.
@@ -227,7 +288,8 @@ def build_watch_command(
     (als root beschreibbar, nie ueberwacht) und die Liste zusaetzlich ausschliessen
     (mktemp-Namen enthalten keine Glob-Zeichen).
 
-    `exclude` sind find-Muster (Standard: WATCH_EXCLUDED), die nie ausloesen.
+    `exclude` sind find-Muster (Standard: WATCH_EXCLUDED), die nie ausloesen. `skip_folders` sind die ausgenommenen
+    Ordner der Einstellungen (`exclude_paths`, wie beim Scan): `find` betritt sie nicht (`_prune_expression`).
 
     `use_clamd` (Einstellung "Echtzeit-Waechter mit clamdscan"; Standard aus):
     Antwortet ein laufender clamd (`clamdscan --ping 1`), prueft der Waechter ueber ihn
@@ -282,7 +344,10 @@ def build_watch_command(
         "Y=$(mktemp -p /run 2>/dev/null || mktemp); K=$(mktemp -p /run 2>/dev/null || mktemp); "
         f"LONG=$(printf '%0{_LONG_PATH_BYTES}d' 0 | tr 0 '?'); LONG=\"$LONG*\"; "
         # `-H`: ein Ordner, der selbst eine Verknuepfung ist (`/home` -> `/data/home`), wird durchsucht, nicht uebergangen.
-        f"LC_ALL=C find -H {finds} -xdev -type f -mmin -{int(minutes)} -size -{int(max_filesize_mb)}M "
+        f"LC_ALL=C find -H {finds} -xdev {_prune_expression(skip_folders or [])}"
+        # Auch `-cmin`: Wer per Freigabe (Samba, Nextcloud-Sync, `cp -p`, `rsync -a`) kopiert, behaelt die alte
+        # Aenderungszeit (mtime); die Zeit des Eintrags (ctime) setzt das System beim Anlegen und laesst sich nicht vorgeben.
+        f"-type f \\( -mmin -{int(minutes)} -o -cmin -{int(minutes)} \\) -size -{int(max_filesize_mb)}M "
         f"-not -path {_q(QUARANTINE_DIR + '/*')} {skip} -not -path \"$L\" -not -path \"$X\" -not -path \"$Y\" "
         f"-not -path \"$K\" \\( {_ODD_NAME_TEST} -exec {_ODD_NAME_SCAN} -o -print \\) 2>/dev/null "
         f"| {_CAP_LIST}; "
@@ -1025,13 +1090,6 @@ def quarantine_name(finding_id: str, path: str) -> str:
 
 # --- Lynis --------------------------------------------------------------------
 
-LYNIS_COMMAND = (
-    "if ! command -v lynis >/dev/null 2>&1; then echo '@@nolynis'; exit 0; fi; "
-    "lynis audit system --quick --quiet --no-colors >/dev/null 2>&1; "
-    "grep -E '^(warning\\[\\]|suggestion\\[\\]|hardening_index)=' /var/log/lynis-report.dat 2>/dev/null; echo '@@done'"
-)
-
-
 @dataclass
 class LynisResult:
     status: str  # ok | error
@@ -1041,9 +1099,27 @@ class LynisResult:
     error: str | None = None
 
 
+LYNIS_DETAIL_LIMIT = 200
+
+
 def _clean_lynis(entry: str) -> str:
     # "AUTH-9286|Configure maximum password age|-|-|" -> "AUTH-9286: Configure maximum password age"
-    parts = [p for p in entry.split("|") if p and p != "-"]
+    # "SSH-7408|Consider hardening SSH configuration|MaxAuthTries (set 6 to 3)|-|"
+    #   -> "SSH-7408: Consider hardening SSH configuration (MaxAuthTries (set 6 to 3))"
+    # Die Angabe im dritten Feld sagt, WAS genau gemeint ist; ohne sie standen mehrere SSH-Hinweise wortgleich da.
+    # Das Format ist "ID|Text|Angabe|Loesung|". Die Angabe kann selbst "|" enthalten (Lynis maskiert das nicht), z. B.
+    # "PermitRootLogin (set YES to (FORCED-COMMANDS-ONLY|NO|PROHIBIT-PASSWORD|WITHOUT-PASSWORD))": dann ist sie alles
+    # zwischen dem Text und der Loesung.
+    fields = entry.split("|")
+    if len(fields) >= 2 and fields[0] and fields[1] and fields[1] != "-":
+        middle = fields[2:-2] if len(fields) >= 5 and fields[-1] == "" else fields[2:3]
+        detail = "|".join(middle).strip()
+        if detail in ("", "-"):
+            detail = ""
+        elif len(detail) > LYNIS_DETAIL_LIMIT:
+            detail = detail[: LYNIS_DETAIL_LIMIT - 1] + "…"
+        return f"{fields[0]}: {fields[1]}" + (f" ({detail})" if detail else "")
+    parts = [p for p in fields if p and p != "-"]
     if len(parts) >= 2:
         return f"{parts[0]}: {parts[1]}"
     return entry

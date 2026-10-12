@@ -11,14 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.mark.asyncio
-async def test_schema_has_27_core_tables(db_session: AsyncSession) -> None:
+async def test_schema_has_28_core_tables(db_session: AsyncSession) -> None:
     def _table_names(sync_conn) -> set[str]:
         return set(inspect(sync_conn).get_table_names())
 
     names = await db_session.connection()
     names = await names.run_sync(_table_names)
-    # 27 seit `custom_apps` (eigene App-Kacheln im Cockpit).
-    assert len(names) == 27, names
+    # 28 seit `secret_usages` (Tresor: wer ein Secret benutzt hat).
+    assert len(names) == 28, names
 
 
 @pytest.mark.asyncio

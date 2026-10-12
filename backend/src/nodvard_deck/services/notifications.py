@@ -11,16 +11,22 @@ das Notification-Center Kern-Code ist, keine Extension (dasselbe Muster wie
 
 from __future__ import annotations
 
+import asyncio
+from dataclasses import dataclass
 from typing import Any
 
 from nodvard_sdk import Notification as SdkNotification, Severity
 from nodvard_sdk.capabilities import NotificationChannel
-from nodvard_sdk.errors import NotificationNotDelivered
-from sqlalchemy import select
+from nodvard_sdk.errors import NotificationNotDelivered, NotificationSkipped
+from sqlalchemy import Text, delete, insert, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..core import maintenance
+from ..db import new_id
 from ..models import Notification, NotificationDelivery
+
+_DELETE_BATCH = 500
+"""Zeilen je `DELETE ... IN (...)`: bleibt weit unter dem Variablen-Limit alter SQLite-Versionen (999)."""
 
 
 def _payload_host_ids(payload: dict[str, Any]) -> list[str] | None:
@@ -114,16 +120,13 @@ async def deliver(
         try:
             await channel.send(sdk_notification)
             outcomes.append((channel.channel_id, "sent", None))
+        except NotificationSkipped:
+            # Bewusst nicht weitergegeben (z. B. unter der Mindest-Stufe des Kanals): weder zugestellt noch Fehler.
+            outcomes.append((channel.channel_id, "skipped", None))
         except Exception as exc:  # noqa: BLE001 - ein kaputter Kanal darf weder andere noch den Aufrufer stoppen
             outcomes.append((channel.channel_id, "failed", str(exc)))
 
-    for channel_id, status, error in outcomes:
-        session.add(
-            NotificationDelivery(
-                notification_id=notification_id, channel_id=channel_id, status=status, error=error,
-            )
-        )
-    await session.flush()
+    await _log_deliveries(session, notification_id, outcomes)
     await session.commit()
 
     from ..core.ws_hub import get_ws_hub
@@ -138,6 +141,30 @@ async def deliver(
         if failures:
             raise NotificationNotDelivered(failures)
     return row, suppressed
+
+
+async def _log_deliveries(
+    session: AsyncSession, notification_id: str, outcomes: list[tuple[str, str, str | None]]
+) -> None:
+    """Schreibt die Zustellprotokolle -- nur, solange die Meldung noch da ist.
+
+    Die Kanaele brauchen Sekunden (ntfy: bis zu 5 s), die Meldung steht aber schon in der Liste:
+    wer sie in der Zwischenzeit loescht (von Hand, `DELETE /notifications/{id}`), soll den Versand
+    nicht mit einem Fremdschluessel-Fehler abbrechen, und es soll keine verwaiste Zeile bleiben.
+    Darum ein einziges `INSERT ... SELECT ... WHERE EXISTS` je Kanal: Pruefung und Schreiben laufen
+    in derselben Schreibsperre, kein Loeschen kann dazwischenkommen."""
+    still_there = select(Notification.id).where(Notification.id == notification_id).exists()
+    for channel_id, status, error in outcomes:
+        await session.execute(
+            insert(NotificationDelivery).from_select(
+                ["id", "notification_id", "channel_id", "status", "error"],
+                select(
+                    literal(new_id()), literal(notification_id), literal(channel_id), literal(status),
+                    literal(error, type_=Text()),
+                ).where(still_there),
+            )
+        )
+    await session.flush()
 
 
 async def list_notifications(
@@ -188,3 +215,70 @@ async def mark_read(session: AsyncSession, notification_ids: list[str]) -> int:
             count += 1
     await session.flush()
     return count
+
+
+async def delete_notifications(session: AsyncSession, ids: list[str]) -> int:
+    """Loescht die Meldungen `ids` samt ihren Zustellprotokollen und gibt zurueck, wie viele es
+    wirklich gab (unbekannte Kennungen zaehlen nicht). Schreibt nur (`flush`), committet nicht.
+
+    Die Zustellprotokolle werden ausdruecklich mitgeloescht, nicht nur ueber `ON DELETE CASCADE`: die
+    Fremdschluessel-Pruefung (`PRAGMA foreign_keys`) haengt an der Verbindung (`db.session`), und eine
+    verwaiste Zeile wuerde nie wieder aufgeraeumt."""
+    removed = 0
+    for start in range(0, len(ids), _DELETE_BATCH):
+        batch = ids[start:start + _DELETE_BATCH]
+        await session.execute(delete(NotificationDelivery).where(NotificationDelivery.notification_id.in_(batch)))
+        result = await session.execute(delete(Notification).where(Notification.id.in_(batch)))
+        removed += int(result.rowcount or 0)
+    await session.flush()
+    return removed
+
+
+async def delete_notification(session: AsyncSession, notification_id: str) -> str | None:
+    """Loescht eine Meldung und gibt ihren Titel zurueck (fuer das Protokoll); `None`, wenn es sie
+    nicht gibt."""
+    row = await session.get(Notification, notification_id)
+    if row is None:
+        return None
+    title = row.title
+    await delete_notifications(session, [notification_id])
+    return title
+
+
+@dataclass
+class DeleteProgress:
+    """Wie viele Meldungen `delete_read` schon endgueltig geloescht (committet) hat. Der Aufrufer legt es an und liest es
+    auch dann, wenn `delete_read` mitten im Lauf eine Ausnahme wirft: die Haeppchen davor sind dann schon weg."""
+
+    deleted: int = 0
+
+
+async def delete_read(
+    session: AsyncSession, *, chunk_size: int = 5000, pause: float = 0.05, progress: DeleteProgress | None = None,
+) -> int:
+    """Loescht alle gelesenen Meldungen (`read_at` gesetzt); ungelesene bleiben. Gibt die Anzahl zurueck.
+
+    Wie der naechtliche Aufraeum-Job in Haeppchen mit Commit dazwischen: in einer einzigen Transaktion hielte ein grosser
+    Bestand (100 000 gelesene Meldungen, rund 10 s) die Schreibsperre so lange, dass gleichzeitige Schreiber (Anmeldung,
+    Zeitplaene) nach 5 s mit "database is locked" scheitern. Scheitert ein spaeteres Haeppchen, sind die frueheren
+    schon weg: `progress.deleted` nennt dann, wie viele (die Ausnahme geht unveraendert weiter)."""
+    total = 0
+    while True:
+        ids = list(
+            (
+                await session.execute(
+                    select(Notification.id).where(Notification.read_at.isnot(None))
+                    .order_by(Notification.id).limit(chunk_size)
+                )
+            ).scalars().all()
+        )
+        if not ids:
+            return total
+        removed = await delete_notifications(session, ids)
+        await session.commit()
+        total += removed
+        if progress is not None:
+            progress.deleted = total
+        if removed == 0 or len(ids) < chunk_size:  # fertig (oder gleichzeitig geloescht): nicht endlos wiederholen
+            return total
+        await asyncio.sleep(pause)  # anderen Schreibern eine Luecke lassen

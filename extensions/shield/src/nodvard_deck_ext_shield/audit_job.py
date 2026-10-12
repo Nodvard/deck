@@ -54,6 +54,10 @@ INCOMPLETE_MESSAGE = "Der Lynis-Bericht ist unvollständig – Lynis wurde vorze
 LOST_MESSAGE = "Das Audit wurde auf dem Server abgebrochen (zum Beispiel durch einen Neustart des Servers). Starte es neu."
 NOT_STARTED_MESSAGE = "Das Audit wurde auf dem Server nicht gefunden – es ist wohl nicht gestartet."
 UNREADABLE_MESSAGE = "Das Audit hat keine lesbare Antwort geliefert. Starte es neu."
+KILLED_MESSAGE = (
+    "Lynis wurde auf dem Server beendet, bevor es fertig war (Rückgabecode 137). Meist war der Arbeitsspeicher knapp, "
+    "oder jemand hat den Prozess beendet. Starte das Audit neu, wenn der Server weniger zu tun hat."
+)
 
 
 def too_long_message(limit_s: int = LIMIT_S) -> str:
@@ -92,6 +96,7 @@ def lynis_command(
     - `@@nolynis`: Lynis ist nicht installiert.
     - `@@busy`: Es laeuft schon ein Lynis (Sperre belegt oder PID-Datei von Lynis mit lebendem Prozess).
     - `@@timeout`: `timeout` hat Lynis nach `limit_s` beendet.
+    - `@@killed`: Lynis wurde vorher hart beendet (Rueckgabecode 137), meist bei Speichermangel.
     - `@@lynis-rc=<n>`, dann `@@report` und die Zeilen des frischen Berichts, oder `@@stale` (kein neuer Bericht).
 
     Davor steht `@@prio=...` (womit Lynis gestartet wurde) und, was Lynis selbst ausgibt. `base_dir`, `report` und
@@ -128,8 +133,13 @@ def lynis_command(
         "T=; case \"$(timeout --version 2>/dev/null)\" in *coreutils*) "
         f"timeout -k 1 5 true >/dev/null 2>&1 && T=\"timeout -k {KILL_AFTER_S} {limit}\";; esac; "
         'echo "@@prio=${N:-normal}"; '
-        "$T $N lynis audit system --quick --quiet --no-colors </dev/null; R=$?; "
-        'if [ -n "$T" ] && { [ "$R" -eq 124 ] || [ "$R" -eq 137 ]; }; then echo @@timeout; exit 0; fi; '
+        "S=$(date +%s 2>/dev/null); $T $N lynis audit system --quick --quiet --no-colors </dev/null; R=$?; "
+        'if [ -n "$T" ] && [ "$R" -eq 124 ]; then echo @@timeout; exit 0; fi; '
+        # 137 (KILL) kommt von `timeout` erst nach der Obergrenze. Frueher beendet hat Lynis jemand anderes, meist der
+        # Kernel bei Speichermangel. Ohne Uhrzeit bleibt es wie bisher bei „zu lange“.
+        'if [ "$R" -eq 137 ]; then E=$(date +%s 2>/dev/null); '
+        f'if [ -n "$T" ] && {{ [ -z "$S" ] || [ -z "$E" ] || [ $((E - S)) -ge {limit} ]; }}; then echo @@timeout; '
+        "else echo @@killed; fi; exit 0; fi; "
         'echo "@@lynis-rc=$R"; '
         f"if [ -f {rep} ] && [ ! -L {rep} ] && [ {rep} -nt {start} ]; then echo @@report; "
         f"grep -E '^(warning\\[\\]|suggestion\\[\\]|hardening_index|finish)=' {rep}; else echo @@stale; fi"
@@ -165,9 +175,11 @@ def stop_command(run_id: str, *, base_dir: str = AUDIT_DIR) -> str:
     return (
         f"if {alive}; then "
         f"systemctl stop --no-block {unit} >/dev/null 2>&1; "
-        'pkill -TERM -s "$p" 2>/dev/null; kill -TERM -- "-$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; '
+        # Die Gruppe als `kill -TERM -<nr>`, ohne `--`: das `kill` von dash (Debian, Ubuntu) bricht bei
+        # `kill -TERM -- -<nr>` mit „Illegal number“ ab, und ohne `pkill` (procps fehlt) lief Lynis dann weiter.
+        'pkill -TERM -s "$p" 2>/dev/null; kill -TERM "-$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; '
         'i=0; while [ $i -lt 10 ] && kill -0 "$p" 2>/dev/null; do sleep 1; i=$((i+1)); done; '
-        'pkill -KILL -s "$p" 2>/dev/null; kill -KILL -- "-$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null; sleep 1; '
+        'pkill -KILL -s "$p" 2>/dev/null; kill -KILL "-$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null; sleep 1; '
         f"if {alive} || pgrep -s \"$p\" >/dev/null 2>&1; then echo @@stuck; else echo @@stopped; fi; "
         "else echo @@notrunning; fi"
     )
@@ -182,6 +194,8 @@ def parse_result(output: str) -> av.LynisResult:
         return av.LynisResult(status="error", error=BUSY_MESSAGE)
     if "@@timeout" in lines:
         return av.LynisResult(status="error", error=too_long_message())
+    if "@@killed" in lines:
+        return av.LynisResult(status="error", error=KILLED_MESSAGE)
     rc = next((int(m.group(1)) for ln in lines if (m := _LYNIS_RC_RE.match(ln))), None)
     if "@@stale" in lines:
         return av.LynisResult(status="error", error=stale_message(rc))

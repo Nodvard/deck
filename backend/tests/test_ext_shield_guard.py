@@ -335,7 +335,7 @@ class _Ctx:
         self.commands: list[str] = []
         self.audits: list[dict] = []
         self.notes: list = []
-        self._settings_value = settings or {"bruteforce_threshold": 2}
+        self._settings_value = settings or {"bruteforce_threshold": 3}
         self._host = Host(id="h1", name="pve2", display_name="pve2", address="10.0.0.2")
         self.settings = SimpleNamespace(get=self._settings)
         self.hosts = SimpleNamespace(list=self._list, get=self._get)
@@ -421,6 +421,7 @@ async def test_first_look_only_learns_then_changes_raise_events_once():
             "1758800200.1 pve2 sshd[2]: Accepted password for root from 45.66.77.88 port 2 ssh2",
             "1758800201.1 pve2 sshd[3]: Failed password for root from 203.0.113.9 port 3 ssh2",
             "1758800202.1 pve2 sshd[4]: Failed password for root from 203.0.113.9 port 4 ssh2",
+            "1758800203.1 pve2 sshd[5]: Failed password for root from 203.0.113.9 port 5 ssh2",
         ]),
     )
     engine, sm = await _engine()
@@ -444,7 +445,7 @@ async def test_first_look_only_learns_then_changes_raise_events_once():
     o = await guard.overview()
     view = o["hosts"][0]["view"]
     assert [p["port"] for p in view["ports"] if p["new"]] == [4444]
-    assert view["files_pending"] == ["/etc/passwd"] and view["failed_24h"] == 2
+    assert view["files_pending"] == ["/etc/passwd"] and view["failed_24h"] == 3
     assert o["summary"]["open_events"] == 4
 
     # Bestaetigen uebernimmt den neuen Stand
@@ -862,7 +863,7 @@ async def test_setting_extends_the_list_and_old_baselines_still_match():
     dyn = ["rpc.mountd", "rpc.statd", "avahi-daemon", "mein-dienst"]
     ctx2 = _Ctx(sm, [_output(ports=BOOT_2), _output(ports=BOOT_2 + "\n" + _ss("tcp", 50123, "mein-dienst")),
                      _output(ports=BOOT_2 + "\n" + _ss("tcp", 51999, "mein-dienst"))],
-                settings={"bruteforce_threshold": 2, "guard_dynamic_processes": dyn})
+                settings={"bruteforce_threshold": 3, "guard_dynamic_processes": dyn})
     guard2 = Guard(ctx2, Defender(ctx2))
     assert (await guard2.inspect(ctx2._host))["events"] == 0
     assert (await guard2.inspect(ctx2._host))["events"] == 1

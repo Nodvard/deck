@@ -240,6 +240,15 @@ describe("Cockpit", () => {
     expect(within(empty).queryByRole("link")).toBeNull();
   });
 
+  it("Erste Schritte verlinken die Anleitung", async () => {
+    previewState.start = true;
+    vi.stubGlobal("fetch", mockFetch());
+    renderCockpit();
+    const card = await screen.findByTestId("first-steps");
+    expect(within(card).getByTestId("first-steps-guide")).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md");
+    expect(within(card).getByTestId("first-steps-guide")).toHaveAttribute("target", "_blank");
+  });
+
   it("Erste Schritte oben im Cockpit, solange etwas offen ist; weg, wenn alles erledigt ist", async () => {
     previewState.start = true; // ein Server ohne Zugang, Module brauchen Einrichtung
     vi.stubGlobal("fetch", mockFetch());

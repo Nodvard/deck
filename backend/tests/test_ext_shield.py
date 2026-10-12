@@ -466,7 +466,12 @@ async def _incident_report_payloads(db_session) -> list[dict]:
     rows = (await db_session.execute(
         select(NotificationRow).where(NotificationRow.source_ext_id == "shield").order_by(NotificationRow.ts)
     )).scalars().all()
-    return [r.payload for r in rows]
+    return [_scope(r.payload) for r in rows]
+
+
+def _scope(payload: dict) -> dict:
+    """Nur der Server-Teil einer Meldung (ohne Link und Knoepfe)."""
+    return {k: v for k, v in payload.items() if k in ("host_id", "host_ids")}
 
 
 class _RecordingChannel:
@@ -516,7 +521,15 @@ async def test_incident_report_is_silenced_end_to_end_by_the_maintenance_window_
     await settings_service.set_global(db_session, "maintenance.windows", _running_window(["anderer-host"]))
     await loaded.instance._process_batch(loaded.ctx, loaded.instance._store.take_batch())
     assert len(channel.received) == 1
-    assert channel.received[0].payload == {"host_id": host_id}
+    payload = channel.received[0].payload
+    assert _scope(payload) == {"host_id": host_id}
+    # Der Neustart wurde vorgeschlagen: ein Klick fuehrt genau zu dieser Freigabe.
+    from nodvard_deck.models import Action
+    from sqlalchemy import select
+
+    action_id = (await db_session.execute(select(Action.id))).scalars().one()
+    assert payload["path"] == f"/actions?action={action_id}"
+    assert payload["actions"][0] == {"label": "Aktion öffnen", "path": f"/actions?action={action_id}"}
 
     await loaded.instance._on_transition(_crash_transition(host_id, "docker", "redis"))
     await settings_service.set_global(db_session, "maintenance.windows", _running_window([host_id]))
@@ -2229,8 +2242,341 @@ async def test_report_writes_the_inspect_facts_itself_and_drops_contradicting_mo
     body = channel.received[0].body
     assert body.startswith(
         "Ursache laut System: echter Absturz (Exit-Code 1)\n"
-        "Fakten (docker inspect): Exit-Code 1 · OOMKilled=false · 3 Neustarts · Image postgres:16 · beendet 2026-09-30 10:00:01 UTC\n\n"
+        "Fakten (docker inspect): Exit-Code 1 · OOMKilled=false · 3 Neustarts · Image postgres:16 · beendet 2026-09-30 10:00:01 UTC\n"
+        "Was heißt das? Das Programm im Container hat sich mit einem Fehler beendet.\n"
+        "Was kannst du tun? Die letzten Zeilen im Protokoll des Containers (`docker logs <Name>`) zeigen meist den Grund"
     )
     assert "OOMKilled=true" not in body and "Speichermangel hin" not in body
     assert "Der Prozess hat sich mit einem Fehler selbst beendet." in body  # der passende Satz bleibt
     assert "2 Aussagen von Nodvard KI widersprachen den Fakten oben und wurden entfernt." in body
+
+
+@pytest.mark.asyncio
+async def test_a_container_that_runs_again_resolves_its_incident_by_itself(client, db_session, test_settings, mock_ollama):
+    """Vorfall schliesst sich selbst: laeuft der Container wieder ruhig (`DockerWatcher.on_recovery`), wird der offene
+    Vorfall "Erledigt", mit dem Satz dazu und einem Eintrag im Protokoll -- ohne neue Meldung."""
+    import time
+
+    from nodvard_deck.models import AuditEntry as AuditLog, Notification as NotificationRow
+    from sqlalchemy import func, select
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    loaded = get_extension_runtime().loaded["shield"]
+    await _queue_crash(client, token, loaded.instance, host_name="docker", target="nginx-proxy")
+    await loaded.instance._process_batch(loaded.ctx, loaded.instance._store.take_batch())
+    history = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"]
+    assert [(i["target"], i["status"]) for i in history] == [("nginx-proxy", "proposed")]
+    notes_before = (await db_session.execute(select(func.count()).select_from(NotificationRow))).scalar_one()
+
+    await loaded.instance._on_recovery(type("H", (), {"id": "x", "name": "DOCKER"})(), "nginx-proxy", time.time() - 300)
+
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "resolved"
+    assert item["auto_resolved"].startswith("Läuft wieder seit ") and "von selbst erledigt." in item["auto_resolved"]
+    assert item["auto_resolved"].endswith("Der vorgeschlagene Neustart unter „Aktionen“ ist nicht mehr nötig, dort einfach ablehnen.")
+    audit = (await db_session.execute(
+        select(AuditLog).where(AuditLog.action == "shield.incident_status", AuditLog.correlation_id == item["id"])
+    )).scalars().all()
+    assert len(audit) == 1 and "-> Erledigt (läuft wieder seit" in audit[0].reason
+    assert "der vorgeschlagene Neustart wartet noch" in audit[0].reason
+    notes_after = (await db_session.execute(select(func.count()).select_from(NotificationRow))).scalar_one()
+    assert notes_after == notes_before, "Ruhe statt Lärm: keine Meldung"
+
+    # Ein anderer Container, ein anderer Server und schon erledigte Vorfaelle bleiben unberuehrt.
+    await loaded.instance._on_recovery(type("H", (), {"id": "x", "name": "docker"})(), "redis", time.time())
+    await loaded.instance._on_recovery(type("H", (), {"id": "y", "name": "mini"})(), "nginx-proxy", time.time())
+    await loaded.instance._on_recovery(type("H", (), {"id": "x", "name": "docker"})(), "nginx-proxy", time.time())
+    audit_again = (await db_session.execute(
+        select(func.count()).select_from(AuditLog).where(AuditLog.action == "shield.incident_status")
+    )).scalar_one()
+    assert audit_again == 1
+
+
+@pytest.mark.asyncio
+async def test_a_crash_after_an_approved_restart_says_that_the_restart_did_not_help(
+    client, db_session, test_settings, mock_ollama
+):
+    from datetime import UTC, datetime, timedelta
+
+    from nodvard_deck.models import Action
+    from nodvard_sdk.capabilities import NotificationChannel
+    from sqlalchemy import select
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    loaded = get_extension_runtime().loaded["shield"]
+    channel = _RecordingChannel()
+    get_extension_runtime().capabilities.provide("test-ext", NotificationChannel, channel)
+    host_id = await _queue_crash(client, token, loaded.instance, host_name="docker", target="nginx-proxy")
+    await loaded.instance._process_batch(loaded.ctx, loaded.instance._store.take_batch())
+    assert "hat nicht geholfen" not in channel.received[0].body
+
+    # Der vorgeschlagene Neustart lief durch -- und der Container stuerzt trotzdem wieder ab.
+    action = (await db_session.execute(select(Action))).scalars().one()
+    action.status = "succeeded"
+    action.finished_at = datetime.now(UTC) - timedelta(minutes=2)
+    await db_session.flush()
+    await loaded.instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    batch = loaded.instance._store.take_batch()
+    assert len(batch) == 1 and isinstance(batch[0].details.get("after_restart"), float)
+    await loaded.instance._process_batch(loaded.ctx, batch)
+    assert channel.received[-1].body.startswith("Hinweis: nginx-proxy auf docker ist nach dem freigegebenen Neustart um ")
+    assert channel.received[-1].body.split("\n", 1)[0].endswith("wieder abgestürzt.")
+
+
+@pytest.mark.asyncio
+async def test_the_restart_hint_only_counts_the_restart_that_really_hit_this_container(
+    client, db_session, test_settings, mock_ollama
+):
+    """Eine Aktion haengt an allen Vorfaellen ihres Batches. "Nach dem Neustart wieder abgestuerzt" gilt nur fuer den
+    Container, den der Befehl auf diesem Server wirklich neu gestartet hat -- erfolgreich, nicht gerade eben (das ist
+    der Neustart selbst), nicht laenger als sechs Stunden her und ohne Erholung dazwischen."""
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from nodvard_deck.models import Action
+    from nodvard_deck_ext_shield.models import IncidentRecord
+    from sqlalchemy import select, update
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    loaded = get_extension_runtime().loaded["shield"]
+    instance = loaded.instance
+    host_id = await _queue_crash(client, token, instance, host_name="docker", target="nginx-proxy")
+    await instance._on_transition(_crash_transition(host_id, "docker", "redis"))
+    await instance._process_batch(loaded.ctx, instance._store.take_batch())
+    action = (await db_session.execute(select(Action))).scalars().one()
+    assert action.payload["command"] == "docker restart nginx-proxy"
+    host = type("H", (), {"id": host_id, "name": "docker"})()
+    check = instance._restart_that_did_not_help
+    now = time.time()
+
+    assert await check(host, "nginx-proxy", crashed_at=now) is None, "noch nicht gelaufen"
+    action.status = "succeeded"
+    action.finished_at = datetime.now(UTC) - timedelta(minutes=10)
+    await db_session.flush()
+    assert await check(host, "nginx-proxy", crashed_at=now) is not None
+    assert await check(host, "redis", crashed_at=now) is None, "der Befehl startete nur nginx-proxy neu"
+    assert await check(type("H", (), {"id": "anderer", "name": "docker"})(), "nginx-proxy", crashed_at=now) is None
+    assert await check(host, "nginx-proxy", crashed_at=action.finished_at.timestamp() + 5) is None, "das ist der Neustart selbst"
+    assert await check(host, "nginx-proxy", crashed_at=action.finished_at.timestamp() + 20) is not None, "20 s danach: nicht geholfen"
+
+    # Der Vorfall ist alt (nachts gemeldet, morgens freigegeben): es zaehlt die Zeit des Neustarts, nicht des Vorfalls.
+    await db_session.execute(update(IncidentRecord).values(created_at=datetime.now(UTC) - timedelta(hours=9)))
+    await db_session.flush()
+    assert await check(host, "nginx-proxy", crashed_at=now) is not None
+    action.finished_at = datetime.now(UTC) - timedelta(hours=7)
+    await db_session.flush()
+    assert await check(host, "nginx-proxy", crashed_at=now) is None, "länger als sechs Stunden her"
+
+
+@pytest.mark.asyncio
+async def test_after_a_recovery_a_new_crash_is_reported_again_and_the_restart_counts_as_helpful(
+    client, db_session, test_settings, mock_ollama
+):
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from nodvard_deck.models import Action, AuditEntry
+    from sqlalchemy import select
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    loaded = get_extension_runtime().loaded["shield"]
+    instance = loaded.instance
+    host_id = await _queue_crash(client, token, instance, host_name="docker", target="nginx-proxy")
+    await instance._process_batch(loaded.ctx, instance._store.take_batch())
+    action = (await db_session.execute(select(Action))).scalars().one()
+    action.status = "succeeded"
+    action.finished_at = datetime.now(UTC) - timedelta(minutes=10)
+    await db_session.flush()
+    host = type("H", (), {"id": host_id, "name": "docker"})()
+
+    await instance._on_recovery(host, "nginx-proxy", time.time() - 300)
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "resolved" and "nicht mehr nötig" not in item["auto_resolved"], "die Aktion lief schon"
+    assert await instance._restart_that_did_not_help(host, "nginx-proxy", crashed_at=time.time()) is None, (
+        "danach lief er ruhig: der Neustart hat geholfen"
+    )
+
+    # Stuerzt er innerhalb der Ruhezeit wieder ab, geht das nicht verloren. Der Neustart ist schon gelaufen, also oeffnet
+    # er den alten Vorfall nicht wieder ("Aktion vorgeschlagen" waere falsch), sondern es gibt einen neuen mit Meldung.
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    batch = instance._store.take_batch()
+    assert [(i.target, i.details["occurrences"]) for i in batch] == [("nginx-proxy", 1)]
+    old = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert old["status"] == "resolved" and old["occurrences"] == 1
+    reasons = (await db_session.execute(
+        select(AuditEntry.reason).where(AuditEntry.action == "shield.incident_status", AuditEntry.correlation_id == old["id"])
+    )).scalars().all()
+    assert not any(r.endswith("(wieder abgestürzt)") for r in reasons)
+
+
+async def _incident_after_recovery(client, db_session, test_settings, mock_ollama, *, confirm: bool):
+    """Absturz ohne Aktion (KI: keine), gespeichert als "Geprueft" -- auf Wunsch von einem Menschen bestaetigt --,
+    dann laeuft der Container wieder ruhig. Gibt (Instanz, Host, Vorfall) zurueck."""
+    import time
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _NONE_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    instance = get_extension_runtime().loaded["shield"].instance
+    host_id = await _queue_crash(client, token, instance, host_name="docker", target="nginx-proxy")
+    await instance._process_batch(get_extension_runtime().loaded["shield"].ctx, instance._store.take_batch())
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "reviewed" and item["action_id"] is None
+    if confirm:
+        res = await client.post(f"/api/v1/ext/shield/incidents/{item['id']}/confirm", headers=_auth_header(token))
+        assert res.status_code == 200, res.text
+    host = type("H", (), {"id": host_id, "name": "docker"})()
+    await instance._on_recovery(host, "nginx-proxy", time.time() - 300)
+    return token, instance, host_id
+
+
+@pytest.mark.asyncio
+async def test_a_crash_right_after_a_recovery_reopens_the_unhandled_incident(client, db_session, test_settings, mock_ollama):
+    from nodvard_deck.models import AuditEntry
+    from sqlalchemy import select
+
+    token, instance, host_id = await _incident_after_recovery(client, db_session, test_settings, mock_ollama, confirm=False)
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    assert instance._store.take_batch() == [], "in der Ruhezeit: derselbe Vorfall, keine neue Meldung"
+    items = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"]
+    assert len(items) == 1
+    assert items[0]["status"] == "reviewed" and items[0]["occurrences"] == 2 and not items[0].get("auto_resolved")
+    reasons = (await db_session.execute(
+        select(AuditEntry.reason).where(AuditEntry.action == "shield.incident_status", AuditEntry.correlation_id == items[0]["id"])
+    )).scalars().all()
+    assert any(r.endswith("(wieder abgestürzt)") for r in reasons)
+
+
+@pytest.mark.asyncio
+async def test_a_confirmed_incident_is_not_reopened(
+    client, db_session, test_settings, mock_ollama
+):
+    token, instance, host_id = await _incident_after_recovery(client, db_session, test_settings, mock_ollama, confirm=True)
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    assert len(instance._store.take_batch()) == 1, "von einem Menschen bestaetigt: neuer Vorfall mit Meldung"
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_only_the_newest_incident_can_reopen(client, db_session, test_settings, mock_ollama):
+    """I0 (ohne Aktion) hat sich erholt, danach I1 mit gelaufenem Neustart, das sich ebenfalls erholt hat. Stuerzt der
+    Container in der Ruhezeit wieder ab, oeffnet nicht still das aeltere I0 -- es gibt einen neuen Vorfall mit Meldung."""
+    import time
+    from datetime import UTC, datetime, timedelta
+
+    from nodvard_deck.models import Action
+    from sqlalchemy import select
+
+    token, instance, host_id = await _incident_after_recovery(client, db_session, test_settings, mock_ollama, confirm=False)
+    _, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    instance._store._cooldowns.clear()
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    await instance._process_batch(get_extension_runtime().loaded["shield"].ctx, instance._store.take_batch())
+    action = (await db_session.execute(select(Action))).scalars().one()
+    action.status = "succeeded"
+    action.finished_at = datetime.now(UTC) - timedelta(minutes=10)
+    await db_session.flush()
+    await instance._on_recovery(type("H", (), {"id": host_id, "name": "docker"})(), "nginx-proxy", time.time() - 60)
+
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    assert len(instance._store.take_batch()) == 1, "neuer Vorfall mit Meldung"
+    items = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"]
+    assert [i["status"] for i in items] == ["resolved", "resolved"]
+    assert all(i["occurrences"] == 1 for i in items)
+
+
+@pytest.mark.asyncio
+async def test_after_the_cooldown_a_crash_after_a_recovery_is_a_new_incident(client, db_session, test_settings, mock_ollama):
+    """Ausserhalb der Ruhezeit oeffnet auch ein unbearbeiteter Vorfall nicht wieder: der normale Weg mit Meldung."""
+    _, instance, host_id = await _incident_after_recovery(client, db_session, test_settings, mock_ollama, confirm=False)
+    instance._store._cooldowns.clear()
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    assert len(instance._store.take_batch()) == 1
+
+
+@pytest.mark.asyncio
+async def test_reopening_by_hand_drops_the_recovery_note(client, db_session, test_settings, mock_ollama):
+    token, _, _ = await _incident_after_recovery(client, db_session, test_settings, mock_ollama, confirm=False)
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "resolved" and item["auto_resolved"]
+    res = await client.post(f"/api/v1/ext/shield/incidents/{item['id']}/reopen", headers=_auth_header(token))
+    assert res.status_code == 200, res.text
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "open" and not item.get("auto_resolved")
+
+
+@pytest.mark.asyncio
+async def test_a_recovery_while_the_incident_is_still_checked_resolves_it_right_away(
+    client, db_session, test_settings, mock_ollama
+):
+    """Die KI braucht laenger als die fuenf ruhigen Minuten: der Vorfall ist bei der Erholung noch nicht gespeichert.
+    Er wird dann gleich als erledigt gespeichert, und die Meldung sagt, dass der Container wieder laeuft."""
+    import time
+
+    from nodvard_sdk.capabilities import NotificationChannel
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    loaded = get_extension_runtime().loaded["shield"]
+    instance = loaded.instance
+    channel = _RecordingChannel()
+    get_extension_runtime().capabilities.provide("test-ext", NotificationChannel, channel)
+    host_id = await _queue_crash(client, token, instance, host_name="docker", target="nginx-proxy")
+    batch = instance._store.take_batch()
+    await instance._on_recovery(type("H", (), {"id": host_id, "name": "docker"})(), "nginx-proxy", time.time())
+    await instance._process_batch(loaded.ctx, batch)
+
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "resolved" and "von selbst erledigt." in item["auto_resolved"]
+    assert "nicht mehr nötig" in item["auto_resolved"], "der Vorschlag wartet noch"
+    assert item["status_changed_at"], "der Wechsel auf Erledigt hat einen Zeitpunkt"
+    assert "Inzwischen läuft nginx-proxy auf docker wieder (seit " in channel.received[-1].body
+
+
+@pytest.mark.asyncio
+async def test_a_recovery_counts_only_until_the_container_stirs_again(client, db_session, test_settings, mock_ollama):
+    """Erholung waehrend der KI-Abfrage, danach wieder ein Absturz: der Vorfall bleibt offen. Und eine Ruhe, die laut
+    Waechter kurz VOR dem letzten Absturz begann (Neustart-Richtlinie: beides im selben Takt), zaehlt trotzdem."""
+    import time
+
+    ollama_url, state = mock_ollama
+    state["next_reply"] = _CRASH_REPLY
+    token = await _setup_shield(client, db_session, test_settings, ollama_url)
+    loaded = get_extension_runtime().loaded["shield"]
+    instance = loaded.instance
+    host_id = await _queue_crash(client, token, instance, host_name="docker", target="nginx-proxy")
+    host = type("H", (), {"id": host_id, "name": "docker"})()
+    batch = instance._store.take_batch()
+    await instance._on_recovery(host, "nginx-proxy", time.time())
+    await instance._on_transition(_crash_transition(host_id, "docker", "nginx-proxy"))
+    await instance._process_batch(loaded.ctx, batch)
+    item = (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"][0]
+    assert item["status"] == "proposed" and not item.get("auto_resolved")
+
+    host_id2 = await _queue_crash(client, token, instance, host_name="docker2", target="web")
+    batch = instance._store.take_batch()
+    await instance._on_recovery(type("H", (), {"id": host_id2, "name": "docker2"})(), "web", batch[0].details["last_seen"] - 0.01)
+    await instance._process_batch(loaded.ctx, batch)
+    web = next(i for i in (await client.get("/api/v1/ext/shield/history", headers=_auth_header(token))).json()["items"] if i["target"] == "web")
+    assert web["status"] == "resolved"
+
+
+def test_container_watch_links_lead_to_the_proposal_or_the_watch_tab():
+    from nodvard_deck_ext_shield import container_watch_links
+
+    assert container_watch_links(None) == {"path": "/ext/shield/soc?tab=containers"}
+    links = container_watch_links("01a1-2fd8")
+    assert links["path"] == "/actions?action=01a1-2fd8"
+    assert [a["label"] for a in links["actions"]] == ["Aktion öffnen", "Container-Wache"]
+    assert container_watch_links("a/b?c")["path"] == "/actions?action=a%2Fb%3Fc"

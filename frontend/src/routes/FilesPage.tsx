@@ -31,10 +31,20 @@
  * schreiben (WebDAV: `GET` auf eine Kollektion liefert eine HTML-Liste statt eines
  * Fehlers, die als "Dateiinhalt" durchgereicht wuerde) -- der alte Button hatte
  * dieses Risiko nie ausgeschlossen, es wurde beim Umbau bewusst mitgefixt.
+ *
+ * **Adresse:** `/files?source=<Quelle>&path=<Ordner>` oeffnet genau diesen Ordner, `/files?host=<Server>[&path=<Ordner>]`
+ * die Dateiquelle dieses Servers (die erste, wenn es mehrere gibt). Die Seite schreibt die Adresse beim Klicken mit
+ * (`replace`, kein neuer Verlaufseintrag), damit Neuladen, Zurueck und Teilen funktionieren. Unbekannte oder ungueltige
+ * Werte ergeben den normalen Start mit einem Hinweis, nie einen Fehler. Zu einer Server-Quelle zeigt die Seitenleiste
+ * "Wichtige Orte" (`GET /files/places`).
  */
 import { useCallback, useEffect, useRef, useState, type DragEvent } from "react";
+import { useSearchParams } from "react-router-dom";
 
+import { osLabel, StatusDot } from "../../../extensions/_shared/frontend/src/HostPicker";
 import { ButtonLink, EmptyState } from "../components/EmptyState";
+import { Icon } from "../components/Icon";
+import { FilePreview, previewKind, type PreviewKind } from "../components/FilePreview";
 import { FolderPickerDialog, type FolderChoice } from "../components/FolderPickerDialog";
 import { api, ApiError, apiErrorFromBody, apiErrorFromResponse, apiFetchResponse, refreshAfterUnauthorized } from "../lib/api";
 import { useWsSubscription } from "../lib/ws";
@@ -46,7 +56,30 @@ interface FileSourceOut {
   label: string;
   icon: string;
   caps: { write: boolean; rename: boolean; remove: boolean; mkdir: boolean; search: boolean; range_read: boolean };
+  /** Server hinter der Quelle (SSH-Quellen); fehlt bei Nextcloud & Co. und bei älteren Versionen. */
+  host_id?: string | null;
 }
+
+/** Ein wichtiger Ort eines Servers (`GET /files/places`). */
+export interface FilePlaceOut {
+  label: string;
+  path: string;
+  icon: string;
+  hint: string | null;
+}
+
+/** Was die Adresse der Seite verlangt (`?source=`, `?host=`, `?path=`); `null` = nicht angegeben. */
+function readLocation(params: URLSearchParams): { source: string | null; host: string | null; path: string | null } {
+  return { source: params.get("source"), host: params.get("host"), path: params.get("path") };
+}
+
+/** Ein Ordner aus der Adresse zaehlt nur, wenn er absolut ist; ob es ihn gibt, sagt die Quelle beim Oeffnen. */
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") && !path.includes("\0");
+}
+
+/** Was die Leiste von einem Server zeigt: Status-Ampel und Betriebssystem (wie die Server-Kacheln). */
+interface SourceHost { status: string; os_family: string }
 
 interface FileEntryOut {
   name: string;
@@ -145,12 +178,17 @@ export function FilesPage(): JSX.Element {
   const canManageExtensions = useAuthStore((s) => s.hasPermission("extensions.manage"));
   const canWriteHosts = useAuthStore((s) => s.hasPermission("hosts.write"));
   const [sources, setSources] = useState<FileSourceOut[] | null>(null);
+  const [sourceHosts, setSourceHosts] = useState<Record<string, SourceHost>>({});
   const [sourceId, setSourceId] = useState<string | null>(null);
   const [path, setPath] = useState("/");
   const [entries, setEntries] = useState<FileEntryOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // Vorschau einer Datei (Text, Bild) über der Liste; ein Ordnerwechsel schließt sie.
+  const [preview, setPreview] = useState<{ entry: FileEntryOut; kind: PreviewKind } | null>(null);
+  useEffect(() => setPreview(null), [sourceId, path]);
+  const closePreview = useCallback(() => setPreview(null), []);
   const [query, setQuery] = useState("");
   const [searchHits, setSearchHits] = useState<SearchHit[] | null>(null);
   const [transferRunId, setTransferRunId] = useState<string | null>(null);
@@ -160,15 +198,29 @@ export function FilesPage(): JSX.Element {
   const [picker, setPicker] = useState<{ fromSourceId: string; entry: { path: string; name: string; size?: number | null }; targetSourceId: string | null } | null>(null);
   const [pendingMove, setPendingMove] = useState<{ runId: string; sourceId: string; path: string; name: string; size: number | null } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const addressKey = searchParams.toString();
+  /** Die Adresse, die diese Seite zuletzt selbst geschrieben hat: Sie ist keine neue Anfrage von aussen. */
+  const writtenAddress = useRef<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [placesByHost, setPlacesByHost] = useState<Record<string, FilePlaceOut[]>>({});
 
   const activeSource = sources?.find((s) => s.source_id === sourceId) ?? null;
+  const placeHostId = activeSource?.host_id ?? null;
+  const places = placeHostId ? placesByHost[placeHostId] ?? [] : [];
 
   const loadSources = useCallback(() => {
     api
       .get<FileSourceOut[]>("/files/sources")
       .then((list) => {
         setSources(list);
-        if (list.length > 0 && !sourceId) setSourceId(list[0].source_id);
+        // Status und System der Server hinter SSH-Quellen; ohne Server-Quellen oder ohne Leserecht eben ohne.
+        if (list.some((s) => s.host_id)) {
+          api
+            .get<({ id: string } & SourceHost)[]>("/hosts")
+            .then((hosts) => setSourceHosts(Object.fromEntries(hosts.map((h) => [h.id, { status: h.status, os_family: h.os_family }]))))
+            .catch(() => undefined);
+        }
       })
       .catch((err: unknown) => setError(err instanceof ApiError ? err.message : String(err)));
     // eslint-disable-next-line react-hooks/exhaustive-deps -- laeuft bewusst nur beim Mount
@@ -177,6 +229,62 @@ export function FilesPage(): JSX.Element {
   useEffect(() => {
     loadSources();
   }, [loadSources]);
+
+  // Quelle und Ordner aus der Adresse uebernehmen (sobald die Quellen da sind, und wenn von aussen eine neue Adresse
+  // kommt, etwa ein Link von der Server-Seite). Ohne Angabe: die erste Quelle, wie immer.
+  useEffect(() => {
+    if (!sources || addressKey === writtenAddress.current) return;
+    const want = readLocation(new URLSearchParams(addressKey));
+    const asksForSource = want.source !== null || want.host !== null;
+    const target = want.source !== null ? sources.find((s) => s.source_id === want.source) : want.host !== null ? sources.find((s) => s.host_id === want.host) : undefined;
+    let problem: string | null = null;
+    if (asksForSource && !target) {
+      problem =
+        want.source !== null
+          ? `Die Quelle „${want.source}“ gibt es nicht (mehr).${sources.length > 0 ? " Du siehst stattdessen die erste Quelle." : ""}`
+          : "Für diesen Server gibt es keine Dateiquelle. Dafür braucht er einen SSH-Zugang, und das Modul „Terminal“ muss eingeschaltet sein.";
+    }
+    const folder = want.path !== null && isAbsolutePath(want.path) ? want.path : null;
+    if (want.path !== null && folder === null && !problem) {
+      problem = `Der Ordner „${want.path}“ ist ungültig: Ein Pfad beginnt mit „/“. Du siehst den Hauptordner.`;
+    }
+    setNotice(problem);
+    if (target) {
+      setSourceId(target.source_id);
+      setPath(folder ?? "/");
+      setSearchHits(null);
+    } else if (!sourceId && sources.length > 0) {
+      setSourceId(sources[0].source_id);
+      setPath(asksForSource ? "/" : folder ?? "/");
+    } else if (folder !== null && !asksForSource) {
+      setPath(folder);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reagiert nur auf neue Quellen und eine neue Adresse
+  }, [sources, addressKey]);
+
+  // Die Adresse mitfuehren (`replace`: kein neuer Verlaufseintrag pro Klick im Explorer).
+  useEffect(() => {
+    if (!sourceId) return;
+    const next = new URLSearchParams({ source: sourceId, path }).toString();
+    writtenAddress.current = next;
+    if (next !== addressKey) setSearchParams(new URLSearchParams(next), { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- schreibt nur, wenn sich Quelle oder Ordner aendern
+  }, [sourceId, path]);
+
+  // Wichtige Orte des Servers hinter der gewaehlten Quelle; einmal je Server, ein Fehler heisst einfach: keine Orte.
+  useEffect(() => {
+    if (!placeHostId || placeHostId in placesByHost) return;
+    let cancelled = false;
+    const store = (list: FilePlaceOut[]) => !cancelled && setPlacesByHost((prev) => ({ ...prev, [placeHostId]: list }));
+    api
+      .get<FilePlaceOut[]>(`/files/places?host_id=${encodeURIComponent(placeHostId)}`)
+      .then(store)
+      .catch(() => store([]));
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `placesByHost` ist nur der Zwischenspeicher
+  }, [placeHostId]);
 
   const loadDir = useCallback((sid: string, p: string) => {
     setError(null);
@@ -408,6 +516,11 @@ export function FilesPage(): JSX.Element {
     <div className="flex h-full flex-col gap-4 p-4 sm:p-6 lg:flex-row">
       <div className={`w-full shrink-0 ${sources?.length === 0 ? "lg:max-w-xl" : "lg:w-48"}`}>
         <h2 className="mb-2 text-lg font-semibold">Dateien</h2>
+        {notice && (
+          <p role="status" data-testid="files-link-notice" className="mb-2 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-3 py-2 text-xs text-amber-100/90">
+            {notice}
+          </p>
+        )}
         {error && <p className="text-sm text-red-400">Fehler: {error}</p>}
         {!sources && !error && <p className="text-sm opacity-60">Lade …</p>}
         {sources && sources.length === 0 && (
@@ -440,6 +553,7 @@ export function FilesPage(): JSX.Element {
                   setSourceId(s.source_id);
                   setPath("/");
                   setSearchHits(null);
+                  setNotice(null);
                 }}
                 onDragOver={canDropAt(s.source_id, `side:${s.source_id}`)}
                 onDragLeave={() => setDropTargetKey((k) => (k === `side:${s.source_id}` ? null : k))}
@@ -447,11 +561,35 @@ export function FilesPage(): JSX.Element {
                 title={s.caps.write ? `Datei hier ablegen, um sie in einen Ordner von '${s.label}' zu kopieren` : undefined}
                 className={`w-full rounded px-2 py-1 text-left ${sourceId === s.source_id ? "bg-white/10 font-medium" : "opacity-80 hover:opacity-100"} ${dropTargetKey === `side:${s.source_id}` ? "outline outline-2 outline-[var(--color-accent)]" : ""}`}
               >
-                {s.label}
+                <SourceLabel source={s} host={s.host_id ? sourceHosts[s.host_id] : undefined} />
               </button>
             </li>
           ))}
         </ul>
+        {places.length > 0 && (
+          <div className="mt-4" data-testid="files-places">
+            <h3 className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wider opacity-60">Wichtige Orte</h3>
+            <ul className="text-sm">
+              {places.map((place) => (
+                <li key={place.path}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPath(place.path);
+                      setSearchHits(null);
+                      setMessage(null);
+                    }}
+                    title={place.hint ? `${place.hint} (${place.path})` : place.path}
+                    className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left ${path === place.path ? "bg-white/10 font-medium" : "opacity-80 hover:opacity-100"}`}
+                  >
+                    <Icon name={place.icon} size={14} className="flex-none" />
+                    <span className="min-w-0 truncate">{place.label}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* Ohne Quelle gibt es nichts zu durchsuchen oder zu zeigen -- der Leerzustand links reicht. */}
@@ -544,6 +682,16 @@ export function FilesPage(): JSX.Element {
           </div>
         )}
 
+        {preview && sourceId && (
+          <FilePreview
+            key={`${sourceId}:${preview.entry.path}`}
+            sourceId={sourceId}
+            entry={preview.entry}
+            kind={preview.kind}
+            onClose={closePreview}
+            onDownload={() => void download(preview.entry)}
+          />
+        )}
         {!entries && !error && <p className="text-sm opacity-60">Lade …</p>}
         {entries && entries.length === 0 && <p className="text-sm opacity-60">Leer.</p>}
         {entries && entries.length > 0 && (
@@ -595,6 +743,19 @@ export function FilesPage(): JSX.Element {
                     <td className="py-1.5 whitespace-nowrap opacity-70">{entry.modified_at ? new Date(entry.modified_at).toLocaleString() : ""}</td>
                     <td className="py-1.5 whitespace-nowrap">
                       <div className="flex gap-1.5">
+                        {canTransfer(entry) && previewKind(entry) && (
+                          <button
+                            type="button"
+                            aria-pressed={preview?.entry.path === entry.path}
+                            onClick={() => {
+                              const kind = previewKind(entry);
+                              setPreview(preview?.entry.path === entry.path || !kind ? null : { entry, kind });
+                            }}
+                            className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20"
+                          >
+                            Ansehen
+                          </button>
+                        )}
                         {canTransfer(entry) && (
                           <button type="button" disabled={busy} onClick={() => void download(entry)} className="rounded bg-white/10 px-1.5 py-0.5 text-xs hover:bg-white/20">
                             Laden
@@ -638,5 +799,18 @@ export function FilesPage(): JSX.Element {
         onConfirm={onPicked}
       />
     </div>
+  );
+}
+
+/** Name der Quelle; bei einer Server-Quelle davor die Status-Ampel und dahinter das Betriebssystem. */
+function SourceLabel({ source, host }: { source: FileSourceOut; host: SourceHost | undefined }) {
+  if (!host) return <>{source.label}</>;
+  const os = osLabel(host.os_family);
+  return (
+    <span className="flex items-center gap-2" data-testid={`source-host-${source.source_id}`}>
+      <StatusDot status={host.status} />
+      <span className="min-w-0 truncate">{source.label}</span>
+      {os && <span className="ml-auto flex-none text-xs opacity-50">{os}</span>}
+    </span>
   );
 }

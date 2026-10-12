@@ -45,6 +45,12 @@ Die Prüfung läuft automatisch, weil eine Regel allein nicht reicht: Ohne sie e
 die Grenze innerhalb weniger Wochen, weil "nur diese eine Sonderbehandlung" immer
 plausibel klingt.
 
+**Dasselbe Prinzip in der Oberfläche:** Der Code einer Erweiterung unter `extensions/<id>/frontend/src` bindet nur
+sich selbst und das gemeinsame UI-Kit (`extensions/_shared/frontend/src`) ein, nie Quelltext des Kerns und nie eine
+andere Erweiterung, ohne Ausnahmen (`backend/tests/test_extension_frontend_imports.py` prüft es). Was Kern und
+Erweiterungen teilen, etwa die Server-Auswahl und den Zeitplan-Wähler, liegt im Kit; der Kern bindet es über
+`frontend/kit.resolve.ts` an ([02 §5](02-EXTENSION-API.md#5-seiten-volle-ui-ansichten)).
+
 ---
 
 ## 2. Prozessmodell
@@ -174,6 +180,12 @@ Gilt sie, ersetzt sie den Klick, unabhängig von `autonomy.mode`, und die Person
 sonst wird ein normaler Vorschlag daraus. Was passiert ist, hängt das Gate selbst an `reason` an, das Datum der
 Freigabe in der eingestellten Zeitzone des Dashboards.
 
+**Eine Ausnahme: Einrichten mit Passwort.** `POST /hosts/{id}/credentials/{cid}/setup-with-password` führt einen
+Befehl als root auf dem Server aus, geht aber bewusst nicht durchs Gate: Ein Vorschlag legt seine Eingaben in
+`actions.payload` ab, und das einmalige Passwort darf nirgends gespeichert werden. Die Route verlangt deshalb
+`hosts.write` und `hosts.execute`, der Mensch löst sie mit dem Absenden selbst aus, und jeder Versuch steht im Protokoll
+(`host.setup_with_password`, ohne Passwort).
+
 **Einstellungen (global, pro Extension überschreibbar):**
 
 ```
@@ -231,7 +243,7 @@ Jahresspanne). Eigenes Branding ändert, wie die Oberfläche heißt, nicht, wem 
 |---|---|
 | Extensions | Vertrauenswürdiger Code. Permissions = Struktur + Audit, keine Sandbox. |
 | KI-Aktionen | Aus KI-Text legt Nodvard Shield höchstens eine feste Aktion an: den Neustart eines Containers, dessen Absturz der Vorfall meldet. Befehl und Begründung baut der Code selbst, der Server kommt aus dem Vorfall; alles andere bleibt Text, der Chat legt nie eine Aktion an. Container-Logs und Docker-Fehlermeldungen gehen als fremde Daten (keine Anweisungen) an die KI. Dazu: Sperrliste für katastrophale Muster, Begründungspflicht, Anti-Flapping, Default = Bestätigung, nie über eine Dauerfreigabe. |
-| Secrets | Nie im Klartext in DB, Antwort oder Log. Extensions bekommen Handles. |
+| Secrets | Nie im Klartext in DB, Antwort oder Log. Extensions bekommen Handles; ersetzen und löschen nur ihre eigenen, Zwei-Faktor-Geheimnisse von Konten gar nicht. Ein Zugang für eine andere Extension geht nur über eine Capability (`ConnectionReceiver`), nie über den Ereignis-Bus. |
 | SSH | Eine Identität aus dem Vault, Known-Hosts-Pinning statt `StrictHostKeyChecking=no`. |
 | API | Alles authentifiziert außer `/branding`, `/health`, `/auth/login`. Routen von Erweiterungen verlangen ohne Angabe eine Anmeldung; ohne Anmeldung nur mit `public=True` und der Manifest-Berechtigung `api.public` (steht beim Einschalten im Protokoll). Mehr als 1 MiB Body bekommt kein Endpunkt zu lesen, auch ohne Anmeldung nicht (darüber `413`; Uploads haben eigene, höhere Grenzen). |
 | Audit | Append-only, jede Aktion, auch die abgelehnten und die nur vorgeschlagenen. |

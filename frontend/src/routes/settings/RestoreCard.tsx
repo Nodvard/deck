@@ -8,6 +8,7 @@
 import { AlertTriangle, History, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 
+import { GuideLink } from "../../components/GuideLink";
 import { api } from "../../lib/api";
 import { formatSize, formatWhen } from "../../lib/backups";
 import { deleteReplaced, type RestoreStatus } from "../../lib/restore";
@@ -33,7 +34,12 @@ export function RestoreCard(): JSX.Element {
     void reload();
   }, [reload]);
 
-  const description = "Eine Sicherung einspielen. Das ersetzt alle Daten dieser Installation, auch die Konten.";
+  const description = (
+    <>
+      Eine Sicherung einspielen. Das ersetzt alle Daten dieser Installation, auch die Konten.{" "}
+      <GuideLink section="restore" testId="restore-guide">Schritt für Schritt in der Anleitung</GuideLink>
+    </>
+  );
 
   if (!status) {
     return (

@@ -1,5 +1,5 @@
 // src/SocPage.tsx
-import { useCallback as useCallback5, useContext as useContext3, useEffect as useEffect7, useMemo as useMemo2, useRef as useRef2, useState as useState6 } from "react";
+import { useCallback as useCallback5, useContext as useContext3, useEffect as useEffect7, useMemo as useMemo2, useRef as useRef2, useState as useState8 } from "react";
 
 // ../../_shared/frontend/src/ui.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
@@ -215,13 +215,13 @@ function useUrlParams() {
   return [params, update, visits];
 }
 
-// ../../../frontend/src/components/SchedulePicker.tsx
+// ../../_shared/frontend/src/SchedulePicker.tsx
 import { useEffect as useEffect3, useState as useState2 } from "react";
 
 // ../../../frontend/src/lib/deckTimezone.ts
 import { useSyncExternalStore } from "react";
 
-// ../../../frontend/src/components/SchedulePicker.tsx
+// ../../_shared/frontend/src/SchedulePicker.tsx
 import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
 var DAY_SHORT = ["So", "Mo", "Di", "Mi", "Do", "Fr", "Sa"];
 var DAY_LONG = ["Sonntag", "Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag"];
@@ -509,6 +509,9 @@ function ago(ts) {
   if (s < 86400 * 2) return `vor ${Math.round(s / 3600)} Std.`;
   return `vor ${Math.round(s / 86400)} Tagen`;
 }
+function count(n, one, many) {
+  return `${n.toLocaleString("de-DE")} ${n === 1 ? one : many}`;
+}
 
 // src/ContainerWatch.tsx
 import { useCallback as useCallback2, useEffect as useEffect4, useState as useState3 } from "react";
@@ -562,10 +565,7 @@ function AuditTrail({ incidentId }) {
   const [entries, setEntries] = useState3(null);
   const [error, setError] = useState3(null);
   useEffect4(() => {
-    authedFetch(`/audit?correlation_id=${encodeURIComponent(incidentId)}&limit=100`).then((r) => {
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return r.json();
-    }).then((rows) => setEntries([...rows].sort((a, b) => a.ts.localeCompare(b.ts)))).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    call(`/audit?correlation_id=${encodeURIComponent(incidentId)}&limit=100`).then((rows) => setEntries([...rows].sort((a, b) => a.ts.localeCompare(b.ts)))).catch((err) => setError(err instanceof Error ? err.message : String(err)));
   }, [incidentId]);
   if (error) return /* @__PURE__ */ jsxs3("p", { className: "text-xs text-red-400", children: [
     "Verlauf nicht abrufbar: ",
@@ -592,6 +592,7 @@ function AuditTrail({ incidentId }) {
 function ContainerWatch() {
   const [page, setPage] = useState3(null);
   const [stats, setStats] = useState3(null);
+  const [actionError, setActionError] = useState3(null);
   const [error, setError] = useState3(null);
   const [query, setQuery] = useState3("");
   const [appliedQuery, setAppliedQuery] = useState3("");
@@ -610,14 +611,8 @@ function ContainerWatch() {
     if (fromDay) params.set("since", dayBoundary(fromDay, false));
     if (toDay) params.set("until", dayBoundary(toDay, true));
     Promise.all([
-      authedFetch(`${EXT_API}/history?${params.toString()}`).then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      }),
-      authedFetch(`${EXT_API}/stats`).then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
+      call(`${EXT_API}/history?${params.toString()}`),
+      call(`${EXT_API}/stats`)
     ]).then(([historyData, statsData]) => {
       setPage(historyData);
       setStats(statsData);
@@ -633,7 +628,12 @@ function ContainerWatch() {
     setOffset(0);
   }, [appliedQuery, statusFilter, hostFilter, fromDay, toDay]);
   async function changeStatus(id, verb) {
-    await authedFetch(`${EXT_API}/incidents/${id}/${verb}`, { method: "POST" });
+    setActionError(null);
+    try {
+      await call(`${EXT_API}/incidents/${id}/${verb}`, { method: "POST" });
+    } catch (err) {
+      setActionError(`Status lie\xDF sich nicht \xE4ndern: ${err instanceof Error ? err.message : String(err)}`);
+    }
     load();
   }
   function resetFilters() {
@@ -650,6 +650,7 @@ function ContainerWatch() {
   const filtersActive = Boolean(appliedQuery || statusFilter || hostFilter || fromDay || toDay);
   return /* @__PURE__ */ jsxs3("div", { className: "space-y-5", children: [
     error && /* @__PURE__ */ jsx3(Notice, { text: `Fehler: ${error}` }),
+    actionError && /* @__PURE__ */ jsx3(Notice, { text: actionError, onClose: () => setActionError(null) }),
     stats && /* @__PURE__ */ jsxs3("div", { className: "grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7", children: [
       ["open", "proposed", "reviewed", "resolved", "dismissed"].map((s) => /* @__PURE__ */ jsxs3(
         "button",
@@ -747,6 +748,7 @@ function ContainerWatch() {
               incident.is_crash && /* @__PURE__ */ jsx3(Badge, { tone: "bad", children: "Absturz" })
             ] }),
             /* @__PURE__ */ jsx3("p", { className: "mt-1 break-words text-white/80", children: incident.message }),
+            incident.auto_resolved && /* @__PURE__ */ jsx3("p", { className: "mt-1 text-xs text-emerald-300", "data-testid": `auto-resolved-${incident.id}`, children: incident.auto_resolved }),
             incident.ai_summary && /* @__PURE__ */ jsx3("p", { className: "mt-2 whitespace-pre-wrap break-words rounded-lg border border-white/[0.06] bg-black/20 p-3 text-xs text-white/75", children: incident.ai_summary }),
             /* @__PURE__ */ jsxs3("p", { className: "mt-1.5 text-xs text-white/40", children: [
               formatTimestamp(incident.created_at),
@@ -808,7 +810,11 @@ var SEVERITY = {
   warning: { label: "Warnung", tone: "warn" },
   info: { label: "Hinweis", tone: "info" }
 };
-var ACK_LABEL = { new_port: "Als bekannt \xFCbernehmen", file_changed: "\xC4nderung \xFCbernehmen" };
+var ACK_TAKES_OVER = {
+  new_port: "Der Port gilt danach als bekannt und meldet sich nicht wieder.",
+  file_changed: "Der neue Stand der Datei gilt danach als richtig."
+};
+var ACK_HINT_OTHER = "Das Ereignis wird abgehakt. Gesperrt oder ge\xE4ndert wird dadurch nichts.";
 function EventDetail({ ev, onBan }) {
   const d = ev.detail;
   return /* @__PURE__ */ jsxs4("div", { className: "mt-2 rounded-lg bg-black/25 p-3 text-xs", children: [
@@ -897,13 +903,16 @@ function GuardTab({ canManage }) {
   });
   const acknowledge = (ev) => run(ev.kind_label, async () => {
     await call(`${API}/events/${ev.id}/acknowledge`, { method: "POST" });
-    return ev.kind in ACK_LABEL ? "als bekannt \xFCbernommen." : "best\xE4tigt.";
+    return ev.kind in ACK_TAKES_OVER ? "als in Ordnung markiert." : "zur Kenntnis genommen.";
   });
   const acknowledgeAll = () => run("Ereignisse", async () => {
-    const ok = await deck().confirmDialog("Alle offenen Ereignisse best\xE4tigen? Neue Ports und ge\xE4nderte Dateien gelten danach als bekannt.", { confirmLabel: "Alle best\xE4tigen" });
+    const ok = await deck().confirmDialog(
+      "Alle offenen Ereignisse abhaken? Neue Ports und ge\xE4nderte Dateien gelten danach als bekannt. Gesperrt oder ge\xE4ndert wird dadurch nichts.",
+      { confirmLabel: "Alle abhaken" }
+    );
     if (!ok) return "abgebrochen.";
     const r = await call(`${API}/events/acknowledge-all`, { method: "POST" });
-    return `${r.acknowledged} best\xE4tigt.`;
+    return `${r.acknowledged} abgehakt.`;
   });
   const ban = (hostId, hostName, ip, unban = false) => run(`${ip} ${unban ? "entsperren" : "sperren"}`, async () => {
     const ok = await deck().confirmDialog(
@@ -975,7 +984,7 @@ function GuardTab({ canManage }) {
             /* @__PURE__ */ jsx5("input", { type: "checkbox", checked: showAll, onChange: (e) => setShowAll(e.target.checked) }),
             " auch erledigte"
           ] }),
-          canManage && shownEvents.some((e) => !e.acknowledged) && /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => void acknowledgeAll(), children: "Alle best\xE4tigen" })
+          canManage && shownEvents.some((e) => !e.acknowledged) && /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => void acknowledgeAll(), children: "Alle abhaken" })
         ] }),
         children: /* @__PURE__ */ jsxs4("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "events", children: [
           shownEvents.length === 0 && /* @__PURE__ */ jsx5("li", { className: "px-5 py-6 text-sm text-emerald-300/80", children: "Keine offenen Ereignisse \u2013 alles ruhig." }),
@@ -989,7 +998,7 @@ function GuardTab({ canManage }) {
                 /* @__PURE__ */ jsx5("span", { className: "text-xs text-white/40", children: when(ev.created_at) }),
                 /* @__PURE__ */ jsx5("span", { className: "flex-1" }),
                 /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => setOpen(open === ev.id ? null : ev.id), className: "text-xs text-white/50 hover:text-white", children: open === ev.id ? "weniger" : "Details" }),
-                canManage && !ev.acknowledged && /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => void acknowledge(ev), children: ACK_LABEL[ev.kind] ?? "Zur Kenntnis genommen" })
+                canManage && !ev.acknowledged && /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => void acknowledge(ev), title: ACK_TAKES_OVER[ev.kind] ?? ACK_HINT_OTHER, children: ev.kind in ACK_TAKES_OVER ? "Ist in Ordnung" : "Zur Kenntnis genommen" })
               ] }),
               open === ev.id && /* @__PURE__ */ jsx5(EventDetail, { ev, onBan: (ip) => void ban(ev.host_id, ev.host_name, ip) })
             ] }, ev.id);
@@ -1118,7 +1127,7 @@ function GuardTab({ canManage }) {
                 /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: "Datei-W\xE4chter" }),
                 v.files_pending.length === 0 ? /* @__PURE__ */ jsxs4("p", { className: "text-xs text-emerald-300/80", children: [
                   v.files_watched,
-                  " Dateien \xFCberwacht \u2013 keine unbest\xE4tigten \xC4nderungen."
+                  " Dateien \xFCberwacht \u2013 keine offenen \xC4nderungen."
                 ] }) : /* @__PURE__ */ jsx5("ul", { className: "space-y-0.5 text-xs", children: v.files_pending.map((p) => /* @__PURE__ */ jsx5("li", { className: "font-mono text-amber-200", children: p }, p)) })
               ] })
             ] })
@@ -1130,9 +1139,121 @@ function GuardTab({ canManage }) {
   ] });
 }
 
+// src/LynisFinding.tsx
+import { useState as useState5 } from "react";
+import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+var ID_RE = /^\s*([A-Z]{2,5}-\d{4}|LYNIS)\b/;
+function lynisId(entry) {
+  return ID_RE.exec(entry)?.[1] ?? null;
+}
+function LynisFinding({
+  entry,
+  help,
+  tone
+}) {
+  const [open, setOpen] = useState5(false);
+  const text = help?.[lynisId(entry) ?? ""];
+  const color = tone === "warning" ? "text-red-200" : "text-white/70";
+  if (!text) return /* @__PURE__ */ jsxs5("li", { className: color, children: [
+    "\u2022 ",
+    entry
+  ] });
+  return /* @__PURE__ */ jsxs5("li", { className: color, children: [
+    /* @__PURE__ */ jsxs5(
+      "button",
+      {
+        type: "button",
+        onClick: () => setOpen(!open),
+        "aria-expanded": open,
+        className: "text-left hover:text-white",
+        children: [
+          "\u2022 ",
+          text.title
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsx6("span", { className: "ml-3 block text-[11px] text-white/40", children: entry }),
+    open && /* @__PURE__ */ jsxs5("div", { className: "ml-3 mt-1 space-y-1 text-xs text-white/70", children: [
+      /* @__PURE__ */ jsxs5("p", { children: [
+        /* @__PURE__ */ jsx6("span", { className: "font-medium text-white/85", children: "Was hei\xDFt das?" }),
+        " ",
+        text.what
+      ] }),
+      /* @__PURE__ */ jsxs5("p", { children: [
+        /* @__PURE__ */ jsx6("span", { className: "font-medium text-white/85", children: "Was kannst du tun?" }),
+        " ",
+        text.todo
+      ] })
+    ] })
+  ] });
+}
+function topIssues(audits, limit = 5) {
+  const byId = /* @__PURE__ */ new Map();
+  for (const audit of audits) {
+    if (audit.status !== "ok") continue;
+    const entries = [
+      ...audit.warnings.map((w) => [w, true]),
+      ...audit.suggestions.map((s) => [s, false])
+    ];
+    for (const [entry, warning] of entries) {
+      const id = lynisId(entry);
+      const help = id ? audit.help?.[id] : void 0;
+      if (!id || !help || (help.weight ?? 1) < 2) continue;
+      const issue = byId.get(id) ?? { id, help, warning: false, hosts: [], hostIds: [] };
+      issue.warning = issue.warning || warning;
+      const hostKey = audit.host_id ?? audit.host_name;
+      if (!issue.hostIds.includes(hostKey)) {
+        issue.hostIds.push(hostKey);
+        issue.hosts.push(audit.host_name);
+      }
+      byId.set(id, issue);
+    }
+  }
+  return [...byId.values()].sort((a, b) => (b.help.weight ?? 1) - (a.help.weight ?? 1) || Number(b.warning) - Number(a.warning) || b.hostIds.length - a.hostIds.length || a.id.localeCompare(b.id)).slice(0, limit);
+}
+function TopIssues({ issues }) {
+  const [open, setOpen] = useState5(null);
+  if (issues.length === 0) return null;
+  return /* @__PURE__ */ jsx6("ol", { className: "space-y-2 text-sm", "data-testid": "top-issues", children: issues.map((issue, i) => /* @__PURE__ */ jsxs5("li", { children: [
+    /* @__PURE__ */ jsxs5(
+      "button",
+      {
+        type: "button",
+        onClick: () => setOpen(open === issue.id ? null : issue.id),
+        "aria-expanded": open === issue.id,
+        className: "text-left hover:text-white",
+        children: [
+          /* @__PURE__ */ jsxs5("span", { className: "mr-1.5 text-white/40", children: [
+            i + 1,
+            "."
+          ] }),
+          /* @__PURE__ */ jsx6("span", { className: issue.warning ? "text-red-200" : "", children: issue.help.title })
+        ]
+      }
+    ),
+    /* @__PURE__ */ jsxs5("span", { className: "ml-5 block text-xs text-white/45", children: [
+      issue.help.weight === 3 ? "wichtig" : "sinnvoll",
+      " \xB7 auf ",
+      issue.hosts.join(", ")
+    ] }),
+    open === issue.id && /* @__PURE__ */ jsxs5("div", { className: "ml-5 mt-1 space-y-1 text-xs text-white/70", children: [
+      /* @__PURE__ */ jsxs5("p", { children: [
+        /* @__PURE__ */ jsx6("span", { className: "font-medium text-white/85", children: "Was hei\xDFt das?" }),
+        " ",
+        issue.help.what
+      ] }),
+      /* @__PURE__ */ jsxs5("p", { children: [
+        /* @__PURE__ */ jsx6("span", { className: "font-medium text-white/85", children: "Was kannst du tun?" }),
+        " ",
+        issue.help.todo
+      ] })
+    ] })
+  ] }, issue.id)) });
+}
+
 // src/UpdatesTab.tsx
-import { useCallback as useCallback4, useContext as useContext2, useEffect as useEffect6, useState as useState5 } from "react";
-import { Fragment as Fragment4, jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+import { useCallback as useCallback4, useContext as useContext2, useEffect as useEffect6, useState as useState6 } from "react";
+import { Fragment as Fragment4, jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
 var ACTIONS_PATH = "/actions";
 var SINGLE_APPROVAL_RISKS = ["high", "critical"];
 var reasonText = (r) => (r ?? "").replace(/\.$/, "");
@@ -1163,14 +1284,14 @@ function hostState(h) {
 }
 function UpdatesTab({ canManage }) {
   const unmountSignal = useUnmountSignal();
-  const [data, setData] = useState5(null);
-  const [error, setError] = useState5(null);
-  const [notice, setNotice] = useState5(null);
-  const [open, setOpen] = useState5(null);
-  const [openRun, setOpenRun] = useState5(null);
-  const [pending, setPending] = useState5({});
-  const [proposing, setProposing] = useState5(null);
-  const [proposed, setProposed] = useState5(null);
+  const [data, setData] = useState6(null);
+  const [error, setError] = useState6(null);
+  const [notice, setNotice] = useState6(null);
+  const [open, setOpen] = useState6(null);
+  const [openRun, setOpenRun] = useState6(null);
+  const [pending, setPending] = useState6({});
+  const [proposing, setProposing] = useState6(null);
+  const [proposed, setProposed] = useState6(null);
   const onlyHost = useContext2(HostFilter);
   const load = useCallback4(() => {
     call(`${API}/updates`).then((d) => {
@@ -1236,8 +1357,8 @@ function UpdatesTab({ canManage }) {
     const st = h.status;
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
     const questions = {
-      security: `${st?.security_count ?? 0} Sicherheitsupdate(s) auf \u201E${h.host_name}\u201C jetzt einspielen?`,
-      all: `Alle ${st?.count ?? 0} Update(s) auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}`,
+      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf \u201E${h.host_name}\u201C jetzt einspielen?`,
+      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}`,
       cleanup: `Auf \u201E${h.host_name}\u201C nicht mehr ben\xF6tigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `\u201E${h.host_name}\u201C jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar \u2013 alle Dienste darauf auch.`
     };
@@ -1276,17 +1397,17 @@ function UpdatesTab({ canManage }) {
   }
   const hosts = useForHost(data?.hosts ?? []);
   const runs = useForHost(data?.runs ?? []);
-  if (error) return /* @__PURE__ */ jsx6(Notice, { text: `Fehler: ${error}` });
-  if (!data) return /* @__PURE__ */ jsx6("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
+  if (error) return /* @__PURE__ */ jsx7(Notice, { text: `Fehler: ${error}` });
+  if (!data) return /* @__PURE__ */ jsx7("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
   const { summary: sm, config: c } = data;
   const unsupported = data.hosts.filter((h) => h.status?.unsupported).length;
   if (hosts.length === 0) {
-    return /* @__PURE__ */ jsx6(EmptyState, { icon: "package", title: "Keine Server", text: "Sobald Linux-Server mit SSH-Zugang angelegt sind, zeigt die Update-Zentrale hier ihre anstehenden Updates.", action: /* @__PURE__ */ jsx6(ServerSetupLink, { className: "text-sm" }) });
+    return /* @__PURE__ */ jsx7(EmptyState, { icon: "package", title: "Keine Server", text: "Sobald Linux-Server mit SSH-Zugang angelegt sind, zeigt die Update-Zentrale hier ihre anstehenden Updates.", action: /* @__PURE__ */ jsx7(ServerSetupLink, { className: "text-sm" }) });
   }
-  return /* @__PURE__ */ jsxs5(Fragment4, { children: [
-    notice && /* @__PURE__ */ jsx6(Notice, { text: notice.text, kind: notice.kind, onClose: () => setNotice(null) }),
-    /* @__PURE__ */ jsxs5("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
-      /* @__PURE__ */ jsx6(
+  return /* @__PURE__ */ jsxs6(Fragment4, { children: [
+    notice && /* @__PURE__ */ jsx7(Notice, { text: notice.text, kind: notice.kind, onClose: () => setNotice(null) }),
+    /* @__PURE__ */ jsxs6("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
+      /* @__PURE__ */ jsx7(
         Stat,
         {
           label: "Server aktuell",
@@ -1298,29 +1419,30 @@ function UpdatesTab({ canManage }) {
           ].filter(Boolean).join(" \xB7 ") || void 0
         }
       ),
-      /* @__PURE__ */ jsx6(Stat, { label: "Offene Updates", value: sm.packages, tone: sm.packages ? "warn" : "good" }),
-      /* @__PURE__ */ jsx6(Stat, { label: "Sicherheitsupdates", value: sm.security, tone: sm.security ? "bad" : "good" }),
-      /* @__PURE__ */ jsx6(Stat, { label: "Neustart n\xF6tig", value: sm.reboot, tone: sm.reboot ? "warn" : void 0, hint: sm.errors ? `${sm.errors} Pr\xFCfung(en) fehlgeschlagen` : void 0 })
+      /* @__PURE__ */ jsx7(Stat, { label: "Offene Updates", value: sm.packages, tone: sm.packages ? "warn" : "good" }),
+      /* @__PURE__ */ jsx7(Stat, { label: "Sicherheitsupdates", value: sm.security, tone: sm.security ? "bad" : "good" }),
+      /* @__PURE__ */ jsx7(Stat, { label: "Neustart n\xF6tig", value: sm.reboot, tone: sm.reboot ? "warn" : void 0, hint: sm.errors ? `${count(sm.errors, "Pr\xFCfung", "Pr\xFCfungen")} fehlgeschlagen` : void 0 })
     ] }),
-    /* @__PURE__ */ jsxs5("div", { className: "mb-4 flex flex-wrap items-center gap-2", children: [
-      /* @__PURE__ */ jsxs5(Badge, { tone: c.check_enabled ? "info" : "neutral", children: [
-        /* @__PURE__ */ jsx6(Icon, { name: "clock", size: 11 }),
+    /* @__PURE__ */ jsxs6("div", { className: "mb-4 flex flex-wrap items-center gap-2", children: [
+      /* @__PURE__ */ jsxs6(Badge, { tone: c.check_enabled ? "info" : "neutral", children: [
+        /* @__PURE__ */ jsx7(Icon, { name: "clock", size: 11 }),
         " Pr\xFCfung: ",
         c.check_enabled ? describeSchedule(c.check_cron, "aus") : "aus"
       ] }),
-      /* @__PURE__ */ jsxs5(Badge, { tone: c.auto_enabled ? "good" : "neutral", children: [
+      /* @__PURE__ */ jsxs6(Badge, { tone: c.auto_enabled ? "good" : "neutral", children: [
         "Automatisch einspielen: ",
         c.auto_enabled ? `${c.auto_mode === "all" ? "alle Updates" : "Sicherheitsupdates"} \xB7 ${describeSchedule(c.auto_cron, "aus")}${c.auto_tag ? ` \xB7 nur \u201E${c.auto_tag}\u201C` : ""}` : "aus"
       ] }),
-      c.auto_enabled && /* @__PURE__ */ jsxs5(Badge, { tone: c.auto_reboot ? "warn" : "neutral", children: [
+      c.auto_enabled && /* @__PURE__ */ jsxs6(Badge, { tone: c.auto_reboot ? "warn" : "neutral", children: [
         "Neustart danach: ",
-        c.auto_reboot ? "automatisch" : "nein"
+        c.auto_reboot ? "automatisch" : "nein",
+        c.auto_reboot && c.auto_reboot_skip?.length ? `, au\xDFer ${c.auto_reboot_skip.join(", ")}` : ""
       ] }),
-      /* @__PURE__ */ jsx6("span", { className: "flex-1" }),
+      /* @__PURE__ */ jsx7("span", { className: "flex-1" }),
       canManage && !onlyHost && ["security", "all"].map((mode) => {
         const n = proposable(mode).length;
         if (n === 0) return null;
-        return /* @__PURE__ */ jsx6(
+        return /* @__PURE__ */ jsx7(
           Button,
           {
             variant: mode === "security" ? "primary" : "secondary",
@@ -1332,110 +1454,113 @@ function UpdatesTab({ canManage }) {
           mode
         );
       }),
-      canManage && /* @__PURE__ */ jsxs5(Button, { onClick: () => void checkAll(), children: [
-        /* @__PURE__ */ jsx6(Icon, { name: "refresh", size: 14 }),
+      canManage && /* @__PURE__ */ jsxs6(Button, { onClick: () => void checkAll(), children: [
+        /* @__PURE__ */ jsx7(Icon, { name: "refresh", size: 14 }),
         " Alle jetzt pr\xFCfen"
       ] })
     ] }),
-    proposed && /* @__PURE__ */ jsx6(ProposedSummary, { result: proposed, onClose: () => setProposed(null) }),
-    /* @__PURE__ */ jsx6("div", { className: "space-y-3", "data-testid": "update-hosts", children: hosts.map((h) => {
+    /* @__PURE__ */ jsx7("p", { className: "-mt-2 mb-4 text-xs text-white/50", "data-testid": "auto-explain", children: "Updates automatisch einspielen geht auf zwei Wegen: Nodvard Deck spielt sie nach seinem Zeitplan ein (\u201EUpdates automatisch einspielen\u201C in den Einstellungen von Nodvard Shield), oder ein Debian- oder Ubuntu-Server spielt Sicherheitsupdates jeden Tag selbst ein (unattended-upgrades). Einer der beiden Wege reicht." }),
+    proposed && /* @__PURE__ */ jsx7(ProposedSummary, { result: proposed, onClose: () => setProposed(null) }),
+    /* @__PURE__ */ jsx7("div", { className: "space-y-3", "data-testid": "update-hosts", children: hosts.map((h) => {
       const st = h.status;
       const state = hostState(h);
       const running = pending[h.host_id] ?? h.busy;
       const rebootSince = st?.reboot_pending_since;
       const needsReboot = !!st?.reboot_required && !rebootSince;
       const isOpen = open === h.host_id;
-      return /* @__PURE__ */ jsxs5("div", { className: "panel px-4 py-3", "data-testid": `updates-${h.host_id}`, children: [
-        /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap items-center gap-3", children: [
-          /* @__PURE__ */ jsxs5("div", { className: "min-w-0 flex-1", children: [
-            /* @__PURE__ */ jsxs5("p", { className: "flex flex-wrap items-center gap-2 text-sm font-medium", children: [
+      return /* @__PURE__ */ jsxs6("div", { className: "panel px-4 py-3", "data-testid": `updates-${h.host_id}`, children: [
+        /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap items-center gap-3", children: [
+          /* @__PURE__ */ jsxs6("div", { className: "min-w-0 flex-1", children: [
+            /* @__PURE__ */ jsxs6("p", { className: "flex flex-wrap items-center gap-2 text-sm font-medium", children: [
               h.host_name,
-              /* @__PURE__ */ jsx6(Badge, { tone: state.tone, children: state.label }),
-              needsReboot && !h.busy && /* @__PURE__ */ jsx6(Badge, { tone: "warn", children: "Neustart n\xF6tig" }),
-              st?.unattended === true && /* @__PURE__ */ jsx6(Badge, { tone: "good", children: "Auto-Sicherheitsupdates an" })
+              /* @__PURE__ */ jsx7(Badge, { tone: state.tone, children: state.label }),
+              needsReboot && !h.busy && /* @__PURE__ */ jsx7(Badge, { tone: "warn", children: "Neustart n\xF6tig" }),
+              st?.unattended === true && /* @__PURE__ */ jsx7(Badge, { tone: "good", children: "Auto-Sicherheitsupdates an" })
             ] }),
-            /* @__PURE__ */ jsxs5("p", { className: "mt-0.5 text-xs text-white/45", children: [
+            /* @__PURE__ */ jsxs6("p", { className: "mt-0.5 text-xs text-white/45", children: [
               st?.manager ? `${st.manager} \xB7 Kernel ${st.kernel ?? "?"} \xB7 l\xE4uft seit ${uptime(st.uptime_s)} \xB7 ` : "",
               st?.checked_at ? `gepr\xFCft ${ago(st.checked_at)}` : "noch nie erfolgreich gepr\xFCft",
               st?.error && !st.unsupported && st.attempted_at ? ` \xB7 letzter Versuch ${ago(st.attempted_at)} fehlgeschlagen` : ""
             ] }),
-            h.check_overdue && /* @__PURE__ */ jsx6("p", { className: "mt-1 text-xs text-amber-300", "data-testid": `updates-overdue-${h.host_id}`, children: "Die geplante Pr\xFCfung ist hier ausgeblieben (das Dashboard lief zur Pr\xFCfzeit nicht). Der Stand kann veraltet sein \u2013 \u201EPr\xFCfen\u201C holt ihn nach." }),
-            st?.error && /* @__PURE__ */ jsx6("p", { className: `mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`, children: st.error }),
-            st?.refresh_error && /* @__PURE__ */ jsx6("p", { className: "mt-1 text-xs text-amber-300/80", children: st.refresh_error }),
-            needsReboot && st.reboot_reasons.length > 0 && /* @__PURE__ */ jsxs5("p", { className: "mt-1 text-xs text-white/50", children: [
+            h.check_overdue && /* @__PURE__ */ jsx7("p", { className: "mt-1 text-xs text-amber-300", "data-testid": `updates-overdue-${h.host_id}`, children: "Die geplante Pr\xFCfung ist hier ausgeblieben (das Dashboard lief zur Pr\xFCfzeit nicht). Der Stand kann veraltet sein \u2013 \u201EPr\xFCfen\u201C holt ihn nach." }),
+            st?.error && /* @__PURE__ */ jsx7("p", { className: `mt-1 text-xs ${st.unsupported ? "text-white/50" : "text-amber-300"}`, children: st.error }),
+            st?.refresh_error && /* @__PURE__ */ jsx7("p", { className: "mt-1 text-xs text-amber-300/80", children: st.refresh_error }),
+            needsReboot && st.reboot_reasons.length > 0 && /* @__PURE__ */ jsxs6("p", { className: "mt-1 text-xs text-white/50", children: [
               "Grund: ",
               st.reboot_reasons.slice(0, 3).join(", ")
             ] }),
-            rebootSince && !h.busy && /* @__PURE__ */ jsxs5("p", { className: "mt-1 text-xs text-sky-300", children: [
+            rebootSince && !h.busy && /* @__PURE__ */ jsxs6("p", { className: "mt-1 text-xs text-sky-300", children: [
               "Neustart ausgel\xF6st (",
               clock2(rebootSince),
               ") \u2013 die n\xE4chste Pr\xFCfung zeigt den neuen Stand."
             ] }),
-            h.last_run && /* @__PURE__ */ jsxs5("p", { className: "mt-1 text-xs text-white/45", children: [
+            h.last_run && /* @__PURE__ */ jsxs6("p", { className: "mt-1 text-xs text-white/45", children: [
               "Zuletzt: ",
               h.last_run.mode_label,
               " ",
               when(h.last_run.started_at),
               " \u2013",
               " ",
-              /* @__PURE__ */ jsx6("span", { className: h.last_run.status === "error" ? "text-red-300" : "", children: h.last_run.summary ?? RUN_STATUS[h.last_run.status]?.label })
+              /* @__PURE__ */ jsx7("span", { className: h.last_run.status === "error" ? "text-red-300" : "", children: h.last_run.summary ?? RUN_STATUS[h.last_run.status]?.label })
             ] })
           ] }),
-          canManage && /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap gap-1", children: [
-            !!st?.security_count && /* @__PURE__ */ jsx6(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void apply(h, "security"), children: "Sicherheitsupdates einspielen" }),
-            !!st?.count && /* @__PURE__ */ jsx6(Button, { small: true, variant: st.security_count ? "secondary" : "primary", disabled: !!running, onClick: () => void apply(h, "all"), children: "Alle einspielen" }),
-            needsReboot && /* @__PURE__ */ jsx6(Button, { small: true, variant: "danger", disabled: !!running, onClick: () => void apply(h, "reboot"), children: "Neu starten" }),
-            /* @__PURE__ */ jsxs5(Button, { small: true, variant: "ghost", disabled: h.checking || !!running, onClick: () => void checkAll([h.host_id]), ariaLabel: `${h.host_name} pr\xFCfen`, children: [
-              /* @__PURE__ */ jsx6(Icon, { name: "refresh", size: 12 }),
+          canManage && /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap gap-1", children: [
+            !!st?.security_count && /* @__PURE__ */ jsx7(Button, { small: true, variant: "primary", disabled: !!running, onClick: () => void apply(h, "security"), children: "Sicherheitsupdates einspielen" }),
+            !!st?.count && /* @__PURE__ */ jsx7(Button, { small: true, variant: st.security_count ? "secondary" : "primary", disabled: !!running, onClick: () => void apply(h, "all"), children: "Alle einspielen" }),
+            needsReboot && /* @__PURE__ */ jsx7(Button, { small: true, variant: "danger", disabled: !!running, onClick: () => void apply(h, "reboot"), children: "Neu starten" }),
+            /* @__PURE__ */ jsxs6(Button, { small: true, variant: "ghost", disabled: h.checking || !!running, onClick: () => void checkAll([h.host_id]), ariaLabel: `${h.host_name} pr\xFCfen`, children: [
+              /* @__PURE__ */ jsx7(Icon, { name: "refresh", size: 12 }),
               " Pr\xFCfen"
             ] })
           ] })
         ] }),
-        st && st.count > 0 && /* @__PURE__ */ jsxs5("button", { type: "button", onClick: () => setOpen(isOpen ? null : h.host_id), className: "mt-2 flex items-center gap-1 text-xs text-white/55 hover:text-white", children: [
-          /* @__PURE__ */ jsx6(Icon, { name: isOpen ? "chevron-down" : "chevron-right", size: 12 }),
+        st && st.count > 0 && /* @__PURE__ */ jsxs6("button", { type: "button", onClick: () => setOpen(isOpen ? null : h.host_id), className: "mt-2 flex items-center gap-1 text-xs text-white/55 hover:text-white", children: [
+          /* @__PURE__ */ jsx7(Icon, { name: isOpen ? "chevron-down" : "chevron-right", size: 12 }),
           " ",
           st.count,
           " Paket",
           st.count === 1 ? "" : "e",
           " anzeigen"
         ] }),
-        isOpen && st && /* @__PURE__ */ jsx6("div", { className: "mt-2 max-h-80 overflow-auto rounded-lg border border-white/[0.06]", children: /* @__PURE__ */ jsxs5("table", { className: "w-full text-left text-xs", children: [
-          /* @__PURE__ */ jsx6("thead", { className: "sticky top-0 bg-[#15171c] text-white/45", children: /* @__PURE__ */ jsxs5("tr", { children: [
-            /* @__PURE__ */ jsx6("th", { className: "px-3 py-1.5 font-medium", children: "Paket" }),
-            /* @__PURE__ */ jsx6("th", { className: "px-3 py-1.5 font-medium", children: "installiert" }),
-            /* @__PURE__ */ jsx6("th", { className: "px-3 py-1.5 font-medium", children: "neu" }),
-            /* @__PURE__ */ jsx6("th", { className: "px-3 py-1.5" })
+        isOpen && st && /* @__PURE__ */ jsx7("div", { className: "mt-2 max-h-80 overflow-auto rounded-lg border border-white/[0.06]", children: /* @__PURE__ */ jsxs6("table", { className: "w-full text-left text-xs", children: [
+          /* @__PURE__ */ jsx7("thead", { className: "sticky top-0 bg-[#15171c] text-white/45", children: /* @__PURE__ */ jsxs6("tr", { children: [
+            /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5 font-medium", children: "Paket" }),
+            /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5 font-medium", children: "installiert" }),
+            /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5 font-medium", children: "neu" }),
+            /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5" })
           ] }) }),
-          /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/[0.04]", children: st.packages.map((p) => /* @__PURE__ */ jsxs5("tr", { children: [
-            /* @__PURE__ */ jsx6("td", { className: "px-3 py-1.5 font-mono", children: p.name }),
-            /* @__PURE__ */ jsx6("td", { className: "px-3 py-1.5 font-mono text-white/50", children: p.current_version ?? "\u2013" }),
-            /* @__PURE__ */ jsx6("td", { className: "px-3 py-1.5 font-mono", children: p.new_version }),
-            /* @__PURE__ */ jsx6("td", { className: "px-3 py-1.5 text-right", children: p.security && /* @__PURE__ */ jsx6(Badge, { tone: "bad", children: "Sicherheit" }) })
+          /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/[0.04]", children: st.packages.map((p) => /* @__PURE__ */ jsxs6("tr", { children: [
+            /* @__PURE__ */ jsx7("td", { className: "px-3 py-1.5 font-mono", children: p.name }),
+            /* @__PURE__ */ jsx7("td", { className: "px-3 py-1.5 font-mono text-white/50", children: p.current_version ?? "\u2013" }),
+            /* @__PURE__ */ jsx7("td", { className: "px-3 py-1.5 font-mono", children: p.new_version }),
+            /* @__PURE__ */ jsx7("td", { className: "px-3 py-1.5 text-right", children: p.security && /* @__PURE__ */ jsx7(Badge, { tone: "bad", children: "Sicherheit" }) })
           ] }, p.name)) })
         ] }) }),
-        canManage && st?.manager === "apt" && st.unattended === false && /* @__PURE__ */ jsxs5("p", { className: "mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50", children: [
-          "Tipp: Der Server kann Sicherheitsupdates auch jeden Tag selbst einspielen.",
-          /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => void installUnattended(h), className: "text-[var(--color-accent)] hover:underline", children: "Einrichten" }),
-          /* @__PURE__ */ jsx6("span", { className: "text-white/25", children: "\xB7" }),
-          /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => void apply(h, "cleanup"), className: "text-white/60 hover:text-white hover:underline", children: "Aufr\xE4umen" })
+        canManage && st?.manager === "apt" && /* @__PURE__ */ jsxs6("p", { className: "mt-2 flex flex-wrap items-center gap-2 text-xs text-white/50", children: [
+          st.unattended === false && !(c.auto_enabled && !c.auto_tag) && /* @__PURE__ */ jsxs6(Fragment4, { children: [
+            "Tipp: Der Server kann Sicherheitsupdates auch jeden Tag selbst einspielen.",
+            /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => void installUnattended(h), className: "text-[var(--color-accent)] hover:underline", children: "Einrichten" }),
+            /* @__PURE__ */ jsx7("span", { className: "text-white/25", children: "\xB7" })
+          ] }),
+          /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => void apply(h, "cleanup"), className: "text-white/60 hover:text-white hover:underline", children: "Aufr\xE4umen" })
         ] })
       ] }, h.host_id);
     }) }),
-    /* @__PURE__ */ jsx6(Card, { title: "Verlauf", description: "Eingespielte Updates, Aufr\xE4umen und Neustarts \u2013 manuell und automatisch.", className: "mt-5", padded: false, children: /* @__PURE__ */ jsxs5("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "update-runs", children: [
-      runs.length === 0 && /* @__PURE__ */ jsx6("li", { className: "px-5 py-6 text-sm text-white/50", children: "Noch nichts eingespielt." }),
+    /* @__PURE__ */ jsx7(Card, { title: "Verlauf", description: "Eingespielte Updates, Aufr\xE4umen und Neustarts \u2013 manuell und automatisch.", className: "mt-5", padded: false, children: /* @__PURE__ */ jsxs6("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "update-runs", children: [
+      runs.length === 0 && /* @__PURE__ */ jsx7("li", { className: "px-5 py-6 text-sm text-white/50", children: "Noch nichts eingespielt." }),
       runs.map((r) => {
         const rs = RUN_STATUS[r.status] ?? { label: r.status, tone: "neutral" };
-        return /* @__PURE__ */ jsxs5("li", { className: "px-5 py-2.5 text-sm", children: [
-          /* @__PURE__ */ jsxs5("div", { className: "flex flex-wrap items-center gap-2", children: [
-            /* @__PURE__ */ jsx6(Badge, { tone: rs.tone, children: rs.label }),
-            /* @__PURE__ */ jsx6("span", { className: "font-medium", children: r.host_name }),
-            /* @__PURE__ */ jsx6("span", { className: "text-white/60", children: r.mode_label }),
-            r.trigger === "schedule" && /* @__PURE__ */ jsx6(Badge, { children: "automatisch" }),
-            /* @__PURE__ */ jsx6("span", { className: "text-xs text-white/40", children: when(r.started_at) }),
-            /* @__PURE__ */ jsx6("span", { className: "min-w-0 flex-1 truncate text-xs text-white/55", children: r.summary }),
-            r.output_tail && /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => setOpenRun(openRun === r.id ? null : r.id), className: "text-xs text-white/50 hover:text-white", children: openRun === r.id ? "Ausgabe ausblenden" : "Ausgabe" })
+        return /* @__PURE__ */ jsxs6("li", { className: "px-5 py-2.5 text-sm", children: [
+          /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap items-center gap-2", children: [
+            /* @__PURE__ */ jsx7(Badge, { tone: rs.tone, children: rs.label }),
+            /* @__PURE__ */ jsx7("span", { className: "font-medium", children: r.host_name }),
+            /* @__PURE__ */ jsx7("span", { className: "text-white/60", children: r.mode_label }),
+            r.trigger === "schedule" && /* @__PURE__ */ jsx7(Badge, { children: "automatisch" }),
+            /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: when(r.started_at) }),
+            /* @__PURE__ */ jsx7("span", { className: "min-w-0 flex-1 truncate text-xs text-white/55", children: r.summary }),
+            r.output_tail && /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => setOpenRun(openRun === r.id ? null : r.id), className: "text-xs text-white/50 hover:text-white", children: openRun === r.id ? "Ausgabe ausblenden" : "Ausgabe" })
           ] }),
-          openRun === r.id && r.output_tail && /* @__PURE__ */ jsx6("pre", { className: "mt-2 max-h-72 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-[11px] text-white/70", children: r.output_tail })
+          openRun === r.id && r.output_tail && /* @__PURE__ */ jsx7("pre", { className: "mt-2 max-h-72 overflow-auto rounded-lg bg-black/40 p-3 font-mono text-[11px] text-white/70", children: r.output_tail })
         ] }, r.id);
       })
     ] }) })
@@ -1451,34 +1576,112 @@ function ProposedSummary({ result, onClose }) {
   const started = c.proposed - waiting;
   const parts = [`${c.proposed} vorgeschlagen`, ...c.skipped ? [`${c.skipped} \xFCbersprungen`] : [], ...c.failed ? [`${c.failed} fehlgeschlagen`] : []];
   const tone = c.failed > 0 ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-200";
-  return /* @__PURE__ */ jsxs5("div", { role: "status", "data-testid": "propose-all-result", className: `mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${tone}`, children: [
-    /* @__PURE__ */ jsxs5("div", { className: "min-w-0 space-y-1", children: [
-      /* @__PURE__ */ jsx6("p", { children: c.proposed === 0 ? "Es wurde kein Vorschlag angelegt." : `${parts.join(", ")}.` }),
-      c.skipped > 0 && /* @__PURE__ */ jsxs5("p", { className: "break-words opacity-90", children: [
+  return /* @__PURE__ */ jsxs6("div", { role: "status", "data-testid": "propose-all-result", className: `mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${tone}`, children: [
+    /* @__PURE__ */ jsxs6("div", { className: "min-w-0 space-y-1", children: [
+      /* @__PURE__ */ jsx7("p", { children: c.proposed === 0 ? "Es wurde kein Vorschlag angelegt." : `${parts.join(", ")}.` }),
+      c.skipped > 0 && /* @__PURE__ */ jsxs6("p", { className: "break-words opacity-90", children: [
         "\xDCbersprungen: ",
         list("skipped"),
         "."
       ] }),
-      c.failed > 0 && /* @__PURE__ */ jsxs5("p", { className: "break-words opacity-90", children: [
+      c.failed > 0 && /* @__PURE__ */ jsxs6("p", { className: "break-words opacity-90", children: [
         "Fehlgeschlagen: ",
         list("failed"),
         "."
       ] }),
-      started > 0 && /* @__PURE__ */ jsxs5("p", { className: "opacity-90", children: [
+      started > 0 && /* @__PURE__ */ jsxs6("p", { className: "opacity-90", children: [
         started === 1 ? "Bei 1 Server hat" : `Bei ${started} Servern hat`,
         " die Automatik schon freigegeben \u2013 das Einspielen l\xE4uft bereits."
       ] }),
-      waiting > 0 && /* @__PURE__ */ jsxs5("p", { children: [
-        /* @__PURE__ */ jsx6("a", { href: ACTIONS_PATH, className: "font-medium underline", children: "Zu \u201EAktionen\u201C zum Freigeben" }),
+      waiting > 0 && /* @__PURE__ */ jsxs6("p", { children: [
+        /* @__PURE__ */ jsx7("a", { href: ACTIONS_PATH, className: "font-medium underline", children: "Zu \u201EAktionen\u201C zum Freigeben" }),
         singleOnly === 0 ? collective > 1 ? " \u2013 dort geht es auch gesammelt." : "." : collective === 0 ? ` \u2013 ${singleOnly === 1 ? "dieser Vorschlag hat" : `diese ${singleOnly} Vorschl\xE4ge haben`} hohes Risiko und ${singleOnly === 1 ? "wird" : "werden"} einzeln freigegeben, nicht gesammelt.` : ` \u2013 ${collective === 1 ? "1 Vorschlag" : `${collective} Vorschl\xE4ge`} kannst du gesammelt freigeben, ${singleOnly === 1 ? "1 mit hohem Risiko" : `${singleOnly} mit hohem Risiko`} nur einzeln.`
       ] })
     ] }),
-    /* @__PURE__ */ jsx6("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx6(Icon, { name: "x", size: 14 }) })
+    /* @__PURE__ */ jsx7("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx7(Icon, { name: "x", size: 14 }) })
   ] });
 }
 
+// src/WatchTemplates.tsx
+import { useState as useState7 } from "react";
+import { jsx as jsx8, jsxs as jsxs7 } from "react/jsx-runtime";
+var KIND_LABEL = {
+  samba: "Samba-Freigabe",
+  nfs: "NFS-Freigabe",
+  nextcloud: "Nextcloud-Daten"
+};
+function WatchTemplates() {
+  const [data, setData] = useState7(null);
+  const [busy, setBusy] = useState7(null);
+  const [message, setMessage] = useState7(null);
+  const canChange = deck().hasPermission("settings.write");
+  async function search() {
+    setBusy("search");
+    setMessage(null);
+    try {
+      setData(await call(`${API}/watch-templates`));
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+  async function add(path) {
+    setBusy(path);
+    setMessage(null);
+    try {
+      const r = await call(`${API}/watch-paths`, {
+        method: "POST",
+        body: JSON.stringify({ path })
+      });
+      setData((d) => d && {
+        ...d,
+        suggestions: d.suggestions.map((s) => s.path === path ? { ...s, covered_by: r.covered_by ?? path } : s)
+      });
+      setMessage({
+        ok: true,
+        text: r.added ? `${path} ist jetzt im Echtzeit-W\xE4chter. Neue und hineinkopierte Dateien pr\xFCft er ab dem n\xE4chsten Lauf.` : `${path} wird schon \xFCberwacht (\xFCber ${r.covered_by}).`
+      });
+    } catch (err) {
+      setMessage({ ok: false, text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setBusy(null);
+    }
+  }
+  return /* @__PURE__ */ jsx8(
+    Card,
+    {
+      title: "W\xE4chter-Vorlagen",
+      description: "Ordner, in denen fremde Dateien landen: Samba- und NFS-Freigaben, die Daten einer Nextcloud. Die Suche liest nur.",
+      className: "mb-4",
+      actions: /* @__PURE__ */ jsx8(Button, { small: true, onClick: () => void search(), disabled: busy !== null, children: busy === "search" ? "Suche \u2026" : data ? "Neu suchen" : "Auf den Servern suchen" }),
+      children: /* @__PURE__ */ jsxs7("div", { className: "space-y-2 text-sm", "data-testid": "watch-templates", children: [
+        message && /* @__PURE__ */ jsx8("p", { role: message.ok ? "status" : "alert", className: message.ok ? "text-emerald-300" : "text-red-300", children: message.text }),
+        data && data.suggestions.length === 0 && /* @__PURE__ */ jsx8("p", { className: "text-white/55", children: "Keine Freigaben und keine Nextcloud gefunden. Ohne root bzw. \u201Esudo\u201C ohne Passwort fehlt auf einem Server meist die Nextcloud." }),
+        data && data.suggestions.length > 0 && /* @__PURE__ */ jsx8("ul", { className: "divide-y divide-white/[0.06]", children: data.suggestions.map((s) => /* @__PURE__ */ jsxs7("li", { className: "flex flex-wrap items-center gap-2 py-2", children: [
+          /* @__PURE__ */ jsxs7("div", { className: "min-w-0 flex-1", children: [
+            /* @__PURE__ */ jsx8("p", { className: "break-all font-mono text-xs", children: s.path }),
+            /* @__PURE__ */ jsxs7("p", { className: "text-xs text-white/50", children: [
+              s.kinds.map((k) => KIND_LABEL[k] ?? k).join(", "),
+              " \xB7 auf ",
+              s.hosts.join(", ")
+            ] })
+          ] }),
+          s.covered_by ? /* @__PURE__ */ jsx8("span", { className: "text-xs text-emerald-300", children: s.covered_by === s.path ? "wird \xFCberwacht" : `wird \xFCberwacht (\xFCber ${s.covered_by})` }) : s.excluded_by ? /* @__PURE__ */ jsxs7("span", { className: "text-xs text-amber-300", children: [
+            "ausgenommen (\xFCber ",
+            s.excluded_by,
+            ") \u2013 dort pr\xFCft der W\xE4chter nicht"
+          ] }) : canChange ? /* @__PURE__ */ jsx8(Button, { small: true, variant: "primary", disabled: busy !== null, onClick: () => void add(s.path), children: busy === s.path ? "F\xFCge hinzu \u2026" : "Zum W\xE4chter hinzuf\xFCgen" }) : /* @__PURE__ */ jsx8("span", { className: "text-xs text-white/45", children: "Hinzuf\xFCgen braucht das Recht, Einstellungen zu \xE4ndern." })
+        ] }, s.path)) }),
+        data && data.errors.length > 0 && /* @__PURE__ */ jsx8("ul", { className: "text-xs text-amber-300", children: data.errors.map((e) => /* @__PURE__ */ jsx8("li", { children: e }, e)) }),
+        /* @__PURE__ */ jsx8("p", { className: "text-xs text-white/45", children: "Der W\xE4chter sieht bei jedem Lauf alle Dateien eines Ordners an. Ein sehr gro\xDFer Ordner (etwa eine Nextcloud mit vielen Tausend Dateien) kostet deshalb jedes Mal etwas Zeit. Entfernen geht unter \u201EEinstellungen \xE4ndern\u201C \u2192 \u201E\xDCberwachte Ordner\u201C." })
+      ] })
+    }
+  );
+}
+
 // src/SocPage.tsx
-import { Fragment as Fragment5, jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
+import { Fragment as Fragment5, jsx as jsx9, jsxs as jsxs8 } from "react/jsx-runtime";
 var AUDIT_DURATION_HINT = "Lynis braucht je nach Server einige Minuten bis \xFCber eine Stunde.";
 function auditRunText(run) {
   if (!run) return "Audit l\xE4uft \u2026";
@@ -1487,7 +1690,7 @@ function auditRunText(run) {
 }
 function AuditRunning({ run }) {
   const title = run?.waiting ? "Es laufen gerade schon mehrere Audits; dieses startet, sobald eines fertig ist." : `${AUDIT_DURATION_HINT} Das Ergebnis erscheint hier, sobald es fertig ist.`;
-  return /* @__PURE__ */ jsx7("span", { title, "data-testid": "audit-running", children: /* @__PURE__ */ jsx7(Badge, { tone: "info", children: auditRunText(run) }) });
+  return /* @__PURE__ */ jsx9("span", { title, "data-testid": "audit-running", children: /* @__PURE__ */ jsx9(Badge, { tone: "info", children: auditRunText(run) }) });
 }
 function auditStartNotice(r) {
   const audits = r.audits ?? [];
@@ -1523,6 +1726,91 @@ var SCAN_STATUS = {
   infected: { label: "Bedrohung gefunden", tone: "bad" },
   error: { label: "Fehler", tone: "warn" }
 };
+function MoreActions({ items }) {
+  const ref = useRef2(null);
+  const [open, setOpen] = useState8(false);
+  const close = (refocus) => {
+    const details = ref.current;
+    if (!details) return;
+    if (refocus) details.querySelector("summary")?.focus();
+    details.open = false;
+  };
+  useEffect7(() => {
+    if (!open) return;
+    const outside = (e) => {
+      if (ref.current && !ref.current.contains(e.target)) close(false);
+    };
+    const escape = (e) => {
+      if (e.key === "Escape") close(true);
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  return /* @__PURE__ */ jsxs8(
+    "details",
+    {
+      ref,
+      className: "relative",
+      "data-testid": "shield-more",
+      onToggle: (e) => setOpen(e.currentTarget.open),
+      onBlur: (e) => {
+        if (ref.current?.open && e.relatedTarget && !ref.current.contains(e.relatedTarget)) close(false);
+      },
+      children: [
+        /* @__PURE__ */ jsxs8("summary", { title: "Weitere Aktionen", className: `${buttonClass("secondary")} cursor-pointer list-none [&::-webkit-details-marker]:hidden`, children: [
+          "Mehr ",
+          /* @__PURE__ */ jsx9(Icon, { name: "chevron-down", size: 14 })
+        ] }),
+        /* @__PURE__ */ jsx9("div", { className: "absolute left-0 z-20 mt-1 flex w-60 max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-white/10 bg-[var(--color-surface)] p-1 shadow-xl", children: items.map((a) => /* @__PURE__ */ jsxs8(
+          "button",
+          {
+            type: "button",
+            disabled: a.disabled,
+            title: a.title,
+            onClick: () => {
+              close(true);
+              a.run();
+            },
+            className: "flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-white/[0.06] disabled:opacity-50",
+            children: [
+              a.icon ? /* @__PURE__ */ jsx9(Icon, { name: a.icon, size: 14 }) : /* @__PURE__ */ jsx9("span", { className: "inline-block w-[14px]", "aria-hidden": true }),
+              " ",
+              a.label
+            ]
+          },
+          a.id
+        )) })
+      ]
+    }
+  );
+}
+function findingsLast30Days(n) {
+  return n ? `${count(n, "Fund", "Funde")} in 30 Tagen` : "keine Funde in 30 Tagen";
+}
+function hostScanBadge(h) {
+  const open = h.open_findings ?? 0;
+  if (open > 0) return { label: count(open, "offene Bedrohung", "offene Bedrohungen"), tone: "bad" };
+  if (!h.last_scan) return null;
+  if (h.last_scan.status === "infected" && h.last_scan_outcome === "quarantined") return { label: "in Quarant\xE4ne", tone: "warn" };
+  if (h.last_scan.status === "infected" && h.last_scan_outcome === "accepted") return { label: "als harmlos markiert", tone: "neutral" };
+  if (h.last_scan.status === "infected" && h.last_scan_outcome === "cleaned") return { label: "bereinigt", tone: "good" };
+  return SCAN_STATUS[h.last_scan.status] ?? { label: h.last_scan.status, tone: "neutral" };
+}
+function ScanCell({ host: h }) {
+  if (h.scanning) return /* @__PURE__ */ jsx9(Badge, { tone: "info", children: "Scan l\xE4uft \u2026" });
+  const badge = hostScanBadge(h);
+  if (!badge) return /* @__PURE__ */ jsx9("span", { className: "text-xs text-white/40", children: "noch nie" });
+  return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+    /* @__PURE__ */ jsx9(Badge, { tone: badge.tone, children: badge.label }),
+    /* @__PURE__ */ jsx9("p", { className: "mt-0.5 text-xs text-white/45", children: (h.open_findings ?? 0) > 0 ? "Details unter \u201EQuarant\xE4ne\u201C" : h.last_scan ? `${h.last_scan.kind_label} \xB7 ${ago(h.last_scan.started_at)}` : "" })
+  ] });
+}
 var FINDING_STATUS = {
   detected: { label: "offen", tone: "bad" },
   quarantined: { label: "in Quarant\xE4ne", tone: "warn" },
@@ -1537,23 +1825,23 @@ function ageText(days) {
 function HardeningCell({ host: h }) {
   const shown = h.last_audit?.hardening_index != null ? h.last_audit : h.last_ok_audit?.hardening_index != null ? h.last_ok_audit : null;
   const failed = h.last_audit && h.last_audit.status !== "ok" ? h.last_audit : null;
-  return /* @__PURE__ */ jsxs6(Fragment5, { children: [
-    shown && shown.hardening_index != null && /* @__PURE__ */ jsxs6("div", { className: "w-28", children: [
-      /* @__PURE__ */ jsxs6("div", { className: "flex justify-between text-xs", children: [
-        /* @__PURE__ */ jsx7("span", { children: shown.hardening_index }),
-        /* @__PURE__ */ jsxs6("span", { className: "text-white/40", children: [
+  return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+    shown && shown.hardening_index != null && /* @__PURE__ */ jsxs8("div", { className: "w-28", children: [
+      /* @__PURE__ */ jsxs8("div", { className: "flex justify-between text-xs", children: [
+        /* @__PURE__ */ jsx9("span", { children: shown.hardening_index }),
+        /* @__PURE__ */ jsxs8("span", { className: "text-white/40", children: [
           shown.warnings,
           " Warn."
         ] })
       ] }),
-      /* @__PURE__ */ jsx7("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx7("div", { className: "h-1.5 rounded-full", style: { width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "#34d399" : "#fbbf24" } }) })
+      /* @__PURE__ */ jsx9("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx9("div", { className: "h-1.5 rounded-full", style: { width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "#34d399" : "#fbbf24" } }) })
     ] }),
-    failed && /* @__PURE__ */ jsxs6("p", { className: `${shown ? "mt-1 " : ""}text-xs text-amber-300`, title: failed.error ?? void 0, "data-testid": "audit-failed", children: [
+    failed && /* @__PURE__ */ jsxs8("p", { className: `${shown ? "mt-1 " : ""}text-xs text-amber-300`, title: failed.error ?? void 0, "data-testid": "audit-failed", children: [
       "Letztes Audit fehlgeschlagen (",
       ago(failed.created_at),
       ")"
     ] }),
-    !shown && !failed && /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: "\u2013" })
+    !shown && !failed && /* @__PURE__ */ jsx9("span", { className: "text-xs text-white/40", children: "\u2013" })
   ] });
 }
 var NOTICE_STYLE = {
@@ -1563,13 +1851,29 @@ var NOTICE_STYLE = {
   info: "border-sky-500/30 bg-sky-500/10 text-sky-200"
 };
 function RunNotice({ notice, onClose }) {
-  return /* @__PURE__ */ jsxs6("div", { role: notice.kind === "error" ? "alert" : "status", className: `mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`, children: [
-    /* @__PURE__ */ jsxs6("span", { className: "min-w-0", children: [
+  return /* @__PURE__ */ jsxs8("div", { role: notice.kind === "error" ? "alert" : "status", className: `mb-4 flex items-start justify-between gap-3 rounded-lg border px-3 py-2 text-sm ${NOTICE_STYLE[notice.kind]}`, children: [
+    /* @__PURE__ */ jsxs8("span", { className: "min-w-0", children: [
       notice.text,
-      notice.links?.map((l) => /* @__PURE__ */ jsx7("a", { href: l.href, className: "ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white", children: l.label }, l.href))
+      notice.links?.map((l) => /* @__PURE__ */ jsx9("a", { href: l.href, className: "ml-2 whitespace-nowrap underline underline-offset-2 hover:text-white", children: l.label }, l.href))
     ] }),
-    onClose && /* @__PURE__ */ jsx7("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "flex-none opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx7(Icon, { name: "x", size: 14 }) })
+    onClose && /* @__PURE__ */ jsx9("button", { type: "button", "aria-label": "Hinweis schlie\xDFen", onClick: onClose, className: "flex-none opacity-60 hover:opacity-100", children: /* @__PURE__ */ jsx9(Icon, { name: "x", size: 14 }) })
   ] });
+}
+function LoadError({ what, error, onRetry }) {
+  return /* @__PURE__ */ jsxs8("div", { role: "alert", "data-testid": "load-error", className: "mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm", children: [
+    /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsxs8("p", { className: "text-red-200", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      /* @__PURE__ */ jsx9("p", { className: "text-xs text-white/55", children: "Das hei\xDFt nicht, dass alles in Ordnung ist." })
+    ] }),
+    /* @__PURE__ */ jsx9(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" })
+  ] });
+}
+function errorText(err) {
+  return err instanceof Error ? err.message : String(err);
 }
 function briefingNotice(r) {
   const stored = `Briefing erstellt: \u201E${r.title}\u201C. Es steht unter \u201EMeldungen\u201C`;
@@ -1579,6 +1883,15 @@ function briefingNotice(r) {
       return { kind: "ok", text: `${stored} und wurde auch als Push-Nachricht zugestellt.`, links: [inbox] };
     case "suppressed":
       return { kind: "warn", text: `${stored}. Als Push-Nachricht kommt es nicht an, weil gerade ein Wartungsfenster l\xE4uft.`, links: [inbox] };
+    case "skipped": {
+      const links = [inbox];
+      if (deck().hasPermission("extensions.manage")) links.push({ href: "/settings/extensions/ntfy", label: "Mindest-Stufe \xE4ndern" });
+      return {
+        kind: "ok",
+        text: `${stored}. Als Push-Nachricht kommt es nicht an, weil es unter der in den Push-Einstellungen gew\xE4hlten Mindest-Stufe liegt.`,
+        links
+      };
+    }
     case "not_delivered": {
       const links = [inbox];
       if (deck().hasPermission("extensions.manage")) links.push({ href: "/settings/extensions/ntfy", label: "Push-Nachrichten einrichten" });
@@ -1592,15 +1905,15 @@ function briefingNotice(r) {
       return { kind: "ok", text: `${stored}.`, links: [inbox] };
   }
 }
-function ScoreRing({ score }) {
+function ScoreRing({ score, reasons = [] }) {
   const r = 42;
   const c = 2 * Math.PI * r;
   const tone = score >= 80 ? "#34d399" : score >= 50 ? "#fbbf24" : "#f87171";
   const label = score >= 80 ? "Gut gesch\xFCtzt" : score >= 50 ? "Verbesserungsbedarf" : "Handlungsbedarf";
-  return /* @__PURE__ */ jsxs6("div", { className: "flex items-center gap-5", children: [
-    /* @__PURE__ */ jsxs6("svg", { width: "104", height: "104", viewBox: "0 0 104 104", role: "img", "aria-label": `Schutzwert ${score} von 100`, children: [
-      /* @__PURE__ */ jsx7("circle", { cx: "52", cy: "52", r, fill: "none", stroke: "rgba(255,255,255,0.08)", strokeWidth: "9" }),
-      /* @__PURE__ */ jsx7(
+  return /* @__PURE__ */ jsxs8("div", { className: "flex min-w-0 flex-wrap items-center gap-5", children: [
+    /* @__PURE__ */ jsxs8("svg", { width: "104", height: "104", viewBox: "0 0 104 104", role: "img", "aria-label": `Schutzwert ${score} von 100`, className: "flex-none", children: [
+      /* @__PURE__ */ jsx9("circle", { cx: "52", cy: "52", r, fill: "none", stroke: "rgba(255,255,255,0.08)", strokeWidth: "9" }),
+      /* @__PURE__ */ jsx9(
         "circle",
         {
           cx: "52",
@@ -1614,12 +1927,16 @@ function ScoreRing({ score }) {
           transform: "rotate(-90 52 52)"
         }
       ),
-      /* @__PURE__ */ jsx7("text", { x: "52", y: "58", textAnchor: "middle", className: "fill-white text-[22px] font-semibold", children: score })
+      /* @__PURE__ */ jsx9("text", { x: "52", y: "58", textAnchor: "middle", className: "fill-white text-[22px] font-semibold", children: score })
     ] }),
-    /* @__PURE__ */ jsxs6("div", { children: [
-      /* @__PURE__ */ jsx7("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
-      /* @__PURE__ */ jsx7("p", { className: "text-lg font-semibold", style: { color: tone }, children: label }),
-      /* @__PURE__ */ jsx7("p", { className: "mt-1 max-w-[16rem] text-xs text-white/45", children: "Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde und wie sicher die Server eingestellt sind (H\xE4rtung)." })
+    /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-1 basis-48", children: [
+      /* @__PURE__ */ jsx9("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
+      /* @__PURE__ */ jsx9("p", { className: "text-lg font-semibold", style: { color: tone }, children: label }),
+      /* @__PURE__ */ jsx9("p", { className: "mt-1 max-w-[16rem] text-xs text-white/45", children: "Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde, wie sicher die Server eingestellt sind (H\xE4rtung), offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse." }),
+      reasons.length > 0 && /* @__PURE__ */ jsx9("ul", { className: "mt-2 max-w-[20rem] space-y-0.5 text-xs text-amber-200/80", "data-testid": "score-reasons", "aria-label": "Was den Schutzwert senkt", children: reasons.map((r2) => /* @__PURE__ */ jsxs8("li", { children: [
+        "\u2013 ",
+        r2
+      ] }, r2)) })
     ] })
   ] });
 }
@@ -1629,10 +1946,10 @@ function SocPage() {
   const tabParam = urlParams.get("tab");
   const tab = TABS.find((x) => x.id === tabParam)?.id ?? "overview";
   const setTab = useCallback5((t) => updateUrl({ tab: t === "overview" ? null : t }), [updateUrl]);
-  const [overview, setOverview] = useState6(null);
-  const [error, setError] = useState6(null);
-  const [notice, setNotice] = useState6(null);
-  const [briefingBusy, setBriefingBusy] = useState6(false);
+  const [overview, setOverview] = useState8(null);
+  const [error, setError] = useState8(null);
+  const [notice, setNotice] = useState8(null);
+  const [briefingBusy, setBriefingBusy] = useState8(false);
   const briefingLock = useRef2(false);
   const canManage = deck().hasPermission("soc.manage");
   const hostFilter = urlParams.get("host") || null;
@@ -1649,7 +1966,7 @@ function SocPage() {
   useEffect7(() => {
     document.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView?.({ block: "nearest", inline: "center" });
   }, [tab]);
-  const [side, setSide] = useState6({ updates: null, guard: null });
+  const [side, setSide] = useState8({ updates: null, guard: null });
   useEffect7(() => {
     call(`${API}/updates`).then((u) => setSide((p) => ({ ...p, updates: u.summary }))).catch(() => void 0);
     call(`${API}/guard`).then((g) => setSide((p) => ({ ...p, guard: g.summary }))).catch(() => void 0);
@@ -1710,6 +2027,17 @@ function SocPage() {
       setBriefingBusy(false);
     }
   }
+  async function confirmAll(kind) {
+    const n = overview?.hosts.length ?? 0;
+    const where = n === 1 ? "dem Server" : n > 1 ? `allen ${n} Servern` : "allen Servern";
+    const ok = await deck().confirmDialog(
+      kind === "deep" ? `Tiefenscan auf ${where} starten? Er pr\xFCft das ganze System und kann Stunden dauern. Die Server sind in der Zeit sp\xFCrbar ausgelastet.` : `H\xE4rtungs-Audit auf ${where} starten? Lynis braucht je Server einige Minuten, auf gro\xDFen Servern auch l\xE4nger.`,
+      { confirmLabel: kind === "deep" ? "Tiefenscan starten" : "Audit starten" }
+    );
+    if (!ok) return;
+    if (kind === "deep") await startScan("deep");
+    else await startAudit();
+  }
   const install = (host, pkg) => run(pkg === "signatures" ? `Signaturen (${host.host_name})` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} installieren (${host.host_name})`, async () => {
     const ok = await deck().confirmDialog(
       pkg === "signatures" ? `Virensignaturen auf \u201E${host.host_name}\u201C jetzt aktualisieren? Das automatische Signatur-Update wird dabei eingeschaltet.` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} auf \u201E${host.host_name}\u201C installieren?`,
@@ -1720,36 +2048,51 @@ function SocPage() {
     loadOverview(true);
     return text;
   });
-  return /* @__PURE__ */ jsxs6(
+  const headerActions = [
+    {
+      id: "briefing",
+      label: briefingBusy ? "Briefing wird erstellt \u2026" : "Briefing senden",
+      disabled: briefingBusy,
+      run: () => void sendBriefing(),
+      title: "Schickt dir jetzt den Lagebericht: Server, Virenschutz, Updates und Einbruchschutz auf einen Blick."
+    },
+    {
+      id: "audit",
+      label: "H\xE4rtungs-Audit",
+      icon: "clock",
+      run: () => void confirmAll("audit"),
+      title: "Lynis pr\xFCft, wie sicher deine Server eingestellt sind (dauert einige Minuten)."
+    },
+    {
+      id: "deep",
+      label: "Tiefenscan",
+      icon: "search",
+      run: () => void confirmAll("deep"),
+      title: "Pr\xFCft das ganze System auf Schadsoftware \u2013 das kann Stunden dauern."
+    },
+    {
+      id: "quick",
+      label: "Schnellscan starten",
+      icon: "play",
+      primary: true,
+      run: () => void startScan("quick"),
+      title: "Pr\xFCft typische Ablageorte auf Schadsoftware \u2013 in wenigen Minuten fertig."
+    }
+  ];
+  return /* @__PURE__ */ jsxs8(
     Page,
     {
       title: "Nodvard Shield",
       description: "Sch\xFCtzt deine Server: Virenscans, Sicherheitsupdates, Einbruchschutz und eine Pr\xFCfung, wie sicher alles eingestellt ist \u2013 plus die KI-Wache (Nodvard KI) f\xFCr abgest\xFCrzte Docker-Container.",
-      actions: canManage && /* @__PURE__ */ jsxs6(Fragment5, { children: [
-        /* @__PURE__ */ jsx7(
-          Button,
-          {
-            onClick: () => void sendBriefing(),
-            disabled: briefingBusy,
-            title: "Schickt dir jetzt den Lagebericht: Server, Virenschutz, Updates und Einbruchschutz auf einen Blick.",
-            children: briefingBusy ? "Briefing wird erstellt \u2026" : "Briefing senden"
-          }
-        ),
-        /* @__PURE__ */ jsxs6(Button, { onClick: () => void startAudit(), title: "Lynis pr\xFCft, wie sicher deine Server eingestellt sind (dauert einige Minuten).", children: [
-          /* @__PURE__ */ jsx7(Icon, { name: "clock", size: 14 }),
-          " H\xE4rtungs-Audit"
-        ] }),
-        /* @__PURE__ */ jsxs6(Button, { onClick: () => void startScan("deep"), title: "Pr\xFCft das ganze System auf Schadsoftware \u2013 das kann Stunden dauern.", children: [
-          /* @__PURE__ */ jsx7(Icon, { name: "search", size: 14 }),
-          " Tiefenscan"
-        ] }),
-        /* @__PURE__ */ jsxs6(Button, { variant: "primary", onClick: () => void startScan("quick"), title: "Pr\xFCft typische Ablageorte auf Schadsoftware \u2013 in wenigen Minuten fertig.", children: [
-          /* @__PURE__ */ jsx7(Icon, { name: "play", size: 14 }),
-          " Schnellscan starten"
-        ] })
-      ] }),
+      actions: canManage && // Die vier Knöpfe gehören zu Übersicht und Scans. Auf den anderen Reitern schoben sie am Handy den Inhalt weit
+      // nach unten: dort stehen sie unter „Mehr“.
+      (tab === "overview" || tab === "scans" ? headerActions.map((a) => /* @__PURE__ */ jsxs8(Button, { variant: a.primary ? "primary" : "secondary", onClick: a.run, disabled: a.disabled, title: a.title, children: [
+        a.icon && /* @__PURE__ */ jsx9(Icon, { name: a.icon, size: 14 }),
+        " ",
+        a.label
+      ] }, a.id)) : /* @__PURE__ */ jsx9(MoreActions, { items: headerActions })),
       children: [
-        /* @__PURE__ */ jsx7("nav", { role: "tablist", "aria-label": "Bereiche", className: "mb-5 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", children: TABS.map((t) => /* @__PURE__ */ jsxs6(
+        /* @__PURE__ */ jsx9("nav", { role: "tablist", "aria-label": "Bereiche", className: "mb-5 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden", children: TABS.map((t) => /* @__PURE__ */ jsxs8(
           "button",
           {
             role: "tab",
@@ -1758,25 +2101,25 @@ function SocPage() {
             className: `-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${tab === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"}`,
             children: [
               t.label,
-              t.id === "quarantine" && overview && overview.summary.open_threats > 0 && /* @__PURE__ */ jsx7("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", children: overview.summary.open_threats }),
-              t.id === "updates" && !!side.updates?.security && /* @__PURE__ */ jsx7("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", title: "Sicherheitsupdates", children: side.updates.security }),
-              t.id === "guard" && !!side.guard?.open_events && /* @__PURE__ */ jsx7("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", title: "offene Ereignisse", children: side.guard.open_events })
+              t.id === "quarantine" && overview && overview.summary.open_threats > 0 && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", children: overview.summary.open_threats }),
+              t.id === "updates" && !!side.updates?.security && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", title: "Sicherheitsupdates", children: side.updates.security }),
+              t.id === "guard" && !!side.guard?.open_events && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", title: "offene Ereignisse", children: side.guard.open_events })
             ]
           },
           t.id
         )) }),
-        hostFilter && /* @__PURE__ */ jsxs6("div", { className: "mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-3 py-2 text-sm", "data-testid": "host-filter", children: [
-          /* @__PURE__ */ jsxs6("span", { children: [
+        hostFilter && /* @__PURE__ */ jsxs8("div", { className: "mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-3 py-2 text-sm", "data-testid": "host-filter", children: [
+          /* @__PURE__ */ jsxs8("span", { children: [
             "Ansicht f\xFCr ",
-            /* @__PURE__ */ jsx7("strong", { children: overview?.hosts.find((h) => h.host_id === hostFilter)?.host_name ?? "diesen Server" })
+            /* @__PURE__ */ jsx9("strong", { children: overview?.hosts.find((h) => h.host_id === hostFilter)?.host_name ?? "diesen Server" })
           ] }),
-          /* @__PURE__ */ jsx7("span", { className: "flex-1" }),
-          /* @__PURE__ */ jsx7("button", { type: "button", onClick: showAllHosts, className: "text-xs text-white/70 hover:text-white hover:underline", children: "Alle Server anzeigen" })
+          /* @__PURE__ */ jsx9("span", { className: "flex-1" }),
+          /* @__PURE__ */ jsx9("button", { type: "button", onClick: showAllHosts, className: "text-xs text-white/70 hover:text-white hover:underline", children: "Alle Server anzeigen" })
         ] }),
-        /* @__PURE__ */ jsxs6(HostFilter.Provider, { value: hostFilter, children: [
-          notice && /* @__PURE__ */ jsx7(RunNotice, { notice, onClose: () => setNotice(null) }),
-          error && ["overview", "scans", "quarantine", "hardening"].includes(tab) && /* @__PURE__ */ jsx7(Notice, { text: `Fehler: ${error}` }),
-          tab === "overview" && overview && /* @__PURE__ */ jsx7(
+        /* @__PURE__ */ jsxs8(HostFilter.Provider, { value: hostFilter, children: [
+          notice && /* @__PURE__ */ jsx9(RunNotice, { notice, onClose: () => setNotice(null) }),
+          error && ["overview", "scans", "quarantine", "hardening"].includes(tab) && /* @__PURE__ */ jsx9(Notice, { text: `Fehler: ${error}` }),
+          tab === "overview" && overview && /* @__PURE__ */ jsx9(
             OverviewTab,
             {
               overview,
@@ -1790,13 +2133,13 @@ function SocPage() {
               onOpen: setTab
             }
           ),
-          tab === "overview" && !overview && !error && /* @__PURE__ */ jsx7("p", { className: "text-sm text-white/50", children: "Lade \u2026" }),
-          tab === "scans" && /* @__PURE__ */ jsx7(ScansTab, { hosts: overview?.hosts ?? [], canManage, onStarted: () => loadOverview() }),
-          tab === "quarantine" && /* @__PURE__ */ jsx7(QuarantineTab, { canManage, onChanged: () => loadOverview() }),
-          tab === "hardening" && /* @__PURE__ */ jsx7(HardeningTab, { canManage, hosts: overview?.hosts ?? [], onAudit: () => void startAudit() }),
-          tab === "updates" && /* @__PURE__ */ jsx7(UpdatesTab, { canManage }),
-          tab === "guard" && /* @__PURE__ */ jsx7(GuardTab, { canManage }),
-          tab === "containers" && /* @__PURE__ */ jsx7(ContainerWatch, {})
+          tab === "overview" && !overview && !error && /* @__PURE__ */ jsx9("p", { className: "text-sm text-white/50", children: "Lade \u2026" }),
+          tab === "scans" && /* @__PURE__ */ jsx9(ScansTab, { hosts: overview?.hosts ?? [], canManage, onStarted: () => loadOverview() }),
+          tab === "quarantine" && /* @__PURE__ */ jsx9(QuarantineTab, { canManage, onChanged: () => loadOverview() }),
+          tab === "hardening" && /* @__PURE__ */ jsx9(HardeningTab, { canManage, hosts: overview?.hosts ?? [], onAudit: () => void startAudit() }),
+          tab === "updates" && /* @__PURE__ */ jsx9(UpdatesTab, { canManage }),
+          tab === "guard" && /* @__PURE__ */ jsx9(GuardTab, { canManage }),
+          tab === "containers" && /* @__PURE__ */ jsx9(ContainerWatch, {})
         ] })
       ]
     }
@@ -1804,13 +2147,13 @@ function SocPage() {
 }
 function SideLink({ title, text, tone, onClick }) {
   const dot = tone === "good" ? "bg-emerald-400" : tone === "warn" ? "bg-amber-400" : "bg-red-400";
-  return /* @__PURE__ */ jsxs6("button", { type: "button", onClick, className: "panel flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]", children: [
-    /* @__PURE__ */ jsx7("span", { className: `h-2.5 w-2.5 flex-none rounded-full ${dot}` }),
-    /* @__PURE__ */ jsxs6("span", { className: "min-w-0 flex-1", children: [
-      /* @__PURE__ */ jsx7("span", { className: "block text-xs text-white/50", children: title }),
-      /* @__PURE__ */ jsx7("span", { className: "block truncate text-sm", title: text, children: text })
+  return /* @__PURE__ */ jsxs8("button", { type: "button", onClick, className: "panel flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition hover:bg-white/[0.04]", children: [
+    /* @__PURE__ */ jsx9("span", { className: `h-2.5 w-2.5 flex-none rounded-full ${dot}` }),
+    /* @__PURE__ */ jsxs8("span", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsx9("span", { className: "block text-xs text-white/50", children: title }),
+      /* @__PURE__ */ jsx9("span", { className: "block truncate text-sm", title: text, children: text })
     ] }),
-    /* @__PURE__ */ jsx7("span", { className: "flex-none text-white/35", children: "\u2192" })
+    /* @__PURE__ */ jsx9("span", { className: "flex-none text-white/35", children: "\u2192" })
   ] });
 }
 function nextStep(hosts, openThreats, canManage, on) {
@@ -1868,12 +2211,12 @@ var GLOSSARY = [
   ["Fail2ban", "sperrt Adressen, die zu oft ein falsches Passwort probieren (Reiter \u201EEinbruchschutz\u201C)."]
 ];
 function Glossary() {
-  return /* @__PURE__ */ jsxs6("details", { className: "mb-5 rounded-lg border border-white/[0.06] px-3 py-2 text-xs text-white/55", "data-testid": "glossary", children: [
-    /* @__PURE__ */ jsx7("summary", { className: "cursor-pointer select-none text-white/70 hover:text-white", children: "Was bedeuten die Begriffe?" }),
-    /* @__PURE__ */ jsx7("dl", { className: "mt-2 space-y-1.5", children: GLOSSARY.map(([term, text]) => /* @__PURE__ */ jsxs6("div", { children: [
-      /* @__PURE__ */ jsx7("dt", { className: "inline font-medium text-white/80", children: term }),
+  return /* @__PURE__ */ jsxs8("details", { className: "mb-5 rounded-lg border border-white/[0.06] px-3 py-2 text-xs text-white/55", "data-testid": "glossary", children: [
+    /* @__PURE__ */ jsx9("summary", { className: "cursor-pointer select-none text-white/70 hover:text-white", children: "Was bedeuten die Begriffe?" }),
+    /* @__PURE__ */ jsx9("dl", { className: "mt-2 space-y-1.5", children: GLOSSARY.map(([term, text]) => /* @__PURE__ */ jsxs8("div", { children: [
+      /* @__PURE__ */ jsx9("dt", { className: "inline font-medium text-white/80", children: term }),
       " ",
-      /* @__PURE__ */ jsxs6("dd", { className: "inline", children: [
+      /* @__PURE__ */ jsxs8("dd", { className: "inline", children: [
         "\u2013 ",
         text
       ] })
@@ -1903,154 +2246,147 @@ function OverviewTab({
   });
   const realtime = coverageBadge(c.realtime_enabled, "Echtzeit-W\xE4chter", "aktiv", s.protected, s.hosts, ` (alle ${c.watch_interval_min} Min.)`);
   const quarantine = coverageBadge(c.auto_quarantine, "Automatische Quarant\xE4ne", "an", s.protected, s.hosts);
-  return /* @__PURE__ */ jsxs6(Fragment5, { children: [
-    step && /* @__PURE__ */ jsxs6("div", { className: "mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-3 text-sm", "data-testid": "next-step", children: [
-      /* @__PURE__ */ jsxs6("p", { className: "min-w-0 flex-1", children: [
-        /* @__PURE__ */ jsx7("strong", { className: "font-semibold", children: "N\xE4chster Schritt:" }),
+  return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+    step && /* @__PURE__ */ jsxs8("div", { className: "mb-5 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border border-[color-mix(in_srgb,var(--color-accent)_35%,transparent)] bg-[color-mix(in_srgb,var(--color-accent)_10%,transparent)] px-4 py-3 text-sm", "data-testid": "next-step", children: [
+      /* @__PURE__ */ jsxs8("p", { className: "min-w-0 flex-1", children: [
+        /* @__PURE__ */ jsx9("strong", { className: "font-semibold", children: "N\xE4chster Schritt:" }),
         " ",
         step.text
       ] }),
-      step.action && /* @__PURE__ */ jsx7(Button, { variant: "primary", small: true, onClick: step.action.run, children: step.action.label }),
-      step.link && /* @__PURE__ */ jsx7("a", { href: step.link.href, className: "text-xs underline underline-offset-2 hover:text-white", children: step.link.label })
+      step.action && /* @__PURE__ */ jsx9(Button, { variant: "primary", small: true, onClick: step.action.run, children: step.action.label }),
+      step.link && /* @__PURE__ */ jsx9("a", { href: step.link.href, className: "text-xs underline underline-offset-2 hover:text-white", children: step.link.label })
     ] }),
-    /* @__PURE__ */ jsxs6("div", { className: "mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]", children: [
-      noServers ? /* @__PURE__ */ jsxs6("div", { className: "panel px-6 py-4", "data-testid": "no-servers", children: [
-        /* @__PURE__ */ jsx7("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
-        (s.hosts_known ?? 0) > 0 ? /* @__PURE__ */ jsxs6(Fragment5, { children: [
-          /* @__PURE__ */ jsx7("p", { className: "text-lg font-semibold", children: "Noch kein Server pr\xFCfbar \u2013 nichts zu bewerten" }),
-          /* @__PURE__ */ jsxs6("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
+    /* @__PURE__ */ jsxs8("div", { className: "mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]", children: [
+      noServers ? /* @__PURE__ */ jsxs8("div", { className: "panel px-6 py-4", "data-testid": "no-servers", children: [
+        /* @__PURE__ */ jsx9("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
+        (s.hosts_known ?? 0) > 0 ? /* @__PURE__ */ jsxs8(Fragment5, { children: [
+          /* @__PURE__ */ jsx9("p", { className: "text-lg font-semibold", children: "Noch kein Server pr\xFCfbar \u2013 nichts zu bewerten" }),
+          /* @__PURE__ */ jsxs8("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
             "Du hast ",
             s.hosts_known === 1 ? "einen Server" : `${s.hosts_known} Server`,
             " angelegt, aber Nodvard Shield kann noch keinen pr\xFCfen. Daf\xFCr braucht er einen Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung).",
-            deck().hasPermission("hosts.write") && /* @__PURE__ */ jsxs6(Fragment5, { children: [
+            deck().hasPermission("hosts.write") && /* @__PURE__ */ jsxs8(Fragment5, { children: [
               " ",
-              /* @__PURE__ */ jsx7("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Zugang einrichten" })
+              /* @__PURE__ */ jsx9("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Zugang einrichten" })
             ] })
           ] })
-        ] }) : /* @__PURE__ */ jsxs6(Fragment5, { children: [
-          /* @__PURE__ */ jsx7("p", { className: "text-lg font-semibold", children: "Noch kein Server \u2013 nichts zu bewerten" }),
-          /* @__PURE__ */ jsxs6("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
+        ] }) : /* @__PURE__ */ jsxs8(Fragment5, { children: [
+          /* @__PURE__ */ jsx9("p", { className: "text-lg font-semibold", children: "Noch kein Server \u2013 nichts zu bewerten" }),
+          /* @__PURE__ */ jsxs8("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
             "F\xFCge zuerst einen Server hinzu.",
-            deck().hasPermission("hosts.write") && /* @__PURE__ */ jsxs6(Fragment5, { children: [
+            deck().hasPermission("hosts.write") && /* @__PURE__ */ jsxs8(Fragment5, { children: [
               " ",
-              /* @__PURE__ */ jsx7("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Server hinzuf\xFCgen" })
+              /* @__PURE__ */ jsx9("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Server hinzuf\xFCgen" })
             ] })
           ] })
         ] })
-      ] }) : /* @__PURE__ */ jsx7("div", { className: "panel flex items-center px-6 py-4", children: /* @__PURE__ */ jsx7(ScoreRing, { score: s.score }) }),
-      /* @__PURE__ */ jsxs6("div", { className: "grid grid-cols-2 gap-3 md:grid-cols-4", children: [
-        /* @__PURE__ */ jsx7(Stat, { label: "Gesch\xFCtzte Server", value: `${s.protected} / ${s.hosts}`, hint: "mit Virenscanner (ClamAV)", tone: noServers ? void 0 : s.protected < s.hosts ? "warn" : "good" }),
-        /* @__PURE__ */ jsx7("button", { type: "button", onClick: onOpenThreats, className: "text-left [&>div]:h-full", children: /* @__PURE__ */ jsx7(Stat, { label: "Offene Bedrohungen", value: s.open_threats, hint: s.open_threats ? "Jetzt pr\xFCfen \u2192" : "keine", tone: s.open_threats ? "bad" : "good" }) }),
-        /* @__PURE__ */ jsx7(Stat, { label: "Neutralisiert", value: s.neutralized_total, hint: `${s.quarantined} in Quarant\xE4ne \xB7 ${s.findings_30d} Funde in 30 Tagen` }),
-        /* @__PURE__ */ jsx7(Stat, { label: "H\xE4rtung (\xD8)", value: s.avg_hardening ?? "\u2013", hint: "von 100 \xB7 wie sicher die Server eingestellt sind (Lynis)", tone: s.avg_hardening == null ? void 0 : s.avg_hardening >= 70 ? "good" : "warn" })
+      ] }) : /* @__PURE__ */ jsx9("div", { className: "panel flex min-w-0 items-center px-6 py-4", children: /* @__PURE__ */ jsx9(ScoreRing, { score: s.score, reasons: s.score_reasons }) }),
+      /* @__PURE__ */ jsxs8("div", { className: "grid grid-cols-2 gap-3 md:grid-cols-4", children: [
+        /* @__PURE__ */ jsx9(Stat, { label: "Gesch\xFCtzte Server", value: `${s.protected} / ${s.hosts}`, hint: "mit Virenscanner (ClamAV)", tone: noServers ? void 0 : s.protected < s.hosts ? "warn" : "good" }),
+        /* @__PURE__ */ jsx9("button", { type: "button", onClick: onOpenThreats, className: "text-left [&>div]:h-full", children: /* @__PURE__ */ jsx9(Stat, { label: "Offene Bedrohungen", value: s.open_threats, hint: s.open_threats ? "Jetzt pr\xFCfen \u2192" : "keine", tone: s.open_threats ? "bad" : "good" }) }),
+        /* @__PURE__ */ jsx9(Stat, { label: "In Quarant\xE4ne", value: s.quarantined, hint: findingsLast30Days(s.findings_30d) }),
+        /* @__PURE__ */ jsx9(Stat, { label: "H\xE4rtung (\xD8)", value: s.avg_hardening ?? "\u2013", hint: "von 100 \xB7 wie sicher die Server eingestellt sind (Lynis)", tone: s.avg_hardening == null ? void 0 : s.avg_hardening >= 70 ? "good" : "warn" })
       ] })
     ] }),
-    attention.length > 0 && /* @__PURE__ */ jsx7("div", { className: "mb-5", "data-testid": "shield-attention", children: /* @__PURE__ */ jsx7(Card, { title: "Braucht Aufmerksamkeit", padded: false, children: /* @__PURE__ */ jsx7("ul", { className: "divide-y divide-white/[0.06]", children: attention.map((a) => {
+    attention.length > 0 && /* @__PURE__ */ jsx9("div", { className: "mb-5", "data-testid": "shield-attention", children: /* @__PURE__ */ jsx9(Card, { title: "Braucht Aufmerksamkeit", padded: false, children: /* @__PURE__ */ jsx9("ul", { className: "divide-y divide-white/[0.06]", children: attention.map((a) => {
       const host = overview.hosts.find((h) => h.host_id === a.host_id);
-      return /* @__PURE__ */ jsxs6("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
-        /* @__PURE__ */ jsx7("span", { "aria-hidden": "true", className: `h-2 w-2 flex-none rounded-full ${a.tone === "warn" ? "bg-amber-300" : "bg-white/40"}` }),
-        /* @__PURE__ */ jsxs6("div", { className: "min-w-0 flex-1", children: [
-          /* @__PURE__ */ jsx7("p", { className: "break-words font-medium", children: a.title }),
-          /* @__PURE__ */ jsx7("p", { className: "text-xs text-white/50", children: a.hint })
+      return /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
+        /* @__PURE__ */ jsx9("span", { "aria-hidden": "true", className: `h-2 w-2 flex-none rounded-full ${a.tone === "warn" ? "bg-amber-300" : "bg-white/40"}` }),
+        /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-1", children: [
+          /* @__PURE__ */ jsx9("p", { className: "break-words font-medium", children: a.title }),
+          /* @__PURE__ */ jsx9("p", { className: "text-xs text-white/50", children: a.hint })
         ] }),
-        canManage && host && a.kind === "signatures" && /* @__PURE__ */ jsx7(Button, { small: true, onClick: () => onInstall(host, "signatures"), children: a.action_label })
+        canManage && host && a.kind === "signatures" && /* @__PURE__ */ jsx9(Button, { small: true, onClick: () => onInstall(host, "signatures"), children: a.action_label })
       ] }, `${a.kind}-${a.host_id}`);
     }) }) }) }),
-    (side.updates?.checked || side.guard) && /* @__PURE__ */ jsxs6("div", { className: "mb-5 grid grid-cols-1 gap-3 md:grid-cols-2", "data-testid": "side-summary", children: [
-      !!side.updates?.checked && /* @__PURE__ */ jsx7(
+    (side.updates?.checked || side.guard) && /* @__PURE__ */ jsxs8("div", { className: "mb-5 grid grid-cols-1 gap-3 md:grid-cols-2", "data-testid": "side-summary", children: [
+      !!side.updates?.checked && /* @__PURE__ */ jsx9(
         SideLink,
         {
           title: "Updates",
           tone: side.updates.security ? "bad" : side.updates.packages || side.updates.reboot ? "warn" : "good",
-          text: side.updates.security ? `${side.updates.security} Sicherheitsupdate(s) offen` : side.updates.packages ? `${side.updates.packages} Update(s) offen` : `Alle ${side.updates.hosts} Server aktuell`,
+          text: side.updates.security ? `${count(side.updates.security, "Sicherheitsupdate", "Sicherheitsupdates")} offen` : side.updates.packages ? `${count(side.updates.packages, "Update", "Updates")} offen` : `Alle ${side.updates.hosts} Server aktuell`,
           onClick: () => onOpen("updates")
         }
       ),
-      side.guard && /* @__PURE__ */ jsx7(
+      side.guard && /* @__PURE__ */ jsx9(
         SideLink,
         {
           title: "Einbruchschutz",
           tone: side.guard.open_events ? "bad" : side.guard.fail2ban_running < side.guard.hosts ? "warn" : "good",
-          text: side.guard.open_events ? `${side.guard.open_events} offene(s) Ereignis(se)` : `ruhig \xB7 ${side.guard.failed_24h} SSH-Fehlversuche in 24 Std., ${side.guard.banned} gesperrt`,
+          text: side.guard.open_events ? count(side.guard.open_events, "offenes Ereignis", "offene Ereignisse") : `ruhig \xB7 ${side.guard.failed_24h} SSH-Fehlversuche in 24 Std., ${side.guard.banned} gesperrt`,
           onClick: () => onOpen("guard")
         }
       )
     ] }),
-    /* @__PURE__ */ jsxs6("div", { className: "mb-5 flex flex-wrap gap-2 text-xs", children: [
-      /* @__PURE__ */ jsx7("span", { className: "max-w-full [&>span]:whitespace-normal", children: /* @__PURE__ */ jsx7(Badge, { tone: realtime.tone, children: realtime.text }) }),
-      /* @__PURE__ */ jsx7("span", { className: "max-w-full [&>span]:whitespace-normal", children: /* @__PURE__ */ jsx7(Badge, { tone: quarantine.tone, children: quarantine.text }) }),
-      /* @__PURE__ */ jsxs6(Badge, { children: [
+    /* @__PURE__ */ jsxs8("div", { className: "mb-5 flex flex-wrap gap-2 text-xs", children: [
+      /* @__PURE__ */ jsx9("span", { className: "max-w-full [&>span]:whitespace-normal", children: /* @__PURE__ */ jsx9(Badge, { tone: realtime.tone, children: realtime.text }) }),
+      /* @__PURE__ */ jsx9("span", { className: "max-w-full [&>span]:whitespace-normal", children: /* @__PURE__ */ jsx9(Badge, { tone: quarantine.tone, children: quarantine.text }) }),
+      /* @__PURE__ */ jsxs8(Badge, { children: [
         "Schnellscan: ",
         describeSchedule(c.quick_scan_cron, "aus")
       ] }),
-      /* @__PURE__ */ jsxs6(Badge, { children: [
+      /* @__PURE__ */ jsxs8(Badge, { children: [
         "Tiefenscan: ",
         describeSchedule(c.deep_scan_cron, "aus")
       ] }),
-      /* @__PURE__ */ jsxs6(Badge, { children: [
+      /* @__PURE__ */ jsxs8(Badge, { children: [
         "H\xE4rtungs-Audit: ",
         describeSchedule(c.audit_cron, "aus")
       ] }),
-      /* @__PURE__ */ jsx7("a", { href: `/settings/extensions/${EXT_ID}`, className: "text-white/50 underline-offset-2 hover:text-white hover:underline", children: "Einstellungen \xE4ndern" })
+      /* @__PURE__ */ jsx9("a", { href: `/settings/extensions/${EXT_ID}`, className: "text-white/50 underline-offset-2 hover:text-white hover:underline", children: "Einstellungen \xE4ndern" })
     ] }),
-    /* @__PURE__ */ jsx7(Glossary, {}),
-    /* @__PURE__ */ jsx7(Card, { title: "Server", padded: false, actions: /* @__PURE__ */ jsxs6(Button, { small: true, variant: "ghost", onClick: onRefresh, children: [
-      /* @__PURE__ */ jsx7(Icon, { name: "refresh", size: 12 }),
+    /* @__PURE__ */ jsx9(Glossary, {}),
+    /* @__PURE__ */ jsx9(Card, { title: "Server", padded: false, actions: /* @__PURE__ */ jsxs8(Button, { small: true, variant: "ghost", onClick: onRefresh, children: [
+      /* @__PURE__ */ jsx9(Icon, { name: "refresh", size: 12 }),
       " Status neu pr\xFCfen"
-    ] }), children: hosts.length === 0 ? /* @__PURE__ */ jsxs6("p", { className: "px-5 py-6 text-sm text-white/50", children: [
+    ] }), children: hosts.length === 0 ? /* @__PURE__ */ jsxs8("p", { className: "px-5 py-6 text-sm text-white/50", children: [
       "Keine Linux-Server mit SSH-Zugang gefunden. Einrichten unter",
       " ",
-      deck().hasPermission("hosts.write") ? /* @__PURE__ */ jsx7("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Einstellungen \u2192 Server & Zug\xE4nge" }) : "Einstellungen \u2192 Server & Zug\xE4nge",
+      deck().hasPermission("hosts.write") ? /* @__PURE__ */ jsx9("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Einstellungen \u2192 Server & Zug\xE4nge" }) : "Einstellungen \u2192 Server & Zug\xE4nge",
       "."
-    ] }) : /* @__PURE__ */ jsx7("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs6("table", { className: "w-full text-left text-sm", children: [
-      /* @__PURE__ */ jsx7("thead", { className: "text-xs uppercase tracking-wider text-white/40", children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/[0.06]", children: [
-        /* @__PURE__ */ jsx7("th", { className: "px-5 py-2.5 font-medium", children: "Server" }),
-        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", title: "ClamAV ist der Virenscanner auf dem Server", children: "Virenschutz" }),
-        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", children: "Letzter Scan" }),
-        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium", title: "Wie sicher der Server eingestellt ist (gepr\xFCft von Lynis), 0 bis 100", children: "H\xE4rtung" }),
-        /* @__PURE__ */ jsx7("th", { className: "px-3 py-2.5 font-medium" })
+    ] }) : /* @__PURE__ */ jsx9("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs8("table", { className: "w-full text-left text-sm", children: [
+      /* @__PURE__ */ jsx9("thead", { className: "text-xs uppercase tracking-wider text-white/40", children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/[0.06]", children: [
+        /* @__PURE__ */ jsx9("th", { className: "px-5 py-2.5 font-medium", children: "Server" }),
+        /* @__PURE__ */ jsx9("th", { className: "px-3 py-2.5 font-medium", title: "ClamAV ist der Virenscanner auf dem Server", children: "Virenschutz" }),
+        /* @__PURE__ */ jsx9("th", { className: "px-3 py-2.5 font-medium", children: "Letzter Scan" }),
+        /* @__PURE__ */ jsx9("th", { className: "px-3 py-2.5 font-medium", title: "Wie sicher der Server eingestellt ist (gepr\xFCft von Lynis), 0 bis 100", children: "H\xE4rtung" }),
+        /* @__PURE__ */ jsx9("th", { className: "px-3 py-2.5 font-medium" })
       ] }) }),
-      /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/[0.04]", children: hosts.map((h) => /* @__PURE__ */ jsxs6("tr", { "data-testid": `host-${h.host_id}`, children: [
-        /* @__PURE__ */ jsxs6("td", { className: "px-5 py-3", children: [
-          /* @__PURE__ */ jsx7("p", { className: "font-medium", children: h.host_name }),
-          h.reachable === false && /* @__PURE__ */ jsxs6("p", { className: "text-xs text-amber-300", children: [
+      /* @__PURE__ */ jsx9("tbody", { className: "divide-y divide-white/[0.04]", children: hosts.map((h) => /* @__PURE__ */ jsxs8("tr", { "data-testid": `host-${h.host_id}`, children: [
+        /* @__PURE__ */ jsxs8("td", { className: "px-5 py-3", children: [
+          /* @__PURE__ */ jsx9("p", { className: "font-medium", children: h.host_name }),
+          h.reachable === false && /* @__PURE__ */ jsxs8("p", { className: "text-xs text-amber-300", children: [
             "nicht erreichbar",
             h.error ? ` \u2013 ${h.error}` : ""
           ] })
         ] }),
-        /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: h.clamav_installed ? /* @__PURE__ */ jsxs6(Fragment5, { children: [
-          /* @__PURE__ */ jsxs6(Badge, { tone: "good", children: [
+        /* @__PURE__ */ jsx9("td", { className: "px-3 py-3", children: h.clamav_installed ? /* @__PURE__ */ jsxs8(Fragment5, { children: [
+          /* @__PURE__ */ jsxs8(Badge, { tone: "good", children: [
             "ClamAV ",
             h.clamav_version
           ] }),
-          /* @__PURE__ */ jsxs6("p", { className: "mt-0.5 text-xs text-white/45", children: [
+          /* @__PURE__ */ jsxs8("p", { className: "mt-0.5 text-xs text-white/45", children: [
             "Signaturen ",
             h.signature_version ?? "?",
             h.signature_date ? ` \xB7 ${h.signature_date}` : "",
-            h.signature_stale === true && /* @__PURE__ */ jsxs6("span", { className: "text-amber-300", children: [
+            h.signature_stale === true && /* @__PURE__ */ jsxs8("span", { className: "text-amber-300", children: [
               " \xB7 ",
               ageText(h.signature_age_days ?? 0),
               " alt"
             ] }),
-            h.signature_stale == null && /* @__PURE__ */ jsx7("span", { className: "text-amber-300", children: " \xB7 Alter unbekannt" }),
-            h.freshclam_active === false && /* @__PURE__ */ jsx7("span", { className: "text-amber-300", children: " \xB7 Auto-Update aus" })
+            h.signature_stale == null && /* @__PURE__ */ jsx9("span", { className: "text-amber-300", children: " \xB7 Alter unbekannt" }),
+            h.freshclam_active === false && /* @__PURE__ */ jsx9("span", { className: "text-amber-300", children: " \xB7 Auto-Update aus" })
           ] })
-        ] }) : h.reachable === false ? /* @__PURE__ */ jsx7(Badge, { children: "unbekannt" }) : /* @__PURE__ */ jsx7(Badge, { tone: "bad", children: "nicht installiert" }) }),
-        /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: h.scanning ? /* @__PURE__ */ jsx7(Badge, { tone: "info", children: "Scan l\xE4uft \u2026" }) : h.last_scan ? /* @__PURE__ */ jsxs6(Fragment5, { children: [
-          /* @__PURE__ */ jsx7(Badge, { tone: SCAN_STATUS[h.last_scan.status]?.tone ?? "neutral", children: SCAN_STATUS[h.last_scan.status]?.label ?? h.last_scan.status }),
-          /* @__PURE__ */ jsxs6("p", { className: "mt-0.5 text-xs text-white/45", children: [
-            h.last_scan.kind_label,
-            " \xB7 ",
-            ago(h.last_scan.started_at)
-          ] })
-        ] }) : /* @__PURE__ */ jsx7("span", { className: "text-xs text-white/40", children: "noch nie" }) }),
-        /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: h.auditing ? /* @__PURE__ */ jsx7(AuditRunning, { run: h.audit_run }) : /* @__PURE__ */ jsx7(HardeningCell, { host: h }) }),
-        /* @__PURE__ */ jsx7("td", { className: "px-3 py-3", children: canManage && /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap justify-end gap-1", children: [
-          h.clamav_installed && /* @__PURE__ */ jsx7(Button, { small: true, onClick: () => onScan(h), disabled: h.scanning, children: "Scannen" }),
-          h.clamav_installed && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", title: "Die Liste bekannter Schadprogramme jetzt aktualisieren", onClick: () => onInstall(h, "signatures"), children: "Signaturen" }),
-          !h.clamav_installed && h.reachable !== false && /* @__PURE__ */ jsx7(Button, { small: true, variant: "primary", title: "ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert.", onClick: () => onInstall(h, "clamav"), children: "ClamAV installieren" }),
-          !h.lynis_installed && h.reachable !== false && /* @__PURE__ */ jsx7(Button, { small: true, title: "Lynis pr\xFCft, wie sicher der Server eingestellt ist.", onClick: () => onInstall(h, "lynis"), children: "Lynis installieren" }),
-          h.lynis_installed && /* @__PURE__ */ jsx7(
+        ] }) : h.reachable === false ? /* @__PURE__ */ jsx9(Badge, { children: "unbekannt" }) : /* @__PURE__ */ jsx9(Badge, { tone: "bad", children: "nicht installiert" }) }),
+        /* @__PURE__ */ jsx9("td", { className: "px-3 py-3", children: /* @__PURE__ */ jsx9(ScanCell, { host: h }) }),
+        /* @__PURE__ */ jsx9("td", { className: "px-3 py-3", children: h.auditing ? /* @__PURE__ */ jsx9(AuditRunning, { run: h.audit_run }) : /* @__PURE__ */ jsx9(HardeningCell, { host: h }) }),
+        /* @__PURE__ */ jsx9("td", { className: "px-3 py-3", children: canManage && /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap justify-end gap-1", children: [
+          h.clamav_installed && /* @__PURE__ */ jsx9(Button, { small: true, onClick: () => onScan(h), disabled: h.scanning, children: "Scannen" }),
+          h.clamav_installed && /* @__PURE__ */ jsx9(Button, { small: true, variant: "ghost", title: "Die Liste bekannter Schadprogramme jetzt aktualisieren", onClick: () => onInstall(h, "signatures"), children: "Signaturen" }),
+          !h.clamav_installed && h.reachable !== false && /* @__PURE__ */ jsx9(Button, { small: true, variant: "primary", title: "ClamAV ist ein kostenloser Virenscanner. Er wird auf dem Server installiert.", onClick: () => onInstall(h, "clamav"), children: "ClamAV installieren" }),
+          !h.lynis_installed && h.reachable !== false && /* @__PURE__ */ jsx9(Button, { small: true, title: "Lynis pr\xFCft, wie sicher der Server eingestellt ist.", onClick: () => onInstall(h, "lynis"), children: "Lynis installieren" }),
+          h.lynis_installed && /* @__PURE__ */ jsx9(
             Button,
             {
               small: true,
@@ -2069,19 +2405,23 @@ function visibleScanOutput(tail) {
   return tail.split("\n").filter((line) => !line.startsWith("@@")).join("\n").trim();
 }
 function ScansTab({ hosts, canManage, onStarted }) {
-  const [scans, setScans] = useState6(null);
-  const [showWatch, setShowWatch] = useState6(false);
-  const [open, setOpen] = useState6(null);
-  const [kind, setKind] = useState6("quick");
-  const [target, setTarget] = useState6("all");
-  const [paths, setPaths] = useState6("");
-  const [msg, setMsg] = useState6(null);
+  const [scans, setScans] = useState8(null);
+  const [showWatch, setShowWatch] = useState8(false);
+  const [open, setOpen] = useState8(null);
+  const [kind, setKind] = useState8("quick");
+  const [target, setTarget] = useState8("all");
+  const [paths, setPaths] = useState8("");
+  const [msg, setMsg] = useState8(null);
+  const [loadError, setLoadError] = useState8(null);
   const hostFilter = useContext3(HostFilter);
   useEffect7(() => {
     setTarget(hostFilter ?? "all");
   }, [hostFilter]);
   const load = useCallback5(() => {
-    call(`${API}/scans?include_watch=${showWatch}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}`).then(setScans).catch(() => setScans([]));
+    call(`${API}/scans?include_watch=${showWatch}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}`).then((rows) => {
+      setScans(rows);
+      setLoadError(null);
+    }).catch((err) => setLoadError(errorText(err)));
   }, [showWatch, hostFilter]);
   useEffect7(() => {
     load();
@@ -2096,97 +2436,102 @@ function ScansTab({ hosts, canManage, onStarted }) {
     try {
       const body = { kind, host_ids: target === "all" ? "all" : [target], paths: kind === "custom" ? paths.split(/[\n,]/).map((p) => p.trim()).filter(Boolean) : null };
       const r = await call(`${API}/scans`, { method: "POST", body: JSON.stringify(body) });
-      setMsg({ kind: "ok", text: r.scans.length ? `${r.scans.length} Scan(s) gestartet.` : "L\xE4uft bereits oder kein Server verf\xFCgbar." });
+      setMsg({ kind: "ok", text: r.scans.length ? `${count(r.scans.length, "Scan", "Scans")} gestartet.` : "L\xE4uft bereits oder kein Server verf\xFCgbar." });
       load();
       onStarted();
     } catch (err) {
       setMsg({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
   }
-  return /* @__PURE__ */ jsxs6("div", { className: "space-y-5", children: [
-    canManage && /* @__PURE__ */ jsxs6(Card, { title: "Scan starten", description: "Schnellscan pr\xFCft typische Ablageorte (tmp, home, root), der Tiefenscan das ganze System \u2013 das kann Stunden dauern.", children: [
-      msg && /* @__PURE__ */ jsx7(Notice, { text: msg.text, kind: msg.kind, onClose: () => setMsg(null) }),
-      /* @__PURE__ */ jsxs6("div", { className: "flex flex-wrap items-end gap-3", children: [
-        /* @__PURE__ */ jsxs6("label", { className: "text-sm", children: [
-          /* @__PURE__ */ jsx7("span", { className: "mb-1.5 block text-white/70", children: "Art" }),
-          /* @__PURE__ */ jsxs6("select", { "aria-label": "Scan-Art", value: kind, onChange: (e) => setKind(e.target.value), className: `${inputClass} w-44`, children: [
-            /* @__PURE__ */ jsx7("option", { value: "quick", children: "Schnellscan" }),
-            /* @__PURE__ */ jsx7("option", { value: "deep", children: "Tiefenscan" }),
-            /* @__PURE__ */ jsx7("option", { value: "custom", children: "Bestimmte Ordner" })
+  return /* @__PURE__ */ jsxs8("div", { className: "space-y-5", children: [
+    canManage && /* @__PURE__ */ jsxs8(Card, { title: "Scan starten", description: "Schnellscan pr\xFCft typische Ablageorte (tmp, home, root), der Tiefenscan das ganze System \u2013 das kann Stunden dauern.", children: [
+      msg && /* @__PURE__ */ jsx9(Notice, { text: msg.text, kind: msg.kind, onClose: () => setMsg(null) }),
+      /* @__PURE__ */ jsxs8("div", { className: "flex flex-wrap items-end gap-3", children: [
+        /* @__PURE__ */ jsxs8("label", { className: "text-sm", children: [
+          /* @__PURE__ */ jsx9("span", { className: "mb-1.5 block text-white/70", children: "Art" }),
+          /* @__PURE__ */ jsxs8("select", { "aria-label": "Scan-Art", value: kind, onChange: (e) => setKind(e.target.value), className: `${inputClass} w-44`, children: [
+            /* @__PURE__ */ jsx9("option", { value: "quick", children: "Schnellscan" }),
+            /* @__PURE__ */ jsx9("option", { value: "deep", children: "Tiefenscan" }),
+            /* @__PURE__ */ jsx9("option", { value: "custom", children: "Bestimmte Ordner" })
           ] })
         ] }),
-        /* @__PURE__ */ jsxs6("label", { className: "text-sm", children: [
-          /* @__PURE__ */ jsx7("span", { className: "mb-1.5 block text-white/70", children: "Server" }),
-          /* @__PURE__ */ jsxs6("select", { "aria-label": "Scan-Ziel", value: target, onChange: (e) => setTarget(e.target.value), className: `${inputClass} w-52`, children: [
-            /* @__PURE__ */ jsx7("option", { value: "all", children: "Alle Server" }),
-            hosts.map((h) => /* @__PURE__ */ jsx7("option", { value: h.host_id, children: h.host_name }, h.host_id))
+        /* @__PURE__ */ jsxs8("label", { className: "text-sm", children: [
+          /* @__PURE__ */ jsx9("span", { className: "mb-1.5 block text-white/70", children: "Server" }),
+          /* @__PURE__ */ jsxs8("select", { "aria-label": "Scan-Ziel", value: target, onChange: (e) => setTarget(e.target.value), className: `${inputClass} w-52`, children: [
+            /* @__PURE__ */ jsx9("option", { value: "all", children: "Alle Server" }),
+            hosts.map((h) => /* @__PURE__ */ jsx9("option", { value: h.host_id, children: h.host_name }, h.host_id))
           ] })
         ] }),
-        kind === "custom" && /* @__PURE__ */ jsxs6("label", { className: "min-w-[16rem] flex-1 text-sm", children: [
-          /* @__PURE__ */ jsx7("span", { className: "mb-1.5 block text-white/70", children: "Ordner (Komma-getrennt)" }),
-          /* @__PURE__ */ jsx7("input", { "aria-label": "Ordner", value: paths, placeholder: "/var/www, /srv/uploads", onChange: (e) => setPaths(e.target.value), className: `${inputClass} font-mono` })
+        kind === "custom" && /* @__PURE__ */ jsxs8("label", { className: "min-w-[16rem] flex-1 text-sm", children: [
+          /* @__PURE__ */ jsx9("span", { className: "mb-1.5 block text-white/70", children: "Ordner (Komma-getrennt)" }),
+          /* @__PURE__ */ jsx9("input", { "aria-label": "Ordner", value: paths, placeholder: "/var/www, /srv/uploads", onChange: (e) => setPaths(e.target.value), className: `${inputClass} font-mono` })
         ] }),
-        /* @__PURE__ */ jsxs6(Button, { variant: "primary", onClick: () => void start(), children: [
-          /* @__PURE__ */ jsx7(Icon, { name: "play", size: 13 }),
+        /* @__PURE__ */ jsxs8(Button, { variant: "primary", onClick: () => void start(), children: [
+          /* @__PURE__ */ jsx9(Icon, { name: "play", size: 13 }),
           " Starten"
         ] })
       ] })
     ] }),
-    /* @__PURE__ */ jsx7(
+    canManage && /* @__PURE__ */ jsx9(WatchTemplates, {}),
+    /* @__PURE__ */ jsxs8(
       Card,
       {
         title: "Verlauf",
         padded: false,
-        actions: /* @__PURE__ */ jsxs6("label", { className: "flex items-center gap-2 text-xs text-white/55", children: [
-          /* @__PURE__ */ jsx7("input", { type: "checkbox", checked: showWatch, onChange: (e) => setShowWatch(e.target.checked) }),
+        actions: /* @__PURE__ */ jsxs8("label", { className: "flex items-center gap-2 text-xs text-white/55", children: [
+          /* @__PURE__ */ jsx9("input", { type: "checkbox", checked: showWatch, onChange: (e) => setShowWatch(e.target.checked) }),
           " saubere W\xE4chter-L\xE4ufe zeigen"
         ] }),
-        children: !scans ? /* @__PURE__ */ jsx7("p", { className: "px-5 py-4 text-sm text-white/50", children: "Lade \u2026" }) : scans.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "px-5 py-6 text-sm text-white/50", children: "Noch keine Scans." }) : /* @__PURE__ */ jsx7("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "scan-list", children: scans.map((s) => {
-          const st = SCAN_STATUS[s.status] ?? { label: s.status, tone: "neutral" };
-          const isOpen = open === s.id;
-          const output = s.output_tail ? visibleScanOutput(s.output_tail) : "";
-          return /* @__PURE__ */ jsxs6("li", { className: "px-5 py-3 text-sm", children: [
-            /* @__PURE__ */ jsxs6("button", { type: "button", onClick: () => setOpen(isOpen ? null : s.id), className: "flex w-full flex-wrap items-center gap-2 text-left", children: [
-              /* @__PURE__ */ jsx7(Icon, { name: isOpen ? "chevron-down" : "chevron-right", size: 14, className: "text-white/40" }),
-              /* @__PURE__ */ jsx7(Badge, { tone: st.tone, children: st.label }),
-              /* @__PURE__ */ jsx7("span", { className: "font-medium", children: s.host_name }),
-              /* @__PURE__ */ jsx7("span", { className: "text-white/50", children: s.kind_label }),
-              s.infected > 0 && /* @__PURE__ */ jsxs6("span", { className: "text-red-300", children: [
-                s.infected,
-                " Fund(e)"
+        children: [
+          loadError && /* @__PURE__ */ jsx9("div", { className: "px-5 pt-4", children: /* @__PURE__ */ jsx9(LoadError, { what: "Der Verlauf", error: loadError, onRetry: load }) }),
+          !scans ? !loadError && /* @__PURE__ */ jsx9("p", { className: "px-5 py-4 text-sm text-white/50", children: "Lade \u2026" }) : scans.length === 0 ? /* @__PURE__ */ jsx9("p", { className: "px-5 py-6 text-sm text-white/50", children: "Noch keine Scans." }) : /* @__PURE__ */ jsx9("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "scan-list", children: scans.map((s) => {
+            const st = SCAN_STATUS[s.status] ?? { label: s.status, tone: "neutral" };
+            const isOpen = open === s.id;
+            const output = s.output_tail ? visibleScanOutput(s.output_tail) : "";
+            return /* @__PURE__ */ jsxs8("li", { className: "px-5 py-3 text-sm", children: [
+              /* @__PURE__ */ jsxs8("button", { type: "button", onClick: () => setOpen(isOpen ? null : s.id), className: "flex w-full flex-wrap items-center gap-2 text-left", children: [
+                /* @__PURE__ */ jsx9(Icon, { name: isOpen ? "chevron-down" : "chevron-right", size: 14, className: "text-white/40" }),
+                /* @__PURE__ */ jsx9(Badge, { tone: st.tone, children: st.label }),
+                /* @__PURE__ */ jsx9("span", { className: "font-medium", children: s.host_name }),
+                /* @__PURE__ */ jsx9("span", { className: "text-white/50", children: s.kind_label }),
+                s.infected > 0 && /* @__PURE__ */ jsx9("span", { className: "text-red-300", children: count(s.infected, "Fund", "Funde") }),
+                s.files_scanned != null && /* @__PURE__ */ jsxs8("span", { className: "text-xs text-white/40", children: [
+                  s.files_scanned.toLocaleString("de-DE"),
+                  " Dateien"
+                ] }),
+                /* @__PURE__ */ jsxs8("span", { className: "ml-auto text-xs text-white/40", children: [
+                  when(s.started_at),
+                  " \xB7 ",
+                  s.trigger === "schedule" ? "Zeitplan" : "manuell"
+                ] })
               ] }),
-              s.files_scanned != null && /* @__PURE__ */ jsxs6("span", { className: "text-xs text-white/40", children: [
-                s.files_scanned.toLocaleString("de-DE"),
-                " Dateien"
-              ] }),
-              /* @__PURE__ */ jsxs6("span", { className: "ml-auto text-xs text-white/40", children: [
-                when(s.started_at),
-                " \xB7 ",
-                s.trigger === "schedule" ? "Zeitplan" : "manuell"
+              s.error && /* @__PURE__ */ jsx9("p", { className: "ml-6 mt-1 text-xs text-amber-300", children: s.error }),
+              isOpen && /* @__PURE__ */ jsxs8("div", { className: "ml-6 mt-2 space-y-2", children: [
+                /* @__PURE__ */ jsxs8("p", { className: "text-xs text-white/45", children: [
+                  "Ordner: ",
+                  /* @__PURE__ */ jsx9("span", { className: "font-mono", children: s.paths.join(", ") }),
+                  s.finished_at ? ` \xB7 Dauer ${Math.max(1, Math.round((s.finished_at - s.started_at) / 60))} Min.` : ""
+                ] }),
+                output && /* @__PURE__ */ jsx9("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-[11px] text-white/75", children: output })
               ] })
-            ] }),
-            s.error && /* @__PURE__ */ jsx7("p", { className: "ml-6 mt-1 text-xs text-amber-300", children: s.error }),
-            isOpen && /* @__PURE__ */ jsxs6("div", { className: "ml-6 mt-2 space-y-2", children: [
-              /* @__PURE__ */ jsxs6("p", { className: "text-xs text-white/45", children: [
-                "Ordner: ",
-                /* @__PURE__ */ jsx7("span", { className: "font-mono", children: s.paths.join(", ") }),
-                s.finished_at ? ` \xB7 Dauer ${Math.max(1, Math.round((s.finished_at - s.started_at) / 60))} Min.` : ""
-              ] }),
-              output && /* @__PURE__ */ jsx7("pre", { className: "max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-black/40 p-2.5 font-mono text-[11px] text-white/75", children: output })
-            ] })
-          ] }, s.id);
-        }) })
+            ] }, s.id);
+          }) })
+        ]
       }
     )
   ] });
 }
 function QuarantineTab({ canManage, onChanged }) {
   const unmountSignal = useUnmountSignal();
-  const [items, setItems] = useState6(null);
-  const [filter, setFilter] = useState6("active");
-  const [msg, setMsg] = useState6(null);
+  const [items, setItems] = useState8(null);
+  const [filter, setFilter] = useState8("active");
+  const [msg, setMsg] = useState8(null);
+  const [loadError, setLoadError] = useState8(null);
   const load = useCallback5(() => {
-    call(`${API}/findings`).then(setItems).catch(() => setItems([]));
+    call(`${API}/findings`).then((rows) => {
+      setItems(rows);
+      setLoadError(null);
+    }).catch((err) => setLoadError(errorText(err)));
   }, []);
   useEffect7(() => {
     load();
@@ -2220,49 +2565,60 @@ function QuarantineTab({ canManage, onChanged }) {
       setMsg({ kind: "error", text: err instanceof Error ? err.message : String(err) });
     }
   }
-  if (!items) return /* @__PURE__ */ jsx7("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
-  if (items.length === 0) {
-    return /* @__PURE__ */ jsx7(EmptyState, { icon: "package", title: "Keine Funde", text: "Bisher wurde keine Schadsoftware gefunden. Funde landen hier \u2013 bei aktivierter automatischer Quarant\xE4ne sind sie sofort unsch\xE4dlich gemacht." });
+  const failed = loadError ? /* @__PURE__ */ jsx9(LoadError, { what: "Die Liste der Funde", error: loadError, onRetry: load }) : null;
+  if (!items) return failed ?? /* @__PURE__ */ jsx9("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
+  if (failed) {
+    return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+      failed,
+      items.length > 0 && /* @__PURE__ */ jsxs8("p", { className: "text-xs text-white/45", children: [
+        "Zuletzt geladener Stand: ",
+        count(items.length, "Eintrag", "Eintr\xE4ge"),
+        "."
+      ] })
+    ] });
   }
-  return /* @__PURE__ */ jsxs6(Fragment5, { children: [
-    msg && /* @__PURE__ */ jsx7(Notice, { text: msg.text, kind: msg.kind, onClose: () => setMsg(null) }),
-    /* @__PURE__ */ jsx7(
+  if (items.length === 0) {
+    return /* @__PURE__ */ jsx9(EmptyState, { icon: "package", title: "Keine Funde", text: "Bisher wurde keine Schadsoftware gefunden. Funde landen hier \u2013 bei aktivierter automatischer Quarant\xE4ne sind sie sofort unsch\xE4dlich gemacht." });
+  }
+  return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+    msg && /* @__PURE__ */ jsx9(Notice, { text: msg.text, kind: msg.kind, onClose: () => setMsg(null) }),
+    /* @__PURE__ */ jsx9(
       Card,
       {
         title: "Funde & Quarant\xE4ne",
         description: "Dateien in Quarant\xE4ne sind unlesbar und nicht ausf\xFChrbar (Rechte 000) im Tresor auf dem Server, auf dem sie gefunden wurden.",
         padded: false,
-        actions: /* @__PURE__ */ jsxs6("select", { "aria-label": "Filter", value: filter, onChange: (e) => setFilter(e.target.value), className: `${inputClass} w-auto py-1 text-xs`, children: [
-          /* @__PURE__ */ jsx7("option", { value: "active", children: "Offen & in Quarant\xE4ne" }),
-          /* @__PURE__ */ jsx7("option", { value: "all", children: "Alle, inkl. erledigt" })
+        actions: /* @__PURE__ */ jsxs8("select", { "aria-label": "Filter", value: filter, onChange: (e) => setFilter(e.target.value), className: `${inputClass} w-auto py-1 text-xs`, children: [
+          /* @__PURE__ */ jsx9("option", { value: "active", children: "Offen & in Quarant\xE4ne" }),
+          /* @__PURE__ */ jsx9("option", { value: "all", children: "Alle, inkl. erledigt" })
         ] }),
-        children: /* @__PURE__ */ jsxs6("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "findings", children: [
-          visible.length === 0 && /* @__PURE__ */ jsx7("li", { className: "px-5 py-6 text-sm text-white/50", children: "Nichts offen." }),
+        children: /* @__PURE__ */ jsxs8("ul", { className: "divide-y divide-white/[0.05]", "data-testid": "findings", children: [
+          visible.length === 0 && /* @__PURE__ */ jsx9("li", { className: "px-5 py-6 text-sm text-white/50", children: "Nichts offen." }),
           visible.map((f) => {
             const st = FINDING_STATUS[f.status] ?? { label: f.status, tone: "neutral" };
-            return /* @__PURE__ */ jsxs6("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
-              /* @__PURE__ */ jsxs6("div", { className: "min-w-0 flex-1", children: [
-                /* @__PURE__ */ jsxs6("p", { className: "flex flex-wrap items-center gap-2", children: [
-                  /* @__PURE__ */ jsx7(Badge, { tone: st.tone, children: st.label }),
-                  /* @__PURE__ */ jsx7("span", { className: "font-medium text-red-200", children: f.signature })
+            return /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-3 px-5 py-3 text-sm", children: [
+              /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-1", children: [
+                /* @__PURE__ */ jsxs8("p", { className: "flex flex-wrap items-center gap-2", children: [
+                  /* @__PURE__ */ jsx9(Badge, { tone: st.tone, children: st.label }),
+                  /* @__PURE__ */ jsx9("span", { className: "font-medium text-red-200", children: f.signature })
                 ] }),
-                /* @__PURE__ */ jsxs6("p", { className: "mt-0.5 truncate font-mono text-xs text-white/70", children: [
+                /* @__PURE__ */ jsxs8("p", { className: "mt-0.5 truncate font-mono text-xs text-white/70", children: [
                   f.host_name,
                   ": ",
                   f.path
                 ] }),
-                /* @__PURE__ */ jsxs6("p", { className: "text-xs text-white/40", children: [
+                /* @__PURE__ */ jsxs8("p", { className: "text-xs text-white/40", children: [
                   "gefunden ",
                   when(f.detected_at),
                   f.status_changed_at ? ` \xB7 ge\xE4ndert ${when(f.status_changed_at)}` : ""
                 ] }),
-                f.note && /* @__PURE__ */ jsx7("p", { className: "text-xs text-amber-300", children: f.note })
+                f.note && /* @__PURE__ */ jsx9("p", { className: "text-xs text-amber-300", children: f.note })
               ] }),
-              canManage && /* @__PURE__ */ jsxs6("div", { className: "flex gap-1", children: [
-                f.status === "detected" && /* @__PURE__ */ jsx7(Button, { small: true, variant: "primary", onClick: () => void act(f, "quarantine"), children: "In Quarant\xE4ne" }),
-                f.status === "detected" && /* @__PURE__ */ jsx7(Button, { small: true, variant: "ghost", onClick: () => void act(f, "ignore"), children: "Ignorieren" }),
-                f.status === "quarantined" && /* @__PURE__ */ jsx7(Button, { small: true, onClick: () => void act(f, "restore"), children: "Wiederherstellen" }),
-                f.status === "quarantined" && /* @__PURE__ */ jsx7(Button, { small: true, variant: "danger", onClick: () => void act(f, "delete"), children: "Endg\xFCltig l\xF6schen" })
+              canManage && /* @__PURE__ */ jsxs8("div", { className: "flex gap-1", children: [
+                f.status === "detected" && /* @__PURE__ */ jsx9(Button, { small: true, variant: "primary", onClick: () => void act(f, "quarantine"), children: "In Quarant\xE4ne" }),
+                f.status === "detected" && /* @__PURE__ */ jsx9(Button, { small: true, variant: "ghost", onClick: () => void act(f, "ignore"), children: "Ignorieren" }),
+                f.status === "quarantined" && /* @__PURE__ */ jsx9(Button, { small: true, onClick: () => void act(f, "restore"), children: "Wiederherstellen" }),
+                f.status === "quarantined" && /* @__PURE__ */ jsx9(Button, { small: true, variant: "danger", onClick: () => void act(f, "delete"), children: "Endg\xFCltig l\xF6schen" })
               ] })
             ] }, f.id);
           })
@@ -2272,74 +2628,83 @@ function QuarantineTab({ canManage, onChanged }) {
   ] });
 }
 function HardeningTab({ canManage, hosts, onAudit }) {
-  const [audits, setAudits] = useState6(null);
-  const [open, setOpen] = useState6(null);
+  const [audits, setAudits] = useState8(null);
+  const [open, setOpen] = useState8(null);
   const runningHosts = useForHost(hosts.filter((h) => h.auditing));
   const runningKey = hosts.filter((h) => h.auditing).map((h) => h.host_id).sort().join(",");
+  const [loadError, setLoadError] = useState8(null);
+  const [reload, setReload] = useState8(0);
   useEffect7(() => {
-    call(`${API}/audits`).then((a) => setAudits(a.sort((x, y) => (x.hardening_index ?? 0) - (y.hardening_index ?? 0)))).catch(() => setAudits([]));
-  }, [runningKey]);
+    call(`${API}/audits`).then((a) => {
+      setAudits(a.sort((x, y) => (x.hardening_index ?? 0) - (y.hardening_index ?? 0)));
+      setLoadError(null);
+    }).catch((err) => setLoadError(errorText(err)));
+  }, [runningKey, reload]);
   const shown = useForHost(audits ?? []);
-  const runningBox = runningHosts.length > 0 && /* @__PURE__ */ jsxs6(Card, { title: "L\xE4uft gerade", className: "mb-4", children: [
-    /* @__PURE__ */ jsx7("ul", { className: "space-y-1.5 text-sm", "data-testid": "audits-running", children: runningHosts.map((h) => /* @__PURE__ */ jsxs6("li", { className: "flex flex-wrap items-center gap-2", children: [
-      /* @__PURE__ */ jsx7("span", { className: "font-medium", children: h.host_name }),
-      /* @__PURE__ */ jsx7(AuditRunning, { run: h.audit_run })
+  const runningBox = runningHosts.length > 0 && /* @__PURE__ */ jsxs8(Card, { title: "L\xE4uft gerade", className: "mb-4", children: [
+    /* @__PURE__ */ jsx9("ul", { className: "space-y-1.5 text-sm", "data-testid": "audits-running", children: runningHosts.map((h) => /* @__PURE__ */ jsxs8("li", { className: "flex flex-wrap items-center gap-2", children: [
+      /* @__PURE__ */ jsx9("span", { className: "font-medium", children: h.host_name }),
+      /* @__PURE__ */ jsx9(AuditRunning, { run: h.audit_run })
     ] }, h.host_id)) }),
-    /* @__PURE__ */ jsxs6("p", { className: "mt-2 text-xs text-white/45", children: [
+    /* @__PURE__ */ jsxs8("p", { className: "mt-2 text-xs text-white/45", children: [
       AUDIT_DURATION_HINT,
       " Das Ergebnis erscheint hier, sobald es fertig ist."
     ] })
   ] });
-  if (!audits) return /* @__PURE__ */ jsx7("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
+  const failed = loadError ? /* @__PURE__ */ jsx9(LoadError, { what: "Die Liste der H\xE4rtungs-Audits", error: loadError, onRetry: () => setReload((n) => n + 1) }) : null;
+  if (!audits) return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+    runningBox,
+    failed ?? /* @__PURE__ */ jsx9("p", { className: "text-sm text-white/50", children: "Lade \u2026" })
+  ] });
+  if (failed) return /* @__PURE__ */ jsxs8(Fragment5, { children: [
+    runningBox,
+    failed
+  ] });
   if (shown.length === 0) {
-    return /* @__PURE__ */ jsxs6(Fragment5, { children: [
+    return /* @__PURE__ */ jsxs8(Fragment5, { children: [
       runningBox,
-      !runningBox && /* @__PURE__ */ jsx7(
+      !runningBox && /* @__PURE__ */ jsx9(
         EmptyState,
         {
           icon: "clock",
           title: "Noch kein H\xE4rtungs-Audit",
           text: "Lynis ist ein kostenloses Pr\xFCfprogramm. Es sucht auf jedem Server nach unsicheren Einstellungen (SSH, Passwortregeln, offene Dienste \u2026) und vergibt einen H\xE4rtungswert von 0 bis 100 \u2013 je h\xF6her, desto sicherer.",
-          action: canManage && /* @__PURE__ */ jsx7(Button, { variant: "primary", onClick: onAudit, children: "Audit jetzt starten" })
+          action: canManage && /* @__PURE__ */ jsx9(Button, { variant: "primary", onClick: onAudit, children: "Audit jetzt starten" })
         }
       )
     ] });
   }
-  return /* @__PURE__ */ jsxs6(Fragment5, { children: [
+  const top = topIssues(shown);
+  return /* @__PURE__ */ jsxs8(Fragment5, { children: [
     runningBox,
-    /* @__PURE__ */ jsx7("div", { className: "grid gap-4 lg:grid-cols-2", children: shown.map((a) => /* @__PURE__ */ jsx7(
+    top.length > 0 && /* @__PURE__ */ jsx9(Card, { title: "Deine wichtigsten Baustellen", description: "Die Hinweise mit der gr\xF6\xDFten Wirkung auf den angezeigten Servern.", className: "mb-4", children: /* @__PURE__ */ jsx9(TopIssues, { issues: top }) }),
+    /* @__PURE__ */ jsx9("div", { className: "grid gap-4 lg:grid-cols-2", children: shown.map((a) => /* @__PURE__ */ jsx9(
       Card,
       {
         title: a.host_name,
         description: `${a.status === "ok" ? "Gepr\xFCft" : "Versucht"} ${when(a.created_at)}`,
-        actions: a.hardening_index != null && /* @__PURE__ */ jsx7("span", { className: `text-2xl font-semibold ${a.hardening_index >= 70 ? "text-emerald-300" : "text-amber-300"}`, children: a.hardening_index }),
-        children: a.status !== "ok" ? /* @__PURE__ */ jsxs6(Fragment5, { children: [
-          /* @__PURE__ */ jsxs6("p", { className: "text-sm text-amber-300", children: [
+        actions: a.hardening_index != null && /* @__PURE__ */ jsx9("span", { className: `text-2xl font-semibold ${a.hardening_index >= 70 ? "text-emerald-300" : "text-amber-300"}`, children: a.hardening_index }),
+        children: a.status !== "ok" ? /* @__PURE__ */ jsxs8(Fragment5, { children: [
+          /* @__PURE__ */ jsxs8("p", { className: "text-sm text-amber-300", children: [
             "Letztes Audit fehlgeschlagen (",
             ago(a.created_at),
             ")"
           ] }),
-          a.error && /* @__PURE__ */ jsx7("p", { className: "mt-1 break-words text-xs text-white/50", children: a.error })
-        ] }) : /* @__PURE__ */ jsxs6(Fragment5, { children: [
-          /* @__PURE__ */ jsxs6("p", { className: "mb-2 text-xs uppercase tracking-wider text-white/40", children: [
+          a.error && /* @__PURE__ */ jsx9("p", { className: "mt-1 break-words text-xs text-white/50", children: a.error })
+        ] }) : /* @__PURE__ */ jsxs8(Fragment5, { children: [
+          /* @__PURE__ */ jsxs8("p", { className: "mb-2 text-xs uppercase tracking-wider text-white/40", children: [
             "Warnungen (",
             a.warnings.length,
             ")"
           ] }),
-          a.warnings.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "mb-3 text-sm text-emerald-300", children: "Keine Warnungen." }) : /* @__PURE__ */ jsx7("ul", { className: "mb-3 space-y-1 text-sm", children: a.warnings.map((w) => /* @__PURE__ */ jsxs6("li", { className: "text-red-200", children: [
-            "\u2022 ",
-            w
-          ] }, w)) }),
-          /* @__PURE__ */ jsxs6("button", { type: "button", onClick: () => setOpen(open === a.id ? null : a.id), className: "flex items-center gap-1 text-xs text-white/55 hover:text-white", children: [
-            /* @__PURE__ */ jsx7(Icon, { name: open === a.id ? "chevron-down" : "chevron-right", size: 12 }),
+          a.warnings.length === 0 ? /* @__PURE__ */ jsx9("p", { className: "mb-3 text-sm text-emerald-300", children: "Keine Warnungen." }) : /* @__PURE__ */ jsx9("ul", { className: "mb-3 space-y-1 text-sm", children: a.warnings.map((w, i) => /* @__PURE__ */ jsx9(LynisFinding, { entry: w, help: a.help, tone: "warning" }, `${i}:${w}`)) }),
+          /* @__PURE__ */ jsxs8("button", { type: "button", onClick: () => setOpen(open === a.id ? null : a.id), className: "flex items-center gap-1 text-xs text-white/55 hover:text-white", children: [
+            /* @__PURE__ */ jsx9(Icon, { name: open === a.id ? "chevron-down" : "chevron-right", size: 12 }),
             " ",
             a.suggestions.length,
             " Verbesserungsvorschl\xE4ge"
           ] }),
-          open === a.id && /* @__PURE__ */ jsx7("ul", { className: "mt-2 max-h-72 space-y-1 overflow-auto text-xs text-white/70", children: a.suggestions.map((s) => /* @__PURE__ */ jsxs6("li", { children: [
-            "\u2022 ",
-            s
-          ] }, s)) })
+          open === a.id && /* @__PURE__ */ jsx9("ul", { className: "mt-2 max-h-72 space-y-1 overflow-auto text-xs text-white/70", children: a.suggestions.map((s, i) => /* @__PURE__ */ jsx9(LynisFinding, { entry: s, help: a.help, tone: "suggestion" }, `${i}:${s}`)) })
         ] })
       },
       a.id
@@ -2347,5 +2712,7 @@ function HardeningTab({ canManage, hosts, onAudit }) {
   ] });
 }
 export {
-  SocPage
+  SocPage,
+  findingsLast30Days,
+  hostScanBadge
 };

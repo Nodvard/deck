@@ -215,13 +215,15 @@ describe("Einbruchschutz", () => {
     expect(evRoot.getByText(/ohne Programm \(Kernel\)/)).toBeInTheDocument();
   });
 
-  it("übernimmt einen neuen Port als bekannt", async () => {
+  it("übernimmt einen neuen Port als bekannt („Ist in Ordnung“, wie bei jedem Ereignis)", async () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));
     render(<GuardTab canManage />);
     const ev = within(await screen.findByTestId("event-ev1"));
-    fireEvent.click(ev.getByRole("button", { name: "Als bekannt übernehmen" }));
-    await waitFor(() => expect(screen.getByText("Neuer offener Port: als bekannt übernommen.")).toBeInTheDocument());
+    const button = ev.getByRole("button", { name: "Ist in Ordnung" });
+    expect(button).toHaveAttribute("title", "Der Port gilt danach als bekannt und meldet sich nicht wieder.");
+    fireEvent.click(button);
+    await waitFor(() => expect(screen.getByText("Neuer offener Port: als in Ordnung markiert.")).toBeInTheDocument());
     expect(calls.some((c) => c.url.endsWith("/events/ev1/acknowledge") && c.method === "POST")).toBe(true);
   });
 
@@ -236,7 +238,7 @@ describe("Einbruchschutz", () => {
     expect(calls.find((c) => c.url.endsWith("/hosts/h-pve2/ban"))?.body).toEqual({ ip: "203.0.113.9", unban: false });
   });
 
-  it("startet die Prüfung und bestätigt alle Ereignisse", async () => {
+  it("startet die Prüfung und hakt alle Ereignisse ab", async () => {
     const calls: Call[] = [];
     vi.stubGlobal("fetch", mockFetch(calls));
     render(<GuardTab canManage />);
@@ -244,8 +246,8 @@ describe("Einbruchschutz", () => {
 
     fireEvent.click(screen.getByRole("button", { name: /Alle jetzt prüfen/ }));
     await waitFor(() => expect(screen.getByText("Prüfung: 1 Server werden geprüft …")).toBeInTheDocument());
-    fireEvent.click(screen.getByRole("button", { name: "Alle bestätigen" }));
-    await waitFor(() => expect(screen.getByText("Ereignisse: 2 bestätigt.")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Alle abhaken" }));
+    await waitFor(() => expect(screen.getByText("Ereignisse: 2 abgehakt.")).toBeInTheDocument());
   });
 
   it("ohne Verwaltungsrecht nur lesen", async () => {
@@ -253,6 +255,31 @@ describe("Einbruchschutz", () => {
     render(<GuardTab canManage={false} />);
     await screen.findByTestId("guard-h-pve2");
     expect(screen.queryByRole("button", { name: "Sperren" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Als bekannt übernehmen" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Ist in Ordnung" })).toBeNull();
+  });
+});
+
+describe("Ereignisse abhaken: Wortwahl je Art", () => {
+  it("„Ist in Ordnung“ nur, wo ein neuer Stand übernommen wird; bei einem Angriff „Zur Kenntnis genommen“", async () => {
+    const attack: SecurityEvent = {
+      id: "ev3", host_id: "h-pve2", host_name: "pve2", kind: "bruteforce", kind_label: "Angriff auf SSH", severity: "critical",
+      title: "Angriff auf SSH: 120 Fehlversuche", acknowledged: false, created_at: now - 10, detail: {},
+    };
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/defender/events") && (init?.method ?? "GET") === "GET") return new Response(JSON.stringify([...EVENTS, attack]), { status: 200 });
+      if (url.endsWith("/events/ev3/acknowledge")) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+      return base(input, init);
+    }));
+    render(<GuardTab canManage />);
+    const file = within(await screen.findByTestId("event-ev2")).getByRole("button", { name: "Ist in Ordnung" });
+    expect(file).toHaveAttribute("title", "Der neue Stand der Datei gilt danach als richtig.");
+    const ev3 = within(screen.getByTestId("event-ev3"));
+    expect(ev3.queryByRole("button", { name: "Ist in Ordnung" })).toBeNull();
+    const ack = ev3.getByRole("button", { name: "Zur Kenntnis genommen" });
+    expect(ack).toHaveAttribute("title", "Das Ereignis wird abgehakt. Gesperrt oder geändert wird dadurch nichts.");
+    fireEvent.click(ack);
+    await waitFor(() => expect(screen.getByText("Angriff auf SSH: zur Kenntnis genommen.")).toBeInTheDocument());
   });
 });

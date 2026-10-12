@@ -10,6 +10,7 @@ import { api, ApiError } from "../lib/api";
 import { USERNAME_HINT, emailProblem, passwordProblem, usernameProblem } from "../lib/credentials";
 import { confirmDialog } from "../state/dialogs";
 import { useAuthStore } from "../state/auth";
+import { SecondFactorField, isTotpMissing, isTotpRejected, useTwoFactorEnabled } from "./settings/SecondFactorField";
 import { Badge, Button, Card, Field, NoticeLine, PageHeader, inputClass, type Notice } from "./settings/ui";
 
 interface Role {
@@ -17,6 +18,12 @@ interface Role {
   name: string;
   description: string;
   is_builtin: boolean;
+  /** Die Rolle darf andere Konten verwalten: Wer sie vergibt, bestätigt mit eigenem Passwort und Code. */
+  manages_users?: boolean;
+}
+
+function grantsAdmin(roles: Role[], ids: string[]): boolean {
+  return ids.some((id) => roles.find((r) => r.id === id)?.manages_users === true);
 }
 
 interface UserRow {
@@ -49,6 +56,25 @@ function errorOf(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
 }
 
+const ASK_FOR_CODE = "Gib zusätzlich deinen eigenen Zwei-Faktor-Code ein.";
+const OWN_PASSWORD_HINT = "Zur Sicherheit: dein eigenes Passwort, nicht das der anderen Person.";
+const OWN_PASSWORD_MISSING = "Zur Bestätigung brauchst du dein eigenes Passwort.";
+
+/** Eigenes Passwort und, bei eigener Zwei-Faktor-Anmeldung, der eigene Code des handelnden Admins. */
+function OwnConfirmation({ password, onPassword, code, onCode, needsCode, note }: {
+  password: string; onPassword: (v: string) => void; code: string; onCode: (v: string) => void; needsCode: boolean; note: string;
+}): JSX.Element {
+  return (
+    <div className="mt-4 grid gap-4 sm:grid-cols-3">
+      <Field label="Dein eigenes Passwort" hint={OWN_PASSWORD_HINT}>
+        <input type="password" autoComplete="current-password" value={password} onChange={(e) => onPassword(e.target.value)} className={inputClass} />
+      </Field>
+      {needsCode && <SecondFactorField value={code} onChange={onCode} allowRecovery={false} />}
+      <p className="text-xs text-white/50 sm:self-end">{note}</p>
+    </div>
+  );
+}
+
 function RolePicker({ roles, selected, onToggle }: { roles: Role[]; selected: string[]; onToggle: (id: string) => void }) {
   return (
     <div className="grid gap-2 sm:grid-cols-2">
@@ -79,11 +105,28 @@ export function UsersPage(): JSX.Element {
   const [notice, setNotice] = useState<Notice>(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [createOwnPassword, setCreateOwnPassword] = useState("");
+  const [createCode, setCreateCode] = useState("");
+  const [createAskedForCode, setCreateAskedForCode] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [resetTarget, setResetTarget] = useState<UserRow | null>(null);
   const [resetPassword, setResetPassword] = useState("");
+  const [resetCode, setResetCode] = useState("");
+  const [resetAskedForCode, setResetAskedForCode] = useState(false);
   const [resetNotice, setResetNotice] = useState<Notice>(null);
   const [resetBusy, setResetBusy] = useState(false);
+  // Hat der handelnde Admin selbst Zwei-Faktor an, verlangt der Server bei fremden Zugängen auch seinen Code.
+  const ownTwoFactor = useTwoFactorEnabled(canWrite);
+  const resetNeedsCode = ownTwoFactor === true || resetAskedForCode;
+  const createNeedsCode = ownTwoFactor === true || createAskedForCode;
+
+  function closeReset() {
+    setResetTarget(null);
+    setResetPassword("");
+    setResetCode("");
+    setResetAskedForCode(false);
+    setResetNotice(null);
+  }
 
   function load() {
     setError(null);
@@ -103,17 +146,32 @@ export function UsersPage(): JSX.Element {
       setNotice({ kind: "error", text: problem });
       return;
     }
+    const confirm = grantsAdmin(roles, form.role_ids);
+    if (confirm && !createOwnPassword) {
+      setNotice({ kind: "error", text: OWN_PASSWORD_MISSING });
+      return;
+    }
     try {
       await api.post("/users", {
         username: form.username, password: form.password,
         display_name: form.display_name, email: form.email.trim() || null, role_ids: form.role_ids,
+        ...(confirm ? { current_password: createOwnPassword, ...(createNeedsCode ? { totp_code: createCode.trim() } : {}) } : {}),
       });
       setNotice({ kind: "ok", text: `Benutzer „${form.username}“ angelegt.` });
       setForm(EMPTY_FORM);
+      setCreateOwnPassword("");
+      setCreateCode("");
+      setCreateAskedForCode(false);
       setShowForm(false);
       load();
     } catch (err) {
-      setNotice({ kind: "error", text: errorOf(err) });
+      if (isTotpMissing(err)) {
+        setCreateAskedForCode(true);
+        setNotice({ kind: "error", text: ASK_FOR_CODE });
+      } else {
+        if (isTotpRejected(err)) setCreateCode("");
+        setNotice({ kind: "error", text: errorOf(err) });
+      }
     }
   }
 
@@ -133,13 +191,21 @@ export function UsersPage(): JSX.Element {
     setResetNotice(null);
     setResetBusy(true);
     try {
-      await api.post(`/users/${resetTarget.id}/reset-2fa`, { current_password: resetPassword });
+      await api.post(
+        `/users/${resetTarget.id}/reset-2fa`,
+        resetNeedsCode ? { current_password: resetPassword, totp_code: resetCode.trim() } : { current_password: resetPassword },
+      );
       setNotice({ kind: "ok", text: `Zwei-Faktor-Anmeldung von „${resetTarget.username}“ zurückgesetzt, alle Anmeldungen beendet.` });
-      setResetTarget(null);
-      setResetPassword("");
+      closeReset();
       load();
     } catch (err) {
-      setResetNotice({ kind: "error", text: errorOf(err) });
+      if (isTotpMissing(err)) {
+        setResetAskedForCode(true);
+        setResetNotice({ kind: "error", text: ASK_FOR_CODE });
+      } else {
+        if (isTotpRejected(err)) setResetCode("");
+        setResetNotice({ kind: "error", text: errorOf(err) });
+      }
     } finally {
       setResetBusy(false);
     }
@@ -200,6 +266,13 @@ export function UsersPage(): JSX.Element {
               selected={form.role_ids}
               onToggle={(id) => setForm((f) => ({ ...f, role_ids: f.role_ids.includes(id) ? f.role_ids.filter((r) => r !== id) : [...f.role_ids, id] }))}
             />
+            {grantsAdmin(roles, form.role_ids) && (
+              <OwnConfirmation
+                password={createOwnPassword} onPassword={setCreateOwnPassword} code={createCode} onCode={setCreateCode}
+                needsCode={createNeedsCode}
+                note="Diese Rolle darf andere Konten verwalten. Unter „Meldungen“ steht danach, dass du das Konto angelegt hast."
+              />
+            )}
           </Card>
         </form>
       )}
@@ -210,16 +283,24 @@ export function UsersPage(): JSX.Element {
           description="Die Person wird überall abgemeldet und kann sich danach nur mit dem Passwort anmelden, bis sie die Zwei-Faktor-Anmeldung unter „Mein Konto“ neu einrichtet."
           footer={
             <>
-              <Button variant="ghost" onClick={() => { setResetTarget(null); setResetPassword(""); setResetNotice(null); }}>Abbrechen</Button>
-              <Button variant="danger" busy={resetBusy} disabled={!resetPassword} onClick={() => void resetTwoFactor()}>Zurücksetzen</Button>
+              <Button variant="ghost" onClick={closeReset}>Abbrechen</Button>
+              <Button
+                variant="danger"
+                busy={resetBusy}
+                disabled={!resetPassword || (resetNeedsCode && !resetCode.trim())}
+                onClick={() => void resetTwoFactor()}
+              >
+                Zurücksetzen
+              </Button>
             </>
           }
         >
           <NoticeLine notice={resetNotice} />
           <div className="max-w-sm">
-            <Field label="Dein eigenes Passwort" hint="Zur Sicherheit wird dein aktuelles Passwort verlangt.">
+            <Field label="Dein eigenes Passwort" hint={OWN_PASSWORD_HINT}>
               <input type="password" autoComplete="current-password" value={resetPassword} onChange={(e) => setResetPassword(e.target.value)} className={inputClass} />
             </Field>
+            {resetNeedsCode && <SecondFactorField value={resetCode} onChange={setResetCode} allowRecovery={false} className="mt-4" />}
           </div>
         </Card>
       )}
@@ -253,7 +334,7 @@ export function UsersPage(): JSX.Element {
                   <div className="flex items-center gap-1.5">
                     <Button onClick={() => setEditingId(editingId === user.id ? null : user.id)}><Pencil size={13} /> Bearbeiten</Button>
                     {user.totp_enabled && !user.is_owner && user.id !== currentUserId && (
-                      <Button onClick={() => { setResetTarget(user); setResetPassword(""); setResetNotice(null); }}>Zwei-Faktor zurücksetzen</Button>
+                      <Button onClick={() => { closeReset(); setResetTarget(user); }}>Zwei-Faktor zurücksetzen</Button>
                     )}
                     {!user.is_owner && user.id !== currentUserId && (
                       <Button onClick={() => void toggleActive(user)}>{user.is_active ? "Deaktivieren" : "Aktivieren"}</Button>
@@ -269,6 +350,7 @@ export function UsersPage(): JSX.Element {
                   user={user}
                   isSelf={user.id === currentUserId}
                   roles={roles}
+                  ownTwoFactor={ownTwoFactor === true}
                   onCancel={() => setEditingId(null)}
                   onSaved={(text) => { setEditingId(null); setNotice({ kind: "ok", text }); load(); }}
                 />
@@ -281,15 +363,26 @@ export function UsersPage(): JSX.Element {
   );
 }
 
-function EditUser({ user, isSelf, roles, onCancel, onSaved }: { user: UserRow; isSelf: boolean; roles: Role[]; onCancel: () => void; onSaved: (text: string) => void }) {
+function EditUser({ user, isSelf, roles, ownTwoFactor = false, onCancel, onSaved }: { user: UserRow; isSelf: boolean; roles: Role[]; ownTwoFactor?: boolean; onCancel: () => void; onSaved: (text: string) => void }) {
   const [displayName, setDisplayName] = useState(user.display_name);
   const [email, setEmail] = useState(user.email ?? "");
   const [roleIds, setRoleIds] = useState(user.roles.map((r) => r.id));
   const [password, setPassword] = useState("");
+  const [ownPassword, setOwnPassword] = useState("");
+  const [code, setCode] = useState("");
+  const [askedForCode, setAskedForCode] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const [busy, setBusy] = useState(false);
   // Eigenes Passwort nur unter „Mein Konto“ (mit dem alten Passwort), das des Inhabers nur er selbst.
   const passwordLocked = isSelf || user.is_owner;
+  // Ein fremdes Passwort setzen oder Rollen vergeben, die Konten verwalten: der Server verlangt das eigene Passwort
+  // und, bei Zwei-Faktor, den eigenen Code.
+  const settingPassword = !passwordLocked && password.length > 0;
+  const before = user.roles.map((r) => r.id);
+  const rolesChanged = roleIds.length !== before.length || roleIds.some((id) => !before.includes(id));
+  const givingAdmin = !user.is_owner && rolesChanged && grantsAdmin(roles, roleIds);
+  const needsConfirmation = settingPassword || givingAdmin;
+  const needsCode = needsConfirmation && (ownTwoFactor || askedForCode);
 
   async function save() {
     const patch: Record<string, unknown> = {};
@@ -300,11 +393,15 @@ function EditUser({ user, isSelf, roles, onCancel, onSaved }: { user: UserRow; i
       if (emailError) return setNotice({ kind: "error", text: emailError });
       patch.email = email.trim() || null;
     }
-    const before = user.roles.map((r) => r.id);
-    if (roleIds.length !== before.length || roleIds.some((id) => !before.includes(id))) patch.role_ids = roleIds;
+    if (rolesChanged) patch.role_ids = roleIds;
     if (password && !passwordLocked) {
       if (password.length < 8) return setNotice({ kind: "error", text: "Das neue Passwort muss mindestens 8 Zeichen haben." });
       patch.password = password;
+    }
+    if (needsConfirmation) {
+      if (!ownPassword) return setNotice({ kind: "error", text: OWN_PASSWORD_MISSING });
+      patch.current_password = ownPassword;
+      if (needsCode) patch.totp_code = code.trim();
     }
     if (Object.keys(patch).length === 0) return onCancel();
     setBusy(true);
@@ -313,7 +410,13 @@ function EditUser({ user, isSelf, roles, onCancel, onSaved }: { user: UserRow; i
       await api.patch(`/users/${user.id}`, patch);
       onSaved(password ? `„${user.username}“ gespeichert, neues Passwort gesetzt.` : `„${user.username}“ gespeichert.`);
     } catch (err) {
-      setNotice({ kind: "error", text: errorOf(err) });
+      if (isTotpMissing(err)) {
+        setAskedForCode(true);
+        setNotice({ kind: "error", text: ASK_FOR_CODE });
+      } else {
+        if (isTotpRejected(err)) setCode("");
+        setNotice({ kind: "error", text: errorOf(err) });
+      }
     } finally {
       setBusy(false);
     }
@@ -341,6 +444,14 @@ function EditUser({ user, isSelf, roles, onCancel, onSaved }: { user: UserRow; i
           </Field>
         )}
       </div>
+      {needsConfirmation && (
+        <OwnConfirmation
+          password={ownPassword} onPassword={setOwnPassword} code={code} onCode={setCode} needsCode={needsCode}
+          note={settingPassword
+            ? `„${user.username}“ wird überall abgemeldet. Unter „Meldungen“ steht danach, dass du das Passwort gesetzt hast.`
+            : `Diese Rolle darf andere Konten verwalten. Unter „Meldungen“ steht danach, dass du sie „${user.username}“ gegeben hast.`}
+        />
+      )}
       {!user.is_owner && (
         <>
           <p className="mb-2 mt-4 text-sm text-white/70">Rollen</p>
@@ -353,7 +464,14 @@ function EditUser({ user, isSelf, roles, onCancel, onSaved }: { user: UserRow; i
       )}
       <div className="mt-4 flex justify-end gap-2">
         <Button variant="ghost" onClick={onCancel}>Abbrechen</Button>
-        <Button variant="primary" busy={busy} onClick={() => void save()}>Speichern</Button>
+        <Button
+          variant="primary"
+          busy={busy}
+          disabled={needsConfirmation && (!ownPassword || (needsCode && !code.trim()))}
+          onClick={() => void save()}
+        >
+          Speichern
+        </Button>
       </div>
     </div>
   );

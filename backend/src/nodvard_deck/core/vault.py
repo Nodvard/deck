@@ -30,17 +30,35 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 
 from cryptography.fernet import Fernet, InvalidToken
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import Settings
 from ..db import utcnow
-from ..models import Secret
+from ..models import Secret, SecretUsage
 from . import audit
 
 Keyring = dict[int, bytes]
+
+USE_NOTE_INTERVAL = timedelta(hours=1)
+"""Hoechstens so oft je Secret und Verwender halten `vault_use()` fest, dass ein Secret benutzt wurde:
+`Secret.last_used_at`, die Zeile in `secret_usages` und die Audit-Zeile `secret.used`. Module fragen
+regelmaessig ab (alle paar Sekunden); eine Zeile je Zugriff flutete Protokoll und Datenbank."""
+
+_now = utcnow
+"""Die Uhr fuer die Drosselung -- in Tests ersetzbar."""
+
+_noted: dict[tuple[str, str, str], datetime] = {}
+"""(Secret, Art, Verwender) -> wann die Nutzung zuletzt festgehalten wurde, in diesem Prozess. Spart die Abfrage
+bei jedem Zugriff und haelt zwei gleichzeitige Zugriffe davon ab, beide zu schreiben. Nach einem Neustart ist sie
+leer; dann entscheidet die Zeile in `secret_usages`."""
+
+_deciding: set[tuple[str, str, str]] = set()
+"""Kennungen, fuer die gerade ein Zugriff in `secret_usages` nachsieht. Ein gleichzeitiger zweiter Zugriff haelt
+dann nichts fest: der erste entscheidet und schreibt, wenn es faellig ist."""
 
 
 class VaultError(Exception):
@@ -149,6 +167,7 @@ async def create_secret(
     owner_ext_id: str | None = None,
     created_by_user_id: str | None = None,
     description: str = "",
+    expires_at: datetime | None = None,
 ) -> Secret:
     version = current_version(keyring)
     secret = Secret(
@@ -159,6 +178,7 @@ async def create_secret(
         owner_ext_id=owner_ext_id,
         created_by_user_id=created_by_user_id,
         description=description,
+        expires_at=expires_at,
     )
     session.add(secret)
     await session.flush()
@@ -210,6 +230,9 @@ async def read_secret_plaintext(session: AsyncSession, keyring: Keyring, secret_
 async def delete_secret(session: AsyncSession, secret_id: str) -> None:
     secret = await session.get(Secret, secret_id)
     if secret is not None:
+        # Die Fremdschluessel-Kaskade raeumt `secret_usages` auch selbst ab; ausdruecklich, damit es nicht an
+        # `PRAGMA foreign_keys` haengt.
+        await session.execute(delete(SecretUsage).where(SecretUsage.secret_id == secret_id))
         await session.delete(secret)
 
 
@@ -248,9 +271,11 @@ async def vault_use(
     correlation_id: str | None = None,
 ) -> AsyncIterator[str]:
     """Materialisiert den Klartext NUR innerhalb des Blocks (docs/03 §3, Invariante 2)
-    -- entspricht `ExtensionContext.vault_use()` im SDK-Vertrag. Jeder Aufruf schreibt
-    eine `secret.used`-Audit-Zeile mit Label und Verwender, nie mit dem Wert
-    (Invariante 3).
+    -- entspricht `ExtensionContext.vault_use()` im SDK-Vertrag. Die Nutzung wird mit Label
+    und Verwender festgehalten, nie mit dem Wert (Invariante 3): `secret.used`-Audit-Zeile,
+    `Secret.last_used_at` und `secret_usages`, je Secret und Verwender hoechstens einmal je
+    `USE_NOTE_INTERVAL` (vorher bei JEDEM Aufruf; ein Modul, das alle paar Sekunden abfragt,
+    flutete das Protokoll).
 
     Anders als `read_secret_plaintext()` (interner Helfer ohne Audit-Pflicht) ist DIES
     der Weg, der auditiert -- die Trennung ist Absicht: einen TOTP-Codecheck bei jedem
@@ -291,27 +316,83 @@ async def vault_use(
     plaintext = decrypt_str(fernet_for_version(keyring, secret.key_version), secret.ciphertext)
     latest = current_version(keyring)
     label = secret.label
+    now = _now()
+    key = (handle.id, actor_type, actor_id)
+    note = await _use_note_due(session, key, now)
+    migrate = secret.key_version != latest
 
-    async with get_sessionmaker()() as durable_session:
-        durable_secret = await durable_session.get(Secret, handle.id)
-        if durable_secret is not None:
-            if durable_secret.key_version != latest:
-                durable_secret.ciphertext = encrypt_str(
-                    fernet_for_version(keyring, latest), plaintext
-                )
-                durable_secret.key_version = latest
-            durable_secret.last_used_at = utcnow()
-            await audit.write_entry(
-                durable_session,
-                actor_type=actor_type,
-                actor_id=actor_id,
-                action="secret.used",
-                outcome="success",
-                target_type="secret",
-                target_id=handle.id,
-                detail={"label": label},
-                correlation_id=correlation_id,
-            )
-            await durable_session.commit()
+    if note or migrate:
+        if note:
+            # Vor dem ersten `await` des Schreibens: ein gleichzeitiger Zugriff sieht den Eintrag schon.
+            _noted[key] = now
+        try:
+            async with get_sessionmaker()() as durable_session:
+                durable_secret = await durable_session.get(Secret, handle.id)
+                if durable_secret is not None:
+                    if durable_secret.key_version != latest:
+                        durable_secret.ciphertext = encrypt_str(
+                            fernet_for_version(keyring, latest), plaintext
+                        )
+                        durable_secret.key_version = latest
+                    if note:
+                        durable_secret.last_used_at = now
+                        usage = await durable_session.get(SecretUsage, key)
+                        if usage is None:
+                            durable_session.add(SecretUsage(
+                                secret_id=handle.id, consumer_type=actor_type, consumer_id=actor_id,
+                                first_used_at=now, last_used_at=now,
+                            ))
+                        else:
+                            usage.last_used_at = now
+                        await audit.write_entry(
+                            durable_session,
+                            actor_type=actor_type,
+                            actor_id=actor_id,
+                            action="secret.used",
+                            outcome="success",
+                            target_type="secret",
+                            target_id=handle.id,
+                            detail={"label": label},
+                            correlation_id=correlation_id,
+                        )
+                    await durable_session.commit()
+        except BaseException:
+            if note and _noted.get(key) == now:
+                # Nichts festgehalten: der naechste Zugriff versucht es wieder, statt eine Stunde zu schweigen.
+                del _noted[key]
+            raise
 
     yield plaintext
+
+
+async def _use_note_due(session: AsyncSession, key: tuple[str, str, str], now: datetime) -> bool:
+    """Ist es Zeit, die Nutzung wieder festzuhalten (`USE_NOTE_INTERVAL`)? Erst der Stand dieses Prozesses, sonst
+    die Zeile in `secret_usages` (nach einem Neustart). Geht die Uhr zurueck, gilt die Nutzung als faellig.
+
+    Zwischen dieser Antwort und dem Merken in `vault_use` liegt kein `await`; waehrend der Abfrage haelt
+    `_deciding` einen gleichzeitigen zweiten Zugriff fern (sonst schrieben beide)."""
+    last = _noted.get(key)
+    if last is None:
+        if key in _deciding:
+            return False
+        _deciding.add(key)
+        try:
+            last = await _stored_last_use(session, key)
+        finally:
+            _deciding.discard(key)
+        if last is not None:
+            _noted[key] = last
+    return last is None or now < last or now - last >= USE_NOTE_INTERVAL
+
+
+async def _stored_last_use(session: AsyncSession, key: tuple[str, str, str]) -> datetime | None:
+    """`last_used_at` aus `secret_usages`, frisch aus der Datenbank (nicht aus der Identity-Map der Aufrufer-Session)."""
+    secret_id, consumer_type, consumer_id = key
+    result = await session.execute(
+        select(SecretUsage.last_used_at).where(
+            SecretUsage.secret_id == secret_id,
+            SecretUsage.consumer_type == consumer_type,
+            SecretUsage.consumer_id == consumer_id,
+        )
+    )
+    return result.scalar_one_or_none()

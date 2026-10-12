@@ -57,6 +57,8 @@ let confirmDialog: Mock<(message: string, options?: { danger?: boolean }) => Pro
 let hasPermission: Mock<(permission: string) => boolean>;
 
 beforeEach(() => {
+  // Reiter stehen in der Adresse (`?tab=`): jeder Test beginnt ohne.
+  window.history.replaceState({}, "", "/ext/proxmox/nodes");
   confirmDialog = vi.fn<(message: string, options?: { danger?: boolean }) => Promise<boolean>>().mockResolvedValue(true);
   hasPermission = vi.fn<(permission: string) => boolean>().mockReturnValue(true);
   window.__lattice = {
@@ -69,6 +71,11 @@ beforeEach(() => {
     hasPermission,
   };
 });
+
+/** Seltene Aktionen liegen unter „Mehr“: wie im Browser erst aufklappen (jsdom zeigte sie auch zugeklappt). */
+function openMenus() {
+  for (const summary of screen.getAllByText("Mehr")) fireEvent.click(summary);
+}
 
 describe("ProxmoxNodePage", () => {
   it("zeigt Aktions-Buttons fuer VM- UND LXC-Hosts (Regressionstest fuer den kind==='vm'-Bug)", async () => {
@@ -102,7 +109,9 @@ describe("ProxmoxNodePage", () => {
     vi.stubGlobal("fetch", fetchMock);
     render(<ProxmoxNodePage />);
 
-    const stopButtons = await screen.findAllByRole("button", { name: "Hart ausschalten" });
+    await screen.findAllByText("Mehr");
+    openMenus();
+    const stopButtons = screen.getAllByRole("button", { name: "Hart ausschalten" });
     fireEvent.click(stopButtons[0]);
 
     await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
@@ -118,11 +127,12 @@ describe("ProxmoxNodePage", () => {
     render(<ProxmoxNodePage />);
 
     const shutdownButtons = await screen.findAllByRole("button", { name: "Herunterfahren" });
+    openMenus();
     const hardButtons = screen.getAllByRole("button", { name: "Hart ausschalten" });
     expect(shutdownButtons).toHaveLength(2);
     // Erst die normale Wahl, dann (rot abgesetzt) das harte Ausschalten.
     expect(shutdownButtons[0].compareDocumentPosition(hardButtons[0]) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(hardButtons[0].className).toContain("text-red-200");
+    expect(hardButtons[0].className).toContain("text-red-300");
     expect(shutdownButtons[0].className).not.toContain("red");
 
     fireEvent.click(shutdownButtons[0]);
@@ -306,6 +316,32 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     await screen.findByText("pve2");
   });
 
+  it("zeigt nach einem Zertifikatswechsel über „Zertifikat“ den neuen Fingerabdruck zum Bestätigen", async () => {
+    const old = Array.from({ length: 32 }, () => "AB").join(":");
+    const fresh = Array.from({ length: 32 }, () => "CD").join(":");
+    const conn = {
+      name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true,
+      tls_fingerprint_sha256: old, tls_fingerprint_invalid: false,
+    };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      if (url.includes("/hosts?tag=proxmox")) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections") && method === "GET") return new Response(JSON.stringify([conn]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections/pve2/certificate") && method === "GET") {
+        return new Response(JSON.stringify({ sha256: fresh, trusted: false, stored: old, stored_invalid: false, matches: false }), { status: 200 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    }));
+    render(<ProxmoxNodePage />);
+
+    expect(await screen.findByText("Fingerabdruck gemerkt")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Zertifikat" }));
+    expect(await screen.findByTestId("certificate-changed")).toBeInTheDocument();
+    expect(screen.getByLabelText("Fingerabdruck des Servers")).toHaveTextContent(fresh);
+    expect(screen.getByRole("button", { name: "Neuen Fingerabdruck bestätigen" })).toBeDisabled();
+  });
+
   it("setzt ein Token ueber promptDialog, nie ueber ein Textfeld", async () => {
     let tokenValue: string | null = null;
     let tokenBody: { label: string; value: string } | null = null;
@@ -402,6 +438,37 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     await waitFor(() => expect(window.__lattice.confirmDialog).toHaveBeenCalledWith(expect.stringContaining("pve2"), expect.anything()));
     await waitFor(() => expect(deleted).toBe(true));
   });
+
+  it("Alte Tokens: Liste mit dem Befehl zum Löschen, Nodvard Deck selbst löscht nichts", async () => {
+    const conn = { name: "pve2", base_url: "https://x:8006", token_id: "nodvard@pve!deck-3", tls_insecure_skip_verify: true, enabled: true, has_token: true };
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      const method = init?.method ?? "GET";
+      calls.push(`${method} ${url}`);
+      if (url.includes("/hosts?tag=proxmox")) return new Response(JSON.stringify([]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections") && method === "GET") return new Response(JSON.stringify([conn]), { status: 200 });
+      if (url.endsWith("/ext/proxmox/connections/pve2/old-tokens") && method === "GET") {
+        return new Response(JSON.stringify({
+          connection: "pve2", user: "nodvard@pve", backups_checked: true, privsep_off: ["nodvard@pve!voll"],
+          tokens: [
+            { token_id: "nodvard@pve!deck", name: "deck", privsep: true, command: "pveum user token remove nodvard@pve deck" },
+            { token_id: "nodvard@pve!deck-2", name: "deck-2", privsep: true, command: "pveum user token remove nodvard@pve deck-2" },
+          ],
+        }), { status: 200 });
+      }
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${method} ${url}`);
+    }));
+    render(<ProxmoxNodePage />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "Alte Tokens" }));
+    const commands = await screen.findByLabelText("Befehle zum Löschen");
+    expect(commands.textContent).toBe(
+      "pveum user token remove nodvard@pve deck\npveum user token remove nodvard@pve deck-2",
+    );
+    expect(screen.getByText(/Ohne Privilegientrennung/)).toHaveTextContent("nodvard@pve!voll");
+    expect(calls.filter((c) => !c.startsWith("GET "))).toEqual([]);
+  });
   it("Konsole: Link auf die Kern-Konsole nur fuer laufende Gaeste", async () => {
     // Echte Statuswerte aus der Discovery ("up"/"down", HostStatus), nicht "running".
     const hosts = [
@@ -450,8 +517,12 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     const names = (row: HTMLElement) => [...row.querySelectorAll("button")].map((b) => b.textContent);
     // Laufende VM: kein "Starten"; gestoppter Container: weder Ausschalten noch Neustarten.
     // Das harte Ausschalten steht als Ausweg ganz hinten, "Herunterfahren" ist die normale Wahl.
-    expect(names(vmRow)).toEqual(["▸", "Herunterfahren", "Neustarten", "Snapshot", "Hart ausschalten"]);
-    expect(names(lxcRow)).toEqual(["▸", "Starten", "Snapshot"]);
+    expect(names(vmRow)).toEqual(["▸", "Herunterfahren", "Neustarten", "Snapshot anlegen", "Hart ausschalten"]);
+    expect(names(lxcRow)).toEqual(["▸", "Starten", "Snapshot anlegen"]);
+    // Direkt in der Zeile nur Starten/Herunterfahren, der Rest unter „Mehr“.
+    const menu = (id: string) => [...screen.getByTestId(`more-${id}`).querySelectorAll("button")].map((b) => b.textContent);
+    expect(menu("h-vm")).toEqual(["Neustarten", "Snapshot anlegen", "Hart ausschalten"]);
+    expect(menu("h-lxc")).toEqual(["Snapshot anlegen"]);
     expect(vmRow.textContent).toContain("VM");
     expect(lxcRow.textContent).toContain("LXC");
   });
@@ -525,6 +596,8 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
             { devpath: "/dev/nvme0n1", model: "Example NVMe 1TB", summary: "NVMe · 1.0 TB · 97 % Restlebensdauer · 34 °C", badge: "gesund", tone: "good", power_on_hours: 12345 },
             { devpath: "/dev/sdb", model: "Alte Platte", summary: "HDD · 2.0 TB", badge: "SMART: FAILED", tone: "danger", power_on_hours: null },
           ],
+          zfs: [{ name: "rpool", badge: "DEGRADED", tone: "warn", summary: "eingeschränkt – eine Platte fehlt oder ist defekt, die Redundanz ist weg · 120 GB von 960 GB belegt" }],
+          zfs_error: null,
         }), { status: 200 });
       }
       if (url.includes("/ext/proxmox/guests/h-vm/details")) {
@@ -567,7 +640,9 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
   it("Speicher: Belegung je Pool und welche Gast-Disks darauf liegen", async () => {
     vi.stubGlobal("fetch", richFetch([]));
     render(<ProxmoxNodePage />);
-    const pool = await screen.findByTestId("pool-local");
+    await screen.findByTestId("pool-local");
+    fireEvent.click(screen.getByRole("tab", { name: "Speicher" }));
+    const pool = screen.getByTestId("pool-local");
     expect(pool.textContent).toContain("Zabbix (45.0 GB)");
     expect(pool.textContent).toContain("3 Backups (17.0 GB)");
     expect(pool.textContent).toContain("46.4 %");
@@ -674,8 +749,9 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     // Nur die eigene Verbindung, Konsolen standardmaessig ausgeblendet.
     expect(screen.queryByTestId("task-UPID:pve1:1")).toBeNull();
     expect(screen.queryByTestId("task-UPID:pve2:5")).toBeNull();
-    expect(screen.getByText("Aufgabenverlauf (3)")).toBeInTheDocument();
+    expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("3 Aufgaben");
 
+    fireEvent.click(screen.getByRole("tab", { name: "Aufgabenverlauf" }));
     fireEvent.click(started);
     expect(await screen.findByText(/starting VM 100\s+TASK OK/)).toBeInTheDocument();
     const logCall = calls.find((c) => c.url.includes("/log?upid="));
@@ -691,21 +767,25 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     try {
       vi.stubGlobal("fetch", richFetch([]));
       render(<ProxmoxNodePage />);
-      const row = (await screen.findByText("docker")).closest("tr")!;
-      // neuer und alter Klassenname (Uebergang: ein Tab mit aelterem Kern kennt nur .lattice-focus)
-      expect(row.className).toContain("nodvard-deck-focus");
-      expect(row.className).toContain("lattice-focus");
-      expect(within(row).getByRole("button", { name: "Details einklappen" })).toBeInTheDocument();
-
-      expect(await screen.findByText("Aufgabenverlauf (1)")).toBeInTheDocument();
+      // Der Reiter „Aufgabenverlauf“ ist offen, nur mit den Aufgaben dieses Gasts.
+      await waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("1 Aufgabe"));
+      expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
       expect(screen.getByTestId("task-UPID:pve2:3")).toBeInTheDocument();
       expect(screen.queryByTestId("task-UPID:pve2:2")).toBeNull();
-      expect(screen.getByText("Aufgabenverlauf (1)").closest("details")).toHaveAttribute("open");
       fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
-      expect(await screen.findByText("Aufgabenverlauf (3)")).toBeInTheDocument();
-      // Die volle Liste bleibt offen (nur der Filter ist weg), die Adresse behält ?host=.
-      expect(screen.getByText("Aufgabenverlauf (3)").closest("details")).toHaveAttribute("open");
-      expect(window.location.search).toBe("?host=h-vm");
+      await waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("3 Aufgaben"));
+      // Die volle Liste bleibt im Reiter (nur der Filter ist weg), die Adresse behält ?host=.
+      expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
+      expect(window.location.search).toBe("?host=h-vm&tab=tasks");
+
+      // Im Reiter „VMs & Container“ ist der Gast markiert (neuer und alter Klassenname: ein Tab mit aelterem Kern
+      // kennt nur .lattice-focus) und aufgeklappt; nach dem Wechsel per Hand bleibt er offen.
+      const row = document.getElementById("host-h-vm")!;
+      expect(row.className).toContain("nodvard-deck-focus");
+      expect(row.className).toContain("lattice-focus");
+      fireEvent.click(screen.getByRole("tab", { name: "VMs & Container" }));
+      expect(row).toBeVisible();
+      expect(within(row).getByRole("button", { name: "Details einklappen" })).toBeInTheDocument();
     } finally {
       window.history.replaceState({}, "", "/");
     }
@@ -719,21 +799,22 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     try {
       vi.stubGlobal("fetch", richFetch([]));
       render(<ProxmoxNodePage />);
-      expect(await screen.findByText("Aufgabenverlauf (1)")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("1 Aufgabe"));
       await waitFor(() => expect(scrolled).toEqual(["tasks-pve2"]));
-      const row = () => screen.getByText("docker", { selector: "td" }).closest("tr")!;
+      const row = () => document.getElementById("host-h-vm")!;
 
-      // Auf der Seite verstellen: Filter weg, Gast zu, Verlauf zu.
+      // Auf der Seite verstellen: Filter weg, anderer Reiter, Gast zu.
       fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
-      expect(await screen.findByText("Aufgabenverlauf (3)")).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("3 Aufgaben"));
+      fireEvent.click(screen.getByRole("tab", { name: "VMs & Container" }));
       fireEvent.click(within(row()).getByRole("button", { name: "Details einklappen" }));
-      (screen.getByText("Aufgabenverlauf (3)").closest("details") as HTMLDetailsElement).open = false;
 
       // Für den Router ist das dieselbe Adresse wie beim Öffnen -- die Seite muss trotzdem folgen.
       navigateTo("/ext/proxmox/nodes?host=h-vm&tasks=1");
-      expect(await screen.findByText("Aufgabenverlauf (1)")).toBeInTheDocument();
-      expect(screen.getByText("Aufgabenverlauf (1)").closest("details")).toHaveAttribute("open");
-      expect(within(row()).getByRole("button", { name: "Details einklappen" })).toBeInTheDocument();
+      await waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent("1 Aufgabe"));
+      expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
+      // Der Gast ist wieder aufgeklappt (im Reiter daneben).
+      expect(within(row()).getByRole("button", { name: "Details einklappen", hidden: true })).toBeInTheDocument();
       await waitFor(() => expect(scrolled).toEqual(["tasks-pve2", "tasks-pve2"]));
     } finally {
       Element.prototype.scrollIntoView = original;
@@ -809,6 +890,8 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     render(<ProxmoxNodePage />);
 
     const pve2 = await screen.findByTestId("updates-pve2");
+    fireEvent.click(screen.getByRole("tab", { name: /^Updates/ }));
+    expect(pve2).toBeVisible();
     expect(within(pve2).getByText("2 Updates").className).toContain("amber");
     expect(pve2.textContent).toContain("darunter ein neuer Kernel (danach Neustart nötig)");
     expect(pve2.textContent).toContain("Proxmox 9.2.20 · Kernel 7.0.14-16-pve");
@@ -843,6 +926,8 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     render(<ProxmoxNodePage />);
 
     await screen.findByTestId("updates-pve2");
+    fireEvent.click(screen.getByRole("tab", { name: /^Updates/ }));
+    expect(screen.getByTestId("updates-check-stale-alt")).toBeVisible();
     expect(screen.queryByTestId("updates-check-stale-pve2")).toBeNull();
     expect(screen.queryByTestId("updates-check-failed-pve2")).toBeNull();
     expect(screen.getByTestId("updates-check-stale-alt").textContent).toContain("seit 90 Stunden nicht gelaufen");
@@ -869,10 +954,20 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     render(<ProxmoxNodePage />);
 
     const hint = await screen.findByTestId("unreachable-pve2");
+    expect(hint).toBeVisible(); // gleich im ersten Reiter, zusammengefasst
     expect([...hint.querySelectorAll("p")].map((p) => p.textContent)).toEqual([
       `Updates und Speicher gerade nicht abrufbar: ${dead}`,
       "Speicher von Knoten pve2 gerade nicht abrufbar: HTTP 500",
     ]);
+    // In den Reitern „Speicher“ und „Updates“ steht jeweils nur der eigene Teil.
+    fireEvent.click(screen.getByRole("tab", { name: "Speicher" }));
+    expect([...screen.getByTestId("unreachable-storage-pve2").querySelectorAll("p")].map((p) => p.textContent)).toEqual([
+      `Speicher gerade nicht abrufbar: ${dead}`,
+      "Speicher von Knoten pve2 gerade nicht abrufbar: HTTP 500",
+    ]);
+    expect(screen.getByTestId("unreachable-storage-pve2")).toBeVisible();
+    fireEvent.click(screen.getByRole("tab", { name: /^Updates/ }));
+    expect(screen.getByTestId("unreachable-updates-pve2")).toHaveTextContent(`Updates gerade nicht abrufbar: ${dead}`);
     // pve1 hat hier keine Hosts und damit keinen Abschnitt.
     expect(screen.queryByTestId("unreachable-pve1")).toBeNull();
   });
@@ -910,6 +1005,10 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     expect(panel.textContent).toContain("Proxmox 9.2.20 · Kernel 7.0.14-16-pve · EFI");
     expect(within(panel).getByText("gesund").className).toContain("emerald");
     expect(within(panel).getByText("SMART: FAILED").className).toContain("red");
+    const zfs = within(panel).getByTestId("zfs-pools");
+    expect(within(zfs).getByText("rpool")).toBeInTheDocument();
+    expect(within(zfs).getByText("DEGRADED")).toBeInTheDocument();
+    expect(within(zfs).getByText(/Redundanz ist weg/)).toBeInTheDocument();
     expect(panel.textContent).toContain("97 % Restlebensdauer · 34 °C");
   });
 });
@@ -938,6 +1037,66 @@ describe("ProxmoxNodePage ohne Server", () => {
     render(<ProxmoxNodePage />);
     await screen.findByText("Noch keine Proxmox-Server gefunden");
     expect(screen.queryByRole("link", { name: "Proxmox einrichten" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Mit Passwort verbinden" })).toBeNull();
+  });
+
+  it("bietet „Mit Passwort verbinden“ an und öffnet das Formular (nur mit secrets.write)", async () => {
+    hasPermission.mockImplementation((permission) => permission === "secrets.write");
+    emptyFetch();
+    render(<ProxmoxNodePage />);
+    await screen.findByText("Noch keine Proxmox-Server gefunden");
+    expect(document.body.textContent).toContain("Nodvard Deck legt dort einen eigenen Zugang an");
+    // Im leeren Zustand und neben der Verbindungsliste.
+    const buttons = await screen.findAllByRole("button", { name: "Mit Passwort verbinden" });
+    expect(buttons).toHaveLength(2);
+    fireEvent.click(buttons[buttons.length - 1]);
+    expect(await screen.findByTestId("proxmox-connect")).toBeInTheDocument();
+    expect(screen.getByLabelText("Adresse des Proxmox-Servers")).toBeInTheDocument();
+    expect(screen.queryByText("Noch keine Proxmox-Server gefunden")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Abbrechen" }));
+    expect(screen.queryByTestId("proxmox-connect")).toBeNull();
+  });
+
+  it("nach dem Verbinden lädt die Seite gleich und nach ein paar Sekunden noch einmal (das Einlesen läuft dann)", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      hasPermission.mockImplementation((permission) => permission === "secrets.write");
+      let hostLoads = 0;
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.includes("/hosts?tag=proxmox")) {
+          hostLoads += 1;
+          return new Response("[]", { status: 200 });
+        }
+        if (url.endsWith("/ext/proxmox/connections")) return new Response("[]", { status: 200 });
+        if (url.endsWith("/ext/proxmox/connect/certificate")) {
+          return new Response(JSON.stringify({
+            base_url: "https://192.168.2.10:8006",
+            certificate: { sha256: "AB", trusted: true, subject: null, issuer: null, not_after: null, alt_names: [] },
+          }), { status: 200 });
+        }
+        if (url.endsWith("/ext/proxmox/connect")) {
+          return new Response(JSON.stringify({
+            status: "connected", connection: { name: "pve1", base_url: "https://192.168.2.10:8006", token_id: "nodvard@pve!deck", tls_insecure_skip_verify: false },
+            created: [], nodes: ["pve1"], notes: [], discovery: "started",
+          }), { status: 200 });
+        }
+        throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+      }));
+      render(<ProxmoxNodePage />);
+      const buttons = await screen.findAllByRole("button", { name: "Mit Passwort verbinden" });
+      fireEvent.click(buttons[0]);
+      fireEvent.change(screen.getByLabelText("Adresse des Proxmox-Servers"), { target: { value: "192.168.2.10" } });
+      fireEvent.click(screen.getByRole("button", { name: "Weiter" }));
+      fireEvent.change(await screen.findByLabelText("Passwort"), { target: { value: "geheim" } });
+      fireEvent.click(screen.getByRole("button", { name: "Verbinden" }));
+      await screen.findByTestId("proxmox-connect-done");
+      await waitFor(() => expect(hostLoads).toBe(2));
+      await vi.advanceTimersByTimeAsync(5000);
+      await waitFor(() => expect(hostLoads).toBe(3));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

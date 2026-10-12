@@ -4,6 +4,7 @@ hat und das Modell zur Migration passt (kein Unterschied zwischen `Base.metadata
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 
@@ -15,6 +16,20 @@ from nodvard_deck.migrate import alembic_config, known_revisions
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PREVIOUS_CORE_HEAD = "e7a1c4b93d52"  # recovery_codes -- die Revision direkt vor custom_apps
 CUSTOM_APPS_REVISION = "d4b7a2c91e63"
+
+
+@pytest.fixture(autouse=True)
+def _keep_logging_setup():
+    """`migrations/env.py` laedt die Logging-Einstellung der `alembic.ini` und schaltet dabei alle
+    schon vorhandenen Logger ab. Das darf nicht in Tests durchsickern, die danach Logmeldungen
+    pruefen (`caplog`). Vorlage: `test_audit_names_migration.py`."""
+    loggers = [logging.getLogger(), *(lg for lg in logging.root.manager.loggerDict.values() if isinstance(lg, logging.Logger))]
+    saved = [(lg, lg.disabled, lg.level, lg.propagate, list(lg.handlers)) for lg in loggers]
+    yield
+    for lg, disabled, level, propagate, handlers in saved:
+        lg.disabled, lg.propagate = disabled, propagate
+        lg.setLevel(level)
+        lg.handlers[:] = handlers
 
 
 def _settings(tmp_path: Path) -> config.Settings:

@@ -29,7 +29,7 @@ async def _world(client):
     roles = {r["name"]: r["id"] for r in (await client.get("/api/v1/roles", headers=_h(owner))).json()}
     for name, role in (("admin1", "admin"), ("viewer1", "viewer")):
         await client.post(
-            "/api/v1/users", json={"username": name, "password": PASSWORD, "role_ids": [roles[role]]}, headers=_h(owner)
+            "/api/v1/users", json={"username": name, "password": PASSWORD, "role_ids": [roles[role]], "current_password": PASSWORD}, headers=_h(owner)
         )
     return owner, owner_id
 
@@ -53,7 +53,12 @@ async def test_admin_cannot_set_own_password_via_patch(client, db_session):
 async def test_admin_cannot_set_the_owners_password(client, db_session):
     _, owner_id = await _world(client)
     admin, _ = await _login(client, "admin1")
+    # Ohne eigenes Passwort erfaehrt der Admin nichts (auch nicht, dass es der Inhaber ist), mit: 403.
     r = await client.patch(f"/api/v1/users/{owner_id}", json={"password": "neues-passwort-99"}, headers=_h(admin))
+    assert r.status_code == 403 and r.json()["code"] == "password_missing"
+    r = await client.patch(
+        f"/api/v1/users/{owner_id}", json={"password": "neues-passwort-99", "current_password": PASSWORD}, headers=_h(admin)
+    )
     assert r.status_code == 403
     assert "Inhaber" in r.json()["detail"]
     assert await _password_ok(db_session, "chef", PASSWORD)
@@ -72,7 +77,9 @@ async def test_admin_can_still_set_passwords_of_other_normal_users(client, db_se
     await _world(client)
     admin, _ = await _login(client, "admin1")
     viewer_id = (await _login(client, "viewer1"))[1]
-    r = await client.patch(f"/api/v1/users/{viewer_id}", json={"password": "neues-passwort-99"}, headers=_h(admin))
+    r = await client.patch(
+        f"/api/v1/users/{viewer_id}", json={"password": "neues-passwort-99", "current_password": PASSWORD}, headers=_h(admin)
+    )
     assert r.status_code == 200
     assert await _password_ok(db_session, "viewer1", "neues-passwort-99")
 

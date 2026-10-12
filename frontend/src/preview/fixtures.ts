@@ -8,9 +8,9 @@ const page = (ext_id: string, id: string, path: string, title: string, icon: str
 
 const PAGES = [
   page("proxmox", "nodes", "/nodes", "Proxmox", "server", "Infrastruktur", 10),
-  page("backups", "backups", "/backups", "Backups", "database-backup", "Infrastruktur", 20),
+  page("backups", "backups", "/backups", "Proxmox-Backups", "database-backup", "Infrastruktur", 20),
   page("service-matrix", "matrix", "/matrix", "Service-Matrix", "layout-grid", "Infrastruktur", 30),
-  page("gameserver", "servers", "/gameservers", "Gameserver", "gamepad-2", "Infrastruktur", 40),
+  { ...page("gameserver", "servers", "/gameservers", "Gameserver", "gamepad-2", "Infrastruktur", 40), stage: "beta" },
   page("shield", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
   page("scripts", "scripts", "/scripts", "Skripte", "terminal-square", "Automatisierung", 20),
   page("documents", "documents", "/documents", "Dokumente", "file-text", "Dokumente", 10),
@@ -52,7 +52,14 @@ const HOST_ID_BY_NAME: Record<string, string> = Object.fromEntries(HOSTS.map((h)
 HOSTS.find((h) => h.id === "g-valheim")!.tags = ["gameserver", "windows"] as never[];
 HOSTS.find((h) => h.id === "g-docker")!.tags = ["docker"] as never[];
 HOSTS.find((h) => h.id === "h-pi")!.tags = ["docker"] as never[];
+/** Wie capabilities.py: Knoten `<verbindung>/node/<knoten>`, Gäste `<verbindung>/<qemu|lxc>/<knoten>/<vmid>`. */
+const PROVIDER_REF: Record<string, string> = {
+  "n-pve2": "pve2/node/pve2", "n-pve1": "pve1/node/pve1",
+  "g-docker": "pve2/qemu/pve2/100", "g-monitoring": "pve2/qemu/pve2/101", "g-ki": "pve2/qemu/pve2/102", "g-valheim": "pve2/qemu/pve2/103",
+  "g-dmini": "pve1/lxc/pve1/200", "g-bastion": "pve1/lxc/pve1/201",
+};
 for (const h of HOSTS) {
+  (h as { provider_ref: string | null }).provider_ref = PROVIDER_REF[h.id] ?? null;
   if (!h.provider_ext_id) continue;
   h.managed_tags = ["proxmox", h.kind ?? "proxmox"].filter((t, i, a) => a.indexOf(t) === i);
   h.tags = [...new Set([...h.managed_tags, ...h.tags])] as never[];
@@ -72,14 +79,14 @@ function hostTools(id: string) {
   }
   if (h.kind === "vm" || h.kind === "lxc") {
     tools.push({ ext_id: "proxmox", id: "tasks", title: "Aufgabenverlauf", description: "Wer hat wann was auf dem Knoten getan", icon: "activity", category: "monitoring", href: `/ext/proxmox/nodes?host=${id}&tasks=1`, order: 200 });
-    tools.push({ ext_id: "backups", id: "backups", title: "Backups", description: "Backup-Jobs, letzter Lauf, vorhandene Sicherungen", icon: "database-backup", category: "data", href: `/ext/backups/backups?host=${id}`, order: 100 });
+    tools.push({ ext_id: "backups", id: "backups", title: "Proxmox-Backups", description: "Backup-Jobs, letzter Lauf, vorhandene Sicherungen", icon: "database-backup", category: "data", href: `/ext/backups/backups?host=${id}`, order: 100 });
     tools.push({ ext_id: "proxmox", id: "guest", title: "Hardware, Netzwerk & Snapshots", description: "Kerne, RAM, Disks mit Speicherort, Netzwerk, Snapshots", icon: "server", category: "settings", href: `/ext/proxmox/nodes?host=${id}`, order: 100 });
   }
   if ((h.tags as string[]).includes("gameserver") && !previewState.ohneProxmox) {
     tools.push({ ext_id: "gameserver", id: "gameserver", title: "Gameserver", description: "Join-Code, Spieler, Welt-Sicherung, Neustart", icon: "gamepad-2", category: "services", href: `/ext/gameserver/gameservers?host=${id}`, order: 100 });
   }
   if (previewState.ohneProxmox && !previewState.ohneProxmoxMin && h.os_family === "linux") {
-    tools.push({ ext_id: "system", id: "system", title: "System-Monitor", description: "Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse", icon: "cpu", category: "monitoring", href: `/ext/system/system?host=${id}`, order: 50 });
+    tools.push({ ext_id: "system", id: "system", title: "Server-Zustand", description: "Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse", icon: "cpu", category: "monitoring", href: `/ext/system/system?host=${id}`, order: 50 });
   }
   if ((h.tags as string[]).includes("docker") && !previewState.ohneProxmoxMin) {
     tools.push({ ext_id: "service-matrix", id: "containers", title: "Container", description: "Docker-Container starten, stoppen, Live-Logs", icon: "layout-grid", category: "services", href: `/ext/service-matrix/matrix?host=${id}`, order: 100 });
@@ -122,6 +129,12 @@ const GB = 1024 ** 3;
 const METRICS: Record<string, object> = {
   "n-pve2": { values: { cpu_percent: 14.2, mem_used_bytes: 11.1 * GB, mem_total_bytes: 13.4 * GB, uptime_s: 38305 }, sampled_at: "" },
   "n-pve1": { values: { cpu_percent: 23.5, mem_used_bytes: 3.3 * GB, mem_total_bytes: 5.6 * GB, uptime_s: 39379 }, sampled_at: "" },
+  "g-docker": { values: { cpu_percent: 6.4, mem_used_bytes: 5.2 * GB, mem_total_bytes: 8 * GB, uptime_s: 1_296_000 }, sampled_at: "2026-10-08T09:58:00Z" },
+  "g-monitoring": { values: { cpu_percent: 2.1, mem_used_bytes: 1.4 * GB, mem_total_bytes: 2 * GB, uptime_s: 1_296_000 }, sampled_at: "2026-10-08T09:58:00Z" },
+  "g-ki": { values: { cpu_percent: 31.8, mem_used_bytes: 14.1 * GB, mem_total_bytes: 16 * GB, uptime_s: 86_400 }, sampled_at: "2026-10-08T09:58:00Z" },
+  "g-valheim": { values: { cpu_percent: 12.0, mem_used_bytes: 3.1 * GB, mem_total_bytes: 6 * GB, uptime_s: 43_200 }, sampled_at: "2026-10-08T09:58:00Z" },
+  "g-dmini": { values: { cpu_percent: 1.2, mem_used_bytes: 0.6 * GB, mem_total_bytes: 2 * GB, uptime_s: 604_800 }, sampled_at: "2026-10-08T09:58:00Z" },
+  "g-bastion": { values: { cpu_percent: 0.3, mem_used_bytes: 0.1 * GB, mem_total_bytes: 0.5 * GB, uptime_s: 604_800 }, sampled_at: "2026-10-08T09:58:00Z" },
 };
 
 /** Letzter Messwert aus dem Verlauf, wie ihn `GET /hosts/metrics/latest` liefert (Cockpit-Karten der Linux-Server). */
@@ -397,10 +410,20 @@ const ACTIONS = [
 /** Dateien-Seite, Format wie api/v1/files.py (FileSourceOut, list -> {items, next_cursor}). */
 const FILE_CAPS = { write: true, rename: true, remove: true, mkdir: true, search: true, range_read: true, sync_status: false, quota: false, trash: false };
 const FILE_SOURCES = [
-  { source_id: "ssh-sftp:h-pi", label: "SSH (SFTP): Raspberry Pi", icon: "server", caps: FILE_CAPS },
-  { source_id: "ssh-sftp:g-docker", label: "SSH (SFTP): docker", icon: "server", caps: FILE_CAPS },
+  { source_id: "ssh-sftp:h-pi", label: "SSH (SFTP): Raspberry Pi", icon: "server", caps: FILE_CAPS, host_id: "h-pi" },
+  { source_id: "ssh-sftp:g-docker", label: "SSH (SFTP): docker", icon: "server", caps: FILE_CAPS, host_id: "g-docker" },
   { source_id: "nextcloud", label: "Nextcloud", icon: "cloud", caps: FILE_CAPS },
 ];
+/** Wichtige Orte je Server (`GET /files/places?host_id=`), Format wie api/v1/files.py (FilePlaceOut). */
+const PLACE_LOGS = { label: "Protokolle", path: "/var/log", icon: "file-text", hint: "Systemprotokolle dieses Servers" };
+const FILE_PLACES: Record<string, { label: string; path: string; icon: string; hint: string | null }[]> = {
+  "g-docker": [
+    { label: "Docker: uptime-kuma", path: "/opt/stacks/uptime-kuma", icon: "boxes", hint: "Ordner des Compose-Projekts „uptime-kuma“" },
+    { label: "Docker: pihole", path: "/opt/stacks/pihole", icon: "boxes", hint: "Ordner des Compose-Projekts „pihole“" },
+    PLACE_LOGS,
+  ],
+  "h-pi": [{ label: "Docker: pihole", path: "/srv/pihole", icon: "boxes", hint: "Ordner des Compose-Projekts „pihole“" }, PLACE_LOGS],
+};
 const FILE_ENTRIES = [
   { name: "backups", path: "/backups", is_dir: true, size: null, modified_at: "2026-09-25T17:30:00Z", mime: null, sync_status: null, metadata: {} },
   { name: "docker-compose.yml", path: "/docker-compose.yml", is_dir: false, size: 2381, modified_at: "2026-09-21T09:12:00Z", mime: "text/yaml", sync_status: null, metadata: {} },
@@ -448,9 +471,9 @@ export const previewState: {
   demo: boolean;
   /** Wiederherstellen: `?scenario=restore-uploaded|restore-ready|restore-pending|restore-result|restore-replaced` (sonst leer). */
   restore: "" | "uploaded" | "ready" | "pending" | "result" | "replaced";
-  /** `?scenario=ohne-proxmox`: nur von Hand angelegte Server mit SSH-Zugang, Proxmox und Backups aus. */
+  /** `?scenario=ohne-proxmox`: nur von Hand angelegte Server mit SSH-Zugang, Proxmox VE und Proxmox-Backups aus. */
   ohneProxmox: boolean;
-  /** `?scenario=ohne-proxmox-min`: wie oben, aber auch System, Service-Matrix & Co. aus (nur Terminal/Dateien). */
+  /** `?scenario=ohne-proxmox-min`: wie oben, aber auch Server-Zustand, Service-Matrix & Co. aus (nur Terminal/Dateien). */
   ohneProxmoxMin: boolean;
   /** `?scenario=keine-apps`: Server da, aber weder erkannte Dienste noch eigene Apps (kein Modul fuer Container) -- der Leerzustand von „Apps“. */
   noApps: boolean;
@@ -570,19 +593,19 @@ const demoStatus = () => ({
 
 /** Einrichtungsassistent (`?path=/setup`): die mitgelieferten Module, alle noch ausgeschaltet (Texte aus den Manifesten). */
 const SETUP_MODULES = [
-  {"id": "backups", "name": "Backups", "description": "Zeigt alle Proxmox-Backups auf einen Blick, warnt bei fehlgeschlagenen oder fehlenden Sicherungen und bei knappem Speicher. Backup-Jobs lassen sich anlegen, ändern und neu starten.", "icon": "database-backup", "category": "servers", "sort_order": 50},
+  {"id": "backups", "name": "Proxmox-Backups", "description": "Zeigt alle Proxmox-Backups auf einen Blick, warnt bei fehlgeschlagenen oder fehlenden Sicherungen und bei knappem Speicher. Backup-Jobs lassen sich anlegen, ändern und neu starten.", "icon": "database-backup", "category": "servers", "sort_order": 50},
   {"id": "documents", "name": "Dokumente", "description": "Dokumentenarchiv mit Texterkennung: PDFs und Scans hochladen, automatisch verschlagworten lassen und per Volltextsuche wiederfinden.", "icon": "file-text", "category": "tools", "sort_order": 20},
-  {"id": "gameserver", "name": "Gameserver", "description": "Gameserver starten und stoppen und den aktuellen Beitritts-Code anzeigen (z. B. Valheim). Server werden über eine Markierung (Tag) erkannt.", "icon": "gamepad-2", "category": "servers", "sort_order": 60},
+  {"id": "gameserver", "name": "Gameserver", "description": "Gameserver starten und stoppen und den aktuellen Beitritts-Code anzeigen (z. B. Valheim). Server werden über eine Markierung (Tag) erkannt.", "icon": "gamepad-2", "category": "servers", "sort_order": 60, "stage": "beta"},
   {"id": "hello-world", "name": "Hello World", "description": "Beispiel-Erweiterung für Nodvard Deck, gedacht für Entwickler. Zeigt, wie eigene Seiten, Kacheln und Aufgaben eingebunden werden – im Alltag nicht nötig.", "icon": "sparkles", "category": "example", "sort_order": 10},
   {"id": "inventory", "name": "Inventar", "description": "Inventar für Geräte und Gegenstände: Standorte, Kategorien, Kaufpreis, Garantie mit Ablaufwarnung, Fotos und CSV-Export.", "icon": "package", "category": "tools", "sort_order": 30},
-  {"id": "network", "name": "Netzwerk", "description": "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blockierung, Proxy-Hosts und ablaufende Zertifikate. Blockierung pausieren und Proxy-Hosts ein- oder ausschalten – über die Freigabe.", "icon": "activity", "category": "servers", "sort_order": 70},
+  {"id": "network", "name": "Netzwerk", "description": "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blockierung, Proxy-Hosts und ablaufende Zertifikate. Blockierung pausieren und Proxy-Hosts ein- oder ausschalten – über die Freigabe.", "icon": "activity", "category": "servers", "sort_order": 70, "stage": "beta"},
   {"id": "nextcloud", "name": "Nextcloud", "description": "Bindet deine Nextcloud in den Dateimanager von Nodvard Deck ein: Dateien ansehen, hoch- und herunterladen und zwischen Servern kopieren.", "icon": "cloud", "category": "connections", "sort_order": 20},
   {"id": "shield", "name": "Nodvard Shield", "description": "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits – dazu die KI-Container-Wache (Nodvard KI), die abgestürzte Docker-Container erkennt und Lösungen vorschlägt.", "icon": "shield-alert", "category": "security", "sort_order": 10},
   {"id": "ntfy", "name": "ntfy-Benachrichtigungen", "description": "Schickt Meldungen von Nodvard Deck als Push-Nachricht aufs Handy über ntfy (ntfy.sh oder eigener Server).", "icon": "bell", "category": "connections", "sort_order": 10},
   {"id": "proxmox", "name": "Proxmox VE", "description": "Liest deine Proxmox-Server mit allen VMs und Containern in Nodvard Deck ein: Auslastung, Start/Stopp/Neustart, Snapshots, Konsole und Speicher-Übersicht.", "icon": "server", "category": "servers", "sort_order": 40},
   {"id": "scripts", "name": "Skripte", "description": "Eigene Skripte zentral verwalten, versionieren und auf einem, mehreren oder allen Servern ausführen – sofort oder nach Zeitplan.", "icon": "terminal-square", "category": "tools", "sort_order": 10},
   {"id": "service-matrix", "name": "Service-Matrix", "description": "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen und neu starten. Auf Wunsch zeigt sie, für welche Container es neuere Images gibt – und spielt sie bei Compose-Diensten auf Knopfdruck ein.", "icon": "layout-grid", "category": "servers", "sort_order": 30},
-  {"id": "system", "name": "System", "description": "Zustand eines Linux-Servers auf einer Seite: Auslastung live und im Verlauf, Temperaturen, Speicherplatz, Dienste (mit Neustart über die Freigabe), Updates und Prozesse.", "icon": "cpu", "category": "servers", "sort_order": 10},
+  {"id": "system", "name": "Server-Zustand", "description": "Zustand eines Linux-Servers auf einer Seite: Auslastung live und im Verlauf, Temperaturen, Speicherplatz, Dienste (mit Neustart über die Freigabe), Updates und Prozesse.", "icon": "cpu", "category": "servers", "sort_order": 10},
   {"id": "terminal", "name": "Terminal", "description": "Web-Terminal und Dateizugriff per SSH direkt im Browser, mit mehreren Sitzungen gleichzeitig.", "icon": "terminal", "category": "servers", "sort_order": 20},
 ];
 /** Module, die nach dem Einschalten noch Angaben brauchen (wie im echten Backend: Pflichtfelder fehlen). */
@@ -639,11 +662,21 @@ const EMPTY_OVERVIEW = {
 };
 
 /** Push-Erweiterung: eigene Zeile, sie hat in der Vorschau keine eigene Seite im Menue. */
+/** Gruppe und Reihenfolge der Module in den Listen (wie im Manifest: `category`, `sort_order`). */
+const MODULE_META: Record<string, { category: string; sort_order: number; stage?: string }> = {
+  system: { category: "servers", sort_order: 10 }, terminal: { category: "servers", sort_order: 20 },
+  "service-matrix": { category: "servers", sort_order: 30 }, proxmox: { category: "servers", sort_order: 40 },
+  backups: { category: "servers", sort_order: 50 }, gameserver: { category: "servers", sort_order: 60, stage: "beta" },
+  shield: { category: "security", sort_order: 10 },
+  scripts: { category: "tools", sort_order: 10 }, documents: { category: "tools", sort_order: 20 }, inventory: { category: "tools", sort_order: 30 },
+  ntfy: { category: "connections", sort_order: 10 },
+};
+
 const NTFY = { id: "ntfy", name: "ntfy-Benachrichtigungen", description: "Push-Nachrichten aufs Handy", icon: "bell", has_settings: true };
 
 const REQUIREMENTS = [
   { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne, Härtungs-Audit, Fail2ban", order: 50 },
-  { ext_id: "system", id: "root", label: "Root-Rechte (System)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Dienste neu starten", order: 60 },
+  { ext_id: "system", id: "root", label: "Root-Rechte (Server-Zustand)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Dienste neu starten", order: 60 },
   { ext_id: "service-matrix", id: "docker-group", label: "Docker ohne sudo (Service-Matrix)", check_command: "docker ps -q", ok_text: "Docker ist erreichbar.", fail_hint: "Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
 ];
 
@@ -928,6 +961,12 @@ function backupRoutes(p: string, method: string): { handled: boolean; value?: un
       },
     };
   }
+  if (p === "/system/connection") {
+    return {
+      handled: true,
+      value: { peer: "172.18.0.5", client: "172.18.0.5", scheme: "http", via_trusted_proxy: false, forwarded_headers: true, trusted_proxies: [], trusted_proxies_source: "setting" },
+    };
+  }
   if (p === "/system/backups") return { handled: true, value: backupOverview() };
   if (p === "/system/backups/config") return { handled: true, value: backupOverview() };
   if (p === "/system/backups/key") return { handled: true, value: { key_id: "5be3e6c41d0a9f87", recipient: "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq", recovery_key: "AGE-SECRET-KEY-1QYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGPQYQSDV5NZE" } };
@@ -981,6 +1020,119 @@ function restoreRoutes(p: string, method: string): { handled: boolean; value?: u
   return { handled: true, value: {} };
 }
 
+/** Proxmox-Seite (`/ext/proxmox/nodes`): Updates, Speicher, Aufgaben und Details der Knoten und Gäste. */
+const T0 = Math.floor(Date.parse("2026-10-08T10:00:00Z") / 1000);
+const PVE_UPDATES = {
+  nodes: [
+    {
+      connection: "pve2", node: "pve2", error: null, count: 3, tone: "warn", badge: "3 Updates",
+      summary: "3 Updates verfügbar, darunter ein neuer Kernel (danach Neustart nötig)",
+      pve_version: "8.2.7", running_kernel: "6.8.12-2-pve", reboot_pending: false,
+      last_check: T0 - 5 * 3600, last_check_ok: true, last_check_status: "OK", last_check_age_s: 5 * 3600, last_check_stale: false,
+      packages: [
+        { package: "proxmox-kernel-6.8", title: "Proxmox-Kernel", old_version: "6.8.12-2", version: "6.8.12-3", new_package: false },
+        { package: "pve-manager", title: "Proxmox VE Manager", old_version: "8.2.7", version: "8.2.8", new_package: false },
+        { package: "libpve-common-perl", title: null, old_version: "8.2.5", version: "8.2.6", new_package: false },
+      ],
+    },
+    {
+      connection: "pve1", node: "pve1", error: null, count: 0, tone: "good", badge: "aktuell", summary: "Auf dem neuesten Stand",
+      pve_version: "8.2.7", running_kernel: "6.8.12-3-pve", reboot_pending: false,
+      last_check: T0 - 6 * 3600, last_check_ok: true, last_check_status: "OK", last_check_age_s: 6 * 3600, last_check_stale: false, packages: [],
+    },
+  ],
+  errors: [],
+};
+const PVE_STORAGE = {
+  pools: [
+    { id: "pve2/pve2/local", connection: "pve2", node: "pve2", storage: "local", type: "dir", content_labels: ["ISO-Images", "Container-Vorlagen", "Backups"], shared: false, total: 94 * GB, used: 31 * GB, used_percent: 33, tone: "good", volumes: [], other: { iso: { label: "ISO-Images", count: 3, size: 6.2 * GB } } },
+    { id: "pve2/pve2/local-lvm", connection: "pve2", node: "pve2", storage: "local-lvm", type: "lvmthin", content_labels: ["VM-Disks", "Container-Disks"], shared: false, total: 832 * GB, used: 655 * GB, used_percent: 78.7, tone: "warn",
+      volumes: [
+        { volid: "local-lvm:vm-100-disk-0", vmid: "100", name: "docker", size: 256 * GB },
+        { volid: "local-lvm:vm-101-disk-0", vmid: "101", name: "monitoring", size: 32 * GB },
+        { volid: "local-lvm:vm-102-disk-0", vmid: "102", name: "ki-server", size: 200 * GB },
+        { volid: "local-lvm:vm-103-disk-0", vmid: "103", name: "game-win", size: 120 * GB },
+      ] },
+    { id: "pve1/pve1/local", connection: "pve1", node: "pve1", storage: "local", type: "dir", content_labels: ["ISO-Images", "Container-Vorlagen"], shared: false, total: 68 * GB, used: 12 * GB, used_percent: 17.6, tone: "good", volumes: [] },
+    { id: "pve1/pve1/local-lvm", connection: "pve1", node: "pve1", storage: "local-lvm", type: "lvmthin", content_labels: ["Container-Disks"], shared: false, total: 348 * GB, used: 41 * GB, used_percent: 11.8, tone: "good",
+      volumes: [
+        { volid: "local-lvm:vm-200-disk-0", vmid: "200", name: "docker-lxc", size: 32 * GB },
+        { volid: "local-lvm:vm-201-disk-0", vmid: "201", name: "bastion", size: 8 * GB },
+      ] },
+    { id: "pve1/pve1/backup-nas", connection: "pve1", node: "pve1", storage: "backup-nas", type: "nfs", content_labels: ["Backups"], shared: true, total: 3.6 * 1024 * GB, used: 1.9 * 1024 * GB, used_percent: 52.8, tone: "good", volumes: [], other: { backup: { label: "Backups", count: 14, size: 1.7 * 1024 * GB } } },
+  ],
+  errors: [],
+};
+const pveTask = (connection: string, node: string, n: number, type: string, type_label: string, guest: [string, string] | null, ago_min: number, duration_s: number | null, ok: boolean | null, status: string | null = ok ? "OK" : null) => ({
+  connection, node, upid: `UPID:${node}:${n}`, type, type_label, guest_id: guest?.[0] ?? null, guest_name: guest?.[1] ?? null,
+  user: type === "vzdump" || type === "aptupdate" ? "root@pam" : "nodvard@pve", status, running: ok === null, ok, starttime: T0 - ago_min * 60, duration_s,
+});
+const PVE_TASKS = [
+  pveTask("pve2", "pve2", 1, "qmsnapshot", "Snapshot erstellt", ["100", "docker"], 12, 4, true),
+  pveTask("pve2", "pve2", 2, "vzdump", "Backup", ["103", "game-win"], 180, null, false, "unexpected status"),
+  pveTask("pve2", "pve2", 3, "aptupdate", "Paketlisten aktualisiert", null, 300, 21, true),
+  pveTask("pve2", "pve2", 4, "qmreboot", "VM neu gestartet", ["102", "ki-server"], 1440, 38, true),
+  pveTask("pve1", "pve1", 5, "vzdump", "Backup", ["200", "docker-lxc"], 200, 412, true),
+  pveTask("pve1", "pve1", 6, "aptupdate", "Paketlisten aktualisiert", null, 360, 18, true),
+];
+const PVE_HEALTH = (big: boolean) => ({
+  cpu_model: big ? "AMD Ryzen 7 5700G" : "Intel Core i5-8500T", cpu_cores: big ? 8 : 6, cpu_threads: big ? 16 : 6,
+  loadavg: big ? [1.42, 1.31, 1.18] : [0.31, 0.28, 0.25], io_wait_percent: big ? 0.8 : 0.2,
+  mem_total: (big ? 64 : 16) * GB, mem_available: (big ? 22 : 9.4) * GB, swap_total: 8 * GB, swap_used: big ? 0.4 * GB : 0,
+  rootfs_total: (big ? 94 : 68) * GB, rootfs_used: (big ? 31 : 12) * GB, ksm_shared: big ? 1.2 * GB : null, uptime_s: big ? 38305 : 39379,
+  pve_version: "8.2.7", kernel: big ? "6.8.12-2-pve" : "6.8.12-3-pve", boot_mode: "EFI",
+  disks: big
+    ? [{ devpath: "/dev/nvme0n1", model: "NVMe SSD 1TB", summary: "NVMe · 1.0 TB · 96 % Restlebensdauer · 38 °C", badge: "gesund", tone: "good", power_on_hours: 9120 }]
+    : [{ devpath: "/dev/sda", model: "SATA SSD 500GB", summary: "SSD · 500 GB · 33 °C", badge: "gesund", tone: "good", power_on_hours: 21400 }],
+  disks_error: null, zfs: [], zfs_error: null,
+});
+const PVE_GUEST = (id: string) => {
+  const lxc = id === "g-dmini" || id === "g-bastion";
+  const vmid = (PROVIDER_REF[id] ?? "").split("/")[3] ?? "100";
+  const mem = Math.round(((METRICS[id] as { values?: { mem_total_bytes?: number } } | undefined)?.values?.mem_total_bytes ?? 2 * GB) / 1024 ** 2);
+  return {
+    kind: lxc ? "lxc" : "qemu", cores: lxc ? 2 : 4, sockets: lxc ? null : 1, cpu_type: lxc ? null : "host",
+    memory_mb: mem, balloon_mb: lxc ? null : 0, swap_mb: lxc ? 512 : null, os: lxc ? "debian" : id === "g-valheim" ? "win11" : "l26",
+    onboot: true, startup_order: id === "g-docker" ? 1 : null,
+    disks: [{ slot: lxc ? "rootfs" : "scsi0", kind: "disk", storage: "local-lvm", volume: `vm-${vmid}-disk-0`, size: lxc ? "32G" : "256G", mountpoint: lxc ? "/" : null }],
+    networks: [{ slot: "net0", name: lxc ? "eth0" : null, model: lxc ? null : "virtio", mac: "BC:24:11:00:00:01", bridge: "vmbr0", vlan: null, firewall: true, configured_ip: lxc ? "dhcp" : null, link_down: false, ips: [HOSTS.find((h) => h.id === id)?.address ?? ""] }],
+    passthrough: id === "g-ki" ? ["GPU 0000:01:00"] : [], tags: [], running: true, other_ips: [],
+    agent_enabled: !lxc, agent_responding: !lxc ? id !== "g-valheim" : null, bios: lxc ? undefined : "ovmf", machine: lxc ? undefined : "q35",
+    unprivileged: lxc ? true : undefined, features: lxc ? ["nesting"] : undefined,
+  };
+};
+
+function proxmoxRoutes(p: string, method: string): { handled: boolean; value?: unknown } {
+  const none = previewState.noHosts || previewState.ohneProxmox;
+  // Der Abgleich meldet Gäste als „up“/„down“ (HostStatus), nicht als „running“.
+  if (p === "/hosts?tag=proxmox") {
+    const rows = HOSTS.filter((h) => h.managed_tags.includes("proxmox")).map((h) => ({ ...h, status: h.status === "running" ? "up" : h.status }));
+    if (rows.length) rows[rows.length - 1] = { ...rows[rows.length - 1], status: "down" };
+    return { handled: true, value: none ? [] : rows };
+  }
+  if (method !== "GET") return { handled: false };
+  if (p === "/ext/proxmox/updates") return { handled: true, value: none ? { nodes: [], errors: [] } : PVE_UPDATES };
+  if (p === "/ext/proxmox/storage") return { handled: true, value: none ? { pools: [], errors: [] } : PVE_STORAGE };
+  if (p.startsWith("/ext/proxmox/tasks?")) return { handled: true, value: { tasks: none ? [] : PVE_TASKS } };
+  if (p === "/ext/proxmox/connections" && !none) {
+    return { handled: true, value: ["pve1", "pve2"].map((name) => ({
+      name, base_url: `https://${name}.home.arpa:8006`, token_id: "nodvard@pve!deck", tls_insecure_skip_verify: false,
+      tls_fingerprint_sha256: "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89", tls_fingerprint_invalid: false,
+      enabled: true, has_token: true,
+    })) };
+  }
+  const health = p.match(/^\/ext\/proxmox\/nodes\/([^/]+)\/health$/);
+  if (health) return { handled: true, value: PVE_HEALTH(health[1] === "n-pve2") };
+  const guest = p.match(/^\/ext\/proxmox\/guests\/([^/]+)\/(details|snapshots)$/);
+  if (guest && guest[2] === "details") return { handled: true, value: PVE_GUEST(guest[1]) };
+  if (guest) {
+    return { handled: true, value: guest[1] === "g-docker"
+      ? [{ name: "vor-update", description: "Vor dem Compose-Update", snaptime: T0 - 12 * 60, parent: null, with_ram: false }]
+      : [] };
+  }
+  return { handled: false };
+}
+
 export function respond(path: string, method: string, body?: unknown): unknown {
   const p = path.replace(/^\/api\/v1/, "");
   const restore = restoreRoutes(p, method);
@@ -1016,6 +1168,8 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   const backup = backupRoutes(p, method);
   if (backup.handled) return backup.value;
   if (p === "/app/changelog") return CHANGELOG;
+  const pve = proxmoxRoutes(p, method);
+  if (pve.handled) return pve.value;
   if (previewState.ohneProxmox && /^\/ext\/(backups|proxmox)\/(inventory|unprotected)$/.test(p)) return { guests: [], errors: [] };
   if (previewState.ohneProxmox && /^\/ext\/(backups|proxmox)\/(connections|jobs|nodes)$/.test(p)) return [];
   if (p === "/ext/gameserver/servers") return previewState.noHosts ? [] : [GAMESERVER];
@@ -1044,14 +1198,36 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   };
   if (p === "/ext/inventory/categories") return [{ id: "c1", name: "Netzwerk" }, { id: "c2", name: "Werkzeug" }, { id: "c3", name: "Server" }];
   if (p === "/ext/inventory/locations") return [{ id: "l1", name: "Serverschrank", parent_id: null }, { id: "l2", name: "Keller", parent_id: null }];
-  if (p.startsWith("/ext/inventory/items")) return [
-    { id: "i1", name: "TP-Link TL-SG108 Switch", description: "8-Port Gigabit", category_id: "c1", location_id: "l1", quantity: 2, purchase_date: "2024-03-02", purchase_price_cents: 2499, warranty_until: "2026-11-20", notes: null, images: [] },
-    { id: "i2", name: "Raspberry Pi 4 (4 GB)", description: null, category_id: "c3", location_id: "l1", quantity: 1, purchase_date: "2023-06-11", purchase_price_cents: 6490, warranty_until: "2025-06-11", notes: "Raspberry Pi", images: [] },
-    { id: "i3", name: "Bosch Akkuschrauber", description: null, category_id: "c2", location_id: "l2", quantity: 1, purchase_date: "2025-01-05", purchase_price_cents: 8999, warranty_until: "2028-01-05", notes: null, images: [] },
+  if (p === "/ext/inventory/projects") return [
+    { id: "p1", name: "NAS bauen", status: "building", description: null, budget_cents: 60000, item_count: 2, spent_cents: 31480 },
+    { id: "p2", name: "Rack aufräumen", status: "planned", description: null, budget_cents: null, item_count: 0, spent_cents: 0 },
   ];
+  if (p === "/ext/inventory/racks") return [{ id: "r1", name: "Serverschrank", height_units: 12, location_id: "l1", notes: null }];
+  if (/^\/ext\/inventory\/hosts\/[^/]+\/scan$/.test(p) && method === "POST") return {
+    host_id: p.split("/")[4], host_name: DEMO_HOSTS.find((h) => h.id === p.split("/")[4])?.display_name ?? "Server", virtual: false, missing: [],
+    suggestions: [
+      { key: "board", kind: "Mainboard", name: "Mainboard B550M Pro4", manufacturer: "ASRock", model: "B550M Pro4", serial_number: null, quantity: 1, detail: null, preselect: true },
+      { key: "cpu", kind: "Prozessor", name: "AMD Ryzen 7 5700G with Radeon Graphics", manufacturer: "AMD", model: "AMD Ryzen 7 5700G with Radeon Graphics", serial_number: null, quantity: 1, detail: "8 Kerne", preselect: true },
+      { key: "memory", kind: "Arbeitsspeicher", name: "Arbeitsspeicher 64 GB", manufacturer: null, model: null, serial_number: null, quantity: 1, detail: "Summe aller Riegel", preselect: true },
+      { key: "disk:nvme0n1:S5GXNX0R000000A", kind: "NVMe-SSD", name: "NVMe-SSD 1 TB (Samsung SSD 980 PRO 1TB)", manufacturer: "Samsung", model: "Samsung SSD 980 PRO 1TB", serial_number: "S5GXNX0R000000A", quantity: 1, detail: "/dev/nvme0n1", preselect: true },
+      { key: "disk:sda:WX00000000", kind: "Festplatte", name: "Festplatte 4 TB (WDC WD40EFZX-68AWUN0)", manufacturer: "WD", model: "WDC WD40EFZX-68AWUN0", serial_number: "WX00000000", quantity: 1, detail: "/dev/sda", preselect: true },
+      { key: "pci:0", kind: "Netzwerkkarte", name: "Netzwerkkarte Intel I350 Gigabit Network Connection", manufacturer: "Intel", model: "I350 Gigabit Network Connection", serial_number: null, quantity: 1, detail: "2 Anschlüsse, kann auch auf dem Mainboard sitzen", preselect: false },
+    ],
+  };
+  if (p.startsWith("/ext/inventory/items")) {
+    const items = [
+      { id: "i1", name: "TP-Link TL-SG108 Switch", description: "8-Port Gigabit", category_id: "c1", location_id: "l1", quantity: 2, purchase_date: "2024-03-02", purchase_price_cents: 2499, warranty_until: "2026-11-20", notes: null, images: [], manufacturer: "TP-Link", model: "TL-SG108", rack_id: "r1", rack_position: 12, rack_units: 1 },
+      { id: "i2", name: "Raspberry Pi 4 (4 GB)", description: null, category_id: "c3", location_id: "l1", quantity: 1, purchase_date: "2023-06-11", purchase_price_cents: 6490, warranty_until: "2025-06-11", notes: "Raspberry Pi", images: [], host_id: "h-pi" },
+      { id: "i3", name: "Bosch Akkuschrauber", description: null, category_id: "c2", location_id: "l2", quantity: 1, purchase_date: "2025-01-05", purchase_price_cents: 8999, warranty_until: "2028-01-05", notes: null, images: [] },
+      { id: "i4", name: "Festplatte 4 TB", description: null, category_id: "c3", location_id: "l1", quantity: 2, purchase_date: "2026-09-20", purchase_price_cents: 11990, warranty_until: "2029-09-20", notes: null, images: [], manufacturer: "WD", model: "Red Plus 4TB", serial_number: "WX00000000", product_url: "https://www.example.com/wd-red-plus", project_id: "p1" },
+      { id: "i5", name: "NAS-Gehäuse 2U", description: null, category_id: "c3", location_id: "l1", quantity: 1, purchase_date: "2026-09-18", purchase_price_cents: 7500, warranty_until: null, notes: null, images: [], project_id: "p1", rack_id: "r1", rack_position: 8, rack_units: 2 },
+    ];
+    const rack = new URLSearchParams(p.split("?")[1] ?? "").get("rack_id");
+    return rack ? items.filter((i) => i.rack_id === rack) : items;
+  }
   if (p === "/ext/documents/tags") return [{ id: "t1", name: "Rechnungen", match_keyword: "rechnung" }, { id: "t2", name: "Verträge", match_keyword: "vertrag" }];
   if (p.startsWith("/ext/documents/documents")) return [
-    { id: "d1", original_filename: "stromrechnung-2026-08.pdf", content_type: "application/pdf", size_bytes: 40050, page_count: 2, ocr_text: "Stadtwerke …", ocr_status: "done", ocr_error: null, tags: [{ id: "t1", name: "Rechnungen", match_keyword: "rechnung" }] },
+    { id: "d1", original_filename: "stromrechnung-2026-08.pdf", content_type: "application/pdf", size_bytes: 40050, page_count: 2, ocr_text: "Stadtwerke …", ocr_status: "done", ocr_error: null, tags: [{ id: "t1", name: "Rechnungen", match_keyword: "rechnung" }], item_ids: ["i4"] },
     { id: "d2", original_filename: "mietvertrag.pdf", content_type: "application/pdf", size_bytes: 1250000, page_count: 12, ocr_text: "Mietvertrag …", ocr_status: "done", ocr_error: null, tags: [{ id: "t2", name: "Verträge", match_keyword: "vertrag" }] },
     { id: "d3", original_filename: "garantie-scan.jpg", content_type: "image/jpeg", size_bytes: 820000, page_count: null, ocr_text: null, ocr_status: "error", ocr_error: "Kein Text erkannt", tags: [] },
   ];
@@ -1135,15 +1311,85 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       { host_id: "h-pi", host_name: "Raspberry Pi", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Sep 25 07:12 2026", signature_age_days: 1, signature_stale: false, freshclam_active: true, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s1", host_id: "h-pi", host_name: "Raspberry Pi", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "clean", files_scanned: 14210, infected: 0, error: null, output_tail: null, started_at: Date.now() / 1000 - 5400, finished_at: null },
         last_audit: { status: "ok", hardening_index: 71, warnings: 1, created_at: Date.now() / 1000 - 80000, error: null }, scanning: false, auditing: false },
-      { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Aug 20 06:40 2026", signature_age_days: 43, signature_stale: true, freshclam_active: false, lynis_installed: true,
+      { host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", host_status: "up", reachable: true, clamav_installed: true, clamav_version: "1.0.7", signature_version: "27410", signature_date: "Thu Aug 20 06:40 2026", signature_age_days: 43, signature_stale: true, freshclam_active: false, lynis_installed: true, quarantine_files: 1,
         last_scan: { id: "s2", host_id: "h-pve2", host_name: "pve2", kind: "quick", kind_label: "Schnellscan", paths: ["/tmp"], trigger: "schedule", status: "infected", files_scanned: 50311, infected: 1, error: null, output_tail: null, started_at: Date.now() / 1000 - 5000, finished_at: null },
-        last_audit: { status: "ok", hardening_index: 62, warnings: 3, created_at: Date.now() / 1000 - 80000, error: null }, scanning: true, auditing: false },
+        last_audit: { status: "ok", hardening_index: 62, warnings: 3, created_at: Date.now() / 1000 - 80000, error: null }, scanning: true, auditing: false,
+        open_findings: 1, last_scan_outcome: "open" },
       { host_id: "h-docker", host_name: "docker", host_status: "up", reachable: true, clamav_installed: false, lynis_installed: false, last_scan: null, last_audit: null, scanning: false, auditing: false },
       { host_id: "h-pve1", host_name: "Proxmox-Knoten pve1", host_status: "down", reachable: false, error: "Zeitüberschreitung", clamav_installed: false, lynis_installed: false, last_scan: null, last_audit: null, scanning: false, auditing: false },
     ],
-    summary: { hosts: 4, protected: 2, open_threats: 1, quarantined: 2, neutralized_total: 5, findings_30d: 3, avg_hardening: 67, score: 58, stale_signatures: 1 },
+    summary: { hosts: 4, protected: 2, open_threats: 1, quarantined: 2, neutralized_total: 3, findings_30d: 3, avg_hardening: 67, score: 58, stale_signatures: 1 },
     attention: [{ kind: "signatures", tone: "warn", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", title: "Proxmox-Knoten pve2: Virensignaturen sind 6 Wochen alt", hint: "Mit alten Signaturen erkennt ClamAV neue Schadprogramme nicht. Signaturen aktualisieren – dabei wird auch das automatische Update eingeschaltet.", action_label: "Signaturen aktualisieren" }],
     config: { auto_quarantine: true, realtime_enabled: true, watch_interval_min: 10, quick_scan_cron: "0 2 * * *", deep_scan_cron: "30 3 * * 0", audit_cron: "0 1 * * *" },
+  };
+  // Shield-Reiter Quarantäne, Scans, Härtung und Container-Wache: dieselben Zahlen wie die Übersicht oben (1 offener Fund,
+  // 2 in Quarantäne, 3 Funde in 30 Tagen, Härtung 71 und 62).
+  if (p.startsWith("/ext/shield/defender/findings") && method === "GET") {
+    const t = Date.now() / 1000;
+    const finding = (id: string, host: "h-pi" | "h-pve2", path: string, signature: string, status: string, daysAgo: number, note: string | null = null) => ({
+      id, host_id: host, host_name: host === "h-pi" ? "Raspberry Pi" : "Proxmox-Knoten pve2", path, signature, status,
+      quarantine_path: status === "quarantined" ? `/var/lib/nexus-quarantine/${id}_${path.split("/").pop()}` : null,
+      note, detected_at: t - daysAgo * 86400, status_changed_at: status === "detected" ? null : t - daysAgo * 86400 + 600,
+    });
+    return [
+      finding("f-5", "h-pve2", "/tmp/eicar.com", "Eicar-Test-Signature", "detected", 80 / 1440), // im Schnellscan sc-5 gefunden
+      finding("f-4", "h-pi", "/home/pi/Downloads/setup.exe", "Win.Trojan.Agent-1234", "quarantined", 3),
+      finding("f-3", "h-pve2", "/var/tmp/.x/run.sh", "Unix.Trojan.Mirai-9876", "quarantined", 10),
+      finding("f-2", "h-pi", "/home/pi/test/eicar.txt", "Eicar-Test-Signature", "deleted", 40),
+      finding("f-1", "h-pi", "/opt/tools/nc.exe", "PUA.Win.Tool.Netcat", "ignored", 60, "Absichtlich da (Werkzeug)"),
+    ];
+  }
+  if (p.startsWith("/ext/shield/defender/scans") && method === "GET") {
+    const t = Date.now() / 1000;
+    const scan = (id: string, host: "h-pi" | "h-pve2", kind: "quick" | "deep" | "watch", status: string, minutesAgo: number, files: number | null, infected = 0, error: string | null = null) => ({
+      id, host_id: host, host_name: host === "h-pi" ? "Raspberry Pi" : "Proxmox-Knoten pve2", kind,
+      kind_label: { quick: "Schnellscan", deep: "Tiefenscan", watch: "Wächter" }[kind],
+      paths: kind === "deep" ? ["/"] : ["/tmp", "/var/tmp", "/home", "/root"], trigger: "schedule",
+      status, files_scanned: files, infected, error, output_tail: null,
+      started_at: t - minutesAgo * 60, finished_at: status === "running" ? null : t - minutesAgo * 60 + 240,
+    });
+    // Saubere Läufe des Wächters nur mit „saubere Wächter-Läufe zeigen“ (wie das Backend).
+    return [
+      scan("sc-6", "h-pve2", "deep", "running", 25, null),
+      scan("sc-5", "h-pve2", "quick", "infected", 83, 50311, 1),
+      scan("sc-4", "h-pi", "quick", "clean", 90, 14210),
+      ...(p.includes("include_watch=true") ? [scan("sc-3", "h-pi", "watch", "clean", 12, 312)] : []),
+      scan("sc-2", "h-pve2", "quick", "error", 60 * 26, null, 0, "Zeitüberschreitung nach 2 Stunden – der Scan wurde auf dem Server beendet."),
+      scan("sc-1", "h-pi", "deep", "clean", 60 * 24 * 4, 182340),
+    ];
+  }
+  if (p.startsWith("/ext/shield/defender/audits") && method === "GET") {
+    const t = Date.now() / 1000;
+    const help = {
+      "SSH-7408": { title: "SSH-Zugang noch etwas lockerer als nötig", what: "Einige SSH-Einstellungen sind großzügiger als nötig, etwa wie lange eine Anmeldung offen bleiben darf.", todo: "In /etc/ssh/sshd_config nachschärfen, zum Beispiel MaxAuthTries 3 und LoginGraceTime 30.", weight: 3 },
+      "AUTH-9230": { title: "Passwörter mit schwacher Verschlüsselung gespeichert", what: "Das System speichert Passwörter mit wenigen Durchläufen. Das macht Erraten leichter.", todo: "In /etc/login.defs SHA_CRYPT_MIN_ROUNDS auf 5000 oder mehr setzen.", weight: 2 },
+      "PKGS-7392": { title: "Sicherheitsupdates offen", what: "Für einige Pakete gibt es Sicherheitsupdates.", todo: "Unter „Updates“ einspielen.", weight: 3 },
+      "BANN-7126": { title: "Kein Hinweis-Text beim Anmelden", what: "Ein rechtlicher Hinweis vor der Anmeldung fehlt. Für ein Heimnetz meist nicht nötig.", todo: "Kann so bleiben.", weight: 1 },
+    };
+    return [
+      { id: "au-2", host_id: "h-pve2", host_name: "Proxmox-Knoten pve2", status: "ok", hardening_index: 62, created_at: t - 80000, error: null, help,
+        warnings: ["SSH-7408: Consider hardening SSH configuration", "PKGS-7392: Found one or more vulnerable packages", "AUTH-9230: Configure password hashing rounds"],
+        suggestions: ["BANN-7126: Add a legal banner to /etc/issue"] },
+      { id: "au-1", host_id: "h-pi", host_name: "Raspberry Pi", status: "ok", hardening_index: 71, created_at: t - 80000, error: null, help,
+        warnings: ["SSH-7408: Consider hardening SSH configuration"],
+        suggestions: ["AUTH-9230: Configure password hashing rounds", "BANN-7126: Add a legal banner to /etc/issue"] },
+    ];
+  }
+  if (p.startsWith("/ext/shield/history")) {
+    const t = Date.now() / 1000;
+    const items = [
+      { id: "inc-3", host_name: "docker", target: "clamav", message: "Container 'clamav' beendet (Exit 137)", created_at: t - 1800, status: "proposed",
+        ai_summary: "Der Container wurde von außen beendet (Exit 137 ohne Speichermangel). Ein Neustart ist vermutlich harmlos.", action_id: "a-inc-3", is_crash: true, occurrences: 2, last_seen: t - 900 },
+      { id: "inc-2", host_name: "docker", target: "nextcloud-app", message: "Container 'nextcloud-app' neu gestartet (Exit 1)", created_at: t - 86400, status: "resolved",
+        status_changed_at: t - 82000, ai_summary: "Die App startete nicht, weil die Datenbank noch nicht bereit war.", action_id: null, is_crash: true,
+        auto_resolved: "Läuft wieder seit gestern – von selbst erledigt." },
+      { id: "inc-1", host_name: "Raspberry Pi", target: "pihole", message: "Container 'pihole' beendet (Exit 0)", created_at: t - 86400 * 3, status: "dismissed",
+        status_changed_at: t - 86400 * 3 + 600, ai_summary: null, action_id: null, is_crash: false },
+    ];
+    return { items, total: items.length, hosts: ["docker", "Raspberry Pi"] };
+  }
+  if (p === "/ext/shield/stats") return {
+    by_status: { open: 0, proposed: 1, reviewed: 0, resolved: 1, dismissed: 1 }, pending_batch: 0, watched_hosts: 2, ai_healthy: true, ai_message: null, ai_configured: true,
   };
   if (p === "/host-groups") return [];
   if (p === "/me") return { id: "u1", username: "admin", display_name: "Admin", email: "admin@example.org", is_owner: true, locale: "de", permissions: ["*"], totp_enabled: false, timezone: "Europe/Berlin" };
@@ -1161,9 +1407,9 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     { key: "autonomy.mode", value: "propose" }, { key: "autonomy.max_risk", value: "low" },
     { key: "security.deny_patterns", value: ["docker\\s+volume\\s+rm"] },
     { key: "maintenance.windows", value: [{ cron: "0 3 * * 0", duration_minutes: 90, host_ids: "all" }] },
-    { key: "system.timezone", value: "Europe/Berlin" }, { key: "audit.retention_days", value: 90 }, { key: "jobs.run_retention_days", value: 30 },
+    { key: "system.timezone", value: "Europe/Berlin" }, { key: "audit.retention_days", value: 90 }, { key: "jobs.run_retention_days", value: 30 }, { key: "notifications.retention_days", value: 90 },
     { key: "hosts.reachability.enabled", value: true }, { key: "hosts.reachability.interval_minutes", value: 2 },
-    { key: "ssh.confirm_new_host_keys", value: true },
+    { key: "ssh.confirm_new_host_keys", value: true }, { key: "system.trusted_proxies", value: [] },
   ];
   if (p.startsWith("/settings/") && method === "PUT") return { key: p.slice("/settings/".length), value: null };
   if (p === "/extensions/proxmox/settings") return {
@@ -1185,13 +1431,13 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     ...PAGES.map((pg) => ({
       id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "shield", "gameserver", "service-matrix"].includes(pg.ext_id),
       state: previewState.noHosts ? "disabled" : pg.ext_id === "shield" ? "disabled" : pg.ext_id === "gameserver" ? "error" : "enabled",
-      name: pg.title, description: `Modul ${pg.title}`, icon: pg.icon, granted_permissions: [],
+      name: pg.title, description: `Modul ${pg.title}`, icon: pg.icon, granted_permissions: [], ...MODULE_META[pg.ext_id],
       last_error: !previewState.noHosts && pg.ext_id === "gameserver" ? "on_start() fehlgeschlagen: Verbindung zu game-win abgelehnt" : null,
       needs_setup: previewState.start && pg.ext_id === "proxmox",
       setup_reasons: previewState.start && pg.ext_id === "proxmox" ? ["Zugangsdaten fehlen: API-Token-Geheimnis (pve2)."] : [],
     })),
     {
-      ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null,
+      ...NTFY, ...MODULE_META.ntfy, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null,
       state: previewState.noHosts ? "disabled" : "enabled", needs_setup: previewState.start,
       setup_reasons: previewState.start ? ["„ntfy-Server“ ist noch nicht ausgefüllt."] : [],
     },
@@ -1224,7 +1470,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (hostSub) return HOSTS.find((h) => h.id === hostSub[1]);
   if (/^\/ext\/system\/hosts\/[^/]+\/live$/.test(p)) return previewLive();
   const history = p.match(/^\/hosts\/([^/]+)\/metrics\/history\?range=(\w+)$/);
-  // Ohne das Modul „System“ gibt es keinen Messwert-Anbieter: das Backend antwortet mit 404.
+  // Ohne das Modul „Server-Zustand“ gibt es keinen Messwert-Anbieter: das Backend antwortet mit 404.
   if (history) return previewState.ohneProxmoxMin ? undefined : metricsHistory(history[1], history[2]);
   const metrics = p.match(/^\/hosts\/([^/]+)\/metrics$/);
   if (metrics) return previewState.ohneProxmoxMin ? undefined : METRICS[metrics[1]];
@@ -1240,6 +1486,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     return status ? ACTIONS.filter((a) => a.status === status) : ACTIONS;
   }
   if (p === "/files/sources") return previewState.noHosts ? [] : FILE_SOURCES;
+  if (p.startsWith("/files/places?")) return previewState.noHosts ? [] : FILE_PLACES[new URLSearchParams(p.split("?")[1]).get("host_id") ?? ""] ?? [];
   if (/^\/files\/[^/]+\/list\?/.test(p)) return { items: FILE_ENTRIES, next_cursor: null };
   if (p === "/notifications/unread-count") return { unread: 3 };
   if (p.startsWith("/notifications?")) return NOTIFICATIONS;
@@ -1261,15 +1508,15 @@ const NOTIFICATIONS = [
   { id: "n5", ts: minutesAgo(60 * 30), severity: "warning", title: "Updates verfügbar: 12 Pakete auf gameserver", body: "", source_ext_id: "shield", correlation_id: null, read_at: minutesAgo(60 * 29), payload: {} },
 ];
 
-const PROXMOX_SCHEMA = {"type": "object", "properties": {"connections": {"type": "array", "title": "Proxmox-Server", "description": "Ein Eintrag je Proxmox-Server oder -Cluster. Knoten, VMs und Container werden automatisch eingelesen.", "x-item-title": "Server", "items": {"type": "object", "properties": {"name": {"type": "string", "title": "Kurzname", "description": "Eindeutig und ohne Leerzeichen, z. B. „pve2“ oder „pve1“. Nach dem ersten Einlesen nicht mehr ändern."}, "base_url": {"type": "string", "title": "Adresse", "description": "z. B. https://192.168.2.11:8006"}, "token_id": {"type": "string", "title": "API-Token-ID", "description": "Format benutzer@realm!tokenname, z. B. nodvard@pve!dashboard. Erstellen unter Rechenzentrum → Berechtigungen → API-Token."}, "tls_insecure_skip_verify": {"type": "boolean", "default": false, "title": "Selbstsigniertes Zertifikat erlauben", "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."}}, "required": ["name", "base_url", "token_id"]}}}, "required": ["connections"], "x-secrets": [{"label": "proxmox-token:{name}", "per_item": "connections", "title": "API-Token-Geheimnis", "description": "Der geheime Wert, den Proxmox beim Anlegen des Tokens einmalig anzeigt."}]};
+const PROXMOX_SCHEMA = {"type": "object", "properties": {"connections": {"type": "array", "title": "Proxmox-Server", "description": "Ein Eintrag je Proxmox-Server oder -Cluster. Knoten, VMs und Container werden automatisch eingelesen.", "x-item-title": "Server", "items": {"type": "object", "properties": {"name": {"type": "string", "title": "Kurzname", "description": "Eindeutig und ohne Leerzeichen, z. B. „pve2“ oder „pve1“. Nach dem ersten Einlesen nicht mehr ändern."}, "base_url": {"type": "string", "title": "Adresse", "description": "z. B. https://192.168.2.11:8006"}, "token_id": {"type": "string", "title": "API-Token-ID", "description": "Format benutzer@realm!tokenname, z. B. nodvard@pve!dashboard. Erstellen unter Rechenzentrum → Rechte → API-Token."}, "tls_insecure_skip_verify": {"type": "boolean", "default": false, "title": "Selbstsigniertes Zertifikat erlauben", "description": "Nur im eigenen Netz aktivieren. Nötig für das Standardzertifikat von Proxmox."}}, "required": ["name", "base_url", "token_id"]}}}, "required": ["connections"], "x-secrets": [{"label": "proxmox-token:{name}", "per_item": "connections", "title": "API-Token-Geheimnis", "description": "Der geheime Wert, den Proxmox beim Anlegen des Tokens einmalig anzeigt."}]};
 const SHIELD_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "string", "title": "Nodvard KI: Server (Ollama)", "description": "Adresse deines Ollama-Servers für Nodvard KI, z. B. http://192.168.2.43:11434"}, "ollama_model": {"type": "string", "default": "qwen2.5:7b", "title": "Nodvard KI: Modell", "description": "Name des Modells auf dem Ollama-Server."}, "ollama_failover_url": {"type": "string", "title": "Nodvard KI: Ersatz-Server (optional)", "description": "Wird nur gefragt, wenn der erste Server nicht antwortet."}, "ollama_failover_model": {"type": "string", "default": "qwen2.5:0.5b", "title": "Nodvard KI: Ersatz-Modell", "description": "Meist ein kleineres, schnelleres Modell."}, "docker_host_tag": {"type": "string", "default": "docker", "title": "Überwachte Server", "description": "Server mit dieser Markierung (Tag) werden auf abgestürzte Container überwacht."}, "incident_batch_delay_s": {"type": "number", "default": 300, "title": "Sammelzeit (Sekunden)", "description": "So lange werden Vorfälle gesammelt, bevor die KI eine Einschätzung abgibt.", "x-advanced": true}, "host_target_cooldown_s": {"type": "number", "default": 1800, "title": "Ruhezeit je Container (Sekunden)", "description": "Mindestabstand, bevor derselbe Container erneut als Vorfall gemeldet wird.", "x-advanced": true}, "suppressed_hosts": {"type": "array", "items": {"type": "string"}, "title": "Ignorierte Server", "description": "Vorfälle dieser Server werden nie gemeldet, z. B. absichtlich pausierte Systeme.", "x-advanced": true}, "forbidden_host_keywords": {"type": "array", "items": {"type": "string"}, "default": ["pve", "proxmox", "host", "server", "node", "router", "gateway", "nas"], "title": "Schutzwörter", "description": "Schlägt die KI einen Container vor, dessen Name eines dieser Wörter enthält, wird der Vorschlag verworfen (Schutz davor, einen ganzen Server statt eines Containers neu zu starten). Die Vorgabe ist nur ein allgemeiner Startwert; ergänze hier die Namen deiner eigenen Server.", "x-advanced": true}}, "required": ["ollama_url"], "x-secrets": [{"label": "nexus-soc-ollama-key", "title": "Nodvard KI: API-Schlüssel des Servers (optional)", "description": "Nur nötig, wenn dein Ollama-Server hinter einer Anmeldung liegt."}]};
 
 // ---------------------------------------------------------------------------
 // Szenario „ohne Proxmox“ (`?scenario=ohne-proxmox`, `…-min`): eine Installation ganz ohne Proxmox.
 // Vier von Hand angelegte Server mit SSH-Zugang (Raspberry Pi, Debian-VM, NAS, Spiele-PC), die
-// Module Proxmox und Backups sind aus. Die Server haben nie „Verbindung prüfen“ erlebt, ausser
+// Module Proxmox VE und Proxmox-Backups sind aus. Die Server haben nie „Verbindung prüfen“ erlebt, ausser
 // dem Pi -- so sieht es aus, solange nichts den Zustand von Hand angelegter Server nachführt.
-// Bei `-min` sind auch System, Service-Matrix, Nodvard Shield & Co. aus (nur Terminal/Dateien laufen).
+// Bei `-min` sind auch Server-Zustand, Service-Matrix, Nodvard Shield & Co. aus (nur Terminal/Dateien laufen).
 // ---------------------------------------------------------------------------
 
 const KEY_PW: PreviewCredential = { kind: "ssh_password", username: "admin", port: 22 };
@@ -1316,19 +1563,19 @@ function ohneProxmoxSoc(p: string, base: Record<string, unknown>): unknown {
 function ohneProxmoxExtensions() {
   const row = (id: string, name: string, icon: string, state: string, hasSettings = false) => ({
     id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: hasSettings, state, name,
-    description: `Modul ${name}`, icon, granted_permissions: [], last_error: null, needs_setup: false, setup_reasons: [],
+    description: `Modul ${name}`, icon, granted_permissions: [], last_error: null, needs_setup: false, setup_reasons: [], ...MODULE_META[id],
   });
   const on = previewState.ohneProxmoxMin ? "disabled" : "enabled";
   return [
     row("terminal", "Terminal", "terminal", "enabled"),
-    row("system", "System", "cpu", on),
+    row("system", "Server-Zustand", "cpu", on),
     row("service-matrix", "Service-Matrix", "layout-grid", on, true),
     row("proxmox", "Proxmox VE", "server", "disabled", true),
-    row("backups", "Backups", "database-backup", "disabled", true),
+    row("backups", "Proxmox-Backups", "database-backup", "disabled", true),
     row("gameserver", "Gameserver", "gamepad-2", "disabled", true),
     row("shield", "Nodvard Shield", "shield-alert", on, true),
     row("scripts", "Skripte", "terminal-square", on),
-    { ...NTFY, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null, state: "disabled", needs_setup: false, setup_reasons: [] },
+    { ...NTFY, ...MODULE_META.ntfy, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", granted_permissions: [], last_error: null, state: "disabled", needs_setup: false, setup_reasons: [] },
   ];
 }
 
@@ -1353,7 +1600,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
   const on = !min;
   PAGES.splice(0, PAGES.length,
     ...(on ? [
-      page("system", "system", "/system", "System", "cpu", "Infrastruktur", 10),
+      page("system", "system", "/system", "Server-Zustand", "cpu", "Infrastruktur", 10),
       page("service-matrix", "matrix", "/matrix", "Service-Matrix", "layout-grid", "Infrastruktur", 30),
       page("shield", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
       page("scripts", "scripts", "/scripts", "Skripte", "terminal-square", "Automatisierung", 20),

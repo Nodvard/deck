@@ -7,8 +7,9 @@
  * und Bundles. Aenderungen meldet das Ereignis `nodvard-deck:timezone`, die Kern-Shell feuert
  * zusaetzlich das alte `lattice:timezone`; Zuhoerer nehmen nur eines (lib/deckGlobal.ts).
  *
- * Bewusst nur React und `window`, keine weiteren Abhaengigkeiten: der Zeitplan-Waehler
- * (components/SchedulePicker.tsx) wird in Erweiterungs-Bundles einkompiliert.
+ * Bewusst nur React und `window`, keine weiteren Abhaengigkeiten: der Zeitplan-Waehler des UI-Kits
+ * (extensions/_shared/frontend/src/SchedulePicker.tsx) holt diese Datei ueber die Kit-Bruecke
+ * `_shared/frontend/src/timezone.ts` und wird so in Erweiterungs-Bundles einkompiliert.
  */
 import { useSyncExternalStore } from "react";
 

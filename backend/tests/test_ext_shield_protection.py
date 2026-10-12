@@ -209,3 +209,193 @@ async def test_failed_audit_keeps_the_earlier_successful_result_visible():
     assert row["last_ok_audit"]["hardening_index"] == 64 and row["last_ok_audit"]["warnings"] == 1
     assert out["summary"]["avg_hardening"] == 64
     await engine.dispose()
+
+
+def test_posture_penalty_counts_updates_fail2ban_ssh_and_events_in_proportion():
+    hosts = ["a", "b", "c", "d"]
+    updates = {
+        "a": {"security_count": 3, "reboot_required": True},
+        "b": {"security_count": 0, "reboot_required": True, "reboot_pending_since": 1.0},  # Neustart laeuft: zaehlt nicht
+        "c": {"error": "nicht erreichbar", "security_count": 9},  # Fehler: zaehlt nicht
+    }
+    guard = {
+        "a": {"fail2ban": "running", "ssh_findings": [{"severity": "critical"}, {"severity": "warning"}]},
+        "b": {"fail2ban": "none", "ssh_findings": [{"severity": "warning"}]},
+        "c": {"fail2ban": "noaccess", "ssh_findings": None},  # nicht lesbar: zaehlt nicht
+        "d": {"fail2ban": "stopped", "ssh_findings": [{"severity": "info"}]},
+    }
+    points, reasons = protection.posture_penalty(hosts, updates, guard, critical_events=1)
+    expected = [
+        round(protection.UPDATES_PENALTY_POINTS / 4),
+        round(protection.REBOOT_PENALTY_POINTS / 4),
+        round(protection.FAIL2BAN_PENALTY_POINTS * 2 / 4),
+        round(protection.SSH_ROOT_PASSWORD_POINTS / 4),
+        round(protection.SSH_PASSWORD_POINTS / 4),
+        protection.EVENT_POINTS,
+    ]
+    assert points == sum(expected)
+    assert reasons[0] == f"Sicherheitsupdates offen auf 1 von 4 Servern (−{expected[0]})"
+    assert any(r.startswith("Fail2ban fehlt oder läuft nicht auf 2 von 4 Servern") for r in reasons)
+    assert any(r.startswith("Gefährliche SSH-Anmeldung erlaubt (root mit Passwort oder leeres Passwort) auf 1 von 4 Servern")
+               for r in reasons)
+    assert f"1 offenes kritisches Sicherheitsereignis (−{protection.EVENT_POINTS})" in reasons
+    # Server c: Update-Pruefung gescheitert -- kein Abzug, aber genannt.
+    assert reasons[-1] == "Updates auf 1 von 4 Servern zuletzt nicht geprüft (ohne Abzug)"
+
+
+def test_posture_penalty_ignores_stale_states_and_names_them():
+    now = 1_000_000_000.0
+    old = now - protection.STALE_AFTER_S - 1
+    updates = {"a": {"security_count": 3, "checked_at": old}, "b": {"security_count": 3, "checked_at": now - 60},
+               "c": {"error": "kein apt", "unsupported": True}}
+    guard = {"a": {"fail2ban": "none", "checked_at": old}, "b": {"error": "nicht erreichbar", "checked_at": now}}
+    points, reasons = protection.posture_penalty(["a", "b", "c"], updates, guard, 0, now=now)
+    assert points == round(protection.UPDATES_PENALTY_POINTS / 3)
+    assert reasons == [
+        f"Sicherheitsupdates offen auf 1 von 3 Servern (−{round(protection.UPDATES_PENALTY_POINTS / 3)})",
+        "Updates auf 1 von 3 Servern zuletzt nicht geprüft (ohne Abzug)",
+        "Einbruchschutz auf 2 von 3 Servern zuletzt nicht geprüft (ohne Abzug)",
+    ]
+
+
+def test_one_affected_server_among_many_still_costs_a_point():
+    hosts = [f"h{i}" for i in range(30)]
+    points, reasons = protection.posture_penalty(hosts, {}, {"h0": {"ssh_findings": [{"severity": "critical"}]}}, 0)
+    assert points == 1 and reasons[0].endswith("auf 1 von 30 Servern (−1)")
+
+
+def test_signature_reasons_say_stale_or_unknown():
+    stale = [{"clamav_installed": True, "signature_stale": True, "signature_age_days": 9}, {"clamav_installed": True}]
+    reasons = protection.signature_reasons(stale)
+    assert len(reasons) == 1 and reasons[0].startswith("Virensignaturen veraltet auf 1 von 2 Servern (−")
+    unknown = protection.signature_reasons([{"clamav_installed": True, "signature_stale": None}])
+    assert len(unknown) == 1 and unknown[0].startswith("Alter der Virensignaturen unbekannt (−")
+    assert protection.signature_reasons([{"clamav_installed": True, "signature_stale": False}]) == []
+
+
+def test_posture_penalty_without_data_or_hosts_costs_nothing_and_events_are_capped():
+    assert protection.posture_penalty([], {}, {}, 0) == (0, [])
+    assert protection.posture_penalty(["a"], {}, {}, 0) == (0, [])
+    points, reasons = protection.posture_penalty(["a"], {}, {}, critical_events=9)
+    assert points == protection.EVENT_MAX_POINTS
+    assert reasons == [f"9 offene kritische Sicherheitsereignisse (−{protection.EVENT_MAX_POINTS})"]
+    one, _ = protection.posture_penalty(["a"], {"a": {"security_count": 1}}, {}, 0)
+    assert one == protection.UPDATES_PENALTY_POINTS
+
+
+@pytest.mark.asyncio
+async def test_overview_score_counts_updates_and_names_the_reasons():
+    from nodvard_deck_ext_shield.models import BaselineRecord, SecurityEventRecord
+
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    async with sm() as session:
+        session.add(_scan("s0", "clean", datetime.now(UTC) - timedelta(days=1)))
+        await session.commit()
+    before = (await Defender(_Ctx(sm, _status(recent))).overview())["summary"]
+    assert before["score_reasons"] == []
+    async with sm() as session:
+        session.add(BaselineRecord(id="h1:updates", host_id="h1", kind="updates", data={"security_count": 2}, updated_at=datetime.now(UTC)))
+        session.add(BaselineRecord(id="h1:guard", host_id="h1", kind="guard", data={"fail2ban": "none", "ssh_findings": []}, updated_at=datetime.now(UTC)))
+        session.add(SecurityEventRecord(
+            id="e1", host_id="h1", host_name="docker", kind="bruteforce", severity="critical", title="Angriff", detail={},
+            acknowledged=False, created_at=datetime.now(UTC),
+        ))
+        await session.commit()
+    after = (await Defender(_Ctx(sm, _status(recent))).overview())["summary"]
+    lost = protection.UPDATES_PENALTY_POINTS + protection.FAIL2BAN_PENALTY_POINTS + protection.EVENT_POINTS
+    assert after["score"] == max(0, before["score"] - lost)
+    assert [r.split(" (")[0] for r in after["score_reasons"]] == [
+        "Sicherheitsupdates offen auf dem Server", "Fail2ban fehlt oder läuft nicht auf dem Server",
+        "1 offenes kritisches Sicherheitsereignis",
+    ]
+    await engine.dispose()
+
+
+def _scan(scan_id: str, status: str, started: datetime, host_id: str = "h1"):
+    from nodvard_deck_ext_shield.models import ScanRecord
+
+    return ScanRecord(id=scan_id, host_id=host_id, host_name="Pi", kind="quick", paths=["/home"], trigger="manual",
+                      status=status, files_scanned=10, infected=0, started_at=started,
+                      finished_at=None if status == "running" else started + timedelta(minutes=5))
+
+
+@pytest.mark.asyncio
+async def test_a_running_scan_does_not_lower_the_score():
+    """In der Demo gesehen: Waehrend eines Schnellscans fiel der Schutzwert von 88 auf 62 und sprang danach zurueck.
+    Fuer „aktuell gescannt“ zaehlt der letzte fertige Scan, nicht der gerade laufende."""
+    from nodvard_deck_ext_shield.models import ScanRecord
+
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    now = datetime.now(UTC)
+
+    def scan(scan_id: str, status: str, started: datetime) -> ScanRecord:
+        return ScanRecord(id=scan_id, host_id="h1", host_name="Pi", kind="quick", paths=["/home"], trigger="manual",
+                          status=status, files_scanned=10, infected=0, started_at=started,
+                          finished_at=None if status == "running" else started + timedelta(minutes=5))
+
+    async with sm() as s:
+        s.add(scan("s1", "clean", now - timedelta(days=2)))
+        await s.commit()
+    before = await Defender(_Ctx(sm, _status(recent))).overview()
+    async with sm() as s:
+        s.add(scan("s2", "running", now - timedelta(minutes=1)))
+        await s.commit()
+    during = await Defender(_Ctx(sm, _status(recent))).overview()
+    assert during["hosts"][0]["last_scan"]["status"] == "running"
+    assert during["hosts"][0]["last_completed_scan_at"] == pytest.approx((now - timedelta(days=2)).timestamp())
+    assert during["summary"]["score"] == before["summary"]["score"]
+
+    async with sm() as s:
+        s.add(scan("s3", "error", now))
+        await s.commit()
+    old_only = await Defender(_Ctx(sm, _status(recent))).overview()
+    assert old_only["summary"]["score"] == before["summary"]["score"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_without_a_finished_scan_the_running_one_still_does_not_count():
+    from nodvard_deck_ext_shield.models import ScanRecord
+
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    none = await Defender(_Ctx(sm, _status(recent))).overview()
+    async with sm() as s:
+        s.add(ScanRecord(id="s1", host_id="h1", host_name="Pi", kind="quick", paths=["/home"], trigger="manual",
+                         status="running", files_scanned=None, infected=0, started_at=datetime.now(UTC), finished_at=None))
+        await s.commit()
+    running = await Defender(_Ctx(sm, _status(recent))).overview()
+    assert running["hosts"][0]["last_completed_scan_at"] is None
+    assert running["summary"]["score"] == none["summary"]["score"]
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_an_old_scan_still_counts_as_old_while_a_new_one_runs_and_the_reasons_say_why():
+    engine, sm = await _engine()
+    recent = (datetime.now(UTC) - timedelta(days=1)).strftime("%a %b %d %H:%M:%S %Y")
+    now = datetime.now(UTC)
+    async with sm() as s:
+        s.add(_scan("fresh", "clean", now - timedelta(days=1)))
+        await s.commit()
+    fresh = (await Defender(_Ctx(sm, _status(recent))).overview())["summary"]
+    async with sm() as s:
+        await s.delete(await s.get(type(_scan("x", "clean", now)), "fresh"))
+        s.add(_scan("old", "infected", now - timedelta(days=9)))
+        s.add(_scan("run", "running", now - timedelta(minutes=1)))
+        await s.commit()
+    stale = (await Defender(_Ctx(sm, _status(recent))).overview())["summary"]
+    assert fresh["score"] - stale["score"] in (25, 26)  # gerundet
+    assert stale["score_reasons"] == ["Kein fertiger Scan in den letzten 8 Tagen: Pi (−25)"]
+
+    async with sm() as s:
+        s.add(_scan("ok", "clean", now - timedelta(hours=2)))
+        s.add(_scan("err", "error", now))  # neuer als der laufende von eben
+        await s.commit()
+    failed = (await Defender(_Ctx(sm, _status(recent))).overview())["summary"]
+    # Ein gescheiterter Scan senkt den Wert nicht (der vorige fertige zaehlt), steht aber als Grund da.
+    assert failed["score"] == fresh["score"]
+    assert failed["score_reasons"] == ["Letzter Scan auf Pi fehlgeschlagen"]
+    await engine.dispose()

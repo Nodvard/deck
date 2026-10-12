@@ -12,6 +12,9 @@ import asyncio
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
+from nodvard_sdk import ServiceCatalog
+
+from .address_check import check_all, docker_hosts, problem_count
 from .config import (
     NPM_SECRET,
     PIHOLE_SECRET,
@@ -26,6 +29,14 @@ from .pihole import PiholeClient, PiholeError
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
+
+CATALOG_TIMEOUT_S = 45.0
+"""So lange darf das Lesen der Container dauern (die Service-Matrix fragt jeden Docker-Server per SSH)."""
+NO_CATALOG = (
+    "Für den Adress-Check braucht es die Service-Matrix, sie kennt die Docker-Container. "
+    "Sie ist ausgeschaltet oder gerade nicht geladen."
+)
+NO_DOCKER_HOSTS = "Kein Server ist als Docker-Server markiert, deshalb lässt sich kein Ziel einem Container zuordnen."
 
 
 class NetworkService:
@@ -172,4 +183,38 @@ class NetworkService:
                 "certificates_warn": sum(1 for c in certificates if c["status"] == "warn"),
                 "certificates_expired": sum(1 for c in certificates if c["status"] == "expired"),
             },
+        }
+
+    async def address_check(self) -> dict[str, Any]:
+        """Je Proxy-Host: Zu welchem Container fuehrt das Ziel, und laeuft er? Wirft nie; Zustaende wie bei
+        `npm_status()`, dazu `no_catalog` (Service-Matrix aus) und `docker_unreadable` (keine Container lesbar)."""
+        empty: dict[str, Any] = {"checks": [], "problems": 0}
+        try:
+            client = await self.npm_client()
+        except NotConfigured as exc:
+            return {"state": "not_configured", "message": str(exc), **empty}
+        providers = await self._ctx.capabilities.query(ServiceCatalog)
+        if not providers:
+            return {"state": "no_catalog", "message": NO_CATALOG, **empty}
+        try:
+            proxies = await client.proxy_hosts()
+        except NpmError as exc:
+            return {"state": exc.state, "message": str(exc), **empty}
+        rows: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for provider in providers:
+            try:
+                rows.extend(await asyncio.wait_for(provider.list_services(), timeout=CATALOG_TIMEOUT_S))
+            except TimeoutError:
+                errors.append(f"Zeitüberschreitung nach {CATALOG_TIMEOUT_S:.0f} s")
+            except Exception as exc:  # noqa: BLE001 - ein Anbieter darf den Check nicht abbrechen
+                errors.append(str(exc) or type(exc).__name__)
+        if errors and not rows:
+            return {"state": "docker_unreadable", "message": f"Die Docker-Container ließen sich nicht lesen: {'; '.join(errors)}", **empty}
+        checks = check_all(proxies, rows, npm_url=client.base_url)
+        return {
+            "state": "ok",
+            "message": None if docker_hosts(rows) else NO_DOCKER_HOSTS,
+            "checks": checks,
+            "problems": problem_count(checks),
         }

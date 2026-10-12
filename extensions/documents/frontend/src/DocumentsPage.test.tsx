@@ -196,3 +196,73 @@ describe("DocumentsPage", () => {
     await waitFor(() => expect(renamed).toBe("Strom 2026.pdf"));
   });
 });
+
+describe("DocumentsPage: Ladefehler und Fehlergründe", () => {
+  /** Wie `mockFetch`, nur antwortet `match` mit `status` und dem Grund „Datenbank gesperrt“. */
+  function failing(match: (url: string, method: string) => boolean, status = 500) {
+    const state = { fail: true };
+    const ok = mockFetch();
+    const fn = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (state.fail && match(String(input), init?.method ?? "GET")) return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status });
+      return ok(input, init);
+    });
+    vi.stubGlobal("fetch", fn);
+    return state;
+  }
+
+  it("die Tags kommen nicht an: der Grund und „Erneut versuchen“ statt einer kaputten Seite", async () => {
+    const state = failing((url) => url.endsWith("/ext/documents/tags"));
+    render(<DocumentsPage />);
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Die Liste der Dokumente ließ sich gerade nicht laden: Datenbank gesperrt");
+    state.fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByText("stromrechnung.pdf")).toBeInTheDocument();
+  });
+
+  it("Herunterladen scheitert: der Grund vom Server statt nur „HTTP 404“", async () => {
+    failing((url) => url.endsWith("/download"), 404);
+    render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.click(screen.getByRole("button", { name: /Herunterladen/ }));
+    expect(await screen.findByText("Fehler: Datenbank gesperrt")).toBeInTheDocument();
+  });
+
+  it("Vorschau scheitert: der Grund vom Server statt nur „HTTP 404“", async () => {
+    failing((url) => url.endsWith("/download"), 404);
+    render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Ansehen" }));
+    expect(await screen.findByText("Fehler: Datenbank gesperrt")).toBeInTheDocument();
+    expect(screen.queryByTestId("preview-doc-1")).toBeNull();
+  });
+
+  it("Löschen scheitert: der Grund steht da, das Dokument bleibt", async () => {
+    failing((url, method) => url.endsWith("/documents/doc-1") && method === "DELETE");
+    render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Löschen" }));
+    expect(await screen.findByText("Fehler: Datenbank gesperrt")).toBeInTheDocument();
+    expect(screen.getByText("stromrechnung.pdf")).toBeInTheDocument();
+  });
+
+  it("scheitert erst die Suche, bleibt die Seite mit Suchfeld stehen und der Grund steht darüber", async () => {
+    failing((url, method) => url.includes("q=STROM") && method === "GET");
+    render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.change(screen.getByLabelText("Volltextsuche"), { target: { value: "STROM" } });
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Die Liste der Dokumente ließ sich gerade nicht laden: Datenbank gesperrt");
+    expect(error.textContent).toContain("letzte geladene Stand");
+    expect(screen.getByLabelText("Volltextsuche")).toBeInTheDocument();
+    expect(screen.getByText("stromrechnung.pdf")).toBeInTheDocument();
+  });
+
+  it("Tag entfernen scheitert: das steht da, statt still nichts zu tun", async () => {
+    failing((url, method) => url.includes("/tags/tag-1") && method === "DELETE");
+    render(<DocumentsPage />);
+    await screen.findByText("stromrechnung.pdf");
+    fireEvent.click(screen.getByRole("button", { name: "Tag Rechnungen entfernen" }));
+    expect(await screen.findByText("Fehler: Datenbank gesperrt")).toBeInTheDocument();
+  });
+});

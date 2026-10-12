@@ -8,10 +8,11 @@ weil sie beim naechsten Infrastruktur-Umbau nie nachgezogen wird. Diese Extensio
 keine Liste, die veralten koennte.
 
 **Container-Verwaltung:** von reiner Anzeige zu echter Verwaltung --
-Start/Stop/Neustart je Container (`container.*`-Aktionen, `DockerContainerExecutor`,
+Start/Stop/Neustart/Loeschen je Container (`container.*`-Aktionen, `DockerContainerExecutor`,
 IMMER ueber das Aktions-Gate) und Live-Logs (`GET .../containers/{host}/{name}/logs`,
-gestreamt ueber `ctx.exec.stream()`). Damit braucht es fuer den Alltag weder
-Portainer noch eine SSH-Sitzung auf dem Docker-Host.
+gestreamt ueber `ctx.exec.stream()`), dazu eine Konsole im Container (`shell.py`, ueber das
+Terminal des Kerns). Damit braucht es fuer den Alltag weder Portainer noch eine SSH-Sitzung auf
+dem Docker-Host.
 
 **Image-Updates** (`image_updates.py`): rein lesende Pruefung, ob es fuer laufende
 Container neuere Images gibt (`GET/POST .../image-updates`), optional als Tagesjob mit
@@ -21,6 +22,7 @@ das Aktions-Gate -- `applier.py` liefert die Uebersicht vorab (`.../image-update
 
 from __future__ import annotations
 
+import asyncio
 import json
 
 from typing import Any
@@ -40,21 +42,38 @@ from nodvard_sdk import (
     StatusGridView,
     WidgetSpec,
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from .capabilities import (
     CONTAINER_NAME_RE,
+    MAX_URL_LENGTH,
+    MAX_URL_OVERRIDES,
     DockerContainerExecutor,
     DockerMaintenanceExecutor,
     DockerServiceCatalog,
+    clean_tile_url,
     container_action_specs,
+    url_origin,
+    url_overrides,
 )
 from .applier import IMAGE_UPDATE_SPEC, ImageApplier, ImageUpdateExecutor
 from .docker_details import parse_images, parse_system_df, summarize_inspect
 from .image_apply import NotUpdatable
 from .image_updates import ImageUpdateService, register_job
+from .shell import ContainerShell
+from .places import DockerFilePlaces
 
 _MAX_TAIL = 5000
+
+
+class _TileUrlIn(BaseModel):
+    url: str | None = Field(..., max_length=MAX_URL_LENGTH)
+    """Eigene Adresse der Kachel; leer oder `null` nimmt wieder die erkannte. Pflichtfeld: `{}` ist kein Zuruecksetzen."""
+
+    @field_validator("url")
+    @classmethod
+    def _url(cls, value: str | None) -> str | None:
+        return None if value is None or not value.strip() else clean_tile_url(value)
 
 
 class _ApplyIn(BaseModel):
@@ -75,7 +94,7 @@ def _register_host_tool(ctx: ExtensionContext, tag: str) -> None:
     einstellbar (`docker_host_tag`) -- deshalb bei jeder Aenderung neu gemeldet."""
     ctx.ui.register_host_tool(HostToolSpec(
         id="containers", title="Container", icon="layout-grid", category="services",
-        description="Container starten, stoppen, Logs, Details -- Docker-Speicher aufräumen", path="/matrix?host={host_id}",
+        description="Container starten, stoppen, löschen, Logs, Konsole, Details -- Docker-Speicher aufräumen", path="/matrix?host={host_id}",
         tags=[tag],
     ))
 
@@ -100,9 +119,11 @@ class Extension(NodvardExtension):
         self._applier = ImageApplier(ctx, self._images)
         self._images.apply_hints = self._applier.hints
         ctx.capabilities.provide(self._catalog)
+        ctx.capabilities.provide(DockerFilePlaces(ctx, self._catalog))
         ctx.capabilities.provide(DockerContainerExecutor(ctx))
         ctx.capabilities.provide(DockerMaintenanceExecutor(ctx))
         ctx.capabilities.provide(ImageUpdateExecutor(self._applier))
+        ctx.capabilities.provide(ContainerShell(ctx))
         # Nicht in `container_action_specs` (die haengen am Docker-Tag): Den Befehl baut immer
         # die Extension, die Aktion kommt nur ueber die Route unten -- nie ueber die Server-Seite.
         ctx.actions.register(IMAGE_UPDATE_SPEC)
@@ -118,6 +139,8 @@ class Extension(NodvardExtension):
                     "url_scheme": {"type": "string", "enum": ["http", "https"]},
                     "image_updates_enabled": {"type": "boolean"},
                     "image_updates_cron": {"type": "string"},
+                    "image_update_auto_rollback": {"type": "boolean"},
+                    "url_overrides": {"type": "object", "additionalProperties": {"type": "string"}},
                 },
             }
         )
@@ -293,6 +316,42 @@ class Extension(NodvardExtension):
             )
 
         ctx.api.include_router(logs_router, permission="hosts.execute")
+
+        apps_router = APIRouter()
+        url_lock = asyncio.Lock()
+
+        @apps_router.put("/containers/{host_id}/{container}/url")
+        async def set_tile_url(host_id: str, container: str, body: _TileUrlIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+            """Eigene Adresse fuer die Kachel eines Containers (z. B. wenn die erkannte nicht stimmt). Bleibt gespeichert,
+            auch wenn der Container neu erstellt wird (gleicher Name); `url: null` nimmt wieder die erkannte. Wie das
+            Bearbeiten der Apps-Seite nur mit `apps.write`."""
+            if not CONTAINER_NAME_RE.match(container):
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
+            host = await _docker_host(host_id)
+            key = f"{host.id}:{container}"
+            async with url_lock:
+                settings = await ctx.settings.get()
+                overrides = url_overrides(settings)
+                if body.url is None:
+                    overrides.pop(key, None)
+                else:
+                    if key not in overrides and len(overrides) >= MAX_URL_OVERRIDES:
+                        raise HTTPException(
+                            status_code=status.HTTP_409_CONFLICT,
+                            detail=f"Es sind schon {MAX_URL_OVERRIDES} eigene Adressen gespeichert. Bitte erst alte zurücksetzen.",
+                        )
+                    overrides[key] = body.url
+                await ctx.settings.set({**settings, "url_overrides": overrides})
+            try:
+                await ctx.audit.log(
+                    action="service_matrix.tile_url", outcome="success", target_type="container", target_id=key,
+                    detail={"custom": body.url is not None, "url": url_origin(body.url) if body.url else None}, actor=actor,
+                )
+            except Exception:  # noqa: BLE001 - gespeichert ist gespeichert
+                pass
+            return {"id": key, "url": body.url}
+
+        ctx.api.include_router(apps_router, permission="apps.write")
 
         ctx.ui.register_page(
             PageSpec(

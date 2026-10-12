@@ -246,7 +246,7 @@ function CredentialRow({
       </div>
 
       {expanded && credential.kind === "ssh_key" && (
-        <div id={`einrichtungsbefehl-${credential.id}`} className="mt-4 scroll-mt-20 rounded-lg border border-white/[0.08] bg-black/10 p-4"><SetupCommand host={host} credential={credential} /></div>
+        <div id={`einrichtungsbefehl-${credential.id}`} className="mt-4 scroll-mt-20 rounded-lg border border-white/[0.08] bg-black/10 p-4"><SetupCommand host={host} credential={credential} onChecked={onChecked} /></div>
       )}
 
       {!credential.is_default && (

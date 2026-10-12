@@ -79,14 +79,21 @@ def install_validation_error_handler(app: FastAPI) -> None:
 
 class CodedHTTPException(HTTPException):
     """HTTP-Fehler mit festem Bezeichner: Die Antwort ist `{detail, code}` (`install_coded_error_handler`), damit die
-    Oberflaeche und Apps ihn erkennen, ohne den Text zu vergleichen."""
+    Oberflaeche und Apps ihn erkennen, ohne den Text zu vergleichen. `extra` haengt weitere Felder an (z. B. den
+    Fingerabdruck eines Server-Schluessels); `detail` und `code` lassen sich damit nicht ueberschreiben."""
 
-    def __init__(self, status_code: int, detail: str, code: str, headers: dict[str, str] | None = None) -> None:
+    def __init__(
+        self, status_code: int, detail: str, code: str, headers: dict[str, str] | None = None,
+        extra: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(status_code=status_code, detail=detail, headers=headers)
         self.code = code
+        self.extra = dict(extra or {})
 
     def response(self) -> JSONResponse:
-        return JSONResponse({"detail": self.detail, "code": self.code}, status_code=self.status_code, headers=self.headers)
+        return JSONResponse(
+            {**self.extra, "detail": self.detail, "code": self.code}, status_code=self.status_code, headers=self.headers
+        )
 
 
 def install_coded_error_handler(app: FastAPI) -> None:

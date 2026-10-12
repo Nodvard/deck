@@ -180,6 +180,8 @@ export interface PageOut extends PageSpec {
   /** Frühere Kennungen der Erweiterung: Adressen `/ext/<alt>/…` leitet `ExtensionPage` auf `/ext/<ext_id>/…`
    * um. Fehlt bei einem älteren Backend. */
   legacy_ext_ids?: string[];
+  /** Reifegrad des Moduls: `beta` bekommt in Menü und Seitenkopf ein Abzeichen. Fehlt bei einem älteren Backend (= fertig). */
+  stage?: string;
 }
 
 /** docs/02-EXTENSION-API.md §4: GET /api/v1/ext/<id>/<data_endpoint> -> {data, meta}. */

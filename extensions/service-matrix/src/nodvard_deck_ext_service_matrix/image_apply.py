@@ -356,6 +356,19 @@ def apply_script(t: ComposeTarget, *, old_image_id: str, rollback: str) -> str:
     )
 
 
+RC_BACK_TAG, RC_BACK_UP = 30, 31
+
+
+def rollback_script(t: ComposeTarget, rollback: str) -> str:
+    """Der automatische Ruecksprung (entkoppelt wie `apply_script`): das Sicherungs-Image wieder unter dem Namen aus
+    der Compose-Datei, dann den Dienst damit neu erstellen. Dieselben Befehle wie `rollback_commands`."""
+    check_target(t)
+    if not is_valid_ref(rollback):
+        raise ValueError(f"Ungültiger Sicherungs-Name: {rollback!r}")
+    tag = shlex.join(["docker", "tag", rollback, t.image])
+    return f"echo @@step=rollback; {tag} || exit {RC_BACK_TAG}; {up_command(t)} || exit {RC_BACK_UP}"
+
+
 def rollback_commands(t: ComposeTarget, rollback: str) -> str:
     """Zurueck auf die alte Version (auf dem Host). Das alte Image bleibt unter `rollback`."""
     return "\n".join([shlex.join(["docker", "tag", rollback, t.image]), up_command(t)])
@@ -522,6 +535,22 @@ def is_database_image(image: str, service: str) -> bool:
     return segment.startswith(_DB_WORDS) and not helper
 
 
+_STORE_WORDS = (
+    "redis", "valkey", "keydb", "dragonfly", "memcached", "mssql", "percona", "cockroach", "etcd", "rabbitmq", "minio",
+    "nats", "zookeeper", "kafka", "opensearch", "meilisearch", "typesense", "qdrant", "weaviate", "milvus", "chroma",
+)
+"""Datenspeicher, die keine "Datenbank" im Sinne der Warnung sind, aber ihre Dateien beim Update umstellen koennen."""
+
+
+def is_data_store(image: str, service: str) -> bool:
+    """Datenbank oder anderer Datenspeicher -- fuer diese Dienste gibt es nie einen automatischen Rueckweg. Prueft jeden
+    Teil des Image-Namens (`mcr.microsoft.com/mssql/server`)."""
+    if is_database_image(image, service):
+        return True
+    parts = canonical_repo(split_ref(image)[0]).lower().split("/")
+    return any(part.startswith(_STORE_WORDS) for part in parts) or service.lower().startswith(_STORE_WORDS)
+
+
 def risk_for(image: str, service: str) -> Risk:
     return Risk.HIGH if is_database_image(image, service) else Risk.MEDIUM
 
@@ -562,13 +591,19 @@ def warnings_for(
     return out
 
 
-def reason_text(host_name: str, container: str, image: str, project: str, service: str, risk: Risk) -> str:
-    """Das Einzige, was die Aktionen-Seite zeigt -- deshalb steht hier das Wesentliche."""
+AUTO_ROLLBACK_REASON = " Startet die neue Version nicht (Absturz), geht es automatisch zur alten zurück."
+
+
+def reason_text(
+    host_name: str, container: str, image: str, project: str, service: str, risk: Risk, *, auto_rollback: bool = False,
+) -> str:
+    """Das Einzige, was die Aktionen-Seite zeigt -- deshalb steht hier das Wesentliche (auch der automatische Rueckweg:
+    der Freigebende gibt ihn mit frei)."""
     text = (
         f"Image-Update: „{container}“ auf {host_name} – {image} neu laden und Container neu erstellen "
         f"(Compose „{project}“/„{service}“). Kurz nicht erreichbar."
     )
-    return text + (" Datenbank – vorher Backup!" if risk is Risk.HIGH else "")
+    return text + (" Datenbank – vorher Backup!" if risk is Risk.HIGH else "") + (AUTO_ROLLBACK_REASON if auto_rollback else "")
 
 
 def plan_id(command: str, old_image_id: str, remote_digest: str | None) -> str:
@@ -666,6 +701,9 @@ class Verdict:
     changed: bool = True
     """`False`: der Container laeuft mit demselben Image wie vorher."""
     health: str | None = None
+    crashed: bool = False
+    """Eindeutiger Fehlstart: beendet, Absturz-Kreislauf oder gar kein Container. Nicht bei blossem "ungesund" -- eine
+    App kann mitten in einer langen Datenumstellung so aussehen (siehe `allows_auto_rollback`)."""
 
 
 CRASH_LOOP_TEXT = "Container startet immer wieder neu. Logs über den Knopf „Logs“."
@@ -704,11 +742,11 @@ def judge_verify(snap: Snapshot, *, old_image_id: str, final: bool) -> Verdict |
     ein Urteil her."""
     members = snap.members
     if not members:
-        return Verdict(False, "Kein Container des Dienstes gefunden – er läuft nicht wieder an.") if final else None
+        return Verdict(False, "Kein Container des Dienstes gefunden – er läuft nicht wieder an.", crashed=True) if final else None
     for m in members:
         if m.status in ("exited", "dead"):
             code = f", Exit-Code {m.exit_code}" if m.exit_code is not None else ""
-            return Verdict(False, f"Container läuft nicht wieder an (Zustand: beendet{code}). Logs über den Knopf „Logs“.")
+            return Verdict(False, f"Container läuft nicht wieder an (Zustand: beendet{code}). Logs über den Knopf „Logs“.", crashed=True)
         if m.health == "unhealthy":
             return Verdict(False, "Container meldet „ungesund“. Logs über den Knopf „Logs“.")
     settled = all(m.status == "running" and m.health in (None, "healthy") for m in members)
@@ -717,7 +755,7 @@ def judge_verify(snap: Snapshot, *, old_image_id: str, final: bool) -> Verdict |
             return None
         restarting = [m for m in members if m.status == "restarting"]
         if restarting:
-            return Verdict(False, CRASH_LOOP_TEXT)
+            return Verdict(False, CRASH_LOOP_TEXT, crashed=True)
         other = [m for m in members if m.status != "running"]
         if other:
             return Verdict(False, f"Container läuft nicht (Zustand: {other[0].status}).")

@@ -4,11 +4,13 @@ name        = "Inventar"
 version     = "0.1.0"
 api_version = "0.1.0"
 author      = "Nodvard"
-description = "Inventar für Geräte und Gegenstände: Standorte, Kategorien, Kaufpreis, Garantie mit Ablaufwarnung, Fotos und CSV-Export."
+description = "Inventar für Geräte und Gegenstände: Standorte, Kategorien, Kaufpreis, Garantie mit Ablaufwarnung, Fotos, CSV-Export, Bauprojekte, Racks und Teile eines Servers per SSH auslesen."
 icon        = "package"
 category    = "tools"
 sort_order  = 30
 entrypoint  = "nodvard_deck_ext_inventory:Extension"
 frontend    = "frontend/dist/index.js"
 
-permissions = []
+# Teile eines Servers auslesen: ein nur lesender Befehl über ctx.exec.run() (hardware.SCAN_COMMAND), die Route
+# verlangt vom Nutzer selbst das Recht hosts.execute; jeder Scan steht im Protokoll (audit.write).
+permissions = ["hosts.read", "hosts.execute", "audit.write"]

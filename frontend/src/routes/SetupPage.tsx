@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
 
+import { GuideLink } from "../components/GuideLink";
 import { apiFetch } from "../lib/api";
 import { SHORT_NAME_HINT, type Branding } from "../lib/branding";
 import { PASSWORD_HINT, USERNAME_HINT, passwordProblem, usernameProblem } from "../lib/credentials";
@@ -422,6 +423,9 @@ function CodeHelp() {
             <p className="font-medium">Unraid</p>
             <p className="opacity-70">Reiter „Docker“ → Symbol von „nodvard-deck“ anklicken → „Logs“.</p>
           </div>
+          <p data-testid="setup-code-guide" className="opacity-70">
+            Alle Schritte des Assistenten erklärt die <GuideLink section="assistant">Anleitung</GuideLink>.
+          </p>
         </div>
       )}
     </div>

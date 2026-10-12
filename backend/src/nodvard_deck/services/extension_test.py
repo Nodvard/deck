@@ -24,6 +24,8 @@ from nodvard_sdk.capabilities import NotificationChannel
 
 TEST_TIMEOUT_S = 25.0
 _MAX_TEXT = 300
+_MAX_VERBATIM = 1500
+"""Fuer Saetze, die mehrere Ziele zusammenfassen (`verbatim`): einer je Ziel, deshalb laenger."""
 
 _SECRET_KEYS = r"(?:token|password|passwort|passwd|secret|api[_-]?key|apikey|authorization|session(?:[_-]?id)?|cookie)"
 _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
@@ -40,7 +42,7 @@ _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
 ]
 
 
-def scrub(text: str, secrets: list[str] | None = None) -> str:
+def scrub(text: str, secrets: list[str] | None = None, *, limit: int = _MAX_TEXT) -> str:
     """Schwärzt bekannte Geheimnisse und typische Muster und kürzt den Text."""
     out = text or ""
     known = {s for s in (secrets or []) if s and len(s) >= 4}
@@ -51,7 +53,7 @@ def scrub(text: str, secrets: list[str] | None = None) -> str:
     for pattern, repl in _REDACTIONS:
         out = pattern.sub(repl, out)
     out = " ".join(out.split())
-    return out if len(out) <= _MAX_TEXT else out[: _MAX_TEXT - 1] + "…"
+    return out if len(out) <= limit else out[: limit - 1] + "…"
 
 
 # Quellen, deren Ausnahmetexte Teile der fremden Antwort oder der eigenen Anfrage zitieren (siehe `_text_is_foreign`).
@@ -165,6 +167,8 @@ class Translation:
 
 _HTTP_CODE = re.compile(r"HTTP[ /]*(\d{3})")
 _TLS = re.compile(r"(?<![a-z])(ssl|tls)|certificate|zertifikat", re.I)
+# Ein gemerkter Fingerabdruck passt nicht mehr (`CertificateMismatch` des Kerns oder der Satz der Erweiterung).
+_PIN_CHANGED = re.compile(r"anderes zertifikat als das gemerkte|passt nicht zum best[äa]tigten fingerabdruck|certificatemismatch", re.I)
 _DNS = re.compile(
     r"name or service not known|getaddrinfo|name resolution|nodename nor servname|no address associated|gaierror|namensaufl", re.I
 )
@@ -247,11 +251,10 @@ def guess_host(settings: dict[str, Any], item_name: str | None = None) -> str | 
     return _first_url_host(settings)
 
 
-def tls_option_title(schema: dict[str, Any] | None) -> str | None:
-    """Titel der Einstellung „Zertifikat nicht prüfen“, falls die Erweiterung eine hat."""
+def _field_title(schema: dict[str, Any] | None, field_name: str) -> str | None:
     def find(props: dict[str, Any]) -> str | None:
         for key, sub in props.items():
-            if key == "tls_insecure_skip_verify":
+            if key == field_name:
                 return str(sub.get("title") or key)
             inner = (sub.get("items") or {}).get("properties") if sub.get("type") == "array" else sub.get("properties")
             if inner:
@@ -263,13 +266,27 @@ def tls_option_title(schema: dict[str, Any] | None) -> str | None:
     return find((schema or {}).get("properties") or {})
 
 
+def tls_option_title(schema: dict[str, Any] | None) -> str | None:
+    """Titel der Einstellung „Zertifikat nicht prüfen“, falls die Erweiterung eine hat."""
+    return _field_title(schema, "tls_insecure_skip_verify")
+
+
+def tls_pin_title(schema: dict[str, Any] | None) -> str | None:
+    """Titel des Felds für den Fingerabdruck des Zertifikats (`tls_fingerprint_sha256`), falls es eines gibt. Dann
+    rät der Hinweis zum Fingerabdruck statt zum Abschalten der Prüfung."""
+    return _field_title(schema, "tls_fingerprint_sha256")
+
+
 def translate(
-    text: str, *, host: str | None = None, tls_hint: str | None = None, status: int | None = None, readable: str | None = None
+    text: str, *, host: str | None = None, tls_hint: str | None = None, status: int | None = None, readable: str | None = None,
+    tls_pin: str | None = None,
 ) -> Translation:
     """Macht aus einer technischen Fehlermeldung einen verständlichen deutschen Satz.
 
     `status`: der HTTP-Status als Zahl, wenn er bekannt ist (geht vor einer Zahl im Text). `readable`: der fertige
-    Satz einer Ausnahme, die sich als lesbar kennzeichnet; er ersetzt nur den Vorspann „Technische Meldung“."""
+    Satz einer Ausnahme, die sich als lesbar kennzeichnet; er ersetzt nur den Vorspann „Technische Meldung“.
+    `tls_pin`: Titel des Felds für den Fingerabdruck (`tls_pin_title`); gibt es ihn, nennt der Hinweis zu einem
+    Zertifikatsfehler den Fingerabdruck statt `tls_hint` (Zertifikat nicht prüfen)."""
     where = host or host_of(text)
     code_match = _HTTP_CODE.search(text)
     code = status if status is not None else (int(code_match.group(1)) if code_match else None)
@@ -306,8 +323,17 @@ def translate(
             "Der Server hat die Verbindung abgebrochen oder eine fehlerhafte Antwort geschickt. "
             "Prüfe die Adresse in den Einstellungen (http:// oder https://, Port).",
         )
+    if _PIN_CHANGED.search(text):
+        return Translation(
+            "tls",
+            "Der Server zeigt ein anderes Zertifikat als das gemerkte – den neuen Fingerabdruck beim Server vergleichen "
+            "und in der Erweiterung bestätigen.",
+        )
     if _TLS.search(text):
-        hint = f" – ggf. „{tls_hint}“ einschalten" if tls_hint else ""
+        if tls_pin:
+            hint = f" – ggf. den Fingerabdruck des Zertifikats vergleichen und eintragen („{tls_pin}“)"
+        else:
+            hint = f" – ggf. „{tls_hint}“ einschalten" if tls_hint else ""
         return Translation("tls", f"Zertifikat wird nicht vertraut{hint}.")
     if _DNS.search(text):
         return Translation("dns", f"Adresse nicht gefunden{f' ({where})' if where else ''} – Schreibweise und Netzwerk prüfen.")
@@ -327,14 +353,21 @@ def translate(
     return Translation("unknown", f"Die Verbindung hat nicht geklappt. Technische Meldung: {text}" if text else "Die Verbindung hat nicht geklappt.")
 
 
-def translate_exception(exc: BaseException, *, host: str | None, tls_hint: str | None, secrets: list[str]) -> Translation:
+def translate_exception(
+    exc: BaseException, *, host: str | None, tls_hint: str | None, secrets: list[str], tls_pin: str | None = None
+) -> Translation:
     """`translate()` für eine Ausnahme: Text der Ursachenkette (ohne Texte aus fremden Antworten), der Status als
-    Zahl und, falls die Ausnahme sich als lesbar kennzeichnet, ihr fertiger Satz."""
+    Zahl und, falls die Ausnahme sich als lesbar kennzeichnet, ihr fertiger Satz. Kennzeichnet sie sich zusätzlich als
+    `verbatim = True`, gilt ihr Satz unverändert (er fasst z. B. die Fehler mehrerer Ziele zusammen; die Übersetzung
+    nähme sonst den ersten HTTP-Code darin und verlöre die anderen)."""
     ready = readable_text(exc)
+    if ready and getattr(exc, "verbatim", False):
+        return Translation("readable", scrub(str(exc).strip(), secrets, limit=_MAX_VERBATIM))
     return translate(
         scrub(describe_exception(exc), secrets),
         host=host,
         tls_hint=tls_hint,
+        tls_pin=tls_pin,
         status=exception_status(exc),
         readable=scrub(ready, secrets) if ready else None,
     )
@@ -365,13 +398,14 @@ async def run_connection_test(
     loaded: Any, *, settings: dict[str, Any], schema: dict[str, Any] | None, secrets: list[str], channel: Any | None
 ) -> CheckOutcome:
     tls_hint = tls_option_title(schema)
+    tls_pin = tls_pin_title(schema)
 
     def tr(text: str, item: str | None = None) -> Translation:
         clean = scrub(text, secrets)
-        return translate(clean, host=guess_host(settings, item), tls_hint=tls_hint)
+        return translate(clean, host=guess_host(settings, item), tls_hint=tls_hint, tls_pin=tls_pin)
 
     def tr_exc(exc: BaseException) -> Translation:
-        return translate_exception(exc, host=guess_host(settings), tls_hint=tls_hint, secrets=secrets)
+        return translate_exception(exc, host=guess_host(settings), tls_hint=tls_hint, secrets=secrets, tls_pin=tls_pin)
 
     try:
         report = await asyncio.wait_for(loaded.instance.health(loaded.ctx), TEST_TIMEOUT_S)
@@ -385,14 +419,24 @@ async def run_connection_test(
     items = _detail_items(report.details or {})
     if items:
         details: list[Detail] = []
+        noted = False
         for name, entry in items:
             if entry["healthy"]:
-                details.append(Detail(name, True, "Verbindung funktioniert."))
+                # `note`: ein Hinweis zu einem Ziel ohne Fehler, etwa was sich ohne Senden nicht prüfen ließ.
+                note = entry.get("note")
+                noted = noted or bool(note)
+                details.append(Detail(name, True, scrub(str(note), secrets) if note else "Verbindung funktioniert."))
+            elif entry.get("verbatim") is True and entry.get("error"):
+                # Ein fertiger Satz der Erweiterung (z. B. „Telegram lässt den Bot nicht in diesen Chat schreiben
+                # (HTTP 403) …“): unverändert, die Übersetzung nähme nur den HTTP-Code darin.
+                details.append(Detail(name, False, scrub(str(entry["error"]), secrets, limit=_MAX_VERBATIM)))
             else:
                 t = tr(str(entry.get("error") or entry.get("message") or ""), name)
                 details.append(Detail(name, False, t.message))
         bad = [d for d in details if not d.ok]
-        if not bad:
+        if not bad and noted:
+            message = "Keine Fehler gefunden – Hinweise unten."
+        elif not bad:
             message = "Verbindung funktioniert." if len(details) == 1 else f"Alle {len(details)} Verbindungen funktionieren."
         elif len(details) == 1:
             message = bad[0].message
@@ -424,6 +468,7 @@ async def run_connection_test(
 
 async def send_test_message(*, channel: Any, settings: dict[str, Any], schema: dict[str, Any] | None, secrets: list[str], product_name: str) -> CheckOutcome:
     tls_hint = tls_option_title(schema)
+    tls_pin = tls_pin_title(schema)
     notification = SdkNotification(
         title="Testnachricht",
         body=f"Das ist eine Testnachricht von {product_name}. Wenn du sie siehst, funktioniert die Benachrichtigung.",
@@ -433,10 +478,10 @@ async def send_test_message(*, channel: Any, settings: dict[str, Any], schema: d
     try:
         await asyncio.wait_for(channel.send(notification), TEST_TIMEOUT_S)
     except asyncio.TimeoutError:
-        t = translate("Timeout: keine Antwort des Servers", host=guess_host(settings), tls_hint=tls_hint)
+        t = translate("Timeout: keine Antwort des Servers", host=guess_host(settings), tls_hint=tls_hint, tls_pin=tls_pin)
         return CheckOutcome(False, t.message, t.kind)
     except Exception as exc:  # noqa: BLE001
-        t = translate_exception(exc, host=guess_host(settings), tls_hint=tls_hint, secrets=secrets)
+        t = translate_exception(exc, host=guess_host(settings), tls_hint=tls_hint, secrets=secrets, tls_pin=tls_pin)
         return CheckOutcome(False, t.message, t.kind)
     return CheckOutcome(True, "Testnachricht gesendet – sie sollte gleich auf dem Gerät ankommen.", "ok")
 

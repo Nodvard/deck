@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nodvard-deck"
-version = "0.7.0"
+version = "0.8.0"
 description = "Nodvard Deck — generischer Kern einer modularen Self-Hosting-Plattform."
 requires-python = ">=3.12"
 license = "PolyForm-Noncommercial-1.0.0"
@@ -27,6 +27,8 @@ dependencies = [
     # MIT/Apache-2.0. Wheels (abi3) fuer linux x86_64 und aarch64.
     "pyrage>=1.4,<2",
     "pyotp>=2.9",
+    # SVG-Uploads (svg_safe.py): XML ohne Entitaeten und externe Verweise lesen. PSF-2.0.
+    "defusedxml>=0.7.1",
     "apscheduler>=3.10,<4",  # 4.x ist eine andere API
     "structlog>=24.1",
     "httpx>=0.27",

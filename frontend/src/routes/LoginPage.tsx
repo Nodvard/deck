@@ -2,6 +2,7 @@ import { AlertCircle, ArrowLeft, Eye, EyeOff, HardDrive, KeyRound, Loader2, Lock
 import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 
+import { GuideLink } from "../components/GuideLink";
 import { copyrightLine } from "../lib/branding";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
@@ -336,6 +337,9 @@ function ForgotPasswordHelp() {
         <code className={codeBlockClass}>python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
         <p className="mt-1">Alle Benutzernamen zeigt <code>python -m nodvard_deck.admin list-users</code>, die Zwei-Faktor-Anmeldung schaltet <code>python -m nodvard_deck.admin disable-2fa &lt;benutzername&gt;</code> ab.</p>
       </div>
+      <p data-testid="forgot-guide">
+        Alles Schritt für Schritt: <GuideLink section="locked">Anleitung, Abschnitt „Ausgesperrt? Notfall-Befehle“</GuideLink>
+      </p>
     </div>
   );
 }

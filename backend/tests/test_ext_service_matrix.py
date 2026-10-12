@@ -42,10 +42,10 @@ class _FakeHost:
 
 
 class _FakeExecResult:
-    def __init__(self, exit_code: int, stdout: str) -> None:
+    def __init__(self, exit_code: int, stdout: str, stderr: str = "") -> None:
         self.exit_code = exit_code
         self.stdout = stdout
-        self.stderr = ""
+        self.stderr = stderr
 
 
 class _FakeSettingsHandle:
@@ -109,6 +109,157 @@ async def test_lists_running_and_stopped_containers_with_tone():
     assert by_name["nginx"]["host"] == "docker"
 
 
+PIHOLE_PORTS = (
+    "0.0.0.0:53->53/tcp, :::53->53/tcp, 0.0.0.0:53->53/udp, :::53->53/udp, 0.0.0.0:8088->80/tcp, :::8088->80/tcp"
+)
+
+
+@pytest.mark.parametrize(
+    ("ports", "image", "expected"),
+    [
+        # Live auf dem Pi: vorher oeffnete die Kachel :53 (DNS).
+        (PIHOLE_PORTS, "pihole/pihole:latest", "http://10.0.0.5:8088/admin/"),
+        # Portainer-Agent: keine Weboberflaeche.
+        ("0.0.0.0:9001->9001/tcp, :::9001->9001/tcp", "portainer/agent:2.21.0", None),
+        # Portainer: 8000 ist der Edge-Tunnel, 9443 die Oberflaeche (https).
+        ("0.0.0.0:8000->8000/tcp, 0.0.0.0:9443->9443/tcp, 0.0.0.0:9000->9000/tcp", "portainer/portainer-ce:latest",
+         "https://10.0.0.5:9443"),
+        ("0.0.0.0:8000->8000/tcp, 0.0.0.0:9000->9000/tcp", "portainer/portainer-ce:2.19.4", "http://10.0.0.5:9000"),
+        # Nach dem Port im Container, nicht dem auf dem Server.
+        ("0.0.0.0:2222->22/tcp, 0.0.0.0:3080->3000/tcp", "gitea/gitea:latest", "http://10.0.0.5:3080"),
+        ("0.0.0.0:8443->443/tcp", "img:latest", "https://10.0.0.5:8443"),
+        # So zeigt Docker den Nginx Proxy Manager mit 80:80 und 81:81: als Bereich.
+        ("0.0.0.0:80-81->80-81/tcp, :::80-81->80-81/tcp, 0.0.0.0:443->443/tcp, :::443->443/tcp",
+         "jc21/nginx-proxy-manager:latest", "http://10.0.0.5:81"),
+        ("0.0.0.0:3000-3001->3000-3001/tcp", "lscr.io/linuxserver/webtop:latest", "http://10.0.0.5:3000"),
+        ("0.0.0.0:8080-8081->8080-8081/tcp", "img:latest", "http://10.0.0.5:8080"),
+        # Unterschiedlich lange Bereiche: welcher Port wohin gehoert, steht nicht fest.
+        ("0.0.0.0:8000-8010->8000/tcp", "img:latest", None),
+        # Kamera-Streams (RTSP) sind keine Weboberflaeche.
+        ("0.0.0.0:5000->5000/tcp, 0.0.0.0:8554->8554/tcp, 0.0.0.0:8555->8555/tcp", "ghcr.io/blakeblackshear/frigate:stable",
+         "http://10.0.0.5:5000"),
+        ("0.0.0.0:8554->8554/tcp", "img:latest", None),
+        # code-server spricht auf 8443 http, UniFi https.
+        ("0.0.0.0:8443->8443/tcp", "lscr.io/linuxserver/code-server:latest", "http://10.0.0.5:8443"),
+        ("0.0.0.0:8443->8443/tcp, 0.0.0.0:8080->8080/tcp", "jacobalberty/unifi:latest", "https://10.0.0.5:8443"),
+        ("0.0.0.0:8053->80/tcp", "ghcr.io/pi-hole/pihole:latest", "http://10.0.0.5:8053/admin/"),
+        ("0.0.0.0:5000->5000/tcp", "registry:2", None),
+        ("0.0.0.0:32400->32400/tcp", "lscr.io/linuxserver/plex:latest", "http://10.0.0.5:32400/web"),
+        # Nur Nicht-Web-Ports: keine Adresse statt einer falschen.
+        ("0.0.0.0:5432->5432/tcp", "postgres:16", None),
+        ("0.0.0.0:1883->1883/tcp, 0.0.0.0:9001->9001/tcp", "eclipse-mosquitto:2", None),
+        ("0.0.0.0:51820->51820/udp", "linuxserver/wireguard", None),
+        # Unbekannt, aber 8000 bis 8999: fast immer eine Weboberflaeche.
+        ("0.0.0.0:8123->8123/tcp", "homeassistant/home-assistant", "http://10.0.0.5:8123"),
+        ("0.0.0.0:8765->8765/tcp", "img:latest", "http://10.0.0.5:8765"),
+        ("0.0.0.0:7000->7000/tcp", "img:latest", None),
+        # Nur am Server selbst erreichbar.
+        ("127.0.0.1:8080->80/tcp", "img:latest", None),
+    ],
+)
+def test_guess_url_picks_the_web_port_by_the_port_inside_the_container(ports, image, expected):
+    from nodvard_deck_ext_service_matrix.capabilities import _guess_url
+
+    assert _guess_url(ports, "10.0.0.5", "http", image) == expected
+
+
+@pytest.mark.parametrize(
+    ("image", "key"),
+    [
+        ("pihole/pihole:latest", "pihole/pihole"),
+        ("lscr.io/linuxserver/plex:latest", "linuxserver/plex"),
+        ("ghcr.io/linuxserver/plex@sha256:abc", "linuxserver/plex"),
+        ("localhost:5000/meins/app:1", "meins/app"),
+        ("library/nginx:1.27", "nginx"),
+        ("Portainer/Agent:2.21", "portainer/agent"),
+        ("", ""),
+    ],
+)
+def test_image_key_drops_registry_tag_and_digest(image, key):
+    from nodvard_deck_ext_service_matrix.capabilities import image_key
+
+    assert image_key(image) == key
+
+
+@pytest.mark.asyncio
+async def test_own_tile_url_wins_and_the_detected_one_stays_visible():
+    host = _FakeHost("h1", "pi-host", "10.0.0.5")
+    ctx = _FakeCtx(
+        # Auch was an der Route vorbei in die Einstellungen kam, wird beim Lesen geprueft.
+        settings={"url_overrides": {"h1:pihole": "https://pihole.example/admin/", "h1:kaputt": "javascript:alert(1)", "h1:x": 5}},
+        hosts=[host],
+        outputs={"h1": _FakeExecResult(0, chr(10).join([
+            _ps_line("pihole", "running", "Up", PIHOLE_PORTS, image="pihole/pihole:latest"),
+            _ps_line("kaputt", "running", "Up", "0.0.0.0:8080->80/tcp"),
+        ]))},
+    )
+    services = {s["name"]: s for s in await DockerServiceCatalog(ctx).list_services()}
+    assert services["pihole"]["url"] == "https://pihole.example/admin/"
+    assert services["pihole"]["url_detected"] == "http://10.0.0.5:8088/admin/"
+    assert services["pihole"]["url_custom"] is True
+    assert (services["kaputt"]["url"], services["kaputt"]["url_custom"]) == ("http://10.0.0.5:8080", False)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("ftp://10.0.0.5", "http://"),
+        ("http://", "http://"),
+        ("http://nutzer:geheim@10.0.0.5", "Passwort"),
+        ("http://10.0.0.5:99999", "Port"),
+        ("http://10.0.0.5/ a", "Leerzeichen"),
+        ("javascript:alert(1)", "http://"),
+        ("http://x:0/", "Port"),
+        ("http://a\"b<c>/", "Rechnernamen"),
+        ("http://x\\y", "Rückwärts"),
+        ("http://x/\u202e", "Steuerzeichen"),
+        ("http://x/a\u200bb", "Steuerzeichen"),
+        ("http://x/\x7f", "Steuerzeichen"),
+        ("http://[::1", "ungültig"),
+        ("http://@10.0.0.5", "Passwort"),
+    ],
+)
+def test_clean_tile_url_rejects_what_does_not_belong_in_a_tile(value, message):
+    from nodvard_deck_ext_service_matrix.capabilities import clean_tile_url
+
+    with pytest.raises(ValueError, match=message):
+        clean_tile_url(value)
+    assert clean_tile_url(" https://pihole.example/admin/ ") == "https://pihole.example/admin/"
+
+
+@pytest.mark.asyncio
+async def test_tile_url_is_saved_reset_and_only_for_docker_hosts(client, db_session, test_settings):
+    from nodvard_deck.ext.runtime import get_extension_runtime
+    from nodvard_deck.services import extensions as extensions_service
+    from nodvard_deck.services import hosts as hosts_service
+
+    test_settings.extensions_dir = REPO_EXTENSIONS_DIR
+    await extensions_service.discover_and_sync(db_session, test_settings)
+    host = await hosts_service.create_host(db_session, name="pi-host", address="10.0.0.5", tags=["docker"])
+    other = await hosts_service.create_host(db_session, name="proxmox-knoten", address="10.0.0.6")
+    await db_session.commit()
+    token = await _bootstrap_owner(client)
+    auth = _auth_header(token)
+    assert (await client.post("/api/v1/extensions/service-matrix/enable", headers=auth)).status_code == 200
+    base = f"/api/v1/ext/service-matrix/containers/{host.id}/pihole/url"
+    ctx = get_extension_runtime().loaded["service-matrix"].instance._ctx
+
+    saved = await client.put(base, json={"url": "http://10.0.0.5:8088/admin/"}, headers=auth)
+    assert saved.status_code == 200, saved.text
+    assert (await ctx.settings.get())["url_overrides"] == {f"{host.id}:pihole": "http://10.0.0.5:8088/admin/"}
+
+    assert (await client.put(base, json={}, headers=auth)).status_code == 422
+    bad = await client.put(base, json={"url": "http://a:b@10.0.0.5"}, headers=auth)
+    assert bad.status_code == 422
+    assert "Passwort" in bad.text
+    assert (await client.put(f"/api/v1/ext/service-matrix/containers/{other.id}/pihole/url", json={"url": "http://x"}, headers=auth)).status_code == 404
+    assert (await client.put(f"/api/v1/ext/service-matrix/containers/{host.id}/x;rm/url", json={"url": "http://x"}, headers=auth)).status_code == 400
+
+    reset = await client.put(base, json={"url": None}, headers=auth)
+    assert reset.status_code == 200, reset.text
+    assert (await ctx.settings.get())["url_overrides"] == {}
+
+
 def test_guess_url_extracts_first_ipv4_published_port():
     from nodvard_deck_ext_service_matrix.capabilities import _guess_url
 
@@ -166,6 +317,13 @@ async def test_a_broken_host_does_not_hide_services_on_a_working_one():
     assert tones["grafana"] == "good"
     assert any(t == "danger" for t in tones.values())
     assert [s["name"] for s in services if not s.get("unreachable")] == ["grafana"]
+
+
+def test_port_80_stays_http_even_with_https_as_link_scheme():
+    from nodvard_deck_ext_service_matrix.capabilities import _guess_url
+
+    assert _guess_url(PIHOLE_PORTS, "10.0.0.5", "https", "pihole/pihole") == "http://10.0.0.5:8088/admin/"
+    assert _guess_url("0.0.0.0:3000->3000/tcp", "10.0.0.5", "https") == "https://10.0.0.5:3000"
 
 
 @pytest.mark.asyncio
@@ -284,6 +442,27 @@ class _RecordingExec:
         return result
 
 
+def _running_state(name: str = "web") -> _FakeExecResult:
+    """Antwort auf die Pruefung nach der Aktion: der Container laeuft (ohne Healthcheck)."""
+    import json
+
+    result = _FakeExecResult(0, json.dumps({
+        "name": f"/{name}", "image_id": "sha256:" + "c" * 64, "status": "running", "exit_code": 0, "health": None,
+        "restarts": 0, "started": "2026-09-24T07:00:00Z",
+    }) + "\n")
+    result.duration_ms = 5
+    return result
+
+
+@pytest.fixture(autouse=True)
+def _quick_after_check(monkeypatch):
+    """Die Pruefung nach der Aktion wartet sonst 15 s auf die zweite ruhige Lesung."""
+    import nodvard_deck_ext_service_matrix.after_check as ac
+
+    monkeypatch.setattr(ac, "CHECK_STABLE_S", 0)
+    monkeypatch.setattr(ac, "CHECK_INTERVAL_S", 0)
+
+
 class _ExecutorCtx:
     def __init__(self, exec_handle: _RecordingExec) -> None:
         self.exec = exec_handle
@@ -323,11 +502,13 @@ async def test_executor_rejects_container_names_that_could_escape_into_the_shell
 async def test_executor_builds_the_exact_docker_command():
     from nodvard_deck_ext_service_matrix.capabilities import DockerContainerExecutor
 
-    exec_handle = _RecordingExec()
+    exec_handle = _RecordingExec({"docker container inspect": _running_state()})
     executor = DockerContainerExecutor(_ExecutorCtx(exec_handle))
     assert (await executor.execute(_request("container.start", "pihole"))).success
     assert (await executor.execute(_request("container.restart", "npm-nginx-1"))).success
-    assert exec_handle.commands == ["docker start pihole", "docker restart npm-nginx-1"]
+    assert [c for c in exec_handle.commands if not c.startswith("docker container inspect")] == [
+        "docker start pihole", "docker restart npm-nginx-1",
+    ]
 
 
 @pytest.mark.asyncio
@@ -344,6 +525,67 @@ async def test_executor_refuses_to_stop_the_container_the_dashboard_runs_in(monk
     assert result.success is False
     assert "Nodvard Deck selbst" in (result.error or "")
     assert not any(c.startswith("docker stop") for c in exec_handle.commands)
+
+
+_OTHER_ID = "0123456789ab" * 5 + "0011"
+
+
+@pytest.mark.asyncio
+async def test_remove_deletes_only_a_stopped_container_and_keeps_volumes():
+    """`container.remove` laeuft als `docker rm <name>` -- ohne `-f` (Docker lehnt einen laufenden Container
+    selbst ab) und ohne `-v` (Volumes bleiben)."""
+    from nodvard_deck_ext_service_matrix.capabilities import DockerContainerExecutor
+
+    exec_handle = _RecordingExec({"docker inspect": _FakeExecResult(0, f"{_OTHER_ID}|exited\n")})
+    result = await DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.remove", "alt-1"))
+    assert result.success, result.error
+    # Geloescht wird die gepruefte volle ID, nicht noch einmal der Name.
+    assert exec_handle.commands[-1] == f"docker rm {_OTHER_ID}"
+    assert "--type container" in exec_handle.commands[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("inspect", "expected"),
+    [
+        (_FakeExecResult(0, "0123456789ab" * 5 + "0011|running\n"), "Erst stoppen"),
+        (_FakeExecResult(0, "0123456789ab" * 5 + "0011|paused\n"), "Erst stoppen"),
+        (_FakeExecResult(0, "0123456789ab" * 5 + "0011|restarting\n"), "Erst stoppen"),
+        (_FakeExecResult(0, "3f2a9c1b7d4e" * 5 + "0011|exited\n"), "Nodvard Deck selbst"),
+        (_FakeExecResult(0, "0123456789ab" * 5 + "0011|stopped\n"), "nicht lesbar"),
+        (_FakeExecResult(0, "0123456789ab" * 5 + "0011\n"), "nicht lesbar"),
+        (_FakeExecResult(0, "kurz|exited\n"), "nicht lesbar"),
+        (_FakeExecResult(1, "", "Error: No such container: weg"), "nicht gefunden"),
+        (_FakeExecResult(1, "", ""), "fehlgeschlagen"),
+    ],
+)
+async def test_remove_refuses_running_own_or_unreadable_containers(monkeypatch, inspect, expected):
+    import nodvard_deck_ext_service_matrix.capabilities as caps
+
+    monkeypatch.setattr(caps, "_own_container_id", lambda: "3f2a9c1b7d4e")
+    exec_handle = _RecordingExec({"docker inspect": inspect})
+    result = await caps.DockerContainerExecutor(_ExecutorCtx(exec_handle)).execute(_request("container.remove", "weg"))
+    assert result.success is False
+    assert expected in (result.error or "")
+    assert not any(c.startswith("docker rm") for c in exec_handle.commands)
+
+
+@pytest.mark.asyncio
+async def test_remove_dry_run_says_what_stays():
+    from nodvard_deck_ext_service_matrix.capabilities import DockerContainerExecutor
+
+    report = await DockerContainerExecutor(_ExecutorCtx(_RecordingExec())).dry_run(_request("container.remove", "alt-1"))
+    assert "löschen" in report.summary and "Volumes" in report.summary
+
+
+def test_remove_is_a_high_risk_docker_host_action():
+    from nodvard_deck_ext_service_matrix.capabilities import container_action_specs
+    from nodvard_sdk.types import Risk
+
+    spec = next(s for s in container_action_specs("docker-tag") if s.action_type == "container.remove")
+    assert spec.default_risk is Risk.HIGH
+    assert spec.host_tags == ["docker-tag"] and spec.host_bound
+    assert spec.confirm_text and "Volumes" in spec.confirm_text
 
 
 @pytest.mark.asyncio
@@ -611,8 +853,9 @@ async def test_stack_restart_runs_compose_without_a_file(project):
     req = ActionRequest(action_type="docker.stack_restart", payload={"project": project}, host_ref="h1",
                         proposed_by=Actor.user("u1", "owner1"), reason="Test")
     result = await caps.DockerMaintenanceExecutor(_ExecutorCtx(exec_handle)).execute(req)
-    assert result.success is True and result.output == f"Stack '{project}' neu gestartet."
-    assert exec_handle.commands == [f"docker compose -p {project} restart"]
+    assert result.success is True and result.output.startswith(f"Stack '{project}' neu gestartet.")
+    assert exec_handle.commands[1:] == [f"docker compose -p {project} restart"]
+    assert exec_handle.commands[0].startswith("docker ps -q --no-trunc --filter")
 
 
 @pytest.mark.asyncio
@@ -654,7 +897,11 @@ async def test_stack_restart_quotes_the_project_in_the_command():
     await caps.DockerMaintenanceExecutor(_ExecutorCtx(exec_handle)).execute(req)
     import shlex
 
-    assert shlex.split(exec_handle.commands[0]) == ["docker", "compose", "-p", "deploy", "restart"]
+    assert shlex.split(exec_handle.commands[1]) == ["docker", "compose", "-p", "deploy", "restart"]
+    assert shlex.split(exec_handle.commands[0]) == [
+        "docker", "ps", "-q", "--no-trunc", "--filter", "label=com.docker.compose.project=deploy",
+        "--filter", "label=com.docker.compose.oneoff=False",
+    ]
 
 
 # ---------------------------------------------------------------------------

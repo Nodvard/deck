@@ -10,6 +10,7 @@
 |---|---|
 | [en/FIRST-SETUP.md](en/FIRST-SETUP.md) · [Deutsch](11-ERST-EINRICHTUNG.md) | First setup step by step: start, setup assistant, users, extensions, servers and SSH keys, Proxmox, ntfy, automation, backups, troubleshooting |
 | [en/PROXMOX-TOKEN.md](en/PROXMOX-TOKEN.md) · [Deutsch](10-PROXMOX-TOKEN.md) | Creating a Proxmox API token with limited rights |
+| [en/REVERSE-PROXY.md](en/REVERSE-PROXY.md) · [Deutsch](12-REVERSE-PROXY.md) | Running Nodvard Deck behind Nginx Proxy Manager, Traefik or Caddy: trusted proxy, HTTPS, real client addresses |
 | [../deploy/README.md](../deploy/README.md) | Building the image, deployment, backup and restore, demo mode |
 | [../SECURITY.md](../SECURITY.md) | Reporting vulnerabilities, hardening notes |
 

@@ -436,9 +436,11 @@ async def test_wrong_codes_from_many_addresses_lock_the_account(client, db_sessi
     assert [n.title for n in notes] == ["Zwei-Faktor-Code wird durchprobiert"]
     # Meldung und Protokoll sagen „Zwei-Faktor“, nicht „2FA“ (wie alle anderen Texte der Anmeldung).
     assert "2FA" not in notes[0].body
-    assert "ändere gleich dein Passwort, das geht auch während der Sperre" in notes[0].body
-    assert "Anmelden kannst du dich in der Zeit mit einem Wiederherstellungs-Code" in notes[0].body
-    assert "Bestätigungen mit Zwei-Faktor-Code" in notes[0].body
+    # Das Passwort ändern verlangt jetzt einen Code, und der aus der App ist gesperrt: Die Meldung verspricht nur den
+    # Weg, der geht (Wiederherstellungs-Code), nicht mehr „ändern geht auch während der Sperre“.
+    assert "ändere gleich dein Passwort. Dafür und fürs Anmelden brauchst du in der Zeit einen Wiederherstellungs-Code" in notes[0].body
+    assert "während der Sperre" not in notes[0].body
+    assert "Bestätigungen mit dem Code aus der App" in notes[0].body
     assert "2FA" not in locked[0].reason
 
     # Nach dem Fenster geht es wieder.
@@ -498,3 +500,55 @@ def test_used_mfa_tokens_are_swept_after_their_lifetime(clock):
     clock[0] += login_limit.MFA_ENTRY_TTL_SECONDS + 1
     login_limit.begin("192.168.2.5", "nico", mfa_token="frisch", account="u1")
     assert len(login_limit._mfa_used) == 0
+
+
+@pytest.mark.parametrize(("ip", "bucket"), [
+    ("192.0.2.7", "192.0.2.7"),
+    ("2001:db8:1:2:aaaa:bbbb:cccc:dddd", "2001:db8:1:2::/64"),
+    ("2001:db8:1:2::1", "2001:db8:1:2::/64"),
+    ("fe80::1%eth0", "fe80::/64"),
+    ("::ffff:192.0.2.7", "192.0.2.7"),
+    ("::1", "::/64"),
+    (None, "unbekannt"),
+    ("konto:u1", "konto:u1"),
+])
+def test_ip_bucket_counts_ipv6_per_64(ip, bucket):
+    assert login_limit.ip_bucket(ip) == bucket
+
+
+def test_ipv6_neighbours_in_one_64_share_the_lock_but_the_log_keeps_the_real_address(clock):
+    """Nicos Entscheidung: Ein Anschluss bekommt meist ein ganzes /64 -- mit jeder neuen Adresse daraus faenge die Sperre
+    sonst von vorn an."""
+    for i in range(login_limit.MAX_FAILURES_PER_USER):
+        attempt = login_limit.begin(f"2001:db8:1:2::{i + 1:x}", "nico")
+        assert attempt.ip == f"2001:db8:1:2::{i + 1:x}"
+        login_limit.failed(attempt)
+    with pytest.raises(login_limit.Locked):
+        login_limit.begin("2001:db8:1:2:ffff::99", "nico")
+    # Ein anderes /64 ist nicht betroffen.
+    login_limit.begin("2001:db8:1:3::1", "nico")
+
+
+def test_ipv4_counts_per_address(clock):
+    for _ in range(login_limit.MAX_FAILURES_PER_USER):
+        login_limit.failed(login_limit.begin("192.0.2.7", "nico"))
+    with pytest.raises(login_limit.Locked):
+        login_limit.begin("::ffff:192.0.2.7", "nico")
+    login_limit.begin("192.0.2.8", "nico")
+
+
+@pytest.mark.asyncio
+async def test_ipv6_lock_names_the_network_and_logs_the_real_address(client, db_session):
+    await _bootstrap(client)
+    for i in range(login_limit.MAX_FAILURES_PER_IP):
+        async with _other_ip_client(f"2001:db8:5:6::{i + 1:x}") as neighbour:
+            assert (await _login(neighbour, username=f"user{i}", password="x")).status_code == 401
+    async with _other_ip_client("2001:db8:5:6::ffff") as same_net:
+        assert (await _login(same_net)).status_code == 429
+    async with _other_ip_client("2001:db8:5:7::1") as other_net:
+        assert (await _login(other_net)).status_code == 200
+    locked = await _audit(db_session, "login.locked")
+    assert len(locked) == 1
+    assert locked[0].detail["network"] == "2001:db8:5:6::/64"
+    assert locked[0].ip == f"2001:db8:5:6::{login_limit.MAX_FAILURES_PER_IP:x}"
+    assert "aus diesem Netz" in locked[0].reason

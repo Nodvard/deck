@@ -250,10 +250,15 @@ def test_widget_row_worst_first_and_unreachable_is_danger():
     info["findings"] = summary_findings(info)
     assert widget_row(host, info, None) == {
         "name": "Raspberry Pi", "host_id": "h1", "summary": "Swap zu 71 % belegt – RAM knapp", "badge": "2 Befunde", "tone": "warn",
+        "cpu_percent": 3.0, "mem_percent": 44,  # fuer die Server-Kacheln der System-Seite
     }
     ok = {**info, "findings": []}
     assert widget_row(host, ok, None)["summary"] == "Debian GNU/Linux 13 (trixie) – alles in Ordnung"
     assert widget_row(host, None, "nicht erreichbar: timeout")["tone"] == "danger"
+    assert "cpu_percent" not in widget_row(host, None, "nicht erreichbar: timeout")
+    # Ohne Speicherangaben (oder mit 0) keine Prozentzahl statt einer Division durch null.
+    assert widget_row(host, {**ok, "mem_total": 0, "mem_available": 0}, None)["mem_percent"] is None
+    assert widget_row(host, {**ok, "mem_total": None}, None)["mem_percent"] is None
 
 
 def test_widget_row_text_is_the_worst_finding_not_the_first():

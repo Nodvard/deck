@@ -129,6 +129,47 @@ describe("HostHistory", () => {
     });
   });
 
+  describe("Quelle des Verlaufs vom Anbieter", () => {
+    const host = { status: "up", last_seen_at: "2026-10-01T10:00:00Z", provider_ext_id: "proxmox" };
+
+    function renderProviderHistory(extensions: unknown, props: Partial<ComponentProps<typeof HostHistory>> = {}) {
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/extensions")) {
+          return extensions === null ? new Response(JSON.stringify({ detail: "kaputt" }), { status: 500 }) : new Response(JSON.stringify(extensions));
+        }
+        return new Response(JSON.stringify({ ...history("1h"), source: "provider" }));
+      }));
+      useAuthStore.setState({ accessToken: "tok", status: "authenticated" } as never);
+      render(
+        <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+          <HostHistory hostId="vm-1" host={host} {...props} />
+        </QueryClientProvider>,
+      );
+    }
+
+    it("nennt das Modul, das den Server eingelesen hat, statt fest „Proxmox“", async () => {
+      renderProviderHistory([{ id: "proxmox", name: "Eigener Hypervisor", state: "enabled" }]);
+      expect(await screen.findByText(/Quelle: Eigener Hypervisor · Auflösung 30 s/)).toBeInTheDocument();
+      expect(screen.queryByText(/Quelle: Proxmox/)).toBeNull();
+    });
+
+    it("kennt auch ein ausgeschaltetes Modul beim Namen", async () => {
+      renderProviderHistory([{ id: "proxmox", name: "Proxmox VE", state: "disabled" }]);
+      expect(await screen.findByText(/Quelle: Proxmox VE/)).toBeInTheDocument();
+    });
+
+    it("solange die Modul-Liste fehlt (oder nicht abrufbar ist): „Quelle: eingelesen“", async () => {
+      renderProviderHistory(null);
+      expect(await screen.findByText(/Quelle: eingelesen · Auflösung 30 s/)).toBeInTheDocument();
+    });
+
+    it("ohne Angabe, wer den Server eingelesen hat, ebenfalls „Quelle: eingelesen“", async () => {
+      renderProviderHistory([], { host: { status: "up", last_seen_at: null } });
+      expect(await screen.findByText(/Quelle: eingelesen/)).toBeInTheDocument();
+    });
+  });
+
   it("Statistik ignoriert Luecken", () => {
     expect(stats([null, 2, null, 4])).toEqual({ current: 4, min: 2, avg: 3, max: 4 });
     expect(stats([null, null])).toEqual({ current: null, min: null, avg: null, max: null });

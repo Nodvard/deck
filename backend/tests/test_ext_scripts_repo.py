@@ -13,7 +13,14 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "extensions" / "scripts" / "src"))
 
-from nodvard_deck_ext_scripts.repo import ScriptMeta, ScriptRepo  # noqa: E402
+from nodvard_deck_ext_scripts import _valid_id
+from nodvard_deck_ext_scripts.repo import (
+    MAX_ID_LENGTH,
+    InvalidScriptId,
+    ScriptMeta,
+    ScriptRepo,
+    safe_script_id,
+)
 
 
 @pytest.fixture
@@ -295,3 +302,64 @@ def test_a_missing_head_keeps_the_history(tmp_path):
     opened = ScriptRepo(root)
     opened.save(_meta(), "echo 3\n", commit_message="drei")
     assert [entry["message"] for entry in opened.history("s1")] == ["drei", "zwei", "eins"]
+
+
+@pytest.mark.parametrize("bad", ["..", ".", "../outside", "/etc", "a/b", "a\\b", ".git", "x\x00y", "C:evil", "x" * 129, ""])
+def test_ids_never_lead_out_of_the_repository(repo: ScriptRepo, tmp_path, bad):
+    """Sicherheitsfund: Die Kennung kommt aus der Adresse (`/scripts/{script_id}`) und wird zum Ordnernamen. Weder
+    lesen noch loeschen noch der Verlauf duerfen damit ausserhalb des Repositorys landen."""
+
+    outside = tmp_path / "outside"
+    outside.mkdir(exist_ok=True)
+    (outside / "meta.json").write_text("{}", encoding="utf-8")
+    (outside / "keep.txt").write_text("bleibt", encoding="utf-8")
+    before = sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if ".git" not in p.parts)
+
+    assert safe_script_id(bad) is False
+    assert repo.get(bad) is None
+    assert repo.history(bad) == []
+    assert repo.delete(bad) is False
+    with pytest.raises(InvalidScriptId):
+        repo.save(_meta(bad), "echo x\n", commit_message="boese")
+    assert (outside / "keep.txt").read_text(encoding="utf-8") == "bleibt"
+    assert sorted(p.relative_to(tmp_path) for p in tmp_path.rglob("*") if ".git" not in p.parts) == before
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows eigene Rechte")
+def test_a_symlinked_script_folder_is_not_followed_out_of_the_repository(repo: ScriptRepo, tmp_path):
+    outside = tmp_path / "draussen"
+    outside.mkdir()
+    (outside / "meta.json").write_text('{"id": "x"}', encoding="utf-8")
+    (outside / "script.sh").write_text("geheim", encoding="utf-8")
+    (repo._root / "link").symlink_to(outside, target_is_directory=True)
+
+    assert repo.get("link") is None
+    assert repo.delete("link") is False
+    assert (outside / "script.sh").read_text(encoding="utf-8") == "geheim"
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows eigene Rechte")
+def test_a_symlink_to_another_script_folder_counts_as_missing(repo: ScriptRepo):
+    """Ein Link auf einen Nachbarn im Repository: nicht lesen, nicht loeschen, nicht ueberschreiben --
+    die Route meldet dann 404 statt 204 fuer ein Skript, das gar nicht weg ist."""
+    repo.save(_meta("echt"), "echo echt\n", commit_message="neu")
+    (repo._root / "verweis").symlink_to(repo._root / "echt", target_is_directory=True)
+
+    assert repo.get("verweis") is None
+    assert repo.delete("verweis") is False
+    with pytest.raises(InvalidScriptId):
+        repo.save(_meta("verweis"), "echo anders\n", commit_message="ueber den Link")
+    assert repo.get("echt").content == "echo echt\n"
+
+
+def test_the_route_check_has_the_same_length_limit_as_the_repository():
+    """Sonst besteht eine lange Kennung die Pruefung der Route und `save` wirft danach (500 statt 422)."""
+    assert _valid_id("a" * MAX_ID_LENGTH)
+    assert not _valid_id("a" * (MAX_ID_LENGTH + 1))
+
+
+def test_normal_ids_still_work(repo: ScriptRepo):
+    repo.save(_meta("backup-nachts"), "echo ok\n", commit_message="neu")
+    assert repo.get("backup-nachts") is not None
+    assert repo.history("backup-nachts")
+    assert repo.delete("backup-nachts") is True

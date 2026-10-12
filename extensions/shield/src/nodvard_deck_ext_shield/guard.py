@@ -21,6 +21,7 @@ from .hostscope import host_scope
 from .ids import EXT_ID, SOC_PATH
 from .models import SecurityEventRecord
 from .patching import load_baseline, load_baselines, save_baseline
+from .steps import minute_step
 
 if TYPE_CHECKING:
     from nodvard_sdk import Actor, ExtensionContext, Host
@@ -38,6 +39,15 @@ EVENT_LABEL = {
     "file_changed": "Datei geändert",
     "fail2ban_down": "Fail2ban läuft nicht",
 }
+
+
+def guard_interval_min(settings: dict[str, Any]) -> int:
+    return minute_step(int(settings.get("guard_interval_min") or 15), 5)
+
+
+def bruteforce_threshold(settings: dict[str, Any]) -> int:
+    """Grenze aus settings.schema.json (ab 3); ein kleinerer Wert von frueher wuerde bei jedem Fehlversuch warnen."""
+    return max(3, int(settings.get("bruteforce_threshold") or 20))
 
 
 def event_out(r: SecurityEventRecord) -> dict[str, Any]:
@@ -155,7 +165,7 @@ class Guard:
         # Brute-Force: viele Fehlversuche von einer Adresse, die (noch) nicht gesperrt ist.
         # Kritisch nur, wenn Fail2ban sicher fehlt oder steht -- ohne root ist sein
         # Zustand nur unbekannt ("noaccess").
-        threshold = int(settings.get("bruteforce_threshold") or 20)
+        threshold = bruteforce_threshold(settings)
         state = await load_baseline(self._ctx, host.id, "alerts") or {}
         bf_alerted: dict[str, float] = {ip: ts for ip, ts in (state.get("bruteforce") or {}).items() if ts > now - REALERT_S}
         banned = snap.banned
@@ -306,8 +316,8 @@ class Guard:
             },
             "config": {
                 "enabled": settings.get("guard_enabled", True),
-                "interval_min": int(settings.get("guard_interval_min") or 15),
-                "threshold": int(settings.get("bruteforce_threshold") or 20),
+                "interval_min": guard_interval_min(settings),
+                "threshold": bruteforce_threshold(settings),
                 "file_watch": settings.get("file_watch_enabled", True),
             },
         }

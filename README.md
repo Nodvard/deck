@@ -41,17 +41,19 @@ etwas verändert, läuft zuerst durch eine **Freigabe** – so passiert nichts v
 | Erweiterung | Was sie macht |
 |---|---|
 | Proxmox VE (nur mit Proxmox) | Nodes, VMs und Container: Start/Stopp, Konsole im Browser, Snapshots, Hardware, Speicher, Updates, Festplatten-Zustand |
-| Backups (nur mit Proxmox) | Alle Proxmox-Backups auf einen Blick, Backup-Jobs anlegen und bearbeiten, Warnungen bei fehlenden oder fehlgeschlagenen Backups |
+| Proxmox-Backups (nur mit Proxmox) | Alle Proxmox-Backups auf einen Blick, Backup-Jobs anlegen und bearbeiten, Warnungen bei fehlenden oder fehlgeschlagenen Backups |
 | Service Matrix | Docker-Container auf deinen Servern: Start/Stopp, Live-Logs, Details, Aufräumen, Compose-Stacks, Image-Update-Prüfung |
-| System | Linux-Server per SSH: Betriebssystem, Last, Platten, fehlgeschlagene Dienste, ausstehende Updates |
+| Server-Zustand | Linux-Server per SSH: Betriebssystem, Last, Platten, fehlgeschlagene Dienste, ausstehende Updates |
 | Nodvard Shield | Sicherheit: Virenscan (ClamAV), Härtungs-Audits (Lynis), Update-Zentrale, Einbruchserkennung, Datei-Integrität, KI-Container-Wache |
-| Netzwerk | Pi-hole und Nginx Proxy Manager: Statistiken, Blocken pausieren, Proxy-Hosts und Zertifikatsablauf |
-| Gameserver | Gameserver starten/stoppen und aktuellen Beitrittscode anzeigen (z. B. Valheim) |
+| Netzwerk (Beta) | Pi-hole und Nginx Proxy Manager: Statistiken, Blocken pausieren, Proxy-Hosts und Zertifikatsablauf |
+| Gameserver (Beta) | Gameserver starten/stoppen und aktuellen Beitrittscode anzeigen (z. B. Valheim) |
 | Skripte | Versionierte Skript-Bibliothek, auf einem oder vielen Servern ausführen, zeitgesteuert – auf Wunsch ohne Klick, solange sich nichts ändert |
 | Dokumente | Dokumentenarchiv mit Texterkennung (OCR) und Volltextsuche |
 | Inventar | Geräte und Gegenstände mit Kaufdaten und Garantie-Erinnerung |
 | Nextcloud | Nextcloud als Quelle im Dateimanager |
 | ntfy | Push-Benachrichtigungen aufs Handy |
+
+„Beta“ heißt: Die Erweiterung funktioniert, ist aber noch nicht so gründlich erprobt wie der Rest. Rückmeldungen helfen.
 
 Du brauchst **kein Proxmox**: Ein Raspberry Pi, eine Debian-VM, ein NAS oder ein paar Docker-Hosts reichen.
 Server legst du von Hand an, Auslastung, Docker-Container, Updates und Sicherheit laufen per SSH.

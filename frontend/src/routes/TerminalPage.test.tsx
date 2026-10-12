@@ -167,7 +167,7 @@ describe("TerminalPage", () => {
     renderPage();
     await screen.findByText("Raspberry Pi");
     fireEvent.change(screen.getByLabelText("Server suchen"), { target: { value: "gibtsnicht" } });
-    expect(screen.getByText("Kein Server passt zur Suche.")).toBeInTheDocument();
+    expect(screen.getByText(/Kein Server passt zu „gibtsnicht“/)).toBeInTheDocument();
     expect(screen.queryByTestId("terminal-empty")).toBeNull();
   });
 
@@ -295,6 +295,30 @@ describe("TerminalPage", () => {
     await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
     expect(sessions).toEqual([{ host_id: "h-vm", cols: 120, rows: 30 }]);
     expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["win-game"]);
+  });
+
+  it("?host=…&scope=container&ref=… oeffnet eine Shell im Container, auch ohne Terminal auf dem Server selbst", async () => {
+    const sessions: unknown[] = [];
+    vi.stubGlobal("fetch", mockFetch(sessions, { terminal: [], console: [] }, HOSTS.map((h) => ({ ...h, credential: { kind: "ssh_key" } }))));
+    renderPage("/terminal?host=h-pi&scope=container&ref=nginx");
+    await waitFor(() => expect(FakeWebSocket.instances).toHaveLength(1));
+    expect(sessions).toEqual([{ host_id: "h-pi", cols: 120, rows: 30, scope: "container", ref: "nginx" }]);
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["nginx @ Raspberry Pi"]);
+  });
+
+  it.each([
+    "/terminal?host=h-pi&scope=container&ref=x%3Brm",
+    "/terminal?host=h-pi&scope=container",
+    "/terminal?host=h-pi&ref=nginx",
+    "/terminal?host=h-pi&scope=Container&ref=nginx",
+  ])("ein ungueltiger oder halber Link %s oeffnet gar nichts -- nie die Shell des Servers", async (path) => {
+    const sessions: unknown[] = [];
+    vi.stubGlobal("fetch", mockFetch(sessions));
+    renderPage(path);
+    expect(await screen.findByRole("alert")).toHaveTextContent("unvollständig oder ungültig");
+    expect(sessions).toEqual([]);
+    expect(FakeWebSocket.instances).toHaveLength(0);
+    expect(screen.queryAllByRole("tab")).toHaveLength(0);
   });
 
   it("baut wss:// hinter HTTPS", () => {

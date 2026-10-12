@@ -19,6 +19,7 @@ from fastapi import APIRouter, HTTPException, status
 from nodvard_sdk import (
     Badge,
     ExtensionContext,
+    FilePlace,
     GridSize,
     HealthReport,
     HostRequirementSpec,
@@ -91,12 +92,20 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
     # (Platten stehen vor Diensten), der Ton aber vom schlimmsten.
     findings = sorted(info["findings"], key=lambda f: _TONE_ORDER.get(f["tone"], 2))
     tone = findings[0]["tone"] if findings else "good"
+    mem_total, mem_available = info.get("mem_total"), info.get("mem_available")
     return {
         "name": name,
         "host_id": host.id,
         "summary": findings[0]["text"] if findings else f"{info.get('os') or 'Linux'} – alles in Ordnung",
         "badge": "OK" if not findings else f"{len(findings)} Befund{'e' if len(findings) > 1 else ''}",
         "tone": tone,
+        # Auslastung zum Zeitpunkt der Abfrage (fuer die Server-Kacheln der Seite „Server-Zustand“); None, wenn unbekannt.
+        "cpu_percent": info.get("cpu_percent"),
+        "mem_percent": (
+            round(100 * (mem_total - mem_available) / mem_total)
+            if isinstance(mem_total, int | float) and isinstance(mem_available, int | float) and mem_total > 0
+            else None
+        ),
     }
 
 
@@ -147,7 +156,31 @@ class SshMetricsProvider:
         return metrics_from_live(await self.live(host, max_age_s=self._SAMPLE_CACHE_S))
 
 
+class SystemFilePlaces:
+    """Erfuellt `FilePlaceProvider`: bei einem Linux-Server mit SSH-Zugang der Ordner der Systemprotokolle.
+    `/var/log` gibt es auf jedem Linux-System; dafuer braucht es keine Abfrage des Servers."""
+
+    def __init__(self, ctx: ExtensionContext) -> None:
+        self._ctx = ctx
+
+    async def places_for_host(self, host_id: str) -> list[FilePlace]:
+        host = await self._ctx.hosts.get(host_id)
+        if host is None or host.os_family != "linux" or not host.has_credential:
+            return []
+        return [FilePlace(label="Protokolle", path="/var/log", icon="file-text", hint="Systemprotokolle dieses Servers")]
+
+
 _NEVER = "0 0 31 2 *"  # 31. Februar -- der Job existiert, laeuft aber nie (Warnungen aus)
+
+
+# Nur Teiler von 60 laufen als `*/N` gleichmaessig (`*/7` liefe um :56 und gleich wieder um :00); die Einstellung bietet
+# nur diese an, ein Wert von frueher wird auf den naechstkleineren gesetzt.
+_MINUTE_STEPS = (5, 6, 10, 12, 15, 20, 30)
+
+
+def warn_interval_min(settings: dict[str, Any]) -> int:
+    value = int(settings.get("warn_interval_min") or DEFAULT_INTERVAL_MIN)
+    return max(step for step in _MINUTE_STEPS if step <= max(value, _MINUTE_STEPS[0]))
 
 
 class _WarnJobSpec:
@@ -160,7 +193,7 @@ class _WarnJobSpec:
 
     def __init__(self, ctx: ExtensionContext, settings: dict[str, Any]) -> None:
         self._ctx = ctx
-        interval = max(5, min(59, int(settings.get("warn_interval_min") or DEFAULT_INTERVAL_MIN)))
+        interval = warn_interval_min(settings)
         self.enabled = settings.get("warn_disk_enabled", True) is not False or settings.get("warn_temp_enabled", True) is not False
         self.schedule = f"*/{interval} * * * *" if self.enabled else _NEVER
 
@@ -181,6 +214,7 @@ class Extension(NodvardExtension):
         await ctx.scheduler.register_job(_WarnJobSpec(ctx, await ctx.settings.get()))
         metrics = SshMetricsProvider(ctx)
         ctx.capabilities.provide(metrics)
+        ctx.capabilities.provide(SystemFilePlaces(ctx))
         ctx.capabilities.provide(SystemActionExecutor(ctx))
         for spec in ACTION_SPECS:
             ctx.actions.register(spec)
@@ -223,7 +257,7 @@ class Extension(NodvardExtension):
             if host is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
             if host.os_family != "linux":
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Live-Werte gibt es nur für Linux-Hosts.")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Live-Werte gibt es nur für Linux-Server.")
             try:
                 live = await metrics.live(host)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
@@ -236,7 +270,7 @@ class Extension(NodvardExtension):
             if host is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
             if host.os_family != "linux":
-                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Die System-Seite gibt es nur für Linux-Hosts.")
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Die Seite „Server-Zustand“ gibt es nur für Linux-Server.")
             try:
                 result = await ctx.exec.run(host, SCRIPT, timeout_s=30)
             except Exception as exc:  # noqa: BLE001 - dem Nutzer zeigen, nicht als 500 verstecken
@@ -264,7 +298,7 @@ class Extension(NodvardExtension):
             PageSpec(
                 id="system",
                 path="/system",
-                title="System",
+                title="Server-Zustand",
                 icon="cpu",
                 nav_section="Infrastruktur",
                 nav_order=40,
@@ -291,14 +325,14 @@ class Extension(NodvardExtension):
             )
         )
         ctx.ui.register_host_tool(HostToolSpec(
-            id="system", title="System-Monitor", icon="cpu", category="monitoring",
+            id="system", title="Server-Zustand", icon="cpu", category="monitoring",
             description="Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse – dazu Dienste und Updates",
             path="/system?host={host_id}", os_families=["linux"], permissions=["hosts.execute"], order=50,
         ))
         # Dienste neu starten geht ueber `sudo -n` (actions.as_root) -- der Einrichtungsbefehl
         # bietet dafuer "Root-Rechte ohne Passwort" an, "Verbindung pruefen" testet es.
         ctx.ui.register_host_requirement(HostRequirementSpec(
-            id="root", label="Root-Rechte (System)", needs_root=True, root_reason="Dienste neu starten", order=20,
+            id="root", label="Root-Rechte (Server-Zustand)", needs_root=True, root_reason="Dienste neu starten", order=20,
         ))
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:

@@ -148,6 +148,9 @@ def parse_proxy_host(raw: Any, certificates: dict[int, dict[str, Any]]) -> dict[
         "id": host_id,
         "domains": _domains(raw.get("domain_names")),
         "target": target,
+        # Fuer den Adress-Check (`address_check.py`): das Ziel in Teilen.
+        "forward_host": forward_host or None,
+        "forward_port": port,
         "enabled": as_bool(raw.get("enabled")),
         "ssl_forced": as_bool(raw.get("ssl_forced")),
         "certificate_id": cert_id,

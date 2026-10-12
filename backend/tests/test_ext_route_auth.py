@@ -48,6 +48,7 @@ ROUTES = [
     ("GET", "/api/v1/ext/service-matrix/containers/h/web/logs"),
     ("GET", "/api/v1/ext/service-matrix/image-updates"),
     ("POST", "/api/v1/ext/service-matrix/image-updates/check"),
+    ("PUT", "/api/v1/ext/service-matrix/containers/h/web/url"),
     ("GET", "/api/v1/ext/documents/widgets/untagged"),
     ("GET", "/api/v1/ext/inventory/widgets/warranty"),
 ]

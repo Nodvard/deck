@@ -7,7 +7,9 @@ dasselbe Prinzip wie `test_ext_proxmox.py`.
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
+import time
 import urllib.parse
 import sys
 from pathlib import Path
@@ -193,6 +195,16 @@ def _build_mock_backup_app() -> tuple[FastAPI, dict]:
             rows = [t for t in rows if "endtime" in t]
         rows.sort(key=lambda t: t.get("starttime", 0), reverse=True)
         return {"data": rows[: int(params.get("limit", 50))]}
+
+    @app.get("/api2/json/nodes/{node}/tasks/{upid}/log")
+    async def task_log(node: str, upid: str, request: Request, _: None = Depends(_check_auth)) -> dict:
+        """Aufgabenprotokoll wie die echte API (`[{"n", "t"}]`). `state["logs"][upid]`: die Zeilen (fehlt er: leer),
+        `state["log_status"]`: eine feste Fehlerantwort (z. B. 403 ohne `Sys.Audit`). `state["log_reads"]` zaehlt mit."""
+        state.setdefault("log_reads", []).append((node, upid, request.query_params.get("limit")))
+        if state.get("log_status"):
+            raise HTTPException(status_code=state["log_status"], detail="Permission check failed (/nodes/pve2, Sys.Audit)")
+        lines = state.setdefault("logs", {}).get(upid, [])
+        return {"data": [{"n": i + 1, "t": line} for i, line in enumerate(lines)], "total": len(lines)}
 
     @app.get("/api2/json/cluster/tasks")
     async def list_tasks(request: Request, _: None = Depends(_check_auth)) -> dict:
@@ -687,6 +699,8 @@ async def test_job_edit_goes_through_the_gate_and_less_retention_is_high_risk(
     proposed = r.json()
     assert (proposed["status"], proposed["risk"]) == ("proposed", "medium")
     assert "job_updates" not in state, "vor der Freigabe darf nichts geschrieben sein"
+    reason = (await client.get(f"/api/v1/actions/{proposed['action_id']}", headers=headers)).json()["reason"]
+    assert "über die Seite „Proxmox-Backups“ geändert" in reason
     approved = (await client.post(f"/api/v1/actions/{proposed['action_id']}/approve", headers=headers)).json()
     assert approved["status"] == "succeeded", approved
     assert state["job_updates"] == [("backup-nextcloud", {"schedule": "sun 03:00", "prune-backups": "keep-last=3,keep-weekly=2,keep-monthly=6", "digest": "d1"})]
@@ -781,6 +795,7 @@ async def test_create_job_for_an_unprotected_guest_through_the_gate(client, db_s
     # D-15: vorgeschlagen hat der klickende Nutzer, nicht "die Extension".
     proposed = (await client.get(f"/api/v1/actions/{r.json()['action_id']}", headers=headers)).json()
     assert (proposed["proposed_by_type"], proposed["ext_id"]) == ("user", "backups")
+    assert "über die Seite „Proxmox-Backups“ angelegt" in proposed["reason"]
     approved = (await client.post(f"/api/v1/actions/{r.json()['action_id']}/approve", headers=headers)).json()
     assert approved["status"] == "succeeded", approved
     assert state["job_creates"] == [{"schedule": "sun 02:00", "storage": "backup-pve1", "prune-backups": "keep-last=3", "vmid": "104"}]
@@ -918,7 +933,7 @@ async def test_one_unreachable_connection_does_not_hide_the_other_jobs_or_stop_t
     dead_port = sock.getsockname()[1]
     sock.close()
 
-    base_url, _state = mock_backup_api
+    base_url, state = mock_backup_api
     token = await _setup_backups_connections(
         client, db_session, test_settings,
         [
@@ -926,6 +941,7 @@ async def test_one_unreachable_connection_does_not_hide_the_other_jobs_or_stop_t
             {"name": "primary", "base_url": base_url, "token_id": _TOKEN_ID},
         ],
     )
+    _make_recent(state)
     headers = _auth_header(token)
 
     res = await client.get("/api/v1/ext/backups/jobs", headers=headers)
@@ -1065,6 +1081,7 @@ async def test_connections_crud_full_round_trip(client, db_session, test_setting
     assert body == {
         "name": "pve2", "base_url": "https://192.168.1.23:8006", "token_id": _TOKEN_ID,
         "tls_insecure_skip_verify": False, "enabled": True, "has_token": False,
+        "tls_fingerprint_sha256": None, "tls_fingerprint_invalid": False,
     }
 
     token_resp = await client.post(
@@ -1294,6 +1311,21 @@ async def test_unprotected_reports_a_broken_connection_instead_of_hiding_it(clie
 # ---------------------------------------------------------------------------
 
 
+_FRESH = int(time.time()) - 86400
+"""Gestern. Der Mock steht in den 1970ern; fuer die Waechter-Tests, die nur Fehlschlaege pruefen, ruecken
+`_make_recent` und die Zeiten unten alles auf "gestern", damit die Meldung "Backup zu alt" nicht dazukommt."""
+
+
+def _make_recent(state) -> None:
+    for task in state["tasks"]:
+        for field in ("starttime", "endtime"):
+            if field in task:
+                task[field] += _FRESH
+    for files in state["backup_files"].values():
+        for row in files:
+            row["ctime"] += _FRESH
+
+
 async def _run_backup_watch() -> dict:
     handler = get_extension_runtime().scheduler.get("backups", "watch")
     assert handler is not None
@@ -1313,16 +1345,17 @@ async def _backup_notifications(db_session) -> list[tuple[str, str]]:
 async def test_backup_watch_reports_a_failure_once_and_the_recovery_once(client, db_session, test_settings, mock_backup_api):
     base_url, state = mock_backup_api
     await _setup_backups(client, db_session, test_settings, base_url)
+    _make_recent(state)
 
     # Ausgangslage im Mock: VM100 zuletzt fehlgeschlagen (Broken pipe), VM102 ok.
     assert (await _run_backup_watch())["notified"] == 1
     assert (await _run_backup_watch())["notified"] == 0, "derselbe Fehlschlag wird nicht erneut gemeldet"
 
     # Ein laufender Wiederholungsversuch ist noch kein "wieder in Ordnung".
-    state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "starttime": 5000})
+    state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "starttime": _FRESH + 5000})
     assert (await _run_backup_watch())["notified"] == 0
 
-    state["tasks"][-1].update({"status": "OK", "endtime": 5300})
+    state["tasks"][-1].update({"status": "OK", "endtime": _FRESH + 5300})
     assert (await _run_backup_watch())["notified"] == 1
 
     notes = await _backup_notifications(db_session)
@@ -1363,7 +1396,7 @@ def _window(host_ids, *, minutes_ago: int) -> list[dict]:
     return [{"cron": f"{start.minute} {start.hour} * * *", "duration_minutes": 60, "host_ids": host_ids}]
 
 
-async def _backup_window_setup(client, db_session, test_settings, base_url) -> tuple[str, _RecordingChannel]:
+async def _backup_window_setup(client, db_session, test_settings, base_url, state) -> tuple[str, _RecordingChannel]:
     """Backups-Verbindung, VM 100 als entdeckter Host (Meldungen tragen dessen ID), ein
     Test-Kanal und ein laufendes Wartungsfenster fuer genau diesen Host."""
     from nodvard_sdk.capabilities import NotificationChannel
@@ -1372,6 +1405,7 @@ async def _backup_window_setup(client, db_session, test_settings, base_url) -> t
     from nodvard_deck.services import settings as settings_service
 
     await _setup_backups(client, db_session, test_settings, base_url)
+    _make_recent(state)
     host = Host(name="docker", display_name="Docker-VM", address="10.0.0.85", provider_ext_id="proxmox", provider_ref="primary/qemu/pve2/100")
     db_session.add(host)
     await db_session.flush()
@@ -1406,7 +1440,7 @@ async def test_backup_failure_in_the_window_is_announced_once_after_it_if_still_
     """Das Backup laeuft nachts im Fenster und schlaegt fehl: im Fenster ein stummer
     Eintrag (auch bei vielen Pruefungen), danach genau eine hoerbare Meldung."""
     base_url, state = mock_backup_api
-    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url)
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
 
     for _ in range(4):
         await _run_backup_watch()
@@ -1419,9 +1453,10 @@ async def test_backup_failure_in_the_window_is_announced_once_after_it_if_still_
         assert (await _run_backup_watch())["notified"] == 0, "nach dem Fenster genau einmal"
     assert [n.title for n in channel.received] == ["Backup fehlgeschlagen: Docker-VM (seit dem Wartungsfenster)"]
     assert "Wartungsfenster" in channel.received[0].body
+    assert "Seite „Proxmox-Backups“" in channel.received[0].body
     assert channel.received[0].payload == {"host_id": host_id}
 
-    state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": 5000, "endtime": 5300})
+    state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": _FRESH + 5000, "endtime": _FRESH + 5300})
     await _run_backup_watch()
     assert [(n.title, n.payload) for n in channel.received][1:] == [("Backup wieder erfolgreich: Docker-VM", {"host_id": host_id})]
 
@@ -1433,10 +1468,10 @@ async def test_backup_retried_successfully_in_the_window_brings_no_push_afterwar
     """Fehlschlag und erfolgreicher Wiederholungsversuch beide im Fenster: nur Verlauf,
     kein Push -- auch die Entwarnung nicht (sie gehoert jetzt ebenfalls zum Host)."""
     base_url, state = mock_backup_api
-    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url)
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
 
     await _run_backup_watch()
-    state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": 5000, "endtime": 5300})
+    state["tasks"].append({"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": _FRESH + 5000, "endtime": _FRESH + 5300})
     await _run_backup_watch()
     await _end_window(db_session, host_id)
     for _ in range(3):
@@ -1454,7 +1489,7 @@ async def _start_window(db_session, host_id: str) -> None:
     await settings_service.set_global(db_session, "maintenance.windows", _window([host_id], minutes_ago=5))
 
 
-_OK_TASK = {"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": 5000, "endtime": 5300}
+_OK_TASK = {"upid": "UPID:pve2:3", "node": "pve2", "type": "vzdump", "id": "100", "status": "OK", "starttime": _FRESH + 5000, "endtime": _FRESH + 5300}
 
 
 @pytest.mark.asyncio
@@ -1465,7 +1500,7 @@ async def test_backup_all_clear_for_a_heard_failure_comes_after_the_window(
     faellt ins Fenster. Im Fenster bleibt die Entwarnung still, danach kommt sie genau
     einmal -- sonst bliebe der gehoerte Alarm auf dem Handy offen."""
     base_url, state = mock_backup_api
-    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url)
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     await _end_window(db_session, host_id)
     assert (await _run_backup_watch())["notified"] == 1
     assert [n.title for n in channel.received] == ["Backup fehlgeschlagen: Docker-VM"]
@@ -1499,7 +1534,7 @@ async def test_backup_push_from_after_the_window_is_closed_by_the_next_nights_su
     dem Fenster hoerbar nachgemeldet, der naechste nachtliche Lauf gelingt wieder im Fenster.
     Die Entwarnung kommt danach -- der Push bleibt nicht offen."""
     base_url, state = mock_backup_api
-    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url)
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     await _run_backup_watch()
     await _end_window(db_session, host_id)
     await _run_backup_watch()
@@ -1521,13 +1556,13 @@ async def test_backup_pending_all_clear_is_dropped_when_the_job_fails_again(
     client, db_session, test_settings, mock_backup_api
 ):
     base_url, state = mock_backup_api
-    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url)
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     await _end_window(db_session, host_id)
     await _run_backup_watch()
     await _start_window(db_session, host_id)
     state["tasks"].append(dict(_OK_TASK))
     await _run_backup_watch()
-    state["tasks"].append({**_OK_TASK, "upid": "UPID:pve2:4", "status": "job errors", "starttime": 6000, "endtime": 6300})
+    state["tasks"].append({**_OK_TASK, "upid": "UPID:pve2:4", "status": "job errors", "starttime": _FRESH + 6000, "endtime": _FRESH + 6300})
     await _run_backup_watch()  # neuer Fehlschlag, still im Fenster
     await _end_window(db_session, host_id)
     await _run_backup_watch()
@@ -1555,7 +1590,7 @@ async def test_backup_watch_runs_against_an_older_core_without_the_new_answers(
     monkeypatch.delattr(NotifyHandle, "would_suppress")
 
     base_url, state = mock_backup_api
-    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url)
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
     for _ in range(2):
         await _run_backup_watch()
     state["tasks"].append(dict(_OK_TASK))
@@ -1563,6 +1598,698 @@ async def test_backup_watch_runs_against_an_older_core_without_the_new_answers(
     assert await _backup_deliveries(db_session) == [
         ("Backup fehlgeschlagen: Docker-VM", "suppressed"), ("Backup wieder erfolgreich: Docker-VM", "suppressed"),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Backup-Waechter: "Backup zu alt" (juengste erfolgreiche Sicherung aelter als N Tage)
+# ---------------------------------------------------------------------------
+
+DAY = 86400
+
+
+def _vzdump(number: int, vmid: int, *, ago: float, ok: bool = True, node: str = "pve2") -> dict:
+    """Ein VZDump-Lauf, der vor `ago` Sekunden begann und 5 Minuten dauerte."""
+    start = int(time.time() - ago)
+    return {
+        "upid": f"UPID:{node}:{number}", "node": node, "type": "vzdump", "id": str(vmid),
+        "status": "OK" if ok else "vma_queue_write: write error - Broken pipe", "starttime": start, "endtime": start + 300,
+    }
+
+
+async def _age_setup(client, db_session, test_settings, mock_backup_api, *, settings: dict | None = None):
+    """Beide VMs (100 "Docker-VM", 102 "Monitoring-VM") sind als Hosts entdeckt und frisch gesichert, keine Dateien
+    auf den Speichern. -> (Mock-Zustand, {VMID: Host-ID})."""
+    from nodvard_deck.models import Host
+
+    base_url, state = mock_backup_api
+    await _setup_backups(client, db_session, test_settings, base_url)
+    if settings:
+        record = await db_session.get(ExtensionRecord, "backups")
+        record.settings = {**record.settings, **settings}
+        await db_session.flush()
+    state["tasks"] = [_vzdump(1, 100, ago=3600), _vzdump(2, 102, ago=7200)]
+    state["backup_files"] = {}
+    host_ids = {}
+    for vmid, name in (("100", "Docker-VM"), ("102", "Monitoring-VM")):
+        host = Host(name=f"vm-{vmid}", display_name=name, address=f"192.168.2.{vmid}", provider_ext_id="proxmox", provider_ref=f"primary/qemu/pve2/{vmid}")
+        db_session.add(host)
+        await db_session.flush()
+        host_ids[vmid] = host.id
+    return state, host_ids
+
+
+async def _backup_payloads(db_session) -> dict[str, dict]:
+    from nodvard_deck.models import Notification as NotificationRow
+
+    rows = (await db_session.execute(
+        select(NotificationRow).where(NotificationRow.source_ext_id == "backups").order_by(NotificationRow.ts)
+    )).scalars().all()
+    return {r.title: r.payload for r in rows}
+
+
+@pytest.mark.asyncio
+async def test_backup_age_reports_an_old_backup_once_and_the_recovery_with_a_new_one(client, db_session, test_settings, mock_backup_api):
+    from nodvard_deck.models import Notification as NotificationRow
+
+    state, host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    assert (await _run_backup_watch())["notified"] == 0, "frische Sicherungen melden nichts"
+
+    state["tasks"][1] = _vzdump(2, 102, ago=4 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+    for _ in range(3):
+        assert (await _run_backup_watch())["notified"] == 0, "derselbe Zustand wird nicht erneut gemeldet"
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
+    assert (await _backup_payloads(db_session))["Backup zu alt: Monitoring-VM"] == {
+        "host_id": host_ids["102"], "path": f"/ext/backups/backups?host={host_ids['102']}",
+    }
+    body = (await db_session.execute(select(NotificationRow.body).where(NotificationRow.title == "Backup zu alt: Monitoring-VM"))).scalar_one()
+    assert "älter als 3 Tage" in body and "UTC" in body
+
+    state["tasks"].append(_vzdump(3, 102, ago=60))
+    assert (await _run_backup_watch())["notified"] == 1
+    assert (await _run_backup_watch())["notified"] == 0
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM"), ("info", "Backup wieder aktuell: Monitoring-VM")]
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    assert not [k for k in json.loads(state_file.read_text(encoding="utf-8")) if k.startswith("age:")]
+
+
+GRACE = 6 * 3600
+
+
+@pytest.mark.asyncio
+async def test_backup_age_limit_is_exact_in_days_plus_the_grace_period(client, db_session, test_settings, mock_backup_api, monkeypatch):
+    """Frist = Tage + 6 Stunden Luft: bis auf die Sekunde genau noch in Ordnung, eine Sekunde mehr nicht."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_max_age_days": 2})
+    watch_module = sys.modules["nodvard_deck_ext_backups.watch"]
+    last = state["tasks"][1]["endtime"]  # VM 102; die Sicherung von VM 100 ist eine Stunde juenger
+
+    for offset in (2 * DAY, 2 * DAY + GRACE - 1, 2 * DAY + GRACE):
+        monkeypatch.setattr(watch_module, "_now", lambda offset=offset: last + offset)
+        assert (await _run_backup_watch())["notified"] == 0, offset
+    monkeypatch.setattr(watch_module, "_now", lambda: last + 2 * DAY + GRACE + 1)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
+
+
+@pytest.mark.asyncio
+async def test_backup_age_one_day_in_the_settings_counts_as_two_days(client, db_session, test_settings, mock_backup_api):
+    """Ein gespeicherter Wert 1 (frueher erlaubt) gilt als 2, nicht als ungueltig (dann waeren es 3) und nicht als 1
+    (dann gaebe es fast taeglich Alarm und Entwarnung)."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_max_age_days": 1})
+    state["tasks"][1] = _vzdump(2, 102, ago=2 * DAY + 5 * 3600)
+    assert (await _run_backup_watch())["notified"] == 0
+    state["tasks"][1] = _vzdump(2, 102, ago=2 * DAY + 7 * 3600)
+    assert (await _run_backup_watch())["notified"] == 1
+    from nodvard_deck.models import Notification as NotificationRow
+
+    body = (await db_session.execute(select(NotificationRow.body))).scalar_one()
+    assert "älter als 2 Tage" in body
+
+
+@pytest.mark.asyncio
+async def test_backup_age_threshold_setting_is_used_and_invalid_values_fall_back_to_the_default(
+    client, db_session, test_settings, mock_backup_api
+):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_max_age_days": 7})
+    state["tasks"][1] = _vzdump(2, 102, ago=6.5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 0
+    state["tasks"][1] = _vzdump(2, 102, ago=7.5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+    from nodvard_deck.models import Notification as NotificationRow
+
+    body = (await db_session.execute(select(NotificationRow.body))).scalar_one()
+    assert "älter als 7 Tage" in body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_value", ["abc", "5", 0, -3, 61, 100, 2.5, True, None, [], {"a": 1}])
+async def test_backup_age_uses_the_default_for_an_invalid_setting(client, db_session, test_settings, mock_backup_api, bad_value):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_max_age_days": bad_value})
+    state["tasks"][1] = _vzdump(2, 102, ago=2.5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 0
+    state["tasks"][1] = _vzdump(2, 102, ago=3.5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+
+
+@pytest.mark.asyncio
+async def test_backup_age_counts_the_latest_success_not_the_latest_run(client, db_session, test_settings, mock_backup_api):
+    """Der letzte Lauf kann fehlgeschlagen sein; entscheidend ist der letzte, der gelang."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=2 * DAY), _vzdump(2, 100, ago=600, ok=False), _vzdump(3, 102, ago=3600)]
+    await _run_backup_watch()
+    assert await _backup_notifications(db_session) == [("critical", "Backup fehlgeschlagen: Docker-VM")], "2 Tage sind nicht zu alt"
+
+
+@pytest.mark.asyncio
+async def test_backup_age_adds_nothing_while_a_failure_alarm_for_the_same_vm_is_open(client, db_session, test_settings, mock_backup_api):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 100, ago=DAY, ok=False), _vzdump(3, 102, ago=3600)]
+    assert (await _run_backup_watch())["notified"] == 1
+    for _ in range(3):
+        assert (await _run_backup_watch())["notified"] == 0
+    assert await _backup_notifications(db_session) == [("critical", "Backup fehlgeschlagen: Docker-VM")]
+
+    state["tasks"].append(_vzdump(4, 100, ago=60))
+    assert (await _run_backup_watch())["notified"] == 1
+    assert await _backup_notifications(db_session) == [
+        ("critical", "Backup fehlgeschlagen: Docker-VM"), ("info", "Backup wieder erfolgreich: Docker-VM"),
+    ]
+    assert (await _run_backup_watch())["notified"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backup_age_alarm_stays_open_and_recovers_next_to_a_later_failure(client, db_session, test_settings, mock_backup_api):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 102, ago=3600)]
+    assert (await _run_backup_watch())["notified"] == 1  # zu alt, noch kein Fehlschlag
+    state["tasks"].append(_vzdump(3, 100, ago=600, ok=False))
+    assert (await _run_backup_watch())["notified"] == 1  # jetzt auch der Fehlschlag
+    assert (await _run_backup_watch())["notified"] == 0
+    state["tasks"].append(_vzdump(4, 100, ago=60))
+    assert (await _run_backup_watch())["notified"] == 2  # beides ist erledigt
+    assert [t for _sev, t in await _backup_notifications(db_session)] == [
+        "Backup zu alt: Docker-VM", "Backup fehlgeschlagen: Docker-VM",
+        "Backup wieder erfolgreich: Docker-VM", "Backup wieder aktuell: Docker-VM",
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("skip", "expected"),
+    [
+        (["102"], []),
+        ([" MONITORING-VM ", ""], []),
+        (["primary/102"], []),
+        (["103", "other/102", "docker-vm"], ["Backup zu alt: Monitoring-VM"]),
+        ("102", ["Backup zu alt: Monitoring-VM"]),
+    ],
+)
+async def test_backup_age_skip_list_takes_vmids_names_and_connection_vmid(
+    client, db_session, test_settings, mock_backup_api, skip, expected
+):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_age_skip": skip})
+    state["tasks"][1] = _vzdump(2, 102, ago=9 * DAY)
+    await _run_backup_watch()
+    assert [t for _sev, t in await _backup_notifications(db_session)] == expected
+
+
+@pytest.mark.asyncio
+async def test_backup_age_forgets_a_vm_that_moves_to_the_skip_list(client, db_session, test_settings, mock_backup_api):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"][1] = _vzdump(2, 102, ago=9 * DAY)
+    await _run_backup_watch()
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    assert "age:primary--102" in json.loads(state_file.read_text(encoding="utf-8"))
+    record = await db_session.get(ExtensionRecord, "backups")
+    record.settings = {**record.settings, "backup_age_skip": ["102"]}
+    await db_session.flush()
+    assert (await _run_backup_watch())["notified"] == 0
+    assert "age:primary--102" not in json.loads(state_file.read_text(encoding="utf-8"))
+
+
+@pytest.mark.asyncio
+async def test_backup_age_ignores_guests_without_job_and_without_backup_and_acknowledged_ones(
+    client, db_session, test_settings, mock_backup_api
+):
+    state, _host_ids = await _age_setup(
+        client, db_session, test_settings, mock_backup_api,
+        settings={"acknowledged_unprotected": [{"connection": "primary", "vmid": "106", "note": "Test"}]},
+    )
+    state["not_backed_up"] = [
+        {"vmid": 105, "name": "neue-vm", "type": "qemu"},  # ohne Job, ohne Sicherung
+        {"vmid": 106, "name": "bewusst-ohne", "type": "qemu"},  # ohne Job, alte Sicherung, aber "bewusst ohne Backup"
+    ]
+    state["backup_files"] = {"backup-pve1": [
+        {"volid": "backup-pve1:backup/vzdump-qemu-106-x.vma.zst", "vmid": 106, "subtype": "qemu", "ctime": int(time.time()) - 40 * DAY, "size": 1},
+    ]}
+    for _ in range(3):
+        assert (await _run_backup_watch())["notified"] == 0
+    assert await _backup_notifications(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_backup_age_watches_a_guest_whose_job_is_gone_but_has_backups_left(
+    client, db_session, test_settings, mock_backup_api, monkeypatch
+):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"] = [state["jobs"][0]]  # der Job von VM 102 ist geloescht
+    state["tasks"] = [_vzdump(1, 100, ago=3600)]
+    state["not_backed_up"] = [{"vmid": 102, "name": "Monitoring", "type": "qemu"}]
+    old = int(time.time()) - 5 * DAY
+    state["backup_files"] = {"backup-pve1": [
+        {"volid": "backup-pve1:backup/vzdump-qemu-102-a.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": old - DAY, "size": 1},
+        {"volid": "backup-pve1:backup/vzdump-qemu-102-b.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": old, "size": 1},
+    ]}
+    assert (await _run_backup_watch())["notified"] == 1
+    assert (await _run_backup_watch())["notified"] == 0
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
+
+    state["backup_files"]["backup-pve1"].append(
+        {"volid": "backup-pve1:backup/vzdump-qemu-102-c.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": int(time.time()) - 600, "size": 1}
+    )
+    # Die Speicher werden nur alle drei Stunden gelesen: die neue Datei zaehlt ab dem naechsten Lesen.
+    monkeypatch.setattr(sys.modules["nodvard_deck_ext_backups.watch"], "_now", lambda: time.time() + 3 * 3600)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert (await _backup_notifications(db_session))[-1] == ("info", "Backup wieder aktuell: Monitoring-VM")
+
+
+@pytest.mark.asyncio
+async def test_backup_age_takes_the_newer_of_run_history_and_files(client, db_session, test_settings, mock_backup_api):
+    """Ein Lauf-Verlauf ohne Erfolg (oder zu kurz) und eine frische Datei auf dem Speicher: nichts zu melden."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"][1] = _vzdump(2, 102, ago=9 * DAY)
+    state["backup_files"] = {"backup-pve1": [
+        {"volid": "backup-pve1:backup/vzdump-qemu-102-a.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": int(time.time()) - 3600, "size": 1},
+    ]}
+    assert (await _run_backup_watch())["notified"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backup_age_reports_a_disabled_job(client, db_session, test_settings, mock_backup_api):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"][1]["enabled"] = 0
+    state["tasks"][1] = _vzdump(2, 102, ago=6 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
+
+
+def _age_state_keys() -> list[str]:
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    if not state_file.exists():
+        return []
+    return sorted(k for k in json.loads(state_file.read_text(encoding="utf-8")) if k.startswith("age:"))
+
+
+async def _body_of(db_session, title: str) -> str:
+    from nodvard_deck.models import Notification as NotificationRow
+
+    return (await db_session.execute(select(NotificationRow.body).where(NotificationRow.title == title))).scalar_one()
+
+
+# --- Frist je VM aus dem Zeitplan des Jobs ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_backup_age_follows_the_schedule_of_a_weekly_job(client, db_session, test_settings, mock_backup_api):
+    """Ein Job, der nur samstags laeuft, ist nach 5 Tagen nicht zu alt, auch wenn die Einstellung 3 sagt;
+    die Meldung nennt die tatsaechliche Frist."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_max_age_days": 3})
+    state["jobs"][1]["schedule"] = "sat 15:00"  # VM 102
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY)
+    for _ in range(2):
+        assert (await _run_backup_watch())["notified"] == 0
+    state["tasks"][1] = _vzdump(2, 102, ago=7 * DAY + 5 * 3600)
+    assert (await _run_backup_watch())["notified"] == 0, "7 Tage plus die Luft von 6 Stunden"
+    state["tasks"][1] = _vzdump(2, 102, ago=7 * DAY + 7 * 3600)
+    assert (await _run_backup_watch())["notified"] == 1
+    body = await _body_of(db_session, "Backup zu alt: Monitoring-VM")
+    assert "älter als 7 Tage" in body and "3 Tage" not in body
+
+
+@pytest.mark.asyncio
+async def test_backup_age_never_goes_below_the_setting_for_a_frequent_job(client, db_session, test_settings, mock_backup_api):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api, settings={"backup_max_age_days": 5})
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY + 3600)  # der Job laeuft taeglich, die Einstellung gilt
+    assert (await _run_backup_watch())["notified"] == 0
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY + 7 * 3600)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert "älter als 5 Tage" in await _body_of(db_session, "Backup zu alt: Monitoring-VM")
+
+
+@pytest.mark.asyncio
+async def test_backup_age_takes_the_shortest_gap_when_a_vm_has_two_jobs(client, db_session, test_settings, mock_backup_api):
+    """Der haeufigste Job sichert die VM: taeglich plus woechentlich heisst taeglicher Abstand, also gilt die Einstellung."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"].append({"id": "backup-weekly", "vmid": "102", "storage": "backup-pve1", "schedule": "sat 15:00", "enabled": 1, "node": "pve2"})
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert "älter als 3 Tage" in await _body_of(db_session, "Backup zu alt: Monitoring-VM")
+
+
+@pytest.mark.asyncio
+async def test_backup_age_ignores_a_switched_off_job_when_it_takes_the_gap(client, db_session, test_settings, mock_backup_api):
+    """Der abgeschaltete taegliche Job sichert nichts mehr: es zaehlt der woechentliche, 5 Tage sind in Ordnung."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"][1]["enabled"] = 0
+    state["jobs"].append({"id": "backup-weekly", "vmid": "102", "storage": "backup-pve1", "schedule": "sat 15:00", "enabled": 1, "node": "pve2"})
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backup_age_uses_only_the_setting_for_a_vm_with_only_a_switched_off_weekly_job(
+    client, db_session, test_settings, mock_backup_api
+):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"][1].update({"schedule": "sat 15:00", "enabled": 0})
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert "älter als 3 Tage" in await _body_of(db_session, "Backup zu alt: Monitoring-VM")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("second", [None, "sat 15:00"])
+async def test_backup_age_uses_only_the_setting_when_a_schedule_cannot_be_read(
+    client, db_session, test_settings, mock_backup_api, second
+):
+    """Kein Raten: ein Zeitplan, den wir nicht lesen, koennte der haeufigste sein -- auch neben einem lesbaren."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"][1]["schedule"] = "irgendwann mal"
+    if second:
+        state["jobs"].append({"id": "backup-weekly", "vmid": "102", "storage": "backup-pve1", "schedule": second, "enabled": 1, "node": "pve2"})
+    state["tasks"][1] = _vzdump(2, 102, ago=5 * DAY)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert "älter als 3 Tage" in await _body_of(db_session, "Backup zu alt: Monitoring-VM")
+
+
+# --- laufende Sicherung ------------------------------------------------------
+
+
+def _running_vzdump(number: int, vmid: int, *, ago: float, node: str = "pve2") -> dict:
+    """Ein VZDump-Lauf ohne Ende, der vor `ago` Sekunden begann."""
+    return {"upid": f"UPID:{node}:{number}", "node": node, "type": "vzdump", "id": str(vmid), "starttime": int(time.time() - ago)}
+
+
+@pytest.mark.asyncio
+async def test_backup_age_waits_while_a_backup_of_the_vm_is_running(client, db_session, test_settings, mock_backup_api):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=3600), _vzdump(2, 102, ago=5 * DAY), _running_vzdump(3, 102, ago=600)]
+    for _ in range(3):
+        assert (await _run_backup_watch())["notified"] == 0
+    assert _age_state_keys() == []
+    assert await _backup_notifications(db_session) == []
+
+    state["tasks"][2].update({"status": "OK", "endtime": int(time.time()) - 60})
+    assert (await _run_backup_watch())["notified"] == 0, "die Sicherung ist fertig und frisch"
+    assert _age_state_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_backup_age_keeps_an_open_alarm_while_a_backup_is_running_and_recovers_afterwards(
+    client, db_session, test_settings, mock_backup_api
+):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=3600), _vzdump(2, 102, ago=5 * DAY)]
+    assert (await _run_backup_watch())["notified"] == 1
+    state["tasks"].append(_running_vzdump(3, 102, ago=600))
+    for _ in range(2):
+        assert (await _run_backup_watch())["notified"] == 0
+        assert _age_state_keys() == ["age:primary--102"], "der Zustand bleibt stehen"
+    state["tasks"][2].update({"status": "OK", "endtime": int(time.time()) - 60})
+    assert (await _run_backup_watch())["notified"] == 1
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM"), ("info", "Backup wieder aktuell: Monitoring-VM")]
+    assert _age_state_keys() == []
+
+
+@pytest.mark.asyncio
+async def test_backup_age_does_not_wait_for_a_backup_that_seems_to_hang(client, db_session, test_settings, mock_backup_api):
+    """Ein Lauf, der seit ueber einem Tag laeuft, haelt die Meldung nicht zurueck -- sonst wuerde ein haengender
+    Lauf genau den Fehler verdecken, den der Waechter finden soll."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=3600), _vzdump(2, 102, ago=5 * DAY), _running_vzdump(3, 102, ago=2 * DAY)]
+    assert (await _run_backup_watch())["notified"] == 1
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
+
+
+async def _jobless_setup(client, db_session, test_settings, mock_backup_api, *, newest_ago: float):
+    """VM 100 hat einen Job und ist frisch gesichert; VM 102 hat keinen Job, nur eine Sicherungsdatei, die vor `newest_ago`
+    Sekunden entstand."""
+    state, host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["jobs"] = [state["jobs"][0]]
+    state["tasks"] = [_vzdump(1, 100, ago=3600)]
+    state["not_backed_up"] = [{"vmid": 102, "name": "Monitoring", "type": "qemu"}]
+    state["backup_files"] = {"backup-pve1": [
+        {"volid": "backup-pve1:backup/vzdump-qemu-102-a.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": int(time.time() - newest_ago), "size": 1},
+    ]}
+    return state, host_ids
+
+
+@pytest.mark.asyncio
+async def test_backup_age_waits_while_a_manual_backup_of_a_guest_without_job_is_running(
+    client, db_session, test_settings, mock_backup_api
+):
+    state, _host_ids = await _jobless_setup(client, db_session, test_settings, mock_backup_api, newest_ago=5 * DAY)
+    state["tasks"].append(_running_vzdump(2, 102, ago=600))
+    for _ in range(2):
+        assert (await _run_backup_watch())["notified"] == 0
+    assert _age_state_keys() == []
+
+    state["tasks"].pop()  # der Lauf ist vorbei, ohne dass eine neue Datei entstand
+    assert (await _run_backup_watch())["notified"] == 1
+    assert await _backup_notifications(db_session) == [("warning", "Backup zu alt: Monitoring-VM")]
+
+
+@pytest.mark.asyncio
+async def test_backup_age_reports_nothing_for_a_guest_without_job_if_running_backups_cannot_be_read(
+    client, db_session, test_settings, mock_backup_api, monkeypatch
+):
+    await _jobless_setup(client, db_session, test_settings, mock_backup_api, newest_ago=5 * DAY)
+    provider_class = sys.modules["nodvard_deck_ext_backups.capabilities"].ProxmoxBackupProvider
+
+    async def broken(self):
+        raise RuntimeError("Aufgaben kaputt")
+
+    monkeypatch.setattr(provider_class, "running_backups", broken)
+    for _ in range(2):
+        assert (await _run_backup_watch())["notified"] == 0
+    monkeypatch.undo()
+    assert (await _run_backup_watch())["notified"] == 1
+
+
+# --- Speicher nicht alle 15 Minuten lesen -------------------------------------
+
+
+class _Clock:
+    """Eine Uhr, die der Test vorstellt (ersetzt `watch._now`)."""
+
+    def __init__(self) -> None:
+        self.base = time.time()
+        self.offset = 0.0
+
+    def __call__(self) -> float:
+        return self.base + self.offset
+
+
+def _storage_reads(state) -> int:
+    return len(state.get("content_calls", []))
+
+
+@pytest.mark.asyncio
+async def test_backup_watch_reads_the_storages_only_every_three_hours(client, db_session, test_settings, mock_backup_api, monkeypatch):
+    state, _host_ids = await _jobless_setup(client, db_session, test_settings, mock_backup_api, newest_ago=3600)
+    clock = _Clock()
+    monkeypatch.setattr(sys.modules["nodvard_deck_ext_backups.watch"], "_now", clock)
+
+    assert (await _run_backup_watch())["notified"] == 0
+    reads = _storage_reads(state)
+    assert reads > 0, "der Gast ohne Job braucht den Blick auf die Speicher"
+    assert (await _run_backup_watch())["notified"] == 0
+    clock.offset = 3 * 3600 - 1
+    assert (await _run_backup_watch())["notified"] == 0
+    assert _storage_reads(state) == reads, "zwei Laeufe hintereinander (und noch knapp vor drei Stunden): kein neues Lesen"
+
+    clock.offset = 3 * 3600
+    assert (await _run_backup_watch())["notified"] == 0
+    assert _storage_reads(state) == 2 * reads, "nach drei Stunden wird neu gelesen"
+    assert (await _run_backup_watch())["notified"] == 0
+    assert _storage_reads(state) == 2 * reads
+
+
+@pytest.mark.asyncio
+async def test_backup_watch_does_not_remember_a_failed_or_incomplete_read_of_the_storages(
+    client, db_session, test_settings, mock_backup_api, monkeypatch
+):
+    await _jobless_setup(client, db_session, test_settings, mock_backup_api, newest_ago=3600)
+    provider_class = sys.modules["nodvard_deck_ext_backups.capabilities"].ProxmoxBackupProvider
+    real_inventory = provider_class.inventory
+    answers = ["raises", "with errors", "ok"]
+    calls: list[str] = []
+
+    async def inventory(self):
+        step = answers.pop(0) if answers else "ok"
+        calls.append(step)
+        if step == "raises":
+            raise RuntimeError("Speicher kaputt")
+        result = await real_inventory(self)
+        if step == "with errors":
+            result["errors"] = [{"connection": "primary", "error": "ein Speicher war nicht lesbar"}]
+        return result
+
+    monkeypatch.setattr(provider_class, "inventory", inventory)
+    for _ in range(5):
+        await _run_backup_watch()
+    assert calls == ["raises", "with errors", "ok"], "erst das fehlerfreie Ergebnis wird gemerkt"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("new_file", "notified"), [(True, 0), (False, 1)])
+async def test_backup_age_reads_fresh_before_a_new_message_instead_of_trusting_the_cache(
+    client, db_session, test_settings, mock_backup_api, monkeypatch, new_file, notified
+):
+    """Die Sicherung ist beim ersten Lesen noch knapp in Ordnung. Zwei Stunden spaeter wuerde der Zwischenspeicher "zu
+    alt" sagen -- vor der Meldung wird neu gelesen: eine inzwischen entstandene Sicherung verhindert den Alarm."""
+    state, _host_ids = await _jobless_setup(client, db_session, test_settings, mock_backup_api, newest_ago=3 * DAY + 5 * 3600)
+    clock = _Clock()
+    monkeypatch.setattr(sys.modules["nodvard_deck_ext_backups.watch"], "_now", clock)
+    assert (await _run_backup_watch())["notified"] == 0
+    reads = _storage_reads(state)
+
+    if new_file:
+        state["backup_files"]["backup-pve1"].append(
+            {"volid": "backup-pve1:backup/vzdump-qemu-102-b.vma.zst", "vmid": 102, "subtype": "qemu", "ctime": int(time.time()) - 600, "size": 1}
+        )
+    clock.offset = 2 * 3600
+    assert (await _run_backup_watch())["notified"] == notified
+    assert _storage_reads(state) == 2 * reads
+
+
+@pytest.mark.asyncio
+async def test_backup_age_does_not_report_when_the_storages_could_not_be_read(
+    client, db_session, test_settings, mock_backup_api, monkeypatch
+):
+    """Ohne den Blick auf die Speicher (Fehler bei der Abfrage) wird nichts als "zu alt" gemeldet und nichts vergessen;
+    die Fehlschlag-Meldungen laufen unveraendert weiter."""
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    provider_class = sys.modules["nodvard_deck_ext_backups.capabilities"].ProxmoxBackupProvider
+    state["tasks"] = [_vzdump(1, 100, ago=3600, ok=False), _vzdump(2, 102, ago=9 * DAY)]
+
+    async def broken(self):
+        raise RuntimeError("Speicher kaputt")
+
+    monkeypatch.setattr(provider_class, "inventory", broken)
+    assert (await _run_backup_watch())["notified"] == 1  # nur der Fehlschlag von VM 100
+    assert (await _run_backup_watch())["notified"] == 0
+
+    async def with_errors(self):
+        return {"guests": [], "orphans": [], "errors": [{"connection": "primary", "error": "lesen nicht moeglich"}]}
+
+    monkeypatch.setattr(provider_class, "inventory", with_errors)
+    assert (await _run_backup_watch())["notified"] == 0
+    assert await _backup_notifications(db_session) == [("critical", "Backup fehlgeschlagen: Docker-VM")]
+
+    monkeypatch.undo()
+    assert (await _run_backup_watch())["notified"] == 1, "wieder lesbar: jetzt kommt die Meldung"
+    assert (await _backup_notifications(db_session))[-1] == ("warning", "Backup zu alt: Monitoring-VM")
+
+
+@pytest.mark.asyncio
+async def test_backup_age_keeps_failure_alarms_working_if_the_check_itself_breaks(
+    client, db_session, test_settings, mock_backup_api, monkeypatch
+):
+    state, _host_ids = await _age_setup(client, db_session, test_settings, mock_backup_api)
+    state["tasks"] = [_vzdump(1, 100, ago=3600, ok=False), _vzdump(2, 102, ago=3600)]
+    provider_class = sys.modules["nodvard_deck_ext_backups.capabilities"].ProxmoxBackupProvider
+
+    async def broken(self):
+        raise RuntimeError("kaputt")
+
+    monkeypatch.setattr(provider_class, "unprotected", broken)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert (await _run_backup_watch())["notified"] == 0
+    assert await _backup_notifications(db_session) == [("critical", "Backup fehlgeschlagen: Docker-VM")]
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    assert any(k.endswith("--100") for k in json.loads(state_file.read_text(encoding="utf-8")))
+
+
+@pytest.mark.asyncio
+async def test_backup_age_leaves_an_unreachable_connection_alone_and_keeps_its_state(client, db_session, test_settings, mock_backup_api):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    dead_port = sock.getsockname()[1]
+    sock.close()
+
+    base_url, state = mock_backup_api
+    await _setup_backups_connections(
+        client, db_session, test_settings,
+        [
+            {"name": "pve1", "base_url": f"http://127.0.0.1:{dead_port}", "token_id": _TOKEN_ID},
+            {"name": "primary", "base_url": base_url, "token_id": _TOKEN_ID},
+        ],
+    )
+    state["tasks"] = [_vzdump(1, 100, ago=3600), _vzdump(2, 102, ago=3600)]
+    state["backup_files"] = {}
+    state_file = Path(str(get_extension_runtime().loaded["backups"].ctx.data_dir)) / "watch-state.json"
+    state_file.parent.mkdir(parents=True, exist_ok=True)
+    state_file.write_text(json.dumps({"age:pve1--104": 500, "age:primary--999": 500, "pve1--backup-x--104": 500}), encoding="utf-8")
+    assert (await _run_backup_watch())["notified"] == 0
+    assert set(json.loads(state_file.read_text(encoding="utf-8"))) == {"age:pve1--104", "pve1--backup-x--104"}, (
+        "die nicht erreichbare Verbindung behaelt ihren Zustand, die verschwundene VM auf der erreichbaren verliert ihn"
+    )
+
+
+@pytest.mark.asyncio
+async def test_backup_age_message_in_the_window_comes_once_after_it_if_it_persists(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
+    state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 102, ago=3600)]
+    for _ in range(4):
+        await _run_backup_watch()
+    assert channel.received == []
+    assert await _backup_deliveries(db_session) == [("Backup zu alt: Docker-VM", "suppressed")], "ein stummer Eintrag, nicht einer je Pruefung"
+
+    await _end_window(db_session, host_id)
+    assert (await _run_backup_watch())["notified"] == 1
+    for _ in range(3):
+        assert (await _run_backup_watch())["notified"] == 0, "nach dem Fenster genau einmal"
+    assert [n.title for n in channel.received] == ["Backup zu alt: Docker-VM (seit dem Wartungsfenster)"]
+    assert "Wartungsfenster" in channel.received[0].body
+    assert channel.received[0].payload["host_id"] == host_id
+
+    state["tasks"].append(_vzdump(3, 100, ago=60))
+    await _run_backup_watch()
+    assert [n.title for n in channel.received][1:] == ["Backup wieder aktuell: Docker-VM"]
+
+
+@pytest.mark.asyncio
+async def test_backup_age_resolved_within_the_window_brings_no_push_afterwards(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
+    state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 102, ago=3600)]
+    await _run_backup_watch()
+    state["tasks"].append(_vzdump(3, 100, ago=60))
+    await _run_backup_watch()
+    await _end_window(db_session, host_id)
+    for _ in range(3):
+        assert (await _run_backup_watch())["notified"] == 0
+    assert channel.received == []
+    assert await _backup_deliveries(db_session) == [("Backup zu alt: Docker-VM", "suppressed"), ("Backup wieder aktuell: Docker-VM", "suppressed")]
+
+
+@pytest.mark.asyncio
+async def test_backup_age_all_clear_for_a_heard_message_comes_after_the_window(client, db_session, test_settings, mock_backup_api):
+    base_url, state = mock_backup_api
+    host_id, channel = await _backup_window_setup(client, db_session, test_settings, base_url, state)
+    await _end_window(db_session, host_id)
+    state["tasks"] = [_vzdump(1, 100, ago=5 * DAY), _vzdump(2, 102, ago=3600)]
+    assert (await _run_backup_watch())["notified"] == 1
+    assert [n.title for n in channel.received] == ["Backup zu alt: Docker-VM"]
+
+    await _start_window(db_session, host_id)
+    state["tasks"].append(_vzdump(3, 100, ago=60))
+    assert (await _run_backup_watch())["notified"] == 1  # die stumme Entwarnung im Verlauf
+    for _ in range(2):
+        assert (await _run_backup_watch())["notified"] == 0, "im Fenster keine weitere Meldung"
+    assert len(channel.received) == 1
+
+    await _end_window(db_session, host_id)
+    assert (await _run_backup_watch())["notified"] == 1
+    assert (await _run_backup_watch())["notified"] == 0, "nach dem Fenster genau einmal"
+    assert [(n.title, n.payload["host_id"]) for n in channel.received][1:] == [("Backup wieder aktuell: Docker-VM (im Wartungsfenster)", host_id)]
+    assert await _backup_deliveries(db_session) == [
+        ("Backup zu alt: Docker-VM", "sent"),
+        ("Backup wieder aktuell: Docker-VM", "suppressed"),
+        ("Backup wieder aktuell: Docker-VM (im Wartungsfenster)", "sent"),
+    ]
+
+
+def test_backup_age_helpers():
+    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "backups" / "src"))
+    from nodvard_deck_ext_backups.watch import _is_skipped, _setting_int, _skip_names
+
+    assert [_setting_int(v, 3, 1, 60) for v in (1, 60, 7.0, 0, 61, "7", None, True, 2.5, float("inf"), float("nan"))] == [1, 60, 7, 3, 3, 3, 3, 3, 3, 3, 3]
+    assert _skip_names(["Monitor", " monitor ", "", 5, None]) == {"monitor"} and _skip_names("monitor") == set()
+    assert _is_skipped({"102"}, "pve1", "102", "x") and _is_skipped({"pve1/102"}, "pve1", "102", "x")
+    assert _is_skipped({"monitor"}, "pve1", "102", " Monitor ") and not _is_skipped({"pve2/102"}, "pve1", "102", "x")
 
 
 # ---------------------------------------------------------------------------

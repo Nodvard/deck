@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { GuideLink } from "../../components/GuideLink";
 import { api } from "../../lib/api";
 import { Button } from "../settings/ui";
 import { StepNav } from "./StepNav";
@@ -30,7 +31,7 @@ export function FinishStep({ onBack, onFinish }: { onBack: () => void; onFinish:
         <h2 className="text-sm font-semibold">Fertig – Nodvard Deck ist startklar</h2>
         <p className="mt-1 text-sm text-white/70">
           Im Cockpit zeigt dir die Karte „Erste Schritte“ als Nächstes, was noch fehlt: einen Server anlegen, seinen Zugang hinterlegen und
-          die Module einrichten, die noch Angaben brauchen.
+          die Module einrichten, die noch Angaben brauchen. Jeder Schritt steht in der <GuideLink testId="finish-guide">Anleitung</GuideLink>.
         </p>
         {totp === false && (
           <p className="mt-2 text-sm text-white/70">
@@ -50,6 +51,9 @@ export function FinishStep({ onBack, onFinish }: { onBack: () => void; onFinish:
         </p>
         <code className={`${codeBlockClass} mt-1`}>docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password &lt;benutzername&gt;</code>
         <p className="mt-1 opacity-70">Er steht auch auf der Anmeldeseite unter „Passwort vergessen?“.</p>
+        <p className="mt-1 opacity-70">
+          Mehr dazu: <GuideLink section="locked">Anleitung, Abschnitt „Ausgesperrt? Notfall-Befehle“</GuideLink>
+        </p>
       </div>
       <StepNav onBack={onBack}>
         <Button variant="primary" onClick={onFinish}>Weiter zum Dashboard</Button>

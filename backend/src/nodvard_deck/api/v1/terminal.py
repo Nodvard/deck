@@ -29,8 +29,8 @@ import time
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, WebSocket, WebSocketDisconnect, status
-from nodvard_sdk.capabilities import TerminalTarget
-from pydantic import BaseModel
+from nodvard_sdk.capabilities import ScopedTerminalTarget, TerminalTarget
+from pydantic import BaseModel, Field, model_validator
 
 from ...config import Settings, get_settings
 from ...core.error_text import describe_connection_error, is_expected_connection_error
@@ -53,6 +53,17 @@ class TerminalSessionCreate(BaseModel):
     cols: int = 80
     rows: int = 24
     user: str | None = None
+    scope: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
+    """Shell IN etwas auf dem Host statt auf dem Host selbst (`ScopedTerminalTarget.scope`, z. B. ein Container).
+    Nur zusammen mit `ref`."""
+    ref: str | None = Field(default=None, min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:@-]*$")
+    """Welches (z. B. der Name des Containers). Der Kern prueft nur die Form; was gilt, entscheidet der Anbieter."""
+
+    @model_validator(mode="after")
+    def _scope_and_ref_together(self) -> "TerminalSessionCreate":
+        if (self.scope is None) != (self.ref is None):
+            raise ValueError("`scope` und `ref` nur zusammen angeben.")
+        return self
 
 
 class TerminalSessionOut(BaseModel):
@@ -67,10 +78,12 @@ async def create_terminal_session(
     host = await session.get(Host, payload.host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+    if payload.scope is not None and await _find_scoped_target(host_to_sdk(host), payload.scope, payload.ref or "") is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dafür bietet kein Modul eine Shell an.")
 
     ticket = get_terminal_session_registry().create(
         host_id=payload.host_id, user_id=user.id, cols=payload.cols, rows=payload.rows,
-        stamp=session_guard.credential_stamp(user), login_id=login_id,
+        stamp=session_guard.credential_stamp(user), login_id=login_id, scope=payload.scope, ref=payload.ref,
     )
     return TerminalSessionOut(
         session_id=ticket.session_id, ws_url=f"/api/v1/ws/terminal/{ticket.session_id}"
@@ -81,6 +94,14 @@ async def _find_terminal_target(host):  # noqa: ANN001 - nodvard_sdk.types.Host
     runtime = get_extension_runtime()
     for candidate in runtime.capabilities.query(TerminalTarget):
         if await candidate.can_open(host):
+            return candidate
+    return None
+
+
+async def _find_scoped_target(host, scope: str, ref: str):  # noqa: ANN001, ANN202 - nodvard_sdk Host/ScopedTerminalTarget
+    """Der Anbieter einer Shell IN etwas (`scope`, z. B. ein Container) auf `host`, der `ref` oeffnen kann."""
+    for candidate in get_extension_runtime().capabilities.query(ScopedTerminalTarget):
+        if getattr(candidate, "scope", None) == scope and await candidate.can_open_in(host, ref):
             return candidate
     return None
 
@@ -112,6 +133,9 @@ async def _send_error(websocket: WebSocket, message: str) -> None:
 
 
 async def _audit(ticket, action: str, outcome: str, **kwargs) -> None:  # noqa: ANN001, ANN003
+    if ticket.scope is not None:
+        # Worin die Shell lief, gehoert in jede Zeile (Oeffnen, Scheitern, Schliessen).
+        kwargs["detail"] = {"scope": ticket.scope, "ref": ticket.ref} | (kwargs.get("detail") or {})
     try:
         async with session_scope() as db_session:
             await audit_service.log(
@@ -178,13 +202,21 @@ async def terminal_ws(
         await websocket.close(code=_WS_ACCESS_ENDED)
         return
 
-    target = await _find_terminal_target(sdk_host)
-    if target is None:
-        await websocket.close(code=_WS_NO_TARGET)
-        return
+    if ticket.scope is not None:
+        scoped = await _find_scoped_target(sdk_host, ticket.scope, ticket.ref or "")
+        if scoped is None:
+            await websocket.close(code=_WS_NO_TARGET)
+            return
+        opening = scoped.open_in(sdk_host, ticket.ref or "", cols=ticket.cols, rows=ticket.rows)
+    else:
+        target = await _find_terminal_target(sdk_host)
+        if target is None:
+            await websocket.close(code=_WS_NO_TARGET)
+            return
+        opening = target.open(sdk_host, user=None, cols=ticket.cols, rows=ticket.rows)
 
     try:
-        term_session = await target.open(sdk_host, user=None, cols=ticket.cols, rows=ticket.rows)
+        term_session = await opening
     except Exception as exc:  # noqa: BLE001 - dem Client sichtbar machen, nicht den Server crashen
         # Nie ein leerer Grund: `str(TimeoutError())` ist leer, die Seite zeigte dann gar nichts.
         reason = describe_connection_error(exc, address=sdk_host.address)

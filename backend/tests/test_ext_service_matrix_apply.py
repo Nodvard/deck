@@ -690,9 +690,11 @@ class Ctx:
         self.audit_rows: list[dict] = []
         outer = self
 
+        self.settings_values: dict = {}
+
         class _Settings:
             async def get(self) -> dict:
-                return {}
+                return dict(outer.settings_values)
 
         class _Hosts:
             async def list(self, *, tag: str | None = None):
@@ -973,6 +975,7 @@ RUN_ID = "imgupd_0123456789abcdef"
 POLL_PULLING = "@@running\n@@step=pull\n@@tail\nnextcloud Pulling\n"
 POLL_UP = "@@running\n@@step=up\n@@tail\nContainer nextcloud-app Recreate\n"
 POLL_DONE = "@@rc=0\n@@step=done\n@@tail\n@@step=tag\nContainer nextcloud-app  Recreated\n"
+POLL_BACK_DONE = "@@rc=0\n@@step=rollback-done\n@@tail\n@@step=rollback\nContainer nextcloud-app  Recreated\n"
 
 
 class FlowDocker(FakeApplyDocker):
@@ -989,13 +992,35 @@ class FlowDocker(FakeApplyDocker):
         self.rollback_tag_id: str | None = IMG_ID
         self.poll_gate: asyncio.Event | None = None
         self.on_poll = None
+        # Der automatische Rueckweg: eigener Start, eigene Abfragen, danach laeuft wieder das alte Image.
+        self.rollback_launched: list[str] = []
+        self.rollback_launch_outs: list[str] = []
+        self.rollback_polls: list[str] = [POLL_BACK_DONE]
+        self.rollback_restores = True
+        self.rollback_verify: dict = {}
+        self.rolled_back = False
+        self.rollback_running_before = False
+        """Der Rueckweg lief schon vor einem Neustart des Dashboards (er ist auf dem Host zu finden)."""
 
     async def run_run(self, command: str) -> FakeResult:
+        if command.startswith("echo @@launch") and "@@step=rollback" in command:
+            self.rollback_launched.append(command)
+            out = self.rollback_launch_outs.pop(0) if self.rollback_launch_outs else self.launch_out
+            return FakeResult(stdout=out)
         if command.startswith("echo @@launch"):
             self.launched.append(command)
             if self.launch_error:
                 raise self.launch_error
             return FakeResult(stdout=self.launch_out)
+        if command.startswith('d="$HOME"') and "@@running" in command and ap.rollback_run_id(RUN_ID) in command:
+            if not self.rollback_launched and not self.rollback_running_before:
+                return FakeResult(stdout="@@unknown\n")  # kein Rueckweg auf dem Host
+            item = self.rollback_polls.pop(0) if len(self.rollback_polls) > 1 else self.rollback_polls[0]
+            if "@@rc=0" in item and self.rollback_restores:
+                self.infos["nextcloud-app"]["image_id"] = IMG_ID
+                self.tag_image_id = IMG_ID
+                self.rolled_back = True
+            return FakeResult(stdout=item)
         if command.startswith('d="$HOME"') and "@@running" in command:
             if self.on_poll:
                 self.on_poll()
@@ -1008,7 +1033,10 @@ class FlowDocker(FakeApplyDocker):
                 self.recreate_with_new_image()
             return FakeResult(stdout=item)
         if command.startswith("ids=$(docker ps -aq"):
-            override = self.verify_overrides.pop(0) if len(self.verify_overrides) > 1 else self.verify_overrides[0]
+            if self.rolled_back:
+                override = self.rollback_verify
+            else:
+                override = self.verify_overrides.pop(0) if len(self.verify_overrides) > 1 else self.verify_overrides[0]
             if isinstance(override, BaseException):
                 raise override
             main = self.infos["nextcloud-app"]
@@ -1163,6 +1191,7 @@ async def test_a_start_error_line_stays_in_the_action_output_but_not_in_log_summ
 @pytest.mark.asyncio
 async def test_a_failing_recreate_shows_the_rollback_and_reads_the_state_exactly_once(tmp_path, fast):
     docker, service, applier, ctx, plan = await flow(tmp_path)
+    ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
     docker.polls = ["@@rc=20\n@@step=up\n@@tail\nError: port already allocated\n"]
     docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
     result = await applier.apply(request_for(plan))
@@ -1188,6 +1217,7 @@ async def test_a_failing_recreate_shows_the_rollback_and_reads_the_state_exactly
 async def test_the_start_is_checked_after_the_run(tmp_path, fast, override, ok, fragment, monkeypatch):
     monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
     docker, service, applier, ctx, plan = await flow(tmp_path)
+    ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
     docker.verify_overrides = [override]
     result = await applier.apply(request_for(plan))
     assert result.success is ok
@@ -1486,6 +1516,7 @@ def test_only_two_calm_reads_count_as_started_without_a_healthcheck():
 @pytest.mark.parametrize("second", [{"restarts": 1}, {"started": "2026-09-30T07:00:20Z"}, {"restarts": 2, "started": "x", "status": "restarting"}])
 async def test_a_crash_loop_without_healthcheck_is_a_failure_even_though_the_first_read_says_running(tmp_path, fast, second):
     docker, service, applier, ctx, plan = await flow(tmp_path)
+    ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False  # hier: der Weg von Hand (automatisch: siehe unten)
     docker.verify_overrides = [{}, second]  # erste Lesung: "running", zweite: neuer Start
     result = await applier.apply(request_for(plan))
     assert result.success is False and "startet immer wieder neu" in result.error
@@ -1716,7 +1747,9 @@ async def test_after_the_restart_the_run_is_polled_verified_reported_and_forgott
     assert await applier.resume_interrupted() == 1
 
     assert not docker.calls_with("echo @@launch"), "nichts wird ein zweites Mal gestartet"
-    assert len(docker.polls_made()) == 2 and docker.calls_with("ids=$(docker ps -aq")
+    # Zwei Abfragen des Updates, dazu eine Nachfrage, ob vor dem Neustart schon ein Rueckweg lief.
+    assert len(docker.polls_made()) == 3 and docker.calls_with("ids=$(docker ps -aq")
+    assert docker.calls_with(ap.rollback_run_id(RUN_ID))
     assert stored_runs(ctx) == {} and applier._busy == {} and applier.snapshot()["applying"] == {}
     applied = applier.snapshot()["applied"]["h1:nextcloud-app"]
     assert applied["ok"] is True and applied["summary"].startswith("„nextcloud-app“ aktualisiert")
@@ -2023,3 +2056,187 @@ async def test_an_entry_whose_project_is_busy_is_dropped_the_running_update_repo
         assert await applier.resume_interrupted() == 0
     assert stored_runs(ctx) == {} and any("Projekt ist belegt" in r.getMessage() for r in caplog.records)
     assert applier._busy == {"h1:nextcloud": "anderer-container"} and ctx.sent == [] and ctx.audit_rows == []
+
+
+# =============================================================================================
+# Automatischer Rueckweg: startet die neue Version nicht sauber, laeuft danach wieder die alte
+# =============================================================================================
+
+BACK_TAG = "docker tag lattice-rollback/nextcloud-app-902344c2:previous nextcloud:30-apache"
+
+
+def test_the_rollback_script_tags_back_and_recreates_only_this_service():
+    t = target()
+    script = ia.rollback_script(t, ia.rollback_ref(t.container))
+    assert script.startswith("echo @@step=rollback; docker tag lattice-rollback/")
+    assert f"|| exit {ia.RC_BACK_TAG}" in script and f"|| exit {ia.RC_BACK_UP}" in script
+    assert ia.up_command(t) in script and " pull " not in script
+    with pytest.raises(ValueError):
+        ia.rollback_script(t, "kaputt; rm -rf /")
+    assert ap.rollback_run_id(RUN_ID) != RUN_ID and dt.RUN_ID_RE.match(ap.rollback_run_id(RUN_ID))
+    assert ap.rollback_run_id(RUN_ID) == ap.rollback_run_id(RUN_ID), "fest abgeleitet: nach einem Neustart kein zweiter Rueckweg"
+
+
+@pytest.mark.asyncio
+async def test_a_crashing_new_version_is_rolled_back_automatically(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    assert plan.auto_rollback is True and plan.as_response()["auto_rollback"] is True
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    phases: list[str] = []
+    docker.on_poll = lambda: phases.append(next(iter(applier.snapshot()["applying"].values()))["phase"])
+    result = await applier.apply(request_for(plan))
+
+    assert result.success is False
+    assert "Exit-Code 1" in result.error and "Automatisch zurück auf die alte Version – sie läuft wieder." in result.error
+    (launch,) = docker.rollback_launched
+    assert ap.rollback_run_id(RUN_ID) in launch and BACK_TAG in launch and "--no-deps --no-build app" in launch
+    assert "lock-nextcloud" in launch, "dieselbe Sperre wie das Update"
+    assert "Zurück (auf dem Host)" not in result.output, "die alte Version laeuft: kein Befehl zum Abtippen"
+    assert "--- Automatischer Rückweg ---" in result.output
+    assert docker.infos["nextcloud-app"]["image_id"] == IMG_ID
+    assert result.detail["auto_rollback"] == {
+        "ok": True, "run_id": ap.rollback_run_id(RUN_ID), "log_path": dt.log_path(ap.rollback_run_id(RUN_ID)),
+    }
+    (note,) = ctx.sent
+    assert note.title.endswith("fehlgeschlagen") and "Automatisch zurück" in note.body and "Zurück (auf dem Host)" not in note.body
+    (row,) = ctx.audit_rows
+    assert row["outcome"] == "failure" and row["detail"]["auto_rollback"]["ok"] is True
+    assert service.snapshot()["data"]["h1:nextcloud-app"]["status"] == iu.UPDATE, "das Update steht weiter aus"
+
+
+@pytest.mark.asyncio
+async def test_a_failing_recreate_is_rolled_back_too(tmp_path, fast):
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    docker.recreate_on_success = False
+    docker.polls = ["@@rc=20\n@@step=up\n@@tail\nError: port already allocated\n"]
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and result.error.startswith("Neu erstellen fehlgeschlagen")
+    assert "sie läuft wieder" in result.error and len(docker.rollback_launched) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_automatic_rollback_when_switched_off_for_databases_or_after_a_pull_error(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    ctx.settings_values[ap.AUTO_ROLLBACK_SETTING] = False
+    plan = await applier.plan(ctx.host, "nextcloud-app")
+    assert plan.auto_rollback is False
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and docker.rollback_launched == []
+    assert "Zurück (auf dem Host)" in result.output and "Automatisch" not in result.error
+
+    monkeypatch.setattr(ia, "is_database_image", lambda image, service: True)
+    docker, service, applier, ctx, plan = await flow(tmp_path / "db")
+    assert plan.auto_rollback is False and plan.risk is Risk.HIGH
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and docker.rollback_launched == [], "nie bei Datenbanken"
+    assert "Zurück (auf dem Host)" in result.output
+
+    monkeypatch.setattr(ia, "is_database_image", lambda image, service: False)
+    docker, service, applier, ctx, plan = await flow(tmp_path / "pull")
+    docker.polls = ["@@rc=10\n@@step=pull\n@@tail\nError response from daemon: manifest unknown\n"]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and docker.rollback_launched == [], "nach einem Pull-Fehler ist nichts zu tun"
+
+
+@pytest.mark.asyncio
+async def test_no_automatic_rollback_without_a_proven_backup_image(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    docker.rollback_tag_id = None  # das Sicherungs-Image fehlt (z. B. aufgeraeumt)
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and docker.rollback_launched == []
+
+    docker, service, applier, ctx, plan = await flow(tmp_path / "tag")
+    docker.polls = [POLL_PULLING, "@@rc=0\n@@step=done\n@@tail\n@@warn=rollback-tag\nRecreated\n"]
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and docker.rollback_launched == [], "das Markieren scheiterte: kein Rueckweg"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("polls", "verify", "fragment"),
+    [
+        (["@@rc=31\n@@step=rollback\n@@tail\nError: port already allocated\n"], {}, "hat nicht geklappt – siehe unten"),
+        ([POLL_BACK_DONE], {"status": "exited", "exit_code": 3}, "hat nicht geklappt (Container läuft nicht wieder an"),
+    ],
+)
+async def test_a_failing_rollback_says_so_and_shows_the_manual_way(tmp_path, fast, monkeypatch, polls, verify, fragment):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    docker.rollback_polls = polls
+    docker.rollback_verify = verify
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and fragment in result.error
+    assert "Zurück (auf dem Host)" in result.output and BACK_TAG in result.output
+    assert result.detail["auto_rollback"]["ok"] is False
+    (note,) = ctx.sent
+    assert "Zurück (auf dem Host)" in note.body
+
+
+@pytest.mark.asyncio
+async def test_a_still_held_project_lock_is_waited_out_briefly(tmp_path, fast, monkeypatch):
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(ap, "ROLLBACK_RETRY_S", 0)
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"status": "exited", "exit_code": 1}]
+    docker.rollback_launch_outs = ["@@launch\n@@busy\n"]
+    result = await applier.apply(request_for(plan))
+    assert len(docker.rollback_launched) == 2 and "sie läuft wieder" in result.error
+
+
+@pytest.mark.asyncio
+async def test_a_restart_during_the_rollback_reports_the_failed_start_and_the_rollback_not_a_success(tmp_path, resume_fast):
+    """Lief der Rueckweg schon, als das Dashboard neu startete, saehe die Pruefung das alte Image und urteilte "kein
+    neueres Image" (Erfolg). Stattdessen: den laufenden Rueckweg weiterverfolgen und den Fehlstart melden."""
+    docker, ctx, plan = await interrupt_update(tmp_path)
+    docker.polls = [POLL_DONE]
+    docker.rollback_running_before = True
+    docker.rollback_polls = [POLL_BACK_DONE]
+    service, applier = new_dashboard(ctx)
+    assert await applier.resume_interrupted() == 1
+
+    assert len(docker.rollback_launched) <= 1, "hoechstens der Start mit derselben Lauf-ID (auf dem Host: @@exists)"
+    applied = applier.snapshot()["applied"]["h1:nextcloud-app"]
+    assert applied["ok"] is False
+    assert "startete nicht sauber" in applied["summary"] and "sie läuft wieder" in applied["summary"]
+    (row,) = ctx.audit_rows
+    assert row["outcome"] == "failure" and row["detail"]["auto_rollback"]["ok"] is True and row["detail"]["resumed"] is True
+    (note,) = ctx.sent
+    assert note.title.endswith("fehlgeschlagen") and ap.RESTARTED_LINE in note.body
+
+
+def test_data_stores_never_get_an_automatic_rollback():
+    for image, service in [
+        ("redis:7", "cache"), ("valkey/valkey:8", "kv"), ("mcr.microsoft.com/mssql/server:2022-latest", "sql"),
+        ("percona/percona-server:8", "x"), ("minio/minio", "s3"), ("rabbitmq:3-management", "mq"), ("postgres:16", "db"),
+        ("nginx:1.27", "redis"),
+    ]:
+        assert ia.is_data_store(image, service), image
+    for image, service in [("nginx:1.27", "web"), ("ghcr.io/home-assistant/home-assistant", "ha"), ("grafana/grafana", "x")]:
+        assert not ia.is_data_store(image, service), image
+    assert ia.risk_for("redis:7", "cache") is Risk.MEDIUM, "die Risikostufe des Updates bleibt, wie sie war"
+
+
+@pytest.mark.asyncio
+async def test_unhealthy_alone_is_no_reason_for_an_automatic_rollback(tmp_path, fast, monkeypatch):
+    """Eine App mitten in einer langen Datenumstellung kann "ungesund" melden -- sie abzubrechen waere schlimmer."""
+    monkeypatch.setattr(ap, "VERIFY_TIMEOUT_S", 0.05)
+    docker, service, applier, ctx, plan = await flow(tmp_path)
+    docker.verify_overrides = [{"health": "unhealthy"}]
+    result = await applier.apply(request_for(plan))
+    assert result.success is False and "ungesund" in result.error
+    assert docker.rollback_launched == [] and "Zurück (auf dem Host)" in result.output
+
+
+def test_the_approver_sees_the_automatic_rollback_in_the_reason():
+    text = ia.reason_text("docker", "web", "nginx:1.27", "web", "nginx", Risk.MEDIUM, auto_rollback=True)
+    assert text.endswith(ia.AUTO_ROLLBACK_REASON)
+    assert ia.AUTO_ROLLBACK_REASON not in ia.reason_text("docker", "web", "nginx:1.27", "web", "nginx", Risk.MEDIUM)

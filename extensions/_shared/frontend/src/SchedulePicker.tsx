@@ -5,12 +5,13 @@
  * bleiben. Alles, was sich nicht in die einfachen Formen uebersetzen laesst, bleibt
  * als "Eigener (Cron)" bearbeitbar.
  *
- * Gemeinsam genutzt vom Kern (Einstellungen) und von Erweiterungsseiten (Skripte);
- * deshalb nur React, keine weiteren Abhaengigkeiten.
+ * Teil des UI-Kits: Erweiterungsseiten (Skripte, Nodvard Shield) binden ihn wie `ui.tsx` ein,
+ * Kern-Seiten (Einstellungen) ueber dieselbe Aufloesung (`frontend/kit.resolve.ts`). Ausser React
+ * braucht er nur die Zeitzone des Dashboards (`timezone.ts`).
  */
 import { useEffect, useState } from "react";
 
-import { browserTimeZone, foreignDeckTimezone, useDeckTimezone } from "../lib/deckTimezone";
+import { browserTimeZone, foreignDeckTimezone, useDeckTimezone } from "./timezone";
 
 type Mode = "off" | "hourly" | "daily" | "weekly" | "monthly" | "custom";
 

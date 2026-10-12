@@ -126,6 +126,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
 
   useEffect(() => {
     setData(null);
+    setError(null);
     setHistory(EMPTY_HISTORY);
   }, [hostId]);
 

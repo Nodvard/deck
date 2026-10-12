@@ -17,6 +17,7 @@ zuordenbar (dieselbe VMID kann auf pve1 UND pve2 vorkommen, siehe
 
 from __future__ import annotations
 
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
@@ -25,6 +26,7 @@ from nodvard_sdk.actions import ActionRequest
 from nodvard_sdk.errors import NodvardError
 
 from .connector import ProxmoxBackupApiError, ProxmoxBackupConnector
+from .failure_text import explain, relevant_lines
 from .job_edit import (
     JobEditError,
     build_job_create,
@@ -101,9 +103,17 @@ def unreachable_row(connection: str, error: str) -> dict[str, Any]:
     return {
         "job_ref": "", "vmid": "", "name": f"Verbindung {connection}", "host_id": None,
         "connection": connection, "node": None, "storage": error, "schedule": None,
-        "enabled": False, "last_status": "unreachable", "last_run_at": None,
+        "enabled": False, "last_status": "unreachable", "last_run_at": None, "last_ok_at": None,
         "next_run_at": None, "retention": None, "error": error,
     }
+
+
+WARNINGS_RE = re.compile(r"WARNINGS: (\d+)")
+"""So endet ein Lauf, der geklappt hat, aber Warnungen hatte (z. B. ein Gast-Agent, der nicht lief). Die Sicherung ist
+da -- Proxmox zeigt ihn gelb, nicht rot. Vorher galt er hier als fehlgeschlagen und loeste "Backup fehlgeschlagen" aus."""
+CAUSE_CACHE_SIZE = 64
+"""So viele Protokolle fehlgeschlagener Laeufe bleiben im Speicher (nur die Zeilen, die `explain` braucht). Ein beendeter
+Lauf aendert sein Protokoll nicht mehr; der Waechter und die Seite fragen dann nicht jedes Mal erneut."""
 
 
 def _task_status(task: dict[str, Any] | None) -> str:
@@ -111,13 +121,20 @@ def _task_status(task: dict[str, Any] | None) -> str:
         return "unknown"
     if "endtime" not in task:
         return "running"
-    return "ok" if task.get("status") == "OK" else "failed"
+    status = str(task.get("status") or "")
+    return "ok" if status == "OK" or WARNINGS_RE.fullmatch(status) else "failed"
+
+
+def _task_warnings(task: dict[str, Any]) -> int | None:
+    match = WARNINGS_RE.fullmatch(str(task.get("status") or ""))
+    return int(match.group(1)) if match else None
 
 
 class ProxmoxBackupProvider:
     def __init__(self, ctx: Any, connectors_factory: ConnectorsFactory) -> None:
         self._ctx = ctx
         self._connectors_factory = connectors_factory
+        self._logs: dict[tuple[str, str], list[str]] = {}
 
     async def _vm_name_and_host(self, connection: str, vmid: str) -> tuple[str, str | None]:
         """`ctx.hosts` kennt Proxmox nicht -- nur `Host.provider_ref` (`"<connection>/
@@ -160,6 +177,9 @@ class ProxmoxBackupProvider:
                     name, host_id = await self._vm_name_and_host(connection, vmid)
                     latest = _vzdump_tasks(tasks, vmid, group_job=group)
                     latest_task = latest[0] if latest else None
+                    # Letzter ERFOLGREICHER Lauf (der letzte kann fehlgeschlagen sein): Grundlage fuer die
+                    # Meldung "Backup zu alt" im Waechter. Ende des Laufs, sonst sein Beginn.
+                    latest_ok = next((t for t in latest if _task_status(t) == "ok"), None)
                     rows.append(
                         {
                             "job_ref": _job_ref(connection, str(job.get("id")), vmid),
@@ -173,6 +193,7 @@ class ProxmoxBackupProvider:
                             "enabled": bool(int(job.get("enabled", 1))),
                             "last_status": _task_status(latest_task),
                             "last_run_at": latest_task.get("starttime") if latest_task else None,
+                            "last_ok_at": (latest_ok.get("endtime") or latest_ok.get("starttime")) if latest_ok else None,
                             # Beides steht schon in der Job-Definition -- kein Extra-Aufruf.
                             "next_run_at": job.get("next-run"),
                             "retention": retention_label(job.get("prune-backups")),
@@ -236,19 +257,46 @@ class ProxmoxBackupProvider:
         guests, orphans = summarize(files_by_connection, known)
         return {"guests": guests, "orphans": orphans, "errors": errors}
 
-    async def job_history(self, job_ref: str) -> list[dict[str, Any]]:
-        connection, _job_id, vmid = _parse_job_ref(job_ref)
-        connectors = await self._connectors_factory()
-        connector = connectors.get(connection)
+    async def running_backups(self) -> dict[str, Any]:
+        """Gaeste, fuer die gerade eine Sicherung laeuft (ein VZDump-Task dieses Gastes ohne Ende), je Verbindung:
+        `{"running": [{"connection", "vmid", "started_at"}], "errors": [{"connection", "error"}]}`. Fuer Gaeste ohne
+        Job -- bei Gaesten mit Job steht der Lauf schon in den Zeilen von `list_jobs()`. Sammel-Laeufe ohne Gast-ID
+        sind hier nicht dabei (sie gehoeren zu einem Job)."""
+        running: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for connection, connector in (await self._connectors_factory()).items():
+            try:
+                tasks = await connector.list_tasks()
+            except ProxmoxBackupApiError as exc:
+                errors.append({"connection": connection, "error": str(exc)})
+                continue
+            running.extend(
+                {"connection": connection, "vmid": str(task["id"]), "started_at": task.get("starttime")}
+                for task in tasks
+                if task.get("type") == "vzdump" and task.get("id") and _task_status(task) == "running"
+            )
+        return {"running": running, "errors": errors}
+
+    async def _connector_for(self, connection: str) -> ProxmoxBackupConnector:
+        connector = (await self._connectors_factory()).get(connection)
         if connector is None:
             raise NodvardError(f"Backup-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
+        return connector
+
+    async def _job_tasks(self, connector: ProxmoxBackupConnector, job_id: str, vmid: str) -> list[dict[str, Any]]:
+        """Die Laeufe eines Jobs fuer diesen Gast, neueste zuerst."""
         tasks = await connector.list_tasks()
-        job = next((j for j in await connector.list_jobs() if str(j.get("id")) == _job_id), None)
+        job = next((j for j in await connector.list_jobs() if str(j.get("id")) == job_id), None)
         # "Alle Gaeste"/Pool-Jobs haben keine VMID-Liste -- ohne Ressourcen
         # ergab job_vmids() [], und der Verlauf blieb leer (wie needs_resources in list_jobs).
         needs_resources = job is not None and not str(job.get("vmid") or "").strip()
         resources = await connector.guest_resources() if needs_resources else []
         group = job if job is not None and len(job_vmids(job, resources)) > 1 else None
+        return _vzdump_tasks(tasks, vmid, group_job=group)
+
+    async def job_history(self, job_ref: str) -> list[dict[str, Any]]:
+        connection, job_id, vmid = _parse_job_ref(job_ref)
+        connector = await self._connector_for(connection)
         return [
             {
                 "upid": t.get("upid"),
@@ -256,9 +304,42 @@ class ProxmoxBackupProvider:
                 "status": _task_status(t),
                 "started_at": t.get("starttime"),
                 "finished_at": t.get("endtime"),
+                # Geklappt, aber mit Warnungen (Anzahl), sonst nicht gesetzt.
+                **({"warnings": warnings} if (warnings := _task_warnings(t)) is not None else {}),
             }
-            for t in _vzdump_tasks(tasks, vmid, group_job=group)
+            for t in await self._job_tasks(connector, job_id, vmid)
         ]
+
+    async def failure_cause(self, job_ref: str, upid: str | None = None) -> dict[str, Any] | None:
+        """Der Grund fuer den neuesten fehlgeschlagenen Lauf dieses Jobs fuer den Gast (oder fuer den Lauf `upid`), in
+        Klartext (failure_text.py): `{"upid", "node", "started_at", "finished_at", "status", "log_readable", "key",
+        "what", "todo", "detail"}`. `None`, wenn es keinen solchen fehlgeschlagenen Lauf gibt. Liest dazu das
+        Aufgabenprotokoll; laesst es sich nicht lesen (fehlendes Recht `Sys.Audit`), zaehlt nur der Status."""
+        connection, job_id, vmid = _parse_job_ref(job_ref)
+        connector = await self._connector_for(connection)
+        task = next(
+            (t for t in await self._job_tasks(connector, job_id, vmid)
+             if _task_status(t) == "failed" and (upid is None or t.get("upid") == upid)),
+            None,
+        )
+        if task is None:
+            return None
+        task_upid, node = str(task.get("upid") or ""), str(task.get("node") or "")
+        lines = self._logs.get((connection, task_upid))
+        if lines is None and task_upid and node:
+            try:
+                lines = relevant_lines(await connector.task_log(node, task_upid))
+            except ProxmoxBackupApiError:
+                lines = None
+            else:
+                if len(self._logs) >= CAUSE_CACHE_SIZE:
+                    self._logs.pop(next(iter(self._logs)))
+                self._logs[(connection, task_upid)] = lines
+        return {
+            "upid": task_upid, "node": node, "started_at": task.get("starttime"), "finished_at": task.get("endtime"),
+            "status": task.get("status"), "log_readable": lines is not None,
+            **explain(vmid, task.get("status"), lines),
+        }
 
     async def retry(self, job_ref: str) -> ActionRequest:
         """Gibt einen *Vorschlag* zurueck (docs/02 §3-Vertrag) -- der Aufrufer

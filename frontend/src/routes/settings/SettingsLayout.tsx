@@ -2,10 +2,11 @@
  * Einstellungen mit Seitennavigation. Jeder Bereich ist eine eigene Unterseite
  * (/settings/<bereich>); Bereiche ohne passende Berechtigung werden nicht angezeigt.
  */
-import { Blocks, Bot, HardDrive, History, Info, Palette, Server, UserCircle, Users } from "lucide-react";
+import { BookOpen, Blocks, Bot, ExternalLink, HardDrive, History, Info, Palette, Server, UserCircle, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 
+import { guideUrl } from "../../lib/docs";
 import { useAuthStore } from "../../state/auth";
 
 interface Section {
@@ -77,6 +78,25 @@ export function SettingsLayout(): JSX.Element {
               </NavLink>
             </li>
           ))}
+          {/* Verlässt das Dashboard: die Anleitung liegt im Quellcode und öffnet in einem neuen Tab. */}
+          <li>
+            <a
+              href={guideUrl()}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="settings-guide-link"
+              className="flex items-start gap-3 whitespace-nowrap rounded-lg px-3 py-2 text-sm text-white/60 transition hover:bg-white/[0.04] hover:text-white"
+            >
+              <BookOpen size={17} className="mt-0.5 flex-none" />
+              <span>
+                <span className="flex items-center gap-1.5 font-medium">
+                  Anleitung <ExternalLink size={12} aria-hidden className="flex-none opacity-70" />
+                  <span className="sr-only">(öffnet in neuem Tab)</span>
+                </span>
+                <span className="hidden text-xs text-white/40 lg:block">Schritt für Schritt erklärt</span>
+              </span>
+            </a>
+          </li>
         </ul>
       </nav>
       <div className="min-w-0 flex-1">

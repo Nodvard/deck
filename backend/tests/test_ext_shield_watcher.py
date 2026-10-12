@@ -538,3 +538,78 @@ async def test_only_exited_dead_and_restarting_count_as_a_crash(state, status, e
     await watcher.tick()
     assert [t.is_crash for t in seen] == [expected_crash]
     assert seen[0].details["is_crash"] is expected_crash
+
+
+# --- Erholung: der Vorfall erledigt sich von selbst ---------------------------------------------------------------------
+
+
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 1000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+async def _recovery_run(states: list[tuple[str, int]], *, step_s: float = 120.0, failures: int = 0) -> list[tuple[str, str]]:
+    """Laesst den Waechter die Zustaende (Zustand, RestartCount) nacheinander sehen, je `step_s` auseinander, und gibt
+    die Erholungs-Meldungen (Server, Container) zurueck. Die ersten `failures` Meldungen scheitern (Datenbank weg)."""
+    from nodvard_deck_ext_shield import watcher as w
+
+    host = _FakeHost("h1", "docker")
+    outputs = {"h1": _FakeExecResult(0, "")}
+    inspect = {"h1": _FakeExecResult(0, "")}
+    ctx = _FakeCtx(settings={"docker_host_tag": "docker"}, hosts=[host], outputs=outputs, inspect=inspect)
+    clock = _Clock()
+    recovered: list[tuple[str, str]] = []
+
+    async def _capture(t: ContainerTransition) -> None:
+        return None
+
+    async def _on_recovery(h, target, since):  # noqa: ANN001
+        assert since <= __import__("time").time()
+        recovered.append((h.name, target))
+        if len(recovered) <= failures:
+            raise RuntimeError("Datenbank weg")
+
+    watcher = w.DockerWatcher(ctx, on_transition=_capture, on_recovery=_on_recovery, clock=clock)
+    for state, restarts in states:
+        status = "Up 1 minute" if state == "running" else "Exited (1) 5 seconds ago"
+        outputs["h1"] = _FakeExecResult(0, _ps_line("nginx", state, status))
+        inspect["h1"] = _FakeExecResult(0, f"/nginx|{restarts}|{'a' * 64}\n")
+        await watcher.tick()
+        clock.now += step_s
+    return recovered
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_container_counts_as_recovered_after_five_quiet_minutes():
+    # laeuft -> abgestuerzt -> laeuft wieder, dann 2, 4, 6 Minuten ruhig: erst danach genau eine Erholung.
+    seen = await _recovery_run([("running", 0), ("exited", 0), ("running", 0), ("running", 0), ("running", 0), ("running", 0)])
+    assert seen == [("docker", "nginx")]
+    assert await _recovery_run([("running", 0), ("exited", 0), ("running", 0), ("running", 0)]) == [], "erst 4 Minuten"
+
+
+@pytest.mark.asyncio
+async def test_a_new_restart_starts_the_quiet_time_again():
+    seen = await _recovery_run([
+        ("running", 0), ("running", 1), ("running", 1), ("running", 2), ("running", 2), ("running", 2),
+    ])
+    assert seen == [], "jeder Neustart durch Docker beginnt die fuenf Minuten neu"
+    seen = await _recovery_run([("running", 0), ("running", 1), ("running", 1), ("running", 1), ("running", 1)])
+    assert seen == [("docker", "nginx")]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_recovery_is_tried_again_in_the_next_tick():
+    seen = await _recovery_run(
+        [("running", 0), ("exited", 0), ("running", 0), ("running", 0), ("running", 0), ("running", 0), ("running", 0), ("running", 0)],
+        failures=1,
+    )
+    assert seen == [("docker", "nginx"), ("docker", "nginx")], "einmal gescheitert, im naechsten Takt wieder, dann Ruhe"
+
+
+@pytest.mark.asyncio
+async def test_a_container_that_never_had_trouble_never_recovers():
+    assert await _recovery_run([("running", 0)] * 6) == []
+    assert await _recovery_run([("exited", 0), ("exited", 0), ("exited", 0)]) == []

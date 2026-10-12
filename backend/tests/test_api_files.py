@@ -119,6 +119,21 @@ async def test_list_sources_aggregates_across_providers(client, db_session):
 
 
 @pytest.mark.asyncio
+async def test_a_source_names_its_server_only_when_it_has_one(client, db_session):
+    """`host_id` ist optional (SDK): eine SSH-Quelle nennt ihren Server, damit der Dateimanager Status und
+    Betriebssystem zeigen kann; Quellen ohne Server (oder mit einem unbrauchbaren Wert) liefern None."""
+    server, plain, broken = _FakeFileSource("ssh"), _FakeFileSource("cloud"), _FakeFileSource("kaputt")
+    server.host_id = "h-pi"
+    broken.host_id = 42
+    _register(server, plain, broken)
+    token = await _bootstrap_owner(client)
+
+    res = await client.get("/api/v1/files/sources", headers=_auth_header(token))
+    assert res.status_code == 200, res.text
+    assert {s["source_id"]: s["host_id"] for s in res.json()} == {"ssh": "h-pi", "cloud": None, "kaputt": None}
+
+
+@pytest.mark.asyncio
 async def test_list_stat_download_roundtrip(client, db_session):
     _register(_FakeFileSource("fake"))
     token = await _bootstrap_owner(client)

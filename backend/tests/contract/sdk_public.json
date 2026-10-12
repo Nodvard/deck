@@ -117,6 +117,21 @@
   "lattice_sdk.ActorType": {
    "art": "klasse"
   },
+  "lattice_sdk.AppSuggestion": {
+   "art": "klasse",
+   "params": {
+    "host": false,
+    "name": true,
+    "source": true,
+    "url": true
+   }
+  },
+  "lattice_sdk.AppSuggestionProvider": {
+   "art": "klasse",
+   "methoden": {
+    "app_suggestions": {}
+   }
+  },
   "lattice_sdk.BackupProvider": {
    "art": "klasse",
    "methoden": {
@@ -134,6 +149,13 @@
    "params": {
     "text": true,
     "tone": false
+   }
+  },
+  "lattice_sdk.CertificateMismatch": {
+   "art": "klasse",
+   "params": {
+    "actual": true,
+    "expected": true
    }
   },
   "lattice_sdk.ChartView": {
@@ -166,6 +188,24 @@
      "timeout_s": false,
      "user": false
     }
+   }
+  },
+  "lattice_sdk.ConnectionReceiver": {
+   "art": "klasse",
+   "methoden": {
+    "connection_conflict": {
+     "base_url": true,
+     "name": true
+    },
+    "receive_connection": {
+     "base_url": true,
+     "name": true,
+     "pinned_sha256": false,
+     "tls_insecure_skip_verify": true,
+     "token_id": true,
+     "token_secret": true
+    },
+    "received_token_ids": {}
    }
   },
   "lattice_sdk.ConnectorHealth": {
@@ -287,6 +327,7 @@
     "settings_schema": false,
     "sort_order": false,
     "source": false,
+    "stage": false,
     "version": true
    }
   },
@@ -301,6 +342,23 @@
     "path": true,
     "size": false,
     "sync_status": false
+   }
+  },
+  "lattice_sdk.FilePlace": {
+   "art": "klasse",
+   "params": {
+    "hint": false,
+    "icon": false,
+    "label": true,
+    "path": true
+   }
+  },
+  "lattice_sdk.FilePlaceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "places_for_host": {
+     "host_id": true
+    }
    }
   },
   "lattice_sdk.FileSource": {
@@ -615,11 +673,15 @@
     "failures": true
    }
   },
+  "lattice_sdk.NotificationSkipped": {
+   "art": "klasse"
+  },
   "lattice_sdk.NotifyResult": {
    "art": "klasse",
    "params": {
     "delivered": false,
     "notification_id": true,
+    "skipped": false,
     "suppressed": false
    }
   },
@@ -645,6 +707,17 @@
     "title": true
    }
   },
+  "lattice_sdk.PeerCertificate": {
+   "art": "klasse",
+   "params": {
+    "alt_names": false,
+    "issuer": false,
+    "not_after": false,
+    "sha256": true,
+    "subject": false,
+    "trusted": true
+   }
+  },
   "lattice_sdk.PermissionDenied": {
    "art": "klasse",
    "params": {
@@ -665,6 +738,21 @@
   "lattice_sdk.Risk": {
    "art": "klasse"
   },
+  "lattice_sdk.ScopedTerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open_in": {
+     "host": true,
+     "ref": true
+    },
+    "open_in": {
+     "cols": true,
+     "host": true,
+     "ref": true,
+     "rows": true
+    }
+   }
+  },
   "lattice_sdk.SearchProvider": {
    "art": "klasse",
    "methoden": {
@@ -676,6 +764,14 @@
   },
   "lattice_sdk.SecretHandleRef": {
    "art": "klasse"
+  },
+  "lattice_sdk.SecretNotOwned": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "label": true,
+    "login_secret": false
+   }
   },
   "lattice_sdk.SecretUnavailable": {
    "art": "klasse"
@@ -928,6 +1024,12 @@
     }
    }
   },
+  "lattice_sdk.capabilities.AppSuggestionProvider": {
+   "art": "klasse",
+   "methoden": {
+    "app_suggestions": {}
+   }
+  },
   "lattice_sdk.capabilities.BackupProvider": {
    "art": "klasse",
    "methoden": {
@@ -951,6 +1053,24 @@
     }
    }
   },
+  "lattice_sdk.capabilities.ConnectionReceiver": {
+   "art": "klasse",
+   "methoden": {
+    "connection_conflict": {
+     "base_url": true,
+     "name": true
+    },
+    "receive_connection": {
+     "base_url": true,
+     "name": true,
+     "pinned_sha256": false,
+     "tls_insecure_skip_verify": true,
+     "token_id": true,
+     "token_secret": true
+    },
+    "received_token_ids": {}
+   }
+  },
   "lattice_sdk.capabilities.ConsoleSession": {
    "art": "klasse",
    "methoden": {
@@ -969,6 +1089,14 @@
     },
     "open_console": {
      "host": true
+    }
+   }
+  },
+  "lattice_sdk.capabilities.FilePlaceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "places_for_host": {
+     "host_id": true
     }
    }
   },
@@ -1045,6 +1173,21 @@
     "test": {}
    }
   },
+  "lattice_sdk.capabilities.ScopedTerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open_in": {
+     "host": true,
+     "ref": true
+    },
+    "open_in": {
+     "cols": true,
+     "host": true,
+     "ref": true,
+     "rows": true
+    }
+   }
+  },
   "lattice_sdk.capabilities.SearchProvider": {
    "art": "klasse",
    "methoden": {
@@ -1111,7 +1254,8 @@
     },
     "result": {
      "action_id": true
-    }
+    },
+    "waiting_count": {}
    }
   },
   "lattice_sdk.context.ApiHandle": {
@@ -1200,6 +1344,7 @@
    "methoden": {
     "open_shell": {
      "cols": true,
+     "command": false,
      "host": true,
      "rows": true
     },
@@ -1261,21 +1406,29 @@
    "methoden": {
     "get": {
      "insecure_tls": false,
+     "pinned_sha256": false,
+     "url": true
+    },
+    "peer_certificate": {
+     "timeout_s": false,
      "url": true
     },
     "post": {
      "insecure_tls": false,
+     "pinned_sha256": false,
      "url": true
     },
     "request": {
      "insecure_tls": false,
      "method": true,
+     "pinned_sha256": false,
      "url": true
     },
     "websocket": {
      "headers": false,
      "insecure_tls": false,
      "open_timeout_s": false,
+     "pinned_sha256": false,
      "subprotocols": false,
      "url": true
     }
@@ -1331,6 +1484,10 @@
     },
     "get_handle": {
      "label": true
+    },
+    "replace": {
+     "label": true,
+     "value": true
     }
    }
   },
@@ -1404,6 +1561,13 @@
     "rule": true
    }
   },
+  "lattice_sdk.errors.CertificateMismatch": {
+   "art": "klasse",
+   "params": {
+    "actual": true,
+    "expected": true
+   }
+  },
   "lattice_sdk.errors.HostUnreachable": {
    "art": "klasse"
   },
@@ -1430,11 +1594,22 @@
     "failures": true
    }
   },
+  "lattice_sdk.errors.NotificationSkipped": {
+   "art": "klasse"
+  },
   "lattice_sdk.errors.PermissionDenied": {
    "art": "klasse",
    "params": {
     "ext_id": true,
     "permission": true
+   }
+  },
+  "lattice_sdk.errors.SecretNotOwned": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "label": true,
+    "login_secret": false
    }
   },
   "lattice_sdk.errors.SecretUnavailable": {
@@ -1497,6 +1672,12 @@
     "limit": true
    }
   },
+  "lattice_sdk.http.sha256_fingerprint": {
+   "art": "funktion",
+   "params": {
+    "value": true
+   }
+  },
   "lattice_sdk.is_compatible": {
    "art": "funktion",
    "params": {
@@ -1528,6 +1709,7 @@
     "settings_schema": false,
     "sort_order": false,
     "source": false,
+    "stage": false,
     "version": true
    }
   },
@@ -1538,6 +1720,9 @@
    "art": "konstante"
   },
   "lattice_sdk.manifest.KNOWN_PERMISSIONS": {
+   "art": "konstante"
+  },
+  "lattice_sdk.manifest.KNOWN_STAGES": {
    "art": "konstante"
   },
   "lattice_sdk.manifest.load_manifest": {
@@ -1557,6 +1742,12 @@
    "params": {
     "new": true,
     "old": true
+   }
+  },
+  "lattice_sdk.sha256_fingerprint": {
+   "art": "funktion",
+   "params": {
+    "value": true
    }
   },
   "lattice_sdk.types.Actor": {
@@ -1584,6 +1775,15 @@
   },
   "lattice_sdk.types.ActorType": {
    "art": "klasse"
+  },
+  "lattice_sdk.types.AppSuggestion": {
+   "art": "klasse",
+   "params": {
+    "host": false,
+    "name": true,
+    "source": true,
+    "url": true
+   }
   },
   "lattice_sdk.types.ConnectorHealth": {
    "art": "klasse",
@@ -1637,6 +1837,15 @@
     "path": true,
     "size": false,
     "sync_status": false
+   }
+  },
+  "lattice_sdk.types.FilePlace": {
+   "art": "klasse",
+   "params": {
+    "hint": false,
+    "icon": false,
+    "label": true,
+    "path": true
    }
   },
   "lattice_sdk.types.FileSourceCaps": {
@@ -1699,6 +1908,7 @@
    "params": {
     "delivered": false,
     "notification_id": true,
+    "skipped": false,
     "suppressed": false
    }
   },
@@ -1707,6 +1917,17 @@
    "params": {
     "items": true,
     "next_cursor": false
+   }
+  },
+  "lattice_sdk.types.PeerCertificate": {
+   "art": "klasse",
+   "params": {
+    "alt_names": false,
+    "issuer": false,
+    "not_after": false,
+    "sha256": true,
+    "subject": false,
+    "trusted": true
    }
   },
   "lattice_sdk.types.Risk": {
@@ -2077,6 +2298,21 @@
   "nodvard_sdk.ActorType": {
    "art": "klasse"
   },
+  "nodvard_sdk.AppSuggestion": {
+   "art": "klasse",
+   "params": {
+    "host": false,
+    "name": true,
+    "source": true,
+    "url": true
+   }
+  },
+  "nodvard_sdk.AppSuggestionProvider": {
+   "art": "klasse",
+   "methoden": {
+    "app_suggestions": {}
+   }
+  },
   "nodvard_sdk.BackupProvider": {
    "art": "klasse",
    "methoden": {
@@ -2094,6 +2330,13 @@
    "params": {
     "text": true,
     "tone": false
+   }
+  },
+  "nodvard_sdk.CertificateMismatch": {
+   "art": "klasse",
+   "params": {
+    "actual": true,
+    "expected": true
    }
   },
   "nodvard_sdk.ChartView": {
@@ -2126,6 +2369,24 @@
      "timeout_s": false,
      "user": false
     }
+   }
+  },
+  "nodvard_sdk.ConnectionReceiver": {
+   "art": "klasse",
+   "methoden": {
+    "connection_conflict": {
+     "base_url": true,
+     "name": true
+    },
+    "receive_connection": {
+     "base_url": true,
+     "name": true,
+     "pinned_sha256": false,
+     "tls_insecure_skip_verify": true,
+     "token_id": true,
+     "token_secret": true
+    },
+    "received_token_ids": {}
    }
   },
   "nodvard_sdk.ConnectorHealth": {
@@ -2247,6 +2508,7 @@
     "settings_schema": false,
     "sort_order": false,
     "source": false,
+    "stage": false,
     "version": true
    }
   },
@@ -2261,6 +2523,23 @@
     "path": true,
     "size": false,
     "sync_status": false
+   }
+  },
+  "nodvard_sdk.FilePlace": {
+   "art": "klasse",
+   "params": {
+    "hint": false,
+    "icon": false,
+    "label": true,
+    "path": true
+   }
+  },
+  "nodvard_sdk.FilePlaceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "places_for_host": {
+     "host_id": true
+    }
    }
   },
   "nodvard_sdk.FileSource": {
@@ -2575,11 +2854,15 @@
     "failures": true
    }
   },
+  "nodvard_sdk.NotificationSkipped": {
+   "art": "klasse"
+  },
   "nodvard_sdk.NotifyResult": {
    "art": "klasse",
    "params": {
     "delivered": false,
     "notification_id": true,
+    "skipped": false,
     "suppressed": false
    }
   },
@@ -2605,6 +2888,17 @@
     "title": true
    }
   },
+  "nodvard_sdk.PeerCertificate": {
+   "art": "klasse",
+   "params": {
+    "alt_names": false,
+    "issuer": false,
+    "not_after": false,
+    "sha256": true,
+    "subject": false,
+    "trusted": true
+   }
+  },
   "nodvard_sdk.PermissionDenied": {
    "art": "klasse",
    "params": {
@@ -2625,6 +2919,21 @@
   "nodvard_sdk.Risk": {
    "art": "klasse"
   },
+  "nodvard_sdk.ScopedTerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open_in": {
+     "host": true,
+     "ref": true
+    },
+    "open_in": {
+     "cols": true,
+     "host": true,
+     "ref": true,
+     "rows": true
+    }
+   }
+  },
   "nodvard_sdk.SearchProvider": {
    "art": "klasse",
    "methoden": {
@@ -2636,6 +2945,14 @@
   },
   "nodvard_sdk.SecretHandleRef": {
    "art": "klasse"
+  },
+  "nodvard_sdk.SecretNotOwned": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "label": true,
+    "login_secret": false
+   }
   },
   "nodvard_sdk.SecretUnavailable": {
    "art": "klasse"
@@ -2888,6 +3205,12 @@
     }
    }
   },
+  "nodvard_sdk.capabilities.AppSuggestionProvider": {
+   "art": "klasse",
+   "methoden": {
+    "app_suggestions": {}
+   }
+  },
   "nodvard_sdk.capabilities.BackupProvider": {
    "art": "klasse",
    "methoden": {
@@ -2911,6 +3234,24 @@
     }
    }
   },
+  "nodvard_sdk.capabilities.ConnectionReceiver": {
+   "art": "klasse",
+   "methoden": {
+    "connection_conflict": {
+     "base_url": true,
+     "name": true
+    },
+    "receive_connection": {
+     "base_url": true,
+     "name": true,
+     "pinned_sha256": false,
+     "tls_insecure_skip_verify": true,
+     "token_id": true,
+     "token_secret": true
+    },
+    "received_token_ids": {}
+   }
+  },
   "nodvard_sdk.capabilities.ConsoleSession": {
    "art": "klasse",
    "methoden": {
@@ -2929,6 +3270,14 @@
     },
     "open_console": {
      "host": true
+    }
+   }
+  },
+  "nodvard_sdk.capabilities.FilePlaceProvider": {
+   "art": "klasse",
+   "methoden": {
+    "places_for_host": {
+     "host_id": true
     }
    }
   },
@@ -3005,6 +3354,21 @@
     "test": {}
    }
   },
+  "nodvard_sdk.capabilities.ScopedTerminalTarget": {
+   "art": "klasse",
+   "methoden": {
+    "can_open_in": {
+     "host": true,
+     "ref": true
+    },
+    "open_in": {
+     "cols": true,
+     "host": true,
+     "ref": true,
+     "rows": true
+    }
+   }
+  },
   "nodvard_sdk.capabilities.SearchProvider": {
    "art": "klasse",
    "methoden": {
@@ -3071,7 +3435,8 @@
     },
     "result": {
      "action_id": true
-    }
+    },
+    "waiting_count": {}
    }
   },
   "nodvard_sdk.context.ApiHandle": {
@@ -3160,6 +3525,7 @@
    "methoden": {
     "open_shell": {
      "cols": true,
+     "command": false,
      "host": true,
      "rows": true
     },
@@ -3221,21 +3587,29 @@
    "methoden": {
     "get": {
      "insecure_tls": false,
+     "pinned_sha256": false,
+     "url": true
+    },
+    "peer_certificate": {
+     "timeout_s": false,
      "url": true
     },
     "post": {
      "insecure_tls": false,
+     "pinned_sha256": false,
      "url": true
     },
     "request": {
      "insecure_tls": false,
      "method": true,
+     "pinned_sha256": false,
      "url": true
     },
     "websocket": {
      "headers": false,
      "insecure_tls": false,
      "open_timeout_s": false,
+     "pinned_sha256": false,
      "subprotocols": false,
      "url": true
     }
@@ -3291,6 +3665,10 @@
     },
     "get_handle": {
      "label": true
+    },
+    "replace": {
+     "label": true,
+     "value": true
     }
    }
   },
@@ -3364,6 +3742,13 @@
     "rule": true
    }
   },
+  "nodvard_sdk.errors.CertificateMismatch": {
+   "art": "klasse",
+   "params": {
+    "actual": true,
+    "expected": true
+   }
+  },
   "nodvard_sdk.errors.HostUnreachable": {
    "art": "klasse"
   },
@@ -3390,11 +3775,22 @@
     "failures": true
    }
   },
+  "nodvard_sdk.errors.NotificationSkipped": {
+   "art": "klasse"
+  },
   "nodvard_sdk.errors.PermissionDenied": {
    "art": "klasse",
    "params": {
     "ext_id": true,
     "permission": true
+   }
+  },
+  "nodvard_sdk.errors.SecretNotOwned": {
+   "art": "klasse",
+   "params": {
+    "ext_id": true,
+    "label": true,
+    "login_secret": false
    }
   },
   "nodvard_sdk.errors.SecretUnavailable": {
@@ -3457,6 +3853,12 @@
     "limit": true
    }
   },
+  "nodvard_sdk.http.sha256_fingerprint": {
+   "art": "funktion",
+   "params": {
+    "value": true
+   }
+  },
   "nodvard_sdk.is_compatible": {
    "art": "funktion",
    "params": {
@@ -3488,6 +3890,7 @@
     "settings_schema": false,
     "sort_order": false,
     "source": false,
+    "stage": false,
     "version": true
    }
   },
@@ -3498,6 +3901,9 @@
    "art": "konstante"
   },
   "nodvard_sdk.manifest.KNOWN_PERMISSIONS": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.manifest.KNOWN_STAGES": {
    "art": "konstante"
   },
   "nodvard_sdk.manifest.load_manifest": {
@@ -3517,6 +3923,12 @@
    "params": {
     "new": true,
     "old": true
+   }
+  },
+  "nodvard_sdk.sha256_fingerprint": {
+   "art": "funktion",
+   "params": {
+    "value": true
    }
   },
   "nodvard_sdk.types.Actor": {
@@ -3544,6 +3956,15 @@
   },
   "nodvard_sdk.types.ActorType": {
    "art": "klasse"
+  },
+  "nodvard_sdk.types.AppSuggestion": {
+   "art": "klasse",
+   "params": {
+    "host": false,
+    "name": true,
+    "source": true,
+    "url": true
+   }
   },
   "nodvard_sdk.types.ConnectorHealth": {
    "art": "klasse",
@@ -3597,6 +4018,15 @@
     "path": true,
     "size": false,
     "sync_status": false
+   }
+  },
+  "nodvard_sdk.types.FilePlace": {
+   "art": "klasse",
+   "params": {
+    "hint": false,
+    "icon": false,
+    "label": true,
+    "path": true
    }
   },
   "nodvard_sdk.types.FileSourceCaps": {
@@ -3659,6 +4089,7 @@
    "params": {
     "delivered": false,
     "notification_id": true,
+    "skipped": false,
     "suppressed": false
    }
   },
@@ -3667,6 +4098,17 @@
    "params": {
     "items": true,
     "next_cursor": false
+   }
+  },
+  "nodvard_sdk.types.PeerCertificate": {
+   "art": "klasse",
+   "params": {
+    "alt_names": false,
+    "issuer": false,
+    "not_after": false,
+    "sha256": true,
+    "subject": false,
+    "trusted": true
    }
   },
   "nodvard_sdk.types.Risk": {

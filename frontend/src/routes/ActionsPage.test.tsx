@@ -1,10 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { GlobalDialogs } from "../components/GlobalDialogs";
 import { useAuthStore } from "../state/auth";
 import { useDialogsStore } from "../state/dialogs";
-import { ActionsPage } from "./ActionsPage";
+import { ActionsPage, expiryText, focusedActionId, RISK_LABEL } from "./ActionsPage";
 
 const HOSTS = [{ id: "h1", display_name: "Proxmox-Knoten pve2" }];
 
@@ -1174,5 +1175,198 @@ describe("ActionsPage: Namen statt Kennungen", () => {
     const dialog = await screen.findByRole("dialog");
     expect(dialog).toHaveTextContent("Nodvard Shield · Updates einspielen ×2");
     expect(dialog).not.toHaveTextContent("shield");
+  });
+});
+
+describe("Restzeit und Risiko auf Deutsch", () => {
+  it("expiryText: Minuten, Stunden, Tage, gleich und ohne Frist", () => {
+    const now = Date.parse("2026-10-08T10:00:00Z");
+    expect(expiryText("2026-10-08T10:30:00Z", now)).toEqual({ text: "läuft ab in 30 Min.", soon: true });
+    expect(expiryText("2026-10-08T15:59:00Z", now)).toEqual({ text: "läuft ab in 5 Std.", soon: false });
+    expect(expiryText("2026-10-11T10:00:00Z", now)).toEqual({ text: "läuft ab in 3 Tagen", soon: false });
+    expect(expiryText("2026-10-08T10:00:30Z", now)).toEqual({ text: "läuft gleich ab", soon: true });
+    expect(expiryText("2026-10-08T10:00:00Z", now)).toEqual({ text: "abgelaufen – kann nicht mehr bestätigt werden", soon: true });
+    expect(expiryText("2026-10-08T09:00:00Z", now)).toEqual({ text: "abgelaufen – kann nicht mehr bestätigt werden", soon: true });
+    expect(expiryText(null, now)).toBeNull();
+    expect(expiryText("kaputt", now)).toBeNull();
+  });
+
+  it("zeigt bei einem offenen Vorschlag die Restzeit und das Risiko auf Deutsch", async () => {
+    const expires = new Date(Date.now() + 5 * 3600 * 1000 + 60000).toISOString();
+    vi.stubGlobal("fetch", mockFetch(undefined, [{ ...PROPOSED_ACTION, expires_at: expires }]));
+    render(<ActionsPage />);
+    expect(await screen.findByTestId("expires-a1")).toHaveTextContent("läuft ab in 5 Std.");
+    expect(screen.getByText("hoch")).toHaveAttribute("title", "high");
+    expect(RISK_LABEL.critical).toBe("kritisch");
+  });
+
+  it("die Restzeit läuft mit, ohne dass die Liste neu geladen wird", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const expires = new Date(Date.now() + 61 * 60000 + 30000).toISOString();
+      const fetchMock = mockFetch(undefined, [{ ...PROPOSED_ACTION, expires_at: expires }]);
+      vi.stubGlobal("fetch", fetchMock);
+      render(<ActionsPage />);
+      expect(await screen.findByTestId("expires-a1")).toHaveTextContent("läuft ab in 1 Std.");
+      const loads = fetchMock.mock.calls.length;
+      await act(async () => { vi.advanceTimersByTime(2 * 60000); });
+      expect(screen.getByTestId("expires-a1")).toHaveTextContent("läuft ab in 59 Min.");
+      expect(fetchMock.mock.calls.length).toBe(loads);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("Aus der Meldung direkt zur Freigabe (?action=)", () => {
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("liest nur eine schlichte Kennung", () => {
+    expect(focusedActionId("?action=a1")).toBe("a1");
+    expect(focusedActionId("?action=01a1-2fd8")).toBe("01a1-2fd8");
+    expect(focusedActionId("")).toBeNull();
+    expect(focusedActionId("?action=")).toBeNull();
+    expect(focusedActionId("?action=a1%3Cscript%3E")).toBeNull();
+    expect(focusedActionId(`?action=${"a".repeat(65)}`)).toBeNull();
+  });
+
+  /** Liste wie `mockFetch`, `GET /actions/<id>` liefert die einzelne Aktion (wie der echte Kern). */
+  function focusFetch(calls: string[], one: Record<string, unknown> = PROPOSED_ACTION, list: Record<string, unknown>[] = [PROPOSED_ACTION]) {
+    return vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      calls.push(url);
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      if (url.endsWith(`/api/v1/actions/${String(one.id)}`)) return new Response(JSON.stringify(one), { status: 200 });
+      if (url.includes("/api/v1/actions")) return new Response(JSON.stringify(list), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    });
+  }
+
+  it("hebt die Aktion aus dem Link in der Liste hervor, ohne sie doppelt zu zeigen", async () => {
+    window.history.replaceState(null, "", "/actions?action=a1");
+    loginAsAdmin();
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", focusFetch(calls));
+    render(<ActionsPage />);
+    const row = await screen.findByTestId("focused-action");
+    expect(row).toHaveTextContent("Testabschaltung");
+    expect(calls.some((c) => c.endsWith("/api/v1/actions/a1"))).toBe(true);
+    await waitFor(() => expect(calls.filter((c) => c.endsWith("/api/v1/actions/a1"))).toHaveLength(1));
+    expect(screen.getAllByRole("row")).toHaveLength(2);
+    expect(screen.getAllByTestId("focused-action")).toHaveLength(1);
+  });
+
+  it("folgt einem neuen Link, wenn die Seite schon offen ist", async () => {
+    loginAsAdmin();
+    const calls: string[] = [];
+    const other = { ...PROPOSED_ACTION, id: "a2", reason: "Zweite Aktion" };
+    vi.stubGlobal("fetch", focusFetch(calls, other, [PROPOSED_ACTION, other]));
+    const router = createMemoryRouter([{ path: "/actions", element: <ActionsPage /> }], { initialEntries: ["/actions"] });
+    render(<RouterProvider router={router} />);
+    expect(await screen.findByText("Testabschaltung")).toBeInTheDocument();
+    expect(screen.queryByTestId("focused-action")).toBeNull();
+    await act(async () => {
+      await router.navigate("/actions?action=a2");
+    });
+    expect(await screen.findByTestId("focused-action")).toHaveTextContent("Zweite Aktion");
+  });
+
+  it("ein Netzfehler sagt etwas anderes als eine fehlende Aktion", async () => {
+    window.history.replaceState(null, "", "/actions?action=a7");
+    loginAsAdmin();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      if (url.endsWith("/api/v1/actions/a7")) return new Response(JSON.stringify({ detail: "Kaputt." }), { status: 500 });
+      if (url.includes("/api/v1/actions")) return new Response(JSON.stringify([PROPOSED_ACTION]), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    }));
+    render(<ActionsPage />);
+    expect(await screen.findByText(/Die Aktion aus dem Link ließ sich gerade nicht laden/)).toBeInTheDocument();
+    expect(screen.queryByText("Die Aktion aus dem Link gibt es nicht (mehr) oder du darfst sie nicht sehen.")).toBeNull();
+  });
+
+  it("eine angeheftete Aktion, die gerade läuft, wird nachgeladen und hat keinen Auswahl-Haken", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    window.history.replaceState(null, "", "/actions?action=a5");
+    loginAsAdmin();
+    const calls: string[] = [];
+    const running = { ...PROPOSED_ACTION, id: "a5", status: "executing", reason: "Läuft gerade" };
+    vi.stubGlobal("fetch", focusFetch(calls, running, []));
+    render(<ActionsPage />);
+    expect(await screen.findByTestId("focused-action")).toHaveTextContent("Läuft gerade");
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    const before = calls.filter((c) => c.endsWith("/api/v1/actions/a5")).length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3500);
+    });
+    expect(calls.filter((c) => c.endsWith("/api/v1/actions/a5")).length).toBeGreaterThan(before);
+  });
+
+  it("eine angeheftete wartende Aktion aus einem anderen Filter zählt die Sammel-Freigabe nicht mit", async () => {
+    window.history.replaceState(null, "", "/actions?action=a3");
+    loginAsAdmin();
+    const pinned = { ...PROPOSED_ACTION, id: "a3", reason: "Angeheftet" };
+    vi.stubGlobal("fetch", focusFetch([], pinned, []));
+    render(<ActionsPage />);
+    expect(await screen.findByTestId("focused-action")).toHaveTextContent("Angeheftet");
+    expect(screen.queryByRole("checkbox")).toBeNull();
+  });
+
+  it("zeigt die Aktion oben, auch wenn sie nicht mehr offen ist", async () => {
+    window.history.replaceState(null, "", "/actions?action=a9");
+    loginAsAdmin();
+    const done = { ...PROPOSED_ACTION, id: "a9", status: "succeeded" };
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      if (url.endsWith("/api/v1/actions/a9")) return new Response(JSON.stringify(done), { status: 200 });
+      if (url.includes("/api/v1/actions")) return new Response(JSON.stringify([PROPOSED_ACTION]), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    }));
+    render(<ActionsPage />);
+    const row = await screen.findByTestId("focused-action");
+    const rows = screen.getAllByRole("row");
+    expect(rows[1]).toBe(row);
+    expect(rows).toHaveLength(3);
+  });
+
+  it("sagt Bescheid, wenn es die Aktion aus dem Link nicht gibt", async () => {
+    window.history.replaceState(null, "", "/actions?action=weg");
+    loginAsAdmin();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.includes("/api/v1/hosts")) return new Response(JSON.stringify(HOSTS), { status: 200 });
+      if (url.endsWith("/api/v1/actions/weg")) return new Response(JSON.stringify({ detail: "Unbekannte Aktion." }), { status: 404 });
+      if (url.includes("/api/v1/actions")) return new Response(JSON.stringify([PROPOSED_ACTION]), { status: 200 });
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    }));
+    render(<ActionsPage />);
+    expect(await screen.findByText("Die Aktion aus dem Link gibt es nicht (mehr) oder du darfst sie nicht sehen.")).toBeInTheDocument();
+    expect(screen.queryByTestId("focused-action")).toBeNull();
+  });
+});
+
+describe("ActionsPage: Ladefehler", () => {
+  it("nennt den Grund und lädt mit „Erneut versuchen“ nach", async () => {
+    loginAsAdmin();
+    let fail = true;
+    const ok = mockFetch();
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (fail && url.includes("/api/v1/actions") && (init?.method ?? "GET") === "GET") {
+        return new Response(JSON.stringify({ detail: "Datenbank gesperrt" }), { status: 500 });
+      }
+      return ok(input, init);
+    }));
+    render(<ActionsPage />);
+    const error = await screen.findByTestId("load-error");
+    expect(error.textContent).toContain("Die Liste der Aktionen ließ sich gerade nicht laden: Datenbank gesperrt");
+    fail = false;
+    fireEvent.click(screen.getByRole("button", { name: "Erneut versuchen" }));
+    expect(await screen.findByText("Proxmox-Knoten pve2")).toBeInTheDocument();
+    expect(screen.queryByTestId("load-error")).toBeNull();
   });
 });

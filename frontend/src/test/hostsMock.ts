@@ -1,7 +1,8 @@
 /**
  * Fetch-Attrappe fuer die Tests der Seite „Server & Zugaenge“: eine Tabelle
  * `"METHOD /pfad" -> Antwort`. Eine Funktion wird bei jedem Aufruf neu gefragt; `reply(status, body)`
- * setzt einen anderen HTTP-Status; `undefined` heisst 204. Ein nicht eingetragener Aufruf wirft --
+ * setzt einen anderen HTTP-Status; `undefined` heisst 204; eine Funktion darf ein Promise liefern (Antwort
+ * zurueckhalten). Ein nicht eingetragener Aufruf wirft --
  * so faellt jede unerwartete Anfrage sofort auf.
  */
 import { vi } from "vitest";
@@ -35,7 +36,8 @@ export function mockHostsApi(routes: Record<string, Handler>): Call[] {
       const key = `${method} ${url}` in routes ? `${method} ${url}` : `${method} ${path}` in routes ? `${method} ${path}` : null;
       if (key === null) throw new Error(`Unerwarteter Fetch: ${method} ${url}`);
       const handler = routes[key];
-      const result = typeof handler === "function" ? (handler as (c: Call) => unknown)(call) : handler;
+      // Eine Funktion darf auch ein Promise liefern (z. B. um eine Antwort im Test zurueckzuhalten).
+      const result: unknown = await (typeof handler === "function" ? (handler as (c: Call) => unknown)(call) : handler);
       if (result instanceof Reply) return new Response(JSON.stringify(result.body), { status: result.status });
       return result === undefined ? new Response(null, { status: 204 }) : new Response(JSON.stringify(result), { status: 200 });
     }),

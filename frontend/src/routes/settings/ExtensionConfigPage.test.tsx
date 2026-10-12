@@ -65,13 +65,33 @@ function settings(secretState: Record<string, boolean> = {}, values: object = { 
   };
 }
 
-function renderConfig() {
+function renderConfig(extId = "demo") {
   return render(
-    <MemoryRouter initialEntries={["/settings/extensions/demo"]}>
+    <MemoryRouter initialEntries={[`/settings/extensions/${extId}`]}>
       <Routes><Route path="/settings/extensions/:extId" element={<><ExtensionConfigPage /><GlobalDialogs /></>} /></Routes>
     </MemoryRouter>,
   );
 }
+
+describe("Anleitung zur Erweiterung", () => {
+  it.each([["proxmox", "7-proxmox-verbinden"], ["ntfy", "8-push-nachrichten-ntfy"]])("%s: Link zum passenden Abschnitt der Anleitung", async (id, anchor) => {
+    mockApi({
+      [`GET /extensions/${id}`]: () => ext({ id, name: "Das Modul" }),
+      [`GET /extensions/${id}/settings`]: () => settings(),
+    });
+    renderConfig(id);
+    const link = await screen.findByTestId("extension-guide");
+    expect(link).toHaveAttribute("href", `https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#${anchor}`);
+    expect(link.textContent).toContain("Anleitung zu „Das Modul“");
+  });
+
+  it("eine Erweiterung ohne eigenen Abschnitt bekommt keinen Link", async () => {
+    mockApi({ "GET /extensions/demo": () => ext(), "GET /extensions/demo/settings": () => settings() });
+    renderConfig();
+    await screen.findByRole("button", { name: "Verbindung testen" });
+    expect(screen.queryByTestId("extension-guide")).toBeNull();
+  });
+});
 
 describe("Verbindung testen", () => {
   it("zeigt ein erfolgreiches Ergebnis grün und fragt den Test-Endpunkt", async () => {

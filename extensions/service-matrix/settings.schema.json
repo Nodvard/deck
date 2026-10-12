@@ -15,7 +15,7 @@
       ],
       "default": "http",
       "title": "Link-Schema der Kacheln",
-      "description": "Womit Kachel-Links auf die Container geöffnet werden."
+      "description": "Womit Kachel-Links auf die Container geöffnet werden. Container, die im Inneren auf 443, 8443 oder 9443 lauschen, öffnen immer mit https."
     },
     "image_updates_enabled": {
       "type": "boolean",
@@ -28,6 +28,22 @@
       "default": "30 6 * * *",
       "title": "Zeitplan der Image-Prüfung",
       "x-widget": "schedule"
+    },
+    "image_update_auto_rollback": {
+      "type": "boolean",
+      "default": true,
+      "title": "Bei Fehlstart automatisch zurück",
+      "description": "Stürzt ein Container nach dem Einspielen eines Image-Updates beim Start ab (oder lässt er sich nicht neu erstellen), stellt Nodvard Deck sofort die alte Version wieder her. Nicht bei bloß „ungesund“ (die App kann gerade ihre Daten umstellen) und nie bei Datenbanken und anderen Datenspeichern wie Redis oder MinIO: Die neue Version kann ihre Dateien schon umgestellt haben."
+    },
+    "url_overrides": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "string"
+      },
+      "default": {},
+      "x-hidden": true,
+      "title": "Eigene Kachel-Adressen",
+      "description": "Wird auf der Seite der Service-Matrix je Container gesetzt."
     }
   }
 }

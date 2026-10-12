@@ -62,3 +62,8 @@ export function ago(ts: number | null | undefined): string {
   if (s < 86400 * 2) return `vor ${Math.round(s / 3600)} Std.`;
   return `vor ${Math.round(s / 86400)} Tagen`;
 }
+
+/** "1 Fund", "3 Funde": Zahl mit der passenden Form statt "Fund(e)". */
+export function count(n: number, one: string, many: string): string {
+  return `${n.toLocaleString("de-DE")} ${n === 1 ? one : many}`;
+}

@@ -74,7 +74,7 @@ async def test_creating_and_changing_passwords_hash_outside_the_event_loop(clien
     )
     assert changed.status_code == 204, changed.text
     anna = made.json()["id"]
-    set_other = await client.patch(f"/api/v1/users/{anna}", json={"password": "wieder-was-neues-5"}, headers=headers)
+    set_other = await client.patch(f"/api/v1/users/{anna}", json={"password": "wieder-was-neues-5", "current_password": "neues-passwort-77"}, headers=headers)
     assert set_other.status_code == 200, set_other.text
     assert in_loop == []
 

@@ -15,6 +15,8 @@ import re
 import shlex
 from typing import Any, NamedTuple
 
+from .incident_text import cause_texts
+
 DEFAULT_FORBIDDEN_HOST_KEYWORDS = (
     "pve", "proxmox", "host", "server",
     "node", "router", "gateway", "nas",
@@ -122,10 +124,10 @@ def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact:
     - Fakten muessen vorhanden sein (sonst HOCH), der Container darf inzwischen nicht wieder
       laufen (`running`: der Neustart waere unnoetig).
     - ExitCode 0 und 143 (sauber beendet / SIGTERM, also absichtlich gestoppt) -> HOCH.
-    - ExitCode > 128 (Beendigung durch ein Signal, z. B. `docker kill`, `kill -s INT/HUP/...`):
-      nur MITTEL, wenn OOMKilled true ist, sonst HOCH. Bewusst konservativ: auch 139 (SIGSEGV)
+    - ExitCode 129 bis 192 (Beendigung durch ein Signal, z. B. `docker kill`, `kill -s INT/HUP/...`; Linux kennt
+      hoechstens 64 Signale): nur MITTEL, wenn OOMKilled true ist, sonst HOCH. Bewusst konservativ: auch 139 (SIGSEGV)
       ist ein echter Absturz, faellt aber unter diese Regel und bleibt HOCH.
-    - Alles andere (z. B. 1, 2) -> MITTEL.
+    - Alles andere (z. B. 1, 2, auch 255 = ein Programm, das sich mit -1 beendet) -> MITTEL.
 
     Nie fuer Vorfaelle ohne Absturz (manueller Stopp, pausiert: `is_crash` False) und nie fuer
     nach einem Neustart wieder aufgenommene (`resumed`) oder wiederholte (`attempts`) Vorfaelle."""
@@ -136,16 +138,18 @@ def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact:
     code = fact.get("exit_code")
     if not isinstance(code, int) or code in (0, 143):
         return False
-    if code > 128:
+    if _is_signal(code):
         return bool(fact.get("oom_killed"))
     return True
 
 
 class Cause(NamedTuple):
-    """Feste Einordnung eines Container-Vorfalls: kurze Bezeichnung + ein Satz."""
+    """Feste Einordnung eines Container-Vorfalls: kurze Bezeichnung + ein Satz. `key`: die Art (Schluessel der Texte
+    in `incident_text.CAUSE_TEXTS`)."""
 
     label: str
     sentence: str
+    key: str = ""
 
     @property
     def tag(self) -> str:
@@ -156,11 +160,25 @@ class Cause(NamedTuple):
 NO_FACTS_CAUSE = Cause(
     "Ursache unklar (keine Beendigungs-Fakten)",
     "Die Beendigungs-Fakten (docker inspect) liegen nicht vor, die Ursache ist deshalb nicht gesichert.",
+    "unknown",
 )
 
 
 _CRASH_SIGNAL_CODES = frozenset({132, 134, 135, 136, 139})
 """128 + SIGILL/SIGABRT/SIGBUS/SIGFPE/SIGSEGV: Signale, die ein Prozess selbst ausloest."""
+
+
+def _is_signal(code: int) -> bool:
+    """Exit-Code 128 + Signal. Linux kennt hoechstens 64 Signale; 193 bis 255 sind normale Fehlercodes (255 etwa bei
+    `exit(-1)`)."""
+    return 128 < code <= 192
+
+
+LOOP_CAUSE = Cause(
+    "Absturzschleife",
+    "Der Container beendet sich immer wieder, und Docker startet ihn jedes Mal neu (Neustart-Regel).",
+    "loop",
+)
 
 
 def classify_exit_cause(details: dict[str, Any], fact: dict[str, Any] | None) -> Cause:
@@ -177,7 +195,11 @@ def classify_exit_cause(details: dict[str, Any], fact: dict[str, Any] | None) ->
     - alles andere (z. B. 1, 2) -> "echter Absturz (Exit-Code X)"."""
     status = str(details.get("status") or "").lower()
     if details.get("state") == "paused" or "(paused)" in status:
-        return Cause("pausiert", "Der Container wurde pausiert (docker pause), er ist nicht abgestürzt.")
+        return Cause("pausiert", "Der Container wurde pausiert (docker pause), er ist nicht abgestürzt.", "paused")
+    if details.get("restarts_since_last_check") or (fact is not None and fact.get("running") and fact.get("exit_code") == 0):
+        # Absturzschleife: Docker startet den Container immer wieder. Laeuft er beim Nachsehen gerade, steht der
+        # Exit-Code dort auf 0 -- das ist kein "sauber gestoppt".
+        return LOOP_CAUSE
     if fact is None:
         return NO_FACTS_CAUSE
     code = fact.get("exit_code")
@@ -187,11 +209,13 @@ def classify_exit_cause(details: dict[str, Any], fact: dict[str, Any] | None) ->
         return Cause(
             "Speichermangel (OOMKilled)",
             f"Der Container wurde beendet, weil der Speicher nicht reichte (OOMKilled=true, Exit-Code {code}).",
+            "oom",
         )
     if code in (0, 143):
         return Cause(
             "manuell gestoppt",
             f"Der Container wurde sauber beendet (Exit-Code {code}), also absichtlich gestoppt.",
+            "stopped",
         )
     if code in _CRASH_SIGNAL_CODES:
         # SIGSEGV/SIGABRT/SIGBUS/SIGFPE/SIGILL kommen aus dem Prozess selbst -- ein Absturz, kein
@@ -200,16 +224,19 @@ def classify_exit_cause(details: dict[str, Any], fact: dict[str, Any] | None) ->
             f"echter Absturz (Signal {code - 128}, Exit-Code {code})",
             f"Der Prozess im Container ist mit einem Fehler-Signal abgestürzt (Exit-Code {code} = "
             f"Signal {code - 128}, z. B. Speicherzugriffsfehler), nicht von außen beendet (OOMKilled=false).",
+            "crash_signal",
         )
-    if code > 128:
+    if _is_signal(code):
         return Cause(
             "von außen beendet (Signal/Kill)",
             f"Der Container wurde durch ein Signal beendet (Exit-Code {code} = Signal {code - 128}, "
             "z. B. docker kill), nicht wegen Speichermangel (OOMKilled=false).",
+            "killed",
         )
     return Cause(
         f"echter Absturz (Exit-Code {code})",
         f"Der Prozess im Container hat sich mit Fehlercode {code} selbst beendet (OOMKilled=false, kein Signal).",
+        "crash",
     )
 
 
@@ -268,6 +295,27 @@ def facts_line(fact: dict[str, Any]) -> str:
     if finished:
         parts.append(f"beendet {finished}")
     return " · ".join(parts)
+
+
+def cause_advice(causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str:
+    """Die festen Saetze "Was heisst das?" und "Was kannst du tun?" zu den Einordnungen (incident_text.CAUSE_TEXTS), einmal
+    je Art. Bei genau einer Art ohne Bezeichnung davor, sonst mit ihr. Leer, wenn keine Art Texte hat."""
+    kinds: dict[str, tuple[Cause, list[str]]] = {}
+    for target, _host, cause in causes.values():
+        if cause.key and cause_texts(cause.key):
+            names = kinds.setdefault(cause.key, (cause, []))[1]
+            if target not in names:
+                names.append(target)
+    if len(kinds) == 1:
+        text = cause_texts(next(iter(kinds)))
+        assert text is not None
+        return f"Was heißt das? {text['what']}\nWas kannst du tun? {text['todo']}"
+    lines = []
+    for key, (cause, names) in kinds.items():
+        text = cause_texts(key)
+        assert text is not None
+        lines.append(f"{cause.tag} ({', '.join(names)}): {text['what']} Was kannst du tun? {text['todo']}")
+    return "\n".join(lines)
 
 
 def facts_notice(

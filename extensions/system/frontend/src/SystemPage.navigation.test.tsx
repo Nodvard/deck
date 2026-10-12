@@ -3,7 +3,7 @@
  * Server folgt Links aus der Server-Seite auch dann, wenn die Seite schon offen ist und man
  * zwischendurch umgeschaltet hat. Vorbild: extensions/shield SocPage.navigation.test.tsx.
  */
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderInShell } from "../../../_shared/frontend/src/testShell";
@@ -46,38 +46,40 @@ afterEach(async () => {
   await act(async () => { await new Promise((r) => setTimeout(r, 0)); });
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
+  window.localStorage.clear();
 });
 
-describe("System in der echten Kern-Shell", () => {
+describe("Server-Zustand in der echten Kern-Shell", () => {
   it("Link, anderen Server wählen, derselbe Link erneut: wieder der Server aus dem Link", async () => {
     renderInShell(LINKS);
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(3));
+    await screen.findByTestId("host-picker");
 
     click("System Raspberry Pi");
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
 
-    fireEvent.change(screen.getByLabelText("Server wählen"), { target: { value: "h-docker" } });
-    await shows("System: docker");
+    fireEvent.click(screen.getByRole("button", { name: "Server wechseln" }));
+    fireEvent.click(within(screen.getByTestId("host-picker")).getByRole("button", { name: /docker/ }));
+    await shows("Server-Zustand: docker");
     expect(window.location.search).toBe("?host=h-docker");
 
     // Der Router hält ?host=h-pi noch für die aktuelle Adresse -- die Seite muss trotzdem folgen.
     click("System Raspberry Pi");
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
     expect(window.location.search).toBe("?host=h-pi");
   });
 
   it("Zurück und Vor folgen", async () => {
     renderInShell(LINKS);
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(3));
+    await screen.findByTestId("host-picker");
     click("System Raspberry Pi");
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
     click("Menü System");
-    await shows("System");
+    await shows("Server-Zustand");
 
     act(() => window.history.back());
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
     act(() => window.history.forward());
-    await shows("System");
+    await shows("Server-Zustand");
   });
 
   // Zurück/Vor meldet die Kern-Shell selbst (nodvard-deck:navigate). Hörte die Seite zusätzlich auf
@@ -88,26 +90,26 @@ describe("System in der echten Kern-Shell", () => {
     vi.stubGlobal("fetch", fetchMock);
     const liveCalls = () => fetchMock.mock.calls.filter(([input]) => String(input).endsWith("/hosts/h-pi/live")).length;
     renderInShell(LINKS);
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(3));
+    await screen.findByTestId("host-picker");
     click("System Raspberry Pi");
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
     await waitFor(() => expect(liveCalls()).toBe(1));
     click("Menü System");
-    await shows("System");
+    await shows("Server-Zustand");
 
     const settle = () => act(async () => { await new Promise((r) => setTimeout(r, 50)); });
     act(() => window.history.back());
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
     await settle();
     expect(liveCalls()).toBe(2);
 
     act(() => window.history.forward());
-    await shows("System");
+    await shows("Server-Zustand");
     await settle();
     expect(liveCalls()).toBe(2);
 
     act(() => window.history.back());
-    await shows("System: Raspberry Pi");
+    await shows("Server-Zustand: Raspberry Pi");
     await settle();
     expect(liveCalls()).toBe(3);
   });

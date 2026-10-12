@@ -21,12 +21,14 @@ bis der Task nicht mehr `running` ist oder ein Zeitlimit erreicht wird.
 `ActionResult.success` den TATSAECHLICHEN Ausgang meint (`exitstatus == "OK"`),
 nicht mehr nur "Proxmox hat die Anfrage angenommen".
 
-**`tls_insecure_skip_verify` (WP-8-Blocker-Nachtrag):** reicht `insecure_tls=True` an
-JEDEN `ctx.http`-Aufruf durch, wenn diese Connector-Instanz dafuer konfiguriert ist
-(Einstellung `tls_insecure_skip_verify`, siehe `config.py`) -- betrifft ausschliesslich
-diese eine Proxmox-Instanz, nicht andere Ziele, die dieselbe Extension ueber
-`ctx.http` erreicht (siehe `ext/context.py HttpHandle`-Docstring fuer die
-Kern-Mechanik).
+**Zertifikat:** Ist fuer die Verbindung ein Fingerabdruck gemerkt (`tls_fingerprint_sha256`, siehe
+`certificate.py`), geht er als `pinned_sha256` in JEDEN `ctx.http`-Aufruf, auch in den WebSocket der Konsole:
+Proxmox muss genau dieses Zertifikat zeigen, sonst scheitert schon der Handshake, bevor das Token hinausgeht
+(`ProxmoxApiError` mit `code == "certificate_changed"`). `tls_insecure_skip_verify` (veraltet) gilt dann nicht. Ohne
+Fingerabdruck reicht der Schalter `insecure_tls=True` durch wie bisher -- betrifft ausschliesslich diese eine
+Proxmox-Instanz, nicht andere Ziele, die dieselbe Extension ueber `ctx.http` erreicht (siehe `ext/context.py
+HttpHandle`). Ein ungueltiger Fingerabdruck faellt nie still auf "nicht pruefen" zurueck: Jeder Aufruf scheitert
+dann mit `code == "certificate_invalid"`, ohne etwas zu senden.
 """
 
 from __future__ import annotations
@@ -35,8 +37,10 @@ import asyncio
 import time
 from typing import TYPE_CHECKING, Any
 
+from .certificate import CHANGED_CODE, INVALID_CODE, INVALID_TEXT, normalize_fingerprint
 from .transport import (
     carries_foreign_text,
+    certificate_changed,
     http_error_text,
     json_body,
     redirect_text,
@@ -49,11 +53,20 @@ if TYPE_CHECKING:
 
 
 class ProxmoxApiError(Exception):
-    """`status_code`: der HTTP-Status der Antwort, falls es eine gab (sonst `None`)."""
+    """`status_code`: der HTTP-Status der Antwort, falls es eine gab (sonst `None`). `code`: fester Grund, wo es einen
+    gibt (`"certificate_changed"`, `"certificate_invalid"`), sonst `None`.
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    `readable`: Der Text ist ein Satz der Erweiterung, nie der Text einer fremden Ausnahme. Fremd ist höchstens der
+    Grund, den Proxmox selbst nennt, gekürzt und bereinigt (`transport.reason_from`). Der Kern zeigt den Text dann
+    unverändert und wertet den Fall wie einen Netzfehler: Messwerte eines ausgeschalteten Proxmox-Servers sind ein
+    502 mit Grund, kein 500 mit Traceback im Protokoll."""
+
+    readable = True
+
+    def __init__(self, message: str, *, status_code: int | None = None, code: str | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.code = code
 
 
 class ProxmoxVncSession:
@@ -91,11 +104,35 @@ class ProxmoxConnector:
         token_id: str,
         token_secret: str,
         tls_insecure_skip_verify: bool = False,
+        tls_fingerprint_sha256: str | None = None,
     ) -> None:
         self._ctx = ctx
         self._base_url = base_url.rstrip("/")
         self._auth_header = {"Authorization": f"PVEAPIToken={token_id}={token_secret}"}
         self._tls_insecure_skip_verify = tls_insecure_skip_verify
+        self._pin: str | None = None
+        self._pin_invalid = False
+        try:
+            self._pin = normalize_fingerprint(tls_fingerprint_sha256)
+        except ValueError:
+            self._pin_invalid = True
+
+    @property
+    def pinned(self) -> bool:
+        """Ob die Verbindung an einen gemerkten Fingerabdruck gebunden ist."""
+        return self._pin is not None
+
+    def _tls(self) -> dict[str, Any]:
+        """Die TLS-Angaben fuer `ctx.http`: der Fingerabdruck, wenn einer gemerkt ist, sonst der alte Schalter. Bei
+        einem ungueltigen Eintrag nie der Schalter: dann `ProxmoxApiError` (auch fuer kuenftige Aufrufer)."""
+        self._refuse_invalid_pin("TLS")
+        if self._pin is not None:
+            return {"pinned_sha256": self._pin}
+        return {"insecure_tls": self._tls_insecure_skip_verify}
+
+    def _refuse_invalid_pin(self, what: str) -> None:
+        if self._pin_invalid:
+            raise ProxmoxApiError(f"{what} -> {INVALID_TEXT}", code=INVALID_CODE)
 
     @property
     def host(self) -> str:
@@ -114,20 +151,21 @@ class ProxmoxConnector:
         # In die Meldung kommt nie der Text der Ausnahme oder der Antwort (siehe transport.py), und der Fehler
         # wird erst ausserhalb des `except`-Blocks geworfen: sonst hinge die Ausnahme von httpx (mit Teilen der
         # fremden Antwort im Text) als `__context__` an der Meldung.
+        self._refuse_invalid_pin(f"{method} {path}")
         problem: str | None = None
+        code: str | None = None
         cause: BaseException | None = None
         response: Any = None
         try:
-            response = await self._ctx.http.request(
-                method, url, headers=headers, insecure_tls=self._tls_insecure_skip_verify, **kwargs
-            )
+            response = await self._ctx.http.request(method, url, headers=headers, **self._tls(), **kwargs)
         except ProxmoxApiError:
             raise
         except Exception as exc:  # noqa: BLE001 - jeder Netzwerkfehler wird hier vereinheitlicht
             problem = transport_text(exc, url)
+            code = CHANGED_CODE if certificate_changed(exc) else None
             cause = None if carries_foreign_text(exc) else exc
         if problem is not None:
-            raise ProxmoxApiError(f"{method} {path} -> {problem}") from cause
+            raise ProxmoxApiError(f"{method} {path} -> {problem}", code=code) from cause
         if response.status_code >= 400:
             raise ProxmoxApiError(http_error_text(method, path, response), status_code=response.status_code)
         if 300 <= response.status_code < 400:
@@ -141,6 +179,15 @@ class ProxmoxConnector:
 
     async def version(self) -> dict[str, Any]:
         return await self._request("GET", "/version")
+
+    async def user_tokens(self, userid: str) -> Any:
+        """Die API-Tokens eines Benutzers aus `GET /access/users/{userid}` (`tokens`: ID -> privsep, Ablauf,
+        Kommentar; nie ein Geheimnis). Braucht nur `Sys.Audit` -- `GET .../token` verlangt von einem Token dagegen
+        `User.Modify`, weil "der eigene Benutzer" fuer eine Token-ID nicht gilt."""
+        from urllib.parse import quote
+
+        data = await self._request("GET", f"/access/users/{quote(userid, safe='@')}") or {}
+        return data.get("tokens") if isinstance(data, dict) else None
 
     async def list_nodes(self) -> list[dict[str, Any]]:
         return await self._request("GET", "/nodes") or []
@@ -245,6 +292,10 @@ class ProxmoxConnector:
         Abnutzung (`wearout` = Restlebensdauer in %, bei manchen SSDs "N/A")."""
         return await self._request("GET", f"/nodes/{node}/disks/list", timeout=30.0) or []
 
+    async def node_zfs(self, node: str) -> list[dict[str, Any]]:
+        """ZFS-Pools des Knotens mit `health` (ONLINE, DEGRADED, FAULTED ...), `size`, `alloc`, `free`, `frag`."""
+        return await self._request("GET", f"/nodes/{node}/disks/zfs", timeout=30.0) or []
+
     async def disk_smart(self, node: str, devpath: str) -> dict[str, Any]:
         """SMART-Details eines Datentraegers: NVMe als Freitext, SATA als Attributliste."""
         return await self._request("GET", f"/nodes/{node}/disks/smart", params={"disk": devpath}, timeout=30.0) or {}
@@ -339,24 +390,22 @@ class ProxmoxConnector:
             raise ProxmoxApiError("vncproxy lieferte kein Ticket/keinen Port.")
 
         url = self.vncwebsocket_url(node, kind, vmid, port=port, ticket=str(ticket))
+        self._refuse_invalid_pin("vncwebsocket")
         stack = AsyncExitStack()
         problem: str | None = None
+        code: str | None = None
         try:
             ws = await stack.enter_async_context(
-                self._ctx.http.websocket(
-                    url,
-                    headers=dict(self._auth_header),
-                    subprotocols=["binary"],
-                    insecure_tls=self._tls_insecure_skip_verify,
-                )
+                self._ctx.http.websocket(url, headers=dict(self._auth_header), subprotocols=["binary"], **self._tls())
             )
         except Exception as exc:  # noqa: BLE001 - wie `_request()`: einheitlich als ProxmoxApiError
             # Nie der Text der Ausnahme: `websockets` nennt in `InvalidURI` die ganze Adresse samt
             # `vncticket` und zitiert bei einer kaputten Antwort Kopfzeilen des Servers.
             problem = transport_text(exc, url)
+            code = CHANGED_CODE if certificate_changed(exc) else None
         if problem is not None:
             await stack.aclose()
-            raise ProxmoxApiError(f"vncwebsocket -> {problem}")
+            raise ProxmoxApiError(f"vncwebsocket -> {problem}", code=code)
         return ProxmoxVncSession(ws, stack, password=str(data.get("password") or ticket))
 
     async def task_status(self, node: str, upid: str) -> dict[str, Any]:

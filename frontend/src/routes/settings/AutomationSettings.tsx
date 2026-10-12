@@ -3,9 +3,10 @@
  * gesperrte Befehle und Wartungsfenster (GET/PUT /settings/{key}).
  */
 import { Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
-import { SchedulePicker } from "../../components/SchedulePicker";
+import { SchedulePicker } from "../../../../extensions/_shared/frontend/src/SchedulePicker";
+import { LoadError } from "../../components/LoadError";
 import { api } from "../../lib/api";
 import { Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
 
@@ -29,7 +30,7 @@ const MODES = [
 const RISKS = [
   { value: "low", label: "Niedrig", text: "z. B. Status abfragen, Logs lesen" },
   { value: "medium", label: "Mittel", text: "z. B. Dienst neu starten" },
-  { value: "high", label: "Hoch", text: "z. B. Updates einspielen, Container ersetzen" },
+  { value: "high", label: "Hoch", text: "z. B. Updates einspielen, Container ersetzen, Gäste aus Sicherungen wiederherstellen" },
   { value: "critical", label: "Kritisch", text: "z. B. Server neu starten, Daten löschen" },
 ];
 
@@ -44,14 +45,21 @@ const DURATIONS = [
 export function AutomationSettings(): JSX.Element {
   const [values, setValues] = useState<Record<string, unknown> | null>(null);
   const [hosts, setHosts] = useState<HostRow[]>([]);
+  // Serverliste nicht ladbar: im Wartungsfenster nicht "Keine Server bekannt." zeigen, sondern den Grund.
+  const [hostsError, setHostsError] = useState<unknown>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadHosts = useCallback(() => {
+    setHostsError(null);
+    api.get<HostRow[]>("/hosts").then(setHosts).catch((err: unknown) => setHostsError(err));
+  }, []);
 
   useEffect(() => {
     api.get<{ key: string; value: unknown }[]>("/settings")
       .then((rows) => setValues(Object.fromEntries(rows.map((r) => [r.key, r.value]))))
       .catch((err: unknown) => setLoadError(errorText(err)));
-    api.get<HostRow[]>("/hosts").then(setHosts).catch(() => setHosts([]));
-  }, []);
+    loadHosts();
+  }, [loadHosts]);
 
   if (loadError) return <NoticeLine notice={{ kind: "error", text: loadError }} />;
   if (!values) return <p className="text-sm text-white/50">Lade …</p>;
@@ -61,7 +69,12 @@ export function AutomationSettings(): JSX.Element {
       <PageHeader title="Automatik & Sicherheit" description="Lege fest, was das System selbst tun darf und wann Wartung erlaubt ist." />
       <AutonomyCard mode={String(values["autonomy.mode"])} maxRisk={String(values["autonomy.max_risk"])} />
       <DenyPatternsCard initial={(values["security.deny_patterns"] as string[]) ?? []} />
-      <MaintenanceCard initial={(values["maintenance.windows"] as MaintenanceWindow[]) ?? []} hosts={hosts} />
+      <MaintenanceCard
+        initial={(values["maintenance.windows"] as MaintenanceWindow[]) ?? []}
+        hosts={hosts}
+        hostsError={hostsError}
+        onRetryHosts={loadHosts}
+      />
     </div>
   );
 }
@@ -272,7 +285,9 @@ function DenyPatternsCard({ initial }: { initial: string[] }) {
   );
 }
 
-function MaintenanceCard({ initial, hosts }: { initial: MaintenanceWindow[]; hosts: HostRow[] }) {
+function MaintenanceCard({ initial, hosts, hostsError, onRetryHosts }: {
+  initial: MaintenanceWindow[]; hosts: HostRow[]; hostsError: unknown; onRetryHosts: () => void;
+}) {
   const [windows, setWindows] = useState<MaintenanceWindow[]>(initial);
   const [saved, setSaved] = useState(JSON.stringify(initial));
   const [busy, setBusy] = useState(false);
@@ -347,7 +362,9 @@ function MaintenanceCard({ initial, hosts }: { initial: MaintenanceWindow[]; hos
             </div>
             {w.host_ids !== "all" && (
               <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5 text-sm">
-                {hosts.length === 0 && <span className="text-xs text-white/45">Keine Server bekannt.</span>}
+                {hostsError ? (
+                  <LoadError compact what="Die Server-Liste" error={hostsError} onRetry={onRetryHosts} />
+                ) : hosts.length === 0 && <span className="text-xs text-white/45">Keine Server bekannt.</span>}
                 {hosts.map((h) => {
                   const ids = w.host_ids as string[];
                   return (

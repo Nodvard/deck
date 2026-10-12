@@ -116,10 +116,10 @@ def _present_names(source: EnvSettingsSource) -> list[str]:
     ]
 
 
-_EMPTY_MEANS_UNSET = ("build", "image", "ssh_confirm_new_host_keys")
+_EMPTY_MEANS_UNSET = ("build", "image", "ssh_confirm_new_host_keys", "trusted_proxies")
 """Felder, bei denen eine leere Variable als nicht gesetzt gilt: Dann greift der naechste Name (z. B. `LATTICE_BUILD`
 hinter einem leeren `NODVARD_DECK_BUILD`) und danach die Datei im Image (`image_info`). Bei
-`ssh_confirm_new_host_keys` heisst das: keine Uebersteuerung, es gilt die gespeicherte Einstellung."""
+`ssh_confirm_new_host_keys` und `trusted_proxies` heisst das: keine Uebersteuerung, es gilt die gespeicherte Einstellung."""
 
 
 class _SkipEmpty(PydanticBaseSettingsSource):
@@ -261,8 +261,8 @@ class Settings(BaseSettings):
     """`Secure`-Flag am Refresh-Cookie (D-07). `None` (Standard) = automatisch: gesetzt,
     wenn die Anfrage ueber HTTPS kam, sonst nicht -- ein Browser verwirft ein
     Secure-Cookie ueber Klartext-HTTP still (z. B. env=prod unter
-    http://...:8080 im Heimnetz). NODVARD_DECK_COOKIE_SECURE=1/0 erzwingt es, z. B. hinter einem
-    TLS-Proxy, dessen X-Forwarded-Proto uvicorn nicht vertraut."""
+    http://...:8080 im Heimnetz). Hinter einem TLS-Proxy zaehlt dessen X-Forwarded-Proto, sobald er als
+    vertrauenswuerdig eingetragen ist (`system.trusted_proxies`). NODVARD_DECK_COOKIE_SECURE=1/0 erzwingt es."""
 
     setup_code: str | None = None
     """LATTICE_SETUP_CODE: Einrichtungscode fuer die Erstinbetriebnahme vorgeben (mindestens
@@ -377,6 +377,12 @@ class Settings(BaseSettings):
     (neue Installationen: an, bestehende: aus; siehe `services.hosts.host_key_confirmation_required`).
     Bereits gemerkte Schluessel sind nie betroffen; ein "Schluessel vergessen" verlangt immer eine
     Bestaetigung, egal was hier steht."""
+
+    trusted_proxies: str | None = None
+    """NODVARD_DECK_TRUSTED_PROXIES: Adressen oder Netze der Reverse-Proxys, deren `X-Forwarded-For` und
+    `X-Forwarded-Proto` gelten (Komma-getrennt, z. B. `172.18.0.5, 192.168.2.0/24`). Gesetzt gewinnt sie ueber die
+    Einstellung `system.trusted_proxies` (die dann nicht aenderbar ist); ungueltige Eintraege werden mit Warnung
+    uebersprungen (`core.trusted_proxies`). Nicht gesetzt oder leer (Standard): es gilt die gespeicherte Einstellung."""
 
     terminal_session_ttl_s: float = 30.0
     """Wie lange ein per `POST /terminal/sessions` gemintetes, noch nicht per WS

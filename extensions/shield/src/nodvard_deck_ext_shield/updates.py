@@ -26,6 +26,7 @@ import re
 import shlex
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from .antivirus import as_root
 from .detached import KEPT_BACK_MARK
@@ -185,7 +186,7 @@ def parse_status(output: str) -> UpdateStatus:
     bad = [ln for ln in refresh_lines if ln.startswith(("E:", "Err:", "Error", "ERROR")) or "Permission denied" in ln]
     if any("Permission denied" in ln or "are you root" in ln for ln in bad):
         refresh_error = "Paketlisten konnten nicht neu geladen werden (fehlen root-Rechte?) – angezeigt wird der zuletzt geladene Stand."
-    elif any("enterprise.proxmox.com" in ln for ln in bad):
+    elif any(_names_host(ln, PROXMOX_ENTERPRISE_HOST) for ln in bad):
         refresh_error = ("Die Proxmox-Enterprise-Paketquelle verlangt ein Abo (401). Ohne Abo die Quelle "
                          "„pve-no-subscription“ nutzen und die Enterprise-Quelle abschalten – die übrigen Quellen wurden geladen.")
     elif bad:
@@ -197,6 +198,24 @@ def parse_status(output: str) -> UpdateStatus:
         latest_kernel=latest, uptime_s=uptime, unattended=True if unattended_raw == "yes" else False if unattended_raw == "no" else None,
         refresh_error=refresh_error,
     )
+
+
+PROXMOX_ENTERPRISE_HOST = "enterprise.proxmox.com"
+_URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
+
+
+def _names_host(line: str, host: str) -> bool:
+    """Nennt eine Fehlerzeile von apt eine Adresse auf genau diesem Rechner? Geprueft wird der Rechnername der Adresse
+    (`urlsplit`), nicht ein Teilstring der Zeile: `enterprise.proxmox.com.example.net` oder `/enterprise.proxmox.com`
+    in einem Pfad zaehlen nicht."""
+    for match in _URL_RE.finditer(line):
+        try:
+            hostname = urlsplit(match.group(0)).hostname
+        except ValueError:
+            continue
+        if hostname == host:
+            return True
+    return False
 
 
 def _version_key(version: str) -> tuple[tuple[int, int | str], ...]:

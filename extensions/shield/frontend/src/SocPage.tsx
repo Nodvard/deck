@@ -7,16 +7,18 @@
  */
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 
-import { Badge, Button, Card, EmptyState, Icon, Notice, Page, Stat, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
+import { Badge, Button, Card, EmptyState, Icon, Notice, Page, Stat, buttonClass, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
-import { describeSchedule } from "../../../../frontend/src/components/SchedulePicker";
-import { API, HostFilter, ago, call, clock, proposeAndApprove, useForHost, when } from "./api";
+import { describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
+import { API, HostFilter, ago, call, clock, count, proposeAndApprove, useForHost, when } from "./api";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { ContainerWatch } from "./ContainerWatch";
 import { EXT_ID } from "./ids";
 import { GuardTab } from "./GuardTab";
+import { LynisFinding, TopIssues, topIssues, type LynisHelp } from "./LynisFinding";
 import { UpdatesTab } from "./UpdatesTab";
+import { WatchTemplates } from "./WatchTemplates";
 
 interface ScanRow {
   id: string;
@@ -113,6 +115,11 @@ interface HostRow {
   lynis_installed: boolean;
   quarantine_files?: number;
   last_scan: ScanRow | null;
+  /** Offene Funde des Servers (auch vom Wächter); dieselbe Quelle wie „Bedrohungen“ oben. Fehlt bei älteren Versionen. */
+  open_findings?: number;
+  /** Was aus den Funden des letzten befallenen Scans wurde: "open", "quarantined", "accepted" (als harmlos markiert),
+   * "cleaned" (gelöscht) oder null. */
+  last_scan_outcome?: "open" | "quarantined" | "accepted" | "cleaned" | null;
   last_audit: AuditSummary | null;
   /** Letztes erfolgreiches Audit; bleibt sichtbar, wenn das neueste gescheitert ist. */
   last_ok_audit?: AuditSummary | null;
@@ -126,7 +133,7 @@ interface Overview {
   hosts: HostRow[];
   summary: {
     hosts: number; hosts_known?: number; protected: number; open_threats: number; quarantined: number; neutralized_total: number;
-    findings_30d: number; avg_hardening: number | null; score: number; stale_signatures?: number;
+    findings_30d: number; avg_hardening: number | null; score: number; score_reasons?: string[]; stale_signatures?: number;
   };
   attention?: AttentionItem[];
   config: {
@@ -156,6 +163,8 @@ interface AuditRow {
   hardening_index: number | null;
   warnings: string[];
   suggestions: string[];
+  /** Deutsche Texte zu bekannten Lynis-Kennungen (lynis_text.py im Backend). */
+  help?: Record<string, LynisHelp>;
   error: string | null;
   created_at: number;
 }
@@ -178,6 +187,112 @@ const SCAN_STATUS: Record<string, { label: string; tone: Tone }> = {
   infected: { label: "Bedrohung gefunden", tone: "bad" },
   error: { label: "Fehler", tone: "warn" },
 };
+
+interface HeaderAction {
+  id: string;
+  label: string;
+  title: string;
+  run: () => void;
+  icon?: Parameters<typeof Icon>[0]["name"];
+  primary?: boolean;
+  disabled?: boolean;
+}
+
+/** Knopf „Mehr“ mit den Aktionen der Kopfzeile als Liste (wie `TileMenu` im Kern). Schließt nach einer Wahl, mit
+ * Escape, beim Antippen oder Klicken daneben und wenn der Fokus hinauswandert; der Fokus kehrt dabei auf „Mehr“ zurück. */
+function MoreActions({ items }: { items: HeaderAction[] }): JSX.Element {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  const close = (refocus: boolean) => {
+    const details = ref.current;
+    if (!details) return;
+    if (refocus) details.querySelector("summary")?.focus();
+    details.open = false;
+  };
+  useEffect(() => {
+    if (!open) return;
+    // `pointerdown` statt nur `mousedown`: iOS schickt beim Antippen einer leeren Fläche keine Mausereignisse.
+    const outside = (e: Event) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) close(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close(true);
+    };
+    document.addEventListener("pointerdown", outside);
+    document.addEventListener("mousedown", outside);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      document.removeEventListener("mousedown", outside);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  return (
+    <details
+      ref={ref}
+      className="relative"
+      data-testid="shield-more"
+      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
+      onBlur={(e) => {
+        if (ref.current?.open && e.relatedTarget && !ref.current.contains(e.relatedTarget as Node)) close(false);
+      }}
+    >
+      <summary title="Weitere Aktionen" className={`${buttonClass("secondary")} cursor-pointer list-none [&::-webkit-details-marker]:hidden`}>
+        Mehr <Icon name="chevron-down" size={14} />
+      </summary>
+      {/* Links ausgerichtet wie der Knopf (am Handy sonst abgeschnitten), mit festem Hintergrund statt durchscheinend. */}
+      <div className="absolute left-0 z-20 mt-1 flex w-60 max-w-[calc(100vw-2rem)] flex-col rounded-xl border border-white/10 bg-[var(--color-surface)] p-1 shadow-xl">
+        {items.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            disabled={a.disabled}
+            title={a.title}
+            onClick={() => {
+              close(true);
+              a.run();
+            }}
+            className="flex items-center gap-2 rounded-md px-3 py-2 text-left text-sm hover:bg-white/[0.06] disabled:opacity-50"
+          >
+            {a.icon ? <Icon name={a.icon} size={14} /> : <span className="inline-block w-[14px]" aria-hidden />} {a.label}
+          </button>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+/** Unterzeile der Kachel „In Quarantäne“. */
+export function findingsLast30Days(n: number): string {
+  return n ? `${count(n, "Fund", "Funde")} in 30 Tagen` : "keine Funde in 30 Tagen";
+}
+
+/** Zustand eines Servers in der Spalte „Letzter Scan“: offene Funde zuerst, danach was aus den Funden des letzten Scans
+ * wurde. So steht nach Quarantäne oder Löschen nicht mehr „Bedrohung gefunden“, während oben „keine Bedrohung“ steht. */
+export function hostScanBadge(h: Pick<HostRow, "last_scan" | "open_findings" | "last_scan_outcome">): { label: string; tone: Tone } | null {
+  const open = h.open_findings ?? 0;
+  if (open > 0) return { label: count(open, "offene Bedrohung", "offene Bedrohungen"), tone: "bad" };
+  if (!h.last_scan) return null;
+  if (h.last_scan.status === "infected" && h.last_scan_outcome === "quarantined") return { label: "in Quarantäne", tone: "warn" };
+  if (h.last_scan.status === "infected" && h.last_scan_outcome === "accepted") return { label: "als harmlos markiert", tone: "neutral" };
+  if (h.last_scan.status === "infected" && h.last_scan_outcome === "cleaned") return { label: "bereinigt", tone: "good" };
+  return SCAN_STATUS[h.last_scan.status] ?? { label: h.last_scan.status, tone: "neutral" };
+}
+
+function ScanCell({ host: h }: { host: HostRow }): JSX.Element {
+  if (h.scanning) return <Badge tone="info">Scan läuft …</Badge>;
+  const badge = hostScanBadge(h);
+  if (!badge) return <span className="text-xs text-white/40">noch nie</span>;
+  return (
+    <>
+      <Badge tone={badge.tone}>{badge.label}</Badge>
+      <p className="mt-0.5 text-xs text-white/45">
+        {/* Offene Funde koennen vom Waechter stammen: dann nicht so tun, als kaemen sie aus dem letzten Scan. */}
+        {(h.open_findings ?? 0) > 0 ? "Details unter „Quarantäne“" : h.last_scan ? `${h.last_scan.kind_label} · ${ago(h.last_scan.started_at)}` : ""}
+      </p>
+    </>
+  );
+}
 
 const FINDING_STATUS: Record<string, { label: string; tone: Tone }> = {
   detected: { label: "offen", tone: "bad" },
@@ -252,7 +367,25 @@ function RunNotice({ notice, onClose }: { notice: PageNotice; onClose?: () => vo
 /** Antwort von `POST /defender/briefing`; `push` sagt ehrlich, ob die Meldung aufs Handy ging. */
 interface BriefingResult {
   title: string;
-  push?: "sent" | "suppressed" | "not_delivered" | "unknown";
+  push?: "sent" | "suppressed" | "skipped" | "not_delivered" | "unknown";
+}
+
+/** Ein Reiter, dessen Liste nicht geladen werden konnte: nie den leeren Zustand zeigen ("keine Funde" waere eine falsche
+ * Entwarnung), sondern sagen, was los ist, mit "Erneut versuchen". */
+function LoadError({ what, error, onRetry }: { what: string; error: string; onRetry: () => void }) {
+  return (
+    <div role="alert" data-testid="load-error" className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm">
+      <div className="min-w-0 flex-1">
+        <p className="text-red-200">{what} ließ sich gerade nicht laden: {error}</p>
+        <p className="text-xs text-white/55">Das heißt nicht, dass alles in Ordnung ist.</p>
+      </div>
+      <Button small onClick={onRetry}>Erneut versuchen</Button>
+    </div>
+  );
+}
+
+function errorText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 function briefingNotice(r: BriefingResult): PageNotice {
@@ -263,6 +396,15 @@ function briefingNotice(r: BriefingResult): PageNotice {
       return { kind: "ok", text: `${stored} und wurde auch als Push-Nachricht zugestellt.`, links: [inbox] };
     case "suppressed":
       return { kind: "warn", text: `${stored}. Als Push-Nachricht kommt es nicht an, weil gerade ein Wartungsfenster läuft.`, links: [inbox] };
+    case "skipped": {
+      const links = [inbox];
+      if (deck().hasPermission("extensions.manage")) links.push({ href: "/settings/extensions/ntfy", label: "Mindest-Stufe ändern" });
+      return {
+        kind: "ok",
+        text: `${stored}. Als Push-Nachricht kommt es nicht an, weil es unter der in den Push-Einstellungen gewählten Mindest-Stufe liegt.`,
+        links,
+      };
+    }
     case "not_delivered": {
       const links = [inbox];
       if (deck().hasPermission("extensions.manage")) links.push({ href: "/settings/extensions/ntfy", label: "Push-Nachrichten einrichten" });
@@ -277,14 +419,14 @@ function briefingNotice(r: BriefingResult): PageNotice {
   }
 }
 
-function ScoreRing({ score }: { score: number }) {
+function ScoreRing({ score, reasons = [] }: { score: number; reasons?: string[] }) {
   const r = 42;
   const c = 2 * Math.PI * r;
   const tone = score >= 80 ? "#34d399" : score >= 50 ? "#fbbf24" : "#f87171";
   const label = score >= 80 ? "Gut geschützt" : score >= 50 ? "Verbesserungsbedarf" : "Handlungsbedarf";
   return (
-    <div className="flex items-center gap-5">
-      <svg width="104" height="104" viewBox="0 0 104 104" role="img" aria-label={`Schutzwert ${score} von 100`}>
+    <div className="flex min-w-0 flex-wrap items-center gap-5">
+      <svg width="104" height="104" viewBox="0 0 104 104" role="img" aria-label={`Schutzwert ${score} von 100`} className="flex-none">
         <circle cx="52" cy="52" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="9" />
         <circle
           cx="52" cy="52" r={r} fill="none" stroke={tone} strokeWidth="9" strokeLinecap="round"
@@ -292,10 +434,15 @@ function ScoreRing({ score }: { score: number }) {
         />
         <text x="52" y="58" textAnchor="middle" className="fill-white text-[22px] font-semibold">{score}</text>
       </svg>
-      <div>
+      <div className="min-w-0 flex-1 basis-48">
         <p className="text-xs uppercase tracking-wider text-white/45">Schutzwert</p>
         <p className="text-lg font-semibold" style={{ color: tone }}>{label}</p>
-        <p className="mt-1 max-w-[16rem] text-xs text-white/45">Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde und wie sicher die Server eingestellt sind (Härtung).</p>
+        <p className="mt-1 max-w-[16rem] text-xs text-white/45">Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde, wie sicher die Server eingestellt sind (Härtung), offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse.</p>
+        {reasons.length > 0 && (
+          <ul className="mt-2 max-w-[20rem] space-y-0.5 text-xs text-amber-200/80" data-testid="score-reasons" aria-label="Was den Schutzwert senkt">
+            {reasons.map((r) => <li key={r}>– {r}</li>)}
+          </ul>
+        )}
       </div>
     </div>
   );
@@ -406,6 +553,21 @@ export function SocPage(): JSX.Element {
     }
   }
 
+  // Die Knoepfe oben starten auf ALLEN Servern: ein Fehlklick wuerde alle stundenlang auslasten, deshalb erst fragen.
+  async function confirmAll(kind: "deep" | "audit") {
+    const n = overview?.hosts.length ?? 0;
+    const where = n === 1 ? "dem Server" : n > 1 ? `allen ${n} Servern` : "allen Servern";
+    const ok = await deck().confirmDialog(
+      kind === "deep"
+        ? `Tiefenscan auf ${where} starten? Er prüft das ganze System und kann Stunden dauern. Die Server sind in der Zeit spürbar ausgelastet.`
+        : `Härtungs-Audit auf ${where} starten? Lynis braucht je Server einige Minuten, auf großen Servern auch länger.`,
+      { confirmLabel: kind === "deep" ? "Tiefenscan starten" : "Audit starten" },
+    );
+    if (!ok) return;
+    if (kind === "deep") await startScan("deep");
+    else await startAudit();
+  }
+
   const install = (host: HostRow, pkg: "clamav" | "lynis" | "signatures") =>
     run(pkg === "signatures" ? `Signaturen (${host.host_name})` : `${pkg === "clamav" ? "ClamAV" : "Lynis"} installieren (${host.host_name})`, async () => {
       const ok = await deck().confirmDialog(
@@ -418,20 +580,33 @@ export function SocPage(): JSX.Element {
       return text;
     });
 
+  const headerActions: HeaderAction[] = [
+    { id: "briefing", label: briefingBusy ? "Briefing wird erstellt …" : "Briefing senden", disabled: briefingBusy, run: () => void sendBriefing(),
+      title: "Schickt dir jetzt den Lagebericht: Server, Virenschutz, Updates und Einbruchschutz auf einen Blick." },
+    { id: "audit", label: "Härtungs-Audit", icon: "clock", run: () => void confirmAll("audit"),
+      title: "Lynis prüft, wie sicher deine Server eingestellt sind (dauert einige Minuten)." },
+    { id: "deep", label: "Tiefenscan", icon: "search", run: () => void confirmAll("deep"),
+      title: "Prüft das ganze System auf Schadsoftware – das kann Stunden dauern." },
+    { id: "quick", label: "Schnellscan starten", icon: "play", primary: true, run: () => void startScan("quick"),
+      title: "Prüft typische Ablageorte auf Schadsoftware – in wenigen Minuten fertig." },
+  ];
+
   return (
     <Page
       title="Nodvard Shield"
       description="Schützt deine Server: Virenscans, Sicherheitsupdates, Einbruchschutz und eine Prüfung, wie sicher alles eingestellt ist – plus die KI-Wache (Nodvard KI) für abgestürzte Docker-Container."
       actions={canManage && (
-        <>
-          <Button onClick={() => void sendBriefing()} disabled={briefingBusy}
-            title="Schickt dir jetzt den Lagebericht: Server, Virenschutz, Updates und Einbruchschutz auf einen Blick.">
-            {briefingBusy ? "Briefing wird erstellt …" : "Briefing senden"}
-          </Button>
-          <Button onClick={() => void startAudit()} title="Lynis prüft, wie sicher deine Server eingestellt sind (dauert einige Minuten)."><Icon name="clock" size={14} /> Härtungs-Audit</Button>
-          <Button onClick={() => void startScan("deep")} title="Prüft das ganze System auf Schadsoftware – das kann Stunden dauern."><Icon name="search" size={14} /> Tiefenscan</Button>
-          <Button variant="primary" onClick={() => void startScan("quick")} title="Prüft typische Ablageorte auf Schadsoftware – in wenigen Minuten fertig."><Icon name="play" size={14} /> Schnellscan starten</Button>
-        </>
+        // Die vier Knöpfe gehören zu Übersicht und Scans. Auf den anderen Reitern schoben sie am Handy den Inhalt weit
+        // nach unten: dort stehen sie unter „Mehr“.
+        tab === "overview" || tab === "scans" ? (
+          headerActions.map((a) => (
+            <Button key={a.id} variant={a.primary ? "primary" : "secondary"} onClick={a.run} disabled={a.disabled} title={a.title}>
+              {a.icon && <Icon name={a.icon} size={14} />} {a.label}
+            </Button>
+          ))
+        ) : (
+          <MoreActions items={headerActions} />
+        )
       )}
     >
       <nav role="tablist" aria-label="Bereiche" className="mb-5 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -637,14 +812,15 @@ function OverviewTab({
             )}
           </div>
         ) : (
-          <div className="panel flex items-center px-6 py-4"><ScoreRing score={s.score} /></div>
+          <div className="panel flex min-w-0 items-center px-6 py-4"><ScoreRing score={s.score} reasons={s.score_reasons} /></div>
         )}
         <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Stat label="Geschützte Server" value={`${s.protected} / ${s.hosts}`} hint="mit Virenscanner (ClamAV)" tone={noServers ? undefined : s.protected < s.hosts ? "warn" : "good"} />
           <button type="button" onClick={onOpenThreats} className="text-left [&>div]:h-full">
             <Stat label="Offene Bedrohungen" value={s.open_threats} hint={s.open_threats ? "Jetzt prüfen →" : "keine"} tone={s.open_threats ? "bad" : "good"} />
           </button>
-          <Stat label="Neutralisiert" value={s.neutralized_total} hint={`${s.quarantined} in Quarantäne · ${s.findings_30d} Funde in 30 Tagen`} />
+          {/* Eine Zahl je Kachel: früher stand hier „Neutralisiert“ als Summe aus Quarantäne und Gelöschtem. */}
+          <Stat label="In Quarantäne" value={s.quarantined} hint={findingsLast30Days(s.findings_30d)} />
           <Stat label="Härtung (Ø)" value={s.avg_hardening ?? "–"} hint="von 100 · wie sicher die Server eingestellt sind (Lynis)" tone={s.avg_hardening == null ? undefined : s.avg_hardening >= 70 ? "good" : "warn"} />
         </div>
       </div>
@@ -680,8 +856,8 @@ function OverviewTab({
               title="Updates"
               tone={side.updates.security ? "bad" : side.updates.packages || side.updates.reboot ? "warn" : "good"}
               text={side.updates.security
-                ? `${side.updates.security} Sicherheitsupdate(s) offen`
-                : side.updates.packages ? `${side.updates.packages} Update(s) offen` : `Alle ${side.updates.hosts} Server aktuell`}
+                ? `${count(side.updates.security, "Sicherheitsupdate", "Sicherheitsupdates")} offen`
+                : side.updates.packages ? `${count(side.updates.packages, "Update", "Updates")} offen` : `Alle ${side.updates.hosts} Server aktuell`}
               onClick={() => onOpen("updates")}
             />
           )}
@@ -690,7 +866,7 @@ function OverviewTab({
               title="Einbruchschutz"
               tone={side.guard.open_events ? "bad" : side.guard.fail2ban_running < side.guard.hosts ? "warn" : "good"}
               text={side.guard.open_events
-                ? `${side.guard.open_events} offene(s) Ereignis(se)`
+                ? count(side.guard.open_events, "offenes Ereignis", "offene Ereignisse")
                 : `ruhig · ${side.guard.failed_24h} SSH-Fehlversuche in 24 Std., ${side.guard.banned} gesperrt`}
               onClick={() => onOpen("guard")}
             />
@@ -753,12 +929,7 @@ function OverviewTab({
                       ) : h.reachable === false ? <Badge>unbekannt</Badge> : <Badge tone="bad">nicht installiert</Badge>}
                     </td>
                     <td className="px-3 py-3">
-                      {h.scanning ? <Badge tone="info">Scan läuft …</Badge> : h.last_scan ? (
-                        <>
-                          <Badge tone={SCAN_STATUS[h.last_scan.status]?.tone ?? "neutral"}>{SCAN_STATUS[h.last_scan.status]?.label ?? h.last_scan.status}</Badge>
-                          <p className="mt-0.5 text-xs text-white/45">{h.last_scan.kind_label} · {ago(h.last_scan.started_at)}</p>
-                        </>
-                      ) : <span className="text-xs text-white/40">noch nie</span>}
+                      <ScanCell host={h} />
                     </td>
                     <td className="px-3 py-3">
                       {h.auditing ? <AuditRunning run={h.audit_run} /> : <HardeningCell host={h} />}
@@ -804,11 +975,14 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
   const [target, setTarget] = useState("all");
   const [paths, setPaths] = useState("");
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const hostFilter = useContext(HostFilter);
   useEffect(() => { setTarget(hostFilter ?? "all"); }, [hostFilter]);
 
   const load = useCallback(() => {
-    call<ScanRow[]>(`${API}/scans?include_watch=${showWatch}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}`).then(setScans).catch(() => setScans([]));
+    call<ScanRow[]>(`${API}/scans?include_watch=${showWatch}${hostFilter ? `&host=${encodeURIComponent(hostFilter)}` : ""}`)
+      .then((rows) => { setScans(rows); setLoadError(null); })
+      .catch((err: unknown) => setLoadError(errorText(err)));
   }, [showWatch, hostFilter]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
@@ -822,7 +996,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
     try {
       const body = { kind, host_ids: target === "all" ? "all" : [target], paths: kind === "custom" ? paths.split(/[\n,]/).map((p) => p.trim()).filter(Boolean) : null };
       const r = await call<{ scans: string[] }>(`${API}/scans`, { method: "POST", body: JSON.stringify(body) });
-      setMsg({ kind: "ok", text: r.scans.length ? `${r.scans.length} Scan(s) gestartet.` : "Läuft bereits oder kein Server verfügbar." });
+      setMsg({ kind: "ok", text: r.scans.length ? `${count(r.scans.length, "Scan", "Scans")} gestartet.` : "Läuft bereits oder kein Server verfügbar." });
       load();
       onStarted();
     } catch (err) {
@@ -861,6 +1035,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
           </div>
         </Card>
       )}
+      {canManage && <WatchTemplates />}
 
       <Card
         title="Verlauf"
@@ -871,7 +1046,8 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
           </label>
         }
       >
-        {!scans ? <p className="px-5 py-4 text-sm text-white/50">Lade …</p> : scans.length === 0 ? (
+        {loadError && <div className="px-5 pt-4"><LoadError what="Der Verlauf" error={loadError} onRetry={load} /></div>}
+        {!scans ? (!loadError && <p className="px-5 py-4 text-sm text-white/50">Lade …</p>) : scans.length === 0 ? (
           <p className="px-5 py-6 text-sm text-white/50">Noch keine Scans.</p>
         ) : (
           <ul className="divide-y divide-white/[0.05]" data-testid="scan-list">
@@ -886,7 +1062,7 @@ function ScansTab({ hosts, canManage, onStarted }: { hosts: HostRow[]; canManage
                     <Badge tone={st.tone}>{st.label}</Badge>
                     <span className="font-medium">{s.host_name}</span>
                     <span className="text-white/50">{s.kind_label}</span>
-                    {s.infected > 0 && <span className="text-red-300">{s.infected} Fund(e)</span>}
+                    {s.infected > 0 && <span className="text-red-300">{count(s.infected, "Fund", "Funde")}</span>}
                     {s.files_scanned != null && <span className="text-xs text-white/40">{s.files_scanned.toLocaleString("de-DE")} Dateien</span>}
                     <span className="ml-auto text-xs text-white/40">{when(s.started_at)} · {s.trigger === "schedule" ? "Zeitplan" : "manuell"}</span>
                   </button>
@@ -912,9 +1088,12 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
   const [items, setItems] = useState<Finding[] | null>(null);
   const [filter, setFilter] = useState<"active" | "all">("active");
   const [msg, setMsg] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(() => {
-    call<Finding[]>(`${API}/findings`).then(setItems).catch(() => setItems([]));
+    call<Finding[]>(`${API}/findings`)
+      .then((rows) => { setItems(rows); setLoadError(null); })
+      .catch((err: unknown) => setLoadError(errorText(err)));
   }, []);
   useEffect(() => { load(); }, [load]);
 
@@ -949,7 +1128,12 @@ function QuarantineTab({ canManage, onChanged }: { canManage: boolean; onChanged
     }
   }
 
-  if (!items) return <p className="text-sm text-white/50">Lade …</p>;
+  const failed = loadError ? <LoadError what="Die Liste der Funde" error={loadError} onRetry={load} /> : null;
+  if (!items) return failed ?? <p className="text-sm text-white/50">Lade …</p>;
+  if (failed) {
+    // Eine aeltere Liste bleibt sichtbar, aber mit dem Hinweis davor: sie kann veraltet sein.
+    return <>{failed}{items.length > 0 && <p className="text-xs text-white/45">Zuletzt geladener Stand: {count(items.length, "Eintrag", "Einträge")}.</p>}</>;
+  }
   if (items.length === 0) {
     return <EmptyState icon="package" title="Keine Funde" text="Bisher wurde keine Schadsoftware gefunden. Funde landen hier – bei aktivierter automatischer Quarantäne sind sie sofort unschädlich gemacht." />;
   }
@@ -1006,9 +1190,13 @@ function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts
   // ändert sich diese Liste: dann die Ergebnisse neu laden.
   const runningHosts = useForHost(hosts.filter((h) => h.auditing));
   const runningKey = hosts.filter((h) => h.auditing).map((h) => h.host_id).sort().join(",");
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   useEffect(() => {
-    call<AuditRow[]>(`${API}/audits`).then((a) => setAudits(a.sort((x, y) => (x.hardening_index ?? 0) - (y.hardening_index ?? 0)))).catch(() => setAudits([]));
-  }, [runningKey]);
+    call<AuditRow[]>(`${API}/audits`)
+      .then((a) => { setAudits(a.sort((x, y) => (x.hardening_index ?? 0) - (y.hardening_index ?? 0))); setLoadError(null); })
+      .catch((err: unknown) => setLoadError(errorText(err)));
+  }, [runningKey, reload]);
 
   const shown = useForHost(audits ?? []);
   const runningBox = runningHosts.length > 0 && (
@@ -1024,7 +1212,9 @@ function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts
       <p className="mt-2 text-xs text-white/45">{AUDIT_DURATION_HINT} Das Ergebnis erscheint hier, sobald es fertig ist.</p>
     </Card>
   );
-  if (!audits) return <p className="text-sm text-white/50">Lade …</p>;
+  const failed = loadError ? <LoadError what="Die Liste der Härtungs-Audits" error={loadError} onRetry={() => setReload((n) => n + 1)} /> : null;
+  if (!audits) return <>{runningBox}{failed ?? <p className="text-sm text-white/50">Lade …</p>}</>;
+  if (failed) return <>{runningBox}{failed}</>;
   if (shown.length === 0) {
     return (
       <>
@@ -1036,9 +1226,15 @@ function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts
       </>
     );
   }
+  const top = topIssues(shown);
   return (
     <>
     {runningBox}
+    {top.length > 0 && (
+      <Card title="Deine wichtigsten Baustellen" description="Die Hinweise mit der größten Wirkung auf den angezeigten Servern." className="mb-4">
+        <TopIssues issues={top} />
+      </Card>
+    )}
     <div className="grid gap-4 lg:grid-cols-2">
       {shown.map((a) => (
         <Card key={a.id} title={a.host_name} description={`${a.status === "ok" ? "Geprüft" : "Versucht"} ${when(a.created_at)}`}
@@ -1052,12 +1248,12 @@ function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts
             <>
               <p className="mb-2 text-xs uppercase tracking-wider text-white/40">Warnungen ({a.warnings.length})</p>
               {a.warnings.length === 0 ? <p className="mb-3 text-sm text-emerald-300">Keine Warnungen.</p> : (
-                <ul className="mb-3 space-y-1 text-sm">{a.warnings.map((w) => <li key={w} className="text-red-200">• {w}</li>)}</ul>
+                <ul className="mb-3 space-y-1 text-sm">{a.warnings.map((w, i) => <LynisFinding key={`${i}:${w}`} entry={w} help={a.help} tone="warning" />)}</ul>
               )}
               <button type="button" onClick={() => setOpen(open === a.id ? null : a.id)} className="flex items-center gap-1 text-xs text-white/55 hover:text-white">
                 <Icon name={open === a.id ? "chevron-down" : "chevron-right"} size={12} /> {a.suggestions.length} Verbesserungsvorschläge
               </button>
-              {open === a.id && <ul className="mt-2 max-h-72 space-y-1 overflow-auto text-xs text-white/70">{a.suggestions.map((s) => <li key={s}>• {s}</li>)}</ul>}
+              {open === a.id && <ul className="mt-2 max-h-72 space-y-1 overflow-auto text-xs text-white/70">{a.suggestions.map((s, i) => <LynisFinding key={`${i}:${s}`} entry={s} help={a.help} tone="suggestion" />)}</ul>}
             </>
           )}
         </Card>

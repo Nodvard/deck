@@ -1,8 +1,8 @@
 /**
  * Metrik-Verlauf auf der Server-Seite: CPU, RAM, Last, Netz, Datentraeger, Temperatur
  * ueber einen waehlbaren Zeitraum (`GET /hosts/{id}/metrics/history`). Die Quelle
- * entscheidet der Kern: Proxmox-Hosts aus Proxmox' eigenen RRD-Daten, alle anderen aus
- * dem Sammler von Nodvard Deck (alle 30 s). Es erscheinen nur Diagramme, fuer die der Host
+ * entscheidet der Kern: von einem Modul eingelesene Server (z. B. Proxmox) aus dessen eigenen Daten, alle anderen
+ * aus dem Sammler von Nodvard Deck (alle 30 s). Es erscheinen nur Diagramme, fuer die der Host
  * tatsaechlich Werte liefert.
  */
 import { useQuery } from "@tanstack/react-query";
@@ -10,6 +10,8 @@ import { useState } from "react";
 
 import { type ChartSeries, TimeSeriesChart } from "../components/TimeSeriesChart";
 import { api } from "../lib/api";
+import { findExtension } from "../lib/extensionNames";
+import { useExtensions } from "../lib/firstSteps";
 import { loginUnproven, neverAnswered } from "../lib/hosts";
 import { formatBytes, hostHealth, type HostOut } from "../lib/overview";
 
@@ -67,7 +69,7 @@ function lastValue(values: (number | null)[] | undefined): number | undefined {
   return undefined;
 }
 
-type HistoryHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostOut, "login_ok_at" | "credential">>;
+type HistoryHost = Pick<HostOut, "status" | "last_seen_at"> & Partial<Pick<HostOut, "login_ok_at" | "credential" | "provider_ext_id">>;
 
 /** Was statt der Kurven steht, solange es keine Messwerte gibt. Ohne Angaben zum Server: der allgemeine Satz. */
 function EmptyHistory({ source, host, canCheck }: { source: HistoryOut["source"]; host?: HistoryHost; canCheck: boolean }) {
@@ -126,6 +128,11 @@ export function HostHistory({ hostId, host, canCheck = false }: {
     retry: false,
   });
 
+  // Bei Verlauf vom Anbieter steht dessen Name da (das Modul, das den Server eingelesen hat), nicht fest „Proxmox“.
+  const providerId = data?.source === "provider" ? host?.provider_ext_id ?? null : null;
+  const { data: extensions } = useExtensions(Boolean(providerId));
+  const providerName = providerId ? findExtension(extensions, providerId)?.name : undefined;
+
   if (error && (error as { status?: number }).status === 404) return null; // kein Anbieter fuer diesen Host
 
   const panels = data
@@ -157,7 +164,7 @@ export function HostHistory({ hostId, host, canCheck = false }: {
         </div>
         {data && (
           <span className="text-[11px] text-white/40">
-            {data.source === "provider" ? "Quelle: Proxmox" : "Quelle: Eigene Messung"} · Auflösung {data.step_s < 120 ? `${data.step_s} s` : `${Math.round(data.step_s / 60)} min`}
+            {data.source === "provider" ? `Quelle: ${providerName ?? "eingelesen"}` : "Quelle: Eigene Messung"} · Auflösung {data.step_s < 120 ? `${data.step_s} s` : `${Math.round(data.step_s / 60)} min`}
           </span>
         )}
       </div>

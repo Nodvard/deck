@@ -139,6 +139,18 @@ describe("Briefing senden", () => {
     expect(screen.getByRole("link", { name: "Meldungen öffnen" })).toBeInTheDocument();
   });
 
+  it("unter der Mindest-Stufe von ntfy: weder „zugestellt“ noch „einrichten“, sondern der Grund", async () => {
+    stubFetch({ overview: overviewOf([host("h1", "pi")]), briefing: () => new Response(JSON.stringify({ title: "Lagebericht – alles im grünen Bereich", push: "skipped" }), { status: 200 }) });
+    render(<SocPage />);
+    await screen.findByTestId("host-h1");
+    fireEvent.click(briefingButton());
+    const notice = await screen.findByText(/Briefing erstellt: „Lagebericht – alles im grünen Bereich“/);
+    expect(notice).toHaveTextContent("weil es unter der in den Push-Einstellungen gewählten Mindest-Stufe liegt");
+    expect(notice.textContent).not.toMatch(/zugestellt/);
+    expect(screen.queryByRole("link", { name: "Push-Nachrichten einrichten" })).toBeNull();
+    expect(screen.getByRole("link", { name: "Mindest-Stufe ändern" })).toHaveAttribute("href", "/settings/extensions/ntfy");
+  });
+
   it("im Wartungsfenster: erstellt, aber der Push ist unterdrückt", async () => {
     stubFetch({ overview: overviewOf([host("h1", "pi")]), briefing: () => new Response(JSON.stringify({ title: "Lagebericht – es gibt etwas zu tun", push: "suppressed" }), { status: 200 }) });
     render(<SocPage />);

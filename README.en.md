@@ -44,17 +44,19 @@ first, so nothing happens on your machines by accident.
 | Extension | What it does |
 |---|---|
 | Proxmox VE (Proxmox only) | Nodes, VMs and containers: start/stop, console in the browser, snapshots, hardware settings, storage, updates, disk health |
-| Backups (Proxmox only) | All Proxmox backups at a glance, create and edit backup jobs, warnings for missing or failed backups |
+| Proxmox-Backups (Proxmox only) | All Proxmox backups at a glance, create and edit backup jobs, warnings for missing or failed backups |
 | Service Matrix | Docker containers on your servers: start/stop, live logs, details, storage cleanup, compose stacks, image update check |
-| System | Linux servers over SSH: OS, load, disks, failed services, pending updates |
+| Server status („Server-Zustand“) | Linux servers over SSH: OS, load, disks, failed services, pending updates |
 | Nodvard Shield | Security: antivirus (ClamAV), hardening audits (Lynis), update center, intrusion detection, file integrity monitoring, AI container watch |
-| Network | Pi-hole and Nginx Proxy Manager: statistics, pause blocking, proxy hosts and certificate expiry |
-| Game servers | Start/stop game servers and show the current join code (e.g. Valheim) |
+| Network (beta) | Pi-hole and Nginx Proxy Manager: statistics, pause blocking, proxy hosts and certificate expiry |
+| Game servers (beta) | Start/stop game servers and show the current join code (e.g. Valheim) |
 | Scripts | Versioned script repository, run on one or many servers, scheduled – optionally without a click, as long as nothing changes |
 | Documents | Document archive with OCR and full-text search |
 | Inventory | Devices and items with purchase data and warranty reminders |
 | Nextcloud | Nextcloud as a source in the file manager |
 | ntfy | Push notifications to your phone |
+
+"Beta" means: the extension works, but is not yet as thoroughly tested as the rest. Feedback helps.
 
 You do **not** need Proxmox: a Raspberry Pi, a Debian VM, a NAS or a few Docker hosts are enough. You add
 servers by hand; load, Docker containers, updates and security all work over SSH.

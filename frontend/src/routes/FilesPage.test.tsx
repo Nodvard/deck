@@ -1,4 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render as renderPlain, screen, waitFor, within } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,6 +7,11 @@ import { GlobalDialogs } from "../components/GlobalDialogs";
 import { useAuthStore } from "../state/auth";
 import { useDialogsStore } from "../state/dialogs";
 import { FilesPage } from "./FilesPage";
+
+/** Die Seite liest und schreibt die Adresse (`?source=`, `?host=`, `?path=`); im Betrieb steckt sie immer in einem Router. */
+function render(ui: ReactElement, initialEntry = "/files") {
+  return renderPlain(<MemoryRouter initialEntries={[initialEntry]}>{ui}</MemoryRouter>);
+}
 
 // Transfer-Fortschritt kommt im Betrieb ueber den WS-Hub (`runs.<id>`) -- hier ein
 // Stellvertreter, ueber den ein Test das "succeeded"/"failed" des Laufs selbst schickt.
@@ -74,6 +80,9 @@ function mockFetch(onTransfer?: (body: unknown) => void) {
     if (url.includes("/api/v1/files/nextcloud/list") && method === "GET") {
       return new Response(JSON.stringify({ items: [] }), { status: 200 });
     }
+    if (url.includes("/api/v1/files/ssh-sftp%3Apve2/download?path=%2Fnotes.txt") && method === "GET") {
+      return new Response("Einkaufsliste: Milch", { status: 200 });
+    }
     if (url.endsWith("/api/v1/files/transfer") && method === "POST") {
       const body = JSON.parse(init!.body as string);
       onTransfer?.(body);
@@ -103,6 +112,62 @@ beforeEach(() => {
   removeCalls = [];
   powerRoot = POWER_ROOT;
   wsHandlers.clear();
+});
+
+describe("FilesPage Server-Quellen", () => {
+  it("zeigt bei einer Server-Quelle Status und Betriebssystem, bei anderen Quellen nichts davon", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/api/v1/files/sources")) {
+        return new Response(JSON.stringify([{ ...SOURCES[0], host_id: "h-pve2" }, SOURCES[1]]), { status: 200 });
+      }
+      if (url.endsWith("/api/v1/hosts")) {
+        return new Response(JSON.stringify([{ id: "h-pve2", name: "pve2", status: "up", os_family: "proxmox" }]), { status: 200 });
+      }
+      if (url.includes("/list")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+    }));
+    render(<FilesPage />);
+    const label = await screen.findByTestId("source-host-ssh-sftp:pve2");
+    expect(label.textContent).toContain("SSH (SFTP): pve2");
+    expect(label.textContent).toContain("Proxmox");
+    expect(within(label).getByRole("img").getAttribute("aria-label")).toBe("erreichbar");
+    expect(screen.queryByTestId("source-host-nextcloud")).toBeNull();
+  });
+
+  it("ohne Server-Quellen fragt die Seite die Serverliste gar nicht erst ab", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      calls.push(url);
+      if (url.endsWith("/api/v1/files/sources")) return new Response(JSON.stringify([SOURCES[1]]), { status: 200 });
+      if (url.includes("/list")) return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      throw new Error(`Unerwarteter Fetch in diesem Test: ${url}`);
+    }));
+    render(<FilesPage />);
+    await waitFor(() => expect(calls.some((c) => c.includes("/api/v1/files/nextcloud/list"))).toBe(true));
+    expect(calls.some((c) => c.endsWith("/api/v1/hosts"))).toBe(false);
+  });
+});
+
+describe("FilesPage Vorschau", () => {
+  it("„Ansehen“ zeigt eine Textdatei über der Liste, ein zweiter Klick schließt sie; Ordner haben keinen Knopf", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    render(<FilesPage />);
+    const row = (await screen.findByText("⠿ notes.txt")).closest("tr")!;
+    expect(within(screen.getByText("📁 docs").closest("tr")!).queryByRole("button", { name: "Ansehen" })).toBeNull();
+
+    const view = within(row).getByRole("button", { name: "Ansehen" });
+    fireEvent.click(view);
+    const dialog = await screen.findByRole("dialog", { name: "Vorschau: notes.txt" });
+    expect(await within(dialog).findByText("Einkaufsliste: Milch")).toBeInTheDocument();
+    expect(view).toHaveAttribute("aria-pressed", "true");
+
+    fireEvent.click(view);
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Vorschau: notes.txt" })).toBeNull());
+  });
 });
 
 describe("FilesPage Drag&Drop", () => {
@@ -560,7 +625,7 @@ describe("FilesPage ohne Quellen", () => {
       if (String(input).endsWith("/api/v1/files/sources")) return new Response("[]", { status: 200 });
       throw new Error(`Unerwarteter Fetch: ${String(input)}`);
     }));
-    render(<MemoryRouter><FilesPage /></MemoryRouter>);
+    render(<FilesPage />);
   }
   const user = (permissions: string[]) =>
     useAuthStore.setState({ user: { id: "u1", username: "a", display_name: null, email: null, is_owner: false, locale: "de", permissions } });

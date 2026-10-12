@@ -12,11 +12,13 @@
  * getAccessToken()` (main.tsx) liefert den aktuellen Access-Token live. Anders
  * als die Kern-App selbst versucht diese Seite KEINEN stillen Refresh bei 401.
  *
- * Aufbau: eine Detailseite statt einer flachen Tabelle -- nach Verbindung (mehrere
- * Proxmox-Instanzen) UND Knoten gruppiert (`provider_ref =
- * "<connection>/<kind>/<node>/<vmid>"`, siehe capabilities.py), jede VM/jeder
+ * Aufbau: oben Kacheln mit dem Wichtigsten (Knoten, Gäste, Updates, vollster Speicher), darunter
+ * Reiter (`?tab=`): „VMs & Container“, „Speicher“, „Updates“, „Aufgabenverlauf“, „Verbindungen“.
+ * Innerhalb der Reiter nach Verbindung (mehrere Proxmox-Instanzen) UND Knoten gruppiert
+ * (`provider_ref = "<connection>/<kind>/<node>/<vmid>"`, siehe capabilities.py); jede VM/jeder
  * Container klappt auf und zeigt echte Live-Metriken (`GET /hosts/{id}/metrics`,
- * CPU/RAM/Laufzeit) statt nur Name+Status+Buttons.
+ * CPU/RAM/Laufzeit). In der Zeile stehen nur Konsole und Starten/Herunterfahren, der Rest
+ * unter „Mehr“.
  *
  * **Freigabe:** `POST /hosts/{id}/actions/{type}` erzeugt bei `autonomy.mode=propose`
  * (Default) IMMER nur einen Vorschlag (`status=proposed`) -- eine zweite, separate
@@ -30,22 +32,35 @@
  * Faelle, andere Rollen) -- die Seite verweist dann auf die Aktionen-Seite.
  */
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 
 import { ACTION_STATUS_LABEL, type ActionState, isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
 import { formatBytes as formatSize } from "../../../_shared/frontend/src/format";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
+import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { SettingsLink } from "../../../_shared/frontend/src/links";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
-import { EmptyState } from "../../../_shared/frontend/src/ui";
+import { MoreMenu } from "../../../_shared/frontend/src/menu";
+import { Button, EmptyState } from "../../../_shared/frontend/src/ui";
 import { FOCUS_CLASS, deck } from "../../../_shared/frontend/src/deck";
+
+import { CertificateStatus, ConnectionCertificate } from "../../../_shared/frontend/src/certificate";
+
+import { OldTokens } from "./OldTokens";
+import { ProxmoxConnect } from "./ProxmoxConnect";
+
+/** Wie lange nach dem Verbinden die Seite noch einmal nachlädt (das Einlesen läuft dann im Hintergrund). */
+const RELOAD_AFTER_CONNECT_MS = 5000;
 
 interface ConnectionOut {
   name: string;
   base_url: string;
   token_id: string;
   tls_insecure_skip_verify: boolean;
+  /** Gemerkter Fingerabdruck des Zertifikats (`AB:CD:…`), sonst null. */
+  tls_fingerprint_sha256?: string | null;
+  tls_fingerprint_invalid?: boolean;
   enabled: boolean;
   has_token: boolean;
 }
@@ -83,17 +98,20 @@ const VM_ACTIONS: {
   dangerConfirm?: boolean;
   variant?: "danger";
   showWhen?: (status: string) => boolean;
+  /** Direkt in der Zeile; alle anderen stehen unter „Mehr“. */
+  main?: boolean;
 }[] = [
-  { type: "vm.start", label: "Starten", showWhen: (s) => s !== "up" },
+  { type: "vm.start", label: "Starten", showWhen: (s) => s !== "up", main: true },
   {
     type: "vm.shutdown",
     label: "Herunterfahren",
     confirm: "sauber herunterfahren? Das Betriebssystem in der VM fährt geordnet herunter.",
     dangerConfirm: false,
     showWhen: (s) => s !== "down",
+    main: true,
   },
   { type: "vm.reboot", label: "Neustarten", confirm: "wirklich neu starten?", showWhen: (s) => s !== "down" },
-  { type: "vm.snapshot", label: "Snapshot" },
+  { type: "vm.snapshot", label: "Snapshot anlegen" },
   {
     type: "vm.stop",
     label: "Hart ausschalten",
@@ -107,7 +125,6 @@ const VM_ACTIONS: {
  * z. B. "vm.snapshot_rollback"). */
 const ACTION_LABEL: Record<string, string> = {
   ...Object.fromEntries(VM_ACTIONS.map((a) => [a.type, a.label])),
-  "vm.snapshot": "Snapshot anlegen",
   "vm.snapshot_rollback": "Snapshot zurückrollen",
   "vm.snapshot_delete": "Snapshot löschen",
 };
@@ -295,8 +312,7 @@ const BADGE_TONE: Record<string, string> = {
  */
 function UpdatesSection({ nodes }: { nodes: NodeUpdates[] }): JSX.Element {
   return (
-    <div className="mt-3">
-      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide opacity-60">Updates</h4>
+    <div>
       <ul className="space-y-2">
         {nodes.map((n) => (
           <li key={n.node} className="text-sm" data-testid={`updates-${n.node}`}>
@@ -358,7 +374,13 @@ interface FetchError {
  * Ist eine Verbindung (oder ein Knoten) nicht erreichbar, sollen Updates und Speicher
  * nicht kommentarlos fehlen. Gleicher Fehler bei beiden -> eine Zeile.
  */
-function UnreachableHint({ connection, sources }: { connection: string; sources: [string, FetchError[]][] }): JSX.Element | null {
+function UnreachableHint({
+  connection, sources, testId = `unreachable-${connection}`,
+}: {
+  connection: string;
+  sources: [string, FetchError[]][];
+  testId?: string;
+}): JSX.Element | null {
   const lines = new Map<string, string[]>();
   for (const [what, errors] of sources) {
     for (const e of errors) {
@@ -371,7 +393,7 @@ function UnreachableHint({ connection, sources }: { connection: string; sources:
   }
   if (lines.size === 0) return null;
   return (
-    <div className="mt-3 space-y-1 text-sm text-amber-300" data-testid={`unreachable-${connection}`}>
+    <div className="mt-3 space-y-1 text-sm text-amber-300" data-testid={testId}>
       {[...lines].map(([rest, whats]) => (
         <p key={rest}>{`${whats.join(" und ")} ${rest}`}</p>
       ))}
@@ -379,10 +401,9 @@ function UnreachableHint({ connection, sources }: { connection: string; sources:
   );
 }
 
-function StorageSection({ pools }: { pools: StoragePool[] }): JSX.Element {
+function StorageSection({ pools, focusNode = null }: { pools: StoragePool[]; focusNode?: string | null }): JSX.Element {
   return (
-    <div className="mt-3">
-      <h4 className="mb-1 text-xs font-medium uppercase tracking-wide opacity-60">Speicher</h4>
+    <div>
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
@@ -393,7 +414,7 @@ function StorageSection({ pools }: { pools: StoragePool[] }): JSX.Element {
         </thead>
         <tbody className="divide-y divide-white/5">
           {pools.map((pool) => (
-            <tr key={pool.id} data-testid={`pool-${pool.storage}`}>
+            <tr key={pool.id} data-testid={`pool-${pool.storage}`} className={focusNode && pool.node === focusNode ? FOCUS_CLASS : undefined}>
               <td className="py-1.5 align-top">
                 <span className="font-medium">{pool.storage}</span>
                 <span className="block text-xs opacity-60">
@@ -505,69 +526,32 @@ function TaskRow({ task }: { task: TaskOut }): JSX.Element {
 }
 
 /**
- * Aufgabenverlauf: was auf den Knoten passiert ist, wer es ausgeloest hat, ob es
+ * Aufgabenverlauf einer Verbindung: was auf den Knoten passiert ist, wer es ausgeloest hat, ob es
  * geklappt hat -- z. B. geplante Neustarts oder Backups, die sonst nur in der
  * Proxmox-Oberflaeche sichtbar waeren.
  */
-function TasksSection({
-  id,
-  tasks,
-  showConsole,
-  onToggleConsole,
-  focused = false,
-  visit = 0,
-  filterLabel,
-  onClearFilter,
-}: {
-  id?: string;
-  tasks: TaskOut[];
-  showConsole: boolean;
-  onToggleConsole: () => void;
-  /** Ein Link (`?tasks=1`) fuehrt hierher: aufklappen -- bei jedem Link (`visit`) erneut. */
-  focused?: boolean;
-  visit?: number;
-  filterLabel?: string;
-  onClearFilter?: () => void;
-}): JSX.Element {
-  // Nur aufklappen, nie zuklappen: nach dem Entfernen des Filters bleibt die volle Liste offen.
-  const ref = useRef<HTMLDetailsElement | null>(null);
-  useEffect(() => {
-    if (focused && ref.current) ref.current.open = true;
-  }, [focused, visit]);
+function TasksTable({ tasks }: { tasks: TaskOut[] }): JSX.Element {
+  if (tasks.length === 0) return <p className="text-xs opacity-60">Keine Aufgaben in letzter Zeit.</p>;
+  // Am Handy ist die Tabelle breiter als der Bildschirm: sie scrollt für sich, die Seite bleibt stehen.
   return (
-    <details ref={ref} id={id} className="mt-3 p-2 panel">
-      <summary className="cursor-pointer text-xs font-medium uppercase tracking-wide opacity-70">Aufgabenverlauf ({tasks.length})</summary>
-      <div className="mt-2 flex flex-wrap items-center gap-3 text-xs opacity-80">
-        <label className="flex items-center gap-1">
-          <input type="checkbox" checked={showConsole} onChange={onToggleConsole} />
-          Konsolen-Öffnungen anzeigen
-        </label>
-        {filterLabel && (
-          <span className="accent-soft flex items-center gap-1 rounded px-2 py-0.5">
-            Nur {filterLabel}
-            <button type="button" onClick={onClearFilter} aria-label="Filter entfernen" className="opacity-70 hover:opacity-100">
-              ✕
-            </button>
-          </span>
-        )}
-      </div>
-      <table className="mt-1 w-full text-xs">
-        <thead>
-          <tr className="border-b border-white/10 text-left uppercase opacity-60">
-            <th className="py-1">Zeit</th>
-            <th className="py-1">Aufgabe</th>
-            <th className="py-1">Benutzer</th>
-            <th className="py-1">Status</th>
-            <th className="py-1">Dauer</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y divide-white/5">
-          {tasks.map((task) => (
-            <TaskRow key={task.upid} task={task} />
-          ))}
-        </tbody>
-      </table>
-    </details>
+    <div className="overflow-x-auto">
+    <table className="w-full min-w-[32rem] text-xs">
+      <thead>
+        <tr className="border-b border-white/10 text-left uppercase opacity-60">
+          <th className="py-1">Zeit</th>
+          <th className="py-1">Aufgabe</th>
+          <th className="py-1">Benutzer</th>
+          <th className="py-1">Status</th>
+          <th className="py-1">Dauer</th>
+        </tr>
+      </thead>
+      <tbody className="divide-y divide-white/5">
+        {tasks.map((task) => (
+          <TaskRow key={task.upid} task={task} />
+        ))}
+      </tbody>
+    </table>
+    </div>
   );
 }
 
@@ -920,6 +904,16 @@ interface NodeHealth {
   boot_mode: string | null;
   disks: DiskHealth[];
   disks_error: string | null;
+  /** ZFS-Pools des Knotens (fehlt bei älteren Servern). */
+  zfs?: ZfsPool[];
+  zfs_error?: string | null;
+}
+
+interface ZfsPool {
+  name: string;
+  badge: string;
+  tone: string;
+  summary: string;
 }
 
 /**
@@ -1014,13 +1008,37 @@ function NodeHealthPanel({ hostId }: { hostId: string }): JSX.Element {
           </li>
         ))}
       </ul>
+      {((h.zfs?.length ?? 0) > 0 || h.zfs_error) && (
+        <>
+          <p className="mt-2 mb-1 font-medium opacity-60">ZFS-Pools</p>
+          {h.zfs_error && <p className="text-red-400">Nicht abrufbar: {h.zfs_error}</p>}
+          <ul className="space-y-0.5" data-testid="zfs-pools">
+            {(h.zfs ?? []).map((p) => (
+              <li key={p.name} className="flex flex-wrap items-center gap-2 opacity-90">
+                <span className={`rounded px-1.5 py-0.5 ${BADGE_TONE[p.tone] ?? BADGE_TONE.neutral}`}>{p.badge}</span>
+                <span>{p.name}</span>
+                <span className="opacity-60">{p.summary}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   );
 }
 
 /** Knoten-Karte: zugeklappt nur Name + Status; aufgeklappt Hardware + Datentraeger
  * (erst dann geladen -- SMART-Abfragen kosten auf pve2 spuerbar Zeit). */
-function NodeCard({ node, focused = false, visit = 0 }: { node: HostOut; focused?: boolean; visit?: number }): JSX.Element {
+function NodeCard({
+  node, focused = false, visit = 0, updates, onOpenUpdates,
+}: {
+  node: HostOut;
+  focused?: boolean;
+  visit?: number;
+  /** Updates dieses Knotens (fehlt, solange sie nicht geladen sind). */
+  updates?: NodeUpdates;
+  onOpenUpdates?: () => void;
+}): JSX.Element {
   const [open, setOpen] = useState(focused);
   // Jeder Link auf diesen Knoten (auch derselbe noch einmal) klappt ihn wieder auf.
   useEffect(() => {
@@ -1038,6 +1056,16 @@ function NodeCard({ node, focused = false, visit = 0 }: { node: HostOut; focused
       </button>
       <span className="font-medium">{node.display_name}</span>{" "}
       <span className="opacity-60">(Knoten) – {HOST_STATUS_LABEL[node.status] ?? node.status}</span>
+      {updates && !updates.error && updates.tone !== "good" && (
+        <button
+          type="button"
+          onClick={onOpenUpdates}
+          title="Zu den Updates"
+          className={`ml-2 rounded px-1.5 py-0.5 text-xs hover:brightness-125 ${BADGE_TONE[updates.tone] ?? BADGE_TONE.neutral}`}
+        >
+          {updates.badge}
+        </button>
+      )}
       {open && <NodeHealthPanel hostId={node.id} />}
     </div>
   );
@@ -1102,7 +1130,16 @@ function MetricsPanel({ hostId }: { hostId: string }): JSX.Element {
  * "Aktiv"-Umschalter deckt das unabhaengige Aktivieren/Deaktivieren einzelner
  * Verbindungen ab (`enabled`-Feld, siehe config.py::build_connectors()).
  */
-function ConnectionsPanel(): JSX.Element {
+function ConnectionsPanel({
+  onConnectWithPassword, version = 0, bare = false,
+}: {
+  /** „Mit Passwort verbinden“ öffnen; ohne die Angabe gibt es den Knopf nicht. */
+  onConnectWithPassword?: () => void;
+  /** Hochzählen lädt die Liste neu (z. B. nachdem „Mit Passwort verbinden“ eine Verbindung eingetragen hat). */
+  version?: number;
+  /** Im Reiter „Verbindungen“: gleich offen, ohne Aufklappen. */
+  bare?: boolean;
+}): JSX.Element {
   const [connections, setConnections] = useState<ConnectionOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -1112,6 +1149,8 @@ function ConnectionsPanel(): JSX.Element {
   const [newTokenId, setNewTokenId] = useState("");
   const [newTlsInsecure, setNewTlsInsecure] = useState(false);
   const [pending, setPending] = useState<string | null>(null);
+  const [oldTokensFor, setOldTokensFor] = useState<string | null>(null);
+  const [certificateFor, setCertificateFor] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -1126,7 +1165,7 @@ function ConnectionsPanel(): JSX.Element {
 
   useEffect(() => {
     load();
-  }, [load]);
+  }, [load, version]);
 
   async function addConnection(e: FormEvent) {
     e.preventDefault();
@@ -1224,10 +1263,8 @@ function ConnectionsPanel(): JSX.Element {
 
   if (error) return <p className="mb-4 text-xs text-red-400">Verbindungen nicht ladbar: {error}</p>;
 
-  return (
-    <details className="mb-6 p-3 panel" open={connections?.length === 0}>
-      <summary className="cursor-pointer text-sm font-medium">Verbindungen verwalten</summary>
-      <div className="mt-3">
+  const content = (
+      <div className={bare ? "" : "mt-3"}>
         {message && <p className="mb-2 text-xs opacity-80">{message}</p>}
         {connections && connections.length === 0 && (
           <p className="mb-2 text-xs opacity-60">Noch keine Verbindung konfiguriert.</p>
@@ -1238,7 +1275,7 @@ function ConnectionsPanel(): JSX.Element {
               <tr className="border-b border-white/10 text-left uppercase opacity-60">
                 <th className="py-1 w-1/6">Name</th>
                 <th className="py-1 w-1/3">Adresse</th>
-                <th className="py-1 whitespace-nowrap">Zertifikat nicht prüfen</th>
+                <th className="py-1 whitespace-nowrap">Zertifikat</th>
                 <th className="py-1 whitespace-nowrap">Token</th>
                 <th className="py-1 whitespace-nowrap">Aktiv</th>
                 <th className="py-1 whitespace-nowrap">Aktionen</th>
@@ -1249,7 +1286,7 @@ function ConnectionsPanel(): JSX.Element {
                 <tr key={c.name}>
                   <td className="py-1.5 break-words">{c.name}</td>
                   <td className="py-1.5 break-all opacity-70">{c.base_url}</td>
-                  <td className="py-1.5 whitespace-nowrap opacity-70">{c.tls_insecure_skip_verify ? "ja" : "nein"}</td>
+                  <td className="py-1.5 whitespace-nowrap"><CertificateStatus connection={c} /></td>
                   <td className="py-1.5 whitespace-nowrap">{c.has_token ? "gesetzt" : <span className="text-amber-400">fehlt</span>}</td>
                   <td className="py-1.5">
                     <button
@@ -1273,6 +1310,22 @@ function ConnectionsPanel(): JSX.Element {
                       </button>
                       <button
                         type="button"
+                        aria-pressed={certificateFor === c.name}
+                        onClick={() => setCertificateFor(certificateFor === c.name ? null : c.name)}
+                        className="px-2 py-1 whitespace-nowrap border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition"
+                      >
+                        Zertifikat
+                      </button>
+                      <button
+                        type="button"
+                        aria-pressed={oldTokensFor === c.name}
+                        onClick={() => setOldTokensFor(oldTokensFor === c.name ? null : c.name)}
+                        className="px-2 py-1 whitespace-nowrap border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition"
+                      >
+                        Alte Tokens
+                      </button>
+                      <button
+                        type="button"
                         disabled={pending === `remove:${c.name}`}
                         onClick={() => void removeConnection(c.name)}
                         className="px-2 py-1 disabled:opacity-40 border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25 rounded-lg"
@@ -1286,15 +1339,33 @@ function ConnectionsPanel(): JSX.Element {
             </tbody>
           </table>
         )}
+        {certificateFor && connections?.some((c) => c.name === certificateFor) && (
+          <ConnectionCertificate
+            extId="proxmox" connection={certificateFor} onSaved={load}
+            unchecked={connections?.find((c) => c.name === certificateFor)?.tls_insecure_skip_verify ?? false}
+          />
+        )}
+        {oldTokensFor && connections?.some((c) => c.name === oldTokensFor) && <OldTokens connection={oldTokensFor} />}
 
         {!showAddForm && (
-          <button
-            type="button"
-            onClick={() => setShowAddForm(true)}
-            className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition"
-          >
-            + Neue Verbindung
-          </button>
+          <div className="flex flex-wrap gap-2">
+            {onConnectWithPassword && (
+              <button
+                type="button"
+                onClick={onConnectWithPassword}
+                className="px-2 py-1 text-xs accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium"
+              >
+                Mit Passwort verbinden
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => setShowAddForm(true)}
+              className="px-2 py-1 text-xs border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition"
+            >
+              + Neue Verbindung
+            </button>
+          </div>
         )}
         {showAddForm && (
           <form onSubmit={(e) => void addConnection(e)} className="flex flex-wrap items-end gap-2 text-xs">
@@ -1316,9 +1387,9 @@ function ConnectionsPanel(): JSX.Element {
                 placeholder="root@pam!dashboard" className="w-40 px-2 py-1 rounded-lg border border-white/10 bg-black/25 outline-none focus:border-[var(--color-accent)]"
               />
             </label>
-            <label className="flex items-center gap-1">
+            <label className="flex items-center gap-1" title="Veraltet: besser nach dem Anlegen unter „Zertifikat“ den Fingerabdruck merken.">
               <input type="checkbox" checked={newTlsInsecure} onChange={(e) => setNewTlsInsecure(e.target.checked)} />
-              Zertifikat nicht prüfen
+              Zertifikat nicht prüfen (veraltet)
             </label>
             <button type="submit" disabled={pending === "add"} className="px-2 py-1 disabled:opacity-40 accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium">
               Anlegen
@@ -1329,6 +1400,20 @@ function ConnectionsPanel(): JSX.Element {
           </form>
         )}
       </div>
+  );
+  // Gleiche Überschrift wie zugeklappt: Meldungen und Doku verweisen auf „Verbindungen verwalten“.
+  if (bare) {
+    return (
+      <div className="mb-6 p-3 panel">
+        <h3 className="mb-3 text-sm font-medium">Verbindungen verwalten</h3>
+        {content}
+      </div>
+    );
+  }
+  return (
+    <details className="mb-6 p-3 panel" open={connections?.length === 0}>
+      <summary className="cursor-pointer text-sm font-medium">Verbindungen verwalten</summary>
+      {content}
     </details>
   );
 }
@@ -1341,6 +1426,12 @@ export function ProxmoxNodePage(): JSX.Element {
   const [urlParams, updateUrl, visits] = useUrlParams();
   const focusHost = urlParams.get("host") || null;
   const focusTasks = urlParams.get("tasks") === "1";
+  // Reiter: `?tab=`; ein Link auf den Aufgabenverlauf (`&tasks=1`) ohne Reiter öffnet den Verlauf.
+  const tabParam = urlParams.get("tab");
+  const tab: TabId = isTab(tabParam) ? tabParam : focusTasks ? "tasks" : "guests";
+  // Ein Wechsel per Hand beendet den Sprung von einer anderen Seite: sonst markierte z. B. „VMs & Container“
+  // nach der Speicher-Meldung noch den Knoten und klappte ihn (mit SMART-Abfrage) auf.
+  const setTab = useCallback((id: TabId) => updateUrl({ tab: id, host: null, tasks: null }), [updateUrl]);
   const [hosts, setHosts] = useState<HostOut[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   // Mehrere Aktionen koennen gleichzeitig laufen (z. B. mehrere Gaeste herunterfahren, das
@@ -1365,49 +1456,71 @@ export function ProxmoxNodePage(): JSX.Element {
   const [updates, setUpdates] = useState<NodeUpdates[] | null>(null);
   const [updatesErrors, setUpdatesErrors] = useState<FetchError[]>([]);
   const [storageErrors, setStorageErrors] = useState<FetchError[]>([]);
+  // Ganze Abfrage gescheitert (nicht nur ein Knoten): sonst fehlten Updates und Speicher still, und der Aufgabenverlauf
+  // stuende auf "(0)" -- als gaebe es nichts.
+  const [updatesLoadError, setUpdatesLoadError] = useState<string | null>(null);
+  const [tasksLoadError, setTasksLoadError] = useState<string | null>(null);
+  const [storageLoadError, setStorageLoadError] = useState<string | null>(null);
+  // „Mit Passwort verbinden“ schreibt Verbindung und Token wie die Verbindungsverwaltung (gleiches Recht).
+  const canConnect = deck().hasPermission("secrets.write");
+  const [connectOpen, setConnectOpen] = useState(false);
+  const [connectionsVersion, setConnectionsVersion] = useState(0);
+  const [connectedAt, setConnectedAt] = useState(0);
 
-  useEffect(() => {
-    authedFetch("/ext/proxmox/updates")
-      .then((res) => (res.ok ? (res.json() as Promise<{ nodes: NodeUpdates[]; errors?: FetchError[] }>) : { nodes: [] }))
+  const loadUpdates = useCallback(() => {
+    setUpdatesLoadError(null);
+    fetchJson<{ nodes: NodeUpdates[]; errors?: FetchError[] }>("/ext/proxmox/updates")
       .then((body) => {
-        setUpdates(body.nodes);
+        setUpdates(body.nodes ?? []);
         setUpdatesErrors(body.errors ?? []);
       })
-      .catch(() => setUpdates([]));
+      .catch((err: unknown) => setUpdatesLoadError(errorMessage(err)));
   }, []);
+  useEffect(() => {
+    loadUpdates();
+  }, [loadUpdates]);
   const [showConsoleTasks, setShowConsoleTasks] = useState(false);
 
+  const loadTasks = useCallback(() => {
+    setTasksLoadError(null);
+    fetchJson<{ tasks: TaskOut[] }>(`/ext/proxmox/tasks?limit=100${showConsoleTasks ? "&include_console=true" : ""}`)
+      .then((body) => setTasks(body.tasks ?? []))
+      .catch((err: unknown) => setTasksLoadError(errorMessage(err)));
+  }, [showConsoleTasks]);
   useEffect(() => {
-    authedFetch(`/ext/proxmox/tasks?limit=100${showConsoleTasks ? "&include_console=true" : ""}`)
-      .then((res) => (res.ok ? (res.json() as Promise<{ tasks: TaskOut[] }>) : { tasks: [] }))
-      .then((body) => setTasks(body.tasks))
-      .catch(() => setTasks([]));
-  }, [showConsoleTasks, snapshotRefresh]);
+    loadTasks();
+  }, [loadTasks, snapshotRefresh]);
 
-  useEffect(() => {
-    authedFetch("/ext/proxmox/storage")
-      .then((res) => (res.ok ? (res.json() as Promise<{ pools: StoragePool[]; errors?: FetchError[] }>) : { pools: [] }))
+  const loadStorage = useCallback(() => {
+    setStorageLoadError(null);
+    fetchJson<{ pools: StoragePool[]; errors?: FetchError[] }>("/ext/proxmox/storage")
       .then((body) => {
-        setStorage(body.pools);
+        setStorage(body.pools ?? []);
         setStorageErrors(body.errors ?? []);
       })
-      .catch(() => setStorage([]));
+      .catch((err: unknown) => setStorageLoadError(errorMessage(err)));
   }, []);
+  useEffect(() => {
+    loadStorage();
+  }, [loadStorage]);
 
   const load = useCallback(() => {
     setError(null);
-    authedFetch("/hosts?tag=proxmox")
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json() as Promise<HostOut[]>;
-      })
+    fetchJson<HostOut[]>("/hosts?tag=proxmox")
       .then(setHosts)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => setError(errorMessage(err)));
   }, []);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  // Nach „Mit Passwort verbinden“ liest Nodvard Deck im Hintergrund ein: nach ein paar Sekunden noch einmal nachsehen.
+  useEffect(() => {
+    if (!connectedAt) return undefined;
+    const timer = window.setTimeout(load, RELOAD_AFTER_CONNECT_MS);
+    return () => window.clearTimeout(timer);
+  }, [connectedAt, load]);
 
   // Einmal je Link hinscrollen, sobald die Zeile existiert -- nicht bei jedem Neuladen.
   const scrolledFor = useRef<number | null>(null);
@@ -1415,10 +1528,12 @@ export function ProxmoxNodePage(): JSX.Element {
     if (!hosts || !focusHost || scrolledFor.current === visits) return;
     const target = hosts.find((h) => h.id === focusHost);
     if (!target) return;
-    if (focusTasks && !tasks) return;
+    if (tab === "tasks" && !tasks) return;
+    if (tab === "storage" && !storage) return;
     scrolledFor.current = visits;
-    scrollToElement(focusTasks ? `tasks-${parseProviderRef(target.provider_ref).connection}` : `host-${target.id}`);
-  }, [hosts, tasks, focusHost, focusTasks, visits]);
+    const { connection } = parseProviderRef(target.provider_ref);
+    scrollToElement(tab === "tasks" ? `tasks-${connection}` : tab === "storage" ? `storage-${connection}` : `host-${target.id}`);
+  }, [hosts, tasks, storage, focusHost, tab, visits]);
 
   async function trigger(
     hostId: string,
@@ -1474,13 +1589,20 @@ export function ProxmoxNodePage(): JSX.Element {
   }
 
   if (!hosts && !error) return <div className="p-6 text-sm opacity-60">Lade …</div>;
-  if (error) return <div className="p-6 text-sm text-red-400">Fehler: {error}</div>;
+  if (error) {
+    return (
+      <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
+        <LoadError what="Die Liste der Proxmox-Server" error={error} onRetry={load} />
+      </div>
+    );
+  }
 
   // Der Abgleich legt Knoten als kind="hypervisor" an -- ein Filter nur auf "node"
   // zeigte deshalb nie einen Knoten an.
   const nodes = (hosts ?? []).filter((h) => h.kind === "hypervisor" || h.kind === "node");
   const guests = (hosts ?? []).filter((h) => h.kind === "vm" || h.kind === "lxc");
   const connections = [...new Set((hosts ?? []).map((h) => parseProviderRef(h.provider_ref).connection))].sort();
+  const empty = !hosts || hosts.length === 0;
 
   // Aufgabenverlauf nur fuer den Host, von dessen Server-Seite der Nutzer kommt.
   const taskHost = (hosts ?? []).find((h) => h.id === taskFocus) ?? null;
@@ -1490,160 +1612,510 @@ export function ProxmoxNodePage(): JSX.Element {
     if (!taskRef || taskRef.connection !== connection) return all;
     return all.filter((t) => t.node === taskRef.node && (taskRef.vmid === null || t.guest_id === taskRef.vmid));
   }
+  const taskConnections = taskRef ? connections.filter((c) => c === taskRef.connection) : connections;
+  // Speicher-Meldung mit `?tab=storage&host=<knoten>`: die Pools dieses Knotens markieren.
+  const storageFocus = tab === "storage" && focusHost ? (hosts ?? []).find((h) => h.id === focusHost) : undefined;
+  const storageRef = storageFocus ? parseProviderRef(storageFocus.provider_ref) : null;
+
+  const nodeUpdates = (node: HostOut) => {
+    const ref = parseProviderRef(node.provider_ref);
+    return updates?.find((u) => u.connection === ref.connection && u.node === ref.node);
+  };
+  const ownUpdates = (updates ?? []).filter((u) => connections.includes(u.connection));
+  const ownPools = (storage ?? []).filter((p) => connections.includes(p.connection));
 
   return (
     <div className="mx-auto w-full max-w-7xl p-4 sm:p-6">
-      <h2 className="mb-4 font-semibold text-xl tracking-tight">Proxmox-Knoten &amp; VMs</h2>
-      <ConnectionsPanel />
-      {[...actionMessages].map(([key, text]) => (
-        <p key={key} className="mb-3 text-sm opacity-80">{text}</p>
-      ))}
-      {hosts && hosts.length === 0 && (
+      <h2 className="font-semibold text-xl tracking-tight">Proxmox</h2>
+      <p className="mb-4 text-sm opacity-60">Deine Proxmox-Server mit allen VMs und Containern: starten, herunterfahren, Snapshots, Speicher und Updates.</p>
+      {empty && (
+        <ConnectionsPanel onConnectWithPassword={canConnect ? () => setConnectOpen(true) : undefined} version={connectionsVersion} />
+      )}
+      {empty && connectOpen && (
+        <ProxmoxConnect
+          onClose={() => setConnectOpen(false)}
+          onConnected={() => {
+            setConnectionsVersion((n) => n + 1);
+            setConnectedAt(Date.now());
+            load();
+          }}
+        />
+      )}
+      {empty && !connectOpen && (
         <EmptyState
           icon="refresh"
           title="Noch keine Proxmox-Server gefunden"
-          text="Trag dafür die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein."
-          action={<SettingsLink to="/settings/extensions/proxmox" permission="extensions.manage">Proxmox einrichten</SettingsLink>}
+          text={
+            canConnect
+              ? "Am einfachsten: „Mit Passwort verbinden“ – Adresse und Passwort deines Proxmox-Servers eingeben, Nodvard Deck legt dort einen eigenen Zugang an. Oder trag einen API-Token von Hand ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein."
+              : "Trag dafür die Adresse deines Proxmox-Servers und einen API-Token ein (oben unter „Verbindungen verwalten“ oder in den Moduleinstellungen). Danach liest Nodvard Deck alle 5 Minuten alle Knoten, VMs und Container von selbst ein."
+          }
+          action={
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {canConnect && <Button variant="primary" onClick={() => setConnectOpen(true)}>Mit Passwort verbinden</Button>}
+              <SettingsLink to="/settings/extensions/proxmox" permission="extensions.manage">Proxmox einrichten</SettingsLink>
+            </div>
+          }
         />
       )}
 
-      {connections.map((connection) => (
-        <section key={connection} className="mb-6">
-          <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+      {!empty && (
+        <>
+          <Summary
+            nodes={nodes}
+            guests={guests}
+            connections={connections}
+            updates={updatesLoadError ? "error" : updates ? ownUpdates : null}
+            pools={storageLoadError ? "error" : storage ? ownPools : null}
+            updatesIncomplete={updatesErrors.some((e) => connections.includes(e.connection))}
+            storageIncomplete={storageErrors.some((e) => connections.includes(e.connection))}
+            onOpen={setTab}
+          />
 
-          {nodes
-            .filter((n) => parseProviderRef(n.provider_ref).connection === connection)
-            .map((node) => (
-              <NodeCard key={node.id} node={node} focused={node.id === focusHost} visit={visits} />
-            ))}
+          <TabBar
+            active={tab}
+            onSelect={setTab}
+            badges={{
+              updates: updatesCount(ownUpdates) > 0 ? { text: String(updatesCount(ownUpdates)), label: `${updatesCount(ownUpdates)} Pakete warten` } : undefined,
+              tasks: tasksLoadError ? { text: "!", label: "nicht abrufbar" } : undefined,
+            }}
+          />
 
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
-                <th className="py-1 w-6" />
-                <th className="py-1 w-1/3">Name</th>
-                <th className="py-1 whitespace-nowrap">Typ</th>
-                <th className="py-1 whitespace-nowrap">Knoten</th>
-                <th className="py-1 whitespace-nowrap">Status</th>
-                <th className="py-1">Aktionen</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/5">
-              {guests
-                .filter((g) => parseProviderRef(g.provider_ref).connection === connection)
-                .map((host) => {
-                  const { node } = parseProviderRef(host.provider_ref);
-                  const isExpanded = expanded === host.id;
-                  return (
-                    <Fragment key={host.id}>
-                      <tr id={`host-${host.id}`} className={host.id === focusHost ? FOCUS_CLASS : undefined}>
-                        <td className="py-1.5">
-                          <button
-                            type="button"
-                            onClick={() => setExpanded(isExpanded ? null : host.id)}
-                            aria-label={isExpanded ? "Details einklappen" : "Details anzeigen"}
-                            className="opacity-60 hover:opacity-100"
-                          >
-                            {isExpanded ? "▾" : "▸"}
-                          </button>
-                        </td>
-                        <td className="py-1.5 break-words">{host.display_name}</td>
-                        <td className="py-1.5 whitespace-nowrap opacity-70">{KIND_LABEL[host.kind ?? ""] ?? host.kind}</td>
-                        <td className="py-1.5 whitespace-nowrap opacity-70">{node}</td>
-                        <td className="py-1.5 whitespace-nowrap">{HOST_STATUS_LABEL[host.status] ?? host.status}</td>
-                        <td className="py-1.5">
-                          <div className="flex flex-wrap gap-1.5">
-                            {/* Konsole: Bildschirm direkt in Nodvard Deck (Kern-Seite
-                                /console/:hostId), ohne Proxmox-Login. Neuer Tab, damit die
-                                Konsole neben dieser Liste offen bleiben kann. Eine gestoppte
-                                VM hat keinen Bildschirm -- Proxmox wuerde den Aufruf ablehnen. */}
-                            {host.status === "up" ? (
-                              <a
-                                href={`/console/${host.id}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="accent-soft rounded px-2 py-1 text-xs hover:brightness-125"
-                              >
-                                Konsole
-                              </a>
-                            ) : (
-                              <span
-                                title="Nur für laufende VMs/Container verfügbar."
-                                className="cursor-not-allowed rounded bg-white/5 px-2 py-1 text-xs opacity-40"
-                              >
-                                Konsole
-                              </span>
+          {[...actionMessages].map(([key, text]) => (
+            <p key={key} className="mb-3 text-sm opacity-80">{text}</p>
+          ))}
+
+          <TabPanel id="guests" active={tab}>
+            {connections.map((connection) => (
+              <section key={connection} className="mb-6">
+                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+
+                {nodes
+                  .filter((n) => parseProviderRef(n.provider_ref).connection === connection)
+                  .map((node) => (
+                    <NodeCard
+                      key={node.id} node={node} focused={node.id === focusHost && tab === "guests"} visit={visits}
+                      updates={nodeUpdates(node)} onOpenUpdates={() => setTab("updates")}
+                    />
+                  ))}
+
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+                      <th className="py-1 w-6" />
+                      <th className="py-1 sm:w-1/2">Name</th>
+                      <th className="hidden py-1 whitespace-nowrap sm:table-cell sm:w-28">Status</th>
+                      <th className="py-1 text-right">Aktionen</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {guests
+                      .filter((g) => parseProviderRef(g.provider_ref).connection === connection)
+                      .map((host) => {
+                        const { node } = parseProviderRef(host.provider_ref);
+                        const isExpanded = expanded === host.id;
+                        const visible = VM_ACTIONS.filter((a) => !a.showWhen || a.showWhen(host.status));
+                        const runAction = (action: (typeof VM_ACTIONS)[number]) =>
+                          void trigger(host.id, host.display_name, action.type, action.confirm, {}, action.dangerConfirm);
+                        const isBusy = (type: string) => pending.has(`${host.id}:${type}`);
+                        return (
+                          <Fragment key={host.id}>
+                            <tr id={`host-${host.id}`} className={host.id === focusHost ? FOCUS_CLASS : undefined}>
+                              <td className="py-1.5 align-top">
+                                <button
+                                  type="button"
+                                  onClick={() => setExpanded(isExpanded ? null : host.id)}
+                                  aria-label={isExpanded ? "Details einklappen" : "Details anzeigen"}
+                                  className="opacity-60 hover:opacity-100"
+                                >
+                                  {isExpanded ? "▾" : "▸"}
+                                </button>
+                              </td>
+                              <td className="py-1.5 break-words">
+                                <span className="font-medium">{host.display_name}</span>
+                                <span className="block text-xs opacity-60">
+                                  {KIND_LABEL[host.kind ?? ""] ?? host.kind} · {node}
+                                </span>
+                                {/* Am Handy fehlt die Spalte „Status“: dort steht er unter dem Namen. */}
+                                <span className={`block text-xs sm:hidden ${STATUS_TONE[host.status] ?? ""}`}>{HOST_STATUS_LABEL[host.status] ?? host.status}</span>
+                              </td>
+                              <td className={`hidden py-1.5 whitespace-nowrap sm:table-cell ${STATUS_TONE[host.status] ?? ""}`}>{HOST_STATUS_LABEL[host.status] ?? host.status}</td>
+                              <td className="py-1.5">
+                                <div className="flex flex-wrap justify-end gap-1.5">
+                                  {/* Konsole: Bildschirm direkt in Nodvard Deck (Kern-Seite
+                                      /console/:hostId), ohne Proxmox-Login. Neuer Tab, damit die
+                                      Konsole neben dieser Liste offen bleiben kann. Eine gestoppte
+                                      VM hat keinen Bildschirm -- Proxmox wuerde den Aufruf ablehnen. */}
+                                  {host.status === "up" ? (
+                                    <a
+                                      href={`/console/${host.id}`}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      className="accent-soft rounded-lg px-2.5 py-1 text-xs hover:brightness-125"
+                                    >
+                                      Konsole
+                                    </a>
+                                  ) : (
+                                    <span
+                                      title="Nur für laufende VMs/Container verfügbar."
+                                      className="cursor-not-allowed rounded-lg bg-white/5 px-2.5 py-1 text-xs opacity-40"
+                                    >
+                                      Konsole
+                                    </span>
+                                  )}
+                                  {/* Starten und Herunterfahren direkt, der Rest (seltener, teils riskant) unter „Mehr“. */}
+                                  {visible.filter((a) => a.main).map((action) => (
+                                    <button
+                                      key={action.type}
+                                      type="button"
+                                      disabled={isBusy(action.type)}
+                                      onClick={() => runAction(action)}
+                                      className="px-2.5 py-1 text-xs disabled:opacity-40 border rounded-lg transition border-white/10 bg-white/[0.06] hover:bg-white/[0.12]"
+                                    >
+                                      {isBusy(action.type) ? "…" : action.label}
+                                    </button>
+                                  ))}
+                                  {visible.some((a) => !a.main) && (
+                                    <MoreMenu
+                                      small
+                                      align="right"
+                                      label={visible.some((a) => !a.main && isBusy(a.type)) ? "Mehr …" : "Mehr"}
+                                      title={`Weitere Aktionen für ${host.display_name}`}
+                                      testId={`more-${host.id}`}
+                                      items={visible.filter((a) => !a.main).map((action) => ({
+                                        id: action.type,
+                                        label: isBusy(action.type) ? `${action.label} (läuft …)` : action.label,
+                                        disabled: isBusy(action.type),
+                                        danger: action.variant === "danger",
+                                        run: () => runAction(action),
+                                      }))}
+                                    />
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                            {isExpanded && (
+                              <tr>
+                                <td />
+                                <td colSpan={3} className="bg-black/20 py-2">
+                                  <MetricsPanel hostId={host.id} />
+                                  <GuestDetailsPanel hostId={host.id} />
+                                  <p className="mt-2 mb-1 text-xs font-medium opacity-60">Snapshots</p>
+                                  <SnapshotsPanel
+                                    hostId={host.id}
+                                    refreshKey={snapshotRefresh}
+                                    isPending={(actionType, snapname) => pending.has(pendingKey(host.id, actionType, snapname))}
+                                    onAction={(actionType, snapname) =>
+                                      void trigger(
+                                        host.id,
+                                        host.display_name,
+                                        actionType,
+                                        actionType === "vm.snapshot_rollback"
+                                          ? `auf Snapshot "${snapname}" zurückrollen? Der Gast wird dabei gestoppt, alles danach geht verloren.`
+                                          : `Snapshot "${snapname}" löschen?`,
+                                        { snapname },
+                                      )
+                                    }
+                                  />
+                                </td>
+                              </tr>
                             )}
-                            {VM_ACTIONS.filter((a) => !a.showWhen || a.showWhen(host.status)).map((action) => (
-                              <button
-                                key={action.type}
-                                type="button"
-                                disabled={pending.has(`${host.id}:${action.type}`)}
-                                onClick={() => void trigger(host.id, host.display_name, action.type, action.confirm, {}, action.dangerConfirm)}
-                                className={`px-2 py-1 text-xs disabled:opacity-40 border rounded-lg transition ${
-                                  action.variant === "danger"
-                                    ? "border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25"
-                                    : "border-white/10 bg-white/[0.06] hover:bg-white/[0.12]"
-                                }`}
-                              >
-                                {pending.has(`${host.id}:${action.type}`) ? "…" : action.label}
-                              </button>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                      {isExpanded && (
-                        <tr>
-                          <td />
-                          <td colSpan={5} className="bg-black/20 py-2">
-                            <MetricsPanel hostId={host.id} />
-                            <GuestDetailsPanel hostId={host.id} />
-                            <p className="mt-2 mb-1 text-xs font-medium opacity-60">Snapshots</p>
-                            <SnapshotsPanel
-                              hostId={host.id}
-                              refreshKey={snapshotRefresh}
-                              isPending={(actionType, snapname) => pending.has(pendingKey(host.id, actionType, snapname))}
-                              onAction={(actionType, snapname) =>
-                                void trigger(
-                                  host.id,
-                                  host.display_name,
-                                  actionType,
-                                  actionType === "vm.snapshot_rollback"
-                                    ? `auf Snapshot "${snapname}" zurückrollen? Der Gast wird dabei gestoppt, alles danach geht verloren.`
-                                    : `Snapshot "${snapname}" löschen?`,
-                                  { snapname },
-                                )
-                              }
-                            />
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-            </tbody>
-          </table>
-          <UnreachableHint connection={connection} sources={[["Updates", updatesErrors], ["Speicher", storageErrors]]} />
-          {updates && updates.some((u) => u.connection === connection) && (
-            <UpdatesSection nodes={updates.filter((u) => u.connection === connection)} />
-          )}
-          {storage && storage.some((p) => p.connection === connection) && (
-            <StorageSection pools={storage.filter((p) => p.connection === connection)} />
-          )}
-          {tasks && (
-            <TasksSection
-              id={`tasks-${connection}`}
-              tasks={tasksFor(connection)}
-              showConsole={showConsoleTasks}
-              onToggleConsole={() => setShowConsoleTasks((v) => !v)}
-              focused={taskRef?.connection === connection}
-              visit={visits}
-              filterLabel={taskRef?.connection === connection ? taskHost?.display_name : undefined}
-              onClearFilter={() => updateUrl({ tasks: null })}
-            />
-          )}
-        </section>
-      ))}
+                          </Fragment>
+                        );
+                      })}
+                  </tbody>
+                </table>
+                <UnreachableHint connection={connection} sources={[["Updates", updatesErrors], ["Speicher", storageErrors]]} />
+              </section>
+            ))}
+          </TabPanel>
+
+          <TabPanel id="storage" active={tab}>
+            {storageLoadError && <LoadError what="Die Liste der Speicher" error={storageLoadError} onRetry={loadStorage} />}
+            {!storage && !storageLoadError && <p className="text-sm opacity-60">Lade Speicher …</p>}
+            {connections.map((connection) => (
+              <section key={connection} id={`storage-${connection}`} className="mb-6">
+                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                {storage && !storage.some((p) => p.connection === connection) && !storageErrors.some((e) => e.connection === connection) && (
+                  <p className="text-xs opacity-60">Keine Speicher gefunden.</p>
+                )}
+                {storage && storage.some((p) => p.connection === connection) && (
+                  <StorageSection
+                    pools={storage.filter((p) => p.connection === connection)}
+                    focusNode={storageRef?.connection === connection ? storageRef.node : null}
+                  />
+                )}
+                <UnreachableHint connection={connection} sources={[["Speicher", storageErrors]]} testId={`unreachable-storage-${connection}`} />
+              </section>
+            ))}
+          </TabPanel>
+
+          <TabPanel id="updates" active={tab}>
+            {updatesLoadError && <LoadError what="Die Liste der Updates" error={updatesLoadError} onRetry={loadUpdates} />}
+            {!updates && !updatesLoadError && <p className="text-sm opacity-60">Lade Updates …</p>}
+            {updates && (
+              <p className="mb-3 text-xs opacity-60">
+                Hier steht, was auf den Knoten wartet. Einspielen kannst du die Updates in Nodvard Shield unter „Updates“ (dafür braucht
+                der Knoten einen SSH-Zugang) oder wie gewohnt in der Proxmox-Oberfläche.
+              </p>
+            )}
+            {connections.map((connection) => (
+              <section key={connection} className="mb-6">
+                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                {updates && updates.some((u) => u.connection === connection) && (
+                  <UpdatesSection nodes={updates.filter((u) => u.connection === connection)} />
+                )}
+                {updates && !updates.some((u) => u.connection === connection) && !updatesErrors.some((e) => e.connection === connection) && (
+                  <p className="text-xs opacity-60">Keine Knoten gefunden.</p>
+                )}
+                <UnreachableHint connection={connection} sources={[["Updates", updatesErrors]]} testId={`unreachable-updates-${connection}`} />
+              </section>
+            ))}
+          </TabPanel>
+
+          <TabPanel id="tasks" active={tab}>
+            {tasksLoadError && <LoadError what="Der Aufgabenverlauf" error={tasksLoadError} onRetry={loadTasks} />}
+            {!tasks && !tasksLoadError && <p className="text-sm opacity-60">Lade Aufgabenverlauf …</p>}
+            <div className="mb-3 flex flex-wrap items-center gap-3 text-xs opacity-80">
+              <label className="flex items-center gap-1">
+                <input type="checkbox" checked={showConsoleTasks} onChange={() => setShowConsoleTasks((v) => !v)} />
+                Konsolen-Öffnungen anzeigen
+              </label>
+              {taskHost && (
+                <span className="accent-soft flex items-center gap-1 rounded px-2 py-0.5">
+                  Nur {taskHost.display_name}
+                  <button
+                    type="button"
+                    onClick={() => updateUrl({ tasks: null, tab: "tasks" })}
+                    aria-label="Filter entfernen"
+                    className="opacity-70 hover:opacity-100"
+                  >
+                    ✕
+                  </button>
+                </span>
+              )}
+            </div>
+            {tasks && taskConnections.map((connection) => {
+              const list = tasksFor(connection);
+              return (
+                <section key={connection} id={`tasks-${connection}`} className="mb-6">
+                  <h3 className="mb-1 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                  {list.length > 0 && (
+                    <p className="mb-1 text-xs opacity-60" data-testid={`tasks-count-${connection}`}>
+                      {list.length === 1 ? "1 Aufgabe" : `${list.length} Aufgaben`}
+                    </p>
+                  )}
+                  <TasksTable tasks={list} />
+                </section>
+              );
+            })}
+          </TabPanel>
+
+          <TabPanel id="connections" active={tab}>
+            {/* Hier statt oben auf der Seite: sonst öffnete der Knopf das Formular außer Sicht (Handy, gescrollt). */}
+            {connectOpen && (
+              <ProxmoxConnect
+                onClose={() => setConnectOpen(false)}
+                onConnected={() => {
+                  setConnectionsVersion((n) => n + 1);
+                  setConnectedAt(Date.now());
+                  load();
+                }}
+              />
+            )}
+            <ConnectionsPanel bare onConnectWithPassword={canConnect ? () => setConnectOpen(true) : undefined} version={connectionsVersion} />
+          </TabPanel>
+        </>
+      )}
+    </div>
+  );
+}
+
+type TabId = "guests" | "storage" | "updates" | "tasks" | "connections";
+
+const TABS: { id: TabId; label: string }[] = [
+  { id: "guests", label: "VMs & Container" },
+  { id: "storage", label: "Speicher" },
+  { id: "updates", label: "Updates" },
+  { id: "tasks", label: "Aufgabenverlauf" },
+  { id: "connections", label: "Verbindungen" },
+];
+
+function isTab(value: string | null): value is TabId {
+  return TABS.some((t) => t.id === value);
+}
+
+/**
+ * Reiterleiste nach dem üblichen Muster: nur der offene Reiter ist ein Tab-Stopp, die Pfeiltasten (sowie Pos1/Ende)
+ * wechseln. Der offene Reiter wird in den sichtbaren Bereich geholt (am Handy passen nicht alle nebeneinander).
+ */
+function TabBar({ active, onSelect, badges }: {
+  active: TabId;
+  onSelect: (id: TabId) => void;
+  badges: Partial<Record<TabId, { text: string; label: string }>>;
+}): JSX.Element {
+  const refs = useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({});
+  const bar = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    // Nur die Leiste waagerecht schieben, nicht die Seite: die scrollt ein Link gleich zu seinem Ziel.
+    const tab = refs.current[active];
+    if (!tab || !bar.current) return;
+    const t = tab.getBoundingClientRect();
+    const b = bar.current.getBoundingClientRect();
+    if (t.left < b.left || t.right > b.right) bar.current.scrollLeft += t.left - b.left - 16;
+  }, [active]);
+  function onKeyDown(e: KeyboardEvent<HTMLButtonElement>) {
+    const index = TABS.findIndex((t) => t.id === active);
+    const next = e.key === "ArrowRight" ? (index + 1) % TABS.length
+      : e.key === "ArrowLeft" ? (index - 1 + TABS.length) % TABS.length
+        : e.key === "Home" ? 0
+          : e.key === "End" ? TABS.length - 1
+            : -1;
+    if (next < 0) return;
+    e.preventDefault();
+    onSelect(TABS[next].id);
+    refs.current[TABS[next].id]?.focus();
+  }
+  return (
+    <div ref={bar} role="tablist" aria-label="Bereiche" className="mb-4 flex gap-1 overflow-x-auto border-b border-white/[0.08] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {TABS.map((t) => {
+        const badge = badges[t.id];
+        return (
+          <button
+            key={t.id}
+            ref={(el) => { refs.current[t.id] = el; }}
+            type="button"
+            role="tab"
+            id={`pve-tab-${t.id}`}
+            aria-selected={active === t.id}
+            aria-controls={`pve-panel-${t.id}`}
+            tabIndex={active === t.id ? 0 : -1}
+            onClick={() => onSelect(t.id)}
+            onKeyDown={onKeyDown}
+            className={`-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${
+              active === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"
+            }`}
+          >
+            {t.label}
+            {badge && (
+              <span className="ml-1.5 rounded-full bg-amber-500/80 px-1.5 text-[10px] text-black" title={badge.label}>
+                <span aria-hidden="true">{badge.text}</span>
+                <span className="sr-only">{`: ${badge.label}`}</span>
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+/** Reiterinhalt: bleibt eingehängt, wenn ein anderer Reiter offen ist (aufgeklappte Zeilen und Eingaben bleiben). */
+function TabPanel({ id, active, children }: { id: TabId; active: TabId; children: ReactNode }): JSX.Element {
+  return (
+    <div role="tabpanel" id={`pve-panel-${id}`} aria-labelledby={`pve-tab-${id}`} hidden={active !== id} tabIndex={0} className="outline-none">
+      {children}
+    </div>
+  );
+}
+
+/** Pakete, die auf allen Knoten zusammen warten. */
+function updatesCount(nodes: NodeUpdates[]): number {
+  return nodes.reduce((sum, n) => sum + (n.count ?? 0), 0);
+}
+
+const STATUS_TONE: Record<string, string> = { up: "text-emerald-300", down: "opacity-60", maintenance: "text-amber-300" };
+
+const TILE_TONE: Record<string, string> = { good: "text-emerald-300", warn: "text-amber-300", bad: "text-red-300", neutral: "text-white" };
+
+function Tile({ label, value, hint, tone = "neutral", onClick, testId }: {
+  label: string; value: string; hint: string; tone?: "good" | "warn" | "bad" | "neutral"; onClick: () => void; testId: string;
+}): JSX.Element {
+  return (
+    <button type="button" onClick={onClick} data-testid={testId} className="panel px-4 py-3 text-left transition hover:bg-white/[0.04]">
+      <span className="block text-xs text-white/50">{label}</span>
+      <span className={`mt-1 block text-xl font-semibold tabular-nums ${TILE_TONE[tone]}`}>{value}</span>
+      <span className="mt-0.5 block text-[11px] text-white/40">{hint}</span>
+    </button>
+  );
+}
+
+/**
+ * Das Wichtigste auf einen Blick: laufen die Knoten und Gäste, warten Updates, wird ein Speicher voll?
+ * Ein Klick auf eine Kachel öffnet den passenden Reiter.
+ */
+function Summary({ nodes, guests, connections, updates, pools, updatesIncomplete, storageIncomplete, onOpen }: {
+  nodes: HostOut[];
+  /** Verbindungen mit Hosts auf dieser Seite: „aktuell“ nur, wenn jede davon Knoten mit Updates geliefert hat. */
+  connections: string[];
+  guests: HostOut[];
+  /** null: lädt noch; "error": Abfrage gescheitert. */
+  updates: NodeUpdates[] | null | "error";
+  pools: StoragePool[] | null | "error";
+  /** Eine Verbindung oder ein Knoten war nicht erreichbar: dann nie „aktuell“ behaupten. */
+  updatesIncomplete: boolean;
+  storageIncomplete: boolean;
+  onOpen: (tab: TabId) => void;
+}): JSX.Element {
+  const nodesUp = nodes.filter((n) => n.status === "up").length;
+  const guestsUp = guests.filter((g) => g.status === "up").length;
+  const guestsDown = guests.filter((g) => g.status === "down").length;
+
+  let updatesTile: { value: string; hint: string; tone: "good" | "warn" | "bad" | "neutral" };
+  if (updates === "error") updatesTile = { value: "?", hint: "gerade nicht abrufbar", tone: "warn" };
+  else if (updates === null) updatesTile = { value: "…", hint: "wird geladen", tone: "neutral" };
+  else {
+    const count = updatesCount(updates);
+    const reboot = updates.some((u) => u.reboot_pending);
+    const incomplete = updatesIncomplete || updates.some((u) => u.error)
+      || connections.some((c) => !updates.some((u) => u.connection === c));
+    // Die Liste stammt aus dem Prüflauf von Proxmox: ist der gescheitert oder lange her, ist „aktuell“ nicht sicher.
+    const outdated = updates.some((u) => !u.error && (u.last_check_ok === false || u.last_check_stale));
+    if (count > 0) updatesTile = { value: String(count), hint: count === 1 ? "Paket wartet" : "Pakete warten", tone: "warn" };
+    else if (reboot) updatesTile = { value: "Neustart", hint: "Neustart nötig, damit ein Update gilt", tone: "warn" };
+    else if (incomplete) updatesTile = { value: "?", hint: "nicht alle Knoten abrufbar", tone: "warn" };
+    else if (outdated) updatesTile = { value: "?", hint: "Prüfung auf Updates veraltet oder fehlgeschlagen", tone: "warn" };
+    else updatesTile = { value: "aktuell", hint: "alles auf dem neuesten Stand", tone: "good" };
+    if (count > 0 && reboot) updatesTile.hint += " · Neustart nötig";
+    if ((count > 0 || reboot) && incomplete) updatesTile.hint += " · nicht alles abrufbar";
+  }
+
+  let storageTile: { value: string; hint: string; tone: "good" | "warn" | "bad" | "neutral" };
+  if (pools === "error") storageTile = { value: "?", hint: "gerade nicht abrufbar", tone: "warn" };
+  else if (pools === null) storageTile = { value: "…", hint: "wird geladen", tone: "neutral" };
+  else {
+    const fullest = [...pools].filter((p) => p.used_percent != null).sort((a, b) => (b.used_percent ?? 0) - (a.used_percent ?? 0))[0];
+    // Ein Speicher, den Proxmox als nicht aktiv meldet, hat keine Belegung -- er wiegt schwerer als jeder volle.
+    const unavailable = pools.find((p) => p.used_percent == null && p.tone === "danger");
+    storageTile = unavailable
+      ? { value: "!", hint: `${unavailable.storage}${unavailable.shared ? "" : ` (${unavailable.node})`} nicht verfügbar`, tone: "bad" }
+      : fullest
+      ? {
+          value: `${Math.round(fullest.used_percent ?? 0)} %`,
+          hint: `am vollsten: ${fullest.storage}${fullest.shared ? "" : ` (${fullest.node})`}`,
+          tone: fullest.tone === "danger" ? "bad" : fullest.tone === "warn" ? "warn" : "good",
+        }
+      : storageIncomplete
+        ? { value: "?", hint: "gerade nicht abrufbar", tone: "warn" }
+        : { value: "–", hint: "keine Speicher gefunden", tone: "neutral" };
+    if (fullest && !unavailable && storageIncomplete) {
+      storageTile.hint += " · nicht alles abrufbar";
+      if (storageTile.tone === "good") storageTile.tone = "warn";
+    }
+  }
+
+  return (
+    <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="pve-summary">
+      <Tile
+        testId="tile-nodes" label="Knoten" value={`${nodesUp}/${nodes.length}`} hint="online"
+        tone={nodes.length === 0 ? "neutral" : nodesUp < nodes.length ? "bad" : "good"} onClick={() => onOpen("guests")}
+      />
+      <Tile
+        testId="tile-guests" label="VMs & Container" value={`${guestsUp}/${guests.length}`}
+        hint={guestsDown > 0 ? `laufen · ${guestsDown} gestoppt` : "laufen"} onClick={() => onOpen("guests")}
+      />
+      <Tile testId="tile-updates" label="Updates" {...updatesTile} onClick={() => onOpen("updates")} />
+      <Tile testId="tile-storage" label="Speicher" {...storageTile} onClick={() => onOpen("storage")} />
     </div>
   );
 }

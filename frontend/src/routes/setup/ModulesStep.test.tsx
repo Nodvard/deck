@@ -1,6 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { BETA_HINT } from "../../components/BetaBadge";
 import { ModulesStep, forEveryone, groupModules, shortDescription } from "./ModulesStep";
 
 describe("shortDescription", () => {
@@ -65,5 +66,38 @@ describe("Schritt „Was willst du nutzen?“ für Neulinge", () => {
     expect(card.querySelector("[class*='line-clamp']")).toBeNull();
     expect(screen.queryByTestId("module-hello-world")).toBeNull();
     expect(screen.queryByText("Zum Ausprobieren")).toBeNull();
+    expect(screen.queryByText("Für Entwickler")).toBeNull();
+  });
+});
+
+describe("Schritt „Was willst du nutzen?“: Beta-Kennzeichen", () => {
+  const module = (id: string, extra: Record<string, unknown> = {}) => ({
+    id, name: id, state: "disabled", description: "Beschreibung.", icon: null, last_error: null, category: "servers", sort_order: 10, ...extra,
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("kennzeichnet nur Module mit stage beta und erklärt es einmal", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
+      module("system", { stage: "stable" }),
+      module("gameserver", { stage: "beta", sort_order: 60 }),
+      module("network", { stage: "beta", sort_order: 70 }),
+      module("alt"),
+    ]))));
+    render(<ModulesStep onBack={() => {}} onNext={() => {}} />);
+    await screen.findByTestId("module-system");
+    expect(within(screen.getByTestId("module-gameserver")).getByTestId("beta-badge")).toBeInTheDocument();
+    expect(within(screen.getByTestId("module-network")).getByTestId("beta-badge")).toBeInTheDocument();
+    expect(within(screen.getByTestId("module-system")).queryByTestId("beta-badge")).toBeNull();
+    expect(within(screen.getByTestId("module-alt")).queryByTestId("beta-badge")).toBeNull();
+    expect(screen.getAllByTestId("beta-explainer")).toHaveLength(1);
+    expect(screen.getByTestId("beta-explainer")).toHaveTextContent(BETA_HINT);
+  });
+
+  it("ohne Beta-Modul gibt es weder Abzeichen noch Erklärung", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([module("system", { stage: "stable" }), module("alt")]))));
+    render(<ModulesStep onBack={() => {}} onNext={() => {}} />);
+    await screen.findByTestId("module-system");
+    expect(screen.queryByTestId("beta-badge")).toBeNull();
+    expect(screen.queryByTestId("beta-explainer")).toBeNull();
   });
 });

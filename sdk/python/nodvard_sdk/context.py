@@ -27,6 +27,7 @@ from .types import (
     Host,
     Notification,
     NotifyResult,
+    PeerCertificate,
     Risk,
     Severity,
 )
@@ -164,6 +165,12 @@ class ActionsHandle(Protocol):
         optional nur zu einer correlation_id -- z. B. die Laeufe eines Skripts."""
         ...
 
+    async def waiting_count(self) -> int:
+        """Wie viele Aktionen (aller Erweiterungen und des Kerns) gerade auf eine Freigabe warten -- dieselbe Zahl wie
+        die Kachel "wartet auf Freigabe" der Übersicht. Nur die Zahl, nichts über fremde Aktionen (etwa für einen
+        Lagebericht: vergessene Freigaben fallen so auf). Braucht die Berechtigung `hosts.read`."""
+        ...
+
     async def proposer_labels(self, rows: list[Any]) -> dict[str, str]:
         """Lesbare Namen der Vorschlagenden zu Zeilen aus `list()`/`result()`:
         `{action_id: "admin" | "Skripte" | "KI" | ...}` -- statt `user/<uuid>` anzuzeigen.
@@ -207,8 +214,11 @@ class ExecHandle(Protocol):
         ...
 
     def open_shell(
-        self, host: Host, *, cols: int, rows: int
-    ) -> AsyncContextManager[Any]: ...
+        self, host: Host, *, cols: int, rows: int, command: str | None = None
+    ) -> AsyncContextManager[Any]:
+        """Interaktive Sitzung mit PTY. Ohne `command` die Login-Shell des Hosts; mit `command` genau dieses
+        Kommando (z. B. eine Shell in einem Container), geprueft gegen dieselbe Sperrliste wie `run()`."""
+        ...
     def sftp(self, host: Host) -> AsyncContextManager[Any]: ...
 
 
@@ -222,17 +232,29 @@ class SecretHandleRef(Protocol):
 
 
 class SecretsHandle(Protocol):
-    async def get_handle(self, label: str) -> SecretHandleRef: ...
+    async def get_handle(self, label: str) -> SecretHandleRef:
+        """Verweis auf das Geheimnis mit diesem Label (Recht `secrets.read:<label>`). Ein Geheimnis der
+        Zwei-Faktor-Anmeldung eines Kontos bekommt keine Erweiterung (`SecretNotOwned`)."""
+        ...
+
     async def create(
         self, *, label: str, kind: str, value: str, description: str | None = None
     ) -> SecretHandleRef: ...
     async def exists(self, label: str) -> bool: ...
+    async def replace(self, *, label: str, value: str) -> SecretHandleRef:
+        """Ersetzt den Wert eines vorhandenen Geheimnisses in einem Schritt (gleiches Recht wie `create`:
+        `secrets.read:<label>`). Scheitert es, bleibt der alte Wert -- anders als Loeschen und neu Anlegen steht das
+        Geheimnis nie zwischendurch leer da. `SecretUnavailable`, wenn es unter dem Label keines gibt;
+        `SecretNotOwned`, wenn es nicht dieser Erweiterung gehoert (siehe dort) -- dann bleibt es unveraendert.
+        Aeltere Kerne haben die Methode nicht."""
+        ...
+
     async def delete(self, label: str) -> bool:
         """Loescht das Geheimnis mit diesem Label (gleiches Recht wie `get_handle`:
         `secrets.read:<label>`). Liefert `True`, wenn es eines gab, sonst `False`
         (kein Fehler). Gedacht fuer Zugangsdaten, die zu einem Ziel gehoeren, das die
-        Extension gerade entfernt oder umstellt. Aeltere Kerne haben
-        die Methode nicht."""
+        Extension gerade entfernt oder umstellt. Nur eigene Geheimnisse: sonst `SecretNotOwned`,
+        und es bleibt stehen. Aeltere Kerne haben die Methode nicht."""
         ...
 
 
@@ -305,7 +327,9 @@ class NotifyHandle(Protocol):
         Liefert `NotifyResult` (Verlaufs-ID; `suppressed`: ein Wartungsfenster hat den Push
         unterdrückt; `delivered`: `True`, wenn mindestens ein Kanal die Meldung zugestellt hat,
         `False`, wenn keiner es getan hat -- kein Kanal eingerichtet, alle ausgefallen oder
-        unterdrückt -- und `None`, wenn der Kern es nicht weiß). Ältere Kerne und Test-Doubles
+        unterdrückt -- und `None`, wenn der Kern es nicht weiß; `skipped`: `True`, wenn kein Kanal
+        zugestellt hat, mindestens einer sie bewusst übersprungen hat, etwa unter seiner Mindest-Stufe,
+        und keiner ausgefallen ist, `None` bei älteren Kernen). Ältere Kerne und Test-Doubles
         liefern `None` -- wie `suppressed=False` und `delivered=None` (unbekannt) behandeln."""
         ...
 
@@ -364,11 +388,37 @@ class HttpHandle(Protocol):
     Weiterleitungen (3xx) werden nie verfolgt: eine Antwort mit Status 3xx kommt unveraendert zurueck, die
     Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` wirft `ValueError` (die Zielpruefung
     kennt nur die Adresse des Aufrufs, nicht das Ziel einer Weiterleitung), auch mit `insecure_tls` und bei
-    `stream()`; `follow_redirects=False` ist erlaubt."""
+    `stream()`; `follow_redirects=False` ist erlaubt.
 
-    async def get(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...
-    async def post(self, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...
-    async def request(self, method: str, url: str, *, insecure_tls: bool = False, **kwargs: Any) -> Any: ...
+    `pinned_sha256` (ein SHA-256-Fingerabdruck, Schreibweise wie `sha256_fingerprint()` sie annimmt) bindet den
+    Aufruf an GENAU dieses eine Zertifikat: Der Kern vergleicht den Fingerabdruck des Zertifikats, das der Server
+    im TLS-Handshake zeigt, und bricht mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist. Die
+    Pruefung ueber Zertifizierungsstellen und Rechnernamen entfaellt dabei (das gepinnte Zertifikat ersetzt sie),
+    deshalb braucht auch das die Berechtigung `net.outbound.insecure_tls`. Fuer `http://`-Adressen wirft es
+    `ValueError` (dort gibt es kein Zertifikat); zusammen mit `insecure_tls=True` ebenfalls. Woher der
+    Fingerabdruck kommt (z. B. ein Mensch hat ihn mit dem auf dem Server verglichen), entscheidet die
+    Erweiterung -- `peer_certificate()` liefert ihn, ohne etwas zu senden. Aufrufe mit `pinned_sha256` merken sich
+    keine Cookies des Servers (ein Cookie geht nur mit, wenn der Aufruf ihn selbst setzt). Aeltere Kerne kennen den
+    Parameter nicht und lehnen den Aufruf ab (`TypeError`), statt ungeprueft zu senden."""
+
+    async def get(
+        self, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
+    ) -> Any: ...
+    async def post(
+        self, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
+    ) -> Any: ...
+    async def request(
+        self, method: str, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
+    ) -> Any: ...
+
+    async def peer_certificate(self, url: str, *, timeout_s: float = 10.0) -> PeerCertificate:
+        """Holt das Zertifikat, das der Server unter `url` (`https://` oder `wss://`) zeigt -- nur den
+        TLS-Handshake, ohne eine Anfrage, Kopfzeilen oder Zugangsdaten zu senden. Erst mit der ueblichen Pruefung
+        (Zertifizierungsstellen wie bei jedem `ctx.http`-Aufruf, Rechnername); scheitert sie, noch einmal ohne
+        Pruefung, nur um das Zertifikat zu lesen (`trusted=False`). Dieselbe Zielpruefung (`net.outbound`) wie
+        jeder Aufruf, kein Proxy aus der Umgebung. Ist der Server nicht erreichbar oder spricht er kein TLS, wirft
+        es `OSError` bzw. `TimeoutError`; eine andere Adresse als `https://`/`wss://` ist ein `ValueError`."""
+        ...
 
     def websocket(
         self,
@@ -378,6 +428,7 @@ class HttpHandle(Protocol):
         subprotocols: list[str] | None = None,
         insecure_tls: bool = False,
         open_timeout_s: float = 10.0,
+        pinned_sha256: str | None = None,
     ) -> AsyncContextManager["WebSocketConnection"]:
         """Ausgehende WebSocket-Verbindung (`ws://`/`wss://`) -- dieselben
         `net.outbound`-/`insecure_tls`-Pruefungen wie die HTTP-Methoden. Erster Bedarf:
@@ -437,7 +488,8 @@ class ExtensionContext(Protocol):
             async with ctx.vault_use(h) as key:
                 ...
 
-        Jede Materialisierung schreibt eine Audit-Zeile (ohne den Wert).
+        Die Nutzung wird protokolliert (ohne den Wert), je Secret und Modul hoechstens
+        einmal pro Stunde.
         """
         ...
 

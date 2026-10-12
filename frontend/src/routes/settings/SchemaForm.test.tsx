@@ -3,7 +3,7 @@ import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { useAuthStore } from "../../state/auth";
-import { SchemaFields, patternError, validateValues, type JsonSchema } from "./SchemaForm";
+import { SchemaFields, enumError, patternError, rangeError, validateValues, type JsonSchema } from "./SchemaForm";
 
 const HOSTS = [
   { id: "1", name: "bastel-pi", display_name: "Bastel-Pi", tags: ["linux", "auto-update"] },
@@ -222,6 +222,99 @@ describe("pattern", () => {
     fireEvent.change(words, { target: { value: "klein" } });
     fireEvent.keyDown(words, { key: "Enter" });
     expect(seen.at(-1)).toMatchObject({ words: ["klein"] });
+  });
+});
+
+describe("Zahlenfelder mit minimum/maximum", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    properties: {
+      interval: { type: "integer", title: "Prüfabstand (Minuten)", default: 10, minimum: 2, maximum: 59 },
+      ratio: { type: "number", title: "Anteil", minimum: 0.5, maximum: 10 },
+      threshold: { type: "integer", title: "Schwelle", minimum: 3 },
+      free: { type: "number", title: "Frei" },
+      limits: { type: "array", title: "Grenzen", items: { type: "integer", minimum: 1, maximum: 5 } },
+    },
+  };
+
+  it("rangeError: Grenzen eingeschlossen, leer erlaubt, gleiche Sätze wie im Backend", () => {
+    const interval = schema.properties!.interval;
+    expect(rangeError(interval, undefined)).toBeNull();
+    expect(rangeError(interval, 2)).toBeNull();
+    expect(rangeError(interval, 59)).toBeNull();
+    expect(rangeError(interval, 0)).toBe("Erlaubt sind Werte von 2 bis 59.");
+    expect(rangeError(interval, -5)).toBe("Erlaubt sind Werte von 2 bis 59.");
+    expect(rangeError(interval, 60)).toBe("Erlaubt sind Werte von 2 bis 59.");
+    expect(rangeError(interval, 2.5)).toBe("Bitte eine ganze Zahl eintragen.");
+    expect(rangeError(schema.properties!.ratio, 0.25)).toBe("Erlaubt sind Werte von 0,5 bis 10.");
+    expect(rangeError(schema.properties!.threshold, 2)).toBe("Erlaubt sind Werte ab 3.");
+    expect(rangeError({ type: "integer", maximum: 5 }, 6)).toBe("Erlaubt sind Werte bis 5.");
+    expect(rangeError(schema.properties!.free, -1e9)).toBeNull();
+    expect(rangeError(schema.properties!.free, Number.POSITIVE_INFINITY)).toBe("Bitte eine Zahl eintragen.");
+    expect(rangeError({ type: "string", minimum: 3 }, 1)).toBeNull();
+  });
+
+  it("validateValues: findet Zahlen außerhalb der Grenzen, auch in Listen", () => {
+    expect(validateValues(schema, { interval: 10, ratio: 0.5, threshold: 3, limits: [1, 5] })).toEqual([]);
+    expect(validateValues(schema, { interval: 0, threshold: 1, limits: [6] })).toEqual([
+      "Prüfabstand (Minuten): Erlaubt sind Werte von 2 bis 59.",
+      "Schwelle: Erlaubt sind Werte ab 3.",
+      "Grenzen: „6“ – Erlaubt sind Werte von 1 bis 5.",
+    ]);
+  });
+
+  it("begrenzt das Feld und zeigt die Meldung direkt daran", () => {
+    render(<Harness schema={schema} onValues={() => undefined} />);
+    const input = screen.getByLabelText(/^Prüfabstand/);
+    expect(input).toHaveAttribute("min", "2");
+    expect(input).toHaveAttribute("max", "59");
+    expect(screen.getByLabelText(/^Frei/)).not.toHaveAttribute("min");
+    fireEvent.change(input, { target: { value: "-5" } });
+    expect(screen.getByText("Erlaubt sind Werte von 2 bis 59.")).toBeInTheDocument();
+    expect(input).toHaveAttribute("aria-invalid", "true");
+    fireEvent.change(input, { target: { value: "15" } });
+    expect(screen.queryByText("Erlaubt sind Werte von 2 bis 59.")).toBeNull();
+    expect(input).not.toHaveAttribute("aria-invalid");
+  });
+});
+
+describe("Auswahl aus Zahlen (enum)", () => {
+  const schema: JsonSchema = {
+    type: "object",
+    properties: {
+      step: {
+        type: "integer", title: "Prüfabstand (Minuten)", default: 10, minimum: 5, maximum: 30, enum: [5, 10, 30],
+        "x-enum-labels": { "5": "alle 5 Minuten", "10": "alle 10 Minuten", "30": "alle 30 Minuten" },
+      },
+    },
+  };
+
+  it("speichert eine Zahl, keinen Text", () => {
+    const seen: Record<string, unknown>[] = [];
+    render(<Harness schema={schema} onValues={(v) => seen.push(v)} />);
+    fireEvent.change(screen.getByLabelText(/^Prüfabstand/), { target: { value: "30" } });
+    expect(seen.at(-1)).toEqual({ step: 30 });
+  });
+
+  it("zeigt einen alten Wert, den es nicht mehr gibt, und sperrt das Speichern", () => {
+    render(<Harness schema={schema} initial={{ step: 7 }} />);
+    const select = screen.getByLabelText(/^Prüfabstand/);
+    expect(select).toHaveValue("7");
+    expect(within(select).getByRole("option", { name: "7 (nicht mehr wählbar)" })).toBeInTheDocument();
+    expect(screen.getByText("Diesen Wert gibt es nicht mehr, bitte einen der angebotenen wählen.")).toBeInTheDocument();
+    expect(validateValues(schema, { step: 7 })).toEqual([
+      "Prüfabstand (Minuten): Diesen Wert gibt es nicht mehr, bitte einen der angebotenen wählen.",
+    ]);
+    fireEvent.change(select, { target: { value: "10" } });
+    expect(screen.queryByText(/nicht mehr wählbar/)).toBeNull();
+  });
+
+  it("enumError: leer und angebotene Werte sind in Ordnung", () => {
+    const step = schema.properties!.step;
+    expect(enumError(step, undefined)).toBeNull();
+    expect(enumError(step, 10)).toBeNull();
+    expect(enumError(step, "10")).not.toBeNull();
+    expect(enumError({ type: "string", enum: ["a"] }, "a")).toBeNull();
   });
 });
 

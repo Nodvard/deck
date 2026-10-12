@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response
+from nodvard_sdk.manifest import KNOWN_STAGES
 from pydantic import BaseModel
 from sqlalchemy import select
 
@@ -102,6 +103,10 @@ class ExtensionOut(BaseModel):
     category: str | None = None
     """Gruppe in der Modul-Auswahl (aus dem Manifest, siehe `ExtensionManifest.category`)."""
     sort_order: int = 100
+    stage: str = "stable"
+    """Reifegrad aus dem Manifest (`ExtensionManifest.stage`): `stable` oder `beta`. Bei `beta` zeigt die Oberflaeche
+    ein Abzeichen „Beta“: funktioniert, ist aber noch nicht so gruendlich erprobt wie der Rest. Fehlt das Feld im
+    Manifest (aeltere Erweiterungen), steht hier `stable`."""
     has_settings: bool = False
     needs_setup: bool = False
     """Nur bei eingeschalteten Erweiterungen: Pflichtfelder oder Pflicht-Zugangsdaten fehlen,
@@ -143,6 +148,7 @@ class ExtensionOut(BaseModel):
             last_error=record.last_error,
             category=manifest.get("category") or None,
             sort_order=manifest.get("sort_order") if isinstance(manifest.get("sort_order"), int) else 100,
+            stage=manifest["stage"] if manifest.get("stage") in KNOWN_STAGES else "stable",
             has_settings=_has_settings(ext_id),
             bundled=record.source == "bundled",
             display_version=__version__ if record.source == "bundled" else record.version,

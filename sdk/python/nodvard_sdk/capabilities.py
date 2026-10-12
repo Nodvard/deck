@@ -17,12 +17,16 @@ from collections.abc import AsyncIterator
 from pathlib import PurePosixPath
 from typing import Any, Protocol, runtime_checkable
 
+from pydantic import SecretStr
+
 from .actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from .types import (
+    AppSuggestion,
     ConnectorHealth,
     DiscoveredHost,
     ExecResult,
     FileEntry,
+    FilePlace,
     FileSourceCaps,
     Host,
     HostStatus,
@@ -101,6 +105,19 @@ class TerminalTarget(Protocol):
 
 
 @runtime_checkable
+class ScopedTerminalTarget(Protocol):
+    """Eine Shell IN etwas auf einem Host statt auf dem Host selbst, etwa in einem Container. `scope` sagt, worin
+    (z. B. `"container"`), `ref` welches (z. B. der Name); was als `ref` gilt, prueft der Anbieter selbst, bevor er
+    es irgendwo einsetzt. Der Kern oeffnet die Sitzung wie ein normales Terminal (`POST /terminal/sessions` mit
+    `scope` und `ref`, gleiche Berechtigung, gleiches Protokoll) und kennt die Art nicht."""
+
+    scope: str
+
+    async def can_open_in(self, host: Host, ref: str) -> bool: ...
+    async def open_in(self, host: Host, ref: str, *, cols: int, rows: int) -> TerminalSession: ...
+
+
+@runtime_checkable
 class ConsoleSession(Protocol):
     """Ein offener Byte-Kanal zum BILDSCHIRM eines Hosts (VM-/Container-Konsole) --
     anders als `TerminalSession` keine Zeichen-Shell, sondern ein Grafikprotokoll.
@@ -158,6 +175,10 @@ class FileSource(Protocol):
     bei gleicher oder unbekannter Kennung müssen außer `path` auch alle fünf Werte übereinstimmen
     (geklonte Rechner teilen oft dieselbe Kennung).
     Bewusst KEIN Pflichtmitglied; der Kern liest es mit `getattr(source, "file_identity", None)`.
+
+    Optional: `host_id: str | None`. Steht die Quelle für einen Server (etwa SFTP auf einen Host), nennt sie
+    hier seine Kennung; der Dateimanager zeigt dann Status und Betriebssystem des Servers neben der Quelle.
+    Bewusst KEIN Pflichtmitglied; der Kern liest es mit `getattr(source, "host_id", None)`.
     Ebenso gilt für `open_write`: eine Quelle sollte das Ziel erst ersetzen, wenn alles
     angekommen ist, nie vorab abschneiden.
     """
@@ -200,6 +221,31 @@ class FileSourceProvider(Protocol):
     auf, statt sich auf eine bei `setup()` eingefrorene Liste zu verlassen."""
 
     async def file_sources(self) -> list["FileSource"]: ...
+
+
+@runtime_checkable
+class FilePlaceProvider(Protocol):
+    """Nennt wichtige Orte eines Servers, die der Dateimanager als Abkürzungen zeigt („Wichtige Orte“).
+
+    `places_for_host(host_id)` liefert die Orte für genau diesen Server (Kennung wie `Host.id`) oder eine leere
+    Liste, wenn die Erweiterung dort nichts weiß. Nur Wissen, das die Erweiterung schon hat: keine eigenen
+    Befehle auf dem Server, nur um Orte zu raten. Der Kern fragt alle Anbieter gleichzeitig, gibt jedem eine
+    Zeitgrenze, lässt Fehler eines Anbieters nur dessen Orte kosten, entdoppelt nach Pfad und begrenzt die Zahl
+    (`GET /files/places`, docs/04-API.md). Der Kern zeigt Orte nur Nutzern, die zu diesem Server auch eine
+    Dateiquelle öffnen dürfen."""
+
+    async def places_for_host(self, host_id: str) -> list["FilePlace"]: ...
+
+
+@runtime_checkable
+class AppSuggestionProvider(Protocol):
+    """Schlaegt App-Kacheln vor: Adressen, die die Erweiterung schon kennt (z. B. die Proxy-Hosts eines Reverse
+    Proxys). Nur vorhandenes Wissen, keine Suche im Netz. Der Kern fragt alle Anbieter gleichzeitig mit einer
+    Zeitgrenze, laesst Fehler eines Anbieters nur dessen Vorschlaege kosten, prueft jede Adresse wie bei einer von Hand
+    angelegten App, laesst schon angelegte weg, entdoppelt und begrenzt die Zahl (`GET /apps/suggestions`,
+    docs/04-API.md). Ein Vorschlag wird erst zur App, wenn ein Nutzer mit `apps.write` ihn speichert."""
+
+    async def app_suggestions(self) -> list["AppSuggestion"]: ...
 
 
 @runtime_checkable
@@ -274,20 +320,74 @@ class CommandRunner(Protocol):
     ) -> ExecResult: ...
 
 
+@runtime_checkable
+class ConnectionReceiver(Protocol):
+    """Uebernimmt eine fertige Verbindung (Adresse und API-Token), die eine ANDERE Erweiterung fuer sie angelegt hat --
+    etwa wenn beim Verbinden eines Servers mit Passwort gleich ein eigener Zugang fuer ein zweites Modul entsteht.
+
+    Erweiterungen importieren einander nicht, und Geheimnisse gehen nie ueber den Ereignis-Bus. Der Anbieter (wer den
+    Zugang anlegt) findet Empfaenger ueber `ctx.capabilities.query(ConnectionReceiver)`, also nur bei Erweiterungen,
+    die er in `requires` nennt; ist der Empfaenger ausgeschaltet, ist die Liste leer, und der Anbieter laesst diesen
+    Teil weg. `requires` macht den Empfaenger nicht zur Pflicht. Das Geheimnis geht als Argument in genau einen Aufruf:
+    Der Empfaenger legt es in seinen eigenen Tresor-Eintrag (`ctx.secrets`, wie sein Einstellungsformular) und gibt es
+    nie zurueck, nie in eine Meldung und nie weiter.
+
+    Der Empfaenger prueft nicht, wer ihn aufruft. Der Anbieter sichert seinen eigenen Weg dorthin ab (etwa eine Route
+    nur fuer Admins mit Protokoll-Eintrag) und fragt nur Empfaenger der Art ab, die er kennt (`connection_kind`)."""
+
+    connection_kind: str
+    """Welche Art Verbindung angenommen wird, zwischen Anbieter und Empfaenger vereinbart (z. B. `"proxmox"`)."""
+
+    async def connection_conflict(self, *, name: str, base_url: str) -> str | None:
+        """`None`, wenn eine Verbindung `name` zu `base_url` angenommen werden kann; sonst ein deutscher Satz, warum
+        nicht (etwa: der Name gehoert schon zu einem anderen Server). Aendert nichts -- der Anbieter fragt, bevor er
+        beim Server etwas anlegt."""
+        ...
+
+    async def receive_connection(
+        self, *, name: str, base_url: str, token_id: str, token_secret: SecretStr, tls_insecure_skip_verify: bool,
+        pinned_sha256: str | None = None,
+    ) -> dict[str, Any]:
+        """Traegt die Verbindung ein. Gibt es zu dieser Adresse schon eine, bekommt sie den neuen Token (ihr Geheimnis
+        wird in einem Schritt ersetzt, ihr Name bleibt), sonst entsteht eine neue unter `name`. Rueckgabe:
+        `{"name": <Name der Verbindung>, "replaced_token_id": <bisherige Token-ID oder None>}`, dazu wahlweise
+        `tls_insecure_skip_verify`, `tls_fingerprint_sha256` und `enabled`: was danach tatsaechlich gilt. Ein Empfaenger
+        schwaecht eine vorhandene Verbindung nie still ab (prueft sie das Zertifikat oder hat sie einen gemerkten
+        Fingerabdruck, bleibt das so; ist sie aus, bleibt sie aus) und nimmt nur, was auch von Hand eingetragen werden
+        koennte; sonst lehnt er ab.
+
+        `pinned_sha256` (wahlweise, wie bei `ctx.http`): der Fingerabdruck des Zertifikats, den die Person beim Anbieter
+        ausdruecklich bestaetigt hat. Der Empfaenger merkt ihn sich (die Verbindung spricht dann nur mit genau diesem
+        Zertifikat) und ersetzt dabei einen alten; "Selbstsigniertes Zertifikat erlauben" gilt dann nicht. Ein
+        Anbieter, der ihn nicht kennt, laesst ihn weg. Scheitert etwas, bleibt der alte Stand, und es
+        kommt eine Ausnahme -- deren Text gibt der Anbieter nicht an Nutzer weiter (`SecretNotOwned`: unter dem Namen
+        liegt ein Geheimnis, das nicht dem Empfaenger gehoert; es bleibt unveraendert)."""
+        ...
+
+    async def received_token_ids(self) -> list[str]:
+        """Die Token-IDs aller eingetragenen Verbindungen (nie ein Geheimnis): woran der Anbieter erkennt, welche der
+        Tokens, die er beim Server angelegt hat, noch benutzt werden."""
+        ...
+
+
 ALL_CAPABILITIES: tuple[type, ...] = (
     HostProvider,
     MetricsProvider,
     ActionExecutor,
     TerminalTarget,
+    ScopedTerminalTarget,
     ConsoleTarget,
     FileSource,
     FileSourceProvider,
+    FilePlaceProvider,
+    AppSuggestionProvider,
     AIProvider,
     NotificationChannel,
     ServiceCatalog,
     BackupProvider,
     SearchProvider,
     CommandRunner,
+    ConnectionReceiver,
 )
 """Der Kern iteriert hierueber, um zu erkennen, welche Capability eine Registrierung
 erfuellt. Neue Protokolle muessen hier eingetragen werden, sonst sieht der Loader sie nicht."""

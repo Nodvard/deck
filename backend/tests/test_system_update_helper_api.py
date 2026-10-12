@@ -398,7 +398,11 @@ async def test_the_lock_by_the_account_limit_names_that_limit(client, db_session
     from nodvard_deck.core import login_limit
 
     owner = await _owner(client)
-    secret = await _enable_totp(client, owner)
+    setup = (await client.post("/api/v1/me/totp/setup", json={"current_password": OWNER_PW}, headers=owner)).json()
+    secret = setup["secret"]
+    confirmed = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=owner)
+    assert confirmed.status_code == 200, confirmed.text
+    recovery_code = confirmed.json()["recovery_codes"][0]
     for i in range(login_limit.MAX_MFA_FAILURES_PER_ACCOUNT):
         await client.post("/api/v1/system/updates/apply", json=apply_body(totp_code=f"{i:06d}"), headers=owner)
     (locked,) = await _audit(db_session, "auth.password_check_locked")
@@ -408,21 +412,27 @@ async def test_the_lock_by_the_account_limit_names_that_limit(client, db_session
     assert locked.detail["day_window_seconds"] == login_limit.ACCOUNT_DAY_SECONDS
     assert "Zwei-Faktor-Codes für dieses Konto" in locked.reason
     assert f"{login_limit.MAX_FAILURES_PER_USER} Fehlversuche in" not in locked.reason, "nicht die Grenze der Passwörter"
-    # Die Meldung dazu verspricht keinen Ausweg, den es bei der Bestaetigung nicht gibt: Wiederherstellungs-Codes
-    # helfen nur bei der Anmeldung. Gesperrt sind nur Bestaetigungen mit Code, das Passwort laesst sich gleich aendern.
+    # Die Meldung dazu verspricht keinen Ausweg, den es nicht gibt: Beim Update helfen Wiederherstellungs-Codes nicht
+    # (nur bei Anmeldung und Passwort), und der Code aus der App ist gesperrt -- auch beim Passwort aendern.
     from nodvard_deck.models import Notification
 
     db_session.expire_all()
     (note,) = (await db_session.execute(select(Notification))).scalars().all()
     assert note.title == "Zwei-Faktor-Code wird durchprobiert"
-    assert "ändere gleich dein Passwort, das geht auch während der Sperre" in note.body
-    assert "Anmelden kannst du dich in der Zeit mit einem Wiederherstellungs-Code" in note.body
-    assert "Bestätigungen mit Zwei-Faktor-Code" in note.body and "Sperre vorbei" in note.body
-    # Und so ist es auch: der richtige Code hilft bei der Bestaetigung nicht, das Passwort aendern geht.
-    r = await client.post("/api/v1/system/updates/apply", json=apply_body(totp_code=pyotp.TOTP(secret).now()), headers=owner)
+    assert "ändere gleich dein Passwort. Dafür und fürs Anmelden brauchst du in der Zeit einen Wiederherstellungs-Code" in note.body
+    assert "während der Sperre" not in note.body
+    assert "Bestätigungen mit dem Code aus der App" in note.body and "Sperre vorbei" in note.body
+    # Und so ist es auch: der richtige Code aus der App hilft bei der Bestaetigung nicht, auch nicht beim Passwort
+    # aendern (ohne Code gibt es dort 403) -- mit einem Wiederherstellungs-Code geht das Passwort aendern.
+    code = pyotp.TOTP(secret).now()
+    r = await client.post("/api/v1/system/updates/apply", json=apply_body(totp_code=code), headers=owner)
     assert r.status_code == 429
-    r = await client.post("/api/v1/me/password", json={"current_password": OWNER_PW, "new_password": "ein-neues-langes-passwort"},
-                          headers=owner)
+    new_password = {"current_password": OWNER_PW, "new_password": "ein-neues-langes-passwort"}
+    r = await client.post("/api/v1/me/password", json=new_password | {"totp_code": code}, headers=owner)
+    assert r.status_code == 429
+    r = await client.post("/api/v1/me/password", json=new_password, headers=owner)
+    assert r.status_code == 403 and r.json()["code"] == "totp_missing"
+    r = await client.post("/api/v1/me/password", json=new_password | {"totp_code": recovery_code}, headers=owner)
     assert r.status_code == 204, r.text
 
 

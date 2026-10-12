@@ -220,6 +220,9 @@ Lookup-Pfade zu brauchen."""
 JOB_RUNS_RETENTION_KEY = "job-runs-retention"
 """`ext_job_key` des nächtlichen Kern-Jobs, der alte Job-Läufe und ihre Protokolldateien aufräumt."""
 
+NOTIFICATIONS_RETENTION_KEY = "notifications-retention"
+"""`ext_job_key` des nächtlichen Kern-Jobs, der alte Meldungen samt Zustellprotokollen löscht."""
+
 _service: SchedulerService | None = None
 
 
@@ -279,6 +282,22 @@ async def register_core_jobs(runs_dir: Path) -> None:
         )
     get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, JOB_RUNS_RETENTION_KEY, _purge_job_runs)
     await service.schedule(runs_job, _purge_job_runs)
+
+    # Alte Meldungen samt Zustellprotokollen loeschen (`services.notification_retention`): Aufbewahrung aus
+    # `notifications.retention_days` (Vorgabe 90 Tage), nur ungelesene kritische bleiben. Eigene Minute (03:30), damit die
+    # Aufraeum-Jobs (Protokoll 03:00, Job-Laeufe 03:20, alte Staende 03:40) nicht gleichzeitig auf die Schreibsperre warten.
+    from ..services import notification_retention as notification_retention_service
+
+    async def _purge_notifications(**_: Any) -> dict[str, int]:
+        return await notification_retention_service.run_purge()
+
+    async with session_scope() as session:
+        notifications_job = await jobs_service.upsert_job(
+            session, ext_id=None, ext_job_key=NOTIFICATIONS_RETENTION_KEY, name="Alte Meldungen aufräumen",
+            kind="core", schedule="30 3 * * *", params={}, enabled=True,
+        )
+    get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, NOTIFICATIONS_RETENTION_KEY, _purge_notifications)
+    await service.schedule(notifications_job, _purge_notifications)
 
     from . import gate as gate_service
 

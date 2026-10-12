@@ -15,6 +15,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { ButtonLink, EmptyState } from "../components/EmptyState";
 import { Icon } from "../components/Icon";
+import { LoadError } from "../components/LoadError";
 import {
   type ActionOutcome,
   type ActionOutcomeSource,
@@ -34,6 +35,7 @@ import {
 } from "../lib/actions";
 import { api, ApiError } from "../lib/api";
 import { useExtensions } from "../lib/firstSteps";
+import { hostProvider } from "../lib/hostProvider";
 import { useUnmountSignal } from "../lib/lifecycle";
 import {
   formatBytes,
@@ -53,6 +55,7 @@ import { confirmDialog } from "../state/dialogs";
 import { AppTile, Ring } from "./Cockpit";
 import { AccessCard } from "./settings/hosts/AccessCard";
 import { DeleteHostButton } from "./settings/hosts/deleteHost";
+import { HostFilesButton, HostFilesNote, useHostFiles } from "./hostFiles";
 import { HostHistory } from "./HostHistory";
 
 interface ToolOut {
@@ -238,7 +241,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
   );
 }
 
-/** Wer misst die Auslastung? Bei Proxmox-Gästen Proxmox selbst, sonst das Modul „System“ per SSH. Fehlt
+/** Wer misst die Auslastung? Bei Proxmox-Gästen Proxmox selbst, sonst das Modul „Server-Zustand“ per SSH. Fehlt
  * beides (404), erklärt dieser Hinweis, was zu tun ist, statt den Abschnitt wortlos wegzulassen. */
 function MetricsHint({ host, canWriteHosts, canManageExtensions }: { host: HostOut; canWriteHosts: boolean; canManageExtensions: boolean }) {
   if (host.os_family !== "linux") return null; // Windows: dafür gibt es (noch) keine Messung, kein Hinweis nötig
@@ -249,7 +252,7 @@ function MetricsHint({ host, canWriteHosts, canManageExtensions }: { host: HostO
       <p className="mt-1 text-xs text-white/55">
         {noAccess
           ? "CPU, Arbeitsspeicher und Platte misst Nodvard Deck per SSH. Dafür braucht der Server einen SSH-Zugang."
-          : "CPU, Arbeitsspeicher und Platte misst das Modul „System“ per SSH. Schalte es unter Einstellungen → Erweiterungen ein, dann erscheinen hier Auslastung und Verlauf."}
+          : "CPU, Arbeitsspeicher und Platte misst das Modul „Server-Zustand“ per SSH. Schalte es unter Einstellungen → Erweiterungen ein, dann erscheinen hier Auslastung und Verlauf."}
       </p>
       {((noAccess && canWriteHosts) || (!noAccess && canManageExtensions)) && (
         <div className="mt-2">
@@ -263,12 +266,14 @@ function MetricsHint({ host, canWriteHosts, canManageExtensions }: { host: HostO
 }
 
 function Metrics({ host, canWriteHosts, canManageExtensions }: { host: HostOut; canWriteHosts: boolean; canManageExtensions: boolean }) {
-  const { data, isError, error } = useHostMetrics(host.id);
+  const { data, isError, error, refetch } = useHostMetrics(host.id);
   const v = data?.values ?? {};
   if (isError) {
-    return error instanceof ApiError && error.status === 404
-      ? <MetricsHint host={host} canWriteHosts={canWriteHosts} canManageExtensions={canManageExtensions} />
-      : null;
+    if (error instanceof ApiError && error.status === 404) {
+      return <MetricsHint host={host} canWriteHosts={canWriteHosts} canManageExtensions={canManageExtensions} />;
+    }
+    // Ein anderer Fehler ist keine Auskunft "keine Messung": den Grund nennen (mit letzten Werten, falls es welche gibt).
+    if (!data) return <div className="panel p-4"><LoadError compact what="Die Auslastung" error={error} onRetry={() => void refetch()} /></div>;
   }
   if (!data && !isNode(host) && host.kind !== "vm" && host.kind !== "lxc") return null;
   const memPct = v.mem_total_bytes ? (100 * (v.mem_used_bytes ?? 0)) / v.mem_total_bytes : null;
@@ -367,6 +372,7 @@ function HostView({ hostId }: { hostId: string }) {
   const canWriteHosts = useAuthStore((s) => s.hasPermission("hosts.write"));
   const canManageExtensions = useAuthStore((s) => s.hasPermission("extensions.manage"));
   const { data: terminalHosts } = useTerminalHosts(canExecute);
+  const files = useHostFiles(hostId);
   const { data: overview } = useOverview();
   const { data: extensions } = useExtensions();
   const notifications = useQuery({
@@ -395,13 +401,20 @@ function HostView({ hostId }: { hostId: string }) {
   };
 
   if (host.isLoading) return <p className="p-6 text-sm opacity-60">Lade Server …</p>;
-  if (host.error || !host.data) return <p className="p-6 text-sm text-red-400">Server nicht gefunden.</p>;
+  if (!host.data) {
+    // Nur 404 heisst "nicht gefunden". Ein anderer Fehler (Server kurz weg, Datenbank gesperrt) ist keine Auskunft
+    // darueber, ob es den Server gibt. Scheitert nur ein Neuladen, bleibt die Seite mit dem letzten Stand stehen.
+    if (host.error && !(host.error instanceof ApiError && host.error.status === 404)) {
+      return <div className="p-4 sm:p-6"><LoadError what="Der Server" error={host.error} onRetry={() => void host.refetch()} /></div>;
+    }
+    return <p className="p-6 text-sm text-red-400">Server nicht gefunden.</p>;
+  }
 
   const h = host.data;
   const health = hostHealth(h.status);
   // Von einem Modul eingelesen (z. B. Proxmox) und das Modul ist inzwischen aus: der Zustand wird nicht mehr nachgeführt.
-  const providerExt = h.provider_ext_id ? extensions?.find((e) => e.id === h.provider_ext_id) : undefined;
-  const providerOff = providerExt !== undefined && providerExt.state !== "enabled";
+  const provider = hostProvider(h, extensions);
+  const providerOff = Boolean(provider?.problem);
   const canTerminal = (terminalHosts ?? []).includes(h.id);
   const services = (overview?.services ?? []).filter((s) => s.host_id === h.id);
   const hostNotes = (notifications.data ?? []).filter((n) => n.payload?.host_id === h.id).slice(0, 8);
@@ -474,6 +487,7 @@ function HostView({ hostId }: { hostId: string }) {
                 <SquareTerminal size={14} /> Terminal
               </Link>
             )}
+            <HostFilesButton files={files} hostId={h.id} />
             {canWriteHosts && (
               <>
                 <Link to={`/settings/hosts/${h.id}`} className="flex items-center gap-1.5 rounded-lg bg-white/10 px-3 py-1.5 text-xs font-medium hover:bg-white/15">
@@ -501,6 +515,11 @@ function HostView({ hostId }: { hostId: string }) {
             </div>
           </details>
         )}
+        {actions.isError && !actions.data && (
+          <div className="mt-4 border-t border-white/[0.06] pt-4">
+            <LoadError compact what="Die Liste der Aktionen" error={actions.error} onRetry={() => void actions.refetch()} />
+          </div>
+        )}
         {messages.length > 0 && (
           <div className="mt-3 space-y-1">
             {messages.map((m) => <p key={m.run} className={`text-sm ${MESSAGE_CLASS[m.outcome.tone]}`} role="status">{m.outcome.text}</p>)}
@@ -508,11 +527,20 @@ function HostView({ hostId }: { hostId: string }) {
         )}
       </div>
 
+      <HostFilesNote
+        files={files}
+        host={h}
+        canExecute={canExecute}
+        canWriteHosts={canWriteHosts}
+        canManageExtensions={canManageExtensions}
+        extensions={extensions}
+      />
+
       {deleteMessage && <p role="alert" className="mt-3 text-sm text-red-300">{deleteMessage.text}</p>}
 
       {providerOff && (
         <p role="status" data-testid="host-provider-off" className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/[0.07] px-4 py-3 text-sm text-amber-100/90">
-          Dieser Server wurde vom Modul „{providerExt?.name ?? h.provider_ext_id}“ eingelesen, und das läuft gerade nicht (ausgeschaltet oder gestört). Sein Zustand und seine
+          Dieser Server wurde vom Modul „{provider?.name}“ eingelesen, und das läuft gerade nicht (ausgeschaltet oder gestört). Sein Zustand und seine
           Aktionen werden nicht mehr nachgeführt{canWriteHosts ? "; wenn du ihn nicht mehr brauchst, kannst du ihn oben löschen" : ""}.
         </p>
       )}
@@ -526,7 +554,12 @@ function HostView({ hostId }: { hostId: string }) {
       <HostHistory hostId={h.id} host={h} canCheck={canWriteHosts} />
 
       <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Werkzeuge &amp; Einstellungen</h2>
-      {grouped.length === 0 && (
+      {tools.isError && !tools.data && (
+        <div className="mb-4">
+          <LoadError what="Die Liste der Werkzeuge" error={tools.error} onRetry={() => void tools.refetch()} />
+        </div>
+      )}
+      {grouped.length === 0 && !(tools.isError && !tools.data) && (
         <EmptyState
           icon="boxes"
           testId="host-no-tools"

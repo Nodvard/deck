@@ -48,6 +48,7 @@ requires    = ["terminal>=0.1"]           # other extensions, optional
 enable_on   = ["host_credential"]         # optional: see below
 category    = "servers"                   # optional: group in the module selection of the setup wizard
 sort_order  = 10                          # optional: order within the group (default 100)
+stage       = "beta"                      # optional: maturity, "stable" (default) or "beta"
 
 # What the extension asks of the core. The admin confirms this at installation.
 # The core enforces it on EVERY ctx call.
@@ -88,6 +89,12 @@ else, and a missing value, ends up under "More modules" („Weitere Module“)) 
 by `sort_order` (smaller = further up; on a tie, by name). The values are also in `GET /extensions`. Modules with
 `example` (examples for developers such as hello-world) are not shown in the wizard; they only appear under
 Settings → Extensions („Einstellungen → Erweiterungen“).
+
+**`stage` (optional):** Maturity of the extension, `stable` (default when the field is missing) or `beta`. For `beta`
+the interface shows a quiet "Beta" badge (Settings → Extensions, the wizard, the menu and above the extension's page)
+with a note that the module works but is not yet as thoroughly tested as the rest. The extension itself does not
+have to do anything. An unknown value (a typo or a maturity level only a newer core knows) counts as `beta`; the extension still
+loads.
 
 **`enable_on` (optional):** Occasions on which the core switches the extension on by itself, so that
 beginners do not first have to look for it in the settings. Known is `host_credential` (a server has
@@ -209,8 +216,12 @@ and `pattern`. In addition, these additions (all optional; unknown ones are igno
 | `x-widget: "remote-select"` | text | Selection list that the extension supplies itself (e.g. the models of an AI server). Needs `x-options-url`. If the query fails or the list is empty, a text field and the reason appear. |
 | `x-options-url` | `remote-select` | Path under `/api/v1`, e.g. `/ext/shield/ai/models?which=primary`. The interface sends no form values along; the extension only asks for what is stored (no address parameter – otherwise the route would be a way to send requests to arbitrary addresses, including the key). After entering a new address: save, then "Reload" („Neu laden“). Response: `{"options": [{"value": "…", "label": "…"}], "error": null}`; on problems `options: []` and `error` as a German sentence (no error status). |
 | `x-empty-label` | selection | Text for "nothing selected" (default "– nicht gesetzt –", i.e. "– not set –"), e.g. "alle Server" ("all servers"). |
+| `x-generate` | text | Button next to the field (caption `label`, default "Zufällig wählen", i.e. "Choose randomly") that inserts `prefix` plus `length` random characters from `a-z0-9`: `{"label": "Zufällig wählen", "prefix": "nodvard-", "length": 20}`. The randomness comes from the browser's `crypto.getRandomValues`. The result must satisfy the field's `pattern` (and fit in `maxLength`), otherwise the interface inserts nothing; a test checks this for the bundled extensions. |
+| `x-qr-url` | top level | Path under `/api/v1`, e.g. `/ext/ntfy/subscribe-link`: a card with a QR code and the link as text appears below the form. Response: `{"url": "…", "text": "…", "error": null}` (`url` goes into the code, `text` says what to do with it); if no link can be computed, `url` is empty and `error` is a German sentence (no error status). As with `x-options-url`, no form values are sent: the extension computes from the saved settings, and the interface reloads after every save. The link must not contain a secret. |
 | `pattern` | text, words of a list | Regular expression (as in JSON Schema, not anchored). The interface shows the message at the field and disables "Save"; the backend checks the same (`422`). Empty values are always allowed. |
 | `x-pattern-message` | next to `pattern` | German message when the pattern does not match (default: "Das Format stimmt nicht.", i.e. "The format is not correct."). |
+| `minimum`, `maximum` | number (`integer`, `number`) | Smallest and largest allowed value, both inclusive. The UI limits the field and shows "Erlaubt sind Werte von 2 bis 59." ("Allowed are values from 2 to 59.") next to it; `PUT /extensions/{id}/settings` checks the same (`422`). The backend always rejects `NaN` and infinity. Empty stays allowed (then `default` applies). A value stored before the bound existed stays as it is: the extension should clamp it itself when reading. |
+| `enum` with numbers | number (`integer`, `number`) | A selection list that stores a **number**, not text; `x-enum-labels` names the values readably (`{"10": "alle 10 Minuten"}`, "every 10 minutes"). A stored value the list no longer offers stays visible ("7 (nicht mehr wählbar)", i.e. "7 (no longer selectable)"); the field reports it and disables "Save". The backend rejects such a value with `422` and names the field's **title** instead of its path. For intervals in minutes that run as a schedule `*/N`, offer only divisors of 60 (e.g. 5, 6, 10, 12, 15, 20, 30): `*/7` would run at :49, at :56 and again at :00. A value stored earlier runs with the next smaller divisor (7 → 6, 25 → 20); the extension does this itself when reading (Nodvard Shield `steps.minute_step`, System `warn_interval_min`). |
 | `x-test-message` | top level | `true` if the extension provides a `NotificationChannel`: the connection card shows "Send test message" („Testnachricht senden“). |
 | `x-secrets` | top level | List of the secrets (vault labels): `{"label": "proxmox-token:{name}", "title": "…", "description": "…", "per_item": "connections", "optional": true}`. `per_item` creates one secret per entry of the named list (via its `name`); if an entry disappears or is renamed when saving via `PUT /extensions/{id}/settings`, the core deletes its secret, and a newly created entry starts without one (an old secret under the same name is deleted). `optional: true`: the extension also works without it; if a non-optional secret or a `required` field is missing, `GET /extensions` reports `needs_setup`. |
 | `x-secret-bound-to` | entry in `x-secrets` | Fields the secret is bound to: with `per_item`, field names of the entry (`["base_url"]`), otherwise paths like `pihole.url`. If one of them changes via `PUT /extensions/{id}/settings`, the core deletes the secret (response `secrets_cleared`, audit log `detail.secrets_cleared`), also for the first address (empty → value); without a stored value, the field's `default` counts. Other spellings of the same address are not a change: upper/lower case of scheme and host name, default port (`:80` for http, `:443` for https), trailing `/`, fragment (`#…`), missing scheme (= `http://`). A different path or query (`?…`) counts as a change. `PUT /extensions/{id}/secrets` only accepts the secret once one of the fields has a stored value or `default`, otherwise `409` („Erst die Adresse eintragen und die Einstellungen speichern, danach die Zugangsdaten hinterlegen.“, i.e. "First enter the address and save the settings, then store the credentials."). |
@@ -220,7 +231,7 @@ its own `/connections` routes), the core deletes no secrets. The extension then 
 `ctx.secrets.delete(label)` itself when a connection is created or removed or its address changes.
 For the comparison there is `nodvard_sdk.same_target(old, new)` (`True` = same target, by the same
 rules as for `x-secret-bound-to`; the interface computes the same in
-`frontend/src/lib/targetAddress.ts`). Proxmox VE and Backups do it this way.
+`frontend/src/lib/targetAddress.ts`). Proxmox VE and Proxmox-Backups do it this way.
 
 **Testing the connection.** Every extension with settings gets the button "Test connection"
 („Verbindung testen“) in the interface (`POST /extensions/{id}/test`). For this, the core calls the
@@ -274,10 +285,10 @@ permission-checked and writes to the audit log where needed.
 | `ctx.ui` | `register_page()`, `register_widget()`, `register_nav()` | — |
 | `ctx.connectors` | `register_type(ConnectorType)` | — |
 | `ctx.capabilities` | `provide(protocol_instance)` | per protocol |
-| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optionally with `standing_approval`, see section 3), `check_standing_approval(granted_by_user_id, risk=…)` (would a standing approval by this person still apply today? `None` = yes, otherwise the reason) | `hosts.execute` and others; standing approval: `actions.standing_approval` |
+| `ctx.actions` | `register(ActionSpec)`, `propose(ActionRequest)` (optionally with `standing_approval`, see section 3), `check_standing_approval(granted_by_user_id, risk=…)` (would a standing approval by this person still apply today? `None` = yes, otherwise the reason), `waiting_count()` (how many proposals of all modules are waiting for approval, just the number) | `hosts.execute` and others; standing approval: `actions.standing_approval`; `waiting_count()`: `hosts.read` |
 | `ctx.hosts` | `list()`, `get()`, `upsert_discovered()` | `hosts.read` / `hosts.write` |
 | `ctx.exec` | `run(host, command)`, `stream(host, command)` (live output, e.g. live logs), `open_shell(host)`, `sftp(host)` | `hosts.execute` |
-| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it) | `secrets.read:<label>` |
+| `ctx.secrets` | `get_handle(label)`, `create()`, `delete(label)` (deletes the secret; `True` if there was one, otherwise `False`; audit log `extension.secret_removed`; older cores do not have it), `replace(label=, value=)` (new value in one step, the old one stays if it fails; `SecretUnavailable` if there is none; audit log `extension.secret_set`; older cores do not have it). An extension may replace or delete only its **own** secrets (created under its id or a former one, via `create()` or its settings page); otherwise `SecretNotOwned` (a kind of `PermissionDenied`) and the secret stays unchanged. Reading still follows the permission. No extension gets the two-factor secret of an account, not even for reading | `secrets.read:<label>` |
 | `ctx.vault_use` | context manager that materializes a value in memory only | same |
 | `ctx.db` | AsyncSession factory, **only** on `ext_<id>_*` tables (after a rename also on the prefixes of the old IDs, see section 1 "Renaming an extension") | — |
 | `ctx.settings` | `declare(schema)`, `get()`, `set()` | — |
@@ -285,7 +296,7 @@ permission-checked and writes to the audit log where needed.
 | `ctx.events` | `publish(Event)`, `subscribe(pattern, handler)` | — |
 | `ctx.notify` | `send(Notification, raise_on_failure=False)` → `NotifyResult` (`notification_id`, `suppressed`, `delivered`) – with `raise_on_failure=True` it raises `NotificationNotDelivered` if there were channels and none delivered (for "try again"); `would_suppress(host_id=…, host_ids=…)` only asks whether a maintenance window would currently silence a notification (see below) | `notify.send` |
 | `ctx.audit` | `log(entry)`. Extensions write under their own name, for example `<id>.<event>`. Actions whose name starts with `mfa.`, `auth.`, `login.`, `system.` or `user.` (case and surrounding spaces do not matter) are written only by the core, because it reads them back and decides on them: the call then raises `ValueError` and writes nothing | `audit.write` |
-| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` never follow them either: a response with status 3xx comes back unchanged, and the extension queries the new address itself. `follow_redirects=True` (or any other true value) raises `ValueError` before a request goes out, also with `insecure_tls=True`; `follow_redirects=False` is still allowed. Reason: the check of allowed addresses (`net.outbound`) only knows the address of the call and would never see the target of a redirect. `ctx.http` never uses a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, for `websocket()` also `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`), every connection goes directly to the checked address; `SSL_CERT_FILE` and `SSL_CERT_DIR` still apply | `net.outbound:<cidr>` |
+| `ctx.http` | preconfigured `httpx.AsyncClient` with target checking, plus `websocket(url, …)`. The target check only covers the start address: `websocket()` never follows redirects (3xx) during the handshake (`async with` then raises a `ConnectionError` with a German message, no second connection is made); `get()`, `post()`, `request()` and `stream()` never follow them either: a response with status 3xx comes back unchanged, and the extension queries the new address itself. `follow_redirects=True` (or any other true value) raises `ValueError` before a request goes out, also with `insecure_tls=True`; `follow_redirects=False` is still allowed. Reason: the check of allowed addresses (`net.outbound`) only knows the address of the call and would never see the target of a redirect. `ctx.http` never uses a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, for `websocket()` also `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`), every connection goes directly to the checked address; `SSL_CERT_FILE` and `SSL_CERT_DIR` still apply. `peer_certificate(url)` only reads the certificate of an `https://`/`wss://` target (SHA-256 fingerprint, `trusted`: valid according to the certificate authorities) without sending a request. `pinned_sha256=` on `get()`, `post()`, `request()`, `stream()` and `websocket()` accepts exactly the certificate with this fingerprint and otherwise aborts in the TLS handshake with `CertificateMismatch` before a single byte of the request is sent (for self-signed certificates when something secret goes out; like `insecure_tls` it needs `net.outbound.insecure_tls`); such calls never keep cookies set by the server | `net.outbound:<cidr>` |
 | `ctx.ws` | `broadcast(channel, payload)` on `ext.<id>.*` (after a rename also on `ext.<old>.*`) | — |
 | `ctx.spawn` | supervised background task with restart policy | — |
 | `ctx.logger` | structured logger, pre-tagged with the extension ID | — |
@@ -354,6 +365,15 @@ German). Without a host reference a notification is never silent.
   `suppressed=False` and `delivered=None` (e.g. `getattr(result, "suppressed", False) is True`,
   `getattr(result, "delivered", None)`). If you do not need the return value,
   nothing changes for you.
+- `NotifyResult.skipped=True` means: no channel delivered, at least one skipped the notification on purpose
+  (e.g. below ntfy's minimum level), and none failed. If another channel failed next to the skipped one, `skipped`
+  is `False`: the failure wins and must not pass as "only below the minimum level". A channel
+  (`NotificationChannel.send`) signals skipping with the exception `NotificationSkipped` from `nodvard_sdk.errors`;
+  the core then records the delivery as `skipped` (neither `sent` nor `failed`), and `raise_on_failure` does not
+  raise because of it. Older cores do not have the class, so the import itself fails there, and `skipped` is
+  `None`. A channel that should also run there imports it like this:
+  `try: from nodvard_sdk.errors import NotificationSkipped` / `except ImportError: NotificationSkipped = None` and
+  simply returns without the class (older cores record that as `sent`, as before).
 - `would_suppress(host_id=None, host_ids=None) -> bool` checks the same rule but creates
   nothing. As in `send()`, a single string passed as `host_ids` counts as a broken list
   (never silent). It also requires `notify.send`.
@@ -408,6 +428,8 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `TerminalTarget` | terminal (SSH), serial/container shells in the future | the web terminal |
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | the graphical console (`/console/:hostId`, noVNC) |
 | `FileSource` | files-sftp, nextcloud, truenas, syncthing | the **one** file manager with sidebar |
+| `FilePlaceProvider` | service-matrix, proxmox, system | "Important places" of a server in the file manager |
+| `AppSuggestionProvider` | network (Nginx Proxy Manager) | Suggestions for app tiles on the "Apps" page (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, only knowledge the extension already has; the core checks, de-duplicates and drops existing ones |
 | `ActionExecutor` | terminal (SSH exec), proxmox (API actions) | execution behind the gate |
 | `AIProvider` | shield (Ollama), others in the future | chat, diagnosis, summaries |
 | `NotificationChannel` | ntfy, email, webhook | the notification center |
@@ -415,6 +437,21 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `ServiceCatalog` | service-matrix (Docker API) | the app launcher |
 | `BackupProvider` | backups (Proxmox jobs, restic …) | the backup center |
 | `SearchProvider` | any | the global search |
+| `ConnectionReceiver` | backups (kind `proxmox`) | nothing – only between extensions: when connecting with a password, proxmox also creates an access for backups |
+
+**`ConnectionReceiver` – an access for another extension.** Extensions do not import each other, and secrets never go
+over the event bus. When an extension creates an access on a server for another one (e.g. "Proxmox VE" creating the one
+for "Proxmox backups" while connecting with a password), it queries that extension's `ConnectionReceiver` through
+`ctx.capabilities.query()` – visible only for extensions listed in `requires`. `requires` does not make the other one
+mandatory: if it is off, the list is empty and that part is skipped. Flow: `connection_conflict(name=, base_url=)`
+before creating anything (a German sentence or `None`), then `receive_connection(name=, base_url=, token_id=,
+token_secret=SecretStr, tls_insecure_skip_verify=, pinned_sha256=None)` – the receiver stores the connection like its
+settings form and puts the secret into its own vault entry. `pinned_sha256` (optional, added): the certificate
+fingerprint the person explicitly confirmed with the provider – the receiver remembers it (the connection then only
+talks to exactly this certificate, "do not verify" does not apply) and replaces an old one; without it a remembered one
+stays. Returns `{name, replaced_token_id}`, optionally with `tls_insecure_skip_verify`, `tls_fingerprint_sha256` and `enabled` (what applies afterwards: an existing connection is never silently weakened, a disabled one stays disabled). Only what could also be entered by hand is accepted; a foreign secret under the name stays untouched (`SecretNotOwned`, nothing changed). `received_token_ids()` lists the token
+IDs of all its connections (never a secret). The receiver does not check who calls it; the provider secures its own
+path (admin route, audit log).
 
 ### Example: `FileSource` — the interface the file manager is built on
 
@@ -467,6 +504,13 @@ different `machine` IDs are always two files; otherwise, besides `path`, all fiv
 the same source. The core reads it with `getattr(source, "file_identity", None)`; older sources without the method
 stay valid.
 
+**Sources with a server behind them:** Optionally, a source names `host_id: str | None`, the ID of the server it
+stands for (for example SFTP to a host; the SSH sources of the terminal extension set it). The core passes it on in
+`GET /files/sources` as `host_id` ([API, section 3](../04-API.md#dateien), in German), and the file manager shows the
+status light and the operating system of that server next to the source. If the attribute is missing or the value is
+not a non-empty string, `null` applies. Like `required_permission` the attribute is not a member of the protocol; the
+core reads it with `getattr(source, "host_id", None)`, older sources without it stay valid.
+
 **Sources with their own permission:** Optionally, a source names `required_permission: str | None`
 (if the attribute is missing, `None` applies). The core then shows and opens it only for users who
 hold that permission themselves; `files.read`/`files.write` alone are not enough. This is meant for
@@ -488,6 +532,15 @@ own is already a finished sentence for the interface, the source sets `readable 
 a network error (no traceback in the container log). Like `required_permission`, the attribute is not a member of the
 protocol; the core reads it with `getattr`. The same applies to exceptions from `TerminalTarget.open()`; there the
 reason appears in the terminal's error message ([API, section 4](../04-API.md#4-websocket), in German).
+
+**Important places:** A `FilePlaceProvider` names shortcuts for a server in the file manager (project folders, logs,
+backups). `async places_for_host(host_id) -> list[FilePlace]`; `FilePlace` has `label` (short, German), `path`
+(absolute, starting with `/`), `icon` and an optional `hint`. A provider names only what its extension already knows
+(labels from a `docker ps` it has read anyway, a node's storage list, the host entry) and asks the server nothing just
+to guess places; without knowledge it returns an empty list. The core asks all providers at the same time
+(`GET /files/places`, [API, section 3](../04-API.md#dateien), in German), gives each six seconds, lets a failing provider
+cost only its own places, removes duplicate paths and shows at most 30. Only users who may also open a file source for
+that server get places. New in this version, purely additive; older extensions are not affected.
 
 ### Example: `ActionExecutor` — the interface Nodvard Shield and the script repository are built on
 
@@ -630,6 +683,16 @@ explicit `tone` field.
 against the view type and reports deviations as an extension error instead of a broken
 UI.
 
+**More fields than the tile shows:** A widget's data may contain more fields than the view needs; the tile ignores
+them, the extension's own page can read them. New fields are only ever added, nothing is removed. Example:
+"Server-Zustand" (server status) of the `system` extension (`GET /api/v1/ext/system/widgets/health`, one SSH call per
+server, cached for 5 minutes) returns per server `name`, `host_id`, `summary`, `badge` and `tone`, and for a server
+that answers also `cpu_percent` (CPU load at the time of the query) and `mem_percent` (memory used in percent, from
+`MemTotal` and `MemAvailable`); both are `null` when the value is unknown. The dashboard tile still shows only name,
+summary and badge. The server tiles on the Server status page turn them into "CPU 12 % · RAM 48 %" and put a finding (yellow
+or red, for example "/mnt/daten at 95 %") below as a hint, without another SSH call. The numbers can therefore be up
+to 5 minutes old; the "Live" tab shows them live.
+
 **The limit, stated clearly:** `component` is an enhancement, not a replacement. A widget
 that exists only as a `component` is rejected at registration — otherwise you get exactly
 the web-only imbalance this rule is meant to prevent.
@@ -746,8 +809,8 @@ without a query (menu item) to the page that is already open resets it to its in
 considered this address current.
 
 **All bundled pages that read their query use the hook:** Nodvard Shield (`?tab=`,
-`?host=`); Backups (`?host=`); Scripts („Skripte“, `?host=`); Service Matrix
-(„Service-Matrix“, `?host=`, `?logs=`); System (`?host=`, the server picker writes it too);
+`?host=`); Proxmox-Backups (`?host=`); Scripts („Skripte“, `?host=`); Service Matrix
+(„Service-Matrix“, `?host=`, `?logs=`); Server status (`?host=`, the server picker writes it too);
 Game servers („Gameserver“, `?host=`: bring to the front, scroll to it); and the Proxmox
 node page (`?host=`, `&tasks=1`: highlight, expand, filter the history, scroll to it). A new
 page that reads its query only once at mount (`new URLSearchParams(window.location.search)`),
@@ -834,6 +897,63 @@ export { IncidentFeed } from "./IncidentFeed";
 
 A real, minimal example is in `extensions/hello-world/frontend/src/`: one page
 (`HelloPage.tsx`, using `authedFetch` and the UI kit), built with `extensions/hello-world/frontend/build.mjs`.
+
+### UI kit and module rule
+
+The shared UI kit lives in `extensions/_shared/frontend/src/`. It is source code, not a package: every bundle takes
+in, at build time, the parts it imports. It contains:
+
+| File | Contents |
+|---|---|
+| `ui.tsx` | Building blocks for pages: `Page`, `Card`, `Button`, `Badge`, `Stat`, `EmptyState`, `Notice`, `Field`, `SearchInput`, `Loading`, icons |
+| `api.ts`, `actions.ts` | `authedFetch` with token renewal and the error texts; `runAction` (propose, approve and poll an action, see above) |
+| `deck.ts`, `location.ts`, `lifecycle.ts` | Access to `window.__nodvardDeck`, `useUrlParams()` (follows the address bar), abort when the page is left |
+| `HostPicker.tsx` | the server picker (see below) |
+| `SchedulePicker.tsx`, `timezone.ts` | the schedule picker and the dashboard's time zone, which it needs |
+| `testShell.tsx` | helpers for tests only |
+
+**Server picker (`HostPicker`).** Whoever lets people choose a server on a page uses this component instead of a
+drop-down of their own. It shows tiles: per server the name, address, operating system as a word, the status as a
+traffic-light dot (reachable, not reachable, unknown, taken from the core's status) and, if the page knows it, a short
+extra (`extra`, for example the load) and a hint (`hint`, for example "ohne SSH-Zugang", i.e. "no SSH access"). The
+page passes the servers as a list of `HostTile` (`id`, `name`, `address`, `os`, `status`, `extra`, `hint`) and stays
+in charge of the selection (`value`/`onChange`, for example via `?host=` in the address bar).
+
+- From six servers on (`searchFrom`) there is a search field over name, address and system.
+- The server chosen last is remembered per page (`storageKey`) in the browser and preselected on the next visit, but
+  only if the page has no server yet (a `?host=` from a link wins) and the server still exists. Without browser
+  storage (private window) there is no preselection.
+- Once a server is chosen, the picker shrinks to one line with "Server wechseln" (switch server); "Abbrechen" (cancel)
+  closes the tiles again.
+- With `actions` the picker becomes a launcher (terminal page): each tile shows its buttons, nothing is chosen or
+  remembered. `gridClass` sets the columns for narrow sidebars.
+- `StatusDot` and `osLabel` (traffic-light dot and operating system as a word) can be used on their own; the file
+  manager uses them for its server sources.
+
+**Schedule picker (`SchedulePicker`).** The alarm-clock style picker (frequency, time of day, weekdays, plain-language
+text, next run) reads and writes a cron expression, matching `x-widget: "schedule"`. The dashboard's time zone comes
+through `timezone.ts`: it passes `browserTimeZone`, `foreignDeckTimezone` and `useDeckTimezone` on from the core,
+without a second copy of the logic; the value lives on `window.__nodvardDeck.timezone`, so core and bundles see the
+same zone although each bundle has its own copy of the module. Scripts and Nodvard Shield take the picker from the
+kit.
+
+**The module rule: an extension imports only itself and the UI kit.** The code under `extensions/<id>/frontend/src`
+may load only files of its own extension and of the kit, never source code from `frontend/` (the core) and never
+another extension. Otherwise core code would end up as a copy in the bundle, and a third-party extension could never
+replicate that. What core and extensions share therefore belongs in the kit. The rule applies **without exceptions**;
+`backend/tests/test_extension_frontend_imports.py` checks it for every bundled extension. Not checked are test files
+(`*.test.ts(x)`; they run in the real core shell and end up in no bundle) and the kit itself: it is the one bridge to
+the core (`deck.ts` and `timezone.ts` pass parts of `frontend/src/lib` on), and `testShell.tsx` exists for tests only.
+
+**How the core uses the kit.** Core pages also import parts of the kit (the terminal page the `HostPicker`, the
+settings the `SchedulePicker`, the file manager `StatusDot` and `osLabel`). The kit lives under `extensions/`, which
+has no `node_modules` of its own; so that React is loaded only once, there is one place for this:
+`frontend/kit.resolve.ts`. `kitDedupe` makes Vite always load `react`, `react-dom`, `react-router-dom` and the Testing
+Library from `frontend/node_modules`, wherever the importing file lives (the same copy as in the core, no second
+React). `kitFsAllow` lets the dev server and the tests serve the kit's files. It is used by `vite.config.ts` (core
+build), `vitest.config.ts` (core tests), `vitest.extensions.config.ts` (extension tests) and `vite.preview.config.ts`
+(design preview); for the types the same is done through `paths` in `frontend/tsconfig.json` and
+`extensions/tsconfig.json`.
 
 ---
 

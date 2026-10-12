@@ -12,6 +12,11 @@ der entkoppelte Lauf auf dem Host in `detached.py`. Hier:
   Freigebende gesehen hat (`payload.command`). Der Lauf startet entkoppelt auf dem Host
   (`detached.py`, ueberlebt einen SSH-Abriss), das Dashboard fragt alle paar Sekunden nach,
   prueft danach den Start, bewertet den Container neu, schreibt Audit und meldet das Ergebnis.
+- Automatischer Rueckweg (`_auto_rollback`, Einstellung `image_update_auto_rollback`, Vorgabe an): startet die neue
+  Version nicht sauber (Pruefung scheitert oder `up` scheitert, der Lauf ist aber zu Ende), kommt das Sicherungs-Image
+  wieder unter den Namen aus der Compose-Datei und der Dienst wird damit neu erstellt -- nur wenn die Sicherung
+  nachweislich das alte Image ist, nie bei Datenbanken (die neue Version kann ihre Dateien schon umgestellt haben).
+  Danach dieselbe Pruefung wie beim Update; klappt es nicht, steht der Weg von Hand in der Ausgabe.
 - `ImageApplier.resume_interrupted()`: startet das Dashboard waehrenddessen neu, macht es danach
   weiter. Dazu merkt sich `image-apply-runs.json` (Datenordner) jeden Lauf VOR dem Start und
   vergisst ihn nach dem Ende -- nur bei einem Abbruch (`CancelledError`) bleibt er stehen.
@@ -23,6 +28,7 @@ Gruppe `docker`. Compose-Dateien, die er nicht lesen kann, blockieren das Update
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import secrets
@@ -36,6 +42,7 @@ from nodvard_sdk import REQUEST_WAIT_S, Notification, Severity
 from nodvard_sdk.actions import ActionRequest, ActionResult, ActionSpec, DryRunReport
 from nodvard_sdk.types import Actor, ActorType, Risk
 
+from . import after_check as ac
 from . import detached as dt
 from . import image_apply as ia
 from .capabilities import CONTAINER_NAME_RE, is_own_container
@@ -89,7 +96,17 @@ RISK_ORDER = (Risk.LOW, Risk.MEDIUM, Risk.HIGH, Risk.CRITICAL)
 NOT_A_USER_MESSAGE = "Ein Image-Update kann nur ein Mensch über die Service-Matrix vorschlagen."
 RISK_TOO_LOW_MESSAGE = "Der Vorschlag hat eine niedrigere Risikostufe, als dieses Update jetzt verlangt – bitte neu prüfen und neu auslösen."
 NOT_STARTED = "Update-Lauf wurde auf dem Host nicht gefunden – er ist wohl nicht gestartet."
-PHASE_OF_STEP = {"tag": "pull", "pull": "pull", "up": "up", "done": "verify"}
+PHASE_OF_STEP = {"tag": "pull", "pull": "pull", "up": "up", "done": "verify", "rollback": "rollback"}
+ROLLBACK_DEADLINE_S = 10 * 60
+"""Eigene Frist des Rueckwegs: Update (bis 40 Minuten) und Rueckweg zusammen bleiben unter der Notbremse des Gates."""
+ROLLBACK_LAUNCH_TRIES = 3
+ROLLBACK_RETRY_S = 2
+AUTO_ROLLBACK_SETTING = "image_update_auto_rollback"
+"""Einstellung: Startet die neue Version nicht sauber, automatisch zurueck auf das Sicherungs-Image (Vorgabe: an).
+Nie bei Datenbanken und anderen Datenspeichern (`ia.is_data_store`) -- die neue Version kann die Dateien schon umgestellt
+haben, die alte koennte sie dann nicht lesen. Und nur bei einem eindeutigen Fehlstart (`Verdict.crashed`, `up` gescheitert),
+nie bei blossem "ungesund": eine App mitten in einer langen Datenumstellung wuerde sonst abgebrochen."""
+
 
 IMAGE_UPDATE_SPEC = ActionSpec(
     action_type=ACTION_TYPE, label="Image-Update einspielen", icon="download",
@@ -100,6 +117,11 @@ IMAGE_UPDATE_SPEC = ActionSpec(
     host_bound=False, command_field="command",
     confirm_text="Der Container wird neu erstellt und ist kurz nicht erreichbar. Fortfahren?",
 )
+
+
+def rollback_run_id(run_id: str) -> str:
+    """Die Lauf-ID des automatischen Rueckwegs zu einem Update -- fest abgeleitet (siehe `_auto_rollback`)."""
+    return "imgupd_" + hashlib.sha256(f"{run_id}:zurueck".encode()).hexdigest()[:16]
 
 
 def _describe(exc: BaseException) -> str:
@@ -196,10 +218,12 @@ class Plan:
     registry_at: str | None
     stale: bool
     plan_id: str
+    auto_rollback: bool = False
+    """Startet die neue Version nicht sauber, geht es automatisch zurueck (Einstellung an, keine Datenbank)."""
 
     def reason_text(self) -> str:
         t = self.target
-        return ia.reason_text(self.host_name, t.container, t.image, t.project, t.service, self.risk)
+        return ia.reason_text(self.host_name, t.container, t.image, t.project, t.service, self.risk, auto_rollback=self.auto_rollback)
 
     def as_response(self) -> dict[str, Any]:
         t = self.target
@@ -222,6 +246,7 @@ class Plan:
             "rollback": self.rollback,
             "risk": self.risk.value,
             "warnings": list(self.warnings),
+            "auto_rollback": self.auto_rollback,
         }
 
 
@@ -334,6 +359,7 @@ class ImageApplier:
             )),
             remote_digest=remote_digest, registry_at=result.get("registry_at"), stale=stale,
             plan_id=ia.plan_id(command, t.image_id, remote_digest),
+            auto_rollback=not ia.is_data_store(t.image, t.service) and await self._auto_rollback_enabled(),
         )
 
     # --- Vorschlagen (POST-Route) ------------------------------------------------------------
@@ -577,13 +603,25 @@ class ImageApplier:
         success = False
         pull_failed = outcome.state == "done" and outcome.rc == ia.RC_PULL
         public_message: str | None = None  # gesetzt, wenn `message` eine Zeile vom Host enthaelt
+        crashed = False
+        # Lief vor einem Neustart des Dashboards schon der Rueckweg, nicht neu pruefen (das alte Image saehe dann wie
+        # "kein Update" aus), sondern den Rueckweg weiterverfolgen und berichten.
+        # Nur nach einem Neustart moeglich: im selben Prozess startet der Rueckweg erst weiter unten.
+        back_started = (
+            resumed and outcome.state == "done" and outcome.rc in (0, ia.RC_UP) and await self._rollback_started(host, run_id)
+        )
 
-        if outcome.state == "done" and outcome.rc == 0:
+        if back_started:
+            message = "Die neue Version startete nicht sauber."
+            show_rollback = crashed = True
+            snap = await self._snapshot_once(host, t, rollback_ref)
+        elif outcome.state == "done" and outcome.rc == 0:
             self._set_phase(app_key, "verify")
             verdict, snap = await self._verify(host, t, rollback_ref)
             success = verdict.ok
             message = verdict.text
             show_rollback = not success
+            crashed = verdict.crashed
         elif pull_failed:
             message = ia.describe_pull_failure(log_text)  # nichts veraendert, kein Zurueck noetig
             public_message = ia.describe_pull_failure(log_text, public=True)
@@ -599,10 +637,26 @@ class ImageApplier:
             if outcome.state in ("done", "lost", "timeout"):  # dort kann schon etwas veraendert sein
                 snap = await self._snapshot_once(host, t, rollback_ref)
             show_rollback = outcome.rc == ia.RC_UP or outcome.step in ("up", "done")
+            crashed = outcome.state == "done" and outcome.rc == ia.RC_UP  # Neu-Erstellen gescheitert
 
         rollback = rollback_ref if (snap is None or snap.rollback_image_id == t.image_id) else None
         if "@@warn=rollback-tag" in log_text:  # das Markieren scheiterte: kein Rueckweg versprechen
             rollback = None
+        back: dict[str, Any] | None = None
+        if back_started or (
+            not success and crashed and show_rollback and outcome.state == "done" and rollback is not None
+            and snap is not None and snap.rollback_image_id == t.image_id  # die Sicherung ist nachweislich das alte Image
+            and not ia.is_data_store(t.image, t.service)
+            and await self._auto_rollback_enabled()
+        ):
+            back = await self._auto_rollback(host, t, rollback_ref, run_id, app_key)
+            message = f"{message.rstrip('.')}. {back['text']}"
+            if public_message is not None:  # die oeffentliche Fassung bekommt denselben (festen) Satz dazu
+                public_message = f"{public_message.rstrip('.')}. {back['text']}"
+            if back["ok"]:
+                show_rollback = False  # die alte Version laeuft wieder: kein Befehl zum Abtippen
+            log_text = f"{log_text.rstrip()}\n--- Automatischer Rückweg ---\n{back['log'].strip()}"
+            snap = back.get("snap") or snap
         if success:
             assert verdict is not None
             output = ia.success_output(t, verdict, old_image_id=t.image_id, rollback=rollback, log=log_text)
@@ -631,6 +685,8 @@ class ImageApplier:
             "log_path": dt.log_path(run_id), "recreated": bool(verdict and verdict.changed) if success else None,
             "health": verdict.health if verdict else None,
         }
+        if back is not None:
+            detail["auto_rollback"] = {"ok": back["ok"], "run_id": back["run_id"], "log_path": dt.log_path(back["run_id"])}
         if resumed:
             detail["resumed"] = True
         await self._audit(actor, host, t, success, summary, detail, run_id)
@@ -640,7 +696,9 @@ class ImageApplier:
             duration_ms=int(duration_s * 1000), detail=detail,
         )
 
-    async def _launch_and_wait(self, host: Any, run_id: str, script: str, app_key: str, project: str) -> _Outcome:
+    async def _launch_and_wait(
+        self, host: Any, run_id: str, script: str, app_key: str, project: str, *, deadline_s: float | None = None,
+    ) -> _Outcome:
         unknown = NOT_STARTED
         reach_grace_s: float | None = None
         try:
@@ -663,7 +721,7 @@ class ImageApplier:
                     "not_started", message=f"Update-Lauf konnte nicht gestartet werden: {reason}",
                     public_message=f"Update-Lauf konnte nicht gestartet werden – {ia.DETAILS_HINT}",
                 )
-        return await self._wait(host, run_id, app_key, unknown_message=unknown, reach_grace_s=reach_grace_s)
+        return await self._wait(host, run_id, app_key, unknown_message=unknown, reach_grace_s=reach_grace_s, deadline_s=deadline_s)
 
     async def _wait(
         self, host: Any, run_id: str, app_key: str, *, unknown_message: str, reach_grace_s: float | None, deadline_s: float | None = None,
@@ -719,38 +777,63 @@ class ImageApplier:
         res = await self._ctx.exec.run(host, ia.cmd_verify(t, rollback_ref), timeout_s=VERIFY_CALL_TIMEOUT_S)
         return ia.parse_verify((res.stdout or "") + (res.stderr or ""))
 
+    async def _rollback_started(self, host: Any, run_id: str) -> bool:
+        """Gibt es auf dem Host schon einen Rueckweg zu diesem Update (nach einem Neustart des Dashboards)?"""
+        try:
+            res = await self._ctx.exec.run(host, dt.poll_command(rollback_run_id(run_id)), timeout_s=POLL_TIMEOUT_S)
+        except Exception:  # noqa: BLE001 - im Zweifel: keiner (dann wie gewohnt pruefen)
+            return False
+        return dt.parse_poll((res.stdout or "") + (res.stderr or "")).state in ("running", "done", "lost")
+
+    async def _auto_rollback_enabled(self) -> bool:
+        try:
+            return (await self._ctx.settings.get()).get(AUTO_ROLLBACK_SETTING) is not False
+        except Exception:  # noqa: BLE001 - im Zweifel wie die Vorgabe
+            return True
+
+    async def _auto_rollback(self, host: Any, t: ComposeTarget, rollback_ref: str, run_id: str, app_key: str) -> dict[str, Any]:
+        """Zurueck auf das Sicherungs-Image (entkoppelt wie das Update) und pruefen, ob die alte Version wieder ruhig
+        laeuft. Die Lauf-ID haengt fest am Update: nach einem Neustart des Dashboards startet kein zweiter Rueckweg,
+        sondern der laufende wird weiter abgefragt. Wirft nie (ausser beim Herunterfahren)."""
+        back_id = rollback_run_id(run_id)
+        self._set_phase(app_key, "rollback")
+        try:
+            for attempt in range(ROLLBACK_LAUNCH_TRIES):
+                outcome = await self._launch_and_wait(
+                    host, back_id, ia.rollback_script(t, rollback_ref), app_key, t.project, deadline_s=ROLLBACK_DEADLINE_S,
+                )
+                # Die Sperre des Projekts gibt das Update erst kurz nach seinem Rueckgabecode frei.
+                if not (outcome.state == "not_started" and outcome.message == BUSY_MESSAGE) or attempt == ROLLBACK_LAUNCH_TRIES - 1:
+                    break
+                await asyncio.sleep(ROLLBACK_RETRY_S)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - als Ergebnis melden
+            return {"ok": False, "run_id": back_id, "log": "", "snap": None,
+                    "text": f"Der automatische Rückweg ließ sich nicht starten ({_describe(exc)}) – siehe unten."}
+        self._set_phase(app_key, "rollback")
+        if outcome.state != "done" or outcome.rc != 0:
+            return {"ok": False, "run_id": back_id, "log": outcome.log, "snap": None,
+                    "text": "Der automatische Rückweg auf die alte Version hat nicht geklappt – siehe unten."}
+        verdict, snap = await self._verify(host, t, rollback_ref)
+        # Erfolg heisst: der Dienst laeuft ruhig, und zwar wieder mit dem alten Image.
+        ok = verdict.ok and not verdict.changed
+        if ok and verdict.health == "starting":
+            text = "Automatisch zurück auf die alte Version – sie läuft, ihr Healthcheck meldet aber noch „startet“."
+        elif ok:
+            text = "Automatisch zurück auf die alte Version – sie läuft wieder."
+        else:
+            text = f"Der automatische Rückweg auf die alte Version hat nicht geklappt ({verdict.text.rstrip('.')}) – siehe unten."
+        return {"ok": ok, "run_id": back_id, "log": outcome.log, "snap": snap, "text": text}
+
     async def _verify(self, host: Any, t: ComposeTarget, rollback_ref: str) -> tuple[ia.Verdict, ia.Snapshot | None]:
-        """Wartet, bis der Dienst wieder laeuft (oder klar nicht). Ohne Healthcheck reicht ein
-        einzelnes "running" nicht: erst zwei Lesungen `VERIFY_STABLE_S` auseinander ohne neuen Start
-        (`StartedAt`, `RestartCount`) gelten als Erfolg; ein neuer Start dazwischen ist ein Absturz-Kreislauf."""
-        deadline = time.monotonic() + VERIFY_TIMEOUT_S
-        snap: ia.Snapshot | None = None
-        first_ok: tuple[ia.Snapshot, float] | None = None
-        while True:
-            try:
-                snap = await self._read_state(host, t, rollback_ref)
-            except Exception:  # noqa: BLE001 - kurzer Aussetzer: weiter versuchen
-                snap = None
-            now = time.monotonic()
-            final = now >= deadline
-            if snap is not None:
-                if first_ok is not None and ia.restarted_since(first_ok[0], snap):
-                    return ia.Verdict(False, ia.CRASH_LOOP_TEXT), snap
-                verdict = ia.judge_verify(snap, old_image_id=t.image_id, final=final)
-                if verdict is not None:
-                    if not (verdict.ok and ia.needs_stability_check(snap)):
-                        return verdict, snap
-                    if first_ok is None:
-                        first_ok = (snap, now)  # erste ruhige Lesung: mindestens eine zweite muss folgen
-                        if final:
-                            return verdict, snap
-                    elif now - first_ok[1] >= VERIFY_STABLE_S or final:
-                        return verdict, snap
-                else:
-                    first_ok = None  # zwischendurch nicht mehr "ok": die Beobachtung beginnt neu
-            elif final:
-                return ia.Verdict(False, "Zustand des Containers nicht prüfbar (Host antwortet nicht)."), None
-            await asyncio.sleep(VERIFY_INTERVAL_S)
+        """Wartet, bis der Dienst wieder laeuft (oder klar nicht) -- dieselbe Pruefung wie nach "Container starten"
+        (`after_check.wait_settled`: ohne Healthcheck erst zwei ruhige Lesungen `VERIFY_STABLE_S` auseinander)."""
+        return await ac.wait_settled(
+            lambda: self._read_state(host, t, rollback_ref),
+            lambda snap, final: ia.judge_verify(snap, old_image_id=t.image_id, final=final),
+            timeout_s=VERIFY_TIMEOUT_S, interval_s=VERIFY_INTERVAL_S, stable_s=VERIFY_STABLE_S,
+        )
 
     async def _snapshot_once(self, host: Any, t: ComposeTarget, rollback_ref: str) -> ia.Snapshot | None:
         try:

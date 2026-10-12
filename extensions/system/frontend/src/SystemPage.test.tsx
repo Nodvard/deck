@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { navigateTo } from "../../../_shared/frontend/src/testShell";
 
 import type { LiveData } from "./LiveView";
-import { formatUptime, SystemPage, type SystemInfo } from "./SystemPage";
+import { formatUptime, SystemPage, type SystemInfo, tileState } from "./SystemPage";
 
 const INFO: SystemInfo = {
   host: { id: "h-pi", name: "Raspberry Pi", address: "192.168.1.72" },
@@ -73,8 +73,9 @@ function mockFetch(calls: string[], infoStatus = 200, info: SystemInfo = INFO) {
 }
 
 beforeEach(() => {
-  // Der gewählte Server steht in der Adresszeile -- jeder Test beginnt ohne.
+  // Der gewählte Server steht in der Adresszeile -- jeder Test beginnt ohne, und ohne gemerkten Server.
   window.history.replaceState({}, "", "/ext/system/system");
+  window.localStorage.clear();
   window.__lattice = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
     getAccessToken: () => "tok", confirmDialog: vi.fn(), promptDialog: vi.fn(), hasPermission: vi.fn().mockReturnValue(true),
@@ -90,15 +91,15 @@ describe("SystemPage", () => {
       fireEvent.click(await screen.findByRole("tab", { name: "Zustand & Updates" }));
       const findings = await screen.findByTestId("findings");
       expect(findings.textContent).toContain("/mnt/daten zu 95 % voll");
-      expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("System: Raspberry Pi");
+      expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Server-Zustand: Raspberry Pi");
       expect(screen.getByText(/Debian GNU\/Linux 13 \(trixie\) · Kernel 6\.18\.39/)).toBeInTheDocument();
       expect(screen.getByTestId("disks").textContent).toContain("95 % von 93 GB");
       expect(screen.getByTestId("failed-units").textContent).toContain("nginx.service");
       expect(screen.getByTestId("updates").textContent).toContain("2 Update(s) ausstehend, davon 1 Sicherheits-Update(s)");
       expect(screen.getByText("Neustart nötig, damit installierte Updates greifen.")).toBeInTheDocument();
       // Nur Linux-Hosts in der Auswahl.
-      const options = [...screen.getByLabelText("Server wählen").querySelectorAll("option")].map((o) => o.textContent);
-      expect(options).toEqual(["Server wählen …", "Raspberry Pi (192.168.1.72)"]);
+      expect(screen.getByTestId("host-picker-selected").textContent).toContain("Raspberry Pi");
+      expect(screen.queryByText(/game-win/)).toBeNull();
     } finally {
       window.history.replaceState({}, "", "/");
     }
@@ -126,8 +127,7 @@ describe("SystemPage", () => {
     vi.stubGlobal("fetch", mockFetch(calls, 502));
     render(<SystemPage />);
     expect(await screen.findByText(/Einen Linux-Server wählen/)).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(2));
-    fireEvent.change(screen.getByLabelText("Server wählen"), { target: { value: "h-pi" } });
+    fireEvent.click(await screen.findByRole("button", { name: /Raspberry Pi/ }));
     fireEvent.click(await screen.findByRole("tab", { name: "Zustand & Updates" }));
     expect(await screen.findByText("Fehler: Nicht erreichbar: timeout")).toBeInTheDocument();
     expect(calls.filter((c) => c.includes("/info")).length).toBe(1);
@@ -149,34 +149,68 @@ describe("SystemPage", () => {
     expect(screen.queryByText("Noch kein Linux-Server")).toBeNull();
   });
 
+  it("Kacheln zeigen die Auslastung aus dem Server-Zustand, einen Befund als Hinweis", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/api/v1/hosts")) {
+        return new Response(JSON.stringify([
+          { id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up" },
+          { id: "h-nas", display_name: "NAS", address: "192.168.1.20", os_family: "linux", status: "up" },
+        ]), { status: 200 });
+      }
+      if (url.endsWith("/ext/system/widgets/health")) {
+        return new Response(JSON.stringify({ data: [
+          { host_id: "h-pi", summary: "Debian – alles in Ordnung", tone: "good", cpu_percent: 12.4, mem_percent: 48 },
+          { host_id: "h-nas", summary: "/mnt/daten zu 95 % voll", tone: "danger", cpu_percent: 3, mem_percent: null },
+        ] }), { status: 200 });
+      }
+      throw new Error(`Unerwarteter Fetch: ${url}`);
+    }));
+    render(<SystemPage />);
+    await waitFor(() => expect(screen.getByRole("button", { name: /Raspberry Pi/ }).textContent).toContain("CPU 12 % · RAM 48 %"));
+    const nas = screen.getByRole("button", { name: /NAS/ });
+    expect(nas.textContent).toContain("CPU 3 %");
+    expect(nas.textContent).toContain("/mnt/daten zu 95 % voll");
+    expect(screen.getByRole("button", { name: /Raspberry Pi/ }).textContent).not.toContain("alles in Ordnung");
+  });
+
+  it("tileState: ohne Auslastung bleibt der Text des Zustands, ein Befund ist immer der Hinweis", () => {
+    expect(tileState(undefined)).toEqual({ extra: null, hint: null });
+    expect(tileState({ host_id: "a", summary: "Debian – alles in Ordnung", tone: "good" })).toEqual({ extra: "Debian – alles in Ordnung", hint: null });
+    expect(tileState({ host_id: "a", summary: "Swap knapp", tone: "warn", cpu_percent: null, mem_percent: 71 })).toEqual({ extra: "RAM 71 %", hint: "Swap knapp" });
+    expect(tileState({ host_id: "a", summary: "nicht erreichbar: timeout", tone: "danger" })).toEqual({ extra: null, hint: "nicht erreichbar: timeout" });
+  });
+
   it("ein Server ohne SSH-Zugang steht in der Auswahl mit dem Hinweis dazu", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify([
       { id: "h-nas", display_name: "NAS", address: "192.168.1.20", os_family: "linux", status: "unknown", credential: null },
       { id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up", credential: { id: "c1", kind: "ssh_key", username: "lattice", port: 22 } },
     ]), { status: 200 })));
     render(<SystemPage />);
-    await waitFor(() => expect(screen.getAllByRole("option").length).toBe(3));
-    const options = [...screen.getByLabelText("Server wählen").querySelectorAll("option")].map((o) => o.textContent);
-    expect(options).toEqual(["Server wählen …", "NAS (192.168.1.20) – ohne SSH-Zugang", "Raspberry Pi (192.168.1.72)"]);
+    const nas = await screen.findByRole("button", { name: /NAS/ });
+    expect(nas.textContent).toContain("192.168.1.20");
+    expect(nas.textContent).toContain("ohne SSH-Zugang");
+    expect(screen.getByRole("button", { name: /Raspberry Pi/ }).textContent).not.toContain("ohne SSH-Zugang");
   });
 
   it("die Auswahl schreibt ?host=; derselbe Link wirkt wieder, nachdem man hier umgeschaltet hat", async () => {
     window.history.replaceState({}, "", "/ext/system/system?host=h-pi&x=1");
     vi.stubGlobal("fetch", mockFetch([]));
     render(<SystemPage />);
-    await waitFor(() => expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("System: Raspberry Pi"));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Server-Zustand: Raspberry Pi"));
 
-    fireEvent.change(screen.getByLabelText("Server wählen"), { target: { value: "" } });
+    expect(screen.getByTestId("host-picker-selected").textContent).toContain("Raspberry Pi");
+    navigateTo("/ext/system/system?x=1"); // Link ohne Server: Auswahl offen, ?x= bleibt
     expect(screen.getByText(/Einen Linux-Server wählen/)).toBeInTheDocument();
-    expect(window.location.search).toBe("?x=1"); // nur ?host= entfernt
+    expect(window.location.search).toBe("?x=1");
 
     // Für den Router ist das dieselbe Adresse wie beim Öffnen -- die Seite muss trotzdem umschalten.
     navigateTo("/ext/system/system?host=h-pi&x=1");
-    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("System: Raspberry Pi");
-    expect(screen.getByLabelText<HTMLSelectElement>("Server wählen").value).toBe("h-pi");
+    expect(screen.getByRole("heading", { level: 2 }).textContent).toBe("Server-Zustand: Raspberry Pi");
+    expect(screen.getByTestId("host-picker-selected").textContent).toContain("Raspberry Pi");
 
-    fireEvent.change(screen.getByLabelText("Server wählen"), { target: { value: "" } });
-    fireEvent.change(screen.getByLabelText("Server wählen"), { target: { value: "h-pi" } });
+    navigateTo("/ext/system/system?x=1");
+    fireEvent.click(screen.getByRole("button", { name: /Raspberry Pi/ }));
     expect(window.location.search).toBe("?x=1&host=h-pi");
     expect(await screen.findByText("Raspberry Pi 4 Model B Rev 1.5", { exact: false })).toBeInTheDocument();
   });
@@ -407,7 +441,8 @@ describe("Dienst neu starten", () => {
       await openInfo();
       fireEvent.click(within(screen.getByTestId("failed-units")).getByRole("button", { name: "nginx.service neu starten" }));
       await waitFor(() => expect(within(screen.getByTestId("failed-units")).getByRole("button", { name: "nginx.service neu starten" }).textContent).toBe("Startet neu …"));
-      fireEvent.change(screen.getByLabelText("Server wählen"), { target: { value: "h-nas" } });
+      fireEvent.click(screen.getByRole("button", { name: "Server wechseln" }));
+      fireEvent.click(within(screen.getByTestId("host-picker")).getByRole("button", { name: /NAS/ }));
       await waitFor(() => expect(infos).toEqual(["h-pi", "h-nas"]));
       // Auf dem anderen Server ist nichts gesperrt.
       const button = await waitFor(() => within(screen.getByTestId("failed-units")).getByRole("button", { name: "nginx.service neu starten" }));

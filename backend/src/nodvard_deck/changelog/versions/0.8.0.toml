@@ -1,0 +1,459 @@
+version = "0.8.0"
+date = "2026-10-12"
+title = "Proxmox in einem Schritt, Apps-Seite, Inventar-Baukasten, einfachere Bedienung und Sicherheits-Updates"
+
+[[entries]]
+kind = "neu"
+text = "Bei einem abgestürzten Container sagt Nodvard Shield in zwei festen Sätzen, was die Ursache heißt und was du tun kannst, auch ohne Nodvard KI."
+
+[[entries]]
+kind = "neu"
+text = "Netzwerk: Unter jedem Proxy-Host steht, zu welchem Docker-Container er führt und ob der läuft. Ist er gestoppt, startet ihn ein Knopf über die Freigabe."
+
+[[entries]]
+kind = "neu"
+text = "Neue Seite „Apps“: alle Kacheln an einem Ort, eigene Apps in Ordnern, per Ziehen sortieren oder in einen anderen Ordner legen."
+
+[[entries]]
+kind = "neu"
+text = "Vorschläge für neue Apps aus dem Nginx Proxy Manager und aus erkannten Containern – mit einem Klick übernehmen."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield: Bei automatischen Updates kannst du einzelne Server vom automatischen Neustart ausnehmen; sie bekommen ihre Updates weiter, und die Meldung sagt dir, wenn dort ein Neustart nötig ist."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox-Backups erklärt einen fehlgeschlagenen Lauf in zwei Sätzen: was passiert ist und was du tun kannst, auch in der Meldung."
+
+[[entries]]
+kind = "behoben"
+text = "Ein Backup mit Warnungen gilt nicht mehr als fehlgeschlagen; im Verlauf steht „OK, mit Warnungen“. Wurde so ein Job bisher als fehlgeschlagen gemeldet, kommt nach dem Update einmal „Backup wieder erfolgreich“."
+
+[[entries]]
+kind = "neu"
+text = "Gameserver und Netzwerk tragen jetzt das Kennzeichen „Beta“ (in den Einstellungen, im Einrichtungsassistenten, im Menü und auf der Seite): Sie funktionieren, sind aber noch nicht so gründlich erprobt wie der Rest."
+
+[[entries]]
+kind = "verbessert"
+text = "Das Modul „Backups“ heißt jetzt „Proxmox-Backups“, damit klar ist, dass es nur die Sicherungen deiner Proxmox-Server zeigt; die Sicherung von Nodvard Deck selbst bleibt unter Einstellungen → System."
+
+[[entries]]
+kind = "neu"
+text = "In der Service-Matrix öffnet „Konsole“ eine Shell direkt im laufenden Container, im Terminal von Nodvard Deck – wie „docker exec“, ohne SSH-Sitzung von Hand."
+
+[[entries]]
+kind = "neu"
+text = "In der Service-Matrix lassen sich gestoppte Container löschen. Volumes und das Image bleiben dabei erhalten."
+
+[[entries]]
+kind = "neu"
+text = "Im Dateimanager zeigt „Ansehen“ Textdateien und Bilder direkt auf der Seite, ohne sie erst herunterzuladen."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Server-Seite führt der neue Knopf „Dateien“ direkt in die Dateien dieses Servers; wo es keine gibt, steht ein Satz dazu, woran es liegt und wo du es behebst."
+
+[[entries]]
+kind = "neu"
+text = "Dateien: Zu einem Server gibt es „Wichtige Orte“ (Docker-Projekte, Protokolle, Proxmox-Sicherungen), und die Adresse merkt sich den geöffneten Ordner."
+
+[[entries]]
+kind = "neu"
+text = "Dokumente holt neue PDFs und Bilder aus einem Nextcloud-Ordner ab, etwa aus dem Ordner einer Scanner-App: alle 15 Minuten von selbst oder mit „Jetzt abholen“. Den Ordner stellst du in den Einstellungen der Dokumente ein, die Dateien bleiben in der Nextcloud."
+
+[[entries]]
+kind = "neu"
+text = "Dokumente lassen sich jetzt Gegenständen im Inventar zuordnen: Rechnung, Handbuch oder Garantieschein direkt am Gerät hochladen und dort wiederfinden. Auf der Seite Dokumente sieht man, wozu ein Dokument gehört, und kann danach filtern. Wird ein Gegenstand gelöscht, bleiben seine Dokumente erhalten."
+
+[[entries]]
+kind = "neu"
+text = "Einen Server kannst du jetzt auch mit Passwort einrichten: Du gibst einmal Benutzer und Passwort eines Kontos ein, Nodvard Deck führt den Einrichtungsbefehl selbst aus und vergisst das Passwort sofort wieder. Dafür braucht dein Konto das Recht, Befehle auf Servern auszuführen (hosts.execute)."
+
+[[entries]]
+kind = "sicherheit"
+text = "Beim Einrichten mit Passwort geht das Passwort nur an einen Server, dessen Schlüssel Nodvard Deck schon kennt, wird nirgends gespeichert und nach wenigen Fehlversuchen gebremst; ohne HTTPS warnt dich das Formular vorher."
+
+[[entries]]
+kind = "sicherheit"
+text = "Proxmox und Proxmox-Backups merken sich den Fingerabdruck des Zertifikats und sprechen nur noch mit genau diesem Server – „Zertifikat nicht prüfen“ ist nicht mehr nötig."
+
+[[entries]]
+kind = "neu"
+text = "Wechselt das Zertifikat eines Proxmox-Servers, hält die Verbindung an; unter „Verbindungen verwalten“ → „Zertifikat“ vergleichst du den neuen Fingerabdruck und bestätigst ihn."
+
+[[entries]]
+kind = "verbessert"
+text = "Auf der Seite „Aktionen“ steht bei jedem offenen Vorschlag, wie lange er noch bestätigt werden kann, und das Risiko auf Deutsch."
+
+[[entries]]
+kind = "neu"
+text = "Stürzt ein Container nach einem Image-Update beim Start ab, stellt die Service-Matrix sofort die alte Version wieder her (abschaltbar, nie bei Datenbanken und anderen Datenspeichern)."
+
+[[entries]]
+kind = "neu"
+text = "Inventar als Homelab-Baukasten: Hersteller, Modell, Seriennummer und Produktlink je Gerät, dazu „Gehört zu Server“; ein Klick sucht das Teil bei Geizhals oder idealo."
+
+[[entries]]
+kind = "neu"
+text = "Bauprojekte im Inventar: Teile einem Projekt zuordnen und sehen, was schon ausgegeben ist und ob das Budget reicht."
+
+[[entries]]
+kind = "neu"
+text = "Racks im Inventar: zeigt, welches Gerät in welcher Höheneinheit steckt; Geräte lassen sich einsetzen und herausnehmen."
+
+[[entries]]
+kind = "neu"
+text = "Inventar: „Teile eines Servers auslesen“ fragt einen Linux-Server, was drinsteckt (Prozessor, Arbeitsspeicher, Platten, Mainboard, Karten), und übernimmt die ausgewählten Teile mit Seriennummer ins Inventar. Es wird nur gelesen; dafür braucht man das Recht, Befehle auf Servern auszuführen."
+
+[[entries]]
+kind = "neu"
+text = "Inventar: „Bestellliste einlesen“ holt Käufe aus einer Tabelle, etwa dem Amazon-Bestellverlauf, mit Datum, Preis und Produktlink. Was schon im Inventar steht, ist nicht angekreuzt."
+
+[[entries]]
+kind = "verbessert"
+text = "Inventar: Seltenes wie Kategorien, Export und Einlesen liegt jetzt unter „Mehr“. Auf dem Handy sind die Namen in der Liste jetzt lesbar, und im Export wird kein Name mehr versehentlich zur Excel-Formel."
+
+[[entries]]
+kind = "verbessert"
+text = "System-Seite: Die Server-Kacheln zeigen jetzt auch die Auslastung (CPU und Arbeitsspeicher); ein Problem wie eine fast volle Platte steht als Hinweis darunter."
+
+[[entries]]
+kind = "verbessert"
+text = "Dateien: Bei Quellen, hinter denen ein Server steht, siehst du jetzt, ob er erreichbar ist und welches System darauf läuft."
+
+[[entries]]
+kind = "verbessert"
+text = "Das Shield-Briefing sagt jetzt, dass die Push-Nachricht wegen der Mindest-Stufe in ntfy nicht aufs Handy kommt."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Lagebericht von Nodvard Shield nennt jetzt, wie viele Vorschläge auf deine Freigabe warten und welche Container in den letzten 24 Stunden abgestürzt sind."
+
+[[entries]]
+kind = "neu"
+text = "Die Härtungs-Seite von Nodvard Shield zeigt oben „Deine wichtigsten Baustellen“: die bis zu fünf Hinweise mit der größten Wirkung, über alle Server."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield erklärt die häufigsten Hinweise des Härtungs-Audits auf Deutsch: was sie heißen und was du tun kannst."
+
+[[entries]]
+kind = "verbessert"
+text = "Mehrere SSH-Hinweise des Audits nennen jetzt jeweils, welche Einstellung gemeint ist, statt wortgleich dazustehen."
+
+[[entries]]
+kind = "verbessert"
+text = "Ein Klick auf die Meldung der Container-Wache öffnet direkt den vorgeschlagenen Neustart unter „Aktionen“. Die Seite hebt ihn hervor, auch wenn er schon erledigt ist."
+
+[[entries]]
+kind = "neu"
+text = "Meldungen, die älter als 90 Tage sind, löscht Nodvard Deck ab jetzt jede Nacht von selbst (ungelesene kritische bleiben stehen, bis du sie liest), wenn du unter Einstellungen, System, „Zeit & Protokoll“ nichts anderes einstellst."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Seite „Meldungen“ kannst du einzelne Meldungen mit dem Papierkorb löschen oder mit „Alle gelesenen löschen“ aufräumen."
+
+[[entries]]
+kind = "neu"
+text = "Push-Nachrichten gehen jetzt auch an Telegram, Discord, Gotify, Pushover, Matrix, Slack und Mattermost – oder über eine eigene Apprise-API an fast jeden anderen Dienst. Jeder Kanal hat seine eigene Mindest-Stufe."
+
+[[entries]]
+kind = "verbessert"
+text = "Das Modul „ntfy-Benachrichtigungen“ heißt jetzt „Push-Nachrichten“; ntfy ist nicht mehr Pflicht, ein anderer Kanal reicht."
+
+[[entries]]
+kind = "neu"
+text = "In den ntfy-Einstellungen wählst du jetzt eine Mindest-Stufe (alles, ab Warnung oder nur Kritisch) und die Lautstärke je Stufe; kleinere Meldungen stehen weiter unter „Meldungen“."
+
+[[entries]]
+kind = "neu"
+text = "Das ntfy-Thema wählst du per Knopf zufällig, und ein QR-Code unter den Einstellungen abonniert es mit der Handy-Kamera in der ntfy-App."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ist die Zwei-Faktor-Anmeldung an, brauchst du zum Ändern deines Passworts jetzt auch den Code aus deiner Authenticator-App oder einen Wiederherstellungs-Code; eine ältere Handy-App bekommt dazu den Hinweis, sich zuerst zu aktualisieren."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Deck meldet jetzt, wenn ein Proxmox-Speicher fast voll ist (Vorgabe ab 90 %, ab 98 % kritisch, einstellbar beim Modul Proxmox VE)."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Deck meldet jetzt, wenn die letzte erfolgreiche Sicherung einer VM oder eines Containers zu alt ist, auch wenn kein Backup fehlschlägt, etwa weil der Job abgeschaltet wurde (Vorgabe 3 Tage, mindestens 2, einstellbar beim Modul Backups; läuft ein Job seltener, gilt sein Abstand)."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox lässt sich jetzt in einem Schritt verbinden: Adresse und Passwort eingeben, Nodvard Deck legt den Zugang in Proxmox selbst an, liest gleich danach alles ein und vergisst das Passwort sofort wieder. Ist Proxmox-Backups eingeschaltet, bekommt es dabei gleich einen eigenen Zugang."
+
+[[entries]]
+kind = "sicherheit"
+text = "Das Passwort geht nur an den Server, dessen Zertifikat bestätigt ist (Fingerabdruck oder Zertifizierungsstelle)."
+
+[[entries]]
+kind = "sicherheit"
+text = "Erweiterungen können nur noch ihre eigenen Zugangsdaten im Tresor ersetzen oder löschen, und an die Zwei-Faktor-Schlüssel von Konten kommen sie gar nicht."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Proxmox-Seite ist übersichtlicher: oben stehen Knoten, VMs, Updates und der vollste Speicher auf einen Blick, darunter Reiter für VMs, Speicher, Updates, Aufgabenverlauf und Verbindungen."
+
+[[entries]]
+kind = "verbessert"
+text = "Bei jeder VM und jedem Container stehen nur noch Konsole und Starten oder Herunterfahren direkt da; Neustarten, Snapshot anlegen und Hart ausschalten liegen unter „Mehr“."
+
+[[entries]]
+kind = "verbessert"
+text = "Eine Meldung „Speicher fast voll“ öffnet die Proxmox-Seite gleich beim Speicher und markiert die Speicher des betroffenen Knotens."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox VE meldet jetzt einen ZFS-Pool, der nicht mehr in Ordnung ist oder ganz fehlt, und zeigt die Pools beim Knoten an."
+
+[[entries]]
+kind = "neu"
+text = "Proxmox VE meldet einen Datenträger, der 10 bis 15 Minuten lang zu heiß ist (Festplatten ab 55 °C, SSD ab 65 °C, NVMe ab 70 °C, einstellbar)."
+
+[[entries]]
+kind = "verbessert"
+text = "Nach „Dienst neu starten“ prüft Nodvard Deck, ob der Dienst wirklich läuft und laufen bleibt. Fällt er gleich wieder aus oder startet er immer wieder neu, steht das in der Aktion."
+
+[[entries]]
+kind = "verbessert"
+text = "Nach „Starten“, „Neustart“ und „Stack neu starten“ in der Service-Matrix prüft Nodvard Deck, ob die Container wirklich laufen und laufen bleiben. Stürzt einer gleich wieder ab, steht das mit dem Grund in der Aktion."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Schutzwert von Nodvard Shield zählt jetzt auch offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse mit und nennt, was ihn senkt."
+
+[[entries]]
+kind = "verbessert"
+text = "System- und Terminal-Seite: Den Server wählst du jetzt über Kacheln mit Name, Adresse, System, Status und dem wichtigsten Befund statt über eine Klappliste – mit Suche ab sechs Servern. Der zuletzt gewählte Server ist beim nächsten Besuch vorgewählt. Dieselbe Auswahl kommt nach und nach auf die anderen Seiten mit Server-Wahl."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Die vier Knöpfe oben (Briefing, Audit, Tiefenscan, Schnellscan) stehen nur noch bei „Übersicht“ und „Scans“. Auf den anderen Reitern liegen sie unter „Mehr“, am Handy rutscht der Inhalt so nicht mehr weit nach unten."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Die Kachel „In Quarantäne“ zeigt eine Zahl statt einer Summe aus zwei verschiedenen Dingen. Im Einbruchschutz heißt der Knopf bei einem neuen Port oder einer geänderten Datei einheitlich „Ist in Ordnung“."
+
+[[entries]]
+kind = "verbessert"
+text = "Updates: Ein Satz erklärt die zwei Wege, Updates automatisch einzuspielen. Der Tipp beim Server entfällt, wenn Nodvard Deck schon selbst einspielt, und „Aufräumen“ gibt es jetzt bei jedem Server."
+
+[[entries]]
+kind = "neu"
+text = "Schlägt ein geplanter Skript-Lauf fehl, bekommst du eine Meldung, einmal je Fehler und erst wieder, wenn sich der Fehler ändert oder das Skript zwischendurch durchgelaufen ist."
+
+[[entries]]
+kind = "behoben"
+text = "Ein geplanter Skript-Lauf, der auf dem Server mit einem Fehler endet oder vom Dashboard abgelehnt wird, steht im Verlauf jetzt als fehlgeschlagen statt als erfolgreich."
+
+[[entries]]
+kind = "neu"
+text = "Läuft Nodvard Deck hinter einem Reverse-Proxy wie Nginx Proxy Manager, Traefik oder Caddy, kannst du den Proxy unter Einstellungen, System eintragen, damit die echten Adressen deiner Geräte und HTTPS zählen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Hinter einem eingetragenen Proxy sehen die Sperre nach zu vielen falschen Anmeldungen und das Protokoll die echte Adresse jedes Geräts. Das ist nur sicher, solange du den Proxy selbst einträgst: Mit einem ganzen Netz könnte jedes Gerät darin eine falsche Adresse vorgeben, deshalb warnt Nodvard Deck bei Netzen mit mehr als 16 Adressen."
+
+[[entries]]
+kind = "verbessert"
+text = "Hattest du die Umgebungsvariable FORWARDED_ALLOW_IPS gesetzt, trag die Adresse deines Proxys jetzt unter Einstellungen, System, Vertrauenswürdiger Proxy ein; die Variable wirkt nicht mehr."
+
+[[entries]]
+kind = "verbessert"
+text = "Läuft ein abgestürzter Container wieder ruhig, erledigt die Container-Wache den Vorfall von selbst. Kein Abhaken mehr von Hand."
+
+[[entries]]
+kind = "verbessert"
+text = "Stürzt ein Container nach einem freigegebenen Neustart wieder ab, sagt die Meldung das ausdrücklich, auch innerhalb der Ruhezeit."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Die „Ausgenommenen Ordner“ gelten jetzt auch für den Echtzeit-Wächter, der dort weder nach neuen Dateien sucht noch etwas prüft."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield findet Samba- und NFS-Freigaben und den Datenordner einer Nextcloud auf deinen Servern und nimmt sie mit einem Klick in den Echtzeit-Wächter auf."
+
+[[entries]]
+kind = "sicherheit"
+text = "Der Echtzeit-Wächter prüft jetzt auch Dateien, die mit alter Änderungszeit auf den Server kopiert wurden, etwa über eine Samba-Freigabe oder den Nextcloud-Sync."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Backups-Seite holst du einen Proxmox-Gast mit „Als Kopie wiederherstellen“ aus einer Sicherung zurück, als neuen Gast mit neuer Nummer im eigenen Pool „nodvard-kopien“, der nicht von selbst startet, während das Original unberührt bleibt."
+
+[[entries]]
+kind = "neu"
+text = "Vor dem Anlegen zeigt der Dialog eine Zusammenfassung, und Nodvard Deck prüft Nummer, Platz, Rechte und Proxmox-Version (VMs brauchen Proxmox VE 7.2 oder neuer)."
+
+[[entries]]
+kind = "neu"
+text = "Am Ende kommt genau eine Meldung, auch wenn der Backup-Wächter die Kopie erst später fertig einrichtet."
+
+[[entries]]
+kind = "verbessert"
+text = "Zahlen in den Einstellungen der Erweiterungen haben jetzt feste Grenzen: Ein Wert wie 0 oder -5 lässt sich nicht mehr speichern, und das Feld sagt dir, welche Werte erlaubt sind."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield setzt eine früher gespeicherte, unpassende Zahl (etwa eine negative Dateigröße) beim Scan auf die erlaubte Grenze, statt sie in den Befehl auf dem Server zu übernehmen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Setzt ein Admin das Passwort eines anderen Kontos, dessen Zwei-Faktor-Anmeldung zurück oder vergibt Verwaltungsrechte, braucht er jetzt sein eigenes Passwort und, wenn er Zwei-Faktor an hat, seinen eigenen Code; danach steht es unter „Meldungen“."
+
+[[entries]]
+kind = "behoben"
+text = "Im Protokoll steht bei jedem Vorgang ein verständlicher deutscher Text, auch bei Wiederherstellung, Updates, Beispieldaten und Nodvard Shield."
+
+[[entries]]
+kind = "verbessert"
+text = "Server, die ein ausgeschaltetes Modul eingelesen hat, sind im Cockpit gekennzeichnet; beim Ausschalten und Löschen erklärt eine Rückfrage, was mit ihnen passiert."
+
+[[entries]]
+kind = "neu"
+text = "Unten in den Einstellungen und in der Suche (Strg+K) öffnet „Anleitung“ die Anleitung; an vielen Stellen führt ein Link direkt zum passenden Abschnitt."
+
+[[entries]]
+kind = "behoben"
+text = "Ist ein Proxmox-Server aus oder antwortet er nicht richtig, zeigt die Auslastung jetzt den Grund statt eines Programmfehlers. Im Protokoll steht dafür kein Fehlerbericht mehr."
+
+[[entries]]
+kind = "behoben"
+text = "Härtungs-Audit: Der Abbruch nach der Zeitgrenze klappt jetzt auch auf Servern, denen ein bestimmtes Hilfsprogramm fehlt. Beendet der Server Lynis vorher selbst, etwa bei knappem Arbeitsspeicher, nennt die Meldung diesen Grund statt „hat zu lange gedauert“."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ausgenommene Ordner beim Virenscan gelten jetzt genau für diesen Ordner: „/srv/backup“ nimmt nicht mehr nebenbei „/srv/backups-wichtig“ aus, und der eingebaute Ausschluss von „/dev“ trifft nicht mehr „/devel“; Platzhalter wie * gelten dabei nicht mehr als Muster."
+
+[[entries]]
+kind = "behoben"
+text = "System, Skripte und Gameserver: Lässt sich eine Liste nicht laden, steht das jetzt mit Grund und „Erneut versuchen“ da, statt fälschlich „Noch kein Linux-Server“, „Noch keine Läufe“ oder „Keine Versionen“ anzuzeigen."
+
+[[entries]]
+kind = "behoben"
+text = "Gameserver: Fehlen die gespeicherten Einstellungen eines Servers, weil er gerade nicht antwortet, lassen sie sich nicht mehr versehentlich mit einem leeren Profil überschreiben."
+
+[[entries]]
+kind = "behoben"
+text = "Server-Seite: Lässt sich ein Server gerade nicht laden, steht der Grund mit „Erneut versuchen“ da statt „Server nicht gefunden“. Dasselbe gilt für Werkzeuge, Aktionen und Auslastung, die vorher still fehlten oder „Noch keine Werkzeuge“ zeigten."
+
+[[entries]]
+kind = "behoben"
+text = "Proxmox und Proxmox-Backups: Lässt sich eine Liste nicht laden, steht das jetzt mit Grund und „Erneut versuchen“ da. Vorher fehlten Updates und Speicher still, der Aufgabenverlauf zeigte „(0)“, und bei jedem Gast stand „keine Sicherung vorhanden“ oder „Keine Läufe bekannt.“"
+
+[[entries]]
+kind = "behoben"
+text = "Einstellungen, Automatik: Im Wartungsfenster steht bei einem Ladefehler der Grund statt „Keine Server bekannt.“."
+
+[[entries]]
+kind = "behoben"
+text = "Die Startseite meldet nicht mehr „Alles läuft rund“, wenn die Daten der Server gar nicht angekommen sind. Sie sagt dann, was fehlt, und bietet „Erneut versuchen“ an. Ältere Werte stehen als „nicht aktuell“ da."
+
+[[entries]]
+kind = "behoben"
+text = "Apps, Meldungen, Aktionen und die Server-Einstellungen zeigen bei einem Ladefehler den Grund und „Erneut versuchen“ statt einer leeren Liste oder eines bloßen „Fehler“."
+
+[[entries]]
+kind = "behoben"
+text = "Inventar und Dokumente: Lässt sich eine Liste nicht laden, steht der Grund mit „Erneut versuchen“ da, statt dass die Seite kaputtgeht. Scheitern Löschen, Herunterladen, Vorschau oder ein Tag, steht der Grund dabei, statt dass still nichts passiert."
+
+[[entries]]
+kind = "behoben"
+text = "Service-Matrix: Klappt das automatische Neuladen einmal nicht, bleibt die Tabelle mit dem letzten Stand stehen und darüber steht, was los ist. Vorher verschwand die ganze Tabelle hinter einer Fehlerzeile."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Lässt sich eine Liste nicht laden, steht das jetzt da, statt fälschlich „keine Funde“ oder „noch kein Audit“ anzuzeigen."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Tiefenscan und Härtungs-Audit für alle Server fragen vorher nach, Fehler der Container-Wache stehen mit Grund da, und der Schutzwert passt aufs Handy."
+
+[[entries]]
+kind = "verbessert"
+text = "Wie oft Shield-Wächter, Einbruchschutz und die Platten- und Temperatur-Warnungen prüfen, wählst du jetzt aus einer Liste („alle 10 Minuten“), die nur gleichmäßige Abstände anbietet; ein früher eingetragener Wert wie 7 Minuten läuft mit dem nächstkleineren, also alle 6 Minuten."
+
+[[entries]]
+kind = "verbessert"
+text = "Am E-Mail-Feld unter „Mein Konto“ steht nicht mehr, dass es für Benachrichtigungen gedacht ist, denn Nodvard Deck verschickt keine E-Mails."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Nach Quarantäne oder Löschen eines Fundes steht beim Server jetzt „in Quarantäne“ oder „bereinigt“ statt weiter rot „Bedrohung“. Kachel, Server-Zeilen und Shield-Seite zählen dieselben Funde, auch die des Wächters."
+
+[[entries]]
+kind = "verbessert"
+text = "Das Modul „System“ heißt jetzt „Server-Zustand“, damit es nicht mit „Einstellungen → System“ verwechselt wird. Adressen, Einstellungen und Rechte bleiben gleich."
+
+[[entries]]
+kind = "verbessert"
+text = "Tresor: Benutzt ein Modul ein Geheimnis, steht das höchstens einmal pro Stunde im Protokoll und nicht mehr bei jedem einzelnen Zugriff."
+
+[[entries]]
+kind = "neu"
+text = "Tresor: Zu jedem Geheimnis merkt sich das Dashboard, wer es benutzt (Modul, Server, Zwei-Faktor-Anmeldung) und wann zuletzt. Außerdem lässt sich ein Ablaufdatum hinterlegen. Die Seite dazu folgt."
+
+[[entries]]
+kind = "behoben"
+text = "App-Kacheln öffnen die richtige Adresse: Entscheidend ist der Port im Container. Pi-hole öffnet seine Verwaltung unter /admin/ statt den DNS-Port, Container ohne Weboberfläche (z. B. der Portainer-Agent oder Datenbanken) bekommen keinen Link mehr, und https wird bei 443, 8443 und 9443 von selbst genommen."
+
+[[entries]]
+kind = "neu"
+text = "Service-Matrix: Die Adresse hinter „Öffnen“ lässt sich je Container selbst festlegen (Knopf „Adresse“). Sie bleibt gespeichert, auch wenn der Container neu erstellt wird."
+
+[[entries]]
+kind = "behoben"
+text = "Inventar: Sehr große Mengen, Preise oder Budgets werden abgelehnt, statt später die Projektliste mit einem Fehler zu blockieren. Ein Produktlink mit Benutzername oder Passwort vor der Adresse wird nicht mehr angenommen."
+
+[[entries]]
+kind = "behoben"
+text = "Dokumente: Wurde ein Gegenstand im Inventar gelöscht, während die Dokumente ausgeschaltet waren, verschwindet die alte Zuordnung jetzt beim nächsten Start von selbst."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nextcloud: Antworten des Servers werden mit einem abgesicherten XML-Leser gelesen. Präparierte Antworten (eingebettete Verweise, aufgeblähte Platzhalter) werden abgelehnt statt ausgewertet."
+
+[[entries]]
+kind = "sicherheit"
+text = "Proxmox: Scheitert eine Abfrage (Snapshots, Details, Zustand eines Knotens, Aufgabenprotokoll), zeigt die Seite nur noch einen verständlichen Satz; technische Einzelheiten stehen im Protokoll des Dashboards statt im Browser."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Sperre nach zu vielen falschen Anmeldungen zählt IPv6-Adressen jetzt je Netz (/64): Wer ein ganzes Netz bekommt, kann nicht mehr mit jeder neuen Adresse von vorn anfangen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Liste „Vertrauenswürdiger Proxy“ ändert nur noch der Inhaber. Andere Admins sehen sie, können sie aber nicht mehr bearbeiten."
+
+[[entries]]
+kind = "sicherheit"
+text = "Wiederherstellen: Eine absichtlich verbaute Sicherung kann die Prüfung nicht mehr minutenlang beschäftigen; die Suche nach versteckten virtuellen Tabellen läuft jetzt immer schnell."
+
+[[entries]]
+kind = "sicherheit"
+text = "Wiederherstellen: Eine Sicherung, deren Datenbank-Aufbau nicht als Text gespeichert ist, wird abgelehnt. Sonst könnte sich darin eine versteckte Tabelle an der Prüfung vorbeimogeln."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Der Schutzwert fällt während eines laufenden Scans nicht mehr ab. Für „aktuell gescannt“ zählt der letzte fertige Scan."
+
+[[entries]]
+kind = "verbessert"
+text = "Nodvard Shield: Unter dem Schutzwert steht jetzt auch, wenn ein Server seit 8 Tagen keinen fertigen Scan hat oder sein letzter Scan gescheitert ist."
+
+[[entries]]
+kind = "behoben"
+text = "Update-Zentrale: Der Hinweis auf das Proxmox-Abo erscheint nur noch, wenn wirklich die Enterprise-Quelle von Proxmox antwortet, nicht schon, wenn ihr Name irgendwo in einer Adresse vorkommt."
+
+[[entries]]
+kind = "sicherheit"
+text = "Skripte: Eine Skript-Kennung aus einer Anfrage kann nie mehr auf Ordner außerhalb des Skript-Speichers zeigen, auch nicht über „..“, einen absoluten Pfad oder einen Verweis."
+
+[[entries]]
+kind = "sicherheit"
+text = "Hochgeladene SVG-Bilder (Logo, App-Symbole) werden mit einem abgesicherten Leser geprüft, der keine eingebetteten Verweise auf Dateien oder andere Adressen auflöst."

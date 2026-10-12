@@ -141,7 +141,7 @@ first, then the common ones (Berlin, Vienna, Zurich …); known zones show their
 
 All bundled modules as tiles with a switch (except the sample module "Hello World" for developers, which only appears
 under Settings → Extensions), sorted by topic: first "For your servers" („Für deine Server“)
-(System, Terminal, Service matrix, Proxmox VE …), then security, tools, connections to other services.
+(Server status („Server-Zustand“), Terminal, Service matrix, Proxmox VE …), then security, tools, connections to other services.
 One click on the tile or the switch turns a module on or off. No module is mandatory ("Skip"). Modules that
 still need details afterwards (address, credentials, token) carry the note "Needs details afterwards"
 („Braucht danach noch Angaben“); you enter these details **only after the wizard** under Settings →
@@ -200,18 +200,21 @@ printed out, **not** only on the phone, because the phone is exactly what is sup
   has already been used, wait for the next one. After 10 wrong codes in 15 minutes (or 20 in 24 hours), no matter from
   which device, code entry for the account is blocked for a while and Nodvard Deck sends a notification. The block
   stays in place after a restart of Nodvard Deck. Whoever guesses that often probably knows the password. If it was not
-  you, change your password right away; that works during the block too. During that time you can sign in with a
-  recovery code. Confirmations with a two-factor code (for example for an update) only work again once the block is
-  over.
+  you, change your password right away. For that and for signing in you need a recovery code during that time, because
+  the codes from the app are blocked. Confirmations with the code from the app (for example for an update) only work
+  again once the block is over.
 - **How many are left** is shown under My account. If there are few or none: "Generate new recovery codes"
   („Neue Wiederherstellungs-Codes erzeugen“). This needs your password and a code: the current one from the app or one
   of your existing recovery codes. The old codes become invalid immediately.
 - **Switching it off** (My account → "Switch off" („Abschalten“)) only works with your password **and** a code: the
   current one from the app or a recovery code, which is used up in the process. Someone who only knows your password
-  cannot switch two-factor login off this way. Older apps do not ask for the code yet; there, switching off, new codes
-  and backups only work after an app update, in the browser right away.
-- If a recovery code is used to switch off or to generate new codes, this is recorded in the audit log just like at
-  sign-in, and Nodvard Deck sends a notification.
+  cannot switch two-factor login off this way. Older apps do not ask for the code yet; there, switching off, new codes,
+  changing the password and backups only work after an app update, in the browser right away.
+- **Changing the password** (My account → "Password" („Passwort“)) also asks for the code from the app or a recovery
+  code when two-factor login is on; the field for it is shown right away. Otherwise someone who only knows your old
+  password could set a new one and lock you out. An older phone app shows a note to update the app first.
+- If a recovery code is used to switch off, to change the password or to generate new codes, this is recorded in the
+  audit log just like at sign-in, and Nodvard Deck sends a notification.
 - **Downloading or restoring a backup** also asks for the code from the app when two-factor login is on (no recovery
   code here): a backup contains all keys, including the one for two-factor login. The field for it appears right away.
   If you mistype, the passwords stay filled in; only the code has to be entered again.
@@ -233,7 +236,8 @@ Settings → Users → **"New user"** („Einstellungen → Benutzer → Neuer B
   account" („Mein Konto“). (The password of *other* users is set later under "Edit"
   („Bearbeiten“); your own and the owner's cannot be set there – your own is set under "My account".)
 - **Display name** („Anzeigename“), **Email (optional)** („E-Mail (optional)“); an address you enter needs an `@`
-  (e.g. `name@beispiel.de`).
+  (e.g. `name@beispiel.de`). Nodvard Deck does not send emails: the address is only a detail of the account
+  (notifications arrive as a push via ntfy).
 - **Roles** („Rollen“):
   - **Administrator** (`admin`) – full administration, including users and settings
   - **Operator** („Bediener“, `operator`) – operate servers, approve actions up to medium risk
@@ -246,7 +250,10 @@ Settings → Users → **"New user"** („Einstellungen → Benutzer → Neuer B
 **Resetting a user's two-factor login:** If someone has lost their phone and their recovery codes, a user
 with the privilege `users.write` (role `admin`) turns off that person's two-factor login under Settings →
 Users → **"Reset two-factor"** („Zwei-Faktor zurücksetzen“) (for safety, the admin's own password is asked
-for). The person is signed out everywhere, and the audit log records who did it. Afterwards, login works with
+for and, if the admin has two-factor login on, the admin's own code from the app). The same applies when an admin
+sets a new password for someone else while editing, creates an account with management rights (role `admin`) or gives
+an account that role. The person is signed out everywhere, the audit log records who
+did it, and "Notifications" shows "Access of … changed" („Zugang von … geändert“). Afterwards, login works with
 the password only, and the person can set up two-factor again. **This does not work for the owner** – the
 owner's two-factor login can only be turned off by the owner personally (under My account) or by the
 emergency command on the server ([12.](#12-locked-out-emergency-commands)).
@@ -272,9 +279,25 @@ switch on the right; "Configure" („Konfigurieren“) opens the extension's set
 „Einrichtung nötig“ – means that details are still missing or that the last connection test failed). If you open
 the page of a module that is switched off (for example via a bookmark), it says so, and **"Switch on"** („Einschalten“)
 switches it on right there (without the privilege for that, it says that an administrator can switch it on). A good
-start for almost any home network: Terminal, System, Nodvard Shield and ntfy notifications, plus Service matrix if
-Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Backups if
+start for almost any home network: Terminal, Server status, Nodvard Shield and Push notifications, plus Service matrix if
+Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Proxmox-Backups if
 you use Proxmox** – otherwise leave them off (see [4.1](#41-without-proxmox)). The rest as needed.
+
+**"Beta":** Game servers and Network carry a "Beta" badge (in the settings, in the wizard, in the menu and above the
+module's page). They work, but are not yet as thoroughly tested as the rest. Feedback helps.
+
+**Address check (Network):** On the "Network" page each proxy host of Nginx Proxy Manager shows which Docker container
+it leads to and whether it runs, e.g. „Führt zum Container immich_server auf docker – der ist gestoppt.“ (leads to the
+container immich_server on docker, which is stopped). If it is stopped, the button „Container starten“ starts it through
+the approval (for users with `hosts.execute`). The mapping uses the server address with port (also for stopped
+containers; ports bound only to `127.0.0.1` do not count), `host.docker.internal` on the server Nginx Proxy Manager
+itself runs on (`localhost` only if it runs in host network mode, otherwise that is Nginx Proxy Manager itself), and the
+container name or Compose service.
+Names only count on the server of Nginx Proxy Manager (Docker resolves them only in its own network); if that server is
+unknown, the result says „vermutlich“ (probably), without red and without a button. The Service Matrix must be switched
+on for this, it knows the containers. A target that matches no container (e.g. the Proxmox web UI) is shown in grey and
+is not an error. Not detected: containers in host network mode (they show no ports), network aliases and additional
+locations of a proxy host.
 
 **Credentials belong to their address.** In an extension's settings, first enter the address and click "Save"
 („Speichern“), then store the token or password in the "Connection" card („Verbindung“) – Nodvard Deck does not
@@ -289,7 +312,7 @@ Nodvard Deck does not need Proxmox. A Raspberry Pi, a Debian VM, a NAS or a few 
 different then:
 
 - **You create servers by hand** ([5.1](#51-create-a-server)) and give each one an SSH login
-  ([5.2](#52-set-up-ssh-access--three-ways)). The modules Proxmox VE and Backups stay off; their entries then appear
+  ([5.2](#52-set-up-ssh-access--three-ways)). The modules Proxmox VE and Proxmox-Backups stay off; their entries then appear
   neither in the menu nor in the cockpit.
 - **Status (online/offline):** Nodvard Deck checks servers created by hand **by itself every 2 minutes**
   (Settings → Servers & access → "Check reachability" („Einstellungen → Server & Zugänge → Erreichbarkeit prüfen“);
@@ -306,7 +329,7 @@ different then:
   "unreachable"; if you do not want that, turn off the check on its page. "Check connection" („Verbindung prüfen“)
   still exists for the precise test including login. For unchecked servers, the cockpit shows "not checked
   yet" („noch nicht geprüft“).
-- **Utilization and history** (CPU, memory, disk, network, temperature) come from the **System** module via SSH, only
+- **Utilization and history** (CPU, memory, disk, network, temperature) come from the **Server status** module („Server-Zustand“, called "System" up to version 0.8.0) via SSH, only
   for Linux servers with an SSH login. Without this module the server page shows a notice instead of the rings and
   curves. The history is measured every 30 seconds and is still empty for the first few minutes. If the server has
   never answered or the login is not confirmed yet, the server page says so instead of letting you wait for curves
@@ -319,9 +342,19 @@ different then:
   loads and asks for all servers in a single query (`GET /hosts/metrics/latest`). If the latest measurement is older
   than 2 minutes, it says "stale" („veraltet“) with the age underneath and the rings are muted; after 10 minutes
   without a measurement the server becomes a plain row again. A server that is "unreachable" does not show old values
-  as current. Servers without measurements (Windows, no SSH login, System module off, measurements turned off for the
+  as current. Servers without measurements (Windows, no SSH login, Server status module off, measurements turned off for the
   server) stay a single row, with a note on why where that fits.
-- **Docker containers:** Service matrix, for servers with the tag `docker`.
+- **Docker containers:** Service matrix, for servers with the tag `docker`. There you start, stop and delete
+  containers (only stopped ones are deleted; volumes and the image stay), read their logs live, open a shell in the
+  container with "Console" („Konsole“) and apply newer images ("Apply" – „Einspielen“, only for Docker Compose
+  services). If the new version crashes on start, the service matrix usually goes back to the old one by itself –
+  never for databases and other data stores; can be switched off under "Configure" („Bei Fehlstart automatisch zurück“).
+  After "Start", "Restart" and "Restart stack" Deck checks for up to a minute whether the containers really
+  run and keep running (without a healthcheck: twice, 15 seconds apart, without a new start). If a container crashes
+  right away, the action counts as failed and says why (e.g. „beendet, Exit-Code 1“). For a stack only the
+  containers that ran before count. A single restart (for example because a dependency was not ready yet) and an end
+  with exit code 0 (containers for one-off tasks) do not count as failures, they are only mentioned; "unhealthy" only
+  counts if it stays that way until the end.
 - **Apps in the cockpit without the Service matrix:** In the "Apps" area you create your own tiles with **+ Add app**
   („+ App hinzufügen“) – name, address (`http://192.168.1.1`), icon (from a selection or an emoji), color, group and,
   if you like, the server it belongs to. That way routers, the NAS interface or Pi-hole also appear in the cockpit,
@@ -330,15 +363,52 @@ different then:
   and administrators may create and change them (privilege `apps.write`); everyone who can see servers can see them.
   Nodvard Deck never calls the addresses itself (so it shows no "running/not running"), allows only `http://` and
   `https://` and no credentials in the address; icons are never image URLs.
+- **"Apps" page** (in the menu on the left): all tiles in one place, your own apps in **folders** (their group) that
+  you can collapse. With `apps.write` you drag a tile onto another one (sorted in before it) or onto a folder heading
+  (to the end of that folder); without a mouse via the menu (⋮). Under **"Suggestions"** („Vorschläge“) you find
+  addresses your modules already know – for example the proxy hosts from Nginx Proxy Manager or detected containers
+  with a web interface – that are not an app yet; **"Take over"** („Übernehmen“) pre-fills the dialog, the app is only
+  created with "Save".
 - **Updates, antivirus, intrusion protection:** Nodvard Shield, for all Linux servers with an SSH login. The AI container
-  watch in it is optional; without an AI server it still shows crashed containers. With AI it proposes at most a
+  watch in it is optional; without an AI server it still shows crashed containers, with the cause determined by the
+  system (for example out of memory or killed from outside) and two fixed sentences: what it means and what you can
+  do. With AI it proposes at most a
   restart of a crashed container, which you find under "Actions" („Aktionen“); other ideas from the AI only appear
   as text in the status report of the container watch. If it suggests another command, the status report only
   mentions that; you see the command itself in the audit log if you have server rights (`hosts.execute`).
+  A tap on the push message of the status report opens exactly this proposal under "Actions" (highlighted, even if it
+  is already done); without a proposal it opens the "Container watch" tab („Container-Wache“). You still have to log in.
+  If a container runs quietly for five minutes after a crash, the container watch sets its incident to „Erledigt“
+  (resolved) by itself („Läuft wieder seit 04:12 – von selbst erledigt.“, no push message, logged in the audit log).
+  If a proposed restart is still waiting under "Actions", the note says it is no longer needed; you reject it there
+  yourself. If the container crashes again within the quiet period, the same incident is open again, as long as nobody
+  had handled it and no restart for it has run yet; otherwise there is a new incident with a message, even within the
+  quiet period (the last word was "running again"). The five quiet minutes
+  are only counted while the dashboard runs: after a dashboard restart an open incident stays open until the container
+  had another disruption and then ran quietly, or until you tick it off.
+  If a container crashes again within six hours after an approved restart of exactly this container (and did not run
+  quietly in between), the next message says „nginx auf docker ist nach dem freigegebenen Neustart um 03:10 wieder
+  abgestürzt.“ (crashed again after the approved restart) – even within the quiet period in which no new message would
+  come otherwise.
+- **Choosing servers, files:** On the "Server status" and "Terminal" pages the servers appear as tiles with name, address,
+  system and status (traffic-light dot). On "Server status" they also show the load ("CPU 12 % · RAM 48 %", up to 5 minutes
+  old) and a finding such as an almost full disk as a hint; the server chosen last is preselected on the next visit
+  (the browser remembers it). In the file manager every server with an SSH login appears as a source (only with the
+  privilege `hosts.execute`); the sidebar shows next to it whether it is reachable and which system runs on it.
+  Sources without a server, such as Nextcloud, have neither. Without the right to see servers (`hosts.read`) only the
+  dot and the system are missing. Text files (configuration, logs, scripts) and images open with **"View"** („Ansehen“)
+  right above the list; for large files the preview shows the first 256 KB. HTML appears as text; SVG and PDF files you
+  fetch with "Download" („Laden“).
 - **Console in the browser** (a guest's screen) exists only for Proxmox guests. For every other server you use the
   **Terminal**.
-- **Backups:** The Backups module shows only Proxmox backups. You back up the dashboard itself under Settings →
+- **Backups:** The Proxmox-Backups module shows only the backups of your Proxmox servers. You back up the dashboard itself under Settings →
   System ([10.](#10-back-up-the-dashboard-itself)).
+  With „Als Kopie wiederherstellen“ (restore as a copy) you get a guest back from a backup there: as a new guest with a
+  new number that does not start by itself; the original stays untouched. Every copy is created in the pool
+  `nodvard-kopien` (only there does the token need the privilege to create guests; VMs need Proxmox VE 7.2 or later).
+  Nodvard Deck disconnects the network cards once Proxmox has finished (otherwise the backup watch catches up and
+  reports back). The pool and the token privileges are in
+  [PROXMOX-TOKEN](PROXMOX-TOKEN.md#restore-as-a-copy-backups).
 
 **The "First steps" card:** On the start page (cockpit), a checklist at the top walks you through exactly these
 steps – create a server, store an SSH login, check the connection, set up modules, push notifications, first
@@ -365,7 +435,7 @@ the phone and is visible only to users with the privilege `hosts.write` (owner a
   automatically" („Automatisch eingelesen“).
 - Everything else – above all the **machine Nodvard Deck runs on** (e.g. a Raspberry Pi), if it is not
   a Proxmox guest – you create by hand.
-- Terminal, System, Service matrix, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
+- Terminal, Server status, Service matrix, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
   password) for every server. Nodvard Deck stores it encrypted; the private key never leaves the vault and is
   never displayed anywhere.
 
@@ -438,6 +508,49 @@ Under "What does the command do?" („Was macht der Befehl?“) the same sequenc
 line. The command runs directly as root, otherwise via `sudo` – so it works on Proxmox (no sudo) as well as on
 Debian or the Pi. It can safely be run several times: it recognizes a key that is already there, even with the older
 comment `lattice@…`, and does not add it twice.
+
+#### Set up with a password (Nodvard Deck runs the command)
+
+You do not have to paste the command yourself: in the box **"Set up the server for this key"** („Server für diesen
+Schlüssel einrichten“) you choose, instead of "Paste the command yourself" („Befehl selbst einfügen“), the second way,
+**"Set up with a password (Nodvard Deck runs the command)"** („Mit Passwort einrichten (Nodvard Deck führt den Befehl
+aus)“). This exists for logins with a key (generated or your own) on Linux servers. It is something different from the
+login "Enter password" in [5.2](#52-set-up-ssh-access--three-ways): here you need the password only for this one
+setup, and it is never stored. Afterwards Nodvard Deck logs in with the key.
+
+- **What you enter:** once the account (default `root`) and its password. The account must be allowed to log in via
+  SSH with a password: `root` or an account with sudo. Debian and Ubuntu usually do not let `root` in with a password;
+  then use an account with sudo (the form says so at the field). For an account other than `root`, sudo uses the same
+  password; if you untick "Use the same password for sudo" („Für sudo dasselbe Passwort nehmen“), the account must be
+  allowed to use sudo without a password.
+- **What happens:** Nodvard Deck logs in with it **once**, runs **exactly the same command** as in 5.3 (the tick boxes
+  "Root rights without a password" and "docker group" above apply here too), closes the connection and then checks
+  with the new key like "Check connection" ([5.4](#54-check-the-connection)). Below you see the command's messages and
+  the result of the check. If the server had no default login yet, this login becomes the default. When replacing a
+  login ([5.5](#55-replace-access-delete-groups)), the check counts like "Check new login" („Neuen Zugang prüfen“);
+  afterwards you can press "Use new login" („Neuen Zugang verwenden“).
+- **The password is never stored:** not in the database, not in the vault, not in the audit log and not in the log.
+  The field is cleared the moment you submit, and the browser is told not to remember it. The audit log records that
+  there was an attempt ("Server mit Passwort einrichten", `host.setup_with_password`) with server, account and result
+  – never the password.
+- **The server key must be known.** The password never goes to a server whose fingerprint Nodvard Deck does not know
+  yet or which has changed. If Nodvard Deck does not know it yet, the form shows the fingerprint to compare and
+  confirm (as in [5.4](#54-check-the-connection)); afterwards you enter the password once more. With a changed key
+  there is only the warning, without a confirm button.
+- **Limits:** You need the privileges `hosts.write` **and** `hosts.execute`, because the command runs on the server as
+  root, like the terminal. Nodvard Deck slows attempts down: at most 5 per address and port, 10 per user in 10 minutes
+  (plus 30 calls per user in 5 minutes), and only one setup runs per server at a time; then you see "Zu viele Versuche
+  mit Passwort …" (too many attempts with a password) or "Für diesen Server läuft gerade schon eine Einrichtung …" (a
+  setup is already running for this server). The counters live in memory and start over after a restart. The command
+  gets up to 90 seconds. If the connection drops or the time runs out, the command may still have run partly on the
+  server: "Check connection" shows what is already there, and trying again is harmless because the command can be run
+  several times.
+- **Without HTTPS** the form warns you before you submit the password: it then travels unencrypted from your browser
+  to Nodvard Deck. On your own home network that is usually fine, on a foreign network it is not; "Paste the command
+  yourself" is safer then. When you open the page directly on the machine (`localhost`) the warning does not appear.
+  Nothing is blocked.
+- **Not possible yet:** Proxmox with a password, Windows servers (there is no setup command for them) and the setup
+  wizard.
 
 ### 5.4 Check the connection
 
@@ -522,7 +635,8 @@ ist auf diesem Server nicht als root angemeldet und darf sudo nicht ohne Passwor
 dashboard is not logged in as root on this server and may not use sudo without a password).
 
 You do **not** have to change the setup command (5.3) by hand for this: the page sets the appropriate tick
-boxes itself, because the extensions report what they need.
+boxes itself, because the extensions report what they need. The same tick boxes apply when you set up the server with
+a password (Nodvard Deck then runs the same command).
 
 - **"Root rights without a password"** („Root-Rechte ohne Passwort“) – needed for (the page names it behind the
   tick box):
@@ -533,10 +647,19 @@ boxes itself, because the extensions report what they need.
     away. The **hardening audit** runs in the background on the server with low priority and can take from a few
     minutes to over an hour, depending on the server (limit 3 hours). Right after the click the server shows
     "Audit running since …" („Audit läuft seit …“), a second click does not start a second audit, and the dashboard
-    may restart in the meantime. The logs are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
+    may restart in the meantime. The most common Lynis findings get a German title in the result; a click shows what it
+    means and what you can do (much of it is deliberately not needed in a home network, and the text says so). At the top,
+    "Deine wichtigsten Baustellen" lists at most five findings with the biggest effect on the servers shown. The logs
+    are kept on the server under `/var/lib/nodvard-shield-audit/`. Scans and the
     real-time guard never run at the same time on a server; for this lock Shield creates a small folder there:
     `/run/nodvard-shield` (as root) or `~/.nodvard-shield`. A finding that you ignored or restored is not moved to
     quarantine again by the next scan (unless ClamAV reports the same file with a different signature).
+  - **Protection score** (0 to 100, on the overview): counts the antivirus (ClamAV, signatures, scans, open findings),
+    the hardening and also open security updates, pending reboots, Fail2ban, the SSH settings (root or password login,
+    in proportion to the number of affected servers) and open critical security events (5 points each, at most 15).
+    Below it you see what currently lowers it and by how many points. If a server's last update or intrusion check
+    failed or is older than three days, its old state does not count; it is then listed as „zuletzt nicht geprüft
+    (ohne Abzug)“ (not checked recently, no deduction).
   - **Update center:** apply updates and reboot. Reloading the package lists before the check needs root – without
     it, you stay at the most recently loaded state. Updates run in the background on the server (with systemd as
     `lattice-upgrade-…`, otherwise via `setsid`) and keep running even if the connection drops or the dashboard
@@ -548,7 +671,9 @@ boxes itself, because the extensions report what they need.
   - **Intrusion protection and file watcher:** SSH log, Fail2ban status, processes behind open ports, SSH settings,
     checksums of files such as `/etc/shadow`. Only limited without root – Nodvard Deck says so, instead of falsely
     giving the all-clear. Blocking/unblocking IP addresses via Fail2ban works only with root.
-  - **System:** restart services (systemd).
+  - **Server status:** restart services (systemd). Afterwards Deck checks for up to 45 seconds whether the service runs and
+    keeps running (twice, 10 seconds apart, without a new start; the check needs no root). If it fails right away or
+    keeps restarting, the action counts as failed and says so.
 - **"Add to the docker group"** („Zur Gruppe docker hinzufügen“) – needed for the Service matrix and the AI container
   watch of Nodvard Shield; they call `docker` without sudo. The group is only entered if it exists on the server.
 
@@ -584,7 +709,15 @@ has the old rule `lattice-<user>`: `nodvard-<user>` is added, and the old one go
 ## 7. Connect Proxmox
 
 **Only if you use Proxmox – otherwise skip this section** (see [4.1](#41-without-proxmox)). In detail in
-**[PROXMOX-TOKEN.md](PROXMOX-TOKEN.md)**. Short version:
+**[PROXMOX-TOKEN.md](PROXMOX-TOKEN.md)**.
+
+Easiest: turn on "Proxmox VE", then on the **"Proxmox"** page click **"Connect with password"** („Mit Passwort
+verbinden“), enter address and the password of `root@pam` and compare the certificate fingerprint (Nodvard Deck
+remembers it and checks it on every later request) – Nodvard Deck creates
+user, role and token in Proxmox itself, reads everything in right away and forgets the password at once
+([quick way](PROXMOX-TOKEN.md#quick-way-connect-with-a-password)). If "Backups" is on, it gets its own access at the
+same time ("Also connect Proxmox backups", „Auch Proxmox-Backups verbinden“) – step 3 below is then not needed. Once per
+Proxmox server. By hand:
 
 1. On every Proxmox server (in the example pve1 **and** pve2), create a user `nodvard@pve` with token `dashboard`
    and a suitable role.
@@ -592,45 +725,113 @@ has the old rule `lattice-<user>`: `nodvard-<user>` is added, and the old one go
    Konfigurieren → Server hinzufügen“) (short name („Kurzname“) `pve1`/`pve2`, address („Adresse“) `https://…:8006`, API
    token ID („API-Token-ID“) `nodvard@pve!dashboard`) → "Save" („Speichern“) → enter the secret under "Credentials"
    („Zugangsdaten“).
-3. Do the same under "Backups", with the same short names.
+3. Do the same under "Proxmox-Backups", with the same short names.
 4. After 5 minutes at the latest, nodes, VMs and containers are there. VMs without a guest agent get the Proxmox
    address as a placeholder – enter the correct IP under Settings → Servers & access
    („Einstellungen → Server & Zugänge“) ([5.1](#51-create-a-server)).
+5. The modules also raise an alert on their own when a storage is almost full (Proxmox VE, from 90 %, adjustable) and
+   when the last successful backup of a VM is older than 3 days (Backups, adjustable, at least 2 days); both under
+   "Configure" („Konfigurieren“) of the module. If the backup job of a VM runs less often (for example only on
+   Saturdays), the gap between its runs applies automatically when it is longer; 6 hours of slack are added, and
+   no alert is raised while a backup is running. Proxmox VE also reports a ZFS pool that is no longer ONLINE (degraded
+   as a warning, faulted as "critical") and a disk that stays too hot for 10 to 15 minutes (hard disks from 55 °C, SSD
+   from 65 °C, NVMe from 70 °C, adjustable under "Advanced"). A pool that disappears completely (for example not imported
+   after a reboot) is reported as well. The ZFS pools also appear on the node under "Node details".
 
 ## 8. Push notifications (ntfy)
 
-Turn on Settings → Extensions → **"ntfy notifications"** („Einstellungen → Erweiterungen → ntfy-Benachrichtigungen“) →
-"Configure" („Konfigurieren“):
+Turn on Settings → Extensions → **"Push notifications"** („Einstellungen → Erweiterungen → Push-Nachrichten“, formerly
+„ntfy-Benachrichtigungen“) → "Configure" („Konfigurieren“). For ntfy:
 
 - **ntfy server** („ntfy-Server“): e.g. `https://ntfy.sh` or your own. Nodvard Deck always connects to it directly, never
   through a proxy from the environment (`HTTP_PROXY`, `HTTPS_PROXY`). If the machine running Nodvard Deck only reaches the
   internet through a proxy, `ntfy.sh` cannot be reached; then use an ntfy server in your own network.
 - **Topic** („Thema (Topic)“): the channel you subscribe to in the ntfy app. On ntfy.sh choose one that is hard to
-  guess, because there anyone who knows the name can read along.
+  guess, because there anyone who knows the name can read along. The **"Choose randomly"** button („Zufällig wählen“)
+  next to the field enters a random name.
 - **Dashboard address (optional)** („Adresse des Dashboards (optional)“): `http://192.168.1.10:8080`. Then tapping a
   notification opens the matching page directly. It must start with `http://` or `https://`, otherwise it is ignored.
+- **Minimum level for push notifications** („Mindest-Stufe für Push-Nachrichten“): "Everything (info, warning, critical)"
+  („Alles (Info, Warnung, Kritisch)“) is the default. With "From warning" („Ab Warnung“) or "Critical only"
+  („Nur Kritisch“), smaller messages no longer reach the phone; they stay under "Notifications" („Meldungen“). The test
+  message always arrives.
+- **Volume for info, warning and critical** („Lautstärke bei Info, Warnung und Kritisch“): how noticeable a message of
+  that level is on the phone, from "1 – no sound" to "5 – very loud". Whether level 5 also gets through "Do not
+  disturb" is decided by your phone.
 - "Save" („Speichern“).
 - **Credentials → "Access token (optional)"** („Zugangsdaten → Zugriffstoken (optional)“): only if your ntfy server
   requires login.
 
-In the ntfy app on your phone, subscribe to the same server and the same topic.
+In the ntfy app on your phone, subscribe to the same server and the same topic. You can skip typing: after saving, the
+page shows a **QR code** below the settings. Point your phone's camera at it, then the ntfy app opens and offers to
+subscribe to the topic. The code contains only server and topic, never the access token.
+
 **Testing:** "Nodvard Shield" page → "Send briefing" („Briefing senden“). Creating it can take up to half a minute if a
 server does not respond. Afterwards the page tells you whether the status report („Lagebericht – …“) was also delivered
 as a push notification. If not, ntfy is not set up yet or the ntfy server cannot be reached. All messages are also in
 the dashboard under "Notifications" („Meldungen“) – even if the push notification does not arrive.
+
+**What the status report contains:** servers, protection score, threats, hardening, updates, intrusion protection and –
+if any – how many proposals (from all modules) wait for your confirmation under "Actions" and which containers crashed
+in the last 24 hours. A waiting approval or a crash that is still open turns it into „es gibt etwas zu tun“ (something to
+do). It also arrives when everything is fine; if it does not arrive, Deck itself is probably down.
+
+If you set the minimum level to "From warning" or "Critical only", test with "Send test message" („Testnachricht senden“,
+"Connection" card under the ntfy settings) instead: a briefing without problems is only an info message and then does not
+reach the phone.
+
+### More channels (Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost)
+
+Instead of ntfy or in addition (up to 10 channels): under **"More channels"** („Weitere Kanäle“) click "Add channel"
+(„Kanal hinzufügen“), choose a **short name** (e.g. `telegram`), the **minimum level** (default "From warning") and
+whether it is **active** → "Save". Then, under **Credentials**, enter the address in the entry "Channel address"
+(„Adresse des Kanals“) with that short name. It contains credentials (bot token, webhook key) and is therefore kept only
+in the vault. If you rename a channel, its address is gone and has to be entered again. It is written like in Apprise:
+
+| Service | Address |
+|---|---|
+| Telegram | `tgram://BOT-TOKEN/CHAT-ID` (several chats separated by `/`; channels as `@name`) |
+| Discord | `discord://WEBHOOK-ID/WEBHOOK-TOKEN` or the webhook URL Discord shows |
+| Gotify | `gotifys://SERVER/APP-TOKEN` (`gotify://` without HTTPS, port with `:`) |
+| Pushover | `pover://USER-KEY@APP-TOKEN` (optionally `/DEVICE`) |
+| Matrix | `matrixs://ACCESS-TOKEN@SERVER/!ROOM-ID:SERVER` or `…/#roomname` (access token only, no password) |
+| Slack | `slack://T…/B…/X…` or Slack's webhook URL |
+| Mattermost | `mmosts://SERVER/WEBHOOK-ID` |
+| anything else | `apprises://SERVER/KEY` – your own [Apprise API](https://github.com/caronc/apprise-api) (separate container), which forwards to every service Apprise supports |
+
+Nodvard Deck sends the messages itself, directly to the service (no extra software, no proxy from the environment, no
+redirects). Telegram, Discord, Slack and Pushover need direct internet access for this, and the text of each message
+(e.g. server names, file paths, addresses) goes to that service. Group pings like `@everyone`, `@channel`, `@all` or
+`@room` from a message stay plain text. If the "Dashboard address" above is set, each message ends with a link to it.
+
+- **"Send test message"** sends to ntfy and all active channels at the same time and names each one that failed.
+- **"Test connection"** asks each service without sending anything: for Telegram, Discord, Pushover, Matrix and an
+  Apprise API this checks the token or key, for Telegram also whether the bot may post in each group and channel, for
+  Matrix whether the account is in each room. Slack, Gotify and Mattermost do not allow that (nor do private Telegram
+  chats); there you see a note, and an error from the last sending counts as well.
+- The short name "ntfy" is not available; it stands for the ntfy server above.
+- If one channel (or one chat of a channel) fails for a normal message, the others still get it.
 
 ## 9. Automation and maintenance windows
 
 Settings → **Automation & security** („Einstellungen → Automatik & Sicherheit“):
 
 - **Autonomy** („Selbstständigkeit“): "Suggest only" („Nur vorschlagen“) is the default and right for the beginning –
-  every action waits for your approval under "Actions" („Aktionen“). "Act autonomously" („Selbstständig handeln“)
+  every action Nodvard Deck proposes on its own waits for your approval under "Actions" („Aktionen“). "Act autonomously" („Selbstständig handeln“)
   lets actions up to the chosen risk level ("Allowed without asking up to risk level" – „Ohne Rückfrage erlaubt bis
   Risikostufe“) run without asking. Under "Actions" („Aktionen“), an action's command appears right in its row
   (without the privilege `hosts.execute` and without the right to approve its risk level, only a notice appears
   there); invisible or redirecting characters in it (such as a reversed writing direction) appear as a visible marker
   like `⟦U+202E⟧`. "Approve selected" („Ausgewählte freigeben“) shows all commands in full in its confirmation, but
   leaves out actions with high or critical risk; you confirm those one by one.
+- **Triggered by you:** If you click a button such as "Delete permanently" („Endgültig löschen“, Nodvard Shield) or
+  "Restart" („Neustart“, Service matrix) yourself and you have the approval right for the action's risk, confirming the
+  dialog already is the approval: the action runs right away. It still appears under "Actions" and in the log, just not
+  under "Waiting for confirmation" („Wartet auf Bestätigung“) but under "All" („Alle“), "Succeeded" or "Failed".
+  Without that right it waits under "Waiting for confirmation" for someone who has it. Exceptions: "Propose all
+  updates" („Alle Updates vorschlagen“) deliberately only proposes (the proposals wait), when applying an image update
+  the overview is the confirmation, and "Quarantine" („In Quarantäne“) and "Ignore" („Ignorieren“) in Nodvard Shield run
+  without an action (log only).
 - **Scripts without a click**: Independently of this, an active script with a schedule can get a standing approval
   („Dauerfreigabe“): on the Scripts page („Skripte“), turn on the switch "Without approval on schedule" („Ohne Freigabe
   nach Zeitplan“) for the script (owner and `admin` only). Beforehand you see which servers, accounts and addresses it
@@ -639,18 +840,25 @@ Settings → **Automation & security** („Einstellungen → Automatik & Sicherh
   who granted it is deactivated or no longer has the rights for it, the runs wait for your click again as well. Every
   run still appears under "Actions" („Aktionen“) and in the audit log, and "Withdraw approval" („Freigabe
   zurückziehen“) takes effect immediately.
+- **Failed runs on a schedule:** If a scheduled script run fails (on the server with an error, rejected by the
+  dashboard, or not started at all), it appears in the script's history as failed, and you get a notification (warning
+  level, with a link to the Scripts page) – **once per error**: the same notification only comes again when the error
+  changes or the script has run through in between, not on every run. The text names the servers but never the output;
+  that is under "Actions" („Aktionen“). If you start a script by hand you see the result yourself, so there is no
+  notification for that. If a script ran nowhere because all servers were skipped, the existing notification about
+  skipped servers already says so.
 - **Blocked commands** („Gesperrte Befehle“): your own patterns (regular expressions) that are never executed. The
   dangerous default cases are always blocked.
 - **Maintenance windows** („Wartungsfenster“): "Add window" („Fenster hinzufügen“) → start, duration, "Applies to"
   („Gilt für“) (All servers / Selected servers) → "Save". During the window, push notifications about these servers
   are muted; they still appear under "Notifications". The time applies in the configured time zone (Settings →
-  System). Only notifications that belong to specific servers are muted: those from **Backups**, **Game servers**, the **Proxmox watcher** (nodes, disks,
+  System). Only notifications that belong to specific servers are muted: those from **Proxmox-Backups**, **Game servers**, the **Proxmox watcher** (nodes, disks,
   connection) and **Nodvard Shield** (updates, hardening audit, intrusion-protection warnings, status report of the
   container watch). A report covering several servers stays audible as long as even one of them is not in the window.
   Always audible: **malware findings** and **critical intrusion-protection events** (the deep scan runs on Sundays at
   03:30 by default, right in the middle of the suggested window), the **morning briefing**, and the notifications of
   the certificate watcher and scripts.
-  Good to know: If something fails during the window for Backups, Game servers or the Proxmox watcher and is still
+  Good to know: If something fails during the window for Proxmox-Backups, Game servers or the Proxmox watcher and is still
   failing after the window, the notification is **delivered once afterwards as a push**, with "(seit dem
   Wartungsfenster)" (since the maintenance window) in the title. This also applies to a new join code of the game
   server, which changes for example at a nightly restart. If everything is already back to normal within the
@@ -666,6 +874,14 @@ Settings → **Automation & security** („Einstellungen → Automatik & Sicherh
 („Danach automatisch neu starten, wenn nötig“). Only turn it on once the update center has run cleanly for a while.
 The round handles the server that Nodvard Deck itself runs on last; its restart only comes after the summary has been
 sent (with a short notification of its own).
+You can exempt single servers from the automatic restart: directly below "Then restart automatically if necessary" you
+choose the servers under "Never restart these servers automatically" („Diese Server nie automatisch neu starten“), for
+example a NAS or a game server. They still get their updates, only the restart is skipped. If such a server needs a
+restart afterwards, the summary says so ("Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu
+starten", i.e. restart needed, but switched off for this server – please restart it yourself), and you restart it
+yourself. The update center names the exemptions on its badge ("Neustart danach: automatisch, außer …", i.e. restart
+afterwards: automatic, except …). If the server Nodvard Deck itself runs on is in the list, it does not restart
+either.
 
 **Propose all updates at once:** in the update center, "Propose all security updates" („Alle Sicherheitsupdates
 vorschlagen“) or "Propose all updates" („Alle Updates vorschlagen“) creates a proposal for every matching server;
@@ -924,7 +1140,7 @@ this machine. Setting it up, updating and removing it: [deploy/README.md, sectio
 
 ## 11. When something goes wrong
 
-**"HTTP 401" or "Not authenticated" („Nicht authentifiziert“) on an extension page** (Proxmox, Backups, Scripts …): In
+**"HTTP 401" or "Not authenticated" („Nicht authentifiziert“) on an extension page** (Proxmox, Proxmox-Backups, Scripts …): In
 the visible tab, Nodvard Deck renews the login by itself. Extension pages, downloading and uploading on the Files page,
 uploading a backup and exporting the audit log also renew an expired login by themselves and try once more. If the
 message still appears, reload the page (F5).
@@ -947,9 +1163,12 @@ abrufbar: …" (not available)) – the error message usually gives the reason:
 - "Proxmox ist nicht erreichbar (Verbindung abgelehnt oder kein Weg dorthin) …" (Proxmox is not reachable) or "Proxmox
   antwortet nicht (Zeitüberschreitung) …" (Proxmox does not answer, timeout): server off, wrong address or port. The
   address needs `https://` and `:8006`.
-- "Das Zertifikat von Proxmox wird nicht akzeptiert …" (the Proxmox certificate is not accepted): the "Allow self-signed
-  certificate" („Selbstsigniertes Zertifikat erlauben“) tick box is missing
-  ([PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#certificate-what-allow-self-signed-certificate-does)).
+- "Das Zertifikat von Proxmox wird nicht akzeptiert …" (the Proxmox certificate is not accepted): the fingerprint is
+  not remembered yet – Proxmox page, "Connections" tab („Verbindungen“) → "Certificate" („Zertifikat“)
+  ([PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#certificate-remember-the-fingerprint)).
+- "Der Server zeigt ein anderes Zertifikat als das gemerkte …" (the server shows a different certificate than the
+  remembered one): the certificate in Proxmox changed. Compare the new fingerprint and confirm it in the "Connections"
+  tab → "Certificate" – only if you know about the change.
 - "HTTP 401: Proxmox hat den Zugang abgelehnt …" (Proxmox refused access): token ID or secret wrong, or token deleted in
   Proxmox.
 - "HTTP 403: Dem Token fehlt ein Recht für diese Abfrage. Grund laut Proxmox: Permission check failed (…)" (the token
@@ -967,7 +1186,8 @@ abrufbar: …" (not available)) – the error message usually gives the reason:
 - Test from the machine running Nodvard Deck: the `curl` command in
   [PROXMOX-TOKEN.md](PROXMOX-TOKEN.md#check-before-you-enter-it-in-nodvard-deck).
 - A failed Proxmox (e.g. pve2 off) no longer slows the others down; it simply shows as "unreachable". If it is off for
-  longer: on the Proxmox and Backups pages, under "Manage connections" („Verbindungen verwalten“), switch it to
+  longer: on the Proxmox page ("Connections" tab, „Verbindungen“) and the Proxmox-Backups page (under "Manage
+  connections", „Verbindungen verwalten“), switch it to
   "disabled" („deaktiviert“); then no notifications come either.
 
 **"… leitet auf eine andere Adresse um"** (… redirects to another address; network with Pi-hole or Nginx Proxy Manager,
@@ -984,6 +1204,17 @@ weekday (0–7), for example `0 2 * * *` for daily at 2 a.m. Shortcuts like `@da
 still comes from an older version, Nodvard Shield keeps running with its default schedule, or the script does not run
 on a schedule for now; a notification "Zeitplan … ist ungültig" says which one it is.
 
+**Backup failed** (Proxmox-Backups): on the "Proxmox-Backups" page, open the job's history ("Verlauf"). At the top,
+two sentences say what happened and what you can do, below them the line Proxmox wrote. The most common reasons are
+known: target full, connection to the network share lost, target not mounted, guest locked, backup server rejects the
+login, guest agent not answering, missing permissions (on the target or in Proxmox), disk error, guest deleted, run
+aborted, target unreachable. For a job with several guests it also says when this guest was backed up and only another
+one failed. For
+an older failure, "Warum?" next to the run shows its reason. The backup watcher's alert contains the same two sentences
+but not the Proxmox line (it may contain paths and addresses). Without the `Sys.Audit` permission Nodvard Deck does not
+read the run's log and only explains its result. A run with warnings ("WARNINGS" in Proxmox) counts as successful, the
+backup exists; the history shows "OK, mit Warnungen".
+
 **Nodvard Shield virus scan failed:** the list of scans gives an understandable reason: whether the server was not
 reachable, the connection broke off in the middle of the scan, the scan exceeded its time limit (with the duration) or
 which message ClamAV wrote, for example "Input/output error" on a failing disk. New files that were deleted again before
@@ -991,6 +1222,34 @@ the real-time guard's scan do not count as an error. If a scan is running on a s
 the skipped time on its next run (up to 6 hours back); if it cannot check for longer, this shows up as an error in the
 list. A scan waits up to 6 minutes for a running guard, and a hanging run is ended by the server shortly before the time
 limit. This needs `flock` and `timeout` on the server (util-linux, coreutils); without them, everything runs as before.
+
+**Excluding folders from the virus scan** (Nodvard Shield, for example a large media archive that slows the scan
+down): Settings → Extensions → "Nodvard Shield" → "Advanced" („Erweitert“) → "Excluded folders" („Ausgenommene
+Ordner“), with full paths such as `/srv/medien`. They apply to the quick and the deep scan **and** to the real-time
+guard, which neither looks for new files there nor checks anything. An entry applies to exactly this folder including
+its contents: `/srv/backup` does not also exclude `/srv/backups-wichtig`, and the built-in exclusion of `/dev` does
+not hit `/devel`. There are no wildcards such as `*`; they count as ordinary characters. Only a trailing `/*` or `/**`
+is allowed and means the same folder (`/srv/backup/*` works like `/srv/backup`). Double slashes, `/./` and a trailing
+slash are dropped. Entries that do not apply are skipped: paths that do not start with `/`, paths with a line break,
+paths with `..` (the entry would hit a completely different folder) and `/` on its own; for the virus scan also paths
+longer than 511 bytes. If a folder the guard watches is itself a link (for example `/home` → `/data/home`), enter the
+exclusion with the path below it (`/home/…`), not with the link's target. If an excluded folder lies above a checked
+folder, that folder's check is dropped entirely.
+
+**Have shares and Nextcloud checked by the real-time guard** (Nodvard Shield → tab "Scans" → "Watch templates" –
+„Wächter-Vorlagen“): By itself the guard only checks places where malware is typically dropped (`/tmp`, `/home` …). What
+others upload often lands elsewhere. "Search the servers" („Auf den Servern suchen“) reads on every checkable server the
+Samba shares (`path =` or `directory =` in `/etc/samba/smb.conf`, without printers and `[homes]`), the NFS exports
+(`/etc/exports`, also with quotes or `\040`) and the data folder of a Nextcloud (from its `config.php` or a Docker volume
+with "nextcloud" in its name, Nextcloud AIO included), and changes nothing. Without root or `sudo -n` the Nextcloud is
+usually missing. "Add to the guard" („Zum Wächter hinzufügen“) appends the folder to "Watched folders" („Überwachte
+Ordner“; needs the right to change settings; logged). The list applies to all servers; on a server without that folder it
+costs nothing. System folders (`/etc`, `/var` …, `/proc`, `/sys`, `/dev`, `/run`, `/boot` with everything below) and
+Samba placeholders such as `%U` are not suggested. A find inside an excluded folder shows as "excluded" („ausgenommen“)
+and cannot be added (the guard does not look there). A very large folder costs some time on every guard run; remove it
+under "Watched folders" in the settings. The guard checks new and changed files, including files copied in with an old
+modification time (Samba, Nextcloud sync, `cp -p`, `rsync -a`): besides the modification time it also looks at when the
+file was created there.
 
 **Server missing in Terminal / "Noch kein Server prüfbar" (no server checkable yet) or "Keine Linux-Server mit SSH-Zugang
 gefunden" (no Linux servers with an SSH login found) in Nodvard Shield:**

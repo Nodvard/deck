@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ACTION_STATUS_LABEL as SHARED_STATUS_LABEL, runAction } from "../../../_shared/frontend/src/actions";
 import { authedFetch, errorText } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
+import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
 import { SettingsLink, useSettingText } from "../../../_shared/frontend/src/links";
 import { useUrlParams } from "../../../_shared/frontend/src/location";
 import { EmptyState } from "../../../_shared/frontend/src/ui";
@@ -58,6 +59,12 @@ interface Details extends Summary {
     error?: string | null;
   };
   config: { profile: string; values: Record<string, string> };
+  /** Nur im Frontend: Die Details dieses Servers liessen sich nicht laden (Grund). Dann fehlt auch
+   * die gespeicherte Einstellung, und "Einstellungen" bleibt zu -- sonst ueberschriebe Speichern
+   * sie mit einem leeren Profil. */
+  details_error?: string;
+  /** Nur im Frontend: Neu laden ist gescheitert, angezeigt wird der letzte gute Stand (Einstellungen bleiben offen). */
+  stale_error?: string;
 }
 
 interface Profile {
@@ -111,7 +118,9 @@ function Row({ label, value }: { label: string; value: React.ReactNode }) {
   );
 }
 
-function SettingsPanel({ server, profiles, onSaved }: { server: Details; profiles: Profile[]; onSaved: () => void }) {
+function SettingsPanel({ server, profiles, profilesError, onRetryProfiles, onSaved }: {
+  server: Details; profiles: Profile[]; profilesError: string | null; onRetryProfiles: () => void; onSaved: () => void;
+}) {
   const [profileId, setProfileId] = useState(server.config.profile);
   const [values, setValues] = useState<Record<string, string>>(server.config.values);
   const [error, setError] = useState<string | null>(null);
@@ -125,15 +134,29 @@ function SettingsPanel({ server, profiles, onSaved }: { server: Details; profile
   async function save() {
     setSaving(true);
     setError(null);
-    const res = await authedFetch(`/ext/gameserver/servers/${server.host_id}/config`, {
-      method: "PUT", body: JSON.stringify({ profile: profileId, values }),
-    });
-    setSaving(false);
-    if (!res.ok) {
-      setError(await errorText(res));
-      return;
+    try {
+      const res = await authedFetch(`/ext/gameserver/servers/${server.host_id}/config`, {
+        method: "PUT", body: JSON.stringify({ profile: profileId, values }),
+      });
+      if (!res.ok) {
+        setError(await errorText(res));
+        return;
+      }
+      onSaved();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
     }
-    onSaved();
+  }
+
+  if (profilesError) {
+    return (
+      <div className="panel mt-4 p-4" data-testid={`settings-${server.host_id}`}>
+        <p className="mb-3 text-sm font-semibold">Einstellungen</p>
+        <LoadError compact what="Die Liste der Spiel-Profile" error={profilesError} onRetry={onRetryProfiles} />
+      </div>
+    );
   }
 
   return (
@@ -170,13 +193,16 @@ function SettingsPanel({ server, profiles, onSaved }: { server: Details; profile
   );
 }
 
-function ServerCard({ server, profiles, onAction, pending, reload }: {
-  server: Details; profiles: Profile[]; onAction: (s: Details, a: Action) => void; pending: string | null; reload: () => void;
+function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction, pending, reload }: {
+  server: Details; profiles: Profile[]; profilesError: string | null; onRetryProfiles: () => void;
+  onAction: (s: Details, a: Action) => void; pending: string | null; reload: () => void;
 }) {
   const [copied, setCopied] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const d = server.details;
-  const canConfigure = deck().hasPermission("settings.write");
+  // Details nicht abrufbar (Abruf gescheitert oder der Server meldet einen Fehler): nichts behaupten, was daraus folgt.
+  const unknown = Boolean(server.details_error || d.error);
+  const canConfigure = deck().hasPermission("settings.write") && !server.details_error;
   const canExecute = deck().hasPermission("hosts.execute");
   const profileLabel = profiles.find((p) => p.id === server.config.profile)?.label ?? server.config.profile;
 
@@ -227,8 +253,23 @@ function ServerCard({ server, profiles, onAction, pending, reload }: {
         </div>
       </div>
 
-      {(server.error || d.error) && <p className="mt-3 text-sm text-red-400">Nicht abrufbar: {server.error ?? d.error}</p>}
-      {showSettings && <SettingsPanel server={server} profiles={profiles} onSaved={() => { setShowSettings(false); reload(); }} />}
+      {server.details_error && (
+        <div className="mt-3">
+          <LoadError compact what="Der Stand dieses Servers" error={server.details_error} onRetry={reload} />
+        </div>
+      )}
+      {!server.details_error && (server.error || d.error) && <p className="mt-3 text-sm text-red-400">Nicht abrufbar: {server.error ?? d.error}</p>}
+      {server.stale_error && (
+        <p className="mt-3 text-sm text-amber-300" data-testid="stale-details">
+          Neu laden ging gerade nicht ({server.stale_error}). Das hier ist der letzte Stand.
+        </p>
+      )}
+      {showSettings && canConfigure && (
+        <SettingsPanel
+          server={server} profiles={profiles} profilesError={profilesError} onRetryProfiles={onRetryProfiles}
+          onSaved={() => { setShowSettings(false); reload(); }}
+        />
+      )}
 
       <div className="mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <Stat
@@ -245,18 +286,19 @@ function ServerCard({ server, profiles, onAction, pending, reload }: {
               <span className="text-base text-white/50">–</span>
             )
           }
-          sub={server.join_code ? `vergeben ${ago(d.join_code_age_s)}` : server.join_code_display}
+          sub={server.join_code ? (unknown ? undefined : `vergeben ${ago(d.join_code_age_s)}`) : server.join_code_display}
         />
         <Stat label="Spieler online" value={server.players_online ?? "–"} sub={d.recent_players?.length ? `${d.recent_players.length} bekannte Spieler` : undefined} />
         <Stat label="Welt gespeichert" value={<span className="text-xl">{ago(d.last_save_age_s)}</span>} sub={d.world?.name ? `${d.world.name} · ${size(d.world.size)}` : undefined} />
         <Stat
           label="Server-Prozess"
           value={<span className="text-xl">{d.process ? `${(d.process.ram_mb / 1024).toFixed(1)} GB` : "–"}</span>}
-          sub={d.process ? `RAM · ${d.process.responding ? "reagiert" : "reagiert nicht"}` : "läuft nicht"}
+          sub={d.process ? `RAM · ${d.process.responding ? "reagiert" : "reagiert nicht"}` : unknown ? "nicht abrufbar" : "läuft nicht"}
         />
       </div>
 
-      <div className="mt-3 grid gap-3 lg:grid-cols-3">
+      {/* Ohne Details keine Leerzustände ("Noch niemand", "Noch keine"): die wären geraten. */}
+      {!unknown && <div className="mt-3 grid gap-3 lg:grid-cols-3">
         <div className="panel p-4">
           <p className="mb-2 text-sm font-semibold">Server</p>
           <div className="divide-y divide-white/5">
@@ -298,7 +340,7 @@ function ServerCard({ server, profiles, onAction, pending, reload }: {
             ))}
           </ul>
         </div>
-      </div>
+      </div>}
 
       {(d.log_tail ?? []).length > 0 && (
         <details className="panel mt-3 p-4">
@@ -337,17 +379,18 @@ export function GameServerPage(): JSX.Element {
   const [urlParams, , visits] = useUrlParams();
   const focusHost = urlParams.get("host") || null;
   const [servers, setServers] = useState<Details[] | null>(null);
+  // Letzter angezeigter Stand: scheitert beim Neuladen nur ein Server, bleibt seine Karte (samt offener Einstellungen).
+  const serversRef = useRef<Details[] | null>(null);
+  serversRef.current = servers;
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [profilesError, setProfilesError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async (fresh = false) => {
-    setError(null);
     try {
-      const res = await authedFetch("/ext/gameserver/servers");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const list = (await res.json()) as Summary[];
+      const list = await fetchJson<Summary[]>("/ext/gameserver/servers");
       // Server-Log und "frisch abfragen" nur mit Ausführen-Recht; Betrachter bekommen
       // die zwischengespeicherten Details ohne Log.
       const full = deck().hasPermission("hosts.execute");
@@ -356,25 +399,37 @@ export function GameServerPage(): JSX.Element {
           const path = full
             ? `/ext/gameserver/servers/${s.host_id}/details${fresh ? "?fresh=true" : ""}`
             : `/ext/gameserver/servers/${s.host_id}`;
-          const r = await authedFetch(path);
-          return r.ok ? ((await r.json()) as Details) : ({ ...s, details: {}, config: { profile: "", values: {} } } as Details);
+          try {
+            return await fetchJson<Details>(path);
+          } catch (err) {
+            // Ein Server ohne Details reisst die anderen nicht mit. Gab es schon einen guten Stand, bleibt der stehen.
+            const previous = serversRef.current?.find((p) => p.host_id === s.host_id && !p.details_error);
+            if (previous) return { ...previous, ...s, stale_error: errorMessage(err) };
+            return { ...s, details: {}, config: { profile: "", values: {} }, details_error: errorMessage(err) } as Details;
+          }
         }),
       );
       setServers(details);
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // Schon angezeigte Server bleiben stehen (alle 30 s wird neu geladen), darüber steht der Grund.
+      setError(errorMessage(err));
     }
+  }, []);
+
+  const loadProfiles = useCallback(() => {
+    setProfilesError(null);
+    fetchJson<Profile[]>("/ext/gameserver/profiles")
+      .then(setProfiles)
+      .catch((err: unknown) => setProfilesError(errorMessage(err)));
   }, []);
 
   useEffect(() => {
     void load();
-    authedFetch("/ext/gameserver/profiles")
-      .then((r) => (r.ok ? (r.json() as Promise<Profile[]>) : []))
-      .then(setProfiles)
-      .catch(() => setProfiles([]));
+    loadProfiles();
     const interval = setInterval(() => void load(), 30_000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, loadProfiles]);
 
   async function trigger(server: Details, action: Action) {
     if (action === "stop" || action === "restart") {
@@ -410,7 +465,6 @@ export function GameServerPage(): JSX.Element {
   }, [servers, focusHost, visits]);
 
   if (!servers && !error) return <div className="p-6 text-sm opacity-60">Lade …</div>;
-  if (error) return <div className="p-6 text-sm text-red-400">Fehler: {error}</div>;
 
   const ordered = [...(servers ?? [])].sort((a, b) => Number(b.host_id === focusHost) - Number(a.host_id === focusHost));
 
@@ -420,12 +474,16 @@ export function GameServerPage(): JSX.Element {
         <h2 className="text-2xl font-semibold tracking-tight">Gameserver</h2>
         <p className="text-sm text-white/55">Status, Spieler, Join-Code und Welt-Sicherungen deiner Spielserver.</p>
       </div>
+      {error && <LoadError what="Die Liste der Gameserver" error={error} onRetry={() => void load(true)} />}
       {message && <p className="panel mb-4 px-4 py-2 text-sm">{message}</p>}
       {servers && servers.length === 0 && (
         <NoGameServers />
       )}
       {ordered.map((server) => (
-        <ServerCard key={server.host_id} server={server} profiles={profiles} onAction={(s, a) => void trigger(s, a)} pending={pending} reload={() => void load(true)} />
+        <ServerCard
+          key={server.host_id} server={server} profiles={profiles} profilesError={profilesError} onRetryProfiles={loadProfiles}
+          onAction={(s, a) => void trigger(s, a)} pending={pending} reload={() => void load(true)}
+        />
       ))}
     </div>
   );

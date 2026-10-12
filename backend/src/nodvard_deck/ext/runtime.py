@@ -109,6 +109,11 @@ class CapabilityRegistry:
             return [impl for _, impl in impls]
         return [impl for ext_id, impl in impls if ext_id in allowed_ext_ids]
 
+    def query_named(self, protocol: type) -> list[tuple[str, Any]]:
+        """Wie `query()` ohne Filter, aber mit der Kennung der Erweiterung je Implementierung -- fuer Meldungen,
+        die sagen sollen, welche Quelle nicht antwortete."""
+        return list(self._by_protocol.get(protocol, []))
+
     def provided_by(self, protocol: type, ext_id: str) -> Any | None:
         """Die Implementierung EINER bestimmten Extension fuer ein Protokoll, falls
         vorhanden -- gebraucht, um z. B. den `HostProvider` aufzuloesen, auf den
@@ -319,6 +324,13 @@ class ExtensionRuntime:
         ihres Manifests. Nur die, die ihr laut letztem Scan auch gehoeren; ohne `legacy_ids` leer."""
         manifest = getattr(self.discovered.get(ext_id), "manifest", None)
         return [old for old in getattr(manifest, "legacy_ids", None) or [] if self.legacy_owner.get(old) == ext_id]
+
+    def stage_of(self, ext_id: str) -> str:
+        """Der Reifegrad (`stage` im Manifest: `stable` oder `beta`) der Erweiterung `ext_id` (heutige Kennung);
+        ohne Angabe oder ohne Fund `stable`."""
+        loaded = self.loaded.get(ext_id)
+        manifest = loaded.manifest if loaded is not None else getattr(self.discovered.get(ext_id), "manifest", None)
+        return getattr(manifest, "stage", None) or "stable"
 
     def mount_router(
         self, app: FastAPI, ext_id: str, router: APIRouter, *, deprecated: bool = False

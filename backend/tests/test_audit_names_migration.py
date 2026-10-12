@@ -108,12 +108,15 @@ def _rows(db_path: Path) -> dict[str, tuple]:
         db.close()
 
 
-def test_the_migration_is_the_only_core_head_and_follows_custom_apps():
+def test_the_migration_follows_custom_apps_and_is_part_of_the_core_chain():
     cfg, _ = alembic_config(repo_root=REPO_ROOT)
     script = ScriptDirectory.from_config(cfg)
     revision = script.get_revision(REVISION)
     assert revision.down_revision == PREVIOUS_CORE_HEAD
-    assert REVISION in script.get_heads()
+    core_dir = (REPO_ROOT / "backend" / "migrations" / "versions").resolve()
+    core_heads = [h for h in script.get_heads() if Path(script.get_revision(h).path).resolve().parent == core_dir]
+    assert len(core_heads) == 1
+    assert REVISION in {rev.revision for rev in script.walk_revisions(base="base", head=core_heads[0])}
 
 
 def test_typed_names_are_removed_from_old_entries(legacy_db):

@@ -73,3 +73,34 @@ class DocumentTag(Base):
         String(36), ForeignKey("ext_documents_tags.id", ondelete="CASCADE"), primary_key=True
     )
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class DocumentItemLink(Base):
+    """Welches Dokument zu welchem Gegenstand im Inventar gehört (Rechnung, Handbuch, Garantieschein).
+
+    `item_id` ohne Fremdschlüssel: der Gegenstand gehört der Inventar-Erweiterung. Wird er dort gelöscht,
+    räumt `__init__.py` die Verknüpfung auf (Ereignis `inventory.item_deleted`)."""
+
+    __tablename__ = "ext_documents_item_links"
+
+    document_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("ext_documents_documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    item_id: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
+
+
+class InboxFile(Base):
+    """Eine Datei aus dem Nextcloud-Ordner, die schon als Dokument übernommen ist (`inbox.py`).
+
+    Bleibt auch, wenn das Dokument hier gelöscht wird: sonst käme es beim nächsten Abruf wieder. Ändern sich
+    Größe oder Änderungszeit der Datei, gilt sie als neu und kommt als weiteres Dokument dazu."""
+
+    __tablename__ = "ext_documents_inbox_files"
+
+    source_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    path: Mapped[str] = mapped_column(String(1024), primary_key=True)
+    size_bytes: Mapped[int | None] = mapped_column(Integer())
+    modified_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
+    document_id: Mapped[str | None] = mapped_column(String(36))
+    imported_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

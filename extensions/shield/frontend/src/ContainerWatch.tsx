@@ -16,9 +16,9 @@
  */
 import { useCallback, useEffect, useState } from "react";
 
-import { authedFetch } from "../../../_shared/frontend/src/api";
 import { Badge, Button, Card, Icon, Notice, Stat, buttonClass, inputClass, type Tone } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
+import { call } from "./api";
 import { EXT_API, EXT_ID } from "./ids";
 
 /** Ältere Protokolleinträge tragen noch die eingefrorene Docker-Zeit ("... 4 seconds ago"). */
@@ -40,6 +40,8 @@ interface Incident {
   is_crash: boolean;
   occurrences?: number;
   last_seen?: number | null;
+  /** Von selbst erledigt, weil der Container wieder ruhig läuft (etwa „Läuft wieder seit 04:12 – von selbst erledigt.“). */
+  auto_resolved?: string | null;
 }
 
 interface HistoryPage {
@@ -129,11 +131,7 @@ function AuditTrail({ incidentId }: { incidentId: string }): JSX.Element {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    authedFetch(`/audit?correlation_id=${encodeURIComponent(incidentId)}&limit=100`)
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<AuditEntry[]>;
-      })
+    call<AuditEntry[]>(`/audit?correlation_id=${encodeURIComponent(incidentId)}&limit=100`)
       .then((rows) => setEntries([...rows].sort((a, b) => a.ts.localeCompare(b.ts))))
       .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
   }, [incidentId]);
@@ -158,6 +156,7 @@ function AuditTrail({ incidentId }: { incidentId: string }): JSX.Element {
 export function ContainerWatch(): JSX.Element {
   const [page, setPage] = useState<HistoryPage | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [appliedQuery, setAppliedQuery] = useState("");
@@ -177,14 +176,8 @@ export function ContainerWatch(): JSX.Element {
     if (fromDay) params.set("since", dayBoundary(fromDay, false));
     if (toDay) params.set("until", dayBoundary(toDay, true));
     Promise.all([
-      authedFetch(`${EXT_API}/history?${params.toString()}`).then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<HistoryPage>;
-      }),
-      authedFetch(`${EXT_API}/stats`).then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json() as Promise<Stats>;
-      }),
+      call<HistoryPage>(`${EXT_API}/history?${params.toString()}`),
+      call<Stats>(`${EXT_API}/stats`),
     ])
       .then(([historyData, statsData]) => {
         setPage(historyData);
@@ -206,7 +199,12 @@ export function ContainerWatch(): JSX.Element {
   }, [appliedQuery, statusFilter, hostFilter, fromDay, toDay]);
 
   async function changeStatus(id: string, verb: "confirm" | "dismiss" | "resolve" | "reopen") {
-    await authedFetch(`${EXT_API}/incidents/${id}/${verb}`, { method: "POST" });
+    setActionError(null);
+    try {
+      await call(`${EXT_API}/incidents/${id}/${verb}`, { method: "POST" });
+    } catch (err) {
+      setActionError(`Status ließ sich nicht ändern: ${err instanceof Error ? err.message : String(err)}`);
+    }
     load();
   }
 
@@ -228,6 +226,7 @@ export function ContainerWatch(): JSX.Element {
   return (
     <div className="space-y-5">
       {error && <Notice text={`Fehler: ${error}`} />}
+      {actionError && <Notice text={actionError} onClose={() => setActionError(null)} />}
 
       {stats && (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
@@ -332,6 +331,9 @@ export function ContainerWatch(): JSX.Element {
                       {incident.is_crash && <Badge tone="bad">Absturz</Badge>}
                     </p>
                     <p className="mt-1 break-words text-white/80">{incident.message}</p>
+                    {incident.auto_resolved && (
+                      <p className="mt-1 text-xs text-emerald-300" data-testid={`auto-resolved-${incident.id}`}>{incident.auto_resolved}</p>
+                    )}
                     {incident.ai_summary && (
                       <p className="mt-2 whitespace-pre-wrap break-words rounded-lg border border-white/[0.06] bg-black/20 p-3 text-xs text-white/75">{incident.ai_summary}</p>
                     )}

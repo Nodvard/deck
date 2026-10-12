@@ -28,11 +28,12 @@ from nodvard_sdk import (
     ListView,
     PageSpec,
     Refresh,
+    SecretNotOwned,
     StatusGridView,
     WidgetSpec,
     same_target,
 )
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from .capabilities import (
     ProxmoxActionExecutor,
@@ -41,10 +42,15 @@ from .capabilities import (
     ProxmoxMetricsProvider,
     _parse_ref,
 )
-from .config import TOKEN_LABEL, build_connector, build_connectors
+from .certificate import FIELD as FINGERPRINT_FIELD
+from .certificate import MAX_INPUT as MAX_FINGERPRINT_INPUT
+from .certificate import build_certificate_router, connection_pin, normalize_fingerprint
+from .config import TOKEN_LABEL, build_connector, build_connectors, foreign_secret_text
 from .connector import ProxmoxApiError
 from .guest_config import collect_guest_details
-from .node_health import collect_disks, collect_node_health
+from .node_health import collect_disks, collect_node_health, temperature_setting
+from .password_connect import build_router as build_password_connect_router
+from .places import ProxmoxFilePlaces
 from .storage import collect_storage, format_bytes, percent_badge, shared_label
 from .tasks import collect_tasks
 from .updates import collect_updates
@@ -54,6 +60,21 @@ from .watch import run_watch
 _KIND_LABEL = {"vm": "VM", "lxc": "LXC", "hypervisor": "Knoten"}
 """Anzeige fuer den Host-Typ in der Proxmox-Uebersicht -- "hypervisor" ist ein
 interner Wert, auf der Proxmox-Seite heisst dasselbe schon "Knoten"."""
+
+
+GATEWAY_FALLBACK = "Proxmox hat die Anfrage nicht beantwortet. Einzelheiten stehen im Protokoll des Dashboards."
+
+
+def bad_gateway(exc: BaseException, logger: Any) -> HTTPException:
+    """502 fuer die Oberflaeche. Den Text der Ausnahme bekommt sie nur, wenn er ein Satz der Erweiterung ist
+    (`readable`, z. B. `ProxmoxApiError`, `ConnectionMissing`); jede andere Ausnahme (etwa ein `RuntimeError` aus einer
+    Bibliothek) kann interne Einzelheiten enthalten und landet nur im Protokoll des Dashboards."""
+    text = str(exc).strip()
+    if getattr(exc, "readable", False) and text:
+        return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=text)
+    logger.warning("Proxmox: Anfrage fehlgeschlagen (%s)", type(exc).__name__, exc_info=exc)
+    return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=GATEWAY_FALLBACK)
+
 
 class _DiscoveryJobSpec:
     """Erfuellt `nodvard_sdk.context.JobSpec` strukturell (wie hello-worlds
@@ -107,7 +128,13 @@ class _ConnectionIn(BaseModel):
     base_url: str
     token_id: str
     tls_insecure_skip_verify: bool = False
+    tls_fingerprint_sha256: str | None = Field(default=None, max_length=MAX_FINGERPRINT_INPUT)
     enabled: bool = True
+
+    @field_validator("tls_fingerprint_sha256")
+    @classmethod
+    def _fingerprint(cls, value: str | None) -> str | None:
+        return normalize_fingerprint(value)
 
 
 class _ConnectionPatch(BaseModel):
@@ -117,7 +144,14 @@ class _ConnectionPatch(BaseModel):
     base_url: str | None = None
     token_id: str | None = None
     tls_insecure_skip_verify: bool | None = None
+    tls_fingerprint_sha256: str | None = Field(default=None, max_length=MAX_FINGERPRINT_INPUT)
+    """Leer oder `null` nimmt den gemerkten Fingerabdruck weg."""
     enabled: bool | None = None
+
+    @field_validator("tls_fingerprint_sha256")
+    @classmethod
+    def _fingerprint(cls, value: str | None) -> str | None:
+        return normalize_fingerprint(value)
 
 
 class _ConnectionOut(BaseModel):
@@ -127,6 +161,10 @@ class _ConnectionOut(BaseModel):
     tls_insecure_skip_verify: bool
     enabled: bool
     has_token: bool
+    tls_fingerprint_sha256: str | None = None
+    """Der gemerkte Fingerabdruck (`AB:CD:...`), sonst `None`."""
+    tls_fingerprint_invalid: bool = False
+    """Im Feld steht etwas, das kein Fingerabdruck ist -- die Verbindung ist dann gesperrt, bis es stimmt."""
 
 
 class Extension(NodvardExtension):
@@ -137,6 +175,7 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(ProxmoxMetricsProvider(ctx))
         ctx.capabilities.provide(ProxmoxActionExecutor(ctx))
         ctx.capabilities.provide(ProxmoxConsoleTarget(ctx))
+        ctx.capabilities.provide(ProxmoxFilePlaces(ctx))
 
         ctx.settings.declare(
             {
@@ -151,11 +190,15 @@ class Extension(NodvardExtension):
                                 "base_url": {"type": "string"},
                                 "token_id": {"type": "string"},
                                 "tls_insecure_skip_verify": {"type": "boolean"},
+                                "tls_fingerprint_sha256": {"type": ["string", "null"]},
                                 "enabled": {"type": "boolean"},
                             },
                             "required": ["name", "base_url", "token_id"],
                         },
                     },
+                    "storage_warn_percent": {"type": "integer", "minimum": 50, "maximum": 99, "default": 90},
+                    "storage_skip": {"type": "array", "items": {"type": "string"}},
+                    "disk_temp_warn_c": {"type": "integer", "minimum": 40, "maximum": 95},
                 },
                 "required": ["connections"],
             }
@@ -178,8 +221,20 @@ class Extension(NodvardExtension):
                 )
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 
+        async def _drop_secret_or_refuse(label: str) -> None:
+            """Das Geheimnis einer Verbindung loeschen, bevor sich etwas aendert -- ist es nicht von dieser Erweiterung
+            (etwa von Hand im Tresor angelegt), bleibt es, und die Anfrage endet mit 409 und dem Weg, es aufzuloesen."""
+            foreign = False
+            try:
+                await ctx.secrets.delete(label)
+            except SecretNotOwned:
+                foreign = True
+            if foreign:
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=foreign_secret_text(label))
+
         async def _connection_out(conn: dict[str, Any]) -> _ConnectionOut:
             name = str(conn.get("name") or "")
+            pin, pin_invalid = connection_pin(conn)
             return _ConnectionOut(
                 name=name,
                 base_url=str(conn.get("base_url") or ""),
@@ -187,6 +242,8 @@ class Extension(NodvardExtension):
                 tls_insecure_skip_verify=bool(conn.get("tls_insecure_skip_verify") or False),
                 enabled=conn.get("enabled") is not False,
                 has_token=await ctx.secrets.exists(f"{TOKEN_LABEL}:{name}") if name else False,
+                tls_fingerprint_sha256=pin,
+                tls_fingerprint_invalid=pin_invalid,
             )
 
         @router.get("/connections")
@@ -208,12 +265,18 @@ class Extension(NodvardExtension):
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
             # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen (etwa von
-            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse.
-            await ctx.secrets.delete(f"proxmox-token:{payload.name}")
-            connections.append(payload.model_dump())
+            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse. Ein fremdes (nicht von dieser
+            # Erweiterung, etwa von Hand im Tresor) bleibt -- dann wird nichts angelegt.
+            await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{payload.name}")
+            entry = payload.model_dump()
+            if entry.get(FINGERPRINT_FIELD) is None:
+                entry.pop(FINGERPRINT_FIELD, None)
+            else:
+                entry["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
+            connections.append(entry)
             settings["connections"] = connections
             await ctx.settings.set(settings)
-            return await _connection_out(payload.model_dump())
+            return await _connection_out(entry)
 
         @router.put("/connections/{name}")
         async def update_connection(name: str, payload: _ConnectionPatch) -> _ConnectionOut:
@@ -225,9 +288,18 @@ class Extension(NodvardExtension):
                 updates = payload.model_dump(exclude_unset=True)
                 old_url = conn.get("base_url")
                 conn.update(updates)
+                if FINGERPRINT_FIELD in updates:
+                    if updates[FINGERPRINT_FIELD] is None:
+                        conn.pop(FINGERPRINT_FIELD, None)
+                    elif "tls_insecure_skip_verify" not in updates:
+                        conn["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
                 if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
-                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue.
-                    await ctx.secrets.delete(f"proxmox-token:{name}")
+                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue. Vor dem Speichern: ein
+                    # fremdes Geheimnis laesst die Adresse unveraendert.
+                    await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{name}")
+                    if FINGERPRINT_FIELD not in updates:
+                        # Der gemerkte Fingerabdruck gehoert zum alten Server.
+                        conn.pop(FINGERPRINT_FIELD, None)
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
                 return await _connection_out(conn)
@@ -244,9 +316,18 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{name}' existiert nicht.")
             settings["connections"] = filtered
             await ctx.settings.set(settings)
-            await ctx.secrets.delete(f"proxmox-token:{name}")
+            try:
+                await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
+            except SecretNotOwned:
+                # Die Verbindung ist weg; ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberuehrt.
+                ctx.logger.warning("Proxmox: Verbindung %s entfernt, fremdes Geheimnis im Tresor bleibt", name)
 
         ctx.api.include_router(router, permission="secrets.write")
+        # "Mit Passwort verbinden" (password_connect.py): legt in Proxmox den Zugang an und schreibt dasselbe wie die
+        # Routen oben (Verbindung + Token-Geheimnis) -- deshalb dieselbe Berechtigung.
+        ctx.api.include_router(build_password_connect_router(ctx), permission="secrets.write")
+        # Fingerabdruck des Zertifikats ansehen und bestaetigen (certificate.py): aendert die Verbindung wie PUT oben.
+        ctx.api.include_router(build_certificate_router(ctx), permission="secrets.write")
 
         data_router = APIRouter()
 
@@ -286,7 +367,7 @@ class Extension(NodvardExtension):
                 connector = await build_connector(ctx, connection)
                 rows = await connector.list_snapshots(node, kind, vmid)
             except (RuntimeError, ProxmoxApiError) as exc:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc) or type(exc).__name__) from exc
+                raise bad_gateway(exc, ctx.logger) from exc
             snaps = [
                 {
                     "name": r.get("name"),
@@ -315,7 +396,7 @@ class Extension(NodvardExtension):
                 connector = await build_connector(ctx, connection)
                 return await collect_guest_details(connector, kind, node, vmid)
             except (RuntimeError, ProxmoxApiError) as exc:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc) or type(exc).__name__) from exc
+                raise bad_gateway(exc, ctx.logger) from exc
 
         @data_router.get("/nodes/{host_id}/health")
         async def node_health(host_id: str) -> dict:
@@ -329,15 +410,17 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Nur fuer Proxmox-Knoten.")
             try:
                 connector = await build_connector(ctx, connection)
-                return await collect_node_health(connector, connection, node)
+                temp_setting = temperature_setting((await ctx.settings.get()).get("disk_temp_warn_c"))
+                return await collect_node_health(connector, connection, node, temp_setting)
             except (RuntimeError, ProxmoxApiError) as exc:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc) or type(exc).__name__) from exc
+                raise bad_gateway(exc, ctx.logger) from exc
 
         @data_router.get("/widgets/disks")
         async def disks_widget_data() -> dict:
             """Alle Datentraeger aller Knoten, schlechtester Zustand zuerst. Ein nicht
             erreichbarer Knoten wird als eigene Zeile gemeldet, nicht verschwiegen."""
             rows: list[dict] = []
+            temp_setting = temperature_setting((await ctx.settings.get()).get("disk_temp_warn_c"))
             for conn_name, connector in (await build_connectors(ctx)).items():
                 try:
                     nodes = await connector.list_nodes()
@@ -352,7 +435,7 @@ class Extension(NodvardExtension):
                         rows.append({"node": node_name, "model": "Knoten", "summary": "offline", "badge": "offline", "tone": "danger"})
                         continue
                     try:
-                        rows.extend(await collect_disks(connector, conn_name, node_name))
+                        rows.extend(await collect_disks(connector, conn_name, node_name, temp_setting))
                     except ProxmoxApiError as exc:
                         rows.append({"node": node_name, "model": "Datenträger", "summary": str(exc), "badge": "nicht abrufbar", "tone": "neutral"})
             order = {"danger": 0, "warn": 1, "neutral": 2, "good": 3}
@@ -376,7 +459,7 @@ class Extension(NodvardExtension):
                 connector = await build_connector(ctx, connection)
                 rows = await connector.task_log(node, upid)
             except (RuntimeError, ProxmoxApiError) as exc:
-                raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc) or type(exc).__name__) from exc
+                raise bad_gateway(exc, ctx.logger) from exc
             return {"lines": [str(r.get("t", "")) for r in sorted(rows, key=lambda r: r.get("n", 0))]}
 
         @data_router.get("/updates")
@@ -615,6 +698,9 @@ class Extension(NodvardExtension):
                 summaries.append(f"{name}: ok")
             except (RuntimeError, ProxmoxApiError) as exc:
                 details[name] = {"healthy": False, "error": str(exc)}
+                code = getattr(exc, "code", None)
+                if code:
+                    details[name]["code"] = code  # z. B. "certificate_changed": die Oberflaeche bietet das Bestaetigen an
                 summaries.append(f"{name}: FEHLER: {exc}")
                 all_healthy = False
 

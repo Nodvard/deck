@@ -2,9 +2,11 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useLayoutEffect, useState, type ComponentType } from "react";
 import { Link, Navigate, useLocation, useParams } from "react-router-dom";
 
+import { BetaPageNotice, isBeta } from "../components/BetaBadge";
 import { api } from "../lib/api";
 import { usePages } from "../lib/catalog";
 import { dispatchDeckEvent, findDeck } from "../lib/deckGlobal";
+import { useExtensionLabel } from "../lib/extensionNames";
 import type { ExtensionInfo } from "../lib/firstSteps";
 import { useAuthStore } from "../state/auth";
 import { Button, errorText } from "./settings/ui";
@@ -73,6 +75,24 @@ function PageMissing({ extId }: { extId: string | undefined }) {
       Seite nicht gefunden oder keine Berechtigung.{" "}
       <Link to="/" className="underline underline-offset-2">Zur Übersicht</Link>
     </p>
+  );
+}
+
+/** Das Programm einer Seite ließ sich nicht laden (nach einem Update oft nur ein alter Stand im Browser) oder hat
+ * keine passende Seite mitgebracht. Der Satz sagt, was man tun kann; die technische Meldung steht klein darunter. */
+function ModuleLoadError({ extId, message }: { extId: string; message: string }) {
+  const label = useExtensionLabel();
+  return (
+    <div className="p-6" data-testid="module-load-error">
+      <p role="alert" className="text-sm text-red-300">Das Modul „{label(extId)}“ ließ sich nicht laden.</p>
+      <p className="mt-1 text-sm opacity-70">
+        Lade die Seite einmal neu. Hilft das nicht, schau unter{" "}
+        <Link to="/settings/extensions" className="underline underline-offset-2">Einstellungen → Erweiterungen</Link>{" "}
+        nach, ob dort ein Fehler zum Modul steht.
+      </p>
+      <div className="mt-3"><Button onClick={() => window.location.reload()}>Seite neu laden</Button></div>
+      <p className="mt-3 break-words text-xs opacity-50">Technische Meldung: {message}</p>
+    </div>
   );
 }
 
@@ -151,10 +171,12 @@ export function ExtensionPage() {
   // Ersetzend, mit unveränderter Abfrage und unverändertem Anker (`?tab=…#…`): Zurück führt nicht auf die alte Adresse.
   if (renamedPage) return <Navigate replace to={{ pathname: `/ext/${renamedPage.ext_id}${renamedPage.path}`, search: location.search, hash: location.hash }} />;
   if (!page) return <PageMissing extId={extId} />;
-  if (error) return <p className="p-6 text-sm text-red-400">Fehler im Modul: {error}</p>;
+  if (error) return <ModuleLoadError extId={page.ext_id} message={error} />;
   if (!Component) return <p className="p-6 text-sm opacity-60">Lade Modul …</p>;
   // Neu aufbauen, wenn sich nur die Query aendert (Server-Seite -> `?host=`): fuer Seiten, die
   // ihre Query nur beim Mount lesen. Die mitgelieferten folgen ihr zusaetzlich ueber das
   // Ereignis oben, auch bei derselben Adresse (docs/02-EXTENSION-API.md, Host-Werkzeuge).
-  return <Component key={location.search} />;
+  const content = <Component key={location.search} />;
+  // Beta-Module: eine schmale Zeile darüber (die Seite des Moduls bringt ihren eigenen Kopf mit und bleibt unberührt).
+  return isBeta(page.stage) ? <><BetaPageNotice />{content}</> : content;
 }

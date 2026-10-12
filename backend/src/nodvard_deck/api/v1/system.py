@@ -1,7 +1,8 @@
 """System: Infos und Sicherungen -- docs/04-API.md "System".
 
 Rechte:
-* Ansehen (`GET /system/info`, `GET /system/backups`, `GET /system/updates`, `GET /system/openapi.json`): `system.read`.
+* Ansehen (`GET /system/info`, `GET /system/backups`, `GET /system/updates`, `GET /system/openapi.json`,
+  `GET /system/connection`): `system.read`.
 * Nach Updates suchen (`POST /system/updates/check`): ebenfalls `system.read`, aber hoechstens einmal pro
   Minute fuer alle zusammen (sonst 429) -- jede Pruefung ist eine Anfrage an ghcr.io.
 * Alles Kritische: nur der Owner (`require_owner`), teils zusaetzlich mit dem aktuellen
@@ -37,6 +38,7 @@ from ...config import get_settings
 from ...core import rate_limit, updates
 from ...core import restart as restart_service
 from ...core import timezone as timezone_service
+from ...core import trusted_proxies as trusted_proxies_service
 from ...core.backup import premigrate, store
 from ...core.backup.errors import BackupError
 from ...core.backup.tickets import TICKET_TTL_S, get_ticket_registry
@@ -49,6 +51,8 @@ from ...services import update_check as update_check_service
 from ...services import update_helper as update_helper_service
 from ...version import __version__
 from ..deps import CurrentUser, OwnerUser, SessionDep, SettingsDep, require_permission
+from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
+from ..proxy_headers import Forwarding
 from .auth import TotpMissing, confirm_current_password, confirm_current_totp
 from .restore_common import (
     RestoreInspectIn,
@@ -168,6 +172,45 @@ async def system_info(session: SessionDep, settings: SettingsDep) -> dict:
         # Die letzten Kopien der Datenbank von vor einer Migration (`nodvard_deck.boot`), neueste zuerst. Ohne Pfade.
         "pre_update_copies": await asyncio.to_thread(premigrate.list_copies, settings.data_dir),
     }
+
+
+class ConnectionOut(BaseModel):
+    """Wie diese Anfrage bei Nodvard Deck ankommt (Einstellungen, Karte „Zugriff über einen Proxy“)."""
+
+    peer: str | None
+    """Direkte Gegenstelle der Verbindung (bei einem Proxy: dessen Adresse); `null` ohne IP (Unix-Socket)."""
+    client: str | None
+    """Die Adresse, die Nodvard Deck fuer diese Anfrage verwendet (Login-Drossel, Protokoll)."""
+    scheme: str
+    """`http` oder `https`, wie Nodvard Deck die Anfrage sieht (entscheidet ueber `Secure` am Anmelde-Cookie)."""
+    via_trusted_proxy: bool
+    """Die Gegenstelle ist ein eingetragener Proxy, seine `X-Forwarded-*` gelten."""
+    forwarded_headers: bool
+    """Die Anfrage trug `X-Forwarded-For` oder `X-Forwarded-Proto`, egal ob sie galten. Zusammen mit
+    `via_trusted_proxy: false` ein Hinweis auf einen Proxy, der noch nicht eingetragen ist."""
+    trusted_proxies: list[str]
+    """Die gerade gueltige Liste."""
+    trusted_proxies_source: Literal["setting", "env"]
+    """`env`: die Liste kommt aus `NODVARD_DECK_TRUSTED_PROXIES` und ist in den Einstellungen nicht aenderbar."""
+
+
+@router.get("/connection", dependencies=[Depends(require_permission("system.read"))])
+async def connection_info(request: Request, settings: SettingsDep) -> ConnectionOut:
+    """Gegenstelle, verwendete Client-Adresse und Schema dieser Anfrage (`api/proxy_headers.py`)."""
+    info = request.scope.get(FORWARDING_SCOPE_KEY)
+    if not isinstance(info, Forwarding):  # ohne die Middleware (nie im Betrieb): wie ohne Proxy
+        info = Forwarding(peer=request.client.host if request.client else None, trusted=False, forwarded_headers=False)
+    peer_ip = trusted_proxies_service.parse_address(info.peer)
+    trust = trusted_proxies_service.current()
+    return ConnectionOut(
+        peer=str(peer_ip) if peer_ip is not None else info.peer,
+        client=request.client.host if request.client else None,
+        scheme="https" if request.url.scheme in ("https", "wss") else "http",
+        via_trusted_proxy=info.trusted,
+        forwarded_headers=info.forwarded_headers,
+        trusted_proxies=list(trust.entries),
+        trusted_proxies_source="env" if settings.trusted_proxies is not None else "setting",
+    )
 
 
 @router.get("/openapi.json", dependencies=[Depends(require_permission("system.read"))])

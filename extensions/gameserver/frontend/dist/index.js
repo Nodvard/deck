@@ -229,9 +229,6 @@ function useUnmountSignal() {
   return useRef(() => ref.current.signal).current;
 }
 
-// ../../_shared/frontend/src/links.tsx
-import { useEffect as useEffect2, useState } from "react";
-
 // ../../_shared/frontend/src/ui.tsx
 import { Fragment, jsx, jsxs } from "react/jsx-runtime";
 var PATHS = {
@@ -308,6 +305,19 @@ var BUTTON_STYLES = {
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
 };
 var buttonClass = (variant = "secondary", small = false) => `inline-flex items-center justify-center gap-1.5 rounded-lg font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${small ? "px-2.5 py-1 text-xs" : "px-3 py-1.5 text-sm"} ${BUTTON_STYLES[variant]}`;
+function Button({
+  children,
+  onClick,
+  variant = "secondary",
+  type = "button",
+  disabled,
+  small,
+  title,
+  ariaLabel,
+  pressed
+}) {
+  return /* @__PURE__ */ jsx("button", { type, onClick, disabled, title, "aria-label": ariaLabel, "aria-pressed": pressed, className: buttonClass(variant, small), children });
+}
 function EmptyState({ icon, title, text, action }) {
   return /* @__PURE__ */ jsxs("div", { className: "panel flex flex-col items-center px-6 py-14 text-center", children: [
     /* @__PURE__ */ jsx("span", { className: "mb-4 grid h-12 w-12 place-items-center rounded-2xl bg-white/[0.06] text-[var(--color-accent)]", children: /* @__PURE__ */ jsx(Icon, { name: icon, size: 22 }) }),
@@ -317,8 +327,52 @@ function EmptyState({ icon, title, text, action }) {
   ] });
 }
 
+// ../../_shared/frontend/src/loadError.tsx
+import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+var UNREADABLE_ANSWER_TEXT = "Die Antwort des Servers lie\xDF sich nicht lesen.";
+async function fetchJson(path, init) {
+  const res = await authedFetch(path, init);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(errorFromBody(body, res.status));
+  }
+  try {
+    return await res.json();
+  } catch {
+    throw new Error(UNREADABLE_ANSWER_TEXT);
+  }
+}
+function errorMessage(err) {
+  return err instanceof Error ? err.message : String(err);
+}
+function LoadError({ what, error, onRetry, hint, compact = false }) {
+  if (compact) {
+    return /* @__PURE__ */ jsxs2("div", { role: "alert", "data-testid": "load-error", className: "text-sm", children: [
+      /* @__PURE__ */ jsxs2("p", { className: "text-red-300", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/50", children: hint }),
+      onRetry && /* @__PURE__ */ jsx2("button", { type: "button", onClick: onRetry, className: "mt-1 text-xs text-white/70 underline underline-offset-2 hover:text-white", children: "Erneut versuchen" })
+    ] });
+  }
+  return /* @__PURE__ */ jsxs2("div", { role: "alert", "data-testid": "load-error", className: "mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm", children: [
+    /* @__PURE__ */ jsxs2("div", { className: "min-w-0 flex-1", children: [
+      /* @__PURE__ */ jsxs2("p", { className: "text-red-200", children: [
+        what,
+        " lie\xDF sich gerade nicht laden: ",
+        error
+      ] }),
+      hint && /* @__PURE__ */ jsx2("p", { className: "text-xs text-white/55", children: hint })
+    ] }),
+    onRetry && /* @__PURE__ */ jsx2(Button, { small: true, onClick: onRetry, children: "Erneut versuchen" })
+  ] });
+}
+
 // ../../_shared/frontend/src/links.tsx
-import { jsx as jsx2 } from "react/jsx-runtime";
+import { useEffect as useEffect2, useState } from "react";
+import { jsx as jsx3 } from "react/jsx-runtime";
 function SettingsLink({
   to,
   permission,
@@ -326,7 +380,7 @@ function SettingsLink({
   children
 }) {
   if (!deck().hasPermission(permission)) return null;
-  return /* @__PURE__ */ jsx2("a", { href: to, className: buttonClass(variant), children });
+  return /* @__PURE__ */ jsx3("a", { href: to, className: buttonClass(variant), children });
 }
 function useSettingText(extId, key, fallback) {
   const [value, setValue] = useState(fallback);
@@ -381,7 +435,7 @@ function useUrlParams() {
 }
 
 // src/GameServerPage.tsx
-import { jsx as jsx3, jsxs as jsxs2 } from "react/jsx-runtime";
+import { jsx as jsx4, jsxs as jsxs3 } from "react/jsx-runtime";
 var ACTION_STATUS_LABEL2 = { ...ACTION_STATUS_LABEL, succeeded: "erledigt" };
 var ACTION_LABEL = { start: "Starten", stop: "Stoppen", restart: "Neustarten", backup: "Welt sichern" };
 var TONE = {
@@ -403,19 +457,19 @@ function size(bytes) {
   return `${Math.round(bytes / 1e3)} KB`;
 }
 function Stat({ label, value, sub }) {
-  return /* @__PURE__ */ jsxs2("div", { className: "panel p-4", children: [
-    /* @__PURE__ */ jsx3("p", { className: "text-[11px] font-medium uppercase tracking-wider text-white/50", children: label }),
-    /* @__PURE__ */ jsx3("div", { className: "mt-1.5 text-2xl font-semibold tabular-nums", children: value }),
-    sub && /* @__PURE__ */ jsx3("p", { className: "mt-0.5 text-xs text-white/50", children: sub })
+  return /* @__PURE__ */ jsxs3("div", { className: "panel p-4", children: [
+    /* @__PURE__ */ jsx4("p", { className: "text-[11px] font-medium uppercase tracking-wider text-white/50", children: label }),
+    /* @__PURE__ */ jsx4("div", { className: "mt-1.5 text-2xl font-semibold tabular-nums", children: value }),
+    sub && /* @__PURE__ */ jsx4("p", { className: "mt-0.5 text-xs text-white/50", children: sub })
   ] });
 }
 function Row({ label, value }) {
-  return /* @__PURE__ */ jsxs2("div", { className: "flex justify-between gap-4 py-1.5 text-sm", children: [
-    /* @__PURE__ */ jsx3("span", { className: "text-white/55", children: label }),
-    /* @__PURE__ */ jsx3("span", { className: "text-right", children: value })
+  return /* @__PURE__ */ jsxs3("div", { className: "flex justify-between gap-4 py-1.5 text-sm", children: [
+    /* @__PURE__ */ jsx4("span", { className: "text-white/55", children: label }),
+    /* @__PURE__ */ jsx4("span", { className: "text-right", children: value })
   ] });
 }
-function SettingsPanel({ server, profiles, onSaved }) {
+function SettingsPanel({ server, profiles, profilesError, onRetryProfiles, onSaved }) {
   const [profileId, setProfileId] = useState3(server.config.profile);
   const [values, setValues] = useState3(server.config.values);
   const [error, setError] = useState3(null);
@@ -430,26 +484,37 @@ function SettingsPanel({ server, profiles, onSaved }) {
   async function save() {
     setSaving(true);
     setError(null);
-    const res = await authedFetch(`/ext/gameserver/servers/${server.host_id}/config`, {
-      method: "PUT",
-      body: JSON.stringify({ profile: profileId, values })
-    });
-    setSaving(false);
-    if (!res.ok) {
-      setError(await errorText(res));
-      return;
+    try {
+      const res = await authedFetch(`/ext/gameserver/servers/${server.host_id}/config`, {
+        method: "PUT",
+        body: JSON.stringify({ profile: profileId, values })
+      });
+      if (!res.ok) {
+        setError(await errorText(res));
+        return;
+      }
+      onSaved();
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setSaving(false);
     }
-    onSaved();
   }
-  return /* @__PURE__ */ jsxs2("div", { className: "panel mt-4 p-4", "data-testid": `settings-${server.host_id}`, children: [
-    /* @__PURE__ */ jsx3("p", { className: "mb-3 text-sm font-semibold", children: "Einstellungen" }),
-    /* @__PURE__ */ jsxs2("label", { className: "mb-3 block text-sm", children: [
-      /* @__PURE__ */ jsx3("span", { className: "mb-1 block text-xs text-white/55", children: "Spiel-Profil" }),
-      /* @__PURE__ */ jsx3("select", { value: profileId, onChange: (e) => setProfileId(e.target.value), className: "w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2", children: profiles.map((p) => /* @__PURE__ */ jsx3("option", { value: p.id, children: p.label }, p.id)) })
+  if (profilesError) {
+    return /* @__PURE__ */ jsxs3("div", { className: "panel mt-4 p-4", "data-testid": `settings-${server.host_id}`, children: [
+      /* @__PURE__ */ jsx4("p", { className: "mb-3 text-sm font-semibold", children: "Einstellungen" }),
+      /* @__PURE__ */ jsx4(LoadError, { compact: true, what: "Die Liste der Spiel-Profile", error: profilesError, onRetry: onRetryProfiles })
+    ] });
+  }
+  return /* @__PURE__ */ jsxs3("div", { className: "panel mt-4 p-4", "data-testid": `settings-${server.host_id}`, children: [
+    /* @__PURE__ */ jsx4("p", { className: "mb-3 text-sm font-semibold", children: "Einstellungen" }),
+    /* @__PURE__ */ jsxs3("label", { className: "mb-3 block text-sm", children: [
+      /* @__PURE__ */ jsx4("span", { className: "mb-1 block text-xs text-white/55", children: "Spiel-Profil" }),
+      /* @__PURE__ */ jsx4("select", { value: profileId, onChange: (e) => setProfileId(e.target.value), className: "w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2", children: profiles.map((p) => /* @__PURE__ */ jsx4("option", { value: p.id, children: p.label }, p.id)) })
     ] }),
-    /* @__PURE__ */ jsx3("div", { className: "grid gap-3 md:grid-cols-2", children: profile?.fields.map((field) => /* @__PURE__ */ jsxs2("label", { className: "block text-sm", children: [
-      /* @__PURE__ */ jsx3("span", { className: "mb-1 block text-xs text-white/55", children: field.label }),
-      /* @__PURE__ */ jsx3(
+    /* @__PURE__ */ jsx4("div", { className: "grid gap-3 md:grid-cols-2", children: profile?.fields.map((field) => /* @__PURE__ */ jsxs3("label", { className: "block text-sm", children: [
+      /* @__PURE__ */ jsx4("span", { className: "mb-1 block text-xs text-white/55", children: field.label }),
+      /* @__PURE__ */ jsx4(
         "input",
         {
           value: values[field.key] ?? "",
@@ -459,17 +524,18 @@ function SettingsPanel({ server, profiles, onSaved }) {
           className: "w-full rounded-lg border border-white/10 bg-black/30 px-3 py-2 font-mono text-xs placeholder:text-white/30"
         }
       ),
-      /* @__PURE__ */ jsx3("span", { className: "mt-1 block text-[11px] text-white/40", children: field.help })
+      /* @__PURE__ */ jsx4("span", { className: "mt-1 block text-[11px] text-white/40", children: field.help })
     ] }, field.key)) }),
-    error && /* @__PURE__ */ jsx3("p", { className: "mt-2 text-sm text-red-400", children: error }),
-    /* @__PURE__ */ jsx3("div", { className: "mt-3 flex justify-end", children: /* @__PURE__ */ jsx3("button", { type: "button", disabled: saving, onClick: () => void save(), className: "accent-gradient rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50", children: saving ? "Speichere \u2026" : "Speichern" }) })
+    error && /* @__PURE__ */ jsx4("p", { className: "mt-2 text-sm text-red-400", children: error }),
+    /* @__PURE__ */ jsx4("div", { className: "mt-3 flex justify-end", children: /* @__PURE__ */ jsx4("button", { type: "button", disabled: saving, onClick: () => void save(), className: "accent-gradient rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50", children: saving ? "Speichere \u2026" : "Speichern" }) })
   ] });
 }
-function ServerCard({ server, profiles, onAction, pending, reload }) {
+function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction, pending, reload }) {
   const [copied, setCopied] = useState3(false);
   const [showSettings, setShowSettings] = useState3(false);
   const d = server.details;
-  const canConfigure = deck().hasPermission("settings.write");
+  const unknown = Boolean(server.details_error || d.error);
+  const canConfigure = deck().hasPermission("settings.write") && !server.details_error;
   const canExecute = deck().hasPermission("hosts.execute");
   const profileLabel = profiles.find((p) => p.id === server.config.profile)?.label ?? server.config.profile;
   async function copy() {
@@ -481,7 +547,7 @@ function ServerCard({ server, profiles, onAction, pending, reload }) {
     } catch {
     }
   }
-  const button = (action, style) => /* @__PURE__ */ jsx3(
+  const button = (action, style) => /* @__PURE__ */ jsx4(
     "button",
     {
       type: "button",
@@ -492,114 +558,129 @@ function ServerCard({ server, profiles, onAction, pending, reload }) {
     },
     action
   );
-  return /* @__PURE__ */ jsxs2("section", { id: `host-${server.host_id}`, className: "mb-8 scroll-mt-4", "data-testid": `server-${server.host_id}`, children: [
-    /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap items-center gap-3", children: [
-      /* @__PURE__ */ jsx3("span", { className: "accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-white shadow-lg shadow-black/40", children: server.name.slice(0, 1).toUpperCase() }),
-      /* @__PURE__ */ jsxs2("div", { className: "min-w-0", children: [
-        /* @__PURE__ */ jsx3("h3", { className: "text-lg font-semibold leading-tight", children: server.name }),
-        /* @__PURE__ */ jsxs2("p", { className: "text-xs text-white/50", children: [
+  return /* @__PURE__ */ jsxs3("section", { id: `host-${server.host_id}`, className: "mb-8 scroll-mt-4", "data-testid": `server-${server.host_id}`, children: [
+    /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-3", children: [
+      /* @__PURE__ */ jsx4("span", { className: "accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-white shadow-lg shadow-black/40", children: server.name.slice(0, 1).toUpperCase() }),
+      /* @__PURE__ */ jsxs3("div", { className: "min-w-0", children: [
+        /* @__PURE__ */ jsx4("h3", { className: "text-lg font-semibold leading-tight", children: server.name }),
+        /* @__PURE__ */ jsxs3("p", { className: "text-xs text-white/50", children: [
           profileLabel,
           server.version ? ` \xB7 Version ${server.version}` : ""
         ] })
       ] }),
-      /* @__PURE__ */ jsx3("span", { className: `rounded-full border px-2.5 py-0.5 text-xs font-medium ${TONE[server.tone] ?? TONE.neutral}`, children: server.service_label }),
-      /* @__PURE__ */ jsxs2("div", { className: "ml-auto flex flex-wrap gap-2", children: [
+      /* @__PURE__ */ jsx4("span", { className: `rounded-full border px-2.5 py-0.5 text-xs font-medium ${TONE[server.tone] ?? TONE.neutral}`, children: server.service_label }),
+      /* @__PURE__ */ jsxs3("div", { className: "ml-auto flex flex-wrap gap-2", children: [
         canExecute && server.can_start && button("start", "accent-gradient text-white"),
         canExecute && server.running && button("restart", "bg-white/10 hover:bg-white/20"),
         canExecute && server.running && button("backup", "bg-white/10 hover:bg-white/20"),
         canExecute && server.can_stop && button("stop", "bg-red-500/20 text-red-200 hover:bg-red-500/30"),
-        canConfigure && /* @__PURE__ */ jsx3("button", { type: "button", onClick: () => setShowSettings((v) => !v), className: "rounded-lg bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10", children: showSettings ? "Einstellungen schlie\xDFen" : "Einstellungen" })
+        canConfigure && /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => setShowSettings((v) => !v), className: "rounded-lg bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10", children: showSettings ? "Einstellungen schlie\xDFen" : "Einstellungen" })
       ] })
     ] }),
-    (server.error || d.error) && /* @__PURE__ */ jsxs2("p", { className: "mt-3 text-sm text-red-400", children: [
+    server.details_error && /* @__PURE__ */ jsx4("div", { className: "mt-3", children: /* @__PURE__ */ jsx4(LoadError, { compact: true, what: "Der Stand dieses Servers", error: server.details_error, onRetry: reload }) }),
+    !server.details_error && (server.error || d.error) && /* @__PURE__ */ jsxs3("p", { className: "mt-3 text-sm text-red-400", children: [
       "Nicht abrufbar: ",
       server.error ?? d.error
     ] }),
-    showSettings && /* @__PURE__ */ jsx3(SettingsPanel, { server, profiles, onSaved: () => {
-      setShowSettings(false);
-      reload();
-    } }),
-    /* @__PURE__ */ jsxs2("div", { className: "mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
-      /* @__PURE__ */ jsx3(
+    server.stale_error && /* @__PURE__ */ jsxs3("p", { className: "mt-3 text-sm text-amber-300", "data-testid": "stale-details", children: [
+      "Neu laden ging gerade nicht (",
+      server.stale_error,
+      "). Das hier ist der letzte Stand."
+    ] }),
+    showSettings && canConfigure && /* @__PURE__ */ jsx4(
+      SettingsPanel,
+      {
+        server,
+        profiles,
+        profilesError,
+        onRetryProfiles,
+        onSaved: () => {
+          setShowSettings(false);
+          reload();
+        }
+      }
+    ),
+    /* @__PURE__ */ jsxs3("div", { className: "mt-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
+      /* @__PURE__ */ jsx4(
         Stat,
         {
           label: "Join-Code",
-          value: server.join_code ? /* @__PURE__ */ jsxs2("span", { className: "flex items-center gap-2", children: [
-            /* @__PURE__ */ jsx3("span", { className: "font-mono tracking-[0.2em]", children: server.join_code }),
-            /* @__PURE__ */ jsx3("button", { type: "button", onClick: () => void copy(), className: "rounded-md px-2 py-0.5 text-xs font-normal tracking-normal border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: copied ? "Kopiert!" : "Kopieren" })
-          ] }) : /* @__PURE__ */ jsx3("span", { className: "text-base text-white/50", children: "\u2013" }),
-          sub: server.join_code ? `vergeben ${ago(d.join_code_age_s)}` : server.join_code_display
+          value: server.join_code ? /* @__PURE__ */ jsxs3("span", { className: "flex items-center gap-2", children: [
+            /* @__PURE__ */ jsx4("span", { className: "font-mono tracking-[0.2em]", children: server.join_code }),
+            /* @__PURE__ */ jsx4("button", { type: "button", onClick: () => void copy(), className: "rounded-md px-2 py-0.5 text-xs font-normal tracking-normal border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: copied ? "Kopiert!" : "Kopieren" })
+          ] }) : /* @__PURE__ */ jsx4("span", { className: "text-base text-white/50", children: "\u2013" }),
+          sub: server.join_code ? unknown ? void 0 : `vergeben ${ago(d.join_code_age_s)}` : server.join_code_display
         }
       ),
-      /* @__PURE__ */ jsx3(Stat, { label: "Spieler online", value: server.players_online ?? "\u2013", sub: d.recent_players?.length ? `${d.recent_players.length} bekannte Spieler` : void 0 }),
-      /* @__PURE__ */ jsx3(Stat, { label: "Welt gespeichert", value: /* @__PURE__ */ jsx3("span", { className: "text-xl", children: ago(d.last_save_age_s) }), sub: d.world?.name ? `${d.world.name} \xB7 ${size(d.world.size)}` : void 0 }),
-      /* @__PURE__ */ jsx3(
+      /* @__PURE__ */ jsx4(Stat, { label: "Spieler online", value: server.players_online ?? "\u2013", sub: d.recent_players?.length ? `${d.recent_players.length} bekannte Spieler` : void 0 }),
+      /* @__PURE__ */ jsx4(Stat, { label: "Welt gespeichert", value: /* @__PURE__ */ jsx4("span", { className: "text-xl", children: ago(d.last_save_age_s) }), sub: d.world?.name ? `${d.world.name} \xB7 ${size(d.world.size)}` : void 0 }),
+      /* @__PURE__ */ jsx4(
         Stat,
         {
           label: "Server-Prozess",
-          value: /* @__PURE__ */ jsx3("span", { className: "text-xl", children: d.process ? `${(d.process.ram_mb / 1024).toFixed(1)} GB` : "\u2013" }),
-          sub: d.process ? `RAM \xB7 ${d.process.responding ? "reagiert" : "reagiert nicht"}` : "l\xE4uft nicht"
+          value: /* @__PURE__ */ jsx4("span", { className: "text-xl", children: d.process ? `${(d.process.ram_mb / 1024).toFixed(1)} GB` : "\u2013" }),
+          sub: d.process ? `RAM \xB7 ${d.process.responding ? "reagiert" : "reagiert nicht"}` : unknown ? "nicht abrufbar" : "l\xE4uft nicht"
         }
       )
     ] }),
-    /* @__PURE__ */ jsxs2("div", { className: "mt-3 grid gap-3 lg:grid-cols-3", children: [
-      /* @__PURE__ */ jsxs2("div", { className: "panel p-4", children: [
-        /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm font-semibold", children: "Server" }),
-        /* @__PURE__ */ jsxs2("div", { className: "divide-y divide-white/5", children: [
-          /* @__PURE__ */ jsx3(Row, { label: "Name", value: d.server?.name ?? "\u2013" }),
-          /* @__PURE__ */ jsx3(Row, { label: "Welt", value: d.server?.world ?? "\u2013" }),
-          /* @__PURE__ */ jsx3(Row, { label: "Port", value: d.server?.port ?? "\u2013" }),
-          /* @__PURE__ */ jsx3(Row, { label: "Crossplay", value: d.server ? d.server.crossplay ? "an" : "aus" : "\u2013" }),
-          /* @__PURE__ */ jsx3(Row, { label: "\xD6ffentlich", value: d.server?.public == null ? "\u2013" : d.server.public ? "ja" : "nein" }),
-          /* @__PURE__ */ jsx3(Row, { label: "Passwort", value: d.server ? d.server.has_password ? "gesetzt" : "keins" : "\u2013" }),
-          d.server?.preset && /* @__PURE__ */ jsx3(Row, { label: "Voreinstellung", value: d.server.preset }),
-          (d.server?.modifiers ?? []).map((m) => /* @__PURE__ */ jsx3(Row, { label: "Modifikator", value: m }, m))
+    !unknown && /* @__PURE__ */ jsxs3("div", { className: "mt-3 grid gap-3 lg:grid-cols-3", children: [
+      /* @__PURE__ */ jsxs3("div", { className: "panel p-4", children: [
+        /* @__PURE__ */ jsx4("p", { className: "mb-2 text-sm font-semibold", children: "Server" }),
+        /* @__PURE__ */ jsxs3("div", { className: "divide-y divide-white/5", children: [
+          /* @__PURE__ */ jsx4(Row, { label: "Name", value: d.server?.name ?? "\u2013" }),
+          /* @__PURE__ */ jsx4(Row, { label: "Welt", value: d.server?.world ?? "\u2013" }),
+          /* @__PURE__ */ jsx4(Row, { label: "Port", value: d.server?.port ?? "\u2013" }),
+          /* @__PURE__ */ jsx4(Row, { label: "Crossplay", value: d.server ? d.server.crossplay ? "an" : "aus" : "\u2013" }),
+          /* @__PURE__ */ jsx4(Row, { label: "\xD6ffentlich", value: d.server?.public == null ? "\u2013" : d.server.public ? "ja" : "nein" }),
+          /* @__PURE__ */ jsx4(Row, { label: "Passwort", value: d.server ? d.server.has_password ? "gesetzt" : "keins" : "\u2013" }),
+          d.server?.preset && /* @__PURE__ */ jsx4(Row, { label: "Voreinstellung", value: d.server.preset }),
+          (d.server?.modifiers ?? []).map((m) => /* @__PURE__ */ jsx4(Row, { label: "Modifikator", value: m }, m))
         ] })
       ] }),
-      /* @__PURE__ */ jsxs2("div", { className: "panel p-4", children: [
-        /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm font-semibold", children: "Zuletzt gesehen" }),
-        (d.recent_players ?? []).length === 0 && /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/50", children: "Noch niemand." }),
-        /* @__PURE__ */ jsx3("ul", { className: "divide-y divide-white/5", children: (d.recent_players ?? []).map((p) => /* @__PURE__ */ jsxs2("li", { className: "flex justify-between py-1.5 text-sm", children: [
-          /* @__PURE__ */ jsx3("span", { children: p.name }),
-          /* @__PURE__ */ jsx3("span", { className: "text-white/50", children: ago(p.last_seen_age_s) })
+      /* @__PURE__ */ jsxs3("div", { className: "panel p-4", children: [
+        /* @__PURE__ */ jsx4("p", { className: "mb-2 text-sm font-semibold", children: "Zuletzt gesehen" }),
+        (d.recent_players ?? []).length === 0 && /* @__PURE__ */ jsx4("p", { className: "text-sm text-white/50", children: "Noch niemand." }),
+        /* @__PURE__ */ jsx4("ul", { className: "divide-y divide-white/5", children: (d.recent_players ?? []).map((p) => /* @__PURE__ */ jsxs3("li", { className: "flex justify-between py-1.5 text-sm", children: [
+          /* @__PURE__ */ jsx4("span", { children: p.name }),
+          /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: ago(p.last_seen_age_s) })
         ] }, p.name)) })
       ] }),
-      /* @__PURE__ */ jsxs2("div", { className: "panel p-4", children: [
-        /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm font-semibold", children: "Sicherungen" }),
-        /* @__PURE__ */ jsx3("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Eigene" }),
-        (d.backups ?? []).length === 0 && /* @__PURE__ */ jsx3("p", { className: "mb-2 text-sm text-white/50", children: "Noch keine \u2013 \u201EWelt sichern\u201C legt eine an." }),
-        /* @__PURE__ */ jsx3("ul", { className: "mb-3", children: (d.backups ?? []).map((b) => /* @__PURE__ */ jsxs2("li", { className: "flex justify-between py-1 text-sm", children: [
-          /* @__PURE__ */ jsx3("span", { className: "font-mono text-xs", children: b.name }),
-          /* @__PURE__ */ jsx3("span", { className: "text-white/50", children: size(b.size) })
+      /* @__PURE__ */ jsxs3("div", { className: "panel p-4", children: [
+        /* @__PURE__ */ jsx4("p", { className: "mb-2 text-sm font-semibold", children: "Sicherungen" }),
+        /* @__PURE__ */ jsx4("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Eigene" }),
+        (d.backups ?? []).length === 0 && /* @__PURE__ */ jsx4("p", { className: "mb-2 text-sm text-white/50", children: "Noch keine \u2013 \u201EWelt sichern\u201C legt eine an." }),
+        /* @__PURE__ */ jsx4("ul", { className: "mb-3", children: (d.backups ?? []).map((b) => /* @__PURE__ */ jsxs3("li", { className: "flex justify-between py-1 text-sm", children: [
+          /* @__PURE__ */ jsx4("span", { className: "font-mono text-xs", children: b.name }),
+          /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: size(b.size) })
         ] }, b.name)) }),
-        /* @__PURE__ */ jsx3("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Automatisch (vom Spiel)" }),
-        /* @__PURE__ */ jsx3("ul", { children: (d.auto_backups ?? []).map((b) => /* @__PURE__ */ jsxs2("li", { className: "flex justify-between py-1 text-sm", children: [
-          /* @__PURE__ */ jsx3("span", { children: ago(b.age_s) }),
-          /* @__PURE__ */ jsx3("span", { className: "text-white/50", children: size(b.size) })
+        /* @__PURE__ */ jsx4("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Automatisch (vom Spiel)" }),
+        /* @__PURE__ */ jsx4("ul", { children: (d.auto_backups ?? []).map((b) => /* @__PURE__ */ jsxs3("li", { className: "flex justify-between py-1 text-sm", children: [
+          /* @__PURE__ */ jsx4("span", { children: ago(b.age_s) }),
+          /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: size(b.size) })
         ] }, b.name)) })
       ] })
     ] }),
-    (d.log_tail ?? []).length > 0 && /* @__PURE__ */ jsxs2("details", { className: "panel mt-3 p-4", children: [
-      /* @__PURE__ */ jsxs2("summary", { className: "cursor-pointer text-sm font-semibold", children: [
+    (d.log_tail ?? []).length > 0 && /* @__PURE__ */ jsxs3("details", { className: "panel mt-3 p-4", children: [
+      /* @__PURE__ */ jsxs3("summary", { className: "cursor-pointer text-sm font-semibold", children: [
         "Server-Log (letzte ",
         d.log_tail.length,
         " Zeilen)"
       ] }),
-      /* @__PURE__ */ jsx3("pre", { className: "mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-white/75", children: d.log_tail.join("\n") })
+      /* @__PURE__ */ jsx4("pre", { className: "mt-3 max-h-72 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-black/40 p-3 font-mono text-[11px] leading-relaxed text-white/75", children: d.log_tail.join("\n") })
     ] })
   ] });
 }
 function NoGameServers() {
   const tag = useSettingText("gameserver", "host_tag", "gameserver");
-  return /* @__PURE__ */ jsx3(
+  return /* @__PURE__ */ jsx4(
     EmptyState,
     {
       icon: "tag",
       title: "Noch kein Gameserver eingerichtet",
       text: `Gib einem Server unter Server & Zug\xE4nge die Markierung \u201E${tag}\u201C, dann erscheint er hier mit Status, Spielern und Welt-Sicherung. Die Markierung l\xE4sst sich in den Einstellungen des Moduls \xE4ndern.`,
-      action: /* @__PURE__ */ jsxs2("div", { className: "flex flex-wrap justify-center gap-2", children: [
-        /* @__PURE__ */ jsx3(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" }),
-        /* @__PURE__ */ jsx3(SettingsLink, { to: "/settings/extensions/gameserver", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" })
+      action: /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap justify-center gap-2", children: [
+        /* @__PURE__ */ jsx4(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" }),
+        /* @__PURE__ */ jsx4(SettingsLink, { to: "/settings/extensions/gameserver", permission: "extensions.manage", variant: "secondary", children: "Moduleinstellungen" })
       ] })
     }
   );
@@ -609,35 +690,45 @@ function GameServerPage() {
   const [urlParams, , visits] = useUrlParams();
   const focusHost = urlParams.get("host") || null;
   const [servers, setServers] = useState3(null);
+  const serversRef = useRef2(null);
+  serversRef.current = servers;
   const [profiles, setProfiles] = useState3([]);
+  const [profilesError, setProfilesError] = useState3(null);
   const [error, setError] = useState3(null);
   const [pending, setPending] = useState3(null);
   const [message, setMessage] = useState3(null);
   const load = useCallback2(async (fresh = false) => {
-    setError(null);
     try {
-      const res = await authedFetch("/ext/gameserver/servers");
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const list = await res.json();
+      const list = await fetchJson("/ext/gameserver/servers");
       const full = deck().hasPermission("hosts.execute");
       const details = await Promise.all(
         list.map(async (s) => {
           const path = full ? `/ext/gameserver/servers/${s.host_id}/details${fresh ? "?fresh=true" : ""}` : `/ext/gameserver/servers/${s.host_id}`;
-          const r = await authedFetch(path);
-          return r.ok ? await r.json() : { ...s, details: {}, config: { profile: "", values: {} } };
+          try {
+            return await fetchJson(path);
+          } catch (err) {
+            const previous = serversRef.current?.find((p) => p.host_id === s.host_id && !p.details_error);
+            if (previous) return { ...previous, ...s, stale_error: errorMessage(err) };
+            return { ...s, details: {}, config: { profile: "", values: {} }, details_error: errorMessage(err) };
+          }
         })
       );
       setServers(details);
+      setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorMessage(err));
     }
+  }, []);
+  const loadProfiles = useCallback2(() => {
+    setProfilesError(null);
+    fetchJson("/ext/gameserver/profiles").then(setProfiles).catch((err) => setProfilesError(errorMessage(err)));
   }, []);
   useEffect4(() => {
     void load();
-    authedFetch("/ext/gameserver/profiles").then((r) => r.ok ? r.json() : []).then(setProfiles).catch(() => setProfiles([]));
+    loadProfiles();
     const interval = setInterval(() => void load(), 3e4);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, loadProfiles]);
   async function trigger(server, action) {
     if (action === "stop" || action === "restart") {
       const text = action === "stop" ? `"${server.name}" wirklich stoppen? Verbundene Spieler fliegen raus.` : `"${server.name}" neu starten? Verbundene Spieler fliegen kurz raus, der Join-Code \xE4ndert sich.`;
@@ -666,20 +757,29 @@ function GameServerPage() {
     scrolledFor.current = visits;
     document.getElementById(`host-${focusHost}`)?.scrollIntoView?.({ block: "start", behavior: "smooth" });
   }, [servers, focusHost, visits]);
-  if (!servers && !error) return /* @__PURE__ */ jsx3("div", { className: "p-6 text-sm opacity-60", children: "Lade \u2026" });
-  if (error) return /* @__PURE__ */ jsxs2("div", { className: "p-6 text-sm text-red-400", children: [
-    "Fehler: ",
-    error
-  ] });
+  if (!servers && !error) return /* @__PURE__ */ jsx4("div", { className: "p-6 text-sm opacity-60", children: "Lade \u2026" });
   const ordered = [...servers ?? []].sort((a, b) => Number(b.host_id === focusHost) - Number(a.host_id === focusHost));
-  return /* @__PURE__ */ jsxs2("div", { className: "p-4 sm:p-6", children: [
-    /* @__PURE__ */ jsxs2("div", { className: "mb-6", children: [
-      /* @__PURE__ */ jsx3("h2", { className: "text-2xl font-semibold tracking-tight", children: "Gameserver" }),
-      /* @__PURE__ */ jsx3("p", { className: "text-sm text-white/55", children: "Status, Spieler, Join-Code und Welt-Sicherungen deiner Spielserver." })
+  return /* @__PURE__ */ jsxs3("div", { className: "p-4 sm:p-6", children: [
+    /* @__PURE__ */ jsxs3("div", { className: "mb-6", children: [
+      /* @__PURE__ */ jsx4("h2", { className: "text-2xl font-semibold tracking-tight", children: "Gameserver" }),
+      /* @__PURE__ */ jsx4("p", { className: "text-sm text-white/55", children: "Status, Spieler, Join-Code und Welt-Sicherungen deiner Spielserver." })
     ] }),
-    message && /* @__PURE__ */ jsx3("p", { className: "panel mb-4 px-4 py-2 text-sm", children: message }),
-    servers && servers.length === 0 && /* @__PURE__ */ jsx3(NoGameServers, {}),
-    ordered.map((server) => /* @__PURE__ */ jsx3(ServerCard, { server, profiles, onAction: (s, a) => void trigger(s, a), pending, reload: () => void load(true) }, server.host_id))
+    error && /* @__PURE__ */ jsx4(LoadError, { what: "Die Liste der Gameserver", error, onRetry: () => void load(true) }),
+    message && /* @__PURE__ */ jsx4("p", { className: "panel mb-4 px-4 py-2 text-sm", children: message }),
+    servers && servers.length === 0 && /* @__PURE__ */ jsx4(NoGameServers, {}),
+    ordered.map((server) => /* @__PURE__ */ jsx4(
+      ServerCard,
+      {
+        server,
+        profiles,
+        profilesError,
+        onRetryProfiles: loadProfiles,
+        onAction: (s, a) => void trigger(s, a),
+        pending,
+        reload: () => void load(true)
+      },
+      server.host_id
+    ))
   ] });
 }
 export {

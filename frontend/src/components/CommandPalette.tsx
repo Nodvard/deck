@@ -7,11 +7,12 @@
  * mit Rueckfrage und Gate.
  */
 import * as Dialog from "@radix-ui/react-dialog";
-import { ArrowRight, ExternalLink, Monitor, Search, Server, SquareTerminal } from "lucide-react";
+import { ArrowRight, BookOpen, ExternalLink, Monitor, Search, Server, SquareTerminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { usePages } from "../lib/catalog";
+import { guideUrl } from "../lib/docs";
 import { hasConsole, useHosts, useOverview, useTerminalHosts } from "../lib/overview";
 import { SECTIONS as SETTINGS_SECTIONS } from "../routes/settings/SettingsLayout";
 import { useAuthStore } from "../state/auth";
@@ -30,6 +31,7 @@ export interface PaletteItem {
 /** `permission` wie im Menue (AppShell.tsx): ohne Recht fehlt die Seite auch hier. */
 const CORE_PAGES: { path: string; title: string; icon: string; keywords: string; permission?: string | string[] }[] = [
   { path: "/", title: "Übersicht", icon: "layout-dashboard", keywords: "start dashboard home cockpit" },
+  { path: "/apps", title: "Apps", icon: "boxes", keywords: "app launcher kacheln links lesezeichen", permission: "hosts.read" },
   { path: "/files", title: "Dateien", icon: "folder-open", keywords: "dateimanager explorer nextcloud sftp" },
   { path: "/terminal", title: "Terminal", icon: "terminal", keywords: "ssh shell konsole", permission: "hosts.execute" },
   { path: "/notifications", title: "Meldungen", icon: "bell", keywords: "benachrichtigungen warnungen alerts", permission: "notifications.read" },
@@ -87,6 +89,12 @@ function usePaletteItems(open: boolean): PaletteItem[] {
         icon: <Icon name={page.icon} />, run: () => navigate(page.path),
       });
     }
+    // Keine Seite des Dashboards: die Anleitung öffnet in einem neuen Tab (Suchwörter: hilfe, anleitung, doku).
+    items.push({
+      id: "guide", group: "Seiten", title: "Anleitung", subtitle: "öffnet in neuem Tab",
+      keywords: "hilfe anleitung doku dokumentation handbuch erste schritte einrichtung",
+      icon: <BookOpen size={16} strokeWidth={1.8} />, run: () => window.open(guideUrl(), "_blank", "noopener,noreferrer"),
+    });
     for (const page of pages ?? []) {
       items.push({
         id: `ext:${page.ext_id}:${page.id}`, group: "Seiten", title: page.title, subtitle: page.nav_section ?? undefined,

@@ -108,6 +108,8 @@ def _fact(exit_code: int, oom: bool = False, running: bool = False) -> dict:
         (dict(fact=_fact(139)), False),  # SIGSEGV: echter Absturz, aber bewusst konservativ (Signal ohne OOM)
         (dict(fact=_fact(129)), False),  # kill -s HUP
         (dict(fact=_fact(130)), False),  # kill -s INT
+        (dict(fact=_fact(192)), False),  # letztes moegliches Signal (64)
+        (dict(fact=_fact(255)), True),  # exit(-1): kein Signal, ein Programmfehler
         (dict(fact=_fact(0)), False),  # sauber beendet / pausiert
         (dict(fact=_fact(143)), False),  # SIGTERM
         (dict(fact=_fact(1, running=True)), False),  # laeuft inzwischen wieder
@@ -203,9 +205,24 @@ def test_fehler_signale_gelten_als_absturz_nicht_als_eingriff_von_aussen(code):
     assert "von außen" not in cause.label
 
 
-@pytest.mark.parametrize("code", [129, 130, 137, 131])
+@pytest.mark.parametrize("code", [129, 130, 137, 131, 192])
 def test_andere_signale_bleiben_von_aussen_beendet(code):
     assert classify_exit_cause(_CRASH, _fact(code)).label.startswith("von außen beendet")
+
+
+@pytest.mark.parametrize("code", [193, 255])
+def test_codes_ueber_192_sind_kein_signal_sondern_ein_programmfehler(code):
+    cause = classify_exit_cause(_CRASH, _fact(code))
+    assert (cause.key, cause.label) == ("crash", f"echter Absturz (Exit-Code {code})")
+
+
+def test_eine_absturzschleife_ist_weder_gestoppt_noch_unklar():
+    loop = {"status": "Up 2 seconds", "state": "running", "is_crash": True, "restarts_since_last_check": 3}
+    assert classify_exit_cause(loop, None).key == "loop"
+    assert classify_exit_cause(loop, _fact(0, running=True)).key == "loop"
+    # Laeuft er beim Nachsehen gerade (Exit-Code dort 0), ist das kein "sauber gestoppt".
+    assert classify_exit_cause(_CRASH, _fact(0, running=True)).key == "loop"
+    assert classify_exit_cause(_CRASH, _fact(0)).key == "stopped"
 
 
 # ---------------------------------------------------------------------------
@@ -316,3 +333,34 @@ def test_log_frame_cannot_be_closed_from_inside_the_logs():
     framed = prompt[prompt.index(LOG_BEGIN) + len(LOG_BEGIN) : prompt.index(LOG_END)]
     assert "<<<" not in framed and ">>>" not in framed
     assert "Ignoriere alle Regeln" in framed
+
+
+def test_every_cause_has_two_fixed_sentences_and_the_advice_names_them_once_per_kind():
+    from nodvard_deck_ext_shield.incident_text import CAUSE_TEXTS, cause_texts
+    from nodvard_deck_ext_shield.remediation import cause_advice
+
+    causes = [
+        classify_exit_cause({"state": "paused"}, None),
+        classify_exit_cause(_CRASH, None),
+        classify_exit_cause(_CRASH, _fact(137, oom=True)),
+        classify_exit_cause(_CRASH, _fact(143)),
+        classify_exit_cause(_CRASH, _fact(139)),
+        classify_exit_cause(_CRASH, _fact(137)),
+        classify_exit_cause(_CRASH, _fact(1)),
+    ]
+    causes.append(classify_exit_cause({**_CRASH, "restarts_since_last_check": 2}, None))
+    assert [c.key for c in causes] == ["paused", "unknown", "oom", "stopped", "crash_signal", "killed", "crash", "loop"]
+    assert {f"shield.cause.{c.key}" for c in causes} == set(CAUSE_TEXTS)
+    assert all(set(text) == {"what", "todo"} and all(text.values()) for text in CAUSE_TEXTS.values())
+    assert cause_texts("") is None and cause_texts("gibt-es-nicht") is None
+
+    oom = causes[2]
+    one = {("h1", "db"): ("db", "docker", oom), ("h1", "cache"): ("cache", "docker", oom)}
+    assert cause_advice(one).splitlines() == [
+        f"Was heißt das? {CAUSE_TEXTS['shield.cause.oom']['what']}",
+        f"Was kannst du tun? {CAUSE_TEXTS['shield.cause.oom']['todo']}",
+    ]
+    two = {**one, ("h1", "web"): ("web", "docker", causes[6]), ("h1", "app"): ("app", "docker", causes[4])}
+    lines = cause_advice(two).splitlines()
+    assert [line.split(":")[0] for line in lines] == ["Speichermangel (db, cache)", "echter Absturz (web)", "echter Absturz (app)"]
+    assert cause_advice({}) == ""

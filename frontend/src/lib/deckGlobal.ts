@@ -15,7 +15,8 @@
  *   hoeren auf GENAU EIN Ereignis (`deckEventName`): auf `nodvard-deck:...`, wenn der Kern den
  *   neuen Namen kennt, sonst auf `lattice:...`. So reagiert nichts doppelt.
  *
- * Bewusst nur `window`, keine Abhaengigkeiten: die Datei wird in Erweiterungs-Bundles einkompiliert.
+ * Bewusst nur `window`, keine Abhaengigkeiten: die Datei wird ueber die Kit-Bruecke
+ * `extensions/_shared/frontend/src/deck.ts` in Erweiterungs-Bundles einkompiliert.
  */
 
 /** Ereignisse, die die Kern-Shell auf `window` meldet. */

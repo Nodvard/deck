@@ -129,7 +129,7 @@ export function buildFirstSteps({ can, hosts, extensions, placedWidgets, catalog
       action: needing.length > 0 ? "Jetzt einrichten" : "Module ansehen",
       text: needing.length > 0
         ? `${listNames(needing)} ${needing.length === 1 ? "braucht" : "brauchen"} noch ein paar Angaben, bevor es losgehen kann.`
-        : "Schalte die Module ein, die du brauchst, zum Beispiel für die Auslastung deiner Server, Docker-Dienste oder Updates. Proxmox und Backups brauchst du nur, wenn du Proxmox nutzt.",
+        : "Schalte die Module ein, die du brauchst, zum Beispiel für die Auslastung deiner Server, Docker-Dienste oder Updates. „Proxmox VE“ und „Proxmox-Backups“ brauchst du nur, wenn du Proxmox nutzt.",
     });
 
     const push = extensions.find((e) => e.id === PUSH_EXTENSION_ID);

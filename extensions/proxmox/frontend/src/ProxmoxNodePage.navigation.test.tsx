@@ -41,7 +41,7 @@ function mockFetch() {
 
 const LINKS = { "Menü Proxmox": "/ext/proxmox/nodes", "Aufgabenverlauf docker": "/ext/proxmox/nodes?host=h-vm&tasks=1" };
 const click = (name: string) => fireEvent.click(screen.getByRole("link", { name }));
-const tasksShown = (n: number) => waitFor(() => expect(screen.getByText(`Aufgabenverlauf (${n})`)).toBeInTheDocument());
+const tasksShown = (n: number) => waitFor(() => expect(screen.getByTestId("tasks-count-pve2")).toHaveTextContent(n === 1 ? "1 Aufgabe" : `${n} Aufgaben`));
 
 beforeEach(() => {
   window.history.replaceState(null, "", "/ext/proxmox/nodes");
@@ -67,13 +67,14 @@ describe("Proxmox-Knoten in der echten Kern-Shell", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "Filter entfernen" }));
     await tasksShown(2);
-    expect(window.location.search).toBe("?host=h-vm");
+    // Der Reiter bleibt offen, obwohl `tasks=1` aus der Adresse verschwindet.
+    expect(window.location.search).toBe("?host=h-vm&tab=tasks");
 
     // Der Router hält ?host=h-vm&tasks=1 noch für die aktuelle Adresse -- die Seite muss trotzdem folgen.
     click("Aufgabenverlauf docker");
     await tasksShown(1);
     expect(window.location.search).toBe("?host=h-vm&tasks=1");
-    expect(screen.getByText("Aufgabenverlauf (1)").closest("details")).toHaveAttribute("open");
+    expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
   });
 
   it("Zurück und Vor folgen", async () => {
@@ -81,12 +82,16 @@ describe("Proxmox-Knoten in der echten Kern-Shell", () => {
     await tasksShown(2);
     click("Aufgabenverlauf docker");
     await tasksShown(1);
+    expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
     click("Menü Proxmox");
     await tasksShown(2);
+    expect(screen.getByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
 
     act(() => window.history.back());
     await tasksShown(1);
+    expect(screen.getByRole("tab", { name: "Aufgabenverlauf" })).toHaveAttribute("aria-selected", "true");
     act(() => window.history.forward());
     await tasksShown(2);
+    expect(screen.getByRole("tab", { name: "VMs & Container" })).toHaveAttribute("aria-selected", "true");
   });
 });

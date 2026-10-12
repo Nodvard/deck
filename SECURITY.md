@@ -33,7 +33,8 @@ Nodvard Deck is in beta. Security fixes are made for the **latest release only**
 ## Hardening notes for operators
 
 - Do not expose Nodvard Deck directly to the internet. Put it behind a VPN (e.g. WireGuard,
-  Tailscale) or a reverse proxy with HTTPS.
+  Tailscale) or a reverse proxy with HTTPS. Behind a proxy, enter only the proxy's own address as a
+  trusted proxy (see [docs/en/REVERSE-PROXY.md](docs/en/REVERSE-PROXY.md)).
 - Enable two-factor login for every account.
 - Give Nodvard Deck's Proxmox API token and SSH users only the rights they need
   (see [docs/en/PROXMOX-TOKEN.md](docs/en/PROXMOX-TOKEN.md)).

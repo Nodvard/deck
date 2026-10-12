@@ -7,6 +7,8 @@ import { ArrowLeft } from "lucide-react";
 import { useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
+import { useExtensions } from "../../lib/firstSteps";
+import { hostProvider } from "../../lib/hostProvider";
 import { useCredentials, useHost, type HostOut } from "../../lib/hosts";
 import { hostHealth } from "../../lib/overview";
 import { AccessPanel } from "./hosts/AccessPanel";
@@ -20,6 +22,8 @@ import { Badge, Button, Card, NoticeLine, PageHeader, type Notice } from "./ui";
 const KIND_LABEL: Record<string, string> = { vm: "Virtuelle Maschine", lxc: "Container", hypervisor: "Proxmox-Knoten", node: "Knoten" };
 
 function Summary({ host }: { host: HostOut }) {
+  const { data: extensions } = useExtensions(Boolean(host.provider_ext_id));
+  const provider = hostProvider(host, extensions);
   const rows: [string, string][] = [
     ["Kurzname", host.name],
     ["Anzeigename", host.display_name],
@@ -43,7 +47,9 @@ function Summary({ host }: { host: HostOut }) {
       </div>
       {host.provider_ext_id && (
         <p className="text-xs text-white/45 sm:col-span-2">
-          Dieser Server wird automatisch von der Erweiterung „{host.provider_ext_id}“ eingelesen{host.kind ? ` (${KIND_LABEL[host.kind] ?? host.kind})` : ""}.
+          {provider?.problem
+            ? <>Dieser Server wurde von der Erweiterung „{provider.name}“ eingelesen{host.kind ? ` (${KIND_LABEL[host.kind] ?? host.kind})` : ""}. Die Erweiterung läuft nicht mehr, darum wird sein Zustand nicht mehr aktualisiert.</>
+            : <>Dieser Server wird automatisch von der Erweiterung „{provider?.name ?? host.provider_ext_id}“ eingelesen{host.kind ? ` (${KIND_LABEL[host.kind] ?? host.kind})` : ""}.</>}
         </p>
       )}
     </dl>

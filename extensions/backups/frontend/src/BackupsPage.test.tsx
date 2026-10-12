@@ -235,6 +235,28 @@ describe("BackupsPage ConnectionsPanel", () => {
     expect((created as { name: string }).name).toBe("pve2");
   });
 
+  it("zeigt den Stand des Zertifikats und bietet über „Zertifikat“ das Merken des Fingerabdrucks an", async () => {
+    const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: true, enabled: true, has_token: true };
+    const base = mockFetch({ connections: [conn], jobs: [] });
+    const certificateCalls: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/ext/backups/connections/pve2/certificate")) {
+        certificateCalls.push(init?.method ?? "GET");
+        const fingerprint = Array.from({ length: 32 }, () => "AB").join(":");
+        return new Response(JSON.stringify({ sha256: fingerprint, trusted: false, stored: null, stored_invalid: false, matches: false }), { status: 200 });
+      }
+      return base(input, init);
+    }));
+    render(<BackupsPage />);
+
+    expect(await screen.findByText("wird nicht geprüft")).toBeInTheDocument();
+    expect(certificateCalls).toEqual([]);
+    fireEvent.click(screen.getByRole("button", { name: "Zertifikat" }));
+    expect(await screen.findByRole("button", { name: "Fingerabdruck merken" })).toBeDisabled();
+    expect(certificateCalls).toEqual(["GET"]);
+  });
+
   it("schaltet eine Verbindung ueber den Aktiv-Knopf um (unabhaengiges Aktivieren/Deaktivieren)", async () => {
     let lastPatch: unknown = null;
     const conn = { name: "pve2", base_url: "https://x:8006", token_id: "t", tls_insecure_skip_verify: false, enabled: true, has_token: true };
@@ -332,7 +354,7 @@ describe("BackupsPage ConnectionsPanel", () => {
 
     vi.stubGlobal("fetch", mockFetch());
     render(<BackupsPage />);
-    await screen.findByText("Backups");
+    await screen.findByText("Proxmox-Backups");
     await waitFor(() => expect(screen.queryByTestId("unprotected")).toBeNull());
   });
 

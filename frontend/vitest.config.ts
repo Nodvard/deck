@@ -2,11 +2,15 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+import { kitDedupe, kitFsAllow } from "./kit.resolve";
+
 // Separat von vite.config.ts (nicht per mergeConfig zusammengefuehrt), damit der
 // Dev-Server-Proxy (der einen laufenden Backend-Prozess auf :8080 voraussetzt) fuer
 // Unit-Tests irrelevant bleibt -- Tests importieren Komponenten direkt, kein Netzwerk.
 export default defineConfig({
   plugins: [react()],
+  resolve: { dedupe: kitDedupe },
+  server: { fs: { allow: kitFsAllow } },
   test: {
     environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],

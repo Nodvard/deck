@@ -18,7 +18,7 @@ from http import HTTPStatus
 from typing import Any
 
 import httpx
-from nodvard_sdk.errors import PermissionDenied
+from nodvard_sdk.errors import CertificateMismatch, PermissionDenied
 
 SERVICE = "Proxmox"
 MAX_REASON = 200
@@ -167,6 +167,18 @@ def _class_names(exc: BaseException) -> set[str]:
     return {cls.__name__ for cls in type(exc).__mro__}
 
 
+CERTIFICATE_CHANGED_TEXT = (
+    "Der Server zeigt ein anderes Zertifikat als das gemerkte. Vergleiche den neuen Fingerabdruck in Proxmox "
+    "(Knoten → System → Zertifikate) und bestätige ihn unter „Verbindungen verwalten“."
+)
+
+
+def certificate_changed(exc: BaseException) -> bool:
+    """Ob `exc` daher kommt, dass der Server ein anderes Zertifikat zeigt als der gemerkte Fingerabdruck
+    (`CertificateMismatch`, meist in eine Ausnahme der HTTP-Schicht eingepackt)."""
+    return any(isinstance(link, CertificateMismatch) for link in _chain(exc))
+
+
 def _chain(exc: BaseException) -> list[BaseException]:
     out: list[BaseException] = []
     seen: set[int] = set()
@@ -244,10 +256,12 @@ def transport_text(exc: BaseException, url: str) -> str:
             return redirect_text()
         return f"Die Anfrage an {SERVICE} ließ sich nicht senden. Prüfe die Einstellungen."
     chain = _chain(exc)
+    if certificate_changed(exc):
+        return CERTIFICATE_CHANGED_TEXT
     if _is_tls(chain):
         return (
-            f"Das Zertifikat von {SERVICE} wird nicht akzeptiert. Bei einem selbstsignierten Zertifikat in den "
-            "Einstellungen „Selbstsigniertes Zertifikat erlauben“ einschalten."
+            f"Das Zertifikat von {SERVICE} wird nicht akzeptiert. Bei einem selbstsignierten Zertifikat vergleiche "
+            "seinen Fingerabdruck und merk ihn dir unter „Verbindungen verwalten“ (Knopf „Zertifikat“)."
         )
     if _is_dns(chain):
         return "Die Adresse ließ sich nicht auflösen (Namensauflösung fehlgeschlagen). Prüfe die Schreibweise der Adresse."
