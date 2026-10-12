@@ -1,18 +1,5 @@
-"""Verstaendliche Texte fuer Verbindungsfehler.
-
-Manche Ausnahmen haben keinen Text: `str(TimeoutError())` ist leer, und aus einem leeren Text wurde
-bei Terminal und Dateien "...Fehler: " ohne jeden Grund. Und die Texte der
-anderen sind englisch ("No route to host"). `describe_connection_error()` macht daraus einen
-deutschen Satz, den die Oberflaeche unveraendert zeigen kann -- und der nie leer ist.
-
-Kennt keine konkrete Quelle (SSH, WebDAV, ...): dieselbe Funktion dient dem Dateimanager, der
-Terminal-Bruecke und der Aktionsausfuehrung. Ausnahmen, deren Text schon ein fertiger deutscher
-Satz ist, tragen `readable = True` (z. B. `core.ssh.SshError`) und kommen unveraendert durch.
-
-Nur Netzfehler gelten als "erwartbar". Ein Dateifehler (`PermissionError`, `FileNotFoundError` ...)
-ist auch ein `OSError`, hat aber nichts mit dem Netz zu tun: sein Text enthaelt Pfade des Servers
-und gehoert nicht in eine Antwort an die Oberflaeche, und er behaelt seinen Traceback im Protokoll.
-"""
+"""Verständliche, nie leere deutsche Texte für Verbindungsfehler, die die Oberfläche unverändert zeigen kann.
+Ausnahmen mit fertigem deutschem Text tragen `readable = True` (z. B. `core.ssh.SshError`) und kommen unverändert durch."""
 
 from __future__ import annotations
 
@@ -35,13 +22,9 @@ def _where(address: str | None, port: int | None) -> str:
 def describe_connection_error(
     exc: BaseException, *, address: str | None = None, port: int | None = None, network: bool = False
 ) -> str:
-    """Deutscher Satz zu einem Verbindungsfehler; nie leer. `address`/`port` (falls bekannt)
-    stehen mit im Text.
-
-    `network=True`: der Aufrufer weiss, dass `exc` beim Verbindungsaufbau entstand (z. B. aus
-    `asyncssh.connect`). Dann ist auch ein sonst unbekannter `OSError` ein Netzfehler ("Multiple
-    exceptions: ...", wenn ein Name auf mehrere Adressen zeigt), und sein Text bleibt als Zusatz stehen
-    -- er nennt nur Adressen, keine Pfade."""
+    """Deutscher Satz zu einem Verbindungsfehler, nie leer (`str(TimeoutError())` ist es, andere Texte sind englisch).
+    `network=True`: `exc` entstand beim Verbindungsaufbau, dann ist auch ein sonst unbekannter `OSError` ein Netzfehler
+    ("Multiple exceptions: ..." bei mehreren Adressen) und sein Text bleibt als Zusatz stehen, er nennt nur Adressen."""
     text = str(exc).strip()
     if getattr(exc, "readable", False) and text:
         return text
@@ -61,21 +44,18 @@ def describe_connection_error(
         where = _where(address, port)
         return f"Keine Verbindung zum Server{where}: {text}" if text else f"Keine Verbindung zum Server{where}."
     if isinstance(exc, OSError):
-        # Ein Dateifehler (PermissionError o. Ae.) hat mit dem Netz nichts zu tun. Sein Text nennt
-        # Pfade des Servers ("[Errno 13] Permission denied: /app/data/...") -- die Person bekommt nur
-        # den Namen der Ausnahme, der volle Text steht im Protokoll.
+        # Ein Dateifehler (PermissionError o. Ä.) hat mit dem Netz nichts zu tun, sein Text nennt Pfade des Servers
+        # ("[Errno 13] Permission denied: /app/data/..."): Die Person bekommt nur den Namen der Ausnahme, der volle Text
+        # steht im Protokoll.
         return type(exc).__name__
-    # Alles andere: der eigene Text, und wenn es keinen gibt, wenigstens der Name der Ausnahme.
+    # Alles andere: der eigene Text, sonst der Name der Ausnahme.
     return text or type(exc).__name__
 
 
 def is_expected_connection_error(exc: BaseException) -> bool:
-    """Server aus oder nicht erreichbar, Zugang abgelehnt, Server-Schluessel unbestaetigt, kein Zugang
-    eingerichtet: kein Fehler im Programm. Solche Faelle gehoeren als EINE Zeile ins Protokoll, nicht
-    mit Traceback (`deploy_pi.sh` wertet "Traceback" im Protokoll als gescheiterten Start).
-
-    Von den `OSError`s zaehlen nur die Netzfehler (Zeitueberschreitung, abgelehnt, abgebrochen, Name
-    unbekannt, kein Weg zum Server). Ein Dateifehler bleibt ein echter Fehler."""
+    """Erwartbare Fehler: Server aus oder nicht erreichbar, Zugang abgelehnt, Schlüssel unbestätigt, kein Zugang
+    eingerichtet. Sie gehören als eine Zeile ins Protokoll, ohne Traceback (`deploy_pi.sh` wertet "Traceback" als
+    gescheiterten Start). Von den `OSError`s zählen nur Netzfehler; ein Dateifehler bleibt ein echter Fehler."""
     if getattr(exc, "readable", False):
         return True
     if isinstance(exc, (asyncssh.Error, HostUnreachable, ConnectionError, TimeoutError, socket.gaierror)):

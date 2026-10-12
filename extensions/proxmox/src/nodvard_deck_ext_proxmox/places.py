@@ -1,16 +1,4 @@
-"""Wichtige Orte eines Proxmox-Knotens fuer den Dateimanager: der Ordner mit den Sicherungen.
-
-Die Speicher des Knotens kennt die Erweiterung ohnehin (`GET /nodes/{node}/storage`, dieselbe Abfrage wie die
-Speicher-Uebersicht). Den Ordner der Sicherungen nennt Proxmox dort nicht, er ergibt sich nur bei zwei
-Speicherarten sicher aus Proxmox' eigener Anordnung:
-
-* der eingebaute Speicher `local` (Art `dir`) liegt unter `/var/lib/vz`,
-* Speicher an einer Netzfreigabe (`nfs`, `cifs`, `cephfs`, `glusterfs`) werden unter `/mnt/pve/<Speicher>` eingehaengt,
-
-und Sicherungen (`vzdump`) liegen darin im Unterordner `dump`. Jedes andere Verzeichnis-Laufwerk (Art `dir` mit
-eigenem Pfad) hat einen frei gewaehlten Ordner, den Proxmox nicht ueber die Programmschnittstelle nennt: Fuer
-solche Speicher gibt es hier keinen Ort, statt einen zu raten.
-"""
+"""Wichtige Orte eines Proxmox-Knotens für den Dateimanager: der Ordner mit den Sicherungen."""
 
 from __future__ import annotations
 
@@ -24,12 +12,15 @@ from .config import build_connector
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# Speicherarten, die Proxmox selbst unter `/mnt/pve/<Speicher>` einhängt.
 _MOUNTED_TYPES = frozenset({"nfs", "cifs", "cephfs", "glusterfs"})
-"""Speicherarten, die Proxmox selbst unter `/mnt/pve/<Speicher>` einhaengt."""
 
 
+# Den Ordner der Sicherungen (`vzdump`, Unterordner `dump`) nennt Proxmox über die API nicht. Er ergibt sich nur bei zwei
+# Arten sicher: `local` (Art `dir`) liegt unter /var/lib/vz, Speicher an einer Netzfreigabe unter /mnt/pve/<Speicher>.
+# Jedes andere Verzeichnis-Laufwerk hat einen frei gewählten Ordner: dafür gibt es keinen Ort, statt einen zu raten.
 def backup_folder(pool: dict[str, Any]) -> str | None:
-    """Ordner der Sicherungen eines Speichers, oder `None`, wenn er sich nicht sicher nennen laesst."""
+    """Ordner der Sicherungen eines Speichers, oder `None`, wenn er sich nicht sicher nennen lässt."""
     storage = str(pool.get("storage") or "")
     kind = str(pool.get("type") or "")
     if not storage or "/" in storage:
@@ -65,8 +56,8 @@ def backup_places(pools: list[dict[str, Any]]) -> list[FilePlace]:
 
 
 class ProxmoxFilePlaces:
-    """Erfuellt `nodvard_sdk.capabilities.FilePlaceProvider` fuer Proxmox-Knoten, die diese Erweiterung eingelesen hat.
-    Gaeste (VM, Container) und Server anderer Herkunft bekommen keine Orte von hier."""
+    """Erfüllt `nodvard_sdk.capabilities.FilePlaceProvider` für Proxmox-Knoten, die diese Erweiterung eingelesen hat.
+    Gäste (VM, Container) und Server anderer Herkunft bekommen keine Orte von hier."""
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx

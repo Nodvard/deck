@@ -1,15 +1,14 @@
-"""Fehler rund um Sicherungen. Jede Meldung ist fuer Menschen geschrieben und enthaelt nie
-ein Passwort, einen Schluessel oder sonst etwas Geheimes."""
+"""Fehler rund um Sicherungen; jede Meldung ist für Menschen geschrieben und enthält nie etwas Geheimes."""
 
 from __future__ import annotations
 
 
 class BackupError(Exception):
-    """Oberklasse. `str(exc)` ist eine deutsche Meldung fuer die Oberflaeche."""
+    """Oberklasse; `str(exc)` ist eine deutsche Meldung für die Oberfläche."""
 
 
 class DamagedBackup(BackupError):
-    """Datei kaputt, abgeschnitten, veraendert oder kein Sicherungsformat."""
+    """Datei kaputt, abgeschnitten, verändert oder kein Sicherungsformat."""
 
     def __init__(self, detail: str = "") -> None:
         text = "Die Sicherung ist beschädigt oder unvollständig."
@@ -30,15 +29,14 @@ class NewerBackup(BackupError):
 
 
 class TooExpensive(BackupError):
-    """Die Datei verlangt eine Schluesselberechnung jenseits unserer Deckel (Schutz vor
-    absichtlich teuren Dateien, die den Rechner minutenlang beschaeftigen wuerden)."""
+    """Die Datei verlangt eine Schlüsselberechnung jenseits der Deckel (Schutz vor absichtlich teuren Dateien)."""
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"Die Sicherung verlangt eine ungewöhnlich aufwendige Schlüsselberechnung ({detail}) und wird abgelehnt.")
 
 
 class BackupTooLarge(BackupError):
-    """Eine Obergrenze (Upload, entpackte Groesse, Zahl der Dateien) wurde ueberschritten."""
+    """Eine Obergrenze (Upload, entpackte Größe, Zahl der Dateien) wurde überschritten."""
 
 
 class NotEnoughSpace(BackupError):
@@ -46,9 +44,8 @@ class NotEnoughSpace(BackupError):
 
 
 class UnusableBackup(BackupError):
-    """Die Sicherung ist in Ordnung, laesst sich hier aber nicht einspielen (zu neue oder
-    unbekannte Datenbankstaende, fehlende Erweiterung, nicht von uns angelegte Datenbank-
-    Objekte). Die Meldung sagt, woran es liegt."""
+    """Die Sicherung ist in Ordnung, lässt sich hier aber nicht einspielen (zu neue oder unbekannte
+    Datenbankstände, fehlende Erweiterung, fremde Datenbank-Objekte); die Meldung sagt, woran es liegt."""
 
 
 class NotSqlite(BackupError):

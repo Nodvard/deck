@@ -1,27 +1,6 @@
-"""Eigene App-Kacheln im Cockpit ("+ App hinzufuegen") -- Pruefung der Eingaben und Datenbankzugriffe
-(Tabelle `custom_apps`, docs/03-DATA-MODEL.md, docs/04-API.md "Eigene Apps").
+"""Eigene App-Kacheln im Cockpit: Prüfung der Eingaben und Datenbankzugriffe (Tabelle `custom_apps`).
 
-**Was eine eigene App ist:** ein von Hand angelegter Link (Name, Adresse, Symbol, Gruppe, optional ein
-Server dazu). Wer keine Service-Matrix hat -- oder zusaetzlich Router, NAS-Oberflaeche oder Pi-hole im
-Cockpit sehen will --, braucht dafuer keinen Code.
-
-**Der Server ruft die Adresse nie selbst ab.** Es gibt keine Statusabfrage (kein "laeuft"/"laeuft nicht"
-fuer eigene Apps): damit kann ueber diese Funktion niemand den Server dazu bringen, interne Adressen
-anzufragen (SSRF). Die Adresse ist nur ein Link, den der Browser der Person oeffnet, die darauf klickt.
-Eine Statusabfrage waere ein eigenes Paket mit eigener Sicherheitsbetrachtung.
-
-**Warum die Pruefung streng ist:** Die Adresse landet als Link auf der Startseite ALLER Nutzer. Erlaubt ist
-darum nur `http://` und `https://` -- `javascript:`, `data:`, `file:` & Co. sind als Link ein Angriff auf
-den, der klickt. Zugangsdaten in der Adresse (`http://user:pass@...`) werden abgelehnt (stuenden sonst fuer
-alle lesbar in der Datenbank und taeuschen mit `https://google.com@boese.example` ein anderes Ziel vor);
-ebenso Leer-/Steuerzeichen und Rueckwaertsschraegstriche (Browser lesen `\\` wie `/`).
-
-**Symbol: feste Auswahl oder ein Emoji -- nie eine Bild-Adresse.** Ein frei waehlbares Bild haette den
-Browser jedes Nutzers beim Anzeigen der Startseite zu einem fremden Server gefuehrt (Tracking, wer wann das
-Dashboard oeffnet), und eine `http://`-Bild-Adresse waere auf einer `https`-Seite ein Mixed-Content-Fehler.
-Die Namen stammen aus lucide (das Frontend bundelt sie ohnehin, `frontend/src/lib/appIcons.ts`; ein Test
-haelt beide Listen deckungsgleich).
-"""
+Eine eigene App ist ein von Hand angelegter Link (Name, Adresse, Symbol, Gruppe, optional ein Server dazu)."""
 
 from __future__ import annotations
 
@@ -41,12 +20,16 @@ NAME_MAX = 60
 GROUP_MAX = 40
 URL_MAX = 1000
 EMOJI_MAX_CODEPOINTS = 12
-"""Laengste echte Emoji-Folge (Familie mit Hautfarben) liegt darunter."""
+"""Längste echte Emoji-Folge (Familie mit Hautfarben) liegt darunter."""
 
 SORT_MAX = 100_000
 MAX_APPS = 200
-"""Mehr Kacheln als das braucht kein Homelab; die Obergrenze haelt die Startseite und `GET /overview` klein."""
+"""Mehr Kacheln als das braucht kein Homelab; die Obergrenze hält die Startseite und `GET /overview` klein."""
 
+# Symbol: feste Auswahl oder ein Emoji, nie eine Bild-Adresse. Ein frei wählbares Bild führte den Browser jedes Nutzers
+# beim Anzeigen der Startseite zu einem fremden Server (Tracking, wer wann das Dashboard öffnet), und eine
+# `http://`-Bild-Adresse wäre auf einer `https`-Seite ein Mixed-Content-Fehler. Die Namen stammen aus lucide (das Frontend
+# bundelt sie ohnehin, `frontend/src/lib/appIcons.ts`); ein Test hält beide Listen deckungsgleich.
 APP_ICONS: tuple[str, ...] = (
     "globe", "link", "router", "network", "wifi", "shield-check", "lock", "key-round", "server", "hard-drive",
     "database", "cloud", "cpu", "monitor", "laptop", "smartphone", "tv", "printer", "camera", "cctv",
@@ -57,7 +40,7 @@ APP_ICONS: tuple[str, ...] = (
 
 _SKIN_TONES = range(0x1F3FB, 0x1F400)
 _TEXT_STYLE_EMOJI = {0x203C, 0x2049, 0x2139, *range(0x2194, 0x219A), 0x21A9, 0x21AA, 0x3030, 0x303D}
-"""Emoji, die Unicode nicht als "Symbol" fuehrt (Ausrufezeichen-Paar, Info, Pfeile, Welle)."""
+"""Emoji, die Unicode nicht als "Symbol" führt (Ausrufezeichen-Paar, Info, Pfeile, Welle)."""
 _EMOJI_JOINERS = {0x200D, 0xFE0F}  # Zero-Width-Joiner und Emoji-Darstellung
 _COLOR_RE = re.compile(r"#[0-9a-fA-F]{6}")
 _HOST_RE = re.compile(r"[\w.-]+")
@@ -67,12 +50,12 @@ _ICON_ERROR = "Wähle ein Symbol aus der Liste oder gib ein einzelnes Emoji ein.
 
 
 class CustomAppError(ValueError):
-    """Eine Eingabe ist nicht in Ordnung; der Text ist fuer die Person gedacht. (`ValueError`, damit
+    """Eine Eingabe ist nicht in Ordnung; der Text ist für die Person gedacht. (`ValueError`, damit
     pydantic daraus eine 422-Antwort mit genau diesem Text macht.)"""
 
 
 class AppServiceError(Exception):
-    """Basis der Fehler beim Speichern; die Meldung ist fuer Nutzer gedacht."""
+    """Basis der Fehler beim Speichern; die Meldung ist für Nutzer gedacht."""
 
 
 class AppNotFoundError(AppServiceError):
@@ -91,16 +74,16 @@ class BadOrderError(AppServiceError):
     pass
 
 
-# --- Pruefung der Eingaben -----------------------------------------------------------------------------
+# --- Prüfung der Eingaben ------------------------------------------------------------------------------
 
 
 _ZERO_WIDTH_JOINER = 0x200D
 _EMOJI_BLOCKS = range(0x1F000, 0x1FB00)
-"""Die Emoji-Bloecke (Mahjong bis "Symbole und Piktogramme, Erweiterung A"). Nur hier gilt ein Zeichen, das diese
-Python-Version noch nicht kennt, als (neues) Emoji -- ausserhalb waeren es unsichtbare, nicht vergebene Zeichen."""
+"""Die Emoji-Blöcke (Mahjong bis "Symbole und Piktogramme, Erweiterung A"). Nur hier gilt ein Zeichen, das diese
+Python-Version noch nicht kennt, als (neues) Emoji; außerhalb wären es unsichtbare, nicht vergebene Zeichen."""
 _BLANK_LETTERS = {0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800}
-"""Fuell- und Leerzeichen, die Unicode als Buchstabe (Hangul-Fueller) bzw. Symbol (Braille-Leerzeichen) fuehrt, die
-aber nichts anzeigen: sie zaehlen nicht als sichtbares Zeichen."""
+"""Füll- und Leerzeichen, die Unicode als Buchstabe (Hangul-Füller) bzw. Symbol (Braille-Leerzeichen) führt, die
+aber nichts anzeigen: Sie zählen nicht als sichtbares Zeichen."""
 
 
 def _is_emoji_block(code: int) -> bool:
@@ -108,10 +91,9 @@ def _is_emoji_block(code: int) -> bool:
 
 
 def _is_unwanted(ch: str) -> bool:
-    """Steuer- und Formatzeichen (Zeilenumbruch, NUL, Rechts-nach-Links-Umschalter, ...), Zeilen- und
-    Absatztrenner (U+2028/U+2029) und alle Leerzeichen ausser dem normalen. Ausgenommen der Zero-Width-Joiner (haelt
-    Emoji-Folgen wie "Person am Computer" zusammen) und Zeichen, die diese Python-Version noch nicht kennt, die aber
-    in einem Emoji-Block liegen (neuere Emoji)."""
+    """Steuer- und Formatzeichen, Zeilen- und Absatztrenner (U+2028/U+2029) und alle Leerzeichen außer dem normalen;
+    ausgenommen der Zero-Width-Joiner (hält Emoji-Folgen wie "Person am Computer" zusammen) und unbekannte Zeichen in
+    einem Emoji-Block (neuere Emoji)."""
     code = ord(ch)
     if code == _ZERO_WIDTH_JOINER:
         return False
@@ -151,7 +133,7 @@ def clean_name(value: str) -> str:
     if _has_bad_characters(text):
         raise CustomAppError("Der Name darf keine Zeilenumbrüche oder Steuerzeichen enthalten.")
     if not _has_visible_character(text):
-        # Nur Fuell- oder Verbindungszeichen: fuer die Person ist das kein Name.
+        # Nur Füll- oder Verbindungszeichen: Für die Person ist das kein Name.
         raise CustomAppError("Bitte gib einen Namen an.")
     return text
 
@@ -169,8 +151,15 @@ def clean_group(value: str | None) -> str | None:
     return text
 
 
+# Der Server ruft die Adresse nie selbst ab (keine Statusabfrage), sonst könnte jemand über diese Funktion den Server
+# dazu bringen, interne Adressen anzufragen (SSRF). Die Adresse ist nur ein Link, den der Browser der klickenden Person öffnet.
+# Die Prüfung ist streng, weil der Link auf der Startseite aller Nutzer landet: Erlaubt ist nur `http://` und `https://`
+# (`javascript:`, `data:`, `file:` & Co. wären als Link ein Angriff auf den, der klickt). Zugangsdaten in der Adresse
+# (`http://user:pass@...`) werden abgelehnt: Sie stünden für alle lesbar in der Datenbank und täuschen mit
+# `https://google.com@boese.example` ein anderes Ziel vor. Ebenso Leer- und Steuerzeichen und Rückwärts-Schrägstriche
+# (Browser lesen `\` wie `/`).
 def clean_url(value: str) -> str:
-    """Nur `http://`/`https://` mit Rechnername oder IP-Adresse; gibt die getrimmte Adresse unveraendert zurueck."""
+    """Nur `http://`/`https://` mit Rechnername oder IP-Adresse; gibt die getrimmte Adresse unverändert zurück."""
     text = value.strip()
     if not text:
         raise CustomAppError("Bitte gib eine Adresse an.")
@@ -206,8 +195,8 @@ def _valid_host(host: str) -> bool:
 
 
 def stored_url(value: str | None) -> str | None:
-    """Die gespeicherte Adresse fuer die Anzeige: nur, wenn sie die Pruefung besteht -- selbst wenn jemand
-    die Datenbank von Hand veraendert hat, kommt nie ein `javascript:`-Link in die Oberflaeche."""
+    """Die gespeicherte Adresse für die Anzeige, nur wenn sie die Prüfung besteht: Selbst bei einer von Hand
+    veränderten Datenbank kommt nie ein `javascript:`-Link in die Oberfläche."""
     if not value:
         return None
     try:
@@ -217,11 +206,11 @@ def stored_url(value: str | None) -> str | None:
 
 
 def url_origin(url: str) -> str:
-    """`https://host:port` ohne Pfad, Parameter und Zugangsdaten -- das, was ins Protokoll darf."""
+    """`https://host:port` ohne Pfad, Parameter und Zugangsdaten, das darf ins Protokoll."""
     try:
         parts = urlsplit(url)
         port = parts.port
-    except ValueError:  # eine von Hand veraenderte Datenbank: das Protokoll soll daran nicht scheitern
+    except ValueError:  # eine von Hand veränderte Datenbank: das Protokoll soll daran nicht scheitern
         return "(ungültige Adresse)"
     host = parts.hostname or ""
     if ":" in host:
@@ -230,7 +219,7 @@ def url_origin(url: str) -> str:
 
 
 def _is_symbol(ch: str) -> bool:
-    """Ein Symbol (`So`), auch ein Emoji, das diese Python-Version noch nicht kennt (nur in den Emoji-Bloecken)."""
+    """Ein Symbol (`So`), auch ein Emoji, das diese Python-Version noch nicht kennt (nur in den Emoji-Blöcken)."""
     if ord(ch) in _BLANK_LETTERS:
         return False
     category = unicodedata.category(ch)
@@ -283,7 +272,7 @@ async def list_apps(session: AsyncSession) -> list[CustomApp]:
 
 
 async def host_names(session: AsyncSession, host_ids: Iterable[str | None]) -> dict[str, str]:
-    """Host-ID -> Anzeigename, nur fuer Server, die es (noch) gibt."""
+    """Host-ID -> Anzeigename, nur für Server, die es (noch) gibt."""
     ids = {h for h in host_ids if h}
     if not ids:
         return {}
@@ -309,7 +298,7 @@ async def create_app(
     host_id: str | None = None,
     sort_order: int | None = None,
 ) -> CustomApp:
-    """Legt die App an (die Werte sind schon geprueft, siehe `clean_*`). Ohne `sort_order` kommt sie ans Ende."""
+    """Legt die App an (die Werte sind schon geprüft, siehe `clean_*`). Ohne `sort_order` kommt sie ans Ende."""
     total = (await session.execute(select(func.count()).select_from(CustomApp))).scalar_one()
     if total >= MAX_APPS:
         raise AppLimitError(f"Es gibt schon {MAX_APPS} Apps – das ist die Obergrenze. Lösche zuerst eine, die du nicht mehr brauchst.")
@@ -335,8 +324,8 @@ async def get_app(session: AsyncSession, app_id: str) -> CustomApp:
 
 
 async def update_app(session: AsyncSession, app: CustomApp, changes: dict[str, Any]) -> list[str]:
-    """Wendet die (schon geprueften) Aenderungen an; Schluessel wie die API-Felder (`group` statt `group_name`).
-    Gibt die Namen der Felder zurueck, die sich wirklich geaendert haben."""
+    """Wendet die (schon geprüften) Änderungen an; Schlüssel wie die API-Felder (`group` statt `group_name`).
+    Gibt die Namen der Felder zurück, die sich wirklich geändert haben."""
     if changes.get("host_id"):
         await _require_host(session, changes["host_id"])
     changed: list[str] = []
@@ -359,7 +348,7 @@ async def delete_app(session: AsyncSession, app: CustomApp) -> None:
 
 async def reorder(session: AsyncSession, ids: list[str]) -> list[CustomApp]:
     """Die genannten Apps stehen danach in dieser Reihenfolge ganz vorn, alle anderen dahinter in ihrer
-    bisherigen Reihenfolge; die Positionen werden neu von 0 an durchgezaehlt."""
+    bisherigen Reihenfolge; die Positionen werden neu von 0 an durchgezählt."""
     if len(set(ids)) != len(ids):
         raise BadOrderError("Jede App darf in der Reihenfolge nur einmal vorkommen.")
     rows = await list_apps(session)
@@ -376,6 +365,6 @@ async def reorder(session: AsyncSession, ids: list[str]) -> list[CustomApp]:
 
 
 async def unlink_host(session: AsyncSession, host_id: str) -> None:
-    """Wird ein Server geloescht, bleiben seine Apps stehen, nur ohne Server-Bezug. (Die Datenbank macht das
-    mit `ON DELETE SET NULL` ohnehin -- hier ausdruecklich, damit es nicht vom SQLite-Pragma abhaengt.)"""
+    """Wird ein Server gelöscht, bleiben seine Apps stehen, nur ohne Server-Bezug (die Datenbank macht das mit
+    `ON DELETE SET NULL` ohnehin; hier ausdrücklich, damit es nicht vom SQLite-Pragma abhängt)."""
     await session.execute(update(CustomApp).where(CustomApp.host_id == host_id).values(host_id=None))

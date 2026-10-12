@@ -1,22 +1,4 @@
-"""Profil "Valheim-Dedicated-Server unter Windows" (Windows-Dienst, z. B. per NSSM).
-
-Live gegen einen echten Windows-Gameserver geprueft (nur lesend):
-- Der Dienst heisst dort "ValheimServer", die alte Extension-Voreinstellung war
-  "valheim" -- Start/Stop liefen damit ins Leere. Deshalb erkennt das Profil den
-  Dienst selbst (Name/Anzeigename/Pfad enthaelt "valheim"), eine Einstellung ist nur
-  noch ein Override.
-- Log-Pfad kommt aus NSSMs `AppStdout`, der Weltordner aus Dienstkonto bzw. `-savedir`
-  -- ebenfalls erkannt statt fest verdrahtet.
-- Log-Zeilen, die ausgewertet werden (echte Beispiele im Test): "Connections N ZDOS:"
-  (alle 10 min, aktuelle Spielerzahl), "Got character ZDOID from NAME", "Session ...
-  registered with join code NNN", "Valheim version: 1.0.12", "World save (5/5) done".
-- Die VM-Uhr stand auf Pazifik-Zeit und springt beim Booten -- Zeitstempel werden
-  deshalb nur RELATIV zur Uhr der VM selbst ausgewertet (beides dieselbe Uhr).
-
-Das Passwort verlaesst die VM nie: es wird schon im PowerShell-Skript aus den
-Startparametern entfernt, Log-Zeilen mit "password" werden dort verworfen.
-"""
-
+"""Profil „Valheim-Dedicated-Server unter Windows“ (Windows-Dienst, z. B. per NSSM), abgefragt per PowerShell-Skript."""
 from __future__ import annotations
 
 import base64
@@ -27,6 +9,9 @@ from typing import Any
 
 from . import ConfigField, ServerConfig
 
+# Das Skript erkennt den Dienst selbst (Name, Anzeigename oder Pfad enthält „valheim“; der echte Dienst heißt
+# „ValheimServer“, ein fester Name träfe ihn nicht), die Einstellung ist nur ein Override. Ebenso der Log-Pfad (NSSMs
+# `AppStdout`) und der Weltordner (Dienstkonto bzw. `-savedir`).
 _PRELUDE = r"""$ErrorActionPreference='SilentlyContinue'
 $S='{S}';$P='{P}';$L='{L}';$W='{W}';$B='{B}'
 $svc=$null
@@ -42,6 +27,10 @@ if(-not $B -and $pp.AppDirectory){$B=Join-Path ([string]$pp.AppDirectory) 'backu
 $wn=if($a -match '(?i)-world\s+("([^"]*)"|(\S+))'){@(@($Matches[2],$Matches[3])|?{$_})[0]}else{''}
 """
 
+# Ausgewertete Log-Zeilen (echte Beispiele im Test): „Connections N ZDOS:“ (alle 10 Minuten, aktuelle Spielerzahl), „Got
+# character ZDOID from NAME“, „Session ... registered with join code NNN“, „Valheim version: 1.0.12“, „World save (5/5)
+# done“. Das Passwort verlässt die VM nie: Es wird schon im Skript aus den Startparametern entfernt, Log-Zeilen mit
+# „password“ werden dort verworfen.
 _STATUS = r"""$o=[ordered]@{now=(Get-Date).ToString('s');service_name=$(if($svc){$svc.Name}else{''});service=$(if($svc){[string]$svc.Status}else{'missing'})}
 $o.has_password=$a -match '(?i)-password\s'
 $o.args=[regex]::Replace($a,'(?i)-password\s+("[^"]*"|\S+)','')
@@ -60,11 +49,10 @@ if($B -and (Test-Path $B)){$o.backups=@(Get-ChildItem -Path $B -Directory|sort N
 $o|ConvertTo-Json -Depth 4 -Compress
 """
 
-# Aktionen: Das Prelude schaltet Fehler stumm (SilentlyContinue) -- ein gescheitertes
-# Start-Service/Copy-Item fiel dadurch nicht auf, der letzte Befehl gelang, Exit 0, und
-# Nodvard Deck meldete "erledigt". Deshalb -ErrorAction Stop im try/catch und bei
-# Diensten danach der Zustand geprueft. Write-Error bliebe unter SilentlyContinue ebenfalls
-# stumm -- Meldungen gehen direkt nach stderr.
+# Das Prelude schaltet Fehler stumm (SilentlyContinue): Ein gescheitertes Start-Service/Copy-Item fiele sonst nicht auf (der
+# letzte Befehl gelingt, Exit 0, Nodvard Deck meldete „erledigt“). Deshalb `-ErrorAction Stop` im try/catch und bei Diensten
+# danach eine Prüfung des Zustands. Write-Error bliebe unter SilentlyContinue ebenfalls stumm, Meldungen gehen direkt nach
+# stderr.
 _NO_SERVICE = "if(-not $svc){[Console]::Error.WriteLine('Kein Valheim-Dienst gefunden');exit 2}\n"
 
 
@@ -83,10 +71,9 @@ _ACTIONS = {
     "start": _service_action("Start-Service -Name $svc.Name", "Starten", "Running"),
     "stop": _service_action("Stop-Service -Name $svc.Name -Force", "Stoppen", "Stopped"),
     "restart": _service_action("Restart-Service -Name $svc.Name -Force", "Neustart", "Running"),
-    # Kopie des letzten Speicherstands in einen Zeitstempel-Ordner: der Weltordner
-    # (aktuelle Valheim-Versionen, live gesehen) bzw. .db/.fwl (aeltere). Rein additiv --
-    # ueberschreibt und loescht nichts; nur ein eigener, halb kopierter Ordner wird
-    # wieder entfernt, damit er nicht als Sicherung in der Liste steht.
+    # Kopie des letzten Speicherstands in einen Zeitstempel-Ordner: der Weltordner (aktuelle Valheim-Versionen) bzw. .db/.fwl
+    # (ältere). Rein additiv, überschreibt und löscht nichts; nur ein eigener, halb kopierter Ordner wird wieder entfernt,
+    # damit er nicht als Sicherung in der Liste steht.
     "backup": r'''if(-not $W -or -not $wn){[Console]::Error.WriteLine('Weltordner oder Weltname unbekannt');exit 2};if(-not $B){[Console]::Error.WriteLine('Kein Sicherungsordner');exit 2}
 $f=@(Get-ChildItem -Path $W|?{$_.Name -in @($wn,"$wn.db","$wn.fwl")})
 if(-not $f){[Console]::Error.WriteLine("Keine Weltdaten fuer $wn in $W");exit 3}
@@ -104,16 +91,16 @@ _NOISE = re.compile(
 
 
 def _ps_literal(value: str) -> str:
-    """Wert fuer ein einfach-quotiertes PowerShell-Literal. Zeilenumbrueche/Hochkommas
-    sind in Pfaden/Dienstnamen nie legitim -- abgelehnt statt escaped."""
+    """Wert für ein einfach-quotiertes PowerShell-Literal; Zeilenumbrüche und Hochkommas sind in Pfaden und Dienstnamen nie
+    legitim, deshalb abgelehnt statt escaped."""
     if not _SAFE_VALUE.match(value):
         raise ValueError("Ungültiges Zeichen in der Gameserver-Konfiguration.")
     return value
 
 
 def encode_powershell(script: str) -> str:
-    """`-EncodedCommand` (UTF-16LE, Base64): kein Quoting-Problem zwischen OpenSSH, cmd.exe
-    und PowerShell, egal welche Standard-Shell der SSH-Server hat."""
+    """`-EncodedCommand` (UTF-16LE, Base64): kein Quoting-Problem zwischen OpenSSH, cmd.exe und PowerShell, egal welche
+    Standard-Shell der SSH-Server hat."""
     b64 = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
     return f"powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {b64}"
 
@@ -142,8 +129,9 @@ def _parse_ts(value: str | None) -> datetime | None:
 
 
 def _age(ts: datetime | None, now: datetime | None) -> int | None:
-    """Sekunden, relativ zur Uhr der VM. Ein Zeitstempel "in der Zukunft" (die VM-Uhr
-    springt beim Booten) ist keine Zeitangabe, der man trauen kann -> None."""
+    """Sekunden, relativ zur Uhr der VM; ein Zeitstempel „in der Zukunft“ ist keine Angabe, der man trauen kann: `None`."""
+    # Die VM-Uhr stand schon auf Pazifik-Zeit und springt beim Booten, deshalb zählt nur der Abstand zwischen Zeitstempel und
+    # `now`, beides von derselben Uhr.
     if ts is None or now is None:
         return None
     delta = int((now - ts).total_seconds())

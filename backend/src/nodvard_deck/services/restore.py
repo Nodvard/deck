@@ -1,22 +1,4 @@
-"""Wiederherstellen einer Sicherung: Hochladen, Pruefen, Vormerken, Abbrechen, Ergebnis.
-
-Die eigentliche Arbeit (Entpacken, Pruefen, Einspielen) steht in `core/backup/restore.py` und
-laeuft beim naechsten Start in `nodvard_deck.boot`. Hier ist, was die LAUFENDE Anwendung dazu tut:
-
-* **Hochladen** als roher Datenstrom in eine Datei unter `<Datenordner>/restore/<id>/`; nie der
-  ganze Inhalt im Speicher, Obergrenze (`restore_max_upload_bytes`) schon am Kopf der Anfrage,
-  Platzpruefung vorher. Es gibt hoechstens EINEN Zwischenstand; ein neuer Upload raeumt den alten weg.
-* **Pruefen** (`inspect`): entschluesseln und auspacken in den Staging-Ordner. Das darf immer nur
-  eines zugleich laufen (die Schluesselberechnung braucht bis zu 256 MiB) und teilt dafuer die
-  Sperre mit den Sicherungen. Laeuft als eigener Task -- bricht die Anfrage ab, laeuft die Pruefung
-  sauber zu Ende, statt halb im Hintergrund weiterzuarbeiten.
-* **Vormerken** (`schedule`): `restore/pending.json`; eingespielt wird beim naechsten Start.
-* **Ergebnis** (`restore/result.json`): `record_result` schreibt nach dem Start das
-  Audit-Protokoll in die DANN gueltige Datenbank.
-
-Ein Zwischenstand gehoert zu einem Bereich (`Scope`): dem Owner, der ihn angelegt hat, oder dem
-Assistenten (Einrichtungscode). Eine ID des einen Bereichs ist im anderen unbekannt.
-"""
+"""Wiederherstellen einer Sicherung in der laufenden Anwendung: Hochladen, Prüfen, Vormerken, Abbrechen, Ergebnis."""
 
 from __future__ import annotations
 
@@ -51,12 +33,16 @@ from . import backups as backups_service
 
 logger = logging.getLogger("nodvard_deck.restore")
 
+# Die eigentliche Arbeit (Entpacken, Prüfen, Einspielen) steht in `core/backup/restore.py` und läuft beim nächsten Start in
+# `boot`. Hier ist, was die laufende Anwendung dazu tut: Hochladen als roher Datenstrom (nie der ganze Inhalt im Speicher,
+# Obergrenze schon am Kopf der Anfrage, Platzprüfung vorher, höchstens ein Zwischenstand), Prüfen, Vormerken und nach dem
+# Start das Ergebnis ins Audit-Protokoll schreiben.
 FILES_NAME = "files.json"
 _WRITE_BUFFER = 1024 * 1024
 
 
 class RestoreBusy(BackupError):
-    """Es laeuft schon ein Upload oder eine Pruefung (409)."""
+    """Es läuft schon ein Upload oder eine Prüfung (409)."""
 
 
 class PendingExists(BackupError):
@@ -70,11 +56,14 @@ class UnknownRestore(BackupError):
 
 
 class WrongState(BackupError):
-    """Der Schritt passt nicht zum Stand (z. B. Vormerken, bevor geprueft wurde) (409)."""
+    """Der Schritt passt nicht zum Stand (z. B. Vormerken, bevor geprüft wurde) (409)."""
 
 
 @dataclass(frozen=True)
 class Scope:
+    """Ein Zwischenstand gehört zu einem Bereich: dem Owner, der ihn angelegt hat, oder dem Assistenten (Einrichtungscode).
+    Eine ID des einen Bereichs ist im anderen unbekannt."""
+
     kind: str
     """`owner` (Einstellungen) oder `bootstrap` (Assistent, mit Einrichtungscode)."""
     user_id: str | None = None
@@ -90,10 +79,6 @@ class Scope:
             return {"type": "user", "id": self.user_id, "label": self.label, "ip": self.ip}
         return {"type": "setup", "id": None, "label": "Einrichtung", "ip": self.ip}
 
-
-# ---------------------------------------------------------------------------
-# Zustand im Prozess
-# ---------------------------------------------------------------------------
 
 _upload_active = False
 _inspect_active: str | None = None
@@ -136,11 +121,11 @@ def layout_for(settings: Settings) -> restore.Layout:
 
 
 def sweep_replaced_states(settings: Settings) -> list[str]:
-    """Kern-Job `restore-cleanup`: der alte Stand (`restore/replaced-...`) geht nach 30 Tagen. Nie ein Fehler."""
+    """Kern-Job `restore-cleanup`: der alte Stand (`restore/replaced-...`) geht nach 30 Tagen; nie ein Fehler."""
     try:
         return restore.sweep_replaced(layout_for(settings))
     except BackupError:
-        return []  # keine SQLite-Datenbank: es gibt nichts aufzuraeumen
+        return []  # keine SQLite-Datenbank: es gibt nichts aufzuräumen
     except OSError:
         logger.exception("restore_replaced_sweep_failed")
         return []
@@ -155,13 +140,12 @@ def limits_info(settings: Settings) -> dict[str, int]:
 
 
 def _sweep(layout: restore.Layout) -> list[str]:
-    """Aufraeumen, aber nie unter einer laufenden Pruefung weg."""
+    """Aufräumen, aber nie unter einer laufenden Prüfung weg."""
     return restore.sweep(layout, keep={_inspect_active} if _inspect_active else frozenset())
 
 
 def _schedule_sweep(layout: restore.Layout) -> None:
-    """Ein aufgegebener Zwischenstand wird auch dann nach einer Stunde geloescht, wenn niemand
-    mehr nachsieht."""
+    """Ein aufgegebener Zwischenstand wird auch dann nach einer Stunde gelöscht, wenn niemand mehr nachsieht."""
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
@@ -170,17 +154,12 @@ def _schedule_sweep(layout: restore.Layout) -> None:
     _sweeps.append(loop.call_later(restore.STAGING_TTL_S + 30, lambda: _sweep(layout)))
 
 
-# ---------------------------------------------------------------------------
-# Hilfen
-# ---------------------------------------------------------------------------
-
-
 async def context_for_summary(session: AsyncSession) -> tuple[str | None, bool]:
-    """(Kennung dieser Installation, gibt es schon Konten?) -- fuer die Warnungen der Zusammenfassung."""
+    """(Kennung dieser Installation, gibt es schon Konten?) für die Warnungen der Zusammenfassung."""
     from . import auth as auth_service
 
-    # `instance_id` legt die Kennung beim ersten Mal an: ohne sie liesse sich eine fremde Sicherung
-    # nicht als fremd erkennen (die Kennung entsteht sonst erst mit der ersten eigenen Sicherung).
+    # `instance_id` legt die Kennung beim ersten Mal an: Ohne sie ließe sich eine fremde Sicherung nicht als fremd erkennen
+    # (die Kennung entsteht sonst erst mit der ersten eigenen Sicherung).
     return await backups_service.instance_id(session), not await auth_service.needs_bootstrap(session)
 
 
@@ -223,7 +202,7 @@ def _staged_view(meta: dict[str, Any], now: float | None = None) -> dict[str, An
 
 
 async def status(settings: Settings, scope: Scope | None) -> dict[str, Any]:
-    """Stand fuer die Oberflaeche: Vormerkung, Zwischenstand (nur fuer den Eigentuemer), letztes Ergebnis."""
+    """Stand für die Oberfläche: Vormerkung, Zwischenstand (nur für den Eigentümer), letztes Ergebnis."""
     layout = layout_for(settings)
     await asyncio.to_thread(_sweep, layout)
     pending = restore.read_pending(layout)
@@ -243,18 +222,13 @@ async def status(settings: Settings, scope: Scope | None) -> dict[str, Any]:
     }
 
 
-# ---------------------------------------------------------------------------
-# Hochladen
-# ---------------------------------------------------------------------------
-
-
 def _mb(value: int) -> str:
     return f"{max(1, value // (1024 * 1024))} MB"
 
 
 async def receive_upload(settings: Settings, scope: Scope, chunks: AsyncIterator[bytes], content_length: int | None) -> dict[str, Any]:
-    """Schreibt den Strom nach `restore/<id>/upload.ndbak`. Vorab-Pruefungen (alle VOR dem ersten
-    gelesenen Byte): Obergrenze laut Kopf, Vormerkung, laufende Arbeit, freier Platz."""
+    """Schreibt den Strom nach `restore/<id>/upload.ndbak`. Vorab-Prüfungen, alle vor dem ersten gelesenen Byte:
+    Obergrenze laut Kopf, Vormerkung, laufende Arbeit, freier Platz."""
     global _upload_active
     layout = layout_for(settings)
     limit = settings.restore_max_upload_bytes
@@ -264,7 +238,7 @@ async def receive_upload(settings: Settings, scope: Scope, chunks: AsyncIterator
         raise BackupError("Die Datei ist leer.")
     if _upload_active or _inspect_active is not None:
         raise RestoreBusy("Es wird gerade eine Sicherung hochgeladen oder geprüft. Bitte warten, bis das fertig ist.")
-    _upload_active = True  # sofort, vor dem ersten await: sonst kaemen zwei Uploads zugleich durch
+    _upload_active = True  # sofort, vor dem ersten await: sonst kämen zwei Uploads zugleich durch
     rid = restore.new_id()
     directory = layout.restore_dir / rid
     try:
@@ -320,11 +294,6 @@ async def receive_upload(settings: Settings, scope: Scope, chunks: AsyncIterator
         _upload_active = False
 
 
-# ---------------------------------------------------------------------------
-# Pruefen
-# ---------------------------------------------------------------------------
-
-
 def _inspect_sync(settings: Settings, layout: restore.Layout, rid: str, secret: str, instance_id: str | None, has_accounts: bool) -> dict[str, Any]:
     directory = layout.restore_dir / rid
     limits = restore.extract_limits(layout, max_unpacked=settings.restore_max_unpacked_bytes, max_entries=settings.restore_max_entries)
@@ -338,13 +307,13 @@ def _inspect_sync(settings: Settings, layout: restore.Layout, rid: str, secret: 
     meta.update(state="ready", summary=staged.summary, unpacked_bytes=staged.unpacked_bytes)
     restore.write_meta(layout, rid, meta)
     with contextlib.suppress(OSError):
-        os.unlink(directory / restore.UPLOAD_NAME)  # der verschluesselte Upload wird nicht mehr gebraucht
+        os.unlink(directory / restore.UPLOAD_NAME)  # der verschlüsselte Upload wird nicht mehr gebraucht
     return meta
 
 
 async def inspect(settings: Settings, scope: Scope, rid: str, *, secret: str, instance_id: str | None, has_accounts: bool) -> dict[str, Any]:
-    """Entschluesselt und prueft. Falsches Passwort und zu wenig Platz lassen den Upload stehen (noch
-    einmal versuchen); jeder andere Fehler loescht den ganzen Zwischenstand."""
+    """Entschlüsselt und prüft. Falsches Passwort und zu wenig Platz lassen den Upload stehen (noch einmal versuchen),
+    jeder andere Fehler löscht den ganzen Zwischenstand."""
     global _inspect_active
     layout = layout_for(settings)
     meta = _meta(layout, scope, rid)
@@ -354,6 +323,9 @@ async def inspect(settings: Settings, scope: Scope, rid: str, *, secret: str, in
         raise WrongState("Diese Sicherung ist nicht (mehr) zum Prüfen bereit.")
     if _upload_active or _inspect_active is not None:
         raise RestoreBusy("Es wird gerade eine Sicherung hochgeladen oder geprüft. Bitte warten, bis das fertig ist.")
+    # Es darf immer nur eine Prüfung laufen (die Schlüsselberechnung braucht bis zu 256 MiB), darum teilt sie die Sperre mit den
+    # Sicherungen. Sie läuft als eigener Task: Bricht die Anfrage ab, läuft die Prüfung sauber zu Ende, statt halb im
+    # Hintergrund weiterzuarbeiten.
     try:
         token = await backups_service.acquire_exclusive(backups_service.EXCLUSIVE_CHECK)
     except backups_service.BackupBusy as exc:
@@ -375,11 +347,6 @@ async def inspect(settings: Settings, scope: Scope, rid: str, *, secret: str, in
 
     done = await asyncio.shield(_spawn(work()))
     return _staged_view(done)
-
-
-# ---------------------------------------------------------------------------
-# Vormerken, Abbrechen
-# ---------------------------------------------------------------------------
 
 
 async def schedule(settings: Settings, scope: Scope, rid: str, *, sign_out_all: bool) -> dict[str, Any]:
@@ -404,7 +371,7 @@ async def schedule(settings: Settings, scope: Scope, rid: str, *, sign_out_all: 
 
 
 async def cancel(settings: Settings) -> int:
-    """Vormerkung und jeden Zwischenstand verwerfen. Gibt die Zahl der geloeschten Zwischenstaende zurueck."""
+    """Verwirft Vormerkung und jeden Zwischenstand; gibt die Zahl der gelöschten Zwischenstände zurück."""
     if _upload_active or _inspect_active is not None:
         raise RestoreBusy("Es wird gerade eine Sicherung hochgeladen oder geprüft. Bitte warten, bis das fertig ist.")
     layout = layout_for(settings)
@@ -420,11 +387,6 @@ async def delete_replaced(settings: Settings) -> int:
 
 def has_pending(settings: Settings) -> bool:
     return restore.pending_exists(layout_for(settings))
-
-
-# ---------------------------------------------------------------------------
-# Nach dem Start: Ergebnis ins Audit-Protokoll
-# ---------------------------------------------------------------------------
 
 
 def audit_actor(scope: Scope) -> tuple[str, str]:
@@ -443,8 +405,8 @@ async def audit(session: AsyncSession, scope: Scope, action: str, *, outcome: st
 
 
 async def record_result(settings: Settings) -> None:
-    """Beim Start: ein Ergebnis von `boot.py`, das noch nicht im Audit-Protokoll steht, dort
-    eintragen -- in die jetzt gueltige Datenbank. Danach aufraeumen. Nie ein Grund, nicht zu starten."""
+    """Beim Start: ein Ergebnis von `boot`, das noch nicht im Audit-Protokoll steht, dort eintragen, in die jetzt gültige
+    Datenbank. Danach aufräumen. Nie ein Grund, nicht zu starten."""
     try:
         layout = layout_for(settings)
     except BackupError:
@@ -479,8 +441,8 @@ async def record_result(settings: Settings) -> None:
 
 
 async def failed_result(settings: Settings) -> dict[str, Any] | None:
-    """Fuer `GET /auth/bootstrap`: das letzte Ergebnis, aber nur, wenn es ein Scheitern war und aus dem
-    Assistenten kam (sonst nichts, es gibt ja noch kein Konto, das es sehen duerfte)."""
+    """Für `GET /auth/bootstrap`: das letzte Ergebnis, aber nur wenn es ein Scheitern aus dem Assistenten war,
+    sonst nichts (es gibt noch kein Konto, das es sehen dürfte)."""
     try:
         layout = layout_for(settings)
     except BackupError:
@@ -495,8 +457,8 @@ _PATH_RE = re.compile(r"(?:/[^\s/'\"():,]+)+/?")
 
 
 def _without_paths(message: object) -> str | None:
-    """Ohne Anmeldung sichtbar (GET /auth/bootstrap): Dateipfade aus Fehlertexten (z. B. OSError)
-    durch „…“ ersetzen, damit niemand im Netz den Aufbau des Datenordners erfährt."""
+    """Ohne Anmeldung sichtbar (GET /auth/bootstrap): Dateipfade aus Fehlertexten (z. B. OSError) durch „…“ ersetzen,
+    damit niemand im Netz den Aufbau des Datenordners erfährt."""
     if not isinstance(message, str):
         return None
     return _PATH_RE.sub("…", message)[:500]

@@ -1,24 +1,4 @@
-"""Update-Zentrale (Nachfolger von `run_system_updates_check` im Vorgaengersystem): anstehende
-Paket-Updates je Server, Sicherheitsupdates, Neustart-Bedarf -- und die Befehle, um
-sie einzuspielen.
-
-Nur die REINEN Teile: Befehle bauen und Ausgaben auswerten. Ausfuehren, Speichern
-und Melden steht in `patching.py`.
-
-Unterschiede zum Original, bewusst:
-- Das Original hat bei jedem gefundenen Update sofort `apt-get upgrade -y` gestartet.
-  Hier ist Pruefen und Einspielen getrennt; automatisch eingespielt wird nur, wenn
-  das in den Einstellungen eingeschaltet ist (Standard: aus).
-- `upgrade --with-new-pkgs` statt `upgrade`: zieht neue Abhaengigkeiten (z. B. einen
-  neuen Kernel) mit, entfernt aber nie Pakete. Nur wenn es in den Einstellungen
-  eingeschaltet ist (`proxmox_dist_upgrade`, Standard: aus), nimmt eine von
-  Hand ausgeloeste "Alle Updates"-Aktion auf Proxmox `dist-upgrade` (Proxmox verlangt
-  das; es darf Pakete ersetzen oder entfernen). Automatische Laeufe nehmen nie
-  dist-upgrade -- sie haben niemanden, der vorher auf den Befehl schaut.
-- Neustart-Bedarf wird auch ohne `/var/run/reboot-required` erkannt (Debian/Proxmox
-  legen die Datei nicht an): laufender Kernel != neuester installierter Kernel
-  derselben Art (auf dem Pi sind z. B. rpi-v8 und rpi-2712 nebeneinander installiert).
-"""
+"""Update-Zentrale, reiner Teil: Befehle bauen und Ausgaben auswerten (Ausführen und Speichern: `patching.py`)."""
 
 from __future__ import annotations
 
@@ -36,8 +16,7 @@ _PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._:~-]*$")
 
 
 def status_command(*, refresh: bool) -> str:
-    """Liest den Update-Stand. Mit `refresh` werden vorher die Paketlisten neu geladen
-    (braucht root -- ohne root bleibt es beim zuletzt geladenen Stand)."""
+    """Befehl, der den Update-Stand liest; mit `refresh` lädt er vorher die Paketlisten neu (braucht root)."""
     refresh_part = ""
     if refresh:
         inner = (
@@ -91,8 +70,7 @@ class UpdateStatus:
     refresh_error: str | None = None
     error: str | None = None
     unsupported: bool = False
-    """Der Server hat keinen Paketmanager, den die Update-Zentrale kennt (z. B. ein NAS mit eigener Firmware).
-    Das ist kein Fehler: er steht als „nicht unterstützt“ da und löst weder Warnungen noch Fehlermeldungen aus."""
+    """Kein bekannter Paketmanager (z. B. ein NAS): kein Fehler, nur „nicht unterstützt“, ohne Warnung."""
 
     @property
     def security_count(self) -> int:
@@ -173,6 +151,7 @@ def parse_status(output: str) -> UpdateStatus:
     reasons = [p for p in reboot_lines[1:] if p != "yes"][:20]
     kernel = (s.get("kernel") or [None])[0]
     latest = _latest_kernel(kernel, s.get("kernels", [])) if kernel else None
+    # Debian/Proxmox legen /var/run/reboot-required nicht an, darum zusätzlich der Kernelvergleich.
     if kernel and latest and latest != kernel and _version_key(latest) > _version_key(kernel):
         reboot = True
         reasons.insert(0, f"neuer Kernel {latest} (läuft: {kernel})")
@@ -205,9 +184,7 @@ _URL_RE = re.compile(r"https?://[^\s'\"<>]+", re.IGNORECASE)
 
 
 def _names_host(line: str, host: str) -> bool:
-    """Nennt eine Fehlerzeile von apt eine Adresse auf genau diesem Rechner? Geprueft wird der Rechnername der Adresse
-    (`urlsplit`), nicht ein Teilstring der Zeile: `enterprise.proxmox.com.example.net` oder `/enterprise.proxmox.com`
-    in einem Pfad zaehlen nicht."""
+    """Nennt die Zeile eine Adresse auf genau diesem Rechner? Verglichen wird der Hostname, kein Teilstring."""
     for match in _URL_RE.finditer(line):
         try:
             hostname = urlsplit(match.group(0)).hostname
@@ -219,9 +196,8 @@ def _names_host(line: str, host: str) -> bool:
 
 
 def _version_key(version: str) -> tuple[tuple[int, int | str], ...]:
-    """Grober Versionsvergleich fuer Kernel-Namen ("6.8.12-4-pve" < "6.8.12-10-pve").
-    Zahl und Text werden nie direkt verglichen ((0, Zahl) vor (1, Text)) -- sonst
-    TypeError, z. B. "rpi-v8" gegen "rpi-2712"."""
+    """Grober Versionsvergleich für Kernel-Namen ("6.8.12-4-pve" < "6.8.12-10-pve")."""
+    # Zahl und Text nie direkt vergleichen ((0, Zahl) vor (1, Text)), sonst TypeError ("rpi-v8" gegen "rpi-2712").
     return tuple((0, int(p)) if p.isdigit() else (1, p) for p in re.split(r"[.\-+~]", version) if p)
 
 
@@ -235,8 +211,7 @@ def _kernel_flavor(version: str) -> str | None:
 
 
 def _latest_kernel(running: str, installed: list[str]) -> str | None:
-    """Neuester installierter Kernel derselben Art wie der laufende. Andere Arten
-    (Pi: rpi-v8 neben rpi-2712) bootet dieser Server nicht -- sie zaehlen nicht."""
+    """Neuester installierter Kernel derselben Art wie der laufende (auf dem Pi liegen rpi-v8 und rpi-2712 nebeneinander)."""
     flavor = _kernel_flavor(running)
     same = [k for k in installed if flavor is not None and _kernel_flavor(k) == flavor]
     return max(same, key=_version_key) if same else None
@@ -251,35 +226,28 @@ _APT_OPTS = "-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force
 
 
 def wants_dist_upgrade(settings: dict[str, Any], manager: str, mode: str) -> bool:
-    """Soll diese von Hand ausgeloeste Aktion `dist-upgrade` nehmen? Nur bei
-    apt und "Alle Updates" und nur, wenn die Einstellung an ist. Ob der Server wirklich
-    Proxmox ist, entscheidet der Befehl selbst auf dem Server (`command -v pveversion`).
-
-    Das Ergebnis gehoert in den Plan der Aktion (Payload `dist_upgrade`): Vorschlag und
-    Ausfuehrung bauen den Befehl beide daraus, eine spaeter geaenderte Einstellung
-    aendert einen schon vorgeschlagenen Befehl nicht. Automatische Laeufe fragen das
-    nicht -- sie nehmen nie dist-upgrade."""
+    """Soll diese von Hand ausgelöste Aktion `dist-upgrade` nehmen (apt, „Alle Updates“, Einstellung an)?"""
+    # Das Ergebnis steht im Plan der Aktion (`dist_upgrade`): eine später geänderte Einstellung ändert
+    # einen schon vorgeschlagenen Befehl nicht. Automatische Läufe nehmen nie dist-upgrade, es schaut niemand vorher hin.
     return bool(settings.get("proxmox_dist_upgrade")) and manager == "apt" and mode == "all"
 
 
 def upgrade_command(manager: str, mode: str, security_packages: list[str] | None = None, *, dist_upgrade: bool = False) -> str:
-    """mode: "all" (alles), "security" (nur Sicherheitsupdates), "cleanup" (Altlasten weg).
+    """Befehl für mode "all", "security" (nur Sicherheitsupdates) oder "cleanup" (Altlasten entfernen).
 
-    Bei apt ist "security" ein gezieltes `install --only-upgrade` der zuletzt als
-    Sicherheitsupdate erkannten Pakete -- apt selbst kennt keinen Sicherheits-Filter.
-
-    `dist_upgrade` gilt nur fuer apt und "all": auf einem Proxmox-Server (`pveversion`
-    vorhanden) laeuft dann `apt-get dist-upgrade`, sonst wie immer `upgrade --with-new-pkgs`.
-    Ohne die Angabe bleibt der Befehl Zeichen fuer Zeichen wie bisher."""
+    `dist_upgrade` gilt nur für apt und "all" und nur auf Proxmox (`pveversion` vorhanden)."""
     tail = f"; R=$?; echo '{UPGRADE_DONE}'; [ -f /var/run/reboot-required ] && echo '{REBOOT_MARK}'; exit $R"
     if manager == "apt":
         prefix = "export DEBIAN_FRONTEND=noninteractive; apt-get update -q"
         if mode == "all":
+            # `--with-new-pkgs` zieht neue Abhängigkeiten (z. B. einen neuen Kernel) mit, entfernt aber nie Pakete.
+            # Proxmox verlangt dist-upgrade, das auch ersetzen oder entfernen darf.
             if dist_upgrade:
                 return (f"{prefix} && if command -v pveversion >/dev/null 2>&1; then apt-get {_APT_OPTS} dist-upgrade; "
                         f"else apt-get {_APT_OPTS} upgrade --with-new-pkgs; fi{tail}")
             return f"{prefix} && apt-get {_APT_OPTS} upgrade --with-new-pkgs{tail}"
         if mode == "security":
+            # apt kennt keinen Sicherheitsfilter: gezielt nur die zuletzt als Sicherheitsupdate erkannten Pakete.
             names = [n for n in (security_packages or []) if _PKG_NAME_RE.match(n)]
             if not names:
                 raise ValueError("Keine Sicherheitsupdates offen.")
@@ -317,39 +285,37 @@ class UpgradeResult:
     removed: int = 0
     reboot_required: bool = False
     summary: str = ""
-    # Kurzfassung ohne Zeilen vom Server fuer Protokoll und Meldungen (die Ausgabe darf Inhalte vom
-    # Server enthalten, die nur mit Server-Recht sichtbar sind). `None`: `summary` selbst enthaelt keine.
+    # Kurzfassung für Protokoll und Meldungen ohne Zeilen vom Server (nur mit Server-Recht sichtbar);
+    # `None`: `summary` enthält selbst keine.
     public_summary: str | None = None
-    # Das Dashboard hat aufgehoert zu warten, der Lauf kann auf dem Server noch laufen.
+    # Das Dashboard wartet nicht mehr, der Lauf kann auf dem Server noch laufen.
     timed_out: bool = False
-    # Pakete, die apt "zurueckgehalten" hat (Update braucht Ersetzen/Entfernen anderer Pakete).
+    # Pakete, die apt zurückhält, weil das Update andere ersetzen oder entfernen müsste.
     kept_back: list[str] = field(default_factory=list)
 
     @property
     def public(self) -> str:
-        """Der Text fuer Protokoll und Meldungen (siehe `public_summary`)."""
+        """Text für Protokoll und Meldungen (siehe `public_summary`)."""
         return self.summary if self.public_summary is None else self.public_summary
 
 
 DETAILS_HINT = "Einzelheiten stehen in der Update-Zentrale."
-"""Ersatz fuer eine Zeile vom Server in Texten, die auch ohne Server-Recht sichtbar sind."""
+"""Ersatz für Zeilen vom Server in Texten, die auch ohne Server-Recht sichtbar sind."""
 
 
 _APT_SUMMARY_RE = re.compile(r"(\d+) upgraded, (\d+) newly installed, (\d+) to remove")
 _APT_SUMMARY_DE_RE = re.compile(r"(\d+) aktualisiert, (\d+) neu installiert, (\d+) zu entfernen")
 
 
-# "The following packages have been kept back:" / "Die folgenden Pakete wurden zurückgehalten:",
-# darunter die Namen, eingerueckt.
+# "The following packages have been kept back:" bzw. "... zurückgehalten:", darunter die Namen eingerückt.
 _KEPT_HEADER_RE = re.compile(r"(?:kept back|zur\S*ckgehalten)\s*:$", re.IGNORECASE)
 KEPT_BACK_SHOWN = 5
 
 
 def parse_kept_back(output: str) -> list[str]:
-    """Namen der Pakete, die apt zurueckgehalten hat -- aus dem apt-Abschnitt oder aus der
-    Zeile `@@kept-back: a b c`, die der Abfrage-Befehl (`detached.poll_command`) aus dem
-    Protokoll zieht, weil der Abschnitt bei langen Laeufen nicht mehr im Ende des
-    Protokolls steht. Nur echte Paketnamen, ohne Doppelte, in der Reihenfolge von apt."""
+    """Namen der von apt zurückgehaltenen Pakete: aus dem apt-Abschnitt oder aus der Zeile `@@kept-back: a b c`.
+
+    Die Zeile zieht `detached.poll_command` aus dem Protokoll, denn bei langen Läufen steht der Abschnitt nicht mehr im Ende."""
     names: list[str] = []
     lines = output.splitlines()
     for i, raw in enumerate(lines):

@@ -1,20 +1,4 @@
-"""Extension-Registry -- docs/04-API.md §3.
-
-Nur der WP-3-Ausschnitt (Auflisten, Aktivieren, Deaktivieren) plus WP-7s
-`GET .../frontend/index.js` (ESM-Bundle, docs/02 §5). `PUT .../settings`,
-`PUT .../permissions`, `POST .../reload`, `DELETE .../{id}` bleiben bewusst NICHT
-Teil dieser Runde -- `reload` waere ohnehin nur Zucker fuer disable+enable, was schon
-denselben Mechanismus beweist.
-
-**Pfad-Uneinigkeit in der Doku, hier aufgeloest:** docs/02 §5 nennt woertlich
-`/api/v1/ext/<id>/frontend/index.js` (den EXTENSION-gemounteten Namensraum), docs/04
-§3s Endpunkt-Katalog nennt `/extensions/{id}/frontend/index.js` (diesen, den
-Registry-Namensraum). Ein statisches Bundle braucht keinen laufenden
-Extension-Router (anders als eine Datenquelle) -- der Registry-Namensraum ist
-konsistenter mit `GET /extensions/{id}` (Metadaten unabhaengig vom Ladezustand) und
-ist der einzige der beiden, der in docs/04s expliziter Endpunkt-LISTE steht, deshalb
-die Wahl hier.
-"""
+"""Extension-Registry: Auflisten, Ein- und Ausschalten und das Frontend-Bundle einer Erweiterung."""
 
 from __future__ import annotations
 
@@ -37,9 +21,8 @@ router = APIRouter(prefix="/extensions", tags=["extensions"])
 
 
 async def refuse_stale_twin_address(session, ext_id: str) -> None:
-    """409, wenn unter der alten Kennung `ext_id` noch ein verwaister Zwilling liegt
-    (`services.extensions.is_stale_twin_address`): Wer diese Adresse benutzt, meint womoeglich den Stand des
-    Zwillings. Ueber sie darf deshalb nichts geaendert werden, weder am Zwilling noch an der Erweiterung."""
+    """409, wenn unter der alten Kennung `ext_id` noch ein verwaister Zwilling liegt (`is_stale_twin_address`).
+    Wer die Adresse benutzt, meint womöglich dessen Stand, deshalb ändert sie weder ihn noch die Erweiterung."""
     if await extensions_service.is_stale_twin_address(session, ext_id):
         canonical = get_extension_runtime().canonical(ext_id)
         raise HTTPException(
@@ -54,13 +37,10 @@ async def refuse_stale_twin_address(session, ext_id: str) -> None:
 async def resolve_extension(
     session, ext_id: str, *, change: bool = False, not_found: str = "Unbekannte Extension."
 ) -> tuple[str, ExtensionRecord]:
-    """Die Kennung aus der Adresse `/extensions/{ext_id}/...` -> (heutige Kennung, Registry-Zeile).
-
-    Eine alte Kennung (`legacy_ids` einer umbenannten Erweiterung) gilt wie die heutige; gelesen und
-    geschrieben wird die Zeile der Speicher-Kennung (`services.extensions.get_record`). 404, wenn es keine
-    Zeile gibt. `change=True` fuer alles, was etwas aendert: dann zusaetzlich `refuse_stale_twin_address`.
-    Ohne `legacy_ids` ist die heutige Kennung immer die aus der Adresse."""
+    """Kennung aus der Adresse -> (heutige Kennung, Registry-Zeile); eine alte Kennung (`legacy_ids`) gilt wie die
+    heutige. 404 ohne Zeile. `change=True` für alles, was etwas ändert, prüft zusätzlich `refuse_stale_twin_address`."""
     canonical = get_extension_runtime().canonical(ext_id)
+    # get_record liefert die Zeile der Speicher-Kennung, die nach einer Umbenennung noch eine alte sein kann.
     record = await extensions_service.get_record(session, canonical)
     if record is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=not_found)
@@ -77,10 +57,9 @@ def _has_settings(ext_id: str) -> bool:
 
 
 def _effective_state(record: ExtensionRecord) -> str:
-    """Der Zustand, den die API meldet. Ein erfolgreiches Laden loescht `last_error`; steht bei
-    einer eingeschalteten Erweiterung trotzdem einer, wurde sie beim Start nicht gefunden (siehe
-    `services.extensions.enable_extension(..., at_boot=True)`) und ist nicht geladen -- also `error`.
-    Es gibt dafuer bewusst keinen neuen Zustandswert, bestehende Clients bleiben unberuehrt."""
+    """Der gemeldete Zustand. Ein erfolgreiches Laden löscht `last_error`; steht bei einer eingeschalteten Erweiterung
+    trotzdem einer, wurde sie beim Start nicht gefunden (`enable_extension(..., at_boot=True)`) und gilt als `error`.
+    Bewusst kein neuer Zustandswert: bestehende Clients bleiben unberührt."""
     if record.state == "enabled" and record.last_error:
         return "error"
     return record.state
@@ -91,9 +70,8 @@ class ExtensionOut(BaseModel):
     version: str
     api_version: str
     state: str
-    """`enabled`, `disabled`, `error` oder `incompatible`. Eine Erweiterung, die eingeschaltet
-    ist, aber gerade fehlt (Ordner oder Paket nicht da), steht in der Registry weiter auf `enabled`
-    und meldet hier `error` samt `last_error`; kommt sie zurueck, laedt sie beim naechsten Start wieder."""
+    """`enabled`, `disabled`, `error` oder `incompatible`. Fehlt eine eingeschaltete Erweiterung gerade (Ordner oder
+    Paket nicht da), bleibt sie in der Registry auf `enabled` und meldet hier `error` samt `last_error`."""
     source: str
     name: str | None
     description: str | None
@@ -104,34 +82,29 @@ class ExtensionOut(BaseModel):
     """Gruppe in der Modul-Auswahl (aus dem Manifest, siehe `ExtensionManifest.category`)."""
     sort_order: int = 100
     stage: str = "stable"
-    """Reifegrad aus dem Manifest (`ExtensionManifest.stage`): `stable` oder `beta`. Bei `beta` zeigt die Oberflaeche
-    ein Abzeichen „Beta“: funktioniert, ist aber noch nicht so gruendlich erprobt wie der Rest. Fehlt das Feld im
-    Manifest (aeltere Erweiterungen), steht hier `stable`."""
+    """Reifegrad aus dem Manifest (`ExtensionManifest.stage`): `stable` oder `beta`, bei `beta` zeigt die Oberfläche ein
+    Abzeichen „Beta“. Fehlt das Feld im Manifest, steht hier `stable`."""
     has_settings: bool = False
     needs_setup: bool = False
     """Nur bei eingeschalteten Erweiterungen: Pflichtfelder oder Pflicht-Zugangsdaten fehlen,
-    oder der letzte Verbindungstest ist fehlgeschlagen (Gruende in `setup_reasons`)."""
+    oder der letzte Verbindungstest ist fehlgeschlagen (Gründe in `setup_reasons`)."""
     setup_reasons: list[str] = []
     last_test: dict | None = None
-    """Ergebnis des letzten Verbindungstests: `{ok, message, at}`; weg nach jeder Aenderung der
-    Einstellungen oder Zugangsdaten."""
+    """Ergebnis des letzten Verbindungstests `{ok, message, at}`; weg nach jeder Änderung von Einstellungen oder
+    Zugangsdaten."""
     bundled: bool = False
-    """`true` bei Erweiterungen, die mit Nodvard Deck ausgeliefert werden (`source == "bundled"`). Ihre eigene
-    `version` wird bis zur 1.0 nicht gepflegt und sagt nichts; massgeblich ist die Programmversion."""
+    """`true` bei mitgelieferten Erweiterungen (`source == "bundled"`). Ihre eigene `version` wird bis zur 1.0
+    nicht gepflegt, maßgeblich ist die Programmversion."""
     display_version: str | None = None
-    """Die Version, die Menschen angezeigt wird: bei mitgelieferten Erweiterungen die Programmversion, bei
-    nachinstallierten (pip) die eigene `version`."""
+    """Die angezeigte Version: bei mitgelieferten Erweiterungen die Programmversion, bei nachinstallierten die eigene."""
     legacy_ids: list[str] = []
-    """Fruehere Kennungen einer umbenannten Erweiterung (`legacy_ids` im Manifest). Adressen mit einer alten
-    Kennung gelten weiter (`/api/v1/extensions/<alt>/...`, `/api/v1/ext/<alt>/...`, als veraltet markiert) und
-    meinen diese Erweiterung; `id` ist immer die heutige Kennung. Liegt unter einer alten Kennung noch ein
-    verwaister Zwilling, aendern die Kern-Adressen ueber sie nichts (409). Ohne Umbenennung leer."""
+    """Frühere Kennungen einer umbenannten Erweiterung (`legacy_ids` im Manifest). Adressen mit einer alten Kennung
+    gelten weiter (als veraltet markiert) und meinen diese Erweiterung; `id` ist immer die heutige. Liegt unter einer
+    alten Kennung noch ein verwaister Zwilling, ändern die Kern-Adressen über sie nichts (409)."""
 
     @classmethod
     def from_model(cls, record: ExtensionRecord) -> "ExtensionOut":
-        """`id` ist die heutige Kennung: nach einer Umbenennung liegt der Stand womoeglich noch in der Zeile
-        einer alten Kennung (Speicher-Kennung), angezeigt und angesprochen wird die Erweiterung trotzdem
-        unter ihrer heutigen."""
+        """`id` ist die heutige Kennung, auch wenn der Stand noch in der Zeile einer alten Kennung liegt."""
         runtime = get_extension_runtime()
         ext_id = runtime.canonical(record.id)
         manifest = record.manifest or {}
@@ -159,13 +132,12 @@ class ExtensionOut(BaseModel):
 async def _with_setup(
     session, records: list[ExtensionRecord], user: User  # noqa: ANN001 - AsyncSession
 ) -> list[ExtensionOut]:
-    """`ExtensionOut` samt „Einrichtung noetig“ -- Geheimnisse und Testergebnisse werden
-    einmal fuer alle geladen, nicht je Erweiterung."""
+    """`ExtensionOut` samt „Einrichtung nötig“; Geheimnisse und Testergebnisse werden einmal für alle geladen."""
     from .extension_settings import schema_for
 
     labels = await extension_setup.present_secret_labels(session)
     tests = await extension_setup.load_last_tests(session)
-    # Der Text eines Testergebnisses nennt Adressen und Fehlergruende: nur fuer Verwalter.
+    # Der Text eines Testergebnisses nennt Adressen und Fehlergründe: nur für Verwalter.
     can_manage = user_has_permission(user, "extensions.manage")
     out: list[ExtensionOut] = []
     for record in records:
@@ -183,11 +155,10 @@ async def _with_setup(
 
 
 async def _audit_toggle(session, user: User, action: str, ext_id: str, record: ExtensionRecord | None) -> None:  # noqa: ANN001
-    """Protokolleintrag fuer das bewusste Ein-/Ausschalten (`state` ist das Ergebnis: eine
-    Erweiterung, die beim Laden abstuerzt, steht danach auf `error`)."""
+    """Protokolleintrag fürs bewusste Ein- und Ausschalten; `state` ist das Ergebnis (nach einem Absturz `error`)."""
     detail: dict = {"state": record.state if record else None}
-    # Bietet die Erweiterung Adressen ohne Anmeldung an (`public=True`, Berechtigung
-    # `api.public`), steht das im Protokoll -- wer sie einschaltet, soll das nachlesen koennen.
+    # Bietet die Erweiterung Adressen ohne Anmeldung an (`public=True`, Berechtigung `api.public`),
+    # steht das im Protokoll: wer sie einschaltet, soll es nachlesen können.
     public_routes = extensions_service.public_route_prefixes(ext_id)
     if public_routes:
         detail["public_routes"] = public_routes
@@ -210,7 +181,7 @@ async def list_extensions(session: SessionDep, user: CurrentUser) -> list[Extens
 
 @router.get("/{ext_id}")
 async def get_extension(ext_id: str, session: SessionDep, user: CurrentUser) -> ExtensionOut:
-    """Auch ueber eine alte Kennung (`legacy_ids`); die Antwort nennt die heutige in `id`."""
+    """Auch über eine alte Kennung (`legacy_ids`); die Antwort nennt die heutige in `id`."""
     _, record = await resolve_extension(session, ext_id)
     return (await _with_setup(session, [record], user))[0]
 
@@ -236,11 +207,9 @@ async def enable_extension(
 
 @router.get("/{ext_id}/frontend/index.js")
 async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Response:
-    """Oeffentlich wie das Kern-Frontend selbst (main.py`s `StaticFiles`-Mount hat
-    auch keine Auth) -- ein Bundle ist nur Code, keine Nutzerdaten. Funktioniert
-    unabhaengig vom Ladezustand der Extension (Metadaten-Ansicht, wie `GET
-    /extensions/{id}`), nicht nur waehrend sie `enabled` ist. Auch ueber eine alte Kennung
-    (`legacy_ids`): offene Tabs mit einem alten Stand laden so weiter das heutige Bundle."""
+    """Öffentlich wie das Kern-Frontend (ein Bundle ist nur Code, keine Nutzerdaten) und unabhängig vom Ladezustand der
+    Erweiterung. Auch über eine alte Kennung (`legacy_ids`): offene Tabs mit altem Stand laden so das heutige Bundle."""
+    # Bewusst unter /extensions/{id} statt /ext/<id>: ein statisches Bundle braucht keinen laufenden Extension-Router.
     runtime = get_extension_runtime()
     discovered = runtime.discovered.get(runtime.canonical(ext_id))
     if discovered is None or not discovered.ok:
@@ -253,16 +222,12 @@ async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Respon
     bundle_path = (discovered.source_path / manifest.frontend).resolve()
     extension_root = discovered.source_path.resolve()
     if extension_root not in bundle_path.parents or not bundle_path.is_file():
-        # `manifest.frontend` ist Freitext aus einer (bundled) extension.toml --
-        # ohne diese Pruefung koennte ein Manifest mit "../../../etc/passwd" ausserhalb
-        # des Extension-Verzeichnisses lesen.
+        # `manifest.frontend` ist Freitext aus einer extension.toml: ohne diese Prüfung könnte ein Manifest
+        # mit "../../../etc/passwd" außerhalb des Extension-Verzeichnisses lesen.
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Frontend-Bundle nicht gefunden.")
-    # Fester URL ohne Inhaltshash im Namen -- ohne `no-cache` hielt der Browser nach
-    # einem Redeploy stundenlang das alte Bundle (live gefunden, siehe
-    # main.py::_cache_policy_for). `no-cache` = immer per ETag revalidieren. Anders
-    # als `StaticFiles` beantwortet ein aus einer Route zurueckgegebenes
-    # `FileResponse` `If-None-Match` NICHT selbst (per Test gefunden) -- ohne den
-    # Abgleich hier waere jede Revalidierung ein kompletter Neu-Download.
+    # Feste URL ohne Inhaltshash: ohne `no-cache` hielt der Browser nach einem Redeploy stundenlang das alte Bundle
+    # (siehe main.py::_cache_policy_for). `no-cache` heißt, immer per ETag zu revalidieren. Anders als `StaticFiles`
+    # beantwortet eine aus einer Route zurückgegebene `FileResponse` `If-None-Match` nicht selbst, das geschieht hier.
     response = FileResponse(
         bundle_path, media_type="application/javascript",
         headers={"Cache-Control": "no-cache"}, stat_result=bundle_path.stat(),
@@ -279,11 +244,8 @@ async def get_extension_frontend_bundle(ext_id: str, request: Request) -> Respon
 async def disable_extension(ext_id: str, request: Request, session: SessionDep, user: CurrentUser) -> ExtensionOut:
     canonical, _ = await resolve_extension(session, ext_id, change=True)
     await extensions_service.disable_extension(request.app, session, canonical)
-    # KEIN session.refresh() hier: die Zeile ist (Identity Map) dasselbe Objekt, das
-    # disable_extension() gerade mutiert hat -- ein refresh() wuerde eine frische
-    # SELECT ausfuehren und die noch nicht geflushte Mutation mit dem alten DB-Stand
-    # ueberschreiben (live gefunden: genau das lieferte "enabled" statt "disabled"
-    # zurueck, siehe Abnahmebericht).
+    # Kein session.refresh(): die Zeile ist (Identity Map) dasselbe Objekt, das disable_extension() gerade geändert hat;
+    # ein refresh() lüde den alten DB-Stand und überschriebe die noch nicht geflushte Änderung.
     record = await extensions_service.get_record(session, canonical)
     await extensions_service.record_user_choice(session, canonical)
     await _audit_toggle(session, user, "extension.disabled", canonical, record)

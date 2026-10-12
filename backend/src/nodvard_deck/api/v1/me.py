@@ -1,8 +1,4 @@
-"""Selbstauskunft und TOTP-Verwaltung -- docs/04-API.md §3.
-
-`GET/PATCH /me`, `POST /me/password` und die drei TOTP-Endpunkte (Einstellungen ->
-"Mein Konto"). `/me/sessions`, `/me/tokens`, `/me/devices` fehlen noch.
-"""
+"""Selbstauskunft, Passwortwechsel und Zwei-Faktor-Verwaltung des eigenen Kontos (docs/04-API.md)."""
 
 from __future__ import annotations
 
@@ -38,35 +34,33 @@ class MeOut(BaseModel):
     recovery_codes_remaining: int = 0
     """Noch nicht benutzte Wiederherstellungs-Codes (0 ohne aktive Zwei-Faktor-Anmeldung)."""
     timezone: str = ""
-    """Zeitzone des Dashboards (Einstellung `system.timezone`). Jeder angemeldete Nutzer darf sie
-    kennen: Zeitplan-Waehler rechnen "naechster Lauf" damit, auch ohne `settings.write`."""
+    """Zeitzone des Dashboards (`system.timezone`); jeder angemeldete Nutzer darf sie kennen."""
 
 
 class RecoveryCodesOut(BaseModel):
     recovery_codes: list[str]
-    """Klartext, EINMALIG -- gespeichert werden nur Hashes, kein Endpunkt liefert sie erneut."""
+    """Klartext, einmalig: gespeichert werden nur Hashes, kein Endpunkt liefert sie erneut."""
 
 
 class RecoveryCodesRequest(BaseModel):
     current_password: str
     totp_code: str = Field(default="", max_length=64)
-    """Pflicht, wenn Zwei-Faktor an ist (sonst gibt es ohnehin keine Codes): der aktuelle Code aus der App oder einer
-    der bisherigen Wiederherstellungs-Codes. Fehlt er: 403 mit `code: "totp_missing"`."""
+    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der App oder ein bisheriger Wiederherstellungs-Code.
+    Fehlt er: 403 mit `code: "totp_missing"`."""
 
 
 class TotpDisableRequest(BaseModel):
     current_password: str
     totp_code: str = Field(default="", max_length=64)
-    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der Authenticator-App (sechs Ziffern) oder ein
-    Wiederherstellungs-Code (`ABCDE-FGHJK`, Schreibweise egal; wird dabei verbraucht). Fehlt er: 403 mit
-    `code: "totp_missing"`. Im Schema optional, damit aeltere Aufrufer diese Antwort bekommen statt eines 422."""
+    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der App oder ein Wiederherstellungs-Code
+    (`ABCDE-FGHJK`, wird verbraucht). Fehlt er: 403 mit `code: "totp_missing"`.
+    Im Schema optional, damit ältere Aufrufer diese Antwort statt eines 422 bekommen."""
 
 
 class TotpSetupRequest(BaseModel):
     current_password: str | None = None
-    """Das aktuelle Passwort. Fuer das Einschalten der Zwei-Faktor-Anmeldung wird es verlangt (ohne
-    gibt es 400); im Schema optional, damit aeltere Aufrufer mit ihrer Anfrage ohne Body gueltig
-    bleiben und eine verstaendliche Antwort bekommen statt eines 422."""
+    """Das aktuelle Passwort, fürs Einschalten verlangt (ohne gibt es 400). Im Schema optional, damit ältere Aufrufer
+    ohne Body diese Antwort statt eines 422 bekommen."""
 
 
 class TotpSetupOut(BaseModel):
@@ -107,9 +101,9 @@ class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=255)
     totp_code: str = Field(default="", max_length=64)
-    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der Authenticator-App (sechs Ziffern) oder ein
-    Wiederherstellungs-Code (`ABCDE-FGHJK`, Schreibweise egal; wird dabei verbraucht). Fehlt er: 403 mit
-    `code: "totp_missing"`. Im Schema optional, damit aeltere Aufrufer diese Antwort bekommen statt eines 422."""
+    """Pflicht, wenn Zwei-Faktor an ist: der aktuelle Code aus der App oder ein Wiederherstellungs-Code
+    (`ABCDE-FGHJK`, wird verbraucht). Fehlt er: 403 mit `code: "totp_missing"`.
+    Im Schema optional, damit ältere Aufrufer diese Antwort statt eines 422 bekommen."""
 
 
 @router.patch("")
@@ -129,7 +123,7 @@ FIRST_STEPS_KEY = "ui.first_steps_dismissed"
 
 class PreferencesOut(BaseModel):
     first_steps_dismissed: bool = False
-    """„Erste Schritte“ im Cockpit ausgeblendet. Gilt fuer den Benutzer auf jedem Geraet."""
+    """„Erste Schritte“ im Cockpit ausgeblendet; gilt für den Benutzer auf jedem Gerät."""
 
 
 class PreferencesUpdate(BaseModel):
@@ -157,26 +151,21 @@ async def change_password(
     payload: PasswordChange, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
     current_session_id: CurrentSessionId,
 ):
-    """Eigenes Passwort aendern -- mit dem aktuellen Passwort und, wenn Zwei-Faktor an ist, einem Code (`totp_code`):
-    dem aktuellen aus der App oder einem Wiederherstellungs-Code. Sonst kaeme, wer nur das alte Passwort kennt, mit
-    einem neuen an jeder Code-Pflicht vorbei und sperrte den Besitzer aus. Alle ANDEREN Anmeldungen werden dabei
-    abgemeldet (sonst holte sich z. B. ein verlorenes Handy noch 30 Tage lang neue Tokens), die aktuelle bleibt.
-
-    Reihenfolge wie bei `DELETE /me/totp`: erst das Passwort (falsch: 400, der Code bleibt unangetastet), dann der Code
-    (fehlt: 403 `totp_missing` mit einem Satz, der auch in einer aelteren App fuer sich verstaendlich ist, zaehlt nicht;
-    falsch oder schon benutzt: 400 und zaehlt wie beim Anmelden; zu viele: 429). Ist das neue Passwort das alte, gibt es
-    vorher 422 -- dafuer wird kein Code verbraucht. Ist Zwei-Faktor aus, reicht das Passwort wie bisher."""
+    """Eigenes Passwort ändern: aktuelles Passwort (falsch 400), bei Zwei-Faktor dazu ein Code (fehlt 403
+    `totp_missing`, falsch 400, zu viele 429); gleich dem alten gibt 422, bevor ein Code verbraucht wird. Andere
+    Anmeldungen werden abgemeldet, die aktuelle bleibt."""
     await confirm_current_password(request, session, user, payload.current_password, "passwort_aendern")
     if payload.new_password == payload.current_password:
         raise HTTPException(status_code=422, detail="Das neue Passwort muss sich vom alten unterscheiden.")
-    # Der Hash des neuen Passworts dauert (auf einem Pi Sekunden). Mit einem Wiederherstellungs-Code bestaetigt, rechnet
-    # er, bevor der Code verbraucht wird: ab da haelt die Anfrage die Schreibsperre der Datenbank.
+    # Das Hashen dauert (auf einem Pi Sekunden): bei Bestätigung mit Wiederherstellungs-Code vor dem Verbrauchen rechnen,
+    # danach hält die Anfrage die Schreibsperre der Datenbank.
     new_hash: str | None = None
 
     async def hash_new_password() -> None:
         nonlocal new_hash
         new_hash = await security.hash_password_async(payload.new_password, signed_in=True)
 
+    # Ohne den Code käme, wer nur das alte Passwort kennt, an der Zwei-Faktor-Anmeldung vorbei und sperrte den Besitzer aus.
     try:
         via = await confirm_current_totp(
             request, session, settings, user, payload.totp_code, "passwort_aendern", allow_recovery=True,
@@ -186,6 +175,7 @@ async def change_password(
         return exc.response()
     user.password_hash = new_hash or await security.hash_password_async(payload.new_password, signed_in=True)
     await session.flush()
+    # Andere Anmeldungen enden, sonst holte sich z. B. ein verlorenes Handy noch 30 Tage lang neue Tokens.
     revoked = await auth_service.revoke_refresh_tokens(session, user.id, except_token_id=current_session_id)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="auth.password_change", outcome="success",
@@ -212,10 +202,8 @@ async def totp_setup(
     settings: SettingsDep,
     payload: TotpSetupRequest | None = None,
 ) -> TotpSetupOut:
-    """Beginnt die Einrichtung (Schluessel + QR-Link). Verlangt das aktuelle Passwort (Body
-    `{current_password}`): sonst koennte eine gestohlene Sitzung allein die Zwei-Faktor-Anmeldung
-    mit einem eigenen Authenticator einschalten und den Besitzer aussperren -- Abschalten und neue
-    Wiederherstellungs-Codes verlangen es aus demselben Grund."""
+    """Beginnt die Einrichtung (Schlüssel und QR-Link) und verlangt das aktuelle Passwort (`current_password`)."""
+    # Sonst könnte eine gestohlene Sitzung allein einen eigenen Authenticator einschalten und den Besitzer aussperren.
     if payload is None or not payload.current_password:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=TOTP_SETUP_PASSWORD_REQUIRED)
     await confirm_current_password(request, session, user, payload.current_password, "2fa_einrichten")
@@ -230,8 +218,7 @@ async def totp_setup(
 async def totp_confirm(
     payload: TotpConfirmRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ) -> RecoveryCodesOut:
-    """Schaltet die Zwei-Faktor-Anmeldung scharf und liefert dabei EINMALIG die ersten
-    zehn Wiederherstellungs-Codes."""
+    """Schaltet die Zwei-Faktor-Anmeldung scharf und liefert dabei einmalig die ersten zehn Wiederherstellungs-Codes."""
     try:
         codes = await auth_service.confirm_totp_setup(
             session, settings, user, code=payload.code, ip=_client_ip(request),
@@ -254,19 +241,17 @@ async def totp_confirm(
 async def regenerate_recovery_codes(
     payload: RecoveryCodesRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep
 ):
-    """Neue Wiederherstellungs-Codes; die bisherigen (auch unbenutzte) sind sofort ungueltig.
-    Verlangt das aktuelle Passwort -- eine gestohlene Sitzung allein soll sich keinen
-    frischen Satz holen koennen -- und dazu einen Code (`totp_code`) wie beim Abschalten: den aktuellen aus der App
-    oder einen der bisherigen Wiederherstellungs-Codes. Sonst holte sich, wer nur das Passwort kennt, frische Codes
-    und kaeme damit an jeder Code-Pflicht vorbei (Anmelden, Abschalten, Update). Antworten wie bei `DELETE /me/totp`."""
+    """Neue Wiederherstellungs-Codes, die bisherigen sind sofort ungültig (409 ohne Zwei-Faktor); verlangt das
+    aktuelle Passwort und einen Code, Antworten wie bei `DELETE /me/totp`."""
+    # Sonst käme, wer nur das Passwort kennt, mit frischen Codes an jeder Code-Pflicht vorbei.
     if not auth_service.two_factor_enabled(user):
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Die Zwei-Faktor-Anmeldung ist nicht aktiv – Wiederherstellungs-Codes gibt es nur dann.",
         )
     await confirm_current_password(request, session, user, payload.current_password, "codes_erneuern")
-    # Die Hashes der neuen Codes dauern (auf einem Pi Sekunden). Mit einem Wiederherstellungs-Code bestaetigt, rechnen
-    # sie, bevor er verbraucht wird: ab da haelt die Anfrage die Schreibsperre der Datenbank.
+    # Das Hashen dauert (auf einem Pi Sekunden): bei Bestätigung mit Wiederherstellungs-Code vor dem Verbrauchen rechnen,
+    # danach hält die Anfrage die Schreibsperre der Datenbank.
     fresh = auth_service.new_recovery_code_set()
     try:
         via = await confirm_current_totp(
@@ -293,12 +278,9 @@ async def totp_disable(
     payload: TotpDisableRequest, request: Request, user: CurrentUser, session: SessionDep, settings: SettingsDep,
     current_session_id: CurrentSessionId,
 ):
-    """Zwei-Faktor abschalten -- verlangt das aktuelle Passwort (Body `{current_password}`), damit eine gestohlene
-    Sitzung allein den zweiten Faktor nicht entfernen kann, und dazu einen Code (`totp_code`): den aktuellen aus der
-    App oder einen Wiederherstellungs-Code. Sonst kaeme, wer nur das Passwort kennt, durch Abschalten an jeder
-    Code-Pflicht vorbei (z. B. beim Update). Reihenfolge: erst das Passwort (falsch: 400, der Code bleibt
-    unangetastet), dann der Code (fehlt: 403 `totp_missing`, zaehlt nicht; falsch oder schon benutzt: 400 und
-    zaehlt wie beim Anmelden; zu viele: 429). Ist Zwei-Faktor aus, reicht das Passwort wie bisher."""
+    """Zwei-Faktor abschalten mit aktuellem Passwort und einem Code (`totp_code`), Antworten wie bei
+    `POST /me/password`; ohne Zwei-Faktor reicht das Passwort."""
+    # Sonst könnte eine gestohlene Sitzung den zweiten Faktor entfernen und jede Code-Pflicht umgehen.
     await confirm_current_password(request, session, user, payload.current_password, "2fa_abschalten")
     try:
         via = await confirm_current_totp(
@@ -307,7 +289,7 @@ async def totp_disable(
     except TotpMissing as exc:
         return exc.response()
     await auth_service.disable_totp(session, user)
-    # Wie beim Passwortwechsel: andere Anmeldungen enden, die aktuelle bleibt.
+    # Wie beim Passwortwechsel enden andere Anmeldungen, die aktuelle bleibt.
     revoked = await auth_service.revoke_refresh_tokens(session, user.id, except_token_id=current_session_id)
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="auth.2fa_disabled",

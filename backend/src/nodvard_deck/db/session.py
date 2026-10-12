@@ -1,10 +1,4 @@
-"""Engine und Session-Factory.
-
-Die SQLite-Pragmas hier sind die Disziplin-Regel aus docs/00-DECISIONS.md D-02
-woertlich umgesetzt: `journal_mode=WAL`, `foreign_keys=ON`, `busy_timeout=5000`,
-`synchronous=NORMAL`. Ohne diese vier ist SQLite unter gleichzeitigem Zugriff
-(Web-Request + Scheduler-Job + Watcher-Task) unzuverlaessig.
-"""
+"""Engine und Session-Factory."""
 
 from __future__ import annotations
 
@@ -20,6 +14,8 @@ _engine: AsyncEngine | None = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
+# WAL, Fremdschlüssel, Wartezeit bei Sperren und synchronous=NORMAL: ohne diese vier ist SQLite bei gleichzeitigem
+# Zugriff (Request, Scheduler-Job, Watcher-Task) unzuverlässig.
 def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:  # noqa: ANN001
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA journal_mode=WAL")
@@ -51,24 +47,16 @@ def get_sessionmaker() -> async_sessionmaker[AsyncSession]:
 
 
 def reset_engine_cache() -> None:
-    """Nur fuer Tests: erzwingt beim naechsten get_engine() eine frische Engine,
-    passend zu einer neuen (typischerweise in-memory) DATABASE_URL."""
+    """Nur für Tests: erzwingt beim nächsten `get_engine()` eine frische Engine (etwa für eine neue In-Memory-URL)."""
     global _engine, _sessionmaker
     _engine = None
     _sessionmaker = None
 
 
 def set_engine_for_testing(engine: AsyncEngine) -> None:
-    """Nur fuer Tests: bindet get_engine()/get_sessionmaker()/session_scope() an eine
-    bereits bestehende Engine, statt beim naechsten Zugriff eine neue gegen die
-    ECHTEN Settings (get_settings()) zu erzeugen.
-
-    Noetig seit WP-3: core.vault.vault_use() oeffnet intern eine von der
-    Aufrufer-Session unabhaengige, sofort committende zweite Session ueber
-    get_sessionmaker() (siehe dortiger Docstring) -- ohne diese Funktion wuerde dieser
-    Pfad in Tests unbemerkt die echte data/lattice.db beruehren statt die
-    Test-Datenbank, exakt dasselbe Muster wie der in WP-1 gefundene
-    `get_settings()`-Singleton-Fallstrick (siehe tests/conftest.py `test_settings`)."""
+    """Nur für Tests: bindet `get_engine()`, `get_sessionmaker()` und `session_scope()` an eine bestehende Engine."""
+    # Ohne das öffnet `core.vault.vault_use()` über `get_sessionmaker()` eine eigene Session auf die echte Datenbank
+    # statt auf die der Tests.
     global _engine, _sessionmaker
     _engine = engine
     _sessionmaker = async_sessionmaker(engine, expire_on_commit=False)
@@ -76,7 +64,7 @@ def set_engine_for_testing(engine: AsyncEngine) -> None:
 
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
-    """Ein Session-Pfad fuer die ganze Anwendung (D-02: keine parallelen Writer)."""
+    """Ein Session-Pfad für die ganze Anwendung (keine parallelen Writer)."""
     sessionmaker = get_sessionmaker()
     async with sessionmaker() as session:
         try:

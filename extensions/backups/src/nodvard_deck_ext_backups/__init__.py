@@ -1,11 +1,4 @@
-"""backups-Extension -- Sichtbarkeit UND Wiederholbarkeit fuer Proxmox-VZDump-Jobs.
-
-**Warum das Wichtigste zuerst gebaut ist:** ein defekter Backup-Job (z. B. "Broken
-pipe" zu einem langsamen NFS-Ziel) kann wochenlang unbemerkt fehlschlagen. Diese
-Extension macht genau diese Klasse Problem sichtbar (strukturierter Status pro VM,
-nicht ein Freitext-KI-Bericht) und gibt ihr eine Handlung (Retry durchs Gate), statt neues generisches
-Backup-Tooling fuer alles andere zu bauen.
-"""
+"""Proxmox-Backups: Status der VZDump-Jobs pro VM und Wiederholen über das Aktions-Gate."""
 
 from __future__ import annotations
 
@@ -53,20 +46,17 @@ _LAST_STATUS_LABEL = {
     "ok": "erfolgreich", "failed": "fehlgeschlagen", "running": "läuft", "unknown": "unbekannt",
     "unprotected": "kein Backup-Job", "unreachable": "nicht erreichbar",
 }
-"""Deutsche Anzeige fuer `last_status` im Dashboard-Widget (die Seite hat ihre eigene,
-gleichlautende Zuordnung in BackupsPage.tsx)."""
+"""Anzeigetext für `last_status` im Widget; die Seite hat dieselbe Zuordnung in BackupsPage.tsx."""
 
 _LAST_STATUS_TONE = {
     "ok": "good", "failed": "danger", "running": "good", "unknown": "neutral", "unprotected": "warn",
     "unreachable": "danger",
 }
-"""Farbe am Maschinenwert, im Backend entschieden (Badge-Regel, docs/02) -- vorher
-`last_status | tone` im Frontend; fuer "unprotected" gibt es dort kein Stichwort."""
+"""Die Farbe hängt am Maschinenwert und wird im Backend entschieden (Badge-Regel, docs/02)."""
 
 
 def _space_warning_response(warning: dict[str, Any]) -> JSONResponse:
-    """409 statt Vorschlag: die Seite fragt mit `detail` nach und schickt bei "trotzdem"
-    dieselbe Anfrage mit `ignore_space: true` erneut (BackupsPage.tsx)."""
+    """409 statt Vorschlag: die Seite fragt nach und schickt bei „trotzdem“ dieselbe Anfrage mit `ignore_space: true` erneut."""
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": warning["message"], "space_warning": warning},
@@ -78,8 +68,7 @@ class _TokenIn(BaseModel):
 
 
 class _ConnectionIn(BaseModel):
-    """Wie `nodvard_deck_ext_proxmox`s Gegenstueck -- ohne das Token selbst, das bleibt
-    ausschliesslich ueber `POST .../{name}/token` im Vault."""
+    """Das Token selbst kommt nie hierher, sondern nur über `POST .../{name}/token` in den Tresor."""
 
     name: str
     base_url: str
@@ -122,12 +111,11 @@ class _ConnectionOut(BaseModel):
     tls_fingerprint_sha256: str | None = None
     """Der gemerkte Fingerabdruck (`AB:CD:...`), sonst `None`."""
     tls_fingerprint_invalid: bool = False
-    """Im Feld steht etwas, das kein Fingerabdruck ist -- die Verbindung ist dann gesperrt, bis es stimmt."""
+    """Im Feld steht kein Fingerabdruck; die Verbindung bleibt gesperrt, bis es stimmt."""
 
 
 class _BackupWatchJobSpec:
-    """Backup-Waechter (watch.py): alle 15 Minuten, meldet nur Zustandswechsel. Richtet vorher offene Kopien aus
-    "Als Kopie wiederherstellen" fertig ein, deren Aktion vorher endete (restore.py, ohne Vermerk kein Aufruf)."""
+    """Backup-Wächter: alle 15 Minuten, meldet nur Zustandswechsel und richtet offene Kopien (restore.py) fertig ein."""
 
     id = "watch"
     name = "Backup-Wächter"
@@ -158,7 +146,7 @@ class Extension(NodvardExtension):
         executor = BackupActionExecutor(_connectors_factory)
         ctx.capabilities.provide(self._provider)
         ctx.capabilities.provide(executor)
-        # "Proxmox VE" traegt beim Verbinden mit Passwort hier gleich einen eigenen Backup-Zugang ein (receiver.py).
+        # Die Proxmox-Erweiterung legt beim Verbinden per Passwort gleich einen Backup-Zugang an (receiver.py).
         ctx.capabilities.provide(ProxmoxConnectionReceiver(ctx))
 
         ctx.actions.register(
@@ -188,8 +176,8 @@ class Extension(NodvardExtension):
                 label="Backup-Job ändern",
                 description="Zeitplan, Aktiv, Speicher, Modus, Aufbewahrung eines Backup-Jobs.",
                 default_risk=Risk.MEDIUM,
-                # Der NUTZER braucht settings.write (Route); die Extension schlaegt vor und
-                # muss die Aktions-Rechte selbst halten -- wie bei backup.run.
+                # Der Nutzer braucht settings.write (Route); die Erweiterung schlägt nur vor und
+                # braucht die Aktionsrechte selbst, wie bei backup.run.
                 permissions=["hosts.execute"],
                 host_bound=False,
             )
@@ -246,8 +234,8 @@ class Extension(NodvardExtension):
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 
         async def _drop_secret_or_refuse(label: str) -> None:
-            """Das Geheimnis einer Verbindung loeschen, bevor sich etwas aendert -- ist es nicht von dieser Erweiterung
-            (etwa von Hand im Tresor angelegt), bleibt es, und die Anfrage endet mit 409 und dem Weg, es aufzuloesen."""
+            """Löscht das Geheimnis einer Verbindung; gehört es nicht dieser Erweiterung (etwa von Hand im Tresor
+            angelegt), bleibt es und die Anfrage endet mit 409."""
             foreign = False
             try:
                 await ctx.secrets.delete(label)
@@ -272,10 +260,7 @@ class Extension(NodvardExtension):
 
         @router.get("/connections")
         async def list_connections() -> list[_ConnectionOut]:
-            """Verbindungen verwalten --
-            backups haelt eine EIGENE Verbindungsliste (siehe connector.py-Docstring),
-            deshalb ein eigener, identisch aufgebauter Satz Endpunkte statt proxmoxs
-            wiederzuverwenden."""
+            """Die Verbindungen dieser Erweiterung (eigene Liste, unabhängig von der Proxmox-Erweiterung)."""
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
             return [await _connection_out(c) for c in connections]
@@ -289,9 +274,8 @@ class Extension(NodvardExtension):
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
-            # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen (etwa von
-            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse. Ein fremdes (nicht von dieser
-            # Erweiterung, etwa von Hand im Tresor) bleibt -- dann wird nichts angelegt.
+            # Neue Verbindung startet ohne Token: ein altes Geheimnis gleichen Namens gehörte zu einer anderen
+            # Adresse. Ein fremdes (nicht von dieser Erweiterung) bleibt, dann wird nichts angelegt.
             await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{payload.name}")
             entry = payload.model_dump()
             if entry.get(FINGERPRINT_FIELD) is None:
@@ -319,11 +303,11 @@ class Extension(NodvardExtension):
                     elif "tls_insecure_skip_verify" not in updates:
                         conn["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
                 if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
-                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue. Vor dem Speichern: ein
-                    # fremdes Geheimnis laesst die Adresse unveraendert.
+                    # Das Token gehört zur alten Adresse und darf nicht an die neue gehen. Vor dem Speichern:
+                    # bei einem fremden Geheimnis bleibt die Adresse unverändert.
                     await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{name}")
                     if FINGERPRINT_FIELD not in updates:
-                        # Der gemerkte Fingerabdruck gehoert zum alten Server.
+                        # Der gemerkte Fingerabdruck gehört zum alten Server.
                         conn.pop(FINGERPRINT_FIELD, None)
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
@@ -342,11 +326,11 @@ class Extension(NodvardExtension):
             try:
                 await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
             except SecretNotOwned:
-                # Die Verbindung ist weg; ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberuehrt.
+                # Die Verbindung ist weg; ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberührt.
                 ctx.logger.warning("Backups: Verbindung %s entfernt, fremdes Geheimnis im Tresor bleibt", name)
 
         ctx.api.include_router(router, permission="secrets.write")
-        # Fingerabdruck des Zertifikats ansehen und bestaetigen (certificate.py): aendert die Verbindung wie PUT oben.
+        # Fingerabdruck des Zertifikats ansehen und bestätigen (certificate.py); ändert die Verbindung wie PUT oben.
         ctx.api.include_router(build_certificate_router(ctx), permission="secrets.write")
 
         data_router = APIRouter()
@@ -367,9 +351,9 @@ class Extension(NodvardExtension):
 
         @data_router.get("/jobs/{job_ref}/failure")
         async def job_failure(job_ref: str, upid: str | None = None) -> dict[str, Any]:
-            """Warum ist der neueste (oder der genannte) Lauf fehlgeschlagen? In Klartext (failure_text.py), dazu die
-            Zeile von Proxmox. 404, wenn es keinen solchen fehlgeschlagenen Lauf gibt."""
-            if job_ref.count("--") < 2:  # kein gueltiger job_ref (<Verbindung>--<Job>--<VMID>)
+            """Warum der neueste (oder der genannte) Lauf fehlschlug, in Klartext (failure_text.py) samt Zeile von
+            Proxmox; 404, wenn es keinen solchen Lauf gibt."""
+            if job_ref.count("--") < 2:  # kein gültiger job_ref (<Verbindung>--<Job>--<VMID>)
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Backup-Job.")
             try:
                 cause = await self._provider.failure_cause(job_ref, upid)
@@ -381,7 +365,7 @@ class Extension(NodvardExtension):
 
         @data_router.get("/unprotected")
         async def unprotected_guests() -> dict[str, Any]:
-            """Gaeste, die KEIN Backup-Job erfasst (Proxmox' eigene Auswertung)."""
+            """Gäste, die kein Backup-Job erfasst (Proxmox' eigene Auswertung)."""
             try:
                 return await self._provider.unprotected()
             except (RuntimeError, NodvardError) as exc:
@@ -389,8 +373,8 @@ class Extension(NodvardExtension):
 
         @data_router.get("/inventory")
         async def backup_inventory_overview() -> dict[str, Any]:
-            """Was tatsaechlich auf den Backup-Speichern liegt, je Gast. Bewusst NICHT im
-            Widget (alle 60 s) -- NFS-Verzeichnisse zu lesen kostet Zeit."""
+            """Was tatsächlich auf den Backup-Speichern liegt, je Gast. Nicht im Widget (alle 60 s), weil das Lesen
+            der NFS-Verzeichnisse dauert."""
             try:
                 return await self._provider.inventory()
             except (RuntimeError, NodvardError) as exc:
@@ -416,7 +400,7 @@ class Extension(NodvardExtension):
 
         @edit_router.get("/jobs/{job_ref}/config")
         async def job_config(job_ref: str) -> dict[str, Any]:
-            """Die editierbaren Werte eines Jobs (Roadmap Punkt 1: Backup-Jobs bearbeiten)."""
+            """Die editierbaren Werte eines Jobs."""
             _connection, job_id, job = await _job_for(job_ref)
             return {"job_id": job_id, **current_values(job)}
 
@@ -427,10 +411,9 @@ class Extension(NodvardExtension):
             ignore_space: bool = Body(False, embed=True),
             actor: Actor = Depends(ctx.api.current_actor),
         ) -> Any:  # noqa: ANN401 - dict oder die 409-Platzwarnung
-            """Schlaegt die Aenderung dem Gate vor. Weniger Aufbewahrung oder Abschalten
-            ist hohes Risiko (Proxmox loescht beim naechsten Lauf, was ueber der Grenze liegt).
-            Neuer Speicher oder wieder eingeschaltet: erst pruefen, ob alle Gaeste des Jobs
-            dort Platz haben (space.py) -- sonst 409 mit `space_warning`."""
+            """Schlägt die Änderung dem Gate vor. Weniger Aufbewahrung oder Abschalten ist hohes Risiko (Proxmox
+            löscht beim nächsten Lauf, was über der Grenze liegt). Bei neuem Speicher oder Wiedereinschalten wird
+            vorher der Platz geprüft (space.py), sonst 409 mit `space_warning`."""
             connection, job_id, job = await _job_for(job_ref)
             try:
                 _params, diff, destructive = build_job_update(job, changes)
@@ -467,9 +450,9 @@ class Extension(NodvardExtension):
             ignore_space: bool = Body(False, embed=True),
             actor: Actor = Depends(ctx.api.current_actor),
         ) -> Any:  # noqa: ANN401 - dict oder die 409-Platzwarnung
-            """Aus "Ohne Backup-Job" heraus sichern: neuer Job nur fuer diesen Gast. Niedriges
-            Risiko -- ein zusaetzliches Backup nimmt nichts weg. Passt der Gast nicht auf den
-            Speicher (space.py), erst 409 mit `space_warning`; `ignore_space` = "trotzdem"."""
+            """Neuer Job nur für einen Gast ohne Backup, niedriges Risiko (ein zusätzliches Backup nimmt nichts weg).
+            Passt der Gast nicht auf den Speicher (space.py), kommt 409 mit `space_warning`; `ignore_space` heißt
+            „trotzdem“."""
             connector = (await build_connectors(ctx)).get(connection)
             if connector is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Verbindung '{connection}' unbekannt.")
@@ -509,9 +492,8 @@ class Extension(NodvardExtension):
 
         @ack_router.put("/unprotected/{connection}/{vmid}/acknowledged", status_code=status.HTTP_204_NO_CONTENT)
         async def acknowledge_unprotected(connection: str, vmid: str, payload: _AcknowledgeIn) -> None:
-            """"Bewusst ohne Backup": eine Konfigurationsentscheidung, daher
-            `settings.write` -- der Gast bleibt auf der Seite sichtbar, warnt aber nicht
-            mehr im Dashboard-Widget."""
+            """„Bewusst ohne Backup“: eine Konfigurationsentscheidung, daher `settings.write`. Der Gast bleibt auf
+            der Seite sichtbar, warnt aber nicht mehr im Widget."""
             await _set_acknowledged(connection, vmid, payload.note)
 
         @ack_router.delete("/unprotected/{connection}/{vmid}/acknowledged", status_code=status.HTTP_204_NO_CONTENT)
@@ -539,17 +521,12 @@ class Extension(NodvardExtension):
                 if warning is not None:
                     return _space_warning_response(warning)
             decision = await ctx.actions.propose(request, wait_s=REQUEST_WAIT_S)
-            # "risk" dazu, damit BackupsPage.tsx
-            # bei status="proposed" pruefen kann, ob der Nutzer actions.approve:<risk>
-            # hat, bevor sie automatisch nachbestaetigt -- request.risk ist hier schon
-            # bekannt (Risk.MEDIUM, siehe capabilities.py), kein zweiter Lookup noetig.
+            # `risk` dazu: die Seite prüft bei status="proposed", ob der Nutzer actions.approve:<risk> hat,
+            # bevor sie automatisch nachbestätigt.
             return {"action_id": decision.action_id, "status": decision.status.value, "risk": request.risk.value}
 
-        # Live gegen den echten pve1 gefunden (WP-8-Nachtrag-Nachtrag): dieselbe
-        # Fehlerklasse wie proxmoxs `node_load_widget_data()` --
-        # `ProxmoxBackupApiError` fehlte hier im Fangnetz, ein echter API-Fehler
-        # (z. B. ein von Proxmox abgelehnter Parameter) lief als roher 500 durch,
-        # statt sauber eine leere Liste zu melden.
+        # ProxmoxBackupApiError muss mit abgefangen werden: ein echter API-Fehler (z. B. ein von Proxmox
+        # abgelehnter Parameter) soll eine leere Liste ergeben, keinen rohen 500.
         @data_router.get("/widgets/summary")
         async def summary_widget_data() -> dict[str, Any]:
             try:
@@ -560,32 +537,27 @@ class Extension(NodvardExtension):
                 unprotected = (await self._provider.unprotected())["guests"]
             except (RuntimeError, NodvardError):
                 unprotected = []
-            # Nicht erreichbare Verbindungen und ungesicherte Gaeste ZUERST -- auf der
-            # kleinen Kachel sonst unter den Jobs verschwunden. Ohne `job_ref` gibt es
-            # keinen Sicherungs-Knopf.
+            # Nicht erreichbare Verbindungen und ungesicherte Gäste zuerst, sonst gehen sie auf der kleinen
+            # Kachel unter. Ohne `job_ref` gibt es keinen Sicherungs-Knopf.
             unreachable = [j for j in jobs if j.get("last_status") == "unreachable"]
             rows = unreachable + [
                 {**g, "job_ref": "", "storage": "kein Backup-Job", "last_status": "unprotected"}
                 for g in unprotected
                 if not g.get("acknowledged")
             ] + [j for j in jobs if j.get("last_status") != "unreachable"]
-            # Angezeigt wird das deutsche Wort, die Farbe haengt weiter
-            # am Maschinenwert -- nicht am Anzeigetext.
+            # Angezeigt wird das deutsche Wort; die Farbe hängt am Maschinenwert.
             for row in rows:
                 row["last_status_label"] = _LAST_STATUS_LABEL.get(row.get("last_status"), row.get("last_status"))
                 row["tone"] = _LAST_STATUS_TONE.get(row.get("last_status"), "neutral")
-                # Beide Knoepfe starten dasselbe (ein volles Backup jetzt), heissen aber
-                # je nach Lage anders: "Erneut versuchen" gibt es nur nach einem
-                # Fehlschlag. Ohne `job_ref` (kein Job) und waehrend eines Laufs keiner.
+                # Beide Knöpfe starten dasselbe Backup, heißen aber je nach Lage anders: „Erneut versuchen“ gibt
+                # es nur nach einem Fehlschlag. Ohne `job_ref` und während eines Laufs gibt es keinen.
                 has_job = bool(row.get("job_ref"))
                 row["can_retry"] = has_job and row.get("last_status") == "failed"
                 row["can_backup_now"] = has_job and row.get("last_status") in ("ok", "unknown")
             return {"data": rows, "meta": {}}
 
-        # Sicherheits-Nachtrag: dieser
-        # Router hing OHNE Berechtigung (`include_router(router)`) -- laut ApiHandle-
-        # Docstring heisst das: oeffentlich, ohne Login erreichbar. Lesen braucht jetzt
-        # `hosts.read`, alles Ausloesende `hosts.execute`.
+        # Lesen braucht hosts.read, alles Auslösende hosts.execute; ohne Berechtigung wäre ein Router
+        # öffentlich, ohne Login erreichbar.
         ctx.api.include_router(data_router, permission="hosts.read")
         ctx.api.include_router(retry_router, permission="hosts.execute")
         ctx.api.include_router(ack_router, permission="settings.write")
@@ -653,13 +625,8 @@ class Extension(NodvardExtension):
         return None
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
-        """**Multi-Instanz-Nachtrag, geschaerft:** wie proxmoxs
-        `health()` -- die erste Fassung meldete `healthy=True`, sobald IRGENDEINE
-        Verbindung erreichbar war, und verdeckte damit den Ausfall einer einzelnen
-        Instanz hinter einer anderen, funktionierenden. `healthy=True` gilt jetzt nur
-        noch, wenn ALLE konfigurierten Verbindungen erreichbar sind;
-        `details[name]["healthy"]` macht jede Verbindung einzeln explizit, `message`
-        fasst immer alle zusammen (nicht nur die fehlgeschlagenen)."""
+        """Gesund nur, wenn alle Verbindungen erreichbar sind, damit ein Ausfall nicht hinter einer funktionierenden
+        verschwindet; `details[name]` zeigt jede einzeln, `message` fasst alle zusammen."""
         try:
             connectors = await build_connectors(ctx)
         except Exception as exc:  # noqa: BLE001 - Health darf nie werfen
@@ -679,7 +646,7 @@ class Extension(NodvardExtension):
                 details[name] = {"healthy": False, "error": str(exc)}
                 code = getattr(exc, "code", None) if isinstance(exc, ProxmoxBackupApiError) else None
                 if code:
-                    details[name]["code"] = code  # z. B. "certificate_changed": die Oberflaeche bietet das Bestaetigen an
+                    details[name]["code"] = code  # z. B. "certificate_changed": die Oberfläche bietet das Bestätigen an
                 summaries.append(f"{name}: FEHLER: {exc}")
                 all_healthy = False
 

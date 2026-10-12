@@ -1,13 +1,5 @@
-"""Knoten-Gesundheit: Prozessor, Last, RAM/Swap, Systemplatte
-und die physischen Datentraeger mit SMART-Zustand, Restlebensdauer und Temperatur --
-das, wofuer man in Proxmox "Uebersicht" und "Disks" des Knotens aufmacht.
-
-Rein lesend (`/nodes/{node}/status`, `/disks/list`, `/disks/smart`, `/disks/zfs`).
-
-Manche SSDs melden keine Abnutzung -- Proxmox zeigt dann "N/A". In kleinen Setups hat
-ein Knoten oft nur eine Platte -- faellt sie aus, ist der Knoten weg; deshalb gehoert ihr
-Zustand aufs Dashboard.
-"""
+"""Knoten-Gesundheit: Prozessor, Last, RAM/Swap, Systemplatte und Datenträger mit SMART-Zustand, Restlebensdauer
+und Temperatur, rein lesend (`/nodes/{node}/status`, `/disks/list`, `/disks/smart`, `/disks/zfs`)."""
 
 from __future__ import annotations
 
@@ -29,8 +21,8 @@ def _int(value: Any) -> int | None:
 
 
 def smart_details(smart: dict[str, Any]) -> dict[str, int | None]:
-    """Temperatur und Betriebsstunden aus der SMART-Antwort. NVMe liefert Freitext
-    (`type: "text"`), SATA eine Attributliste (`type: "ata"`) -- live beide gesehen."""
+    """Temperatur und Betriebsstunden aus der SMART-Antwort. NVMe liefert Freitext (`type: "text"`), SATA eine
+    Attributliste (`type: "ata"`)."""
     temperature: int | None = None
     hours: int | None = None
     text = smart.get("text") or ""
@@ -69,8 +61,8 @@ def disk_assessment(
     return "gesund", "good"
 
 
+# Ein Pool in diesem Zustand liefert keine (oder keine verlässlichen) Daten mehr.
 ZFS_CRITICAL = frozenset({"FAULTED", "UNAVAIL", "SUSPENDED", "REMOVED"})
-"""Ein Pool in diesem Zustand liefert keine (oder keine verlaesslichen) Daten mehr."""
 ZFS_STATE_TEXT = {
     "ONLINE": "in Ordnung",
     "DEGRADED": "eingeschränkt – eine Platte fehlt oder ist defekt, die Ausfallsicherheit ist verringert",
@@ -81,19 +73,19 @@ ZFS_STATE_TEXT = {
     "SUSPENDED": "angehalten (Schreibfehler)",
 }
 
+# Ab wie viel °C ein Datenträger als zu heiß gilt, wenn nichts eingestellt ist: Festplatten vertragen weniger als SSDs und
+# NVMe (oft 60-70 °C unter Last). Bei vielen SATA-SSDs ist 70 °C schon das Betriebsmaximum, darum 65. Unbekannte Arten
+# (auch USB) gelten wie eine HDD.
 TEMP_WARN_DEFAULT = {"hdd": 55, "ssd": 65, "nvme": 70}
-"""Ab wie viel °C ein Datentraeger als zu heiss gilt, wenn nichts eingestellt ist: Festplatten vertragen weniger als
-SSDs und NVMe (die oft 60-70 °C unter Last erreichen). Bei vielen SATA-SSDs ist 70 °C schon das Betriebsmaximum, darum
-65. Unbekannte Arten (auch USB) wie eine HDD."""
+# Werte außerhalb sind kein echter Messwert (fehlender oder defekter Sensor) und gelten als "keine Temperatur".
 TEMP_PLAUSIBLE = (1, 120)
-"""Werte ausserhalb sind kein echter Messwert (fehlender oder defekter Sensor) und gelten als "keine Temperatur"."""
 TEMP_SETTING_MIN, TEMP_SETTING_MAX = 40, 95
+# So viele Grad unter der Schwelle gilt ein Datenträger wieder als normal warm.
 TEMP_HYSTERESIS = 5
-"""So viele Grad unter der Schwelle gilt ein Datentraeger wieder als normal warm."""
 
 
 def temperature_limit(disk_type: Any, setting: int | None) -> int:
-    """Die Warnschwelle fuer einen Datentraeger: die Einstellung, sonst die Vorgabe seiner Art."""
+    """Die Warnschwelle für einen Datenträger: die Einstellung, sonst die Vorgabe seiner Art."""
     if setting:
         return setting
     return TEMP_WARN_DEFAULT.get(str(disk_type or "").lower(), TEMP_WARN_DEFAULT["hdd"])
@@ -101,7 +93,7 @@ def temperature_limit(disk_type: Any, setting: int | None) -> int:
 
 def temperature_setting(raw: Any) -> int | None:
     """`disk_temp_warn_c` aus den Einstellungen: eine ganze Zahl von 40 bis 95, sonst `None` (dann gilt die Vorgabe
-    je Art). Die Oberflaeche laesst nur solche Werte zu; ein anders gespeicherter Wert legt nichts lahm."""
+    je Art). Die Oberfläche lässt nur solche Werte zu; ein anders gespeicherter Wert legt nichts lahm."""
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return None
     try:
@@ -112,7 +104,7 @@ def temperature_setting(raw: Any) -> int | None:
 
 
 def zfs_assessment(health: Any) -> tuple[str, str, str]:
-    """-> (Badge-Text, Ton, Satz) fuer einen ZFS-Pool."""
+    """-> (Badge-Text, Ton, Satz) für einen ZFS-Pool."""
     state = str(health or "").upper()
     text = ZFS_STATE_TEXT.get(state, state.lower() or "unbekannt")
     if state == "ONLINE":
@@ -159,6 +151,7 @@ async def collect_disks(
     disks: list[dict[str, Any]] = []
     for row in await connector.node_disks(node):
         devpath = row.get("devpath")
+        # Manche SSDs melden keine Abnutzung, Proxmox zeigt dann "N/A".
         life_left = row.get("wearout") if isinstance(row.get("wearout"), int) else None
         try:
             smart = await connector.disk_smart(node, devpath) if devpath else {}
@@ -216,7 +209,7 @@ async def collect_node_health(connector: Any, conn_name: str, node: str, temp_se
         "cpu_sockets": cpu.get("sockets"),
         "loadavg": [float(x) for x in status.get("loadavg") or []],
         "io_wait_percent": round(float(status.get("wait") or 0) * 100, 1),
-        # "available" statt "free": Linux-Seitencache zaehlt sonst als belegt.
+        # "available" statt "free": Linux-Seitencache zählt sonst als belegt.
         "mem_total": memory.get("total"),
         "mem_available": memory.get("available", memory.get("free")),
         "swap_total": swap.get("total"),

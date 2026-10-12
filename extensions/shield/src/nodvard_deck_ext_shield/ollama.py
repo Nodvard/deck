@@ -1,19 +1,4 @@
-"""Ollama als `AIProvider` (`nodvard_sdk.capabilities.AIProvider`) -- ersetzt
-`ask_ai()` aus dem Vorgaengersystem: dieselbe Zwei-Stufen-Anfrage
-(primaeres Modell, dann ein optionales, typischerweise schwaecheres Failover-Modell),
-dieselbe Ollama-`/api/generate`-Anfrageform (`{model, system, prompt, stream}`,
-Antwortfeld `response`).
-
-**Ehrlich abgegrenzt:** `ctx.connectors.register_type()` (docs/02-EXTENSION-API.md §6
-zeigt Ollama als das kanonische `ConnectorType`-Beispiel) wird unten registriert, aber
-`OllamaProvider` selbst liest seine Konfiguration DIREKT ueber `ctx.settings.get()` +
-optional `ctx.secrets`, genau wie ntfy/proxmox es tun -- NICHT ueber
-`ctx.connectors.get_client()`. Der Grund: `get_client()` ist im Kern noch ein
-`NotImplementedError`-Stub (`ext/context.py::ConnectorsHandle.get_client()`, Docstring
-wörtlich: "erster Bedarf voraussichtlich mit einer spaeteren KI-/Connector-Extension"
--- das ist genau diese Extension). Der registrierte `ConnectorType` ist damit fuer
-Sichtbarkeit/Dokumentation da, nicht fuer den tatsaechlichen Laufzeitpfad.
-"""
+"""Ollama als `AIProvider`: erst das Hauptmodell, dann ein optionales Failover-Modell."""
 
 from __future__ import annotations
 
@@ -25,8 +10,7 @@ if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
 _TOKEN_LABEL = "nexus-soc-ollama-key"
-"""Bewusst alt: Der Schluessel liegt unter diesem Label im Tresor. Das Recht dazu steht im Manifest (`secrets.read:nexus-soc-*`),
-das Label im Schema (`x-secrets`)."""
+"""Label des Schlüssels im Tresor; es bleibt, weil das Recht dazu im Manifest steht (`secrets.read:nexus-soc-*`)."""
 DEFAULT_MODEL = "qwen2.5:7b"
 DEFAULT_FAILOVER_MODEL = "qwen2.5:0.5b"
 _TIMEOUT_PRIMARY_S = 45.0
@@ -38,8 +22,7 @@ NO_AI_TEXT = (
     "eine Einschätzung und Vorschläge gibt es erst, wenn unter Einstellungen → Erweiterungen → Nodvard Shield "
     "ein KI-Server (Ollama) eingetragen ist."
 )
-"""Antwort, wenn gar kein KI-Server eingetragen ist. Bewusst kein „Nodvard KI nicht erreichbar“: nichts ist kaputt,
-und jemand ohne KI soll bei jedem Container-Absturz nicht lesen, es sei etwas schiefgelaufen."""
+"""Antwort ohne eingetragenen KI-Server. Bewusst keine Fehlermeldung: Ohne KI ist nichts kaputt."""
 
 
 class OllamaUnavailable(Exception):
@@ -47,8 +30,7 @@ class OllamaUnavailable(Exception):
 
 
 def _redirect_message(status_code: int) -> str:
-    """Text fuer eine Weiterleitung (3xx). `ctx.http` folgt ihr nicht, und die Zieladresse (`Location`) kommt vom fremden
-    Server: Sie steht nie im Text, damit sie nicht wie ein Vorschlag aussieht."""
+    """Text für eine Weiterleitung (3xx); die Zieladresse kommt vom fremden Server und steht nie darin."""
     return (
         f"Der KI-Server hat die Anfrage auf eine andere Adresse umgeleitet (HTTP {status_code}). Solchen Umleitungen folgt "
         "Nodvard Deck aus Sicherheitsgründen nicht. Prüfe die eingetragene Adresse des KI-Servers."
@@ -59,9 +41,9 @@ UNEXPECTED_ANSWER = "Unerwartete Antwort vom KI-Server."
 
 
 def _unreachable_text(exc: BaseException) -> str:
-    """Fester Satz fuer einen Netzwerkfehler. Der Text der Ausnahme selbst kommt nie in die Meldung: httpx und h11
-    zitieren darin Teile der fremden Antwort (etwa eine kaputte Zeile mit `Location` oder Teile eines fremden
-    Rechnernamens aus einer Weiterleitung). Er waehlt nur zwischen den festen Saetzen."""
+    """Fester Satz für einen Netzwerkfehler.
+
+    Der Ausnahmetext selbst bleibt draußen, httpx und h11 zitieren darin Teile der fremden Antwort."""
     text = f"{type(exc).__name__} {exc}".lower()
     if "timeout" in text or "timed out" in text:
         return "Keine Antwort vom KI-Server – Adresse und Port prüfen."
@@ -89,18 +71,14 @@ async def _auth_headers(ctx: "ExtensionContext") -> dict[str, str]:
 
 
 class OllamaProvider:
-    """Erfuellt `nodvard_sdk.capabilities.AIProvider`."""
+    """Erfüllt `nodvard_sdk.capabilities.AIProvider`."""
 
     provider_id = "ollama"
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx
         self.model = DEFAULT_MODEL
-        """Bewusst ein einfaches, synchron lesbares Attribut (das Protokoll verlangt
-        `model: str`, keine async-Property) -- wird nach jedem echten Aufruf aus den
-        aktuellen Einstellungen aufgefrischt. Fuer Anzeige-/Attributionszwecke
-        (`Actor.ai(model=...)`) reicht das; ein Aufrufer, der den Wert VOR dem ersten
-        Aufruf braucht, sieht den Default aus `settings.schema.json`."""
+        """Das Protokoll verlangt `model: str`; nach jedem Aufruf aus den Einstellungen aufgefrischt, davor der Standard."""
 
     async def complete(self, prompt: str, *, system: str | None = None, **kwargs: Any) -> str:
         cfg = await _config(self._ctx)
@@ -141,7 +119,7 @@ class OllamaProvider:
                 headers=headers,
                 timeout=timeout_s,
             )
-        except Exception as exc:  # noqa: BLE001 - Netzwerkfehler sind hier ein normaler, erwarteter Fall (Failover)
+        except Exception as exc:  # noqa: BLE001 - Netzwerkfehler sind hier der Normalfall (Failover)
             raise OllamaUnavailable(_unreachable_text(exc)) from exc
         if 300 <= response.status_code < 400:
             raise OllamaUnavailable(_redirect_message(response.status_code))
@@ -149,7 +127,7 @@ class OllamaProvider:
             raise OllamaUnavailable(f"HTTP {response.status_code}")
         try:
             body = response.json()
-        except (ValueError, RecursionError) as exc:  # kein JSON, oder so tief verschachtelt, dass der Parser aufgibt
+        except (ValueError, RecursionError) as exc:  # kein JSON oder zu tief verschachtelt
             raise OllamaUnavailable(UNEXPECTED_ANSWER) from exc
         if not isinstance(body, dict):
             raise OllamaUnavailable(UNEXPECTED_ANSWER)
@@ -161,15 +139,9 @@ class OllamaProvider:
         return text
 
     async def stream(self, prompt: str, *, system: str | None = None, **kwargs: Any) -> AsyncIterator[str]:
-        """**Ehrlich abgegrenzt:** kein echtes Token-fuer-Token-Streaming -- `ctx.http`
-        (der geteilte, `net.outbound`-gepruefte Client, siehe `HttpHandle`) hat keine
-        Streaming-Methode, nur `get`/`post`/`request` mit vollstaendig gepuffertem
-        Body. Ein direkter Zugriff auf den darunterliegenden `httpx`-Client wuerde die
-        CIDR-/Permission-Pruefung umgehen (dasselbe Muster wie D-13) -- das ist hier
-        bewusst NICHT gemacht. Liefert stattdessen das vollstaendige Ergebnis von
-        `complete()` als einzelnen Chunk; erfuellt das Protokoll, ohne echtes
-        Streaming vorzutaeuschen. Die Chat-Seite dieser Extension nutzt in dieser
-        Runde ohnehin `complete()` direkt, kein WS-Streaming."""
+        """Kein echtes Streaming, sondern das ganze Ergebnis von `complete()` als ein Stück.
+
+        `ctx.http` puffert den Body; der darunterliegende httpx-Client würde die Netzprüfung umgehen."""
         yield await self.complete(prompt, system=system, **kwargs)
 
     async def health(self) -> ConnectorHealth:
@@ -181,21 +153,15 @@ class OllamaProvider:
         except Exception as exc:  # noqa: BLE001 - Health-Check darf nie werfen, nur melden
             return ConnectorHealth(ok=False, message=_unreachable_text(exc))
         if 300 <= response.status_code < 400:
-            # Eine Weiterleitung ist keine Antwort des KI-Servers: frueher galt alles unter 400 als "in Ordnung".
+            # Eine Weiterleitung ist keine Antwort des KI-Servers.
             return ConnectorHealth(ok=False, message=_redirect_message(response.status_code))
         return ConnectorHealth(ok=200 <= response.status_code < 300, message=f"HTTP {response.status_code}")
 
 
 async def list_models(ctx: "ExtensionContext", which: str = "primary") -> dict[str, Any]:
-    """Die Modelle, die der Ollama-Server kennt (`/api/tags`) -- fuer die Auswahlliste in den
-    Einstellungen. Antwortet nie mit einem Fehlerstatus: bei Problemen bleibt `options` leer
-    und `error` erklaert es auf Deutsch (die Oberflaeche faellt dann auf ein Textfeld zurueck).
+    """Die Modelle des Ollama-Servers (`/api/tags`) für die Auswahlliste; bei Problemen bleibt `options` leer.
 
-    **Nur gespeicherte Adressen:** `which` waehlt `ollama_url` ("primary") oder
-    `ollama_failover_url` ("failover"); eine Adresse vom Aufrufer gibt es bewusst nicht. Sonst
-    waere die Route ein Weg, beliebige Anfragen -- samt Bearer-Schluessel -- ins Heimnetz zu
-    schicken (SSRF, Sicherheits-Review). Wer eine neue Adresse eingetragen hat, speichert sie
-    erst und laedt die Liste dann neu."""
+    `which` wählt nur eine gespeicherte Adresse, sonst ließen sich Anfragen samt Schlüssel ins Heimnetz lenken."""
     cfg = await _config(ctx)
     chosen = cfg["failover_url"] if which == "failover" else cfg["url"] if which == "primary" else None
     base = str(chosen or "").strip()
@@ -213,15 +179,15 @@ async def list_models(ctx: "ExtensionContext", which: str = "primary") -> dict[s
         return {"options": [], "error": f"Der KI-Server antwortet mit HTTP {response.status_code}."}
     try:
         data = response.json()
-    except (ValueError, RecursionError):  # kein JSON, oder so tief verschachtelt, dass der Parser aufgibt
+    except (ValueError, RecursionError):  # kein JSON oder zu tief verschachtelt
         return {"options": [], "error": UNEXPECTED_ANSWER}
     models = (data.get("models") or []) if isinstance(data, dict) else None
-    if not isinstance(models, list):  # die Antwort ist kein Objekt, oder "models" ist keine Liste
+    if not isinstance(models, list):  # Antwort kein Objekt oder "models" keine Liste
         return {"options": [], "error": UNEXPECTED_ANSWER}
     options: list[dict[str, str]] = []
     for model in models:
         if not isinstance(model, dict):
-            continue  # ein Eintrag, der kein Objekt ist (Zahl, Text, Liste): ueberspringen
+            continue
         name = model.get("name")
         name = name.strip() if isinstance(name, str) else ""
         if not name:
@@ -236,9 +202,9 @@ async def list_models(ctx: "ExtensionContext", which: str = "primary") -> dict[s
 
 
 class OllamaConnectorType:
-    """Erfuellt `nodvard_sdk.context.ConnectorType` -- registriert fuer Sichtbarkeit
-    (docs/02 §6), siehe Modul-Docstring fuer den Grund, warum `OllamaProvider` selbst
-    NICHT ueber `ctx.connectors.get_client()` geht."""
+    """Erfüllt `nodvard_sdk.context.ConnectorType`; nur für die Sichtbarkeit registriert.
+
+    `OllamaProvider` liest seine Einstellungen direkt, weil `ctx.connectors.get_client()` im Kern noch ein Stub ist."""
 
     id = "ollama"
     label = "Ollama"

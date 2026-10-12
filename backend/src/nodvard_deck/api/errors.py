@@ -1,11 +1,6 @@
 """Gemeinsame Fehlerantworten der API.
 
-FastAPI haengt an jeden 422-Eintrag die komplette Eingabe (`input`) und bei eigenen
-Pruefungen die Ausnahme (`ctx`). Bei Passwoertern, Tokens und privaten SSH-Schluesseln
-darf nichts davon je in der Antwort (oder in einem Proxy-Log) zurueckkommen. Bleiben
-`type`, `loc` und `msg` -- mehr braucht die Oberflaeche nicht. `msg` steht auf Deutsch (auch
-bei den Standard-Pruefungen von pydantic, siehe `_german_message`).
-"""
+Bei 422 bleiben nur `type`, `loc` und `msg` (deutsch); `input` und `ctx` könnten Passwörter, Tokens oder Schlüssel enthalten."""
 
 from __future__ import annotations
 
@@ -20,10 +15,9 @@ _VALUE_ERROR_PREFIX = "Value error, "
 
 
 def _german_message(error_type: str, ctx: Mapping[str, Any], fallback: str) -> str:
-    """Deutscher Satz zu den Standard-Pruefungen von pydantic (zu kurz, fehlt, falsche Zahl ...), damit
-    die Oberflaeche nie "String should have at least 8 characters" zeigt. Gebaut aus `type` und
-    `ctx`; `ctx` selbst kommt nie in die Antwort. Eigene Pruefungen (`value_error`) tragen schon
-    einen deutschen Text und bleiben unveraendert, ebenso alles, was hier nicht vorkommt."""
+    """Deutscher Satz zu den Standard-Prüfungen von pydantic, gebaut aus `type` und `ctx` (`ctx` selbst kommt nie in die Antwort).
+
+    Eigene Prüfungen (`value_error`) tragen schon einen deutschen Text und bleiben unverändert, ebenso alles Unbekannte."""
     if error_type == "missing":
         return "Pflichtangabe fehlt."
     if error_type == "string_too_short":
@@ -69,8 +63,8 @@ def install_validation_error_handler(app: FastAPI) -> None:
         errors = []
         for item in exc.errors():
             msg = str(item.get("msg", ""))
-            # Eigene Pruefungen (ValueError) bekommen von pydantic ein englisches Praefix;
-            # die deutschen Meldungen sollen unveraendert bei der Person ankommen.
+            # Eigene Prüfungen (ValueError) bekommen von pydantic ein englisches Präfix;
+            # die deutschen Meldungen sollen unverändert bei der Person ankommen.
             msg = msg.removeprefix(_VALUE_ERROR_PREFIX)
             msg = _german_message(str(item.get("type", "")), item.get("ctx") or {}, msg)
             errors.append({"type": item.get("type"), "loc": list(item.get("loc", ())), "msg": msg})
@@ -78,9 +72,9 @@ def install_validation_error_handler(app: FastAPI) -> None:
 
 
 class CodedHTTPException(HTTPException):
-    """HTTP-Fehler mit festem Bezeichner: Die Antwort ist `{detail, code}` (`install_coded_error_handler`), damit die
-    Oberflaeche und Apps ihn erkennen, ohne den Text zu vergleichen. `extra` haengt weitere Felder an (z. B. den
-    Fingerabdruck eines Server-Schluessels); `detail` und `code` lassen sich damit nicht ueberschreiben."""
+    """HTTP-Fehler mit festem Bezeichner: Die Antwort ist `{detail, code}`, damit Oberfläche und Apps ihn ohne Textvergleich
+    erkennen. `extra` hängt weitere Felder an (z. B. den Fingerabdruck eines Server-Schlüssels), überschreibt aber nie
+    `detail` und `code`."""
 
     def __init__(
         self, status_code: int, detail: str, code: str, headers: dict[str, str] | None = None,

@@ -1,10 +1,6 @@
-"""In-Memory-Registry fuer Terminal-Session-Tickets (docs/04-API.md §4).
+"""Registry für Terminal-Tickets im Speicher.
 
-`POST /terminal/sessions` mintet ein Ticket, das GENAU EINMAL beim WS-Verbindungsaufbau
-eingeloest wird. Kein Access-Token in der URL (docs/04 §4: "Keine Tokens in der URL,
-sie landen in Proxy-Logs") -- die Session-ID selbst ist zwingend Teil des WS-Pfads, um
-den Kanal zu adressieren, ist aber ein kurzlebiges, einmaliges Ticket und kein
-wiederverwendbares Credential."""
+`POST /terminal/sessions` erzeugt ein Einmal-Ticket für den WebSocket-Aufbau; Tokens gehören nicht in die URL (Proxy-Logs)."""
 
 from __future__ import annotations
 
@@ -24,7 +20,7 @@ class TerminalSessionTicket:
     consumed: bool = False
     stamp: str = ""
     """Fingerabdruck des Passworts beim Anlegen (`services.session_guard.credential_stamp`);
-    aendert er sich, endet die Sitzung."""
+    ändert er sich, endet die Sitzung."""
     login_id: str | None = None
     """Anmeldung (`sid` im Zugangs-Token), aus der das Ticket stammt (`services.session_guard`)."""
     scope: str | None = None
@@ -51,8 +47,7 @@ class TerminalSessionRegistry:
         return ticket
 
     def consume(self, session_id: str, *, ttl_s: float) -> TerminalSessionTicket | None:
-        """Entfernt das Ticket unabhaengig vom Ergebnis -- ein Ticket ist IMMER
-        Einmalgebrauch, auch wenn es abgelaufen war."""
+        """Entfernt das Ticket unabhängig vom Ergebnis: Ein Ticket ist immer Einmalgebrauch, auch wenn es abgelaufen war."""
         ticket = self._tickets.pop(session_id, None)
         if ticket is None:
             return None
@@ -72,6 +67,6 @@ def get_terminal_session_registry() -> TerminalSessionRegistry:
 
 
 def reset_terminal_session_registry() -> None:
-    """Nur fuer Tests."""
+    """Nur für Tests."""
     global _registry
     _registry = None

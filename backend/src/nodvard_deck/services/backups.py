@@ -1,23 +1,4 @@
-"""Sicherungen: Einstellungen, Sicherungsschluessel, automatischer Job, Download-Tickets.
-
-Das Format und die Kryptografie stehen in `core/backup` (siehe dort). Hier liegt, was die
-Anwendung damit macht:
-
-* Einstellungen (globale Settings, NICHT ueber `/settings` erreichbar, weil nur der Owner
-  sie aendern darf):
-    `backup.config`    {enabled, schedule, keep, dir, include_runs}
-    `backup.key`       {recipient, key_id, kdf, created_at} -- nie Passwort oder Schluessel
-    `backup.last_run`  {at, ok, trigger, name, size, error, deleted, warnings}
-    `system.instance_id`  zufaellige Kennung dieser Installation (steht im Manifest)
-* Der Kern-Job `system-backup` (Zeitplan aus `backup.config`). Ein Lauf schreibt die
-  Sicherung, raeumt nach `keep` auf, merkt sich das Ergebnis, protokolliert
-  `system.backup.created`/`.failed` und meldet einen Fehlschlag ueber die Benachrichtigungen.
-* Es laeuft immer nur EINE Sicherung (`asyncio.Lock`); "Jetzt sichern" und der Download
-  bekommen sonst 409.
-* Der Download wird NICHT als Job gebaut: ein Job schreibt seine Parameter ins Laufprotokoll,
-  und dort duerfte ein Einmal-Passwort nie landen. Stattdessen ein Hintergrund-Task mit
-  Einmal-Ticket (`core/backup/tickets.py`).
-"""
+"""Sicherungen der Anwendung: Einstellungen, Sicherungsschlüssel, automatischer Job und Download-Tickets (Format und Kryptografie: `core/backup`)."""
 
 from __future__ import annotations
 
@@ -52,15 +33,18 @@ from . import settings as settings_service
 
 logger = logging.getLogger("nodvard_deck.backups")
 
+# Globale Einstellungen, über `/settings` nicht erreichbar, weil nur der Owner sie ändern darf:
+# backup.config {enabled, schedule, keep, dir, include_runs}, backup.key {recipient, key_id, kdf, created_at} (nie Passwort
+# oder Schlüssel), backup.last_run {at, ok, trigger, name, size, error, deleted, warnings}; die zufällige `system.instance_id`
+# dieser Installation steht im Manifest.
 SETTING_CONFIG = "backup.config"
 SETTING_KEY = "backup.key"
 SETTING_LAST_RUN = "backup.last_run"
 SETTING_INSTANCE = "system.instance_id"
 
 EXCLUSIVE_CHECK = "pruefen"
-"""Art der Sperre, wenn eine hochgeladene Sicherung zum Wiederherstellen entschluesselt wird
-(`services/restore.py`): die Schluesselberechnung braucht bis zu 256 MiB, deshalb nie zugleich mit einer
-Sicherung oder einer zweiten Pruefung."""
+"""Art der Sperre, wenn eine hochgeladene Sicherung zum Wiederherstellen entschlüsselt wird (`services/restore.py`):
+Die Schlüsselberechnung braucht bis zu 256 MiB, deshalb nie zugleich mit einer Sicherung oder einer zweiten Prüfung."""
 
 JOB_KEY = "system-backup"
 JOB_NAME = "Sicherung"
@@ -108,17 +92,14 @@ class BackupConfig:
         return cfg
 
 
-# ---------------------------------------------------------------------------
-# Zustand im Prozess
-# ---------------------------------------------------------------------------
-
+# Es läuft immer nur eine Sicherung (`asyncio.Lock`); "Jetzt sichern" und der Download bekommen sonst 409.
 _lock: asyncio.Lock | None = None
 _running: dict[str, Any] = {}
 _tasks: set[asyncio.Task] = set()
 _waiting = 0
 SCHEDULED_WAIT_S = 3600.0
-"""So lange wartet ein Lauf nach Zeitplan, wenn gerade ein Download gebaut wird (statt
-ausgelassen zu werden). Danach zaehlt er als fehlgeschlagen, mit Meldung."""
+"""So lange wartet ein Lauf nach Zeitplan, wenn gerade ein Download gebaut wird (statt ausgelassen zu werden);
+danach zählt er als fehlgeschlagen, mit Meldung."""
 
 
 def _get_lock() -> asyncio.Lock:
@@ -129,12 +110,12 @@ def _get_lock() -> asyncio.Lock:
 
 
 async def _try_acquire(kind: str) -> str:
-    """Sperrt oder wirft `BackupBusy`. Liefert ein Token; nur wer es hat, gibt wieder frei
-    (ein doppeltes Freigeben darf nie die Sperre eines anderen Laufs loesen)."""
+    """Sperrt oder wirft `BackupBusy`; liefert ein Token, nur wer es hat, gibt wieder frei
+    (ein doppeltes Freigeben darf nie die Sperre eines anderen Laufs lösen)."""
     lock = _get_lock()
     if lock.locked() or _waiting:
         raise BackupBusy(_running.get("kind"))
-    await lock.acquire()  # frei, niemand wartet -> kehrt ohne Unterbrechung zurueck, kein Wettlauf
+    await lock.acquire()  # frei, niemand wartet -> kehrt ohne Unterbrechung zurück, kein Wettlauf
     return _mark_running(kind)
 
 
@@ -169,7 +150,7 @@ def _release(token: str) -> None:
 
 
 async def acquire_exclusive(kind: str) -> str:
-    """Fuer andere Dienste, die dieselbe Sperre brauchen (Wiederherstellen). `BackupBusy`, wenn belegt."""
+    """Für andere Dienste, die dieselbe Sperre brauchen (Wiederherstellen); `BackupBusy`, wenn belegt."""
     return await _try_acquire(kind)
 
 
@@ -179,7 +160,7 @@ def release_exclusive(token: str) -> None:
 
 def running() -> dict[str, Any] | None:
     if not _running or _running.get("kind") == EXCLUSIVE_CHECK:
-        return None  # eine Pruefung ist keine Sicherung (die Karte zeigt sonst "Sicherung laeuft")
+        return None  # eine Prüfung ist keine Sicherung (die Karte zeigt sonst "Sicherung läuft")
     return {k: v for k, v in _running.items() if k != "token"}
 
 
@@ -191,7 +172,7 @@ def _spawn(coro) -> asyncio.Task:
 
 
 async def wait_for_tasks() -> None:
-    """Nur fuer Tests: wartet auf laufende Hintergrund-Tasks."""
+    """Nur für Tests: wartet auf laufende Hintergrund-Tasks."""
     while _tasks:
         await asyncio.gather(*list(_tasks), return_exceptions=True)
 
@@ -207,11 +188,6 @@ def reset_for_tests() -> None:
     from ..core.backup.tickets import reset_ticket_registry
 
     reset_ticket_registry()
-
-
-# ---------------------------------------------------------------------------
-# Einstellungen
-# ---------------------------------------------------------------------------
 
 
 async def load_config(session: AsyncSession) -> BackupConfig:
@@ -235,7 +211,7 @@ async def instance_id(session: AsyncSession) -> str:
 
 
 def validate_config(payload: dict[str, Any], settings: Settings) -> BackupConfig:
-    """Wirft `ValueError` (-> 422) oder `TargetNotAllowed` mit verstaendlicher Meldung."""
+    """Wirft `ValueError` (-> 422) oder `TargetNotAllowed` mit verständlicher Meldung."""
     keep = payload.get("keep")
     if not isinstance(keep, int) or isinstance(keep, bool) or not KEEP_MIN <= keep <= KEEP_MAX:
         raise ValueError(f"Anzahl behalten muss zwischen {KEEP_MIN} und {KEEP_MAX} liegen.")
@@ -269,11 +245,10 @@ async def save_config(session: AsyncSession, settings: Settings, payload: dict[s
 
 
 def protected_changes(old: BackupConfig, payload: dict[str, Any], settings: Settings) -> list[str]:
-    """Aenderungen, die Sicherungen gefaehrden und deshalb das Kontopasswort brauchen (als
-    Teile eines deutschen Satzes): weniger Sicherungen behalten (die Rotation loescht dann
-    beim naechsten Lauf aeltere), automatische Sicherung ausschalten, anderer Ordner.
-    Bewusst OHNE Seiteneffekte (legt keinen Ordner an) und vor der Pruefung der Eingabe: ein
-    Ordner gilt als geaendert, wenn sich die Schreibweise nach dem Normalisieren unterscheidet."""
+    """Änderungen, die Sicherungen gefährden und deshalb das Kontopasswort brauchen (als Teile eines deutschen Satzes)."""
+    # Das sind weniger Sicherungen behalten (die Rotation löscht dann beim nächsten Lauf ältere), die automatische Sicherung
+    # ausschalten und ein anderer Ordner. Bewusst ohne Seiteneffekte (legt keinen Ordner an) und vor der Prüfung der Eingabe:
+    # Ein Ordner gilt als geändert, wenn sich die Schreibweise nach dem Normalisieren unterscheidet.
     reasons: list[str] = []
     keep = payload.get("keep")
     if isinstance(keep, int) and not isinstance(keep, bool) and keep < old.keep:
@@ -306,11 +281,6 @@ async def set_key(session: AsyncSession, password: str, *, user_id: str) -> cryp
     return key
 
 
-# ---------------------------------------------------------------------------
-# Pfade und Quellen
-# ---------------------------------------------------------------------------
-
-
 def database_file(settings: Settings) -> Path:
     url = make_url(settings.database_url)
     if not url.drivername.startswith("sqlite") or url.database in (None, "", ":memory:"):
@@ -328,6 +298,8 @@ def downloads_dir(settings: Settings) -> Path:
 
 
 def sources_for(settings: Settings, *, include_runs: bool) -> snapshot.Sources:
+    # Schlüsselmaterial (Tresor, Anmelde-Geheimnis) wandert nur in den verschlüsselten Teil der Datei; das Anmelde-Geheimnis
+    # nur, wenn es nicht über die Umgebung kommt.
     single = [
         ("master.key", settings.master_key_path),
         ("vault_keyring.json", settings.vault_keyring_path),
@@ -359,8 +331,8 @@ def _build_file(
     settings: Settings, *, target: Path, name: str, header: dict[str, Any], encrypt: container.Encryptor,
     include_runs: bool, instance: str,
 ) -> tuple[Path, str, int, list[str]]:
-    """Synchron (laeuft im Thread). Klartext-Kopie der Datenbank nur im Temp-Ordner unter
-    dem Datenordner, nie im Zielordner. Vierter Wert: die nicht mitgesicherten Verknuepfungen."""
+    """Synchron (läuft im Thread). Vierter Wert: die nicht mitgesicherten Verknüpfungen."""
+    # Die Klartext-Kopie der Datenbank entsteht nur im Temp-Ordner unter dem Datenordner, nie im Zielordner.
     sources = sources_for(settings, include_runs=include_runs)
     work = _work_dir(settings, ".tmp")
     tmp = store.make_private_dir(work / uuid.uuid4().hex)
@@ -388,7 +360,7 @@ MAX_WARNING_PATHS = 5
 
 
 def link_warnings(skipped: list[str]) -> list[str]:
-    """Meldung fuer Verknuepfungen, die nicht gesichert wurden (hoechstens ein paar Pfade)."""
+    """Meldung für Verknüpfungen, die nicht gesichert wurden (höchstens ein paar Pfade)."""
     if not skipped:
         return []
     shown = ", ".join(skipped[:MAX_WARNING_PATHS])
@@ -406,22 +378,18 @@ async def _local_now(session: AsyncSession) -> datetime:
     return datetime.now(ZoneInfo(zone))
 
 
-# ---------------------------------------------------------------------------
-# Automatische Sicherung
-# ---------------------------------------------------------------------------
-
-
 async def run_backup(
     *, trigger: str = "schedule", user_id: str | None = None, lock_token: str | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Ein Lauf des Jobs (Zeitplan oder "Jetzt sichern"). Wirft bei Fehler weiter, damit der
-    Lauf als fehlgeschlagen im Job-Protokoll steht. `lock_token`: die Sperre hat schon der
-    Aufrufer ("Jetzt sichern")."""
+    """Ein Lauf des Jobs (Zeitplan oder "Jetzt sichern"); wirft bei Fehler weiter, damit er im Job-Protokoll als
+    fehlgeschlagen steht. `lock_token`: Die Sperre hat schon der Aufrufer."""
+    # Ein Lauf schreibt die Sicherung, räumt nach `keep` auf, merkt sich das Ergebnis, protokolliert
+    # `system.backup.created`/`.failed` und meldet einen Fehlschlag über die Benachrichtigungen.
     settings = settings or get_settings()
     if lock_token is None:
-        # Ein Download wird gerade gebaut: warten statt die naechtliche Sicherung still
-        # auszulassen. Klappt es auch dann nicht, steht es wie jeder Fehlschlag in der Karte.
+        # Ein Download wird gerade gebaut: warten statt die nächtliche Sicherung still auszulassen. Klappt es auch dann
+        # nicht, steht es wie jeder Fehlschlag in der Karte.
         try:
             lock_token = await _acquire_waiting("automatisch", SCHEDULED_WAIT_S)
         except BackupBusy as exc:
@@ -514,8 +482,8 @@ async def _job_handler(lock_token: str | None = None, user_id: str | None = None
 
 
 async def sync_job() -> None:
-    """Legt den Kern-Job an bzw. passt Zeitplan/Schalter an und plant ihn neu. Aufgerufen
-    beim Start (`register_core_jobs`) und nach jeder Aenderung der Einstellungen."""
+    """Legt den Kern-Job an bzw. passt Zeitplan und Schalter an und plant ihn neu; aufgerufen beim Start
+    (`register_core_jobs`) und nach jeder Änderung der Einstellungen."""
     from ..core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
     from ..ext.runtime import get_extension_runtime
 
@@ -531,8 +499,8 @@ async def sync_job() -> None:
 
 
 async def start_manual_run(*, user_id: str) -> None:
-    """"Jetzt sichern": sperrt sofort (409, wenn schon eine laeuft) und laeuft als Job im
-    Hintergrund (Ergebnis im Job-Protokoll und unter `last_run`)."""
+    """Startet "Jetzt sichern": sperrt sofort (409, wenn schon eine läuft) und läuft als Job im Hintergrund
+    (Ergebnis im Job-Protokoll und unter `last_run`)."""
     from ..core.scheduler import get_scheduler_service
 
     async with session_scope() as session:
@@ -555,14 +523,9 @@ async def start_manual_run(*, user_id: str) -> None:
     _spawn(_go())
 
 
-# ---------------------------------------------------------------------------
-# Download
-# ---------------------------------------------------------------------------
-
-
 async def prepare_download(settings: Settings, *, user_id: str, mode: str, password: str | None) -> DownloadTicket:
-    """Baut eine verschluesselte Sicherung fuer den Download im Hintergrund und gibt sofort
-    ein Ticket zurueck. Das Einmal-Passwort lebt nur in diesem Task."""
+    """Baut eine verschlüsselte Sicherung für den Download im Hintergrund und gibt sofort ein Ticket zurück;
+    das Einmal-Passwort lebt nur in diesem Task."""
     async with session_scope() as session:
         key = await load_key(session)
         instance = await instance_id(session)
@@ -581,8 +544,10 @@ async def prepare_download(settings: Settings, *, user_id: str, mode: str, passw
         encrypt = container.encryptor_for_password(password)
     else:
         raise ValueError("Unbekannte Art der Verschlüsselung.")
-    database_file(settings)  # NotSqlite frueh melden
+    database_file(settings)  # NotSqlite früh melden
 
+    # Kein Job: Ein Job schreibt seine Parameter ins Laufprotokoll, und dort dürfte ein Einmal-Passwort nie landen.
+    # Darum ein Hintergrund-Task mit Einmal-Ticket (`core/backup/tickets.py`).
     token = await _try_acquire("download")
     registry = get_ticket_registry()
     registry.sweep()
@@ -628,7 +593,7 @@ async def prepare_download(settings: Settings, *, user_id: str, mode: str, passw
 
 
 def _sweep_downloads(directory: Path, live: set[Path]) -> None:
-    """Dateien ohne gueltiges Ticket (Neustart, abgebrochener Download) entfernen."""
+    """Dateien ohne gültiges Ticket (Neustart, abgebrochener Download) entfernen."""
     for entry in list(os.scandir(directory)):
         path = Path(entry.path)
         if path not in live and entry.is_file(follow_symlinks=False):
@@ -637,8 +602,7 @@ def _sweep_downloads(directory: Path, live: set[Path]) -> None:
 
 
 def cleanup_on_start(settings: Settings) -> None:
-    """Beim Start: Reste frueherer Downloads und Temp-Ordner wegraeumen (es gibt noch
-    keine Tickets)."""
+    """Beim Start Reste vorheriger Downloads und Temp-Ordner wegräumen (es gibt noch keine Tickets)."""
     base = store.default_dir(settings.data_dir)
     for name in (".downloads", ".tmp"):
         with contextlib.suppress(OSError):
@@ -655,11 +619,6 @@ async def ticket_for_stored(settings: Settings, session: AsyncSession, *, user_i
 async def target_of(settings: Settings, session: AsyncSession) -> Path:
     cfg = await load_config(session)
     return await asyncio.to_thread(store.resolve_target, cfg.dir, settings.data_dir, create=False)
-
-
-# ---------------------------------------------------------------------------
-# Uebersicht
-# ---------------------------------------------------------------------------
 
 
 async def overview(session: AsyncSession, settings: Settings) -> dict[str, Any]:

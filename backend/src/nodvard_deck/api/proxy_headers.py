@@ -1,34 +1,6 @@
-"""Echte Adresse und echtes Schema hinter einem vertrauenswuerdigen Reverse-Proxy (reine ASGI-Middleware, vor allem,
-was `request.client` oder `request.url.scheme` liest).
+"""Echte Adresse und echtes Schema hinter einem vertrauenswürdigen Reverse-Proxy (reine ASGI-Middleware).
 
-Nur wenn die direkte Gegenstelle (`scope["client"]`) in `system.trusted_proxies` steht (`core.trusted_proxies`),
-gelten ihre Kopfzeilen:
-- `X-Forwarded-For`: alle Kopfzeilen dieses Namens hintereinander, durch Kommas getrennt. Von rechts gelesen
-  (jeder Proxy haengt die Adresse an, von der er die Anfrage bekam) ist die erste Adresse, die selbst KEIN
-  vertrauenswuerdiger Proxy ist, der Client. Was links davon steht, kann der Client selbst geschrieben haben und
-  wird nicht gelesen. Das gilt, solange nur der Proxy selbst eingetragen ist: Steht ein ganzes Netz in der Liste, gilt
-  jedes Geraet darin als Proxy, und was es mitschickt (als direkte Gegenstelle oder mitten in der Kette), wird
-  geglaubt. Deshalb sind Netze begrenzt (`core/trusted_proxies.py`), und die Einstellungen warnen vor grossen.
-  Ein kaputter Eintrag (keine IP-Adresse) beendet die Suche: es bleibt die zuletzt gepruefte Adresse
-  (ein Proxy der Liste), nie wird ueber ihn hinweg weiter links gelesen. Ports (`1.2.3.4:5678`, `[::1]:80`) werden
-  abgeschnitten, IPv4 in IPv6-Schreibweise wird IPv4.
-- `X-Forwarded-Proto`: der rechteste Wert, nur `http`/`https` (Traefik schickt bei WebSockets auch `ws`/`wss`); fuer
-  einen WebSocket entsprechend `ws`/`wss`. Alles andere aendert nichts.
-`X-Forwarded-Host`/`-Port` liest Nodvard Deck nicht: keine Stelle baut Adressen aus dem Host der Anfrage.
-
-Kommt die Anfrage nicht von einem eingetragenen Proxy, bleibt alles, wie es ist: Die Kopfzeilen werden nicht
-ausgewertet (nicht entfernt), `request.client` ist die echte Gegenstelle. Eine Gegenstelle ohne IP-Adresse (Unix-Socket,
-`client` fehlt) gilt nie als Proxy.
-
-`scope["client"]` und `scope["scheme"]` werden im selben Scope ersetzt (wie uvicorns eigene ProxyHeadersMiddleware):
-so sehen auch uvicorns Zugriffsprotokoll und jede spaetere Middleware die echte Adresse. Die Middleware von uvicorn
-selbst taugt hier nicht: ihre Liste steht beim Start fest, sie nimmt auch unlesbare Eintraege als Client-Adresse
-und vergleicht `::ffff:a.b.c.d` nicht mit einem IPv4-Netz. Das Image startet uvicorn deshalb mit `--no-proxy-headers`
-(sonst vertraute uvicorn vorab still `127.0.0.1`), und es entscheidet nur diese Einstellung.
-
-Fuer die Anzeige in den Einstellungen (`GET /system/connection`) steht unter `scope[SCOPE_KEY]` ein `Forwarding` mit
-der urspruenglichen Gegenstelle.
-"""
+`X-Forwarded-For` und `X-Forwarded-Proto` gelten nur, wenn die direkte Gegenstelle in `system.trusted_proxies` steht."""
 
 from __future__ import annotations
 
@@ -42,9 +14,11 @@ from ..core.trusted_proxies import Address, TrustedProxies, parse_address
 
 logger = logging.getLogger("nodvard_deck.trusted_proxies")
 
+# Unter `scope[SCOPE_KEY]` liegt ein `Forwarding` mit der ursprünglichen Gegenstelle, für die Anzeige in den Einstellungen
+# (`GET /system/connection`). `X-Forwarded-Host` und `-Port` werden nicht gelesen: Keine Stelle baut Adressen aus dem Host.
 SCOPE_KEY = "nodvard_deck.forwarding"
 MAX_HOPS = 32
-"""So viele Eintraege von rechts werden hoechstens angesehen; laengere Ketten gibt es in einem Heimnetz nicht."""
+"""So viele Einträge von rechts werden höchstens angesehen; längere Ketten gibt es in einem Heimnetz nicht."""
 
 _HTTP_SCHEMES = {"http": "http", "https": "https", "ws": "http", "wss": "https"}
 _WS_SCHEMES = {"http": "ws", "https": "wss", "ws": "ws", "wss": "wss"}
@@ -91,14 +65,18 @@ def _parse_hop(entry: str) -> tuple[Address, int] | None:
     return ip, port
 
 
+# Von rechts gelesen: Jeder Proxy hängt die Adresse an, von der er die Anfrage bekam. Die erste Adresse, die selbst kein
+# vertrauenswürdiger Proxy ist, ist der Client; was links davon steht, kann der Client selbst geschrieben haben. Ein
+# unlesbarer Eintrag beendet die Suche, es bleibt die zuletzt geprüfte Adresse. Steht ein ganzes Netz in der Liste, gilt
+# jedes Gerät darin als Proxy und wird geglaubt; darum sind Netze begrenzt (`core/trusted_proxies.py`).
 def client_from_chain(entries: list[str], trust: TrustedProxies) -> tuple[str, int] | None:
-    """Die Client-Adresse aus `X-Forwarded-For` (Eintraege schon getrennt, links zuerst), gesehen von einer
-    vertrauenswuerdigen Gegenstelle. `None`, wenn kein Eintrag etwas taugt (dann bleibt die Gegenstelle)."""
+    """Die Client-Adresse aus `X-Forwarded-For` (Einträge schon getrennt, links zuerst), gesehen von einer
+    vertrauenswürdigen Gegenstelle. `None`, wenn kein Eintrag etwas taugt (dann bleibt die Gegenstelle)."""
     found: tuple[str, int] | None = None
     for entry in reversed(entries[-MAX_HOPS:]):
         hop = _parse_hop(entry)
         if hop is None:
-            break  # Ueber einen unlesbaren Eintrag hinweg wird nie weiter links gelesen.
+            break  # Über einen unlesbaren Eintrag hinweg wird nie weiter links gelesen.
         ip, port = hop
         found = (str(ip), port)
         if not trust.contains(ip):
@@ -106,8 +84,13 @@ def client_from_chain(entries: list[str], trust: TrustedProxies) -> tuple[str, i
     return found
 
 
+# `scope["client"]` und `scope["scheme"]` werden im selben Scope ersetzt (wie bei uvicorns ProxyHeadersMiddleware), damit
+# auch das Zugriffsprotokoll und jede spätere Middleware die echte Adresse sehen. Die von uvicorn taugt hier nicht: Ihre
+# Liste steht beim Start fest, sie nimmt unlesbare Einträge als Client und vergleicht `::ffff:a.b.c.d` nicht mit einem
+# IPv4-Netz. Das Image startet uvicorn darum mit `--no-proxy-headers` (sonst vertraute es vorab still `127.0.0.1`);
+# es entscheidet nur diese Einstellung.
 def apply_forwarding(scope: Scope, trust: TrustedProxies) -> Forwarding:
-    """Wertet die Kopfzeilen fuer diesen Scope aus (aendert ihn ggf.) und legt `Forwarding` unter `SCOPE_KEY` ab."""
+    """Wertet die Kopfzeilen für diesen Scope aus (ändert ihn ggf.) und legt `Forwarding` unter `SCOPE_KEY` ab."""
     client = scope.get("client")
     peer_host = client[0] if client else None
     forwarded_for: list[bytes] = []
@@ -123,10 +106,12 @@ def apply_forwarding(scope: Scope, trust: TrustedProxies) -> Forwarding:
                       forwarded_headers=bool(forwarded_for or forwarded_proto))
     scope[SCOPE_KEY] = info
     if not trusted or peer_ip is None:
+        # Kein eingetragener Proxy (auch nicht ohne IP, z. B. Unix-Socket): alles bleibt, wie es ist.
         return info
     try:
         found = client_from_chain(_split_values(forwarded_for), trust) if forwarded_for else None
         values = _split_values(forwarded_proto)
+        # Nur der rechteste Wert zählt; Traefik schickt bei WebSockets auch `ws`/`wss`.
         table = _WS_SCHEMES if scope["type"] == "websocket" else _HTTP_SCHEMES
         scheme = table.get(values[-1].lower()) if values else None
     except Exception as exc:  # noqa: BLE001 - lieber wie ohne Proxy als jede Anfrage mit 500

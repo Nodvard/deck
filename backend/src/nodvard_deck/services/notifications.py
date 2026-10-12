@@ -1,13 +1,6 @@
-"""Das Notification-Center -- docs/03-DATA-MODEL.md §8, docs/02-EXTENSION-API.md §3.
-
-Ein `Notification`-Datensatz entsteht IMMER (sichtbar im In-App-Verlauf), auch wenn
-ein Wartungsfenster den Versand an externe Kanaele (ntfy, E-Mail, ...) unterdrueckt --
-"unterdruecken" heisst hier "niemanden um 3 Uhr nachts per Push stoeren", nicht "so
-tun, als waere nichts passiert". Kanaele sind Connector-Instanzen, die die
-`NotificationChannel`-Capability erfuellen (docs/03 §8) -- unrestricted Query, weil
-das Notification-Center Kern-Code ist, keine Extension (dasselbe Muster wie
-`core.gate.find_executor()`).
-"""
+"""Das Notification-Center: legt Meldungen an und stellt sie an die Kanäle (`NotificationChannel`) zu.
+Eine Meldung entsteht immer (sichtbar im In-App-Verlauf), auch wenn ein Wartungsfenster den Versand an externe Kanäle
+unterdrückt: Das heißt, niemanden nachts per Push zu stören, nicht so zu tun, als wäre nichts passiert."""
 
 from __future__ import annotations
 
@@ -30,10 +23,9 @@ _DELETE_BATCH = 500
 
 
 def _payload_host_ids(payload: dict[str, Any]) -> list[str] | None:
-    """`payload["host_ids"]` nur, wenn es eine nicht leere Liste (oder ein Tupel) aus
-    Host-IDs ist. Ein unbrauchbarer Eintrag macht die ganze Liste ungueltig (Meldung
-    bleibt hoerbar) -- eine stillschweigend verkuerzte Liste koennte sonst einen fremden
-    Server mit still schalten. Ein einzelner String ist keine Liste."""
+    """`payload["host_ids"]` nur, wenn es eine nicht leere Liste (oder ein Tupel) aus Host-IDs ist. Ein unbrauchbarer
+    Eintrag macht die ganze Liste ungültig (Meldung bleibt hörbar), denn eine still verkürzte Liste könnte einen fremden
+    Server mit stumm schalten. Ein einzelner String ist keine Liste."""
     raw = payload.get("host_ids")
     if isinstance(raw, (list, tuple)) and raw and all(isinstance(h, str) and h for h in raw):
         return list(raw)
@@ -41,10 +33,9 @@ def _payload_host_ids(payload: dict[str, Any]) -> list[str] | None:
 
 
 async def would_suppress(session: AsyncSession, payload: dict[str, Any] | None) -> bool:
-    """Die EINE Regel, nach der `deliver()` den Versand an die Kanaele unterdrueckt --
-    auch einzeln abfragbar (`ctx.notify.would_suppress()`), ohne etwas anzulegen. Ein
-    Waechter holt damit eine im Fenster stumme Meldung danach nach, ohne bei jeder
-    Pruefung einen weiteren (stummen) Verlaufseintrag zu erzeugen."""
+    """Die eine Regel, nach der `deliver()` den Versand unterdrückt; auch einzeln abfragbar
+    (`ctx.notify.would_suppress()`), damit ein Wächter eine im Fenster stumme Meldung später nachholt, ohne bei jeder
+    Prüfung einen neuen Verlaufseintrag anzulegen."""
     payload = payload or {}
     return await maintenance.is_in_window(
         session, host_id=payload.get("host_id"), host_ids=_payload_host_ids(payload)
@@ -68,19 +59,12 @@ async def deliver(
     payload: dict[str, Any] | None = None,
     raise_on_failure: bool = False,
 ) -> tuple[Notification, bool]:
-    """Legt die Meldung an, stellt sie zu und liefert `(Datensatz, unterdrueckt)`.
-
-    `payload.get("host_id")` ist die Konvention (kein eigenes SDK-Feld, um den
-    stabilen `nodvard_sdk.types.Notification`-Vertrag nicht zu aendern), ueber die
-    eine host-bezogene Benachrichtigung fuer die Wartungsfenster-Pruefung markiert
-    wird -- eine Benachrichtigung ohne `host_id` im Payload wird nie unterdrueckt.
-    Eine Sammelmeldung ueber mehrere Server traegt stattdessen `payload["host_ids"]`
-    (Liste von Host-IDs): still nur, wenn alle in einem laufenden Fenster liegen.
-
-    Kanalfehler stoppen den Aufrufer nicht (sie stehen im Zustellprotokoll). Mit
-    `raise_on_failure` wirft es NACH dem Speichern `NotificationNotDelivered`, wenn es
-    Kanaele gab und keiner zugestellt hat -- fuer Aufrufer, die dann erneut versuchen
-    wollen. Kein Kanal oder ein Wartungsfenster (`suppressed`) ist kein Fehler."""
+    """Legt die Meldung an, stellt sie zu und liefert `(Datensatz, unterdrückt)`; Kanalfehler stehen im
+    Zustellprotokoll. Mit `raise_on_failure` wirft es nach dem Speichern `NotificationNotDelivered`, wenn es Kanäle gab
+    und keiner zugestellt hat (kein Kanal oder ein Wartungsfenster ist kein Fehler)."""
+    # `payload["host_id"]` markiert eine host-bezogene Meldung für die Wartungsfenster-Prüfung (Konvention statt
+    # SDK-Feld, um den stabilen `Notification`-Vertrag nicht zu ändern); ohne `host_id` wird nie unterdrückt. Eine
+    # Sammelmeldung trägt `payload["host_ids"]`: still nur, wenn alle in einem laufenden Fenster liegen.
     payload = payload or {}
     row = Notification(
         severity=severity, title=title, body=body, source_ext_id=source_ext_id,
@@ -91,27 +75,23 @@ async def deliver(
     notification_id = row.id
 
     suppressed = await would_suppress(session, payload)
-    # VOR den Kanaelen committen. Der flush oben startet die
-    # Schreibtransaktion; bliebe sie offen, hielte sie die SQLite-Schreibsperre fuer
-    # die ganze Dauer des ntfy-Aufrufs (httpx-Timeout 5 s). Ein Kanal, der selbst
-    # schreibt (ntfy mit Token -> ctx.vault_use() -> 'secret.used' ueber eine eigene
-    # Verbindung), liefe sonst in busy_timeout und scheiterte mit 'database is locked',
-    # und jeder andere Schreibzugriff (Bestaetigen, Login, ...) ebenso. Einziger
-    # Aufrufer ist NotifyHandle.send() mit einer frischen session_scope() -- der
-    # Zwischen-Commit nimmt also nichts Fremdes mit (D-14-Muster).
+    # Vor den Kanälen committen: Der flush hielte sonst die SQLite-Schreibsperre für die ganze Dauer des Push-Aufrufs
+    # (Timeout 5 s), und ein Kanal, der selbst schreibt (Token aus dem Tresor, Audit über eine eigene Verbindung),
+    # scheiterte mit "database is locked", ebenso jeder andere Schreibzugriff. Einziger Aufrufer ist
+    # `NotifyHandle.send()` mit frischer `session_scope()`, der Zwischen-Commit nimmt also nichts Fremdes mit.
     await session.commit()
 
     from ..ext.runtime import get_extension_runtime
 
     runtime = get_extension_runtime()
+    # Ohne Beschränkung auf Extensions: Das Notification-Center ist Kern-Code.
     channels = runtime.capabilities.query(NotificationChannel, allowed_ext_ids=None)
 
     sdk_notification = SdkNotification(
         title=title, body=body, severity=Severity(severity), correlation_id=correlation_id, payload=payload,
     )
 
-    # Erst alle Kanaele anfragen (ohne offene Schreibtransaktion), dann die
-    # Zustellprotokolle in einem Rutsch schreiben.
+    # Erst alle Kanäle anfragen (ohne offene Schreibtransaktion), dann die Zustellprotokolle in einem Rutsch schreiben.
     outcomes: list[tuple[str, str, str | None]] = []
     for channel in channels:
         if suppressed:
@@ -146,13 +126,9 @@ async def deliver(
 async def _log_deliveries(
     session: AsyncSession, notification_id: str, outcomes: list[tuple[str, str, str | None]]
 ) -> None:
-    """Schreibt die Zustellprotokolle -- nur, solange die Meldung noch da ist.
-
-    Die Kanaele brauchen Sekunden (ntfy: bis zu 5 s), die Meldung steht aber schon in der Liste:
-    wer sie in der Zwischenzeit loescht (von Hand, `DELETE /notifications/{id}`), soll den Versand
-    nicht mit einem Fremdschluessel-Fehler abbrechen, und es soll keine verwaiste Zeile bleiben.
-    Darum ein einziges `INSERT ... SELECT ... WHERE EXISTS` je Kanal: Pruefung und Schreiben laufen
-    in derselben Schreibsperre, kein Loeschen kann dazwischenkommen."""
+    """Schreibt die Zustellprotokolle, nur solange die Meldung noch da ist (jemand kann sie während des Versands
+    löschen). Ein `INSERT ... SELECT ... WHERE EXISTS` je Kanal: Prüfung und Schreiben laufen in derselben
+    Schreibsperre, es bleibt keine verwaiste Zeile und der Versand scheitert nicht an einem Fremdschlüssel-Fehler."""
     still_there = select(Notification.id).where(Notification.id == notification_id).exists()
     for channel_id, status, error in outcomes:
         await session.execute(
@@ -191,8 +167,7 @@ async def unread_count(session: AsyncSession) -> int:
 
 
 async def mark_all_read(session: AsyncSession) -> int:
-    """Fuer "Alle als gelesen": ein UPDATE statt einer
-    Liste von IDs, die der Client erst vollstaendig laden muesste."""
+    """Für "Alle als gelesen": ein UPDATE statt einer ID-Liste, die der Client erst vollständig laden müsste."""
     from sqlalchemy import update
 
     from ..db import utcnow
@@ -218,12 +193,9 @@ async def mark_read(session: AsyncSession, notification_ids: list[str]) -> int:
 
 
 async def delete_notifications(session: AsyncSession, ids: list[str]) -> int:
-    """Loescht die Meldungen `ids` samt ihren Zustellprotokollen und gibt zurueck, wie viele es
-    wirklich gab (unbekannte Kennungen zaehlen nicht). Schreibt nur (`flush`), committet nicht.
-
-    Die Zustellprotokolle werden ausdruecklich mitgeloescht, nicht nur ueber `ON DELETE CASCADE`: die
-    Fremdschluessel-Pruefung (`PRAGMA foreign_keys`) haengt an der Verbindung (`db.session`), und eine
-    verwaiste Zeile wuerde nie wieder aufgeraeumt."""
+    """Löscht die Meldungen `ids` samt Zustellprotokollen; gibt zurück, wie viele es gab, und schreibt nur (`flush`).
+    Die Protokolle gehen ausdrücklich mit, nicht nur per `ON DELETE CASCADE`: Die Fremdschlüssel-Prüfung hängt an der
+    Verbindung, und eine verwaiste Zeile würde nie wieder aufgeräumt."""
     removed = 0
     for start in range(0, len(ids), _DELETE_BATCH):
         batch = ids[start:start + _DELETE_BATCH]
@@ -235,8 +207,7 @@ async def delete_notifications(session: AsyncSession, ids: list[str]) -> int:
 
 
 async def delete_notification(session: AsyncSession, notification_id: str) -> str | None:
-    """Loescht eine Meldung und gibt ihren Titel zurueck (fuer das Protokoll); `None`, wenn es sie
-    nicht gibt."""
+    """Löscht eine Meldung und gibt ihren Titel zurück (fürs Protokoll); `None`, wenn es sie nicht gibt."""
     row = await session.get(Notification, notification_id)
     if row is None:
         return None
@@ -247,8 +218,8 @@ async def delete_notification(session: AsyncSession, notification_id: str) -> st
 
 @dataclass
 class DeleteProgress:
-    """Wie viele Meldungen `delete_read` schon endgueltig geloescht (committet) hat. Der Aufrufer legt es an und liest es
-    auch dann, wenn `delete_read` mitten im Lauf eine Ausnahme wirft: die Haeppchen davor sind dann schon weg."""
+    """Wie viele Meldungen `delete_read` schon endgültig gelöscht (committet) hat; der Aufrufer liest es auch, wenn
+    `delete_read` wirft."""
 
     deleted: int = 0
 
@@ -256,12 +227,9 @@ class DeleteProgress:
 async def delete_read(
     session: AsyncSession, *, chunk_size: int = 5000, pause: float = 0.05, progress: DeleteProgress | None = None,
 ) -> int:
-    """Loescht alle gelesenen Meldungen (`read_at` gesetzt); ungelesene bleiben. Gibt die Anzahl zurueck.
-
-    Wie der naechtliche Aufraeum-Job in Haeppchen mit Commit dazwischen: in einer einzigen Transaktion hielte ein grosser
-    Bestand (100 000 gelesene Meldungen, rund 10 s) die Schreibsperre so lange, dass gleichzeitige Schreiber (Anmeldung,
-    Zeitplaene) nach 5 s mit "database is locked" scheitern. Scheitert ein spaeteres Haeppchen, sind die frueheren
-    schon weg: `progress.deleted` nennt dann, wie viele (die Ausnahme geht unveraendert weiter)."""
+    """Löscht alle gelesenen Meldungen und gibt die Anzahl zurück, in Häppchen mit Commit dazwischen.
+    In einer Transaktion hielte ein großer Bestand (100 000 Meldungen, rund 10 s) die Schreibsperre so lange, dass andere
+    Schreiber nach 5 s scheitern. Wirft ein Häppchen, nennt `progress.deleted`, was schon weg ist."""
     total = 0
     while True:
         ids = list(
@@ -279,6 +247,6 @@ async def delete_read(
         total += removed
         if progress is not None:
             progress.deleted = total
-        if removed == 0 or len(ids) < chunk_size:  # fertig (oder gleichzeitig geloescht): nicht endlos wiederholen
+        if removed == 0 or len(ids) < chunk_size:  # fertig (oder gleichzeitig gelöscht): nicht endlos wiederholen
             return total
-        await asyncio.sleep(pause)  # anderen Schreibern eine Luecke lassen
+        await asyncio.sleep(pause)  # anderen Schreibern eine Lücke lassen

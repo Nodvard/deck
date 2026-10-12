@@ -1,36 +1,4 @@
-"""Migrations-Einstiegspunkt -- laesst `alembic upgrade heads` laufen (Mehrzahl),
-nicht das rohe CLI-Kommando `alembic -c backend/alembic.ini upgrade head` (Einzahl),
-das bis zur inventory-Extension (erste mit echten eigenen Tabellen) hier lief.
-
-docs/02-EXTENSION-API.md §7 sieht das seit der ersten Fassung so vor: "Jede
-Extension hat einen eigenen Alembic-Branch (`alembic upgrade heads` faehrt Kern +
-alle Extensions hoch)." Bis jetzt war das Spekulation ohne echten Abnehmer
-(`ext/tables.py`s eigener Docstring: "ohne eine Extension mit eigenem Schema waere
-das spekulativ gegen nichts Echtes").
-
-**Warum ein eigener Python-Einstiegspunkt statt eines statischen `version_locations`-
-Eintrags in `alembic.ini`:** Alembics `ScriptDirectory` liest `version_locations`,
-BEVOR `env.py` ueberhaupt laeuft (`env.py` kann den Wert fuer den aktuellen Lauf
-nicht mehr beeinflussen) -- ein rein statischer Ini-Eintrag muesste also bei JEDER
-neuen Extension mit eigenen Tabellen von Hand nachgezogen werden. Hier stattdessen
-programmatisch: jedes `extensions/<id>/migrations/versions`-Verzeichnis, das beim
-Aufruf existiert, wird automatisch aufgenommen (`_discover_version_locations()`) --
-eine neue Extension muss nur ihre eigene erste Revision mit `down_revision=None` +
-einem eigenen `branch_labels`-Wert anlegen, sonst nichts in diesem Repo aendern.
-
-Mehrere unabhaengige Koepfe in EINER `alembic_version`-Tabelle sind natives Alembic-
-Verhalten (eine Zeile pro Kopf) -- kein zweiter Mechanismus noetig.
-
-**Live gefunden beim ersten echten Deploy:** `backend_dir` NICHT relativ zu
-`Path(__file__)` ableiten -- das funktioniert nur bei einem editierbaren Dev-Install
-(`pip install -e`, README), wo `__file__` noch auf den Repo-Checkout zeigt. Im
-Container ist `nodvard_deck` per `pip install ./backend` (nicht editierbar) nach
-site-packages installiert, `__file__` zeigt dann auf einen Pfad ohne jedes
-`backend/alembic.ini` daneben ("Path doesn't exist: .../migrations"). Der einzige
-Anker, der in BEIDEN Faellen stimmt: der Arbeitsordner des Prozesses -- README
-fuehrt `python -m nodvard_deck.migrate` explizit vom Repo-Root aus, `entrypoint.sh`
-macht vorher ein explizites `cd /app` (Container-Aequivalent des Repo-Roots).
-Deshalb `Path.cwd()`, nicht `Path(__file__)`."""
+"""Migrations-Einstiegspunkt: `alembic upgrade heads` über den Kern und alle Erweiterungen mit eigenem Alembic-Zweig."""
 
 from __future__ import annotations
 
@@ -44,14 +12,12 @@ from .config import get_settings
 
 
 class DuplicateRevisions(RuntimeError):
-    """Dieselbe Revision liegt in zwei Erweiterungsordnern -- meist ist nach einer Umbenennung (oder
-    beim Auspacken ueber einen alten Stand) der alte Ordner liegen geblieben. Die Meldung ist ein ganzer
-    deutscher Satz ohne Pfade; `boot` zeigt sie auf der Notseite."""
+    """Dieselbe Revision liegt in zwei Erweiterungsordnern, meist ist nach einer Umbenennung der alte Ordner liegen
+    geblieben. Die Meldung ist ein ganzer deutscher Satz ohne Pfade; `boot` zeigt sie auf der Notseite."""
 
 
 def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
-    """Vor Alembic: Ohne diese Pruefung bricht Alembic mit einer unverstaendlichen Meldung ab (ein
-    Zweig-Name sei schon vergeben, oder eine Revision sei mehrfach da)."""
+    """Läuft vor Alembic, das sonst mit einer unverständlichen Meldung abbricht (Zweigname vergeben, Revision mehrfach da)."""
     from .core.backup.snapshot import REVISION_RE
 
     seen: dict[str, str] = {}
@@ -77,6 +43,9 @@ def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
 
 
 def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path]:
+    """Der Kern plus jedes vorhandene `extensions/<id>/migrations/versions`, damit eine neue Erweiterung nichts nachziehen muss."""
+    # Alembic liest `version_locations`, bevor `env.py` läuft; ein statischer Eintrag in `alembic.ini` müsste bei jeder neuen
+    # Erweiterung von Hand ergänzt werden. Sie legt nur ihre erste Revision mit `down_revision=None` und eigenem `branch_labels` an.
     locations = [backend_dir / "migrations" / "versions"]
     extensions_dir = repo_root / "extensions"
     if extensions_dir.is_dir():
@@ -89,10 +58,10 @@ def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path
 
 
 def alembic_config(database_url: str | None = None, repo_root: Path | None = None) -> tuple[Config, list[Path]]:
-    """Alembic-Konfiguration samt der gefundenen `version_locations` (Kern + alle Erweiterungen
-    mit eigenem Zweig). Ohne `database_url` bleibt die URL leer -- fuer Abfragen am
-    Skriptordner (`known_revisions`) braucht es keine Datenbank. Wirft `DuplicateRevisions`, wenn zwei
-    Erweiterungsordner dieselbe Revision enthalten."""
+    """Alembic-Konfiguration samt der gefundenen `version_locations`. Ohne `database_url` bleibt die URL leer (Abfragen am
+    Skriptordner brauchen keine Datenbank). Wirft `DuplicateRevisions`, wenn zwei Erweiterungsordner dieselbe Revision enthalten."""
+    # Der Arbeitsordner, nicht `Path(__file__)`: Im Container liegt das Paket nicht editierbar in site-packages, dort steht
+    # neben `__file__` kein `backend/alembic.ini`. Der Entrypoint wechselt vorher nach `/app`, die README ruft vom Repo-Root aus.
     repo_root = repo_root or Path.cwd()
     backend_dir = repo_root / "backend"
     cfg = Config(str(backend_dir / "alembic.ini"))
@@ -106,8 +75,8 @@ def alembic_config(database_url: str | None = None, repo_root: Path | None = Non
 
 
 def known_revisions(repo_root: Path | None = None) -> tuple[set[str], set[str]]:
-    """-> (alle Revisionen, die dieses Image kennt; die Koepfe davon). Grundlage dafuer,
-    eine fremde Datenbank vor dem Einspielen auf bekannte Staende zu pruefen."""
+    """-> (alle Revisionen, die dieses Image kennt; deren Köpfe), um eine fremde Datenbank vor dem Einspielen auf bekannte
+    Stände zu prüfen."""
     from alembic.script import ScriptDirectory
 
     cfg, _ = alembic_config(repo_root=repo_root)
@@ -117,9 +86,7 @@ def known_revisions(repo_root: Path | None = None) -> tuple[set[str], set[str]]:
 
 
 def upgrade_heads() -> list[Path]:
-    """Fuehrt die Migration aus UND gibt die tatsaechlich verwendeten
-    `version_locations` zurueck -- praktisch fuers Logging/Tests, ohne dass ein
-    Aufrufer `_discover_version_locations()` ein zweites Mal separat rufen muss."""
+    """Führt die Migration aus und gibt die verwendeten `version_locations` zurück."""
     settings = get_settings()
     settings.ensure_data_dir()
 

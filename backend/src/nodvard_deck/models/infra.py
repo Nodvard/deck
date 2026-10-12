@@ -1,10 +1,6 @@
-"""Hosts, Gruppen, Zugangsdaten, Host-Keys. Siehe docs/03-DATA-MODEL.md §2.
+"""Hosts, Gruppen, Zugangsdaten, Host-Keys.
 
-Die Host-Identitaet gehoert dem Kern. Extensions *entdecken* Hosts und schreiben sie hier
-hinein (provider_ext_id + provider_ref), besitzen sie aber nicht. Ohne diese Regel haette
-jede Extension ihre eigene Host-Liste — genau der Ist-Zustand mit vier
-auseinanderdriftenden Wahrheiten.
-"""
+Hosts gehören dem Kern; Erweiterungen entdecken sie und tragen sie über `provider_ext_id` und `provider_ref` hier ein."""
 
 from __future__ import annotations
 
@@ -46,7 +42,7 @@ class Host(Base, IdMixin, TimestampMixin):
 
     provider_ext_id: Mapped[str | None] = mapped_column(String(64), index=True)
     provider_ref: Mapped[str | None] = mapped_column(String(255))
-    """Fremdschluessel beim Anbieter. Der Kern liest ihn nie inhaltlich."""
+    """Fremdschlüssel beim Anbieter; der Kern liest ihn nie inhaltlich."""
 
     is_managed: Mapped[bool] = mapped_column(Boolean, default=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -63,12 +59,7 @@ class Host(Base, IdMixin, TimestampMixin):
 
 
 class HostTag(Base):
-    """Tags ersetzen die Sonderlisten des Bestands (DOCKER_HOSTS, CRITICAL_CONTAINERS).
-
-    Eine Extension fragt "alle Hosts mit Tag docker" statt eine eigene Liste zu pflegen,
-    die unbemerkt veraltet — und die, wie im Bestand beobachtet, sogar korrekt sein kann,
-    ohne dass der Code sie liest.
-    """
+    """Markierung eines Hosts: eine Extension fragt "alle Hosts mit Tag docker", statt eine eigene Liste zu pflegen."""
 
     __tablename__ = "host_tags"
 
@@ -77,22 +68,13 @@ class HostTag(Base):
     )
     tag: Mapped[str] = mapped_column(String(64), primary_key=True, index=True)
     managed_by_ext_id: Mapped[str | None] = mapped_column(String(64))
-    """Live gefunden (WP-12, gameserver-Extension): `HostsHandle.upsert_discovered()`s
-    Tag-Abgleich (WP-8) behandelte den frisch entdeckten Tag-Satz als VOLLSTAENDIG und
-    entfernte JEDEN Tag, der nicht darin vorkam -- auch einen, den ein Admin oder eine
-    ANDERE Extension (z. B. gameserver: "diesen Host mit 'gameserver' taggen") gesetzt
-    hatte. Ergebnis: proxmoxs 5-minuetiger Discovery-Zyklus loeschte einen manuell
-    gesetzten Tag beim naechsten Lauf wieder -- exakt das "entdeckt, nicht gepflegt"-
-    Versprechen (docs/02-EXTENSION-API.md Paragraph 6) in sein Gegenteil verkehrt,
-    live im Browser reproduziert. Dieses Feld macht Tag-Eigentuemerschaft explizit:
-    `upsert_discovered()` entfernt nur noch Tags, die SIE SELBST zuvor gesetzt hat
-    (`managed_by_ext_id == eigene ext_id`) -- ein Tag mit `NULL` (manuell) oder einer
-    ANDEREN `ext_id` bleibt unberuehrt, unabhaengig davon, ob der neu entdeckte
-    Tag-Satz ihn enthaelt."""
+    """Welche Extension den Tag gesetzt hat; leer bei manuell gesetzten Tags.
+
+    `upsert_discovered()` entfernt beim Abgleich nur Tags mit der eigenen `ext_id`, nie manuelle oder fremde."""
 
 
 class HostGroup(Base, IdMixin, TimestampMixin):
-    """Zielgruppen fuer Skripte."""
+    """Zielgruppen für Skripte."""
 
     __tablename__ = "host_groups"
 
@@ -116,11 +98,9 @@ class HostCredential(Base, IdMixin, TimestampMixin):
 
 
 class KnownHostKey(Base, IdMixin):
-    """Ersetzt StrictHostKeyChecking=no aus dem Bestand.
+    """SSH-Host-Key eines Servers: TOFU beim ersten Kontakt, danach Pinning.
 
-    TOFU beim ersten Kontakt, danach Pinning. Eine Abweichung laesst die Verbindung
-    sichtbar scheitern, statt sie stillschweigend anzunehmen.
-    """
+    Eine Abweichung lässt die Verbindung sichtbar scheitern, statt sie stillschweigend anzunehmen."""
 
     __tablename__ = "known_hosts"
 

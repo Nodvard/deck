@@ -1,14 +1,4 @@
-"""Lynis auf Deutsch: zu den haeufigsten Hinweisen des Haertungs-Audits eine kurze deutsche Ueberschrift, "Was heisst
-das?" und "Was kannst du tun?" -- fest hinterlegt, ohne KI.
-
-Lynis schreibt seine Funde englisch und knapp ("AUTH-9286: Configure maximum password age"). Viele davon sind fuer ein
-Heimnetz bewusst nicht noetig; das sagen die Texte offen, statt jeden Hinweis wie einen Fehler aussehen zu lassen. Wo eine
-Aenderung etwas kaputt machen kann, das Nodvard Deck selbst braucht (SSH-Anmeldung, Kernel-Werte fuer Docker und
-Proxmox), steht die Warnung im Text.
-
-Schluessel ist die Kennung des Lynis-Tests (`SSH-7408`); alle Saetze stehen in `LYNIS_TEXTS` und nur dort -- eine
-spaetere englische Oberflaeche uebersetzt nur diese Sammlung. Unbekannte Kennungen bleiben einfach englisch.
-"""
+"""Deutsche Kurztexte zu häufigen Lynis-Hinweisen, fest hinterlegt und ohne KI; Schlüssel ist die Test-Kennung."""
 
 from __future__ import annotations
 
@@ -17,6 +7,8 @@ from collections.abc import Iterable
 
 _UNNEEDED = "Für ein Heimnetz meist nicht nötig – du kannst es bewusst so lassen."
 
+# Alle Sätze stehen nur hier. Wo eine Änderung Nodvard Deck selbst stören kann (SSH, Kernel-Werte für Docker und
+# Proxmox), steht die Warnung im Text; unbekannte Kennungen bleiben englisch.
 LYNIS_TEXTS: dict[str, dict[str, str]] = {
     "SSH-7408": {
         "title": "SSH-Einstellung härten",
@@ -251,15 +243,13 @@ LYNIS_TEXTS: dict[str, dict[str, str]] = {
 }
 
 LYNIS_WEIGHT: dict[str, int] = {
-    # 3 = wichtig: bekannte Luecken in installierten Paketen.
+    # 3 = wichtig: bekannte Lücken in installierten Paketen.
     "PKGS-7392": 3,
-    # 2 = sinnvoll. SSH bewusst nicht hoeher: der Hinweis steht auf fast jedem Server, und eine falsche Aenderung kann
-    # Nodvard Deck aussperren. Kernel-Werte (KRNL-6000) fehlen hier ganz: sie weichen auf jedem Docker- oder
-    # Proxmox-Server ab und brauchen Einzelfall-Pruefung.
+    # 2 = sinnvoll. SSH bewusst nicht höher: Der Hinweis steht auf fast jedem Server, und eine falsche Änderung kann
+    # Nodvard Deck aussperren. KRNL-6000 fehlt, weil jeder Docker- oder Proxmox-Server abweicht.
     "SSH-7408": 2, "PKGS-7420": 2, "DEB-0880": 2, "HRDN-7230": 2, "FIRE-4512": 2, "LOGG-2190": 2,
 }
-"""Wie viel ein Hinweis bringt, fuer die Liste "Deine wichtigsten Baustellen" (nur Gewicht 2 und 3). Alles andere ist 1:
-fuer ein Heimnetz meist nicht noetig. Grobe Einordnung, kein Punktesystem."""
+"""Gewicht je Hinweis für die Liste "Deine wichtigsten Baustellen" (nur 2 und 3); alles andere zählt 1."""
 
 _ID_RE = re.compile(r"^\s*([A-Z]{2,5}-\d{4}|LYNIS)\b")
 
@@ -271,8 +261,7 @@ def lynis_id(entry: str) -> str | None:
 
 
 def lynis_help(entries: Iterable[str]) -> dict[str, dict[str, str | int]]:
-    """Die deutschen Texte zu allen bekannten Kennungen in `entries`: `{Kennung: {"title", "what", "todo", "weight"}}`
-    (`weight` aus `LYNIS_WEIGHT`, sonst 1)."""
+    """Die deutschen Texte zu den bekannten Kennungen in `entries`: `{Kennung: {"title", "what", "todo", "weight"}}`."""
     found: dict[str, dict[str, str | int]] = {}
     for entry in entries:
         key = lynis_id(entry)

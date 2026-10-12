@@ -1,25 +1,4 @@
-"""Verbindungen, die die Erweiterung "Proxmox VE" beim Verbinden mit Passwort fuer "Proxmox-Backups" anlegt
-(`nodvard_sdk.ConnectionReceiver`, Art `"proxmox"`).
-
-Die beiden Erweiterungen importieren einander nicht: "Proxmox VE" findet diesen Empfaenger ueber
-`ctx.capabilities.query()` (es nennt "backups" in `requires`) und uebergibt Adresse, Token-ID und Token-Geheimnis in
-genau einem Aufruf. Eingetragen wird wie im Einstellungsformular dieser Erweiterung: die Verbindung in
-`settings.connections`, das Geheimnis im eigenen Tresor-Eintrag `backups-token:<name>`. Nie ueber den Ereignis-Bus,
-nie zurueck an den Aufrufer. Jede Uebernahme steht im Protokoll (`backups.connection_received`, nur Name, Adresse und
-Token-IDs).
-
-Angenommen wird nur, was auch eine Verbindung von Hand sein koennte, und strenger: `https://` mit Rechner (ohne
-Zugangsdaten, Pfad, Anfrage), Token-ID `benutzer@bereich!name`, Kurzname wie im Formular. Gibt es zur Adresse schon
-eine Verbindung, bekommt sie den neuen Token und behaelt ihren Namen, ihr "aus" (`enabled: false`) und eine strenge
-Zertifikatspruefung: Eine Verbindung, die das Zertifikat prueft (normal oder ueber einen gemerkten Fingerabdruck),
-wird nie still auf "Selbstsigniertes Zertifikat erlauben" umgestellt -- das waere eine Abschwaechung, die nur die
-Person entscheiden soll (sie sieht es dann an der Verbindung). Ein bestaetigter Fingerabdruck (`pinned_sha256`) wird
-gemerkt und ersetzt dabei einen alten: Der Anbieter hat ihn die Person beim Verbinden ausdruecklich bestaetigen
-lassen. Ohne neuen Fingerabdruck bleibt ein gemerkter stehen. Ihr Geheimnis wird in einem Schritt ersetzt (`ctx.secrets.replace`). Ein fremdes Geheimnis unter dem
-Label (nicht von dieser Erweiterung, etwa von Hand im Tresor) wird nie angefasst: bei einer neuen Verbindung faellt
-das vor jeder Aenderung auf, bei einer vorhandenen beim Ersetzen -- dann kommen die Einstellungen auf den alten Stand
-zurueck (`SecretNotOwned`). Scheitert sonst etwas, ebenso.
-"""
+"""Verbindungen, die die Erweiterung "Proxmox VE" beim Verbinden mit Passwort für "Proxmox-Backups" anlegt."""
 
 from __future__ import annotations
 
@@ -51,6 +30,7 @@ class ConnectionRefused(Exception):
 
 def _valid_base_url(base_url: str) -> bool:
     """`https://rechner[:port]` -- ohne Zugangsdaten, Pfad, Anfrage, Fragment oder Leer-/Steuerzeichen."""
+    # Strenger als eine von Hand eingetragene Adresse, weil sie von einer anderen Erweiterung kommt.
     text = str(base_url or "")
     if not text or len(text) > 300 or any(unicodedata.category(ch).startswith(("C", "Z")) for ch in text):
         return False
@@ -65,6 +45,11 @@ def _valid_base_url(base_url: str) -> bool:
     )
 
 
+# "Proxmox VE" findet den Empfänger über `ctx.capabilities.query()` (es nennt "backups" in `requires`) und übergibt
+# Adresse, Token-ID und Geheimnis in einem Aufruf; die Erweiterungen importieren einander nicht. Das Geheimnis geht nie
+# über den Ereignis-Bus und nie zurück an den Aufrufer. Eingetragen wird wie im Einstellungsformular: die Verbindung in
+# `settings.connections`, das Geheimnis als `backups-token:<name>` im Tresor. Jede Übernahme steht im Protokoll (nur
+# Name, Adresse und Token-IDs). Angenommen wird nur, was auch von Hand eingetragen werden könnte, und strenger.
 class ProxmoxConnectionReceiver:
     connection_kind = "proxmox"
 
@@ -123,27 +108,31 @@ class ProxmoxConnectionReceiver:
                 entry[FINGERPRINT_FIELD] = pin
             connections.append(entry)
         else:
+            # Die vorhandene Verbindung bekommt nur den neuen Token und behält Namen, "aus" und Zertifikatsprüfung.
             name = str(existing.get("name"))
             replaced = str(existing.get("token_id") or "") or None
             old_pin, old_pin_invalid = connection_pin(existing)
             if pin is not None:
                 if old_pin is not None and old_pin != pin:
                     replaced_pin = old_pin
-                existing[FINGERPRINT_FIELD] = pin  # ausdruecklich bestaetigt: ersetzt einen alten
+                existing[FINGERPRINT_FIELD] = pin  # ausdrücklich bestätigt: ersetzt einen alten
             elif old_pin is not None or old_pin_invalid:
-                insecure = False  # ein gemerkter (auch ein kaputter, der sperrt) bleibt, nie "nicht pruefen"
+                insecure = False  # ein gemerkter (auch ein kaputter, der sperrt) bleibt, nie "nicht prüfen"
             else:
-                # Nie still abschwaechen: prueft die Verbindung das Zertifikat, bleibt es so.
+                # Nie still abschwächen: prüft die Verbindung das Zertifikat, bleibt es so. Auf "Selbstsigniertes
+                # Zertifikat erlauben" umzustellen soll nur die Person entscheiden.
                 insecure = insecure and bool(existing.get("tls_insecure_skip_verify"))
-            # Eine ausgeschaltete Verbindung bleibt aus; fehlt das Feld (aeltere Eintraege), gilt sie als an.
+            # Eine ausgeschaltete Verbindung bleibt aus; fehlt das Feld (ältere Einträge), gilt sie als an.
             enabled = existing.get("enabled") is not False
             existing.update({"token_id": token_id, "tls_insecure_skip_verify": insecure, "enabled": enabled})
         label = f"{TOKEN_LABEL}:{name}"
         keep_secret = existing is not None and await self._ctx.secrets.exists(label)
         if not keep_secret:
-            # Ein Geheimnis unter diesem Namen gehoert dann zu einer frueher entfernten Verbindung -- weg, bevor sich
-            # etwas aendert. Ein fremdes (`SecretNotOwned`) bricht hier ab, ohne Aenderung.
+            # Ein Geheimnis unter diesem Namen gehört dann zu einer entfernten Verbindung und muss weg, bevor sich
+            # etwas ändert. Ein fremdes (`SecretNotOwned`) bricht hier ab, ohne Änderung.
             await self._ctx.secrets.delete(label)
+        # Scheitert etwas (auch `SecretNotOwned` beim Ersetzen eines fremden Geheimnisses), kommen die Einstellungen
+        # auf den alten Stand zurück.
         failure: BaseException | None = None
         try:
             await self._ctx.settings.set({**settings, "connections": connections})
@@ -154,12 +143,12 @@ class ProxmoxConnectionReceiver:
                     label=label, kind="generic", value=token_secret.get_secret_value(),
                     description="API-Token (beim Verbinden von Proxmox VE mit Passwort angelegt)",
                 )
-        except Exception as exc:  # noqa: BLE001 - erst den alten Stand zurueck, dann melden
+        except Exception as exc:  # noqa: BLE001 - erst den alten Stand zurück, dann melden
             failure = exc
         if failure is not None:
             try:
                 await self._ctx.settings.set({**settings, "connections": before})
-            except Exception as exc:  # noqa: BLE001 - der urspruengliche Fehler zaehlt
+            except Exception as exc:  # noqa: BLE001 - der ursprüngliche Fehler zählt
                 self._ctx.logger.warning("Backups: alter Stand nicht wiederhergestellt (%s)", type(exc).__name__)
             raise failure
         saved = existing if existing is not None else connections[-1]

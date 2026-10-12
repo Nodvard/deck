@@ -1,11 +1,4 @@
-"""Aktionen der Netzwerk-Extension -- alle laufen durch das Aktions-Gate des Kerns:
-die Seite schlaegt vor (`ctx.actions.propose`), ein berechtigter Nutzer gibt frei, erst
-dann ruft der Kern `NetworkActionExecutor.execute()` auf.
-
-Der Payload steht zwischen Vorschlag und Ausfuehrung in der Datenbank und wird hier
-deshalb NOCHMAL vollstaendig geprueft (nur erlaubte Felder, echte ganze Zahlen, feste
-Pausenlaengen) -- nie blind weitergereicht.
-"""
+"""Aktionen der Netzwerk-Erweiterung, alle über das Aktions-Gate des Kerns."""
 
 from __future__ import annotations
 
@@ -76,6 +69,8 @@ class PayloadError(ValueError):
 
 
 def _only(payload: Any, allowed: set[str]) -> dict[str, Any]:
+    # Der Payload liegt zwischen Vorschlag und Ausführung in der Datenbank, darum wird er hier
+    # noch einmal streng geprüft (nur erlaubte Felder, echte ganze Zahlen, feste Pausenlängen).
     if not isinstance(payload, dict):
         raise PayloadError("Ungültige Aktion: Daten fehlen.")
     extra = sorted(set(payload) - allowed)
@@ -113,7 +108,7 @@ def pause_text(minutes: int) -> str:
 
 
 class NetworkActionExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor`."""
+    """Führt freigegebene Netzwerk-Aktionen aus (`ActionExecutor` des SDK)."""
 
     action_types = frozenset({PIHOLE_PAUSE, PIHOLE_RESUME, NPM_HOST_ENABLE, NPM_HOST_DISABLE})
 
@@ -155,7 +150,7 @@ class NetworkActionExecutor:
         changed = await client.set_host_enabled(host_id, enabled)
         word = "eingeschaltet" if enabled else "ausgeschaltet"
         name = f"Proxy-Host {host_id}"
-        try:  # nur fuer eine lesbare Meldung -- die Aenderung selbst ist schon passiert
+        try:  # nur für eine lesbare Meldung, die Änderung selbst ist schon passiert
             match = next((h for h in await client.proxy_hosts() if h["id"] == host_id), None)
             if match and match["domains"]:
                 name = f"„{', '.join(match['domains'])}“"

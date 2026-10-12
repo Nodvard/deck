@@ -1,20 +1,6 @@
-"""Das Notification-Center -- docs/04-API.md.
+"""Benachrichtigungen: Liste, Zähler, Als-gelesen-Markieren und Löschen.
 
-Benachrichtigungs-Center: die Endpunkte existierten seit WP-6, aber KEINE Seite
-im Frontend rief sie auf -- Meldungen (z. B. die Lageberichte von Nodvard Shield) landeten in der
-Datenbank und niemand sah sie. Dazu `GET /unread-count` (fuer den Zaehler im Menue,
-ohne die ganze Liste zu laden) und `POST /read-all`.
-
-Lesen, Als-gelesen-Markieren und Loeschen. Der Lesestatus gilt fuer alle Nutzer gemeinsam (eine Spalte
-`read_at`), deshalb verlangt das Markieren `notifications.write` (Operator und Admin); wer nur
-lesen darf, kann Meldungen anderer nicht ausblenden. Dasselbe gilt fuers Loeschen (`DELETE /{id}`,
-`POST /delete-read`): es trifft alle Nutzer und steht mit `notifications.deleted` im Protokoll (einzeln mit
-Kennung und Titel, gesammelt mit der Anzahl; scheitert das Sammel-Loeschen mittendrin, steht der bisherige Stand
-als `failure` mit `interrupted` dort). Zusaetzlich loescht der Kern-Job `notifications-retention` jede
-Nacht alte Meldungen (`services.notification_retention`, Einstellung `notifications.retention_days`).
-Geschrieben wird ausschliesslich ueber
-`services.notifications.send()` (derzeit aus `ext.context.NotifyHandle.send()`) --
-kein Endpunkt hier legt selbst eine Zeile an, dasselbe Prinzip wie `api/v1/audit.py`.
+Geschrieben wird nur über `services.notifications.send()`; kein Endpunkt hier legt selbst eine Zeile an.
 """
 
 from __future__ import annotations
@@ -35,6 +21,8 @@ from ..deps import CurrentUser, SessionDep, require_permission
 
 log = logging.getLogger("nodvard_deck.notifications")
 
+# Lesestatus (`read_at`) und Löschen gelten für alle Nutzer gemeinsam; wer nur lesen darf, soll Meldungen anderer nicht
+# ausblenden. Darum brauchen Markieren und Löschen `notifications.write`, und beides steht im Protokoll.
 router = APIRouter(
     prefix="/notifications",
     tags=["notifications"],
@@ -70,17 +58,17 @@ async def _audit_deleted(session: AsyncSession, user: User, *, target_id: str | 
 
 
 async def _audit_interrupted_delete(session: AsyncSession, actor_id: str, deleted: int) -> None:
-    """Das Sammel-Loeschen ist nach `deleted` geloeschten Meldungen gescheitert: auch das steht im Protokoll (der
-    eigentliche Fehler geht danach weiter). Ein Fehler hier ueberdeckt ihn nie. Die Kennung kommt als Text herein:
-    nach dem `rollback()` waeren die Felder eines geladenen Nutzers verfallen und nur noch per Nachladen lesbar."""
+    """Hält ein gescheitertes Sammel-Löschen (nach `deleted` Meldungen) im Protokoll fest, ohne den Fehler zu überdecken.
+
+    `actor_id` kommt als Text, weil die Felder eines geladenen Nutzers nach `rollback()` verfallen wären."""
     try:
-        await session.rollback()  # das gescheiterte Haeppchen verwerfen, die geloeschten sind schon committet
+        await session.rollback()  # das gescheiterte Häppchen verwerfen, die gelöschten sind schon committet
         await audit_service.log(
             session, actor_type="user", actor_id=actor_id, action="notifications.deleted", outcome="failure",
             target_type="notification", target_id=None, detail={"count": deleted, "interrupted": True},
         )
         await session.commit()
-    except Exception:  # nie den urspruenglichen Fehler ueberdecken
+    except Exception:  # nie den ursprünglichen Fehler überdecken
         log.exception("Protokolleintrag fuer das unterbrochene Loeschen gelesener Meldungen ging nicht")
 
 
@@ -96,10 +84,10 @@ async def list_notifications(
     return [NotificationOut.from_model(n) for n in rows]
 
 
+# Muss vor `/{notification_id}` stehen, sonst fängt jene Route "unread-count" als ID ab.
 @router.get("/unread-count")
 async def get_unread_count(session: SessionDep) -> dict[str, int]:
-    """Muss VOR `/{notification_id}` stehen -- sonst faengt jene Route "unread-count"
-    als ID ab."""
+    """Zahl der ungelesenen Meldungen für den Zähler im Menü, ohne die Liste zu laden."""
     return {"unread": await notifications_service.unread_count(session)}
 
 
@@ -110,9 +98,8 @@ async def mark_all_read(session: SessionDep) -> dict[str, int]:
 
 @router.post("/delete-read", dependencies=[Depends(require_permission("notifications.write"))])
 async def delete_read_notifications(session: SessionDep, user: CurrentUser) -> dict[str, int]:
-    """Loescht alle gelesenen Meldungen (ungelesene bleiben) und meldet, wie viele es waren. Geloescht wird in
-    Haeppchen mit Commit dazwischen; scheitert ein spaeteres, steht der Stand bis dahin trotzdem im Protokoll
-    (`outcome` `failure`, `{"count": n, "interrupted": true}`) und der Fehler geht weiter."""
+    """Löscht alle gelesenen Meldungen (ungelesene bleiben) und meldet die Anzahl. Gelöscht wird in Häppchen mit Commit
+    dazwischen; scheitert eines, steht der Stand bis dahin als `failure` mit `interrupted` im Protokoll."""
     progress = notifications_service.DeleteProgress()
     try:
         deleted = await notifications_service.delete_read(session, progress=progress)

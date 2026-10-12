@@ -1,15 +1,4 @@
-"""Berechtigungsauswertung.
-
-Reine Funktionen, kein I/O — damit vollstaendig testbar ohne Datenbank. Das ist Absicht:
-Zugriffslogik, die man nur mit laufendem System testen kann, wird nicht getestet.
-
-Format:  <domaene>.<aktion>[:<scope>]
-Beispiele:
-    hosts.read
-    secrets.read:ssh-fleet
-    secrets.read:ssh-*          (Suffix-Wildcard im Scope)
-    actions.approve:high
-"""
+"""Berechtigungsauswertung als reine Funktionen ohne I/O (Format `<domäne>.<aktion>[:<scope>]`, z. B. `hosts.read`)."""
 
 from __future__ import annotations
 
@@ -23,10 +12,10 @@ def _split(permission: str) -> tuple[str, str | None]:
 
 def _scope_matches(granted_scope: str | None, required_scope: str | None) -> bool:
     if granted_scope is None:
-        # Ohne Scope gewaehrt = fuer alle Scopes gewaehrt.
+        # Ohne Scope gewährt gilt für alle Scopes.
         return True
     if required_scope is None:
-        # Verlangt wird ohne Scope, gewaehrt ist nur ein Teilbereich -> reicht nicht.
+        # Verlangt ohne Scope, gewährt nur ein Teilbereich: reicht nicht.
         return False
     if granted_scope == "*":
         return True
@@ -36,7 +25,7 @@ def _scope_matches(granted_scope: str | None, required_scope: str | None) -> boo
 
 
 def has_permission(granted: Iterable[str], required: str) -> bool:
-    """Prueft, ob `required` durch mindestens eine der `granted`-Berechtigungen gedeckt ist."""
+    """Ob `required` durch mindestens eine der `granted`-Berechtigungen gedeckt ist."""
     req_base, req_scope = _split(required)
     for g in granted:
         g_base, g_scope = _split(g)
@@ -59,20 +48,11 @@ def has_any(granted: Iterable[str], required: Iterable[str]) -> bool:
     return any(has_permission(granted, r) for r in required)
 
 
-# --- WS-Kanal-/Event-Berechtigungen (WP-6-Nachtrag) -------------------------
-# docs/04-API.md §4 verlangt fuer den `events`-Kanal "gefiltert nach RBAC" -- diese
-# Tabelle ist die Umsetzung: der Prefix eines Event-Namens (vor dem ersten Punkt)
-# bestimmt, welche Berechtigung ein WS-Client braucht, um das Event zu SEHEN
-# (Zustellung wird gefiltert, nicht das Abonnieren des Kanals selbst -- "events" bleibt
-# EIN Kanal fuer alle, nur die einzelnen Nachrichten darin sind unterschiedlich
-# sichtbar). Dieselbe Tabelle liefert auch die Berechtigung fuer die anderen,
-# themenreinen Kanaele (`notifications`, `jobs.{id}`/`runs.{id}`, `actions`, `hosts`) --
-# derselbe Domaenen-Name, dieselbe Berechtigung, ob als Event-Praefix oder als
-# eigener Kanal. Unbekannte Praefixe (z. B. `ext.<id>.*`, `hello.tick`, `system.*`)
-# brauchen NUR Authentifizierung, keine zusaetzliche Berechtigung -- Events tragen
-# nie sensible Werte (dieselbe Regel wie im Audit-Log), und Extensions sind
-# vertrauenswuerdiger Code (docs/01 §7), keine Sandbox, die zusaetzliche
-# Kern-Berechtigungen fuer ihre eigenen Kanaele bräuchte.
+# Der Präfix eines Event-Namens (vor dem ersten Punkt) bestimmt die Berechtigung, die ein WS-Client zum Sehen braucht.
+# Gefiltert wird die Zustellung, nicht das Abonnieren des Kanals `events`. Dieselbe Tabelle gilt für die themenreinen
+# Kanäle (`notifications`, `jobs.{id}`, `runs.{id}`, `actions`, `hosts`).
+# Unbekannte Präfixe (`ext.<id>.*`, `hello.tick`, `system.*`) brauchen nur eine Anmeldung: Events tragen nie sensible
+# Werte, und Extensions sind vertrauenswürdiger Code (docs/01 §7), keine Sandbox.
 EVENT_PREFIX_PERMISSIONS: dict[str, str] = {
     "host": "hosts.read",
     "action": "hosts.read",
@@ -83,21 +63,17 @@ EVENT_PREFIX_PERMISSIONS: dict[str, str] = {
 
 
 def permission_for_event(event_name: str) -> str | None:
-    """`None` heisst: jeder authentifizierte WS-Client sieht dieses Event, keine
-    weitere Pruefung noetig."""
+    """Die nötige Berechtigung für das Event; `None` heißt, jeder angemeldete WS-Client sieht es."""
     prefix = event_name.split(".", 1)[0]
     return EVENT_PREFIX_PERMISSIONS.get(prefix)
 
 
-# --- Eingebaute Rollen -----------------------------------------------------
-# `owner` steht nicht in dieser Tabelle: der Owner umgeht RBAC vollstaendig
-# (User.is_owner), damit eine unglueckliche Rollenaenderung die Installation nicht
-# aussperren kann.
+# Eingebaute Rollen. `owner` steht nicht hier: Er umgeht RBAC ganz (`User.is_owner`), damit eine Rollenänderung die
+# Installation nicht aussperren kann.
 #
-# `system.read` (Einstellungen -> System ansehen: Version, Sicherungen, Updates) hat nur
-# `admin` ueber `*`. Alles Kritische dort (Sicherung herunterladen, Schluessel, Loeschen,
-# spaeter Wiederherstellen) verlangt den Owner selbst (`api.deps.require_owner`) -- eine
-# Berechtigung allein reicht dafuer nie, auch `*` nicht.
+# `system.read` (Einstellungen, System ansehen) hat nur `admin` über `*`. Alles Kritische dort (Sicherung herunterladen,
+# Schlüssel, Löschen, Wiederherstellen) verlangt den Owner selbst (`api.deps.require_owner`), eine Berechtigung allein
+# reicht dafür nie, auch `*` nicht.
 SYSTEM_READ = "system.read"
 
 BUILTIN_ROLES: dict[str, tuple[str, ...]] = {

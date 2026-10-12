@@ -1,18 +1,5 @@
-"""Git-gestuetztes Skript-Repository (docs/02-EXTENSION-API.md Paragraph 6).
-
-**Ehrlich abgewichen von der woertlichen Doku-Zeile "Metadaten, Parameter: eigene
-Tabellen + JSON-Schema pro Skript":** Es gibt noch keinen Alembic-Branch-pro-Extension
-(siehe `ext/tables.py`-Docstring -- der Mechanismus fehlt bis heute im Kern). Eine eigene
-Tabelle nur fuer diese WP zu bauen waere ausser Proportion -- dieselbe Abwaegung wie
-der In-Memory-`IncidentStore` von Nodvard Shield (WP-9). Metadaten UND Inhalt leben stattdessen als
-Dateien IM SELBEN Git-Repo, das ohnehin fuer die Versionierung noetig ist
-(`<script_id>/script.sh` + `<script_id>/meta.json`) -- eine Metadatenaenderung (Name,
-Zeitplan, Parameter) landet dadurch im selben Commit-Verlauf wie eine Inhaltsaenderung,
-statt in einer zweiten, getrennt zu betrachtenden Historie.
-
-`dulwich` statt `pygit2`: ein reines Python-Wheel (kein C-Build in der Windows-
-Entwicklungsumgebung noetig), siehe docs/00-DECISIONS.md zu Plattformunterschieden (D-10).
-"""
+"""Git-gestütztes Skript-Repository: Inhalt (`script.sh`) und Metadaten (`meta.json`) liegen je Skript im selben
+Verlauf."""
 
 from __future__ import annotations
 
@@ -23,6 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+# dulwich ist reines Python (kein C-Build wie bei pygit2).
 from dulwich import porcelain
 from dulwich.repo import Repo
 
@@ -33,12 +21,11 @@ _GIT_CONFIG = (
     "[core]\n\trepositoryformatversion = 0\n"
     f"\tfilemode = {_FILEMODE}\n\tbare = false\n\tlogallrefupdates = true\n"
 )
-"""Die einzigen Einstellungen, mit denen das Repo je geoeffnet wird. Was sonst in `.git/config`
-stuende (Filter, Hooks, Signierprogramme, Einbindungen), wird bei jedem Oeffnen ueberschrieben."""
+# Das sind die einzigen Einstellungen, mit denen das Repo geöffnet wird: Was sonst in `.git/config` stünde (Filter,
+# Hooks, Signierprogramme, Einbindungen), wird bei jedem Öffnen überschrieben.
 
-# Alles unter `.git` und im Arbeitsordner, was Git-Einstellungen oder Programmaufrufe mitbringen
-# kann. Eine Sicherung bringt solche Dateien nicht mehr mit; das hier faengt auch Reste aus
-# aelteren Sicherungen und Eingriffe von aussen ab.
+# Dateien, die Git-Einstellungen oder Programmaufrufe mitbringen können. Eine Sicherung enthält sie nicht mehr; das hier
+# fängt Reste aus alten Sicherungen und Eingriffe von außen ab.
 _GIT_DIR_REMOVE = (
     "hooks", "info", "commondir", "gitdir", "worktrees", "modules", "config.worktree", "logs", "description",
 )
@@ -56,14 +43,11 @@ class _PlainNormalizer:
 
 
 class _SafeRepo(Repo):
-    """Ein Repo, das nie Programme startet: weder Filter (`.gitattributes`/`filter.*`) noch Hooks.
-    Die Dateien dafuer raeumt `ScriptRepo` ohnehin weg; das hier gilt zusaetzlich, falls dulwich
-    kuenftig noch weitere Wege kennt."""
+    """Ein Repo, das nie Programme startet: weder Filter (`.gitattributes`, `filter.*`) noch Hooks."""
 
     def __init__(self, root: str) -> None:
-        # `bare=False`: sonst nimmt dulwich den Arbeitsordner selbst als Repo, sobald dort `objects/`
-        # und `refs/` liegen und `.git/objects` fehlt -- mit `config`, `hooks/` und `info/` aus dem
-        # Arbeitsordner, an `_harden` vorbei.
+        # `bare=False`: sonst nimmt dulwich den Arbeitsordner selbst als Repo, sobald dort `objects/` und `refs/` liegen
+        # und `.git/objects` fehlt, mit `config` und `hooks/` von dort, an `_harden` vorbei.
         super().__init__(root, bare=False)
         self.hooks.clear()
 
@@ -82,11 +66,10 @@ def _remove(path: Path) -> None:
 
 
 def _harden(root: Path) -> None:
-    """Stellt sicher, dass `root/.git` ein gewoehnliches Repo ohne Filter, Hooks und fremde
-    Einstellungen ist (Verlauf und Index bleiben unberuehrt)."""
+    """Stellt sicher, dass `root/.git` ein gewöhnliches Repo ohne Filter, Hooks und fremde Einstellungen ist."""
     git_dir = root / ".git"
     if git_dir.is_symlink() or (git_dir.exists() and not git_dir.is_dir()):
-        _remove(git_dir)  # eine Verweisdatei oder ein Link woanders hin ist kein Repo von uns
+        _remove(git_dir)  # eine Verweisdatei oder ein Link woandershin ist kein eigenes Repo
     if not git_dir.exists():
         porcelain.init(str(root))
     for name in _GIT_DIR_REMOVE:
@@ -107,8 +90,7 @@ def _harden(root: Path) -> None:
 
 
 def _complete(git_dir: Path) -> None:
-    """Ergaenzt, was eine Sicherung nicht mitbringt: leere Ordner (ein Repo ohne Commit hat sonst
-    kein `objects/`) und `HEAD` (ohne `HEAD` landete der naechste Commit neben dem Verlauf)."""
+    """Ergänzt, was eine Sicherung nicht mitbringt: leere Ordner (sonst fehlt `objects/`) und `HEAD`."""
     for sub in ("objects/info", "objects/pack", "refs/heads", "refs/tags"):
         path = git_dir
         for part in sub.split("/"):
@@ -131,14 +113,13 @@ MAX_ID_LENGTH = 128
 
 
 class InvalidScriptId(ValueError):
-    """Die Kennung taugt nicht als Ordnername im Skript-Repository (`..`, Schraegstrich, absoluter Pfad ...)."""
+    """Die Kennung taugt nicht als Ordnername im Skript-Repository."""
 
 
 def safe_script_id(script_id: object) -> bool:
-    """Darf diese Kennung ein Ordner direkt unter dem Repository werden? Neue Skripte bekommen ohnehin nur `a-z0-9-`
-    (siehe `_valid_id` in `__init__.py`); hier geht es um jeden Weg, auf dem eine Kennung aus einer Anfrage zu einem
-    Dateipfad wird (lesen, Verlauf, loeschen): nie `..`, `.`, ein Schraegstrich, ein absoluter Pfad, ein Nullbyte oder
-    ein versteckter Ordner wie `.git`."""
+    """Darf diese Kennung ein Ordner direkt unter dem Repository werden?"""
+    # Eine Kennung aus einer Anfrage wird zum Dateipfad (lesen, Verlauf, löschen). Deshalb nie `..`, Schrägstrich,
+    # absoluter Pfad, Nullbyte oder versteckter Ordner wie `.git`, sonst käme man aus dem Repository heraus.
     return (
         isinstance(script_id, str)
         and 0 < len(script_id) <= MAX_ID_LENGTH
@@ -152,13 +133,11 @@ class ScriptMeta:
     id: str
     name: str
     description: str = ""
+    # `{name: {"type": "string"|"secret", "label": str, "default"?: str}}`. Ein `secret` wird nie im Klartext
+    # gespeichert, sondern erst beim Ausführen aus dem Tresor geholt (`ctx.vault_use()`).
     params_schema: dict[str, dict[str, Any]] = field(default_factory=dict)
-    """`{param_name: {"type": "string"|"secret", "label": str, "default"?: str}}`.
-    `type="secret"` heisst: der Wert wird NIE im Klartext gespeichert, sondern beim
-    Ausfuehren frisch ueber `ctx.secrets.get_handle()`/`ctx.vault_use()` aufgeloest
-    (docs/02 Paragraph 6, Zeile "Secrets")."""
+    # `{"kind": "host", "host_id": str} | {"kind": "group", "group_id": str} | {"kind": "all"}`
     target: dict[str, Any] = field(default_factory=lambda: {"kind": "host", "host_id": None})
-    """`{"kind": "host", "host_id": str} | {"kind": "group", "group_id": str} | {"kind": "all"}`."""
     schedule: str | None = None
     enabled: bool = True
 
@@ -193,28 +172,22 @@ class Script:
 
 
 class ScriptRepo:
-    """Ein Git-Repo pro Extension-Instanz unter `ctx.data_dir / "repo"` -- entspricht
-    docs/02 Paragraph 6 woertlich ("eigenes Git-Repo unter /data/ext/scripts/repo")."""
+    """Ein Git-Repo pro Extension-Instanz unter `ctx.data_dir / "repo"`."""
 
     def __init__(self, root: Path) -> None:
-        # Live gefunden (WP-10-Boot-Test gegen den echten Dev-Server): `Settings.
-        # ext_data_dir` ist standardmaessig ein RELATIVER Pfad ("./data/ext") --
-        # `porcelain.add()` staged dann STILL GAR NICHTS (kein Fehler, einfach ein
-        # leerer Baum), sobald `root` (und damit jeder abgeleitete Dateipfad) relativ
-        # ist. `pytest`s `tmp_path` ist dagegen IMMER absolut, weshalb kein Unit-Test
-        # das gezeigt hat -- erst der echte Server-Lauf (relatives CWD-basiertes
-        # `./data/...`) hat es aufgedeckt. `.resolve()` hier macht JEDEN abgeleiteten
-        # Pfad (`_dir()`, `script_path`, `meta_path`) unabhaengig vom Aufrufer absolut.
+        # Absolut machen: Bei einem relativen `root` (die Vorgabe für das Datenverzeichnis ist relativ) fügt
+        # `porcelain.add()` ohne Fehlermeldung nichts hinzu.
         self._root = root.resolve()
         self._root.mkdir(parents=True, exist_ok=True)
         _harden(self._root)
 
     def _dir(self, script_id: str) -> Path:
-        """Ordner eines Skripts -- immer direkt unter dem Repository. Wirft `InvalidScriptId`, wenn die Kennung dort
-        hinaus fuehren wuerde oder der Ordner ein symbolischer Link ist (auch auf einen Nachbarn im Repository)."""
+        """Ordner eines Skripts, immer direkt unter dem Repository; wirft `InvalidScriptId`, wenn die Kennung
+        hinausführt."""
         if not safe_script_id(script_id):
             raise InvalidScriptId(script_id)
         path = self._root / script_id
+        # Auch ein Link auf einen Nachbarordner im Repository wird abgelehnt.
         if path.is_symlink() or path.resolve().parent != self._root:
             raise InvalidScriptId(script_id)
         return path

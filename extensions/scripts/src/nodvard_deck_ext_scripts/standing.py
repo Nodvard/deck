@@ -1,35 +1,5 @@
-"""Dauerfreigabe fuer geplante Skripte: Ein Owner/Admin gibt ein Skript EINMAL frei, danach
-laufen die Zeitplan-Laeufe ohne Klick, solange sich nichts aendert.
-
-Was die Freigabe festhaelt (und was sie erloeschen laesst):
-
-- `fingerprint`: SHA-256 ueber Inhalt, Parameter (samt Vorgabewerten -- ein geplanter Lauf
-  nutzt genau die), Ziel (Server/Gruppe/Alle) und Zeitplan. Name, Beschreibung und der
-  Schalter "aktiv" zaehlen nicht: sie aendern weder was, noch wo, noch wann etwas laeuft
-  (ein pausiertes Skript laeuft ohnehin nicht). Geheime Werte stehen nie darin, nur die Namen
-  der geheimen Parameter (die Werte liegen im Tresor).
-- `hosts`: die Zielserver zum Zeitpunkt der Freigabe, je mit dem Konto, unter dem das Dashboard
-  sich dort anmeldet (z. B. "root"), dazu (`addresses`) ihre Adresse und (`ports`) den SSH-Port.
-  Wird ein freigegebener Server spaeter unter einem anderen Konto, einer anderen Adresse oder
-  einem anderen Port angesprochen, erlischt die ganze Freigabe -- das ist eine Aenderung an
-  etwas Freigegebenem (WO und ALS WER).
-  Welche Server mit welchem Konto die Freigabe deckt, sieht die freigebende Person vorher; die
-  Seite schickt dazu `targets_fingerprint` mit, und passt der nicht mehr, wird nicht freigegeben. Kommt ein Server neu dazu (Gruppe, "Alle Server"), laeuft das Skript dort
-  NICHT ohne Klick, sondern bekommt eine normale Freigabe; die anderen laufen weiter. Faellt ein
-  Server weg, laufen die uebrigen weiter -- weniger Ziele heisst nie mehr Risiko.
-
-Der Stand liegt als kleine JSON-Datei im Datenverzeichnis der Extension (neben
-`skip-notices.json`, ausserhalb des Git-Repos `repo/`): keine eigene Tabelle, also keine
-Migration. Bewusst NICHT in `meta.json`: Ein Zuruecksetzen des Skripts auf eine alte Fassung
-darf eine erloschene Freigabe nicht wiederbeleben. Kann die Datei nicht gelesen werden, gilt
-keine Freigabe (dann wird eben wieder geklickt). Ob eine Freigabe gilt, entscheidet zudem bei
-jedem Lauf der Vergleich hier -- auch ein nicht geloeschter Eintrag mit altem Fingerabdruck
-startet nichts.
-
-Erloeschen wirkt sofort, auch wenn die Datei gerade nicht beschreibbar ist oder das Protokoll
-scheitert: `block()` merkt sich die erloschene Freigabe im Speicher, `get()` liefert sie dann
-nicht mehr, und der naechste Lauf holt Protokoll und Loeschen nach (`pending_expiry()`).
-"""
+"""Dauerfreigabe für geplante Skripte: Ein Owner oder Admin gibt ein Skript einmal frei, der Zeitplan läuft dann ohne
+Klick."""
 
 from __future__ import annotations
 
@@ -49,14 +19,18 @@ _log = logging.getLogger(__name__)
 
 _FINGERPRINT_VERSION = 1
 
+# Der Stand liegt als JSON-Datei im Datenverzeichnis der Extension (keine Tabelle, keine Migration) und bewusst nicht in
+# `meta.json`: Ein Zurücksetzen des Skripts auf eine alte Fassung darf eine erloschene Freigabe nicht wiederbeleben.
+# Ist die Datei nicht lesbar, gilt keine Freigabe (es wird dann wieder geklickt).
+
 
 def port_label(port: int | None) -> str:
     return "keiner" if port is None else str(port)
 
 
 def targets_fingerprint(targets: list[SdkHost]) -> str:
-    """Fingerabdruck der Zielserver, wie die Seite sie vor dem Erteilen zeigt: je Server
-    Kennung, Konto, Adresse und SSH-Port. Damit wird nur freigegeben, was man gesehen hat."""
+    """Fingerabdruck der Zielserver (Kennung, Konto, Adresse, SSH-Port), wie die Seite sie vor dem Erteilen zeigt."""
+    # Passt er beim Erteilen nicht mehr, wird nicht freigegeben: Es gilt nur, was die Person gesehen hat.
     rows = sorted(
         json.dumps([h.id, h.credential_username, h.address, h.credential_port], ensure_ascii=False)
         for h in targets
@@ -65,7 +39,10 @@ def targets_fingerprint(targets: list[SdkHost]) -> str:
 
 
 def script_fingerprint(meta: ScriptMeta, content: str) -> str:
-    """Fingerabdruck der Teile, die bestimmen, WAS WO WANN laeuft (siehe Modul-Docstring)."""
+    """Fingerabdruck der Teile, die bestimmen, was wo wann läuft."""
+    # Name, Beschreibung und „aktiv“ zählen nicht (sie ändern nichts daran; ein pausiertes Skript läuft ohnehin nicht).
+    # Parameter stehen samt Vorgabewerten darin, denn ein geplanter Lauf nutzt genau die. Geheime Werte gehören nicht
+    # hinein, nur die Namen der geheimen Parameter (die Werte liegen im Tresor).
     data = {
         "v": _FINGERPRINT_VERSION,
         "content": content,
@@ -82,17 +59,13 @@ class StandingRecord:
     fingerprint: str
     granted_by_user_id: str
     granted_by_label: str
-    granted_at: str
-    """ISO-Zeitstempel (UTC)."""
+    granted_at: str  # ISO-Zeitstempel (UTC)
+    # Zielserver zur Zeit der Freigabe: Konto, Name (nur zur Anzeige), Adresse und SSH-Port, je nach Kennung.
     hosts: dict[str, str | None] = field(default_factory=dict)
-    """{host_id: Konto} der Zielserver bei der Freigabe."""
     host_names: dict[str, str] = field(default_factory=dict)
-    """{host_id: Name} nur fuer die Anzeige."""
     addresses: dict[str, str] = field(default_factory=dict)
-    """{host_id: Adresse} der Zielserver bei der Freigabe."""
+    # Fehlt eine Kennung (ältere Einträge), wird der Port nicht verglichen; None heißt: Der Server hatte keinen Zugang.
     ports: dict[str, int | None] = field(default_factory=dict)
-    """{host_id: SSH-Port} der Zielserver bei der Freigabe. Fehlt die Kennung (Eintrag aus der Zeit
-    vor diesem Feld), wird der Port nicht verglichen; steht dort None, galt ein Server ohne Zugang."""
 
     @classmethod
     def from_json(cls, data: Any) -> "StandingRecord | None":
@@ -120,15 +93,17 @@ class StandingRecord:
 @dataclass
 class Evaluation:
     valid: bool
-    problem: str | None = None
-    """Warum die Freigabe nicht (mehr) gilt -- dann erlischt sie."""
-    covered: list[SdkHost] = field(default_factory=list)
-    """Ziele, die ohne Klick laufen duerfen."""
-    uncovered: list[SdkHost] = field(default_factory=list)
-    """Neue Ziele, die bei der Freigabe nicht dabei waren: normale Freigabe."""
+    problem: str | None = None  # warum die Freigabe nicht mehr gilt; dann erlischt sie
+    covered: list[SdkHost] = field(default_factory=list)  # laufen ohne Klick
+    uncovered: list[SdkHost] = field(default_factory=list)  # bei der Freigabe nicht dabei, brauchen die normale Freigabe
 
 
 def evaluate(record: StandingRecord, meta: ScriptMeta, content: str, targets: list[SdkHost]) -> Evaluation:
+    """Prüft bei jedem Lauf, ob die Freigabe noch gilt; ein alter Eintrag mit anderem Fingerabdruck startet nichts."""
+    # Erloschen ist die Freigabe, wenn sich Inhalt, Parameter, Ziel oder Zeitplan des Skripts ändern oder ein
+    # freigegebener Server unter anderem Konto, anderer Adresse oder anderem SSH-Port angesprochen wird (anderes Wo oder
+    # Als wer). Ein neuer Server (Gruppe, „Alle Server“) bekommt die normale Freigabe, die übrigen laufen weiter; ein
+    # weggefallener Server macht sie nicht ungültig, weniger Ziele bedeuten nie mehr Risiko.
     if record.fingerprint != script_fingerprint(meta, content):
         return Evaluation(valid=False, problem="Das Skript wurde seit der Freigabe geändert.")
     covered: list[SdkHost] = []
@@ -173,20 +148,19 @@ class PendingExpiry:
 
     granted_at: str
     reason: str
-    logged: bool = False
-    """Die Protokollzeile ist geschrieben (beim Nachholen nicht noch einmal)."""
-    notified: bool = False
-    """Die Push-Nachricht ist raus (oder war nicht gewuenscht)."""
+    logged: bool = False  # Protokollzeile geschrieben, beim Nachholen nicht noch einmal
+    notified: bool = False  # Push-Nachricht raus oder nicht gewünscht
 
 
+# {Pfad der Datei: {script_id: PendingExpiry}}, im Speicher, weil die Datei in genau diesem Fall nicht beschreibbar sein
+# kann. Nach einem Neustart ist der Merker weg; der Vergleich beim nächsten Lauf lässt den Eintrag dann erneut
+# erlöschen.
 _BLOCKED: dict[str, dict[str, PendingExpiry]] = {}
-"""{Pfad der Datei: {script_id: PendingExpiry}} -- im Speicher, weil die Datei in genau diesem
-Fall nicht beschreibbar sein kann. Nach einem Neustart ist der Merker weg; dann laesst der
-Vergleich (Fingerabdruck, Konto, Adresse) bzw. das Gate (Person, Rechte) den Eintrag erneut
-erloeschen."""
 
 
 class StandingApprovals:
+    """Dauerfreigaben je Skript; erlöschen wirkt sofort, auch wenn die Datei nicht beschreibbar ist."""
+
     def __init__(self, path: Path) -> None:
         self._path = path
 
@@ -214,8 +188,8 @@ class StandingApprovals:
         return StandingRecord.from_json(self._read().get(script_id))
 
     def get(self, script_id: str) -> StandingRecord | None:
-        """Die Freigabe, die gilt -- None ohne Eintrag oder wenn sie erloschen ist, ihr
-        Eintrag sich aber noch nicht loeschen liess (`block`)."""
+        """Die Freigabe, die gilt; None ohne Eintrag oder wenn sie erloschen ist (auch wenn sich der Eintrag nicht
+        löschen ließ)."""
         record = self.get_raw(script_id)
         if record is None:
             return None
@@ -225,19 +199,19 @@ class StandingApprovals:
         return record
 
     def pending_expiry(self, script_id: str) -> PendingExpiry | None:
-        """Erloschen, aber Protokoll oder Loeschen stehen noch aus."""
+        """Erloschen, aber Protokoll oder Löschen stehen noch aus; der nächste Lauf holt sie nach."""
         record = self.get_raw(script_id)
         pending = self._blocked().get(script_id)
         if pending is None:
             return None
         if record is None or record.granted_at != pending.granted_at:
-            # Inzwischen geloescht oder neu erteilt: nichts mehr nachzuholen.
+            # Inzwischen gelöscht oder neu erteilt: nichts mehr nachzuholen.
             self.unblock(script_id)
             return None
         return pending
 
     def block(self, script_id: str, record: StandingRecord, reason: str) -> PendingExpiry:
-        """Ab sofort gilt `record` nicht mehr, egal ob sich der Eintrag loeschen laesst."""
+        """Ab sofort gilt `record` nicht mehr, egal ob sich der Eintrag löschen lässt."""
         blocked = self._blocked()
         pending = blocked.get(script_id)
         if pending is None or pending.granted_at != record.granted_at:
@@ -249,17 +223,15 @@ class StandingApprovals:
         self._blocked().pop(script_id, None)
 
     def set(self, script_id: str, record: StandingRecord) -> None:
-        """Wirft OSError, wenn nicht gespeichert werden kann -- eine Freigabe, die nur
-        scheinbar erteilt wurde, waere schlimmer als eine Fehlermeldung."""
+        """Wirft OSError, wenn nicht gespeichert werden kann; eine nur scheinbar erteilte Freigabe wäre schlimmer."""
         state = self._read()
         state[script_id] = asdict(record)
         self._write(state)
         self.unblock(script_id)
 
     def remove(self, script_id: str) -> StandingRecord | None:
-        """Entfernt die Freigabe und gibt sie zurueck (None, wenn es keine gab). Wirft
-        OSError, wenn nicht gespeichert werden kann -- dann vorher `block()` aufrufen, damit
-        sie trotzdem nicht mehr gilt."""
+        """Entfernt die Freigabe und gibt sie zurück (None, wenn es keine gab); vorher `block()`, damit sie sicher nicht
+        mehr gilt."""
         state = self._read()
         raw = state.pop(script_id, None)
         if raw is None:
@@ -267,10 +239,9 @@ class StandingApprovals:
         try:
             self._write(state)
         except OSError:
-            # Fail closed: Laesst sich die Datei nicht neu schreiben (z. B. Platte voll), wuerde
-            # die Freigabe nach einem Neustart wieder gelten -- die Sperre (`block`) liegt nur im
-            # Speicher. Dann lieber die ganze Datei loeschen (geht auch bei voller Platte): es
-            # gilt keine Dauerfreigabe mehr, alle muessen neu erteilt werden.
+            # Fail closed: Ließe sich die Datei nicht neu schreiben (z. B. Platte voll), gälte die Freigabe nach einem
+            # Neustart wieder, denn die Sperre (`block`) liegt nur im Speicher. Löschen geht auch bei voller Platte;
+            # dann müssen alle Dauerfreigaben neu erteilt werden.
             _log.error(
                 "Dauerfreigaben: Datei nicht beschreibbar -- alle Dauerfreigaben werden geloescht.",
                 exc_info=True,

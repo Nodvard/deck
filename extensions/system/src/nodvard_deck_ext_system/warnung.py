@@ -1,31 +1,4 @@
-"""Warnungen der system-Erweiterung: Platte fast voll und Temperatur zu hoch.
-
-Ersetzt die zwei Ueberwachungen des Vorgaengersystems. Ein Job (`warnung`, Standard alle 10
-Minuten) fragt jeden Linux-Host mit SSH-Zugang, den die Erweiterung betreut (dieselbe
-Auswahl wie das Widget "Server-Zustand": Linux + hinterlegter Zugang), EINMAL und
-rein lesend ab -- ein kurzes Skript, nicht die volle Systemabfrage (die wartet 1 s auf die
-CPU-Messung und liest die Paketlisten).
-
-Meldungen (Schwere Warnung, Entwarnung nur Info):
-  "Speicher fast voll: /var auf ki-server bei 91 %"
-  "Raspberry Pi ist heiss: 78 °C"
-
-Keine Dauerwiederholung -- je Host und Dateisystem bzw. Sensor:
-  - einmal melden, wenn der Schwellwert erreicht wird,
-  - erneut erst, wenn der Wert mindestens `HYSTERESIS` darunter lag (dann gilt die
-    Warnung als beendet und es kommt einmal "wieder im gruenen Bereich"),
-  - oder als Erinnerung nach 24 Stunden, falls es anhaelt.
-Der Zustand steht in `data_dir/warnung-state.json`, ein Neustart meldet also nichts doppelt.
-
-Nicht erreichbare Hosts sind KEIN Befund dieser Pruefung: nur ein Log-Eintrag, der Zustand
-bleibt unveraendert (der Ausfall selbst wird anderswo gemeldet).
-
-Wartungsfenster: jede Meldung traegt `host_id`. Hat ein Fenster sie stumm geschaltet
-(`ctx.notify.send()` sagt das), merkt sich der Job "stumm gemeldet" und fragt danach nur
-`ctx.notify.would_suppress()`; ist das Fenster vorbei und das Problem noch da, kommt die
-Warnung einmal hoerbar nach (wie im Gameserver-Waechter). Eine gehoerte Warnung bekommt
-ausserdem immer eine gehoerte Entwarnung.
-"""
+"""Warnungen der system-Erweiterung: Platte fast voll und Temperatur zu hoch."""
 
 from __future__ import annotations
 
@@ -44,19 +17,21 @@ from .sysinfo import _sections, parse_disks
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# Ein Job (`warnung`) fragt jeden Linux-Server mit SSH-Zugang rein lesend mit einem kurzen Skript ab, nicht mit der
+# vollen Systemabfrage (die wartet 1 s auf die CPU-Messung und liest die Paketlisten). Der Zustand je Server und
+# Dateisystem bzw. Sensor steht in `data_dir/warnung-state.json`, ein Neustart meldet also nichts doppelt.
 PAGE_PATH = "/ext/system/system"
 STATE_FILE = "warnung-state.json"
 
 DEFAULT_DISK_PERCENT = 85
 DEFAULT_TEMP_C = 75
 DEFAULT_INTERVAL_MIN = 10
-HYSTERESIS = 5  # Punkte (Prozent) bzw. Grad, die der Wert wieder darunter liegen muss
+HYSTERESIS = 5  # Prozentpunkte bzw. Grad, die der Wert wieder darunter liegen muss
 REMIND_S = 24 * 3600
-_PARALLEL_HOSTS = 6
+_PARALLEL_HOSTS = 6  # Server, die gleichzeitig abgefragt werden
 
-# Nur lesend. Netzlaufwerke (nfs, cifs, sshfs) fehlen mit Absicht: ein haengendes
-# Laufwerk wuerde `df` und damit die ganze Pruefung blockieren. Dazu die ueblichen
-# Nicht-Platten (tmpfs, overlay, squashfs, devtmpfs, efivarfs, CD/DVD).
+# Netzlaufwerke (nfs, cifs, sshfs) fehlen mit Absicht: Ein hängendes Laufwerk würde `df` und damit die ganze Prüfung
+# blockieren. Dazu fehlen die üblichen Nicht-Platten (tmpfs, overlay, squashfs, devtmpfs, efivarfs, CD/DVD).
 WARN_SCRIPT = r"""echo @@disks
 df -P -T -x tmpfs -x devtmpfs -x overlay -x squashfs -x efivarfs -x ramfs -x iso9660 -x udf -x nfs -x nfs4 -x cifs -x smb3 -x fuse.sshfs 2>/dev/null | tail -n +2
 echo @@thermal
@@ -83,13 +58,10 @@ def _plausible(celsius: float) -> bool:
 
 
 def parse_warn_output(text: str) -> dict[str, Any]:
-    """Ausgabe von WARN_SCRIPT -> {"complete", "disks", "temps"}.
-
-    disks: echte Dateisysteme (ohne /boot/efi, je Geraet nur der kuerzeste Einhaengepunkt --
-    btrfs-Unterdatentraeger und Bind-Mounts zeigen sonst dieselbe Platte mehrfach).
-    temps: [{"sensor": "thermal_zone0", "label": "cpu-thermal", "celsius": 48.3}].
-    Fehlende oder unsinnige Werte fallen einfach weg, das ist kein Fehler."""
+    """Ausgabe von `WARN_SCRIPT` als {"complete", "disks", "temps"}; fehlende oder unsinnige Werte fallen weg."""
     s = _sections(text)
+    # Je Gerät zählt nur der kürzeste Einhängepunkt, sonst zeigen btrfs-Unterdatenträger und Bind-Mounts dieselbe Platte
+    # mehrfach.
     best: dict[str, dict[str, Any]] = {}
     for disk in parse_disks(s.get("disks", [])):
         if _is_boot_efi(disk["mount"]):
@@ -107,7 +79,7 @@ def parse_warn_output(text: str) -> dict[str, Any]:
         celsius = int(parts[2]) / 1000  # Millgrad
         if _plausible(celsius):
             temps.append({"sensor": parts[0], "label": parts[1].strip() or parts[0], "celsius": round(celsius, 1)})
-    if not temps:  # Raspberry Pi ohne thermal_zone (seltener): vcgencmd als Rueckfall
+    if not temps:  # Raspberry Pi ohne thermal_zone (selten): `vcgencmd` als Rückfall
         for line in s.get("vcgencmd", []):
             match = _VCGENCMD_RE.search(line)
             if match and _plausible(float(match.group(1))):
@@ -122,16 +94,15 @@ def parse_warn_output(text: str) -> dict[str, Any]:
 
 
 def whole(value: float) -> int:
-    """Kaufmaennisch gerundet -- die Zahl, die in der Meldung steht, entscheidet auch."""
+    """Kaufmännisch gerundet: Die Zahl, die in der Meldung steht, entscheidet auch."""
     return int(value + 0.5)
 
 
 def decide(entry: dict[str, Any] | None, value: float, threshold: float, now: float) -> str | None:
-    """Was tun bei diesem Messwert? "warn", "remind", "recover" oder None.
-
-    Hysterese: Nach einer Warnung gilt das Problem erst als behoben, wenn der Wert
-    mindestens HYSTERESIS unter dem Schwellwert liegt. Dazwischen bleibt es ruhig --
-    ein Wert, der um die Schwelle pendelt, meldet nicht jedes Mal neu."""
+    """Was tun bei diesem Messwert? "warn", "remind", "recover" oder None."""
+    # Hysterese: Nach einer Warnung gilt das Problem erst als behoben, wenn der Wert mindestens `HYSTERESIS` unter der
+    # Schwelle liegt; ein Wert, der um die Schwelle pendelt, meldet so nicht jedes Mal neu. Ein anhaltendes Problem
+    # erinnert nach `REMIND_S`.
     entry = entry or {}
     if not entry.get("alerting"):
         return "warn" if value >= threshold else None
@@ -218,8 +189,7 @@ def _save(path: Path, state: dict[str, Any]) -> None:
 
 
 def warn_hosts(hosts: list[Any], skip: list[str]) -> list[Any]:
-    """Dieselbe Auswahl wie das Widget "Server-Zustand" (Linux mit SSH-Zugang), minus
-    die in den Einstellungen ausgenommenen (Name, Anzeigename oder Host-ID)."""
+    """Linux-Server mit SSH-Zugang wie im Widget „Server-Zustand“, ohne die in den Einstellungen ausgenommenen."""
     skipped = {s.strip().lower() for s in skip if isinstance(s, str) and s.strip()}
     return [
         h for h in hosts
@@ -229,9 +199,9 @@ def warn_hosts(hosts: list[Any], skip: list[str]) -> list[Any]:
 
 
 async def _send(ctx: "ExtensionContext", notification: Notification) -> bool | None:
-    """-> True, wenn ein Wartungsfenster den Push unterdrueckt hat; False, wenn zugestellt;
-    None, wenn das Senden scheiterte (dann bleibt der Zustand, der naechste Lauf versucht es
-    erneut). Aeltere Kerne liefern kein Ergebnis -- dann gilt die Meldung als zugestellt."""
+    """True, wenn ein Wartungsfenster den Push unterdrückt hat, False bei Zustellung, None bei Sendefehler (nächster
+    Lauf versucht es erneut)."""
+    # Ältere Kerne liefern kein Ergebnis; dann gilt die Meldung als zugestellt.
     try:
         result = await ctx.notify.send(notification)
     except Exception as exc:  # noqa: BLE001 - eine Meldung darf den Job nicht abbrechen
@@ -241,8 +211,8 @@ async def _send(ctx: "ExtensionContext", notification: Notification) -> bool | N
 
 
 async def _window_over(ctx: "ExtensionContext", host_id: str) -> bool:
-    """Ist das Wartungsfenster fuer diesen Host vorbei? Im Zweifel True: lieber einmal zu
-    viel melden als eine Meldung verlieren."""
+    """Ist das Wartungsfenster für diesen Server vorbei? Im Zweifel ja: lieber einmal zu viel melden als eine Meldung
+    verlieren."""
     try:
         return await ctx.notify.would_suppress(host_id=host_id) is not True
     except Exception:  # noqa: BLE001
@@ -250,8 +220,10 @@ async def _window_over(ctx: "ExtensionContext", host_id: str) -> bool:
 
 
 async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_id: str, value: float, threshold: int, now: float, build: Any) -> int:
-    """Ein Messwert gegen seinen Zustand. `build(kind, note)` liefert die Notification.
-    -> Anzahl gesendeter Meldungen."""
+    """Prüft einen Messwert gegen seinen Zustand und gibt die Zahl gesendeter Meldungen zurück; `build(kind, note)` baut
+    die Meldung."""
+    # Eine im Wartungsfenster stumm geschaltete Meldung (`muted`) wird nur still vermerkt; ist das Fenster vorbei und
+    # das Problem noch da, kommt sie einmal hörbar nach. Eine gehörte Warnung bekommt immer eine gehörte Entwarnung.
     entry = state.get(key)
     action = decide(entry, value, threshold, now)
     sent = 0
@@ -266,7 +238,7 @@ async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_i
         muted = await _send(ctx, build("recover", ""))
         if muted is None:
             return 0
-        # Eine gehoerte Warnung schliesst immer eine gehoerte Entwarnung: fiel sie ins Fenster, kommt sie danach nach.
+        # Fiel die Entwarnung einer gehörten Warnung ins Fenster, kommt sie danach nach (`ok_pending`).
         state[key] = {"alerting": False, "last_sent": now, "muted": False, "heard": False,
                       "ok_pending": bool(muted and entry and entry.get("heard")), "value": value}
         return 1
@@ -274,7 +246,7 @@ async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_i
         return 0
     entry["value"] = value
     if entry.get("alerting") and value >= threshold and entry.get("muted") and await _window_over(ctx, host_id):
-        # Im Fenster nur still gemeldet, Fenster vorbei, Problem besteht noch: einmal hoerbar.
+        # Im Fenster nur still gemeldet, Fenster vorbei, Problem besteht noch: einmal hörbar.
         muted = await _send(ctx, build("warn", "Das begann im Wartungsfenster (dort nur im Verlauf, ohne Push) und hält noch an."))
         if muted is not None:
             entry.update(muted=muted, heard=not muted, last_sent=now)
@@ -288,9 +260,11 @@ async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_i
 
 
 async def _read_host(ctx: "ExtensionContext", host: Any, sem: asyncio.Semaphore) -> dict[str, Any] | None:
-    """Messwerte eines Hosts oder None (nicht erreichbar / Antwort unbrauchbar -- nur Log)."""
+    """Messwerte eines Servers oder None, wenn er nicht antwortet; das ist keine Warnung, nur ein Log-Eintrag."""
     async with sem:
         try:
+            # Das äußere Zeitlimit (40 s) liegt über dem des SSH-Aufrufs (30 s), damit auch ein hängender
+            # Verbindungsaufbau endet.
             result = await asyncio.wait_for(ctx.exec.run(host, WARN_SCRIPT, timeout_s=30), timeout=40)
         except Exception as exc:  # noqa: BLE001 - ein Host darf die anderen nicht aufhalten
             ctx.logger.info("system-Warnungen: %s nicht erreichbar, übersprungen (%s)", host.name, str(exc) or type(exc).__name__)
@@ -314,7 +288,7 @@ async def run_warnungen(ctx: "ExtensionContext") -> dict[str, int]:
     state = _load(path, ctx.logger)
     all_hosts = await ctx.hosts.list()
     hosts = warn_hosts(all_hosts, settings.get("warn_skip_hosts") or [])
-    # Zustand entfernter Server aufraeumen, sonst waechst die Datei ewig.
+    # Zustand entfernter Server aufräumen, sonst wächst die Datei ewig.
     known = {h.id for h in all_hosts}
     for key in [k for k in state if k.split("|", 1)[0] not in known]:
         del state[key]

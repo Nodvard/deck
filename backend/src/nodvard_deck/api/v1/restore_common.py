@@ -1,14 +1,6 @@
-"""Gemeinsame Bausteine der Wiederherstellen-Endpunkte: unter `/system/restore/*` (Owner mit
-Passwort) und unter `/auth/bootstrap/restore/*` (Assistent, nur ohne Konto, mit Einrichtungscode).
+"""Gemeinsame Bausteine der Wiederherstellen-Endpunkte unter `/system/restore/*` und `/auth/bootstrap/restore/*`.
 
-Beide Wege laufen durch dieselben Funktionen; sie unterscheiden sich nur im `Scope` und darin,
-WER vorher geprueft wurde. Diese Pruefung steht in einer Dependency und laeuft IMMER VOR dem
-Lesen des Bodys -- FastAPI liest einen Body nur, wenn der Endpunkt einen deklariert, und der
-Upload liest ihn erst ueber `request.stream()` im Handler.
-
-Passwort im Kopf: `X-Confirm-Password` traegt das Anmeldepasswort PROZENTKODIERT (UTF-8,
-`encodeURIComponent`). HTTP-Kopfzeilen kennen kein Unicode; ein Passwort mit "ä" oder einem
-Emoji liesse sich sonst gar nicht senden. Reines ASCII ohne `%` geht unveraendert.
+Beide Wege nutzen dieselben Funktionen und unterscheiden sich nur im `Scope`.
 """
 
 from __future__ import annotations
@@ -33,7 +25,7 @@ OCTET_STREAM = "application/octet-stream"
 
 class RestoreInspectIn(BaseModel):
     """Genau eines von beiden: das Sicherungspasswort bzw. Einmal-Passwort der Datei, oder der
-    Wiederherstellungsschluessel (`AGE-SECRET-KEY-1...`)."""
+    Wiederherstellungsschlüssel (`AGE-SECRET-KEY-1...`)."""
 
     password: str | None = Field(default=None, max_length=1024)
     recovery_key: str | None = Field(default=None, max_length=256)
@@ -53,7 +45,7 @@ class RestoreInspectIn(BaseModel):
 
 class RestoreScheduleIn(BaseModel):
     sign_out_all: bool = True
-    """Alle Anmeldungen beenden (Standard). Sonst wuerden Sitzungen aus der Zeit der Sicherung wieder gelten."""
+    """Alle Anmeldungen beenden (Standard). Sonst würden Sitzungen aus der Zeit der Sicherung wieder gelten."""
 
 
 def http_error(exc: Exception) -> HTTPException:
@@ -74,7 +66,7 @@ def http_error(exc: Exception) -> HTTPException:
 
 
 def decode_header_password(value: str | None) -> str:
-    """`X-Confirm-Password` -> Passwort (prozentkodiert, UTF-8). Leer, wenn der Kopf fehlt."""
+    """`X-Confirm-Password` -> Passwort, leer ohne den Kopf; prozentkodiert (UTF-8), weil Kopfzeilen kein Unicode kennen."""
     if not value:
         return ""
     try:
@@ -84,7 +76,7 @@ def decode_header_password(value: str | None) -> str:
 
 
 def upload_headers(request: Request) -> int | None:
-    """Prueft Content-Type und liest Content-Length -- alles aus dem Kopf, vor dem Body."""
+    """Prüft Content-Type und liest Content-Length aus dem Kopf, vor dem Body."""
     media = request.headers.get("content-type", "").split(";")[0].strip().lower()
     if media != OCTET_STREAM:
         raise HTTPException(status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, f"Bitte die Datei als {OCTET_STREAM} senden (roher Datenstrom, kein Formular).")
@@ -105,12 +97,13 @@ async def _stream(request: Request) -> AsyncIterator[bytes]:
         yield chunk
 
 
+# Die Berechtigung prüft eine Dependency vor dem Lesen des Bodys; der Upload liest ihn erst hier über `request.stream()`.
 async def do_upload(request: Request, session: Any, settings: Settings, scope: Scope) -> dict:
     length = upload_headers(request)
     try:
         view = await restore_service.receive_upload(settings, scope, _stream(request), length)
     except ClientDisconnect:
-        raise  # die Gegenstelle ist weg; es gibt niemanden, der eine Antwort bekaeme
+        raise  # die Gegenstelle ist weg; es gibt niemanden, der eine Antwort bekäme
     except BackupError as exc:
         await restore_service.audit(session, scope, "system.restore.upload_failed", outcome="failure", reason=str(exc))
         await session.commit()
@@ -129,7 +122,7 @@ async def do_inspect(session: Any, settings: Settings, scope: Scope, rid: str, b
             settings, scope, rid, secret=body.secret, instance_id=instance_id, has_accounts=has_accounts,
         )
     except (BackupError, ValueError) as exc:
-        # Nie das Passwort oder den Schluessel ins Protokoll -- nur, dass es nicht ging und warum.
+        # Nie das Passwort oder den Schlüssel ins Protokoll, nur dass es nicht ging und warum.
         await restore_service.audit(session, scope, "system.restore.inspect_failed", outcome="failure", reason=str(exc), target_id=rid)
         await session.commit()
         raise http_error(exc) from exc

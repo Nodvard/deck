@@ -1,17 +1,6 @@
-"""Konsole IN einem Container (`docker exec -it`), ueber das Terminal des Kerns.
+"""Konsole in einem Container (`docker exec -it`) über das Terminal des Kerns (`ScopedTerminalTarget`, scope `container`).
 
-Erfuellt `nodvard_sdk.capabilities.ScopedTerminalTarget` mit `scope = "container"`: Die Seite oeffnet
-`/terminal?host=<id>&scope=container&ref=<name>`, der Kern legt die Sitzung an wie fuer ein normales Terminal
-(Berechtigung `hosts.execute`, Einmal-Ticket, Leerlauf-Grenze, Protokoll `terminal.open`/`terminal.close` mit
-`scope` und `ref`) und fragt hier nach der Shell.
-
-Der Name wandert in ein SSH-Kommando und muss deshalb durch `CONTAINER_NAME_RE` -- vor `can_open_in` UND noch
-einmal vor dem Oeffnen. Nur Server mit dem Docker-Tag, wie bei allen Container-Aktionen. In welcher Shell man landet,
-entscheidet der Container: bash, wenn es sie gibt, sonst sh. Gibt es keine (Images ohne Shell) oder laeuft der
-Container nicht, zeigt das Terminal Dockers eigene Meldung und endet. Nie in den Container von Nodvard Deck selbst:
-darin liegen Datenbank und Tresor-Schluessel (wie Stoppen und Loeschen nur direkt auf dem Host).
-
-Gilt auch, wenn die Erweiterung "Terminal" aus ist: Diese Shell haengt nur am Recht `hosts.execute`.
+Hängt nur am Recht `hosts.execute`, auch wenn die Erweiterung "Terminal" aus ist.
 """
 
 from __future__ import annotations
@@ -25,24 +14,27 @@ from .capabilities import CONTAINER_NAME_RE, is_own_container
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# bash, wenn es sie gibt, sonst sh; hat das Image keine Shell, zeigt das Terminal Dockers eigene Meldung.
 PICK_SHELL = "if command -v bash >/dev/null 2>&1; then exec bash; else exec sh; fi"
 
 
 def exec_command(container: str) -> str:
     """`docker exec -it <name> sh -c '<bash, sonst sh>'`. `ValueError` bei einem Namen, der nicht Dockers Regel folgt."""
+    # Der Name steht ungequotet im SSH-Kommando: nur durchlassen, was Dockers Namensregel erlaubt (auch `can_open_in`
+    # prüft sie, hier noch einmal vor dem Öffnen).
     if not CONTAINER_NAME_RE.match(container):
         raise ValueError("Ungültiger Containername.")
     return f"docker exec -it {container} sh -c {shlex.quote(PICK_SHELL)}"
 
 
 class ShellRefused(RuntimeError):
-    """Fertiger Satz fuer die Fehlermeldung des Terminals (`readable`, siehe docs/02)."""
+    """Fertiger Satz für die Fehlermeldung des Terminals (`readable`, siehe docs/02)."""
 
     readable = True
 
 
 class _ShellSession:
-    """Erfuellt `nodvard_sdk.capabilities.TerminalSession` strukturell (wie die terminal-Erweiterung)."""
+    """Strukturell eine `TerminalSession` (wie in der Terminal-Erweiterung)."""
 
     def __init__(self, process: Any, stack: AsyncExitStack) -> None:
         self._process = process
@@ -71,7 +63,7 @@ class _ShellSession:
 
 
 class ContainerShell:
-    """Erfuellt `nodvard_sdk.capabilities.ScopedTerminalTarget` fuer Container auf Docker-Hosts."""
+    """Konsole in Containern von Docker-Hosts (`ScopedTerminalTarget`); nur Server mit dem Docker-Tag."""
 
     scope = "container"
 
@@ -86,6 +78,8 @@ class ContainerShell:
 
     async def open_in(self, host: Any, ref: str, *, cols: int, rows: int) -> _ShellSession:
         command = exec_command(ref)
+        # Nie in den Container von Nodvard Deck selbst: darin liegen Datenbank und Tresor-Schlüssel (wie Stoppen und
+        # Löschen geht das nur direkt auf dem Host).
         inspected = await self._ctx.exec.run(host, f"docker inspect --type container -f '{{{{.Id}}}}' {ref}", timeout_s=15)
         if inspected.exit_code == 0 and is_own_container(inspected.stdout.strip()):
             raise ShellRefused(

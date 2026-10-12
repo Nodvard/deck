@@ -1,17 +1,4 @@
-"""Dauerhafte Vorfalls-Historie -- eigene `Base`/`MetaData` wie bei
-inventory/documents, eigener Alembic-Branch (`migrations/versions/`), Pflicht-Praefix
-`ext_nexus_soc_` (von `ctx.db.declare_tables()` beim `setup()` geprueft).
-
-Vorher lebte die Historie nur in einer `deque(maxlen=200)` im Prozess: nach jedem
-Neustart/Deploy war die SOC-Seite leer, und Bestaetigen/Verwerfen ging ebenso
-verloren. Die Warteschlange des laufenden Batches und die Cooldowns liegen im Speicher
-(`incidents.py`); damit ein Neustart im Sammelfenster keinen Vorfall verliert, steht
-jeder Vorfall zusaetzlich sofort in `ext_nexus_soc_incident_queue` (`IncidentQueueRecord`)
-und wird beim Start wieder aufgenommen.
-
-Jede Spalte hier hat ihre Entsprechung 1:1 in der Migration -- beide Dateien muessen
-zusammen geaendert werden.
-"""
+"""Tabellen der Erweiterung (eigene `Base`, Präfix `ext_nexus_soc_`); Spalten stehen 1:1 in den Migrationen."""
 
 from __future__ import annotations
 
@@ -30,8 +17,7 @@ class Base(DeclarativeBase):
 class IncidentRecord(Base):
     __tablename__ = "ext_nexus_soc_incidents"
 
-    # Die Vorfall-ID aus `incidents.new_incident_id()` -- dieselbe, die als
-    # `correlation_id` im Kern-Audit-Log steht (Verknuepfung Vorfall <-> Audit).
+    # Dieselbe ID steht als `correlation_id` im Kern-Audit-Log.
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     host_id: Mapped[str | None] = mapped_column(String(64), index=True)
     host_name: Mapped[str] = mapped_column(String(255), index=True)
@@ -48,11 +34,7 @@ class IncidentRecord(Base):
 
 
 class IncidentQueueRecord(Base):
-    """Noch nicht gemeldeter Vorfall des laufenden Sammelfensters. Wird sofort beim
-    Erkennen geschrieben ("offen") und erst nach der Verarbeitung des Batches auf
-    "verarbeitet" gesetzt -- so geht ein Vorfall bei einem Neustart innerhalb des
-    Fensters nicht verloren, sondern wird beim Start wieder aufgenommen.
-    Spalten 1:1 wie in der Migration b8c9d0e1f2a3."""
+    """Noch nicht gemeldeter Vorfall des Sammelfensters; wird nach einem Neustart wieder aufgenommen."""
 
     __tablename__ = "ext_nexus_soc_incident_queue"
 
@@ -65,24 +47,19 @@ class IncidentQueueRecord(Base):
     # offen | verarbeitet | fehlgeschlagen
     status: Mapped[str] = mapped_column(String(16), index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
-    # Zeitpunkt, an dem der Eintrag "verarbeitet" oder "fehlgeschlagen" wurde (fuers Aufraeumen)
+    # Für das Aufräumen alter Einträge.
     processed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    # Fehlgeschlagene Verarbeitungsversuche; nach MAX_ATTEMPTS wird der Eintrag "fehlgeschlagen".
+    # Nach MAX_ATTEMPTS Fehlversuchen wird der Eintrag "fehlgeschlagen".
     attempts: Mapped[int] = mapped_column(Integer(), default=0)
-    # Schon angelegter Aktionsvorschlag samt KI-Text: ein erneuter Versuch schlaegt nichts
-    # ein zweites Mal vor, sondern meldet mit diesem Stand weiter.
+    # Ein erneuter Versuch schlägt nichts ein zweites Mal vor, sondern meldet mit diesem Stand weiter.
     action_id: Mapped[str | None] = mapped_column(String(64))
     ai_summary: Mapped[str | None] = mapped_column(Text())
-    # Gesetzt, BEVOR ein Aktionsvorschlag angelegt wird (bei voller Autonomie fuehrt ihn das Gate
-    # sofort aus). Steht es nach einem Neustart ohne `action_id` da, ist unklar, ob der Vorschlag
-    # entstanden ist: dann wird nur gemeldet, nie ein zweiter vorgeschlagen.
+    # Wird vor dem Vorschlag gesetzt (bei voller Autonomie führt das Gate ihn sofort aus). Fehlt danach
+    # `action_id`, ist unklar, ob er entstand: dann nur melden, nie ein zweiter Vorschlag.
     proposal_started: Mapped[bool] = mapped_column(Boolean(), default=False)
 
 
-# ---------------------------------------------------------------------------
-# Virenschutz: Scans, Funde/Quarantaene, Haertungs-Audits.
-# Spalten 1:1 wie in der Migration e5f6a7b8c9d0 -- beide Dateien zusammen aendern.
-# ---------------------------------------------------------------------------
+# Virenschutz: Scans, Funde, Härtungs-Audits.
 
 
 class ScanRecord(Base):
@@ -139,14 +116,11 @@ class AuditRecord(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
 
 
-# ---------------------------------------------------------------------------
-# Update-Zentrale, Einbruchschutz und Datei-Waechter.
-# Spalten 1:1 wie in der Migration f6a7b8c9d0e1 (+ a7b8c9d0e1f2) -- beide Dateien zusammen aendern.
-# ---------------------------------------------------------------------------
+# Update-Zentrale, Einbruchschutz und Datei-Wächter.
 
 
 class UpdateRunRecord(Base):
-    """Ein Einspiel-Lauf (Updates, Aufraeumen, Neustart) -- manuell oder automatisch."""
+    """Ein Einspiel-Lauf (Updates, Aufräumen, Neustart), manuell oder automatisch."""
 
     __tablename__ = "ext_nexus_soc_update_runs"
 
@@ -164,15 +138,12 @@ class UpdateRunRecord(Base):
     output_tail: Mapped[str | None] = mapped_column(Text())
     started_at: Mapped[datetime] = mapped_column(UTCDateTime, index=True)
     finished_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    # Migration a7b8c9d0e1f2: Name des entkoppelten Laufs auf dem Server
-    # (`detached.py`). Gesetzt = nach einem Dashboard-Neustart wieder aufnehmen.
+    # Name des entkoppelten Laufs auf dem Server (`detached.py`); gesetzt heißt: nach einem Neustart wieder aufnehmen.
     remote_id: Mapped[str | None] = mapped_column(String(64))
 
 
 class BaselineRecord(Base):
-    """Zuletzt gesehener/bestaetigter Stand je Server und Art: "updates" (letzte
-    Update-Pruefung), "ports" (bekannte offene Ports), "logins" (bekannte Login-IPs),
-    "files" (Pruefsummen ueberwachter Dateien), "guard" (letzter Einbruchschutz-Blick)."""
+    """Zuletzt gesehener oder bestätigter Stand je Server und Art (updates, ports, logins, files, guard)."""
 
     __tablename__ = "ext_nexus_soc_baselines"
 
@@ -184,8 +155,7 @@ class BaselineRecord(Base):
 
 
 class SecurityEventRecord(Base):
-    """Sicherheitsereignis aus Einbruchschutz/Datei-Waechter (Brute-Force, Login von
-    neuer IP, neuer offener Port, geaenderte Systemdatei ...)."""
+    """Sicherheitsereignis aus Einbruchschutz oder Datei-Wächter."""
 
     __tablename__ = "ext_nexus_soc_events"
 

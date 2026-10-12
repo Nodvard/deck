@@ -1,8 +1,6 @@
-"""Manifest — `extension.toml`.
+"""Das Manifest `extension.toml`, gelesen ohne den Extension-Code zu importieren (ein Import wäre Codeausführung).
 
-Wird gelesen, **ohne** den Extension-Code zu importieren. Ein Import ist Codeausführung;
-eine deaktivierte oder defekte Extension darf nicht laufen, nur weil sie in der Registry
-angezeigt wird. Siehe docs/01-ARCHITECTURE.md §3.
+Eine deaktivierte oder defekte Extension darf nicht laufen, nur weil die Registry sie anzeigt.
 """
 
 from __future__ import annotations
@@ -31,19 +29,19 @@ KNOWN_PERMISSIONS = frozenset(
         "files.provide",
         "settings.read",
         "net.outbound",
-        # WP-8-Blocker-Nachtrag: erlaubt ctx.http, TLS-Zertifikatspruefung fuer einen
-        # einzelnen Aufruf abzuschalten (insecure_tls=True) -- getrennt von
-        # net.outbound, damit ein Admin diese deutlich riskantere Faehigkeit separat
-        # sieht und bestaetigt, siehe ext/context.py HttpHandle-Docstring.
+        # Erlaubt ctx.http, die TLS-Zertifikatsprüfung für einen einzelnen Aufruf abzuschalten
+        # (insecure_tls=True) oder ein Zertifikat zu pinnen (pinned_sha256) -- getrennt von
+        # net.outbound, damit ein Admin diese deutlich riskantere Fähigkeit separat
+        # sieht und bestätigt (siehe HttpHandle).
         "net.outbound.insecure_tls",
         # Erlaubt `ctx.api.include_router(..., public=True)`: Routen, die OHNE Anmeldung
-        # erreichbar sind (z. B. fuer Webhooks). Eigene Berechtigung, damit ein Admin sieht,
-        # dass eine Erweiterung Adressen fuer jeden oeffnet; der Kern schreibt die
-        # oeffentlichen Praefixe beim Einschalten ins Protokoll.
+        # erreichbar sind (z. B. für Webhooks). Eigene Berechtigung, damit ein Admin sieht,
+        # dass eine Erweiterung Adressen für jeden öffnet; der Kern schreibt die
+        # öffentlichen Präfixe beim Einschalten ins Protokoll.
         "api.public",
-        # Darf Vorschlaege mit einer Dauerfreigabe (ActionRequest.standing_approval) einreichen.
+        # Darf Vorschläge mit einer Dauerfreigabe (ActionRequest.standing_approval) einreichen.
         # Eigene Berechtigung, damit im Manifest sichtbar ist, welche Erweiterung etwas ohne Klick
-        # starten kann; das Gate prueft die Freigabe trotzdem selbst.
+        # starten kann; das Gate prüft die Freigabe trotzdem selbst.
         "actions.standing_approval",
     }
 )
@@ -51,10 +49,10 @@ KNOWN_PERMISSIONS = frozenset(
 
 KNOWN_STAGES = ("stable", "beta")
 """Reifegrad einer Erweiterung (`stage` im Manifest): `stable` (Vorgabe) oder `beta` (funktioniert, ist aber
-noch nicht so gruendlich erprobt wie der Rest; die Oberflaeche kennzeichnet sie)."""
+noch nicht so gründlich erprobt wie der Rest; die Oberfläche kennzeichnet sie)."""
 
 KNOWN_ENABLE_TRIGGERS = frozenset({"host_credential"})
-"""Anlaesse, bei denen der Kern eine noch unberuehrte Erweiterung von selbst einschaltet
+"""Anlässe, bei denen der Kern eine noch unberührte Erweiterung von selbst einschaltet
 (`enable_on` im Manifest). `host_credential`: ein Server hat einen SSH-Zugang bekommen."""
 
 
@@ -77,22 +75,20 @@ class ExtensionManifest(BaseModel):
     nur, solange niemand sie je bewusst ein- oder ausgeschaltet hat. Leer = nie automatisch."""
     category: str | None = None
     """Gruppe in der Modul-Auswahl des Einrichtungsassistenten, z. B. `servers`, `security`,
-    `tools`, `connections`, `example`. Die Oberflaeche kennt die Namen; ein unbekannter oder
+    `tools`, `connections`, `example`. Die Oberfläche kennt die Namen; ein unbekannter oder
     fehlender Wert landet unter „Weitere Module“."""
     sort_order: int = 100
     """Reihenfolge innerhalb der Gruppe (kleiner = weiter oben), bei Gleichstand nach Name."""
     stage: str = "stable"
-    """Reifegrad: `stable` (Vorgabe, wenn das Feld fehlt) oder `beta`. Die Oberflaeche zeigt bei `beta` ein
-    ruhiges Abzeichen „Beta“ (Modul-Liste, Assistent, Menue, Seitenkopf). Ein anderer Wert ist ein Fehler
-    beim Laden des Manifests, damit ein Tippfehler nicht still als `stable` gilt."""
+    """Reifegrad: `stable` (Vorgabe, wenn das Feld fehlt) oder `beta`. Die Oberfläche zeigt bei `beta` ein
+    ruhiges Abzeichen „Beta“ (Modul-Liste, Assistent, Menü, Seitenkopf). Ein unbekannter Wert gilt als `beta`."""
+    # Grenze: Eine Erweiterung, die Server anlegt (`hosts.write`), kann nicht umbenannt werden, weil die Server die
+    # Kennung ihres Anbieters tragen. Der Kern lehnt `legacy_ids` zusammen mit `hosts.write` beim Entdecken ab (Meldung
+    # im Protokoll).
     legacy_ids: list[str] = Field(default_factory=list)
-    """Fruehere Kennungen dieser Erweiterung, z. B. `["alt-name"]` nach einer Umbenennung. Der Kern
-    nimmt dann den gespeicherten Stand der alten Kennung weiter (Einstellungen, Zeitplaene, Daten)
-    und erlaubt die alten Tabellen-Praefixe. Leer = nie umbenannt (der Normalfall).
-
-    Grenze: Eine Erweiterung, die Server anlegt (`hosts.write`), kann nicht umbenannt werden -- die Server
-    tragen die Kennung ihres Anbieters. Der Kern lehnt `legacy_ids` zusammen mit `hosts.write` beim
-    Entdecken ab (Meldung im Protokoll)."""
+    """Frühere Kennungen dieser Erweiterung, z. B. `["alt-name"]` nach einer Umbenennung. Der Kern
+    nimmt dann den gespeicherten Stand der alten Kennung weiter (Einstellungen, Zeitpläne, Daten)
+    und erlaubt die alten Tabellen-Präfixe. Leer = nie umbenannt (der Normalfall)."""
 
     @field_validator("id")
     @classmethod
@@ -130,7 +126,7 @@ class ExtensionManifest(BaseModel):
     @field_validator("stage")
     @classmethod
     def _known_stage(cls, v: str) -> str:
-        """Ein unbekannter Wert ist kein Ladefehler, sondern gilt als `beta`: Eine Erweiterung fuer einen neueren Kern
+        """Ein unbekannter Wert ist kein Ladefehler, sondern gilt als `beta`: Eine Erweiterung für einen neueren Kern
         darf einen Reifegrad nennen, den dieser Kern noch nicht kennt, und soll trotzdem laden (das Feld steuert nur
         die Anzeige). `beta` statt `stable`, damit ein Tippfehler nicht still als erprobt gilt."""
         return v if v in KNOWN_STAGES else "beta"
@@ -156,12 +152,12 @@ class ExtensionManifest(BaseModel):
 
     @property
     def table_prefix(self) -> str:
-        """Zwingender Praefix fuer alle Tabellen dieser Extension."""
+        """Zwingender Präfix für alle Tabellen dieser Extension."""
         return _table_prefix(self.id)
 
     @property
     def table_prefixes(self) -> tuple[str, ...]:
-        """Alle erlaubten Tabellen-Praefixe: der eigene zuerst (Standard fuer neue Tabellen), danach
+        """Alle erlaubten Tabellen-Präfixe: der eigene zuerst (Standard für neue Tabellen), danach
         die der alten Kennungen (`legacy_ids`) -- deren Tabellen behalten ihren Namen."""
         return (self.table_prefix, *(_table_prefix(old) for old in self.legacy_ids))
 
@@ -175,7 +171,7 @@ def _table_prefix(ext_id: str) -> str:
 
 
 def load_manifest(path: Path) -> ExtensionManifest:
-    """Liest `extension.toml`. Fuehrt keinen Extension-Code aus."""
+    """Liest `extension.toml`. Führt keinen Extension-Code aus."""
     data = tomllib.loads(path.read_text(encoding="utf-8"))
     ext = dict(data.get("extension", {}))
 

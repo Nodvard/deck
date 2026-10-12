@@ -1,20 +1,6 @@
-"""Metrik-Verlauf fuer Hosts, deren Anbieter selbst KEINE Historie hat (z. B. ein Pi
-ueber SSH) -- genaue Server-Metriken wie in Grafana oder im Task-Manager.
-
-**Abgrenzung zu D-02** (docs/00-DECISIONS.md, dort als D-02-Nachtrag festgehalten):
-D-02 verbietet Zeitreihen in der RELATIONALEN Datenbank. Dieser Speicher ist bewusst
-eine EIGENE SQLite-Datei (`<data_dir>/metrics.db`) mit eigener Verbindung und genau
-einem Schreiber (dem Sammler unten) -- er konkurriert nicht mit der Schreibsperre von
-`lattice.db`, taucht in keiner Alembic-Migration auf und darf jederzeit geloescht
-werden (dann fehlt nur Verlauf, nichts Fachliches). Anbieter MIT eigener Historie
-(Proxmox fuehrt RRD-Daten, `MetricsProvider.history()`) werden hier gar nicht erst
-gesammelt.
-
-Stufen: Rohwerte alle `interval_s` (Default 30 s) fuer `raw_retention_h` (48 h),
-daraus 5-Minuten-Verdichtung (Mittel/Min/Max) fuer `rollup_retention_d` (35 Tage).
-Groessenordnung fuer den Pi: ~18 Werte x 2 880 Messungen/Tag -- weit unter dem,
-was SQLite im WAL-Modus nebenbei schreibt.
-"""
+"""Metrik-Verlauf für Hosts, deren Anbieter selbst keine Historie hat (z. B. ein Pi über SSH). Bewusst eine eigene
+SQLite-Datei (`<data_dir>/metrics.db`) mit einem Schreiber: Zeitreihen gehören nicht in die relationale Datenbank, die
+Datei konkurriert nicht mit deren Schreibsperre und darf jederzeit gelöscht werden (dann fehlt nur der Verlauf)."""
 
 from __future__ import annotations
 
@@ -28,16 +14,18 @@ from typing import Any
 
 logger = logging.getLogger("nodvard_deck.metrics")
 
+# Stufen: Rohwerte alle `interval_s` für `raw_retention_h`, daraus 5-Minuten-Verdichtung (Mittel/Min/Max) für
+# `rollup_retention_d`.
 ROLLUP_S = 300
 
 RANGES: dict[str, int] = {"1h": 3600, "6h": 6 * 3600, "24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
-"""Erlaubte Zeitraeume (Sekunden) -- dieselben fuer jeden Anbieter."""
+"""Erlaubte Zeiträume (Sekunden), für jeden Anbieter dieselben."""
 
 _MAX_POINTS = 720
 """Obergrenze je Kurve: mehr Punkte als Pixel bringen nichts, kosten nur JSON."""
 
 LATEST_WINDOW_S = 600
-"""Aelter als das ist ein "letzter Wert" nichts mehr wert (Cockpit-Auslastung): der Server fehlt dann ganz."""
+"""Ältere Werte zählen nicht als "letzter Wert" (Cockpit-Auslastung); der Server fehlt dann ganz."""
 
 STALE_AFTER_S = 120
 """Ab diesem Alter gilt ein letzter Wert als veraltet (der Sammler misst alle 30 s, 4 Messungen fehlen)."""
@@ -54,7 +42,7 @@ def _step_for(range_s: int, native_s: int) -> int:
 
 
 class MetricsStore:
-    """Duenne, synchrone sqlite3-Schicht; alle Aufrufe laufen ueber `asyncio.to_thread`."""
+    """Dünne, synchrone sqlite3-Schicht; alle Aufrufe laufen über `asyncio.to_thread`."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -99,7 +87,7 @@ class MetricsStore:
             db.executemany("INSERT OR REPLACE INTO raw VALUES (?, ?, ?, ?)", rows)
 
     def maintain(self, now: int, *, raw_retention_s: int, rollup_retention_s: int) -> None:
-        """Abgeschlossene 5-Minuten-Fenster verdichten, dann Altes loeschen."""
+        """Verdichtet abgeschlossene 5-Minuten-Fenster und löscht Altes."""
         db = self._db()
         done = db.execute("SELECT value FROM state WHERE key = 'rolled_until'").fetchone()
         start = done[0] if done else 0
@@ -122,9 +110,9 @@ class MetricsStore:
     def latest(
         self, host_ids: Iterable[str], now: int, *, max_age_s: int, metrics: Iterable[str] = LATEST_METRICS,
     ) -> dict[str, dict[str, tuple[int, float]]]:
-        """Letzter Rohwert je (Host, Metrik) innerhalb von `max_age_s`: `{host_id: {metrik: (ts, wert)}}`.
-        Hosts ohne Wert fehlen. Je Paar ein Sprung auf den Primaerschluessel (rueckwaerts, ein Treffer) --
-        ein Bereichsscan ueber `ts` wuerde die ganze Tabelle lesen, denn `ts` steht im Schluessel hinten."""
+        """Letzter Rohwert je (Host, Metrik) innerhalb von `max_age_s`: `{host_id: {metrik: (ts, wert)}}`; Hosts ohne
+        Wert fehlen. Je Paar ein Sprung auf den Primärschlüssel (rückwärts, ein Treffer): Ein Bereichsscan über `ts`
+        läse die ganze Tabelle, denn `ts` steht im Schlüssel hinten."""
         db = self._db()
         since = now - max_age_s
         names = tuple(metrics)
@@ -162,8 +150,7 @@ class MetricsStore:
 
 def columnar(rows: Iterable[tuple[str, int, float, float | None]], *, step: int, since: int, now: int) -> dict[str, Any]:
     """(metric, bucket_ts, avg, max) -> gemeinsame Zeitachse, eine Werteliste je Metrik.
-    Luecken (Host nicht erreichbar) bleiben `None` -- die Kurve zeigt sie als Luecke,
-    statt sie wegzuinterpolieren."""
+    Lücken (Host nicht erreichbar) bleiben `None`, damit die Kurve sie als Lücke zeigt statt sie wegzuinterpolieren."""
     by_metric: dict[str, dict[int, tuple[float, float | None]]] = {}
     for metric, ts, avg, mx in rows:
         if avg is None:
@@ -177,9 +164,8 @@ def columnar(rows: Iterable[tuple[str, int, float, float | None]], *, step: int,
 
 
 class MetricsCollector:
-    """Genau EIN Schreiber in `metrics.db`: fragt alle `interval_s` jeden Host ab, dessen
-    Anbieter keine eigene Historie hat, und legt die Werte ab. Ein nicht erreichbarer
-    Host wird uebersprungen (Luecke im Verlauf), nie zum Fehler fuer die anderen."""
+    """Der einzige Schreiber in `metrics.db`: fragt alle `interval_s` jeden Host ohne eigene Historie ab. Ein nicht
+    erreichbarer Host wird übersprungen (Lücke im Verlauf) und ist nie ein Fehler für die anderen."""
 
     def __init__(self, store: MetricsStore, *, interval_s: int, raw_retention_s: int, rollup_retention_s: int) -> None:
         self.store = store
@@ -232,7 +218,7 @@ class MetricsCollector:
             async with semaphore:
                 try:
                     values = await asyncio.wait_for(provider.sample(sdk_host), timeout=max(10, self.interval_s - 2))
-                except Exception as exc:  # noqa: BLE001 - Luecke statt Absturz
+                except Exception as exc:  # noqa: BLE001 - Lücke statt Absturz
                     logger.info("metrics_sample_failed host=%s error=%s", host_id, str(exc) or type(exc).__name__)
                     return False
             await asyncio.to_thread(self.store.insert, host_id, now, values)
@@ -249,9 +235,8 @@ class MetricsCollector:
 
 
 async def resolve_metrics_provider(sdk_host: Any, provider_ext_id: str | None) -> Any | None:
-    """Eigener Anbieter des Hosts (provider_ext_id), sonst ein allgemeiner, der den Host
-    nach eigener Auskunft (`supports`) messen kann -- etwa per SSH. Gemeinsam fuer die
-    Live-Werte (api/v1/hosts.py), den Verlauf und den Sammler."""
+    """Eigener Anbieter des Hosts (`provider_ext_id`), sonst ein allgemeiner, der den Host nach eigener Auskunft
+    (`supports`) messen kann, etwa per SSH. Gemeinsam für Live-Werte, Verlauf und Sammler."""
     from nodvard_sdk.capabilities import MetricsProvider
 
     from ..ext.runtime import get_extension_runtime
@@ -287,6 +272,6 @@ def get_metrics_collector() -> MetricsCollector:
 
 
 def reset_metrics_collector() -> None:
-    """Nur fuer Tests."""
+    """Nur für Tests."""
     global _collector
     _collector = None

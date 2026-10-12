@@ -1,5 +1,4 @@
-"""Anbindung des Virenschutzes an den Kern: Zeitplaene, API-Routen und die
-Aktionen, die durch das Gate laufen (Wiederherstellen, Loeschen, Installieren)."""
+"""Anbindung des Virenschutzes an den Kern: Zeitpläne, API-Routen und die Aktionen, die durchs Gate laufen."""
 
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
-_NEVER = "0 0 31 2 *"  # 31. Februar -- Job existiert, laeuft aber nie
+_NEVER = "0 0 31 2 *"  # 31. Februar: der Job existiert, läuft aber nie
 
 
 class _JobSpec:
@@ -42,8 +41,7 @@ class _JobSpec:
 
 
 async def register_jobs(ctx: ExtensionContext, defender: Defender, updates: UpdateCenter, guard: Guard | None = None) -> None:
-    """Bei jedem Start UND nach jeder Einstellungsaenderung -- `register_job` ist ein
-    Upsert ueber die Job-ID, alte Zeitplaene werden dabei ersetzt."""
+    """Registriert die Jobs bei jedem Start und nach jeder Einstellungsänderung (Upsert über die Job-ID)."""
     s = await ctx.settings.get()
 
     async def quick() -> dict:
@@ -91,16 +89,14 @@ async def register_jobs(ctx: ExtensionContext, defender: Defender, updates: Upda
                              s.get("guard_enabled", True), guard_run))
     for job in jobs:
         await _register_job(ctx, job)
-    # Der Zeitplaner holt einen verpassten Lauf (Dashboard war zur Zeit aus) nicht nach: die
-    # Update-Pruefung holt sich ausgebliebene Server selbst.
+    # Der Zeitplaner holt einen verpassten Lauf nicht nach; die Update-Prüfung holt ausgebliebene Server selbst.
     updates.schedule_catch_up()
 
 
 async def _register_job(ctx: ExtensionContext, job: _JobSpec) -> None:
-    """Ein kaputter Zeitplan aus den Einstellungen (gespeichert von einer Version, die ihn noch nicht pruefte)
-    legte frueher die ganze Erweiterung lahm: `register_job()` warf, `setup()` brach ab -- keine Scans, kein
-    Waechter, kein Executor. Jetzt laeuft der Job vorerst mit seinem Standard-Zeitplan, mit Warnung (ohne
-    Traceback: die Deploy-Pruefung sucht im Container-Log danach) und Meldung."""
+    """Registriert einen Job; ein kaputter Zeitplan fällt mit Warnung und Meldung auf den Standard zurück."""
+    # Sonst bräche `register_job()` das `setup()` ab und die ganze Erweiterung stünde. Die Warnung bekommt bewusst
+    # keinen Traceback: Die Deploy-Prüfung sucht im Container-Log danach.
     if job.enabled and job.fallback is not None:
         try:
             ctx.scheduler.validate_schedule(job.schedule)
@@ -128,8 +124,8 @@ async def _register_job(ctx: ExtensionContext, job: _JobSpec) -> None:
 OLD_VERSION_MESSAGE = "Vorschlag stammt von einer älteren Version – bitte neu auslösen."
 STALE_MESSAGE = "Der Vorschlag passt nicht (mehr) zum erwarteten Befehl – bitte neu auslösen."
 
-# Diese Felder schreiben die /defender-Routen in den Payload; daraus (und nur daraus)
-# entsteht der Befehl. Fehlen sie, stammt der Vorschlag aus einer aelteren Version.
+# Diese Felder schreiben die /defender-Routen in den Payload; nur daraus entsteht der Befehl.
+# Fehlen sie, stammt der Vorschlag aus einer älteren Version.
 _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     ACTION_BAN: ("ip", "jail", "unban"),
     ACTION_INSTALL: ("package",),
@@ -141,18 +137,15 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
 
 
 class ActionCommands:
-    """Baut den Befehl einer Nodvard-Shield-Aktion NUR aus strukturierten, geprueften Feldern.
+    """Baut den Befehl einer Shield-Aktion nur aus geprüften Feldern, nie aus einem frei eingetippten Befehl.
 
-    Dieselbe Funktion nutzen die Routen (fuer `payload.command`, das Anzeige und
-    Sperrliste des Gates sehen) und der Executor (der den Befehl vor dem Ausfuehren neu
-    baut und mit `payload.command` vergleicht). Ein frei eingetippter Befehl kommt so
-    nie mehr als root auf einen Server."""
+    Die Routen (für `payload.command`) und der Executor (baut vor dem Ausführen neu und vergleicht) teilen sich das."""
 
     def __init__(self, defender: Defender) -> None:
         self._defender = defender
 
     async def build(self, action_type: str, host: Any, payload: dict[str, Any]) -> str:
-        """ValueError mit lesbarem (deutschem) Grund, wenn die Angaben nicht passen."""
+        """ValueError mit lesbarem deutschem Grund, wenn die Angaben nicht passen."""
         required = _REQUIRED_FIELDS.get(action_type)
         if required is None:
             raise ValueError(f"Unbekannte Aktion '{action_type}'.")
@@ -180,13 +173,12 @@ class ActionCommands:
                 raise ValueError("Unbekannte Update-Art.")
             if not isinstance(manager, str) or not isinstance(packages, list) or not all(isinstance(p, str) for p in packages):
                 raise ValueError("Ungültige Update-Angaben.")
-            # Ob "Alle Updates" dist-upgrade nimmt, steht im Plan (Payload), nicht in
-            # der Einstellung von heute -- Vorschlag und Ausfuehrung bauen dasselbe. Fehlt die
-            # Angabe (aeltere Vorschlaege), gilt der bisherige Befehl.
+            # Ob dist-upgrade gilt, steht im Plan (Payload), nicht in der heutigen Einstellung, damit Vorschlag und
+            # Ausführung denselben Befehl bauen. Fehlt die Angabe, gilt der normale Befehl.
             dist_upgrade = payload.get("dist_upgrade", False)
             if not isinstance(dist_upgrade, bool):
                 raise ValueError("Ungültige Update-Angaben.")
-            # upgrade_command prueft den Paketmanager und filtert/quotet die Paketnamen.
+            # upgrade_command prüft den Paketmanager und filtert und quotet die Paketnamen.
             return up.upgrade_command(manager, mode, packages, dist_upgrade=dist_upgrade)
         # restore / delete: alles Wesentliche kommt aus der Fund-Zeile, nicht aus dem Payload.
         finding_id = payload["finding_id"]
@@ -203,8 +195,7 @@ class ActionCommands:
 
 
 class DefenderExecutor:
-    """Die Aktionen, die NICHT automatisch passieren duerfen: sie laufen durchs Gate
-    und damit durch Freigabe, Sperrliste und Audit."""
+    """Führt die Aktionen aus, die nicht automatisch laufen dürfen: durchs Gate mit Freigabe, Sperrliste und Audit."""
 
     action_types = frozenset({
         ACTION_RESTORE, ACTION_DELETE, ACTION_INSTALL, ACTION_UPGRADE, ACTION_REBOOT, ACTION_BAN,
@@ -220,9 +211,8 @@ class DefenderExecutor:
         host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
         if host is None:
             return ActionResult(success=False, error="Server nicht gefunden.")
-        # Der Befehl entsteht hier neu aus den Feldern -- `payload.command`
-        # wird nie ausgefuehrt, nur verglichen: Das Gate hat genau ihn gegen die
-        # Sperrliste geprueft, und der Freigebende hat genau ihn gesehen.
+        # Der Befehl entsteht hier neu aus den Feldern; `payload.command` wird nur verglichen, denn Gate und
+        # Freigebender haben genau ihn gesehen.
         try:
             command = await self._commands.build(req.action_type, host, req.payload)
         except ValueError as exc:
@@ -239,8 +229,7 @@ class DefenderExecutor:
         result = await self._ctx.exec.run(host, av.as_root(command), timeout_s=timeout)
         ok = result.exit_code == 0
         if req.action_type == ACTION_INSTALL:
-            # Was installiert ist, steht im gemerkten Stand des Servers: sonst bot die Seite bis zu
-            # 10 Minuten lang an, das gerade Installierte noch einmal zu installieren.
+            # Sonst bote die Seite mit dem gemerkten Stand (bis 10 Minuten) das gerade Installierte erneut an.
             self._defender.forget_status(host.id)
         if av.NO_ROOT in (result.stdout or ""):
             return ActionResult(success=False, exit_code=result.exit_code, error=av.NO_ROOT_MESSAGE)
@@ -255,11 +244,9 @@ class DefenderExecutor:
         return DryRunReport(would_change=True, summary=req.reason or "Virenschutz-Aktion")
 
 
-# host_bound=False: Den Befehl bauen immer die /defender-Routen (ActionCommands). Auf
-# der Server-Seite (GET /hosts/{id}/actions) erschienen diese Aktionen sonst als
-# Formular mit freiem Feld "command", das als root laeuft; POST /hosts/{id}/actions
-# lehnt sie deshalb ab. ctx.actions.propose prueft host_bound nicht.
-# command_field bleibt, damit die Sperrliste des Gates den gebauten Befehl prueft.
+# host_bound=False: Den Befehl bauen immer die /defender-Routen. Sonst erschienen die Aktionen auf der Server-Seite
+# als Formular mit freiem Feld "command" (läuft als root); POST /hosts/{id}/actions lehnt sie deshalb ab.
+# `ctx.actions.propose` prüft host_bound nicht. command_field bleibt, damit die Sperrliste den Befehl prüft.
 ACTION_SPECS = [
     ActionSpec(action_type=ACTION_RESTORE, label="Datei aus Quarantäne wiederherstellen", default_risk=Risk.MEDIUM,
                permissions=["hosts.execute"], host_bound=False, command_field="command"),
@@ -301,23 +288,21 @@ class _UpgradeIn(BaseModel):
 
 
 class _ProposeAllIn(BaseModel):
-    """Sammel-Vorschlag: nur Einspielen (alle Updates oder nur Sicherheitsupdates), kein Aufraeumen und kein
-    Neustart -- beides bleibt eine bewusste Entscheidung je Server."""
+    """Sammel-Vorschlag: nur Einspielen (alle oder nur Sicherheitsupdates); Aufräumen und Neustart bleiben je Server."""
 
     mode: Literal["all", "security"]
     host_ids: list[str] | None = Field(default=None, max_length=200)
-    """Nur diese Server. Ohne Angabe: alle Server, bei denen fuer `mode` etwas offen ist."""
+    """Nur diese Server; ohne Angabe alle, bei denen für `mode` etwas offen ist."""
 
 
 PROPOSE_ALL_WAIT_S = 0.0
-"""Beim Sammel-Vorschlag wartet kein Vorschlag auf das Ergebnis einer sofort freigegebenen Aktion (`wait_s` des Gates).
-Das Warten gibt es nur bei "Selbststaendig handeln": Der Einzelweg zeigt dem Klickenden das Ergebnis (bis
-`REQUEST_WAIT_S`), der Sammelweg verweist ohnehin auf "Aktionen". Mit 20 s je Server dauerte die Anfrage bei zehn
-Servern drei Minuten und liefe in die Zeitgrenze eines Proxys; die Aktionen laufen im Hintergrund trotzdem an."""
+"""Der Sammel-Vorschlag wartet nicht auf sofort freigegebene Aktionen (`wait_s` des Gates), anders als der Einzelweg.
+Mit 20 s je Server dauerte die Anfrage bei zehn Servern drei Minuten und liefe in die Zeitgrenze eines Proxys;
+die Aktionen laufen im Hintergrund trotzdem an."""
 
-# Offen im Sinne des Sammel-Vorschlags: wartet auf Freigabe, ist freigegeben oder laeuft.
+# Offen im Sinne des Sammel-Vorschlags: wartet auf Freigabe, ist freigegeben oder läuft.
 _OPEN_UPGRADE_STATUS = ("proposed", "approved", "executing")
-# So viele eigene Aktionen holt der Sammel-Vorschlag, um offene Vorschlaege zu finden (Obergrenze von `ctx.actions.list`).
+# So viele eigene Aktionen holt der Sammel-Vorschlag, um offene Vorschläge zu finden (Obergrenze von `ctx.actions.list`).
 _OPEN_LOOKUP_LIMIT = 200
 
 
@@ -328,10 +313,9 @@ _INSTALL_LABEL = {
 
 
 def _nothing_to_do(row: dict[str, Any], mode: str) -> str | None:
-    """Warum fuer diesen Server der Update-Uebersicht (eine Zeile von `UpdateCenter.overview`) in dieser Art nichts
-    vorgeschlagen wird -- None, wenn etwas offen ist. Dieselben Bedingungen wie bei den Einzel-Knoepfen der Seite
-    ("Sicherheitsupdates einspielen" bei `security_count`, "Alle einspielen" bei `count`). Es geht nur um den
-    gespeicherten Stand: Der Sammel-Vorschlag prueft keinen Server selbst."""
+    """Warum für diesen Server (eine Zeile von `UpdateCenter.overview`) in dieser Art nichts vorgeschlagen wird, sonst None.
+
+    Gleiche Bedingungen wie bei den Einzel-Knöpfen der Seite, nach gespeichertem Stand; es wird kein Server geprüft."""
     st = row.get("status")
     if not st:
         return "Noch nicht geprüft."
@@ -347,21 +331,21 @@ def _nothing_to_do(row: dict[str, Any], mode: str) -> str | None:
 
 
 NOT_PROPOSED_MESSAGE = "Der Vorschlag konnte nicht angelegt werden (Einzelheiten im Protokoll)."
-"""Was der Sammel-Vorschlag bei einer unerwarteten Ausnahme an den Client schreibt. Der Ausnahmetext selbst bleibt im
-Protokoll des Dashboards: bei einem Datenbankfehler stuenden SQL-Text und Parameter darin."""
+"""Was der Sammel-Vorschlag bei einer unerwarteten Ausnahme meldet. Der Ausnahmetext bleibt im Protokoll,
+bei einem Datenbankfehler stünden SQL und Parameter darin."""
 
 
 def _client_reason(exc: BaseException) -> str:
-    """Grund fuer die Antwort des Sammel-Vorschlags zu einer unerwarteten Ausnahme. Im Wortlaut kommt nur durch, was fuer
-    Nutzer gedacht ist: Fehler, die selbst als lesbar gelten (`readable`, z. B. der SSH-Verbindung: ein fertiger deutscher
-    Satz), und die festen Saetze bei einer Zeitueberschreitung. Alles andere gilt `NOT_PROPOSED_MESSAGE`."""
+    """Grund für die Antwort des Sammel-Vorschlags bei einer unerwarteten Ausnahme.
+
+    Im Wortlaut kommen nur lesbare Fehler (`readable`) und Zeitüberschreitungen durch, sonst `NOT_PROPOSED_MESSAGE`."""
     if (getattr(exc, "readable", False) and str(exc).strip()) or isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         return _describe(exc)
     return NOT_PROPOSED_MESSAGE
 
 
 def _already_open_reason(action: Any) -> str:
-    """Satz dazu, dass fuer den Server schon ein Update-Vorschlag offen ist (`action`: Zeile aus `ctx.actions.list`)."""
+    """Satz dazu, dass für den Server schon ein Update-Vorschlag offen ist (`action`: Zeile aus `ctx.actions.list`)."""
     label = up.MODE_LABEL.get(str((action.payload or {}).get("mode")), "Updates")
     if action.status == "proposed":
         return f"Vorschlag „{label}“ wartet schon auf Freigabe."
@@ -369,7 +353,7 @@ def _already_open_reason(action: Any) -> str:
 
 
 def _threats(n: int) -> str:
-    """"1 Bedrohung", "3 Bedrohungen" -- statt "Bedrohung(en)"."""
+    """"1 Bedrohung", "3 Bedrohungen" statt "Bedrohung(en)"."""
     return "1 Bedrohung" if n == 1 else f"{n} Bedrohungen"
 
 
@@ -393,8 +377,7 @@ def build_routers(
 
     async def _submit(host: Any, action_type: str, fields: dict, reason: str, actor: Actor, risk: Risk,
                       *, error_status: int = status.HTTP_400_BAD_REQUEST, wait_s: float | None = REQUEST_WAIT_S) -> GateDecision:
-        """Der Befehl entsteht hier aus `fields` -- derselbe Weg wie beim Ausfuehren.
-        `command` im Payload dient nur der Anzeige und der Sperrliste."""
+        """Der Befehl entsteht hier aus `fields`, derselbe Weg wie beim Ausführen; `command` dient nur Anzeige und Sperrliste."""
         try:
             command = await commands.build(action_type, host, fields)
         except ValueError as exc:
@@ -405,8 +388,8 @@ def build_routers(
         ), wait_s=wait_s)
 
     def _proposal(decision: GateDecision, risk: Risk) -> dict:
-        # `risk`: die Seite prueft damit, ob der Nutzer den Vorschlag selbst freigeben darf
-        # (`actions.approve:<risiko>`) -- sie soll die Stufe nicht raten (dist-upgrade ist "hoch").
+        # `risk`: Die Seite prüft damit, ob der Nutzer selbst freigeben darf (`actions.approve:<risiko>`); sie soll
+        # die Stufe nicht raten (dist-upgrade ist "hoch").
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": risk.value}
 
     async def _propose(host: Any, action_type: str, fields: dict, reason: str, actor: Actor, risk: Risk,
@@ -414,8 +397,8 @@ def build_routers(
         return _proposal(await _submit(host, action_type, fields, reason, actor, risk, error_status=error_status), risk)
 
     async def _propose_upgrade(host: Any, mode: str, actor: Actor, *, wait_s: float | None) -> tuple[GateDecision, Risk]:
-        """Plan, Grund, Risiko und Vorschlag fuer Einspielen/Aufraeumen (nicht Neustart). Der Einzelweg und der
-        Sammel-Vorschlag gehen beide hierdurch -- gleiche Felder, gleicher Befehl, gleiches Risiko.
+        """Plan, Grund, Risiko und Vorschlag für Einspielen und Aufräumen; Einzelweg und Sammel-Vorschlag teilen sich das.
+
         409 mit deutschem Grund, wenn der Plan nicht aufgeht (z. B. "Keine Sicherheitsupdates offen.")."""
         assert updates is not None
         name = host.display_name or host.name
@@ -426,16 +409,14 @@ def build_routers(
         fields: dict[str, Any] = {"mode": mode, "manager": manager, "packages": packages}
         reason = f"{up.MODE_LABEL[mode]} auf {name}"
         risk = Risk.MEDIUM
-        # Nur wenn eingeschaltet, kommt die Angabe in den Plan (sonst bleibt der
-        # Payload wie bisher); der Freigebende sieht sie im Grund und im Befehl. Ob der Server
-        # Proxmox ist, entscheidet erst der Befehl auf dem Server -- daher "falls".
-        # dist-upgrade darf Pakete entfernen: hohes Risiko wie ein Neustart, damit auch bei
-        # "volle Autonomie" bis "mittel" niemand vorbeigeht, ohne den Befehl gesehen zu haben.
+        # Ob der Server Proxmox ist, entscheidet erst der Befehl auf dem Server, daher "falls".
+        # dist-upgrade darf Pakete entfernen: hohes Risiko wie ein Neustart, damit auch bei voller Autonomie (bis
+        # "mittel") niemand vorbeigeht, ohne den Befehl gesehen zu haben.
         if up.wants_dist_upgrade(await ctx.settings.get(), manager, mode):
             fields["dist_upgrade"] = True
             reason += " (dist-upgrade, falls der Server Proxmox ist)"
             risk = Risk.HIGH
-        # "Keine Sicherheitsupdates offen." u. ae. kommen aus dem Befehlsbau -> 409 wie bisher.
+        # Meldungen wie "Keine Sicherheitsupdates offen." kommen aus dem Befehlsbau: 409.
         decision = await _submit(host, ACTION_UPGRADE, fields, reason, actor, risk,
                                  error_status=status.HTTP_409_CONFLICT, wait_s=wait_s)
         return decision, risk
@@ -446,13 +427,12 @@ def build_routers(
 
     @read.get("/widgets/protection")
     async def protection_widget() -> dict:
-        """Kachel fuer die Uebersicht: erste Zeile Gesamtlage, danach je Server."""
+        """Kachel für die Übersicht: erste Zeile Gesamtlage, danach je Server."""
         o = await defender.overview()
         sm = o["summary"]
         if sm["hosts"] == 0:
-            # Ohne pruefbaren Server gibt es nichts zu bewerten -- "Schutzwert 0 / 100, keine Bedrohung" waere irrefuehrend.
-            # Zwei Faelle: gar kein Server angelegt, oder Server da, aber keiner pruefbar (Linux, verwaltet, mit SSH-Zugang,
-            # ggf. mit der eingestellten Markierung).
+            # Ohne prüfbaren Server wäre "Schutzwert 0 / 100, keine Bedrohung" irreführend. Entweder gibt es gar keinen
+            # Server oder keinen prüfbaren (Linux, verwaltet, mit SSH-Zugang, ggf. mit der eingestellten Markierung).
             if sm.get("hosts_known", 0) > 0:
                 title = "Noch kein Server prüfbar"
                 subtitle = ("Nodvard Shield prüft Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung). "
@@ -460,7 +440,7 @@ def build_routers(
             else:
                 title = "Noch kein Server"
                 subtitle = "Füge zuerst einen Server hinzu (Einstellungen → Server & Zugänge)."
-            # Offene Funde aus frueheren Scans bleiben offen, auch wenn der Server inzwischen fehlt -- die Kachel zeigt sie.
+            # Offene Funde aus älteren Scans bleiben auch ohne Server offen und stehen in der Kachel.
             threats = sm.get("open_threats", 0)
             label, tone = (_threats(threats), "danger") if threats else ("nichts zu bewerten", "neutral")
             return {"data": [{"title": title, "subtitle": subtitle, "label": label, "tone": tone}], "meta": {}}
@@ -473,9 +453,9 @@ def build_routers(
         for h in o["hosts"]:
             scan = h.get("last_scan") or {}
             status = scan.get("status")
-            # Offene Funde und was aus den Funden des letzten Scans wurde, kommen aus derselben Quelle wie die Kopfzeile
-            # (`overview`): nach Quarantaene oder Loeschen steht hier nicht mehr "Bedrohung", ein offener Fund des
-            # Waechters dagegen auch dann, wenn der letzte Scan sauber war.
+            # Offene Funde und das Ergebnis des letzten Scans kommen aus derselben Quelle wie die Kopfzeile (`overview`):
+            # Nach Quarantäne oder Löschen steht hier nicht mehr "Bedrohung", ein offener Fund des Wächters dagegen
+            # auch bei sauberem Scan.
             open_findings = int(h.get("open_findings") or 0)
             outcome = h.get("last_scan_outcome")
             done = status == "infected" and outcome in ("quarantined", "accepted", "cleaned")
@@ -512,7 +492,7 @@ def build_routers(
         return await guard.overview()
 
     @read.get("/events")
-    async def events(all: bool = False) -> list[dict]:  # noqa: A002 - Query-Parameter heisst so
+    async def events(all: bool = False) -> list[dict]:  # noqa: A002 - Query-Parameter heißt so
         assert guard is not None
         return await guard.list_events(include_acknowledged=all)
 
@@ -608,10 +588,9 @@ def build_routers(
     propose_all_running = False
 
     async def _open_upgrades() -> dict[str, Any]:
-        """Je Server die neueste offene Aktion `ACTION_UPGRADE` (wartet auf Freigabe, freigegeben, laeuft).
-        Quelle ist `ctx.actions.list`: die juengsten eigenen Aktionen (hoechstens 200, alle Arten, auch unter einer
-        frueheren Kennung der Erweiterung), nach Art, Status und Server gefiltert. Ein Vorschlag, dessen Frist
-        abgelaufen ist, aber noch nicht als `expired` markiert wurde, zaehlt nicht mehr."""
+        """Je Server die neueste offene Aktion `ACTION_UPGRADE` (wartet auf Freigabe, freigegeben oder läuft).
+
+        Quelle: die jüngsten eigenen Aktionen (`ctx.actions.list`, auch unter der alten Kennung); Abgelaufene zählen nicht."""
         now = datetime.now(UTC)
         found: dict[str, Any] = {}
         for row in await ctx.actions.list(limit=_OPEN_LOOKUP_LIMIT):  # neueste zuerst
@@ -628,13 +607,9 @@ def build_routers(
 
     @manage.post("/updates/propose-all")
     async def propose_all(payload: _ProposeAllIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
-        """Legt fuer viele Server auf einmal je einen Update-Vorschlag an (nur Vorschlaege: freigegeben wird wie
-        sonst unter "Aktionen", auch dort gesammelt). Jeder Vorschlag geht ueber `_propose_upgrade`, also genau
-        wie der Einzelweg; ein Server mit Fehler haelt die anderen nicht auf.
+        """Legt für viele Server je einen Update-Vorschlag an; freigegeben wird wie sonst unter "Aktionen".
 
-        Laufzeit: je Server ein Schritt durch Datenbank und Gate -- keine SSH-Verbindung (der Plan kommt aus dem
-        gespeicherten Stand der Update-Zentrale; Server ohne Stand werden uebersprungen, nicht geprueft) und
-        ohne Warten auf freigegebene Aktionen (`PROPOSE_ALL_WAIT_S`). Die Vorschlaege entstehen nacheinander."""
+        Ohne SSH und ohne Warten (`PROPOSE_ALL_WAIT_S`); Server ohne gespeicherten Stand werden übersprungen."""
         nonlocal propose_all_running
         assert updates is not None
         mode = payload.mode
@@ -676,7 +651,7 @@ def build_routers(
                 except HTTPException as exc:
                     out.update(result="failed", reason=str(exc.detail))
                     continue
-                except Exception as exc:  # noqa: BLE001 - ein Server darf die Vorschlaege der anderen nicht abbrechen
+                except Exception as exc:  # noqa: BLE001 - ein Server darf die Vorschläge der anderen nicht abbrechen
                     logging.getLogger(LOGGER).exception("shield_propose_all_failed host=%s", host_id)
                     out.update(result="failed", reason=_client_reason(exc))
                     continue
@@ -698,7 +673,7 @@ def build_routers(
                     detail={"mode": mode, **counts, "host_ids": [r["host_id"] for r in results if r["result"] == "proposed"]},
                     actor=actor,
                 )
-            except Exception:  # noqa: BLE001 - die Vorschlaege stehen schon unter "Aktionen": die Antwort darf nicht an der Protokoll-Zeile scheitern
+            except Exception:  # noqa: BLE001 - die Vorschläge stehen schon unter "Aktionen", die Antwort darf nicht am Protokoll scheitern
                 logging.getLogger(LOGGER).exception("shield_propose_all_audit_failed")
             return {"mode": mode, "results": results, "counts": counts}
         finally:
@@ -708,7 +683,7 @@ def build_routers(
 
     @manage.post("/briefing")
     async def briefing_now() -> dict:
-        """Lagebericht jetzt. Das Erstellen kann bei einem nicht erreichbaren Server ~20 s dauern:
+        """Lagebericht jetzt. Dauert bei einem nicht erreichbaren Server bis ~20 s;
         ein zweiter Klick (auch aus einem anderen Tab) legt kein zweites Briefing an."""
         nonlocal briefing_running
         if briefing_running:
@@ -723,8 +698,8 @@ def build_routers(
 
     @manage.post("/audits")
     async def start_audit(payload: _AuditIn) -> dict:
-        """Startet je Server ein Audit und antwortet sofort mit dem Stand: `started` (neu), `running` (lief schon, es
-        startet kein zweites) und `audits` (je Server seit wann, fuer "laeuft seit ...")."""
+        """Startet je Server ein Audit und antwortet sofort: `started` (neu), `running` (lief schon, es startet kein
+        zweites) und `audits` (je Server seit wann, für "läuft seit ...")."""
         hosts = await _hosts(payload.host_ids)
         return {"hosts": len(hosts), **await defender.start_audits(hosts, trigger="manual")}
 

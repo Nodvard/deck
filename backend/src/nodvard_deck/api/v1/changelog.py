@@ -1,9 +1,6 @@
-"""Aenderungsprotokoll fuer die Seite "Über Nodvard Deck" (Einstellungen) und den
-Versions-Hinweis unten in der Seitenleiste.
+"""Änderungsprotokoll für die Seite „Über“ in den Einstellungen und den Versionshinweis in der Seitenleiste.
 
-Fuer jeden angemeldeten Nutzer, ohne eigene Berechtigung: das Protokoll enthaelt nur,
-was sich an der Software geaendert hat, keine Daten aus der Installation. Die Dateien
-selbst liegen unter `nodvard_deck/changelog/` (siehe dortiger Modul-Docstring).
+Für jeden angemeldeten Nutzer ohne eigene Berechtigung: Es enthält nur Änderungen an der Software, keine Daten der Installation.
 """
 
 from __future__ import annotations

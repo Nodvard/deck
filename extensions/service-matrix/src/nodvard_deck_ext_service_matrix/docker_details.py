@@ -1,13 +1,6 @@
-"""Container-Details und Docker-Speicher (Roadmap Punkt 2: "Docker wie Portainer").
+"""Container-Details und Docker-Speicher (Belegung, Images) für die Service-Matrix.
 
-Rein lesend bis auf das Aufraeumen (`docker.prune_*`, ueber das Gate). Aus
-`docker inspect` wird eine WHITELIST uebernommen -- Umgebungsvariablen nur mit ihrem
-NAMEN, nie mit Wert: dort stehen Passwoerter und Tokens auch unter Namen, die nicht
-danach aussehen (`DATABASE_URL=postgres://user:pw@...`). Befehlszeile/Entrypoint
-bleiben aus demselben Grund weg.
-
-Live gefunden beim Bau: der Docker-Build-Cache kann viele GB belegen, fast alles davon
-freigebbar (z. B. Rueckstand alter Deploys) -- ohne diese Seite nur per Konsole sichtbar.
+Rein lesend bis auf das Aufräumen (`docker.prune_*`, über das Gate).
 """
 
 from __future__ import annotations
@@ -26,9 +19,10 @@ def _time(value: Any) -> str | None:
 
 
 def _ports(raw_ports: dict[str, Any] | None) -> list[dict[str, Any]]:
-    """{"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}, {"HostIp": "::", ...}]}
-    -> je Container-Port die veroeffentlichten Host-Ports, IPv4/IPv6-Dubletten
-    zusammengefasst. Nicht veroeffentlicht = host None (nur im Docker-Netz)."""
+    """`{"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}, ...]}` -> je Container-Port die veröffentlichten Host-Ports.
+
+    IPv4/IPv6-Dubletten sind zusammengefasst; ein nicht veröffentlichter Port bleibt mit leerer Liste (nur im Docker-Netz).
+    """
     ports: list[dict[str, Any]] = []
     for container_port, bindings in sorted((raw_ports or {}).items()):
         published = sorted({
@@ -41,6 +35,8 @@ def _ports(raw_ports: dict[str, Any] | None) -> list[dict[str, Any]]:
 
 
 def summarize_inspect(raw: dict[str, Any]) -> dict[str, Any]:
+    # Nur ausgewählte Felder (Positivliste). Umgebungsvariablen nur mit Namen, nie mit Wert: Passwörter stehen auch unter
+    # harmlos wirkenden Namen (`DATABASE_URL=postgres://user:pw@...`). Befehlszeile und Entrypoint fehlen deshalb auch.
     state = raw.get("State") or {}
     config = raw.get("Config") or {}
     host_config = raw.get("HostConfig") or {}
@@ -123,8 +119,10 @@ def parse_system_df(text: str) -> list[dict[str, Any]]:
 
 
 def parse_images(text: str) -> list[dict[str, Any]]:
-    """`docker images --format '{{json .}}'`. "Containers" kennt erst neueres Docker
-    (29.x auf dem Pi) -- aelteres liefert "N/A", dann bleibt `in_use` offen (None)."""
+    """`docker images --format '{{json .}}'`.
+
+    "Containers" kennt erst neueres Docker (z. B. 29.x); älteres liefert "N/A", dann bleibt `in_use` offen (None).
+    """
     images = []
     for row in _json_lines(text):
         repo, tag = row.get("Repository") or "<none>", row.get("Tag") or "<none>"

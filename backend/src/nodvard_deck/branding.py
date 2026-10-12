@@ -1,11 +1,6 @@
-"""Branding als Konfigurationswert — docs/01-ARCHITECTURE.md §6.
+"""Branding als Konfigurationswert: nur die Vorgabe für die Erstinbetriebnahme, geändert wird per `PUT /api/v1/branding`.
 
-**Dies ist der einzige Ort im Kern, an dem ein Produktname/eine Farbe als Literal stehen
-darf** (siehe `scripts/check_core_purity.py`). Alles hier ist nur der *Seed* fuer die
-Erstinbetriebnahme — sobald die Tabelle `settings` einen Wert hat, gewinnt der.
-
-Aendern nach dem ersten Start: `PUT /api/v1/branding`, nicht diese Datei.
-"""
+Einzige Kerndatei, in der ein Produktname oder eine Farbe als Literal stehen darf (`scripts/check_core_purity.py`)."""
 
 from __future__ import annotations
 
@@ -21,13 +16,9 @@ SETTINGS_KEY_PREFIX = "branding."
 LOGO_CONTENT_TYPES = {
     "image/png": "png", "image/jpeg": "jpg", "image/svg+xml": "svg", "image/webp": "webp",
 }
-"""`logo_url` akzeptierte bisher
-nur eine bereits gehostete URL -- kein Weg, ohne eigenen Webserver ein Logo zu
-hinterlegen. `POST /branding/logo` (api/v1/branding.py) speichert die Datei jetzt
-selbst unter `<data_dir>/branding/`, `GET /branding/logo` (api/v1/public.py, oeffentlich
-wie `GET /branding` selbst -- die Login-Seite braucht das Logo vor jeder
-Authentifizierung) liefert sie aus. Absichtlich eine kleine, feste Allowlist statt
-beliebiger Content-Types -- ein Logo ist ein Bild, kein generischer Datei-Upload."""
+"""Erlaubte Logo-Typen: bewusst eine kleine, feste Liste, denn ein Logo ist ein Bild, kein generischer Datei-Upload.
+Die Datei liegt unter `<data_dir>/branding/` (`POST /branding/logo`) und wird öffentlich ausgeliefert (`GET /branding/logo`),
+weil die Login-Seite sie vor jeder Anmeldung braucht."""
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
 
@@ -35,11 +26,9 @@ UNTRUSTED_FILE_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     "X-Content-Type-Options": "nosniff",
 }
-"""Header für alles, was Nutzer hochladen und das im selben Origin wie das Dashboard
-ausgeliefert wird. Öffnet jemand die Adresse direkt, läuft kein Skript: `sandbox` gibt
-dem Dokument einen eigenen, leeren Origin, `nosniff` verbietet dem Browser, den Typ zu
-erraten. Ein `<img src>` ist davon nicht betroffen, die Regel gilt nur für die Antwort
-selbst, nicht für die Seite, die sie einbettet."""
+"""Header für alles, was Nutzer hochladen und im selben Origin wie das Dashboard ausgeliefert wird: `sandbox` gibt dem
+Dokument einen eigenen, leeren Origin (kein Skript bei direktem Aufruf), `nosniff` verbietet das Erraten des Typs.
+Ein `<img src>` ist davon nicht betroffen, die Regel gilt nur für die Antwort selbst."""
 
 SUPPORT_URL_SCHEMES = ("http", "https", "mailto")
 
@@ -64,9 +53,8 @@ def logo_dir(data_dir: Path) -> Path:
 
 
 def find_logo_file(data_dir: Path) -> Path | None:
-    """Es kann nur EIN aktuelles Logo geben -- bei jedem Upload werden zuerst alle
-    vorhandenen `logo.*`-Dateien entfernt (save_logo_file), damit hier nie mehrere
-    unterschiedlicher Endung gleichzeitig existieren."""
+    """Das aktuelle Logo. Es gibt nur eines: `save_logo_file` entfernt vor jedem Upload alle vorhandenen `logo.*`,
+    damit nie mehrere Endungen nebeneinander liegen."""
     d = logo_dir(data_dir)
     if not d.is_dir():
         return None
@@ -110,18 +98,15 @@ DEFAULT_BRANDING = Branding(
     login_subtitle="Homelab-Kommandozentrale",
     colors=BrandingColors(),
 )
-"""Arbeitsstand-Branding dieser Installation. Ein Kaeufer des
-generischen Kerns sieht stattdessen seinen eigenen Wert aus `settings` — dieser Default
-greift nur, solange niemand ihn ueberschrieben hat."""
+"""Vorgabe, die nur greift, solange `settings` keinen eigenen Wert hat."""
 
 
 _FIELD_NAMES = tuple(Branding.model_fields.keys())
 
 
 async def load_branding(session: AsyncSession) -> Branding:
-    """Liest `settings` (scope='global', key='branding.<feld>') und fuellt Luecken aus
-    `DEFAULT_BRANDING`. Muss lokal importieren, um einen Zirkelimport mit models zu
-    vermeiden (Setting-Modell importiert seinerseits nichts aus branding.py)."""
+    """Liest `settings` (scope='global', key='branding.<feld>') und füllt Lücken aus `DEFAULT_BRANDING`."""
+    # Lokal importiert, um einen Zirkelimport mit `models` zu vermeiden.
     from .models import Setting
 
     rows = await session.execute(
@@ -138,14 +123,13 @@ async def load_branding(session: AsyncSession) -> Branding:
 
     data = DEFAULT_BRANDING.model_dump()
     data.update(overrides)
-    # Ein früher gespeicherter, ungültiger Wert (z. B. `javascript:`) wird nicht als Link angezeigt.
+    # Ein gespeicherter, ungültiger Wert (z. B. `javascript:`) wird nicht als Link angezeigt.
     data["support_url"] = clean_support_url(data.get("support_url"))
     return Branding.model_validate(data)
 
 
 async def save_branding(session: AsyncSession, branding: Branding, *, updated_by_user_id: str | None = None) -> None:
-    """Schreibt jedes Feld als eigene `settings`-Zeile (upsert). Wird von
-    `PUT /api/v1/branding` in einem spaeteren Arbeitspaket aufgerufen."""
+    """Schreibt jedes Feld als eigene `settings`-Zeile (upsert)."""
     from .db import utcnow
     from .models import Setting
 

@@ -1,11 +1,6 @@
-"""Vergleich von Zieladressen (Server-URLs).
+"""Vergleich von Zieladressen (Server-URLs): Zugangsdaten bleiben nur bei erkennbar demselben Server.
 
-Zugangsdaten gehoeren zu dem Server, bei dem sie eingegeben wurden. Wer eine Adresse aendert,
-bekommt die Zugangsdaten nicht mit, es sei denn, es ist erkennbar derselbe Server. Diese eine
-Vergleichsform benutzen der Kern (Einstellungen von Erweiterungen) und die Erweiterungen mit
-eigenen Verbindungs-Routen, damit alle gleich urteilen. Die Oberflaeche rechnet dieselbe Form
-(`frontend/src/lib/targetAddress.ts`); beide Seiten pruefen dieselben Beispiele
-(`sdk/python/tests/vectors/same_target.json`).
+Der Kern (Einstellungen von Erweiterungen) und Erweiterungen mit eigenen Verbindungs-Routen benutzen diese eine Form.
 """
 
 from __future__ import annotations
@@ -16,17 +11,17 @@ from urllib.parse import urlsplit
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
+# Die Oberfläche rechnet dieselbe Form (`frontend/src/lib/targetAddress.ts`); beide Seiten prüfen dieselben Beispiele
+# (`sdk/python/tests/vectors/same_target.json`).
+# Gleich bleiben: Groß-/Kleinschreibung von Schema und Rechnername, der Standardport (`:80` bei http, `:443` bei
+# https), Schrägstriche am Ende des Pfads, ein Fragment (`#...`) und ein fehlendes Schema (`pi.hole` gilt wie
+# `http://pi.hole`). NICHT gleich: ein anderer Pfad, eine andere Abfrage (`?...`) oder andere Anmeldedaten in der
+# Adresse. Was sich nicht als Adresse lesen lässt, bleibt (nur ohne Leerraum an den Rändern) und gilt im Zweifel als
+# verschieden.
 def target_form(value: Any) -> Any:
-    """Vergleichsform einer Zieladresse.
+    """Vergleichsform einer Zieladresse; gleiche Form heißt: dasselbe Ziel.
 
-    Gleich bleiben: Gross-/Kleinschreibung von Schema und Rechnername, der Standardport
-    (`:80` bei http, `:443` bei https), Schraegstriche am Ende des Pfads, ein Fragment (`#...`)
-    und ein fehlendes Schema (`pi.hole` gilt wie `http://pi.hole`). NICHT gleich sind ein
-    anderer Pfad, eine andere Abfrage (`?...`) oder andere Anmeldedaten in der Adresse. Was
-    sich nicht als Adresse lesen laesst, bleibt, wie es ist (nur ohne Leerraum an den Raendern),
-    und gilt damit im Zweifel als verschieden.
-
-    Leere Werte (`None`, leerer Text) ergeben `""`; andere Typen als Text bleiben unveraendert.
+    Leere Werte (`None`, leerer Text) ergeben `""`; andere Typen als Text bleiben unverändert.
     """
     if value is None:
         return ""

@@ -1,19 +1,4 @@
-"""Notfall-Werkzeug auf dem Server: Zugang wiederherstellen, ohne dass jemand angemeldet ist.
-
-    docker compose exec nodvard-deck python -m nodvard_deck.admin list-users
-    docker compose exec nodvard-deck python -m nodvard_deck.admin reset-password <benutzername>
-    docker compose exec nodvard-deck python -m nodvard_deck.admin disable-2fa <benutzername>
-    docker compose exec nodvard-deck python -m nodvard_deck.admin restore-backup <datei.ndbak>
-
-Gedacht fuer den Fall, dass der Inhaber sein Passwort oder sein Handy (Zwei-Faktor) verloren
-hat -- dann kommt man ueber die Weboberflaeche nicht mehr hinein. Wer diesen Befehl ausfuehren
-kann, hat ohnehin Zugriff auf den Server und das Datenverzeichnis (Datenbank, Schluessel);
-deshalb braucht er keine Anmeldung, schreibt aber jede Aenderung ins Audit-Protokoll
-(Akteur `system/cli`).
-
-Arbeitet gegen die konfigurierte Datenbank (`NODVARD_DECK_DATABASE_URL` bzw. alt `LATTICE_DATABASE_URL`, im Container schon gesetzt),
-genau wie die Anwendung selbst. Die Ausgabe ist bewusst schlicht und deutsch.
-"""
+"""Notfall-Werkzeug auf dem Server (`python -m nodvard_deck.admin`): Zugang wiederherstellen, ohne dass jemand angemeldet ist."""
 
 from __future__ import annotations
 
@@ -40,11 +25,15 @@ from .models import User
 from .services import audit as audit_service
 from .services import auth as auth_service
 
+# Aufruf im Container: `docker compose exec nodvard-deck python -m nodvard_deck.admin <Befehl>`, die Befehle zeigt `--help`.
+# Gedacht für den Fall, dass der Inhaber Passwort oder Handy (Zwei-Faktor) verloren hat. Wer den Befehl ausführen kann, hat
+# ohnehin Zugriff auf den Server und das Datenverzeichnis (Datenbank, Schlüssel); er braucht deshalb keine Anmeldung, jede
+# Änderung kommt aber ins Audit-Protokoll (Akteur `system/cli`). Arbeitet gegen die konfigurierte Datenbank wie die Anwendung.
 ACTOR_TYPE = "system"
 ACTOR_ID = "cli"
 
 _PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
-"""Ohne l, i, o, 0, 1 -- das Passwort wird oft von einem Bildschirm abgetippt."""
+"""Ohne l, i, o, 0, 1: Das Passwort wird oft von einem Bildschirm abgetippt."""
 
 
 class CliError(Exception):
@@ -131,8 +120,8 @@ async def disable_two_factor(session: AsyncSession, username: str) -> list[str]:
 
 
 def _read_secret() -> str:
-    """Passwort oder Wiederherstellungsschluessel: am Terminal ohne Anzeige, sonst die erste Zeile
-    der Standardeingabe (fuer Skripte wie `restore.sh`)."""
+    """Passwort oder Wiederherstellungsschlüssel: am Terminal ohne Anzeige, sonst die erste Zeile
+    der Standardeingabe (für Skripte wie `restore.sh`)."""
     if sys.stdin.isatty():
         return getpass.getpass("Passwort der Sicherung (oder Wiederherstellungsschlüssel): ")
     line = sys.stdin.readline()
@@ -140,9 +129,8 @@ def _read_secret() -> str:
 
 
 def restore_backup(settings: Settings, file: str, *, assume_yes: bool = False) -> list[str]:
-    """Prueft eine Sicherung und merkt sie zum Einspielen vor -- ohne Oberflaeche und ohne Anmeldung
-    (wer das ausfuehren kann, hat ohnehin Zugriff auf alle Daten). Ersetzt wird erst beim naechsten
-    Start, dort laufen dieselben Pruefungen und derselbe Rueckweg wie bei der Oberflaeche."""
+    """Prüft eine Sicherung und merkt sie zum Einspielen vor, ohne Oberfläche und ohne Anmeldung. Ersetzt wird erst beim
+    nächsten Start, mit denselben Prüfungen und demselben Rückweg wie bei der Oberfläche."""
     from . import migrate
     from .version import __version__
 
@@ -165,8 +153,8 @@ def restore_backup(settings: Settings, file: str, *, assume_yes: bool = False) -
 
     restore_core.make_private_dir(layout.restore_dir)
     if bootstate.is_locked(settings.data_dir):
-        # Die Anwendung laeuft (`compose exec`): in `restore/` kann gerade ein Upload von ihr liegen -- nur aufraeumen,
-        # was laengst abgelaufen ist.
+        # Läuft die Anwendung (`compose exec`), kann in `restore/` gerade ein Upload von ihr liegen: nur aufräumen, was
+        # längst abgelaufen ist.
         restore_core.sweep(layout)
     else:
         restore_core.cleanup_restore_dir(layout)
@@ -272,15 +260,11 @@ async def _run(args: argparse.Namespace, settings: Settings) -> list[str]:
 
 
 def drop_root_to_data_owner(settings: Settings) -> None:
-    """Als root gestartet (z. B. `docker compose exec` ohne `-u`): nie als root weiterarbeiten.
-
-    Das Image startet als root und gibt die Rechte im Entrypoint ab; `docker compose exec` laeuft aber
-    als root. Ohne Wechsel koennte der Befehl root-eigene Dateien im Datenordner anlegen (z. B.
-    SQLite-Nebendateien), die die Anwendung spaeter nicht mehr schreiben kann. Ziel ist der Besitzer des
-    Datenordners. Gehoert der Ordner root (Benutzer oder Gruppe 0), ist das Ziel der Benutzer `lattice`;
-    gibt es den nicht, bricht der Befehl mit einem Hinweis ab, statt als root weiterzulaufen.
-    Nicht als root (oder ohne `geteuid`, etwa unter Windows) bleibt alles, wie es ist.
-    """
+    """Als root gestartet (z. B. `docker compose exec` ohne `-u`): zum Besitzer des Datenordners wechseln, gehört er
+    root, zum Benutzer `lattice`; gibt es den nicht, Abbruch mit Hinweis statt als root weiterzulaufen."""
+    # Das Image gibt die Rechte im Entrypoint ab, `compose exec` läuft aber als root. Ohne Wechsel könnte der Befehl
+    # root-eigene Dateien im Datenordner anlegen (z. B. SQLite-Nebendateien), die die Anwendung später nicht schreiben kann.
+    # Nicht als root (oder ohne `geteuid`, etwa unter Windows) bleibt alles, wie es ist.
     if not hasattr(os, "geteuid") or os.geteuid() != 0:
         return
     try:
@@ -289,7 +273,7 @@ def drop_root_to_data_owner(settings: Settings) -> None:
         return
     uid, gid = owner.st_uid, owner.st_gid
     if uid == 0 or gid == 0:
-        import pwd  # nur unter Linux/Unix da -- dort, wo `geteuid` existiert
+        import pwd  # nur unter Unix da, dort wo `geteuid` existiert
 
         try:
             entry = pwd.getpwnam("lattice")
@@ -319,7 +303,7 @@ def main(argv: Sequence[str] | None = None, settings: Settings | None = None) ->
     except CliError as exc:
         print(f"Fehler: {exc}", file=sys.stderr)
         return 1
-    except Exception as exc:  # noqa: BLE001 - kaputte DB/Verbindung: verstaendlich melden
+    except Exception as exc:  # noqa: BLE001 - kaputte DB/Verbindung: verständlich melden
         if getattr(args, "command", "") == "restore-backup":
             print(f"Fehler: Die Sicherung ließ sich nicht prüfen oder vormerken ({type(exc).__name__}: {exc}).", file=sys.stderr)
             return 2
@@ -334,6 +318,6 @@ def main(argv: Sequence[str] | None = None, settings: Settings | None = None) ->
 
 
 if __name__ == "__main__":
-    # Auch ohne den Entrypoint (`compose exec` erbt dessen umask nicht): neue Dateien nur fuer den Besitzer.
+    # Auch ohne den Entrypoint (`compose exec` erbt dessen umask nicht): neue Dateien nur für den Besitzer.
     os.umask(0o077)
     sys.exit(main())

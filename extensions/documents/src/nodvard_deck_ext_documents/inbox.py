@@ -1,21 +1,6 @@
 """Nextcloud-Ordner als Eingang: neue PDFs und Bilder aus einem eingestellten Ordner werden Dokumente.
 
-Gedacht für Scanner-Apps auf dem Handy oder einen Netzwerkscanner, die in die Nextcloud speichern. Der Abruf
-läuft alle 15 Minuten (Job `inbox`) und auf Knopfdruck (`POST /inbox/fetch`).
-
-Die Dateien kommen über die Dateiquelle der Nextcloud-Erweiterung (`FileSource`, `requires = ["nextcloud"]`).
-Ohne sie oder ohne eingestellten Ordner passiert nichts. Gelesen wird nur: in der Nextcloud bleibt alles, wie es
-war. Was schon übernommen ist, steht in `InboxFile`; eine Datei zählt als neu, wenn es ihren Pfad dort noch nicht
-gibt oder Größe bzw. Änderungszeit sich geändert haben.
-
-Grenzen: nur der Ordner selbst, keine Unterordner; höchstens `MAX_FILES_PER_RUN` Dateien je Lauf (der Rest
-kommt beim nächsten); nur PDF, PNG, JPEG und WebP bis `MAX_DOCUMENT_BYTES`, und der Inhalt muss zur Endung
-passen (eine `.pdf`, die in Wahrheit eine Webseite ist, wird übersprungen). Übersprungene Dateien werden einmal
-gemeldet und gemerkt. Dateien, die sich nicht lesen oder speichern ließen, kommen beim nächsten Lauf wieder dran,
-zählen aber nicht gegen die Grenze je Lauf: sonst hielten sie neue Dateien auf.
-
-Dokument und Merkeintrag entstehen in derselben Transaktion (`store` ruft `mark` in seiner Session auf): bricht
-der Lauf dazwischen ab, gibt es weder ein Dokument ohne Eintrag (käme doppelt) noch einen Eintrag ohne Dokument."""
+Der Abruf läuft alle 15 Minuten (Job `inbox`) und auf Knopfdruck (`POST /inbox/fetch`); in der Nextcloud wird nur gelesen."""
 
 from __future__ import annotations
 
@@ -36,11 +21,18 @@ from .storage import MAX_DOCUMENT_BYTES
 
 logger = logging.getLogger(__name__)
 
+# Die Dateien kommen über die Dateiquelle der Nextcloud-Erweiterung (`FileSource`, `requires = ["nextcloud"]`);
+# ohne sie oder ohne eingestellten Ordner passiert nichts.
 SOURCE_ID = "nextcloud"
+# Nur der Ordner selbst, keine Unterordner; höchstens so viele Dateien je Lauf, der Rest kommt beim nächsten. Dateien, die
+# sich nicht lesen oder speichern ließen, kommen beim nächsten Lauf wieder dran und zählen nicht gegen diese Grenze
+# (sonst hielten sie neue Dateien auf); dafür begrenzt MAX_ATTEMPTS_PER_RUN die Versuche.
 MAX_FILES_PER_RUN = 20
 MAX_ATTEMPTS_PER_RUN = 3 * MAX_FILES_PER_RUN
+# Höchstens so viele Seiten beim Auflisten des Ordners.
 MAX_PAGES = 100
 
+# Nur PDF, PNG, JPEG und WebP (Größe bis `MAX_DOCUMENT_BYTES`); der Inhalt muss zur Endung passen (`content_matches`).
 CONTENT_TYPES = {
     ".pdf": "application/pdf",
     ".png": "image/png",
@@ -49,11 +41,11 @@ CONTENT_TYPES = {
     ".webp": "image/webp",
 }
 
+# (Session, Kennung des neuen Dokuments): merkt die Datei in derselben Transaktion wie das Dokument.
 MarkSaved = Callable[[Any, str], Awaitable[None]]
-"""(Session, Kennung des neuen Dokuments): merkt die Datei in derselben Transaktion wie das Dokument."""
 
+# (Inhalt, Dateityp, Dateiname, mark) -> Kennung des neuen Dokuments; derselbe Weg wie beim Hochladen.
 StoreDocument = Callable[[bytes, str, str, MarkSaved], Awaitable[str]]
-"""(Inhalt, Dateityp, Dateiname, mark) -> Kennung des neuen Dokuments; derselbe Weg wie beim Hochladen."""
 
 
 class InboxError(Exception):
@@ -91,7 +83,7 @@ def normalize_folder(value: object) -> str | None:
     parts = [p for p in text.split("/") if p]
     if not parts:
         return "/"
-    if any(p in (".", "..") for p in parts):
+    if any(p in (".", "..") for p in parts):  # der Abruf bleibt im eingestellten Ordner
         raise InboxError("Der Nextcloud-Ordner darf kein „..“ enthalten.")
     return "/" + "/".join(parts)
 
@@ -192,6 +184,7 @@ async def fetch_inbox(ctx: Any, folder: str, store: StoreDocument) -> InboxResul
             row.path: row
             for row in (await session.execute(select(InboxFile).where(InboxFile.source_id == SOURCE_ID))).scalars()
         }
+    # Neu ist eine Datei, wenn es ihren Pfad in `InboxFile` noch nicht gibt oder sich Größe oder Änderungszeit geändert haben.
     new = [
         e for e in candidates
         if e.path not in known
@@ -223,12 +216,14 @@ async def fetch_inbox(ctx: Any, folder: str, store: StoreDocument) -> InboxResul
             await _remember_skipped(ctx, entry)
             handled += 1
             continue
-        if not content_matches(content, content_type):
+        if not content_matches(content, content_type):  # etwa eine `.pdf`, die in Wahrheit eine Webseite ist
             result.wrong_content.append(entry.name)
             await _remember_skipped(ctx, entry)
             handled += 1
             continue
 
+        # Dokument und Merkeintrag entstehen in einer Transaktion (`store` ruft `mark` in seiner Session auf): bricht der
+        # Lauf dazwischen ab, gibt es weder ein Dokument ohne Eintrag (käme doppelt) noch einen Eintrag ohne Dokument.
         async def _mark(session: Any, document_id: str, entry: FileEntry = entry) -> None:
             await _upsert(session, entry, document_id)
 

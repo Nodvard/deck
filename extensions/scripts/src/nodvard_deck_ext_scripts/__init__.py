@@ -1,26 +1,5 @@
-"""scripts-Extension -- Git-versioniertes Skript-Repository, Ausfuehrung ueber das
-Aktions-Gate, fleet-weiter Zeitplan ueber den Kern-Scheduler
-(docs/02-EXTENSION-API.md Paragraph 6).
-
-Setzt die urspruengliche Script-Repository-Vision um: Versionierung (Git, siehe
-`repo.py`), Metadaten/Parameter (JSON-Dateien im selben Repo, siehe `repo.py`s
-Docstring fuer die bewusste Abweichung von "eigene Tabellen"), das Sicherheits-Gate
-(dasselbe Kern-Gate wie ueberall sonst -- kein zweites Bestaetigungs-UI), und die
-Verbindung zum AI-SOC ueber den Event-Bus ("wiederkehrende Reparatur als Skript
-befoerdern", siehe `promotion.py`).
-
-**Run-Historie bewusst NICHT hier dupliziert:** `api/v1/jobs.py`s eigener Docstring
-sagt es woertlich -- "GET/PATCH/DELETE /jobs/{id} und POST /jobs/{id}/run funktionieren
-bereits fuer jeden Job, den eine Extension registriert hat". Ein Skript IST ein Job
-(`ext_job_key="script-<id>"`); die Web-UI ruft fuer die Lauf-Historie direkt die
-bestehenden Kern-Endpunkte auf (per `ext_id=scripts` gefiltert und ueber `ext_job_key`
-mit der Skript-ID verknuepft), statt dass diese Extension einen zweiten, redundanten
-Satz Endpunkte dafuer baut. `POST /scripts/{id}/run` existiert hier trotzdem zusaetzlich
--- NICHT als zweiter Ausfuehrungsweg (er ruft `run_script()` auf, denselben Code, den
-auch der geplante Lauf nutzt), sondern weil der Kern-Endpunkt `POST /jobs/{id}/run`
-keine Parameter-Ueberschreibungen im Request-Body entgegennimmt (nur die gespeicherten
-`job.params`), die UI aber "einmalig mit anderen Werten ausprobieren" anbieten soll.
-"""
+"""scripts-Extension: Git-versioniertes Skript-Repository, Ausführung über das Aktions-Gate, Zeitplan über den
+Kern-Scheduler."""
 
 from __future__ import annotations
 
@@ -75,14 +54,12 @@ from .standing import (
 
 _log = logging.getLogger(__name__)
 
+# Platzhalter-Cron für deaktivierte oder ungeplante Skripte. Der Scheduler prüft `job.enabled` vor dem Parsen, der Wert
+# muss aber gültig sein, falls ein Skript später per PATCH /jobs/{id} ohne neues `register_job()` aktiviert wird.
 _NEVER = "0 0 1 1 *"
-"""Platzhalter-Cron fuer deaktivierte/ungeplante Skripte. Wird nie ausgewertet --
-`SchedulerService.schedule()` prueft `job.enabled` VOR dem Parsen des Cron-Strings
-(core/scheduler.py) -- muss aber trotzdem SYNTAKTISCH gueltig sein, falls ein Skript
-spaeter per PATCH /jobs/{id} (Kern-Endpunkt) ohne neuen `register_job()`-Aufruf wieder
-aktiviert wird."""
 
 
+# Ein Skript ist ein Job des Kerns (`ext_job_key="script-<id>"`); die Lauf-Historie liefern die Kern-Endpunkte unter /jobs.
 def _job_id(script_id: str) -> str:
     return f"script-{script_id}"
 
@@ -103,27 +80,22 @@ def _standing_approvals(ctx: ExtensionContext) -> StandingApprovals:
     return StandingApprovals(Path(str(ctx.data_dir)) / "standing-approvals.json")
 
 
+# Fehlertext, wenn die Dauerfreigabe direkt vor dem Befehl nicht mehr gilt.
 STANDING_WITHDRAWN = "Dauerfreigabe wurde zurückgezogen – nichts ausgeführt."
-"""Fehlertext des Ausfuehrers, wenn die Dauerfreigabe direkt vor dem Befehl nicht mehr gilt."""
 
+# Berechtigung zum Erteilen und Zurückziehen (eingebaut nur Owner und Admin) und zugleich die der Erweiterung,
+# Vorschläge mit Dauerfreigabe einzureichen.
 STANDING_PERMISSION = "actions.standing_approval"
-"""Nutzer-Berechtigung fuer Erteilen/Zurueckziehen (eingebaute Rollen: nur Owner und Admin)
-und zugleich die Erweiterungs-Berechtigung, Vorschlaege mit Dauerfreigabe einzureichen."""
 
 
 async def _expire_standing(
     ctx: ExtensionContext, script_id: str, script_name: str, reason: str, *,
     actor: Actor | None = None, notify: bool = True,
 ) -> bool:
-    """Laesst die Dauerfreigabe eines Skripts erloeschen: ab sofort gilt sie nicht mehr, dann
-    Protokollzeile, Eintrag weg und (ausser `notify=False`) EINE Push-Nachricht. True, wenn es
-    eine Freigabe gab.
-
-    Im Zweifel gilt sie nicht (fail closed): Scheitert das Protokoll, bleibt der Eintrag
-    stehen und gilt trotzdem nicht mehr; der naechste Lauf schreibt die Zeile nach (erst
-    danach wird geloescht, sonst ginge das Erloeschen ohne Protokoll verloren). Laesst sich
-    die Datei nicht schreiben, steht das Erloeschen trotzdem im Protokoll und gilt; der
-    naechste Lauf versucht das Loeschen erneut, ohne doppelte Zeile oder Push."""
+    """Lässt die Dauerfreigabe erlöschen (Protokollzeile, Eintrag löschen, eine Push-Nachricht). True, wenn es eine gab."""
+    # Fail closed: Ab `block` gilt sie nicht mehr, auch wenn das Protokoll oder das Löschen scheitert; der nächste Lauf
+    # holt es nach, ohne doppelte Zeile oder Push. Gelöscht wird erst nach dem Protokoll, sonst ginge das Erlöschen ohne
+    # Protokoll verloren.
     store = _standing_approvals(ctx)
     record = store.get_raw(script_id)
     if record is None:
@@ -180,7 +152,7 @@ async def _expire_standing(
                     payload={"path": "/ext/scripts/scripts"},
                 )
             )
-        except Exception:  # noqa: BLE001 -- der Hinweis darf das Erloeschen nicht kippen
+        except Exception:  # noqa: BLE001 -- der Hinweis darf das Erlöschen nicht kippen
             _log.warning("Skript %s: Hinweis auf erloschene Dauerfreigabe nicht gesendet.", script_id, exc_info=True)
     elif not notify:
         pending.notified = True
@@ -190,10 +162,10 @@ async def _expire_standing(
 async def _recheck_standing(
     ctx: ExtensionContext, repo: ScriptRepo, script_id: str, first: StandingRecord, host: SdkHost
 ) -> str | None:
-    """Gilt die Dauerfreigabe vom Laufbeginn fuer `host` noch? Vor JEDEM Server neu geprueft:
-    Ein Lauf auf mehreren Servern kann lange dauern, und Zurueckziehen, eine Aenderung am
-    Skript oder ein anderes Konto mitten im Lauf muessen sofort wirken. None = gilt, sonst der
-    Grund (dann laeuft der Rest des Laufs mit Klick)."""
+    """Gilt die Dauerfreigabe vom Laufbeginn noch für `host`? None = ja, sonst der Grund (der Rest läuft dann mit
+    Klick)."""
+    # Vor jedem Server neu geprüft: Ein Lauf auf mehreren Servern dauert, Zurückziehen oder Änderungen müssen sofort
+    # wirken.
     current = _standing_approvals(ctx).get(script_id)
     if current is None:
         return "Sie wurde während des Laufs zurückgezogen oder ist erloschen."
@@ -223,16 +195,13 @@ async def _notify_skipped(
     skipped: dict[str, tuple[str, str]],
     new: set[str],
 ) -> bool:
-    """EINE Meldung fuer die uebersprungenen Server eines Zeitplan-Laufs
-    (`skipped` = {host_id: (Name, Grund)}, `new` = die Kennungen, die neu dazugekommen
-    sind). Genannt wird immer die ganze Liste, Neues wird hervorgehoben. Ein Fehler beim
-    Senden darf den Lauf nicht kippen; er liefert False (dann bleibt es beim alten Stand).
-    Der Kern schluckt Kanalfehler (ntfy nicht erreichbar) -- `raise_on_failure` macht sie
-    hier sichtbar."""
+    """Eine Meldung für die übersprungenen Server (`skipped` = {host_id: (Name, Grund)}, `new` = neu dazugekommene);
+    False bei Sendefehler."""
     parts = ", ".join(f"{name} ({reason})" for name, reason in skipped.values())
     if len(new) < len(skipped):
         parts += ". Neu dazugekommen: " + ", ".join(skipped[hid][0] for hid in skipped if hid in new)
     try:
+        # Der Kern schluckt Kanalfehler (z. B. ntfy nicht erreichbar); `raise_on_failure` macht sie sichtbar.
         await ctx.notify.send(
             Notification(
                 title=f"Skript „{script_name}“ überspringt Server",
@@ -257,11 +226,13 @@ def _draft_id_for(fp: str) -> str:
     return f"auto-{hashlib.sha1(fp.encode('utf-8')).hexdigest()[:10]}"
 
 
+# Skripte (Audits, Updates, Backups) laufen oft minutenlang; die 60 s Vorgabe von `ctx.exec.run()` ließ z. B. Lynis
+# scheitern.
 SCRIPT_TIMEOUT_S = 30 * 60
 
+# Platzhalter für geheime Parameter im Befehl, der in Aktion, API und Ereignissen steht; der echte Wert kommt erst im
+# Executor aus dem Tresor.
 SECRET_MASK = "••••"
-"""Platzhalter fuer geheime Parameter im Befehl, der in der Aktion (Payload, API,
-Ereignisse) steht. Der echte Wert wird erst im Executor aus dem Tresor geholt."""
 
 CHANGED_SINCE_PROPOSAL = "Skript wurde seit dem Vorschlag geändert – bitte neu ausführen."
 
@@ -271,12 +242,8 @@ def _secret_names(params_schema: dict[str, dict[str, Any]]) -> list[str]:
 
 
 class _ScriptActionExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor` fuer `script.run`.
-
-    Derselbe SSH-Layer wie die terminal-Extension (`ctx.exec.run`, docs/00 D-05: kein
-    zweiter Ausfuehrungsweg) -- der Unterschied zu `shell.exec` ist nur die eigene
-    `ActionSpec`-Identitaet, damit `promotion.py` `script.run`-Ausfuehrungen NIE erneut
-    als "wiederkehrenden Fix" befoerdert (siehe dort)."""
+    """Führt `script.run` über denselben SSH-Weg wie `shell.exec` aus, nur mit eigener Aktionsart (siehe
+    `promotion.py`)."""
 
     action_types = frozenset({"script.run"})
 
@@ -294,7 +261,7 @@ class _ScriptActionExecutor:
         if not command:
             return ActionResult(success=False, error="payload.command fehlt (aufgelöster Skriptinhalt).")
         if "account" in req.payload and req.payload["account"] != host.credential_username:
-            # Lief ueber eine Dauerfreigabe, die einem anderen Anmeldekonto galt.
+            # Lief über eine Dauerfreigabe, die einem anderen Anmeldekonto galt.
             name = host.display_name or host.name
             return ActionResult(
                 success=False,
@@ -305,7 +272,7 @@ class _ScriptActionExecutor:
                 ),
             )
         if "port" in req.payload and req.payload["port"] != host.credential_port:
-            # Dasselbe fuer den SSH-Port: ein anderer Port ist ein anderes Ziel.
+            # Dasselbe für den SSH-Port: Ein anderer Port ist ein anderes Ziel.
             name = host.display_name or host.name
             return ActionResult(
                 success=False,
@@ -316,9 +283,8 @@ class _ScriptActionExecutor:
                 ),
             )
 
-        # Ohne geheime Parameter steht der fertige Befehl im Payload (wie bisher). Mit
-        # geheimen steht dort nur die maskierte Fassung -- der echte Befehl entsteht erst
-        # hier, damit der Klartext nie in Aktion, API oder Ereignissen landet.
+        # Mit geheimen Parametern steht im Payload nur die maskierte Fassung; der echte Befehl entsteht erst hier,
+        # damit der Klartext nie in Aktion, API oder Ereignissen landet.
         secret_params = req.payload.get("secret_params") or []
         audit_command: str | None = None
         if secret_params:
@@ -326,17 +292,13 @@ class _ScriptActionExecutor:
                 command = await self._rebuild_command(req.payload, command, secret_params)
             except (ParamError, NodvardError) as exc:
                 return ActionResult(success=False, error=str(exc))
-            # Greift eine Sperrregel erst beim echten Befehl, darf die Audit-Zeile den
-            # Klartext nicht enthalten: dort steht dann die maskierte Fassung.
+            # Greift eine Sperrregel erst beim echten Befehl, darf die Audit-Zeile den Klartext nicht enthalten.
             audit_command = req.payload["command"]
         if self._standing_withdrawn(req):
-            # Zwischen der letzten Pruefung beim Vorschlagen und hier liegen das Gate, der Start
-            # der Ausfuehrung und ggf. das Lesen aus dem Tresor: ein Zurueckziehen (oder eine
-            # Aenderung am Skript) in dieser Zeit muss noch wirken. Direkt vor dem Befehl pruefen.
+            # Zwischen der Prüfung beim Vorschlagen und hier liegen Gate, Start und das Lesen aus dem Tresor; ein
+            # Zurückziehen in dieser Zeit muss noch wirken.
             return ActionResult(success=False, error=STANDING_WITHDRAWN)
         try:
-            # Skripte (Audits, Updates, Backups) laufen oft minutenlang -- die 60 s
-            # Vorgabe von ctx.exec.run() liess z. B. Lynis regelmaessig scheitern.
             if audit_command is None:
                 result = await self._ctx.exec.run(host, command, timeout_s=SCRIPT_TIMEOUT_S)
             else:
@@ -355,14 +317,11 @@ class _ScriptActionExecutor:
         )
 
     def _standing_withdrawn(self, req: ActionRequest) -> bool:
-        """True, wenn die Aktion ueber eine Dauerfreigabe ohne Klick anlief, die es so nicht mehr
-        gibt: kein Eintrag (zurueckgezogen, erloschen) oder ein Eintrag mit anderem
-        Erteilungszeitpunkt (zurueckgezogen und neu erteilt -- die neue Freigabe galt nicht fuer
-        diesen Vorschlag). Ob sie ohne Klick anlief, sagt das Gate (`req.standing_approval`): Hat
-        es die Dauerfreigabe nicht anerkannt und ein Mensch hat per Klick freigegeben, zaehlt der
-        Klick, auch wenn der Vorschlag noch die Angaben der Dauerfreigabe traegt."""
+        """True, wenn die Aktion ohne Klick über eine Dauerfreigabe anlief, die so nicht mehr gilt."""
+        # Sie gilt nicht mehr bei fehlendem Eintrag oder anderem Erteilungszeitpunkt (zurückgezogen und neu erteilt: die
+        # neue Freigabe galt nicht für diesen Vorschlag). Ob ohne Klick, sagt das Gate (`req.standing_approval`).
         if req.standing_approval is None:
-            return False  # Freigabe per Klick
+            return False  # Freigabe per Klick, auch wenn der Vorschlag noch Angaben der Dauerfreigabe trägt
         payload = req.payload
         script_id = payload.get("script_id")
         record = _standing_approvals(self._ctx).get(script_id) if isinstance(script_id, str) else None
@@ -371,9 +330,8 @@ class _ScriptActionExecutor:
     async def _rebuild_command(
         self, payload: dict[str, Any], masked_command: str, secret_params: list[str]
     ) -> str:
-        """Baut den echten Befehl aus dem aktuellen Skript und den Tresor-Werten. Passt die
-        maskierte Fassung des heutigen Skripts nicht zu der, die vorgeschlagen (und
-        freigegeben) wurde, wird nichts ausgefuehrt."""
+        """Baut den echten Befehl aus dem aktuellen Skript und den Tresor-Werten; passt das Skript nicht mehr zum
+        Vorschlag, wird nichts ausgeführt."""
         script_id = payload.get("script_id")
         script = self._repo.get(script_id) if isinstance(script_id, str) else None
         if script is None:
@@ -388,8 +346,8 @@ class _ScriptActionExecutor:
             raise NodvardError(CHANGED_SINCE_PROPOSAL)
         for name in secrets:
             handle = await self._ctx.secrets.get_handle(f"scripts-{script_id}-{name}")
-            # Kurzer Block je Geheimnis: vault_use haelt eine DB-Verbindung, solange er
-            # offen ist -- waehrend des (bis zu 30 Minuten langen) Laufs darf keine offen sein.
+            # Kurzer Block je Geheimnis: `vault_use` hält eine DB-Verbindung, solange er offen ist, und die darf nicht
+            # den ganzen (bis zu 30 Minuten langen) Lauf offen bleiben.
             async with self._ctx.vault_use(handle) as value:
                 values[name] = str(value)
         return substitute_params(script.content, schema, values)
@@ -400,10 +358,8 @@ class _ScriptActionExecutor:
 
 
 class _ScriptJobSpec:
-    """Erfuellt `nodvard_sdk.context.JobSpec` strukturell (wie proxmoxs
-    `_DiscoveryJobSpec`). `handler` liest das Skript bei JEDEM Lauf frisch aus dem Repo
-    -- eine Zeitplanaenderung oder ein neuer Skriptinhalt braucht dadurch kein erneutes
-    `register_job()`, nur einen neuen Commit (siehe `repo.py`)."""
+    """Job für den Kern-Scheduler; `handler` liest das Skript bei jedem Lauf frisch aus dem Repo, `register_job()` ist
+    nicht nötig."""
 
     def __init__(
         self, ctx: ExtensionContext, repo: ScriptRepo, script_id: str, *, schedule: str, enabled: bool
@@ -418,8 +374,8 @@ class _ScriptJobSpec:
         self.enabled = enabled
 
     async def handler(self, **_: Any) -> dict[str, Any]:
-        # Nur ein echter Zeitplan-Lauf darf eine Dauerfreigabe nutzen; "Jetzt ausfuehren"
-        # ueber die Jobs-Schnittstelle (manual) bleibt ein normaler Vorschlag.
+        # Nur ein echter Zeitplan-Lauf darf eine Dauerfreigabe nutzen; „Jetzt ausführen“ (manual) bleibt ein normaler
+        # Vorschlag.
         result = await run_script(
             self._ctx, self._repo, self._script_id, param_overrides={},
             scheduled=current_job_trigger() == "schedule",
@@ -429,14 +385,14 @@ class _ScriptJobSpec:
             _failure_notices(self._ctx).forget(self._script_id)
             return result
         if current_job_trigger() == "schedule" and not _only_skipped(result):
-            # Wer von Hand startet, sieht das Ergebnis selbst; uebersprungene Server meldet `_notify_skipped`.
+            # Wer von Hand startet, sieht das Ergebnis selbst; übersprungene Server meldet `_notify_skipped`.
             await self._notify_failure(problem)
-        # Der Kern-Scheduler zaehlt einen Lauf nur als fehlgeschlagen, wenn der Handler
-        # wirft -- sonst stuende ein Lauf, der nichts getan hat, als "erfolgreich" da.
+        # Der Scheduler zählt einen Lauf nur als fehlgeschlagen, wenn der Handler wirft; sonst gälte ein Lauf ohne
+        # Wirkung als erfolgreich.
         raise NodvardError(problem)
 
     async def _notify_failure(self, problem: str) -> None:
-        """EINE Meldung je Fehler (`FailureNotices`); ein Fehler beim Senden darf den Lauf nicht kippen."""
+        """Eine Meldung je Fehler (`FailureNotices`); ein Sendefehler darf den Lauf nicht kippen."""
         if not _failure_notices(self._ctx).claim(self._script_id, problem):
             return
         script = self._repo.get(self._script_id)
@@ -459,22 +415,18 @@ class _ScriptJobSpec:
 
 
 def _run_problem(result: dict[str, Any]) -> str | None:
-    """Warum ein Lauf als fehlgeschlagen gilt, obwohl `run_script()` normal zurueckkam:
-    ein Ziel mit Fehler (z. B. ein Parameter ohne Wert) oder gar kein Ziel. Uebersprungene
-    Server eines Sammelziels sind fuer sich kein Fehler (dafuer gibt es den Hinweis aus
-    `_notify_skipped`); wurden aber alle uebersprungen, lief das Skript nirgends.
-
-    Nur fuer den Job-Handler: "Jetzt ausfuehren" auf der Skripte-Seite
-    (`POST /scripts/{id}/run`) zeigt die Ergebnisse je Server selbst an."""
+    """Warum ein Lauf trotz normaler Rückgabe von `run_script()` als fehlgeschlagen gilt (Ziel mit Fehler oder kein
+    Ziel); sonst None."""
+    # Übersprungene Server eines Sammelziels sind für sich kein Fehler (dafür gibt es `_notify_skipped`), wohl aber,
+    # wenn alle übersprungen wurden. Nur für den Job-Handler: Die Skripte-Seite zeigt die Ergebnisse je Server selbst.
     results: list[dict[str, Any]] = result.get("results") or []
     failed = [r for r in results if "error" in r]
     if failed:
         names = ", ".join(str(r.get("host_name") or r.get("host_id")) for r in failed)
         reasons = "; ".join(dict.fromkeys(str(r["error"]) for r in failed))
         return f"Nicht ausgeführt auf {names}: {reasons}"
-    # Der Zeitplan wartet, bis eine Aktion ohne Klick (Dauerfreigabe) fertig ist: Scheitert sie auf dem Server oder
-    # lehnt das Dashboard sie ab, ist der Lauf fehlgeschlagen. Die Ausgabe nennt der Satz nicht (sie kann Inhalte vom
-    # Server enthalten und steht nur in der Aktion).
+    # Der Zeitplan wartet auf Aktionen ohne Klick (Dauerfreigabe); scheitert eine oder lehnt das Dashboard sie ab, ist
+    # der Lauf fehlgeschlagen. Die Ausgabe steht nicht im Satz, sie kann Inhalte vom Server enthalten.
     problems = []
     for wanted, text in ((ActionStatus.FAILED.value, "Auf {} ist das Skript fehlgeschlagen; die Ausgabe steht unter „Aktionen“."),
                          (ActionStatus.DENIED.value, "Auf {} hat das Dashboard den Lauf abgelehnt (siehe „Aktionen“).")):
@@ -492,7 +444,7 @@ def _run_problem(result: dict[str, Any]) -> str | None:
 
 
 def _only_skipped(result: dict[str, Any]) -> bool:
-    """Lief nirgends, weil alle Server uebersprungen wurden: das meldet schon `_notify_skipped` (einmal je Liste)."""
+    """Lief nirgends, weil alle Server übersprungen wurden; das meldet schon `_notify_skipped` (einmal je Liste)."""
     results: list[dict[str, Any]] = result.get("results") or []
     return not result.get("targets") and any("skipped" in r for r in results)
 
@@ -508,8 +460,7 @@ async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> lis
     if kind == "group":
         group_id = target.get("group_id")
         if not group_id:
-            # `ctx.hosts.list(group=None)` filtert nicht -- ohne Gruppe liefe das
-            # Skript sonst auf ALLEN Servern.
+            # `ctx.hosts.list(group=None)` filtert nicht, das Skript liefe sonst auf allen Servern.
             return []
         return await ctx.hosts.list(group=group_id)
     if kind == "all":
@@ -520,9 +471,8 @@ async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> lis
 async def _runnable_targets(
     ctx: ExtensionContext, target: dict[str, Any]
 ) -> tuple[list[SdkHost], list[tuple[SdkHost, str]]]:
-    """(Ziele, auf denen der Lauf klappen kann; uebersprungene mit Grund). Ein
-    ausdruecklich gewaehlter Server ('host') bleibt unveraendert Ziel; bei Sammelzielen
-    nur Hosts, auf denen der Lauf ueberhaupt klappen kann."""
+    """(Ziele, auf denen der Lauf klappen kann; übersprungene mit Grund). Ein gewählter Server ('host') bleibt immer
+    Ziel."""
     targets = await _resolve_targets(ctx, target)
     if target.get("kind") not in ("all", "group"):
         return targets, []
@@ -538,9 +488,9 @@ async def _runnable_targets(
 
 
 def _skip_reason(host: SdkHost) -> str | None:
-    """Warum ein Host bei 'Alle Server'/'Gruppe' nicht als Ziel taugt
-    -- dieselben Kriterien wie `target_hosts()` in Nodvard Shield. Ein Lauf dort wuerde
-    garantiert scheitern und nur die Aktionen-Liste zumuellen."""
+    """Warum ein Host bei 'Alle Server' oder 'Gruppe' nicht als Ziel taugt (wie `target_hosts()` in Nodvard Shield);
+    sonst None."""
+    # Ein Lauf dort scheiterte sicher und würde nur die Aktionen-Liste füllen.
     if not host.is_managed:
         return "nicht verwaltet"
     if host.os_family != "linux":
@@ -554,36 +504,25 @@ async def run_script(
     ctx: ExtensionContext, repo: ScriptRepo, script_id: str, *, param_overrides: dict[str, str], actor: Actor | None = None,
     wait_s: float | None = None, scheduled: bool = False,
 ) -> dict[str, Any]:
-    """Loest Ziel-Hosts UND Parameter (inkl. `type="secret"` ueber `ctx.vault_use()`)
-    auf und schlaegt EINE `script.run`-Aktion PRO Ziel-Host vor. Wird sowohl vom
-    Kern-Scheduler (geplanter Lauf, ueber `_ScriptJobSpec.handler`) als auch von
-    `POST /scripts/{id}/run` (manueller Lauf mit optionalen Ueberschreibungen)
-    aufgerufen -- derselbe Pfad, unabhaengig vom Ausloeser, exakt wie in Nodvard Shield
-    `_propose_from_response()` fuer Chat UND Vorfall-Batches denselben Pfad nutzt.
-
-    `wait_s` (nur von der HTTP-Route) ist EIN Zeitbudget fuer alle Ziel-Hosts
-    zusammen -- sonst wartete ein Lauf auf fuenf Servern bis zu 5 x 20 s. None = jede
-    Aktion bis zum Ende abwarten (geplanter Lauf).
-
-    `scheduled` (nur vom Zeitplan): Gibt es eine gueltige Dauerfreigabe (standing.py), tragen
-    die freigegebenen Ziele sie im Vorschlag und laufen ohne Klick an; neue Ziele bekommen
-    eine normale Freigabe. Ist sie nicht mehr gueltig, erlischt sie hier."""
+    """Löst Ziele und Parameter auf und schlägt je Zielserver eine `script.run`-Aktion vor (Zeitplan und manueller
+    Lauf)."""
+    # `wait_s` (nur die HTTP-Route) ist ein Zeitbudget für alle Server zusammen, sonst wartete ein Lauf auf fünf Servern
+    # bis zu 5 x 20 s; None wartet jede Aktion ab (geplanter Lauf). `scheduled` (nur der Zeitplan): Mit gültiger
+    # Dauerfreigabe laufen die freigegebenen Ziele ohne Klick, neue Ziele bekommen die normale Freigabe, eine ungültige
+    # Dauerfreigabe erlischt hier.
     deadline = None if wait_s is None else time.monotonic() + wait_s
     script = repo.get(script_id)
     if script is None:
         raise NodvardError(f"Skript '{script_id}' existiert nicht (mehr) im Repository.")
     meta = script.meta
     if not meta.enabled:
-        # `enabled=False` ist ein Kill-Switch, kein reiner Zeitplan-Schalter -- ein
-        # automatisch angelegter Entwurf (siehe `_on_action_executed()` unten) wird
-        # GENAU DESHALB deaktiviert gespeichert: er soll erst nach manueller Pruefung
-        # ueberhaupt ausfuehrbar sein, weder geplant NOCH per Handauslösung.
+        # `enabled=False` ist ein Kill-Switch, kein reiner Zeitplan-Schalter: Ein automatisch angelegter Entwurf (siehe
+        # `_on_action_executed()`) bleibt deshalb deaktiviert, bis ihn jemand geprüft hat, auch für Läufe von Hand.
         raise NodvardError(f"Skript '{script_id}' ist deaktiviert.")
 
-    # Geheimnisse kommen NUR aus dem Tresor und stehen nie in der Aktion.
-    # Der Vorschlag traegt den Befehl mit Platzhalter, der Executor setzt den echten Wert
-    # erst beim Ausfuehren ein. Ein Wert fuer einen geheimen Parameter per Aufruf wuerde
-    # sonst doch im Payload landen -- deshalb abgelehnt.
+    # Geheimnisse kommen nur aus dem Tresor und stehen nie in der Aktion: Der Vorschlag trägt den Befehl mit
+    # Platzhalter, der Executor setzt den echten Wert erst beim Ausführen ein. Ein per Aufruf mitgegebener Wert landete
+    # im Payload.
     secrets = _secret_names(meta.params_schema)
     given = sorted(name for name in secrets if name in param_overrides)
     if given:
@@ -598,18 +537,16 @@ async def run_script(
         for host, reason in skipped_hosts:
             results.append({"host_id": host.id, "host_name": host.name, "skipped": reason})
             skipped[host.id] = (host.name, reason)
-        # Den Zeitplan nicht jede Nacht dieselben Server melden lassen --
-        # einmal, dann erst wieder bei Aenderung. Bei Handausloesung (`actor`) zeigt die
-        # Oberflaeche die Liste ohnehin; dort bleibt der Stand unberuehrt, sonst bliebe die
-        # erste Zeitplan-Meldung aus, sobald jemand das Skript einmal von Hand getestet hat.
+        # Übersprungene Server meldet der Zeitplan nur einmal und dann erst wieder bei einer Änderung, nicht jede Nacht.
+        # Bei Läufen von Hand (`actor`) bleibt der Stand unberührt, sonst bliebe die erste Zeitplan-Meldung aus, sobald
+        # jemand das Skript einmal getestet hat.
         if actor is None:
             notices = _skip_notices(ctx)
             new, previous = notices.update(script_id, {hid: reason for hid, (_n, reason) in skipped.items()})
             if not new or await _notify_skipped(ctx, script_id, meta.name, skipped, set(new)):
                 notices.send_done(script_id)
             elif not notices.send_failed(script_id, previous):
-                # Senden ging schief (z. B. ntfy nicht erreichbar): beim naechsten Lauf erneut
-                # versuchen -- aber nicht endlos, jeder Versuch ist ein Eintrag im Dashboard.
+                # Senden ging schief (z. B. ntfy nicht erreichbar): beim nächsten Lauf erneut, aber nicht endlos.
                 _log.warning("Skript %s: Hinweis auf übersprungene Server nach %d Versuchen aufgegeben.", script_id, MAX_SEND_TRIES)
     for name in secrets if targets else []:
         # Fehlt das Geheimnis im Tresor, soll schon der Vorschlag scheitern.
@@ -626,12 +563,12 @@ async def run_script(
     standing: StandingApproval | None = None
     standing_record: StandingRecord | None = None
     covered: set[str] = set()
-    lost: str | None = None  # warum die Dauerfreigabe fuer den Rest dieses Laufs nicht mehr gilt
+    lost: str | None = None  # warum die Dauerfreigabe für den Rest dieses Laufs nicht mehr gilt
     if scheduled and actor is None and not param_overrides and targets and command is not None:
         store = _standing_approvals(ctx)
         pending = store.pending_expiry(script_id)
         if pending is not None:
-            # Ein frueheres Erloeschen konnte nicht protokolliert oder geloescht werden.
+            # Ein Erlöschen aus einem vorigen Lauf ließ sich nicht protokollieren oder löschen.
             await _expire_standing(ctx, script_id, meta.name, pending.reason)
         standing_record = store.get(script_id)
         if standing_record is not None:
@@ -650,7 +587,6 @@ async def run_script(
         if command is None:
             results.append({"host_id": host.id, "host_name": host.name, "error": param_error})
             continue
-        # Ob es ohne Klick lief, haengt das Gate an (erst nach seiner Pruefung).
         reason = f"Skript '{meta.name}' ({script_id}) ausführen"
         use_standing = standing is not None and host.id in covered
         if use_standing and standing_record is not None:
@@ -664,9 +600,8 @@ async def run_script(
             "secret_params": secrets,
         }
         if use_standing and standing_record is not None:
-            # Das Freigegebene: Konto und Port prueft der Executor direkt vor dem Ausfuehren noch
-            # einmal (zwischen Gate und Ausfuehrung kann es sich aendern), ebenso ob genau diese
-            # Dauerfreigabe (Erteilungszeitpunkt) dann noch gilt.
+            # Konto und Port prüft der Executor direkt vor dem Ausführen noch einmal, ebenso ob genau diese
+            # Dauerfreigabe (Erteilungszeitpunkt) dann noch gilt; zwischen Gate und Ausführung kann sich beides ändern.
             payload["account"] = standing_record.hosts.get(host.id)
             if host.id in standing_record.ports:
                 payload["port"] = standing_record.ports[host.id]
@@ -689,8 +624,8 @@ async def run_script(
             wait_s=None if deadline is None else max(0.0, deadline - time.monotonic()),
         )
         if use_standing and decision.outcome == GateOutcome.REQUIRE_CONFIRMATION:
-            # Das Gate hat die Freigabe nicht anerkannt (z. B. Person gesperrt oder keine
-            # Admin-Rechte mehr): dieser Lauf wartet auf einen Klick, und die Freigabe erlischt.
+            # Das Gate hat die Freigabe nicht anerkannt (z. B. Person gesperrt oder kein Admin mehr): Dieser Lauf wartet
+            # auf einen Klick, und die Freigabe erlischt.
             lost = decision.detail or "Das Dashboard hat die Freigabe nicht anerkannt."
             await _expire_standing(ctx, script_id, meta.name, lost)
             standing = None
@@ -720,13 +655,10 @@ class _RunIn(BaseModel):
 
 
 class _StandingIn(BaseModel):
+    # Was die Seite angezeigt hat (`_ScriptOut.fingerprint`, `_ScriptOut.targets_fingerprint`). Hat sich das Skript oder
+    # ein Zielserver seitdem geändert, wird nicht freigegeben: Es gilt nur, was die Person gesehen hat.
     fingerprint: str
-    """Der Fingerabdruck, den die Seite angezeigt hat (`_ScriptOut.fingerprint`). Hat jemand
-    das Skript inzwischen geaendert, wird nicht freigegeben -- sonst gaebe man etwas frei,
-    das man nie gesehen hat."""
     targets_fingerprint: str
-    """Dasselbe fuer die angezeigten Zielserver samt Konto und Adresse
-    (`_ScriptOut.targets_fingerprint`)."""
 
 
 class _StandingHostOut(BaseModel):
@@ -738,15 +670,12 @@ class _StandingHostOut(BaseModel):
 
 
 class _StandingOut(BaseModel):
-    active: bool
-    """False: die Freigabe gilt nicht mehr (`problem`) und erlischt beim naechsten Lauf."""
+    active: bool  # False: gilt nicht mehr (`problem`) und erlischt beim nächsten Lauf
     problem: str | None = None
     granted_by_label: str
     granted_at: str
-    hosts: list[_StandingHostOut]
-    """Die Server, fuer die die Freigabe gilt."""
-    new_hosts: list[str] = []
-    """Namen neuer Zielserver, die beim naechsten Lauf eine normale Freigabe brauchen."""
+    hosts: list[_StandingHostOut]  # Server, für die die Freigabe gilt
+    new_hosts: list[str] = []  # Namen neuer Zielserver, die eine normale Freigabe brauchen
 
 
 class _ScriptOut(BaseModel):
@@ -759,16 +688,11 @@ class _ScriptOut(BaseModel):
     schedule: str | None
     enabled: bool
     job_id: str
-    fingerprint: str = ""
-    """Fingerabdruck von Inhalt, Parametern, Ziel und Zeitplan (fuer das Erteilen einer
-    Dauerfreigabe, siehe `_StandingIn`)."""
+    fingerprint: str = ""  # Inhalt, Parameter, Ziel, Zeitplan (zum Erteilen einer Dauerfreigabe, siehe `_StandingIn`)
     standing_approval: _StandingOut | None = None
-    """Die Dauerfreigabe des Skripts, None ohne."""
+    # Bei aktiven Skripten mit Zeitplan: die Server, die eine Dauerfreigabe jetzt decken würde (zeigt der Dialog).
     standing_preview: list[_StandingHostOut] | None = None
-    """Fuer aktive Skripte mit Zeitplan: die Server, die eine Dauerfreigabe JETZT decken
-    wuerde, mit Konto und Adresse (zeigt der Bestaetigungsdialog)."""
-    targets_fingerprint: str | None = None
-    """Fingerabdruck von `standing_preview` (fuer `_StandingIn.targets_fingerprint`)."""
+    targets_fingerprint: str | None = None  # Fingerabdruck von `standing_preview`
 
     @classmethod
     def from_script(cls, script: Script) -> "_ScriptOut":
@@ -799,8 +723,8 @@ def _valid_id(script_id: str) -> bool:
 
 
 def _target_problem(target: dict[str, Any]) -> str | None:
-    """'Einer Gruppe'/'Einem Server' ohne Auswahl nicht still speichern --
-    eine Gruppe ohne Kennung lief frueher auf allen Servern."""
+    """Meldet 'Einer Gruppe' oder 'Einem Server' ohne Auswahl, statt sie still zu speichern."""
+    # Eine Gruppe ohne Kennung würde sonst auf allen Servern laufen (siehe `_resolve_targets`).
     kind = target.get("kind")
     if kind == "group" and not target.get("group_id"):
         return "Bitte eine Gruppe wählen, auf der das Skript laufen soll."
@@ -813,10 +737,9 @@ def _target_problem(target: dict[str, Any]) -> str | None:
 
 class Extension(NodvardExtension):
     async def _register_script_job(self, ctx: ExtensionContext, script: Script) -> None:
-        """Beim Start. Ein Skript mit kaputtem Zeitplan (gespeichert von einer Version, die ihn noch nicht
-        pruefte) legte frueher die ganze Erweiterung lahm: `register_job()` warf, `setup()` brach ab, kein
-        Skript lief mehr. Jetzt wird nur dieses Skript ohne Zeitplan angemeldet, mit Warnung (ohne Traceback:
-        die Deploy-Pruefung sucht im Container-Log danach) und Meldung; die anderen laufen wie geplant."""
+        """Meldet das Skript beim Start an; bei ungültigem Zeitplan ohne Zeitplan, mit Warnung und Meldung."""
+        # Sonst brächte `register_job()` die ganze Erweiterung zu Fall. Die Warnung ohne Traceback: Die Deploy-Prüfung
+        # sucht im Container-Log danach.
         meta = script.meta
         schedule = meta.schedule or _NEVER
         enabled = bool(meta.enabled and meta.schedule)
@@ -854,9 +777,8 @@ class Extension(NodvardExtension):
         self._ctx = ctx
         self._repo = ScriptRepo(_repo_path(ctx))
         self._tracker = RecurringFixTracker()
-        # Bewusst KEIN vorab angelegtes Skript mehr: das fruehere
-        # Lynis-Seed kam nach jedem Loeschen beim naechsten Start zurueck, lief ohne
-        # sudo und doppelte das eigene Haertungs-Audit von Nodvard Shield.
+        # Bewusst kein vorab angelegtes Skript: Es käme nach jedem Löschen beim nächsten Start zurück, liefe ohne sudo und
+        # doppelte das Härtungs-Audit von Nodvard Shield.
 
         ctx.capabilities.provide(_ScriptActionExecutor(ctx, self._repo))
         ctx.actions.register(
@@ -866,10 +788,8 @@ class Extension(NodvardExtension):
                 description="Führt ein aufgelöstes Skript aus dem Repository per SSH auf dem Host aus.",
                 default_risk=Risk.HIGH,
                 permissions=["hosts.execute"],
-                # Nicht host-gebunden (wie backups' backup.run): sonst bietet die
-                # Server-Seite script.run als Formular mit freiem Feld "command" an.
-                # Gestartet wird ueber die Skript-Seite; das Gate prueft
-                # host_bound nicht.
+                # Nicht host-gebunden: Sonst böte die Server-Seite `script.run` als Formular mit freiem Feld "command"
+                # an. Gestartet wird über die Skripte-Seite; das Gate prüft `host_bound` nicht.
                 host_bound=False,
                 command_field="command",
             )
@@ -902,8 +822,8 @@ class Extension(NodvardExtension):
             evaluation = evaluate(record, meta, script.content, targets)
             problem = evaluation.problem
             if evaluation.valid:
-                # Dieselbe Pruefung der Person wie im Gate -- sonst zeigte die Seite "gilt",
-                # obwohl der naechste Lauf auf einen Klick wartet.
+                # Dieselbe Prüfung der Person wie im Gate, sonst zeigte die Seite „gilt“, obwohl der nächste Lauf auf
+                # einen Klick wartet.
                 problem = await ctx.actions.check_standing_approval(record.granted_by_user_id, risk=Risk.HIGH)
             out.standing_approval = _StandingOut(
                 active=problem is None,
@@ -927,12 +847,8 @@ class Extension(NodvardExtension):
 
         @router.get("/widgets/overview")
         async def overview_widget_data() -> dict[str, Any]:
-            """Eigener Endpunkt statt `GET /scripts` direkt als `data_endpoint` --
-            der generische Widget-Vertrag verlangt `{"data": ..., "meta": {}}`
-            (siehe `WidgetCard.tsx`/proxmoxs `overview_widget_data()`), waehrend
-            `GET /scripts` bewusst die rohe Liste liefert, die `ScriptsPage.tsx`
-            direkt erwartet. Live gefunden: ohne diese Trennung zeigte das Dashboard
-            den Fehler 'Antwort hat keine "data"-Eigenschaft.'"""
+            """Widget-Daten im Format `{"data": ..., "meta": {}}`; `GET /scripts` liefert dagegen die rohe Liste für die
+            Seite."""
             return {
                 "data": [
                     {"name": s.meta.name, "schedule": s.meta.schedule or "manuell"}
@@ -956,9 +872,7 @@ class Extension(NodvardExtension):
 
         @router.get("/scripts/{script_id}/runs")
         async def script_runs(script_id: str, limit: int = 20) -> list[dict[str, Any]]:
-            """Die letzten Laeufe mit Ausgabe, Exit-Code, Ziel-Host und wer ausgeloest hat
-            -- vorher sah man nach "Ausfuehren" nur "vorgeschlagen"/"erfolgreich", nie,
-            was das Skript tatsaechlich ausgegeben hat."""
+            """Die letzten Läufe mit Ausgabe, Exit-Code, Zielserver und Auslöser."""
             if self._repo.get(script_id) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
             rows = await ctx.actions.list(correlation_id=f"script:{script_id}", limit=limit)
@@ -970,7 +884,7 @@ class Extension(NodvardExtension):
                 out.append({
                     "action_id": row.id,
                     "status": row.status,
-                    # Lief ohne Klick ueber die Dauerfreigabe; `reason` nennt wer und wann.
+                    # Lief ohne Klick über die Dauerfreigabe; `reason` nennt, wer und wann.
                     "standing_approval": (row.gate_decision or {}).get("rule") == "standing_approval",
                     "reason": row.reason,
                     "host_id": row.host_id,
@@ -990,8 +904,8 @@ class Extension(NodvardExtension):
         async def save_script(
             script_id: str, payload: _ScriptIn, create: bool = False, actor: Actor = Depends(ctx.api.current_actor)
         ) -> _ScriptOut:
-            """`create=true` kommt von "Neues Skript": ist die Kennung schon
-            vergeben, 409 statt das bestehende Skript still zu ueberschreiben."""
+            """Speichert das Skript; `create=true` ("Neues Skript") antwortet bei vergebener Kennung mit 409 statt zu
+            überschreiben."""
             if not _valid_id(script_id):
                 raise HTTPException(
                     status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -1001,8 +915,7 @@ class Extension(NodvardExtension):
             if problem:
                 raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=problem)
             if payload.schedule:
-                # Vor dem Speichern: ein kaputter Zeitplan landete sonst im Repo, und der naechste Start
-                # der Erweiterung scheiterte daran (siehe `_register_script_job`).
+                # Vor dem Speichern, sonst landete ein kaputter Zeitplan im Repo (siehe `_register_script_job`).
                 try:
                     ctx.scheduler.validate_schedule(payload.schedule)
                 except ValueError as exc:
@@ -1037,15 +950,14 @@ class Extension(NodvardExtension):
                     ctx, script_id, meta.name, "Das Skript wurde neu angelegt.", actor=actor, notify=False
                 )
             elif record is not None and record.fingerprint != script_fingerprint(meta, payload.content):
-                # Inhalt, Parameter, Ziel oder Zeitplan geaendert: die Dauerfreigabe galt dem
-                # alten Stand. Name, Beschreibung und "aktiv" zaehlen nicht (standing.py).
+                # Inhalt, Parameter, Ziel oder Zeitplan geändert: Die Dauerfreigabe galt dem alten Stand (siehe
+                # `standing.py`).
                 who = actor.label or actor.id
                 await _expire_standing(
                     ctx, script_id, meta.name, f"Das Skript wurde von {who} geändert.", actor=actor
                 )
             if payload.target.get("kind") not in ("all", "group"):
-                # Kein Sammelziel mehr: ein alter Stand dürfte sonst bei einem Rückwechsel
-                # eine erwartete Meldung unterdrücken.
+                # Kein Sammelziel mehr: Ein alter Stand unterdrückte sonst bei einem Rückwechsel eine erwartete Meldung.
                 _skip_notices(ctx).forget(script_id)
             await ctx.scheduler.register_job(
                 _ScriptJobSpec(
@@ -1062,11 +974,8 @@ class Extension(NodvardExtension):
             script = self._repo.get(script_id)
             if script is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
-            # Job zuerst abmelden (unschedule), DANACH aus dem Repo entfernen -- sonst
-            # koennte ein zwischen beiden Schritten faelliger Lauf ein bereits
-            # geloeschtes Skript lesen wollen. `run_script()` wirft in dem Fall zwar nur
-            # einen sauberen NodvardError statt abzustuerzen, aber "abmelden vor
-            # loeschen" vermeidet das Fenster von vornherein.
+            # Erst den Job abmelden, dann aus dem Repo löschen, damit zwischen beiden Schritten kein Lauf ein
+            # gelöschtes Skript lesen will.
             await ctx.scheduler.register_job(
                 _ScriptJobSpec(ctx, self._repo, script_id, schedule=_NEVER, enabled=False)
             )
@@ -1079,10 +988,8 @@ class Extension(NodvardExtension):
 
         @router.post("/scripts/{script_id}/run")
         async def run_now(script_id: str, payload: _RunIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
-            """Kein zweiter Ausfuehrungsweg -- ruft `run_script()` auf, denselben Code
-            wie ein geplanter Lauf. Existiert zusaetzlich zu `POST /api/v1/jobs/{id}/
-            run` (Kern-Endpunkt, siehe Modul-Docstring), weil letzterer keine
-            Parameter-Ueberschreibungen entgegennimmt."""
+            """Führt das Skript wie ein geplanter Lauf aus (`run_script()`), aber mit überschriebenen Parametern."""
+            # Neben `POST /api/v1/jobs/{id}/run` des Kerns, das keine Parameter-Überschreibungen entgegennimmt.
             if self._repo.get(script_id) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
             try:
@@ -1095,23 +1002,22 @@ class Extension(NodvardExtension):
 
         ctx.api.include_router(router, permission="hosts.execute")
 
-        # Dauerfreigabe erteilen/zurueckziehen: eigener Router mit eigener Berechtigung --
-        # bei den eingebauten Rollen haben sie nur Owner und Admin, Bediener und Betrachter
-        # bekommen 403 (serverseitig, nicht nur in der Oberflaeche).
+        # Eigener Router mit eigener Berechtigung: Dauerfreigaben erteilen und zurückziehen dürfen nur Owner und Admin,
+        # alle anderen bekommen serverseitig 403.
         standing_router = APIRouter()
 
         @standing_router.post("/scripts/{script_id}/standing-approval")
         async def grant_standing(
             script_id: str, payload: _StandingIn, actor: Actor = Depends(ctx.api.current_actor)
         ) -> _ScriptOut:
-            """Dauerfreigabe erteilen: die geplanten Laeufe dieses Skripts laufen auf den
-            jetzigen Zielservern ohne Klick, solange sich nichts aendert (standing.py)."""
+            """Erteilt die Dauerfreigabe: Geplante Läufe auf den jetzigen Zielservern laufen ohne Klick, solange sich
+            nichts ändert."""
             script = self._repo.get(script_id)
             if script is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
             meta = script.meta
             if actor.type != ActorType.USER:
-                # Nur ein Mensch; ctx.api.current_actor liefert ohnehin immer den Nutzer.
+                # Nur ein Mensch; `ctx.api.current_actor` liefert ohnehin immer den Nutzer.
                 raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Nur ein Mensch kann freigeben.")
             if not meta.schedule or not meta.enabled:
                 raise HTTPException(
@@ -1131,8 +1037,8 @@ class Extension(NodvardExtension):
                     detail="Das Skript hat gerade keinen Server, auf dem es laufen kann.",
                 )
             if payload.targets_fingerprint != targets_fingerprint(targets):
-                # Seit dem Laden der Seite kam ein Server dazu, fiel weg oder hat ein anderes
-                # Konto bzw. eine andere Adresse: nur freigeben, was man gesehen hat.
+                # Seit dem Laden der Seite hat sich die Serverliste, ein Konto oder eine Adresse geändert: Es gilt nur,
+                # was die Person gesehen hat.
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="Die Zielserver haben sich inzwischen geändert – lade die Seite neu und prüfe die Liste noch einmal.",
@@ -1184,8 +1090,7 @@ class Extension(NodvardExtension):
 
         @standing_router.delete("/scripts/{script_id}/standing-approval", status_code=status.HTTP_204_NO_CONTENT)
         async def revoke_standing(script_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> None:
-            """Freigabe zurueckziehen: wirkt sofort, auch auf die restlichen Server eines
-            laufenden Laufs (der prueft sie vor jedem Server neu)."""
+            """Zieht die Freigabe zurück; wirkt sofort, auch auf die restlichen Server eines laufenden Laufs."""
             script = self._repo.get(script_id)
             if script is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
@@ -1193,8 +1098,7 @@ class Extension(NodvardExtension):
             record = store.get(script_id)
             if record is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Für dieses Skript gibt es keine Dauerfreigabe.")
-            # Zuerst im Speicher sperren: so gilt sie sofort nicht mehr, auch wenn die Datei
-            # gleich nicht beschreibbar ist.
+            # Zuerst im Speicher sperren: So gilt sie sofort nicht mehr, auch wenn die Datei nicht beschreibbar ist.
             pending = store.block(script_id, record, "Sie wurde zurückgezogen.")
             stuck = False
             try:
@@ -1222,7 +1126,7 @@ class Extension(NodvardExtension):
                 correlation_id=f"script:{script_id}",
                 actor=actor,
             )
-            # Zurueckziehen ist schon protokolliert; ein spaeteres Nachholen nur noch loeschen.
+            # Das Zurückziehen ist protokolliert; ein späteres Nachholen muss nur noch löschen.
             pending.logged = pending.notified = True
             if stuck:
                 raise HTTPException(
@@ -1299,8 +1203,8 @@ class Extension(NodvardExtension):
                 draft_content(command),
                 commit_message=f"scripts: automatischer Entwurf nach {MAX_COUNT}x Wiederholung",
             )
-            # Der Befehl selbst steht nur im Entwurf (Skripte-Seite, `hosts.execute`): Meldungen
-            # liest auch, wer nur ansehen darf, und Befehle koennen Zugangsdaten enthalten.
+            # Der Befehl steht nur im Entwurf (Skripte-Seite, `hosts.execute`): Meldungen liest auch, wer nur ansehen
+            # darf, und Befehle können Zugangsdaten enthalten.
             await ctx.notify.send(
                 Notification(
                     title="Wiederkehrende Reparatur erkannt",

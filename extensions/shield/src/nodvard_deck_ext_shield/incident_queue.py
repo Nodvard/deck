@@ -1,16 +1,5 @@
-"""Dauerhafte Warteschlange fuer Vorfaelle des laufenden Sammelfensters
-(`ext_nexus_soc_incident_queue`, models.py).
-
-Der Speicher-Batch aus `incidents.py` bleibt die Arbeitsliste; diese Tabelle ist seine
-Absicherung gegen einen Neustart: ein Vorfall wird beim Erkennen sofort als "offen"
-geschrieben, nach der Verarbeitung des Batches als "verarbeitet" markiert, und
-`load_open()` holt beim Start alles zurueck, was noch nicht gemeldet wurde.
-
-Scheitert die Verarbeitung, zaehlt `attempts` hoch; nach `MAX_ATTEMPTS` Versuchen (oder
-wenn ein offener Eintrag aelter als `MAX_AGE_S` ist) wird der Eintrag "fehlgeschlagen"
-und nicht mehr mitgeschleppt. `action_id`/`ai_summary` halten einen schon angelegten
-Aktionsvorschlag fest, damit ein erneuter Versuch keinen zweiten anlegt.
-"""
+"""Dauerhafte Warteschlange (`ext_nexus_soc_incident_queue`), die den Batch aus `incidents.py` über einen Neustart
+rettet: Ein Vorfall steht ab dem Erkennen als "offen" darin, `load_open()` holt beim Start den Rest."""
 
 from __future__ import annotations
 
@@ -25,6 +14,8 @@ from .models import IncidentQueueRecord
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# Scheitert die Verarbeitung, zählt `attempts` hoch. Nach MAX_ATTEMPTS Versuchen oder wenn der Eintrag älter als
+# MAX_AGE_S ist, wird er "fehlgeschlagen" und nicht mehr mitgeschleppt.
 OPEN = "offen"
 PROCESSED = "verarbeitet"
 FAILED = "fehlgeschlagen"
@@ -96,7 +87,7 @@ class IncidentQueueRepository:
             )
 
     async def save_outcome(self, incident_ids: list[str], *, action_id: str | None, ai_summary: str) -> None:
-        """Vermerkt den angelegten Aktionsvorschlag samt KI-Text an den Eintraegen."""
+        """Hält den angelegten Aktionsvorschlag samt KI-Text fest, damit ein erneuter Versuch keinen zweiten anlegt."""
         if not incident_ids:
             return
         async with self._ctx.db.session() as session:
@@ -107,7 +98,7 @@ class IncidentQueueRepository:
             )
 
     async def mark_proposal_started(self, incident_ids: list[str]) -> None:
-        """Vermerkt VOR dem Anlegen eines Aktionsvorschlags, dass er begonnen wird."""
+        """Vermerkt vor dem Anlegen eines Aktionsvorschlags, dass er begonnen wird."""
         if not incident_ids:
             return
         async with self._ctx.db.session() as session:
@@ -116,8 +107,8 @@ class IncidentQueueRepository:
             )
 
     async def bump_attempts(self, incident_ids: list[str]) -> dict[str, int]:
-        """Zaehlt einen fehlgeschlagenen Versuch fuer die noch OFFENEN Eintraege hoch und
-        gibt deren neuen Stand zurueck (bereits verarbeitete fehlen im Ergebnis)."""
+        """Zählt einen fehlgeschlagenen Versuch für die noch offenen Einträge hoch und gibt deren neuen Stand
+        zurück (bereits verarbeitete fehlen im Ergebnis)."""
         if not incident_ids:
             return {}
         async with self._ctx.db.session() as session:
@@ -133,8 +124,8 @@ class IncidentQueueRepository:
             return {row.id: row.attempts for row in rows}
 
     async def expire_stale(self, *, max_attempts: int = MAX_ATTEMPTS, max_age_s: float = MAX_AGE_S) -> int:
-        """Beim Start: offene Eintraege, die zu alt sind oder ihre Versuche verbraucht
-        haben, als "fehlgeschlagen" markieren, statt sie ewig mitzuschleppen."""
+        """Beim Start: offene Einträge, die zu alt sind oder ihre Versuche verbraucht haben, als "fehlgeschlagen"
+        markieren."""
         cutoff = datetime.now(UTC) - timedelta(seconds=max_age_s)
         async with self._ctx.db.session() as session:
             result = await session.execute(

@@ -1,16 +1,4 @@
-"""Fingerabdruck des Zertifikats je Backup-Verbindung: merken, pruefen, nach einem Wechsel neu bestaetigen
-(gleiche Form wie in der Erweiterung "Proxmox VE", unabhaengig dupliziert -- Erweiterungen importieren einander nicht).
-
-Eine Verbindung mit `tls_fingerprint_sha256` spricht nur mit dem Server, der genau dieses Zertifikat zeigt
-(`ctx.http.*(..., pinned_sha256=...)`): Zeigt er ein anderes, scheitert schon der TLS-Handshake, bevor das Token
-hinausgeht (`CertificateMismatch`). Das ersetzt "Selbstsigniertes Zertifikat erlauben", das jede Pruefung abschaltet;
-der Schalter bleibt fuer aeltere Einstellungen, gilt aber nicht, solange ein Fingerabdruck eingetragen ist.
-
-Gemerkt wird ein Fingerabdruck auf drei Wegen: von Hand im Einstellungsfeld, beim Verbinden mit Passwort (die Person
-hat ihn dort bestaetigt) und ueber `POST /connections/{name}/certificate` -- dort nur, wenn der uebergebene Wert genau
-dem Zertifikat entspricht, das der Server in diesem Moment zeigt. Ein ungueltiger Eintrag gilt nie still als "nicht
-pruefen": Die Verbindung meldet dann einen Fehler, bis er korrigiert ist.
-"""
+"""Fingerabdruck des Zertifikats je Backup-Verbindung: merken, prüfen, nach einem Wechsel neu bestätigen."""
 
 from __future__ import annotations
 
@@ -27,6 +15,10 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# Eine Verbindung mit Fingerabdruck spricht nur mit dem Server, der genau dieses Zertifikat zeigt: bei einem
+# anderen scheitert schon der TLS-Handshake, bevor das Token hinausgeht. Das ersetzt den Schalter für
+# selbstsignierte Zertifikate, der jede Prüfung abschaltet und bei eingetragenem Fingerabdruck nicht gilt.
+# Die Logik steht auch in der Proxmox-Erweiterung, weil Erweiterungen einander nicht importieren.
 FIELD = "tls_fingerprint_sha256"
 CHANGED_CODE = "certificate_changed"
 INVALID_CODE = "certificate_invalid"
@@ -45,9 +37,9 @@ MISMATCH_TEXT = (
 
 
 def normalize_fingerprint(value: Any) -> str | None:
-    """`None` fuer "nicht eingetragen" (fehlt, leer), sonst die Schreibweise `AB:CD:...` (32 Paare, wie Proxmox sie
-    zeigt). Nimmt Gross- und Kleinbuchstaben, mit oder ohne Doppelpunkte. `ValueError`, wenn es kein
-    SHA-256-Fingerabdruck ist."""
+    """`None` für „nicht eingetragen“ (fehlt, leer), sonst `AB:CD:...` (32 Paare, wie Proxmox sie zeigt).
+
+    Groß- und Kleinbuchstaben, mit oder ohne Doppelpunkte; `ValueError`, wenn es kein SHA-256-Fingerabdruck ist."""
     if value is None:
         return None
     if not isinstance(value, str) or len(value) > MAX_INPUT:
@@ -61,7 +53,9 @@ def normalize_fingerprint(value: Any) -> str | None:
 
 
 def connection_pin(conn: dict[str, Any]) -> tuple[str | None, bool]:
-    """(Fingerabdruck oder `None`, ob der Eintrag ungueltig ist)."""
+    """(Fingerabdruck oder `None`, ob der Eintrag ungültig ist).
+
+    Ein ungültiger Eintrag gilt nie still als „nicht prüfen“: die Verbindung meldet einen Fehler, bis er stimmt."""
     try:
         return normalize_fingerprint(conn.get(FIELD)), False
     except ValueError:
@@ -69,8 +63,9 @@ def connection_pin(conn: dict[str, Any]) -> tuple[str | None, bool]:
 
 
 async def read_certificate(ctx: Any, base_url: str) -> PeerCertificate:
-    """Nur der TLS-Handshake (`ctx.http.peer_certificate`), nichts wird gesendet. Fehler als `HTTPException` mit
-    festem Satz, nie mit dem Text der Ausnahme."""
+    """Nur der TLS-Handshake (`ctx.http.peer_certificate`), es wird nichts gesendet.
+
+    Fehler gehen als `HTTPException` mit festem Satz hinaus, nie mit dem Ausnahmetext, der Interna verraten könnte."""
     problem: str | None = None
     cert: PeerCertificate | None = None
     try:
@@ -85,7 +80,7 @@ async def read_certificate(ctx: Any, base_url: str) -> PeerCertificate:
         problem = "Für die eingetragene Adresse gibt es kein Zertifikat (nur https:// mit Rechner)."
     except OSError:
         problem = "Der Server ist nicht erreichbar. Läuft er, und stimmen Adresse und Port?"
-    except Exception as exc:  # noqa: BLE001 - feste Saetze, nie der Text
+    except Exception as exc:  # noqa: BLE001 - feste Sätze, nie der Text
         ctx.logger.info("Zertifikat nicht lesbar (%s)", type(exc).__name__)
         problem = "Das Zertifikat des Servers ließ sich nicht lesen."
     if problem is not None or cert is None:
@@ -103,12 +98,11 @@ def _certificate_out(cert: PeerCertificate, stored: str | None, *, invalid: bool
 
 class CertificateConfirmIn(BaseModel):
     sha256: str = Field(max_length=MAX_INPUT)
-    """Der Fingerabdruck, den die Person mit dem beim Server verglichen hat."""
+    """Der Fingerabdruck, den die Person mit dem des Servers verglichen hat."""
 
 
 def build_certificate_router(ctx: ExtensionContext) -> APIRouter:
-    """`GET` und `POST /connections/{name}/certificate`. Eingehaengt mit derselben Berechtigung wie die uebrigen
-    Verbindungs-Routen (`secrets.write`)."""
+    """`GET` und `POST /connections/{name}/certificate`, mit derselben Berechtigung wie die übrigen Verbindungs-Routen."""
     router = APIRouter()
 
     async def _connection(name: str) -> dict[str, Any]:
@@ -130,8 +124,8 @@ def build_certificate_router(ctx: ExtensionContext) -> APIRouter:
     async def confirm_certificate(
         name: str, payload: CertificateConfirmIn, actor: Actor = Depends(ctx.api.current_actor),  # noqa: B008
     ) -> Any:
-        """Merkt den Fingerabdruck -- nur, wenn er genau dem Zertifikat entspricht, das der Server jetzt zeigt (sonst
-        409 mit dem aktuellen Wert). Schaltet dabei "Selbstsigniertes Zertifikat erlauben" aus."""
+        """Merkt den Fingerabdruck, nur wenn er genau dem Zertifikat entspricht, das der Server jetzt zeigt (sonst 409
+        mit dem aktuellen Wert), und schaltet „Selbstsigniertes Zertifikat erlauben“ aus."""
         try:
             wanted = normalize_fingerprint(payload.sha256)
         except ValueError as exc:
@@ -141,6 +135,7 @@ def build_certificate_router(ctx: ExtensionContext) -> APIRouter:
         conn = await _connection(name)
         base_url = str(conn.get("base_url") or "")
         cert = await read_certificate(ctx, base_url)
+        # Bestätigt wird nur, was der Server in diesem Moment wirklich zeigt.
         if cert.sha256 != wanted:
             return JSONResponse(
                 status_code=http_status.HTTP_409_CONFLICT,

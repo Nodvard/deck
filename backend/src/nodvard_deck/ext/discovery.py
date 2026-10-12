@@ -1,23 +1,6 @@
-"""Entdeckung von Extensions: Verzeichnis-Scan + Entry-Points, ohne Code-Import
-(docs/02-EXTENSION-API.md §1).
+"""Findet Extensions per Verzeichnis-Scan und Entry-Points, ohne Code zu importieren (docs/02-EXTENSION-API.md §1).
 
-`nodvard_sdk.load_manifest()` erledigt das Parsen von `extension.toml` bereits (reines
-TOML-Lesen, kein Import) -- dieses Modul erledigt nur das FINDEN der Manifeste, an
-zwei Stellen:
-
-1. Verzeichnis-Scan: `<extensions_dir>/<name>/extension.toml` -- fuer mitgeliefertes/
-   lokales Material (`source="bundled"`), das Manifest liegt neben dem Code.
-2. Entry-Points: fuer `pip install`-te Extensions (`source="pip"`). Ein Entry-Point
-   selbst ist reine, statische Distributions-Metadaten (kein Import); das Manifest
-   wird zusaetzlich als Paketdatei ueber `Distribution.locate_file()` gelesen --
-   ebenfalls ohne die Extension zu importieren. Gelesen werden **zwei Gruppen**: `nodvard_deck.extensions`
-   (neu) und `lattice.extensions` (der Name vor der Umbenennung -- Fremd-Extensions tragen ihn noch ein).
-   Steht dieselbe Distribution mit demselben Manifest in beiden (Extension fuer alte und neue Kerne),
-   zaehlt sie einmal.
-
-**Fehler-Isolation gilt schon hier:** ein Manifest, das nicht parst, darf die
-Entdeckung der ANDEREN Extensions nicht verhindern -- deshalb sammelt `scan_*` Fehler
-pro Kandidat statt beim ersten Fehler abzubrechen.
+Ein Manifest, das nicht parst, darf die anderen Extensions nicht aufhalten: Fehler werden je Kandidat gesammelt.
 """
 
 from __future__ import annotations
@@ -31,19 +14,17 @@ from pathlib import Path
 from nodvard_sdk import ExtensionManifest, load_manifest
 
 DEFAULT_ENTRY_POINT_GROUPS = ("nodvard_deck.extensions", "lattice.extensions")
-"""Neue Gruppe zuerst, dann der alte Name. Beide bleiben, bis eine angekuendigte Major-Version den alten entfernt."""
+"""Neue Gruppe zuerst, dann der alte Name; der alte bleibt bis zu einer angekündigten Major-Version."""
 
 
 @dataclass
 class DiscoveredExtension:
-    """Ein Fund -- entweder ein gueltiges Manifest oder ein Fehler, nie beides."""
+    """Ein Fund: entweder ein gültiges Manifest oder ein Fehler, nie beides."""
 
     id: str
     source: str  # "bundled" | "pip"
     source_path: Path
-    """Bei `bundled`: das Extension-Verzeichnis (Basis fuer `sys.path`-Eintrag und
-    `src/`-Layout). Bei `pip`: der Distributions-Root (informativ, `sys.path` ist
-    bereits korrekt, weil die Extension installiert ist)."""
+    """Bei `bundled` das Extension-Verzeichnis, bei `pip` der Distributions-Root."""
     manifest: ExtensionManifest | None
     error: str | None = None
 
@@ -90,7 +71,7 @@ def _scan_group(group: str) -> list[tuple[str, DiscoveredExtension]]:
     """Eine Entry-Point-Gruppe -> (normalisierter Distributionsname, Fund)."""
     try:
         entry_points = importlib.metadata.entry_points(group=group)
-    except Exception as exc:  # noqa: BLE001 - defekte Metadaten duerfen den Boot nicht stoppen
+    except Exception as exc:  # noqa: BLE001 - defekte Metadaten dürfen den Start nicht stoppen
         return [("?", DiscoveredExtension(id="?", source="pip", source_path=Path("."), manifest=None, error=str(exc)))]
 
     found: list[tuple[str, DiscoveredExtension]] = []
@@ -100,6 +81,7 @@ def _scan_group(group: str) -> list[tuple[str, DiscoveredExtension]]:
         try:
             if dist is None:
                 raise LookupError(f"Entry-Point '{ep.name}' hat keine zugehörige Distribution")
+            # Das Manifest liegt als Paketdatei neben den Metadaten; so bleibt auch dieser Weg ohne Import.
             manifest_path = Path(str(dist.locate_file("extension.toml")))
             if not manifest_path.exists():
                 raise FileNotFoundError(
@@ -126,12 +108,9 @@ def _scan_group(group: str) -> list[tuple[str, DiscoveredExtension]]:
 
 
 def scan_entry_points(group: str | Iterable[str] = DEFAULT_ENTRY_POINT_GROUPS) -> list[DiscoveredExtension]:
-    """Pip-installierte Extensions. Erwartet je Distribution ein `extension.toml` im
-    Distributions-Root neben dem `entry_point`-Eintrag -- gelesen ueber
-    `Distribution.locate_file()`, damit auch dieser Pfad ohne Import auskommt.
+    """Pip-installierte Extensions mit `extension.toml` im Distributions-Root.
 
-    `group`: eine Gruppe oder mehrere (Standard: die neue und die alte). Funde mit gleicher Distribution UND
-    gleicher ID (aus beiden Gruppen oder doppelt eingetragen) werden zusammengefasst, der erste gewinnt."""
+    Funde mit gleicher Distribution und ID aus mehreren Gruppen zählen einmal, der erste gewinnt."""
     groups = (group,) if isinstance(group, str) else tuple(group)
     found: list[DiscoveredExtension] = []
     seen: set[tuple[str, str]] = set()
@@ -151,20 +130,12 @@ def discover_all(
     return [*scan_directory(extensions_dir), *scan_entry_points(entry_point_group)]
 
 
+# Berechtigungen, die Daten unter der Kennung speichern und sie darüber wiederfinden (`hosts.write`:
+# `Host.provider_ext_id`, `HostTag.managed_by_ext_id`). Nach einer Umbenennung gäbe es doppelte Server, und ein
+# Rückweg aufs alte Image fände die neuen nicht. Die Grenze liegt in der Kern-Speicherung und fällt weg, sobald der
+# Kern die alten Kennungen dort mitliest. `secrets.*`, `notify.send` und `audit.write` halten die Kennung nur als
+# Herkunft, nichts sucht danach. Wert: Satzteil für die Meldung.
 LEGACY_BLOCKING_PERMISSIONS: dict[str, str] = {"hosts.write": "Server anlegen"}
-"""Berechtigungen, die sich mit `legacy_ids` nicht vertragen, jeweils mit dem Satzteil fuer die Meldung.
-
-Wer sie hat, speichert Daten dauerhaft unter seiner Kennung und sucht sie darueber wieder: `hosts.write`
-(`ctx.hosts.upsert_discovered`) schreibt `Host.provider_ext_id` und `HostTag.managed_by_ext_id` und findet
-seine Server ueber `provider_ext_id` wieder. Nach einer Umbenennung gaebe es doppelte Server, die alten
-verloeren ihren Anbieter, und ein Rueckweg aufs alte Image faende die neuen nicht. Die Pruefung sitzt im Kern
-und nicht im Manifest-Pruefer des SDK: Es ist eine Grenze der Kern-Speicherung (heute), keine Eigenschaft
-des Manifest-Formats, und faellt weg, sobald der Kern die alten Kennungen auch dort mitliest.
-
-Nicht dabei, weil nichts dauerhaft unter der Kennung gesucht wird: `secrets.*` (`Secret.owner_ext_id` ist
-nur die Herkunftsangabe), `notify.send` (`Notification.source_ext_id`) und `audit.write` (Akteur im
-Protokoll) -- alte Eintraege behalten die alte Kennung, nichts sucht danach. `ctx.connectors` braucht keine
-Berechtigung und liest ueber alle eigenen Kennungen (`ConnectorsHandle`)."""
 
 
 @dataclass
@@ -172,31 +143,23 @@ class LegacyResolution:
     """Ergebnis von `resolve_legacy()`."""
 
     found: list[DiscoveredExtension]
-    """Alle Funde in derselben Reihenfolge; abgelehnte stehen darin als Fund mit Fehler."""
+    """Alle Funde in derselben Reihenfolge; abgelehnte stehen als Fund mit Fehler darin."""
     owner: dict[str, str]
-    """Alte Kennung -> Kennung der Erweiterung, die sie (ohne Konflikt) in `legacy_ids` nennt."""
+    """Alte Kennung -> Kennung der Erweiterung, die sie ohne Konflikt in `legacy_ids` nennt."""
     refused: list[DiscoveredExtension]
-    """Die wegen eines Konflikts abgelehnten Funde (mit Fehlertext) -- fuers Protokoll."""
+    """Die wegen eines Konflikts abgelehnten Funde mit Fehlertext, fürs Protokoll."""
     refused_old: dict[str, str] = field(default_factory=dict)
-    """Alte Kennung -> Grund, wenn die Erweiterungen, die sie in `legacy_ids` nennen, abgelehnt wurden und es
-    sie selbst nicht als Erweiterung gibt. Bei einem Update steht die Registry-Zeile noch unter dieser Kennung;
-    sie nennt dann diesen Grund statt "nicht gefunden". Jede alte Kennung, die es nicht selbst gibt, steht
-    entweder hier oder in `owner`."""
+    """Alte Kennung -> Grund, wenn alle Erweiterungen, die sie nennen, abgelehnt wurden und es sie selbst nicht gibt.
+
+    Bei einem Update zeigt die Zeile der alten Kennung diesen Grund statt "nicht gefunden"."""
 
 
 def resolve_legacy(found: list[DiscoveredExtension]) -> LegacyResolution:
-    """Prueft die alten Kennungen (`legacy_ids`) aller gueltigen Funde.
+    """Prüft die alten Kennungen (`legacy_ids`) aller gültigen Funde und lehnt Konflikte ab.
 
-    - Ist eine alte Kennung selbst noch als Erweiterung da, wird die NEUE abgelehnt; die alte bleibt, wie
-      sie ist. So laeuft nichts doppelt, und keine Erweiterung uebernimmt den Stand einer anderen. Als "da"
-      zaehlt ein Ordner mit diesem Namen (auch mit kaputtem Manifest, dann laedt keine der beiden) oder ein
-      Paket mit lesbarem Manifest. Ein Paket mit kaputtem Manifest traegt als Fund den Distributionsnamen
-      und blockiert nichts; laden kann es ohnehin nicht.
-    - Nennen zwei Erweiterungen dieselbe alte Kennung, werden beide abgelehnt.
-    - Hat eine Erweiterung `legacy_ids` UND eine Berechtigung aus `LEGACY_BLOCKING_PERMISSIONS`
-      (heute `hosts.write`), wird sie abgelehnt.
-
-    Ohne `legacy_ids` aendert sich nichts: `found` kommt unveraendert zurueck, `owner` ist leer."""
+    Ohne `legacy_ids` bleibt `found` unverändert und `owner` leer."""
+    # Als "da" zählt ein Ordner mit dem Namen (auch mit kaputtem Manifest) oder ein Paket mit lesbarem Manifest;
+    # ein Paket mit kaputtem Manifest trägt den Distributionsnamen und blockiert nichts.
     present: dict[str, DiscoveredExtension] = {}
     for d in found:
         present.setdefault(d.id, d)
@@ -219,6 +182,7 @@ def resolve_legacy(found: list[DiscoveredExtension]) -> LegacyResolution:
             if message not in problems.setdefault(d.id, []):
                 problems[d.id].append(message)
     for old, claimants in sorted(claims.items()):
+        # Gibt es die alte Erweiterung noch, wird die neue abgelehnt, damit nichts doppelt läuft.
         if old in present:
             other = present[old]
             where = f"Ordner „{other.source_path.name}“" if other.source == "bundled" else "als Paket installiert"
@@ -227,7 +191,7 @@ def resolve_legacy(found: list[DiscoveredExtension]) -> LegacyResolution:
                     f"Die alte Kennung „{old}“ gehört noch zu einer installierten Erweiterung ({where}). "
                     "Bitte die alte Erweiterung entfernen."
                 )
-        elif len(claimants) > 1:
+        elif len(claimants) > 1:  # derselbe alte Name von zwei Erweiterungen: beide ablehnen
             others = ", ".join(f"„{c}“" for c in sorted(claimants))
             for ext_id in claimants:
                 problems.setdefault(ext_id, []).append(

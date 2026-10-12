@@ -1,28 +1,6 @@
-"""Image-Updates einspielen (service-matrix) -- alles, was Hosts anspricht.
+"""Image-Updates einspielen: alles, was Hosts anspricht (reine Teile: `image_apply.py`, entkoppelter Lauf: `detached.py`).
 
-Die reinen Teile (erkennen, Befehle bauen, Ergebnis beurteilen) stehen in `image_apply.py`,
-der entkoppelte Lauf auf dem Host in `detached.py`. Hier:
-
-- `ImageApplier.hints()`: ein lesender Aufruf je Host beim Pruefen -- welche Container mit
-  Update sich ueberhaupt einspielen lassen (Feld `apply` im Ergebnis).
-- `ImageApplier.plan()`: die Uebersicht VOR dem Klick (nur lesend): was wird gepullt, welcher
-  Befehl laeuft, was ist betroffen, welche Warnungen gibt es -- oder warum es nicht geht.
-- `ImageApplier.apply()` / `ImageUpdateExecutor`: die Gate-Aktion `container.image_update`. Der
-  Executor baut den Befehl aus den geprueften Feldern NEU und vergleicht ihn mit dem, was der
-  Freigebende gesehen hat (`payload.command`). Der Lauf startet entkoppelt auf dem Host
-  (`detached.py`, ueberlebt einen SSH-Abriss), das Dashboard fragt alle paar Sekunden nach,
-  prueft danach den Start, bewertet den Container neu, schreibt Audit und meldet das Ergebnis.
-- Automatischer Rueckweg (`_auto_rollback`, Einstellung `image_update_auto_rollback`, Vorgabe an): startet die neue
-  Version nicht sauber (Pruefung scheitert oder `up` scheitert, der Lauf ist aber zu Ende), kommt das Sicherungs-Image
-  wieder unter den Namen aus der Compose-Datei und der Dienst wird damit neu erstellt -- nur wenn die Sicherung
-  nachweislich das alte Image ist, nie bei Datenbanken (die neue Version kann ihre Dateien schon umgestellt haben).
-  Danach dieselbe Pruefung wie beim Update; klappt es nicht, steht der Weg von Hand in der Ausgabe.
-- `ImageApplier.resume_interrupted()`: startet das Dashboard waehrenddessen neu, macht es danach
-  weiter. Dazu merkt sich `image-apply-runs.json` (Datenordner) jeden Lauf VOR dem Start und
-  vergisst ihn nach dem Ende -- nur bei einem Abbruch (`CancelledError`) bleibt er stehen.
-
-Kein sudo: service-matrix ruft ueberall schlicht `docker` auf, der SSH-Benutzer ist also in der
-Gruppe `docker`. Compose-Dateien, die er nicht lesen kann, blockieren das Update mit Hinweis.
+Kein sudo: der SSH-Benutzer ist in der Gruppe `docker`; Compose-Dateien, die er nicht lesen kann, blockieren das Update.
 """
 
 from __future__ import annotations
@@ -65,26 +43,26 @@ UNKNOWN_GRACE_S = 30
 REACH_GRACE_S = 3 * 60
 """Nach einem gescheiterten Start: meldet sich der Host so lange nicht, gilt er als nicht erreichbar."""
 RUN_DEADLINE_S = 40 * 60
-"""Unter der Notbremse des Gates (60 Minuten). Danach laeuft der Lauf auf dem Host weiter."""
+"""Unter der Notbremse des Gates (60 Minuten). Danach läuft der Lauf auf dem Host weiter."""
 VERIFY_TIMEOUT_S = 180
 VERIFY_INTERVAL_S = 3
 VERIFY_STABLE_S = 15
-"""Ohne Healthcheck gilt der Start erst nach zwei Lesungen mindestens so weit auseinander, ohne
-dass sich `StartedAt`/`RestartCount` geaendert haben (Absturz-Kreislauf)."""
+"""Ohne Healthcheck gilt der Start erst nach zwei Lesungen mindestens so weit auseinander, ohne dass sich
+`StartedAt`/`RestartCount` geändert haben (Absturz-Kreislauf)."""
 VERIFY_CALL_TIMEOUT_S = 20
 NOTIFY_SUCCESS_AFTER_S = 60
-"""Ein Erfolg wird nur gemeldet, wenn er laenger dauerte (der Nutzer hat ja zugesehen); ein Fehler immer."""
+"""Ein Erfolg wird nur gemeldet, wenn er länger dauerte (der Nutzer hat ja zugesehen); ein Fehler immer."""
 APPLIED_KEEP_S = 6 * 3600
 """So lange merkt sich die Seite das Ergebnis des letzten Updates (nur im Speicher)."""
 RUNS_FILE = "image-apply-runs.json"
-"""Laufende Updates (im Datenordner): ueberlebt einen Neustart des Dashboards, damit es danach weitermachen kann."""
+"""Laufende Updates (im Datenordner): überlebt einen Neustart des Dashboards, damit es danach weitermachen kann."""
 RESUME_DELAY_S = 5
 """Nach dem Start kurz warten, bis Netz und SSH wieder da sind."""
 RESUME_MIN_WAIT_S = 5 * 60
 """Nach einem Neustart mindestens so lange nachfragen, auch wenn die Frist des Laufs fast um ist."""
 RESUME_MAX_AGE_S = 60 * 60
-"""Ein Eintrag, der aelter ist als `RUN_DEADLINE_S` + so lange, wird verworfen (die Protokolle des Hosts sind dann
-womoeglich schon aufgeraeumt, ein Ergebnis waere Unsinn)."""
+"""Ein Eintrag, der älter ist als `RUN_DEADLINE_S` + so lange, wird verworfen (die Protokolle des Hosts sind dann
+womöglich schon aufgeräumt, ein Ergebnis wäre Unsinn)."""
 FUTURE_TOLERANCE_S = 5 * 60
 """So weit darf `started_at` in der Zukunft liegen (Uhr nach dem Start noch nicht gestellt), sonst gilt es als unbekannt."""
 RESTARTED_LINE = "Das Dashboard wurde währenddessen neu gestartet."
@@ -98,29 +76,29 @@ RISK_TOO_LOW_MESSAGE = "Der Vorschlag hat eine niedrigere Risikostufe, als diese
 NOT_STARTED = "Update-Lauf wurde auf dem Host nicht gefunden – er ist wohl nicht gestartet."
 PHASE_OF_STEP = {"tag": "pull", "pull": "pull", "up": "up", "done": "verify", "rollback": "rollback"}
 ROLLBACK_DEADLINE_S = 10 * 60
-"""Eigene Frist des Rueckwegs: Update (bis 40 Minuten) und Rueckweg zusammen bleiben unter der Notbremse des Gates."""
+"""Eigene Frist des Rückwegs: Update (bis 40 Minuten) und Rückweg zusammen bleiben unter der Notbremse des Gates."""
 ROLLBACK_LAUNCH_TRIES = 3
 ROLLBACK_RETRY_S = 2
+# Nie bei Datenbanken und anderen Datenspeichern (`ia.is_data_store`): die neue Version kann ihre Dateien schon umgestellt
+# haben, die alte könnte sie dann nicht lesen. Und nur bei einem eindeutigen Fehlstart (`Verdict.crashed`, `up`
+# gescheitert), nie bei bloßem "ungesund": eine App mitten in einer langen Datenumstellung würde sonst abgebrochen.
 AUTO_ROLLBACK_SETTING = "image_update_auto_rollback"
-"""Einstellung: Startet die neue Version nicht sauber, automatisch zurueck auf das Sicherungs-Image (Vorgabe: an).
-Nie bei Datenbanken und anderen Datenspeichern (`ia.is_data_store`) -- die neue Version kann die Dateien schon umgestellt
-haben, die alte koennte sie dann nicht lesen. Und nur bei einem eindeutigen Fehlstart (`Verdict.crashed`, `up` gescheitert),
-nie bei blossem "ungesund": eine App mitten in einer langen Datenumstellung wuerde sonst abgebrochen."""
+"""Einstellung: Startet die neue Version nicht sauber, geht es automatisch zurück auf das Sicherungs-Image (Vorgabe: an)."""
 
 
 IMAGE_UPDATE_SPEC = ActionSpec(
     action_type=ACTION_TYPE, label="Image-Update einspielen", icon="download",
     description="Lädt das neue Image eines Compose-Dienstes und erstellt den Container damit neu (docker compose pull + up -d).",
     default_risk=Risk.MEDIUM, permissions=["hosts.execute"],
-    # host_bound=False: den Befehl baut immer die Extension (Uebersicht + Executor), nie ein
-    # Formular auf der Server-Seite. command_field: die Sperrliste des Gates prueft den Befehl.
+    # host_bound=False: den Befehl baut immer die Extension (Übersicht + Executor), nie ein Formular auf der Server-Seite.
+    # command_field: die Sperrliste des Gates prüft den Befehl.
     host_bound=False, command_field="command",
     confirm_text="Der Container wird neu erstellt und ist kurz nicht erreichbar. Fortfahren?",
 )
 
 
 def rollback_run_id(run_id: str) -> str:
-    """Die Lauf-ID des automatischen Rueckwegs zu einem Update -- fest abgeleitet (siehe `_auto_rollback`)."""
+    """Die Lauf-ID des automatischen Rückwegs zu einem Update, fest abgeleitet (siehe `_auto_rollback`)."""
     return "imgupd_" + hashlib.sha256(f"{run_id}:zurueck".encode()).hexdigest()[:16]
 
 
@@ -135,9 +113,9 @@ def _iso_now() -> str:
 
 
 _ACTIVE_RUNS: set[str] = set()
-"""Lauf-IDs, die IN DIESEM PROZESS gerade von einem `apply()` oder einer Fortsetzung betreut werden. Schaltet jemand die
-Extension aus und wieder ein, laeuft das alte `apply()` in der Gate-Aufgabe weiter, waehrend `on_start` schon
-`resume_interrupted` ruft -- diese Laeufe darf die Fortsetzung nicht ein zweites Mal aufgreifen (doppeltes Audit)."""
+"""Lauf-IDs, die in diesem Prozess gerade von einem `apply()` oder einer Fortsetzung betreut werden. Schaltet jemand die
+Extension aus und wieder ein, läuft das alte `apply()` in der Gate-Aufgabe weiter, während `on_start` schon
+`resume_interrupted` ruft; diese Läufe darf die Fortsetzung nicht ein zweites Mal aufgreifen (doppeltes Audit)."""
 
 
 def _target_to_json(t: ComposeTarget) -> dict[str, Any]:
@@ -167,7 +145,7 @@ def _actor_to_json(actor: Any) -> dict[str, Any]:
 
 
 def _actor_from_json(data: Any) -> Actor | None:
-    """Der Freigebende aus dem Eintrag, streng geprueft; bei jedem Zweifel `None` (das Audit gibt es trotzdem)."""
+    """Der Freigebende aus dem Eintrag, streng geprüft; bei jedem Zweifel `None` (das Audit gibt es trotzdem)."""
     if not isinstance(data, dict):
         return None
     kind, ident, label = data.get("type"), data.get("id"), data.get("label")
@@ -194,8 +172,8 @@ class _Outcome:
     step: str | None = None
     message: str = ""
     public_message: str = ""
-    """Wie `message`, aber ohne Zeilen vom Host (fuer Protokoll, Meldung und `applied`).
-    Leer: `message` selbst enthaelt keinen Text vom Host."""
+    """Wie `message`, aber ohne Zeilen vom Host (für Protokoll, Meldung und `applied`).
+    Leer: `message` selbst enthält keinen Text vom Host."""
 
     @property
     def safe_message(self) -> str:
@@ -219,7 +197,7 @@ class Plan:
     stale: bool
     plan_id: str
     auto_rollback: bool = False
-    """Startet die neue Version nicht sauber, geht es automatisch zurueck (Einstellung an, keine Datenbank)."""
+    """Startet die neue Version nicht sauber, geht es automatisch zurück (Einstellung an, keine Datenbank)."""
 
     def reason_text(self) -> str:
         t = self.target
@@ -251,17 +229,22 @@ class Plan:
 
 
 class ImageApplier:
+    """`hints()` und `plan()` lesen nur, `apply()` ist die Gate-Aktion `container.image_update`.
+
+    Der Lauf startet entkoppelt auf dem Host; das Dashboard fragt nach, prüft den Start, bewertet neu und meldet.
+    """
+
     def __init__(self, ctx: ExtensionContext, images: ImageUpdateService) -> None:
         self._ctx = ctx
         self._images = images
         self._busy: dict[str, str] = {}
-        """`host_id:projekt` -> Container, fuer den dort gerade ein Update laeuft."""
+        """`host_id:projekt` -> Container, für den dort gerade ein Update läuft."""
         self._applying: dict[str, dict[str, Any]] = {}
         """`host_id:container` -> Stand des laufenden Updates (Schritt, Start, Lauf-ID)."""
         self._applied: dict[str, dict[str, Any]] = {}
         """`host_id:container` -> Ergebnis des letzten Updates (nur im Speicher)."""
         self._applied_at: dict[str, float] = {}
-        self._now = time.monotonic  # Test-Einhaenger (Dauer eines Laufs)
+        self._now = time.monotonic  # Test-Einhänger (Dauer eines Laufs)
 
     def snapshot(self) -> dict[str, Any]:
         cutoff = time.time() - APPLIED_KEEP_S
@@ -270,12 +253,11 @@ class ImageApplier:
             self._applied_at.pop(key, None)
         return {"applying": {k: dict(v) for k, v in self._applying.items()}, "applied": {k: dict(v) for k, v in self._applied.items()}}
 
-    # --- Hinweise beim Pruefen -------------------------------------------------------------
+    # --- Hinweise beim Prüfen --------------------------------------------------------------
 
     async def hints(self, host: Any, names: list[str]) -> dict[str, dict[str, Any]]:
-        """`{name: {"mode": "compose", project, service} | {"mode": "none", kind, why}}` -- nur
-        aus Etiketten (ein lesender Aufruf, keine Umgebungsvariablen). Die endgueltige Pruefung
-        macht `plan()` beim Klick."""
+        """`{name: {"mode": "compose", project, service} | {"mode": "none", kind, why}}`, nur aus Etiketten (ein lesender
+        Aufruf, keine Umgebungsvariablen). Die endgültige Prüfung macht `plan()` beim Klick."""
         wanted = [n for n in names if CONTAINER_NAME_RE.match(n)]
         if not wanted:
             return {}
@@ -292,7 +274,7 @@ class ImageApplier:
                 hints[name] = {"mode": "compose", "project": verdict.project, "service": verdict.service}
         return hints
 
-    # --- Die Uebersicht vor dem Klick -------------------------------------------------------
+    # --- Die Übersicht vor dem Klick --------------------------------------------------------
 
     async def plan(self, host: Any, container: str) -> Plan | NotUpdatable:
         """Nur lesend. Ein SSH-Fehler kommt als Ausnahme heraus (die Route macht daraus 502,
@@ -329,7 +311,7 @@ class ImageApplier:
         affected = tuple(n for n, _ in members) or (t.container,)
         stopped = tuple(n for n, state in members if state != "running")
 
-        # Die Ausgabe enthaelt aufgeloeste Umgebungswerte: nur auswerten, nie weitergeben.
+        # Die Ausgabe enthält aufgelöste Umgebungswerte: nur auswerten, nie weitergeben.
         config = await run(host, ia.cmd_config(t), timeout_s=CONFIG_TIMEOUT_S)
         blocked = ia.check_config(config.stdout, config.stderr, config.exit_code, t)
         if blocked is not None:
@@ -365,8 +347,8 @@ class ImageApplier:
     # --- Vorschlagen (POST-Route) ------------------------------------------------------------
 
     async def propose(self, host: Any, plan: Plan, actor: Any) -> dict[str, Any]:
-        """Legt den Vorschlag im Gate an. Die Begruendung ist das Einzige, was die Aktionen-Seite
-        zeigt -- sie traegt deshalb das Wesentliche (`Plan.reason_text`)."""
+        """Legt den Vorschlag im Gate an. Die Begründung ist das Einzige, was die Aktionen-Seite zeigt, sie trägt deshalb
+        das Wesentliche (`Plan.reason_text`)."""
         t = plan.target
         decision = await self._ctx.actions.propose(
             ActionRequest(
@@ -381,7 +363,7 @@ class ImageApplier:
         )
         return {"action_id": decision.action_id, "status": decision.status.value, "risk": plan.risk.value, "detail": decision.detail}
 
-    # --- Ausfuehren (Gate-Aktion) ------------------------------------------------------------
+    # --- Ausführen (Gate-Aktion) -------------------------------------------------------------
 
     async def apply(self, req: ActionRequest) -> ActionResult:
         payload = req.payload or {}
@@ -395,8 +377,8 @@ class ImageApplier:
         if not CONTAINER_NAME_RE.match(container):
             return ActionResult(success=False, error=f"Ungültiger Containername: {container!r}")
 
-        # Der Befehl entsteht hier NEU aus den geprueften Feldern; `payload.command` wird nie
-        # ausgefuehrt, nur verglichen: das Gate hat genau ihn geprueft, der Freigebende genau ihn gesehen.
+        # Der Befehl entsteht hier neu aus den geprüften Feldern; `payload.command` wird nie ausgeführt, nur verglichen:
+        # das Gate hat genau ihn geprüft, der Freigebende genau ihn gesehen.
         try:
             plan = await self.plan(host, container)
         except Exception as exc:  # noqa: BLE001 - als Ergebnis melden
@@ -406,15 +388,15 @@ class ImageApplier:
         t = plan.target
         if payload.get("command") != plan.command or payload.get("old_image_id") != t.image_id:
             return ActionResult(success=False, error=STALE_MESSAGE)
-        # Nur ein Mensch schlaegt das vor, und nie mit einer kleineren Risikostufe, als die neue
-        # Uebersicht verlangt (z. B. weil aus dem Container inzwischen eine Datenbank wurde).
+        # Nur ein Mensch schlägt das vor, und nie mit einer kleineren Risikostufe, als die neue Übersicht verlangt (z. B.
+        # weil aus dem Container inzwischen eine Datenbank wurde).
         if getattr(req.proposed_by.type, "value", req.proposed_by.type) != "user":
             return ActionResult(success=False, error=NOT_A_USER_MESSAGE)
         if RISK_ORDER.index(req.risk) < RISK_ORDER.index(plan.risk):
             return ActionResult(success=False, error=RISK_TOO_LOW_MESSAGE)
 
         busy_key, app_key = f"{host.id}:{t.project}", f"{host.id}:{container}"
-        if busy_key in self._busy:  # zwischen Uebersicht und hier kann ein anderer Lauf begonnen haben
+        if busy_key in self._busy:  # zwischen Übersicht und hier kann ein anderer Lauf begonnen haben
             return ActionResult(success=False, error=BUSY_MESSAGE)
         run_id = req.correlation_id if isinstance(req.correlation_id, str) and dt.RUN_ID_RE.match(req.correlation_id) else "imgupd_" + secrets.token_hex(8)
         self._busy[busy_key] = container
@@ -434,12 +416,11 @@ class ImageApplier:
             outcome = await self._launch_and_wait(host, run_id, script, app_key, t.project)
             return await self._conclude(host, t, plan.rollback_ref, run_id, app_key, started, outcome, actor=req.proposed_by)
         except asyncio.CancelledError:
-            # Das Dashboard faehrt herunter: der Lauf auf dem Host geht weiter (entkoppelt). Hier
-            # wird nichts als "fertig" gemeldet -- das Gate markiert die Aktion als unterbrochen.
-            # Der Eintrag bleibt: nach dem Neustart macht `resume_interrupted` weiter und meldet.
-            # Achtung: CancelledError kommt nicht nur vom Herunterfahren, sondern auch von der Notbremse
-            # des Gates (`asyncio.timeout`, 60 Minuten). Ein dann stehengebliebener Eintrag wird beim
-            # naechsten Start als zu alt verworfen (`RESUME_MAX_AGE_S`), nicht ewig weiterverfolgt.
+            # Das Dashboard fährt herunter: der Lauf auf dem Host geht weiter (entkoppelt) und wird hier nicht als "fertig"
+            # gemeldet, das Gate markiert die Aktion als unterbrochen. Der Eintrag bleibt, nach dem Neustart macht
+            # `resume_interrupted` weiter. CancelledError kommt auch von der Notbremse des Gates (`asyncio.timeout`,
+            # 60 Minuten): ein dann stehengebliebener Eintrag wird beim nächsten Start als zu alt verworfen
+            # (`RESUME_MAX_AGE_S`).
             keep_entry = True
             log.warning("image_update_interrupted host=%s container=%s run=%s (laeuft auf dem Host weiter)", host.id, container, run_id)
             raise
@@ -450,7 +431,7 @@ class ImageApplier:
             self._busy.pop(busy_key, None)
             self._applying.pop(app_key, None)
 
-    # --- Merkzettel fuer den Neustart des Dashboards ------------------------------------------
+    # --- Merkzettel für den Neustart des Dashboards -------------------------------------------
 
     def _runs_path(self) -> Path:
         return Path(str(self._ctx.data_dir)) / RUNS_FILE
@@ -496,12 +477,9 @@ class ImageApplier:
     # --- Nach einem Neustart weitermachen ------------------------------------------------------
 
     async def resume_interrupted(self) -> int:
-        """Beim Start (Hintergrundaufgabe): Updates, die beim Beenden des Dashboards noch liefen,
-        weiter abfragen und abschliessen wie nach dem normalen Weg -- mit Meldung, denn der
-        Ausloeser hat die Antwort nie bekommen.
-
-        Container und Projekt werden sofort als belegt eingetragen (ein zweites Update kann in
-        der Wartezeit nicht starten); nur das Abfragen wartet kurz (`RESUME_DELAY_S`)."""
+        """Beim Start (Hintergrundaufgabe): Updates, die beim Beenden des Dashboards noch liefen, weiter abfragen und
+        abschließen, mit Meldung, denn der Auslöser hat die Antwort nie bekommen. Container und Projekt gelten sofort als
+        belegt (ein zweites Update kann in der Wartezeit nicht starten); nur das Abfragen wartet kurz (`RESUME_DELAY_S`)."""
         claimed: list[tuple[dict[str, Any], Any, ComposeTarget, float]] = []
         for run_id, entry in list(self._read_runs().items()):
             if run_id in _ACTIVE_RUNS:  # betreut dieser Prozess schon (z. B. Extension aus- und eingeschaltet)
@@ -527,7 +505,7 @@ class ImageApplier:
                 continue
             try:
                 host = await self._ctx.hosts.get(str(entry.get("host_id") or ""))
-            except Exception:  # noqa: BLE001 - voruebergehender Fehler (z. B. Datenbank gesperrt): Eintrag behalten
+            except Exception:  # noqa: BLE001 - vorübergehender Fehler (z. B. Datenbank gesperrt): Eintrag behalten
                 log.exception("image_update_resume_host_lookup_failed run=%s (Eintrag bleibt)", run_id)
                 continue
             if host is None:
@@ -535,7 +513,7 @@ class ImageApplier:
                 self._drop_run(run_id)
                 continue
             busy_key, app_key = f"{host.id}:{t.project}", f"{host.id}:{t.container}"
-            if busy_key in self._busy:  # der laufende Lauf meldet sich selbst, auf dem Host schuetzt die Sperre
+            if busy_key in self._busy:  # der laufende Lauf meldet sich selbst, auf dem Host schützt die Sperre
                 log.warning("image_update_resume_dropped run=%s (Projekt ist belegt)", run_id)
                 self._drop_run(run_id)
                 continue
@@ -548,7 +526,7 @@ class ImageApplier:
             return 0
         try:
             await asyncio.sleep(RESUME_DELAY_S)
-        except asyncio.CancelledError:  # schon wieder beendet: Eintraege bleiben fuer den naechsten Start
+        except asyncio.CancelledError:  # schon wieder beendet: Einträge bleiben für den nächsten Start
             for entry, host, t, _ts in claimed:
                 self._release(host, t, entry["run_id"])
             raise
@@ -564,13 +542,13 @@ class ImageApplier:
         run_id, app_key = entry["run_id"], f"{host.id}:{t.container}"
         keep_entry = False
         try:
-            # Nie laenger als ein ganzer Lauf, nie kuerzer als 5 Minuten ab jetzt (der Host war ja evtl. weg).
+            # Nie länger als ein ganzer Lauf, nie kürzer als 5 Minuten ab jetzt (der Host war ja evtl. weg).
             left = started_ts + RUN_DEADLINE_S - time.time()
             outcome = await self._wait(
                 host, run_id, app_key, unknown_message=NOT_STARTED, reach_grace_s=None,
                 deadline_s=min(max(left, RESUME_MIN_WAIT_S), RUN_DEADLINE_S),
             )
-            # Das Sicherungs-Image wird neu abgeleitet, nie aus der Datei uebernommen.
+            # Das Sicherungs-Image wird neu abgeleitet, nie aus der Datei übernommen.
             await self._conclude(
                 host, t, ia.rollback_ref(t.container), run_id, app_key, self._now(), outcome,
                 actor=_actor_from_json(entry.get("proposed_by")), resumed=True,
@@ -594,19 +572,18 @@ class ImageApplier:
         self, host: Any, t: ComposeTarget, rollback_ref: str, run_id: str, app_key: str, started: float, outcome: _Outcome,
         *, actor: Actor | None, resumed: bool = False,
     ) -> ActionResult:
-        """Alles nach dem Lauf: pruefen, Container neu bewerten, Audit, Meldung. Fuer den Weg ueber
-        das Gate und fuer das Fortsetzen nach einem Neustart (`resumed`); `actor` ist der Freigebende (falls bekannt)."""
+        """Alles nach dem Lauf: prüfen, Container neu bewerten, Audit, Meldung. Für den Weg über das Gate und für das
+        Fortsetzen nach einem Neustart (`resumed`); `actor` ist der Freigebende (falls bekannt)."""
         log_text = outcome.log
         verdict: ia.Verdict | None = None
         snap: ia.Snapshot | None = None
         show_rollback = False
         success = False
         pull_failed = outcome.state == "done" and outcome.rc == ia.RC_PULL
-        public_message: str | None = None  # gesetzt, wenn `message` eine Zeile vom Host enthaelt
+        public_message: str | None = None  # gesetzt, wenn `message` eine Zeile vom Host enthält
         crashed = False
-        # Lief vor einem Neustart des Dashboards schon der Rueckweg, nicht neu pruefen (das alte Image saehe dann wie
-        # "kein Update" aus), sondern den Rueckweg weiterverfolgen und berichten.
-        # Nur nach einem Neustart moeglich: im selben Prozess startet der Rueckweg erst weiter unten.
+        # Lief vor einem Neustart des Dashboards schon der Rückweg, nicht neu prüfen (das alte Image sähe dann wie "kein
+        # Update" aus), sondern den Rückweg weiterverfolgen und berichten. Im selben Prozess startet er erst weiter unten.
         back_started = (
             resumed and outcome.state == "done" and outcome.rc in (0, ia.RC_UP) and await self._rollback_started(host, run_id)
         )
@@ -623,7 +600,7 @@ class ImageApplier:
             show_rollback = not success
             crashed = verdict.crashed
         elif pull_failed:
-            message = ia.describe_pull_failure(log_text)  # nichts veraendert, kein Zurueck noetig
+            message = ia.describe_pull_failure(log_text)  # nichts verändert, kein Zurück nötig
             public_message = ia.describe_pull_failure(log_text, public=True)
         else:
             if outcome.state == "done":
@@ -634,13 +611,13 @@ class ImageApplier:
             else:
                 message = outcome.message
                 public_message = outcome.safe_message
-            if outcome.state in ("done", "lost", "timeout"):  # dort kann schon etwas veraendert sein
+            if outcome.state in ("done", "lost", "timeout"):  # dort kann schon etwas verändert sein
                 snap = await self._snapshot_once(host, t, rollback_ref)
             show_rollback = outcome.rc == ia.RC_UP or outcome.step in ("up", "done")
             crashed = outcome.state == "done" and outcome.rc == ia.RC_UP  # Neu-Erstellen gescheitert
 
         rollback = rollback_ref if (snap is None or snap.rollback_image_id == t.image_id) else None
-        if "@@warn=rollback-tag" in log_text:  # das Markieren scheiterte: kein Rueckweg versprechen
+        if "@@warn=rollback-tag" in log_text:  # das Markieren scheiterte: kein Rückweg versprechen
             rollback = None
         back: dict[str, Any] | None = None
         if back_started or (
@@ -651,10 +628,10 @@ class ImageApplier:
         ):
             back = await self._auto_rollback(host, t, rollback_ref, run_id, app_key)
             message = f"{message.rstrip('.')}. {back['text']}"
-            if public_message is not None:  # die oeffentliche Fassung bekommt denselben (festen) Satz dazu
+            if public_message is not None:  # die öffentliche Fassung bekommt denselben (festen) Satz dazu
                 public_message = f"{public_message.rstrip('.')}. {back['text']}"
             if back["ok"]:
-                show_rollback = False  # die alte Version laeuft wieder: kein Befehl zum Abtippen
+                show_rollback = False  # die alte Version läuft wieder: kein Befehl zum Abtippen
             log_text = f"{log_text.rstrip()}\n--- Automatischer Rückweg ---\n{back['log'].strip()}"
             snap = back.get("snap") or snap
         if success:
@@ -666,15 +643,15 @@ class ImageApplier:
                 state=ia.describe_members(snap) if snap is not None and not pull_failed else None,
             )
 
-        try:  # der Stand der Seite: aus "Update verfuegbar" wird "aktuell" (oder es bleibt, wie es war)
+        try:  # der Stand der Seite: aus "Update verfügbar" wird "aktuell" (oder es bleibt, wie es war)
             await self._images.recheck_container(host, t.container)
         except Exception:  # noqa: BLE001 - das Ergebnis des Updates steht trotzdem fest
             log.exception("image_update_recheck_failed host=%s container=%s", host.id, t.container)
 
         duration_s = self._now() - started
         new_id = verdict.new_image_id if verdict else None
-        # Was auch ohne Server-Recht sichtbar ist (Uebersicht der Seite, Protokoll, Meldung): bei einem
-        # Fehler nur feste Texte. Die Zeile vom Host steht nur in der Ausgabe der Aktion.
+        # Was auch ohne Server-Recht sichtbar ist (Übersicht der Seite, Protokoll, Meldung): bei einem Fehler nur feste
+        # Texte. Die Zeile vom Host steht nur in der Ausgabe der Aktion.
         public_output = output if success else ia.failure_headline(t, public_message or message)
         summary = public_output.splitlines()[0]
         self._applied[app_key] = {"ok": success, "summary": summary, "finished_at": _iso_now()}
@@ -704,15 +681,14 @@ class ImageApplier:
         try:
             res = await self._ctx.exec.run(host, dt.launch_command(run_id, script, project), timeout_s=LAUNCH_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
-            # Der Start kann trotzdem geklappt haben (Verbindung erst danach weg) -- nachsehen statt
-            # einen laufenden Lauf als gescheitert zu melden. Meldet sich der Host gar nicht mehr,
-            # nicht 40 Minuten lang "laeuft" zeigen.
+            # Der Start kann trotzdem geklappt haben (Verbindung erst danach weg): nachsehen, statt einen laufenden Lauf als
+            # gescheitert zu melden. Meldet sich der Host gar nicht mehr, nicht 40 Minuten lang "läuft" zeigen.
             unknown = f"Start fehlgeschlagen: {_describe(exc)}"
             reach_grace_s = REACH_GRACE_S
         else:
             out = (res.stdout or "") + (res.stderr or "")
             info = dt.parse_launch(out)
-            if info.busy:  # auf dem Host laeuft schon ein Update dieses Projekts (z. B. von einem anderen Dashboard)
+            if info.busy:  # auf dem Host läuft schon ein Update dieses Projekts (z. B. von einem anderen Dashboard)
                 return _Outcome("not_started", message=BUSY_MESSAGE)
             if not info.started and info.method is None:  # schon der Ordner scheiterte: nichts gestartet
                 lines = [ln for ln in out.strip().splitlines() if not ln.startswith("@@")]
@@ -726,9 +702,8 @@ class ImageApplier:
     async def _wait(
         self, host: Any, run_id: str, app_key: str, *, unknown_message: str, reach_grace_s: float | None, deadline_s: float | None = None,
     ) -> _Outcome:
-        """Fragt alle `POLL_INTERVAL_S` Sekunden kurz nach. Verbindungsfehler zwischendurch (z. B.
-        wenn Docker neu startet) und Antworten ohne Auskunft werden ausgesessen. Der Lauf auf dem
-        Host wird nie beendet."""
+        """Fragt alle `POLL_INTERVAL_S` Sekunden kurz nach. Verbindungsfehler zwischendurch (z. B. wenn Docker neu startet)
+        und Antworten ohne Auskunft werden ausgesessen. Der Lauf auf dem Host wird nie beendet."""
         command = dt.poll_command(run_id)
         deadline = time.monotonic() + (RUN_DEADLINE_S if deadline_s is None else deadline_s)
         unknown_until = time.monotonic() + UNKNOWN_GRACE_S
@@ -778,10 +753,10 @@ class ImageApplier:
         return ia.parse_verify((res.stdout or "") + (res.stderr or ""))
 
     async def _rollback_started(self, host: Any, run_id: str) -> bool:
-        """Gibt es auf dem Host schon einen Rueckweg zu diesem Update (nach einem Neustart des Dashboards)?"""
+        """Gibt es auf dem Host schon einen Rückweg zu diesem Update (nach einem Neustart des Dashboards)?"""
         try:
             res = await self._ctx.exec.run(host, dt.poll_command(rollback_run_id(run_id)), timeout_s=POLL_TIMEOUT_S)
-        except Exception:  # noqa: BLE001 - im Zweifel: keiner (dann wie gewohnt pruefen)
+        except Exception:  # noqa: BLE001 - im Zweifel: keiner (dann wie gewohnt prüfen)
             return False
         return dt.parse_poll((res.stdout or "") + (res.stderr or "")).state in ("running", "done", "lost")
 
@@ -792,9 +767,9 @@ class ImageApplier:
             return True
 
     async def _auto_rollback(self, host: Any, t: ComposeTarget, rollback_ref: str, run_id: str, app_key: str) -> dict[str, Any]:
-        """Zurueck auf das Sicherungs-Image (entkoppelt wie das Update) und pruefen, ob die alte Version wieder ruhig
-        laeuft. Die Lauf-ID haengt fest am Update: nach einem Neustart des Dashboards startet kein zweiter Rueckweg,
-        sondern der laufende wird weiter abgefragt. Wirft nie (ausser beim Herunterfahren)."""
+        """Zurück auf das Sicherungs-Image (entkoppelt wie das Update) und prüfen, ob die alte Version wieder ruhig läuft.
+        Die Lauf-ID hängt fest am Update: nach einem Neustart des Dashboards startet kein zweiter Rückweg, sondern der
+        laufende wird weiter abgefragt. Wirft nie (außer beim Herunterfahren)."""
         back_id = rollback_run_id(run_id)
         self._set_phase(app_key, "rollback")
         try:
@@ -802,7 +777,7 @@ class ImageApplier:
                 outcome = await self._launch_and_wait(
                     host, back_id, ia.rollback_script(t, rollback_ref), app_key, t.project, deadline_s=ROLLBACK_DEADLINE_S,
                 )
-                # Die Sperre des Projekts gibt das Update erst kurz nach seinem Rueckgabecode frei.
+                # Die Sperre des Projekts gibt das Update erst kurz nach seinem Rückgabecode frei.
                 if not (outcome.state == "not_started" and outcome.message == BUSY_MESSAGE) or attempt == ROLLBACK_LAUNCH_TRIES - 1:
                     break
                 await asyncio.sleep(ROLLBACK_RETRY_S)
@@ -816,7 +791,7 @@ class ImageApplier:
             return {"ok": False, "run_id": back_id, "log": outcome.log, "snap": None,
                     "text": "Der automatische Rückweg auf die alte Version hat nicht geklappt – siehe unten."}
         verdict, snap = await self._verify(host, t, rollback_ref)
-        # Erfolg heisst: der Dienst laeuft ruhig, und zwar wieder mit dem alten Image.
+        # Erfolg heißt: der Dienst läuft ruhig, und zwar wieder mit dem alten Image.
         ok = verdict.ok and not verdict.changed
         if ok and verdict.health == "starting":
             text = "Automatisch zurück auf die alte Version – sie läuft, ihr Healthcheck meldet aber noch „startet“."
@@ -827,8 +802,8 @@ class ImageApplier:
         return {"ok": ok, "run_id": back_id, "log": outcome.log, "snap": snap, "text": text}
 
     async def _verify(self, host: Any, t: ComposeTarget, rollback_ref: str) -> tuple[ia.Verdict, ia.Snapshot | None]:
-        """Wartet, bis der Dienst wieder laeuft (oder klar nicht) -- dieselbe Pruefung wie nach "Container starten"
-        (`after_check.wait_settled`: ohne Healthcheck erst zwei ruhige Lesungen `VERIFY_STABLE_S` auseinander)."""
+        """Wartet, bis der Dienst wieder läuft (oder klar nicht), mit derselben Prüfung wie nach "Container starten"
+        (`after_check.wait_settled`)."""
         return await ac.wait_settled(
             lambda: self._read_state(host, t, rollback_ref),
             lambda snap, final: ia.judge_verify(snap, old_image_id=t.image_id, final=final),
@@ -854,8 +829,8 @@ class ImageApplier:
         self, host: Any, t: ComposeTarget, success: bool, public_output: str, duration_s: float, with_rollback: bool, run_id: str,
         rollback: str | None, *, resumed: bool = False,
     ) -> None:
-        """Fehler immer, Erfolg nur nach mehr als `NOTIFY_SUCCESS_AFTER_S` (nach einem Neustart immer). Bewusst OHNE `host_id`
-        im Payload: ein Ergebnis, auf das der Nutzer wartet, soll ein Wartungsfenster nicht schlucken.
+        """Fehler immer, Erfolg nur nach mehr als `NOTIFY_SUCCESS_AFTER_S` (nach einem Neustart immer).
+        Bewusst ohne `host_id` im Payload: ein Ergebnis, auf das der Nutzer wartet, soll ein Wartungsfenster nicht schlucken.
         `public_output`: die Ausgabe ohne Zeilen vom Host (siehe `_conclude`); die Meldung zeigt nur die ersten Zeilen."""
         if success and duration_s <= NOTIFY_SUCCESS_AFTER_S and not resumed:
             return
@@ -864,7 +839,7 @@ class ImageApplier:
         body = "\n".join(lines[:2] if success else lines[:1])
         if with_rollback and rollback:
             body += "\nZurück (auf dem Host):\n" + ia.rollback_commands(t, rollback)
-        if resumed:  # der Ausloeser hat die Antwort nie bekommen: immer melden, und sagen warum
+        if resumed:  # der Auslöser hat die Antwort nie bekommen: immer melden, und sagen warum
             body += "\n" + RESTARTED_LINE
         try:
             await self._ctx.notify.send(Notification(
@@ -877,7 +852,7 @@ class ImageApplier:
 
 
 class ImageUpdateExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor` fuer `container.image_update`."""
+    """`ActionExecutor` für `container.image_update`."""
 
     action_types = frozenset({ACTION_TYPE})
 

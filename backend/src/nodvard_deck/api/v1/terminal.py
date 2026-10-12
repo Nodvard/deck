@@ -1,24 +1,5 @@
-"""Terminal-Sitzungen -- docs/04-API.md §4, docs/00-DECISIONS.md D-05.
-
-Eigener Socket, ABSICHTLICH getrennt vom generischen WS-Multiplex-Hub (`api/v1/ws.py`):
-Tastatureingaben sind latenzkritisch, Ausgaben binaer und voluminoes -- beides wuerde
-den Multiplex-Steuerkanal verstopfen.
-
-`POST /terminal/sessions` mintet ein einmaliges Ticket (die Autorisierung passiert
-HIER, ueber die normale Bearer-Pruefung); der WS-Verbindungsaufbau selbst braucht
-keinen zweiten Auth-Schritt, weil das Ticket bereits an den anfragenden Nutzer
-gebunden ist (docs/04 §4: "keine Tokens in der URL" -- die Session-ID ist ein
-kurzlebiges Einmal-Ticket, kein wiederverwendbares Credential).
-
-Kennt SSH nicht: findet einen `TerminalTarget`-Anbieter ueber die
-Capability-Registry (docs/02 §3) -- welche Extension das ist (aktuell die
-terminal-Extension mit `core/ssh.py` dahinter), ist hier bewusst unbekannt.
-
-**Terminal-Seite:** `GET /terminal/hosts` sagt der Terminal-Seite,
-fuer welche Hosts eine Sitzung ueberhaupt moeglich ist. Und docs/04 §4 versprach
-seit jeher `terminal.open`/`terminal.close` mit Dauer im Audit-Log -- geschrieben
-wurde das nie. Jetzt schon: eine Shell ist Vollzugriff auf die Maschine.
-"""
+"""Terminal-Sitzungen: ein Einmal-Ticket per `POST` und danach ein eigener WebSocket, getrennt von `ws.py`.
+Der Kern kennt kein SSH, den Anbieter liefert die Capability-Registry (`TerminalTarget`)."""
 
 from __future__ import annotations
 
@@ -44,6 +25,8 @@ from ...services import session_guard
 from ...services.hosts import host_to_sdk
 from ..deps import CurrentSessionId, CurrentUser, SessionDep, require_permission
 
+# Eigener Socket statt Multiplex-Hub: Eingaben sind latenzkritisch, Ausgaben binär und groß,
+# das würde dessen Steuerkanal verstopfen.
 router = APIRouter(tags=["terminal"])
 logger = logging.getLogger("nodvard_deck.terminal")
 
@@ -54,10 +37,10 @@ class TerminalSessionCreate(BaseModel):
     rows: int = 24
     user: str | None = None
     scope: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9_-]{0,31}$")
-    """Shell IN etwas auf dem Host statt auf dem Host selbst (`ScopedTerminalTarget.scope`, z. B. ein Container).
+    """Shell in etwas auf dem Host statt auf dem Host selbst (`ScopedTerminalTarget.scope`, z. B. ein Container).
     Nur zusammen mit `ref`."""
     ref: str | None = Field(default=None, min_length=1, max_length=255, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:@-]*$")
-    """Welches (z. B. der Name des Containers). Der Kern prueft nur die Form; was gilt, entscheidet der Anbieter."""
+    """Welches (z. B. der Name des Containers). Der Kern prüft nur die Form, was gilt, entscheidet der Anbieter."""
 
     @model_validator(mode="after")
     def _scope_and_ref_together(self) -> "TerminalSessionCreate":
@@ -81,6 +64,8 @@ async def create_terminal_session(
     if payload.scope is not None and await _find_scoped_target(host_to_sdk(host), payload.scope, payload.ref or "") is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Dafür bietet kein Modul eine Shell an.")
 
+    # Die Autorisierung läuft hier über die Bearer-Prüfung. Das Ticket ist einmalig und an den Nutzer gebunden,
+    # der WebSocket braucht deshalb keinen zweiten Auth-Schritt und keine Tokens in der URL.
     ticket = get_terminal_session_registry().create(
         host_id=payload.host_id, user_id=user.id, cols=payload.cols, rows=payload.rows,
         stamp=session_guard.credential_stamp(user), login_id=login_id, scope=payload.scope, ref=payload.ref,
@@ -99,7 +84,7 @@ async def _find_terminal_target(host):  # noqa: ANN001 - nodvard_sdk.types.Host
 
 
 async def _find_scoped_target(host, scope: str, ref: str):  # noqa: ANN001, ANN202 - nodvard_sdk Host/ScopedTerminalTarget
-    """Der Anbieter einer Shell IN etwas (`scope`, z. B. ein Container) auf `host`, der `ref` oeffnen kann."""
+    """Der Anbieter einer Shell in etwas (`scope`, z. B. ein Container) auf `host`, der `ref` öffnen kann."""
     for candidate in get_extension_runtime().capabilities.query(ScopedTerminalTarget):
         if getattr(candidate, "scope", None) == scope and await candidate.can_open_in(host, ref):
             return candidate
@@ -108,9 +93,8 @@ async def _find_scoped_target(host, scope: str, ref: str):  # noqa: ANN001, ANN2
 
 @router.get("/terminal/hosts", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_terminal_hosts(session: SessionDep) -> list[str]:
-    """IDs aller Hosts, fuer die gerade ein Anbieter eine Terminal-Sitzung oeffnen
-    kann (heute: Hosts mit SSH-Zugangsdaten) -- die Terminal-Seite bietet nur diese an,
-    statt erst beim Verbinden zu scheitern."""
+    """IDs aller Hosts, für die gerade ein Anbieter eine Terminal-Sitzung öffnen kann (heute: Hosts mit
+    SSH-Zugangsdaten), damit die Terminal-Seite nur diese anbietet."""
     if not get_extension_runtime().capabilities.query(TerminalTarget):
         return []
     result: list[str] = []
@@ -128,13 +112,13 @@ async def _access_ended(watch: session_guard.SessionWatch) -> str | None:
 async def _send_error(websocket: WebSocket, message: str) -> None:
     try:
         await websocket.send_text(json.dumps({"type": "error", "message": message[:300]}))
-    except Exception:  # noqa: BLE001 - der Client ist moeglicherweise schon weg
+    except Exception:  # noqa: BLE001 - der Client ist möglicherweise schon weg
         pass
 
 
 async def _audit(ticket, action: str, outcome: str, **kwargs) -> None:  # noqa: ANN001, ANN003
     if ticket.scope is not None:
-        # Worin die Shell lief, gehoert in jede Zeile (Oeffnen, Scheitern, Schliessen).
+        # Worin die Shell lief, gehört in jede Zeile (Öffnen, Scheitern, Schließen).
         kwargs["detail"] = {"scope": ticket.scope, "ref": ticket.ref} | (kwargs.get("detail") or {})
     try:
         async with session_scope() as db_session:
@@ -142,18 +126,18 @@ async def _audit(ticket, action: str, outcome: str, **kwargs) -> None:  # noqa: 
                 db_session, actor_type="user", actor_id=ticket.user_id, action=action, outcome=outcome,
                 target_type="host", target_id=ticket.host_id, **kwargs,
             )
-    except Exception:  # noqa: BLE001 - ein Audit-Fehler darf die Sitzung nicht abreissen
+    except Exception:  # noqa: BLE001 - ein Audit-Fehler darf die Sitzung nicht abreißen
         pass
 
 
-# Private WS-Fehlercodes im Bereich 4000-4999 (RFC 6455 erlaubt 4000-4999 fuer
-# Anwendungen). Keine Standard-Codes verfuegbar, die "Ticket unbekannt" o. Ae. meinen.
+# Private WS-Fehlercodes im Bereich 4000-4999, den RFC 6455 für Anwendungen vorsieht: Standardcodes für
+# "Ticket unbekannt" o. Ä. gibt es nicht.
 _WS_UNKNOWN_TICKET = 4404
 _WS_UNKNOWN_HOST = 4404
 _WS_NO_TARGET = 4501
 _WS_OPEN_FAILED = 4500
 _WS_ACCESS_ENDED = 4401
-"""Konto deaktiviert, Berechtigung entzogen, Passwort geaendert oder abgemeldet."""
+"""Konto deaktiviert, Berechtigung entzogen, Passwort geändert oder abgemeldet."""
 _WS_IDLE = 4408
 """Zu lange weder Eingabe noch Ausgabe."""
 
@@ -164,16 +148,11 @@ _PERMISSION = "hosts.execute"
 async def terminal_ws(
     websocket: WebSocket, session_id: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> None:
-    """`settings` via `Depends()`, NICHT `get_settings()` direkt -- WebSocket-Routen
-    unterstuetzen FastAPIs DI genauso wie normale Endpunkte, und nur darueber greift
-    die Test-Ueberschreibung (`app.dependency_overrides[get_settings]`, siehe
-    conftest.py `client`/`running_app`)."""
-    # `accept()` VOR jeder Pruefung, auch vor einer, die sofort ablehnt: `accept()`
-    # konsumiert intern erst das ausstehende ASGI-"websocket.connect"-Ereignis via
-    # `receive()`, bevor es sendet. `close()` allein tut das NICHT -- ruft man
-    # `close()` als allererste Handler-Aktion auf, wartet der ASGI-Server auf ein
-    # `receive()`, das nie kommt, und der Verbindungsaufbau haengt unbestimmt lange
-    # (live gefunden: genau das lieferte test_unknown_ticket_is_rejected).
+    """`settings` kommt über `Depends()`, nicht über `get_settings()` direkt: nur so greift die Test-Überschreibung
+    (`app.dependency_overrides[get_settings]`)."""
+    # `accept()` vor jeder Prüfung, auch vor einer, die sofort ablehnt: erst `accept()` konsumiert das ausstehende
+    # ASGI-Ereignis "websocket.connect", `close()` allein nicht. Ein `close()` als erste Aktion lässt den
+    # Verbindungsaufbau unbestimmt lange hängen.
     await websocket.accept()
 
     ticket = get_terminal_session_registry().consume(session_id, ttl_s=settings.terminal_session_ttl_s)
@@ -193,7 +172,7 @@ async def terminal_ws(
     watch = session_guard.SessionWatch(user_id=ticket.user_id, stamp=ticket.stamp, login_id=ticket.login_id)
     try:
         ended = await _access_ended(watch)
-    except Exception:  # noqa: BLE001 - im Zweifel nicht oeffnen
+    except Exception:  # noqa: BLE001 - im Zweifel nicht öffnen
         await websocket.close(code=_WS_OPEN_FAILED)
         return
     if ended is not None:
@@ -218,17 +197,16 @@ async def terminal_ws(
     try:
         term_session = await opening
     except Exception as exc:  # noqa: BLE001 - dem Client sichtbar machen, nicht den Server crashen
-        # Nie ein leerer Grund: `str(TimeoutError())` ist leer, die Seite zeigte dann gar nichts.
+        # Nie ein leerer Grund: `str(TimeoutError())` ist leer, die Seite zeigte dann nichts.
         reason = describe_connection_error(exc, address=sdk_host.address)
         if is_expected_connection_error(exc):
-            # Server aus, falsche Adresse, Zugang abgelehnt: erwartbar, eine Zeile reicht (kein
-            # Traceback -- `deploy_pi.sh` wertet "Traceback" im Protokoll als gescheiterten Start).
+            # Server aus, falsche Adresse, Zugang abgelehnt: erwartbar, eine Zeile reicht (kein Traceback,
+            # `deploy_pi.sh` wertet "Traceback" im Protokoll als gescheiterten Start).
             logger.info("terminal_open_failed host=%s reason=%s", ticket.host_id, reason)
         else:
             logger.exception("terminal_open_failed host=%s", ticket.host_id)
         await _audit(ticket, "terminal.open", "failure", reason=reason[:500])
-        # Der Grund als Text VOR dem Close-Frame -- die Seite
-        # zeigt ihn an, statt nur "Verbindung getrennt (4500)".
+        # Der Grund als Text vor dem Close-Frame: die Seite zeigt ihn an, statt nur "Verbindung getrennt (4500)".
         try:
             await websocket.send_text(json.dumps({"type": "error", "message": reason[:300]}))
         except Exception:  # noqa: BLE001
@@ -239,10 +217,10 @@ async def terminal_ws(
             pass
         return
 
+    # Jede Sitzung kommt mit Dauer ins Protokoll (open/close): eine Shell ist Vollzugriff auf die Maschine.
     await _audit(ticket, "terminal.open", "success")
     opened_at = time.monotonic()
-    # Zeitpunkt der letzten Eingabe ODER Ausgabe: ein Befehl, der noch Text liefert, haelt die
-    # Sitzung am Leben.
+    # Zeitpunkt der letzten Eingabe oder Ausgabe: ein Befehl, der noch Text liefert, hält die Sitzung am Leben.
     last_activity = opened_at
 
     async def _pump_host_to_client() -> None:
@@ -294,9 +272,9 @@ async def terminal_ws(
 
     async def _watchdog() -> tuple[int, str, str] | None:
         """Endet die Sitzung bei Leerlauf oder wenn Konto, Berechtigung oder Anmeldung nicht mehr gelten.
-        Rueckgabe: (Close-Code, Grund fuer die Anzeige, Kennung fuers Protokoll); `None`, wenn die Sitzung
-        anders endete. Wird nie abgebrochen, sondern ueber `stop_watchdog` gestoppt -- eine mitten in der
-        Datenbankabfrage abgebrochene Aufgabe wuerde deren Verbindung mit wegreissen."""
+        Rückgabe: (Close-Code, Grund für die Anzeige, Kennung fürs Protokoll), `None` bei anderem Ende."""
+        # Wird nie abgebrochen, sondern über `stop_watchdog` gestoppt: eine mitten in der Datenbankabfrage
+        # abgebrochene Aufgabe risse deren Verbindung mit.
         recheck = max(0.05, settings.terminal_recheck_interval_s)
         idle_limit = settings.terminal_idle_timeout_s
         tick = min(recheck, idle_limit) if idle_limit > 0 else recheck
@@ -316,7 +294,7 @@ async def terminal_ws(
                 next_check = now + recheck
                 try:
                     ended = await _access_ended(watch)
-                except Exception:  # noqa: BLE001 - ein Datenbank-Haenger beendet keine laufende Shell
+                except Exception:  # noqa: BLE001 - ein Datenbank-Hänger beendet keine laufende Shell
                     continue
                 if ended is not None:
                     return _WS_ACCESS_ENDED, ended, "access_ended"
@@ -334,13 +312,9 @@ async def terminal_ws(
             if verdict is not None:
                 close_code, ended_reason, ended_by = verdict
     finally:
-        # Live gefunden: `writer` haengt oft in `await websocket.receive()`, das auf
-        # `cancel()` nicht immer sofort reagiert (Starlettes ASGI-receive-Wartung
-        # scheint eine CancelledError gelegentlich zu verschlucken/verzoegern statt
-        # sie umgehend durchzureichen) -- ohne Zeitlimit blieb die Verbindung (und
-        # damit ein Test-Server-Shutdown) unbestimmt lange haengen. Ein bewusst
-        # grosszuegiges, aber ENDLICHES Limit verhindert das, ohne eine normal
-        # schnell endende Sitzung zu beeintraechtigen.
+        # `writer` hängt oft in `await websocket.receive()` und reagiert auf `cancel()` nicht immer sofort; ohne
+        # Zeitlimit blieb die Verbindung (und ein Test-Server-Shutdown) unbestimmt lange offen. Das Limit ist
+        # großzügig, aber endlich, damit normal endende Sitzungen nicht ausgebremst werden.
         reader.cancel()
         writer.cancel()
         stop_watchdog.set()
@@ -353,8 +327,8 @@ async def terminal_ws(
         except Exception:  # noqa: BLE001
             pass
         if ended_reason:
-            # Der Grund als Text vor dem Close-Frame, nach dem "exit" der Lese-Aufgabe, damit die
-            # Seite ihn als letzte Meldung zeigt.
+            # Der Grund als Text vor dem Close-Frame, nach dem "exit" der Lese-Aufgabe, damit die Seite ihn als
+            # letzte Meldung zeigt.
             await _send_error(websocket, ended_reason)
         await _audit(
             ticket, "terminal.close", "success",
@@ -364,5 +338,5 @@ async def terminal_ws(
         )
         try:
             await websocket.close(code=close_code)
-        except Exception:  # noqa: BLE001 - moeglicherweise schon zu
+        except Exception:  # noqa: BLE001 - möglicherweise schon zu
             pass

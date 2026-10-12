@@ -1,17 +1,5 @@
-"""Prüfung hochgeladener SVG-Dateien.
-
-Ein SVG ist ein XML-Dokument und kann Skripte enthalten. Die Auslieferung schützt
-zusätzlich mit einer Sandbox (siehe `UNTRUSTED_FILE_HEADERS` in `branding.py`); diese
-Prüfung hält gefährliche Dateien schon beim Hochladen fern.
-
-Es gilt eine **Erlaubnisliste**: nur bekannte Zeichen-Elemente, keine Skripte,
-keine Animationen (`<set>`/`<animate>` können Adressen umschreiben), kein `<foreignObject>`.
-Verweise (`href`, `url(...)`) sind nur auf Teile derselben Datei erlaubt, dazu eingebettete
-PNG-/JPEG-/GIF-/WebP-Bilder als `data:`-Adresse. Eine DOCTYPE-Angabe mit eigenen Entitäten
-wird abgelehnt (Schutz vor Entity-Bomben). Gelesen wird der Baum mit `defusedxml`: Auch wenn die
-Vorprüfung mit expat einmal etwas durchließe, löst der Parser weder Entitäten noch externe
-Verweise auf (XXE).
-"""
+"""Prüfung hochgeladener SVG-Dateien nach einer Erlaubnisliste. Ein SVG ist ein XML-Dokument und kann Skripte enthalten; die
+Auslieferung schützt zusätzlich mit einer Sandbox (`UNTRUSTED_FILE_HEADERS` in `branding.py`)."""
 
 from __future__ import annotations
 
@@ -41,6 +29,8 @@ _EDITOR_NS = frozenset({
     "http://www.w3.org/2000/xmlns/",
 })
 
+# Erlaubnisliste: nur bekannte Zeichen-Elemente. Keine Skripte, keine Animationen (`<set>`/`<animate>` können Adressen
+# umschreiben), kein `<foreignObject>`.
 ALLOWED_ELEMENTS = frozenset({
     "svg", "g", "defs", "title", "desc", "metadata", "symbol", "use", "style",
     "path", "rect", "circle", "ellipse", "line", "polyline", "polygon",
@@ -54,6 +44,8 @@ ALLOWED_ELEMENTS = frozenset({
     "fePointLight", "feSpecularLighting", "feSpotLight", "feTile", "feTurbulence",
 })
 
+# Verweise (`href`, `url(...)`) sind nur auf Teile derselben Datei erlaubt, dazu eingebettete PNG-/JPEG-/GIF-/WebP-Bilder
+# als `data:`-Adresse.
 _DATA_IMAGE = re.compile(r"^data:image/(?:png|jpeg|jpg|gif|webp);base64,[A-Za-z0-9+/=\s]*$", re.IGNORECASE)
 _URL_REF = re.compile(r"url\(\s*(['\"]?)\s*([^)'\"]*)", re.IGNORECASE)
 # `\\` steht für CSS-Escapes (`\\75rl(` ist `url(`), mit denen sich die übrigen Prüfungen
@@ -109,9 +101,8 @@ def _check_attribute(name: str, value: str) -> None:
 
 def check_svg(content: bytes) -> None:
     """Wirft `UnsafeSvg` mit einer deutschen Meldung, wenn das SVG nicht sicher aussieht."""
-    # Erster Durchlauf nur mit expat: eigene Entitäten (DOCTYPE mit [...]) werden abgelehnt,
-    # bevor irgendetwas ersetzt wird. Der C-beschleunigte ElementTree-Parser bietet dafür
-    # keinen Einstieg.
+    # Erster Durchlauf nur mit expat: eigene Entitäten (DOCTYPE mit [...]) werden abgelehnt (Schutz vor Entity-Bomben),
+    # bevor irgendetwas ersetzt wird. Der C-beschleunigte ElementTree-Parser bietet dafür keinen Einstieg.
     def _entities_not_allowed(*_args) -> None:
         raise UnsafeSvg("Das SVG enthält eigene Entitäten (DOCTYPE) und wird nicht angenommen.")
 
@@ -128,6 +119,8 @@ def check_svg(content: bytes) -> None:
         raise UnsafeSvg("Das SVG enthält eine Verarbeitungsanweisung (<?...?>) und wird nicht angenommen.")
 
     guard.ProcessingInstructionHandler = _pi_not_allowed
+    # Den Baum liest `defusedxml`: Auch wenn die Vorprüfung mit expat einmal etwas durchließe, löst der Parser weder
+    # Entitäten noch externe Verweise auf (XXE).
     try:
         guard.Parse(content, True)
         root = SafeET.fromstring(content, forbid_dtd=False, forbid_entities=True, forbid_external=True)

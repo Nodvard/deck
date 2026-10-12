@@ -1,20 +1,6 @@
-"""inventory-Extension -- Homebox-artiges Zuhause-Inventar: Gegenstaende, Standorte,
-Kategorien, Garantie-Datum, Bilder pro Gegenstand.
+"""Inventar-Erweiterung (Homebox-artig): Gegenstände, Standorte, Kategorien, Racks, Bauprojekte und Bilder.
 
-**Die erste Extension mit echten eigenen Datenbank-Tabellen** (docs/02-EXTENSION-API.md
-§7: "eigener Alembic-Branch") -- `models.py` deklariert eine EIGENE, vom Kern
-unabhaengige `Base`/`MetaData`, `migrations/versions/
-a1b2c3d4e5f6_create_inventory_tables.py` ist ein eigener, vom Kern-Branch
-unabhaengiger Alembic-Kopf (`down_revision=None`, eigener `branch_labels`-Wert).
-`python -m nodvard_deck.migrate` (backend/src/nodvard_deck/migrate.py) findet und migriert
-beide Branches zusammen ("upgrade heads"). `ctx.db.declare_tables(Base.metadata)`
-unten aktiviert den bisher nie aufgerufenen `ext.tables.validate_table_prefix()`
-zum ersten Mal gegen echten Code -- ein Tabellenname ohne `ext_inventory_`-Praefix
-wuerde die Extension beim Laden zurueckweisen.
-
-Bilder liegen NICHT in der Datenbank, sondern auf der Platte unter
-`ctx.data_dir/images/` (siehe images.py) -- dasselbe Muster wie
-`nodvard_deck.branding.save_logo_file()`, `ItemImage` traegt nur Metadaten.
+Eigene Tabellen mit eigenem Alembic-Zweig (`models.py`); die Bilder liegen auf der Platte, nicht in der Datenbank.
 """
 
 from __future__ import annotations
@@ -94,16 +80,13 @@ _UNTRUSTED_FILE_HEADERS = {
     "X-Content-Type-Options": "nosniff",
 }
 
+# Ab so vielen Tagen vor Ablauf taucht ein Gegenstand im Garantie-Widget auf. Muss zur Inventar-Seite passen
+# (`warrantyState()` in InventoryPage.tsx: bis 90 Tage heißt "endet bald"), sonst zählen Seite und Kachel verschieden.
 _WARRANTY_SOON_DAYS = 90
-"""Ab wie vielen Tagen vor Ablauf ein Gegenstand im Garantie-Widget auftaucht --
-kein Vertragswert, nur ein sinnvoller Default. Muss zur Inventar-Seite passen
-(`warrantyState()` in InventoryPage.tsx: <= 90 Tage = "endet bald"); vorher 30,
-dann zeigte die Seite "Garantie endet bald: 4" und die Kachel nur einen."""
 
+# So lange steht eine abgelaufene Garantie noch in der Kachel: sonst füllten alte Geräte die 2x2-Kachel, und die gerade
+# ablaufenden wären abgeschnitten. Die Inventar-Seite zeigt weiterhin alle.
 _WARRANTY_EXPIRED_SHOWN_DAYS = 30
-"""Wie lange eine abgelaufene Garantie noch in der Kachel steht. Ohne Untergrenze
-fuellten vor Jahren abgelaufene Geraete die 2x2-Kachel, und die gerade ablaufenden
-waren abgeschnitten. Die Inventar-Seite zeigt weiterhin alle."""
 
 
 class CategoryIn(BaseModel):
@@ -130,13 +113,13 @@ class LocationOut(BaseModel):
     updated_at: datetime
 
 
+# So viele Kennungen beantwortet eine Nachfrage `inventory.items_check_requested` höchstens.
 MAX_ITEMS_PER_CHECK = 500
-"""So viele Kennungen beantwortet eine Nachfrage `inventory.items_check_requested` höchstens."""
 _ITEM_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 MAX_QUANTITY = 100_000
+# 10 Millionen Euro in Cent: weit über jedem Homelab, und Preis mal Menge mal Gegenstände bleibt im Zahlenbereich.
 MAX_CENTS = 1_000_000_000
-"""10 Millionen Euro in Cent: weit über jedem Homelab, und Preis mal Menge mal Gegenstände bleibt im Zahlenbereich."""
 
 
 class ItemIn(BaseModel):
@@ -151,13 +134,13 @@ class ItemIn(BaseModel):
     purchase_price_cents: int | None = None
     warranty_until: date | None = None
     notes: str | None = None
-    # Homelab-Baukasten (neu): beim Aendern (PUT) gilt ein Feld nur, wenn es mitgeschickt wird -- ein
-    # aelterer Aufrufer, der sie nicht kennt, loescht sie so nicht versehentlich.
+    # Homelab-Baukasten: beim Ändern (PUT) gilt ein Feld nur, wenn es mitgeschickt wird, damit ein älterer Aufrufer,
+    # der sie nicht kennt, sie nicht versehentlich löscht.
     manufacturer: str | None = Field(default=None, max_length=200)
     model: str | None = Field(default=None, max_length=200)
     serial_number: str | None = Field(default=None, max_length=200)
     product_url: str | None = Field(default=None, max_length=2000)
-    # Kennungen sind 40 Zeichen lang (`new_id()`), obwohl die Spalten String(36) heissen: hier nur eine Obergrenze.
+    # Kennungen sind 40 Zeichen lang (`new_id()`), obwohl die Spalten String(36) heißen: hier nur eine Obergrenze.
     host_id: str | None = Field(default=None, max_length=64)
     project_id: str | None = Field(default=None, max_length=64)
     rack_id: str | None = Field(default=None, max_length=64)
@@ -167,7 +150,7 @@ class ItemIn(BaseModel):
     @field_validator("host_id", "project_id", "rack_id", "manufacturer", "model", "serial_number", mode="before")
     @classmethod
     def _blank_is_none(cls, value: Any) -> Any:
-        # "" aus einem leeren Formularfeld heisst "keins", nicht "ein Verweis mit leerer Kennung".
+        # "" aus einem leeren Formularfeld heißt "keins", nicht "ein Verweis mit leerer Kennung".
         if isinstance(value, str):
             value = value.strip()
             return value or None
@@ -190,14 +173,14 @@ class ItemIn(BaseModel):
     @field_validator("product_url")
     @classmethod
     def _only_web_links(cls, value: str | None) -> str | None:
-        # Der Link wird in der Oberflaeche anklickbar: nur vollstaendige Webadressen, kein `javascript:` o. Ae.
+        # Der Link wird in der Oberfläche anklickbar: nur vollständige Webadressen, kein `javascript:` o. Ä.
         if value is None or not value.strip():
             return None
         value = value.strip()
         parts = urlsplit(value)
         if parts.scheme.lower() not in ("http", "https") or not parts.hostname or any(ch.isspace() or ord(ch) < 32 for ch in value):
             raise ValueError("Der Produktlink muss eine vollständige Webadresse sein, die mit http:// oder https:// beginnt.")
-        # `https://shop.example@boese.example/` sieht nach dem Shop aus, führt aber woandershin; Zugangsdaten gehören
+        # `https://shop.example@evil.example/` sieht nach dem Shop aus, führt aber woandershin; Zugangsdaten gehören
         # ohnehin nicht in einen Link, den jeder mit Leserecht sieht.
         if parts.username is not None or parts.password is not None:
             raise ValueError("Der Produktlink darf keinen Benutzernamen und kein Passwort enthalten (kein „@“ vor der Adresse).")
@@ -276,12 +259,12 @@ class ProjectOut(BaseModel):
     status: str
     description: str | None
     budget_cents: int | None
+    # Teile im Projekt (Zeilen, nicht Stückzahl).
     item_count: int
-    """Teile im Projekt (Zeilen, nicht Stueckzahl)."""
+    # Summe Kaufpreis mal Anzahl der Teile mit Preis.
     spent_cents: int
-    """Summe Kaufpreis x Anzahl der Teile mit Preis."""
+    # Teile ohne Kaufpreis: die Summe ist dann unvollständig.
     unpriced_count: int = 0
-    """Teile ohne Kaufpreis: die Summe ist dann unvollstaendig."""
     created_at: datetime
     updated_at: datetime
 
@@ -316,9 +299,8 @@ def _location_out(row: Location) -> LocationOut:
 
 
 def _image_out(row: ItemImage) -> ItemImageOut:
-    # Vollstaendiger Pfad inkl. /api/v1 (wie ws_url/logo_url im Kern), damit das
-    # Frontend ihn unveraendert abrufen kann -- ohne Praefix lieferte der
-    # SPA-Fallback die index.html statt des Bildes.
+    # Vollständiger Pfad samt /api/v1 (wie ws_url/logo_url im Kern), damit das Frontend ihn unverändert abrufen
+    # kann; ohne Präfix lieferte der SPA-Fallback die index.html statt des Bildes.
     return ItemImageOut(
         id=row.id, filename=row.filename, content_type=row.content_type, size_bytes=row.size_bytes,
         created_at=row.created_at, url=f"/api/v1/ext/inventory/items/{row.item_id}/images/{row.id}",
@@ -328,6 +310,7 @@ def _image_out(row: ItemImage) -> ItemImageOut:
 class Extension(NodvardExtension):
     async def setup(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
+        # Der Kern prüft die Tabellennamen auf den Präfix `ext_inventory_` und weist die Erweiterung sonst ab.
         ctx.db.declare_tables(Base.metadata)
 
         async def _images_for(session: Any, item_id: str) -> list[ItemImageOut]:
@@ -349,8 +332,8 @@ class Extension(NodvardExtension):
             )
 
         async def _check_links(session: Any, values: dict[str, Any], item_id: str | None = None) -> None:
-            """Projekt, Rack und Platz im Rack pruefen, bevor ein Teil gespeichert wird. Ohne Rack gibt es keinen
-            Platz darin: Position und Hoehe werden dann geleert (sonst gaelten alte Angaben wieder, sobald jemand
+            """Projekt, Rack und Platz im Rack prüfen, bevor ein Teil gespeichert wird. Ohne Rack gibt es keinen
+            Platz darin: Position und Höhe werden dann geleert (sonst gälten alte Angaben wieder, sobald jemand
             nur `rack_id` setzt)."""
             if not values.get("rack_id"):
                 values["rack_position"] = None
@@ -455,7 +438,7 @@ class Extension(NodvardExtension):
                     raise HTTPException(status_code=404, detail="Standort nicht gefunden.")
                 await session.delete(row)
 
-        # --- Gegenstaende -------------------------------------------------
+        # --- Gegenstände --------------------------------------------------
         @read_router.get("/items")
         async def list_items(
             q: str | None = None, category_id: str | None = None, location_id: str | None = None,
@@ -523,9 +506,8 @@ class Extension(NodvardExtension):
                 row = await session.get(Item, item_id)
                 if row is None:
                     raise HTTPException(status_code=404, detail="Gegenstand nicht gefunden.")
-                # Bild-DATEIEN muessen explizit weg -- die DB-Zeilen kaskadieren beim
-                # Loeschen der Item-Zeile ueber die FK (ondelete="CASCADE",
-                # PRAGMA foreign_keys=ON), die Dateien auf der Platte nicht.
+                # Die Bilddateien müssen explizit weg: die Datenbankzeilen kaskadieren beim Löschen über den
+                # Fremdschlüssel (ondelete="CASCADE", PRAGMA foreign_keys=ON), die Dateien auf der Platte nicht.
                 image_rows = (
                     await session.execute(select(ItemImage).where(ItemImage.item_id == item_id))
                 ).scalars().all()
@@ -564,7 +546,7 @@ class Extension(NodvardExtension):
 
         @write_router.delete("/projects/{project_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def delete_project(project_id: str) -> None:
-            """Die Teile bleiben im Inventar, sie gehoeren danach nur zu keinem Projekt mehr."""
+            """Die Teile bleiben im Inventar, sie gehören danach nur zu keinem Projekt mehr."""
             async with ctx.db.session() as session:
                 row = await session.get(Project, project_id)
                 if row is None:
@@ -616,7 +598,7 @@ class Extension(NodvardExtension):
 
         @write_router.delete("/racks/{rack_id}", status_code=status.HTTP_204_NO_CONTENT)
         async def delete_rack(rack_id: str) -> None:
-            """Die Geraete bleiben im Inventar, sie stecken danach nur in keinem Rack mehr."""
+            """Die Geräte bleiben im Inventar, sie stecken danach nur in keinem Rack mehr."""
             async with ctx.db.session() as session:
                 row = await session.get(Rack, rack_id)
                 if row is None:
@@ -691,13 +673,13 @@ class Extension(NodvardExtension):
         @write_router.post("/items/{item_id}/images", status_code=status.HTTP_201_CREATED)
         @max_body_bytes(MAX_IMAGE_BYTES)
         async def upload_item_image(item_id: str, request: Request) -> ItemImageOut:
-            """Rohkoerper-Upload wie `POST /branding/logo` -- dieselbe Konvention
-            statt zusaetzlich `multipart/form-data` einzufuehren."""
+            """Rohkörper-Upload wie `POST /branding/logo`, dieselbe Konvention statt `multipart/form-data`."""
             content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
             extension = ALLOWED_CONTENT_TYPES.get(content_type)
             if extension is None:
                 raise HTTPException(status_code=415, detail=f"Nicht unterstützter Bildtyp: {content_type or '(keiner)'}")
 
+            # Erst die Angabe im Kopf prüfen, dann die tatsächliche Größe: sie kann fehlen oder falsch sein.
             content_length = request.headers.get("content-length")
             if content_length is not None and content_length.isdigit() and int(content_length) > MAX_IMAGE_BYTES:
                 raise HTTPException(status_code=413, detail=f"Bild zu gross (max. {MAX_IMAGE_BYTES // 1024} KB).")
@@ -764,17 +746,16 @@ class Extension(NodvardExtension):
                         .order_by(Item.warranty_until)
                     )
                 ).scalars().all()
-                # Zuerst, was noch ablaeuft (naechstes Ende oben) -- da kann man noch
-                # etwas tun --, danach das kuerzlich Abgelaufene (neuestes zuerst).
+                # Zuerst, was noch abläuft (nächstes Ende oben), da kann man noch etwas tun; danach das kürzlich
+                # Abgelaufene (neuestes zuerst).
                 rows = sorted(rows, key=lambda r: (r.warranty_until < today, abs((r.warranty_until - today).days)))
                 return {
                     "data": [
                         {
                             "id": r.id, "name": r.name, "warranty_until": r.warranty_until.isoformat(),
                             "status": "abgelaufen" if r.warranty_until < today else "läuft bald ab",
-                            # `tone` ist bereits ein gueltiger Tone-Literal (renderTone()
-                            # reicht ihn direkt durch, kein "| tone"-Ratefilter noetig,
-                            # siehe frontend/src/widgets/template.ts).
+                            # `tone` ist schon ein gültiges Tone-Literal (renderTone() reicht es durch, kein
+                            # "| tone"-Ratefilter nötig, siehe frontend/src/widgets/template.ts).
                             "tone": "danger" if r.warranty_until < today else "warn",
                         }
                         for r in rows
@@ -782,8 +763,8 @@ class Extension(NodvardExtension):
                     "meta": {},
                 }
 
-        # Sicherheits-Nachtrag: hing ohne Berechtigung (= oeffentlich, siehe
-        # ApiHandle.include_router()) -- Namen waren ohne Login lesbar.
+        # Mit Berechtigung einhängen: ohne wäre der Router öffentlich (siehe `ApiHandle.include_router()`), und die
+        # Namen wären ohne Login lesbar.
         ctx.api.include_router(widget_router, permission="inventory.read")
 
         ctx.ui.register_page(

@@ -1,9 +1,6 @@
-"""Daten fuer die beiden Dashboard-Kacheln ("Pi-hole", "Zertifikate").
+"""Daten für die Kacheln "Pi-hole" und "Zertifikate": `ListView`-Zeilen `{title, subtitle, label, tone}`.
 
-Beide sind `ListView`s mit Zeilen `{title, subtitle, label, tone}` -- die Texte
-entstehen hier fertig auf Deutsch (die Widget-Templates kennen keine Bedingungen), die
-Farbe kommt als expliziter Maschinenwert (`good`/`warn`/`danger`/`neutral`).
-"Nicht eingerichtet" und "nicht erreichbar" sind ganz normale Zeilen, nie ein Fehler.
+Die Texte entstehen hier fertig (Widget-Templates kennen keine Bedingungen), `tone` ist `good`, `warn`, `danger` oder `neutral`.
 """
 
 from __future__ import annotations

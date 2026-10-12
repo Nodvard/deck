@@ -1,24 +1,6 @@
-"""Konkrete Implementierung von `nodvard_sdk.ExtensionContext` (docs/02-EXTENSION-API.md
-§2).
+"""Setzt `nodvard_sdk.ExtensionContext` im Kern um (docs/02-EXTENSION-API.md §2).
 
-Jeder Handle, fuer den docs/02 §2 eine Permission nennt, prueft sie ZUERST -- ueber
-`_PermissionChecker`, der dieselbe Suffix-Wildcard-Logik wie die Nutzer-RBAC
-wiederverwendet (`core.rbac.has_permission`), nur gegen `granted_permissions` einer
-Extension statt gegen Rollen eines Nutzers.
-
-**Bewusster Realitaetsgrad je Handle** (siehe Abnahmeberichte fuer die volle
-Begruendung): `ui`, `settings`, `events`, `audit`, `secrets`, `vault_use`,
-`capabilities`, `hosts`, `notify`, `scheduler.register_job`, `http`, `spawn`, `api`,
-`logger`, `data_dir` sind seit WP-3 ECHT. `exec` (run/open_shell/sftp) ist seit WP-4
-ECHT -- der gemeinsame `core/ssh.py`-Layer, den die terminal-Extension nutzt. Seit
-WP-5 ist `actions` (register/propose/result) ECHT -- `propose()` geht durch
-`core.gate.propose()` (Sperrliste, Anti-Flapping, Autonomie-Entscheidung, Ausfuehrung
-bei voller Autonomie), `ctx.exec.run()` prueft zusaetzlich selbst gegen die
-Sperrliste (Verteidigung in der Tiefe, siehe `ExecHandle.run()`-Docstring). `ws`,
-`connectors.get_client`, `scheduler.trigger` werfen weiterhin `NotImplementedError`
-mit einem Verweis auf das WP, das die fehlende Grundlage liefert
-(Scheduler-Ausfuehrung/WS-Multiplex-Hub: WP-6) -- die Permission-Pruefung laeuft aber
-auch fuer sie zuerst, damit ein Test beweisen kann, dass die Reihenfolge stimmt.
+Jeder Handle prüft seine Berechtigung zuerst (`_PermissionChecker`, Wildcard-Logik wie bei der Nutzer-RBAC).
 """
 
 from __future__ import annotations
@@ -81,7 +63,7 @@ from .runtime import ExtensionRuntime, LoadedExtension, SpawnTarget, SupervisedT
 logger = logging.getLogger("nodvard_deck.ext")
 
 PUBLIC_ROUTES_PERMISSION = "api.public"
-"""Manifest-Berechtigung fuer `ctx.api.include_router(..., public=True)`."""
+"""Manifest-Berechtigung für `ctx.api.include_router(..., public=True)`."""
 
 
 class _PermissionChecker:
@@ -94,31 +76,21 @@ class _PermissionChecker:
             raise PermissionDenied(self.ext_id, permission)
 
 
-
-
 class ApiHandle:
     """Hängt die Routen einer Erweiterung unter `/api/v1/ext/<id>/...` ein.
 
-    Sicher ist der Standard: Jede Route verlangt mindestens eine gültige Anmeldung.
-    Früher blieb eine Route ohne `permission` ganz ohne Prüfung und war damit ohne
-    Anmeldung erreichbar; wer das Argument vergaß, veröffentlichte den Endpunkt für
-    alle (so geschehen bei mehreren mitgelieferten Erweiterungen und bei hello-world).
-    Öffentlich ist eine Route nur noch mit dem ausdrücklichen `public=True`."""
+    Jede Route verlangt eine gültige Anmeldung; öffentlich ist sie nur mit `public=True`."""
 
     def __init__(self, loaded: LoadedExtension) -> None:
         self._loaded = loaded
-        # Router, deren Routen eine Anmeldung verlangen (ohne `public=True`). Der Host
-        # prueft sie nach setup() noch einmal (`check_routes`), weil eine Erweiterung
-        # nach include_router() weitere Routen an denselben Router haengen kann.
+        # Router mit Anmeldepflicht; `check_routes` prüft sie nach setup() erneut, weil eine Erweiterung nach
+        # include_router() weitere Routen anhängen kann.
         self._guarded: list[Any] = []
-        # Vollstaendige Adress-Praefixe (/api/v1/ext/<id><prefix>), die die Erweiterung mit
-        # `public=True` ohne Anmeldung anbietet. Der Host schreibt sie beim Einschalten ins
-        # Protokoll (services/extensions.py::public_route_prefixes).
+        # Adress-Präfixe mit `public=True`, die der Kern beim Einschalten ins Protokoll schreibt.
         self.public_prefixes: list[str] = []
 
     def check_routes(self) -> None:
-        """Wirft `InvalidRegistration`, wenn ein geschuetzter Router eine Route hat, an
-        der die Anmeldepruefung nicht greift."""
+        """Wirft `InvalidRegistration`, wenn ein geschützter Router eine Route ohne Anmeldeprüfung hat."""
         unguarded = [desc for router in self._guarded for desc in _unguarded_routes(router)]
         if unguarded:
             from nodvard_sdk.errors import InvalidRegistration
@@ -132,18 +104,14 @@ class ApiHandle:
 
     @property
     def current_actor(self) -> Any:  # noqa: ANN401 - eine FastAPI-Dependency
-        """D-15: wer ruft diese Extension-Route auf? Als FastAPI-Dependency deklarieren --
-        `actor: Actor = Depends(ctx.api.current_actor)` -- und `actor` als `proposed_by`
-        bzw. im Audit-Log verwenden. Liefert `Actor.user(id, username)` des angemeldeten
-        Nutzers (401 ohne gueltigen Token, wie jede Kern-Route)."""
+        """Der angemeldete Nutzer als `Actor`, per `Depends(ctx.api.current_actor)`; 401 ohne gültigen Token."""
         from fastapi import Depends
         from nodvard_sdk import Actor
 
         from ..api.deps import get_current_user
 
-        # Depends als Default statt Annotated-Typ: dieses Modul nutzt
-        # `from __future__ import annotations`, ein lokal importierter Typ waere fuer
-        # FastAPIs Signatur-Aufloesung nur ein unbekannter String (-> Query-Parameter).
+        # `Depends` als Default statt `Annotated`: Mit `from __future__ import annotations` wäre ein lokal
+        # importierter Typ für FastAPI nur ein String und damit ein Query-Parameter.
         async def _current_actor(user: Any = Depends(get_current_user)) -> Actor:  # noqa: B008
             return Actor.user(user.id, user.username)
 
@@ -158,26 +126,14 @@ class ApiHandle:
         permission: str | None = None,
         public: bool = False,
     ) -> None:
-        """Montiert NICHT sofort -- registriert nur (docs/02 §1: setup() darf kein
-        I/O machen). Die eigentliche Montage unter /api/v1/ext/<id>/... macht der
-        Host, NACHDEM setup() erfolgreich durchgelaufen ist (services/extensions.py).
+        """Registriert den Router; montiert wird erst nach setup() (docs/02 §1: setup() macht kein I/O).
 
-        Zugriff (gilt fuer ALLE Routen dieses Routers, kein Pro-Route-Feingranulat):
-        - `permission` gesetzt: Anmeldung UND diese Berechtigung.
-        - weder `permission` noch `public`: gueltige Anmeldung, keine bestimmte
-          Berechtigung (401 ohne Token). Anmeldung ist keine Berechtigung: Routen, die
-          Daten zeigen oder etwas aendern, setzen `permission=` oder pruefen selbst.
-        - `public=True`: keinerlei Pruefung, ohne Anmeldung erreichbar. Nur fuer
-          Routen, die bewusst fuer jeden da sind. Braucht die Manifest-Berechtigung
-          `api.public` (sonst `PermissionDenied`); der Host schreibt die oeffentlichen
-          Praefixe beim Einschalten ins Protokoll. Zusammen mit `permission` ein Fehler.
-
-        Grenzen der Anmeldepruefung: Der Host prueft die Router nach `setup()` und nach
-        `on_start()` (`check_routes`) und lehnt dann Routen ab, an denen die Pruefung
-        nicht greift (WebSocket, `add_route()`, `mount()`). Was eine Erweiterung erst
-        spaeter zur Laufzeit an einen schon montierten Router haengt, etwa aus einem
-        Hintergrundtask, sieht der Host nicht mehr: solche Routen muessen sich selbst
-        absichern."""
+        Der Zugriff gilt für den ganzen Router: `permission` verlangt Anmeldung und Recht, `public=True` nichts."""
+        # Ohne `permission` und `public` genügt eine gültige Anmeldung; sie ist keine Berechtigung, Routen mit Daten
+        # setzen `permission=`. `public=True` braucht die Manifest-Berechtigung `api.public` und schließt `permission`
+        # aus. Grenze: Der Host prüft nach `setup()` und `on_start()` (`check_routes`) und lehnt WebSocket,
+        # `add_route()` und `mount()` ab. Routen, die später (etwa aus einem Hintergrundtask) an einen montierten Router
+        # kommen, sieht er nicht mehr, sie müssen sich selbst absichern.
         if public and permission is not None:
             from nodvard_sdk.errors import InvalidRegistration
 
@@ -221,12 +177,10 @@ class ApiHandle:
 
 
 def _unguarded_routes(router: Any) -> list[str]:
-    """Routen eines Routers, an denen eine Router-Abhaengigkeit wie `get_current_user`
-    nicht greift: Starlette-Routen (`add_route`), `mount()` (z. B. StaticFiles) und
-    WebSocket-Routen (die HTTP-Pruefung braucht einen Request und bricht dort ab).
-    FastAPI uebernimmt Abhaengigkeiten nur fuer `APIRoute`. Eingebundene Unter-Router
-    werden mit durchsucht (je nach FastAPI-Version als Platzhalter mit
-    `original_router` oder schon aufgeloest). Unbekannte Arten zaehlen als ungeschuetzt."""
+    """Routen eines Routers, an denen eine Router-Abhängigkeit wie `get_current_user` nicht greift."""
+    # FastAPI übernimmt Abhängigkeiten nur für `APIRoute`: Starlette-Routen (`add_route`), `mount()` und WebSockets
+    # fallen heraus, unbekannte Arten zählen als ungeschützt. Unter-Router werden mitgesucht (je nach FastAPI-Version
+    # als Platzhalter mit `original_router` oder schon aufgelöst).
     from fastapi.routing import APIRoute
 
     found: list[str] = []
@@ -259,11 +213,7 @@ class UiHandle:
         self._runtime.ui.register_host_requirement(self._ext_id, spec)
 
     def register_nav(self, *, section: str, order: int = 100) -> None:
-        """Reine Bestandsaufnahme -- die eigentliche Navigation ergibt sich aus den
-        `nav_section`/`nav_order`-Feldern der registrierten PageSpecs (GET /pages).
-        Diese Methode existiert fuer Extensions, die NUR eine Nav-Sektion anlegen
-        wollen, ohne selbst eine Seite zu registrieren (z. B. um eine leere Sektion
-        vorzubereiten, die eine andere Extension spaeter befuellt)."""
+        """Legt nur eine Nav-Sektion an; sonst ergibt sich die Navigation aus `nav_section`/`nav_order` der Seiten."""
         return None
 
 
@@ -288,10 +238,9 @@ class CapabilitiesHandle:
             self._runtime.capabilities.provide(self._ext_id, proto, implementation)
 
     async def query(self, protocol: type) -> list[Any]:
-        """Nur Capabilities von Extensions, die in `requires` deklariert sind
-        (docs/02 §2: 'andere Extensions nur ueber ctx.events und deklarierte
-        requires'). Eine alte Kennung in `requires` gilt fuer die umbenannte Erweiterung
-        (`legacy_ids`) -- aufgeloest erst hier, weil die andere Erweiterung spaeter laden kann."""
+        """Nur Capabilities von Extensions, die in `requires` deklariert sind (docs/02 §2).
+
+        Alte Kennungen in `requires` gelten für die umbenannte Erweiterung; aufgelöst wird erst hier."""
         allowed = self._allowed | {self._runtime.canonical(ext_id) for ext_id in self._allowed}
         return self._runtime.capabilities.query(protocol, allowed_ext_ids=allowed)
 
@@ -302,15 +251,7 @@ class HostsHandle:
         self._ext_id = ext_id
 
     async def list(self, *, tag: str | None = None, group: str | None = None) -> list[SdkHost]:
-        """Live gefunden (WP-10-Vorarbeit, scripts-Extension): `group` war seit WP-3
-        im Protokoll deklariert, wurde in der eigenen, hier dupliziert gehaltenen
-        Query aber nie ausgewertet -- ein Aufruf mit `group=...` lieferte still ALLE
-        Hosts statt der gefilterten Teilmenge, kein Fehler, nur ein falsches Ergebnis.
-        `HostGroup` (models/infra.py) tragt bereits im Docstring "Zielgruppen fuer
-        Skripte" -- genau das, was diese Extension jetzt braucht. Delegiert deshalb an
-        `services.hosts.list_hosts()`, das den Join auf `host_group_members` schon
-        korrekt implementiert (siehe test_services_hosts.py), statt die Query ein
-        zweites Mal von Hand zu pflegen."""
+        """Die Server, optional nach `tag` oder `group` gefiltert (delegiert an `services.hosts.list_hosts`)."""
         from ..services import hosts as hosts_service
 
         self._perm.require("hosts.read")
@@ -356,42 +297,25 @@ class HostsHandle:
                     )
                     session.add(host)
                     await session.flush()
-                    # docs/00-DECISIONS.md D-12: lazy="selectin" auf einem frisch
-                    # angelegten Objekt braucht ein explizites Refresh, sonst
-                    # MissingGreenlet beim naechsten Zugriff auf `.tags`. "credentials"
-                    # dazugekommen mit dem has_credential-Nachtrag (_host_to_sdk()
-                    # liest jetzt auch das) -- derselbe Grund, dieselbe Regel.
+                    # `lazy="selectin"` braucht bei einem frisch angelegten Objekt ein explizites Refresh, sonst gibt es
+                    # MissingGreenlet beim Zugriff auf `.tags` und `.credentials` (`_host_to_sdk` liest beide).
                     await refresh_relationships(session, host, "tags", "credentials")
                     for tag in dh.tags:
                         host.tags.append(HostTag(tag=tag, managed_by_ext_id=self._ext_id))
                     await session.flush()
                 else:
                     host.display_name = dh.display_name or host.display_name
-                    # Live gefunden (WP-12-Nachtrag, echte Windows-VM gegen einen
-                    # echten Proxmox-Knoten): Proxmox' eigene API kennt die tatsaechliche
-                    # Gast-IP einer VM/eines LXC nicht (kein qemu-guest-agent-Abruf) --
-                    # `discover_hosts()` liefert dafuer ehrlich nur `connector.host` (die
-                    # Proxmox-API-Adresse SELBST) als Platzhalter. Ein unbedingtes
-                    # `host.address = dh.address` liess jeden 5-Minuten-Resync eine
-                    # manuell auf die echte Gast-IP korrigierte Adresse wieder mit diesem
-                    # Platzhalter ueberschreiben -- beobachtet an einer Windows-VM
-                    # (Gast-IP z. B. 192.168.2.46, Proxmox-Platzhalter 192.168.2.41), was
-                    # gameservers Join-Code-Abruf per SSH strukturell unmoeglich machte
-                    # (SSH landete auf dem Proxmox-Host, nicht auf dem Windows-Gast). Fuer
-                    # `kind="node"` bleibt das alte Verhalten: die Node-eigene Adresse IST
-                    # die Proxmox-API-Adresse und darf sich legitim aendern.
-                    #
-                    # Nachtrag (beobachtet: die Terminal-Liste zeigte zwei VMs mit
-                    # der Knoten-IP): meldet der Anbieter eine vom GAST selbst stammende
-                    # Adresse (`address_verified`, z. B. per Gast-Agent), ist das die
-                    # Wahrheit und wird uebernommen -- ein Platzhalter weiterhin nie.
+                    # Proxmox kennt die Gast-IP einer VM oder eines LXC nicht; `discover_hosts()` liefert als
+                    # Platzhalter die Adresse der Proxmox-API selbst. Ein unbedingtes Überschreiben setzte bei jedem
+                    # Abgleich eine von Hand korrigierte Gast-IP auf diesen Platzhalter zurück. Bei `kind="node"` ist
+                    # die Adresse die der API und darf sich ändern; eine vom Gast selbst gemeldete Adresse
+                    # (`address_verified`) gilt immer.
                     if host.kind not in ("vm", "lxc") or dh.address_verified:
                         if host.address != dh.address:
-                            # Wie bei einer Aenderung von Hand: Passwoerter gehoeren zum alten Server,
-                            # eine gepoolte Verbindung ginge sonst weiter an die alte Adresse. Fuer
-                            # Gaeste (die Adresse kommt vom Gast selbst und wechselt per DHCP) bleibt
-                            # ein Passwort, wenn der Server-Schluessel schon gemerkt ist: ein anderer
-                            # Server an der neuen Adresse kaeme nie bis zur Anmeldung.
+                            # Wie bei einer Änderung von Hand: Passwörter gehören zum alten Server, eine gepoolte
+                            # Verbindung ginge sonst weiter an die alte Adresse. Bei Gästen (Adresse vom Gast selbst,
+                            # wechselt per DHCP) bleibt ein Passwort, wenn der Server-Schlüssel schon gemerkt ist: Ein
+                            # anderer Server an der neuen Adresse käme nie bis zur Anmeldung.
                             from ..services import hosts as hosts_service
 
                             old_address = host.address
@@ -412,24 +336,13 @@ class HostsHandle:
                     # Den Beleg der letzten SSH-Anmeldung (vom Kern, nicht vom Anbieter) behalten.
                     kept = {k: v for k, v in (host.host_metadata or {}).items() if k == "login_ok"}
                     host.host_metadata = {**dh.metadata, **kept}
-                    # Live gefunden (Server-Seiten): eine Windows-VM stand als
-                    # "linux" in Nodvard Deck -- os_family wurde nur beim ANLEGEN gesetzt, und
-                    # nur mit dem Standardwert. Jetzt: uebernehmen, wenn der Anbieter es
-                    # WIRKLICH meldet (explizit gesetzt); sonst bliebe eine manuelle
-                    # Korrektur nicht stehen.
+                    # Nur übernehmen, wenn der Anbieter es ausdrücklich meldet,
+                    # sonst bliebe eine manuelle Korrektur nicht stehen.
                     if "os_family" in dh.model_fields_set:
                         host.os_family = dh.os_family
-                    # `DiscoveredHost.tags` wurde hier bisher stillschweigend verworfen
-                    # (live gefunden beim Bau der proxmox-Extension, WP-8) -- weder beim
-                    # Anlegen noch beim erneuten Abgleich landete je ein Tag in der DB.
-                    # Set-Abgleich statt Ersetzen, damit die cascade="all, delete-orphan"-
-                    # Beziehung (models/infra.py) verschwundene Tags korrekt entfernt.
-                    #
-                    # Live gefunden (WP-12): NUR Tags entfernen, die DIESE Extension
-                    # selbst zuvor gesetzt hat (`managed_by_ext_id`, siehe HostTag-
-                    # Docstring) -- sonst loescht ein Discovery-Zyklus einen manuell
-                    # oder von einer anderen Extension gesetzten Tag (z. B. gameserver
-                    # taggt einen proxmox-entdeckten Host mit "gameserver").
+                    # Mengenabgleich statt Ersetzen, damit die Beziehung (`cascade="all, delete-orphan"`) verschwundene
+                    # Tags entfernt. Nur Tags der eigenen Extension (`managed_by_ext_id`) fliegen raus: Manuelle oder
+                    # fremde Tags (etwa "gameserver" auf einem entdeckten Host) bleiben.
                     current = {t.tag: t for t in host.tags}
                     target = set(dh.tags)
                     for tag_str, tag_row in list(current.items()):
@@ -444,11 +357,9 @@ class HostsHandle:
 
 
 class ExecHandle:
-    """Der gemeinsame SSH-Layer aus `core/ssh.py`, docs/00 D-05 zufolge geteilt von
-    Terminal, Skript-Ausfuehrung und KI-Remediation -- `ctx.exec` ist die Stelle,
-    an der Extensions ihn erreichen. Loest die Zugangsdaten je Aufruf frisch ueber
-    den Vault auf (`services.hosts.resolve_connection_target`); der Klartext lebt
-    nur kurzlebig im Aufrufrahmen (docs/03 §3, Invariante 2)."""
+    """Der gemeinsame SSH-Layer (`core/ssh.py`) für Extensions.
+
+    Zugangsdaten kommen je Aufruf frisch aus dem Tresor, der Klartext lebt nur im Aufrufrahmen (docs/03 §3)."""
 
     def __init__(self, perm: _PermissionChecker, settings: Any) -> None:
         self._perm = perm
@@ -464,7 +375,7 @@ class ExecHandle:
                 raise HostUnreachable(f"Host '{host.id}' existiert nicht (mehr).")
             credential = await hosts_service.default_credential(session, host.id)
             if credential is None:
-                # Typisch fuer einen von Hand angelegten Server, der schon getaggt, aber noch ohne SSH-Zugang ist.
+                # Typisch für einen von Hand angelegten Server, der schon getaggt, aber noch ohne SSH-Zugang ist.
                 raise HostUnreachable(
                     f"Für „{host.display_name or host.name}“ ist noch kein SSH-Zugang eingerichtet "
                     "(Einstellungen → Server & Zugänge)."
@@ -504,23 +415,12 @@ class ExecHandle:
         self, host: SdkHost, command: str, *, timeout_s: int = 60, user: str | None = None,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Nur fuer *lesende* Kommandos ohne Nebenwirkung (docs/02 §2) -- Aendernde
-        Aktionen gehen ueber `ctx.actions.propose()`, niemals hierueber.
+        """Für lesende Kommandos ohne Nebenwirkung (docs/02 §2); ändernde Aktionen gehen über `ctx.actions.propose()`.
 
-        **Verteidigung in der Tiefe (WP-5):** Extensions sind vertrauenswuerdiger
-        Code, keine Sandbox (docs/01 §7) -- `ctx.exec.run()` ist deshalb technisch
-        NICHT auf lesende Kommandos beschraenkt, nur per Konvention. Damit ein Fehler
-        in einer Extension (oder ein Missverstaendnis der obigen Konvention) nicht
-        unbemerkt an der Sperrliste vorbei ein `rm -rf /` verschickt, laeuft JEDER
-        `ctx.exec.run()`-Befehl trotzdem durch dieselbe `core.deny_patterns`-Pruefung
-        wie ein `ctx.actions.propose()`-Vorschlag, BEVOR er die Verbindung erreicht --
-        ohne Action-Zeile (das ist kein Gate-Vorschlag, den jemand bestaetigen
-        koennte), aber mit Audit-Zeile, damit ein blockierter Versuch sichtbar
-        bleibt.
-
-        `log_command`: Enthaelt `command` Geheimnisse (z. B. ein Skript mit Tresor-Wert),
-        steht in der Audit-Zeile eines Sperrlisten-Treffers stattdessen diese maskierte
-        Fassung."""
+        `log_command`: maskierte Fassung des Kommandos für die Audit-Zeile, falls `command` Geheimnisse enthält."""
+        # Extensions sind vertrauenswürdiger Code, keine Sandbox (docs/01 §7), und `run()` ist nur per Konvention auf
+        # lesende Kommandos beschränkt. Deshalb läuft jedes Kommando vor der Verbindung durch die Sperrliste: ohne
+        # Action-Zeile (niemand könnte bestätigen), aber mit Audit-Zeile.
         self._perm.require("hosts.execute")
         await self._reject_denied(command, log_command=log_command)
 
@@ -535,8 +435,7 @@ class ExecHandle:
         )
 
     async def _reject_denied(self, command: str, *, log_command: str | None = None) -> None:
-        """Sperrlisten-Pruefung fuer JEDES Kommando, das eine Extension selbst
-        verschickt (`run()` UND `stream()`) -- siehe `run()`-Docstring."""
+        """Sperrlisten-Prüfung für jedes Kommando, das eine Extension selbst verschickt (`run()` und `stream()`)."""
         from ..core import deny_patterns
 
         matched = deny_patterns.match_deny_patterns(command)
@@ -559,13 +458,9 @@ class ExecHandle:
         raise ActionBlocked(f"deny_pattern:{matched.id}", matched.description)
 
     def stream(self, host: SdkHost, command: str) -> Any:
-        """Live-Logs (Container-Verwaltung): wie `run()` nur fuer LESENDE
-        Kommandos, aber die Ausgabe kommt laufend als Byte-Stuecke statt erst am Ende
-        -- `docker logs -f` endet nie von selbst. Liefert einen Kontextmanager, der
-        einen `AsyncIterator[bytes]` liefert; beim Verlassen wird der entfernte Prozess
-        beendet (PTY-Hangup, siehe `core.ssh.open_command_stream()`). Dieselbe
-        Berechtigung und dieselbe Sperrliste wie `run()`, geprueft beim Betreten --
-        bevor irgendeine Verbindung entsteht."""
+        """Wie `run()` (gleiche Berechtigung und Sperrliste, geprüft beim Betreten), aber mit laufender Ausgabe.
+
+        Gibt einen Kontextmanager mit `AsyncIterator[bytes]` zurück; beim Verlassen endet der Prozess (PTY-Hangup)."""
         self._perm.require("hosts.execute")
 
         @asynccontextmanager
@@ -618,9 +513,9 @@ class ExecHandle:
 
 
 async def _is_login_secret(session: Any, secret: Secret) -> bool:
-    """Gehoert das Geheimnis zur Zwei-Faktor-Anmeldung eines Kontos? Wie `api/v1/secrets.py::_refuse_login_secret`
-    ueber `User.totp_secret_id`, dazu das Label, unter dem der Kern solche Geheimnisse anlegt (`totp:<Nutzer>:...`):
-    auch ein noch nicht bestaetigter oder verwaister Eintrag bleibt so unberuehrt."""
+    """Gehört das Geheimnis zur Zwei-Faktor-Anmeldung eines Kontos (`User.totp_secret_id`, Label `totp:<Nutzer>:...`)?
+
+    Auch unbestätigte oder verwaiste Einträge bleiben unberührt (wie `_refuse_login_secret` in `api/v1/secrets.py`)."""
     if secret.label.startswith("totp:"):
         return True
     owner_of = await session.execute(select(User.id).where(User.totp_secret_id == secret.id).limit(1))
@@ -628,21 +523,19 @@ async def _is_login_secret(session: Any, secret: Secret) -> bool:
 
 
 class SecretsHandle:
-    """`own_ids`: die Kennungen, unter denen Geheimnisse als eigene gelten (`Secret.owner_ext_id`) -- die eigene,
-    die Speicher-Kennung und fruehere Kennungen (`legacy_ids`): nach einer Umbenennung tragen alte Geheimnisse noch
-    die alte. Lesen geht nach dem Recht `secrets.read:<label>`; ersetzen und loeschen nur eigene (`SecretNotOwned`),
-    und ein Geheimnis der Zwei-Faktor-Anmeldung eines Kontos weder lesen noch aendern noch loeschen -- wie ueber die
-    Tresor-Endpunkte (`_refuse_login_secret`). Sonst koennte eine Erweiterung mit einem weiten Muster
-    (`secrets.read:*`) den Zugang eines anderen Moduls oder den Authenticator eines Kontos austauschen."""
+    """Lesen nach `secrets.read:<label>`; ersetzen und löschen nur eigene Geheimnisse (`SecretNotOwned`).
+
+    Anmelde-Geheimnisse sind tabu, sonst könnte `secrets.read:*` den Authenticator eines Kontos austauschen."""
 
     def __init__(self, perm: _PermissionChecker, ext_id: str, settings: Any, *, own_ids: Sequence[str] = ()) -> None:
         self._perm = perm
         self._ext_id = ext_id
         self._settings = settings
+        # Eigene tragen als `owner_ext_id` die Kennung, die Speicher-Kennung oder eine alte (`legacy_ids`).
         self._own_ids = {ext_id, *own_ids}
 
     async def _secret(self, session: Any, label: str, *, change: bool) -> Secret | None:
-        """Die Zeile zum Label, mit den Pruefungen oben; `change`: ersetzen oder loeschen (nur eigene)."""
+        """Die Zeile zum Label; Anmelde-Geheimnisse werden verweigert, bei `change` (ersetzen, löschen) auch fremde."""
         from nodvard_sdk.errors import SecretNotOwned
 
         secret = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
@@ -686,8 +579,9 @@ class SecretsHandle:
             return await vault.get_handle(session, label) is not None
 
     async def replace(self, *, label: str, value: str) -> SecretHandleRef:
-        """Neuer Wert in derselben Zeile und derselben Transaktion (`vault.replace_secret_value`): scheitert etwas,
-        bleibt der alte Wert. Im Protokoll steht wie beim Ersetzen ueber die Einstellungsseite nur das Label."""
+        """Ersetzt den Wert in derselben Transaktion (`vault.replace_secret_value`); scheitert etwas, bleibt der alte.
+
+        Im Protokoll steht wie über die Einstellungsseite nur das Label."""
         self._perm.require(f"secrets.read:{label}")
         async with session_scope() as session:
             secret = await self._secret(session, label, change=True)
@@ -713,8 +607,7 @@ class SecretsHandle:
                 return False
             await vault.delete_secret(session, secret.id)
             await session.flush()
-            # Wie beim Entfernen ueber die Einstellungsseite: im Protokoll steht, welches
-            # Geheimnis weg ist (nur das Label, nie der Wert).
+            # Wie über die Einstellungsseite: Im Protokoll steht nur das Label, nie der Wert.
             await audit_service.log(
                 session, actor_type="extension", actor_id=self._ext_id, action="extension.secret_removed",
                 outcome="success", target_type="extension", target_id=self._ext_id, detail={"label": label},
@@ -741,10 +634,7 @@ class SettingsHandle:
             return dict(record.settings) if record else {}
 
     async def set(self, values: dict[str, Any]) -> None:
-        """**Ehrlich abgegrenzt:** keine JSON-Schema-Validierung gegen `declare()` in
-        dieser Runde -- das braucht eine `jsonschema`-Abhaengigkeit, die noch niemand
-        sonst im Projekt zieht. Persistiert unvalidiert; die Validierung nachzuruesten
-        ist risikofrei moeglich (reiner Zusatz-Check vor dem Schreiben)."""
+        """Speichert die Werte ohne Schema-Validierung (`declare()`) und ruft danach `on_settings_changed`."""
         from ..services.extensions import get_record
 
         async with session_scope() as session:
@@ -753,11 +643,8 @@ class SettingsHandle:
                 record.settings = values
                 await session.flush()
 
-        # Gefunden beim Bau der Server-Seiten: das SDK versprach den Hook
-        # `on_settings_changed`, der Kern rief ihn aber nie auf. Erst NACH dem Commit,
-        # damit der Hook per get() schon die neuen Werte liest. Ein set() aus dem Hook
-        # heraus loest ihn nicht erneut aus (keine Endlosschleife); ein Fehler im Hook
-        # darf das bereits gespeicherte set() nicht nachtraeglich scheitern lassen.
+        # Erst nach dem Commit, damit der Hook per get() die neuen Werte liest. Ein set() aus dem Hook löst ihn nicht
+        # erneut aus, und ein Fehler im Hook lässt das gespeicherte set() nicht nachträglich scheitern.
         hook = getattr(self._loaded.instance, "on_settings_changed", None)
         if hook is None or self._notifying:
             return
@@ -779,22 +666,11 @@ class SettingsHandle:
 
 
 class SchedulerHandle:
-    """Seit WP-6 echt: `register_job()` legt/aktualisiert die `jobs`-Zeile (Upsert
-    ueber `(ext_id, spec.id)`, docs/00 D-08 -- ein erneutes Enable dupliziert den
-    Job nicht mehr) UND meldet den Handler beim Kern-Scheduler an, der ihn bei
-    Faelligkeit wirklich ausfuehrt.
+    """`register_job()` legt die `jobs`-Zeile an (Upsert über `ext_id` und `spec.id`) und meldet den Handler an."""
 
-    **Dokumentierte Abweichung vom SDK-Protokoll:** `SchedulerHandle.register_job`
-    ist dort als SYNCHRONE Methode deklariert, legt aber eine DB-Zeile an -- ein
-    echtes I/O. Sync mit `asyncio.ensure_future()` im Hintergrund "loesen" waere die
-    naheliegende Abkuerzung, hat aber zwei echte Maengel: (1) eine Exception
-    verschwindet spurlos, (2) kein deterministischer Zeitpunkt, zu dem der Aufrufer
-    sich auf die Zeile verlassen kann -- exakt das Muster, das WP-1 beim
-    MissingGreenlet-Fund schon einmal teuer gemacht hat. `@runtime_checkable` prueft
-    nur Attributnamen, keine Signaturen (siehe `ext/runtime.py` `SupervisedTask` fuer
-    dieselbe Abwaegung bei `ctx.spawn`) -- deshalb ist `async def` hier
-    protokollkonform. hello-world ruft entsprechend `await ctx.scheduler.
-    register_job(...)` auf."""
+    # Anders als im SDK-Protokoll ist `register_job` hier `async`: Die DB-Zeile ist echtes I/O, und ein
+    # `ensure_future` im Hintergrund verlöre Fehler und jeden festen Zeitpunkt, ab dem sich der Aufrufer auf die
+    # Zeile verlassen kann. Das Protokoll ist trotzdem erfüllt, `@runtime_checkable` prüft keine Signaturen.
 
     def __init__(
         self, perm: _PermissionChecker, ext_id: str, runtime: ExtensionRuntime, *, store_id: str | None = None
@@ -802,8 +678,8 @@ class SchedulerHandle:
         self._perm = perm
         self._ext_id = ext_id
         self._runtime = runtime
-        # Jobs haengen an der Speicher-Kennung (`jobs.ext_id`, Handler-Bestand): nach einer Umbenennung
-        # laufen dieselben Jobzeilen samt Verlauf weiter.
+        # Jobs hängen an der Speicher-Kennung (`jobs.ext_id`, Handler-Bestand): Nach einer Umbenennung laufen
+        # dieselben Jobzeilen samt Verlauf weiter.
         self._store_id = store_id or ext_id
 
     async def register_job(self, spec: JobSpec) -> None:
@@ -825,16 +701,13 @@ class SchedulerHandle:
             await get_scheduler_service().schedule(job, spec.handler)
 
     def validate_schedule(self, schedule: str) -> None:
-        """Siehe SDK: dieselbe Pruefung wie beim Anmelden (`core.cron.cron_trigger`), ohne Nebenwirkung."""
+        """Dieselbe Prüfung wie beim Anmelden (`core.cron.cron_trigger`), ohne Nebenwirkung."""
         from ..core.cron import cron_trigger
 
         cron_trigger(schedule)
 
     async def trigger(self, job_id: str, **params: Any) -> str:
-        """`job_id` ist `spec.id` (der von der Extension selbst gewaehlte Schluessel,
-        siehe `Job.ext_job_key`-Docstring), NICHT die server-generierte `Job.id` --
-        eine Extension bekommt letztere nie zu sehen (`register_job()` liefert laut
-        SDK-Vertrag nichts zurueck)."""
+        """`job_id` ist `spec.id`, der Schlüssel der Extension, nicht die generierte `Job.id` (die sie nie sieht)."""
         from ..services import jobs as jobs_service
         from ..core.scheduler import get_scheduler_service
 
@@ -866,8 +739,7 @@ class EventsHandle:
         self._subscriptions.append((pattern, handler))
 
     def unsubscribe_all(self) -> None:
-        """Beim Entladen der Extension: sonst feuern die Handler der alten Instanz nach
-        dem naechsten setup() zusammen mit denen der neuen (doppelte Reaktionen)."""
+        """Beim Entladen, sonst feuern die Handler der alten Instanz nach dem nächsten setup() doppelt."""
         bus = get_event_bus()
         for pattern, handler in self._subscriptions:
             bus.unsubscribe(pattern, handler)
@@ -894,9 +766,8 @@ class NotifyHandle:
                 payload=notification.payload,
                 raise_on_failure=raise_on_failure,
             )
-            # Was ist wirklich angekommen? `deliver()` hat die Zustellprotokolle gerade
-            # geschrieben; ein ausgefallener oder nicht eingerichteter Kanal steht dort als
-            # "failed" und darf nicht als "gesendet" durchgehen.
+            # `deliver()` hat die Zustellprotokolle gerade geschrieben; ein ausgefallener oder nicht eingerichteter
+            # Kanal steht dort als "failed" und darf nicht als "gesendet" durchgehen.
             statuses = (
                 await session.execute(
                     select(NotificationDelivery.status).where(NotificationDelivery.notification_id == row.id)
@@ -909,7 +780,7 @@ class NotifyHandle:
         return NotifyResult(notification_id=row.id, suppressed=suppressed, delivered=delivered, skipped=skipped)
 
     async def would_suppress(self, *, host_id: str | None = None, host_ids: Sequence[str] | None = None) -> bool:
-        """Nur lesen: dieselbe Pruefung wie in `send()`, ohne Verlaufseintrag."""
+        """Nur lesen: dieselbe Prüfung wie in `send()`, ohne Verlaufseintrag."""
         from ..services import notifications as notifications_service
 
         self._perm.require("notify.send")
@@ -917,23 +788,18 @@ class NotifyHandle:
         if host_id is not None:
             payload["host_id"] = host_id
         if host_ids is not None:
-            # Unveraendert weitergeben: ob die Liste taugt, entscheidet dieselbe Pruefung
-            # wie in send() (ein einzelner String etwa ist keine Liste, also nie still).
+            # Unverändert weitergeben: Ob die Liste taugt, entscheidet dieselbe Prüfung wie in send().
             payload["host_ids"] = host_ids
         async with session_scope() as session:
             return await notifications_service.would_suppress(session, payload)
 
 
+# Namensräume im Protokoll, die nur der Kern beschreibt, weil er solche Einträge wieder liest: `mfa.failed` und
+# `auth.totp_check_failed` holen beim Start die Sperre nach falschen Zwei-Faktor-Codes zurück (ein gefälschter Eintrag
+# sperrte den Owner bis zu 24 Stunden aus), `login.failed`/`login.locked` bestimmen, welche Namen das Protokoll
+# verbirgt, `system.update.*` hält fest, ob ein Update-Ergebnis schon protokolliert ist, und `user.*` ist die Spur der
+# Kontenverwaltung. `AuditHandle.log()` lehnt diese Namen ab.
 CORE_AUDIT_PREFIXES = ("mfa.", "auth.", "login.", "system.", "user.")
-"""Namensraeume im Protokoll, die nur der Kern beschreibt. Der Kern liest solche Eintraege wieder und
-entscheidet danach: `mfa.failed` und `auth.totp_check_failed` (`services.auth.CODE_FAILURE_ACTIONS`) holen beim
-Start die Sperre nach falschen Zwei-Faktor-Codes zurueck, ein gefaelschter Eintrag mit dem Konto als Ziel
-sperrte den Owner bis zu 24 Stunden aus; `login.failed`/`login.locked` bestimmen, welche Namen das Protokoll
-verbirgt (`services.audit.hide_typed_names`); `system.update.*` des Update-Helfers entscheidet, ob dessen Ergebnis
-schon festgehalten ist (`services.update_helper._already_logged`) und belegt, wer ein Update angestossen hat;
-`user.*` (`api/v1/users.py`: Konto angelegt, geaendert, geloescht, Zwei-Faktor zurueckgesetzt) ist die Spur der
-Kontenverwaltung -- ein gefaelschter Eintrag (mit `actor=` sogar im Namen eines Benutzers) verfaelschte, wer wann
-ein Konto oder Rechte geaendert hat. `AuditHandle.log()` lehnt diese Namen ab; Erweiterungen schreiben unter eigenem Namen (`<kennung>.<ereignis>`)."""
 
 
 class AuditHandle:
@@ -953,14 +819,11 @@ class AuditHandle:
         correlation_id: str | None = None,
         actor: Any | None = None,  # noqa: ANN401 - nodvard_sdk.Actor
     ) -> None:
-        """`actor` (D-15): der Mensch hinter dem Klick, aus `ctx.api.current_actor`. Dann
-        steht ER im Audit-Log, die Extension nur als `detail.via` -- sonst wie bisher
-        die Extension selbst.
+        """Schreibt einen Eintrag; mit `actor` (`current_actor`) steht der Mensch darin, die Extension in `detail.via`.
 
-        Aktionen aus `CORE_AUDIT_PREFIXES` (`mfa.`, `auth.`, `login.`, `system.`, `user.`) schreibt nur der Kern:
-        `ValueError`, nichts wird geschrieben. Gross-/Kleinschreibung und umgebende Leerzeichen zaehlen
-        nicht (die Abfrage des Kerns unterscheidet Schreibweisen teils nicht)."""
+        Namen aus `CORE_AUDIT_PREFIXES` sind dem Kern vorbehalten (`ValueError`)."""
         self._perm.require("audit.write")
+        # Groß-/Kleinschreibung und Leerzeichen zählen nicht: Die Abfrage des Kerns unterscheidet sie teils nicht.
         if str(action).strip().casefold().startswith(CORE_AUDIT_PREFIXES):
             raise ValueError(
                 f"Die Aktion '{str(action)[:60]}' ist dem Kern vorbehalten (Namen mit "
@@ -990,13 +853,14 @@ class AuditHandle:
 class WsHandle:
     def __init__(self, ext_id: str, legacy_ids: Callable[[], Sequence[str]] | None = None) -> None:
         self._ext_id = ext_id
-        # Alte Kennungen (`legacy_ids`), bei jedem Senden nach dem letzten Scan gefragt (`ExtensionRuntime.legacy_ids_of`).
+        # Alte Kennungen (`legacy_ids`), bei jedem Senden nach dem letzten Scan gefragt
+        # (`ExtensionRuntime.legacy_ids_of`).
         self._legacy_ids = legacy_ids
 
     async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
-        """Sendet auf `ext.<Kennung>.<Kanal>` und, nach einer Umbenennung, genauso auf den Kanaelen der alten
-        Kennungen: eine noch offene Seite mit altem Katalog (`ws_channel` eines Widgets) hat ihren Kanal unter der
-        alten Kennung abonniert und bekommt so weiter ihre Nachrichten."""
+        """Sendet auf `ext.<Kennung>.<Kanal>` und nach einer Umbenennung auch auf den Kanälen der alten Kennungen.
+
+        Eine noch offene Seite mit altem Katalog hat ihren Kanal unter der alten Kennung abonniert."""
         from ..core.ws_hub import get_ws_hub
 
         hub = get_ws_hub()
@@ -1007,8 +871,7 @@ class WsHandle:
 class ConnectorsHandle:
     def __init__(self, ext_id: str, *, own_ids: Sequence[str] = ()) -> None:
         self._ext_id = ext_id
-        # Instanzen liegen unter der Kennung, mit der sie angelegt wurden: nach einer Umbenennung
-        # (`legacy_ids`) also auch unter den alten. Ohne alte Kennungen genau `{ext_id}`.
+        # Instanzen liegen unter der Kennung, mit der sie angelegt wurden, nach einer Umbenennung auch unter den alten.
         self._own_ids = sorted({ext_id, *own_ids})
         self._types: dict[str, ConnectorType] = {}
 
@@ -1034,10 +897,7 @@ class ConnectorsHandle:
 
 
 class ActionsHandle:
-    """`propose()` geht seit WP-5 durch `core.gate.propose()` -- die Permission-
-    Pruefung hier (Schritte 1+2 im docs/01-§4-Diagramm) bleibt Sache dieses Handles,
-    weil nur es die GRANTED_PERMISSIONS der jeweiligen Extension kennt; das Gate selbst
-    kennt keine Extensions, nur Aktionen (Schritte 3-6)."""
+    """`propose()` prüft die Berechtigungen der Extension (Schritte 1+2 in docs/01 §4); das Gate kennt nur Aktionen."""
 
     def __init__(
         self, perm: _PermissionChecker, ext_id: str, runtime: ExtensionRuntime, settings: Any,
@@ -1047,16 +907,15 @@ class ActionsHandle:
         self._ext_id = ext_id
         self._runtime = runtime
         self._settings = settings
-        # Kennungen, unter denen DIESE Erweiterung Aktionen vorgeschlagen hat: die heutige und nach
-        # einer Umbenennung auch die alten (`legacy_ids`, Speicher-Kennung). Neue tragen die heutige.
+        # Kennungen, unter denen diese Erweiterung Aktionen vorgeschlagen hat: die heutige und nach einer Umbenennung
+        # die alten; neue Aktionen tragen die heutige.
         self._own_ids = sorted({ext_id, *own_ids})
 
     def register(self, spec: ActionSpec) -> None:
         self._runtime.actions.register(self._ext_id, spec)
 
     async def propose(self, request: ActionRequest, *, wait_s: float | None = None) -> GateDecision:
-        """`wait_s` begrenzt bei Vollautonomie das Warten auf das Ergebnis;
-        None = bis zum Ende, wie bisher."""
+        """`wait_s` begrenzt bei Vollautonomie das Warten auf das Ergebnis; `None` wartet bis zum Ende."""
         from ..core import gate as gate_service
 
         entry = self._runtime.actions.get(request.action_type)
@@ -1067,8 +926,7 @@ class ActionsHandle:
         else:
             self._perm.require("hosts.execute")
         if request.standing_approval is not None:
-            # Ohne Klick nur, wenn das Manifest es ausdruecklich anmeldet; die Freigabe
-            # selbst prueft danach das Gate.
+            # Ohne Klick nur, wenn das Manifest es ausdrücklich anmeldet; die Freigabe selbst prüft danach das Gate.
             self._perm.require(gate_service.STANDING_APPROVAL_PERMISSION)
 
         async with session_scope() as session:
@@ -1081,10 +939,9 @@ class ActionsHandle:
             )
 
     async def check_standing_approval(self, granted_by_user_id: str, *, risk: Risk) -> str | None:
-        """Gaelte eine Dauerfreigabe von `granted_by_user_id` heute fuer Aktionen der Stufe
-        `risk`? None = ja, sonst der Grund in einfachen Worten. Dieselbe Pruefung wie im Gate
-        (`core.gate.standing_approval_problem`), nur lesend -- fuer Anzeigen wie "Dauerfreigabe
-        gilt". Wie `propose()` mit Freigabe nur mit der Berechtigung `actions.standing_approval`."""
+        """Gälte eine Dauerfreigabe von `granted_by_user_id` heute für die Stufe `risk`? `None` = ja, sonst der Grund.
+
+        Lesend (`core.gate.standing_approval_problem`); braucht dieselbe Berechtigung wie `propose()` mit Freigabe."""
         from ..core import gate as gate_service
 
         self._perm.require(gate_service.STANDING_APPROVAL_PERMISSION)
@@ -1095,8 +952,7 @@ class ActionsHandle:
         return None if found is None else found[0]
 
     async def list(self, *, correlation_id: str | None = None, limit: int = 20) -> list[Action]:
-        """Die juengsten Aktionen DIESER Extension, optional nur zu einer
-        `correlation_id` (z. B. alle Laeufe eines Skripts) -- wie `result()` nie fremde."""
+        """Die jüngsten Aktionen dieser Extension, optional zu einer `correlation_id`; wie `result()` nie fremde."""
         from sqlalchemy import select
 
         stmt = select(Action).where(Action.ext_id.in_(self._own_ids))
@@ -1107,8 +963,7 @@ class ActionsHandle:
             return list((await session.execute(stmt)).scalars().all())
 
     async def waiting_count(self) -> int:
-        """Alle Aktionen mit Status `proposed`, gleich welcher Erweiterung -- nur die Zahl (wie `GET /overview`).
-        Braucht `hosts.read`, wie jeder andere lesende Blick ueber die eigene Erweiterung hinaus."""
+        """Zahl der Aktionen mit Status `proposed` aller Erweiterungen (wie `GET /overview`); braucht `hosts.read`."""
         from sqlalchemy import func
 
         self._perm.require("hosts.read")
@@ -1117,15 +972,10 @@ class ActionsHandle:
             return int((await session.execute(stmt)).scalar_one())
 
     async def proposer_labels(self, rows: list[Action]) -> dict[str, str]:
-        """`{action_id: Name des Vorschlagenden}` -- mit je einer Abfrage fuer
-        Nutzer und Erweiterungen. Aufgeloest werden nur Zeilen DIESER Extension, und zwar
-        anhand der Datenbank: von `rows` zaehlt nur die `id`, eine selbstgebaute Zeile mit
-        fremder Nutzer-ID bekommt den rohen Wert zurueck -- sonst liesse sich mit ihr jede
-        Nutzer-ID in einen Namen umsetzen.
-
-        Wer den Namen sieht, prueft der Kern hier NICHT (die Extension kennt den Aufrufer
-        nicht): die Route der Extension muss selbst abgesichert sein. Die Skripte-Seite
-        verlangt `hosts.execute`, also mindestens Bediener."""
+        """`{action_id: Name des Vorschlagenden}`, aufgelöst nur für Zeilen dieser Extension anhand der Datenbank."""
+        # Von `rows` zählt nur die `id`: Mit einer selbstgebauten Zeile ließe sich sonst jede Nutzer-ID in einen Namen
+        # umsetzen. Wer den Namen sieht, prüft der Kern hier nicht (er kennt den Aufrufer nicht): Die Route der
+        # Extension muss selbst abgesichert sein.
         from sqlalchemy import select
 
         from ..services.actor_labels import load_actor_labels, raw_actor
@@ -1141,10 +991,7 @@ class ActionsHandle:
         return out
 
     async def result(self, action_id: str) -> Action | None:
-        """Nur Aktionen, die DIESE Extension selbst vorgeschlagen hat -- ein fremdes
-        `action_id` zu erraten und dessen Payload/Ergebnis einzusehen waere ein
-        Informationsleck ueber `ctx.actions` hinaus (docs/02 §2 kennt keine
-        Cross-Extension-Sicht ausser ueber `requires`+Capabilities)."""
+        """Nur eigene Aktionen; ein erratenes fremdes `action_id` wäre ein Informationsleck."""
         async with session_scope() as session:
             row = await session.get(Action, action_id)
             if row is None or row.ext_id not in self._own_ids:
@@ -1153,9 +1000,9 @@ class ActionsHandle:
 
 
 class WebSocketRedirectRefused(ConnectionError):
-    """Der Server hat beim WebSocket-Handshake mit einer Weiterleitung (3xx) geantwortet.
-    `ctx.http.websocket()` folgt Weiterleitungen nie. Der Text ist ein fertiger deutscher Satz
-    (`readable`, wie bei `core.ssh.SshError`) und kommt unveraendert beim Aufrufer an."""
+    """Der Server hat beim WebSocket-Handshake mit einer Weiterleitung (3xx) geantwortet, der nie gefolgt wird.
+
+    Der Text ist ein fertiger deutscher Satz (`readable`) und kommt unverändert beim Aufrufer an."""
 
     readable = True
 
@@ -1170,12 +1017,11 @@ class WebSocketRedirectRefused(ConnectionError):
 
 @functools.lru_cache(maxsize=1)
 def _websocket_connect_class() -> type:
-    """`websockets.asyncio.client.connect` ohne Weiterleitungen. Die Bibliothek folgt 3xx-Antworten
-    bis zu zehnmal, prueft aber nur die Start-Adresse gegen `_require_target_allowed` -- ein Server
-    koennte die Verbindung so auf eine Adresse lenken, die die Erweiterung nicht erreichen duerfte.
-    `process_redirect()` ist die dafuer vorgesehene Stelle der Bibliothek: gibt sie eine Ausnahme
-    zurueck, wird diese statt eines zweiten Verbindungsaufbaus ausgeloest (die erste Verbindung ist
-    dann schon abgebrochen). Lazy, weil `websockets` auch sonst erst beim ersten Gebrauch geladen wird."""
+    """`websockets.asyncio.client.connect` ohne Weiterleitungen, lazy geladen wie `websockets` sonst auch."""
+    # Die Bibliothek folgt 3xx bis zu zehnmal, prüft aber nur die Start-Adresse gegen `_require_target_allowed`: Ein
+    # Server könnte die Verbindung so auf eine Adresse lenken, die die Erweiterung nicht erreichen dürfte.
+    # `process_redirect()` ist dafür die vorgesehene Stelle; eine zurückgegebene Ausnahme wird statt eines zweiten
+    # Verbindungsaufbaus ausgelöst (die erste Verbindung ist dann schon abgebrochen).
     from websockets.asyncio.client import connect
     from websockets.exceptions import InvalidStatus
 
@@ -1189,16 +1035,10 @@ def _websocket_connect_class() -> type:
 
 
 def _direct_transport(*, verify: bool | ssl.SSLContext = True) -> httpx.AsyncHTTPTransport:
-    """Transport ohne Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`).
-
-    httpx liest Proxys nur, wenn der Client den Transport selbst anlegt
-    (`allow_env_proxies = trust_env and transport is None`, httpx 0.28). `trust_env=False` am
-    Client waere der falsche Weg: es schaltet auch `SSL_CERT_FILE`/`SSL_CERT_DIR` ab, und ein
-    Betreiber mit eigener Zertifizierungsstelle verloere sie. Dieser Transport behaelt
-    `trust_env=True` (SSL-Einstellungen aus der Umgebung bleiben), hat aber keinen Proxy.
-    Alle anderen Vorgaben entsprechen dem, was `httpx.AsyncClient()` selbst angelegt haette
-    (`http1`, kein `http2`, Standard-`Limits`, keine Wiederholungen); Weiterleitungen werden
-    weiter nicht verfolgt (Client-Vorgabe `follow_redirects=False`)."""
+    """Transport ohne Proxy aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`)."""
+    # httpx liest Proxys nur, wenn der Client den Transport selbst anlegt. `trust_env=False` am Client wäre falsch: Es
+    # schaltet auch `SSL_CERT_FILE`/`SSL_CERT_DIR` ab, und ein Betreiber mit eigener Zertifizierungsstelle verlöre sie.
+    # Sonst gilt, was `httpx.AsyncClient()` selbst angelegt hätte; Weiterleitungen folgt der Client weiter nicht.
     return httpx.AsyncHTTPTransport(verify=verify)
 
 
@@ -1212,14 +1052,12 @@ def _pin_digest(value: str) -> bytes:
 
 
 def _pinned_sslobject_class(expected: bytes) -> type[ssl.SSLObject]:
-    """`ssl.SSLObject`, das nach dem Handshake den Fingerabdruck des Server-Zertifikats mit `expected` vergleicht.
-
-    Die TLS-Schichten von asyncio (`websockets`) und anyio (`httpx`/`httpcore`) bauen ihre Verbindung ueber
-    `SSLContext.wrap_bio()`, und das liefert eine Instanz von `SSLContext.sslobject_class` -- laut Python-Doku genau
-    fuer eigene Unterklassen gedacht. Beide rufen erst `do_handshake()` und schreiben erst danach Anwendungsdaten:
-    Passt das Zertifikat nicht, scheitert schon der Handshake (`CertificateMismatch`, ein `ssl.SSLError`), und kein
-    Byte der Anfrage (Kopf, Zugangsdaten, Koerper) hat die Maschine verlassen. `write()` verweigert zusaetzlich alles,
-    solange kein passendes Zertifikat gesehen wurde -- falls eine Schicht je ohne eigenen Handshake-Aufruf schriebe."""
+    """`ssl.SSLObject`, das nach dem Handshake den Fingerabdruck des Server-Zertifikats mit `expected` vergleicht."""
+    # asyncio (`websockets`) und anyio (`httpx`/`httpcore`) bauen ihre TLS-Verbindung über `SSLContext.wrap_bio()`, das
+    # `SSLContext.sslobject_class` liefert (laut Python-Doku für Unterklassen gedacht). Beide rufen `do_handshake()` vor
+    # dem ersten Anwendungsbyte: Passt das Zertifikat nicht, scheitert der Handshake (`CertificateMismatch`, ein
+    # `ssl.SSLError`) und nichts von der Anfrage verlässt die Maschine. `write()` verweigert zusätzlich alles, solange
+    # kein passendes Zertifikat gesehen wurde, falls eine Schicht je ohne eigenen Handshake-Aufruf schriebe.
 
     class _PinnedSSLObject(ssl.SSLObject):
         _nodvard_pin_ok = False
@@ -1241,10 +1079,10 @@ def _pinned_sslobject_class(expected: bytes) -> type[ssl.SSLObject]:
 
 
 def _pinned_ssl_context(expected: bytes) -> ssl.SSLContext:
-    """TLS-Kontext, der genau ein Zertifikat annimmt: keine Pruefung ueber Zertifizierungsstellen und Rechnernamen
-    (ein selbstsigniertes Zertifikat haette dort keine Chance), stattdessen der Fingerabdruck-Vergleich im Handshake
-    (`_pinned_sslobject_class`). Bewusst ein einfacher `ssl.SSLContext` (keine Unterklasse): anyio ruft `wrap_bio()`
-    nur fuer genau diese Klasse direkt auf."""
+    """TLS-Kontext, der genau ein Zertifikat annimmt (`_pinned_sslobject_class`).
+
+    Keine Prüfung über Zertifizierungsstellen und Rechnernamen; ein selbstsigniertes Zertifikat fiele dort durch."""
+    # Ein einfacher `ssl.SSLContext` ohne Unterklasse: anyio ruft `wrap_bio()` nur für genau diese Klasse direkt auf.
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
@@ -1264,7 +1102,7 @@ _CERT_MAX_NAMES = 10
 
 
 def _cert_text(value: Any, limit: int = _CERT_TEXT_LIMIT) -> str | None:
-    """Einzeilig, ohne Steuer- und Formatzeichen, gekuerzt: die Felder kommen ungeprueft vom Server."""
+    """Einzeilig, ohne Steuer- und Formatzeichen, gekürzt: Die Felder kommen ungeprüft vom Server."""
     if not isinstance(value, str):
         return None
     text = "".join(" " if unicodedata.category(ch).startswith("C") else ch for ch in value)
@@ -1275,8 +1113,7 @@ def _cert_text(value: Any, limit: int = _CERT_TEXT_LIMIT) -> str | None:
 
 
 def _describe_certificate(der: bytes, *, trusted: bool) -> PeerCertificate:
-    """Fingerabdruck immer; Inhaber, Aussteller, Ablauf und weitere Namen nur, soweit sich das Zertifikat lesen
-    laesst (sonst leer -- der Fingerabdruck allein reicht zum Vergleichen)."""
+    """Fingerabdruck immer; Inhaber, Aussteller, Ablauf und Namen nur, soweit sich das Zertifikat lesen lässt."""
     sha256 = _format_sha256(hashlib.sha256(der).digest())
     subject = issuer = not_after = None
     names: list[str] = []
@@ -1297,7 +1134,7 @@ def _describe_certificate(der: bytes, *, trusted: bool) -> PeerCertificate:
                 text = _cert_text(str(value), 100) if value is not None else None
                 if text and len(names) < _CERT_MAX_NAMES:
                     names.append(text)
-    except Exception:  # noqa: BLE001, S110 - nur Anzeige; ein ungewoehnliches Zertifikat bleibt beim Fingerabdruck
+    except Exception:  # noqa: BLE001, S110 - nur Anzeige; ein ungewöhnliches Zertifikat bleibt beim Fingerabdruck
         pass
     return PeerCertificate(
         sha256=sha256, trusted=trusted, subject=subject, issuer=issuer, not_after=not_after, alt_names=tuple(names)
@@ -1326,15 +1163,15 @@ async def _read_peer_certificate(host: str, port: int, context: ssl.SSLContext, 
 
 
 _MAX_PINNED_CLIENTS = 8
-"""So viele Clients mit gepinntem Zertifikat haelt ein Handle offen (je Fingerabdruck einer); der aelteste geht zu."""
+"""So viele Clients mit gepinntem Zertifikat hält ein Handle offen (je Fingerabdruck einer); der älteste geht zu."""
 
 
 class _NoCookies(http.cookiejar.DefaultCookiePolicy):
-    """Kein Cookie wird gemerkt oder mitgeschickt. Ein Client mit gepinntem Zertifikat ist fuer Aufrufe da, bei
-    denen etwas Geheimes hinausgeht (etwa eine einmalige Anmeldung). Merkte er sich ein `Set-Cookie` des Servers
-    (z. B. eine Sitzung nach der Anmeldung), truege jede spaetere Anfrage mit demselben Fingerabdruck sie mit --
-    auch die einer anderen Stelle der Erweiterung, die davon nichts weiss. Wer ein Cookie braucht, setzt den Kopf
-    selbst je Anfrage."""
+    """Kein Cookie wird gemerkt oder mitgeschickt."""
+
+    # Ein gepinnter Client ist für Aufrufe mit etwas Geheimem da (etwa eine einmalige Anmeldung). Merkte er ein
+    # `Set-Cookie` (z. B. eine Sitzung), ginge es mit jeder späteren Anfrage an denselben Fingerabdruck mit, auch von
+    # anderen Stellen der Erweiterung. Wer ein Cookie braucht, setzt den Kopf selbst je Anfrage.
 
     def set_ok(self, cookie: http.cookiejar.Cookie, request: Any) -> bool:
         return False
@@ -1344,52 +1181,7 @@ class _NoCookies(http.cookiejar.DefaultCookiePolicy):
 
 
 class HttpHandle:
-    """CIDR-Pruefung nur fuer literale IP-Ziele (kein DNS-Resolving vor dem Check in
-    dieser Runde, siehe Abnahmebericht) -- ein DNS-Name braucht mindestens eine
-    beliebige `net.outbound`/`net.outbound:<cidr>`-Berechtigung, ein literales
-    IP-Ziel muss zusaetzlich in eine der gewaehrten CIDR-Bereiche fallen.
-
-    **`insecure_tls`, WP-8-Blocker-Nachtrag:** `httpx.AsyncClient` erlaubt `verify=`
-    nur bei der Konstruktion, nicht pro Anfrage (geprueft gegen httpx 0.28: `request()`
-    hat kein `verify`-Keyword) -- EIN geteilter Client fuer alle Aufrufe einer
-    Extension kann Zertifikatspruefung deshalb nicht selektiv abschalten. Proxmox VE
-    liefert standardmaessig ein selbstsigniertes Zertifikat aus (der konkrete Anlass:
-    pve1 im echten Homelab) -- ohne diesen Ausweg schlaegt JEDE Verbindung zu einem
-    solchen Host mit einem Zertifikatsfehler fehl, WP-8s proxmox-Extension war damit
-    gegen einen echten Proxmox-Host nie einsatzbereit. Loesung: ein ZWEITER,
-    lazy angelegter Client mit `verify=False`, nur fuer Aufrufe mit
-    `insecure_tls=True` -- der Normalfall (kein Kwarg) bleibt unveraendert streng.
-    Eigene Berechtigung `net.outbound.insecure_tls` (nicht automatisch mit
-    `net.outbound` mitgewaehrt) macht das im Manifest sichtbar und
-    bestaetigungspflichtig, statt es an `net.outbound` huckepack zu haengen -- ein
-    Admin, der `net.outbound` erlaubt, erlaubt damit nicht automatisch, dass die
-    Extension sich gegen jede MITM-Manipulation innerhalb dieses Bereichs blind
-    macht. Kein Pro-Host-CA-Pinning in dieser Runde (nur an/aus) -- fuer den
-    tatsaechlichen Bedarf (ein einzelnes selbstsigniertes Standardzertifikat je
-    Connector-Instanz) reicht das; siehe docs/00-DECISIONS.md.
-
-    **Kein Proxy aus der Umgebung:** beide Clients bekommen einen eigenen Transport
-    (`_direct_transport()`), `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY` (und die kleinen
-    Schreibweisen) werden also nicht gelesen. Die Zielpruefung oben sieht nur die URL; ginge
-    die Anfrage ueber einen Proxy aus der Umgebung, bekaeme dieser den Header
-    `Authorization` und das Ziel, ohne dass die Erweiterung dafuer freigegeben wurde. Die
-    Verbindung geht immer direkt zum geprueften Ziel.
-
-    **Keine Weiterleitungen:** der Client folgt keiner 3xx-Antwort (httpx-Vorgabe) und `follow_redirects=True`
-    wird nicht durchgereicht, sondern mit `ValueError` abgelehnt -- bei `get()`, `post()`, `request()` und
-    `stream()`, auch mit `insecure_tls`. Die Zielpruefung kennt nur die Adresse des Aufrufs; das Ziel einer
-    Weiterleitung hat sie nie gesehen (`websocket()` verhaelt sich ebenso).
-
-    **Gepinntes Zertifikat (`pinned_sha256`):** Zwischen "streng" und "gar nicht pruefen" fehlte ein Weg fuer
-    Ziele mit selbstsigniertem Zertifikat, an die etwas wirklich Geheimes geht (etwa ein Administrator-Passwort,
-    das nur einmal benutzt wird). Mit `pinned_sha256` nimmt der Aufruf genau ein Zertifikat an: Der Fingerabdruck
-    wird im TLS-Handshake verglichen (`_pinned_sslobject_class`), vor dem ersten Byte der Anfrage; passt er nicht,
-    scheitert die Verbindung mit `CertificateMismatch`. Je Fingerabdruck ein eigener Client (hoechstens
-    `_MAX_PINNED_CLIENTS`), damit keine Verbindung aus dem Pool eines anderen Fingerabdrucks wiederverwendet wird.
-    Weil damit die Pruefung ueber Zertifizierungsstellen entfaellt, braucht es wie `insecure_tls` die Berechtigung
-    `net.outbound.insecure_tls`. `peer_certificate()` liest das Zertifikat vorher, ohne etwas zu senden. Gepinnte
-    Clients merken sich keine Cookies (`_NoCookies`): eine Sitzung, die der Server nach einer Anmeldung setzt, ginge
-    sonst mit jeder spaeteren Anfrage an denselben Fingerabdruck mit."""
+    """Ausgehende HTTP-Aufrufe einer Extension, geprüft gegen ihre `net.outbound`-Berechtigungen."""
 
     def __init__(self, perm: _PermissionChecker, granted_permissions: list[str]) -> None:
         self._perm = perm
@@ -1398,6 +1190,8 @@ class HttpHandle:
             for p in granted_permissions
             if p == "net.outbound" or p.startswith("net.outbound:")
         ]
+        # Eigener Transport ohne Proxy aus der Umgebung: Die Zielprüfung sieht nur die URL, und ein Proxy bekäme
+        # `Authorization` und das Ziel, ohne dass die Erweiterung dafür freigegeben wurde.
         self._client = httpx.AsyncClient(transport=_direct_transport())
         self._insecure_client: httpx.AsyncClient | None = None
         self._pinned_clients: OrderedDict[bytes, httpx.AsyncClient] = OrderedDict()
@@ -1415,7 +1209,7 @@ class HttpHandle:
             ip = None
 
         if ip is None:
-            return  # DNS-Name: mindestens eine net.outbound-Berechtigung reicht (oben geprueft)
+            return  # DNS-Name wird nicht aufgelöst: Eine net.outbound-Berechtigung reicht (oben geprüft)
 
         for cidr in self._cidrs:
             if cidr is None or ip in ipaddress.ip_network(cidr, strict=False):
@@ -1427,6 +1221,9 @@ class HttpHandle:
             return self._pinned_client(url, pinned_sha256, insecure_tls=insecure_tls)
         if not insecure_tls:
             return self._client
+        # httpx erlaubt `verify=` nur bei der Konstruktion, daher ein zweiter, lazy angelegter Client (etwa für das
+        # selbstsignierte Standardzertifikat von Proxmox). Die eigene Berechtigung macht das im Manifest sichtbar und
+        # bestätigungspflichtig: `net.outbound` allein erlaubt nicht, die Zertifikatsprüfung abzuschalten.
         self._perm.require("net.outbound.insecure_tls")
         if self._insecure_client is None:
             self._insecure_client = httpx.AsyncClient(transport=_direct_transport(verify=False))
@@ -1443,8 +1240,12 @@ class HttpHandle:
             raise ValueError("pinned_sha256 geht nur mit einer verschluesselten Adresse (https:// bzw. wss://).")
 
     def _pinned_client(self, url: str, pinned_sha256: str, *, insecure_tls: bool) -> httpx.AsyncClient:
-        """Client, der nur das Zertifikat mit diesem Fingerabdruck annimmt -- je Fingerabdruck einer, die
-        aeltesten gehen zu, wenn es mehr als `_MAX_PINNED_CLIENTS` werden."""
+        """Client, der nur das Zertifikat mit diesem Fingerabdruck annimmt; die ältesten gehen bei zu vielen zu."""
+        # Für Ziele mit selbstsigniertem Zertifikat, an die etwas wirklich Geheimes geht (etwa ein einmal benutztes
+        # Administrator-Passwort): Der Vergleich läuft im TLS-Handshake vor dem ersten Byte der Anfrage, bei Abweichung
+        # gibt es `CertificateMismatch`. Je Fingerabdruck ein eigener Client, damit keine Pool-Verbindung eines anderen
+        # Fingerabdrucks wiederverwendet wird. Weil die Prüfung über Zertifizierungsstellen entfällt, braucht es wie
+        # `insecure_tls` die Berechtigung `net.outbound.insecure_tls`.
         self._check_pin_use(url, insecure_tls=insecure_tls, schemes=("https",))
         expected = _pin_digest(pinned_sha256)
         self._perm.require("net.outbound.insecure_tls")
@@ -1466,13 +1267,10 @@ class HttpHandle:
 
     @staticmethod
     def _refuse_redirects(kwargs: dict[str, Any]) -> None:
-        """Weiterleitungen folgt der Handle nie. `_require_target_allowed()` sieht nur die Adresse des Aufrufs;
-        folgte httpx einer 3xx-Antwort (`follow_redirects=True`), ginge die naechste Anfrage an ein Ziel, das
-        die Pruefung nie gesehen hat -- ein Server koennte eine Erweiterung so auf eine Adresse ausserhalb
-        ihrer `net.outbound:<cidr>`-Bereiche lenken (samt `Authorization`-Header). Ein Aufruf mit
-        `follow_redirects=True` scheitert deshalb sofort, bevor etwas gesendet wird, auch mit `insecure_tls`
-        und bei `stream()`. Ohne die Angabe, mit `False` oder mit `httpx.USE_CLIENT_DEFAULT` (= `False`)
-        kommt die 3xx-Antwort unveraendert zurueck, die Erweiterung entscheidet dann selbst, was sie damit tut."""
+        """Lehnt `follow_redirects=True` mit `ValueError` ab, bevor etwas gesendet wird (auch mit `insecure_tls`)."""
+        # `_require_target_allowed()` sieht nur die Adresse des Aufrufs: Folgte httpx einer 3xx-Antwort, ginge die
+        # nächste Anfrage samt `Authorization` an ein ungeprüftes Ziel, und ein Server könnte die Erweiterung so aus
+        # ihren `net.outbound:<cidr>`-Bereichen lenken. 3xx-Antworten kommen unverändert zurück (wie bei `websocket()`).
         value = kwargs.get("follow_redirects", False)
         if value is httpx.USE_CLIENT_DEFAULT or not value:
             return
@@ -1501,9 +1299,9 @@ class HttpHandle:
         return await client.request(method, url, **kwargs)
 
     async def peer_certificate(self, url: str, *, timeout_s: float = 10.0) -> PeerCertificate:
-        """Siehe SDK: nur der Handshake, erst streng (dieselben Zertifizierungsstellen wie `self._client`, also
-        `httpx.create_ssl_context()` samt `SSL_CERT_FILE`/`SSL_CERT_DIR`), sonst ohne Pruefung nur zum Lesen.
-        Direkte Verbindung, kein Proxy aus der Umgebung."""
+        """Liest das Zertifikat des Ziels ohne Anfrage: erst streng, sonst ohne Prüfung nur zum Lesen.
+
+        Gleiche Zertifizierungsstellen wie `self._client` (`httpx.create_ssl_context()`), direkt und ohne Proxy."""
         self._require_target_allowed(url)
         parts = urlsplit(url)
         if parts.scheme.lower() not in ("https", "wss"):
@@ -1523,19 +1321,7 @@ class HttpHandle:
     def stream(  # noqa: ANN201 - httpx.AsyncClient.stream()s eigener Typ
         self, method: str, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
     ):
-        """Fehlte bisher komplett (WP-9 Nachtrag: `AIProvider.stream()` musste
-        deshalb das VOLLSTAENDIGE Ergebnis als einen Chunk liefern) -- die
-        nextcloud-Extension (WP-11) braucht echtes Antwort-Streaming fuer
-        `FileSource.open_read()` gegen potenziell grosse Dateien, ohne sie
-        vollstaendig in den Prozessspeicher zu laden. `request()`/`get()`/`post()`
-        oben lesen den GESAMTEN Body, bevor sie zurueckkehren -- fuer eine
-        Chat-Antwort tolerierbar (WP-9), fuer eine mehrere GB grosse Datei nicht.
-        Zweiter unabhaengiger Bedarf fuer dasselbe fehlende Primitiv; anders als bei
-        D-13/D-14/D-15 (dort: strukturelle Aenderungen mit unklarem "richtigen"
-        Umfang, deshalb bis zum dritten Fall zurueckgestellt) ist die Form hier von
-        Anfang an eindeutig -- ein duenner Wrapper um `httpx.AsyncClient.stream()`,
-        genau wie `get`/`post`/`request` es fuer die nicht-streamende Variante schon
-        sind -- deshalb sofort ergaenzt statt zurueckgestellt."""
+        """Streamt die Antwort statt sie ganz zu lesen (Wrapper um `AsyncClient.stream()`), etwa für große Dateien."""
         self._require_target_allowed(url)
         self._refuse_redirects(kwargs)
         return self._client_for(insecure_tls=insecure_tls, pinned_sha256=pinned_sha256, url=url).stream(method, url, **kwargs)
@@ -1550,35 +1336,12 @@ class HttpHandle:
         open_timeout_s: float = 10.0,
         pinned_sha256: str | None = None,
     ):  # noqa: ANN201 - AsyncContextManager[websockets ClientConnection]
-        """Ausgehender WebSocket (fuer die Konsole: eine Hypervisor-Konsole ist nur
-        ueber einen WebSocket erreichbar, httpx kann keine WebSockets). Dieselben
-        Pruefungen wie die HTTP-Methoden, in derselben Reihenfolge und VOR jedem
-        Verbindungsaufbau: Zielpruefung (`net.outbound`/CIDR), dann `insecure_tls`
-        nur mit `net.outbound.insecure_tls`. Die Pruefungen laufen beim Aufruf, nicht
-        erst beim `async with` -- ein verbotenes Ziel scheitert damit sofort.
+        """Ausgehender WebSocket mit denselben Prüfungen wie die HTTP-Methoden, beim Aufruf und vor dem Verbinden.
 
-        `max_size=None`: ein Bildschirm-Update ist ein einzelner grosser Frame, das
-        websockets-Default (1 MiB) wuerde eine Konsole mit hoher Aufloesung mitten in
-        der Sitzung abbrechen. `compression=None`: RFB-Rahmen sind bereits kodiert,
-        permessage-deflate kostet nur CPU (auf dem Pi spuerbar).
-
-        **Keine Weiterleitungen:** antwortet der Server beim Handshake mit 3xx, entsteht keine
-        zweite Verbindung -- `async with` wirft `WebSocketRedirectRefused` (ein `ConnectionError`
-        mit deutschem Text). Wie bei `get()`/`post()` (httpx folgt dort standardmaessig ebenfalls
-        nicht) bleibt es bei der geprueften Start-Adresse.
-
-        **Kein Proxy aus der Umgebung:** `proxy=None`. Seit websockets 15 nutzt `connect()` sonst von
-        sich aus `HTTP_PROXY`/`HTTPS_PROXY`/`WS_PROXY`/`WSS_PROXY`/`SOCKS_PROXY` (und beachtet
-        `NO_PROXY`). Die Zielpruefung oben kennt keinen Proxy: die Verbindung (samt Zugangs-Header und
-        Ticket) ginge sonst an eine Stelle, die die Erweiterung nie freigegeben bekam. `proxy` gibt es
-        erst ab websockets 15, deshalb steht in `backend/pyproject.toml` `websockets>=15`; in aelteren
-        Versionen wuerde das Keyword an `loop.create_connection()` weitergereicht und mit einem
-        `TypeError` scheitern.
-
-        `pinned_sha256` wie bei den HTTP-Methoden (nur `wss://`): der Handshake scheitert mit
-        `CertificateMismatch`, bevor der WebSocket-Handshake samt Kopfzeilen gesendet wird."""
+        Ziel (`net.outbound`/CIDR), dann `insecure_tls` oder `pinned_sha256` nur mit `net.outbound.insecure_tls`."""
         self._require_target_allowed(url)
         ssl_context: ssl.SSLContext | None = None
+        # Gepinnt (nur `wss://`): Der TLS-Handshake scheitert mit `CertificateMismatch` vor den Kopfzeilen.
         if pinned_sha256 is not None:
             self._check_pin_use(url, insecure_tls=insecure_tls, schemes=("wss",))
             expected = _pin_digest(pinned_sha256)
@@ -1593,6 +1356,12 @@ class HttpHandle:
             else:
                 ssl_context = ssl.create_default_context()
 
+        # `max_size=None`: Ein Bildschirm-Update ist ein einzelner großer Frame, das Standardlimit (1 MiB) bräche eine
+        # Konsole mit hoher Auflösung mitten in der Sitzung ab. `compression=None`: RFB-Rahmen sind schon kodiert,
+        # permessage-deflate kostet nur CPU. `proxy=None`: Seit websockets 15 nutzt `connect()` sonst `HTTP_PROXY`,
+        # `WS_PROXY` und Co., und die Verbindung samt Zugangs-Header ginge an eine Stelle, die die Erweiterung nie
+        # freigegeben bekam (deshalb `websockets>=15` in `backend/pyproject.toml`; ältere Versionen scheiterten mit
+        # `TypeError`). Antwortet der Server beim Handshake mit 3xx, wirft `async with` `WebSocketRedirectRefused`.
         return _websocket_connect_class()(
             url,
             additional_headers=headers,
@@ -1616,21 +1385,13 @@ class HttpHandle:
 
 
 class DbHandle:
-    """Liefert eine echte Session (`ctx.db.session()`, dieselbe `session_scope()` wie
-    im Kern) UND, seit der inventory-Extension (docs/02-EXTENSION-API.md §7: "eigener
-    Alembic-Branch" -- inventory ist die ERSTE Extension mit echten eigenen
-    Tabellen), einen echten Torwaechter: `declare_tables(metadata)` prueft die
-    `MetaData` einer Extension EINMAL beim `setup()`-Aufruf gegen ihren
-    Pflicht-Praefix (`ext.tables.validate_table_prefix()`, vorher nur synthetisch
-    getestet, nie von echtem Code aufgerufen). **Weiterhin bewusst abgegrenzt:**
-    kein Statement-Introspektions-Schutz zur Laufzeit (jede einzelne Query
-    durchleuchten waere ein eigener, hier nicht gebauter Aufwand) -- `declare_tables()`
-    ist eine Vertrauens-, keine Sandbox-Grenze, genau wie `ctx.exec` fuer
-    Extension-Code generell (docs/02 §3: Extensions sind vertrauenswuerdiger Code)."""
+    """`ctx.db`: eine echte Session (`session_scope()` wie im Kern) und die Präfix-Prüfung für Tabellen."""
+
+    # `declare_tables()` ist eine Vertrauens-, keine Sandbox-Grenze: Einzelne Queries werden nicht durchleuchtet
+    # (docs/02 §3: Extensions sind vertrauenswürdiger Code).
 
     def __init__(self, ext_id: str, table_prefix: str | tuple[str, ...]) -> None:
-        """`table_prefix`: ein Praefix oder mehrere (`ExtensionManifest.table_prefixes`: nach einer
-        Umbenennung zusaetzlich die der alten Kennungen)."""
+        """Ein Präfix oder mehrere (`ExtensionManifest.table_prefixes`; nach einer Umbenennung auch die alten)."""
         self._ext_id = ext_id
         self._table_prefix = table_prefix
 
@@ -1638,11 +1399,9 @@ class DbHandle:
         return session_scope()
 
     def declare_tables(self, metadata: Any) -> None:
-        """`metadata` ist eine SQLAlchemy `MetaData` (typischerweise `Base.metadata`
-        der Extension). Wirft `ext.tables.TablePrefixViolation`, wenn irgendeine
-        deklarierte Tabelle nicht mit `ext_<id>_` beginnt -- laesst die Extension
-        NICHT laden (wird in `services/extensions.py` beim `setup()`-Aufruf sichtbar,
-        derselbe Fehler-Isolations-Pfad wie jeder andere `setup()`-Fehler)."""
+        """Prüft die `MetaData` der Extension gegen `ext_<id>_`; bei einer Abweichung wirft sie `TablePrefixViolation`.
+
+        Der Fehler läuft über den Fehlerpfad von `setup()` und verhindert das Laden."""
         from .tables import validate_table_prefix
 
         validate_table_prefix(self._ext_id, metadata.tables.keys(), expected_prefix=self._table_prefix)
@@ -1672,12 +1431,7 @@ class Context:
     logger: Any
     _loaded: LoadedExtension
     _app_settings: Any
-    """Die `Settings`-Instanz, die beim Laden dieser Extension aktiv war (siehe
-    `services.extensions.enable_extension()`) -- NICHT `config.get_settings()`
-    direkt. Live gefunden: ein Handle, das intern `get_settings()` aufruft, ignoriert
-    stillschweigend, mit welchen Settings der Host gerade laeuft (in Tests: die echten
-    Projektpfade statt der isolierten Test-Settings -- derselbe Fallstrick wie der
-    `get_settings()`-Singleton aus WP-1, nur eine Ebene tiefer)."""
+    """Die beim Laden aktiven `Settings`, nicht `config.get_settings()` (das ignorierte die des laufenden Hosts)."""
 
     def vault_use(self, handle: SecretHandleRef):  # noqa: ANN201
         @asynccontextmanager
@@ -1721,9 +1475,7 @@ def build_context(
     ext_data_dir: Path,
     settings: Any,
 ) -> Context:
-    """Einstellungen und Jobs haengen an der Speicher-Kennung `loaded.store_id` (nach einer Umbenennung
-    die Zeile der alten Kennung, sonst die Kennung). Alles andere (Routen, Seiten, Aktionen, Meldungen,
-    Protokoll, Logger) laeuft immer unter der Kennung `manifest.id`."""
+    """Einstellungen und Jobs hängen an der Speicher-Kennung `loaded.store_id`, alles andere an `manifest.id`."""
     store = loaded.store_id or manifest.id
     perm = _PermissionChecker(manifest.id, granted_permissions)
     ext_data_dir.mkdir(parents=True, exist_ok=True)

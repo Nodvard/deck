@@ -1,51 +1,4 @@
-"""Einen Gast aus einer Sicherung als KOPIE wiederherstellen -- das Original bleibt immer unberuehrt.
-
-Feste Regeln (so entschieden, nicht verhandelbar):
-
-- **Neue Nummer, neue MAC-Adressen.** Die Nummer (VMID) muss frei sein, darf nicht die des Originals sein,
-  nicht die eines frueheren Gastes, von dem noch Sicherungen liegen (sonst gehoerten dessen Sicherungen ab jetzt
-  zur Kopie, und die Aufbewahrung eines Backup-Jobs koennte sie loeschen), und fuer sie darf keine HA-Regel
-  bestehen (die wuerde die Kopie starten). `unique=1` vergibt in Proxmox neue MAC-Adressen; VMs (qemu-server)
-  und Container (pve-container) kennen den Schalter beide.
-- **Nur im eigenen Pool.** Jede Kopie entsteht im Pool `COPY_POOL` (connector.py, fest, nie aus der Anfrage). Dem
-  Zugang gehoert `VM.Allocate` nur auf diesem Pool: Proxmox prueft es bei gesetztem `pool` dort (`create_vm` in
-  qemu-server und pve-container), und die Kopie erbt als Mitglied des Pools die Rechte fuer das Fertig-Einrichten.
-  Fehlt der Pool oder das Recht, wird nichts angelegt.
-- **Nie ueberschreiben.** `force` geht nie mit (`RESTORE_KEYS` in connector.py). Ohne `force` prueft
-  Proxmox beim Anlegen selbst clusterweit, ob die Nummer frei ist (VMs: `create_and_lock_config`, Container:
-  `check_vmid_unused`) -- wird sie zwischen unserer Pruefung und dem Anlegen vergeben, lehnt Proxmox ab.
-- **Startet nur von Hand.** Kein `start`, und `onboot=0` geht gleich beim Anlegen mit: die Sicherung bringt
-  sonst den Autostart des Originals mit, und die Kopie liefe beim naechsten Neustart des Servers los.
-- **Platz, Speicher, Rechte und Version vorher pruefen** -- beim Vorschlag UND noch einmal beim Ausfuehren. Dem
-  Payload aus dem Gate wird dabei nichts geglaubt, was sich frisch nachpruefen laesst. Fehlt dem Token ein Recht,
-  das das Fertig-Einrichten braucht (Netzwerkkarten trennen), wird gar nicht erst angelegt. Eine VM braucht
-  Proxmox VE 7.2 (erst dort uebernimmt Proxmox `name` und `onboot` aus dem Aufruf, qemu-server 7.2-1); Container
-  gehen auch auf aelteren Versionen, mit den Einschraenkungen bei `check_version`.
-- **Gleiche IP im Gast.** Die Kopie hat im Gast dieselbe Netzwerk-Einstellung wie das Original (feste IP,
-  Rechnername im Gast). Deshalb werden ihre Netzwerkkarten standardmaessig getrennt (`link_down=1`), sobald
-  Proxmox fertig ist; wieder verbinden geht in Proxmox mit einem Haken.
-
-Ablauf beim Ausfuehren (`RestoreCopyExecutor`): pruefen -> Vermerk "offene Kopie" (pending.py) -> `POST
-/nodes/{n}/qemu|lxc` -> Proxmox-Aufgabe abwarten (hoechstens `RESTORE_TIMEOUT_S`, unter der Notbremse des Gates
-von 60 Minuten) -> fertig einrichten (`PUT .../config` mit `digest`, nur auf der NEUEN Nummer und nur, wenn die
-Aufgabe nachweislich diese Wiederherstellung ist) -> nachlesen -> Meldung -> Vermerk weg. Endet die Aktion vorher
-(Zeitgrenze, keine Antwort, Neustart des Dashboards), bleibt der Vermerk, und der Backup-Waechter holt das
-Fertig-Einrichten nach (`follow_up_open_copies`, alle 15 Minuten) und gibt nach `FOLLOW_UP_GIVE_UP_S` mit einer
-Meldung auf. Geloescht wird dabei nie etwas. Die Datei mit den Vermerken laesst sich von aussen veraendern, deshalb fasst
-der Waechter nur einen Gast an, wenn der Vermerk genau zu ihm passt: Die Aufgaben-Kennung ist die Wiederherstellung dieser
-Nummer auf diesem Knoten (`CopyTarget.from_record`), und der Gast steht im Pool `COPY_POOL` (`_in_copy_pool`) -- sonst
-meldet er "Kopie nicht gefunden" und veraendert nichts. Jeder Vermerk wird fuer sich bearbeitet: ein kaputter blockiert die
-anderen nicht.
-
-**Genau eine Meldung je Kopie** (`_conclude`): Wer den Vermerk wegraeumt -- die Aktion oder der Waechter --,
-schickt vorher genau eine Meldung (fertig eingerichtet, Proxmox-Fehler, nicht fertig eingerichtet, abgelehnt, nicht
-gefunden). Der Vermerk traegt, dass sie schon raus ist (`announced`), und im Speicher steht dasselbe
-(`pending.ANNOUNCED`): scheitert das Wegraeumen, kommt in der naechsten Runde keine zweite Meldung; scheitert die
-Meldung, bleibt der Vermerk, und der Waechter versucht es noch einmal.
-
-Auf die Nummer des Originals geht kein einziger Aufruf; seine Einstellungen kommen aus der Sicherung selbst
-(`extractconfig`, nur lesend). Rechte des Tokens: docs/10-PROXMOX-TOKEN.md, Abschnitt "Wiederherstellen als Kopie".
-"""
+"""Einen Gast aus einer Sicherung als Kopie wiederherstellen; das Original bleibt immer unberührt."""
 
 from __future__ import annotations
 
@@ -82,46 +35,47 @@ AUDIT_ACTION = "backups.restore_copy"
 PAGE_PATH = "/ext/backups/backups"
 
 RESTORE_TIMEOUT_S = 45 * 60.0
-"""So lange wartet die Aktion hoechstens auf Proxmox. Unter `EXECUTE_TIMEOUT_S` des Gates (60 min), damit die
-Aktion selbst sagen kann, was dann gilt -- statt nur "Ausgang unbekannt"."""
+"""So lange wartet die Aktion höchstens auf Proxmox, unter `EXECUTE_TIMEOUT_S` des Gates (60 Minuten), damit die
+Aktion selbst sagen kann, was dann gilt, statt nur "Ausgang unbekannt"."""
 POLL_INTERVAL_S = 5.0
 MAX_POLL_ERRORS = 12
-"""Aufeinanderfolgende Fehler bzw. unbrauchbare Antworten beim Nachfragen (etwa eine Minute), bevor die Aktion
-aufgibt und das Fertig-Einrichten dem Waechter ueberlaesst."""
+"""Aufeinanderfolgende Fehler oder unbrauchbare Antworten beim Nachfragen (etwa eine Minute), bevor die Aktion
+aufgibt und das Fertig-Einrichten dem Wächter überlässt."""
 FINISH_ATTEMPTS = 3
 FINISH_RETRY_DELAY_S = 2.0
 FOLLOW_UP_GIVE_UP_S = 24 * 3600.0
-"""Nach so langer Zeit gibt der Waechter eine offene Kopie mit einer Meldung auf."""
+"""Nach so langer Zeit gibt der Wächter eine offene Kopie mit einer Meldung auf."""
 NO_TASK_GRACE_S = 15 * 60.0
-"""So lange darf eine Aufgabe fehlen (Anlegen ohne Antwort), bevor der Waechter annimmt, dass Proxmox nie anfing."""
+"""So lange darf eine Aufgabe fehlen (Anlegen ohne Antwort), bevor der Wächter annimmt, dass Proxmox nie anfing."""
 FOLLOW_UP_INTERVAL_TEXT = "alle 15 Minuten"
 
 SPACE_FACTOR = 1.1
 SPACE_RESERVE_BYTES = 2 * 1024**3
-"""Mindestens noetig auf dem Zielspeicher: Groesse der Sicherung + 10 % + 2 GB Reserve. Die Sicherung ist meist
-gepackt, die Kopie also eher groesser -- weniger Platz reicht sicher nicht."""
+"""Mindestens nötig auf dem Zielspeicher: Größe der Sicherung + 10 % + 2 GB Reserve. Die Sicherung ist meist
+gepackt, die Kopie also eher größer; weniger Platz reicht sicher nicht."""
 THICK_STORAGE_TYPES = frozenset({"lvm"})
-"""Speicher, die beim Anlegen sofort die volle Plattengroesse belegen: dort zaehlt die Groesse der Platten aus der
+"""Speicher, die beim Anlegen sofort die volle Plattengröße belegen: dort zählt die Größe der Platten aus der
 Sicherung als Mindestbedarf."""
 
 NAME_MAX = 63
 DESCRIPTION_MAX = 8000
-"""Bytes der Notiz an der Kopie (Proxmox: hoechstens 8 KiB)."""
+"""Bytes der Notiz an der Kopie (Proxmox: höchstens 8 KiB)."""
 NOTE_MAX = 2000
 SOURCE_TEXT_MAX = 200
-"""Laengen, auf die Notiz und Herkunft eines Vermerks beim Laden gekuerzt werden. Was Nodvard Deck selbst schreibt, ist
-deutlich kuerzer (Namen aus der Sicherung sind auf `NAME_MAX` gekuerzt); laenger kann nur ein veraenderter Vermerk sein."""
+"""Längen, auf die Notiz und Herkunft eines Vermerks beim Laden gekürzt werden. Was Nodvard Deck selbst schreibt, ist
+deutlich kürzer (Namen aus der Sicherung sind auf `NAME_MAX` gekürzt); länger kann nur ein veränderter Vermerk sein."""
 FUTURE_SLACK_S = 3600.0
-"""So weit darf die Zeit eines Vermerks der Uhr voraus sein (Uhr zurueckgestellt). Weiter in der Zukunft haelt ein Vermerk
-die Frist von `FOLLOW_UP_GIVE_UP_S` fuer immer offen."""
+"""So weit darf die Zeit eines Vermerks der Uhr voraus sein (Uhr zurückgestellt). Weiter in der Zukunft hielte ein
+Vermerk die Frist von `FOLLOW_UP_GIVE_UP_S` für immer offen."""
 SUGGEST_TRIES = 25
 KIND_LABEL = {"qemu": "VM", "lxc": "Container"}
 WORKER = {"qemu": "qmrestore", "lxc": "vzrestore"}
 
 INVALID = 422
-"""Ungueltige Eingabe (Zahl statt der in neueren Starlette-Versionen umbenannten Konstante)."""
+"""Ungültige Eingabe (Zahl statt der in neueren Starlette-Versionen umbenannten Konstante)."""
 
-# Immer mit `fullmatch` benutzt: `$` liesse einen Zeilenumbruch am Ende durch.
+# Immer mit `fullmatch` benutzt: `$` ließe einen Zeilenumbruch am Ende durch. Die Muster haben keine verschachtelten
+# Wiederholungen ohne trennendes Zeichen, damit lange Eingaben kein Backtracking aufblähen.
 _NODE_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?")
 _STORAGE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*[A-Za-z0-9]")
 _VMID_RE = re.compile(r"[1-9][0-9]{2,8}")
@@ -146,24 +100,24 @@ _TAR_RE = re.compile(r"\.(?:tar|tgz)(?:\.(?:gz|lzo|zst))?$")
 _TRUE = ("1", "true", "yes", "on")
 
 MIN_VERSION_QEMU = (7, 2)
-"""Erst ab Proxmox VE 7.2 (qemu-server 7.2-1, "allow overriding non-disk options during restore") uebernimmt Proxmox
-`name` und `onboot` beim Wiederherstellen einer VM aus dem Aufruf. Aelter bliebe der Autostart des Originals, bis
+"""Erst ab Proxmox VE 7.2 (qemu-server 7.2-1, "allow overriding non-disk options during restore") übernimmt Proxmox
+`name` und `onboot` beim Wiederherstellen einer VM aus dem Aufruf. Älter bliebe der Autostart des Originals, bis
 Nodvard Deck ihn nach der Wiederherstellung abschaltet."""
 MIN_VERSION_LXC = (6, 0)
 """`unique` (neue MAC-Adressen beim Wiederherstellen eines Containers) gibt es seit pve-container 2.0-37 (April 2019,
-Proxmox VE 6). Ohne `unique` bekaeme die Kopie die MAC-Adressen des Originals -- das laesst Nodvard Deck nie zu."""
+Proxmox VE 6). Ohne `unique` bekäme die Kopie die MAC-Adressen des Originals, das lässt Nodvard Deck nie zu."""
 POOL_CHECK_FIXED_LXC = (7, 1)
 """Bis pve-container 4.1-4 (Februar 2022, Proxmox VE 7.1) verlangte Proxmox beim Anlegen eines Containers in einem Pool
-zusaetzlich `Permissions.Modify` oder `Pool.Allocate` auf dem Pool ("fix #3635: fix overly-strict pool permission
-check on create")."""
+zusätzlich `Permissions.Modify` oder `Pool.Allocate` auf dem Pool (Proxmox-Fehler 3635, "fix overly-strict pool
+permission check on create")."""
 
 ROLE_NAME = "NodvardDeckRestore"
 ROLE_PRIVS = "VM.Allocate VM.Audit VM.Config.Options VM.Config.Network"
-"""Die Rolle fuer den Pool. Dieselben Namen legt die Einrichtung mit Passwort in der proxmox-Erweiterung an."""
+"""Die Rolle für den Pool. Dieselben Namen legt die Einrichtung mit Passwort in der Proxmox-Erweiterung an."""
 POOL_PATH = f"/pool/{COPY_POOL}"
 POOL_COMMENT = "Nodvard Deck: wiederhergestellte Kopien"
-"""Derselbe Kommentar wie bei der Einrichtung mit Passwort (proxmox-Erweiterung): Nur einen Pool mit genau diesem
-Kommentar uebernimmt sie als eigenen."""
+"""Derselbe Kommentar wie bei der Einrichtung mit Passwort (Proxmox-Erweiterung): nur einen Pool mit genau diesem
+Kommentar übernimmt sie als eigenen."""
 
 POOL_KEEP_HINT = (
     f"Willst du die Kopie behalten, nimm sie aus dem Pool {COPY_POOL}: in Proxmox unter Rechenzentrum → Rechte → Pools → "
@@ -206,7 +160,7 @@ def leftover_note(vmid: int) -> str:
 
 
 class RestoreError(Exception):
-    """Ein Grund, nichts wiederherzustellen -- als ganzer deutscher Satz. `status_code` fuer die Route."""
+    """Ein Grund, nichts wiederherzustellen, als ganzer deutscher Satz. `status_code` für die Route."""
 
     def __init__(self, message: str, status_code: int = status.HTTP_409_CONFLICT) -> None:
         super().__init__(message)
@@ -239,8 +193,8 @@ def check_volid(volid: Any) -> str:  # noqa: ANN401 - kommt als Text von der Sei
 
 
 def parse_input(values: Any) -> RestoreInput:  # noqa: ANN401 - kommt als JSON von der Seite bzw. aus dem Gate
-    """Prueft Form und Grenzen -- ohne Proxmox. Die Formate sind die von Proxmox selbst (pve-node,
-    pve-storage-id, pve-vmid, dns-name), damit nichts Unerwartetes in einen Pfad oder Parameter gelangt."""
+    """Prüft Form und Grenzen, ohne Proxmox. Die Formate sind die von Proxmox selbst (pve-node, pve-storage-id,
+    pve-vmid, dns-name), damit nichts Unerwartetes in einen Pfad oder Parameter gelangt."""
     if not isinstance(values, dict):
         raise RestoreError("Angaben zur Wiederherstellung fehlen.", INVALID)
     volid = check_volid(values.get("volid"))
@@ -268,8 +222,8 @@ def parse_input(values: Any) -> RestoreInput:  # noqa: ANN401 - kommt als JSON v
 
 
 def source_vmid_from_volid(volid: str) -> str | None:
-    """Die Nummer des gesicherten Gastes aus dem Dateinamen (`vzdump-qemu-101-...`, PBS `backup/vm/101/...`) --
-    nur, um die Liste auf dem Speicher von Proxmox vorfiltern zu lassen; massgeblich ist der Eintrag dort."""
+    """Die Nummer des gesicherten Gastes aus dem Dateinamen (`vzdump-qemu-101-...`, PBS `backup/vm/101/...`), nur um
+    die Liste auf dem Speicher von Proxmox vorfiltern zu lassen; maßgeblich ist der Eintrag dort."""
     match = _VZDUMP_NAME_RE.search(volid) or _PBS_NAME_RE.search(volid)
     return match.group(1) if match else None
 
@@ -285,7 +239,7 @@ def suggest_name(source_name: str | None, source_vmid: str) -> str:
 
 def parse_backup_config(text: str) -> dict[str, str]:
     """`key: value` bis zum ersten Abschnitt (`[snapshot]`, `[PENDING]`); Kommentare (`#...`, dort steht auch die
-    Notiz) bleiben aussen vor."""
+    Notiz) bleiben außen vor."""
     config: dict[str, str] = {}
     for line in text.splitlines():
         if line.startswith("["):
@@ -314,14 +268,14 @@ def _positional(value: str) -> str:
 
 
 def _short_name(value: Any) -> str | None:  # noqa: ANN401 - Name aus der Sicherung oder aus Proxmox
-    """Ein Name fuer Meldungen und Notiz: einzeilig, hoechstens `NAME_MAX` Zeichen. Der Gastname in einer Sicherung ist
+    """Ein Name für Meldungen und Notiz: einzeilig, höchstens `NAME_MAX` Zeichen. Der Gastname in einer Sicherung ist
     frei beschreibbar (sie kann von sonstwoher stammen) und darf Meldung und Notiz nicht ausufern lassen."""
     return clean_text(value, NAME_MAX)
 
 
 def _acl_name_ok(name: Any) -> bool:  # noqa: ANN401 - Text aus der Sicherung
-    """Ob ein Name aus der Sicherung (Bridge, Zuordnung) in einen Rechte-Pfad passen darf: nur diese Zeichen, nicht lang, und
-    nicht nur Punkte (`..` waere ein Weg nach oben). Sonst wird das Recht nicht geprueft, und es gibt einen Hinweis."""
+    """Ob ein Name aus der Sicherung (Bridge, Zuordnung) in einen Rechte-Pfad passen darf: nur diese Zeichen, nicht lang,
+    und nicht nur Punkte (`..` wäre ein Weg nach oben). Sonst wird das Recht nicht geprüft, und es gibt einen Hinweis."""
     return isinstance(name, str) and _ACL_NAME_RE.fullmatch(name) is not None and name.strip(".") != ""
 
 
@@ -339,16 +293,16 @@ class BackupInfo:
     warnings: list[str] = field(default_factory=list)
     refuse: str | None = None
     mappings: list[str] = field(default_factory=list)
-    """Proxmox-Zuordnungen (`/mapping/pci/<name>` ...), fuer die der Token `Mapping.Use` braucht."""
+    """Proxmox-Zuordnungen (`/mapping/pci/<name>` ...), für die der Token `Mapping.Use` braucht."""
     privileged: bool = False
 
 
 def _devices(kind: str, config: dict[str, str], info: BackupInfo) -> None:
-    """Durchgereichte Hardware. VMs: Proxmox uebernimmt `hostpci`/`usb` beim Wiederherstellen unveraendert, laesst
-    aber Geraete ohne Zuordnung (`host=...`) nur root wiederherstellen (`check_mapping_access`) -- der Zugang von
-    Nodvard Deck ist nie root, also gleich ablehnen. Zuordnungen brauchen `Mapping.Use`. Platten des Servers
-    (`/dev/...`) mit `backup=0` laesst Proxmox weg, sonst legt es aus der Sicherung eine neue Platte an.
-    Container: `dev<N>` uebernimmt Proxmox mit."""
+    """Hinweise und Ablehnungsgründe für Hardware des Servers, die die Sicherung durchreicht."""
+    # VMs: Proxmox übernimmt `hostpci`/`usb` beim Wiederherstellen unverändert, lässt Geräte ohne Zuordnung
+    # (`host=...`) aber nur root wiederherstellen (`check_mapping_access`); der Zugang von Nodvard Deck ist nie root,
+    # also gleich ablehnen. Zuordnungen brauchen `Mapping.Use`. Platten des Servers (`/dev/...`) mit `backup=0` lässt
+    # Proxmox weg, sonst legt es aus der Sicherung eine neue Platte an. Container: `dev<N>` übernimmt Proxmox mit.
     raw: list[str] = []
     for key in sorted(config):
         value = config[key]
@@ -406,8 +360,8 @@ def _devices(kind: str, config: dict[str, str], info: BackupInfo) -> None:
 
 
 def describe_config(kind: str, config: dict[str, str] | None) -> BackupInfo:
-    """Was die Sicherung ueber den Gast verraet: Name, Plattengroesse (Obergrenze, space.py), Netzwerkkarten und
-    feste Adressen, durchgereichte Hardware, und ob Proxmox die Wiederherstellung einem Token ueberhaupt erlaubt."""
+    """Was die Sicherung über den Gast verrät: Name, Plattengröße (Obergrenze, space.py), Netzwerkkarten und feste
+    Adressen, durchgereichte Hardware, und ob Proxmox die Wiederherstellung einem Token überhaupt erlaubt."""
     info = BackupInfo()
     if config is None:
         info.warnings.append(
@@ -457,7 +411,7 @@ def describe_config(kind: str, config: dict[str, str] | None) -> BackupInfo:
 
 
 def gb(value: float) -> str:
-    """Wie `formatBytes` der Seite: unter 10 GB eine Nachkommastelle, darueber keine."""
+    """Wie `formatBytes` der Seite: unter 10 GB eine Nachkommastelle, darüber keine."""
     amount = value / 1024**3
     return f"{amount:.1f} GB" if amount < 10 else f"{amount:.0f} GB"
 
@@ -479,7 +433,7 @@ def space_warning(disk_bytes: int | None, avail: int, storage_type: str | None) 
     )
 
 
-# --- Pruefungen gegen Proxmox --------------------------------------------------------------------------
+# --- Prüfungen gegen Proxmox --------------------------------------------------------------------------
 
 
 async def online_nodes(connector: ProxmoxBackupConnector) -> list[str]:
@@ -491,8 +445,8 @@ async def online_nodes(connector: ProxmoxBackupConnector) -> list[str]:
 
 
 async def find_backup(connector: ProxmoxBackupConnector, node: str, volid: str) -> dict[str, Any]:
-    """Der Eintrag der Sicherung, so wie DIESER Knoten den Backup-Speicher sieht. Fehlt sie dort (Speicher nur
-    eines anderen Knotens, inzwischen geloescht), wird nichts wiederhergestellt."""
+    """Der Eintrag der Sicherung, so wie dieser Knoten den Backup-Speicher sieht. Fehlt sie dort (Speicher nur
+    eines anderen Knotens, inzwischen gelöscht), wird nichts wiederhergestellt."""
     storage = volid.split(":", 1)[0]
     guess = source_vmid_from_volid(volid)
     try:
@@ -541,8 +495,8 @@ async def _backup_locations(connector: ProxmoxBackupConnector, nodes: list[str])
 async def storages_with_backups_of(
     connector: ProxmoxBackupConnector, vmid: int | str, locations: list[tuple[str, str]]
 ) -> list[str]:
-    """Auf welchen Backup-Speichern noch Sicherungen eines Gastes mit dieser Nummer liegen (bestmoeglich: ein
-    nicht lesbarer Speicher zaehlt nicht)."""
+    """Auf welchen Backup-Speichern noch Sicherungen eines Gastes mit dieser Nummer liegen (bestmöglich: ein
+    nicht lesbarer Speicher zählt nicht)."""
     found: list[str] = []
     for node, storage in locations:
         try:
@@ -555,7 +509,7 @@ async def storages_with_backups_of(
 
 
 async def ha_vmids(connector: ProxmoxBackupConnector) -> set[str] | None:
-    """Nummern mit HA-Regel (`vm:900`, `ct:900`, aeltere Form `900`); None, wenn nicht lesbar."""
+    """Nummern mit HA-Regel (`vm:900`, `ct:900`, ältere Form `900`); None, wenn nicht lesbar."""
     try:
         rows = await connector.ha_resources()
     except ProxmoxBackupApiError:
@@ -567,7 +521,7 @@ async def check_vmid(
     connector: ProxmoxBackupConnector, vmid: int, *, source_vmid: str, locations: list[tuple[str, str]]
 ) -> tuple[list[dict[str, Any]], list[str]]:
     """Frei, nicht die des Originals, keine alten Sicherungen und keine HA-Regel darunter.
-    -> (`/cluster/resources` fuer den Namen, Hinweise)."""
+    -> (`/cluster/resources` für den Namen, Hinweise)."""
     if str(vmid) == str(source_vmid):
         raise RestoreError(
             f"Die Kopie braucht eine neue Nummer, nicht die des Originals ({source_vmid}). Wähle eine andere."
@@ -586,6 +540,8 @@ async def check_vmid(
         raise RestoreError(f"Ob die Nummer {vmid} frei ist, ließ sich nicht prüfen: {exc}") from None
     if not free:
         raise RestoreError(f"Die Nummer {vmid} ist in Proxmox schon vergeben. Wähle eine freie Nummer.")
+    # Alte Sicherungen unter der Nummer gehörten ab jetzt zur Kopie, und die Aufbewahrung eines Backup-Jobs könnte
+    # sie löschen. Eine HA-Regel würde die Kopie starten.
     old = await storages_with_backups_of(connector, vmid, locations)
     if old:
         raise RestoreError(
@@ -612,7 +568,7 @@ async def suggest_vmid(
     connector: ProxmoxBackupConnector, *, source_vmid: str, locations: list[tuple[str, str]]
 ) -> int | None:
     """Ab `GET /cluster/nextid` die erste Nummer, die frei ist und unter der weder alte Sicherungen liegen noch eine
-    HA-Regel steht (nextid nennt die kleinste freie -- oft genau die eines geloeschten Gastes)."""
+    HA-Regel steht (nextid nennt die kleinste freie, oft genau die eines gelöschten Gastes)."""
     try:
         candidate = await connector.next_vmid()
     except ProxmoxBackupApiError:
@@ -660,14 +616,14 @@ Version = tuple[int, int]
 
 
 def parse_version(text: Any) -> Version | None:  # noqa: ANN401 - Text aus der Antwort von Proxmox
-    """`8.2.4` oder `7.4-3` -> (8, 2) bzw. (7, 4); None, wenn nichts Brauchbares dasteht. Nur ASCII-Ziffern und hoechstens
+    """`8.2.4` oder `7.4-3` -> (8, 2) bzw. (7, 4); None, wenn nichts Brauchbares dasteht. Nur ASCII-Ziffern und höchstens
     vier je Zahl: keine Ziffernflut, keine fremden Ziffern (arabisch-indisch, volle Breite)."""
     match = _VERSION_RE.match(text) if isinstance(text, str) else None
     return (int(match.group(1)), int(match.group(2))) if match else None
 
 
 async def read_version(connector: ProxmoxBackupConnector) -> tuple[Version | None, str]:
-    """`GET /version` -> (Version, Text fuer die Meldung); (None, "") wenn sie sich nicht lesen laesst."""
+    """`GET /version` -> (Version, Text für die Meldung); (None, "") wenn sie sich nicht lesen lässt."""
     try:
         text = await connector.version()
     except ProxmoxBackupApiError:
@@ -678,7 +634,7 @@ async def read_version(connector: ProxmoxBackupConnector) -> tuple[Version | Non
 
 def upgrade_text(version: Version | None, needed: Version) -> str:
     """Wie der Server auf `needed` kommt: innerhalb derselben Hauptversion holen die normalen Updates es ein; eine neue
-    Hauptversion (VE 6 auf 7, VE 5 auf 6) ist ein eigenes, grosses Update, das die Update-Zentrale nicht einspielt."""
+    Hauptversion (VE 6 auf 7, VE 5 auf 6) ist ein eigenes, großes Update, das die Update-Zentrale nicht einspielt."""
     return MAJOR_UPGRADE_TEXT if version is not None and version[0] < needed[0] else UPDATES_TEXT
 
 
@@ -696,9 +652,8 @@ def version_too_old_text(kind: str, version: Version, version_text: str) -> str:
 
 
 def check_version(kind: str, version: Version | None, version_text: str) -> list[str]:
-    """Zu alt -> `RestoreError` (nichts wird angelegt). Nicht lesbar -> Hinweis, Proxmox prueft beim Anlegen selbst.
-    Container gehen auch auf aelteren Versionen; was dort fehlt, steht bei den Konstanten oben (`MIN_VERSION_LXC` hier,
-    `POOL_CHECK_FIXED_LXC` in `check_rights`)."""
+    """Zu alt -> `RestoreError` (nichts wird angelegt). Nicht lesbar -> Hinweis, Proxmox prüft beim Anlegen selbst.
+    Container gehen auch auf älteren Versionen; was dort fehlt, steht bei `MIN_VERSION_LXC` und `POOL_CHECK_FIXED_LXC`."""
     if version is None:
         need = f"{MIN_VERSION_QEMU[0]}.{MIN_VERSION_QEMU[1]}" if kind == "qemu" else str(MIN_VERSION_LXC[0])
         return [
@@ -712,9 +667,9 @@ def check_version(kind: str, version: Version | None, version_text: str) -> list
 
 
 def pool_setup_text(token_id: str) -> str:
-    """Fuer Leute ohne die Einrichtung mit Passwort: die Befehle, die Pool und Rechte von Hand anlegen. Die Rolle muss
-    zuerst da sein, sonst nimmt `acl modify` sie nicht. Benutzer UND Token bekommen sie: Der Token ist von den Rechten
-    seines Benutzers abhaengig (Rechtetrennung), er hat nie mehr als beide zusammen."""
+    """Die Befehle, die Pool und Rechte von Hand anlegen, für Leute ohne die Einrichtung mit Passwort."""
+    # Die Rolle muss zuerst da sein, sonst nimmt `acl modify` sie nicht. Benutzer und Token bekommen sie: der Token ist
+    # von den Rechten seines Benutzers abhängig (Rechtetrennung) und hat nie mehr als beide zusammen.
     valid = re.fullmatch(r"([A-Za-z0-9._-]+@[A-Za-z0-9._-]+)![A-Za-z0-9._-]+", token_id or "")
     user, token = (valid.group(1), valid.group(0)) if valid else ("<Benutzer@Bereich>", "<Token-ID>")
     return (
@@ -728,9 +683,9 @@ def pool_setup_text(token_id: str) -> str:
 def pool_problem(
     have: dict[str, Any], kind: str, version: Version | None, token_id: str
 ) -> str | None:
-    """Reichen die Rechte des Tokens auf dem Pool, um dort eine Kopie anzulegen? (`have`: `GET /access/permissions` fuer
-    den Pool.) Ob es den Pool gibt, sieht der Zugang nicht ohne `Pool.Audit`; wer dort `VM.Allocate` hat, hat den Pool
-    (Proxmox entfernt die Rechte mit dem Pool). Fehlt `VM.Allocate`, fehlt der Pool oder das Recht -- derselbe Weg."""
+    """Reichen die Rechte des Tokens (`have`: `GET /access/permissions` für den Pool), um dort eine Kopie anzulegen?"""
+    # Ob es den Pool gibt, sieht der Zugang nicht ohne `Pool.Audit`; wer dort `VM.Allocate` hat, hat den Pool (Proxmox
+    # entfernt die Rechte mit dem Pool). Fehlt `VM.Allocate`, fehlt der Pool oder das Recht: derselbe Weg.
     if "VM.Allocate" not in have:
         return (
             f"Für Kopien braucht Nodvard Deck den Pool {COPY_POOL}, und der Zugang braucht dort das Recht VM.Allocate – "
@@ -750,7 +705,7 @@ def pool_problem(
 
 
 async def pool_rights(connector: ProxmoxBackupConnector) -> dict[str, Any] | None:
-    """Die Rechte des Tokens auf dem Pool; None, wenn sich das nicht lesen laesst (dann prueft Proxmox selbst)."""
+    """Die Rechte des Tokens auf dem Pool; None, wenn sich das nicht lesen lässt (dann prüft Proxmox selbst)."""
     try:
         return await connector.permissions(POOL_PATH)
     except ProxmoxBackupApiError:
@@ -767,16 +722,17 @@ def _missing_rights_error(missing: list[str]) -> RestoreError:
 async def check_rights(
     connector: ProxmoxBackupConnector, inp: RestoreInput, kind: str, info: BackupInfo, version: Version | None
 ) -> list[str]:
-    """Die eigenen Rechte des Tokens VOR dem Anlegen (`GET /access/permissions`). Fehlt eines sicher, wird gar nicht
-    erst angelegt -- sonst laesst Proxmox die Kopie womoeglich entstehen, und Nodvard Deck kann danach ihre
-    Netzwerkkarten nicht trennen. Laesst sich die Abfrage nicht lesen, nur ein Hinweis (Proxmox prueft ohnehin selbst);
-    was vorher schon sicher fehlte, bleibt aber ein Grund abzulehnen. Namen aus der Sicherung (Bridge, VLAN-Tag) kommen nur
-    in einen Pfad, wenn sie unbedenklich aussehen (`_acl_name_ok`), sonst bleibt es bei einem Hinweis.
+    """Die eigenen Rechte des Tokens vor dem Anlegen (`GET /access/permissions`).
 
-    Die Rechte fuer den neuen Gast gelten auf dem Pool `COPY_POOL`, nicht auf `/vms/<neue Nummer>`: Vor dem Anlegen
-    steckt die neue Nummer noch in keinem Pool, und Proxmox prueft `VM.Allocate` bei gesetztem `pool` auf dem Pool
-    (`create_vm`, `$pool && $rpcenv->check($authuser, "/pool/$pool", ['VM.Allocate'])`); die Rechte fuers Name-Setzen,
-    `onboot` und die Netzwerkkarten prueft `check_vm_perm` zuerst auf dem Pool."""
+    Fehlt eines sicher, wird gar nicht erst angelegt; ist die Abfrage nicht lesbar, gibt es nur einen Hinweis."""
+    # Fehlt ein Recht, ließe Proxmox die Kopie womöglich trotzdem entstehen, und Nodvard Deck könnte danach ihre
+    # Netzwerkkarten nicht trennen. Was vorher schon sicher fehlte, bleibt ein Ablehnungsgrund, auch wenn sich ein
+    # weiteres Recht nicht lesen lässt. Namen aus der Sicherung (Bridge, VLAN-Tag) kommen nur in einen Pfad, wenn sie
+    # unbedenklich aussehen (`_acl_name_ok`), sonst bleibt es bei einem Hinweis.
+    # Die Rechte für den neuen Gast gelten auf dem Pool `COPY_POOL`, nicht auf `/vms/<neue Nummer>`: vor dem Anlegen
+    # steckt die neue Nummer noch in keinem Pool, und Proxmox prüft `VM.Allocate` bei gesetztem `pool` auf dem Pool
+    # (`create_vm`: `$pool && $rpcenv->check($authuser, "/pool/$pool", ['VM.Allocate'])`). Die Rechte fürs
+    # Name-Setzen, `onboot` und die Netzwerkkarten prüft `check_vm_perm` zuerst auf dem Pool.
     vm_rights = ["VM.Allocate", "VM.Audit", "VM.Config.Options"]
     if inp.link_down or kind == "lxc":  # Container: auch der neue Name (`hostname`) braucht VM.Config.Network
         vm_rights.append("VM.Config.Network")
@@ -820,7 +776,7 @@ async def check_rights(
             if lacking:
                 missing.append(f"{', '.join(lacking)} {where}")
     except ProxmoxBackupApiError:
-        if missing:  # was schon sicher fehlt, gilt auch, wenn sich ein weiteres Recht nicht lesen laesst
+        if missing:  # was schon sicher fehlt, gilt auch, wenn sich ein weiteres Recht nicht lesen lässt
             raise _missing_rights_error(missing) from None
         return [*unreadable, *hints]
     if missing:
@@ -829,6 +785,8 @@ async def check_rights(
 
 
 async def read_backup_config(connector: ProxmoxBackupConnector, node: str, volid: str) -> dict[str, str] | None:
+    # Die Einstellungen des Originals kommen aus der Sicherung (`extractconfig`, nur lesend); auf die Nummer des
+    # Originals geht kein einziger Aufruf.
     try:
         text = await connector.backup_config(node, volid)
     except ProxmoxBackupApiError:
@@ -865,7 +823,7 @@ def _required_text(rec: dict[str, Any], key: str) -> str:
 
 @dataclass(frozen=True)
 class CopyTarget:
-    """Was das Fertig-Einrichten ueber eine neue Kopie wissen muss -- auch noch nach einem Neustart (pending.py)."""
+    """Was das Fertig-Einrichten über eine neue Kopie wissen muss, auch nach einem Neustart (pending.py)."""
 
     connection: str
     node: str
@@ -879,7 +837,7 @@ class CopyTarget:
     upid: str | None = None
     announced: str | None = None
     """Der Ausgang, zu dem die Abschluss-Meldung schon raus ist (`_conclude`); der Vermerk liegt dann nur noch, weil das
-    Wegraeumen nicht klappte."""
+    Wegräumen nicht klappte."""
 
     @property
     def key(self) -> str:
@@ -898,12 +856,12 @@ class CopyTarget:
 
     @classmethod
     def from_record(cls, rec: dict[str, Any], *, now: float | None = None) -> CopyTarget | None:
-        """Nur ein Vermerk, der genau so aussieht, wie Nodvard Deck ihn schreibt -- sonst None (und er faellt weg).
-
-        Die Datei laesst sich von aussen veraendern, und was darin steht, bestimmt, welchen Gast die Nachbereitung anfasst.
-        Deshalb muss eine Aufgaben-Kennung die Wiederherstellung genau dieser Nummer auf diesem Knoten sein (sonst koennte
-        ein Vermerk auf einen fremden Gast und eine fertige fremde Aufgabe zeigen), Notiz und Herkunft werden gekuerzt, und
-        die Zeit muss eine endliche Zahl sein, die nicht in der Zukunft liegt (sonst lief die Frist nie ab)."""
+        """Nur ein Vermerk, der genau so aussieht, wie Nodvard Deck ihn schreibt, sonst None (und er fällt weg)."""
+        # Die Datei lässt sich von außen verändern, und was darin steht, bestimmt, welchen Gast die Nachbereitung
+        # anfasst. Darum muss eine Aufgaben-Kennung die Wiederherstellung genau dieser Nummer auf diesem Knoten sein
+        # (sonst könnte ein Vermerk auf einen fremden Gast und eine fertige fremde Aufgabe zeigen), Notiz und Herkunft
+        # werden gekürzt, und die Zeit muss eine endliche Zahl sein, die nicht in der Zukunft liegt (sonst liefe die
+        # Frist nie ab).
         try:
             created_at = rec["created_at"]
             if isinstance(created_at, bool) or not isinstance(created_at, (int, float)):
@@ -953,7 +911,7 @@ class RestorePlan:
         return f"{self.kind_label} {self.source_vmid}" + (f" ({self.source_name})" if self.source_name else "")
 
     def payload(self) -> dict[str, Any]:
-        """Was im Gate steht. `kind`/`source_vmid`/`backup_at` sind nur zum Abgleich: beim Ausfuehren wird alles
+        """Was im Gate steht. `kind`/`source_vmid`/`backup_at` sind nur zum Abgleich: beim Ausführen wird alles
         frisch aus Proxmox gelesen, weichen sie ab, gilt die Freigabe nicht."""
         return {
             "connection": self.connection, "volid": self.inp.volid, "node": self.inp.node, "storage": self.inp.storage,
@@ -962,8 +920,11 @@ class RestorePlan:
         }
 
     def create_params(self) -> dict[str, Any]:
-        """Genau das, was an Proxmox geht: immer im Pool `COPY_POOL`, kein `force`, kein `start` (connector.RESTORE_KEYS
-        laesst sie auch nicht durch)."""
+        """Genau das, was an Proxmox geht: immer im Pool `COPY_POOL`, kein `force`, kein `start` (auch
+        connector.RESTORE_KEYS lässt sie nicht durch)."""
+        # `unique=1` vergibt neue MAC-Adressen (VMs und Container kennen den Schalter). `onboot=0` gleich beim
+        # Anlegen, weil die Sicherung sonst den Autostart des Originals mitbringt und die Kopie beim nächsten
+        # Neustart des Servers loslief.
         common = {"vmid": self.inp.vmid, "storage": self.inp.storage, "unique": 1, "onboot": 0, "pool": COPY_POOL}
         if self.kind == "lxc":
             return {**common, "ostemplate": self.inp.volid, "restore": 1, "hostname": self.inp.name}
@@ -995,7 +956,9 @@ class RestorePlan:
 
 
 async def check_restore(connector: ProxmoxBackupConnector, connection: str, values: Any) -> RestorePlan:  # noqa: ANN401
-    """Alle Pruefungen vor dem Anlegen, beim Vorschlag und beim Ausfuehren gleich. Wirft `RestoreError`."""
+    """Alle Prüfungen vor dem Anlegen, beim Vorschlag und beim Ausführen gleich; wirft `RestoreError`.
+
+    Dem Payload aus dem Gate wird nichts geglaubt, was sich frisch nachprüfen lässt."""
     inp = parse_input(values)
     nodes = await online_nodes(connector)
     if inp.node not in nodes:
@@ -1044,11 +1007,11 @@ async def check_restore(connector: ProxmoxBackupConnector, connection: str, valu
     )
 
 
-# --- Auswahl fuer den Dialog (nur lesend) -----------------------------------------------------------
+# --- Auswahl für den Dialog (nur lesend) -----------------------------------------------------------
 
 
 async def guest_backups(connector: ProxmoxBackupConnector, vmid: str, kind: str | None) -> dict[str, Any]:
-    """Die Sicherungen EINES Gastes (Nummer, optional Art), neueste zuerst -- fuer die Auswahl im Dialog."""
+    """Die Sicherungen eines Gastes (Nummer, optional Art), neueste zuerst, für die Auswahl im Dialog."""
     if not _VMID_RE.fullmatch(vmid):
         raise RestoreError("Unbekannter Gast.", INVALID)
     nodes = await online_nodes(connector)
@@ -1086,7 +1049,7 @@ async def guest_backups(connector: ProxmoxBackupConnector, vmid: str, kind: str 
 
 async def restore_blocker(connector: ProxmoxBackupConnector, kind: str) -> tuple[str | None, list[str]]:
     """Was die Kopie schon vor jeder Eingabe verhindert: ein zu alter Proxmox oder fehlender Pool bzw. fehlende Rechte
-    dort. -> (Satz oder None, Hinweise). Nur fuer den Dialog; verbindlich prueft `check_restore`."""
+    dort. -> (Satz oder None, Hinweise). Nur für den Dialog; verbindlich prüft `check_restore`."""
     version, version_text = await read_version(connector)
     try:
         notes = check_version(kind, version, version_text)
@@ -1099,8 +1062,8 @@ async def restore_blocker(connector: ProxmoxBackupConnector, kind: str) -> tuple
 
 
 async def restore_options(connector: ProxmoxBackupConnector, connection: str, volid: str) -> dict[str, Any]:
-    """Vorschlaege fuer den Dialog: welche Knoten die Sicherung sehen, welche Speicher dort passen (mit Platz),
-    freie Nummer, Name, Hinweise. Verbindlich prueft erst `check_restore` beim Vorschlagen und Ausfuehren."""
+    """Vorschläge für den Dialog: welche Knoten die Sicherung sehen, welche Speicher dort passen (mit Platz),
+    freie Nummer, Name, Hinweise. Verbindlich prüft erst `check_restore` beim Vorschlagen und Ausführen."""
     check_volid(volid)
     nodes = await online_nodes(connector)
     storage_name = volid.split(":", 1)[0]
@@ -1177,14 +1140,14 @@ async def restore_options(connector: ProxmoxBackupConnector, connection: str, vo
     }
 
 
-# --- Ausfuehren --------------------------------------------------------------------------------------
+# --- Ausführen --------------------------------------------------------------------------------------
 
 
 @dataclass
 class TaskOutcome:
     state: str  # "ok", "failed", "timeout", "lost"
     exitstatus: str | None = None
-    """Bei "ok" der Ausgang von Proxmox; bei "failed" nur sein Grund, soweit er sich anzeigen laesst (`proxmox_reason`), sonst None."""
+    """Bei "ok" der Ausgang von Proxmox; bei "failed" nur sein Grund, soweit er sich anzeigen lässt (`proxmox_reason`), sonst None."""
 
 
 def task_finished_ok(exitstatus: str) -> bool:
@@ -1193,7 +1156,7 @@ def task_finished_ok(exitstatus: str) -> bool:
 
 async def wait_for_restore(connector: ProxmoxBackupConnector, node: str, upid: str) -> TaskOutcome:
     """Fragt nach, bis die Proxmox-Aufgabe fertig ist. `RESTORE_TIMEOUT_S`/`POLL_INTERVAL_S` werden bei jedem Aufruf
-    gelesen. Fehler und Antworten ohne `status` zaehlen nicht als Ausgang ("vielleicht laeuft sie noch"), erst nach
+    gelesen. Fehler und Antworten ohne `status` zählen nicht als Ausgang ("vielleicht läuft sie noch"), erst nach
     `MAX_POLL_ERRORS` in Folge gibt die Aktion auf ("lost")."""
     deadline = time.monotonic() + RESTORE_TIMEOUT_S
     errors = 0
@@ -1221,7 +1184,7 @@ async def wait_for_restore(connector: ProxmoxBackupConnector, node: str, upid: s
 
 def upid_is_restore_of(upid: str, node: str, kind: str, vmid: int) -> bool:
     """Ob die Aufgaben-Kennung (`UPID:<knoten>:<pid>:<pstart>:<start>:<art>:<nummer>:<benutzer>:`) genau diese
-    Wiederherstellung meint. Nur dann fasst die Nachbereitung die Nummer an -- sie gehoert dann sicher der Kopie."""
+    Wiederherstellung meint. Nur dann fasst die Nachbereitung die Nummer an: sie gehört dann sicher der Kopie."""
     if not isinstance(upid, str) or not UPID_RE.fullmatch(upid):
         return False
     parts = upid.split(":")
@@ -1244,6 +1207,8 @@ def _truthy(value: Any) -> bool:  # noqa: ANN401
 def finish_changes(target: CopyTarget, config: dict[str, Any]) -> dict[str, Any]:
     """Was nach dem Anlegen noch zu setzen ist: getrennte Netzwerkkarten, Autostart aus, Name, Notiz."""
     changes: dict[str, Any] = {}
+    # Im Gast gilt noch die Netzwerk-Einstellung des Originals (feste IP, Rechnername); darum werden die
+    # Netzwerkkarten getrennt, bis die Person sie in Proxmox wieder verbindet.
     if target.link_down:
         for key in sorted(k for k in config if _NET_RE.fullmatch(k)):
             new = with_link_down(str(config[key]))
@@ -1256,7 +1221,7 @@ def finish_changes(target: CopyTarget, config: dict[str, Any]) -> dict[str, Any]
         changes[name_key] = target.name
     old = str(config.get("description") or "")
     if not old.startswith(target.note):
-        # Proxmox nimmt hoechstens 8 KiB; gekuerzt wird nach Bytes, nicht mitten in einem Umlaut.
+        # Proxmox nimmt höchstens 8 KiB; gekürzt wird nach Bytes, nicht mitten in einem Umlaut.
         text = target.note + (f"\n\n{old}" if old else "")
         changes["description"] = text.encode()[:DESCRIPTION_MAX].decode(errors="ignore")
     if changes and config.get("digest"):
@@ -1277,7 +1242,7 @@ def finish_problems(target: CopyTarget, config: dict[str, Any]) -> list[str]:
 
 async def finish_copy(connector: ProxmoxBackupConnector, target: CopyTarget) -> tuple[str | None, bool]:
     """Richtet die neue Kopie fertig ein (nur ihre Nummer!) und liest nach. -> (None oder was nicht klappte,
-    ob ein weiterer Versuch sinnlos ist -- 403: dem Zugang fehlt ein Recht)."""
+    ob ein weiterer Versuch sinnlos ist; 403: dem Zugang fehlt ein Recht)."""
     vmid = str(target.vmid)
     problem: str | None = None
     for attempt in range(FINISH_ATTEMPTS):
@@ -1314,13 +1279,13 @@ def _network_sentence(link_down: bool) -> str:
 
 
 def _unclear(status_code: int | None) -> bool:
-    """Ob ein Fehler beim Anlegen offen laesst, ob Proxmox angefangen hat: keine Antwort, oder ein Proxy bzw. Proxmox'
+    """Ob ein Fehler beim Anlegen offen lässt, ob Proxmox angefangen hat: keine Antwort, oder ein Proxy bzw. Proxmox'
     eigener Weiterleiter meldet sich (502/503/504, 595/596). Ein 4xx oder 500 kommt von Proxmox selbst, vor dem Anlegen."""
     return status_code is None or status_code >= 502
 
 
 class RestoreCopyExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor` fuer `backup.restore_copy`."""
+    """Führt `backup.restore_copy` aus."""
 
     action_types = frozenset({ACTION_TYPE})
 
@@ -1368,9 +1333,9 @@ class RestoreCopyExecutor:
                 )
         target = plan.target(time.time())
         if target.key in pending.ACTIVE:
-            # Ein zweiter Lauf zur selben Nummer (gleichzeitig vorgeschlagen und freigegeben): Der erste ist schon dabei.
-            # Hier wird nichts angefasst -- weder sein Vermerk noch sein Platz in `ACTIVE` (das `finally` unten gehoert dem
-            # Lauf, der sich eingetragen hat).
+            # Ein zweiter Lauf zur selben Nummer (gleichzeitig vorgeschlagen und freigegeben): der erste ist schon
+            # dabei. Hier wird nichts angefasst, weder sein Vermerk noch sein Platz in `ACTIVE` (das `finally` unten
+            # gehört dem Lauf, der sich eingetragen hat).
             return ActionResult(
                 success=False,
                 error=f"Nicht wiederhergestellt: Für diese Nummer läuft schon eine Wiederherstellung. {nothing}",
@@ -1382,6 +1347,11 @@ class RestoreCopyExecutor:
             pending.ACTIVE.discard(target.key)
 
     async def _create_and_finish(self, connector: ProxmoxBackupConnector, plan: RestorePlan, target: CopyTarget) -> ActionResult:
+        # Ablauf: Vermerk "offene Kopie" (pending.py) -> Anlegen -> Aufgabe abwarten (höchstens `RESTORE_TIMEOUT_S`) ->
+        # fertig einrichten (`PUT .../config` mit `digest`, nur auf der neuen Nummer und nur, wenn die Aufgabe
+        # nachweislich diese Wiederherstellung ist) -> nachlesen -> Meldung -> Vermerk weg. Endet die Aktion vorher
+        # (Zeitgrenze, keine Antwort, Neustart des Dashboards), bleibt der Vermerk, und der Backup-Wächter holt das
+        # Fertig-Einrichten nach (`follow_up_open_copies`).
         nothing = "Es wurde nichts angelegt, das Original ist unberührt."
         detail: dict[str, Any] = {
             "connection": plan.connection, "node": plan.inp.node, "storage": plan.inp.storage, "vmid": plan.inp.vmid,
@@ -1390,7 +1360,7 @@ class RestoreCopyExecutor:
         }
         pending.ANNOUNCED.pop(target.key, None)
         try:
-            # Vor dem Anlegen: endet die Aktion danach unerwartet, weiss der Waechter von der Kopie.
+            # Vor dem Anlegen: endet die Aktion danach unerwartet, weiß der Wächter von der Kopie.
             pending.remember(self._ctx, target.key, target.record())
         except OSError:
             return ActionResult(
@@ -1400,6 +1370,8 @@ class RestoreCopyExecutor:
                     f"und könnte die Kopie nach einem Abbruch nicht fertig einrichten. {nothing}"
                 ),
             )
+        # Ohne `force` prüft Proxmox beim Anlegen selbst clusterweit, ob die Nummer frei ist (VMs:
+        # `create_and_lock_config`, Container: `check_vmid_unused`); wurde sie seit unserer Prüfung vergeben, lehnt es ab.
         try:
             upid = await connector.restore_guest(plan.inp.node, plan.kind, plan.create_params())
         except ProxmoxBackupApiError as exc:
@@ -1502,11 +1474,11 @@ async def _audit(
             },
             correlation_id=correlation_id,
         )
-    except Exception:  # noqa: BLE001 - das Gate bzw. die Meldung haelt das Ergebnis ohnehin fest
+    except Exception:  # noqa: BLE001 - das Gate bzw. die Meldung hält das Ergebnis ohnehin fest
         return
 
 
-# --- Abschluss und Nachbereiten offener Kopien (Backup-Waechter) --------------------------------------
+# --- Abschluss und Nachbereiten offener Kopien (Backup-Wächter) --------------------------------------
 
 
 def finished_message(target: CopyTarget) -> tuple[str, str]:
@@ -1519,7 +1491,7 @@ def finished_message(target: CopyTarget) -> tuple[str, str]:
 
 
 def failed_message(target: CopyTarget, exitstatus: str | None) -> tuple[str, str]:
-    """Der Ausgang der Aufgabe kommt von Proxmox: derselbe Filter und Rahmen wie bei den Gruenden in Fehlerantworten
+    """Der Ausgang der Aufgabe kommt von Proxmox: derselbe Filter und Rahmen wie bei den Gründen in Fehlerantworten
     (`proxmox_reason`, "Grund laut Proxmox ..."), nie HTML und nie eine Adresse mit Schema."""
     reason = proxmox_reason(exitstatus)
     why = (
@@ -1543,28 +1515,26 @@ def unfinished_message(target: CopyTarget, problem: str) -> tuple[str, str]:
 
 
 NOTIFY_GIVE_UP_S = FOLLOW_UP_GIVE_UP_S + 24 * 3600.0
-"""Lässt sich die Abschluss-Meldung so lange nicht abschicken (der Vermerk liegt seit der Kopie), raeumt der Waechter
-den Vermerk trotzdem weg und schreibt es ins Protokoll -- statt es fuer immer weiter zu versuchen."""
+"""Lässt sich die Abschluss-Meldung so lange nicht abschicken (der Vermerk liegt seit der Kopie), räumt der Wächter
+den Vermerk trotzdem weg und schreibt es ins Protokoll, statt es für immer weiter zu versuchen."""
 
 
 async def _conclude(
     ctx: ExtensionContext, target: CopyTarget, result: str, title: str, body: str, *, success: bool,
     followup: bool = False,
 ) -> bool:
-    """Das Ende einer Kopie: genau EINE Meldung, dann den Vermerk wegraeumen. Aufgerufen von der Aktion (ihr Ergebnis
-    steht im Protokoll der Aktion) und vom Waechter (`followup=True`, schreibt selbst ins Protokoll). Geloescht wird in
-    Proxmox nie etwas.
-
-    -> True, wenn die Meldung raus ist (jetzt oder schon vorher). Scheitert sie, bleibt der Vermerk, und der Waechter
-    versucht es in der naechsten Runde noch einmal; scheitert nur das Wegraeumen, ist die Meldung schon raus
-    (`announced`, auch im Speicher), und es kommt keine zweite."""
+    """Das Ende einer Kopie: genau eine Meldung, dann den Vermerk wegräumen. -> True, wenn die Meldung raus ist."""
+    # Scheitert die Meldung, bleibt der Vermerk (nächste Runde neuer Versuch); scheitert nur das Wegräumen, merken
+    # `announced` und der Speicher die Meldung, und es kommt keine zweite. Aufgerufen von der Aktion (ihr Ergebnis
+    # steht im Protokoll der Aktion) und vom Wächter (`followup=True`, schreibt selbst ins Protokoll). In Proxmox
+    # wird dabei nie etwas gelöscht.
     if target.announced is None and target.key not in pending.ANNOUNCED:
         try:
             await ctx.notify.send(Notification(
                 title=title, body=body, severity=Severity.INFO if success else Severity.WARNING,
                 correlation_id=f"backups-restore:{target.key}", payload={"path": PAGE_PATH},
             ))
-        except Exception:  # noqa: BLE001 - dann bleibt der Vermerk, und die naechste Runde versucht es noch einmal
+        except Exception:  # noqa: BLE001 - dann bleibt der Vermerk, und die nächste Runde versucht es noch einmal
             log.exception("restore_conclude_notify_failed key=%s", target.key)
             if time.time() - target.created_at <= NOTIFY_GIVE_UP_S:
                 return False
@@ -1589,14 +1559,14 @@ async def _conclude(
 async def _close(
     ctx: ExtensionContext, target: CopyTarget, result: str, title: str, body: str, *, success: bool,
 ) -> str:
-    """Der Waechter beendet eine Kopie: Meldung, Protokoll, Vermerk weg. -> der Ausgang, oder "open", wenn die Meldung
+    """Der Wächter beendet eine Kopie: Meldung, Protokoll, Vermerk weg. -> der Ausgang, oder "open", wenn die Meldung
     nicht abging (der Vermerk bleibt)."""
     return result if await _conclude(ctx, target, result, title, body, success=success, followup=True) else "open"
 
 
 async def _find_restore_task(connector: ProxmoxBackupConnector, target: CopyTarget) -> str | None:
     """Die Aufgabe zu einer Kopie, deren Kennung nie ankam: Wiederherstellung genau dieser Nummer auf diesem Knoten,
-    nicht aelter als der Vermerk (zwei Minuten Spielraum fuer abweichende Uhren)."""
+    nicht älter als der Vermerk (zwei Minuten Spielraum für abweichende Uhren)."""
     rows = await connector.restore_tasks(target.node, target.vmid, WORKER[target.kind])
     found = [
         r for r in rows
@@ -1617,7 +1587,7 @@ def _give_up_message(target: CopyTarget, reason: str) -> tuple[str, str]:
 
 async def _in_copy_pool(connector: ProxmoxBackupConnector, target: CopyTarget) -> bool:
     """Ob es unter der Nummer einen Gast dieser Art im Pool `COPY_POOL` gibt (`GET /cluster/resources`). Nur dort richtet
-    die Nachbereitung etwas ein: jede Kopie entsteht im Pool, ein Gast ausserhalb ist nie eine Kopie von Nodvard Deck."""
+    die Nachbereitung etwas ein: jede Kopie entsteht im Pool, ein Gast außerhalb ist nie eine Kopie von Nodvard Deck."""
     rows = await connector.guest_resources()
     return any(
         isinstance(r, dict) and str(r.get("vmid")) == str(target.vmid) and r.get("type") == target.kind
@@ -1629,11 +1599,13 @@ async def _in_copy_pool(connector: ProxmoxBackupConnector, target: CopyTarget) -
 async def _follow_up_one(
     ctx: ExtensionContext, connector: ProxmoxBackupConnector | None, target: CopyTarget, now: float,
 ) -> str:
+    # Der Wächter fasst einen Gast nur an, wenn der Vermerk genau zu ihm passt (`CopyTarget.from_record`, Aufgaben-Kennung,
+    # `_in_copy_pool`); sonst meldet er "Kopie nicht gefunden" und verändert nichts.
     age = now - target.created_at
     expired = age > FOLLOW_UP_GIVE_UP_S
     label = target.label
     done = target.announced or pending.ANNOUNCED.get(target.key)
-    if done:  # die Meldung ist schon raus, nur das Wegraeumen ging schief
+    if done:  # die Meldung ist schon raus, nur das Wegräumen ging schief
         await _conclude(ctx, target, done, "", "", success=True, followup=True)
         return done
 
@@ -1706,23 +1678,23 @@ async def _follow_up_one(
 async def _follow_up_record(
     ctx: ExtensionContext, connectors: dict[str, ProxmoxBackupConnector], key: str, now: float | None,
 ) -> str | None:
-    # Frisch lesen: Waehrend der Waechter auf Proxmox wartete, kann die Aktion die Kopie abgeschlossen (Meldung, Vermerk weg)
-    # oder eine neue begonnen haben. Mit dem Stand vom Anfang der Runde kaeme eine Meldung doppelt.
+    # Frisch lesen: Während der Wächter auf Proxmox wartete, kann die Aktion die Kopie abgeschlossen (Meldung, Vermerk weg)
+    # oder eine neue begonnen haben. Mit dem Stand vom Anfang der Runde käme eine Meldung doppelt.
     record = pending.load(ctx).get(key)
     if record is None or key in pending.ACTIVE:
         return None
     current = time.time() if now is None else now
     target = CopyTarget.from_record(record, now=current)
     if target is None or target.key != key:
-        log.warning("restore_pending_dropped key=%r", key)  # `%r`: der Schluessel stammt aus einer veraenderbaren Datei
+        log.warning("restore_pending_dropped key=%r", key)  # `%r`: der Schlüssel stammt aus einer veränderbaren Datei
         pending.forget(ctx, key)
         return None
     return await _follow_up_one(ctx, connectors.get(target.connection), target, current)
 
 
 async def _expire_failing_record(ctx: ExtensionContext, key: str, now: float | None) -> None:
-    """Ein Vermerk, den der Waechter in jeder Runde nicht auswerten kann (unerwarteter Fehler): Nach `FOLLOW_UP_GIVE_UP_S`
-    meldet der Waechter es einmal und raeumt ihn weg, statt ihn fuer immer mitzuschleppen."""
+    """Ein Vermerk, den der Wächter in jeder Runde nicht auswerten kann (unerwarteter Fehler): nach `FOLLOW_UP_GIVE_UP_S`
+    meldet der Wächter es einmal und räumt ihn weg, statt ihn für immer mitzuschleppen."""
     try:
         record = pending.load(ctx).get(key)
         current = time.time() if now is None else now
@@ -1733,29 +1705,29 @@ async def _expire_failing_record(ctx: ExtensionContext, key: str, now: float | N
             target, "Nodvard Deck konnte den Stand dieser Wiederherstellung nicht auswerten (Näheres im Protokoll)."
         )
         await _close(ctx, target, "given_up", title, body, success=False)
-    except Exception:  # noqa: BLE001 - der Waechter laeuft weiter
+    except Exception:  # noqa: BLE001 - der Wächter läuft weiter
         log.exception("restore_followup_expire_failed key=%r", key)
 
 
 async def follow_up_open_copies(
     ctx: ExtensionContext, connectors_factory: ConnectorsFactory, *, now: float | None = None,
 ) -> dict[str, int]:
-    """Fuer den Backup-Waechter: offene Kopien fertig einrichten, deren Aktion vorher endete. Ohne Vermerk kein
-    einziger Aufruf an Proxmox. Wirft nie (der Waechter soll weiterlaufen). Jeder Vermerk fuer sich: Ein kaputter blockiert
-    die anderen nicht, und er laeuft nach `FOLLOW_UP_GIVE_UP_S` ab."""
+    """Für den Backup-Wächter: offene Kopien fertig einrichten, deren Aktion vorher endete. Ohne Vermerk kein
+    einziger Aufruf an Proxmox. Wirft nie (der Wächter soll weiterlaufen). Jeder Vermerk für sich: ein kaputter blockiert
+    die anderen nicht, und er läuft nach `FOLLOW_UP_GIVE_UP_S` ab."""
     counts: dict[str, int] = {}
     try:
         records = pending.load(ctx)
         if not records:
             return counts
         connectors = await connectors_factory()
-    except Exception:  # noqa: BLE001 - der Waechter soll weiterlaufen; der Vermerk bleibt fuer die naechste Runde
+    except Exception:  # noqa: BLE001 - der Wächter soll weiterlaufen; der Vermerk bleibt für die nächste Runde
         log.exception("restore_followup_failed")
         return counts
     for key in records:
         try:
             result = await _follow_up_record(ctx, connectors, key, now)
-        except Exception:  # noqa: BLE001 - der Vermerk bleibt fuer die naechste Runde
+        except Exception:  # noqa: BLE001 - der Vermerk bleibt für die nächste Runde
             log.exception("restore_followup_failed key=%r", key)
             await _expire_failing_record(ctx, key, now)
             continue
@@ -1775,15 +1747,14 @@ SPEC = ActionSpec(
     permissions=["hosts.execute"],
     host_bound=False,
 )
-"""Hohes Risiko: Es entsteht ein ganzer Gast mit eigenen Platten (oft viele GB), der Lauf belastet Speicher und Netz
-lange, und die Kopie traegt im Gast dieselbe Einrichtung wie das Original (IP, Dienste, Zugangsdaten) -- einmal
-gestartet, kann sie das Netz oder fremde Systeme stoeren. Freigeben duerfen das nur Rollen mit
+"""Hohes Risiko: Es entsteht ein ganzer Gast mit eigenen Platten, der Lauf belastet Speicher und Netz lange, und die
+Kopie trägt dieselbe Einrichtung wie das Original (IP, Dienste, Zugangsdaten). Freigeben dürfen das nur Rollen mit
 `actions.approve:high` (Admin, Owner), nicht der Operator."""
 
 
 def register(ctx: ExtensionContext, connectors_factory: ConnectorsFactory) -> None:
-    """Aktion, Ausfuehrer und Routen -- alle mit `hosts.execute`: auch die Auswahl zeigt feste Adressen und Geraete
-    aus der Gast-Konfiguration, und gebraucht wird sie nur von denen, die vorschlagen duerfen."""
+    """Aktion, Ausführer und Routen, alle mit `hosts.execute`: auch die Auswahl zeigt feste Adressen und Geräte aus der
+    Gast-Konfiguration und ist nur für die gedacht, die vorschlagen dürfen."""
     ctx.actions.register(SPEC)
     ctx.capabilities.provide(RestoreCopyExecutor(ctx, connectors_factory))
 
@@ -1799,7 +1770,7 @@ def register(ctx: ExtensionContext, connectors_factory: ConnectorsFactory) -> No
     async def restore_backups(
         connection: str = Query(...), vmid: str = Query(...), kind: str | None = Query(None),
     ) -> dict[str, Any]:
-        """Sicherungen eines Gastes fuer "Als Kopie wiederherstellen", neueste zuerst."""
+        """Sicherungen eines Gastes für "Als Kopie wiederherstellen", neueste zuerst."""
         try:
             return await guest_backups(await _connector(connection), vmid, kind)
         except RestoreError as exc:
@@ -1817,7 +1788,7 @@ def register(ctx: ExtensionContext, connectors_factory: ConnectorsFactory) -> No
     async def propose_restore(
         values: dict[str, Any] = Body(...), actor: Actor = Depends(ctx.api.current_actor),
     ) -> dict[str, Any]:
-        """Prueft alles (wie beim Ausfuehren) und schlaegt die Wiederherstellung dem Gate vor (hohes Risiko).
+        """Prüft alles (wie beim Ausführen) und schlägt die Wiederherstellung dem Gate vor (hohes Risiko).
         Passt etwas nicht (Nummer vergeben, zu wenig Platz, falscher Speicher, fehlendes Recht), entsteht gar kein
         Vorschlag."""
         connection = str(values.get("connection") or "")

@@ -1,28 +1,4 @@
-"""Die drei Capability-Protokolle, die diese Extension erfuellt
-(sdk/python/nodvard_sdk/capabilities.py) -- HostProvider, MetricsProvider,
-ActionExecutor. Der Kern kennt nur diese Protokolle, nie diese Klassen namentlich
-(kein "proxmox" im Kern, das prueft scripts/check_core_purity.py).
-
-`provider_ref`-Schema (frei waehlbar, der Kern liest ihn nie inhaltlich, siehe
-`nodvard_sdk.types.Host.provider_ref`-Docstring): "<connection>/node/<node>" fuer
-einen Proxmox-Knoten, "<connection>/qemu/<node>/<vmid>" fuer eine QEMU-VM,
-"<connection>/lxc/<node>/<vmid>" fuer einen LXC-Container (WP-8-Blocker-Nachtrag:
-auf einem Knoten, der nur LXC-Container betreibt, sah diese Extension ohne das
-nichts) -- jeweils (Knoten, VMID), weil Proxmox eine VM/einen Container nie ueber
-die ID allein adressiert.
-
-**`<connection>`-Praefix (Multi-Instanz-Nachtrag):** mehrere gleichzeitig
-konfigurierte Proxmox-Instanzen (siehe config.py) koennen dieselbe VMID vergeben
-(z. B. auf pve1 eine VM UND auf pve2 einen Container mit derselben ID) -- ohne das
-Praefix waeren `provider_ref` UND der abgeleitete `Host.name` uber Verbindungen
-hinweg nicht mehr eindeutig. Jede Methode hier loest den Verbindungsnamen zuerst
-auf (`_parse_ref()`) und holt sich darueber den richtigen Connector aus
-`config.build_connectors()`.
-
-**Bewusste Sicherheitsentscheidung:** Knoten (Hypervisoren) bekommen in dieser Runde
-KEINE Aktionen (`host_actions()` liefert fuer sie eine leere Liste) -- ein Neustart
-des Hypervisors selbst reisst potenziell alle darauf laufenden VMs mit, das ist eine
-Tragweite jenseits von "Start/Stop/Neustart/Snapshot einer einzelnen VM"."""
+"""Capability-Protokolle der Proxmox-Erweiterung: Hosts, Messwerte, Aktionen und Konsole."""
 
 from __future__ import annotations
 
@@ -51,8 +27,8 @@ _VM_ACTION_SPECS = [
         action_type="vm.start", label="Starten", icon="play",
         default_risk=Risk.LOW, host_bound=True,
     ),
-    # Das saubere Herunterfahren (ACPI/Gast-Agent), die normale Wahl -- `vm.stop`
-    # darunter ist das harte Ausschalten.
+    # Herunterfahren (ACPI bzw. Gast-Agent) ist die normale Wahl; `vm.stop` schaltet hart aus und kann Daten kosten,
+    # darum getrennte Aktionen mit eigener Risikostufe.
     ActionSpec(
         action_type="vm.shutdown", label="Herunterfahren", icon="power",
         description="Fährt das Betriebssystem im Gast (VM oder Container) geordnet herunter (wie \"Herunterfahren\" im Startmenü).",
@@ -73,8 +49,6 @@ _VM_ACTION_SPECS = [
         action_type="vm.snapshot", label="Snapshot erstellen", icon="camera",
         default_risk=Risk.MEDIUM, host_bound=True,
     ),
-    # Frueher konnte Nodvard Deck Snapshots nur ANLEGEN -- sie sammelten sich
-    # unsichtbar auf dem Speicher, Zurueckrollen ging nur in Proxmox.
     ActionSpec(
         action_type="vm.snapshot_rollback", label="Snapshot zurückrollen", icon="history",
         default_risk=Risk.HIGH, host_bound=True,
@@ -86,9 +60,7 @@ _VM_ACTION_SPECS = [
         default_risk=Risk.MEDIUM, host_bound=True,
         params_schema={"type": "object", "properties": {"snapname": {"type": "string"}}, "required": ["snapname"]},
     ),
-    # Roadmap Punkt 1 ("VM-Einstellungen bearbeiten"): nur die Whitelist aus
-    # guest_edit.py. Eigenes Formular auf der Proxmox-Seite -- `changes` ist ein Objekt,
-    # die Server-Seite des Kerns bietet dafuer bewusst kein Freitextfeld an.
+    # Nur die Positivliste aus guest_edit.py; `changes` ist ein Objekt, daher ein eigenes Formular auf der Proxmox-Seite.
     ActionSpec(
         action_type="vm.config_set", label="Hardware ändern", icon="sliders-horizontal",
         default_risk=Risk.MEDIUM, host_bound=True,
@@ -96,13 +68,12 @@ _VM_ACTION_SPECS = [
     ),
 ]
 
+# Proxmox' Regel für Snapshot-Namen (pve-configid, höchstens 40 Zeichen). Der Name landet im URL-Pfad, alles andere
+# (z. B. "../") wird vorher abgewiesen.
 SNAPNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{1,39}$")
-"""Proxmox' eigene Regel fuer Snapshot-Namen (pve-configid, max. 40 Zeichen). Der Name
-landet im URL-Pfad -- alles andere (z. B. "../") wird vorher abgewiesen."""
 _VM_ACTION_TYPES = frozenset(spec.action_type for spec in _VM_ACTION_SPECS)
 
-# Roadmap Punkt 1 ("Updates/Neustart der Knoten"). Pakete EINSPIELEN kann die REST-API
-# nicht (nur per Shell) -- bewusst nur Listen aktualisieren und neu starten.
+# Pakete einspielen kann die REST-API nicht (nur per Shell): hier nur Paketlisten aktualisieren und neu starten.
 _NODE_ACTION_SPECS = [
     ActionSpec(
         action_type="node.apt_refresh", label="Paketlisten aktualisieren", icon="refresh-cw",
@@ -119,6 +90,8 @@ _NODE_ACTION_SPECS = [
 _NODE_ACTION_TYPES = frozenset(spec.action_type for spec in _NODE_ACTION_SPECS)
 
 
+# Gäste werden über (Knoten, VMID) adressiert, nie über die VMID allein. Der Verbindungsname vorn hält die Kennung
+# eindeutig, weil mehrere Proxmox-Instanzen dieselbe VMID vergeben können.
 def _parse_ref(provider_ref: str) -> tuple[str, str, str, str | None]:
     """"<connection>/node/<node>" -> (connection, "node", node, None);
     "<connection>/qemu|lxc/<node>/<vmid>" -> (connection, kind, node, vmid)."""
@@ -129,18 +102,14 @@ def _parse_ref(provider_ref: str) -> tuple[str, str, str, str | None]:
     return connection, kind, node, parts[3]
 
 
+# Schnittstellen, über die man den Gast im Heimnetz nicht erreicht (Docker-Brücken, VPNs); nur für den Fall ohne
+# Subnetz-Treffer.
 _NOT_THE_LAN = ("lo", "docker", "br-", "veth", "virbr", "tailscale", "cni", "flannel", "wg", "zt")
-"""Schnittstellen, deren Adresse NICHT die ist, unter der man den Gast im Heimnetz
-erreicht (Docker-Bruecken, VPNs ...) -- nur fuer den Fall ohne Subnetz-Treffer."""
 
 
 def pick_guest_ipv4(candidates: list[tuple[str | None, str | None]], node_host: str | None) -> str | None:
-    """Waehlt aus den vom Gast gemeldeten Adressen die, unter der er im selben Netz wie
-    sein Proxmox-Knoten erreichbar ist. Live gesehen: eine Docker-VM meldet neben
-    ihrer LAN-Adresse (z. B. 192.168.2.45) fuenf Docker-Bruecken (172.x) -- die
-    duerfen nie gewinnen.
-    Zuerst: gleiches /24 wie der Knoten; sonst die erste Adresse ausserhalb von
-    Bruecken/VPNs; sonst keine."""
+    """Wählt aus den gemeldeten Adressen die im Netz des Proxmox-Knotens: gleiches /24, sonst die erste Adresse
+    außerhalb von Brücken und VPNs, sonst keine."""
     parsed: list[tuple[str, ipaddress.IPv4Address]] = []
     for iface, addr in candidates:
         if not addr:
@@ -222,10 +191,8 @@ def _slug(text: str) -> str:
 
 
 def node_host_name(connection: str, node: str) -> str:
-    """Kennung fuer einen NEU eingelesenen Knoten: klein geschrieben (wie jede Host-Kennung
-    im Kern) und ohne Doppelung, wenn Verbindung und Knoten gleich heissen
-    (`pve-pve1` statt `pve-pve1-pve1`). Bereits eingelesene Hosts behalten ihre Kennung --
-    der Kern aendert sie bei einem erneuten Abgleich nie."""
+    """Kennung für einen neu eingelesenen Knoten, klein geschrieben und ohne Doppelung bei gleichem Namen
+    (`pve-pve1` statt `pve-pve1-pve1`). Bereits eingelesene Hosts behalten ihre Kennung, der Kern ändert sie nicht."""
     conn, name = _slug(connection), _slug(node)
     return (f"pve-{conn}" if conn == name else f"pve-{conn}-{name}")[:64]
 
@@ -240,21 +207,17 @@ def _legacy_node_host_name(connection: str, node: str) -> str:
 
 _POWER_ACTIONS = frozenset({"start", "stop", "shutdown", "reboot", "reset", "suspend", "resume"})
 
+# Normale Wartezeit auf den Ausgang eines Proxmox-Tasks (`_wait_and_report`).
 _TASK_WAIT_S = 30.0
-"""Wie lange `_wait_and_report()` normalerweise auf den Ausgang eines Proxmox-Tasks wartet."""
+# Geordnetes Herunterfahren dauert oft deutlich länger (Datenbanken schreiben noch, Windows installiert Updates). Dieselbe
+# Zeit geht als `timeout` an Proxmox: ohne ihn bricht Proxmox nach etwa 60 s mit "got timeout" ab.
 _SHUTDOWN_WAIT_S = 180.0
-"""Ein Gast braucht zum geordneten Herunterfahren oft deutlich laenger als 30 s
-(Datenbanken schreiben noch, Windows installiert Updates) -- der Task endet erst, wenn
-der Gast wirklich aus ist. Dieselbe Zeit geht als `timeout` an Proxmox: ohne den Parameter
-bricht Proxmox das Herunterfahren nach etwa 60 s mit "got timeout" ab, obwohl der Gast
-noch herunterfaehrt."""
+# Puffer obendrauf, damit der Ausgang bei Ablauf des Proxmox-Limits noch bei uns ankommt.
 _SHUTDOWN_GRACE_S = 10.0
-"""Puffer obendrauf: laeuft Proxmox' eigenes Zeitlimit ab, soll dessen Ausgang noch bei
-uns ankommen (statt "laeuft noch" kurz vor dem Fehlschlag)."""
 
 
 class ProxmoxHostProvider:
-    """Erfuellt `nodvard_sdk.capabilities.HostProvider`."""
+    """Erfüllt `nodvard_sdk.capabilities.HostProvider`."""
 
     provider_id = "proxmox"
 
@@ -263,9 +226,8 @@ class ProxmoxHostProvider:
 
     async def discover_hosts(self) -> list[DiscoveredHost]:
         discovered: list[DiscoveredHost] = []
-        # Kennungen sind im Kern eindeutig. Wer schon eingelesen ist, behaelt seine
-        # (der Kern uebernimmt `name` nur beim Anlegen); fuer neue wird die einheitliche
-        # Form nur genommen, wenn sie noch frei ist -- sonst die bisherige.
+        # Kennungen sind im Kern eindeutig. Wer schon eingelesen ist, behält seine (der Kern übernimmt `name` nur
+        # beim Anlegen); für neue wird die einheitliche Form nur genommen, wenn sie noch frei ist, sonst die bisherige.
         known = await self._ctx.hosts.list()
         taken = {h.name for h in known}
         name_by_ref = {
@@ -277,7 +239,7 @@ class ProxmoxHostProvider:
                 return name_by_ref[provider_ref]
             chosen = wanted if wanted not in taken else fallback
             # Sind beide Formen schon vergeben (z. B. Verbindung „a“ + Knoten „b-c“ neben „a-b“ + „c“),
-            # haengt eine Zahl an: ein doppelter Name wuerde sonst den ganzen Abgleich abbrechen.
+            # hängt eine Zahl an: ein doppelter Name würde sonst den ganzen Abgleich abbrechen.
             n = 2
             while chosen in taken:
                 suffix = f"-{n}"
@@ -287,10 +249,8 @@ class ProxmoxHostProvider:
             return chosen
 
         for conn_name, connector in (await build_connectors(self._ctx)).items():
-            # Eine nicht erreichbare Verbindung (pve2 aus oder gerade im
-            # Neustart) riss vorher den ganzen Lauf mit -- auch pve1 wurde nicht mehr
-            # eingelesen. Ihre bekannten Hosts bleiben einfach stehen:
-            # upsert_discovered() loescht nichts und setzt nichts auf "aus", was fehlt.
+            # Eine nicht erreichbare Verbindung überspringen, damit die anderen weiter eingelesen werden. Ihre bekannten
+            # Hosts bleiben stehen: upsert_discovered() löscht nichts und setzt nichts auf "aus", was fehlt.
             try:
                 nodes = await connector.list_nodes()
             except ProxmoxApiError as exc:
@@ -314,9 +274,8 @@ class ProxmoxHostProvider:
                         },
                     )
                 )
-                # WP-8-Blocker-Nachtrag: LXC strukturell identisch zu QEMU -- Proxmox
-                # liefert dieselben Felder (vmid/name/status/cpu/maxmem). Ein offline
-                # Knoten im Cluster wirft hier (595) -- nur seine Gaeste auslassen.
+                # LXC liefert dieselben Felder wie QEMU (vmid/name/status/cpu/maxmem). Ein offline Knoten im Cluster
+                # antwortet mit 595: dann nur seine Gäste auslassen.
                 try:
                     guests: list[tuple[str, dict[str, Any]]] = [
                         *(("qemu", vm) for vm in await connector.list_qemu(node_name)),
@@ -325,10 +284,8 @@ class ProxmoxHostProvider:
                 except ProxmoxApiError as exc:
                     _log.warning("Proxmox-Discovery: Gäste von Knoten '%s' (%s) nicht lesbar: %s", node_name, conn_name, exc)
                     continue
-                # Echte Gast-Adressen (beobachtet: zwei VMs standen mit der
-                # Knoten-IP in der Terminal-Liste): nur fuer LAUFENDE Gaeste, parallel,
-                # je Abfrage max. 5s. Ohne Antwort bleibt es beim Platzhalter, der eine
-                # vorhandene Adresse nie ueberschreibt (siehe `address_verified`).
+                # Echte Gast-Adressen nur für laufende Gäste, parallel, je Abfrage höchstens 5 s. Ohne Antwort bleibt die
+                # Knoten-Adresse als Platzhalter, der eine vorhandene Adresse nie überschreibt (siehe `address_verified`).
                 addresses = await asyncio.gather(*(
                     _guest_address(connector, kind, node_name, str(g["vmid"]))
                     if g.get("status") == "running" else _none()
@@ -349,7 +306,7 @@ class ProxmoxHostProvider:
                             address=address or connector.host,
                             address_verified=address is not None,
                             kind=short,
-                            # Nur gesetzt, wenn bekannt -- der Kern uebernimmt es sonst nicht.
+                            # Nur gesetzt, wenn bekannt -- der Kern übernimmt es sonst nicht.
                             **({"os_family": os_family} if os_family else {}),
                             status=HostStatus.UP if guest.get("status") == "running" else HostStatus.DOWN,
                             tags=["proxmox", short],
@@ -383,8 +340,7 @@ class ProxmoxHostProvider:
 
 
 class ProxmoxMetricsProvider:
-    """Erfuellt `nodvard_sdk.capabilities.MetricsProvider`. Momentaufnahme, keine
-    Historie (docs/00-DECISIONS.md D-02) -- `sample()` fragt Proxmox bei JEDEM
+    """Erfüllt `nodvard_sdk.capabilities.MetricsProvider`: eine Momentaufnahme, `sample()` fragt Proxmox bei jedem
     Aufruf frisch ab."""
 
     _METRIC_NAMES = ["cpu_percent", "mem_used_bytes", "mem_total_bytes", "uptime_s"]
@@ -403,8 +359,7 @@ class ProxmoxMetricsProvider:
             data = await connector.lxc_status(node, vmid)  # type: ignore[arg-type]
         else:
             data = await connector.qemu_status(node, vmid)  # type: ignore[arg-type]
-        # Beobachtet: RAM der Knoten stand auf "-". Knoten melden ihn als
-        # memory.used/total, Gaeste als mem/maxmem.
+        # Knoten melden den RAM als memory.used/total, Gäste als mem/maxmem.
         memory = data.get("memory") if isinstance(data.get("memory"), dict) else {}
         return {
             "cpu_percent": round(float(data.get("cpu") or 0.0) * 100, 1),
@@ -417,8 +372,8 @@ class ProxmoxMetricsProvider:
         return list(self._METRIC_NAMES)
 
     async def history(self, host: SdkHost, range_name: str) -> dict[str, Any]:
-        """Verlauf aus Proxmox' eigenen RRD-Daten (dieselben Kurven wie in der
-        Proxmox-Oberflaeche) -- nichts wird in Nodvard Deck zwischengespeichert."""
+        """Verlauf aus Proxmox' eigenen RRD-Daten (dieselben Kurven wie in der Proxmox-Oberfläche);
+        nichts wird in Nodvard Deck zwischengespeichert."""
         if not host.provider_ref:
             raise ProxmoxApiError("Host ohne Proxmox-Bezug.")
         connection, kind, node, vmid = _parse_ref(host.provider_ref)
@@ -440,10 +395,8 @@ def _num(row: dict[str, Any], *keys: str) -> float | None:
 
 
 def rrd_to_series(rows: list[dict[str, Any]], range_s: int, *, now: int) -> dict[str, Any]:
-    """RRD-Zeilen -> gemeinsame Zeitachse + eine Werteliste je Metrik, mit denselben
-    Schluesseln wie der SSH-Anbieter. Knoten melden RAM als memused/memtotal, Gaeste als
-    mem/maxmem (siehe `sample()`); fehlende Werte (NaN bei Proxmox, weggelassen im
-    JSON) bleiben `None` -- eine Luecke, keine erfundene Null."""
+    """RRD-Zeilen -> gemeinsame Zeitachse plus eine Werteliste je Metrik, mit denselben Schlüsseln wie der SSH-Anbieter.
+    Fehlende Werte (NaN bei Proxmox, im JSON weggelassen) bleiben `None`: eine Lücke, keine erfundene Null."""
     since = now - range_s
     points = sorted((r for r in rows if isinstance(r.get("time"), (int, float)) and r["time"] >= since), key=lambda r: r["time"])
     timestamps = [int(r["time"]) for r in points]
@@ -459,6 +412,7 @@ def rrd_to_series(rows: list[dict[str, Any]], range_s: int, *, now: int) -> dict
         "cpu_percent": pct("cpu"),
         "cpu_iowait_percent": pct("iowait"),
         "load_1": raw("loadavg"),
+        # Knoten melden den RAM als memused/memtotal, Gäste als mem/maxmem.
         "mem_used_bytes": raw("memused", "mem"),
         "mem_total_bytes": raw("memtotal", "maxmem"),
         "swap_used_bytes": raw("swapused"),
@@ -470,15 +424,14 @@ def rrd_to_series(rows: list[dict[str, Any]], range_s: int, *, now: int) -> dict
         "root_used_bytes": raw("rootused"),
         "root_total_bytes": raw("roottotal"),
     }
-    # Nur Metriken, die dieser Host ueberhaupt liefert (ein Gast hat kein iowait/load).
+    # Nur Metriken, die dieser Host überhaupt liefert (ein Gast hat kein iowait/load).
     series = {k: v for k, v in series.items() if any(x is not None for x in v)}
     return {"step_s": step, "timestamps": timestamps, "series": series, "max": {}}
 
 
 class ProxmoxActionExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor`. Wird ausschliesslich vom
-    Gate aufgerufen (`core.gate.execute_action()`), nie direkt von dieser Extension --
-    siehe Protokoll-Docstring."""
+    """Erfüllt `nodvard_sdk.capabilities.ActionExecutor`; wird nur vom Gate aufgerufen (`core.gate.execute_action()`),
+    nie direkt von dieser Erweiterung."""
 
     action_types = _VM_ACTION_TYPES | _NODE_ACTION_TYPES
 
@@ -549,8 +502,7 @@ class ProxmoxActionExecutor:
             else:
                 result = await self._wait_and_report(connector, node, task_id, label)
             if action in _POWER_ACTIONS:
-                # Sonst stand bis zur naechsten Discovery (alle 5 min) noch der alte
-                # Zustand in der Liste -- "gestoppt" zeigte weiter "läuft".
+                # Sonst zeigt die Liste bis zur nächsten Discovery (alle 5 min) den alten Zustand.
                 await self._refresh_hosts()
             return result
         except (ProxmoxApiError, RuntimeError) as exc:
@@ -564,8 +516,8 @@ class ProxmoxActionExecutor:
             _log.warning("Proxmox: Host-Status nach der Aktion nicht aufgefrischt", exc_info=True)
 
     async def _config_set(self, connection: str, kind: str, node: str, vmid: str, changes: Any) -> ActionResult:
-        """Liest die Konfiguration (fuer `digest` und die Ausgangswerte), prueft gegen
-        die Whitelist, schreibt, und meldet ehrlich, was erst nach einem Neustart greift."""
+        """Liest die Konfiguration (für `digest` und Ausgangswerte), prüft gegen die Positivliste, schreibt und meldet,
+        was erst nach einem Neustart greift."""
         try:
             connector = await _connector_for(self._ctx, connection)
             config = await connector.guest_config(node, kind, vmid)
@@ -574,7 +526,7 @@ class ProxmoxActionExecutor:
             try:
                 pending = pending_keys(await connector.guest_pending(node, kind, vmid))
             except ProxmoxApiError:
-                pending = []  # Aenderung ist durch -- nur die Neustart-Auskunft fehlt
+                pending = []  # Änderung ist durch, nur die Neustart-Auskunft fehlt
         except ConfigEditError as exc:
             return ActionResult(success=False, error=str(exc))
         except (ProxmoxApiError, RuntimeError) as exc:
@@ -585,13 +537,8 @@ class ProxmoxActionExecutor:
         self, connector: ProxmoxConnector, node: str, task_id: str, label: str,
         *, timeout_s: float = _TASK_WAIT_S, running_note: str | None = None,
     ) -> ActionResult:
-        """`success=True` hiess frueher nur
-        "Proxmox hat die Anfrage angenommen" (UPID erhalten), nicht "die
-        Aktion ist tatsaechlich durchgelaufen". Wartet jetzt bis zu 30s auf den
-        echten Ausgang -- laenger laufende Tasks (grosse Snapshots) melden sich als
-        "noch laufend", nicht als Fehlschlag, der Task selbst wird dadurch nicht
-        abgebrochen. Das Herunterfahren (`vm.shutdown`) wartet laenger (`timeout_s`) und
-        sagt in `running_note`, was dann noch offen ist."""
+        """Wartet auf den Ausgang des Tasks, nicht nur auf die Annahme (UPID). Länger laufende Tasks melden sich als
+        "noch laufend", nicht als Fehlschlag, und werden nicht abgebrochen. `running_note` sagt, was dann noch offen ist."""
         status = await connector.wait_for_task(node, task_id, timeout_s=timeout_s)
         if status.get("status") == "running":
             note = f" ({running_note})" if running_note else ""
@@ -616,15 +563,9 @@ class ProxmoxActionExecutor:
 
 
 class ProxmoxConsoleTarget:
-    """Erfuellt `nodvard_sdk.capabilities.ConsoleTarget`: der
-    Bildschirm einer VM bzw. eines LXC-Containers, ueber Proxmox' eigenen
-    vncproxy/vncwebsocket-Weg. Der Kern reicht die Bytes an noVNC im Browser durch
-    und authentifiziert den NUTZER selbst (Login bei Nodvard Deck + `hosts.execute`) -- der
-    Browser braucht dafuer weder einen Proxmox-Login noch das API-Token.
-
-    Knoten bekommen keine Konsole: dieselbe Grenze wie bei den Aktionen (siehe
-    Modul-Docstring) -- ein Hypervisor-Bildschirm ist eine Tragweite jenseits
-    einer einzelnen VM."""
+    """Erfüllt `nodvard_sdk.capabilities.ConsoleTarget`: Bildschirm einer VM oder eines Containers über Proxmox'
+    vncproxy/vncwebsocket. Der Kern prüft den Nutzer selbst, der Browser braucht weder Proxmox-Login noch API-Token.
+    Knoten haben keine Konsole: ein Hypervisor-Bildschirm reicht weiter als eine einzelne VM."""
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx

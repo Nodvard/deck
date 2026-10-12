@@ -1,17 +1,6 @@
-"""Einbruchschutz und Datei-Waechter -- die REINEN Teile: ein einziger Befehl je
-Server sammelt SSH-Anmeldungen (fehlgeschlagen/erfolgreich), Fail2ban-Status, offene
-Ports und Pruefsummen wichtiger Dateien; die Funktionen hier werten das aus und
-vergleichen mit dem zuletzt bestaetigten Stand. Ausfuehren, Speichern und Melden
-steht in `guard.py`.
-
-Im Original gab es dafuer nur den Satz "Fail2ban IPS: Aktiv und wachsam" im
-Morgen-Briefing -- geprueft wurde nichts davon.
-
-Programmdateien (sudo, sshd, ps ...) werden zusaetzlich gegen die Pruefsummen des
-Pakets geprueft (`/var/lib/dpkg/info/*.md5sums`): aendert sich eine solche Datei durch
-ein normales Update, passt sie zum Paket und wird still uebernommen; passt sie NICHT,
-ist das ein typisches Zeichen fuer ein Rootkit.
-"""
+"""Einbruchschutz und Datei-Wächter, reine Teile: ein Befehl je Server sammelt SSH-Anmeldungen, Fail2ban-Status,
+offene Ports und Prüfsummen; die Funktionen werten die Ausgabe aus und vergleichen sie mit dem bestätigten Stand.
+Ausführen, Speichern und Melden steht in `guard.py`."""
 
 from __future__ import annotations
 
@@ -31,36 +20,33 @@ DEFAULT_WATCH_FILES = [
     "/etc/profile", "/etc/bash.bashrc", "/root/.bashrc", "/etc/rc.local",
 ]
 
+# Programmdateien werden zusätzlich gegen die Prüfsummen ihres Pakets geprüft (`/var/lib/dpkg/info/*.md5sums`): Eine
+# Änderung durch ein normales Update passt zum Paket und wird still übernommen, eine andere deutet auf ein Rootkit.
 WATCH_BINARIES = [
     "/usr/bin/sudo", "/usr/sbin/sshd", "/usr/bin/ssh", "/usr/bin/passwd", "/usr/bin/login", "/usr/bin/su",
     "/usr/bin/ls", "/usr/bin/ps", "/usr/bin/ss", "/usr/bin/top", "/usr/bin/find", "/usr/sbin/cron",
 ]
 
-# Programme, die bei jedem Start neue zufaellige Ports waehlen. Ihre Ports im dynamischen
-# Bereich zaehlen als ein einziger Eintrag ("udp/dyn/rpc.mountd"). Diese Liste ist fest
-# eingebaut und gilt immer; die Einstellung "guard_dynamic_processes" fuegt weitere hinzu.
-# (Ein gespeicherter Einstellungswert wuerde sonst eine spaeter erweiterte Vorgabe ueberdecken.)
-#   - tailscaled: UDP-Port fuer die Verbindung zu anderen Geraeten und TCP-Port der
-#     Tailscale-Adresse werden bei jedem Start neu gewaehlt
-#   - rpc.mountd, rpc.statd, rpcbind: NFS-Hilfsdienste (RPC) waehlen ihre Ports zufaellig
+# Programme, die bei jedem Start neue zufällige Ports wählen; ihre Ports im dynamischen Bereich zählen als ein
+# Eintrag ("udp/dyn/rpc.mountd"). Die Liste ist fest eingebaut, die Einstellung "guard_dynamic_processes" fügt weitere
+# hinzu (ein gespeicherter Wert würde sonst eine später erweiterte Vorgabe überdecken).
+#   - tailscaled: UDP-Port und TCP-Port der Tailscale-Adresse
+#   - rpc.mountd, rpc.statd, rpcbind: NFS-Hilfsdienste (RPC)
 #   - avahi-daemon: mDNS-Antwort-Ports
-#   - dhclient, dhcpcd: DHCP-Client oeffnet neben Port 68 zufaellige Ports
-#   - chronyd: Zeitabgleich ueber einen zufaelligen Quell-Port (acquisitionport)
+#   - dhclient, dhcpcd: DHCP-Client öffnet neben Port 68 zufällige Ports
+#   - chronyd: zufälliger Quell-Port beim Zeitabgleich (acquisitionport)
 DEFAULT_DYNAMIC_PROCESSES = [
     "tailscaled", "rpc.mountd", "rpc.statd", "rpcbind", "avahi-daemon", "dhclient", "dhcpcd", "chronyd",
 ]
-# RPC-Dienste (libtirpc) suchen ihren Port zuerst im "reservierten" Bereich 600-1023
-# (bindresvport) -- auch dort aendert er sich bei jedem Start. Feste Ports wie 111 (rpcbind)
-# liegen darunter und bleiben einzeln sichtbar.
+# RPC-Dienste (libtirpc) suchen ihren Port zuerst im reservierten Bereich 600-1023 (bindresvport); auch dort wechselt
+# er bei jedem Start. Feste Ports wie 111 (rpcbind) liegen darunter und bleiben einzeln sichtbar.
 RESERVED_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd", "rpcbind"}
 RESERVED_DYNAMIC_PORT_MIN = 600
 RESERVED_DYNAMIC_PORT_MAX = 1023
-# Den Programmnamen (`comm`) darf sich jedes Programm selbst geben: eine Hintertuer kann sich
-# "chronyd" nennen. Fuer die eingebauten Namen gilt die Ausnahme deshalb nur dort, wo das
-# echte Programm wirklich wechselnde Ports oeffnet -- sonst bleibt der Port einzeln sichtbar
-# und meldet. UDP ist bei allen der Normalfall; TCP nur bei den NFS-Hilfsdiensten (mountd und
-# statd lauschen auch auf zufaelligen TCP-Ports) und bei tailscaled nur auf der eigenen
-# Tailscale-Adresse (von aussen nicht erreichbar, nur aus dem eigenen Tailscale-Netz).
+# Den Programmnamen (`comm`) darf sich jedes Programm selbst geben, eine Hintertür kann sich "chronyd" nennen. Für
+# eingebaute Namen gilt die Ausnahme darum nur dort, wo das echte Programm wechselnde Ports öffnet, sonst bleibt der
+# Port einzeln sichtbar und meldet. UDP ist bei allen der Normalfall; TCP nur bei mountd und statd und bei tailscaled
+# nur auf der eigenen Tailscale-Adresse (von außen nicht erreichbar).
 TCP_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd"}
 TAILSCALE_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 # Untergrenze des dynamischen Bereichs, falls ip_local_port_range nicht lesbar ist.
@@ -71,8 +57,7 @@ _SAFE_GLOB_RE = re.compile(r"^/[A-Za-z0-9_./*@+-]+$")
 
 def guard_command(watch_files: list[str] | None = None) -> str:
     files = [f for f in (watch_files or DEFAULT_WATCH_FILES) if _SAFE_GLOB_RE.match(f) and ".." not in f]
-    # Globs duerfen von der Shell aufgeloest werden -- deshalb NICHT gequotet, aber
-    # vorher streng gefiltert (nur Pfadzeichen und *).
+    # Die Shell löst die Globs auf, deshalb nicht gequotet; vorher streng auf Pfadzeichen und `*` gefiltert.
     file_list = " ".join(files)
     bin_list = " ".join(shlex.quote(b) for b in WATCH_BINARIES)
     return (
@@ -80,8 +65,8 @@ def guard_command(watch_files: list[str] | None = None) -> str:
         "echo @@ssh; L=$(journalctl -t sshd -t sshd-session -t sshd-auth --since '24 hours ago' --no-pager -q -o short-unix 2>/dev/null); "
         "if [ -z \"$L\" ]; then L=$(tail -q -n 20000 /var/log/auth.log /var/log/secure 2>/dev/null); fi; "
         "printf '%s\\n' \"$L\" | grep -E 'Failed password|Failed publickey|Invalid user|Accepted |authenticating user' | tail -n 8000; "
-        # Ohne root scheitert `ping` am Socket-Recht ("Permission denied ... you must be
-        # root") -- das heisst "nicht lesbar", nicht "gestoppt".
+        # Ohne root scheitert `ping` am Socket-Recht ("Permission denied ... you must be root"): Das heißt
+        # "nicht lesbar", nicht "gestoppt".
         "echo @@f2b; if command -v fail2ban-client >/dev/null 2>&1; then "
         "o=$(fail2ban-client ping 2>&1); rc=$?; "
         "if [ \"$rc\" -eq 0 ]; then echo running; "
@@ -92,9 +77,9 @@ def guard_command(watch_files: list[str] | None = None) -> str:
         "echo @@sshd; (sshd -T 2>/dev/null || /usr/sbin/sshd -T 2>/dev/null) | grep -E "
         "'^(port|permitrootlogin|passwordauthentication|permitemptypasswords|pubkeyauthentication|maxauthtries|x11forwarding|kbdinteractiveauthentication) '; "
         "echo @@range; cat /proc/sys/net/ipv4/ip_local_port_range 2>/dev/null; "
-        # Der Prozessname in `users:(("name",...` stammt vom Programm selbst und darf Zeilenumbrueche
-        # enthalten ("a\n@@ssh\nb"). Nur Zeilen, die mit tcp/udp beginnen, kommen durch: sonst koennte ein
-        # Prozess hier eine Abschnittsmarke vortaeuschen und die SSH-/Fail2ban-Daten ueberschreiben.
+        # Der Prozessname in `users:(("name",...` kommt vom Programm selbst und kann Zeilenumbrüche enthalten
+        # ("a\n@@ssh\nb"). Nur Zeilen, die mit tcp/udp beginnen, kommen durch: sonst könnte ein Prozess hier eine
+        # Abschnittsmarke vortäuschen und die SSH-/Fail2ban-Daten überschreiben.
         "echo @@ports; (ss -H -tulnp 2>/dev/null || ss -tulnp 2>/dev/null | tail -n +2) | grep -E '^(tcp|udp)[[:space:]]'; "
         "echo @@files; for f in " + file_list + "; do [ -f \"$f\" ] || continue; "
         "echo \"$(sha256sum \"$f\" 2>/dev/null | cut -d' ' -f1) $(stat -c '%a %U %Y %s' \"$f\" 2>/dev/null) - $f\"; done; "
@@ -109,7 +94,7 @@ def guard_command(watch_files: list[str] | None = None) -> str:
     )
 
 
-# --- Auswerten -----------------------------------------------------------------
+# --- Auswerten ---
 
 
 @dataclass
@@ -134,12 +119,12 @@ class Port:
     address: str
     port: int
     process: str | None
-    # Zufaelliger Port (Programm mit wechselnden Ports oder Kernel-Socket ohne Prozess):
-    # ein Eintrag steht dann fuer alle Ports dieser Art, `count` sagt wie viele es sind.
+    # Zufälliger Port (Programm mit wechselnden Ports oder Kernel-Socket ohne Prozess): Ein Eintrag steht dann für
+    # alle Ports dieser Art, `count` sagt, wie viele es sind.
     dynamic: bool = False
     count: int = 1
-    # Ohne root zeigt `ss` keinen Programmnamen: ein UDP-Port im Zufallsbereich wird dann
-    # mit allen anderen dieser Art zusammengefasst ("udp/dyn/?"), statt einzeln zu melden.
+    # Ohne root zeigt `ss` keinen Programmnamen: Ein UDP-Port im Zufallsbereich wird dann mit allen anderen dieser Art
+    # zusammengefasst ("udp/dyn/?"), statt einzeln zu melden.
     unreadable: bool = False
 
     @property
@@ -246,9 +231,9 @@ class GuardSnapshot:
 def _sections(output: str) -> dict[str, list[str]]:
     sections: dict[str, list[str]] = {}
     current: str | None = None
-    # Nur am Zeilenvorschub trennen wie grep in den Befehlen: `splitlines()` trennt auch an U+2028,
-    # U+0085, Formularvorschub usw.; ein Prozess- oder Benutzername mit so einem Zeichen koennte sonst
-    # eine Abschnittsmarke `@@…` vortaeuschen.
+    # Nur am Zeilenvorschub trennen wie grep in den Befehlen: `splitlines()` trennt auch an U+2028, U+0085,
+    # Formularvorschub usw., und ein Prozess- oder Benutzername mit so einem Zeichen könnte eine Abschnittsmarke
+    # `@@…` vortäuschen.
     for raw in output.split("\n"):
         line = raw.rstrip("\r")
         stripped = line.strip()
@@ -261,11 +246,9 @@ def _sections(output: str) -> dict[str, list[str]]:
 
 
 _TS_UNIX_RE = re.compile(r"^(\d{9,11}(?:\.\d+)?)\s")
-# Die Meldung beginnt nach dem ERSTEN "sshd[pid]: " -- davor stehen nur Zeit und
-# Servername. Dahinter kann der (vom Angreifer gewaehlte) Benutzername alles
-# enthalten, auch ein zweites "from <ip>" oder eine ganze "Accepted ..."-Meldung.
-# Deshalb: Muster nur am Meldungsanfang, und bei "Invalid user" gilt das LETZTE
-# "from <ip>" (das haengt sshd selbst an).
+# Die Meldung beginnt nach dem ersten "sshd[pid]: ", davor stehen nur Zeit und Servername. Dahinter kann der vom
+# Angreifer gewählte Benutzername alles enthalten, auch ein zweites "from <ip>" oder eine ganze "Accepted ..."-Meldung.
+# Darum Muster nur am Meldungsanfang, und bei "Invalid user" gilt das letzte "from <ip>" (das hängt sshd selbst an).
 _MSG_START_RE = re.compile(r"^.*?\bsshd(?:-session|-auth)?\[\d+\]: ")
 _FAILED_RE = re.compile(r"Failed (?:password|publickey) for (?P<invalid>invalid user )?(?P<user>\S+) from (?P<ip>\S+) port")
 _INVALID_RE = re.compile(r"Invalid user (?P<user>.*) from (?P<ip>\S+)(?: port \d+)?\s*$")
@@ -277,9 +260,8 @@ _IP_CHARS_RE = re.compile(r"[0-9A-Fa-f:.]+")
 
 
 def _valid_ip(ip: str) -> bool:
-    """Nur echte Adressen, OHNE IPv6-Scope-ID: `ipaddress` laesst hinter `%` fast
-    alles durch (`fe80::1%$(id)`), und der Benutzername in den SSH-Zeilen kommt vom
-    Angreifer -- so eine "IP" darf nie als Angreifer erscheinen oder gesperrt werden."""
+    """Nur echte Adressen ohne IPv6-Scope-ID: `ipaddress` lässt hinter `%` fast alles durch (`fe80::1%$(id)`), und
+    die SSH-Zeilen kommen vom Angreifer. So eine "IP" darf nie als Angreifer erscheinen oder gesperrt werden."""
     if not _IP_CHARS_RE.fullmatch(ip):
         return False
     try:
@@ -306,7 +288,7 @@ def parse_ssh(lines: list[str]) -> tuple[dict[str, Attacker], list[Login]]:
             continue
         m = _FAILED_RE.match(msg)
         if m and m.group("invalid"):
-            continue  # schon ueber die "Invalid user"-Zeile gezaehlt
+            continue  # schon über die "Invalid user"-Zeile gezählt
         m = m or _INVALID_RE.match(msg) or _AUTHUSER_RE.match(msg)
         if not m or not _valid_ip(m.group("ip")):
             continue
@@ -378,23 +360,12 @@ def _builtin_allows(name: str, proto: str, address: str) -> bool:
 
 def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None, dynamic_min: int = DEFAULT_DYNAMIC_PORT_MIN,
                 is_root: bool = True) -> list[Port]:
-    """Wertet `ss -tulnp` aus.
-
-    Zufaellige Ports (>= `dynamic_min`) von Programmen aus der festen Liste
-    `DEFAULT_DYNAMIC_PROCESSES` und aus `dynamic_processes` (Einstellung, kommt hinzu) sowie
-    von Sockets ohne Prozess (Kernel, z. B. lockd) bekommen einen Schluessel ohne Port, sonst
-    meldet jeder Neustart 15 "neue" Ports. RPC-Dienste zaehlen auch im Bereich 600-1023 so.
-    Eingebaute Programme zaehlen nur auf den Protokollen als wechselnd, auf denen das echte
-    Programm zufaellige Ports oeffnet (`_builtin_allows`): der Name allein ist faelschbar.
-    Sockets ohne Prozess gelten nur mit root als Kernel-Sockets -- ohne root sind auch normale
-    Programme namenlos, dann bliebe eine echte neue Hintertuer hinter dem Sammeleintrag
-    verborgen. Nur bei UDP wird auch ohne root zusammengefasst ("udp/dyn/?"): dort sind
-    Zufallsports im hohen Bereich der Normalfall (Tailscale, DHCP, mDNS), und ein TCP-Dienst
-    -- der typische Hintertuer-Fall -- bleibt weiter einzeln sichtbar.
-    """
+    """Wertet `ss -tulnp` aus. Zufällige Ports (>= `dynamic_min`) wechselnder Programme und Kernel-Sockets bekommen
+    einen Schlüssel ohne Port, sonst meldet jeder Neustart 15 "neue" Ports; RPC-Dienste zählen auch im Bereich
+    600-1023 so."""
     builtin = {n.lower() for n in DEFAULT_DYNAMIC_PROCESSES}
-    # Eingebaute Namen behalten ihre Regeln, auch wenn sie (alter gespeicherter Wert) zusaetzlich
-    # in der Einstellung stehen; nur weitere Programme aus der Einstellung gelten fuer TCP und UDP.
+    # Eingebaute Namen behalten ihre Regeln, auch wenn sie (alter gespeicherter Wert) zusätzlich in der Einstellung
+    # stehen; nur weitere Programme aus der Einstellung gelten für TCP und UDP.
     extra = {n.strip().lower() for n in (dynamic_processes or []) if isinstance(n, str) and n.strip()} - builtin
     ports: dict[str, Port] = {}
     seen: dict[str, set[int]] = {}
@@ -412,18 +383,22 @@ def parse_ports(lines: list[str], *, dynamic_processes: list[str] | None = None,
         proto = m.group("proto")
         unreadable = False
         if proc:
+            # Der Name allein ist fälschbar, darum zählen eingebaute Programme nur auf ihren echten Protokollen.
             lower = proc.lower()
             allowed = lower in extra or (lower in builtin and _builtin_allows(lower, proto, addr))
             dynamic = allowed and (
                 num >= dynamic_min
                 or (lower in RESERVED_DYNAMIC_PROCESSES and RESERVED_DYNAMIC_PORT_MIN <= num <= RESERVED_DYNAMIC_PORT_MAX)
             )
+        # Sockets ohne Prozess gelten nur mit root als Kernel-Sockets: Ohne root sind auch normale Programme namenlos,
+        # und eine neue Hintertür bliebe hinter dem Sammeleintrag verborgen. Nur UDP wird auch dann zusammengefasst
+        # (Zufallsports sind dort der Normalfall: Tailscale, DHCP, mDNS), ein TCP-Dienst bleibt einzeln sichtbar.
         elif is_root:
             dynamic = num >= dynamic_min
         else:
             dynamic = unreadable = proto == "udp" and num >= dynamic_min
         p = Port(proto=proto, address=addr, port=num, process=proc, dynamic=dynamic, unreadable=unreadable)
-        # IPv4 und IPv6 desselben Dienstes nur einmal zeigen -- oeffentlich gewinnt.
+        # IPv4 und IPv6 desselben Dienstes nur einmal zeigen, die öffentliche Adresse gewinnt.
         existing = ports.get(p.key)
         seen.setdefault(p.key, set()).add(num)
         if existing is None or (p.public and not existing.public):
@@ -438,9 +413,8 @@ _LEGACY_PORT_KEY_RE = re.compile(r"^(?P<proto>tcp|udp)/(?P<port>\d+)/(?P<proc>.+
 
 
 def port_is_known(port: Port, known: set[str], *, dynamic_min: int = DEFAULT_DYNAMIC_PORT_MIN) -> bool:
-    """Ist der Port im bestaetigten Stand? Alte Staende kennen Ports mit Nummer je Programm
-    ("udp/58094/rpc.mountd"); sie decken den neuen Sammeleintrag ab, damit das Update
-    nicht ueberall auf einmal "neue" Ports meldet."""
+    """Ist der Port im bestätigten Stand? Ältere Stände kennen Ports mit Nummer je Programm ("udp/58094/rpc.mountd");
+    sie decken den Sammeleintrag ab, damit nicht überall auf einmal "neue" Ports gemeldet werden."""
     if port.key in known:
         return True
     if not port.dynamic:
@@ -490,7 +464,7 @@ def parse_guard(output: str, dynamic_processes: list[str] | None = None) -> Guar
     )
 
 
-# --- Vergleich mit dem bestaetigten Stand -----------------------------------------
+# --- Vergleich mit dem bestätigten Stand ---
 
 
 @dataclass
@@ -551,7 +525,7 @@ _JAIL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 
 
 def ban_command(ip: str, jail: str = "sshd", *, unban: bool = False) -> str:
-    """Laeuft als root -- deshalb IP und Jail streng pruefen UND quoten."""
+    """Läuft als root, deshalb IP und Jail streng prüfen und quoten."""
     if not _valid_ip(ip):
         raise ValueError("Ungültige IP-Adresse.")
     if not _JAIL_RE.fullmatch(jail):

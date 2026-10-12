@@ -1,32 +1,5 @@
-"""Gemeinsamer SSH-Ausfuehrungs-Layer -- Terminal, Skript-Ausfuehrung und
-KI-Remediation benutzen DENSELBEN Layer (docs/00-DECISIONS.md D-05,
-docs/01-ARCHITECTURE.md §2 "ein asyncssh-Verbindungspool, geteilt von Terminal,
-Scripts und KI"; docs/02-EXTENSION-API.md §3 CommandRunner: "kein zweiter, separater
-Ausfuehrungsweg mit eigenen Edge-Cases").
-
-Dieses Modul ist bewusst generische Kern-Infrastruktur -- es kennt "Terminal" oder
-"Extension" nicht, nur Hosts, Zugangsdaten und Befehle (dieselbe Ebene wie
-`core/vault.py`, das `cryptography` kapselt, ohne von Secrets-Verwendern zu wissen).
-
-**TOFU + Pinning statt `StrictHostKeyChecking=no`** (D-05 Sicherheitskorrektur): beim
-ERSTEN Kontakt zu einem Host/Schluesseltyp wird der Server-Fingerprint in
-`known_hosts` gespeichert; jede spaetere Verbindung mit demselben Schluesseltyp muss
-exakt dazu passen, sonst scheitert sie sichtbar mit `HostKeyMismatch` statt still zu
-akzeptieren (docs/03-DATA-MODEL.md §2).
-
-**Warum das Pinning synchron entscheidet, aber die DB asynchron ist:** asyncssh ruft
-`SSHClient.validate_host_public_key()` SYNCHRON aus dem Handshake heraus auf -- ein
-`await` darin ist nicht moeglich. Deshalb werden die bekannten Fingerprints VOR
-`asyncssh.connect()` async geladen und der `_PinningClient`-Instanz mitgegeben; die
-Pruefung selbst ist reiner In-Memory-Vergleich. Ein neu gesehener Schluesseltyp wird
-NACH erfolgreichem Connect asynchron gespeichert (TOFU), nicht waehrend des Handshakes.
-
-**Ohne TOFU (`tofu=False`, Sicherheitskern der "Verbindung pruefen"-Funktion):** ist der
-Schluessel eines Servers noch nicht bestaetigt, verweigert der `_PinningClient` ihn im
-Schluesseltausch. Die Anmeldung beginnt erst NACH dem Schluesseltausch -- an einen
-unbestaetigten Server gehen deshalb weder Passwort noch Schluessel, und es wird nichts
-gespeichert. Stattdessen `HostKeyUnknown` mit dem Fingerabdruck zum Bestaetigen.
-"""
+"""SSH-Schicht des Kerns: gepinnte, gepoolte asyncssh-Verbindungen, die Terminal, Skripte und Remediation gemeinsam
+nutzen."""
 
 from __future__ import annotations
 
@@ -46,28 +19,23 @@ from .error_text import describe_connection_error
 
 KEEPALIVE_INTERVAL_S = 15.0
 KEEPALIVE_COUNT_MAX = 3
-"""Keepalive fuer jede Verbindung: verschwindet ein Host ohne FIN/RST
-(VM hart gestoppt, Netz weg), merkt asyncssh das sonst erst, wenn TCP nach etwa
-15 min aufgibt -- bis dahin gaebe der Pool die tote Verbindung weiter heraus und
-jeder Befehl liefe in sein eigenes Timeout. So ist sie nach etwa 45-60 s
-geschlossen, `is_closed()` greift und der Pool verbindet neu."""
+"""Ohne Keepalive bemerkt asyncssh einen hart weggefallenen Host erst nach dem TCP-Timeout (etwa 15 min); so ist die
+Verbindung nach 45-60 s zu und der Pool verbindet neu."""
 
 
 class SshError(Exception):
     readable = True
-    """Der Text ist ein fertiger deutscher Satz fuer die Oberflaeche (siehe `core.error_text`)."""
+    """Der Text ist ein fertiger deutscher Satz für die Oberfläche (siehe `core.error_text`)."""
     key_type: str | None = None
     fingerprint: str | None = None
-    """Hat der Server im Schluesseltausch einen Schluessel gezeigt und der wurde akzeptiert, stehen
-    hier Typ und Fingerabdruck (`connect()` setzt sie, bevor es den Fehler wirft). So weiss der
-    Aufrufer bei einer abgelehnten Anmeldung, dass der Server-Schluessel selbst in Ordnung war."""
+    """Typ und Fingerabdruck des akzeptierten Server-Schlüssels, wenn der Fehler erst danach kam (z. B. abgelehnte
+    Anmeldung)."""
 
 
 class SshUnreachable(SshError, OSError):
-    """Der Server war nicht zu erreichen oder die Verbindung riss ab (Netzwerkfehler, Zeitlimit, Name
-    unbekannt). Der Text sagt es auf Deutsch, auch wenn die Ursache keinen hatte (`TimeoutError()`).
-    Bewusst AUCH ein `OSError`: wer bisher `except OSError` schrieb, faengt es weiter; `__cause__` ist
-    die urspruengliche Ausnahme."""
+    """Server nicht erreichbar oder Verbindung abgerissen (Netzwerkfehler, Zeitlimit, Name unbekannt).
+
+    Auch ein `OSError`, damit ein bestehendes `except OSError` greift; `__cause__` ist die ursprüngliche Ausnahme."""
 
 
 class SshTimeout(SshUnreachable, TimeoutError):
@@ -75,14 +43,13 @@ class SshTimeout(SshUnreachable, TimeoutError):
 
 
 class SshAuthError(SshError):
-    """Der Server hat die Anmeldung abgelehnt (falsches Passwort, Schluessel nicht eingetragen,
-    Benutzer unbekannt). Der Server-Schluessel war dabei schon geprueft und bekannt."""
+    """Der Server hat die Anmeldung abgelehnt (falsches Passwort, Schlüssel nicht eingetragen, Benutzer unbekannt);
+    sein Schlüssel war schon geprüft."""
 
 
 class HostKeyUnknown(SshError):
-    """Der Server-Schluessel ist noch nicht bestaetigt und TOFU ist aus: es wurde NICHTS
-    gesendet (keine Anmeldedaten) und NICHTS gespeichert. `fingerprint` ist der angebotene
-    Schluessel, zum Vergleichen und Bestaetigen."""
+    """Server-Schlüssel noch nicht bestätigt und TOFU aus: Es wurden weder Anmeldedaten gesendet noch etwas gespeichert.
+    `fingerprint` ist der angebotene Schlüssel, zum Vergleichen und Bestätigen."""
 
     def __init__(self, host_id: str, key_type: str | None, fingerprint: str | None) -> None:
         super().__init__(
@@ -95,7 +62,7 @@ class HostKeyUnknown(SshError):
 
 
 class HostKeyMismatch(SshError):
-    """Der sichtbare Fehler, den D-05 anstelle von `StrictHostKeyChecking=no` verlangt."""
+    """Der Server zeigt einen anderen Schlüssel als den gemerkten (möglicher Angriff oder Neuinstallation)."""
 
     def __init__(self, host_id: str, key_type: str | None, expected: str | None, actual: str | None) -> None:
         super().__init__(
@@ -111,14 +78,12 @@ class HostKeyMismatch(SshError):
 
 
 class SshTargetChanged(SshError):
-    """Waehrend des Verbindungsaufbaus wurden die Verbindungsdaten des Servers geaendert
-    (Adresse, Zugang, Schluessel) -- kein "Server nicht erreichbar", nur "bitte nochmal"."""
+    """Die Verbindungsdaten des Servers haben sich während des Aufbaus geändert: kein Ausfall, nur "bitte noch mal"."""
 
 
 @dataclass(frozen=True)
 class ConnectionTarget:
-    """Alles, was `connect()` braucht -- der Klartext lebt hier nur kurzlebig
-    (aus `ctx.vault_use()`), nie ausserhalb dieses Bausteins persistiert."""
+    """Alles, was `connect()` braucht. Der Klartext lebt nur kurz (aus dem Tresor) und wird nie gespeichert."""
 
     host_id: str
     address: str
@@ -126,19 +91,17 @@ class ConnectionTarget:
     username: str
     kind: str  # "ssh_key" | "ssh_password"
     secret_value: str = field(repr=False)
-    """Passwort oder privater Schluessel im Klartext -- bewusst nicht im `repr`, damit er nie in einer
-    Meldung oder einem Traceback mit ausgegebenen Werten landet."""
+    """Passwort oder privater Schlüssel im Klartext; nicht im `repr`, damit er in keinem Traceback landet."""
     generation: int | None = None
-    """`SshPool.generation(host_id)` VOR dem Lesen der Verbindungsdaten aus der DB. Hat
-    `drop_host()` seitdem zugeschlagen, sind die Daten evtl. veraltet und `get()` lehnt
-    das Ziel ab. `None` = unbekannt (dann gilt der Stand beim Start von `get()`)."""
+    """`SshPool.generation(host_id)` vor dem Lesen der Verbindungsdaten aus der Datenbank. Hat `drop_host()` seitdem
+    zugeschlagen, lehnt `get()` das Ziel ab. `None`: es gilt der Stand beim Start von `get()`."""
     allow_tofu: bool = True
-    """`False`: unbekannte Server-Schluessel werden nicht still gemerkt, die Verbindung scheitert
-    mit `HostKeyUnknown` (siehe `connect(tofu=...)`). Standard `True` wie bisher."""
+    """`False`: ein unbekannter Server-Schlüssel wird nicht still gemerkt, die Verbindung scheitert mit
+    `HostKeyUnknown`."""
 
 
 class _PinningClient(asyncssh.SSHClient):
-    """Synchroner Host-Key-Torwaechter, siehe Modul-Docstring."""
+    """Entscheidet synchron im Schlüsseltausch über den Host-Schlüssel (Pinning)."""
 
     def __init__(self, known: dict[str, str], allow_tofu: bool = True) -> None:
         self._known = known
@@ -147,7 +110,7 @@ class _PinningClient(asyncssh.SSHClient):
         self.offered_fingerprint: str | None = None
         self.mismatch = False
         self.unknown = False
-        """Ein unbekannter Schluessel wurde abgelehnt, weil TOFU aus ist."""
+        """Ein unbekannter Schlüssel wurde abgelehnt, weil TOFU aus ist."""
 
     def validate_host_public_key(self, host: str, addr: str, port: int, key: Any) -> bool:
         key_type = key.get_algorithm()
@@ -157,18 +120,17 @@ class _PinningClient(asyncssh.SSHClient):
 
         expected = self._known.get(key_type)
         if expected is None and self._known:
-            # Fuer diesen Host ist schon ein Schluessel gemerkt, der Server zeigt aber einen ANDEREN
-            # Typ: das ist kein "neuer" Schluessel, sondern eine Abweichung (sonst koennte ein
-            # Mittelsmann das Pinning umgehen, indem er nur einen anderen Typ anbietet).
+            # Anderer Typ als der gemerkte ist eine Abweichung, nicht "neu": sonst könnte ein Mittelsmann das
+            # Pinning umgehen, indem er nur einen anderen Typ anbietet.
             self.mismatch = True
             return False
         if expected is None:
             if not self._allow_tofu:
-                # Hier, im Schluesseltausch, ist der letzte Moment vor der Anmeldung: wer
-                # `False` zurueckgibt, bekommt nie Benutzername, Passwort oder Schluessel zu sehen.
+                # Letzter Moment vor der Anmeldung: nach `False` sieht der Server nie Benutzername, Passwort oder
+                # Schlüssel.
                 self.unknown = True
                 return False
-            return True  # TOFU fuer DIESEN Schluesseltyp an diesem Host
+            return True  # TOFU für diesen Schlüsseltyp an diesem Host
         if expected != fingerprint:
             self.mismatch = True
             return False
@@ -176,8 +138,7 @@ class _PinningClient(asyncssh.SSHClient):
 
 
 class _InspectClient(asyncssh.SSHClient):
-    """Merkt sich den angebotenen Server-Schluessel und lehnt IMMER ab -- die Verbindung
-    kommt nie ueber den Schluesseltausch hinaus, es wird nichts gesendet."""
+    """Merkt sich den angebotenen Server-Schlüssel und lehnt immer ab, damit nichts gesendet wird."""
 
     def __init__(self) -> None:
         self.key_type: str | None = None
@@ -193,13 +154,11 @@ _RSA_SIGNATURE_ALGS = ("rsa-sha2-512", "rsa-sha2-256", "ssh-rsa")
 
 
 def _preferred_host_key_algs(known: dict[str, str]) -> list[str] | None:
-    """Reihenfolge der Host-Key-Verfahren fuer asyncssh: die gemerkten Typen zuerst, danach die
-    uebrigen. `None` (asyncssh-Standard), wenn noch nichts gemerkt ist.
-
-    Der Server waehlt das erste Verfahren der Liste des Clients, das er kann -- ein Server mit
-    mehreren Schluesseln zeigt so den gemerkten statt eines anderen. Die uebrigen bleiben
-    absichtlich erlaubt: zeigt ein Server NUR einen anderen Typ, soll das als geaenderter Schluessel
-    gemeldet werden (`_PinningClient`), nicht als unverstaendlicher Verschluesselungsfehler."""
+    """Host-Key-Verfahren für asyncssh: gemerkte Typen zuerst, danach die übrigen; `None`, wenn noch nichts gemerkt
+    ist."""
+    # Der Server nimmt das erste Verfahren der Clientliste, das er kann, und zeigt so bei mehreren Schlüsseln den
+    # gemerkten. Die übrigen bleiben erlaubt: zeigt ein Server nur einen anderen Typ, soll das als geänderter
+    # Schlüssel gemeldet werden (`_PinningClient`) und nicht als unverständlicher Verschlüsselungsfehler.
     if not known:
         return None
     from asyncssh.public_key import get_default_public_key_algs, get_public_key_algs
@@ -215,16 +174,13 @@ def _preferred_host_key_algs(known: dict[str, str]) -> list[str] | None:
 
 
 def _known_summary(known: dict[str, str]) -> str | None:
-    """Was bisher gemerkt ist, lesbar (fuer Meldungen bei einem anderen Schluesseltyp)."""
+    """Das Gemerkte, lesbar (für Meldungen bei einem anderen Schlüsseltyp)."""
     return "; ".join(f"{fp} ({key_type})" for key_type, fp in sorted(known.items())) or None
 
 
-# Keine Schluessel, kein Agent, keine Konfiguration des Rechners, auf dem Nodvard Deck laeuft
-# (Werte aus asyncssh 2.24, SSHClientConnectionOptions): `client_keys=None` schaltet auch die
-# Standard-Schluessel aus ~/.ssh UND den ssh-agent ab (`[]` taete das nicht: es laedt die Standard-
-# Schluessel); `config=[]` liest weder ~/.ssh/config noch /etc/ssh/ssh_config; `agent_path=None`
-# ignoriert SSH_AUTH_SOCK auch dann, wenn ein eigener Schluessel mitgegeben wird; `gss_host=None`
-# schaltet Kerberos ab.
+# Der Client bleibt vom Rechner abgeschottet (asyncssh 2.24): `client_keys=None` schaltet auch die Standard-Schlüssel
+# aus ~/.ssh und den ssh-agent ab (`[]` lädt die Standard-Schlüssel); `config=[]` liest keine ssh_config;
+# `agent_path=None` ignoriert SSH_AUTH_SOCK auch bei eigenem Schlüssel; `gss_host=None` schaltet Kerberos ab.
 _ISOLATED_CLIENT: dict[str, Any] = {"config": [], "agent_path": None, "gss_host": None}
 
 
@@ -234,14 +190,13 @@ async def _known_fingerprints(session: AsyncSession, host_id: str) -> dict[str, 
 
 
 HOST_KEY_CONFIRM_REQUIRED = "ssh.host_key_confirm_required"
-"""Merker je Server in der Tabelle `settings` (`scope=HOST_KEY_CONFIRM_SCOPE`, `user_id=<host_id>`):
-nach "Schluessel vergessen" darf fuer diesen Server kein Schluessel still gemerkt werden, bis er
-ausdruecklich bestaetigt ist. Gesetzt und entfernt in `services/hosts.py`."""
+"""Merker je Server in `settings` (`scope=HOST_KEY_CONFIRM_SCOPE`, `user_id=<host_id>`): Nach "Schlüssel vergessen" wird
+kein Schlüssel still gemerkt, bis er ausdrücklich bestätigt ist. Gesetzt und entfernt in `services/hosts.py`."""
 HOST_KEY_CONFIRM_SCOPE = "host"
 
 
 async def host_key_confirm_pending(session: AsyncSession, host_id: str) -> bool:
-    """Liegt fuer `host_id` der Merker `HOST_KEY_CONFIRM_REQUIRED`? Immer frisch aus der Datenbank."""
+    """Liegt für `host_id` der Merker `HOST_KEY_CONFIRM_REQUIRED`? Immer frisch aus der Datenbank."""
     result = await session.execute(
         select(Setting.key).where(
             Setting.key == HOST_KEY_CONFIRM_REQUIRED, Setting.scope == HOST_KEY_CONFIRM_SCOPE,
@@ -259,25 +214,23 @@ async def _remember_fingerprint(
 
 
 async def load_known_fingerprints(session: AsyncSession, host_id: str) -> dict[str, str]:
-    """Die gemerkten Server-Schluessel von `host_id` als `{Schluesseltyp: Fingerabdruck}`."""
+    """Die gemerkten Server-Schlüssel von `host_id` als `{Schlüsseltyp: Fingerabdruck}`."""
     return await _known_fingerprints(session, host_id)
 
 
 async def connect(
     session: AsyncSession, target: ConnectionTarget, *, connect_timeout_s: float = 10.0, tofu: bool = True
 ) -> asyncssh.SSHClientConnection:
-    """Baut eine EINZELNE, gepinnte Verbindung auf. Fuer Wiederverwendung siehe
-    `SshPool.get()` -- diese Funktion selbst poolt nicht.
-
-    `tofu` (UND `target.allow_tofu`, beide muessen wahr sein): ist der Schluessel dieses Servers
-    noch nicht gemerkt, wird er nur bei wahr still gemerkt. Bei falsch scheitert die Verbindung
-    mit `HostKeyUnknown`, bevor Anmeldedaten gesendet werden, und es wird nichts gespeichert."""
+    """Baut eine einzelne, gepinnte Verbindung auf (gepoolt wird in `SshPool.get()`). Ist `tofu` oder
+    `target.allow_tofu` falsch, scheitert ein ungemerkter Schlüssel mit `HostKeyUnknown`, bevor Anmeldedaten gesendet
+    werden."""
     allow_tofu = tofu and target.allow_tofu
+    # Vor dem Connect laden: asyncssh fragt den Schlüssel synchron im Handshake ab, ein `await` ist dort nicht möglich.
+    # Ein neu gesehener Typ wird deshalb erst nach dem Connect gespeichert.
     known = await _known_fingerprints(session, target.host_id)
     if allow_tofu and not known and await host_key_confirm_pending(session, target.host_id):
-        # `target` kann von kurz vor einem "Schluessel vergessen" stammen (Merker damals noch nicht
-        # da, gemerkter Schluessel jetzt schon weg). Erst NACH den gemerkten Schluesseln lesen: ist
-        # der Schluessel schon weg, ist der Merker (selber Commit) auch schon zu sehen.
+        # `target` kann von kurz vor "Schlüssel vergessen" stammen. Den Merker erst nach den gemerkten Schlüsseln lesen:
+        # ist der Schlüssel weg, ist der Merker (selber Commit) auch schon zu sehen.
         allow_tofu = False
     holder: list[_PinningClient] = []
 
@@ -290,17 +243,9 @@ async def connect(
         host=target.address,
         port=target.port,
         username=target.username,
-        # **Live gefunden, nicht in der Doku so offensichtlich:** `known_hosts=None`
-        # deaktiviert die Host-Key-Pruefung KOMPLETT -- asyncssh ruft
-        # `validate_host_public_key()` dann NIE auf und akzeptiert jeden Schluessel
-        # (siehe SSHClientConnectionOptions._validate_host_key: der Aufruf steht in
-        # einem `if self._trusted_host_keys is not None:`-Block, der bei `None` nie
-        # betreten wird). Das waere exakt das `StrictHostKeyChecking=no`-Verhalten,
-        # das D-05 ersetzen soll. Ein leeres 3-Tupel (server_keys, ca_keys,
-        # revoked_keys) haelt `_trusted_host_keys` auf einer LEEREN, aber nicht-None
-        # Collection -- dadurch wird `validate_host_public_key()` fuer JEDEN
-        # Schluessel aufgerufen (er ist nie schon "bekannt"), womit `_PinningClient`
-        # tatsaechlich entscheidet.
+        # Nie `known_hosts=None`: das schaltet die Host-Key-Prüfung ganz ab, asyncssh ruft `validate_host_public_key()`
+        # dann nicht auf und akzeptiert jeden Schlüssel. Das leere Tupel (server_keys, ca_keys, revoked_keys) ist
+        # nicht-None, also wird für jeden Schlüssel nachgefragt und `_PinningClient` entscheidet.
         known_hosts=([], [], []),
         client_factory=_client_factory,
         connect_timeout=connect_timeout_s,
@@ -322,9 +267,8 @@ async def connect(
     try:
         conn = await asyncssh.connect(**connect_kwargs)
     except (OSError, asyncio.TimeoutError) as exc:
-        # Kein SSH-Fehler, sondern das Netz: nicht erreichbar, abgelehnt, Name unbekannt, Zeitlimit.
-        # Ein `TimeoutError()` hat keinen Text -- ohne diese Umwandlung stuende bei Terminal und
-        # Dateien nirgends, warum es nicht geht.
+        # Netzfehler: nicht erreichbar, abgelehnt, Name unbekannt, Zeitlimit. Ein `TimeoutError()` hat keinen Text,
+        # ohne diese Umwandlung stünde nirgends, warum es nicht geht.
         error_type = SshTimeout if isinstance(exc, TimeoutError) else SshUnreachable
         raise error_type(describe_connection_error(exc, address=target.address, port=target.port, network=True)) from exc
     except asyncssh.Error as exc:
@@ -340,7 +284,7 @@ async def connect(
         error_class = SshAuthError if isinstance(exc, asyncssh.PermissionDenied) else SshError
         error = error_class(f"Verbindung zu {target.address}:{target.port} fehlgeschlagen: {exc}")
         if holder:
-            # Schluesseltausch war durch (sonst waere `offered_*` leer oder der Schluessel abgelehnt).
+            # Schlüsseltausch war durch, sonst wäre `offered_*` leer oder der Schlüssel abgelehnt.
             error.key_type = holder[0].offered_type
             error.fingerprint = holder[0].offered_fingerprint
         raise error from exc
@@ -354,33 +298,24 @@ async def connect(
 
 @dataclass(frozen=True)
 class HostKeyReport:
-    """Was ein Server im Schluesseltausch gezeigt hat, verglichen mit dem Gemerkten."""
+    """Was ein Server im Schlüsseltausch gezeigt hat, verglichen mit dem Gemerkten."""
 
     key_type: str
     fingerprint: str
     """Wie `key.get_fingerprint()`: `SHA256:...`."""
     status: Literal["known", "new", "changed"]
-    """`known`: stimmt mit dem gemerkten Schluessel dieses Typs ueberein; `new`: fuer diesen Host
-    ist noch GAR KEIN Schluessel gemerkt; `changed`: es ist einer gemerkt, und der Server zeigt einen
-    anderen (auch: einen anderen Schluesseltyp)."""
+    """`known`: stimmt mit dem Gemerkten dieses Typs überein; `new`: für den Host ist noch nichts gemerkt;
+    `changed`: es ist etwas gemerkt und der Server zeigt anderes (auch einen anderen Typ)."""
     expected: str | None = None
-    """Der gemerkte Fingerabdruck dieses Typs (bei `known` und `changed`); bei einem anderen Typ
-    alles Gemerkte als `SHA256:... (typ)`; bei `new` `None`."""
+    """Gemerkter Fingerabdruck dieses Typs (`known`, `changed`); bei einem anderen Typ alles Gemerkte als
+    `SHA256:... (typ)`; bei `new` `None`."""
 
 
 async def inspect_host_key(
     address: str, port: int, known: dict[str, str], *, timeout_s: float = 10.0
 ) -> HostKeyReport:
-    """Liest den Server-Schluessel, OHNE sich anzumelden: der Client lehnt den Schluessel im
-    Schluesseltausch immer ab, die Verbindung kommt nie zur Anmeldung. Es werden keine
-    Zugangsdaten gebraucht und keine gesendet, und es wird nichts gespeichert. Fuer Server, die
-    noch keinen Zugang haben. Auch hier bleiben Standard-Schluessel aus ~/.ssh, der ssh-agent und
-    die ssh-Konfiguration des Rechners aussen vor (`_ISOLATED_CLIENT`, `client_keys=None`): selbst
-    wenn die Verbindung je weiterkaeme, gaebe es nichts, womit sie sich anmelden koennte.
-
-    Ist fuer den Host schon ein Schluessel gemerkt, zeigt ein Server mit mehreren Schluesseln den
-    gemerkten (Verfahren-Reihenfolge, `_preferred_host_key_algs`); ein anderer Typ gilt als
-    `changed`, nicht als `new`."""
+    """Liest den Server-Schlüssel, ohne sich anzumelden: der Client lehnt ihn im Schlüsseltausch immer ab. Keine
+    Zugangsdaten, nichts wird gespeichert; ein anderer Typ als der gemerkte gilt als `changed`, nicht als `new`."""
     holder: list[_InspectClient] = []
 
     def _client_factory() -> asyncssh.SSHClient:
@@ -392,7 +327,7 @@ async def inspect_host_key(
         conn = await asyncssh.connect(
             host=address, port=port,
             client_factory=_client_factory,
-            known_hosts=([], [], []),  # siehe connect(): nie `None`, sonst wird nichts geprueft
+            known_hosts=([], [], []),  # siehe connect(): nie `None`, sonst wird nichts geprüft
             client_keys=None, password=None,
             connect_timeout=timeout_s,
             login_timeout=timeout_s,
@@ -400,19 +335,19 @@ async def inspect_host_key(
             **({"server_host_key_algs": algs} if (algs := _preferred_host_key_algs(known)) else {}),
         )
     except asyncssh.HostKeyNotVerifiable:
-        conn = None  # der Normalfall: abgelehnt, nachdem der Schluessel gesehen wurde
+        conn = None  # der Normalfall: abgelehnt, nachdem der Schlüssel gesehen wurde
     except (asyncssh.Error, OSError, asyncio.TimeoutError) as exc:
         if not holder or holder[0].key_type is None:
             raise SshError(f"Verbindung zu {address}:{port} fehlgeschlagen: {exc}") from exc
         conn = None
-    if conn is not None:  # kann nicht passieren (der Client lehnt immer ab) -- sicherheitshalber zumachen
+    if conn is not None:  # kann nicht passieren, der Client lehnt immer ab; sicherheitshalber zumachen
         await _close_quietly(conn)
     if not holder or holder[0].key_type is None or holder[0].fingerprint is None:
         raise SshError(f"Der Server {address}:{port} hat keinen Schlüssel gezeigt.")
     key_type, fingerprint = holder[0].key_type, holder[0].fingerprint
     expected = known.get(key_type)
     if expected is None:
-        if known:  # ein anderer Typ als der gemerkte: Abweichung, nicht "neu" (siehe _PinningClient)
+        if known:  # anderer Typ als der gemerkte: Abweichung, nicht "neu" (siehe _PinningClient)
             return HostKeyReport(key_type, fingerprint, "changed", _known_summary(known))
         return HostKeyReport(key_type, fingerprint, "new", None)
     return HostKeyReport(key_type, fingerprint, "known" if expected == fingerprint else "changed", expected)
@@ -426,12 +361,11 @@ class _Retired:
 
 
 async def _close_quietly(conn: asyncssh.SSHClientConnection) -> None:
-    """Verbindung schliessen und kurz auf das Ende warten -- Aufraeumen darf nie scheitern
-    und nie haengen."""
+    """Verbindung schließen und kurz auf das Ende warten; Aufräumen darf weder scheitern noch hängen."""
     try:
         conn.close()
         await asyncio.wait_for(conn.wait_closed(), timeout=2.0)
-    except Exception:  # noqa: BLE001, S110 - Aufraeumen darf nicht scheitern
+    except Exception:  # noqa: BLE001, S110 - Aufräumen darf nicht scheitern
         pass
 
 
@@ -442,28 +376,17 @@ _TARGET_CHANGED_TEXT = (
 
 
 class SshPool:
-    """Ein Verbindungspool je (Host, Zugangsdaten) -- D-05: "kann Verbindungen und
-    Kanaele poolen". Kein Idle-Timeout in dieser Runde (siehe Abnahmebericht) --
-    tote Verbindungen werden bei der naechsten Anfrage erkannt und ersetzt.
-
-    Zwei Wege, einen Host aus dem Pool zu nehmen:
-    - `drop_host()`: sofort schliessen. Fuer alles, was Vertrauen oder Ziel aendert
-      (Zugang geloescht, Server-Schluessel vergessen, Server geloescht, Adresse
-      geaendert) -- eine noch offene Verbindung darf danach nicht weiterarbeiten.
-    - `retire_host()`: nur aus dem Pool nehmen, die alte Verbindung laeuft noch eine
-      Weile aus (z. B. ein `docker logs -f`). Fuer "neue Rechte sollen gelten"."""
+    """Ein Verbindungspool je (Host, Zugangsdaten); tote Verbindungen werden bei der nächsten Anfrage erkannt und
+    ersetzt."""
 
     def __init__(self) -> None:
         self._connections: dict[tuple[str, str], asyncssh.SSHClientConnection] = {}
-        # Eine Sperre je (Host, Zugangsdaten) statt einer globalen: ein
-        # nicht erreichbarer Host haelt seine Sperre bis zum Connect-Timeout (10 s),
+        # Eine Sperre je (Host, Zugangsdaten): ein nicht erreichbarer Host hält seine bis zum Connect-Timeout,
         # das darf Verbindungen zu anderen Hosts nicht aufhalten.
         self._locks: dict[tuple[str, str], asyncio.Lock] = {}
-        # Zaehler je Host, der bei jedem drop_host() steigt: ein Verbindungsaufbau, der
-        # waehrenddessen mit den ALTEN Daten (alte Adresse, geloeschter Zugang)
-        # fertig wird, darf nicht mehr im Pool landen.
+        # Steigt bei jedem drop_host(): ein Aufbau mit den alten Daten (alte Adresse, gelöschter Zugang) darf nicht
+        # mehr im Pool landen.
         self._generation: dict[str, int] = {}
-        # Ausgemusterte Verbindungen samt ihrem Schliess-Timer.
         self._retired: list[_Retired] = []
 
     async def get(
@@ -477,16 +400,14 @@ class SshPool:
         key = (target.host_id, credential_id)
         conn = self._connections.get(key)
         if conn is not None and not conn.is_closed():
-            return conn  # lebende Verbindung: ohne auf irgendeine Sperre zu warten
-        # VOR dem Warten auf die Sperre festhalten (nicht erst danach): wer hier mit einem
-        # alten `target` wartet, darf nach einem drop_host() nicht mit diesem ins Pool.
+            return conn  # Schnellweg: lebende Verbindung, keine Sperre nötig
+        # Vor dem Warten auf die Sperre festhalten: wer mit einem alten `target` wartet, darf nach einem
+        # drop_host() nicht mit diesem in den Pool.
         generation = target.generation if target.generation is not None else self._generation.get(target.host_id, 0)
-        # `setdefault` ohne `await` dazwischen -- im Event-Loop atomar, braucht
-        # darum selbst keine Sperre.
+        # `setdefault` ohne `await` ist im Event-Loop atomar und braucht keine eigene Sperre.
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
-            # Erneut pruefen: ein paralleler Aufrufer fuer denselben Schluessel kann
-            # die Verbindung inzwischen aufgebaut haben.
+            # Erneut prüfen: ein paralleler Aufrufer kann die Verbindung inzwischen aufgebaut haben.
             conn = self._connections.get(key)
             if conn is not None and not conn.is_closed():
                 return conn
@@ -494,33 +415,30 @@ class SshPool:
                 raise SshTargetChanged(_TARGET_CHANGED_TEXT)  # schon vor dem Aufbau veraltet
             conn = await connect(session, target, connect_timeout_s=connect_timeout_s)
             if self._generation.get(target.host_id, 0) != generation:
-                # drop_host() lief waehrend des Aufbaus: `target` stammt noch aus der
-                # Zeit davor und ist evtl. veraltet. Nicht poolen, nicht herausgeben.
+                # drop_host() lief während des Aufbaus: `target` kann veraltet sein, nicht poolen und nicht herausgeben.
                 await _close_quietly(conn)
                 raise SshTargetChanged(_TARGET_CHANGED_TEXT)
             self._connections[key] = conn
             return conn
 
     def generation(self, host_id: str) -> int:
-        """Stand des Zaehlers, der bei jedem `drop_host()` steigt (siehe `ConnectionTarget.generation`)."""
+        """Stand des Zählers, der bei jedem `drop_host()` steigt (siehe `ConnectionTarget.generation`)."""
         return self._generation.get(host_id, 0)
 
     async def drop_host(self, host_id: str) -> None:
-        """Alle Verbindungen (auch ausgemusterte) zu `host_id` sofort schliessen; der
-        naechste Zugriff verbindet neu, mit dann aktuellen Daten."""
+        """Schließt alle Verbindungen (auch ausgemusterte) zu `host_id` sofort, für alles, was Vertrauen oder Ziel
+        ändert; der nächste Zugriff verbindet mit dann aktuellen Daten."""
         self._generation[host_id] = self._generation.get(host_id, 0) + 1
         conns = [self._connections.pop(k) for k in [k for k in self._connections if k[0] == host_id]]
         for retired in [r for r in self._retired if r.host_id == host_id]:
             self._retire_done(retired)
             conns.append(retired.conn)
-        # Die Sperren bleiben bewusst bestehen: eine geloeschte Sperre liesse einen
-        # Wartenden und einen Neuen gleichzeitig verbinden.
+        # Die Sperren bleiben bewusst: eine gelöschte ließe einen Wartenden und einen Neuen gleichzeitig verbinden.
         await asyncio.gather(*(_close_quietly(conn) for conn in conns))
 
     def retire_host(self, host_id: str, grace_s: float = 900.0) -> None:
-        """Die gepoolten Verbindungen zu `host_id` aus dem Pool nehmen (neue Aufrufer
-        verbinden neu), die alten nach `grace_s` Sekunden schliessen. So gelten z. B.
-        neue Gruppenrechte, ohne ein laufendes `docker logs -f` abzuschneiden."""
+        """Nimmt die Verbindungen zu `host_id` aus dem Pool und schließt die alten erst nach `grace_s` Sekunden,
+        damit bei neuen Gruppenrechten kein laufendes `tail -f` abreißt."""
         loop = asyncio.get_running_loop()
         for key in [k for k in self._connections if k[0] == host_id]:
             retired = _Retired(host_id, self._connections.pop(key))
@@ -548,7 +466,7 @@ class SshPool:
         for conn in conns:
             try:
                 await conn.wait_closed()
-            except Exception:  # noqa: BLE001 - Aufraeumen darf nicht scheitern
+            except Exception:  # noqa: BLE001 - Aufräumen darf nicht scheitern
                 pass
 
 
@@ -563,8 +481,8 @@ def get_ssh_pool() -> SshPool:
 
 
 async def reset_ssh_pool() -> None:
-    """Nur fuer Tests/Shutdown: schliesst alle gepoolten Verbindungen und erzwingt
-    beim naechsten `get_ssh_pool()` einen frischen Pool."""
+    """Nur für Tests und Shutdown: schließt alle gepoolten Verbindungen; der nächste `get_ssh_pool()` baut einen neuen
+    Pool."""
     global _pool
     if _pool is not None:
         await _pool.close_all()
@@ -574,15 +492,10 @@ async def reset_ssh_pool() -> None:
 async def run(
     conn: asyncssh.SSHClientConnection, command: str, *, timeout_s: float = 60.0
 ) -> tuple[int, str, str]:
-    """Nur fuer *lesende* Kommandos ohne Nebenwirkung (docs/02 §2 `ctx.exec.run()`).
-    Gibt `(exit_code, stdout, stderr)` zurueck.
-
-    `encoding=None` -- live gefunden: laesst man Client und Server bei
-    unterschiedlichen Default-Encodings (Server schreibt Bytes, Kanal erwartet Str
-    o.ae.), wirft der Server eine uncaught `TypeError` und die GESAMTE Verbindung
-    faellt mit "Connection lost", nicht nur der eine Kanal. Rohe Bytes ueberall und
-    hier explizit dekodieren ist robuster als sich auf eine Encoding-Uebereinstimmung
-    zwischen Kern und (potenziell fremden) SSH-Servern zu verlassen."""
+    """Führt ein *lesendes* Kommando ohne Nebenwirkung aus und liefert `(exit_code, stdout, stderr)`."""
+    # `encoding=None`: bei abweichenden Standard-Kodierungen von Client und Server wirft der Server einen unbehandelten
+    # `TypeError`, und die ganze Verbindung fällt mit "Connection lost", nicht nur der Kanal. Rohe Bytes und
+    # explizites Dekodieren sind robuster als auf übereinstimmende Kodierungen fremder Server zu bauen.
     result = await asyncio.wait_for(
         conn.run(command, check=False, encoding=None), timeout=timeout_s
     )
@@ -598,10 +511,8 @@ async def open_shell(
     conn: asyncssh.SSHClientConnection, *, cols: int = 80, rows: int = 24, term_type: str = "xterm",
     command: str | None = None,
 ) -> AsyncIterator[asyncssh.SSHClientProcess]:
-    """Interaktive PTY-Sitzung -- die Grundlage fuer das Web-Terminal
-    (docs/00-DECISIONS.md D-05). Mit `command` laeuft statt der Login-Shell genau dieses Kommando (z. B. eine
-    Shell in einem Container)."""
-    # Ohne `command` genau wie bisher (kein Positionsargument: asyncssh nimmt dann seine Vorgabe, die Login-Shell).
+    """Interaktive PTY-Sitzung für das Web-Terminal; mit `command` läuft statt der Login-Shell genau dieses Kommando."""
+    # Ohne Positionsargument startet asyncssh die Login-Shell.
     args = (command,) if command is not None else ()
     process = await conn.create_process(*args, term_type=term_type, term_size=(cols, rows), encoding=None)
     try:
@@ -614,15 +525,11 @@ async def open_shell(
 async def open_command_stream(
     conn: asyncssh.SSHClientConnection, command: str
 ) -> AsyncIterator[asyncssh.SSHClientProcess]:
-    """Ein Kommando, dessen Ausgabe LAUFEND gelesen wird (z. B. `docker logs -f`) --
-    `run()` kehrt erst nach dem Ende zurueck, fuer einen endlosen Strom nie.
-
-    Mit PTY, bewusst: ohne PTY bekommt ein entfernter `... -f`-Prozess beim Schliessen
-    des Kanals kein Signal und laeuft weiter, bis er das naechste Mal schreibt (bei
-    einem ruhigen Container: beliebig lange). Mit PTY haengt sshd beim Schliessen die
-    Sitzung auf, der Prozess bekommt SIGHUP und endet sofort. Nebenwirkung: stdout und
-    stderr kommen gemischt, Zeilenenden als `\\r\\n` -- fuer eine Log-Ansicht genau
-    richtig, der Aufrufer normalisiert die Zeilenenden."""
+    """Ein Kommando, dessen Ausgabe laufend gelesen wird (z. B. `tail -f`); `run()` kehrt bei einem endlosen Strom nie
+    zurück."""
+    # Bewusst mit PTY: ohne bekommt ein entferntes `... -f` beim Schließen des Kanals kein Signal und läuft weiter, bis
+    # es das nächste Mal schreibt. Mit PTY hängt sshd die Sitzung auf und der Prozess bekommt SIGHUP. Nebenwirkung:
+    # stdout und stderr kommen gemischt, Zeilenenden `\r\n`; der Aufrufer normalisiert sie.
     process = await conn.create_process(command, term_type="dumb", term_size=(250, 50), encoding=None)
     try:
         yield process
@@ -631,7 +538,7 @@ async def open_command_stream(
 
 
 async def start_sftp(conn: asyncssh.SSHClientConnection) -> asyncssh.SFTPClient:
-    """Grundlage fuer `FileSource` (SFTP) -- docs/02-EXTENSION-API.md §3."""
+    """Grundlage für `FileSource` (SFTP)."""
     return await conn.start_sftp_client()
 
 
@@ -640,10 +547,9 @@ _drop_tasks: set[asyncio.Task[None]] = set()
 
 
 def drop_host_after_commit(session: AsyncSession, host_id: str) -> None:
-    """Merkt `host_id` vor: sobald die Transaktion dieser Session COMMITTET ist, wird der Host
-    (nochmals) aus dem Pool genommen. Noetig zusaetzlich zum Droppen vor dem Commit -- ein
-    paralleler Leser mit eigener Session (z. B. `ExecHandle`) kann zwischen Drop und Commit
-    noch die ALTEN Daten lesen und damit sofort wieder eine Verbindung poolen."""
+    """Nimmt `host_id` nach dem Commit dieser Session nochmals aus dem Pool.
+
+    Ein paralleler Leser mit eigener Session sieht bis dahin noch alte Daten und würde sofort neu poolen."""
     session.sync_session.info.setdefault(_DROP_INFO_KEY, set()).add(host_id)
 
 

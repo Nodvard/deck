@@ -1,37 +1,6 @@
-"""Vertrauenswuerdige Proxys (Einstellung `system.trusted_proxies`): wessen Angaben `X-Forwarded-For` und
-`X-Forwarded-Proto` Nodvard Deck glaubt.
-
-Steht ein Reverse-Proxy (Nginx Proxy Manager, Traefik, Caddy) vor Nodvard Deck, ist die Gegenstelle jeder
-Verbindung der Proxy. Ohne seine Kopfzeilen saehe die Login-Drossel alle Menschen als eine einzige Adresse, das
-Protokoll ebenso, und hinter HTTPS bekaeme das Anmelde-Cookie kein `Secure`. Dieselben Kopfzeilen kann aber jeder
-Client selbst schicken: ausgewertet werden sie nur, wenn die direkte Gegenstelle in dieser Liste steht
-(`api/proxy_headers.py`). Leere Liste (Vorgabe) = niemandem vertrauen, wie vor dieser Einstellung.
-
-Regeln fuer die Liste (`normalize`):
-- einzelne Adressen oder Netze (CIDR), IPv4 und IPv6, hoechstens `MAX_ENTRIES`;
-- eine IPv4-Adresse in IPv6-Schreibweise (`::ffff:172.18.0.5`) zaehlt als IPv4-Adresse, auch beim Vergleich mit
-  der Gegenstelle (ein Server, der auf `::` lauscht, meldet IPv4-Gegenstellen so);
-- zu grosse Netze sind verboten, denn jeder Rechner darin duerfte seine Adresse faelschen (`0.0.0.0/0` hiesse:
-  allen glauben). Oeffentliche IPv4-Netze hoechstens /24 (`MIN_PREFIX_V4_PUBLIC`): ein Proxy steht auf einem
-  Rechner oder in einem kleinen Netz, schon ein /16 umfasste 65 536 fremde Adressen. Private bzw. interne
-  IPv4-Bereiche (`_PRIVATE_V4`: 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 127.0.0.0/8,
-  169.254.0.0/16) duerfen so gross sein wie der Bereich selbst (bis /8, `MIN_PREFIX_V4`): dort sitzen nur eigene
-  Geraete, und ein Docker-Netz wie 172.18.0.0/16 ist ueblich. `172.0.0.0/8` statt `172.16.0.0/12` waere dagegen ein
-  Vertipper mit fremden Netzen.
-  IPv6 hoechstens /48 (`MIN_PREFIX_V6`), fuer oeffentliche wie interne Adressen gleich. Eine weitere Grenze fuer
-  interne Adressen (ULA `fc00::/7`, Link-Local `fe80::/10`, `::1`) braucht es nicht: ein ULA-Netz eines ganzen
-  Standorts ist nach RFC 4193 genau ein /48, und Docker legt IPv6-Netze meist als /64 an, das ist enger als ein /48
-  und geht also. Ein /32 waere dagegen ein ganzer Anbieter. Zu gross sind damit auch `fc00::/7` und `fe80::/10`;
-  einzelne Adressen (`::1`, `fd00::5`) sind immer in Ordnung;
-- eine Adresse mit Netzmaske, deren hintere Stellen nicht null sind (`192.168.2.40/24`), wird abgelehnt statt still
-  zum ganzen Netz erweitert: gemeint war oft nur der eine Rechner;
-- keine Zonen-Angabe (`%eth0`), keine Multicast-Adressen, nicht `0.0.0.0`/`::`: von dort kommt keine Verbindung.
-
-Der gueltige Stand liegt im Prozess (`current()`), nie wird je Anfrage die Datenbank gefragt: beim Start geladen
-(`load`), nach `PUT /settings/system.trusted_proxies` ersetzt (`apply`). Ist `NODVARD_DECK_TRUSTED_PROXIES` gesetzt
-(Komma-getrennt, `config.Settings.trusted_proxies`), gilt nur sie; ungueltige Eintraege darin werden mit einer
-Warnung im Protokoll uebersprungen (lieber weniger vertrauen als nicht starten).
-"""
+"""Vertrauenswürdige Proxys (`system.trusted_proxies`): Nur wenn die direkte Gegenstelle in der Liste steht, glaubt
+das Dashboard `X-Forwarded-For` und `X-Forwarded-Proto`, denn diese Kopfzeilen kann jeder Client selbst schicken.
+Leere Liste (Vorgabe) heißt: niemandem vertrauen."""
 
 from __future__ import annotations
 
@@ -52,45 +21,45 @@ SETTING_KEY = "system.trusted_proxies"
 ENV_NAME = "NODVARD_DECK_TRUSTED_PROXIES"
 MAX_ENTRIES = 20
 MAX_ENTRY_CHARS = 64
-"""Laenger ist keine Adresse und kein Netz (die laengste IPv6-Schreibweise mit Praefix hat 50 Zeichen)."""
+"""Länger ist keine Adresse und kein Netz (die längste IPv6-Schreibweise mit Präfix hat 50 Zeichen)."""
 MIN_PREFIX_V4 = 8
-"""Kleinstes Praefix fuer IPv4-Netze in `_PRIVATE_V4` (der Bereich selbst ist die eigentliche Grenze: kein Netz darf
-ueber ihn hinausgehen)."""
+"""Kleinstes Präfix für IPv4-Netze in `_PRIVATE_V4`; kein Netz darf über seinen Bereich hinausgehen."""
 MIN_PREFIX_V4_PUBLIC = 24
-"""Kleinstes Praefix fuer alle anderen (oeffentlichen) IPv4-Netze."""
+"""Kleinstes Präfix für öffentliche IPv4-Netze: Ein Proxy steht auf einem Rechner oder in einem kleinen Netz,
+schon ein /16 umfasste 65 536 fremde Adressen."""
 MIN_PREFIX_V6 = 48
-"""Kleinstes Praefix fuer IPv6-Netze, gleich fuer oeffentliche und interne (siehe Modulkopf)."""
+"""Kleinstes Präfix für IPv6, öffentlich wie intern: Ein ULA-Netz eines Standorts ist ein /48 (RFC 4193),
+Container-Netze sind meist ein /64, ein /32 wäre ein ganzer Anbieter."""
 
 Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 Network = ipaddress.IPv4Network | ipaddress.IPv6Network
 Source = Literal["setting", "env"]
 
+# Ein Server, der auf `::` lauscht, meldet IPv4-Gegenstellen als `::ffff:192.0.2.10`; das zählt als IPv4.
 _MAPPED_V4 = ipaddress.IPv6Network("::ffff:0:0/96")
 _PRIVATE_V4 = tuple(
     ipaddress.IPv4Network(net)
     for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16")
 )
-"""Private bzw. interne IPv4-Bereiche (Heimnetz, Docker, Tailscale/CGNAT, der Rechner selbst, Link-Local), in denen
-Netze bis zur Groesse des Bereichs erlaubt sind (hoechstens /8)."""
+"""Interne IPv4-Bereiche (Heimnetz, Container, CGNAT, Loopback, Link-Local): Dort sitzen nur eigene Geräte,
+daher sind Netze bis zur Größe des Bereichs erlaubt."""
 _EXAMPLE = "zum Beispiel 172.18.0.5 oder 172.18.0.0/28"
 
 
 class InvalidEntry(ValueError):
-    """Ein Eintrag der Liste ist keine erlaubte Adresse bzw. kein erlaubtes Netz. Der Text ist ein fertiger deutscher
-    Satz fuer die Oberflaeche."""
+    """Ein Eintrag ist keine erlaubte Adresse bzw. kein erlaubtes Netz; der Text ist ein fertiger Satz für die UI."""
 
 
 def parse_address(text: object) -> Address | None:
-    """Eine einzelne Adresse (ohne Praefix und Port), IPv4 in IPv6-Schreibweise als IPv4. `None`, wenn es keine ist
-    (z. B. bei einer Gegenstelle ohne IP, etwa einem Unix-Socket). Eine Zonen-Angabe (`fe80::1%eth0`) faellt weg:
-    sie sagt nur, ueber welche Netzwerkkarte die Adresse erreichbar ist, und gehoert weder in die Drossel noch ins
-    Protokoll."""
+    """Eine einzelne Adresse ohne Präfix und Port (IPv4 in IPv6-Schreibweise als IPv4), sonst `None`, z. B. bei einem
+    Unix-Socket."""
     if not isinstance(text, str) or not text or len(text) > MAX_ENTRY_CHARS:
         return None
     try:
         ip = ipaddress.ip_address(text)
     except ValueError:
         return None
+    # Die Zonen-Angabe (`fe80::1%eth0`) nennt nur die Netzwerkkarte und gehört weder in die Drossel noch ins Protokoll.
     if isinstance(ip, ipaddress.IPv6Address) and ip.scope_id is not None:
         ip = ipaddress.IPv6Address(int(ip))
     if isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None:
@@ -104,8 +73,7 @@ def _shown(raw: str) -> str:
 
 
 def parse_entry(raw: object) -> Network:
-    """Ein Eintrag der Liste als Netz (eine einzelne Adresse als /32 bzw. /128). `InvalidEntry`, wenn er nicht
-    erlaubt ist (siehe Modul-Docstring)."""
+    """Ein Eintrag als Netz (eine einzelne Adresse als /32 bzw. /128); `InvalidEntry`, wenn er nicht erlaubt ist."""
     if not isinstance(raw, str):
         raise InvalidEntry(f"Jeder Eintrag muss eine Adresse oder ein Netz als Text sein, {_EXAMPLE}.")
     text = raw.strip()
@@ -116,6 +84,8 @@ def parse_entry(raw: object) -> Network:
         try:
             net: Network = ipaddress.ip_network(text, strict=True)
         except ValueError:
+            # Gesetzte Host-Bits (`192.0.2.40/24`): ablehnen statt still das ganze Netz zu nehmen, gemeint war oft nur
+            # der eine Rechner.
             try:
                 loose = ipaddress.ip_network(text, strict=False)
             except ValueError:
@@ -133,6 +103,7 @@ def parse_entry(raw: object) -> Network:
     if isinstance(net, ipaddress.IPv6Network) and net.prefixlen >= 96 and net.subnet_of(_MAPPED_V4):
         # IPv4 in IPv6-Schreibweise: als das IPv4-Netz behandeln, das es meint.
         net = ipaddress.IPv4Network((int(net.network_address) & 0xFFFFFFFF, net.prefixlen - 96))
+    # Zu große Netze sind verboten: Jeder Rechner darin dürfte seine Adresse fälschen (`0.0.0.0/0` hieße: allen trauen).
     if net.version == 6:
         minimum = MIN_PREFIX_V6
     elif any(net.subnet_of(private) for private in _PRIVATE_V4):
@@ -145,21 +116,22 @@ def parse_entry(raw: object) -> Network:
             f"deines Proxys ein oder ein kleines Netz (öffentliche IPv4-Netze ab /{MIN_PREFIX_V4_PUBLIC}, private "
             f"wie 10.0.0.0/8 ab /{MIN_PREFIX_V4}; IPv6 ab /{MIN_PREFIX_V6})."
         )
+    # Von Multicast, `0.0.0.0` und `::` kommt keine Verbindung.
     if net.is_multicast or (net.num_addresses == 1 and net.network_address.is_unspecified):
         raise InvalidEntry(f"„{text}“ ist keine Adresse, von der ein Proxy kommen kann ({_EXAMPLE}).")
     return net
 
 
 def format_entry(net: Network) -> str:
-    """Einheitliche Schreibweise: eine einzelne Adresse ohne Praefix, ein Netz mit."""
+    """Einheitliche Schreibweise: eine einzelne Adresse ohne Präfix, ein Netz mit."""
     if net.prefixlen == net.max_prefixlen:
         return str(net.network_address)
     return str(net)
 
 
 def normalize(value: object) -> list[str]:
-    """Die Liste aus `PUT /settings/system.trusted_proxies`, geprueft und einheitlich geschrieben (doppelte fallen
-    weg). `InvalidEntry` beim ersten Fehler."""
+    """Die Liste aus `PUT /settings/system.trusted_proxies`, geprüft und einheitlich geschrieben (Doppelte fallen weg);
+    `InvalidEntry` beim ersten Fehler."""
     if not isinstance(value, list):
         raise InvalidEntry("Erwartet wird eine Liste von Adressen oder Netzen.")
     if len(value) > MAX_ENTRIES:
@@ -173,8 +145,8 @@ def normalize(value: object) -> list[str]:
 
 
 def lenient(values: Iterable[object], *, origin: str, warn: bool = True) -> list[str]:
-    """Wie `normalize`, aber ohne Fehler: ungueltige Eintraege fallen mit einer Warnung im Protokoll weg (`warn`), nach
-    `MAX_ENTRIES` ist Schluss. Fuer die Umgebungsvariable und gespeicherte Werte (beim Start)."""
+    """Wie `normalize`, aber ohne Fehler: Ungültige Einträge fallen mit einer Warnung weg (`warn`), nach `MAX_ENTRIES`
+    ist Schluss. Für Umgebungsvariable und gespeicherte Werte beim Start: Lieber weniger vertrauen als nicht starten."""
     out: list[str] = []
     for raw in values:
         if isinstance(raw, str) and not raw.strip():
@@ -196,17 +168,18 @@ def lenient(values: Iterable[object], *, origin: str, warn: bool = True) -> list
 
 
 def env_entries(settings: Settings, *, warn: bool = True) -> list[str] | None:
-    """Die Liste aus `NODVARD_DECK_TRUSTED_PROXIES`; `None`, wenn die Variable nicht gesetzt (oder leer) ist. Gewarnt
-    wird nur beim Start (`warn`), nicht bei jedem Anzeigen der Einstellungen."""
+    """Die Liste aus `NODVARD_DECK_TRUSTED_PROXIES`, `None` wenn sie nicht gesetzt ist; gewarnt wird nur beim Start."""
     raw = settings.trusted_proxies
     if raw is None:
         return None
     return lenient(raw.split(","), origin=ENV_NAME, warn=warn)
 
 
+# Ohne Proxy-Kopfzeilen wäre die Gegenstelle für Login-Drossel und Protokoll immer der Proxy, und hinter HTTPS
+# bekäme das Anmelde-Cookie kein `Secure`.
 @dataclass(frozen=True)
 class TrustedProxies:
-    """Der gueltige Stand: die Netze, ihre Schreibweise fuer die Anzeige und woher sie kommen."""
+    """Der gültige Stand: die Netze, ihre Schreibweise für die Anzeige und woher sie kommen."""
 
     networks: tuple[Network, ...] = ()
     entries: tuple[str, ...] = ()
@@ -222,13 +195,12 @@ _current = TrustedProxies()
 
 
 def current() -> TrustedProxies:
-    """Der gueltige Stand, ohne Datenbank (die Middleware fragt ihn bei jeder Anfrage)."""
+    """Der gültige Stand, ohne Datenbank (die Middleware fragt ihn bei jeder Anfrage)."""
     return _current
 
 
 def apply(entries: Iterable[str], *, source: Source = "setting") -> TrustedProxies:
-    """Ersetzt den gueltigen Stand. `entries` muss schon geprueft sein (`normalize`/`lenient`); was trotzdem nicht
-    passt, faellt weg."""
+    """Ersetzt den gültigen Stand; `entries` sind schon geprüft (`normalize`/`lenient`), was nicht passt, fällt weg."""
     global _current
     networks: list[Network] = []
     shown: list[str] = []
@@ -244,13 +216,13 @@ def apply(entries: Iterable[str], *, source: Source = "setting") -> TrustedProxi
 
 
 def reset() -> None:
-    """Zurueck auf „niemandem vertrauen“ (Tests)."""
+    """Zurück auf „niemandem vertrauen“ (Tests)."""
     global _current
     _current = TrustedProxies()
 
 
 async def load(session: AsyncSession, settings: Settings) -> TrustedProxies:
-    """Beim Start: Umgebungsvariable, sonst die gespeicherte Einstellung."""
+    """Beim Start: Die Umgebungsvariable hat Vorrang, sonst gilt die gespeicherte Einstellung."""
     from_env = env_entries(settings)
     if from_env is not None:
         return apply(from_env, source="env")

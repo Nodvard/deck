@@ -1,10 +1,6 @@
-"""Gemeinsame HTTP-Helfer fuer die beiden Clients (Pi-hole, Nginx Proxy Manager).
+"""Gemeinsame HTTP-Helfer der beiden Clients, nur über `ctx.http` (nie ein eigener `httpx`-Client).
 
-Nur ueber `ctx.http` (Zielpruefung `net.outbound`, TLS-Ausnahme nur mit
-`net.outbound.insecure_tls`) -- nie ein eigener `httpx`-Client. Jeder Netzwerkfehler
-wird hier in eine verstaendliche deutsche Meldung uebersetzt; Passwoerter, Sitzungen
-und Tokens landen nie in einer Meldung (die stehen nur in Headern/Bodies, nie in der
-URL).
+Netzwerkfehler werden zu festen deutschen Meldungen; Passwörter, Sitzungen und Tokens stehen nie darin.
 """
 
 from __future__ import annotations
@@ -22,8 +18,8 @@ class HttpLike(Protocol):
 
 
 class ServiceError(Exception):
-    """Basis beider Clients. `state` ist der Maschinenwert fuer Seite/Kacheln:
-    `unreachable` | `auth_failed` | `unsupported` | `error`."""
+    """Basis beider Clients; `state` ist der Maschinenwert für Seite und Kacheln (`unreachable`, `auth_failed`,
+    `unsupported` oder `error`)."""
 
     state = "unreachable"
 
@@ -40,11 +36,11 @@ _REDIRECT_STEPS = frozenset(
 
 
 def came_from_redirect(exc: BaseException) -> bool:
-    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand. httpx baut die Weiterleitung auch
-    dann, wenn es ihr nicht folgt, und scheitert dabei an einem kaputten `Location`-Header (z. B. an
-    einem ungueltigen Punycode-Namen). Erkannt an der Stelle im Traceback, ersatzweise am Wort
-    "location" im Text. Beides waehlt nur zwischen festen Saetzen: der Text der Ausnahme selbst kommt
-    nie in eine Meldung."""
+    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand.
+
+    httpx baut sie auch, ohne ihr zu folgen, und scheitert an einem kaputten `Location`-Header (z. B. ungültiger Punycode)."""
+    # Erkannt an der Stelle im Traceback, ersatzweise am Wort "location". Beides wählt nur zwischen festen Sätzen:
+    # der Text der Ausnahme selbst kommt nie in eine Meldung.
     tb = exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_code.co_name in _REDIRECT_STEPS:
@@ -55,7 +51,7 @@ def came_from_redirect(exc: BaseException) -> bool:
 
 def own_url_ok(url: str) -> bool:
     try:
-        _ = httpx.URL(url).host  # `.host` entschluesselt Punycode und scheitert an einem kaputten Namen
+        _ = httpx.URL(url).host  # `.host` entschlüsselt Punycode und scheitert an einem kaputten Namen
     except (httpx.InvalidURL, ValueError):
         return False
     return True
@@ -73,10 +69,9 @@ def _protocol_text(exc: BaseException, service: str) -> str:
 
 
 def unusable_exchange_text(exc: BaseException, url: str, service: str) -> str:
-    """Fester Satz fuer `httpx.ProtocolError`, `httpx.InvalidURL` und `ValueError` -- nie ihr Text.
-    h11 zitiert kaputte Zeilen der Antwort (`illegal header line: bytearray(b'Location: ...')`) und
-    bei der eigenen Anfrage den kaputten Header samt Wert; ein ungueltiger Punycode-Name in der
-    Weiterleitung nennt Teile des fremden Namens."""
+    """Fester Satz für `httpx.ProtocolError`, `httpx.InvalidURL` und `ValueError`, nie deren Text.
+
+    h11 zitiert kaputte Zeilen der Antwort und den kaputten Header samt Wert; ein ungültiger Punycode-Name nennt Teile des fremden Namens."""
     if isinstance(exc, httpx.ProtocolError):
         return _protocol_text(exc, service)
     if not own_url_ok(url):
@@ -114,18 +109,19 @@ async def send(
 ) -> Any:
     problem: str
     try:
+        # `ctx.http` prüft das Ziel (`net.outbound`) und erlaubt die TLS-Ausnahme nur mit `net.outbound.insecure_tls`.
         return await http.request(method, url, insecure_tls=insecure_tls, timeout=timeout_s, **kwargs)
     except NodvardError as exc:
         # z. B. PermissionDenied von ctx.http (Ziel oder TLS-Ausnahme nicht erlaubt).
         raise error_cls(f"{service}: Verbindung vom Dashboard nicht erlaubt ({_short(str(exc))}).") from exc
     except (httpx.ProtocolError, httpx.InvalidURL, ValueError) as exc:
         # Kaputte Antwort, unbrauchbare Weiterleitung oder unbrauchbare eigene Adresse. `InvalidURL`
-        # und die Punycode-Fehler (`ValueError`) wirft httpx ausserhalb von `HTTPError`.
+        # und die Punycode-Fehler (`ValueError`) wirft httpx außerhalb von `HTTPError`.
         problem = unusable_exchange_text(exc, url, service)
     except (httpx.HTTPError, OSError) as exc:
         raise error_cls(describe_transport_error(exc, service)) from exc
-    # Ausserhalb des `except`-Blocks: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
-    # Antwort im Text) als `__context__` an der Meldung, und wer die Ursachenkette abschreibt, truege sie mit.
+    # Außerhalb des `except`-Blocks: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
+    # Antwort im Text) als `__context__` an der Meldung, und wer die Ursachenkette abschreibt, trüge sie mit.
     raise error_cls(problem)
 
 
@@ -133,13 +129,12 @@ def json_body(response: Any) -> Any:
     try:
         return response.json()
     except (ValueError, RecursionError):
-        # Kaputter oder absichtlich tief verschachtelter Koerper: wie "kein JSON" behandeln.
+        # Kaputter oder absichtlich tief verschachtelter Körper: wie "kein JSON" behandeln.
         return None
 
 
 def error_message(response: Any) -> str | None:
-    """`{"error": {"message": "..."}}` -- so melden Pi-hole v6 UND Nginx Proxy
-    Manager Fehler."""
+    """`{"error": {"message": "..."}}`: so melden Pi-hole v6 und Nginx Proxy Manager Fehler."""
     body = json_body(response)
     if isinstance(body, dict):
         err = body.get("error")
@@ -151,9 +146,8 @@ def error_message(response: Any) -> str | None:
 
 
 def redirect_text(service: str, status_code: int | None = None) -> str:
-    """Der Satz fuer jede Weiterleitung. Der `Location`-Header kommt vom fremden Server und
-    steht darum nirgends im Text, auch nicht als Adressvorschlag: ein Angreifer koennte sich
-    sonst eine Adresse aussuchen, die der Nutzer dann in die Einstellungen uebernimmt."""
+    """Fester Satz für jede Weiterleitung. Der `Location`-Header steht nirgends im Text, auch nicht als
+    Adressvorschlag: ein Angreifer könnte sonst eine Adresse wählen, die der Nutzer in die Einstellungen übernimmt."""
     code = f" (HTTP {status_code})" if status_code else ""
     return (
         f"{service} leitet auf eine andere Adresse um{code}. "
@@ -164,9 +158,8 @@ def redirect_text(service: str, status_code: int | None = None) -> str:
 
 
 def redirect_message(response: Any, service: str) -> str | None:
-    """Satz fuer eine 3xx-Antwort, sonst `None`. Eine Weiterleitung ist nie ein Erfolg:
-    `ctx.http` folgt ihr bewusst nicht -- sonst ginge das Passwort an ein Ziel, das niemand
-    eingetragen hat."""
+    """Satz für eine 3xx-Antwort, sonst `None`. Eine Weiterleitung ist nie ein Erfolg: `ctx.http` folgt ihr
+    bewusst nicht, sonst ginge das Passwort an ein Ziel, das niemand eingetragen hat."""
     if not 300 <= response.status_code < 400:
         return None
     return redirect_text(service, response.status_code)
@@ -191,7 +184,7 @@ def as_int(value: Any) -> int | None:
 
 
 def as_bool(value: Any) -> bool:
-    """Aeltere NPM-Versionen liefern 0/1 statt true/false."""
+    """Ältere NPM-Versionen liefern 0/1 statt true/false."""
     if isinstance(value, str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     return bool(value)

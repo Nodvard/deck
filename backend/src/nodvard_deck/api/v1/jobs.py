@@ -1,21 +1,4 @@
-"""Zeitplan und Laeufe -- docs/04-API.md.
-
-**Bewusst NICHT Teil dieser Runde:** `POST /jobs` (einen brandneuen Job direkt ueber
-die API anlegen). docs/04 nennt den Endpunkt, aber es gibt in Phase 1 keinen
-generischen, von der API aus adressierbaren "Handler" -- ein Job braucht IMMER eine
-Extension (oder den Kern), die `ctx.scheduler.register_job()` mit einem echten
-Python-Handler aufruft (docs/02 §2 `JobSpec.handler`). Ein Job "aus dem Nichts" ohne
-Code dahinter waere ein Platzhalter ohne Wirkung. Das Script-Repository (docs/02 §9),
-das genau diese Luecke fuellen wuerde (ein Job = ein Skript), ist keine Phase-1-
-Core-WP. `GET/PATCH/DELETE /jobs/{id}` und `POST /jobs/{id}/run` funktionieren bereits
-fuer jeden Job, den eine Extension (oder der Kern, siehe `core/scheduler.py
-register_core_jobs()`) registriert hat.
-
-Permission: `jobs.read` zum Lesen, `jobs.run` zum Ausloesen/Abbrechen (beide schon in
-WP-1s `BUILTIN_ROLES` fuer `operator`/`viewer` gesetzt, `core/rbac.py`), `jobs.write`
-zum Aendern/Loeschen des Zeitplans selbst (neu, nur `admin` hat es ueber `"*"` -- eine
-bewusst engere Voreinstellung, weil das Schema (nicht nur die Ausfuehrung) aendert).
-"""
+"""Zeitplan und Läufe: Jobs auflisten, ändern, auslösen und ihre Läufe einsehen oder abbrechen."""
 
 from __future__ import annotations
 
@@ -35,12 +18,16 @@ from ...services.reachability import JOB_KEY as REACHABILITY_JOB_KEY
 from ...services.update_check import JOB_KEY as UPDATE_CHECK_JOB_KEY
 from ..deps import SessionDep, require_permission
 
+# `jobs.read` liest, `jobs.run` löst aus und bricht ab, `jobs.write` ändert oder löscht den Zeitplan selbst.
+# `jobs.write` hat bewusst nur der Admin (über `"*"`): es ändert den Zeitplan, nicht nur eine Ausführung.
+# Es gibt kein `POST /jobs`: ein Job braucht immer eine Erweiterung (oder den Kern), die ihn mit einem Python-Handler
+# registriert (`ctx.scheduler.register_job()`); ein Job ohne Code dahinter wäre ein Platzhalter ohne Wirkung.
 router = APIRouter(tags=["jobs"])
 
 _OWNER_ONLY_CORE_JOBS = frozenset({BACKUP_JOB_KEY})
-"""Kern-Jobs, deren Schalter nur der Owner unter Einstellungen -> System umlegt
-(`services.backups`). Ueber `jobs.write` (Admin) duerften automatische Sicherungen sonst
-still pausiert oder geloescht werden, waehrend die Oberflaeche "an" zeigt."""
+"""Kern-Jobs, deren Schalter nur der Owner unter Einstellungen -> System umlegt (`services.backups`).
+Über `jobs.write` (Admin) ließen sich automatische Sicherungen sonst still pausieren oder löschen,
+während die Oberfläche „an“ zeigt."""
 
 
 _SETTINGS_CORE_JOBS: dict[str, str] = {
@@ -48,8 +35,8 @@ _SETTINGS_CORE_JOBS: dict[str, str] = {
     UPDATE_CHECK_JOB_KEY: "Diesen Job stellst du unter Einstellungen → System → Updates ein; dort gibt es auch „Jetzt suchen“.",
 }
 """Kern-Jobs, deren Schalter und Zeitplan aus einer Einstellung kommen (`hosts.reachability.*`,
-`system.update_check.enabled`), mit dem Hinweis, wo man sie einstellt: ein Umlegen hier wuerde beim
-naechsten Start oder bei der naechsten Aenderung der Einstellung still zurueckgesetzt."""
+`system.update_check.enabled`), mit dem Hinweis, wo man sie einstellt: ein Umlegen hier würde beim
+nächsten Start oder bei der nächsten Änderung der Einstellung still zurückgesetzt."""
 
 
 def _refuse_owner_only(job: Job) -> None:
@@ -127,11 +114,8 @@ async def get_job(job_id: str, session: SessionDep) -> JobOut:
 
 @router.patch("/jobs/{job_id}", dependencies=[Depends(require_permission("jobs.write"))])
 async def patch_job(job_id: str, payload: JobPatch, session: SessionDep) -> JobOut:
-    """**Ehrlich abgegrenzt:** ein erneutes Laden der registrierenden Extension
-    (`register_job()`s Upsert) ueberschreibt `enabled` wieder mit dem, was die
-    Extension selbst deklariert -- eine manuelle Pause hier ueberlebt keinen
-    Extension-Reload. Ein "manuelle Aenderung gewinnt"-Abgleich ist eine eigene
-    Entscheidung, hier nicht getroffen."""
+    """Schaltet einen Job an oder aus. Ein erneutes Laden der Erweiterung (Upsert in `register_job()`) setzt `enabled`
+    wieder auf das, was sie selbst deklariert: eine manuelle Pause überlebt keinen Reload."""
     job = await jobs_service.get_job(session, job_id)
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Job.")
@@ -151,10 +135,9 @@ async def patch_job(job_id: str, payload: JobPatch, session: SessionDep) -> JobO
                     detail="Kein Handler geladen -- der Besitzer (Extension oder Kern) muss dafür laufen.",
                 )
             job.enabled = True
-            # D-14: schedule() schreibt next_run_at ueber eine EIGENE
-            # session_scope() -- vorher committen, sonst wartet die auf unsere eigene
-            # Schreibsperre (busy_timeout 5 s), und am Ende steht HTTP 500 mit
-            # zurueckgerolltem enabled, obwohl APScheduler den Job schon eingeplant hat.
+            # schedule() schreibt next_run_at über eine eigene session_scope(): vorher committen, sonst wartet sie auf
+            # unsere Schreibsperre (busy_timeout 5 s), und am Ende steht HTTP 500 mit zurückgerolltem `enabled`,
+            # obwohl APScheduler den Job schon eingeplant hat.
             await session.commit()
             await get_scheduler_service().schedule(job, handler)
             await session.refresh(job)  # next_run_at kommt aus der anderen Session
@@ -179,7 +162,7 @@ async def run_job_now(job_id: str, session: SessionDep) -> RunOut:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Job.")
     if job.ext_id is None:
         # Der Job "Nach Updates suchen" hat seinen eigenen Knopf mit Minuten-Drossel (`POST /system/updates/check`);
-        # ein Weg daran vorbei wuerde die Anfragen an ghcr.io nicht bremsen.
+        # ein Weg daran vorbei bremste die Anfragen an ghcr.io nicht.
         detail = (
             _SETTINGS_CORE_JOBS[job.ext_job_key]
             if job.ext_job_key == UPDATE_CHECK_JOB_KEY

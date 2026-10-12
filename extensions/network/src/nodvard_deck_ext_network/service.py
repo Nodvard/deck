@@ -1,9 +1,6 @@
-"""Haelt je Dienst EINEN Client (und damit die Pi-hole-Sitzung bzw. das NPM-Token)
-ueber alle Aufrufe hinweg -- die Clients werden erst beim ersten Bedarf gebaut und neu
-gebaut, sobald sich Adresse/Konto in den Einstellungen aendern.
+"""Hält je Dienst einen Client (Pi-hole-Sitzung bzw. NPM-Token) über alle Aufrufe hinweg.
 
-`pihole_status()`/`npm_status()` werfen nie: "nicht eingerichtet", "nicht
-erreichbar" usw. sind Zustaende (`state`) mit einer deutschen Meldung, keine 500er.
+`pihole_status()` und `npm_status()` werfen nie: Fehler sind Zustände (`state`) mit deutscher Meldung, keine 500er.
 """
 
 from __future__ import annotations
@@ -30,8 +27,8 @@ from .pihole import PiholeClient, PiholeError
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# So lange darf das Lesen der Container dauern (die Service-Matrix fragt jeden Docker-Server per SSH).
 CATALOG_TIMEOUT_S = 45.0
-"""So lange darf das Lesen der Container dauern (die Service-Matrix fragt jeden Docker-Server per SSH)."""
 NO_CATALOG = (
     "Für den Adress-Check braucht es die Service-Matrix, sie kennt die Docker-Container. "
     "Sie ist ausgeschaltet oder gerade nicht geladen."
@@ -44,8 +41,8 @@ class NetworkService:
         self._ctx = ctx
         self._pihole: tuple[PiholeConfig, PiholeClient] | None = None
         self._npm: tuple[NpmConfig, NpmClient] | None = None
-        # Seite und Kacheln fragen gleichzeitig -- ohne Sperre baute jeder Aufruf
-        # seinen eigenen Client, und die Pi-hole-Sitzung des verworfenen bliebe offen.
+        # Seite und Kacheln fragen gleichzeitig; ohne Sperre baute jeder Aufruf einen eigenen Client, und die
+        # Pi-hole-Sitzung des verworfenen bliebe offen.
         self._pihole_lock = asyncio.Lock()
         self._npm_lock = asyncio.Lock()
 
@@ -142,7 +139,7 @@ class NetworkService:
         async with self._npm_lock:
             self._drop_npm()
 
-    # -- Zustaende fuer Seite und Kacheln --------------------------------------
+    # -- Zustände für Seite und Kacheln ----------------------------------------
 
     async def pihole_status(self) -> dict[str, Any]:
         try:
@@ -186,7 +183,7 @@ class NetworkService:
         }
 
     async def address_check(self) -> dict[str, Any]:
-        """Je Proxy-Host: Zu welchem Container fuehrt das Ziel, und laeuft er? Wirft nie; Zustaende wie bei
+        """Je Proxy-Host: Zu welchem Container führt das Ziel, und läuft er? Wirft nie; Zustände wie bei
         `npm_status()`, dazu `no_catalog` (Service-Matrix aus) und `docker_unreadable` (keine Container lesbar)."""
         empty: dict[str, Any] = {"checks": [], "problems": 0}
         try:

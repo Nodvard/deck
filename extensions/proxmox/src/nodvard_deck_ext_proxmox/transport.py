@@ -1,15 +1,4 @@
-"""Fehlertexte des Proxmox-Clients: feste Saetze statt Text aus der Antwort oder der Ausnahme.
-
-Alles, was in einer Meldung landet (Kacheln, Seiten, Aktionsergebnis, Konsole, Protokoll), kommt von hier
-oder aus dem eigenen Code. Der Text einer Ausnahme der HTTP-Schicht oder der Antwort des Servers wird nur
-benutzt, um zwischen den Saetzen zu waehlen, und steht nie selbst in einer Meldung: h11 und httpx zitieren
-kaputte Zeilen der Antwort (auch einen `Location`-Header), bei der eigenen Anfrage den Header samt Zugangs-
-daten, und ein ungueltiger Punycode-Name nennt Teile des fremden Namens.
-
-Einzige Ausnahme ist der Grund, den Proxmox selbst im JSON einer Fehlerantwort nennt (`message`, `errors`,
-z. B. welches Recht fehlt): gekuerzt, ohne Steuerzeichen und nur, wenn er weder nach HTML noch nach einer
-Adresse mit Schema (`https://...`) aussieht (`reason_from`).
-"""
+"""Fehlertexte des Proxmox-Clients: feste Sätze statt Text aus der Antwort oder der Ausnahme."""
 
 from __future__ import annotations
 
@@ -20,11 +9,15 @@ from typing import Any
 import httpx
 from nodvard_sdk.errors import CertificateMismatch, PermissionDenied
 
+# Der Text einer Ausnahme der HTTP-Schicht oder der Antwort wählt nur zwischen festen Sätzen und steht nie selbst in einer
+# Meldung: h11 und httpx zitieren kaputte Zeilen der Antwort (auch einen `Location`-Header), bei der eigenen Anfrage den
+# Header samt Zugangsdaten, und ein ungültiger Punycode-Name nennt Teile des fremden Namens. Einzige Ausnahme ist der
+# Grund, den Proxmox selbst im JSON nennt (`reason_from`): gekürzt, ohne Steuerzeichen, nie HTML oder Adresse mit Schema.
 SERVICE = "Proxmox"
 MAX_REASON = 200
 
-# Die Schritte, in denen httpx eine Weiterleitung zusammenbaut. httpx baut sie auch dann, wenn es ihr
-# nicht folgt, und scheitert dabei an einem kaputten `Location`-Header (z. B. einem ungueltigen Punycode-Namen).
+# Die Schritte, in denen httpx eine Weiterleitung zusammenbaut. httpx baut sie auch dann, wenn es ihr nicht folgt, und
+# scheitert dabei an einem kaputten `Location`-Header (z. B. einem ungültigen Punycode-Namen).
 _REDIRECT_STEPS = frozenset(
     {"_build_redirect_request", "_redirect_url", "_redirect_method", "_redirect_headers", "_redirect_stream"}
 )
@@ -33,8 +26,8 @@ _FOREIGN_TEXT_MODULES = frozenset({"httpx", "httpcore", "h11", "idna", "websocke
 
 
 def came_from_redirect(exc: BaseException) -> bool:
-    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand. Erkannt an der Stelle im Traceback,
-    ersatzweise am Wort "location" im Text -- beides waehlt nur zwischen festen Saetzen."""
+    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand. Erkannt an der Stelle im Traceback, ersatzweise am
+    Wort "location" im Text (beides wählt nur zwischen festen Sätzen)."""
     tb = exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_code.co_name in _REDIRECT_STEPS:
@@ -45,15 +38,15 @@ def came_from_redirect(exc: BaseException) -> bool:
 
 def own_url_ok(url: str) -> bool:
     try:
-        _ = httpx.URL(url).host  # `.host` entschluesselt Punycode und scheitert an einem kaputten Namen
+        _ = httpx.URL(url).host  # `.host` entschlüsselt Punycode und scheitert an einem kaputten Namen
     except (httpx.InvalidURL, ValueError):
         return False
     return True
 
 
 def redirect_text(status_code: int | None = None) -> str:
-    """Der Satz fuer jede Weiterleitung. Der `Location`-Header kommt vom fremden Server und steht darum
-    nirgends im Text, auch nicht als Adressvorschlag."""
+    """Der Satz für jede Weiterleitung. Der `Location`-Header kommt vom fremden Server und steht darum nirgends im
+    Text, auch nicht als Adressvorschlag."""
     code = f" (HTTP {status_code})" if status_code else ""
     return (
         f"Der Server hat die Verbindung auf eine andere Adresse umgeleitet{code}. "
@@ -67,7 +60,7 @@ def unexpected_format_text(status_code: int) -> str:
 
 
 def json_body(response: Any) -> Any:
-    """Der JSON-Koerper, oder `None`, wenn er kaputt oder absichtlich tief verschachtelt ist."""
+    """Der JSON-Körper, oder `None`, wenn er kaputt oder absichtlich tief verschachtelt ist."""
     try:
         return response.json()
     except (ValueError, RecursionError):
@@ -75,7 +68,7 @@ def json_body(response: Any) -> Any:
 
 
 def clean_text(value: Any, limit: int = MAX_REASON) -> str | None:
-    """Einzeiliger, gekuerzter Text ohne Steuer- und Formatzeichen; `None`, wenn nichts bleibt."""
+    """Einzeiliger, gekürzter Text ohne Steuer- und Formatzeichen; `None`, wenn nichts bleibt."""
     if not isinstance(value, str):
         return None
     text = "".join(" " if ch in "\r\n\t" else ch for ch in value)
@@ -90,9 +83,9 @@ def _reason_text(value: Any, limit: int) -> str | None:
     text = clean_text(value, limit)
     if text is None:
         return None
-    # Nie HTML und nie eine Adresse mit Schema (`https://...`), die sich dem Nutzer als neue Adresse anbieten
-    # koennte. Rechnernamen und `IP:Port` ohne Schema bleiben mit Absicht: echte Gruende von Proxmox nennen sie
-    # (z. B. "Can't connect to 192.168.2.10:8006" im Cluster), und der Satz davor sagt, dass der Grund von Proxmox stammt.
+    # Nie HTML und nie eine Adresse mit Schema (`https://...`), die sich dem Nutzer als neue Adresse anbieten könnte.
+    # Rechnernamen und `IP:Port` ohne Schema bleiben mit Absicht: echte Gründe von Proxmox nennen sie (z. B. "Can't connect
+    # to 192.0.2.10:8006" im Cluster), und der Satz davor sagt, dass der Grund von Proxmox stammt.
     if "<" in text or ">" in text or "://" in text:
         return None
     return text
@@ -106,11 +99,9 @@ def _standard_phrase(status_code: int) -> str:
 
 
 def reason_from(response: Any) -> str | None:
-    """Der Grund, den Proxmox in einer Fehlerantwort nennt, sonst `None`: `message` und `errors` im JSON
-    (`{"message": "...", "errors": {"vmid": "..."}}`), ersatzweise der Text in der Statuszeile
-    (`HTTP/1.1 403 Permission check failed (...)`), wenn er nicht der Standardtext des Status ist.
-    Roher Antworttext (HTML einer Proxy-Fehlerseite, Klartext) kommt nie zurueck, ebenso kein Grund mit HTML
-    oder einer Adresse mit Schema."""
+    """Der Grund, den Proxmox in einer Fehlerantwort nennt, sonst `None`: `message` und `errors` im JSON, ersatzweise der
+    Text der Statuszeile (`HTTP/1.1 403 Permission check failed (...)`), wenn er nicht der Standardtext des Status ist.
+    Roher Antworttext (HTML einer Proxy-Fehlerseite, Klartext) kommt nie zurück."""
     status_code = getattr(response, "status_code", 0)
     phrase = getattr(response, "reason_phrase", None)
     from_status_line = (
@@ -225,7 +216,7 @@ def _is_timeout(chain: list[BaseException]) -> bool:
 
 
 def transport_text(exc: BaseException, url: str) -> str:
-    """Fester Satz zu einer Ausnahme beim Senden einer Anfrage oder beim Oeffnen der Konsole -- nie ihr Text."""
+    """Fester Satz zu einer Ausnahme beim Senden einer Anfrage oder beim Öffnen der Konsole, nie ihr Text."""
     if isinstance(exc, PermissionDenied):
         return str(exc)  # eigener Text des Kerns (welche Berechtigung fehlt), nichts aus der Antwort
     names = _class_names(exc)
@@ -248,7 +239,7 @@ def transport_text(exc: BaseException, url: str) -> str:
             "Prüfe die Adresse in den Einstellungen (https:// und Port 8006)."
         )
     # Ein Zertifikatsfehler (`ssl.SSLCertVerificationError`) ist zugleich ein `ValueError`: `websockets` reicht ihn
-    # ohne Huelle durch. Er gehoert zur Pruefung der Kette unten, nicht zu den Fehlern einer Adresse.
+    # ohne Hülle durch. Er gehört zur Prüfung der Kette unten, nicht zu den Fehlern einer Adresse.
     if "InvalidURI" in names or (isinstance(exc, (httpx.InvalidURL, ValueError, UnicodeError)) and not isinstance(exc, OSError)):
         if not own_url_ok(url) or "InvalidURI" in names:
             return "Die eingetragene Adresse ist ungültig. Bitte in den Einstellungen prüfen."
@@ -276,8 +267,8 @@ def transport_text(exc: BaseException, url: str) -> str:
 
 
 def carries_foreign_text(exc: BaseException) -> bool:
-    """Ob der Text von `exc` aus der fremden Antwort oder der eigenen Anfrage stammen kann. Solche Ausnahmen
-    bleiben nicht als Ursache an der Meldung haengen."""
+    """Ob der Text von `exc` aus der fremden Antwort oder der eigenen Anfrage stammen kann. Solche Ausnahmen bleiben
+    nicht als Ursache an der Meldung hängen."""
     if isinstance(exc, (httpx.ProtocolError, httpx.InvalidURL, httpx.DecodingError)):
         return True
     tb = exc.__traceback__
@@ -291,6 +282,6 @@ def carries_foreign_text(exc: BaseException) -> bool:
 
 
 def task_outcome(value: Any) -> str | None:
-    """Ausgang eines Proxmox-Tasks (`exitstatus`) fuer eine Aktionsmeldung: der Text bleibt (er sagt, warum
-    etwas nicht ging), aber einzeilig, ohne Steuerzeichen und gekuerzt."""
+    """Ausgang eines Proxmox-Tasks (`exitstatus`) für eine Aktionsmeldung: der Text bleibt (er sagt, warum etwas nicht
+    ging), aber einzeilig, ohne Steuerzeichen und gekürzt."""
     return clean_text(value, MAX_REASON)

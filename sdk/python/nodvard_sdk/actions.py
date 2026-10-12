@@ -1,14 +1,6 @@
 """Aktionen und das Gate.
 
-Der Mechanismus hinter der Grundregel: KI-Aktionen defaulten auf
-"Vorschlag + Bestätigung", volle Autonomie nur per explizitem Schalter.
-
-Die entscheidende Eigenschaft ist strukturell, nicht konfigurativ: *Vorschlagen* und
-*Ausführen* sind getrennte Schritte mit einem persistenten Datensatz dazwischen. Im
-Bestandssystem parst und führt eine einzige Funktion aus, weshalb ein Bestätigungsmodus
-dort nicht sauber nachrüstbar wäre.
-
-Siehe docs/01-ARCHITECTURE.md §4.
+Vorschlagen und Ausführen sind getrennte Schritte mit einem gespeicherten Datensatz dazwischen.
 """
 
 from __future__ import annotations
@@ -42,8 +34,7 @@ class GateOutcome(str, enum.Enum):
 class ActionSpec(BaseModel):
     """Was eine Extension als ausführbare Aktion anmeldet.
 
-    Der Kern bietet sie daraufhin generisch an — etwa auf der Host-Seite oder als
-    Widget-Aktion — ohne zu wissen, was sie fachlich tut.
+    Der Kern bietet sie generisch an (Host-Seite, Widget-Aktion), ohne zu wissen, was sie fachlich tut.
     """
 
     action_type: str            # "shell.exec", "vm.start", "script.run"
@@ -54,40 +45,34 @@ class ActionSpec(BaseModel):
     params_schema: dict[str, Any] | None = None   # JSON-Schema
     permissions: list[str] = Field(default_factory=list)
     host_bound: bool = True
-    """False: erscheint nicht auf der Server-Seite und ist nicht per
-    POST /hosts/{id}/actions/{typ} ausloesbar -- nur ueber ctx.actions.propose der
-    Extension (z. B. wenn sie den Befehl selbst aus eigenen, geprueften Feldern baut)."""
+    """False: nicht auf der Server-Seite und nicht per POST /hosts/{id}/actions/{typ} auslösbar, nur über
+    ctx.actions.propose der Extension (etwa wenn sie den Befehl selbst aus eigenen, geprüften Feldern baut)."""
 
     confirm_text: str | None = None
     host_tags: list[str] = Field(default_factory=list)
-    """Nur fuer Hosts mit mindestens einem dieser Tags angeboten (leer = jeder Host).
-    Ohne das stuende "Container neu starten" auch auf einem Proxmox-Knoten ohne Docker."""
+    """Nur für Hosts mit mindestens einem dieser Tags angeboten (leer = jeder Host); so erscheint
+    "Container neu starten" nicht auf einem Proxmox-Knoten ohne Docker."""
 
     command_field: str | None = None
-    """Welches Payload-Feld die Sperrlisten-Prüfung des Gates untersucht.
-
-    Muss gesetzt sein, wenn der Payload einen auszuführenden Befehl enthält
-    (z. B. "command"). Ohne diese Angabe kann das Gate nicht wissen, was es prüfen
-    soll — und raten oder den ganzen Payload zu stringifizieren wäre beides falsch.
-    """
+    """Payload-Feld, das die Sperrlisten-Prüfung des Gates untersucht. Pflicht, wenn der Payload einen auszuführenden
+    Befehl enthält (z. B. "command"): Das Gate rät nicht und prüft auch nicht den ganzen Payload."""
 
 
+# Die Extension prüft, ob die Freigabe noch zum Vorschlag passt (bei Skripten: Inhalt, Parameter, Ziel, Zeitplan,
+# Zielserver und Konto unverändert). Das Gate prüft danach selbst, ob `granted_by_user_id` noch aktiv ist und
+# Dauerfreigaben sowie Aktionen dieser Risikostufe bestätigen darf.
 class StandingApproval(BaseModel):
-    """Eine Dauerfreigabe, die ein Mensch vorab erteilt hat (z. B. "dieses Skript darf nach
-    Zeitplan ohne Klick laufen, solange es sich nicht aendert").
-
-    Die Extension prueft, ob die Freigabe noch zum Vorschlag passt (bei Skripten: Inhalt,
-    Parameter, Ziel, Zeitplan, Zielserver und Konto unveraendert). Das Gate prueft danach
-    selbst, ob `granted_by_user_id` noch aktiv ist und Dauerfreigaben sowie Aktionen dieser
-    Risikostufe bestaetigen darf. Vorschlaege einer KI laufen nie ueber eine Dauerfreigabe.
-    Die Extension braucht dafuer die Berechtigung `actions.standing_approval`."""
+    """Eine Dauerfreigabe, die ein Mensch vorab erteilt hat (z. B. "dieses Skript darf nach Zeitplan ohne Klick laufen,
+    solange es sich nicht ändert"). Die Extension braucht dafür die Berechtigung `actions.standing_approval`.
+    Vorschläge einer KI laufen nie über eine Dauerfreigabe."""
 
     granted_by_user_id: str
     granted_at: datetime
     label: str | None = None
-    """Kurzer Text fuer das Protokoll, z. B. "Skript 'lynis' (Dauerfreigabe)"."""
+    """Kurzer Text für das Protokoll, z. B. "Skript 'lynis' (Dauerfreigabe)"."""
 
 
+# KI-Aktionen starten als Vorschlag mit Bestätigung; volle Autonomie gibt es nur per ausdrücklichem Schalter.
 class ActionRequest(BaseModel):
     """Ein Vorschlag an das Gate. Niemals direkt ausgeführt."""
 
@@ -97,24 +82,16 @@ class ActionRequest(BaseModel):
     risk: Risk = Risk.MEDIUM
     proposed_by: Actor
     reason: str
-    """Pflichtfeld — jede vorgeschlagene Aktion muss begründet sein.
-
-    Im Bestandssystem heisst das Feld `BEGRUENDUNG:` und wird aus der Modellantwort
-    geparst. Dass es hier im Datentyp Pflicht ist, macht ein Umgehen unmöglich statt
-    unwahrscheinlich.
-    """
+    """Pflichtfeld: jede vorgeschlagene Aktion muss begründet sein (leerer Text ist ein Fehler)."""
     correlation_id: str | None = None
     idempotency_key: str | None = None
     expires_in_s: int | None = None
+    # Das Gate hängt an `reason` selbst an, was passiert ist ("ohne Klick, lief mit Dauerfreigabe vom <Datum> durch
+    # <Benutzer>" bzw. warum sie nicht galt); `reason` der Extension nennt also nur, WAS laufen soll.
     standing_approval: StandingApproval | None = None
-    """Optional: der Vorschlag beruft sich auf eine Dauerfreigabe (siehe `StandingApproval`).
-    Haelt sie der Pruefung im Gate stand, laeuft die Aktion ohne Klick an; sonst wird sie
-    ein ganz normaler Vorschlag. Das Gate haengt dann selbst an `reason` an, was passiert ist
-    ("ohne Klick, lief mit Dauerfreigabe vom <Datum> durch <Benutzer>" bzw. warum sie nicht
-    galt) -- `reason` der Extension nennt also nur, WAS laufen soll.
-
-    Beim Ausfuehren steht das Feld im `ActionRequest` an den Executor nur, wenn die Aktion
-    wirklich ueber die Dauerfreigabe ohne Klick anlief; nach einer Freigabe per Klick ist es None."""
+    """Optional: Berufung auf eine Dauerfreigabe (`StandingApproval`). Hält sie der Prüfung im Gate stand, läuft die
+    Aktion ohne Klick an, sonst wird es ein normaler Vorschlag. Im `ActionRequest` an den Executor steht das Feld nur,
+    wenn die Aktion wirklich ohne Klick anlief; nach einer Freigabe per Klick ist es None."""
 
     @field_validator("reason")
     @classmethod
@@ -141,10 +118,9 @@ class GateDecision(BaseModel):
 
 
 REQUEST_WAIT_S: float = 20.0
-"""So lange wartet eine HTTP-Anfrage hoechstens auf das Ergebnis einer sofort
-freigegebenen Aktion. Extension-Routen reichen den Wert als
-`ctx.actions.propose(..., wait_s=REQUEST_WAIT_S)` durch; laeuft die Aktion danach noch,
-meldet die Entscheidung `executing`, und die Seite verweist auf "Aktionen"."""
+"""Sekunden, die eine HTTP-Anfrage höchstens auf das Ergebnis einer sofort freigegebenen Aktion wartet; Routen reichen
+sie als `ctx.actions.propose(..., wait_s=REQUEST_WAIT_S)` durch. Läuft die Aktion danach noch, meldet die Entscheidung
+`executing`."""
 
 
 class ActionResult(BaseModel):

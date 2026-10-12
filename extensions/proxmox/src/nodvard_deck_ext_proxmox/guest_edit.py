@@ -1,20 +1,11 @@
-"""Gast-Hardware aendern (Roadmap Punkt 1: "VM-Einstellungen
-bearbeiten"): Kerne, Sockel, RAM, Ballon, Swap, Autostart, Startreihenfolge.
-
-Bewusst eine WHITELIST wie beim Lesen (guest_config.py): nur diese Felder, jeweils mit
-Grenzen. Alles andere (Disks, Netzwerk, PCI-Durchreichung, Cloud-Init) bleibt Proxmox
-vorbehalten -- dort kann ein Tippfehler einen Gast unbootbar machen oder vom Netz
-nehmen, das gehoert nicht hinter ein Formular mit fuenf Feldern.
-
-Geschrieben wird IMMER mit dem `digest` der gerade gelesenen Konfiguration: hat jemand
-anderes (Proxmox-Oberflaeche, zweiter Tab) zwischendurch geaendert, lehnt Proxmox ab,
-statt dessen Aenderung stumm zu ueberschreiben.
-"""
+"""Gast-Hardware ändern: Kerne, Sockel, RAM, Ballon, Swap, Autostart, Startreihenfolge (Positivliste mit Grenzen)."""
 
 from __future__ import annotations
 
 from typing import Any
 
+# Nur diese Felder lassen sich ändern. Alles andere (Disks, Netzwerk, PCI-Durchreichung, Cloud-Init) bleibt Proxmox
+# vorbehalten: ein Tippfehler kann dort einen Gast unbootbar machen oder vom Netz nehmen.
 EDITABLE: dict[str, tuple[str, ...]] = {
     "qemu": ("cores", "sockets", "memory", "balloon", "onboot", "startup_order"),
     "lxc": ("cores", "memory", "swap", "onboot", "startup_order"),
@@ -25,6 +16,7 @@ LABEL = {
     "swap": "Swap", "onboot": "Autostart", "startup_order": "Startreihenfolge",
 }
 
+# Erlaubte Bereiche (RAM, Ballon und Swap in MB); `_int` lehnt alles außerhalb mit einer Meldung ab.
 _LIMITS = {
     "cores": (1, 512),
     "sockets": (1, 16),
@@ -37,7 +29,7 @@ _MB_FIELDS = ("memory", "balloon", "swap")
 
 
 class ConfigEditError(ValueError):
-    """Ungueltige Aenderung -- die Meldung geht so an den Nutzer."""
+    """Ungültige Änderung, die Meldung geht so an den Nutzer."""
 
 
 def _int(key: str, value: Any) -> int:
@@ -69,8 +61,7 @@ def _startup_parts(value: Any) -> dict[str, str]:
 
 
 def current_values(kind: str, config: dict[str, Any]) -> dict[str, Any]:
-    """Die editierbaren Felder so, wie das Formular sie zeigt (Proxmox-Standardwerte
-    eingesetzt, wo der Schluessel fehlt)."""
+    """Die editierbaren Felder so, wie das Formular sie zeigt (Proxmox-Standardwerte, wo der Schlüssel fehlt)."""
     values: dict[str, Any] = {
         "cores": int(config.get("cores") or 1),
         "memory": int(config.get("memory") or 512),
@@ -80,7 +71,7 @@ def current_values(kind: str, config: dict[str, Any]) -> dict[str, Any]:
     values["startup_order"] = int(order) if order and order.isdigit() else None
     if kind == "qemu":
         values["sockets"] = int(config.get("sockets") or 1)
-        # Kein "balloon"-Schluessel heisst: Ballon aktiv, Minimum = RAM.
+        # Kein "balloon"-Schlüssel heißt: Ballon aktiv, Minimum = RAM.
         values["balloon"] = int(config["balloon"]) if "balloon" in config else values["memory"]
     else:
         values["swap"] = int(config.get("swap") or 0)
@@ -88,9 +79,8 @@ def current_values(kind: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def build_update(kind: str, config: dict[str, Any], changes: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Prueft `changes` gegen die Whitelist und die aktuelle Konfiguration. Liefert die
-    Proxmox-Parameter fuer PUT .../config (inkl. `digest`) und die Liste der echten
-    Aenderungen fuers Protokoll. Unveraenderte Werte fallen heraus."""
+    """Prüft `changes` gegen die Positivliste und die aktuelle Konfiguration. Liefert die Proxmox-Parameter für
+    PUT .../config (inkl. `digest`) und die Liste der echten Änderungen fürs Protokoll; unveränderte Werte fallen heraus."""
     if kind not in EDITABLE:
         raise ConfigEditError("Nur VMs und Container lassen sich bearbeiten.")
     if not isinstance(changes, dict) or not changes:
@@ -111,9 +101,8 @@ def build_update(kind: str, config: dict[str, Any], changes: dict[str, Any]) -> 
         else:
             after[key] = _int(key, raw)
 
-    # Ohne "balloon"-Schluessel folgt das Minimum in Proxmox dem RAM -- wer nur
-    # den RAM aendert, aendert es mit. Vorher wurde RAM verkleinern faelschlich abgelehnt
-    # (Minimum = alter RAM > neuer RAM), obwohl das Ballon-Feld nie angefasst wurde.
+    # Ohne "balloon"-Schlüssel folgt das Minimum in Proxmox dem RAM: wer nur den RAM ändert, ändert es mit. Sonst würde
+    # RAM verkleinern fälschlich abgelehnt (Minimum = alter RAM > neuer RAM), obwohl das Ballon-Feld nie angefasst wurde.
     balloon_follows = kind == "qemu" and "balloon" not in config and "balloon" not in changes
     if balloon_follows:
         after["balloon"] = after["memory"]
@@ -141,7 +130,7 @@ def build_update(kind: str, config: dict[str, Any], changes: dict[str, Any]) -> 
             else:
                 deletes.append("startup")
         elif key == "balloon" and after[key] == after["memory"]:
-            # Minimum = RAM ist Proxmox' Standard -- Schluessel entfernen statt doppeln.
+            # Minimum = RAM ist Proxmox' Standard: Schlüssel entfernen statt doppeln.
             deletes.append("balloon")
         else:
             params[key] = after[key]
@@ -149,6 +138,8 @@ def build_update(kind: str, config: dict[str, Any], changes: dict[str, Any]) -> 
         raise ConfigEditError("Keine Änderung -- die Werte sind bereits so gesetzt.")
     if deletes:
         params["delete"] = ",".join(deletes)
+    # Immer mit dem `digest` der gerade gelesenen Konfiguration: Hat jemand zwischendurch geändert (Proxmox-Oberfläche,
+    # zweiter Tab), lehnt Proxmox ab, statt die Änderung stumm zu überschreiben.
     if config.get("digest"):
         params["digest"] = config["digest"]
     return params, diff
@@ -176,8 +167,7 @@ def describe(diff: list[dict[str, Any]], pending: list[str]) -> str:
 
 
 def pending_keys(rows: list[dict[str, Any]]) -> list[str]:
-    """Aus GET .../pending: welche unserer Felder noch auf einen Neustart warten.
-    `startup` zaehlt als `startup_order`."""
+    """Aus GET .../pending: welche unserer Felder noch auf einen Neustart warten. `startup` zählt als `startup_order`."""
     keys: list[str] = []
     for row in rows:
         key = row.get("key")

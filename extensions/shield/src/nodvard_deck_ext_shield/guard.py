@@ -1,11 +1,5 @@
-"""Einbruchschutz und Datei-Waechter: regelmaessig je Server SSH-Anmeldungen,
-Fail2ban, offene Ports und wichtige Dateien pruefen, mit dem bestaetigten Stand
-vergleichen und Auffaelligkeiten als Sicherheitsereignis speichern und melden.
-
-Beim ERSTEN Blick auf einen Server wird nur der Stand gemerkt (keine Flut an
-"neuen" Ports/Dateien). Danach meldet jede Auffaelligkeit genau einmal; bestaetigt
-der Nutzer ein Ereignis, wird der neue Stand als bekannt uebernommen.
-"""
+"""Einbruchschutz und Datei-Wächter: prüft je Server SSH-Anmeldungen, Fail2ban, offene Ports und wichtige Dateien
+gegen den bestätigten Stand und speichert und meldet Auffälligkeiten als Sicherheitsereignis."""
 
 from __future__ import annotations
 
@@ -46,7 +40,7 @@ def guard_interval_min(settings: dict[str, Any]) -> int:
 
 
 def bruteforce_threshold(settings: dict[str, Any]) -> int:
-    """Grenze aus settings.schema.json (ab 3); ein kleinerer Wert von frueher wuerde bei jedem Fehlversuch warnen."""
+    """Mindestens 3 (settings.schema.json): Ein kleinerer gespeicherter Wert würde bei jedem Fehlversuch warnen."""
     return max(3, int(settings.get("bruteforce_threshold") or 20))
 
 
@@ -68,7 +62,7 @@ class Guard:
     async def _settings(self) -> dict[str, Any]:
         return await self._ctx.settings.get()
 
-    # --- Pruefen ---------------------------------------------------------------
+    # --- Prüfen ---
 
     async def inspect(self, host: Host, *, notify: bool = True) -> dict[str, Any]:
         from .defender import _describe, _now
@@ -123,6 +117,9 @@ class Guard:
         now = _now().timestamp()
         events: list[dict[str, Any]] = []
 
+        # Beim ersten Blick auf einen Server wird nur der Stand gemerkt (keine Flut "neuer" Ports und Dateien).
+        # Danach meldet jede Auffälligkeit genau einmal; eine Bestätigung übernimmt den neuen Stand.
+
         # Offene Ports
         ports = await load_baseline(self._ctx, host.id, "ports")
         current_keys = {p.key for p in snap.ports}
@@ -162,9 +159,8 @@ class Guard:
             logins["known"] = sorted(known_ips | seen_now)[-500:]
         await save_baseline(self._ctx, host.id, "logins", logins)
 
-        # Brute-Force: viele Fehlversuche von einer Adresse, die (noch) nicht gesperrt ist.
-        # Kritisch nur, wenn Fail2ban sicher fehlt oder steht -- ohne root ist sein
-        # Zustand nur unbekannt ("noaccess").
+        # Brute-Force: viele Fehlversuche von einer (noch) nicht gesperrten Adresse. Kritisch nur, wenn Fail2ban
+        # sicher fehlt oder steht; ohne root ist sein Zustand nur unbekannt ("noaccess").
         threshold = bruteforce_threshold(settings)
         state = await load_baseline(self._ctx, host.id, "alerts") or {}
         bf_alerted: dict[str, float] = {ip: ts for ip, ts in (state.get("bruteforce") or {}).items() if ts > now - REALERT_S}
@@ -187,7 +183,7 @@ class Guard:
         state["bruteforce"] = bf_alerted
         await save_baseline(self._ctx, host.id, "alerts", state)
 
-        # Datei-Waechter
+        # Datei-Wächter
         files = await load_baseline(self._ctx, host.id, "files")
         if settings.get("file_watch_enabled", True) and snap.files:
             if files is None:
@@ -237,7 +233,7 @@ class Guard:
         return events
 
     def _view(self, snap: ix.GuardSnapshot, ports: dict[str, Any], logins: dict[str, Any], files: dict[str, Any]) -> dict[str, Any]:
-        """Was die Oberflaeche zeigt -- ohne neue SSH-Verbindung."""
+        """Was die Oberfläche zeigt, ohne neue SSH-Verbindung."""
         known_ports = set(ports.get("known", []))
         attackers = sorted(snap.failures.values(), key=lambda a: -a.count)
         banned = snap.banned
@@ -258,7 +254,7 @@ class Guard:
                        "public": p.public, "dynamic": p.dynamic, "count": p.count, "unreadable": p.unreadable,
                        "new": not ix.port_is_known(p, known_ports, dynamic_min=snap.dynamic_min)} for p in snap.ports],
             "ssh_port": snap.sshd.get("port"),
-            # None = nicht lesbar (ohne root liefert `sshd -T` nichts) -- nicht "keine Befunde".
+            # None = nicht lesbar (ohne root liefert `sshd -T` nichts), nicht "keine Auffälligkeiten".
             "ssh_findings": [{"key": f.key, "value": f.value, "severity": f.severity, "text": f.text, "advice": f.advice}
                              for f in snap.ssh_findings] if snap.sshd else None,
             "files_watched": len(snap.files),
@@ -274,8 +270,8 @@ class Guard:
         body = "\n".join(f"- {EVENT_LABEL.get(e['kind'], e['kind'])}: {e['title']}" for e in events)
         payload: dict[str, Any] = {"path": f"{SOC_PATH}?tab=guard&host={host.id}"}
         if worst != "critical":
-            # Wartungsfenster stellen nur Warnungen stumm (z. B. neue Ports nach einem
-            # Dienst-Neustart). Kritisches (Einbruch, Rootkit-Verdacht) bleibt immer hörbar.
+            # Wartungsfenster stellen nur Warnungen stumm (z. B. neue Ports nach einem Dienst-Neustart);
+            # Kritisches (Einbruch, Rootkit-Verdacht) bleibt immer hörbar.
             payload.update(host_scope([host.id]))
         await self._ctx.notify.send(Notification(
             title=f"{name}: {title}" if len(events) == 1 else title, body=body,
@@ -283,7 +279,7 @@ class Guard:
             payload=payload,
         ))
 
-    # --- Uebersicht & Bestaetigen ----------------------------------------------------
+    # --- Übersicht und Bestätigen ---
 
     async def overview(self) -> dict[str, Any]:
         hosts = await self._defender.target_hosts()
@@ -330,7 +326,7 @@ class Guard:
             return [event_out(r) for r in (await session.execute(stmt)).scalars()]
 
     async def acknowledge(self, event_id: str, actor: Actor | None = None) -> bool:
-        """Ereignis erledigen und -- je nach Art -- den neuen Stand als bekannt uebernehmen."""
+        """Erledigt ein Ereignis und übernimmt je nach Art den neuen Stand als bekannt."""
         async with self._ctx.db.session() as session:
             row = await session.get(SecurityEventRecord, event_id)
             if row is None or row.acknowledged:
@@ -372,7 +368,7 @@ class Guard:
         return done
 
     async def _current_files(self, host_id: str) -> dict[str, Any]:
-        """Aktuellen Datei-Stand frisch holen (fuer das Uebernehmen beim Bestaetigen)."""
+        """Holt den aktuellen Datei-Stand frisch, zum Übernehmen beim Bestätigen."""
         host = await self._ctx.hosts.get(host_id)
         if host is None:
             return {}
@@ -385,7 +381,7 @@ class Guard:
         return {p: ix.file_entry_dict(e) for p, e in ix.parse_guard(res.stdout or "").files.items()}
 
     async def summary_line(self) -> tuple[str | None, list[str]]:
-        """Zeile und Aufgaben fuer das Morgen-Briefing."""
+        """Zeile und Aufgaben für das Morgen-Briefing."""
         o = await self.overview()
         sm = o["summary"]
         checked = [r for r in o["hosts"] if r["view"] and not r["view"].get("error")]

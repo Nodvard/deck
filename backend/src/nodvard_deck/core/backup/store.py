@@ -1,16 +1,4 @@
-"""Ablage der automatischen Sicherungen: Zielordner, Schreiben, Pruefsummen-Datei, Liste,
-Pruefen, Loeschen, Rotation.
-
-**Zielordner nur aus einer Allowlist:** `<Datenordner>/backups` oder ein eingebundener
-Ordner `/backups` (bzw. darunter). `/app` gehoert dem Dienstnutzer -- ein frei waehlbarer
-Ordner waere ein Schreibweg in den Programmcode. Geprueft wird der angegebene Pfad Teil fuer
-Teil: absolut, kein `..`, kein Symlink, `realpath` gleich dem Pfad, beschreibbar.
-
-**Dateien:** `nodvard-deck-sicherung-*.ndbak` (0600) und daneben `<name>.json` mit sha256
-und Groesse der ganzen Datei (Bitfaeule erkennen, ohne Passwort). Geschrieben wird erst nach
-`.<name>.part` und danach umbenannt; eine halbe Datei traegt nie den echten Namen.
-Rotation und Loeschen fassen nur Dateien mit unserem Namensmuster UND gueltigem Kopf an.
-"""
+"""Ablage der Sicherungen: Zielordner, Schreiben, Prüfsummen-Datei, Liste, Prüfen, Löschen und Rotation."""
 
 from __future__ import annotations
 
@@ -28,7 +16,7 @@ from . import format as fmt
 from .errors import BackupError, DamagedBackup
 
 EXTERNAL_ROOT = Path("/backups")
-"""Eingebundener Ordner fuer Sicherungen ausserhalb des Datenordners (Compose: `./sicherungen:/backups`)."""
+"""Eingebundener Ordner für Sicherungen außerhalb des Datenordners (Compose: `./sicherungen:/backups`)."""
 
 DIR_MODE = 0o700
 FILE_MODE = 0o600
@@ -65,8 +53,10 @@ def _check_components(root: Path, target: Path, *, create: bool) -> None:
 
 
 def resolve_target(raw: str | None, data_dir: Path, *, create: bool = True) -> Path:
-    """Prueft einen Zielordner gegen die Allowlist und gibt ihn zurueck (legt
-    `<Datenordner>/backups` bzw. Unterordner von `/backups` bei Bedarf mit 0700 an)."""
+    """Prüft einen Zielordner gegen die Allowlist und gibt ihn zurück; fehlende Ordner entstehen mit 0700."""
+    # Erlaubt sind nur `<Datenordner>/backups` und der eingebundene Ordner `/backups` samt Unterordnern. `/app` gehört dem
+    # Dienstnutzer: Ein frei wählbarer Ordner wäre ein Schreibweg in den Programmcode. Geprüft wird der Pfad Teil für Teil
+    # (absolut, kein `..`, kein Symlink, `realpath` gleich dem Pfad, beschreibbar), damit keine Verknüpfung hinausführt.
     default = default_dir(data_dir)
     if raw is None or raw == "":
         raw = str(default)
@@ -96,8 +86,7 @@ def resolve_target(raw: str | None, data_dir: Path, *, create: bool = True) -> P
 
 
 def same_storage(a: Path, b: Path) -> bool:
-    """Liegen beide auf demselben Dateisystem? Dann schuetzt die Sicherung vor
-    Fehlbedienung, aber nicht vor einem Plattendefekt."""
+    """Liegen beide auf demselben Dateisystem? Dann schützt die Sicherung vor Fehlbedienung, aber nicht vor einem Plattendefekt."""
     try:
         return os.stat(a).st_dev == os.stat(b).st_dev
     except OSError:
@@ -114,11 +103,6 @@ def make_private_dir(path: Path) -> Path:
     with contextlib.suppress(OSError):
         os.chmod(path, DIR_MODE)
     return path
-
-
-# ---------------------------------------------------------------------------
-# Schreiben
-# ---------------------------------------------------------------------------
 
 
 class _HashingWriter:
@@ -147,8 +131,8 @@ def _fsync_dir(path: Path) -> None:
 
 
 def write_file(directory: Path, name: str, produce: Callable[[Any], None]) -> tuple[Path, str, int]:
-    """Schreibt atomar `directory/name` (0600) ueber `.name.part` und liefert (Pfad, sha256,
-    Groesse). Scheitert `produce`, bleibt nichts liegen."""
+    """Schreibt atomar `directory/name` (0600) und liefert (Pfad, sha256, Größe); scheitert `produce`, bleibt nichts liegen."""
+    # Erst nach `.name.part`, dann umbenennen: Eine halbe Datei trägt nie den echten Namen.
     final = directory / name
     part = directory / f".{name}.part"
     if os.path.lexists(final):
@@ -170,6 +154,7 @@ def write_file(directory: Path, name: str, produce: Callable[[Any], None]) -> tu
 
 
 def write_sidecar(path: Path, data: dict[str, Any]) -> None:
+    """Legt neben die Sicherung `<name>.json` mit sha256 und Größe der ganzen Datei, so erkennt man Bitfäule ohne Passwort."""
     sidecar = path.with_name(path.name + fmt.SIDECAR_SUFFIX)
     tmp = path.with_name(f".{sidecar.name}.part")
     with contextlib.suppress(FileNotFoundError):
@@ -194,11 +179,6 @@ def read_sidecar(path: Path) -> dict[str, Any] | None:
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
-
-
-# ---------------------------------------------------------------------------
-# Lesen, Pruefen, Loeschen, Rotation
-# ---------------------------------------------------------------------------
 
 
 def backup_path(directory: Path, name: str) -> Path:
@@ -235,9 +215,8 @@ def _iter_ours(directory: Path) -> Iterator[tuple[str, Path]]:
 
 
 def list_backups(directory: Path) -> list[dict[str, Any]]:
-    """Neueste zuerst. `status`: `ok` (Groesse passt zur Pruefsummen-Datei), `ungeprueft`
-    (keine Pruefsummen-Datei), `beschaedigt` (Kopf unlesbar oder Groesse falsch). Ob der
-    Inhalt Bit fuer Bit stimmt, sagt erst `verify` (Ergebnis in `checked_at`/`check_ok`)."""
+    """Neueste zuerst. `status`: `ok` (Größe passt zur Prüfsummen-Datei), `ungeprueft` (keine Prüfsummen-Datei),
+    `beschaedigt` (Kopf unlesbar oder Größe falsch). Ob der Inhalt stimmt, sagt erst `verify`."""
     out: list[dict[str, Any]] = []
     for name, path in _iter_ours(directory):
         item: dict[str, Any] = {"name": name, "size": os.lstat(path).st_size}
@@ -269,7 +248,7 @@ def list_backups(directory: Path) -> list[dict[str, Any]]:
 
 
 def verify(path: Path, *, now_iso: str) -> dict[str, Any]:
-    """sha256 der ganzen Datei gegen die Pruefsummen-Datei (ohne Passwort)."""
+    """sha256 der ganzen Datei gegen die Prüfsummen-Datei (ohne Passwort)."""
     sidecar = read_sidecar(path)
     if sidecar is None or not isinstance(sidecar.get("sha256"), str):
         return {"ok": False, "detail": "Keine Prüfsummen-Datei gefunden, Prüfen ist nicht möglich."}
@@ -287,13 +266,12 @@ def verify(path: Path, *, now_iso: str) -> dict[str, Any]:
 
 
 def delete(path: Path) -> None:
-    """Nur unsere Dateien mit lesbarem Kopf (sonst koennte ein falscher Name etwas Fremdes
-    treffen); die Pruefsummen-Datei verschwindet mit."""
+    """Löscht eine eigene Sicherung (unser Name, lesbarer Kopf) samt Prüfsummen-Datei,
+    damit ein falscher Name nichts Fremdes trifft."""
     try:
         read_header(path)
     except DamagedBackup:
-        # Kaputter Kopf: eine beschaedigte eigene Datei darf man trotzdem loswerden, solange
-        # Name und Pruefsummen-Datei zu uns gehoeren.
+        # Eine beschädigte eigene Datei darf man trotz kaputtem Kopf loswerden, solange Name und Prüfsummen-Datei zu uns gehören.
         if read_sidecar(path) is None:
             raise
     os.unlink(path)
@@ -302,12 +280,9 @@ def delete(path: Path) -> None:
 
 
 def rotate(directory: Path, keep: int) -> list[str]:
-    """Behaelt die `keep` neuesten eigenen Sicherungen, loescht aeltere. Fremde Dateien
-    und Dateien mit unlesbarem Kopf bleiben unangetastet.
-
-    "Neu" heisst: `created_at` aus dem Kopf (UTC). Der Dateiname traegt die Ortszeit und
-    sortiert nach einem Wechsel der Zeitzone (oder in der doppelten Stunde beim Ende der
-    Sommerzeit) nicht mehr zuverlaessig -- sonst koennte die Rotation die NEUESTE loeschen."""
+    """Behält die `keep` neuesten eigenen Sicherungen und löscht ältere; Fremdes und Dateien mit unlesbarem Kopf bleiben."""
+    # "Neu" heißt `created_at` aus dem Kopf (UTC). Der Dateiname trägt die Ortszeit und sortiert nach einem Zeitzonenwechsel
+    # oder in der doppelten Stunde am Ende der Sommerzeit nicht zuverlässig, sonst könnte die Rotation die neueste löschen.
     ours: list[tuple[str, str, Path]] = []
     for name, path in _iter_ours(directory):
         try:
@@ -331,8 +306,8 @@ _OUR_PART_RE = re.compile(
 
 
 def sweep_parts(directory: Path) -> None:
-    """Uebrig gebliebene eigene `.part`-Dateien (Absturz mitten im Schreiben) wegraeumen.
-    Nur unser Muster: in `/backups` koennen auch fremde Programme halbe Dateien ablegen."""
+    """Räumt übrig gebliebene eigene `.part`-Dateien weg (Absturz mitten im Schreiben), nur nach unserem Muster:
+    in `/backups` können auch fremde Programme halbe Dateien ablegen."""
     for entry in list(os.scandir(directory)) if directory.is_dir() else []:
         if _OUR_PART_RE.fullmatch(entry.name) and entry.is_file(follow_symlinks=False):
             with contextlib.suppress(OSError):

@@ -1,34 +1,4 @@
-"""Wiederherstellen einer Sicherung: Staging, Pruefen, Vormerken, Einspielen beim Start.
-
-Ablauf (die Schritte 1 bis 3 laufen in der Anwendung, 4 und 5 beim naechsten Start in
-`nodvard_deck.boot`, VOR Migration und Anwendung):
-
-1. **Upload** der Datei nach `<Datenordner>/restore/<id>/upload.ndbak` (Service, nicht hier).
-2. **Staging** (`stage_backup`): entschluesseln und in einen EIGENEN Ordner
-   `restore/<id>/staging/` auspacken, dort alles pruefen (Namen, Pruefsummen, Datenbank,
-   Migrationsstand). Bei jedem Fehler wird der Ordner geloescht. Erst nach erfolgreicher
-   Rueckkehr darf irgendetwas davon weiterverwendet werden -- `read_backup` legt die Dateien
-   schon vor dem Ende der Pruefung ab.
-3. **Vormerken** (`write_pending`): `restore/pending.json`. Sie laeuft nach einer Stunde ab.
-4. **Einspielen** (`apply_pending`, `boot.py`): Staging erneut pruefen, den aktuellen Stand
-   nach `restore/replaced-<Zeit>/` VERSCHIEBEN (nur `rename`, kein Kopieren), das Staging an
-   seinen Platz verschieben, Anmeldungen beenden, Einrichtungscode entfernen. Ein Journal
-   (`restore/journal.json`) macht das Ganze auch nach einem Absturz mitten drin wieder
-   rueckgaengig. **Endgueltig** ist die Wiederherstellung erst, wenn `boot.py` danach auch die
-   Migration geschafft hat (`Applied.commit`); scheitert die, geht der alte Stand zurueck.
-5. **Ergebnis** (`restore/result.json`): die Oberflaeche zeigt es, die Anwendung schreibt das
-   Audit-Protokoll nach dem Start in die dann gueltige Datenbank.
-
-**Nicht vertrauenswuerdig ist alles in der Datei.** Die Verschluesselung (age) prueft nur, dass
-niemand die Datei veraendert hat -- nicht, WER sie gemacht hat; jeder, der den oeffentlichen
-Schluessel oder das Einmal-Passwort kennt, kann eine gueltige Sicherung bauen. Deshalb:
-Namen nur aus einer Erlaubnisliste, nur normale Dateien und Ordner, Obergrenzen fuer Eintraege,
-Einzeldateien und die entpackte Menge (auch gegen den freien Platz), die SQLite-Datei nur
-lesend und ohne vertrauten Schema-Code (`trusted_schema=OFF`, Autorisierer, keine Trigger,
-Ansichten oder virtuellen Tabellen -- die legt Nodvard Deck nie an), `integrity_check`,
-nur Alembic-Revisionen, die dieses Image kennt, und eine Zusammenfassung zur Ansicht vor dem
-Einspielen.
-"""
+"""Wiederherstellen einer Sicherung: Staging, Prüfen, Vormerken und Einspielen beim nächsten Start."""
 
 from __future__ import annotations
 
@@ -63,6 +33,13 @@ from .errors import (
 
 logger = logging.getLogger("nodvard_deck.restore")
 
+# Ablauf: Upload nach `restore/<id>/upload.ndbak` (Service), Staging (`stage_backup`: entschlüsseln, in einen eigenen Ordner
+# auspacken, alles prüfen), Vormerken (`pending.json`) und Einspielen beim nächsten Start in `boot` vor Migration und
+# Anwendung (`apply_pending`). Die laufende Anwendung hält Datenbank und Schlüssel offen; darum wird erst beim nächsten
+# Start ersetzt. Dabei wandert der aktuelle Stand per `rename` (kein Kopieren) nach `restore/replaced-<Zeit>/`, das Staging
+# an seinen Platz, und ein Journal (`journal.json`) macht das auch nach einem Absturz mittendrin rückgängig. Endgültig ist
+# es erst, wenn `boot` danach auch die Migration geschafft hat (`Applied.commit`); scheitert die, geht der alte Stand zurück.
+# Das Ergebnis steht in `result.json`; die Anwendung schreibt das Audit-Protokoll nach dem Start in die dann gültige Datenbank.
 RESTORE_DIR = "restore"
 UPLOAD_NAME = "upload.ndbak"
 STAGING_NAME = "staging"
@@ -73,15 +50,15 @@ RESULT_NAME = "result.json"
 REPLACED_PREFIX = "replaced-"
 
 REPLACED_TTL_S = 30 * 24 * 3600
-"""So lange bleibt der alte Stand unter `restore/replaced-...` liegen (Konten, Schluessel im Klartext!), dann loescht ihn
-`sweep_replaced` von selbst. Die Oberflaeche zeigt, wann."""
+"""So lange bleibt der alte Stand unter `restore/replaced-...` liegen (Konten, Schlüssel im Klartext!), dann löscht ihn
+`sweep_replaced` von selbst; die Oberfläche zeigt, wann."""
 _REPLACED_TIME_RE = re.compile(r"^replaced-(\d{8}T\d{6})x*$")
 
 STAGING_TTL_S = 3600
-"""Ein aufgegebener Upload bzw. ein aufgegebenes Staging wird nach einer Stunde geloescht."""
+"""Ein aufgegebener Upload oder ein aufgegebenes Staging wird nach einer Stunde gelöscht."""
 PENDING_TTL_S = 3600
-"""So lange gilt eine Vormerkung. Danach wird sie beim Start NICHT mehr eingespielt (sonst
-spielte ein Stromausfall Wochen spaeter ploetzlich einen alten Stand ein)."""
+"""So lange gilt eine Vormerkung; danach wird sie beim Start nicht mehr eingespielt (sonst spielte ein Stromausfall
+Wochen später plötzlich einen alten Stand ein)."""
 
 SPACE_RESERVE = 128 * 1024 * 1024
 MIN_SPACE_BUDGET = 16 * 1024 * 1024
@@ -98,22 +75,17 @@ class RestoreFailed(BackupError):
 
 
 class RollbackFailed(BackupError):
-    """Der Rueckweg selbst ist gescheitert -- der alte Stand liegt noch in `replaced-...`."""
+    """Der Rückweg selbst ist gescheitert; der alte Stand liegt noch in `replaced-...`."""
 
 
 def new_id() -> str:
     return uuid.uuid4().hex
 
 
-# ---------------------------------------------------------------------------
-# Wo liegt was
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class Layout:
-    """Die Orte der Daten im laufenden Betrieb (aus den Einstellungen). Beim Einspielen wird
-    genau das ersetzt, was `targets()` aufzaehlt -- und sonst nichts."""
+    """Die Orte der Daten im laufenden Betrieb (aus den Einstellungen); beim Einspielen wird genau ersetzt,
+    was `targets()` aufzählt, und sonst nichts."""
 
     data_dir: Path
     db_path: Path
@@ -157,7 +129,7 @@ class Target:
     """Name im `replaced-...`-Ordner (flach)."""
     path: Path
     staged: str | None
-    """Pfad im Staging; `None` = wird nur weggeraeumt (Nebendateien der alten Datenbank)."""
+    """Pfad im Staging; `None` = wird nur weggeräumt (Nebendateien der alten Datenbank)."""
 
 
 def targets(layout: Layout) -> list[Target]:
@@ -173,11 +145,6 @@ def targets(layout: Layout) -> list[Target]:
         Target("runs", layout.runs_dir, "files/runs"),
     ]
     return out
-
-
-# ---------------------------------------------------------------------------
-# Kleine Helfer fuer Dateien
-# ---------------------------------------------------------------------------
 
 
 def make_private_dir(path: Path) -> Path:
@@ -216,8 +183,7 @@ def write_json_atomic(path: Path, data: Any) -> None:
 
 
 def read_json(path: Path, *, max_bytes: int = 64 * 1024 * 1024) -> Any | None:
-    """Liest eine JSON-Datei von uns (ohne Links zu folgen); `None`, wenn es sie nicht gibt oder
-    sie nicht lesbar ist."""
+    """Liest eine JSON-Datei von uns, ohne Links zu folgen; `None`, wenn es sie nicht gibt oder sie nicht lesbar ist."""
     try:
         fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
     except OSError:
@@ -233,7 +199,7 @@ def read_json(path: Path, *, max_bytes: int = 64 * 1024 * 1024) -> Any | None:
 
 
 def remove_path(path: Path) -> None:
-    """Loescht Datei, Link oder Ordner samt Inhalt (ohne Links zu folgen). Fehlt der Pfad: nichts."""
+    """Löscht Datei, Link oder Ordner samt Inhalt, ohne Links zu folgen; fehlt der Pfad, passiert nichts."""
     try:
         st = os.lstat(path)
     except FileNotFoundError:
@@ -245,22 +211,18 @@ def remove_path(path: Path) -> None:
 
 
 def _move(src: Path, dst: Path) -> None:
-    """Verschieben ist hier immer `rename` -- gleiches Dateisystem, atomar, kein Kopieren. Als
-    eigene Funktion, damit Tests einen Fehler mitten im Verschieben einbauen koennen."""
+    """Verschieben ist hier immer `rename` (gleiches Dateisystem, atomar, kein Kopieren); eigene Funktion, damit Tests
+    einen Fehler mitten im Verschieben einbauen können."""
     os.rename(src, dst)
 
 
 def _text(value: object, limit: int = _MAX_TEXT) -> str | None:
-    """Text aus einer fremden Datei fuer die Anzeige: nur Zeichen, begrenzt."""
+    """Text aus einer fremden Datei für die Anzeige: nur druckbare Zeichen, begrenzt."""
     if not isinstance(value, str):
         return None
     cleaned = "".join(c for c in value if c.isprintable())
     return cleaned[:limit]
 
-
-# ---------------------------------------------------------------------------
-# Die fremde Datenbank
-# ---------------------------------------------------------------------------
 
 _SQLITE_MAGIC = b"SQLite format 3\x00"
 _ALLOWED_PRAGMAS = frozenset({"integrity_check", "trusted_schema", "query_only", "cell_size_check"})
@@ -281,10 +243,9 @@ def _authorizer(action: int, arg1: str | None, arg2: str | None, dbname: str | N
 
 @contextlib.contextmanager
 def open_untrusted(path: Path) -> Iterator[sqlite3.Connection]:
-    """Oeffnet eine fremde SQLite-Datei so, dass sie nichts ausfuehren und nichts aendern kann:
-    nur lesend und unveraenderlich (`mode=ro&immutable=1`), `trusted_schema=OFF` (Funktionen in
-    Ansichten, Triggern, CHECK-Bedingungen und Indexausdruecken laufen nicht), und ein
-    Autorisierer, der nur Lesen und die noetigen PRAGMAs zulaesst."""
+    """Öffnet eine fremde SQLite-Datei so, dass sie nichts ausführen und nichts ändern kann: nur lesend und unveränderlich
+    (`mode=ro&immutable=1`), mit `trusted_schema=OFF` (Funktionen in Ansichten, Triggern, CHECK-Bedingungen und
+    Indexausdrücken laufen nicht) und einem Autorisierer, der nur Lesen und die nötigen PRAGMAs zulässt."""
     try:
         with open(path, "rb") as fh:
             if fh.read(16) != _SQLITE_MAGIC:
@@ -299,7 +260,7 @@ def open_untrusted(path: Path) -> Iterator[sqlite3.Connection]:
         conn.execute("PRAGMA query_only=ON")
         row = conn.execute("PRAGMA trusted_schema").fetchone()
         if row is None or row[0] != 0:
-            # Faellt die Sperre aus (sehr altes SQLite), lieber gar nichts pruefen als unsicher.
+            # Fällt die Sperre aus (sehr altes SQLite), lieber gar nichts prüfen als unsicher.
             raise UnusableBackup("Dieses SQLite kann fremde Datenbanken nicht sicher prüfen.")
         conn.set_authorizer(_authorizer)
         yield conn
@@ -327,14 +288,12 @@ def _scalar(conn: sqlite3.Connection, sql: str) -> Any:
 
 
 def _foreign_schema_object(kind: object, rootpage: object, sql: object) -> str | None:
-    """Was an einem Eintrag in `sqlite_master` nicht von uns stammen kann (oder `None`).
-
-    SQLite selbst richtet sich beim Laden des Schemas nach dem SQL-Text, NICHT nach der Spalte
-    `type` -- mit `writable_schema` laesst sich ein Trigger als `type='TRIGGER'` (oder jede andere
-    Schreibweise) eintragen, und er laeuft spaeter trotzdem. Darum: nur genau `table` und `index`,
-    beide mit einer echten Seite (`rootpage > 0`; Ansichten, Trigger und virtuelle Tabellen haben
-    keine), und zusaetzlich kein `CREATE VIRTUAL` im Text (auch mit Kommentar dazwischen). Der Text muss Text sein:
-    SQLite liest das Schema auch aus einem BLOB, und daran ginge die Pruefung sonst vorbei."""
+    """Was an einem Eintrag in `sqlite_master` nicht von uns stammen kann (Trigger, Ansicht, virtuelle Tabelle), oder `None`."""
+    # SQLite richtet sich beim Laden des Schemas nach dem SQL-Text, nicht nach der Spalte `type`: Mit `writable_schema` lässt
+    # sich ein Trigger als `type='TRIGGER'` (oder jede andere Schreibweise) eintragen, und er läuft später trotzdem. Darum
+    # gelten nur genau `table` und `index`, beide mit echter Seite (`rootpage > 0`; Ansichten, Trigger und virtuelle Tabellen
+    # haben keine), und kein `CREATE VIRTUAL` im Text, auch mit Kommentar dazwischen. Der Text muss Text sein: SQLite liest
+    # das Schema auch aus einem BLOB, und daran ginge die Prüfung sonst vorbei.
     if not isinstance(kind, str) or kind not in ("table", "index"):
         lowered = kind.lower() if isinstance(kind, str) else ""
         return {"trigger": "Trigger", "view": "Ansicht"}.get(lowered, "Schema-Eintrag")
@@ -348,9 +307,9 @@ def _foreign_schema_object(kind: object, rootpage: object, sql: object) -> str |
 
 
 def _skip_sql_gap(sql: str, i: int) -> int:
-    """Ab `i` Leerraum und Kommentare (`/* ... */`, `-- ...` bis Zeilenende) ueberspringen. Ein offener Kommentar reicht
-    bis zum Ende. Ein einfacher Durchlauf statt eines regulaeren Ausdrucks: Der fruehere Ausdruck brauchte bei vielen
-    leeren Kommentaren (`/**/`) exponentiell lange, und der SQL-Text kommt aus einer fremden Sicherung."""
+    """Überspringt ab `i` Leerraum und Kommentare (`/* ... */`, `-- ...` bis Zeilenende); ein offener Kommentar reicht bis zum Ende."""
+    # Ein einfacher Durchlauf statt eines regulären Ausdrucks: Der brauchte bei vielen leeren Kommentaren (`/**/`)
+    # exponentiell lange, und der SQL-Text kommt aus einer fremden Sicherung.
     n = len(sql)
     while i < n:
         if sql[i].isspace():
@@ -367,8 +326,8 @@ def _skip_sql_gap(sql: str, i: int) -> int:
 
 
 def _is_create_virtual(sql: str) -> bool:
-    """Beginnt der Text (nach Leerraum und Kommentaren) mit `CREATE`, Trenner, `VIRTUAL` als ganzem Wort? Gross- und
-    Kleinschreibung egal, auch ein Kommentar als Trenner (`CREATE/**/VIRTUAL`) zaehlt."""
+    """Beginnt der Text (nach Leerraum und Kommentaren) mit `CREATE`, Trenner, `VIRTUAL` als ganzem Wort?
+    Groß-/Kleinschreibung egal, auch ein Kommentar als Trenner (`CREATE/**/VIRTUAL`) zählt."""
     i = _skip_sql_gap(sql, 0)
     if sql[i:i + 6].upper() != "CREATE":
         return False
@@ -380,8 +339,8 @@ def _is_create_virtual(sql: str) -> bool:
 
 
 def inspect_db(path: Path) -> DbFacts:
-    """Prueft die fremde Datenbank (siehe `open_untrusted`) und liest die Fakten fuer die
-    Zusammenfassung. Wirft `DamagedBackup` bzw. `UnusableBackup` mit verstaendlichem Text."""
+    """Prüft die fremde Datenbank (siehe `open_untrusted`) und liest die Fakten für die Zusammenfassung.
+    Wirft `DamagedBackup` bzw. `UnusableBackup` mit verständlichem Text."""
     with open_untrusted(path) as conn:
         try:
             objects = conn.execute("SELECT type, name, rootpage, sql FROM sqlite_master").fetchall()
@@ -415,9 +374,9 @@ def inspect_db(path: Path) -> DbFacts:
 
 
 def installed_extension_ids(extensions_dir: Path | None) -> set[str] | None:
-    """Kennungen der hier installierten Erweiterungen: Ordnername, Kennung und alte Kennungen
-    (`legacy_ids`, siehe `snapshot.extension_ids`); `None`, wenn nicht feststellbar. Eine Sicherung mit
-    der Zeile einer alten Kennung gilt so nicht als "Erweiterung fehlt"."""
+    """Kennungen der hier installierten Erweiterungen (Ordnername, Kennung, alte Kennungen); `None`, wenn nicht feststellbar."""
+    # Die alten Kennungen (`legacy_ids`, siehe `snapshot.extension_ids`) zählen mit, damit eine Sicherung mit der Zeile einer
+    # alten Kennung nicht als "Erweiterung fehlt" gilt.
     if extensions_dir is None or not extensions_dir.is_dir():
         return None
     out: set[str] = set()
@@ -430,9 +389,8 @@ def installed_extension_ids(extensions_dir: Path | None) -> set[str] | None:
 def check_compatible(
     facts: DbFacts, manifest: dict[str, Any], *, known: set[str] | None, installed: set[str] | None, current_version: str
 ) -> None:
-    """Passt der Migrationsstand der Datenbank zu diesem Image? Sonst `UnusableBackup` mit
-    Klartext (neuer als dieses Image, oder eine Erweiterung fehlt). Aeltere Staende sind in
-    Ordnung -- `boot.py` bringt sie nach dem Einspielen auf den neuen Stand."""
+    """Passt der Migrationsstand der Datenbank zu diesem Image? Sonst `UnusableBackup` mit Klartext (neuer als dieses
+    Image, oder eine Erweiterung fehlt). Ältere Stände sind in Ordnung: `boot` bringt sie nach dem Einspielen auf den neuen Stand."""
     if not facts.versions:
         raise UnusableBackup("In der Datenbank der Sicherung steht kein Migrationsstand. Sie kann nicht eingespielt werden.")
     declared = manifest.get("db", {}).get("alembic_heads") if isinstance(manifest.get("db"), dict) else None
@@ -470,14 +428,9 @@ def check_compatible(
     )
 
 
-# ---------------------------------------------------------------------------
-# Staging
-# ---------------------------------------------------------------------------
-
-
 def extract_limits(layout: Layout, *, max_unpacked: int, max_entries: int, reserve: int = SPACE_RESERVE) -> snapshot.ExtractLimits:
-    """Obergrenzen fuer das Entpacken: die feste Grenze, aber nie mehr als der freie Platz im
-    Datenordner (abzueglich einer Reserve, damit die Anwendung weiterlaufen kann)."""
+    """Obergrenzen für das Entpacken: die feste Grenze, aber nie mehr als der freie Platz im Datenordner abzüglich
+    einer Reserve, damit die Anwendung weiterlaufen kann."""
     free = store.free_bytes(layout.restore_dir)
     budget = free - reserve
     if budget < MIN_SPACE_BUDGET:
@@ -493,16 +446,15 @@ def extract_limits(layout: Layout, *, max_unpacked: int, max_entries: int, reser
 class Staged:
     summary: dict[str, Any]
     files: dict[str, list]
-    """Pfad im Staging -> [sha256, Groesse]; genau das, was beim Einspielen erneut geprueft wird."""
+    """Pfad im Staging -> [sha256, Größe]; genau das, was beim Einspielen erneut geprüft wird."""
     unpacked_bytes: int
     compat: dict[str, Any] = field(default_factory=dict)
-    """Angaben fuer die Verstaendlichkeit der Fehlermeldung beim erneuten Pruefen (welche
-    Erweiterung zu welcher Revision gehoert)."""
+    """Angaben für die Verständlichkeit der Fehlermeldung beim erneuten Prüfen (welche Erweiterung zu welcher Revision gehört)."""
 
 
 def read_upload_header(path: Path) -> dict[str, Any]:
-    """Kopf einer hochgeladenen Datei (Klartext, nicht authentifiziert); wirft `DamagedBackup`/
-    `NewerBackup`, wenn es keine Sicherung von Nodvard Deck ist."""
+    """Kopf einer hochgeladenen Datei (Klartext, nicht authentifiziert); wirft `DamagedBackup`/`NewerBackup`,
+    wenn es keine Sicherung des Dashboards ist."""
     with open(path, "rb") as fh:
         return fmt.read_header(fh)
 
@@ -580,9 +532,15 @@ def stage_backup(
     upload: Path, secret: str, staging: Path, *, layout: Layout, limits: snapshot.ExtractLimits,
     known: set[str] | None, current_version: str, current_instance_id: str | None, has_accounts: bool | None,
 ) -> Staged:
-    """Entschluesselt `upload` nach `staging` (ein neuer, eigener Ordner) und prueft alles. Gibt
-    es einen Fehler -- falsches Passwort, beschaedigte Datei, zu gross, nicht einspielbar --
-    ist `staging` danach GELOESCHT. Nur nach erfolgreicher Rueckkehr darf es benutzt werden."""
+    """Entschlüsselt `upload` nach `staging` (ein neuer, eigener Ordner) und prüft alles; bei jedem Fehler
+    (falsches Passwort, beschädigte Datei, zu groß, nicht einspielbar) ist `staging` danach gelöscht."""
+    # `read_backup` legt die Dateien schon vor dem Ende der Prüfung ab: Erst nach erfolgreicher Rückkehr darf etwas davon
+    # weiterverwendet werden.
+    # Nichts in der Datei ist vertrauenswürdig. age stellt nur sicher, dass niemand sie verändert hat, nicht wer sie gemacht
+    # hat: Wer den öffentlichen Schlüssel oder das Einmal-Passwort kennt, kann eine gültige Sicherung bauen. Darum Namen nur
+    # aus der Erlaubnisliste, nur normale Dateien und Ordner, Obergrenzen (auch gegen den freien Platz), die Datenbank nur
+    # lesend und ohne vertrauten Schema-Code (`inspect_db`), nur Alembic-Revisionen, die dieses Image kennt, und eine
+    # Zusammenfassung zur Ansicht vor dem Einspielen.
     make_private_dir(staging.parent)
     staging.mkdir(mode=0o700)
     try:
@@ -605,8 +563,8 @@ def stage_backup(
         skipped_files = 0
         for item in manifest["files"]:
             if item["path"] in skipped_names:
-                # Nicht eingespielt, also auch nicht Teil dessen, was spaeter erneut geprueft wird; die Zahl
-                # landet in der Zusammenfassung (Oberflaeche und Kommandozeile), nicht nur im Protokoll.
+                # Nicht eingespielt, also auch nicht Teil dessen, was später erneut geprüft wird; die Zahl landet in der
+                # Zusammenfassung (Oberfläche und Kommandozeile), nicht nur im Protokoll.
                 skipped_files += 1
                 continue
             files[item["path"]] = [item["sha256"], item["size"]]
@@ -635,11 +593,6 @@ def stage_backup(
         raise
 
 
-# ---------------------------------------------------------------------------
-# Zustand im Ordner restore/
-# ---------------------------------------------------------------------------
-
-
 def id_dir(layout: Layout, restore_id: str) -> Path:
     if not ID_RE.fullmatch(restore_id):
         raise ValueError("ungueltige ID")
@@ -663,7 +616,7 @@ def list_ids(layout: Layout) -> list[str]:
 
 
 def validate_pending(raw: Any) -> dict[str, Any] | None:
-    """Prueft eine gelesene Vormerkung streng; `None`, wenn irgendetwas nicht stimmt."""
+    """Prüft eine gelesene Vormerkung streng; `None`, wenn irgendetwas nicht stimmt."""
     if not isinstance(raw, dict) or raw.get("version") != 1:
         return None
     rid, source, at = raw.get("id"), raw.get("source"), raw.get("scheduled_at")
@@ -686,8 +639,8 @@ def validate_pending(raw: Any) -> dict[str, Any] | None:
 
 
 def pending_fresh(pending: dict[str, Any], now: float) -> bool:
-    """Gilt die Vormerkung noch? Hoechstens `PENDING_TTL_S` alt -- und auch nicht mehr als das
-    "aus der Zukunft" (falsch gestellte Uhr beim Vormerken): sonst liefe sie nie ab."""
+    """Gilt die Vormerkung noch? Höchstens `PENDING_TTL_S` alt und auch nicht so weit aus der Zukunft
+    (falsch gestellte Uhr beim Vormerken), sonst liefe sie nie ab."""
     return abs(now - pending["scheduled_at"]) <= PENDING_TTL_S
 
 
@@ -743,7 +696,7 @@ def latest_replaced(layout: Layout) -> Path | None:
 
 
 def replaced_created(path: Path) -> float | None:
-    """Wann der `replaced-...`-Ordner entstanden ist: aus dem Namen (UTC), sonst seine Aenderungszeit."""
+    """Wann der `replaced-...`-Ordner entstanden ist: aus dem Namen (UTC), sonst seine Änderungszeit."""
     match = _REPLACED_TIME_RE.match(path.name)
     if match:
         try:
@@ -773,8 +726,8 @@ def replaced_info(layout: Layout) -> dict[str, Any] | None:
 
 
 def sweep_replaced(layout: Layout, *, now: float | None = None) -> list[str]:
-    """Loescht `replaced-...`-Ordner, die aelter als `REPLACED_TTL_S` (30 Tage) sind. Nie einen, den ein unfertiges
-    Einspielen noch braucht (Journal), nie einen Link, nie einen mit unbekanntem oder zukuenftigem Alter."""
+    """Löscht `replaced-...`-Ordner, die älter als `REPLACED_TTL_S` (30 Tage) sind; nie einen, den ein unfertiges
+    Einspielen noch braucht (Journal), nie einen Link, nie einen mit unbekanntem oder zukünftigem Alter."""
     now = time.time() if now is None else now
     protected: set[str] = set()
     journal = read_json(layout.restore_dir / JOURNAL_NAME)
@@ -796,7 +749,7 @@ def sweep_replaced(layout: Layout, *, now: float | None = None) -> list[str]:
 
 
 def remove_replaced(layout: Layout) -> int:
-    """Loescht alle `replaced-...`-Ordner (der alte Stand mit Klartext-Schluesseln)."""
+    """Löscht alle `replaced-...`-Ordner (der alte Stand mit Klartext-Schlüsseln)."""
     removed = 0
     try:
         entries = [e for e in os.scandir(layout.restore_dir) if e.name.startswith(REPLACED_PREFIX) and e.is_dir(follow_symlinks=False)]
@@ -809,17 +762,17 @@ def remove_replaced(layout: Layout) -> int:
 
 
 def cleanup_restore_dir(layout: Layout, *, keep: set[str] = frozenset()) -> None:
-    """Loescht alle ID-Ordner (Upload und Staging) ausser den genannten."""
+    """Löscht alle ID-Ordner (Upload und Staging) außer den genannten."""
     for rid in list_ids(layout):
         if rid not in keep:
             shutil.rmtree(layout.restore_dir / rid, ignore_errors=True)
 
 
 def sweep(layout: Layout, *, now: float | None = None, keep: set[str] | frozenset[str] = frozenset()) -> list[str]:
-    """Raeumt Aufgegebenes weg: ID-Ordner, die aelter als `STAGING_TTL_S` sind, ausser sie
-    gehoeren zu einer noch gueltigen Vormerkung, einem laufenden Einspielen oder sind in `keep`
-    (gerade in Arbeit, z. B. eine laufende Pruefung). Auch eine abgelaufene Vormerkung selbst, und der alte
+    """Räumt Aufgegebenes weg: ID-Ordner, die älter als `STAGING_TTL_S` sind, eine abgelaufene Vormerkung und den alten
     Stand nach 30 Tagen (`sweep_replaced`)."""
+    # Ausgenommen sind ID-Ordner einer noch gültigen Vormerkung, eines laufenden Einspielens und die in `keep` (gerade in
+    # Arbeit, z. B. eine laufende Prüfung).
     now = time.time() if now is None else now
     removed: list[str] = []
     pending = read_pending(layout)
@@ -853,14 +806,9 @@ def sweep(layout: Layout, *, now: float | None = None, keep: set[str] | frozense
     return removed
 
 
-# ---------------------------------------------------------------------------
-# Einspielen (laeuft in boot.py, vor Migration und Anwendung)
-# ---------------------------------------------------------------------------
-
-
 def hash_tree(root: Path) -> dict[str, list]:
-    """Alle Dateien unter `root` mit sha256 und Groesse. Alles ausser normalen Dateien und
-    Ordnern (Links, Geraete, ...) oder ein nicht erlaubter Name ist ein Fehler."""
+    """Alle Dateien unter `root` mit sha256 und Größe; alles außer normalen Dateien und Ordnern (Links, Geräte ...)
+    oder ein nicht erlaubter Name ist ein Fehler."""
     found: dict[str, list] = {}
 
     def walk(directory: Path, rel: PurePosixPath) -> None:
@@ -887,7 +835,7 @@ def hash_tree(root: Path) -> dict[str, list]:
 
 @dataclass
 class Applied:
-    """Ein eingespieltes, aber noch nicht endgueltiges Einspielen (siehe Modul-Docstring)."""
+    """Ein eingespieltes, aber noch nicht endgültiges Einspielen; endgültig wird es mit `commit()` nach der Migration."""
 
     layout: Layout
     pending: dict[str, Any]
@@ -898,8 +846,8 @@ class Applied:
     """Die eingespielte Datenbank hat Konten (dann braucht es keinen Einrichtungscode mehr)."""
 
     def commit(self) -> None:
-        """Endgueltig: Journal auf `done`, Ergebnis schreiben, Aufraeumen. Der Einrichtungscode wird
-        erst jetzt entfernt -- beim Zurueckrollen bleibt er, wie er war."""
+        """Endgültig: Journal auf `done`, Ergebnis schreiben, aufräumen. Der Einrichtungscode wird erst jetzt entfernt,
+        beim Zurückrollen bleibt er, wie er war."""
         journal = read_json(self.layout.restore_dir / JOURNAL_NAME) or {}
         journal["state"] = "done"
         write_json_atomic(self.layout.restore_dir / JOURNAL_NAME, journal)
@@ -910,7 +858,7 @@ class Applied:
         finish_ok(self.layout, self.pending, self.replaced.name, now=self.now)
 
     def rollback(self, reason: str) -> None:
-        """Alles zurueck auf den alten Stand und das Scheitern festhalten."""
+        """Alles zurück auf den alten Stand und das Scheitern festhalten."""
         rollback_plan(self.layout, self.plan)
         finish_failed(self.layout, self.pending, reason, now=self.now)
 
@@ -951,9 +899,10 @@ def _replaced_entries(layout: Layout) -> list[str]:
 
 
 def rollback_plan(layout: Layout, plan: list[dict[str, Any]]) -> None:
-    """Stellt den alten Stand her -- anhand dessen, was auf der Platte liegt, nicht anhand
-    dessen, was gemeldet wurde (ein Absturz kann zwischen Schritt und Eintrag liegen).
-    Angefasst werden nur Ziele, die zum aktuellen Aufbau gehoeren, und Ablagen unter `restore/`."""
+    """Stellt den alten Stand her, anhand dessen, was auf der Platte liegt, nicht dessen, was gemeldet wurde
+    (ein Absturz kann zwischen Schritt und Eintrag liegen)."""
+    # Angefasst werden nur Ziele des aktuellen Aufbaus und Ablagen unter `restore/`; ein verändertes Journal führt so nicht
+    # aus dem Datenordner heraus.
     allowed = {str(t.path) for t in targets(layout)}
     restore_root = os.path.realpath(layout.restore_dir)
     errors: list[str] = []
@@ -979,8 +928,8 @@ def rollback_plan(layout: Layout, plan: list[dict[str, Any]]) -> None:
 
 
 def _post_restore(layout: Layout, pending: dict[str, Any]) -> bool:
-    """Nach dem Verschieben, in der eingespielten Datenbank: Anmeldungen beenden. Gibt zurueck,
-    ob es Konten gibt (dann entfernt `Applied.commit` den Einrichtungscode)."""
+    """Nach dem Verschieben, in der eingespielten Datenbank: Anmeldungen beenden. Gibt zurück, ob es Konten gibt
+    (dann entfernt `Applied.commit` den Einrichtungscode)."""
     conn = sqlite3.connect(os.fspath(layout.db_path), timeout=30)
     try:
         conn.execute("PRAGMA trusted_schema=OFF")
@@ -1001,9 +950,9 @@ def _post_restore(layout: Layout, pending: dict[str, Any]) -> bool:
 
 
 def _has_users(db_path: Path) -> bool | None:
-    """Gibt es im aktuellen Stand schon ein Konto? (`None`: nicht feststellbar -- der Aufrufer
-    behandelt das wie "ja", denn eine Wiederherstellung aus dem Assistenten darf nie ein
-    bestehendes Konto ersetzen.) Nur "keine Datei" und "keine Tabelle users" gelten als leer."""
+    """Gibt es im aktuellen Stand schon ein Konto? `None`: nicht feststellbar, der Aufrufer behandelt das wie "ja".
+    Nur "keine Datei" und "keine Tabelle users" gelten als leer."""
+    # Eine Wiederherstellung aus dem Assistenten darf nie ein bestehendes Konto ersetzen.
     if not os.path.lexists(db_path):
         return False
     try:
@@ -1026,11 +975,10 @@ def _has_users(db_path: Path) -> bool | None:
 def apply_pending(
     layout: Layout, *, known: set[str] | None, current_version: str, now: float | None = None,
 ) -> Applied | None:
-    """Spielt eine vorgemerkte Wiederherstellung ein. `None`: nichts vorgemerkt. Sonst ein
-    `Applied`, das der Aufrufer nach der Migration mit `commit()` endgueltig macht oder mit
-    `rollback()` zuruecknimmt. Scheitert etwas, ist der alte Stand zurueck, `result.json`
-    erklaert es, und es wird `RestoreFailed` geworfen (der Start geht normal weiter).
-    Scheitert der Rueckweg, wird `RollbackFailed` geworfen (der Start darf dann nicht weitergehen)."""
+    """Spielt eine vorgemerkte Wiederherstellung ein. `None`: nichts vorgemerkt, sonst ein `Applied`, das der Aufrufer
+    nach der Migration mit `commit()` endgültig macht oder mit `rollback()` zurücknimmt."""
+    # Scheitert etwas, ist der alte Stand zurück, `result.json` erklärt es, und `RestoreFailed` wird geworfen (der Start geht
+    # normal weiter). Scheitert der Rückweg, wird `RollbackFailed` geworfen: Der Start darf dann nicht weitergehen.
     now = time.time() if now is None else now
     if not layout.restore_dir.is_dir() or not pending_exists(layout):
         return None
@@ -1092,19 +1040,18 @@ def _apply(layout: Layout, pending: dict[str, Any], *, known: set[str] | None, c
         staged = staging / target.staged if target.staged else None
         staged_exists = staged is not None and os.path.lexists(staged)
         had_old = os.path.lexists(target.path)
-        # Auch was es vorher NICHT gab, steht im Plan: der Rueckweg raeumt es dann weg. Wichtig fuer
-        # `-wal`/`-journal`: stirbt die Migration der eingespielten Datenbank mittendrin, bleiben deren
-        # Nebendateien liegen -- neben der zurueckgeholten alten Datenbank wuerde SQLite sie auf DIESE
-        # anwenden (eine fremde WAL bzw. ein "heisses" Journal) und sie damit zerstoeren.
+        # Auch was es vorher nicht gab, steht im Plan: Der Rückweg räumt es dann weg. Wichtig für `-wal`/`-journal`: Stirbt
+        # die Migration der eingespielten Datenbank mittendrin, bleiben deren Nebendateien liegen, und neben der
+        # zurückgeholten alten Datenbank würde SQLite sie auf diese anwenden (fremde WAL, "heißes" Journal) und sie zerstören.
         plan.append({
             "name": target.name, "target": str(target.path), "saved": str(replaced / target.name),
             "staged": str(staged) if staged_exists else None, "had_old": had_old,
         })
-    light = {**pending, "files": {fmt.ARC_DB: pending["files"][fmt.ARC_DB]}}  # das Journal braucht die Pruefsummen nicht
+    light = {**pending, "files": {fmt.ARC_DB: pending["files"][fmt.ARC_DB]}}  # das Journal braucht die Prüfsummen nicht
     journal = {"version": 1, "id": pending["id"], "state": "applying", "replaced": str(replaced), "plan": plan, "pending": light}
     make_private_dir(replaced)
     write_json_atomic(layout.restore_dir / JOURNAL_NAME, journal)
-    clear_pending(layout)  # ab jetzt zaehlt das Journal; eine abgebrochene Vormerkung wird nie zweimal versucht
+    clear_pending(layout)  # ab jetzt zählt das Journal; eine abgebrochene Vormerkung wird nie zweimal versucht
 
     try:
         for item in plan:
@@ -1137,8 +1084,8 @@ def _apply(layout: Layout, pending: dict[str, Any], *, known: set[str] | None, c
 
 
 def recover_interrupted(layout: Layout) -> dict[str, Any] | None:
-    """Beim Start zuerst aufrufen: Gab es ein Einspielen, das mitten drin abbrach (Strom weg,
-    Absturz), wird es zurueckgenommen -- ausser es war schon fertig. Gibt das Ergebnis zurueck."""
+    """Beim Start zuerst aufrufen: Ein Einspielen, das mitten drin abbrach (Strom weg, Absturz), wird zurückgenommen,
+    außer es war schon fertig. Gibt das Ergebnis zurück."""
     path = layout.restore_dir / JOURNAL_NAME
     if not os.path.lexists(path):
         return None

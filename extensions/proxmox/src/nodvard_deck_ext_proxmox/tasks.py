@@ -1,13 +1,5 @@
-"""Aufgabenverlauf: was auf den Knoten passiert ist, wer es
-ausgeloest hat, ob es geklappt hat -- Proxmox' eigenes "Tasks"-Panel, ueber alle
-Verbindungen zusammengefuehrt.
-
-Beispiel: ein Knoten, der planmaessig neu startet, taucht hier als "stopall"/"startall"
-auf (die Proxmox-Zeitstempel sind UTC, die Seite zeigt Ortszeit). Ohne Verlauf sieht
-das in Nodvard Deck nur aus wie "VMs laufen"; hier wird es sichtbar.
-
-Rein lesend. Die Protokollzeilen eines Tasks holt ein eigener Aufruf (`task_log`).
-"""
+"""Aufgabenverlauf: was auf den Knoten passiert ist, wer es ausgelöst hat und ob es geklappt hat, über alle Verbindungen
+zusammengeführt (Proxmox' "Tasks"-Panel). Rein lesend; die Protokollzeilen eines Tasks holt `task_log`."""
 
 from __future__ import annotations
 
@@ -58,9 +50,9 @@ TYPE_LABEL = {
     "download": "Download",
 }
 
+# Konsolen-Öffnungen sind zahlreich (jede Konsole in Nodvard Deck erzeugt eine) und für den Blick auf "was ist passiert"
+# meist Rauschen; die Seite blendet sie standardmäßig aus.
 CONSOLE_TYPES = frozenset({"vncproxy", "vncshell", "termproxy", "spiceproxy"})
-"""Konsolen-Oeffnungen -- zahlreich (jede Konsole in Nodvard Deck erzeugt eine), fuer den Blick
-auf "was ist passiert" meist Rauschen; die Seite blendet sie standardmaessig aus."""
 
 
 def _guest_names(hosts: list[Any]) -> dict[tuple[str, str], str]:
@@ -87,8 +79,7 @@ async def collect_tasks(ctx: "ExtensionContext", *, limit: int, include_console:
             if not node_name or node.get("status") not in (None, "online"):
                 continue
             try:
-                # Konsolen herausfiltern kostet Eintraege -- deshalb mehr holen, als
-                # am Ende gezeigt werden.
+                # Konsolen herausfiltern kostet Einträge, darum mehr holen, als am Ende gezeigt wird.
                 rows = await connector.node_tasks(node_name, limit=limit if include_console else limit * 3)
             except ProxmoxApiError as exc:
                 errors.append({"connection": conn_name, "node": node_name, "error": str(exc)})
@@ -112,6 +103,7 @@ async def collect_tasks(ctx: "ExtensionContext", *, limit: int, include_console:
                     "status": status,
                     "running": end is None,
                     "ok": status == "OK" if end is not None else None,
+                    # Zeitstempel von Proxmox sind UTC, die Seite zeigt Ortszeit.
                     "starttime": start,
                     "endtime": end,
                     "duration_s": (end - start) if isinstance(start, int) and isinstance(end, int) else None,

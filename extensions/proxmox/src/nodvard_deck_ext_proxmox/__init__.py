@@ -1,14 +1,4 @@
-"""proxmox-Extension -- die erste echte Vendor-Extension.
-Entdeckt Proxmox-VE-Knoten und ihre QEMU-VMs als Hosts, liefert Live-Metriken
-und Start/Stop/Neustart/Snapshot ueber das Aktions-Gate.
-
-**Die Nagelprobe fuer core_purity (siehe check_core_purity.py):** diese Datei ist die
-EINZIGE Stelle im gesamten Repository ausserhalb von `extensions/proxmox/`, an der das
-Wort "Proxmox" vorkommen darf. Alles, was der Kern sieht, sind die drei generischen
-Capability-Protokolle aus `nodvard_sdk.capabilities` (HostProvider, MetricsProvider,
-ActionExecutor) -- registriert wie jede andere Capability auch (siehe hello-world/
-ntfy), nicht anders behandelt.
-"""
+"""Proxmox-Erweiterung: entdeckt Knoten und Gäste als Hosts, liefert Messwerte und führt Aktionen über das Gate aus."""
 
 from __future__ import annotations
 
@@ -57,31 +47,25 @@ from .updates import collect_updates
 from .watch import run_watch
 
 
+# "hypervisor" ist ein interner Wert; die Proxmox-Seite nennt ihn "Knoten".
 _KIND_LABEL = {"vm": "VM", "lxc": "LXC", "hypervisor": "Knoten"}
-"""Anzeige fuer den Host-Typ in der Proxmox-Uebersicht -- "hypervisor" ist ein
-interner Wert, auf der Proxmox-Seite heisst dasselbe schon "Knoten"."""
 
 
 GATEWAY_FALLBACK = "Proxmox hat die Anfrage nicht beantwortet. Einzelheiten stehen im Protokoll des Dashboards."
 
 
 def bad_gateway(exc: BaseException, logger: Any) -> HTTPException:
-    """502 fuer die Oberflaeche. Den Text der Ausnahme bekommt sie nur, wenn er ein Satz der Erweiterung ist
-    (`readable`, z. B. `ProxmoxApiError`, `ConnectionMissing`); jede andere Ausnahme (etwa ein `RuntimeError` aus einer
-    Bibliothek) kann interne Einzelheiten enthalten und landet nur im Protokoll des Dashboards."""
+    """502 für die Oberfläche; der Text der Ausnahme geht nur an den Client, wenn sie `readable` ist (z. B. `ProxmoxApiError`)."""
     text = str(exc).strip()
     if getattr(exc, "readable", False) and text:
         return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=text)
+    # Andere Ausnahmen (etwa ein RuntimeError aus einer Bibliothek) können interne Einzelheiten enthalten: nur ins Protokoll.
     logger.warning("Proxmox: Anfrage fehlgeschlagen (%s)", type(exc).__name__, exc_info=exc)
     return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=GATEWAY_FALLBACK)
 
 
 class _DiscoveryJobSpec:
-    """Erfuellt `nodvard_sdk.context.JobSpec` strukturell (wie hello-worlds
-    `_HelloJobSpec`) -- der Kern-Scheduler fuehrt `handler` bei Faelligkeit UND per
-    manuellem `POST /jobs/{id}/run` aus. `ctx.hosts.upsert_discovered()` ist der
-    bereits im Kern bestehende Abgleichsweg (ext/context.py `HostsHandle`) -- diese
-    Extension ruft ihn nur mit ihren eigenen Funden auf."""
+    """Erfüllt `JobSpec` strukturell; der Scheduler ruft `handler` bei Fälligkeit und per `POST /jobs/{id}/run` auf."""
 
     id = "discovery"
     name = "Proxmox-Abgleich"
@@ -100,7 +84,7 @@ class _DiscoveryJobSpec:
 
 
 class _WatchJobSpec:
-    """Zustandswaechter (watch.py): alle 5 Minuten, meldet nur Zustandswechsel."""
+    """Zustandswächter (watch.py): meldet nur Zustandswechsel."""
 
     id = "watch"
     name = "Proxmox-Zustandswächter"
@@ -120,9 +104,7 @@ class _TokenIn(BaseModel):
 
 
 class _ConnectionIn(BaseModel):
-    """Wie `settings.connections`s Schema (`ctx.settings.declare()` unten) -- ohne
-    das Token selbst, das bleibt ausschliesslich ueber `POST .../{name}/token` im
-    Vault, nie hier im Klartext."""
+    """Wie das Schema von `settings.connections`, aber ohne Token: das liegt nur im Tresor (`POST .../{name}/token`)."""
 
     name: str
     base_url: str
@@ -138,8 +120,7 @@ class _ConnectionIn(BaseModel):
 
 
 class _ConnectionPatch(BaseModel):
-    """Alle Felder optional -- ein `PUT` aendert nur, was mitgeschickt wird
-    (insbesondere `enabled` alleine fuer das unabhaengige Aktivieren/Deaktivieren)."""
+    """Alle Felder optional: ein `PUT` ändert nur, was mitgeschickt wird (z. B. `enabled` allein)."""
 
     base_url: str | None = None
     token_id: str | None = None
@@ -208,11 +189,8 @@ class Extension(NodvardExtension):
 
         @router.post("/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT)
         async def set_token(name: str, payload: _TokenIn) -> None:
-            """Wie ntfys `/token` (WP-6): das Token-GEHEIMNIS liegt im Vault, nie in
-            den (Klartext-)Einstellungen. Ein Label pro Verbindung (Multi-Instanz-
-            Nachtrag), damit pve1 und pve2 unabhaengig eigene Tokens haben. Kein
-            Rotations-Pfad in dieser Runde -- ein bestehendes Token muss erst ueber
-            `DELETE /api/v1/secrets/{id}` entfernt werden."""
+            """Legt das Token im Tresor ab, nie in den Einstellungen; ein Geheimnis je Verbindung."""
+            # Kein Austausch: ein vorhandenes Token muss erst gelöscht werden.
             label = f"{TOKEN_LABEL}:{name}"
             if await ctx.secrets.exists(label):
                 raise HTTPException(
@@ -222,8 +200,8 @@ class Extension(NodvardExtension):
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 
         async def _drop_secret_or_refuse(label: str) -> None:
-            """Das Geheimnis einer Verbindung loeschen, bevor sich etwas aendert -- ist es nicht von dieser Erweiterung
-            (etwa von Hand im Tresor angelegt), bleibt es, und die Anfrage endet mit 409 und dem Weg, es aufzuloesen."""
+            """Löscht das Geheimnis einer Verbindung; ist es nicht von dieser Erweiterung (etwa von Hand angelegt),
+            bleibt es, und die Anfrage endet mit 409."""
             foreign = False
             try:
                 await ctx.secrets.delete(label)
@@ -248,9 +226,7 @@ class Extension(NodvardExtension):
 
         @router.get("/connections")
         async def list_connections() -> list[_ConnectionOut]:
-            """Verbindungen fuer die Oberflaeche auflisten.
-            Liefert nie den Token-WERT (der steht nie in `settings`, siehe oben) --
-            nur, OB eines gesetzt ist."""
+            """Verbindungen für die Oberfläche; nie der Token-Wert, nur ob eines gesetzt ist."""
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
             return [await _connection_out(c) for c in connections]
@@ -264,9 +240,8 @@ class Extension(NodvardExtension):
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Verbindung '{payload.name}' existiert bereits.",
                 )
-            # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen (etwa von
-            # einer frueher entfernten Verbindung) gehoerte zu einer anderen Adresse. Ein fremdes (nicht von dieser
-            # Erweiterung, etwa von Hand im Tresor) bleibt -- dann wird nichts angelegt.
+            # Eine neue Verbindung startet ohne Token: ein altes unter demselben Namen gehörte zu einer anderen Adresse.
+            # Ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt, dann wird nichts angelegt.
             await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{payload.name}")
             entry = payload.model_dump()
             if entry.get(FINGERPRINT_FIELD) is None:
@@ -294,11 +269,11 @@ class Extension(NodvardExtension):
                     elif "tls_insecure_skip_verify" not in updates:
                         conn["tls_insecure_skip_verify"] = False  # der Fingerabdruck ersetzt den Schalter
                 if "base_url" in updates and not same_target(old_url, conn.get("base_url")):
-                    # Das Token gehoert zur alten Adresse -- sonst ginge es an die neue. Vor dem Speichern: ein
-                    # fremdes Geheimnis laesst die Adresse unveraendert.
+                    # Das Token gehört zur alten Adresse, sonst ginge es an die neue. Ein fremdes Geheimnis lässt die
+                    # Adresse unverändert.
                     await _drop_secret_or_refuse(f"{TOKEN_LABEL}:{name}")
                     if FINGERPRINT_FIELD not in updates:
-                        # Der gemerkte Fingerabdruck gehoert zum alten Server.
+                        # Der gemerkte Fingerabdruck gehört zum alten Server.
                         conn.pop(FINGERPRINT_FIELD, None)
                 settings["connections"] = connections
                 await ctx.settings.set(settings)
@@ -307,8 +282,7 @@ class Extension(NodvardExtension):
 
         @router.delete("/connections/{name}", status_code=status.HTTP_204_NO_CONTENT)
         async def remove_connection(name: str) -> None:
-            """Entfernt die Verbindung samt ihrem Token im Tresor -- sonst bekaeme eine spaeter
-            neu angelegte Verbindung mit demselben Namen das alte Token."""
+            """Entfernt die Verbindung samt Token im Tresor, damit eine neue gleichnamige Verbindung es nicht erbt."""
             settings = await ctx.settings.get()
             connections: list[dict[str, Any]] = settings.get("connections") or []
             filtered = [c for c in connections if c.get("name") != name]
@@ -319,14 +293,14 @@ class Extension(NodvardExtension):
             try:
                 await ctx.secrets.delete(f"{TOKEN_LABEL}:{name}")
             except SecretNotOwned:
-                # Die Verbindung ist weg; ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberuehrt.
+                # Ein fremdes Geheimnis (etwa von Hand im Tresor) bleibt unberührt.
                 ctx.logger.warning("Proxmox: Verbindung %s entfernt, fremdes Geheimnis im Tresor bleibt", name)
 
         ctx.api.include_router(router, permission="secrets.write")
-        # "Mit Passwort verbinden" (password_connect.py): legt in Proxmox den Zugang an und schreibt dasselbe wie die
-        # Routen oben (Verbindung + Token-Geheimnis) -- deshalb dieselbe Berechtigung.
+        # "Mit Passwort verbinden" (password_connect.py) legt Verbindung und Token-Geheimnis an wie die Routen oben,
+        # daher dieselbe Berechtigung.
         ctx.api.include_router(build_password_connect_router(ctx), permission="secrets.write")
-        # Fingerabdruck des Zertifikats ansehen und bestaetigen (certificate.py): aendert die Verbindung wie PUT oben.
+        # Fingerabdruck des Zertifikats ansehen und bestätigen (certificate.py): ändert die Verbindung wie PUT oben.
         ctx.api.include_router(build_certificate_router(ctx), permission="secrets.write")
 
         data_router = APIRouter()
@@ -341,10 +315,7 @@ class Extension(NodvardExtension):
                         "status": h.status.value,
                         "kind": h.kind or "",
                         "kind_label": _KIND_LABEL.get(h.kind or "", h.kind or ""),
-                        # Multi-Instanz-Nachtrag: ohne dieses Feld waeren pve1 und
-                        # pve2-Kacheln in derselben Liste nicht unterscheidbar --
-                        # discover_hosts() schreibt den Verbindungsnamen mit in
-                        # host_metadata["connection"] (siehe capabilities.py).
+                        # Verbindungsname aus host_metadata, damit gleiche Knoten mehrerer Instanzen unterscheidbar sind.
                         "connection": (h.metadata or {}).get("connection", ""),
                     }
                     for h in hosts
@@ -354,9 +325,8 @@ class Extension(NodvardExtension):
 
         @data_router.get("/guests/{host_id}/snapshots")
         async def guest_snapshots(host_id: str) -> list[dict]:
-            """Snapshots eines Gasts, neueste zuerst -- ohne Proxmox' Pseudo-Eintrag
-            "current". Zurueckrollen/Loeschen laufen als Aktionen ueber das Gate
-            (`vm.snapshot_rollback`/`vm.snapshot_delete`), nicht hier."""
+            """Snapshots eines Gasts, neueste zuerst, ohne Proxmox' Pseudo-Eintrag "current" (der laufende Zustand).
+            Zurückrollen und Löschen laufen als Aktionen über das Gate, nicht hier."""
             host = await ctx.hosts.get(host_id)
             if host is None or host.provider_ext_id != ctx.ext_id or not host.provider_ref:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Gast.")
@@ -384,8 +354,7 @@ class Extension(NodvardExtension):
 
         @data_router.get("/guests/{host_id}/details")
         async def guest_details(host_id: str) -> dict:
-            """Kerne, RAM, Disks mit Speicherort, Netzwerk (mit Adressen je Karte),
-            Gast-Agent -- guest_config.py. Nur Whitelist-Felder, keine Rohkonfiguration."""
+            """Kerne, RAM, Disks, Netzwerk und Gast-Agent (guest_config.py); nur Felder der Positivliste, keine Rohkonfiguration."""
             host = await ctx.hosts.get(host_id)
             if host is None or host.provider_ext_id != ctx.ext_id or not host.provider_ref:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Gast.")
@@ -400,8 +369,7 @@ class Extension(NodvardExtension):
 
         @data_router.get("/nodes/{host_id}/health")
         async def node_health(host_id: str) -> dict:
-            """Prozessor, Last, RAM/Swap, Systemplatte und Datentraeger mit SMART-Zustand
-            eines Knotens (node_health.py). Rein lesend."""
+            """Prozessor, Last, Speicher, Systemplatte und Datenträger mit SMART-Zustand eines Knotens (node_health.py)."""
             host = await ctx.hosts.get(host_id)
             if host is None or host.provider_ext_id != ctx.ext_id or not host.provider_ref:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Knoten.")
@@ -417,8 +385,7 @@ class Extension(NodvardExtension):
 
         @data_router.get("/widgets/disks")
         async def disks_widget_data() -> dict:
-            """Alle Datentraeger aller Knoten, schlechtester Zustand zuerst. Ein nicht
-            erreichbarer Knoten wird als eigene Zeile gemeldet, nicht verschwiegen."""
+            """Alle Datenträger aller Knoten, schlechtester Zustand zuerst; ein nicht erreichbarer Knoten erscheint als eigene Zeile."""
             rows: list[dict] = []
             temp_setting = temperature_setting((await ctx.settings.get()).get("disk_temp_warn_c"))
             for conn_name, connector in (await build_connectors(ctx)).items():
@@ -444,15 +411,13 @@ class Extension(NodvardExtension):
 
         @data_router.get("/tasks")
         async def task_history(limit: int = 50, include_console: bool = False) -> dict:
-            """Aufgabenverlauf aller Knoten (tasks.py) -- wer hat was wann getan, hat es
-            geklappt. Konsolen-Oeffnungen standardmaessig ausgeblendet."""
+            """Aufgabenverlauf aller Knoten (tasks.py); Konsolen-Öffnungen sind standardmäßig ausgeblendet."""
             return await collect_tasks(ctx, limit=max(1, min(limit, 200)), include_console=include_console)
 
         @data_router.get("/tasks/{connection}/{node}/log")
         async def task_log(connection: str, node: str, upid: str) -> dict:
-            """Protokoll eines einzelnen Tasks. `upid` als Query-Parameter (enthaelt
-            Doppelpunkte); er muss zu `node` gehoeren -- Proxmox kodiert den Knoten in
-            der UPID selbst ("UPID:<node>:...")."""
+            """Protokoll eines Tasks. `upid` kommt als Query-Parameter (enthält Doppelpunkte) und muss zu `node` passen:
+            Proxmox kodiert den Knoten in der UPID selbst (`UPID:<node>:...`)."""
             if not upid.startswith(f"UPID:{node}:") or "/" in upid:
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="UPID passt nicht zum Knoten.")
             try:
@@ -464,13 +429,12 @@ class Extension(NodvardExtension):
 
         @data_router.get("/updates")
         async def updates_overview() -> dict:
-            """Wartende Paket-Updates je Knoten mit Paketliste (updates.py). Rein lesend."""
+            """Wartende Paket-Updates je Knoten mit Paketliste (updates.py)."""
             return await collect_updates(ctx, details=True)
 
         @data_router.get("/widgets/updates")
         async def updates_widget_data() -> dict:
-            """Eine nicht erreichbare Verbindung als eigene rote Zeile --
-            vorher stand sie nur in `meta`, das keine Kachel liest; pve2 fehlte still."""
+            """Eine nicht erreichbare Verbindung erscheint als eigene rote Zeile, damit sie nicht still fehlt."""
             overview = await collect_updates(ctx, details=False)
             rows = [
                 {"connection": e["connection"], "node": e["connection"], "summary": e["error"], "badge": "nicht erreichbar", "tone": "danger"}
@@ -480,17 +444,14 @@ class Extension(NodvardExtension):
 
         @data_router.get("/storage")
         async def storage_overview() -> dict:
-            """Speicher-Uebersicht fuer die Seite: Belegung je Pool UND welche Gast-Disks
-            darauf liegen (storage.py)."""
+            """Belegung je Pool und die Gast-Disks darauf (storage.py)."""
             return await collect_storage(ctx, details=True)
 
         @data_router.get("/widgets/storage")
         async def storage_widget_data() -> dict:
-            """Nur Belegung (eine Abfrage je Knoten) -- das Widget laedt alle 60s neu;
-            der Pool-Inhalt waere dafuer zu teuer."""
+            """Nur die Belegung (eine Abfrage je Knoten); der Pool-Inhalt wäre für das Neuladen alle 60 s zu teuer."""
             overview = await collect_storage(ctx, details=False, merge_connections=True)
-            # Wie bei den Updates: Fehler als eigene rote Zeile. Texte kommen
-            # fertig aus dem Backend, damit die Fehlerzeile keine leeren Zahlen zeigt.
+            # Fehler als eigene rote Zeile; die Texte kommen fertig aus dem Backend, damit die Zeile keine leeren Zahlen zeigt.
             rows: list[dict] = [
                 {
                     "connection": e["connection"],
@@ -515,13 +476,8 @@ class Extension(NodvardExtension):
 
         @data_router.get("/widgets/node-load")
         async def node_load_widget_data() -> dict:
-            """Vorher `nodes[0]` -- bei mehreren Proxmox-Instanzen
-            (pve1/pve2, siehe capabilities.py-Nachtrag) war das eine willkuerliche,
-            als "erster Knoten" nur ehrlich gelabelte, aber nicht wirklich
-            aussagekraeftige Einzelmessung. Jetzt: Durchschnitt ueber ALLE bekannten
-            Knoten -- fehlerhafte/nicht erreichbare Knoten werden einzeln uebersprungen
-            (`return_exceptions=True`), nicht die ganze Kachel leer geraeumt, solange
-            mindestens ein Knoten antwortet."""
+            """Durchschnitt der CPU-Auslastung über alle bekannten Knoten; ein nicht erreichbarer Knoten wird einzeln
+            übersprungen, solange mindestens einer antwortet."""
             nodes = await ctx.hosts.list(tag="node")
             if not nodes:
                 return {"data": {"value": None, "node_count": 0}, "meta": {}}
@@ -538,10 +494,7 @@ class Extension(NodvardExtension):
             average = sum(cpu_values) / len(cpu_values)
             return {"data": {"value": round(average, 1), "node_count": len(cpu_values)}, "meta": {}}
 
-        # Sicherheits-Nachtrag: dieser
-        # Router hing OHNE Berechtigung (`include_router(router)`) -- laut ApiHandle-
-        # Docstring heisst das: oeffentlich, ohne Login erreichbar. Lesen braucht jetzt
-        # `hosts.read`, alles Ausloesende `hosts.execute`.
+        # Ohne `permission` wäre der Router ohne Login erreichbar.
         ctx.api.include_router(data_router, permission="hosts.read")
 
         ctx.ui.register_page(
@@ -576,11 +529,7 @@ class Extension(NodvardExtension):
                 id="node-load",
                 title="Proxmox-Knoten-Auslastung",
                 icon="cpu",
-                # Live gefunden (Dashboard-Boot-Test, echter Browser): GaugeView.tsx
-                # rendert ein 80x80px-SVG PLUS Text nebeneinander (flex, gap-4) -- bei
-                # GridSize(w=1, h=1) (~89x90px Karte minus Padding/Titel) blieb dafuer
-                # nie genug Platz, die Karte wirkte leer/abgeschnitten. w=2/h=2 entspricht
-                # der Groesse, die jedes andere Widget auf diesem Dashboard schon hat.
+                # Die Gauge-Ansicht zeigt ein 80x80-px-SVG neben dem Text; in 1x1 Feldern wirkt die Karte abgeschnitten.
                 size=GridSize(w=2, h=2),
                 refresh=Refresh(interval_s=30),
                 data_endpoint="widgets/node-load",
@@ -612,7 +561,7 @@ class Extension(NodvardExtension):
                 title="Proxmox-Updates",
                 icon="package",
                 size=GridSize(w=2, h=2),
-                # Proxmox prueft selbst nur einmal taeglich -- oefter nachzufragen bringt nichts.
+                # Proxmox prüft selbst nur einmal täglich, öfter nachzufragen bringt nichts.
                 refresh=Refresh(interval_s=900),
                 data_endpoint="widgets/updates",
                 view=ListView(
@@ -632,7 +581,7 @@ class Extension(NodvardExtension):
                 title="Proxmox-Datenträger",
                 icon="hard-drive",
                 size=GridSize(w=2, h=2),
-                # SMART aendert sich langsam; alle 10 Minuten reicht.
+                # SMART ändert sich langsam; alle 10 Minuten reicht.
                 refresh=Refresh(interval_s=600),
                 data_endpoint="widgets/disks",
                 view=ListView(
@@ -646,7 +595,7 @@ class Extension(NodvardExtension):
             )
         )
 
-        # Server-Seite (Plesk-Stil): was diese Extension fuer ihre eigenen Hosts anbietet.
+        # Server-Seite: was diese Erweiterung für ihre eigenen Hosts anbietet.
         ctx.ui.register_host_tool(HostToolSpec(
             id="guest", title="Hardware, Netzwerk & Snapshots", icon="server", category="settings",
             description="Kerne, RAM, Disks mit Speicherort, Netzwerk, Snapshots", path="/nodes?host={host_id}",
@@ -673,16 +622,8 @@ class Extension(NodvardExtension):
         return None
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
-        """**Multi-Instanz-Nachtrag, geschaerft:** die erste Fassung
-        meldete `healthy=True`, sobald IRGENDEINE Verbindung erreichbar war -- ein
-        Ausfall einer Instanz wurde von der anderen, funktionierenden verdeckt (pve2
-        down, pve1 laeuft -> insgesamt "gesund", obwohl die Haelfte der Flotte
-        unerreichbar ist). `healthy=True` gilt jetzt nur noch, wenn ALLE
-        konfigurierten Verbindungen erreichbar sind. `details[name]["healthy"]` macht
-        den Zustand JEDER einzelnen Verbindung explizit (nicht nur implizit ueber die
-        An-/Abwesenheit eines "error"-Schluessels erschliessbar), `message` fasst
-        IMMER alle Verbindungen zusammen (nicht nur die fehlgeschlagenen) -- sichtbar
-        auch bei einem kurzen Blick, ohne `details` erst aufklappen zu muessen."""
+        """Gesund nur, wenn alle Verbindungen erreichbar sind: `details` und `message` nennen jede einzeln, damit der
+        Ausfall einer Instanz nicht von einer funktionierenden verdeckt wird."""
         connectors = await build_connectors(ctx)
         if not connectors:
             return HealthReport(healthy=False, message="Keine Verbindung konfiguriert.")
@@ -700,7 +641,7 @@ class Extension(NodvardExtension):
                 details[name] = {"healthy": False, "error": str(exc)}
                 code = getattr(exc, "code", None)
                 if code:
-                    details[name]["code"] = code  # z. B. "certificate_changed": die Oberflaeche bietet das Bestaetigen an
+                    details[name]["code"] = code  # z. B. "certificate_changed": die Oberfläche bietet das Bestätigen an
                 summaries.append(f"{name}: FEHLER: {exc}")
                 all_healthy = False
 

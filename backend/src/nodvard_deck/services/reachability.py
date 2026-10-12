@@ -1,41 +1,5 @@
-"""Regelmaessige Erreichbarkeitspruefung -- Kern-Job `host-reachability`
-(docs/04-API.md §5 `hosts.reachability.*`).
-
-**Wen der Job prueft:** jeden aktiven Server, dessen Zustand *kein Modul selbst pflegt*. Das
-Merkmal dafuer steht am Host: `provider_ext_id`. Ein Modul, das Server einliest
-(`ctx.hosts.upsert_discovered`), traegt sich dort ein und fuehrt den Zustand dann selbst nach
-(`HostProvider.host_status`). Von Hand angelegte Server haben es nicht, der Kern ist fuer sie
-zustaendig. So kennt der Kern keine Modul-ID. Bewusst auch dann *nicht* geprueft, wenn das
-einlesende Modul gerade aus ist: Die Adresse eingelesener Gaeste ist oft nur ein Platzhalter (die
-Adresse des Hypervisors), eine TCP-Antwort dort sagt nichts ueber den Gast. Uebersprungen werden
-ausserdem Beispiel-Server (`core.demo_seed`), Server im Zustand "Wartung", ohne Adresse und
-Server, deren Standard-Zugang kein SSH ist (dann ist der Port nicht der SSH-Port).
-
-**Wie geprueft wird:** nur eine TCP-Verbindung zum SSH-Port (Port des Standard-Zugangs, ohne
-Zugang 22), 3 Sekunden Zeitgrenze. Kein Login, kein Schluessel, kein SSH-Pool -- das geht auch
-fuer Server ohne Zugang und belastet die Server kaum. Kein ICMP: Ping braucht im Container Root
-oder Capabilities. "Erreichbar" heisst also: der SSH-Port nimmt Verbindungen an. Hoechstens
-`MAX_PARALLEL` Pruefungen gleichzeitig; ein Durchlauf wartet nie laenger als das Intervall, und
-laeuft noch einer, wird der naechste uebersprungen (Lock).
-
-**Entprellung:** "nicht erreichbar" gilt erst nach `FAILS_BEFORE_DOWN` Fehlschlaegen hintereinander,
-"erreichbar" sofort. Die Zaehler liegen im Prozessspeicher (ein Neustart beginnt bei null, das
-kostet hoechstens eine Pruefrunde).
-
-**Meldungen** (`services.notifications.deliver`, Kanaele wie ntfy, `payload.path` zur Server-Seite):
-nur bei Wechseln, nie fuer denselben Zustand erneut.
-
-* up -> down: "Server X ist nicht erreichbar" (kritisch). Ein Server, der noch nie "up" war
-  (`last_seen_at` leer, z. B. ein Tippfehler in der Adresse), bekommt den Zustand, aber keine
-  Meldung.
-* down -> up: "Server X ist wieder erreichbar" (Info) -- nur, wenn der Ausfall gemeldet wurde.
-* Wartungsfenster (`core.maintenance`): der Zustand wird trotzdem nachgefuehrt. Die Meldung
-  traegt `payload.host_id`; `deliver()` stellt sie im Fenster stumm (nur Verlauf). Dauert der
-  Ausfall nach dem Fenster an, kommt die Ausfallmeldung einmal hoerbar nach.
-
-Was gemeldet wurde, steht in der Einstellung `hosts.reachability.state` (Host-ID -> stumm ja/nein),
-damit ein Neustart (Deploy) keine Meldungsflut und keine verlorene Entwarnung verursacht.
-"""
+"""Regelmäßige Erreichbarkeitsprüfung (Kern-Job `host-reachability`): TCP-Verbindung zum SSH-Port, Meldung nur bei
+Wechseln und mit Entprellung. Geprüft werden Server, deren Zustand kein Modul selbst pflegt (`provider_ext_id` leer)."""
 
 from __future__ import annotations
 
@@ -67,7 +31,8 @@ JOB_NAME = "Erreichbarkeit der Server"
 KEY_ENABLED = "hosts.reachability.enabled"
 KEY_INTERVAL = "hosts.reachability.interval_minutes"
 KEY_STATE = "hosts.reachability.state"
-"""Interner Merker (Host-ID -> {"muted": bool}); nicht ueber die Einstellungs-API sichtbar."""
+"""Interner Merker (Host-ID -> {"muted": bool}) darüber, was gemeldet wurde, damit ein Neustart keine Meldungsflut und
+keine verlorene Entwarnung verursacht; nicht über die Einstellungs-API sichtbar."""
 
 DEFAULT_ENABLED = True
 DEFAULT_INTERVAL_MINUTES = 2
@@ -76,9 +41,10 @@ MAX_INTERVAL_MINUTES = 60
 
 CONNECT_TIMEOUT_S = 3.0
 MAX_PARALLEL = 10
+# "Nicht erreichbar" gilt erst nach so vielen Fehlschlägen hintereinander, "erreichbar" sofort.
 FAILS_BEFORE_DOWN = 2
 KEEP_RUNS = timedelta(hours=24)
-"""So lange bleiben die Laeufe dieses Jobs im Protokoll (er laeuft bis zu 1440 mal am Tag)."""
+"""So lange bleiben die Läufe dieses Jobs im Protokoll (er läuft bis zu 1440-mal am Tag)."""
 
 DEFAULT_SSH_PORT = 22
 EVENT_NAME = "host.status_changed"
@@ -93,13 +59,15 @@ DOWN_AFTER_WINDOW_BODY = (
 UP_TITLE = "Server {name} ist wieder erreichbar"
 UP_BODY = "{address}:{port} antwortet wieder."
 
+# Läuft noch ein Durchlauf, wird der nächste übersprungen.
 _run_lock = asyncio.Lock()
 _streaks: dict[str, tuple[tuple[str, int], int]] = {}
-"""Host-ID -> (Ziel, Fehlschlaege in Folge). Ein neues Ziel (Adresse/Port geaendert) beginnt neu."""
+"""Host-ID -> (Ziel, Fehlschläge in Folge); ein neues Ziel (Adresse oder Port geändert) beginnt neu. Nur im
+Prozessspeicher: ein Neustart beginnt bei null und kostet höchstens eine Prüfrunde."""
 
 
 def reset_state() -> None:
-    """Nur fuer Tests: Zaehler und Lock verwerfen (jeder Test hat seinen eigenen Event-Loop)."""
+    """Nur für Tests: Zähler und Lock verwerfen (jeder Test hat seinen eigenen Event-Loop)."""
     global _run_lock
     _streaks.clear()
     _run_lock = asyncio.Lock()
@@ -124,7 +92,7 @@ class Config:
 
 
 def cron_for(interval_minutes: int) -> str:
-    """Zeitplan fuer das Intervall: alle N Minuten ab voller Stunde (60 = stuendlich)."""
+    """Zeitplan für das Intervall: alle N Minuten ab voller Stunde (60 = stündlich)."""
     if interval_minutes >= 60:
         return "0 * * * *"
     return f"*/{interval_minutes} * * * *"
@@ -138,7 +106,7 @@ def _valid_interval(value: Any) -> bool:
 
 
 async def load_config(session: AsyncSession) -> Config:
-    """Schalter und Intervall; ein unbrauchbarer gespeicherter Wert zaehlt als nicht gesetzt."""
+    """Schalter und Intervall; ein unbrauchbarer gespeicherter Wert zählt als nicht gesetzt."""
     enabled = await settings_service.get_global(session, KEY_ENABLED)
     minutes = await settings_service.get_global(session, KEY_INTERVAL)
     return Config(
@@ -148,13 +116,13 @@ async def load_config(session: AsyncSession) -> Config:
 
 
 # ---------------------------------------------------------------------------
-# Pruefung
+# Prüfung
 # ---------------------------------------------------------------------------
 
 
 async def probe_tcp(address: str, port: int, timeout_s: float = CONNECT_TIMEOUT_S) -> bool:
-    """Nimmt `address:port` innerhalb von `timeout_s` eine TCP-Verbindung an? Es wird nichts
-    gesendet; die Verbindung wird sofort wieder geschlossen."""
+    """Nimmt `address:port` innerhalb von `timeout_s` eine TCP-Verbindung an? Es wird nichts gesendet. Bewusst kein
+    Login, kein Schlüssel, kein SSH-Pool und kein ICMP (Ping braucht im Container Root oder Capabilities)."""
     try:
         _, writer = await asyncio.wait_for(asyncio.open_connection(address, port), timeout=timeout_s)
     except (OSError, TimeoutError, UnicodeError, ValueError):
@@ -167,7 +135,12 @@ async def probe_tcp(address: str, port: int, timeout_s: float = CONNECT_TIMEOUT_
 
 
 async def select_targets(session: AsyncSession) -> list[Target]:
-    """Die Server, die dieser Job prueft (siehe Modul-Docstring)."""
+    """Die Server, die dieser Job prüft: aktive ohne `provider_ext_id`, mit Adresse, nicht in Wartung, keine
+    Beispiel-Server."""
+    # Ein Modul, das Server einliest, trägt sich in `provider_ext_id` ein und pflegt den Zustand selbst
+    # (`HostProvider.host_status`), so kennt der Kern keine Modul-ID. Auch bei ausgeschaltetem Modul nicht prüfen: Die
+    # Adresse eingelesener Gäste ist oft nur ein Platzhalter (die des Hypervisors), eine TCP-Antwort dort sagt nichts
+    # über den Gast.
     hosts = (
         await session.execute(
             select(Host).where(Host.enabled.is_(True), Host.provider_ext_id.is_(None)).order_by(Host.name)
@@ -190,8 +163,8 @@ async def select_targets(session: AsyncSession) -> list[Target]:
 
 
 async def _probe_all(targets: list[Target], budget_s: float) -> dict[str, bool]:
-    """Pruft alle Ziele, hoechstens `MAX_PARALLEL` gleichzeitig. Was nach `budget_s` noch laeuft,
-    wird abgebrochen und zaehlt weder als Erfolg noch als Fehlschlag (kein Ergebnis)."""
+    """Prüft alle Ziele, höchstens `MAX_PARALLEL` gleichzeitig. Was nach `budget_s` noch läuft, wird abgebrochen und
+    zählt weder als Erfolg noch als Fehlschlag."""
     semaphore = asyncio.Semaphore(MAX_PARALLEL)
 
     async def _one(target: Target) -> bool:
@@ -235,8 +208,8 @@ def _payload(host_id: str, *, down: bool) -> dict[str, Any]:
 async def _apply(
     targets: list[Target], results: dict[str, bool]
 ) -> tuple[list[_Message], list[tuple[str, str, str]], dict[str, int]]:
-    """Fuehrt Zustand, `last_seen_at` und den Merker nach. Liefert die zu sendenden Meldungen, die
-    Zustandswechsel (Host-ID, alt, neu) und eine Zaehlung."""
+    """Führt Zustand, `last_seen_at` und den Merker nach; liefert die zu sendenden Meldungen, die Zustandswechsel
+    (Host-ID, alt, neu) und eine Zählung."""
     messages: list[_Message] = []
     changes: list[tuple[str, str, str]] = []
     counts = {"up": 0, "down": 0, "unknown": 0}
@@ -250,14 +223,18 @@ async def _apply(
         ).scalars().unique().all() if wanted else []
         hosts = {h.id: h for h in rows}
 
+        # Meldungen nur bei Wechseln. Ein Server, der noch nie "up" war (`last_seen_at` leer, z. B. Tippfehler in der
+        # Adresse), bekommt den Zustand, aber keine Meldung; "wieder erreichbar" kommt nur, wenn der Ausfall gemeldet
+        # wurde.
         for target in wanted:
             host = hosts.get(target.host_id)
             if host is None or host.provider_ext_id is not None or host.status == "maintenance":
-                continue  # inzwischen geloescht, von einem Modul uebernommen oder in Wartung
+                continue  # inzwischen gelöscht, von einem Modul übernommen oder in Wartung
             if (host.address or "").strip() != target.address:
-                continue  # waehrend der Pruefung geaendert: das Ergebnis gilt dem alten Ziel
+                continue  # während der Prüfung geändert: das Ergebnis gilt dem alten Ziel
             previous = host.status
             reached = results[target.host_id]
+            # `payload.host_id` lässt `deliver()` die Meldung im Wartungsfenster stumm stellen (nur Verlauf).
             payload = _payload(host.id, down=not reached)
 
             if reached:
@@ -288,12 +265,12 @@ async def _apply(
                     state[host.id] = {"muted": muted}
                     messages.append(_Message("down", target))
             elif isinstance(state.get(host.id), dict) and state[host.id].get("muted"):
-                # Im Wartungsfenster still gemeldet: ist es vorbei und der Server noch weg, einmal hoerbar nachholen.
+                # Im Wartungsfenster still gemeldet: Ist es vorbei und der Server noch weg, einmal hörbar nachholen.
                 if not await notifications_service.would_suppress(session, payload):
                     state[host.id] = {"muted": False}
                     messages.append(_Message("late_down", target))
 
-        # Geloeschte Server aus dem Merker raeumen.
+        # Gelöschte Server aus dem Merker räumen.
         if state:
             existing = set((await session.execute(select(Host.id).where(Host.id.in_(list(state))))).scalars())
             for host_id in [h for h in state if h not in existing]:
@@ -331,12 +308,12 @@ async def _publish_changes(changes: list[tuple[str, str, str]]) -> None:
     for host_id, previous, current in changes:
         try:
             await bus.publish(Event(name=EVENT_NAME, payload={"host_id": host_id, "status": current, "previous": previous}))
-        except Exception:  # noqa: BLE001 - die Oberflaeche holt den Stand sonst beim naechsten Abruf
+        except Exception:  # noqa: BLE001 - die Oberfläche holt den Stand sonst beim nächsten Abruf
             logger.exception("reachability_event_failed host=%s", host_id)
 
 
 async def run_once() -> dict[str, Any]:
-    """Ein Durchlauf. Laeuft noch einer, wird dieser uebersprungen."""
+    """Ein Durchlauf; läuft noch einer, wird dieser übersprungen."""
     if _run_lock.locked():
         logger.info("reachability_skipped reason=previous_run_still_running")
         return {"skipped": True}
@@ -344,9 +321,10 @@ async def run_once() -> dict[str, Any]:
         async with session_scope() as session:
             config = await load_config(session)
             targets = await select_targets(session)
+        # Ein Durchlauf wartet nie länger als das Intervall.
         budget_s = max(10.0, config.interval_minutes * 60 - 5.0)
         results = await _probe_all(targets, budget_s)
-        # Zaehler der Server aufraeumen, die es nicht mehr zu pruefen gibt.
+        # Zähler der Server aufräumen, die es nicht mehr zu prüfen gibt.
         for host_id in [h for h in _streaks if h not in {t.host_id for t in targets}]:
             _streaks.pop(host_id)
         messages, changes, counts = await _apply(targets, results)
@@ -390,8 +368,8 @@ async def _job_handler(**_: Any) -> dict[str, Any]:
 
 
 async def sync_job() -> None:
-    """Legt den Kern-Job an bzw. passt Zeitplan und Schalter an und plant ihn neu. Aufgerufen
-    beim Start (`register_core_jobs`) und nach jeder Aenderung der Einstellungen."""
+    """Legt den Kern-Job an bzw. passt Zeitplan und Schalter an und plant ihn neu (beim Start und nach jeder Änderung
+    der Einstellungen)."""
     from ..core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
     from ..ext.runtime import get_extension_runtime
 

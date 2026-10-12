@@ -1,27 +1,4 @@
-"""Duenner Client fuer die Proxmox-VE-Backup-API, analog zu
-`nodvard_deck_ext_proxmox.connector.ProxmoxConnector` -- nutzt ausschliesslich `ctx.http`,
-niemals einen eigenen `httpx`-Client.
-
-**Bewusst eine EIGENE, unabhaengige Proxmox-Verbindung statt Wiederverwendung der
-proxmox-Extension:** Extensions duerfen sich laut docs/02-EXTENSION-API.md Paragraph 2
-nur ueber `ctx.events`/deklarierte `requires` + typisierte Capabilities sehen, nicht
-sich gegenseitig direkt importieren -- und proxmox bietet keine Capability, die
-Backup-Job-/Task-Daten liefert (nur `HostProvider`/`MetricsProvider`/`ActionExecutor`).
-Diese Extension baut deshalb ihren eigenen, kleinen REST-Client -- derselbe
-Kompromiss wie bei nextclouds eigenem WebDAV-Client trotz proxmoxs bereits
-vorhandenem `ctx.http`-Nutzungsmuster. Konsequenz: wer beide Extensions nutzt,
-konfiguriert dieselbe Proxmox-Instanz zweimal.
-
-**`tls_insecure_skip_verify` (Nachtrag, live gegen den echten pve1 gefunden):**
-dieselbe eigenstaendige Verbindung heisst auch, dass der WP-8-TLS-Fix
-(`net.outbound.insecure_tls`, siehe `nodvard_deck_ext_proxmox.connector`) diese
-Extension NICHT automatisch mitdeckt -- eine unabhaengige, aber strukturell
-identische Ergaenzung hier.
-
-**Gemerkter Fingerabdruck (`tls_fingerprint_sha256`, certificate.py):** wie in "Proxmox VE": ist einer gemerkt, geht
-er als `pinned_sha256` in jeden Aufruf, und der veraltete Schalter gilt nicht. Ein anderes Zertifikat ergibt
-`ProxmoxBackupApiError` mit `code == "certificate_changed"`, ein ungueltiger Eintrag sperrt die Verbindung
-(`code == "certificate_invalid"`), nie still "nicht pruefen"."""
+"""Dünner Client für die Proxmox-VE-Backup-API, nur über `ctx.http`, nie mit einem eigenen `httpx`-Client."""
 
 from __future__ import annotations
 
@@ -44,16 +21,19 @@ from .transport import (
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
+# Die Erweiterung führt eine eigene Proxmox-Verbindung: Erweiterungen importieren einander nicht, und die
+# Proxmox-Erweiterung bietet keine Capability für Backup-Jobs und Tasks. Wer beide nutzt, trägt dieselbe Instanz
+# zweimal ein.
 
 NODE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.-]{0,62}")
 """Name eines Proxmox-Knotens, so wie er im Pfad einer Anfrage landet."""
 TASK_LOG_LINES = 5000
-"""Ein Sammel-Job mit vielen Gaesten schreibt je Gast gut hundert Zeilen; mehr liest Nodvard Deck nicht."""
+"""Ein Sammel-Job mit vielen Gästen schreibt je Gast gut hundert Zeilen; mehr liest Nodvard Deck nicht."""
 
 
 class ProxmoxBackupApiError(Exception):
-    """`status_code`: der HTTP-Status der Antwort, falls es eine gab (sonst `None`). `code`: fester Grund, wo es einen
-    gibt (`"certificate_changed"`, `"certificate_invalid"`), sonst `None`."""
+    """`status_code`: HTTP-Status der Antwort, falls es eine gab. `code`: fester Grund (`"certificate_changed"`,
+    `"certificate_invalid"`), sonst `None`."""
 
     def __init__(self, message: str, *, status_code: int | None = None, code: str | None = None) -> None:
         super().__init__(message)
@@ -90,8 +70,9 @@ class ProxmoxBackupConnector:
         return self._pin is not None
 
     def _tls(self) -> dict[str, Any]:
-        """Die TLS-Angaben fuer `ctx.http`: der Fingerabdruck, wenn einer gemerkt ist, sonst der alte Schalter. Bei
-        einem ungueltigen Eintrag nie der Schalter: dann `ProxmoxBackupApiError` (auch fuer kuenftige Aufrufer)."""
+        """TLS-Angaben für `ctx.http`: der Fingerabdruck, wenn einer gemerkt ist, sonst der alte Schalter."""
+        # Ein ungültiger Eintrag fällt nie auf den Schalter zurück (nie still „nicht prüfen“), sondern sperrt die
+        # Verbindung; ein anderes Zertifikat ergibt später den Code "certificate_changed".
         if self._pin_invalid:
             raise ProxmoxBackupApiError(f"TLS -> {INVALID_TEXT}", code=INVALID_CODE)
         if self._pin is not None:
@@ -104,15 +85,14 @@ class ProxmoxBackupConnector:
 
     @property
     def token_id(self) -> str:
-        """Die Token-ID (`benutzer@bereich!name`), nie das Geheimnis -- fuer Anleitungen mit einem fertigen `pveum`-Befehl."""
+        """Die Token-ID (`benutzer@bereich!name`), nie das Geheimnis; für Anleitungen mit fertigem `pveum`-Befehl."""
         return self._token_id
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._base_url}/api2/json{path}"
         headers = {**self._auth_header, **kwargs.pop("headers", {})}
-        # Nie der Text der Ausnahme oder der Antwort in der Meldung (siehe transport.py), und der Fehler wird erst
-        # ausserhalb des `except`-Blocks geworfen: sonst hinge die Ausnahme von httpx (mit Teilen der fremden
-        # Antwort im Text) als `__context__` an der Meldung.
+        # Weder Ausnahmetext noch Antwort kommen in die Meldung (transport.py). Geworfen wird erst außerhalb des
+        # `except`-Blocks, sonst hinge die httpx-Ausnahme (mit Teilen der fremden Antwort) als `__context__` dran.
         if self._pin_invalid:
             raise ProxmoxBackupApiError(f"{method} {path} -> {INVALID_TEXT}", code=INVALID_CODE)
         problem: str | None = None
@@ -123,7 +103,7 @@ class ProxmoxBackupConnector:
             response = await self._ctx.http.request(method, url, headers=headers, **self._tls(), **kwargs)
         except ProxmoxBackupApiError:
             raise
-        except Exception as exc:  # noqa: BLE001 - jeder Fehler wird hier vereinheitlicht (wie ProxmoxConnector)
+        except Exception as exc:  # noqa: BLE001 - jeder Fehler wird hier vereinheitlicht
             problem = transport_text(exc, url)
             code = CHANGED_CODE if certificate_changed(exc) else None
             cause = None if carries_foreign_text(exc) else exc
@@ -141,22 +121,20 @@ class ProxmoxBackupConnector:
         return body.get("data")
 
     async def list_jobs(self) -> list[dict[str, Any]]:
-        """`GET /cluster/backup` -- die konfigurierten VZDump-Zeitplaene
-        (Proxmox-Aequivalent von `/etc/pve/jobs.cfg`)."""
+        """`GET /cluster/backup`: die konfigurierten VZDump-Zeitpläne (entspricht `/etc/pve/jobs.cfg`)."""
         return await self._request("GET", "/cluster/backup") or []
 
     async def not_backed_up(self) -> list[dict[str, Any]]:
-        """`GET /cluster/backup-info/not-backed-up` -- Proxmox' EIGENE Auswertung, welche
-        Gaeste von keinem Backup-Job erfasst sind (beruecksichtigt `all`/`exclude`/
-        `pool`, die hier sonst nachgebaut werden muessten). Eintraege: `vmid`, `name`,
-        `type` ("qemu"/"lxc")."""
+        """`GET /cluster/backup-info/not-backed-up`: Proxmox' eigene Auswertung, welche Gäste kein Job erfasst.
+
+        Sie berücksichtigt `all`, `exclude` und `pool`. Einträge: `vmid`, `name`, `type` ("qemu"/"lxc")."""
         return await self._request("GET", "/cluster/backup-info/not-backed-up") or []
 
     async def list_nodes(self) -> list[dict[str, Any]]:
         return await self._request("GET", "/nodes") or []
 
     async def backup_storages(self, node: str) -> list[dict[str, Any]]:
-        """Speicher des Knotens, die Backups aufnehmen koennen (`storage`, `shared`, `active`)."""
+        """Speicher des Knotens, die Backups aufnehmen können (`storage`, `shared`, `active`)."""
         return await self._request("GET", f"/nodes/{node}/storage", params={"content": "backup"}) or []
 
     async def backup_files(self, node: str, storage: str) -> list[dict[str, Any]]:
@@ -166,33 +144,22 @@ class ProxmoxBackupConnector:
         ) or []
 
     async def guest_resources(self) -> list[dict[str, Any]]:
-        """Alle Gaeste der Verbindung (`vmid`, `node`, `pool`, `type`) -- nur noetig,
-        um Jobs ohne explizite VMID-Liste ("alle Gaeste", Pool) aufzuloesen."""
+        """Alle Gäste der Verbindung (`vmid`, `node`, `pool`, `type`), nötig für Jobs ohne VMID-Liste („alle Gäste“, Pool)."""
         return await self._request("GET", "/cluster/resources", params={"type": "vm"}) or []
 
     async def guest_config(self, node: str, guest_type: str, vmid: str) -> dict[str, Any]:
-        """`GET /nodes/{node}/{qemu|lxc}/{vmid}/config` -- Plattengroessen fuer die
-        Platz-Pruefung (space.py). Braucht `VM.Audit`; fehlt das, faellt space.py auf
-        `maxdisk` aus `/cluster/resources` zurueck."""
+        """`GET /nodes/{node}/{qemu|lxc}/{vmid}/config`: Plattengrößen für die Platzprüfung (space.py).
+
+        Braucht `VM.Audit`; fehlt das, fällt space.py auf `maxdisk` aus `/cluster/resources` zurück."""
         kind = "lxc" if guest_type == "lxc" else "qemu"
         return await self._request("GET", f"/nodes/{node}/{kind}/{vmid}/config") or {}
 
     async def list_tasks(self, *, limit: int = 500) -> list[dict[str, Any]]:
-        """Backup-Tasks (`vzdump`) aus dem VOLLSTAENDIGEN Task-Verlauf jedes Knotens
-        (`GET /nodes/{node}/tasks?typefilter=vzdump&source=all`).
-
-        **Live gefunden (ein laufendes Backup stand auf "unbekannt"):** vorher
-        `GET /cluster/tasks` -- das ist ein RINGPUFFER der letzten
-        ~25 Tasks des ganzen Knotens. Jede Konsolen-Oeffnung (vncproxy), jeder
-        VM-Start legt dort einen Eintrag an; auf pve1 waren 17 von 25 Eintraegen
-        vncproxy, kein einziger vzdump mehr -- ein gesundes Backup wurde als
-        "unbekannt" gemeldet, abhaengig davon, wie viel sonst auf dem Knoten los war.
-        Der Knoten-Endpunkt liest den vollen Task-Index und filtert serverseitig.
-        `source=all`: sonst fehlen gerade LAUFENDE Backups (Default ist nur das
-        Archiv abgeschlossener Tasks).
-
-        Ein nicht erreichbarer Knoten wird uebersprungen, nicht zum Fehler fuer alle
-        anderen."""
+        """Backup-Tasks (`vzdump`) aller Knoten; ein nicht erreichbarer Knoten wird übersprungen."""
+        # Nicht `/cluster/tasks`: das ist ein Ringpuffer der letzten ~25 Tasks, in dem Konsolen (vncproxy) und
+        # VM-Starts die vzdump-Einträge verdrängen, ein gesundes Backup stünde dann auf „unbekannt“. Der
+        # Knoten-Endpunkt liest den vollen Index und filtert serverseitig; `source=all`, sonst fehlen laufende
+        # Backups (Standard ist nur das Archiv beendeter Tasks).
         nodes = await self._request("GET", "/nodes") or []
         tasks: list[dict[str, Any]] = []
         for entry in nodes:
@@ -225,16 +192,10 @@ class ProxmoxBackupConnector:
     async def run_vzdump(
         self, node: str, vmid: str, *, storage: str | None = None, options: dict[str, Any] | None = None
     ) -> str:
-        """`POST /nodes/{node}/vzdump` -- startet einen sofortigen Backup-Lauf fuer
-        EINE VMID. Gibt die UPID (Proxmox-Task-Kennung) zurueck. **Ehrlich
-        abgegrenzt** (wie proxmoxs `qemu_action()`): wartet NICHT auf Abschluss des
-        Tasks -- ein Erfolg hier heisst "Proxmox hat den Auftrag angenommen", nicht
-        "das Backup ist fertig".
+        """`POST /nodes/{node}/vzdump`: startet sofort einen Lauf für eine VMID und gibt die UPID zurück.
 
-        `options` sind die Einstellungen des Jobs (nur die Schluessel aus job_edit). Eine
-        Aufbewahrung wird immer mitgeschickt: fehlt sie, gilt `keep-all=1`. Ohne sie raeumt
-        Proxmox nach der Regel des Speichers auf und kann Sicherungen loeschen, die der Job
-        behalten haette."""
+        Wartet nicht auf das Ende: Erfolg heißt nur „Proxmox hat den Auftrag angenommen“."""
+        # `options` sind die Einstellungen des Jobs, es gehen nur Schlüssel aus job_edit mit.
         payload: dict[str, Any] = {"vmid": vmid}
         allowed = (*VZDUMP_JOB_KEYS, *VZDUMP_RETENTION_KEYS)
         for key, value in (options or {}).items():
@@ -242,6 +203,8 @@ class ProxmoxBackupConnector:
                 payload[key] = value
         if storage and "storage" not in payload:
             payload["storage"] = storage
+        # Die Aufbewahrung geht immer mit, fehlt sie, gilt `keep-all=1`. Sonst räumt Proxmox nach der Regel des
+        # Speichers auf und kann Sicherungen löschen, die der Job behalten hätte.
         if "prune-backups" not in payload and "maxfiles" not in payload:
             payload["prune-backups"] = "keep-all=1"
         return await self._request("POST", f"/nodes/{node}/vzdump", data=payload)
@@ -249,14 +212,14 @@ class ProxmoxBackupConnector:
     # --- Wiederherstellen als Kopie (restore.py) -------------------------------------------------
 
     async def guest_backup_files(self, node: str, storage: str, vmid: str) -> list[dict[str, Any]]:
-        """Nur die Sicherungen EINES Gastes auf einem Speicher (Proxmox filtert selbst nach `vmid`)."""
+        """Nur die Sicherungen eines Gastes auf einem Speicher (Proxmox filtert nach `vmid`)."""
         return await self._request(
             "GET", f"/nodes/{node}/storage/{storage}/content",
             params={"content": "backup", "vmid": vmid}, timeout=30.0,
         ) or []
 
     async def guest_storages(self, node: str, content: str) -> list[dict[str, Any]]:
-        """Speicher des Knotens, die `content` (`images` fuer VMs, `rootdir` fuer Container) aufnehmen."""
+        """Speicher des Knotens, die `content` (`images` für VMs, `rootdir` für Container) aufnehmen."""
         return await self._request("GET", f"/nodes/{node}/storage", params={"content": content, "enabled": 1}) or []
 
     async def storage_status(self, node: str, storage: str) -> dict[str, Any]:
@@ -268,8 +231,8 @@ class ProxmoxBackupConnector:
         return int(value) if str(value).isdigit() else None
 
     async def vmid_is_free(self, vmid: int) -> bool:
-        """`GET /cluster/nextid?vmid=N`: Proxmox antwortet mit N, wenn die Nummer im ganzen Cluster frei
-        ist, sonst mit 400 ("VM N already exists"). Sieht auch Gaeste, die der Token nicht lesen darf."""
+        """`GET /cluster/nextid?vmid=N`: Proxmox antwortet mit N, wenn die Nummer im ganzen Cluster frei ist, sonst
+        mit 400. Sieht auch Gäste, die der Token nicht lesen darf."""
         try:
             value = await self._request("GET", "/cluster/nextid", params={"vmid": vmid})
         except ProxmoxBackupApiError as exc:
@@ -284,9 +247,9 @@ class ProxmoxBackupConnector:
         return value if isinstance(value, str) else ""
 
     async def restore_guest(self, node: str, kind: str, params: dict[str, Any]) -> str:
-        """`POST /nodes/{n}/qemu` bzw. `/lxc` mit Sicherung -> UPID. Nur die Schluessel aus `RESTORE_KEYS`; `force`
-        (ueberschreibt einen vorhandenen Gast), `start` und `live-restore` gehen hier nie mit, egal, was ankommt.
-        Der Pool ist immer `COPY_POOL`, auch wenn `params` einen anderen nennt."""
+        """`POST /nodes/{n}/qemu` bzw. `/lxc` mit Sicherung, gibt die UPID zurück.
+
+        Nur Schlüssel aus `RESTORE_KEYS` (nie `force`, `start`, `live-restore`); der Pool ist immer `COPY_POOL`."""
         allowed = RESTORE_KEYS["lxc" if kind == "lxc" else "qemu"]
         payload = {key: value for key, value in params.items() if key in allowed}
         payload["pool"] = COPY_POOL
@@ -294,34 +257,38 @@ class ProxmoxBackupConnector:
         return await self._request("POST", path, data=payload)
 
     async def task_status(self, node: str, upid: str) -> dict[str, Any]:
+        # Die UPID landet im Pfad, daher vorher gegen das feste Muster prüfen.
         if not UPID_RE.fullmatch(upid):
             raise ProxmoxBackupApiError("Ungültige Aufgaben-Kennung von Proxmox.")
         return await self._request("GET", f"/nodes/{node}/tasks/{upid}/status") or {}
 
     async def task_log(self, node: str, upid: str, *, limit: int = TASK_LOG_LINES) -> list[str]:
-        """Das Protokoll einer Aufgabe als Zeilen (`GET /nodes/{node}/tasks/{upid}/log`, hoechstens `limit` Zeilen).
-        Fuer fremde Aufgaben wie die naechtlichen Backups braucht der Zugang `Sys.Audit` auf dem Knoten."""
+        """Das Protokoll einer Aufgabe als Zeilen (`GET /nodes/{node}/tasks/{upid}/log`, höchstens `limit`).
+
+        Für fremde Aufgaben wie die nächtlichen Backups braucht der Zugang `Sys.Audit` auf dem Knoten."""
+        # UPID und Knotenname landen im Pfad, daher vorher gegen feste Muster prüfen.
         if not UPID_RE.fullmatch(upid) or not NODE_RE.fullmatch(node):
             raise ProxmoxBackupApiError("Ungültige Aufgaben-Kennung von Proxmox.")
         rows = await self._request("GET", f"/nodes/{node}/tasks/{upid}/log", params={"start": 0, "limit": limit}) or []
         return [str(row.get("t") or "") for row in rows if isinstance(row, dict)]
 
     async def restore_tasks(self, node: str, vmid: int, worker: str) -> list[dict[str, Any]]:
-        """Wiederherstellungs-Aufgaben (`qmrestore`/`vzrestore`) fuer eine Nummer -- um eine Kopie wiederzufinden,
-        deren Aufgaben-Kennung nie ankam (Verbindung beim Anlegen abgerissen)."""
+        """Wiederherstellungs-Aufgaben (`qmrestore`/`vzrestore`) zu einer Nummer, um eine Kopie wiederzufinden,
+        deren Kennung nie ankam (Verbindung beim Anlegen abgerissen)."""
         return await self._request(
             "GET", f"/nodes/{node}/tasks", params={"typefilter": worker, "vmid": vmid, "source": "all", "limit": 50},
         ) or []
 
     async def update_guest_config(self, node: str, kind: str, vmid: str, params: dict[str, Any]) -> Any:
-        """`PUT .../config` -- nur fuer die neu angelegte Kopie (restore.py prueft die Nummer vorher) und nur die
-        Schluessel, die das Fertig-Einrichten braucht (`FINISH_KEYS`, Netzwerkkarten `net<N>`)."""
+        """`PUT .../config` nur für die neu angelegte Kopie (restore.py prüft die Nummer vorher) und nur mit den
+        Schlüsseln aus `FINISH_KEYS` und `net<N>`."""
         payload = {k: v for k, v in params.items() if k in FINISH_KEYS or NET_KEY_RE.fullmatch(k)}
         return await self._request("PUT", f"/nodes/{node}/{'lxc' if kind == 'lxc' else 'qemu'}/{vmid}/config", data=payload)
 
     async def permissions(self, path: str) -> dict[str, Any]:
-        """Die eigenen, wirksamen Rechte des Tokens auf `path` (`GET /access/permissions`, darf jeder fuer sich selbst):
-        `{"VM.Allocate": 1, ...}`; leer, wenn er dort keine hat."""
+        """Die wirksamen Rechte des Tokens auf `path` (`GET /access/permissions`, jeder darf das für sich selbst).
+
+        Ergebnis wie `{"VM.Allocate": 1, ...}`, leer ohne Rechte."""
         data = await self._request("GET", "/access/permissions", params={"path": path}) or {}
         rights = data.get(path) if isinstance(data, dict) else None
         return rights if isinstance(rights, dict) else {}
@@ -331,7 +298,7 @@ class ProxmoxBackupConnector:
         return str(data.get("version") or "") if isinstance(data, dict) else ""
 
     async def ha_resources(self) -> list[dict[str, Any]]:
-        """`GET /cluster/ha/resources` (`Sys.Audit` auf `/`): HA-Regeln, die einen Gast von selbst starten koennen."""
+        """`GET /cluster/ha/resources` (`Sys.Audit` auf `/`): HA-Regeln, die einen Gast von selbst starten können."""
         return await self._request("GET", "/cluster/ha/resources") or []
 
 
@@ -339,20 +306,19 @@ UPID_RE = re.compile(
     r"UPID:[A-Za-z0-9-]+:[0-9A-Fa-f]{8,16}:[0-9A-Fa-f]{8,16}:[0-9A-Fa-f]{8,16}:[A-Za-z0-9_-]+:[A-Za-z0-9_.-]*:[^\s:/?#%]+:"
 )
 """Aufgaben-Kennung von Proxmox (`UPID:<knoten>:<pid>:<pstart>:<start>:<art>:<nummer>:<benutzer>:`). Sie landet im Pfad
-einer Anfrage -- nichts, was den Pfad verlassen oder eine Abfrage anhaengen koennte (`/`, `?`, `#`, `%`)."""
+einer Anfrage, darum nichts, was den Pfad verlassen oder eine Abfrage anhängen könnte (`/`, `?`, `#`, `%`)."""
 NET_KEY_RE = re.compile(r"net\d+")
 FINISH_KEYS = frozenset({"onboot", "name", "hostname", "description", "digest"})
 
 COPY_POOL = "nodvard-kopien"
-"""Der Pool, in dem jede Kopie entsteht. Fest, nie aus einer Anfrage oder aus dem Payload der Aktion: Dem Zugang
-gehoert `VM.Allocate` nur auf diesem Pool, so kann Nodvard Deck nirgends sonst einen Gast anlegen. Dieselbe
-Bezeichnung nutzt die Einrichtung "Proxmox mit Passwort verbinden" in der proxmox-Erweiterung, die den Pool und
-die Rechte anlegt -- bewusst kein Import zwischen den Erweiterungen, beide tragen den Namen selbst ein."""
+"""Der Pool, in dem jede Kopie entsteht. Fest, nie aus einer Anfrage oder dem Payload der Aktion: der Zugang hat
+`VM.Allocate` nur auf diesem Pool, so kann Nodvard Deck nirgends sonst einen Gast anlegen. Die Proxmox-Erweiterung
+legt Pool und Rechte an und trägt denselben Namen selbst ein (kein Import zwischen Erweiterungen)."""
 
 RESTORE_KEYS: dict[str, frozenset[str]] = {
     "qemu": frozenset({"vmid", "archive", "storage", "unique", "name", "onboot", "pool"}),
     "lxc": frozenset({"vmid", "ostemplate", "restore", "storage", "unique", "hostname", "onboot", "pool"}),
 }
-"""Was beim Wiederherstellen als Kopie an Proxmox geht. `pool` ist immer `COPY_POOL` (`restore_guest` setzt es selbst).
-Bewusst NICHT dabei: `force` (wuerde einen vorhandenen Gast mit derselben Nummer ueberschreiben), `start`,
-`live-restore`, `ha-managed`."""
+"""Was beim Wiederherstellen als Kopie an Proxmox geht; `pool` setzt `restore_guest` selbst auf `COPY_POOL`.
+Bewusst nicht dabei: `force` (überschriebe einen vorhandenen Gast mit derselben Nummer), `start`, `live-restore`,
+`ha-managed`."""

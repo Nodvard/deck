@@ -1,0 +1,3 @@
+[[entries]]
+kind = "neu"
+text = "Tresor: Hat ein gespeicherter Zugang (etwa ein Token) ein Ablaufdatum, erinnert das Dashboard 14 und 3 Tage vorher daran. Ist er abgelaufen, gibt es eine Warnung, die auch auf der Startseite steht."

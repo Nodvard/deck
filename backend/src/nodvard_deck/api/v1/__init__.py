@@ -1,30 +1,6 @@
-"""Aggregation aller /api/v1-Router.
+"""Fasst alle `/api/v1`-Router zusammen.
 
-WP-0 lieferte `public`, WP-1 ergaenzt `auth` + `me`, WP-2 ergaenzt `secrets`
-(Metadaten, nie Werte) + `audit` (Filter + NDJSON-Export), WP-3 ergaenzt `extensions`
-(Registry) + `catalog` (`/pages`, `/widgets`), WP-4 ergaenzt `hosts`
-(Hosts/Gruppen/Zugangsdaten) + `terminal` (Session-Ticket + WS-Bruecke), WP-5 ergaenzt
-`actions` (Gate-Journal: Liste/Details/Entscheiden -- der host-gebundene Katalog+
-Ausloeser liegt weiterhin in `hosts.router`) + `settings` (globale Autonomie-/
-Sperrlisten-Einstellungen, Gap-Fill siehe dortiger Modul-Docstring), WP-6 ergaenzt
-`jobs` (Zeitplan + Laeufe), `notifications` (Notification-Center) + `ws` (der
-generische WS-Multiplex-Hub aus docs/04 §4). WP-7 ergaenzt `dashboard`
-(Layout-Persistenz pro Nutzer) + ein `GET /extensions/{id}/frontend/index.js` direkt
-in `extensions.router` (ESM-Bundle-Auslieferung, docs/02 §5). WP-11 ergaenzt `files`
-(Dateimanager: Quellen-Fan-out ueber `FileSourceProvider`, Transfer zwischen Quellen).
-WP-13 ergaenzt `branding` (`PUT /branding` -- der Erstinbetriebnahme-Assistent im
-Web-Frontend braucht einen Schreibweg, `GET /branding` in `public.router` bleibt
-unveraendert). Eine seit WP-1 offene Luecke schliesst `users`
-(Nutzerverwaltung: Anlegen/Aendern/Entfernen weiterer Accounts, Rollenzuweisung --
-`POST /auth/bootstrap` deckte bis dahin nur den allerersten Nutzer ab). Die
-Konsole ergaenzt `console` (Bildschirm einer VM/eines Containers ueber
-die `ConsoleTarget`-Capability, Einmal-Ticket + WS-Bruecke wie beim Terminal).
-Die eigenen App-Kacheln ergaenzen `apps` (`/apps`, "+ App hinzufuegen" im Cockpit; die
-Zusammenfuehrung mit den erkannten Diensten steht in `overview`).
-Das Aenderungsprotokoll ergaenzt `changelog` (`GET /app/changelog`, fuer die Seite "Ueber
-Nodvard Deck"). Die Sicherungen ergaenzen `system` (Infos, Sicherungen; Kritisches nur fuer den Owner).
-Extension-eigene Router (`/api/v1/ext/<id>/...`) werden NICHT hier, sondern dynamisch
-von `ext.runtime.ExtensionRuntime.mount_router()` an- und abgemontiert.
+Router der Erweiterungen (`/api/v1/ext/<id>/...`) hängt `ExtensionRuntime.mount_router()` dynamisch ein und aus.
 """
 
 from __future__ import annotations

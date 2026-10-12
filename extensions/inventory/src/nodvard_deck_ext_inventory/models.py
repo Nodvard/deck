@@ -1,33 +1,21 @@
-"""SQLAlchemy-Modelle der inventory-Extension -- eigene `Base`/`MetaData`,
-UNABHAENGIG von `nodvard_deck.models.Base`, damit die Trennung zum eigenen
-Alembic-Branch (docs/02-EXTENSION-API.md §7, `migrations/versions/`) auch auf
-ORM-Ebene sichtbar bleibt: `DbHandle.declare_tables(Base.metadata)`
-(`__init__.py::setup()`) validiert GENAU diese Metadata gegen den Pflicht-Praefix
-`ext_inventory_`, nicht die des Kerns.
+"""SQLAlchemy-Modelle des Inventars mit eigener `Base`, unabhängig von der des Kerns (eigener Alembic-Zweig).
 
-Wiederverwendet aus dem Kern (reine, `Base`-unabhaengige Hilfsmittel, kein
-Core-Purity-Verstoss -- dieselbe Zugriffsrichtung wie `ctx.db.session()`, nicht
-umgekehrt): `IdMixin` (zeitsortierte UUID-Strings, `db/base.py::new_id()`),
-`UTCDateTime` (dieselbe SQLite-Rundreise-Garantie, die WP-1 bereits einmal live
-gefunden hat -- kein Grund, denselben Bug hier ein zweites Mal zu finden). Jede
-Spalte hier hat ihre Entsprechung 1:1 in `migrations/versions/` (Anlage:
-`a1b2c3d4e5f6_create_inventory_tables.py`, Baukasten: `c7d8e9f0a1b2_inventory_baukasten.py`)
--- Modell und Migration muessen zusammen geaendert werden.
-
-`Item.project_id`, `Item.rack_id` und `Item.host_id` haben bewusst keinen Fremdschluessel (Begruendung in
-der Baukasten-Migration); das Loeschen eines Projekts oder Racks setzt die Verweise in `__init__.py` auf NULL.
+Jede Spalte entspricht 1:1 der Migration (ein Test vergleicht beide per `compare_metadata`): nur zusammen ändern.
 """
 
 from __future__ import annotations
 
 from datetime import date, datetime
 
+# Aus dem Kern nur Hilfsmittel ohne Bezug zu seiner `Base`: `IdMixin` (zeitsortierte UUID-Strings) und `UTCDateTime`
+# (verlustfreie Rundreise der Zeitzone durch SQLite).
 from nodvard_deck.db.base import IdMixin, UTCDateTime, utcnow
 from sqlalchemy import Date, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
 class Base(DeclarativeBase):
+    # Eigene Metadaten: `declare_tables(Base.metadata)` prüft genau sie auf den Pflicht-Präfix `ext_inventory_`.
     pass
 
 
@@ -63,15 +51,12 @@ class Item(Base, IdMixin):
     )
     quantity: Mapped[int] = mapped_column(Integer(), default=1)
     purchase_date: Mapped[date | None] = mapped_column(Date())
-    # Geldbetrag als Cent-Ganzzahl, nicht Float -- keine Rundungsfehler bei
-    # Preisangaben, dieselbe Haltung wie ueberall sonst in diesem Projekt (D-02:
-    # dialektneutrale, portable Typen; ein `Numeric` mit fester Präzision wäre die
-    # Alternative gewesen, Cent-Integer ist die einfachste, die keinen zusätzlichen
-    # Typ-Kommentar für SQLite vs. Postgres braucht).
+    # Geldbetrag als Cent-Ganzzahl, nicht Float: keine Rundungsfehler, und der Typ ist auf jeder Datenbank gleich.
     purchase_price_cents: Mapped[int | None] = mapped_column(Integer())
     warranty_until: Mapped[date | None] = mapped_column(Date())
     notes: Mapped[str | None] = mapped_column(Text())
-    # Homelab-Baukasten: woran man ein Teil erkennt, wo es hingehört und wo es steckt.
+    # Homelab-Baukasten: woran man ein Teil erkennt, wo es hingehört und wo es steckt. `project_id`, `rack_id` und
+    # `host_id` haben bewusst keinen Fremdschlüssel; das Löschen eines Projekts oder Racks setzt die Verweise auf NULL.
     manufacturer: Mapped[str | None] = mapped_column(String(200))
     model: Mapped[str | None] = mapped_column(String(200))
     serial_number: Mapped[str | None] = mapped_column(String(200))
@@ -115,15 +100,12 @@ class Rack(Base, IdMixin):
 
 
 class ItemImage(Base, IdMixin):
-    """**Bewusst keine ORM-`relationship()`** zu `Item` (weder hier noch umgekehrt) --
-    das Loeschen kaskadiert bereits auf DB-Ebene (`ondelete="CASCADE"` oben,
-    `PRAGMA foreign_keys=ON` global aktiv, `db/session.py`). Bilder eines Items werden
-    stattdessen immer explizit per eigener Query geladen (`__init__.py::_images_for()`)
-    -- vermeidet die in diesem Projekt mehrfach real aufgetretene `lazy="selectin"`-
-    Falle (docs/00-DECISIONS.md D-12: laedt zuverlaessig nur bei einer frischen
-    `select()`-Query, nicht nach `session.get()` auf ein bereits identity-gemapptes
-    oder gerade erst angelegtes Objekt) komplett, statt sie hier ein weiteres Mal zu
-    riskieren."""
+    """Bild eines Gegenstands; die Datei liegt auf der Platte (`images.py`), hier stehen nur Metadaten."""
+
+    # Bewusst keine `relationship()` zu `Item`: das Löschen kaskadiert auf Datenbankebene (`ondelete="CASCADE"`,
+    # `PRAGMA foreign_keys=ON`), die Bilder werden immer per eigener Query geladen (`_images_for()` in `__init__.py`).
+    # `lazy="selectin"` lädt nur bei einer frischen `select()`-Query zuverlässig, nicht nach `session.get()` auf ein
+    # schon gemapptes oder gerade angelegtes Objekt.
 
     __tablename__ = "ext_inventory_item_images"
 

@@ -1,13 +1,5 @@
-"""system-Extension (Roadmap Punkt 3: "Linux-Hosts per SSH"): der Zustand eines
-Linux-Servers auf einer Seite -- Betriebssystem, Auslastung, Platten, fehlgeschlagene
-Dienste, ausstehende Updates, Neustart noetig. Fuer jeden Host mit SSH-Zugang, egal ob
-Proxmox-Gast, Raspberry Pi oder gemieteter Server (herstellerneutral).
-
-Lesend, bis auf EINE Aktion: "Dienst neu starten" (actions.py). Sie geht wie bei den
-anderen Erweiterungen als Vorschlag ans Aktions-Gate (`ctx.actions.propose`), ausgefuehrt
-erst nach Freigabe. Alles Lesende laeuft ueber `ctx.exec.run()` wie jedes andere
-SSH-Kommando und braucht deshalb `hosts.execute` -- dieselbe Stufe wie Logs und Terminal.
-"""
+"""system-Extension: der Zustand eines Linux-Servers mit SSH-Zugang auf einer Seite (Auslastung, Platten, Dienste,
+Updates)."""
 
 from __future__ import annotations
 
@@ -44,15 +36,15 @@ from .live import LIVE_SCRIPT, metrics_from_live, parse_live
 from .sysinfo import SCRIPT, apply_thresholds, parse_system_info, summary_findings
 from .warnung import DEFAULT_DISK_PERCENT, DEFAULT_INTERVAL_MIN, DEFAULT_TEMP_C, run_warnungen
 
+# Das Lesende läuft über `ctx.exec.run()` und braucht deshalb `hosts.execute`; schreibend ist nur „Dienst neu starten“
+# (`actions.py`), als Vorschlag ans Aktions-Gate.
 _WIDGET_CACHE_S = 300
 _TONE_ORDER = {"danger": 0, "warn": 1, "good": 2}
 
 
 class WidgetCache:
-    """Zwischenspeicher des Widgets „Server-Zustand“ (siehe `health_widget`).
-
-    Er gilt nur, solange dieselben Server da sind (`key`): Ein neuer Server oder ein neu hinterlegter Zugang soll
-    nicht bis zu fünf Minuten lang fehlen („Keine Linux-Server mit SSH-Zugang“, obwohl gerade einer angelegt wurde)."""
+    """Zwischenspeicher des Widgets „Server-Zustand“; gilt nur, solange `key` (die Serverliste) gleich bleibt."""
+    # Ein neuer Server oder Zugang soll nicht bis zu fünf Minuten fehlen.
 
     def __init__(self, ttl_s: float) -> None:
         self._ttl_s = ttl_s
@@ -74,8 +66,7 @@ def hosts_key(hosts: list[Any]) -> tuple[tuple[str, str, str], ...]:
 
 
 def error_text(exc: BaseException) -> str:
-    """Warum ein Server nicht antwortet, in einem Satz für Menschen. Ausnahmen wie `TimeoutError` haben oft
-    keinen Text: Der Klassenname („TimeoutError“) hilft niemandem."""
+    """Warum ein Server nicht antwortet, in einem Satz; Ausnahmen wie `TimeoutError` haben oft keinen Text."""
     if isinstance(exc, TimeoutError):  # auch asyncio.TimeoutError (seit Python 3.11 derselbe Typ)
         return "keine Antwort innerhalb der Zeitgrenze – ist der Server an?"
     if isinstance(exc, ConnectionRefusedError):
@@ -88,8 +79,7 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
     name = host.display_name or host.name
     if info is None:
         return {"name": name, "host_id": host.id, "summary": error or "nicht erreichbar", "badge": "nicht erreichbar", "tone": "danger"}
-    # Stabil nach Schwere sortiert: der Text kam sonst vom ERSTEN Befund
-    # (Platten stehen vor Diensten), der Ton aber vom schlimmsten.
+    # Nach Schwere sortiert, damit Text und Ton vom selben (schlimmsten) Eintrag kommen.
     findings = sorted(info["findings"], key=lambda f: _TONE_ORDER.get(f["tone"], 2))
     tone = findings[0]["tone"] if findings else "good"
     mem_total, mem_available = info.get("mem_total"), info.get("mem_available")
@@ -99,7 +89,7 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
         "summary": findings[0]["text"] if findings else f"{info.get('os') or 'Linux'} – alles in Ordnung",
         "badge": "OK" if not findings else f"{len(findings)} Befund{'e' if len(findings) > 1 else ''}",
         "tone": tone,
-        # Auslastung zum Zeitpunkt der Abfrage (fuer die Server-Kacheln der Seite „Server-Zustand“); None, wenn unbekannt.
+        # Auslastung zur Zeit der Abfrage (für die Server-Kacheln); None, wenn unbekannt.
         "cpu_percent": info.get("cpu_percent"),
         "mem_percent": (
             round(100 * (mem_total - mem_available) / mem_total)
@@ -110,13 +100,9 @@ def widget_row(host: Any, info: dict[str, Any] | None, error: str | None) -> dic
 
 
 class SshMetricsProvider:
-    """Erfuellt `MetricsProvider` fuer Linux-Hosts OHNE eigenen Anbieter (z. B. den Pi).
-
-    Eine Messung = ein SSH-Aufruf mit dem Live-Skript (live.py, ~1 s wegen der
-    Raten). Das Ergebnis dient drei Lesern: der Live-Ansicht (alle paar Sekunden,
-    solange jemand hinschaut), den Live-Ringen der Server-Seite und dem Verlaufs-
-    Sammler des Kerns (alle 30 s). Kurz zwischengespeichert, damit sie sich eine
-    Messung teilen statt den Host mehrfach parallel abzufragen."""
+    """Messwerte für Linux-Server ohne eigenen Anbieter: ein SSH-Aufruf mit dem Live-Skript (etwa 1 s wegen der Raten)."""
+    # Live-Ansicht, Live-Ringe der Server-Seite und der Verlaufs-Sammler des Kerns teilen sich eine kurz
+    # zwischengespeicherte Messung, statt den Server mehrfach parallel abzufragen.
 
     _LIVE_CACHE_S = 2.5
     _SAMPLE_CACHE_S = 10
@@ -140,7 +126,7 @@ class SshMetricsProvider:
     async def live(self, host: Any, *, max_age_s: float | None = None) -> dict[str, Any]:
         max_age = self._LIVE_CACHE_S if max_age_s is None else max_age_s
         lock = self._locks.setdefault(host.id, asyncio.Lock())
-        async with lock:  # gleichzeitige Leser warten auf DIESELBE Messung
+        async with lock:  # gleichzeitige Leser warten auf dieselbe Messung
             cached = self._cache.get(host.id)
             if cached and time.monotonic() - cached[0] < max_age:
                 return cached[1]
@@ -157,8 +143,7 @@ class SshMetricsProvider:
 
 
 class SystemFilePlaces:
-    """Erfuellt `FilePlaceProvider`: bei einem Linux-Server mit SSH-Zugang der Ordner der Systemprotokolle.
-    `/var/log` gibt es auf jedem Linux-System; dafuer braucht es keine Abfrage des Servers."""
+    """Bietet bei einem Linux-Server mit SSH-Zugang `/var/log` an; das gibt es überall, es braucht keine Abfrage."""
 
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
@@ -170,11 +155,10 @@ class SystemFilePlaces:
         return [FilePlace(label="Protokolle", path="/var/log", icon="file-text", hint="Systemprotokolle dieses Servers")]
 
 
-_NEVER = "0 0 31 2 *"  # 31. Februar -- der Job existiert, laeuft aber nie (Warnungen aus)
+_NEVER = "0 0 31 2 *"  # 31. Februar: der Job existiert, läuft aber nie (Warnungen aus)
 
-
-# Nur Teiler von 60 laufen als `*/N` gleichmaessig (`*/7` liefe um :56 und gleich wieder um :00); die Einstellung bietet
-# nur diese an, ein Wert von frueher wird auf den naechstkleineren gesetzt.
+# Nur Teiler von 60 laufen als `*/N` gleichmäßig (`*/7` liefe um :56 und gleich wieder um :00); ein anderer Wert wird
+# auf den nächstkleineren gesetzt.
 _MINUTE_STEPS = (5, 6, 10, 12, 15, 20, 30)
 
 
@@ -184,8 +168,7 @@ def warn_interval_min(settings: dict[str, Any]) -> int:
 
 
 class _WarnJobSpec:
-    """Platte fast voll / Temperatur zu hoch als Meldung (warnung.py). Zeitplan und
-    Schalter kommen aus den Einstellungen; `register_job` ist ein Upsert ueber die ID."""
+    """Job für die Warnungen (Platte fast voll, Temperatur zu hoch); Zeitplan und Schalter kommen aus den Einstellungen."""
 
     id = "warnung"
     name = "Warnungen: Platte und Temperatur"
@@ -202,7 +185,7 @@ class _WarnJobSpec:
 
 
 def _thresholds(settings: dict[str, Any]) -> tuple[int, int]:
-    """(Plattenschwelle %, Temperaturschwelle °C) fuer die Anzeige -- dieselben Werte wie die Warnungen."""
+    """(Plattenschwelle %, Temperaturschwelle °C), dieselben Werte wie bei den Warnungen."""
     return int(settings.get("warn_disk_percent") or DEFAULT_DISK_PERCENT), int(settings.get("warn_temp_c") or DEFAULT_TEMP_C)
 
 
@@ -223,6 +206,8 @@ class Extension(NodvardExtension):
 
         async def _query(host: Any) -> dict[str, Any]:
             try:
+                # Das äußere Zeitlimit (25 s) liegt über dem des SSH-Aufrufs (20 s), damit auch ein hängender
+                # Verbindungsaufbau endet.
                 result = await asyncio.wait_for(ctx.exec.run(host, SCRIPT, timeout_s=20), timeout=25)
             except Exception as exc:  # noqa: BLE001 - ein Host darf die anderen nicht verstecken
                 return widget_row(host, None, f"nicht erreichbar: {error_text(exc)}")
@@ -235,9 +220,8 @@ class Extension(NodvardExtension):
 
         @router.get("/widgets/health")
         async def health_widget() -> dict:
-            """Alle Linux-Hosts mit SSH-Zugang, schlimmster zuerst. 5 min zwischengespeichert:
-            je Host ein SSH-Aufruf mit 1 s CPU-Messung -- nicht bei jedem Dashboard-Refresh.
-            Ändert sich die Serverliste (neuer Server, neuer Zugang), gilt der Speicher nicht mehr."""
+            """Alle Linux-Server mit SSH-Zugang, schlimmster zuerst; fünf Minuten zwischengespeichert."""
+            # Je Server ein SSH-Aufruf mit 1 s CPU-Messung, das soll nicht bei jedem Refresh laufen.
             now = time.monotonic()
             hosts = [h for h in await ctx.hosts.list() if h.os_family == "linux" and h.has_credential]
             key = hosts_key(hosts)
@@ -251,8 +235,8 @@ class Extension(NodvardExtension):
 
         @router.get("/hosts/{host_id}/live")
         async def host_live(host_id: str) -> dict:
-            """Task-Manager-Ansicht: pro Kern, Takt, Temperaturen, RAM-Aufschluesselung,
-            jede Platte/Netzwerkkarte, Dateisysteme, Top-Prozesse (live.py)."""
+            """Task-Manager-Ansicht: Kerne, Takt, Temperaturen, RAM, Platten, Netzwerkkarten, Dateisysteme,
+            Top-Prozesse."""
             host = await ctx.hosts.get(host_id)
             if host is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
@@ -282,10 +266,8 @@ class Extension(NodvardExtension):
             apply_thresholds(info, *_thresholds(await ctx.settings.get()))
             info["findings"] = summary_findings(info)
             units = list(dict.fromkeys([*info["failed_units"], *info["running_units"]]))
-            # Docker/containerd nur anbieten, wo dort nicht das Dashboard laeuft -- wie die
-            # Route, aber vor dem Knopf statt erst nach der Rueckfrage.
-            # Die Abfrage nur, wenn so eine Einheit ueberhaupt in der Liste steht; "nicht
-            # feststellbar" zaehlt als gesperrt.
+            # Docker und containerd nur anbieten, wo dort nicht das Dashboard läuft (wie die Route, aber schon vor dem
+            # Knopf). Gefragt wird nur, wenn so eine Einheit in der Liste steht; „nicht feststellbar“ gilt als gesperrt.
             dashboard = await is_dashboard_host(ctx, host) if any(needs_dashboard_check(u) for u in units) else False
             info["restartable_units"] = [u for u in units if is_restartable(u, dashboard_host=dashboard)]
             info["host"] = {"id": host.id, "name": host.display_name or host.name, "address": host.address}
@@ -329,8 +311,8 @@ class Extension(NodvardExtension):
             description="Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse – dazu Dienste und Updates",
             path="/system?host={host_id}", os_families=["linux"], permissions=["hosts.execute"], order=50,
         ))
-        # Dienste neu starten geht ueber `sudo -n` (actions.as_root) -- der Einrichtungsbefehl
-        # bietet dafuer "Root-Rechte ohne Passwort" an, "Verbindung pruefen" testet es.
+        # Dienste neu starten geht über `sudo -n` (`actions.as_root`); der Einrichtungsbefehl bietet dafür „Root-Rechte
+        # ohne Passwort“ an, „Verbindung prüfen“ testet es.
         ctx.ui.register_host_requirement(HostRequirementSpec(
             id="root", label="Root-Rechte (Server-Zustand)", needs_root=True, root_reason="Dienste neu starten", order=20,
         ))

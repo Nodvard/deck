@@ -1,11 +1,6 @@
-"""Prozessspeicher-Zustand des Extension-Hosts: UI-Katalog, Capabilities, geladene
-Extensions, Router-Montage, ueberwachte Hintergrundtasks.
+"""Flüchtiger Zustand des Extension-Hosts: UI-Katalog, Capabilities, geladene Extensions, Router, Hintergrundtasks.
 
-Analog zu `core/events.py`: ein Singleton mit `get_extension_runtime()`/
-`reset_extension_runtime()` fuers Testen. Die Registry-TABELLE (`ExtensionRecord`,
-dauerhaft, in der DB) und dieser RUNTIME-Zustand (fluechtig, Prozessspeicher) sind
-bewusst getrennt: die DB sagt, was ENABLED sein SOLL, die Runtime, was gerade
-tatsaechlich laeuft. `main.py`s Lifespan bringt beide beim Boot in Deckung.
+Die Registry-Tabelle sagt, was aktiv sein soll, dieser Zustand, was gerade läuft; der Lifespan bringt beide in Deckung.
 """
 
 from __future__ import annotations
@@ -24,11 +19,6 @@ from starlette.routing import BaseRoute
 logger = logging.getLogger("nodvard_deck.ext")
 
 
-# ---------------------------------------------------------------------------
-# UI-Katalog -- Seiten, Widgets, Navigation je Extension
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class NavEntry:
     ext_id: str
@@ -38,9 +28,7 @@ class NavEntry:
 
 
 class UiRegistry:
-    """Nur Bestand, keine Logik. `clear_extension()` ist der Grund, warum Deaktivieren
-    ohne Neustart funktioniert: der Katalog ist reiner Prozessspeicher, kein
-    FastAPI-Zustand, der erst beim naechsten Boot neu aufgebaut wuerde."""
+    """Bestand an Seiten, Widgets und Host-Angaben; `clear_extension()` macht Deaktivieren ohne Neustart möglich."""
 
     def __init__(self) -> None:
         self._pages: dict[str, list[PageSpec]] = {}
@@ -55,14 +43,13 @@ class UiRegistry:
         self._widgets.setdefault(ext_id, []).append(spec)
 
     def register_host_tool(self, ext_id: str, spec: HostToolSpec) -> None:
-        # Gleiche ID ersetzt -- so kann eine Extension ihr Werkzeug nach einer
-        # Einstellungs-Aenderung (on_settings_changed) mit neuen Bedingungen melden.
+        # Gleiche ID ersetzt: so meldet eine Extension ihr Werkzeug nach `on_settings_changed` mit neuen Bedingungen.
         tools = [t for t in self._host_tools.get(ext_id, []) if t.id != spec.id]
         tools.append(spec)
         self._host_tools[ext_id] = tools
 
     def register_host_requirement(self, ext_id: str, spec: HostRequirementSpec) -> None:
-        # Wie bei den Werkzeugen: gleiche ID ersetzt (Meldung nach Einstellungs-Aenderung).
+        # Wie bei den Werkzeugen ersetzt die gleiche ID.
         specs = [r for r in self._host_requirements.get(ext_id, []) if r.id != spec.id]
         specs.append(spec)
         self._host_requirements[ext_id] = specs
@@ -71,7 +58,7 @@ class UiRegistry:
         self._pages.pop(ext_id, None)
         self._widgets.pop(ext_id, None)
         self._host_tools.pop(ext_id, None)
-        # Eine deaktivierte Extension darf nichts mehr verlangen (Einrichtungsbefehl, Pruefung).
+        # Eine deaktivierte Extension darf nichts mehr verlangen (Einrichtungsbefehl, Prüfung).
         self._host_requirements.pop(ext_id, None)
 
     def all_pages(self) -> list[tuple[str, PageSpec]]:
@@ -85,11 +72,6 @@ class UiRegistry:
 
     def all_host_requirements(self) -> list[tuple[str, HostRequirementSpec]]:
         return [(ext_id, r) for ext_id, specs in self._host_requirements.items() for r in specs]
-
-
-# ---------------------------------------------------------------------------
-# Capabilities -- wer erfuellt welches Protokoll
-# ---------------------------------------------------------------------------
 
 
 class CapabilityRegistry:
@@ -110,32 +92,21 @@ class CapabilityRegistry:
         return [impl for ext_id, impl in impls if ext_id in allowed_ext_ids]
 
     def query_named(self, protocol: type) -> list[tuple[str, Any]]:
-        """Wie `query()` ohne Filter, aber mit der Kennung der Erweiterung je Implementierung -- fuer Meldungen,
-        die sagen sollen, welche Quelle nicht antwortete."""
+        """Wie `query()` ohne Filter, aber mit der Kennung der Erweiterung je Implementierung."""
         return list(self._by_protocol.get(protocol, []))
 
     def provided_by(self, protocol: type, ext_id: str) -> Any | None:
-        """Die Implementierung EINER bestimmten Extension fuer ein Protokoll, falls
-        vorhanden -- gebraucht, um z. B. den `HostProvider` aufzuloesen, auf den
-        `Host.provider_ext_id` verweist (docs/04-API.md: `GET /hosts/{id}/actions`),
-        ohne die generische `query()` erst nach `allowed_ext_ids` filtern zu muessen."""
+        """Die Implementierung einer bestimmten Extension für ein Protokoll, falls vorhanden."""
         for impl_ext_id, impl in self._by_protocol.get(protocol, []):
             if impl_ext_id == ext_id:
                 return impl
         return None
 
 
-# ---------------------------------------------------------------------------
-# Aktions-Katalog -- welche ActionSpecs welche Extension angemeldet hat
-# ---------------------------------------------------------------------------
-
-
 class ActionRegistry:
-    """Bestand fuer `GET /hosts/{id}/actions` (docs/04-API.md §3) und fuer das Gate
-    (docs/00 D-05, WP-5): `command_field`/`permissions` einer `ActionSpec` werden bei
-    `ctx.actions.propose()` gebraucht, lange nachdem die Extension, die sie registriert
-    hat, die einzelne Anfrage laengst vergessen hat -- deshalb Prozess-weiter Bestand
-    hier, analog zu `UiRegistry`, nicht ein privates Dict je `ActionsHandle`-Instanz."""
+    """Bestand der `ActionSpec`s für `GET /hosts/{id}/actions` und das Gate.
+
+    Prozessweit statt je `ActionsHandle`: `propose()` braucht `command_field` und `permissions` später noch."""
 
     def __init__(self) -> None:
         self._specs: dict[str, tuple[str, ActionSpec]] = {}
@@ -154,19 +125,10 @@ class ActionRegistry:
         return [spec for _, spec in self._specs.values() if spec.host_bound]
 
 
-# ---------------------------------------------------------------------------
-# Job-Handler -- welche Extension welchen Job-Schluessel wie ausfuehrt
-# ---------------------------------------------------------------------------
-
-
 class SchedulerRegistry:
-    """Bestand fuer `core/scheduler.py`: eine `JobSpec.handler` ist eine gebundene
-    Methode einer Extension-Instanz -- nicht in der DB speicherbar (`jobs` haelt nur
-    Zeitplan-Metadaten, docs/03 §7) und nicht ueber einen Prozessneustart hinweg
-    gueltig. Bei jedem `register_job()`-Aufruf (also bei jedem Extension-Enable) wird
-    der Handler hier frisch eingetragen -- der Scheduler fasst beim Ausloesen eines
-    faelligen Jobs nur ueber `(ext_id, ext_job_key)` dahin, niemals ueber eine
-    gespeicherte Referenz."""
+    """Bestand der Job-Handler für `core/scheduler.py`, gefunden über `(ext_id, ext_job_key)`.
+
+    Ein Handler ist eine gebundene Methode (nicht speicherbar) und wird bei jedem Aktivieren neu eingetragen."""
 
     def __init__(self) -> None:
         self._handlers: dict[tuple[str, str], Callable[..., Coroutine[Any, Any, Any]]] = {}
@@ -182,27 +144,14 @@ class SchedulerRegistry:
         return self._handlers.get((ext_id, job_key))
 
 
-# ---------------------------------------------------------------------------
-# Ueberwachte Hintergrundtasks (ctx.spawn)
-# ---------------------------------------------------------------------------
-
-
 SpawnTarget = Coroutine[Any, Any, Any] | Callable[[], Coroutine[Any, Any, Any]]
 
 
 @dataclass
 class SupervisedTask:
-    """**Dokumentierte Abweichung vom SDK-Protokoll:** `ExtensionContext.spawn()`
-    nimmt laut Vertrag eine `Coroutine` entgegen -- ein bereits erzeugtes
-    Coroutine-Objekt ist aber nach einem Absturz nicht wiederverwendbar (Python wirft
-    `RuntimeError: cannot reuse already awaited coroutine`). Ein echter Neustart
-    braucht eine FABRIK (`Callable[[], Coroutine]`), keine fertige Coroutine.
-    `@runtime_checkable` prueft nur Attributnamen, keine Signaturen, deshalb ist es
-    protokollkonform, hier zusaetzlich eine Fabrik zu akzeptieren. Wird eine blosse
-    Coroutine uebergeben (der dokumentierte Fall), laeuft sie einmal ueberacht; ein
-    Absturz wird geloggt und gezaehlt, ein echter Neustart ist dann NICHT moeglich --
-    das ist eine Grenze des SDK-Vertrags, nicht dieser Implementierung (siehe
-    Abnahmebericht, Abschnitt "ehrlich offen gelassen")."""
+    """Hintergrundtask mit Absturzzähler; Neustart nur mit einer Fabrik (`Callable[[], Coroutine]`) als Ziel.
+
+    Eine fertige Coroutine lässt sich nicht erneut abwarten; ihr Absturz wird nur geloggt und gezählt."""
 
     ext_id: str
     name: str
@@ -247,13 +196,8 @@ class SupervisedTask:
             self.task.cancel()
             try:
                 await self.task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - Aufraeumen, nicht neu werfen
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - Aufräumen, nicht neu werfen
                 pass
-
-
-# ---------------------------------------------------------------------------
-# Eine geladene Extension
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -267,18 +211,11 @@ class LoadedExtension:
     tasks: list[SupervisedTask] = field(default_factory=list)
     settings_schema: dict[str, Any] | None = None
     store_id: str | None = None
-    """Speicher-Kennung: die `id` der Registry-Zeile, an der Einstellungen und Zeitplaene haengen.
-    Gleich der Kennung (`manifest.id`), ausser die Erweiterung nutzt nach einer Umbenennung noch den
-    Stand einer alten Kennung (`legacy_ids`). Ohne Angabe die Kennung."""
+    """`id` der Registry-Zeile für Einstellungen und Zeitpläne; nach einer Umbenennung ggf. die alte Kennung."""
 
     def __post_init__(self) -> None:
         if not self.store_id:
             self.store_id = self.manifest.id
-
-
-# ---------------------------------------------------------------------------
-# Der Runtime-Zustand insgesamt
-# ---------------------------------------------------------------------------
 
 
 class ExtensionRuntime:
@@ -290,44 +227,37 @@ class ExtensionRuntime:
         self.scheduler = SchedulerRegistry()
         self.discovered: dict[str, Any] = {}  # ext_id -> DiscoveredExtension, vom letzten Scan
         self.legacy_owner: dict[str, str] = {}
-        """Alte Kennung -> Kennung der Erweiterung, die sie in `legacy_ids` nennt (vom letzten Scan)."""
+        """Alte Kennung -> Kennung der Erweiterung, die sie in `legacy_ids` nennt."""
         self.store_ids: dict[str, str] = {}
-        """Kennung -> Speicher-Kennung (`id` der Registry-Zeile), vom letzten Scan. Ohne alte
-        Kennungen steht hier dieselbe Kennung."""
+        """Kennung -> Speicher-Kennung (`id` der Registry-Zeile); ohne alte Kennungen dieselbe."""
         self.refused: dict[str, str] = {}
-        """Kennung -> Grund, warum die Erweiterung wegen einer alten Kennung nicht geladen wird (vom
-        letzten Scan, siehe `discovery.resolve_legacy`). Ohne `legacy_ids` immer leer."""
+        """Kennung -> Grund, warum die Erweiterung wegen einer alten Kennung nicht geladen wird."""
         self.refused_old: dict[str, str] = {}
-        """Alte Kennung -> Grund, warum ihre neue Version nicht geladen wird (vom letzten Scan, siehe
-        `discovery.LegacyResolution.refused_old`). Fuer die Zeile der alten Kennung nach einem Update."""
+        """Alte Kennung -> Grund, warum ihre neue Version nicht geladen wird."""
 
     def canonical(self, ext_id: str) -> str:
-        """Die heutige Kennung zu `ext_id` (eine alte wird aufgeloest, alles andere bleibt)."""
+        """Die heutige Kennung zu `ext_id` (eine alte wird aufgelöst, alles andere bleibt)."""
         return self.legacy_owner.get(ext_id, ext_id)
 
     def store_id(self, ext_id: str) -> str:
-        """Die `id` der Registry-Zeile, die fuer `ext_id` (alte oder heutige Kennung) gilt. Ohne
-        Umbenennung (oder vor dem ersten Scan) ist das die Kennung selbst."""
+        """Die `id` der Registry-Zeile, die für `ext_id` (alte oder heutige Kennung) gilt."""
         canonical = self.canonical(ext_id)
         return self.store_ids.get(canonical, canonical)
 
     def is_stale_twin(self, row_id: str) -> bool:
-        """Eine Registry-Zeile mit alter Kennung, waehrend die Erweiterung eine andere Zeile nutzt
-        (entsteht nur nach Neuinstallation, Rueckweg aufs alte Image und erneutem Update). Sie wird
-        nie angefasst und nie geladen."""
+        """Eine Zeile mit alter Kennung, während die Erweiterung eine andere nutzt (nach Rückweg und erneutem Update).
+
+        Sie wird nie angefasst und nie geladen."""
         owner = self.legacy_owner.get(row_id)
         return owner is not None and self.store_ids.get(owner, owner) != row_id
 
     def legacy_ids_of(self, ext_id: str) -> list[str]:
-        """Die alten Kennungen der Erweiterung `ext_id` (heutige Kennung), unter denen sie zusaetzlich
-        erreichbar ist (alte Adressen, siehe `services.extensions.enable_extension`), in der Reihenfolge
-        ihres Manifests. Nur die, die ihr laut letztem Scan auch gehoeren; ohne `legacy_ids` leer."""
+        """Die alten Kennungen von `ext_id` in Manifest-Reihenfolge, die ihr laut letztem Scan auch gehören."""
         manifest = getattr(self.discovered.get(ext_id), "manifest", None)
         return [old for old in getattr(manifest, "legacy_ids", None) or [] if self.legacy_owner.get(old) == ext_id]
 
     def stage_of(self, ext_id: str) -> str:
-        """Der Reifegrad (`stage` im Manifest: `stable` oder `beta`) der Erweiterung `ext_id` (heutige Kennung);
-        ohne Angabe oder ohne Fund `stable`."""
+        """Der Reifegrad (`stable` oder `beta`) von `ext_id`; ohne Angabe oder ohne Fund `stable`."""
         loaded = self.loaded.get(ext_id)
         manifest = loaded.manifest if loaded is not None else getattr(self.discovered.get(ext_id), "manifest", None)
         return getattr(manifest, "stage", None) or "stable"
@@ -335,39 +265,17 @@ class ExtensionRuntime:
     def mount_router(
         self, app: FastAPI, ext_id: str, router: APIRouter, *, deprecated: bool = False
     ) -> list[BaseRoute]:
-        """Montiert unter /api/v1/ext/<id>/... und merkt sich die HINZUGEFUEGTEN
-        Route-Objekte, damit `unmount_router` exakt sie wieder entfernen kann --
-        `app.include_router()` selbst kennt kein Gegenstueck zum Entfernen.
+        """Montiert den Router unter /api/v1/ext/<id>/... und gibt die neuen Routen für `unmount_router` zurück.
 
-        `deprecated=True` markiert alle so montierten Routen im OpenAPI-Schema als veraltet (fuer die
-        alten Adressen einer umbenannten Erweiterung, `ExtensionManifest.legacy_ids`); sie bleiben im
-        Schema und antworten wie die Routen unter der heutigen Kennung.
-
-        Fuegt bewusst an `app.state.ext_mount_index` EIN, nicht ans Ende von
-        `app.router.routes`: main.py mountet dort spaeter (nur wenn `frontend/dist`
-        existiert) einen StaticFiles-Catch-all auf "/" -- staende der davor, wuerde er
-        JEDE `/api/v1/ext/<id>/...`-Anfrage abfangen, bevor eine erst danach
-        hinzugefuegte Extension-Route je geprueft wird. Ein Scratch-Router (nie an
-        `app` gehaengt) erzeugt die praefixierten Route-Objekte, ohne sie selbst ans
-        Ende von `app.router.routes` zu haengen.
-
-        **Live gefunden beim Bau von WP-6s `permission=`-Parameter, nicht vorher
-        bedacht:** ein frisch konstruierter `APIRouter()` hat
-        `dependency_overrides_provider=None`. FastAPI backt diesen Wert beim
-        `include_router()`-Aufruf UNVERAENDERLICH in jede daraus entstehende Route ein
-        (`_RouterIncludeContext.for_include`) -- ohne das Setzen unten haette JEDE
-        ueber eine Extension gemountete Route, die `Depends(get_settings)`/
-        `Depends(get_session)` (direkt oder ueber `CurrentUser`/`require_permission`)
-        nutzt, `app.dependency_overrides` STILLSCHWEIGEND ignoriert und wäre in Tests
-        (und ueberall sonst, wo Overrides greifen sollen) gegen die echten,
-        ungecachten Projekt-Settings/-DB gelaufen -- exakt derselbe Fallstrick-Familie
-        wie der wiederholt gefundene `get_settings()`-Singleton-Bug, nur eine Ebene
-        tiefer und nie zuvor bemerkt, weil keine Extension-Route vor WP-6 je
-        `Depends()` fuer etwas Ueberschreibbares benutzt hat."""
+        `deprecated=True` markiert sie im OpenAPI-Schema als veraltet (alte Adressen einer umbenannten Erweiterung)."""
+        # Ein Scratch-Router erzeugt die präfixierten Routen, ohne sie ans Ende von `app.router.routes` zu hängen.
+        # FastAPI backt `dependency_overrides_provider` beim Einbinden in jede Route ein; ohne die Zuweisung
+        # ignorierten Extension-Routen `app.dependency_overrides` und liefen in Tests gegen die echte DB.
         scratch = APIRouter()
         scratch.dependency_overrides_provider = app
         scratch.include_router(router, prefix=f"/api/v1/ext/{ext_id}", deprecated=deprecated)
         new_routes = list(scratch.routes)
+        # Vor den StaticFiles-Catch-all auf "/", den main.py später anhängt, sonst fängt er alle Extension-Anfragen ab.
         index = getattr(app.state, "ext_mount_index", len(app.router.routes))
         app.router.routes[index:index] = new_routes
         return new_routes
@@ -395,6 +303,6 @@ def get_extension_runtime() -> ExtensionRuntime:
 
 
 def reset_extension_runtime() -> None:
-    """Nur fuer Tests."""
+    """Nur für Tests."""
     global _runtime
     _runtime = None

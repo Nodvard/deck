@@ -1,19 +1,4 @@
-"""Passt ein Backup ueberhaupt auf den Speicher? -- VOR dem Anlegen eines Jobs bzw.
-dem Start eines Laufs.
-
-**Warum:** ein grosser Gast kann den Backup-Speicher volllaufen lassen. Der Lauf
-bricht ab, die halbe `.dat` bleibt liegen -- und liegt auf derselben Platte auch
-Nodvard Deck selbst, scheitert danach JEDER Schreibzugriff im Dashboard ("HTTP 500"
-beim Bestaetigen). Beide Zahlen (Gastgroesse, freier Platz) sind in Proxmox abrufbar,
-also wird vorher gewarnt.
-
-Die Gastgroesse ist bewusst eine OBERGRENZE: Summe der Platten, die VZDump sichert
-(`backup=0` und CD-Laufwerke zaehlen nicht, bei Containern nur `rootfs` und
-Mountpoints mit `backup=1`). Komprimierung und leere Bloecke machen das echte
-Backup meist kleiner -- deshalb eine Warnung mit "trotzdem", kein hartes Verbot.
-Fehlt eine der Zahlen (API-Fehler, fehlende Rechte), wird NICHT gewarnt: lieber
-keine Warnung als eine geratene.
-"""
+"""Prüft vor dem Anlegen eines Jobs oder dem Start eines Laufs, ob das Backup auf den Speicher passt."""
 
 from __future__ import annotations
 
@@ -44,7 +29,9 @@ def _size_bytes(value: str) -> int | None:
 
 
 def backed_up_disk_bytes(guest_type: str, config: dict[str, Any]) -> int | None:
-    """Summe der Platten, die VZDump fuer diesen Gast sichert (Obergrenze)."""
+    """Summe der Platten, die VZDump für diesen Gast sichert (Obergrenze)."""
+    # `backup=0` und CD-Laufwerke zählen nicht, bei Containern nur `rootfs` und Mountpoints mit `backup=1`.
+    # Komprimierung und leere Blöcke machen das echte Backup meist kleiner.
     total = 0
     found = False
     for key, raw in config.items():
@@ -74,10 +61,13 @@ def format_gb(value: int) -> str:
 
 
 async def check_backup_space(connector: ProxmoxBackupConnector, vmids: str | list[str], storage: str | None) -> dict[str, Any] | None:
-    """-> Warnung (dict mit `message` und den Zahlen), wenn der/die Gast/Gaeste zusammen
-    groesser sind als der freie Platz auf `storage`; sonst None -- auch dann, wenn eine
-    Zahl nicht zu ermitteln war. Mehrere Gaeste (Job bearbeiten) werden addiert: ein
-    Job-Lauf legt alle Sicherungen nebeneinander ab."""
+    """-> Warnung (dict mit `message` und den Zahlen), wenn die Gäste zusammen größer sind als der freie Platz
+    auf `storage`, sonst None (auch, wenn eine Zahl nicht zu ermitteln war). Mehrere Gäste (Job bearbeiten)
+    werden addiert: ein Job-Lauf legt alle Sicherungen nebeneinander ab."""
+    # Ein großer Gast kann den Speicher volllaufen lassen: der Lauf bricht ab, die halbe `.dat` bleibt liegen, und
+    # liegt auf derselben Platte Nodvard Deck selbst, scheitert danach jeder Schreibzugriff im Dashboard. Die
+    # Gastgröße ist eine Obergrenze, daher eine Warnung mit "trotzdem" statt eines Verbots. Fehlt eine der Zahlen
+    # (API-Fehler, fehlende Rechte), wird nicht gewarnt: lieber keine Warnung als eine geratene.
     if not storage:
         return None
     wanted = [str(v) for v in ([vmids] if isinstance(vmids, str) else vmids)]

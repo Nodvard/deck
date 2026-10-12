@@ -1,10 +1,4 @@
-"""Kopf, Manifest, Namens- und Pfadregeln einer Sicherung. Reine Funktionen ohne E/A
-(bis auf das Lesen des Kopfes aus einem offenen Strom).
-
-Der Kopf (Zeile 2) ist Klartext und NICHT authentifiziert -- er sagt nur, wie die Datei zu
-oeffnen ist. Damit ein veraenderter Kopf auffaellt, steht eine Kopie davon im Manifest
-(im verschluesselten Teil); `check_manifest` vergleicht beide.
-"""
+"""Kopf, Manifest, Namens- und Pfadregeln einer Sicherung; reine Funktionen ohne E/A (außer dem Lesen des Kopfes)."""
 
 from __future__ import annotations
 
@@ -17,8 +11,17 @@ from typing import Any, BinaryIO
 
 from .errors import DamagedBackup, NewerBackup
 
+# Aufbau einer Sicherungsdatei: Zeile 1 die Kennung mit Formatversion, Zeile 2 ein JSON-Kopf, danach eine age-Datei mit
+# einem tar.gz. Ohne das Dashboard lässt sie sich öffnen, wenn man die ersten zwei Zeilen abschneidet
+# (`tail -n +3 datei.ndbak > datei.age`) und mit `age -d` entschlüsselt: im Modus "passwort" mit dem Einmal-Passwort,
+# im Modus "schluessel" mit dem Wiederherstellungsschlüssel (`age -d -i schluessel.txt`).
+# Der Kopf ist Klartext und nicht authentifiziert. Er enthält nie Geheimnisse (nur Modus, Version, Zeit, Schlüssel-Kennung
+# und Parameter der Schlüsselableitung); Datenbank, Tresorschlüssel und Zugangsdaten stehen nur im verschlüsselten Teil.
+# Damit ein veränderter Kopf auffällt, liegt eine Kopie im Manifest (verschlüsselt), `check_manifest` vergleicht beide.
 MAGIC_PREFIX = b"NODVARD-DECK-BACKUP/"
 MAGIC = MAGIC_PREFIX + b"1\n"
+# Bisher die einzige Version. Eine neuere Datei lehnen `read_header` und `validate_header` mit `NewerBackup` ab, damit erst
+# das Dashboard aktualisiert wird, statt eine halb verstandene Sicherung einzuspielen.
 FORMAT_VERSION = 1
 MAX_HEADER_BYTES = 4096
 MODES = ("passwort", "schluessel")
@@ -33,6 +36,8 @@ ARC_DB = "db/lattice.db"
 ARC_FILES = "files/"
 MAX_MANIFEST_BYTES = 32 * 1024 * 1024
 
+# Nie in der Sicherung: die Ablage der Sicherungen selbst, der Arbeitsordner der Wiederherstellung, der Startzustand,
+# der Einrichtungscode, SQLite-Nebendateien (die Datenbank kommt als Online-Kopie) und temporäre Dateien.
 EXCLUDED_TOP_LEVEL = frozenset({"backups", "restore", ".boot"})
 EXCLUDED_NAMES = frozenset({"setup_code.txt"})
 EXCLUDED_SUFFIXES = ("-wal", "-shm", "-journal", ".tmp", ".part", ".swp", "~")
@@ -73,7 +78,7 @@ def encode_header(header: dict[str, Any]) -> bytes:
 
 
 def read_header(reader: BinaryIO) -> dict[str, Any]:
-    """Liest Zeile 1 und 2 und laesst den Strom direkt am Anfang der age-Datei stehen."""
+    """Liest Zeile 1 und 2 und lässt den Strom direkt am Anfang der age-Datei stehen."""
     first = reader.readline(64)
     if not first.startswith(MAGIC_PREFIX) or not first.endswith(b"\n"):
         raise DamagedBackup("keine Sicherung von Nodvard Deck")
@@ -140,8 +145,7 @@ def build_manifest(
 
 
 def check_manifest(manifest: object, header: dict[str, Any]) -> dict[str, Any]:
-    """Manifest muss zum Kopf passen -- sonst wurde der Kopf veraendert oder die Datei
-    zusammengestueckelt."""
+    """Das Manifest muss zum Kopf passen, sonst wurde der Kopf verändert oder die Datei zusammengestückelt."""
     if not isinstance(manifest, dict):
         raise DamagedBackup("Inhaltsverzeichnis ungültig")
     if manifest.get("header") != header:
@@ -155,8 +159,7 @@ def check_manifest(manifest: object, header: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_safe_member(name: str) -> bool:
-    """Nur `manifest.json`, `db/lattice.db` und Dateien unter `files/`: kein absoluter
-    Pfad, kein `..`, keine Rueckwaertsstriche, keine leeren Teile."""
+    """Nur `manifest.json`, `db/lattice.db` und Dateien unter `files/`, ohne absoluten Pfad, `..`, Rückwärtsstriche, leere Teile."""
     if not name or len(name) > 1024 or "\\" in name or "\x00" in name:
         return False
     if name in (ARC_MANIFEST, ARC_DB):
@@ -169,30 +172,27 @@ def is_safe_member(name: str) -> bool:
 
 RESTORE_SINGLE_FILES = frozenset({"master.key", "vault_keyring.json", "jwt_secret.key"})
 RESTORE_TREES = ("ext", "branding", "runs")
-"""Was beim Wiederherstellen ueberhaupt angenommen wird -- genau das, was `services/backups.py`
-(`sources_for`) schreibt: drei Schluesseldateien und die Ordner `ext`, `branding`, `runs` unter
-`files/`, dazu `db/lattice.db` und `manifest.json`. Alles andere ist fremd."""
+"""Was beim Wiederherstellen überhaupt angenommen wird: genau das, was `sources_for` in `services/backups.py` schreibt
+(drei Schlüsseldateien, die Ordner `ext`, `branding`, `runs` unter `files/`, `db/lattice.db`, `manifest.json`)."""
 
 MAX_MEMBER_DEPTH = 40
 
 _VCS_SETTING_NAMES = frozenset({".gitattributes", ".gitconfig", ".gitmodules"})
 _NTFS_SHORT_NAME_RE = re.compile(r"(git|gitatt|gitcon|gitmod)~[0-9]+")
 _NTFS_SHORT_NAMES = {"git": ".git", "gitatt": ".gitattributes", "gitcon": ".gitconfig", "gitmod": ".gitmodules"}
-"""Kurznamen, unter denen NTFS die Git-Namen ebenfalls erreichbar macht (`GIT~1/config` landet in
-`.git/config`). Gemeint sind die ersten sechs Zeichen ohne den Punkt plus `~` und eine Zahl."""
+"""Kurznamen, unter denen NTFS die Git-Namen ebenfalls erreichbar macht (`GIT~1/config` landet in `.git/config`):
+die ersten sechs Zeichen ohne den Punkt, `~` und eine Zahl."""
 _NTFS_HASH_NAME_RE = re.compile(r"gi[0-9a-f]{4}~[0-9]+")
-"""Ersatzform, die Windows ab dem fuenften gleichen Kurznamen bildet: die ersten zwei Zeichen, vier
-Hex-Ziffern aus dem Namen und `~` mit Zahl (`.gitmodules` wird so zu `GI7EBA~1`). Alle vier Git-Namen
-beginnen mit `gi`; solche Teile zaehlen wie `.git`: als Datei uebersprungen, als Ordner nur Verlauf."""
+"""Ersatzform, die Windows ab dem fünften gleichen Kurznamen bildet: zwei Zeichen, vier Hex-Ziffern, `~` und eine Zahl
+(`.gitmodules` wird so zu `GI7EBA~1`). Solche Teile zählen wie `.git`: als Datei übersprungen, als Ordner nur Verlauf."""
 _HEX2_RE = re.compile(r"[0-9a-f]{2}")
 _OBJECT_RE = re.compile(r"[0-9a-f]{38,62}")
 _PACK_RE = re.compile(r"pack-[0-9a-f]{40,64}\.(pack|idx|rev)")
 
 
 def _git_inner_ok(rest: Sequence[str], *, is_dir: bool) -> bool:
-    """Was unterhalb eines `.git`-Ordners uebernommen wird: nur die Daten des Verlaufs (Objekte,
-    Verweise, `HEAD`, Index). Alles, wonach Git Programme starten oder Einstellungen lesen
-    koennte (`config`, `hooks/`, `info/`, `commondir`, `worktrees/` ...), nicht."""
+    """Was unterhalb eines `.git`-Ordners übernommen wird: nur Daten des Verlaufs (Objekte, Verweise, `HEAD`, Index),
+    nichts, wonach Git Programme starten oder Einstellungen lesen könnte (`config`, `hooks/`, `info/` ...)."""
     if not rest:
         return is_dir
     top = rest[0]
@@ -217,11 +217,10 @@ def _git_inner_ok(rest: Sequence[str], *, is_dir: bool) -> bool:
 
 
 def is_unwanted_vcs_entry(parts: Sequence[str], *, is_dir: bool = False) -> bool:
-    """Gehoert der Pfad (Teile unterhalb von `ext/`, `branding/`, `runs/`) zu den Git-Einstellungen
-    eines Ordners? Dann wird er weder gesichert noch eingespielt: eine fremde Sicherung koennte dort
-    ein Repository mit Filtern, Hooks oder Attributen unterbringen, die Git beim naechsten Speichern
-    ausfuehrt. Die Daten des Verlaufs (Objekte, Verweise) bleiben erlaubt; die Einstellungen legt
-    die Erweiterung beim Oeffnen selbst frisch an. `.gitignore` fuehrt nichts aus und bleibt erlaubt."""
+    """Gehört der Pfad (Teile unterhalb von `ext/`, `branding/`, `runs/`) zu den Git-Einstellungen eines Ordners?"""
+    # Dann wird er weder gesichert noch eingespielt: Eine fremde Sicherung könnte dort ein Repository mit Filtern, Hooks
+    # oder Attributen unterbringen, die Git beim nächsten Speichern ausführt. Die Daten des Verlaufs bleiben erlaubt, die
+    # Einstellungen legt die Erweiterung beim Öffnen selbst frisch an. `.gitignore` führt nichts aus und bleibt erlaubt.
     for index, part in enumerate(parts):
         # Windows liest `.git.`, `.git ` und `.git::$INDEX_ALLOCATION` als `.git`, NTFS dazu `GIT~1`.
         low = part.split(":", 1)[0].rstrip(" .").casefold()
@@ -238,8 +237,8 @@ def is_unwanted_vcs_entry(parts: Sequence[str], *, is_dir: bool = False) -> bool
 
 
 def is_unwanted_restore_entry(name: str, is_dir: bool) -> bool:
-    """Ein sonst erlaubter Eintrag einer Sicherung, der beim Einspielen still uebersprungen wird
-    (siehe `is_unwanted_vcs_entry`). Fuer alles, was ohnehin abgelehnt wird, `False`."""
+    """Ein sonst erlaubter Eintrag, der beim Einspielen still übersprungen wird (siehe `is_unwanted_vcs_entry`).
+    Für alles, was ohnehin abgelehnt wird, `False`."""
     parts = _clean_parts(name)
     if parts is None or len(parts) < 3 or parts[0] != "files" or parts[1] not in RESTORE_TREES:
         return False
@@ -247,14 +246,14 @@ def is_unwanted_restore_entry(name: str, is_dir: bool) -> bool:
 
 
 def _clean_parts(name: str) -> list[str] | None:
-    """Pfadteile eines Archivnamens oder `None`, wenn der Name nicht sauber ist (leer,
-    absolut, `..`, Rueckwaertsstrich, Steuerzeichen, zu lang oder zu tief)."""
+    """Pfadteile eines Archivnamens oder `None`, wenn der Name nicht sauber ist (leer, absolut, `..`, Rückwärtsstrich,
+    Steuerzeichen, zu lang oder zu tief)."""
     if not name or len(name) > 1024 or "\\" in name:
         return None
     if any(ord(c) < 32 or ord(c) == 127 for c in name):
         return None
     try:
-        name.encode("utf-8")  # kein gueltiges UTF-8 im Archiv (tarfile liefert dann Ersatzzeichen)
+        name.encode("utf-8")  # kein gültiges UTF-8 im Archiv (tarfile liefert dann Ersatzzeichen)
     except UnicodeEncodeError:
         return None
     parts = name.split("/")
@@ -264,7 +263,7 @@ def _clean_parts(name: str) -> list[str] | None:
 
 
 def is_restore_file(name: str) -> bool:
-    """Strenge Erlaubnisliste fuer Dateien beim Wiederherstellen (siehe `RESTORE_*`)."""
+    """Strenge Erlaubnisliste für Dateien beim Wiederherstellen (siehe `RESTORE_*`)."""
     parts = _clean_parts(name)
     if parts is None:
         return False
@@ -278,8 +277,7 @@ def is_restore_file(name: str) -> bool:
 
 
 def is_restore_dir(name: str) -> bool:
-    """Ordner-Eintraege (tar kennt sie; Nodvard Deck selbst schreibt keine): nur die Ordner, die
-    eine erlaubte Datei enthalten duerfte."""
+    """Ordner-Einträge (tar kennt sie, das Dashboard schreibt keine): nur Ordner, die eine erlaubte Datei enthalten dürfte."""
     parts = _clean_parts(name)
     if parts is None:
         return False
@@ -291,7 +289,7 @@ def is_restore_dir(name: str) -> bool:
 
 
 def is_excluded(relative: PurePosixPath) -> bool:
-    """Regeln fuer Dateien aus dem Datenordner (Pfad relativ dazu)."""
+    """Regeln für Dateien aus dem Datenordner (Pfad relativ dazu)."""
     if not relative.parts:
         return True
     if relative.parts[0] in EXCLUDED_TOP_LEVEL:

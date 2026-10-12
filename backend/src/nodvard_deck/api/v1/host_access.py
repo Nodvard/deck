@@ -1,17 +1,4 @@
-"""Server-Zugaenge: was eine Extension auf einem Server braucht, SSH-Schluessel
-erzeugen, Einrichtungsbefehl (zum Einfuegen oder von Nodvard Deck mit einem einmaligen Passwort
-ausgefuehrt), Zugang als Standard setzen (docs/04-API.md §3).
-
-Der Kern kennt hier keine Extension und kein Werkzeug (Docker, ...) beim Namen: was auf
-einem Server gebraucht wird, melden die Extensions ueber `ctx.ui.register_host_requirement()`.
-
-**Private Schluessel verlassen den Vault nie.** `generate-key` legt den privaten Schluessel
-direkt im Vault ab und antwortet nur mit dem oeffentlichen Teil und dem Fingerabdruck;
-`setup` entschluesselt ihn serverseitig, leitet den oeffentlichen Teil ab und verwirft den
-Klartext. Weder Antworten noch Fehlertexte (auch keine 422) noch Protokoll noch Log
-enthalten Schluesselmaterial -- Fehlertexte sind feste deutsche Saetze, nie eine
-weitergereichte Ausnahme.
-"""
+"""Server-Zugänge: Anforderungen, SSH-Schlüssel, Einrichtungsbefehl, Standard-Zugang (docs/04-API.md §3)."""
 
 from __future__ import annotations
 
@@ -50,16 +37,20 @@ from .hosts import (
 router = APIRouter(tags=["hosts"])
 log = logging.getLogger("nodvard_deck.host_access")
 
-UNIX_GROUP_RE = GROUP_RE
-"""Gueltiger Gruppenname -- der Name kommt von einer Extension und landet spaeter in einem
-Shell-Befehl, deshalb gilt nur diese enge Form."""
+# Private Schlüssel verlassen den Vault nie: `generate-key` antwortet nur mit dem öffentlichen Teil und dem
+# Fingerabdruck, `setup` leitet den öffentlichen Teil serverseitig ab und verwirft den Klartext. Fehlertexte sind feste
+# Sätze, nie eine weitergereichte Ausnahme, und enthalten kein Schlüsselmaterial. Was ein Server braucht, melden die
+# Extensions über `ctx.ui.register_host_requirement()`; der Kern kennt keine beim Namen.
 
+# Der Gruppenname kommt von einer Extension und landet später in einem Shell-Befehl, daher nur diese enge Form.
+UNIX_GROUP_RE = GROUP_RE
+
+# Gruppen, die einer Erweiterung nie einen Benutzer-Eintrag im Einrichtungsbefehl erlauben (Root-Rechte oder lesender
+# Zugriff auf alles). `docker` ist bewusst erlaubt: praktisch root, aber genau dafür gedacht, die Hinweise im Befehl
+# sagen es.
 PRIVILEGED_GROUPS = frozenset({
     "root", "sudo", "wheel", "admin", "shadow", "disk", "adm", "staff", "lxd", "libvirt", "kvm",
 })
-"""Gruppen, die einer Erweiterung nie einen Benutzer-Eintrag im Einrichtungsbefehl erlauben: sie
-bedeuten Root-Rechte oder lesenden Zugriff auf alles. Die Ausnahme ist `docker` (ebenfalls
-praktisch root, aber genau dafuer gedacht -- die Hinweise im Befehl sagen es)."""
 
 KEY_GENERATION_LIMIT = 10
 KEY_GENERATION_WINDOW_S = 5 * 60
@@ -75,11 +66,6 @@ async def _load_host(session: SessionDep, host_id: str) -> Host:
     return host
 
 
-# ---------------------------------------------------------------------------
-# Was Erweiterungen auf dem Server brauchen
-# ---------------------------------------------------------------------------
-
-
 class HostRequirementOut(BaseModel):
     ext_id: str
     id: str
@@ -87,7 +73,7 @@ class HostRequirementOut(BaseModel):
     check_command: str | None
     ok_text: str
     fail_hint: str
-    """Darf `{user}` enthalten (der SSH-Benutzer); die Oberflaeche setzt ihn ein."""
+    """Darf `{user}` enthalten (der SSH-Benutzer); die Oberfläche setzt ihn ein."""
     unix_group: str | None
     needs_root: bool
     root_reason: str | None
@@ -95,9 +81,9 @@ class HostRequirementOut(BaseModel):
 
 
 def matching_requirements(host: Host) -> list[tuple[str, HostRequirementSpec]]:
-    """Die zum Host passenden Meldungen der Extensions (`HostRequirementSpec`), sortiert nach
-    `order`, dann Bezeichnung. Passt: `tags` leer oder mindestens ein Tag gemeinsam, und der
-    `os_family` des Hosts steht in `os_families` (leer = jedes System)."""
+    """Die zum Host passenden Meldungen der Extensions (`HostRequirementSpec`), sortiert nach `order`, dann Bezeichnung.
+    Passt: `tags` leer oder mindestens ein Tag gemeinsam, und der `os_family` des Hosts steht in `os_families`
+    (leer = jedes System)."""
     tags = {t.tag for t in host.tags}
     found: list[tuple[str, HostRequirementSpec]] = []
     for ext_id, spec in get_extension_runtime().ui.all_host_requirements():
@@ -111,8 +97,8 @@ def matching_requirements(host: Host) -> list[tuple[str, HostRequirementSpec]]:
 
 
 def valid_group(name: str | None, ext_id: str | None = None) -> str | None:
-    """Der Gruppenname, wenn er gueltig und nicht privilegiert ist, sonst `None` (und bei einer
-    Sperrlisten-Gruppe ein Eintrag im Log). `docker` ist bewusst erlaubt."""
+    """Der Gruppenname, wenn er gültig und nicht privilegiert ist, sonst `None` (bei einer Sperrlisten-Gruppe mit
+    Eintrag im Log). `docker` ist bewusst erlaubt."""
     if name is None or not UNIX_GROUP_RE.fullmatch(name):
         return None
     if name in PRIVILEGED_GROUPS:
@@ -123,8 +109,8 @@ def valid_group(name: str | None, ext_id: str | None = None) -> str | None:
 
 @router.get("/hosts/{host_id}/requirements", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_host_requirements(host_id: str, session: SessionDep) -> list[HostRequirementOut]:
-    """Was Extensions auf diesem Server brauchen: root ohne Passwort, eine Gruppe (z. B. fuer
-    Container), ein lesender Pruefbefehl. Grundlage des Einrichtungsbefehls."""
+    """Was Extensions auf diesem Server brauchen: root ohne Passwort, eine Gruppe (z. B. für Container), ein lesender
+    Prüfbefehl. Grundlage des Einrichtungsbefehls."""
     host = await _load_host(session, host_id)
     return [
         HostRequirementOut(
@@ -136,16 +122,11 @@ async def list_host_requirements(host_id: str, session: SessionDep) -> list[Host
     ]
 
 
-# ---------------------------------------------------------------------------
-# SSH-Schluessel erzeugen
-# ---------------------------------------------------------------------------
-
-
 class GenerateKeyIn(BaseModel):
-    # Neue Zugaenge heissen in der Oberflaeche „nodvard“; das Formular schickt den Namen immer mit. Der Standard der API
-    # bleibt bewusst „lattice“: aeltere Aufrufer (auch die App) schicken oft keinen Namen, und ein anderer Standard
-    # waere fuer sie eine stille Verhaltensaenderung (anderer Benutzer auf dem Server). Aendern nur ueber eine
-    # angekuendigte Uebergangszeit, siehe docs/04-API.md, Abschnitt „Kompatibilitaet“.
+    # Neue Zugänge heißen in der Oberfläche „nodvard“, das Formular schickt den Namen immer mit. Der Standard der API
+    # bleibt bewusst „lattice“: ältere Aufrufer (auch die App) schicken oft keinen Namen, ein anderer Standard änderte
+    # für sie still den Benutzer auf dem Server. Ändern nur nach angekündigter Übergangszeit (docs/04-API.md, Abschnitt
+    # „Kompatibilität“).
     username: str = "lattice"
     port: int = 22
 
@@ -163,7 +144,7 @@ class GenerateKeyIn(BaseModel):
 class GeneratedKeyOut(BaseModel):
     credential: CredentialOut
     public_key: str
-    """`ssh-ed25519 AAAA... nodvard@<Kurzname>` -- gehoert in `authorized_keys` auf dem Server."""
+    """`ssh-ed25519 AAAA... nodvard@<Kurzname>`, gehört in `authorized_keys` auf dem Server."""
     fingerprint: str
     """`SHA256:...` wie bei `ssh-keygen -l`."""
 
@@ -172,11 +153,8 @@ class GeneratedKeyOut(BaseModel):
 async def generate_key(
     host_id: str, payload: GenerateKeyIn, request: Request, session: SessionDep, settings: SettingsDep, user: WriteUser
 ) -> GeneratedKeyOut:
-    """Erzeugt einen eigenen ed25519-Schluessel nur fuer diesen Server. Der private Teil geht
-    direkt in den Vault und erscheint nirgends sonst (nicht in der Antwort, nicht im Protokoll,
-    nicht im Log). Er wird nur dann Standard-Zugang, wenn der Server noch keinen SSH-Zugang
-    hat -- sonst bleibt der bisherige Standard, bis der neue geprueft und bewusst umgestellt
-    ist (`make-default`)."""
+    """Erzeugt einen eigenen ed25519-Schlüssel nur für diesen Server (der private Teil geht direkt in den Vault). Er
+    wird nur Standard-Zugang, wenn der Server noch keinen SSH-Zugang hat, sonst erst nach Prüfung per `make-default`."""
     host = await _load_host(session, host_id)
     wait = _key_generation.hit(user.id)
     if wait:
@@ -207,24 +185,19 @@ async def generate_key(
     )
 
 
-# ---------------------------------------------------------------------------
-# Einrichtungsbefehl
-# ---------------------------------------------------------------------------
-
-
 class SetupOut(BaseModel):
     username: str
     public_key: str
     fingerprint: str
     one_liner: str
-    """Der Befehl zum Einfuegen auf dem Server (als root direkt, sonst ueber sudo)."""
+    """Der Befehl zum Einfügen auf dem Server (als root direkt, sonst über sudo)."""
     script: str
     """Dasselbe lesbar, eine Anweisung je Zeile."""
     notes: list[str]
     groups: list[str]
-    """Die Gruppen, die der Befehl wirklich eintraegt (nur solche, die Erweiterungen verlangen)."""
+    """Die Gruppen, die der Befehl wirklich einträgt (nur solche, die Erweiterungen verlangen)."""
     sudo: bool
-    """Ob der Befehl root ohne Passwort einrichtet (nie fuer `root` selbst)."""
+    """Ob der Befehl root ohne Passwort einrichtet (nie für `root` selbst)."""
 
 
 def _split_groups(raw: list[str] | None) -> list[str]:
@@ -248,9 +221,9 @@ class _PreparedSetup:
 async def _prepare_setup(
     session: SessionDep, settings: Settings, host_id: str, credential_id: str, *, sudo: bool, groups: list[str] | None
 ) -> _PreparedSetup:
-    """Gemeinsame Vorbedingungen und das Skript fuer `GET .../setup` und `POST .../setup-with-password`:
-    nur Linux, nur Zugaenge mit SSH-Schluessel, nur uebliche Linux-Benutzernamen; eingetragen werden nur
-    Gruppen, die Erweiterungen fuer diesen Server verlangen. Fehler sind feste Saetze (404/422)."""
+    """Gemeinsame Vorbedingungen und das Skript für `GET .../setup` und `POST .../setup-with-password`. Nur Linux, nur
+    Zugänge mit SSH-Schlüssel, nur übliche Linux-Benutzernamen; Gruppen nur, wenn Erweiterungen sie für diesen Server
+    verlangen. Fehler sind feste Sätze (404/422)."""
     host = await _load_host(session, host_id)
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
@@ -284,6 +257,7 @@ async def _prepare_setup(
 
     try:
         private_key = await vault.read_secret_plaintext(session, vault.load_keyring(settings), credential.secret_id)
+        # Der öffentliche Teil wird aus dem privaten im Vault abgeleitet, mit eigenem Kommentar, nie dem im Schlüssel.
         info = host_setup.derive_public_key(private_key, comment=host_setup.key_comment(host.name))
         del private_key
         script, one_liner = host_setup.build_setup_script(
@@ -307,11 +281,9 @@ async def credential_setup(
     sudo: bool = False,
     groups: Annotated[list[str] | None, Query()] = None,
 ) -> SetupOut:
-    """Der Befehl, den man auf dem Server ausfuehrt, damit sich Nodvard Deck mit diesem Schluessel
-    anmelden kann. Der oeffentliche Teil wird hier aus dem privaten im Vault abgeleitet (mit
-    einem eigenen Kommentar, nie dem im Schluessel eingetragenen). `groups` sind Wuensche
-    (`?groups=docker` oder `?groups=a,b`); eingetragen werden nur Gruppen, die Erweiterungen
-    fuer diesen Server verlangen. Aendert nichts -- daher GET."""
+    """Der Befehl, den man auf dem Server ausführt, damit sich Nodvard Deck mit diesem Schlüssel anmelden kann. `groups`
+    sind Wünsche (`?groups=docker` oder `?groups=a,b`), eingetragen werden nur Gruppen, die Erweiterungen verlangen.
+    Ändert nichts, daher GET."""
     prepared = await _prepare_setup(session, settings, host_id, credential_id, sudo=sudo, groups=groups)
     username = prepared.credential.username
     return SetupOut(
@@ -322,10 +294,6 @@ async def credential_setup(
     )
 
 
-# ---------------------------------------------------------------------------
-# Einrichten mit einem einmaligen Passwort
-# ---------------------------------------------------------------------------
-
 _LOGIN_USER_ERROR = (
     "Anmelde-Konto: nur Kleinbuchstaben, Ziffern, _ und - (höchstens 32 Zeichen, nicht mit einer Ziffer oder - beginnen)."
 )
@@ -333,15 +301,15 @@ _LOGIN_USER_ERROR = (
 
 class SetupWithPasswordIn(BaseModel):
     login_user: str = "root"
-    """Das Konto fuer die EINE Anmeldung (root oder ein Konto mit sudo) -- nicht der Benutzer des Zugangs."""
+    """Das Konto für die EINE Anmeldung (root oder ein Konto mit sudo), nicht der Benutzer des Zugangs."""
     password: SecretStr
-    """Wird einmal benutzt und nie gespeichert, protokolliert oder zurueckgegeben."""
+    """Wird einmal benutzt und nie gespeichert, protokolliert oder zurückgegeben."""
     sudo: bool = False
-    """Wie `GET .../setup`: root ohne Passwort fuer den Benutzer des Zugangs einrichten."""
+    """Wie `GET .../setup`: root ohne Passwort für den Benutzer des Zugangs einrichten."""
     groups: list[str] = Field(default_factory=list, max_length=20)
-    """Wie `GET .../setup`: nur Gruppen, die Erweiterungen fuer diesen Server verlangen, werden eingetragen."""
+    """Wie `GET .../setup`: nur Gruppen, die Erweiterungen für diesen Server verlangen, werden eingetragen."""
     sudo_password_same: bool = True
-    """Nur ohne root: sudo bekommt dasselbe Passwort (ueber die Standardeingabe, nie in der Befehlszeile).
+    """Nur ohne root: sudo bekommt dasselbe Passwort (über die Standardeingabe, nie in der Befehlszeile).
     `false`: `sudo -n`, geht nur, wenn das Konto sudo ohne Passwort darf."""
 
     @field_validator("login_user")
@@ -354,7 +322,7 @@ class SetupWithPasswordIn(BaseModel):
     @field_validator("password")
     @classmethod
     def _check_password(cls, value: SecretStr) -> SecretStr:
-        # Feste Saetze ohne den Wert. Ein Zeilenumbruch wuerde bei `sudo -S` die Eingabe zerteilen.
+        # Feste Sätze ohne den Wert. Ein Zeilenumbruch würde bei `sudo -S` die Eingabe zerteilen.
         secret = value.get_secret_value()
         if not secret:
             raise ValueError("Bitte das Passwort eingeben.")
@@ -363,7 +331,7 @@ class SetupWithPasswordIn(BaseModel):
         if any(c in secret for c in "\n\r\x00"):
             raise ValueError("Das Passwort darf keinen Zeilenumbruch enthalten.")
         try:
-            secret.encode("utf-8")  # ein einzelnes Surrogat aus JSON („\\ud800“) laesst sich nicht senden
+            secret.encode("utf-8")  # ein einzelnes Surrogat aus JSON („\\ud800“) lässt sich nicht senden
         except UnicodeEncodeError:
             raise ValueError("Das Passwort enthält ein Zeichen, das sich nicht senden lässt.") from None
         return value
@@ -371,19 +339,19 @@ class SetupWithPasswordIn(BaseModel):
 
 class SetupWithPasswordOut(BaseModel):
     ok: bool
-    """Der Befehl ist gelaufen, und die Pruefung mit dem neuen Schluessel hat keinen Fehler gefunden."""
+    """Der Befehl ist gelaufen, und die Prüfung mit dem neuen Schlüssel hat keinen Fehler gefunden."""
     check: ConnectionCheckOut | None
-    """Ergebnis von „Verbindung pruefen“ mit dem neuen Schluessel (wie `POST /hosts/{id}/check`); `null`, wenn die
-    Pruefung gerade nicht laufen konnte (zu viele Pruefungen) -- dann steht ein Hinweis in `notes`."""
+    """Ergebnis von „Verbindung prüfen“ mit dem neuen Schlüssel (wie `POST /hosts/{id}/check`); `null`, wenn die Prüfung
+    gerade nicht laufen konnte (zu viele Prüfungen), dann steht ein Hinweis in `notes`."""
     notes: list[str]
     messages: list[str]
-    """Meldungen des Einrichtungsbefehls (nur seine eigenen Zeilen, gekuerzt)."""
+    """Meldungen des Einrichtungsbefehls (nur seine eigenen Zeilen, gekürzt)."""
     made_default: bool
     """Der Zugang ist jetzt der Standard (nur, wenn der Server noch keinen hatte)."""
 
 
 async def _audit_check(session: SessionDep, user: User, host_id: str, result: ConnectionCheckOut) -> None:
-    """Protokoll einer Pruefung: nur Kennungen und Ergebnisse -- weder Banner noch Fehlerausgaben des Servers noch
+    """Protokoll einer Prüfung: nur Kennungen und Ergebnisse, weder Banner noch Fehlerausgaben des Servers noch
     Geheimnisse."""
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="host.connection_checked",
@@ -404,25 +372,15 @@ async def credential_setup_with_password(
     settings: SettingsDep,
     user: WriteUser,
 ) -> SetupWithPasswordOut:
-    """Richtet den Server fuer diesen Schluessel-Zugang ein, ohne dass jemand den Befehl selbst einfuegt: Nodvard
-    Deck meldet sich EINMAL mit `login_user`/`password` an, fuehrt genau den Befehl von `GET .../setup` aus
-    (als root direkt, sonst ueber `sudo -S` mit dem Passwort auf der Standardeingabe), schliesst die Verbindung
-    und prueft danach mit dem neuen Schluessel wie `POST /hosts/{id}/check`. Der Zugang wird nur dann Standard,
-    wenn der Server noch keinen hat (sonst bleibt es beim Knopf `make-default`).
-
-    Verlangt `hosts.write` UND `hosts.execute`: der Befehl laeuft als root auf dem Server, das ist wie Terminal
-    und Konsole eine Ausfuehrung und kein blosses Einrichten eines Zugangs. Die Route geht bewusst nicht durchs
-    Aktions-Gate: ein Vorschlag stuende samt Eingaben in `actions.payload`, und dort darf das Passwort nie
-    landen. Stattdessen entscheidet der Mensch mit dem Absenden selbst, und jeder Versuch steht im Protokoll.
-
-    Das Passwort wird nie gespeichert, protokolliert oder zurueckgegeben (`services/one_time_password.py`). Es geht
-    nur an die gespeicherte Adresse und nur, wenn Nodvard Deck den Server-Schluessel schon kennt (gemerkt hat) --
-    sonst 409 `host_key_unconfirmed` mit `host_key` (Fingerabdruck; bestaetigen mit `POST /hosts/{id}/known-hosts`
-    und `credential_id` dieses Zugangs), ohne dass das Passwort benutzt wurde. Fehler: `{detail, code}` mit festem
-    Satz -- `wrong_password`/`sudo_failed`/`invalid_password` (400), `host_key_unconfirmed`/`host_key_changed` (409),
-    `rate_limited`/`busy` (429), `unreachable`/`connection_failed`/`setup_failed` (502, `setup_failed` mit
-    `messages`), `timeout` (504). Grenzen: je Ziel 5, je Nutzer 10 Versuche in 10 Minuten, dazu je Nutzer
-    30 Aufrufe in 5 Minuten."""
+    """Richtet den Server für diesen Schlüssel-Zugang ein: Nodvard Deck meldet sich EINMAL mit `login_user`/`password`
+    an, führt den Befehl von `GET .../setup` aus und prüft mit dem neuen Schlüssel wie `POST /hosts/{id}/check`. Fehler
+    als `{detail, code}`: 400 Passwort/sudo, 409 Schlüssel unbestätigt (`host_key`) oder geändert, 429, 502, 504."""
+    # Verlangt `hosts.write` UND `hosts.execute`: der Befehl läuft als root auf dem Server, wie Terminal und Konsole.
+    # Bewusst nicht durchs Aktions-Gate: ein Vorschlag stünde samt Eingaben in `actions.payload`, dort darf das Passwort
+    # nie landen. Der Mensch entscheidet mit dem Absenden, jeder Versuch steht im Protokoll.
+    # Das Passwort geht nur an die gespeicherte Adresse und nur, wenn der Server-Schlüssel schon gemerkt ist (sonst
+    # `host_key_unconfirmed`, Bestätigen mit `POST /hosts/{id}/known-hosts`). Grenzen: je Ziel 5, je Nutzer 10 Versuche
+    # in 10 Minuten, dazu je Nutzer 30 Aufrufe in 5 Minuten.
     prepared = await _prepare_setup(session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups)
     host, credential = prepared.host, prepared.credential
     as_root = payload.login_user == "root"
@@ -436,8 +394,8 @@ async def credential_setup_with_password(
     async def refuse(
         code: str, text: str, status_code: int, *, retry_after: int | None = None, audit: bool = True, **extra: Any
     ) -> CodedHTTPException:
-        # Auch ein gescheiterter Versuch steht im Protokoll -- vor dem Fehler festschreiben, sonst rollt
-        # `session_scope()` die Zeile zurueck. Eine schon protokollierte Sperre nicht bei jedem Klopfen erneut.
+        # Auch ein gescheiterter Versuch steht im Protokoll: vor dem Fehler festschreiben, sonst rollt `session_scope()`
+        # die Zeile zurück. Eine schon protokollierte Sperre nicht bei jedem Klopfen erneut.
         if audit:
             await audit_service.log(
                 session, actor_type="user", actor_id=user.id, action="host.setup_with_password", outcome="failure",
@@ -503,30 +461,23 @@ async def credential_setup_with_password(
     )
 
 
-# ---------------------------------------------------------------------------
-# Zugang zum Standard machen
-# ---------------------------------------------------------------------------
-
-
 class MakeDefaultOut(CredentialOut):
     notice: str | None = None
-    """Hinweis, wenn der alte Zugang geloescht wurde: sein oeffentlicher Schluessel steht weiter auf dem Server."""
+    """Hinweis, wenn der alte Zugang gelöscht wurde: sein öffentlicher Schlüssel steht weiter auf dem Server."""
 
 
 class MakeDefaultIn(BaseModel):
     delete_previous: bool = False
-    """Den bisherigen Standard-Zugang samt Geheimnis gleich mitloeschen."""
+    """Den bisherigen Standard-Zugang samt Geheimnis gleich mitlöschen."""
 
 
 @router.post("/hosts/{host_id}/credentials/{credential_id}/make-default")
 async def make_default(
     host_id: str, credential_id: str, session: SessionDep, user: WriteUser, payload: MakeDefaultIn | None = None
 ) -> MakeDefaultOut:
-    """Stellt den Standard-Zugang um (Schluesselwechsel: neuen Zugang anlegen, pruefen, dann
-    umstellen). Mit `delete_previous` verschwindet der alte Standard samt Geheimnis in derselben
-    Transaktion; offene Verbindungen mit dem alten Zugang werden geschlossen. **Vorher den neuen
-    Zugang mit „Verbindung prüfen“ testen** -- und der alte oeffentliche Schluessel bleibt in
-    authorized_keys auf dem Server (Nodvard Deck entfernt ihn dort nicht), das steht in `notice`."""
+    """Stellt den Standard-Zugang um (Schlüsselwechsel: neuen Zugang anlegen, prüfen, dann umstellen). Mit
+    `delete_previous` verschwindet der alte Standard samt Geheimnis (409, solange der neue nicht kürzlich erfolgreich
+    geprüft wurde); sein öffentlicher Schlüssel bleibt in authorized_keys auf dem Server (steht in `notice`)."""
     host = await _load_host(session, host_id)
     target = await session.get(HostCredential, credential_id)
     if target is None or target.host_id != host_id:
@@ -536,8 +487,8 @@ async def make_default(
     previous = await hosts_service.default_credential(session, host_id)
     previous_id = previous.id if previous is not None and previous.id != target.id else None
     if delete_previous and previous_id is not None and not host_check.login_was_ok(host, target):
-        # Den alten Zugang erst loeschen, wenn der neue gerade nachweislich funktioniert hat --
-        # sonst sperrt man sich aus (der alte Zugang samt Geheimnis waere unwiederbringlich weg).
+        # Den alten Zugang erst löschen, wenn der neue gerade nachweislich funktioniert hat, sonst sperrt man sich aus
+        # (der alte Zugang samt Geheimnis wäre unwiederbringlich weg).
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=(
@@ -550,6 +501,7 @@ async def make_default(
         {"credential_id": previous.id, "kind": previous.kind, "username": previous.username, "port": previous.port}
         if previous is not None and previous_id is not None else None
     )
+    # Mit `delete_previous` in derselben Transaktion; offene Verbindungen mit dem alten Zugang werden geschlossen.
     result = await hosts_service.make_default_credential(session, host_id, credential_id, delete_previous=delete_previous)
     if result is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Zugangsdaten.")
@@ -579,31 +531,24 @@ async def make_default(
     return MakeDefaultOut(**CredentialOut.from_model(credential).model_dump(), notice=notice)
 
 
-# ---------------------------------------------------------------------------
-# Verbindung pruefen
-# ---------------------------------------------------------------------------
-
 _SSH_KINDS = _SSH_CREDENTIAL_KINDS
 
 
 class CheckIn(BaseModel):
     credential_id: str | None = None
-    """Mit welchem Zugang geprueft wird; ohne Angabe der Standard-Zugang (ohne Zugang: nur
-    Erreichbarkeit und Server-Schluessel)."""
+    """Mit welchem Zugang geprüft wird; ohne Angabe der Standard-Zugang (ohne Zugang: nur Erreichbarkeit und
+    Server-Schlüssel)."""
 
 
 @router.post("/hosts/{host_id}/check")
 async def check_connection(
     host_id: str, session: SessionDep, settings: SettingsDep, user: WriteUser, payload: CheckIn | None = None
 ) -> ConnectionCheckOut:
-    """Prueft Schritt fuer Schritt, ob sich Nodvard Deck mit dem Server verbinden kann: erreichbar,
-    Server-Schluessel, Anmeldung, Root-Rechte, was Erweiterungen brauchen, Betriebssystem.
-
-    **An einen Server, dessen Schluessel noch nicht bestaetigt ist, gehen keine Zugangsdaten** --
-    die Pruefung meldet dann `host_key` als `confirm` mit dem Fingerabdruck und hoert auf
-    (`POST /hosts/{id}/known-hosts` bestaetigt ihn). Geprueft wird nur die gespeicherte Adresse,
-    nie ein Ziel aus der Anfrage. 429 bei zu vielen Pruefungen (je Nutzer 12 in 5 Minuten, je Server
-    nur eine gleichzeitig)."""
+    """Prüft Schritt für Schritt, ob sich Nodvard Deck mit dem Server verbinden kann: erreichbar, Server-Schlüssel,
+    Anmeldung, Root-Rechte, was Erweiterungen brauchen, Betriebssystem. Ist der Schlüssel unbestätigt, endet die Prüfung
+    bei `host_key` (`confirm`, mit Fingerabdruck). 429 bei zu vielen Prüfungen (je Nutzer 12 in 5 Minuten)."""
+    # An einen Server, dessen Schlüssel noch nicht bestätigt ist, gehen keine Zugangsdaten. Geprüft wird nur die
+    # gespeicherte Adresse, nie ein Ziel aus der Anfrage.
     host = await _load_host(session, host_id)
     credential_id = payload.credential_id if payload is not None else None
     credential: HostCredential | None
@@ -633,20 +578,15 @@ class PinKeyIn(BaseModel):
     key_type: str = Field(min_length=1, max_length=32)
     fingerprint: str = Field(min_length=1, max_length=128)
     credential_id: str | None = None
-    """Der Zugang, mit dem die Pruefung den Schluessel gesehen hat (sein Port zaehlt); ohne Angabe der
-    Standard-Zugang. Noetig, wenn ein weiterer Zugang einen anderen Port hat."""
+    """Der Zugang, mit dem die Prüfung den Schlüssel gesehen hat (sein Port zählt); ohne Angabe der Standard-Zugang.
+    Nötig, wenn ein weiterer Zugang einen anderen Port hat."""
 
 
 @router.post("/hosts/{host_id}/known-hosts", status_code=status.HTTP_201_CREATED)
 async def pin_known_host_key(host_id: str, payload: PinKeyIn, session: SessionDep, user: WriteUser) -> KnownHostKeyOut:
-    """Merkt den Server-Schluessel, den „Verbindung pruefen“ gerade gezeigt hat (Fingerabdruck
-    bestaetigen). Nur genau dieser: Typ und Fingerabdruck muessen dem entsprechen, was die letzte
-    Pruefung dieses Servers (hoechstens 15 Minuten her) vom Server gesehen hat -- ein selbst
-    mitgebrachter Fingerabdruck wird abgelehnt (409). Ein einmal gezeigter Schluessel laesst sich
-    nur einmal bestaetigen. Ist fuer den Server schon IRGENDEIN Schluessel gemerkt (auch eines anderen
-    Typs), gilt: erst den alten vergessen (409). Adresse und Port muessen die der letzten Pruefung
-    sein: Port des Zugangs `credential_id` (eines SSH-Zugangs dieses Servers, sonst 404/422), ohne Angabe
-    der des Standard-Zugangs, ohne Zugang 22."""
+    """Merkt den Server-Schlüssel, den „Verbindung prüfen“ gerade gezeigt hat. Typ, Fingerabdruck, Adresse und Port
+    müssen der letzten Prüfung (höchstens 15 Minuten her) entsprechen; ein gezeigter Schlüssel gilt nur einmal.
+    Sonst 409, auch wenn für den Server schon IRGENDEIN Schlüssel gemerkt ist (erst den alten vergessen)."""
     host = await _load_host(session, host_id)
     credential: HostCredential | None
     if payload.credential_id is not None:
@@ -657,6 +597,8 @@ async def pin_known_host_key(host_id: str, payload: PinKeyIn, session: SessionDe
             raise HTTPException(status_code=422, detail="Dieser Zugang ist keine SSH-Anmeldung.")
     else:
         credential = await hosts_service.default_credential(session, host_id)
+    # Port: der des Zugangs `credential_id` (ein SSH-Zugang dieses Servers, sonst 404/422), sonst der des
+    # Standard-Zugangs, ohne Zugang 22.
     port = credential.port if credential is not None and credential.kind in _SSH_KINDS else host_check.DEFAULT_SSH_PORT
     # Zuerst und ohne `await` dazwischen: der Merkzettel gilt nur einmal.
     if not host_check.consume_seen_key(host, port, payload.key_type, payload.fingerprint):
@@ -664,9 +606,9 @@ async def pin_known_host_key(host_id: str, payload: PinKeyIn, session: SessionDe
             status_code=status.HTTP_409_CONFLICT,
             detail="Bitte zuerst „Verbindung prüfen“ – der Fingerabdruck muss frisch vom Server kommen.",
         )
-    # IRGENDEIN gemerkter Schluessel genuegt: ein weiterer Typ wird nie per Bestaetigen dazugenommen
-    # (sonst liesse sich ein Schluesseltyp-Wechsel durchwinken). Wer wirklich wechseln will, vergisst
-    # erst den alten (`DELETE .../known-hosts/{key_type}`).
+    # IRGENDEIN gemerkter Schlüssel genügt: ein weiterer Typ wird nie per Bestätigen dazugenommen (sonst ließe sich ein
+    # Schlüsseltyp-Wechsel durchwinken). Wer wirklich wechseln will, vergisst erst den alten
+    # (`DELETE .../known-hosts/{key_type}`).
     existing = (await session.execute(select(KnownHostKey.id).where(KnownHostKey.host_id == host_id))).first()
     if existing is not None:
         raise HTTPException(
@@ -678,7 +620,7 @@ async def pin_known_host_key(host_id: str, payload: PinKeyIn, session: SessionDe
     )
     session.add(row)
     await session.flush()
-    # Die ausdrueckliche Bestaetigung hebt die Sperre nach "Schluessel vergessen" auf (und nur sie).
+    # Die ausdrückliche Bestätigung hebt die Sperre nach "Schlüssel vergessen" auf (und nur sie).
     await hosts_service.host_key_was_confirmed(session, host_id)
     await _audit(
         session, user, "host.known_key_pinned", target_id=host_id,

@@ -1,11 +1,5 @@
-"""Speicher-Uebersicht: Belegung jedes Speicher-Pools je
-Verbindung und Knoten, auf Wunsch mit dem Inhalt -- WELCHE Gast-Disks auf welchem Pool
-liegen. Liegt eine Gast-Disk z. B. auf `local` (Verzeichnis-Speicher) statt auf
-`local-lvm`, faellt das in der Proxmox-Oberflaeche kaum auf, weil man dafuer jeden Pool
-einzeln aufklappen muss.
-
-Rein lesend, keine Aktion.
-"""
+"""Speicher-Übersicht: Belegung jedes Pools je Verbindung und Knoten, auf Wunsch mit dem Inhalt (welche Gast-Disks auf
+welchem Pool liegen, etwa unerwartet auf `local` statt `local-lvm`). Rein lesend."""
 
 from __future__ import annotations
 
@@ -28,8 +22,8 @@ CONTENT_LABEL = {
 }
 
 
-# Speicherarten, die von Natur aus von aussen kommen. Proxmox setzt `shared` dort nicht
-# immer selbst; ohne diese Liste stuenden sie je Knoten einzeln da.
+# Speicherarten, die von außen kommen. Proxmox setzt `shared` dort nicht immer selbst; ohne diese Liste stünden sie je
+# Knoten einzeln da.
 _REMOTE_TYPES = {"nfs", "cifs", "glusterfs", "cephfs", "pbs"}
 
 
@@ -41,7 +35,7 @@ def is_shared(pool: dict[str, Any]) -> bool:
 
 
 def shared_label(nodes: list[str]) -> str:
-    """Kurzer Hinweis, wo ein geteilter Speicher verfuegbar ist."""
+    """Kurzer Hinweis, wo ein geteilter Speicher verfügbar ist."""
     if len(nodes) <= 3:
         return f"geteilt, verfügbar auf {', '.join(nodes)}"
     return f"geteilt, verfügbar auf {len(nodes)} Knoten"
@@ -58,15 +52,14 @@ def usage_tone(percent: float | None) -> str:
 
 
 def _de_number(value: float) -> str:
-    """1234.5 -> "1.234,5", 46.0 -> "46" (hoechstens eine Nachkommastelle)."""
+    """1234.5 -> "1.234,5", 46.0 -> "46" (höchstens eine Nachkommastelle)."""
     text = f"{value:,.1f}".replace(",", " ").replace(".", ",").replace(" ", ".")
     return text.removesuffix(",0")
 
 
 def format_bytes(value: Any) -> str:
-    """Wie der Widget-Filter `bytes` im Frontend (template.ts): 1024er-Stufen,
-    deutsches Komma -- die Kachel bekommt den Text fertig, damit auch eine
-    Fehlerzeile ohne Zahlen sauber aussieht."""
+    """Wie der Widget-Filter `bytes` im Frontend (template.ts): 1024er-Stufen, deutsches Komma. Die Kachel bekommt den
+    Text fertig, damit auch eine Fehlerzeile ohne Zahlen sauber aussieht."""
     try:
         num = float(value)
     except (TypeError, ValueError):
@@ -104,15 +97,9 @@ async def _guest_names(ctx: "ExtensionContext") -> dict[tuple[str, str], str]:
 async def collect_storage(
     ctx: "ExtensionContext", *, details: bool, merge_connections: bool = False
 ) -> dict[str, Any]:
-    """`details=False` (Widget, alle 30s): nur Belegung, eine Abfrage je Knoten.
-    `details=True` (Seite): zusaetzlich der Inhalt je Pool -- Gast-Disks einzeln,
-    Backups/ISOs/Vorlagen als Anzahl + Groesse.
-
-    Ein geteilter Speicher (NFS ...) steht in der Antwort jedes Knotens. Er kommt nur
-    einmal vor, mit `nodes` (wo er verfuegbar ist); Belegung und Groesse sind auf allen
-    Knoten gleich und werden nicht addiert. Mit `merge_connections` (Widget, ohne
-    Verbindungs-Gruppierung) auch ueber Verbindungen hinweg, wenn Name, Art und Groesse
-    gleich sind -- zwei eigenstaendige Proxmox-Server, die dieselbe Freigabe einbinden."""
+    """`details=False` (Widget): nur die Belegung, eine Abfrage je Knoten; `details=True` (Seite): zusätzlich der Inhalt je Pool.
+    Ein geteilter Speicher (NFS ...) steht in der Antwort jedes Knotens, kommt aber nur einmal vor, mit `nodes`: Belegung
+    und Größe sind überall gleich und werden nicht addiert. `merge_connections` gilt auch über Verbindungen hinweg."""
     pools: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     names = await _guest_names(ctx) if details else {}
@@ -139,14 +126,15 @@ async def collect_storage(
                 shared_keys: list[tuple[Any, ...]] = []
                 if shared:
                     shared_keys = [("conn", conn_name, storage)]
+                    # Über Verbindungen hinweg nur bei gleichem Namen, gleicher Art und Größe (zwei eigenständige Server mit
+                    # derselben Freigabe).
                     if merge_connections and pool.get("total"):
                         shared_keys.append(("all", storage, pool.get("type"), pool.get("total")))
                     known = next((shared_rows[k] for k in shared_keys if k in shared_rows), None)
                     if known is not None:
-                        # Auch die Schluessel dieses Funds merken: der naechste Knoten
-                        # derselben Verbindung findet die Zeile sonst nicht, wenn er
-                        # (z. B. Speicher gerade inaktiv, Groesse 0) den Verbindungs-
-                        # uebergreifenden Schluessel nicht bildet.
+                        # Auch die Schlüssel dieses Funds merken: der nächste Knoten derselben Verbindung findet die Zeile
+                        # sonst nicht, wenn er (z. B. Speicher gerade inaktiv, Größe 0) den verbindungsübergreifenden
+                        # Schlüssel nicht bildet.
                         for k in shared_keys:
                             shared_rows.setdefault(k, known)
                         if node_name not in known["nodes"]:

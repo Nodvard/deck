@@ -1,21 +1,14 @@
-"""System-Zustand eines Linux-Hosts in EINEM SSH-Aufruf (Roadmap Punkt 3: "Linux-Hosts
-per SSH"): Betriebssystem, Laufzeit, Last, CPU, RAM/Swap, Dateisysteme, fehlgeschlagene
-systemd-Dienste, ausstehende Paket-Updates, Neustart noetig, Temperatur.
-
-Rein lesend und ohne root: `apt list --upgradable` liest nur die vorhandenen
-Paketlisten (Stand der letzten Aktualisierung durch den Host selbst), `systemctl
-list-units` und `/proc` sind fuer jeden Nutzer lesbar. Abschnitte mit `@@name`, damit ein
-fehlender Befehl (kein systemd, kein apt) nur SEINEN Abschnitt leer laesst.
-
-Live gefunden beim Bau (Raspberry Pi): ein grosser Teil des Swaps war belegt -- ohne diese
-Seite nur per Konsole sichtbar.
-"""
+"""Systemzustand eines Linux-Servers in einem SSH-Aufruf: Betriebssystem, Last, RAM, Platten, Dienste, Updates,
+Neustart."""
 
 from __future__ import annotations
 
 import re
 from typing import Any
 
+# Rein lesend und ohne root: `apt list --upgradable` liest nur die vorhandenen Paketlisten (Stand der letzten
+# Aktualisierung durch den Server selbst). Die Abschnitte mit `@@name` sorgen dafür, dass ein fehlender Befehl (kein
+# systemd, kein apt) nur seinen eigenen Abschnitt leer lässt.
 SCRIPT = r"""echo @@os; (. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME")
 echo @@kernel; uname -r
 echo @@arch; uname -m
@@ -88,17 +81,14 @@ _KERNEL_RE = re.compile(r"^(\d+(?:[.-]\d+)*)(.*)$")
 
 
 def _kernel_key(version: str) -> tuple[tuple[int, int | str], ...]:
-    """Typsicherer Versionsvergleich: Zahlen als (0, int), Text als (1, str) --
-    nie `str > int` (Absturz bei gemischten Teilen)."""
+    """Typsicherer Versionsvergleich: Zahlen als (0, int), Text als (1, str), nie `str > int`."""
     return tuple((0, int(p)) if p.isdigit() else (1, p) for p in re.split(r"[.\-+~]", version) if p)
 
 
 def _newer_kernel(running: str | None, installed: list[str]) -> str | None:
-    """Neuester installierter Kernel DERSELBEN Art wie der laufende, falls er neuer ist.
-
-    Debian und Proxmox legen /var/run/reboot-required nicht an -- ein neuerer Kernel
-    in /boot heisst trotzdem: Neustart noetig. Auf dem Pi liegen 2712- und v8-Kernel
-    nebeneinander, deshalb nur Kernel mit gleicher Endung vergleichen."""
+    """Neuester installierter Kernel derselben Art wie der laufende, falls er neuer ist."""
+    # Debian und Proxmox legen `/var/run/reboot-required` nicht an; ein neuerer Kernel in /boot heißt trotzdem: Neustart
+    # nötig. Auf dem Pi liegen 2712- und v8-Kernel nebeneinander, deshalb zählen nur Kernel mit gleicher Endung.
     match = _KERNEL_RE.match(running or "")
     if not match:
         return None
@@ -123,7 +113,7 @@ def parse_disks(lines: list[str]) -> list[dict[str, Any]]:
     disks = []
     for line in lines:
         parts = line.split()
-        # df -P -T: Geraet, Typ, Groesse, belegt, frei, Prozent, Einhaengepunkt (1K-Bloecke)
+        # `df -P -T`: Gerät, Typ, Größe, belegt, frei, Prozent, Einhängepunkt (in 1K-Blöcken)
         if len(parts) < 7 or not parts[2].isdigit():
             continue
         size, used, avail = (int(parts[i]) * _KB for i in (2, 3, 4))
@@ -188,8 +178,8 @@ def parse_system_info(text: str) -> dict[str, Any]:
 
 
 def apply_thresholds(info: dict[str, Any], disk_percent: float, temp_c: float) -> None:
-    """Die Schwellen der Warnungen (Einstellungen) in die Anzeige tragen: Dateisysteme ab
-    `disk_percent` mindestens gelb, die Temperatur ab `temp_c` gelb ("temperature_tone")."""
+    """Trägt die Schwellen der Warnungen in die Anzeige ein: Dateisysteme ab `disk_percent` und Temperatur ab `temp_c`
+    gelb."""
     for disk in info.get("disks", []):
         if disk["percent"] >= disk_percent and disk["tone"] == "good":
             disk["tone"] = "warn"
@@ -199,7 +189,7 @@ def apply_thresholds(info: dict[str, Any], disk_percent: float, temp_c: float) -
 
 
 def summary_findings(info: dict[str, Any]) -> list[dict[str, str]]:
-    """Was Aufmerksamkeit braucht -- dieselben Schwellen wie die Anzeige."""
+    """Was Aufmerksamkeit braucht, mit denselben Schwellen wie die Anzeige."""
     findings: list[dict[str, str]] = []
     for disk in info.get("disks", []):
         if disk["tone"] != "good":

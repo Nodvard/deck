@@ -1,23 +1,16 @@
-"""SDK-Version — der Kompatibilitätsvertrag zwischen Kern und Extensions.
-
-Siehe docs/02-EXTENSION-API.md §10.
-"""
+"""SDK-Version: der Kompatibilitätsvertrag zwischen Kern und Extensions."""
 
 from __future__ import annotations
 
 API_VERSION = "0.1.0"
-"""SemVer. Eine Extension deklariert in ihrem Manifest `api_version`.
-
-Solange die Major-Version 0 ist, sind brechende Änderungen erlaubt — es existieren nur
-eigene Extensions. Anhebung auf 1.0.0, sobald die Phase-1-Extensions stehen.
-"""
+"""SemVer; eine Extension deklariert sie in ihrem Manifest als `api_version`.
+Änderungen sind nur abwärtskompatibel: Hinzufügen ja, Entfernen oder Umbenennen nur mit Übergang."""
 
 
 def is_compatible(required: str) -> bool:
     """Prüft, ob eine Extension mit `api_version = required` geladen werden darf.
 
-    Regel ab 1.0: gleiche Major-Version, Minor des Kerns >= Minor der Extension.
-    Unter 1.0 zählt die Minor-Version als Major (SemVer-Konvention für 0.x).
+    Ab 1.0: gleiche Major-Version, Minor des Kerns >= Minor der Extension; unter 1.0 zählt die Minor-Version als Major.
     """
     try:
         req = tuple(int(p) for p in required.split(".")[:3])

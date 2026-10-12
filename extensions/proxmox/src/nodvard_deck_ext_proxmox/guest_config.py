@@ -1,15 +1,4 @@
-"""Gast-Details: Kerne, RAM, Disks mit Speicherort, Netzwerk,
-Gast-Agent -- das, wofuer man in Proxmox die "Hardware"-/"Ressourcen"-Reiter aufmacht.
-
-Rein lesend. Bewusst eine WHITELIST: aus der Rohkonfiguration werden nur die hier
-benannten Felder uebernommen. Cloud-Init-Passwort (`cipassword`), SSH-Schluessel
-(`sshkeys`) und die frei beschreibbaren Notizen (`description`) verlassen Proxmox so
-nie ueber Nodvard Deck.
-
-Wo eine Gast-Disk liegt (z. B. unerwartet auf `local` statt `local-lvm`, ebenso EFI- und
-Cloud-Init-Laufwerke), steht hier direkt am Gast statt nur in der Speicher-Uebersicht;
-durchgereichte PCI-Geraete ebenfalls.
-"""
+"""Gast-Details: Kerne, RAM, Disks mit Speicherort, Netzwerk und Gast-Agent, rein lesend."""
 
 from __future__ import annotations
 
@@ -18,6 +7,8 @@ from typing import Any
 
 from .connector import ProxmoxApiError
 
+# Aus der Rohkonfiguration werden nur Felder einer Positivliste übernommen: Cloud-Init-Passwort (`cipassword`), SSH-Schlüssel
+# (`sshkeys`) und die frei beschreibbaren Notizen (`description`) verlassen Proxmox so nie über Nodvard Deck.
 QEMU_DISK_RE = re.compile(r"^(scsi|virtio|sata|ide|efidisk|tpmstate)\d+$")
 LXC_DISK_RE = re.compile(r"^(rootfs|mp\d+)$")
 UNUSED_RE = re.compile(r"^unused\d+$")
@@ -33,7 +24,7 @@ OS_LABEL = {
 
 
 def split_property(value: str) -> tuple[str | None, dict[str, str]]:
-    """Proxmox-Eigenschaftsstring -> (fuehrender Wert ohne "=", Schluessel/Wert).
+    """Proxmox-Eigenschaftsstring -> (führender Wert ohne "=", Schlüssel/Wert).
     "local-lvm:vm-100-disk-0,iothread=1,size=540G" -> ("local-lvm:vm-100-disk-0", {...})."""
     head: str | None = None
     options: dict[str, str] = {}
@@ -97,8 +88,7 @@ def _int(value: Any) -> int | None:
 
 
 def agent_enabled(value: Any) -> bool:
-    """`agent` ist "1", "0" oder "enabled=1,fstrim_cloned_disks=1" -- live beide
-    Schreibweisen gesehen ("1" und "enabled=1")."""
+    """`agent` ist "1", "0" oder "enabled=1,fstrim_cloned_disks=1"; beide Schreibweisen kommen vor."""
     if value is None:
         return False
     head, opts = split_property(str(value))
@@ -145,8 +135,8 @@ def summarize_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
 
 
 def _attach_ips(networks: list[dict[str, Any]], interfaces: list[tuple[str | None, str | None, list[str]]]) -> list[str]:
-    """Adressen den konfigurierten Netzwerkkarten ueber die MAC zuordnen. Rueckgabe:
-    Adressen, die keiner Karte zuzuordnen waren (Docker-Bruecken im Gast o. ae.)."""
+    """Adressen den konfigurierten Netzwerkkarten über die MAC zuordnen. Rückgabe: Adressen, die keiner Karte
+    zuzuordnen waren (Docker-Brücken im Gast o. ä.)."""
     by_mac = {n["mac"]: n for n in networks if n.get("mac")}
     leftover: list[str] = []
     for name, mac, ips in interfaces:

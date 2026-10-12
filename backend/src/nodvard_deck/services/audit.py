@@ -1,11 +1,6 @@
-"""Audit-Abfragen, Retention-Job, NDJSON-Export.
+"""Protokoll-Abfragen, Aufbewahrungsfrist und NDJSON-Export.
 
-`core.audit.write_entry` bleibt der einzige Schreibpfad; hier nur Lesen/Filtern/
-Loeschen jenseits der Retention -- letzteres die eine dokumentierte Ausnahme vom
-Append-only-Prinzip (docs/03-DATA-MODEL.md §4).
-
-Die periodische Ausfuehrung von `purge_expired()` uebernimmt der Kern-Scheduler
-(`core/scheduler.py`); hier existiert nur die pure, getestete Funktion.
+`core.audit.write_entry` bleibt der einzige Schreibweg; gelöscht wird nur jenseits der Frist (docs/03-DATA-MODEL.md §4).
 """
 
 from __future__ import annotations
@@ -32,9 +27,7 @@ RETENTION_MAX_DAYS = 3650
 
 
 async def log(session: AsyncSession, **kwargs) -> AuditEntry:  # noqa: ANN003
-    """Duenner Alias auf `core.audit.write_entry` -- eigener Name in `services/`, damit
-    Aufrufer (z. B. `services/auth.py`) gegen die Orchestrierungsschicht programmieren,
-    nicht direkt gegen `core/`."""
+    """Dünner Alias auf `core.audit.write_entry`, damit Dienste nicht direkt gegen `core/` programmieren."""
     return await core_audit.write_entry(session, **kwargs)
 
 
@@ -79,26 +72,21 @@ async def list_entries(
 
 
 LEGACY_UNKNOWN_NAME_REASONS = ("Unbekannter Benutzername.", "Eingabe zu lang.")
-"""Gruende, mit denen aeltere `login.failed`-Eintraege den eingetippten Text als Akteur trugen."""
+"""Gründe, mit denen ältere `login.failed`-Einträge den eingetippten Text als Akteur trugen."""
 
 
 TYPED_NAME_TRACES = ("username_ref", "username_length")
-"""Was neue Eintraege ueber einen unbekannten Namen festhalten (`services.auth.unknown_login_audit`)."""
+"""Was neue Einträge über einen unbekannten Namen festhalten (`services.auth.unknown_login_audit`)."""
 
 
 async def hide_typed_names(
     session: AsyncSession, entries: list[AuditEntry], *, keep_traces: bool = False
 ) -> list[AuditEntry]:
-    """Schwaerzt in Antworten die Namen, die jemand bei einer Anmeldung eingetippt hat.
+    """Schwärzt in Kopien der Einträge die Namen, die jemand bei einer Anmeldung eingetippt hat.
 
-    Neue Eintraege enthalten den Text gar nicht mehr (`services.auth.unknown_login_audit`),
-    nur Kennung und Laenge. Die sieht nur, wer `keep_traces` setzt (der Owner): mit der Kennung
-    liesse sich eine Vermutung pruefen (selbst als Namen eintippen, Kennungen vergleichen), die
-    Laenge verkleinert das Raten. Aeltere Eintraege trugen den Text noch: bei `login.failed` mit
-    unbekanntem Namen als `actor_id`, bei `login.locked` als `detail.username`. Die Migration
-    `f3a9c6d18e24` entfernt ihn aus der Datenbank; hier bleibt die Schwaerzung als zweite
-    Sicherung, und zwar fuer alle, auch den Owner. Dort steht „unbekannt“; die Zeilen in der
-    Datenbank bleiben dabei unveraendert (es sind Kopien, nichts wird gespeichert)."""
+    Kennung und Länge bleiben nur mit `keep_traces` (Owner), sonst ließe sich ein Name erraten."""
+    # Ältere Einträge trugen den Text selbst. Die Migration entfernt ihn; das Schwärzen bleibt als zweite Sicherung,
+    # auch für den Owner.
     candidates = [
         e for e in entries
         if e.action in ("login.failed", "login.locked") and (
@@ -127,10 +115,9 @@ async def hide_typed_names(
 
 
 async def effective_retention_days(session: AsyncSession, *, fallback: int) -> int:
-    """Aufbewahrungsdauer des Protokolls in Tagen: die Einstellung `audit.retention_days`
-    (Einstellungen, System), sonst `fallback` (die Umgebungsvariable). Ein gespeicherter Wert
-    ausserhalb von 7 bis 3650 (etwa von Hand in die Tabelle geschrieben) zaehlt als nicht
-    gesetzt: lieber die Umgebung nehmen als das Protokoll fast leer zu raeumen."""
+    """Aufbewahrungsdauer des Protokolls in Tagen: `audit.retention_days`, sonst `fallback`.
+
+    Ein Wert außerhalb von 7 bis 3650 zählt als nicht gesetzt, damit nicht versehentlich fast alles gelöscht wird."""
     from . import settings as settings_service
 
     stored = await settings_service.get_global(session, RETENTION_KEY)
@@ -140,8 +127,7 @@ async def effective_retention_days(session: AsyncSession, *, fallback: int) -> i
 
 
 async def purge_expired(session: AsyncSession, *, retention_days: int) -> int:
-    """Der Retention-Job (docs/03 §4: "nur der Retention-Job loescht jenseits von
-    audit.retention_days"). Gibt die Anzahl geloeschter Zeilen zurueck."""
+    """Löscht Einträge jenseits von `retention_days` (einzige Ausnahme vom Append-only) und gibt deren Zahl zurück."""
     cutoff = utcnow() - timedelta(days=retention_days)
     result = await session.execute(delete(AuditEntry).where(AuditEntry.ts < cutoff))
     await session.flush()

@@ -1,14 +1,6 @@
-"""Paket-Updates je Knoten: was wartet, ob ein neuer Kernel dabei ist, ob ein Neustart
-aussteht, wann Proxmox zuletzt nach Updates gesehen hat.
-
-Rein lesend -- `GET /nodes/{node}/apt/update` liest nur die Liste, die Proxmox' eigener
-naechtlicher Check (`aptupdate`-Task, `pve-daily-update.timer`) ohnehin aktualisiert.
-Installiert wird hier nichts; das bleibt Sache des Administrators.
-
-Typischer Fall: unter den wartenden Paketen ist ein neuer Kernel. Nach der Installation
-laeuft bis zum Neustart weiter der alte Kernel -- deshalb meldet diese Ansicht einen
-ausstehenden Neustart gesondert.
-"""
+"""Paket-Updates je Knoten: was wartet, ob ein neuer Kernel dabei ist, ob ein Neustart aussteht, wann Proxmox zuletzt
+nach Updates gesehen hat. Rein lesend: `GET .../apt/update` liest nur die Liste, die Proxmox' nächtlicher Check
+(`aptupdate`-Task, `pve-daily-update.timer`) aktualisiert; installiert wird hier nichts."""
 
 from __future__ import annotations
 
@@ -23,21 +15,19 @@ if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
 KERNEL_PACKAGE_RE = re.compile(r"^(proxmox|pve)-kernel-")
-# Konkretes, installierbares Kernel-Image ("proxmox-kernel-6.8.12-4-pve-signed",
-# aelter: "pve-kernel-5.15.108-1-pve") -- im Gegensatz zu Meta-Paketen wie
-# "proxmox-kernel-6.8", die nur auf das neueste Image zeigen.
+# Konkretes, installierbares Kernel-Image ("proxmox-kernel-6.8.12-4-pve-signed", älter: "pve-kernel-5.15.108-1-pve"), im
+# Gegensatz zu Meta-Paketen wie "proxmox-kernel-6.8", die nur auf das neueste Image zeigen.
 KERNEL_IMAGE_RE = re.compile(r"^(?:proxmox|pve)-kernel-(\d+\.\d+\.\d+-\d+)-pve(?:-signed)?$")
 
 
-# Proxmox startet den naechtlichen Check (`pve-daily-update.timer`) mit einer zufaelligen
-# Verzoegerung von mehreren Stunden; zwei gesunde Laeufe liegen deshalb bis zu rund 29 Stunden
-# auseinander. Erst deutlich darueber gilt der Check als ausgeblieben.
+# Proxmox startet den nächtlichen Check (`pve-daily-update.timer`) mit einer zufälligen Verzögerung von mehreren Stunden;
+# zwei gesunde Läufe liegen deshalb bis zu rund 29 Stunden auseinander. Erst deutlich darüber gilt der Check als ausgeblieben.
 CHECK_STALE_AFTER_S = 36 * 3600
 
 
 def check_age(last_check: Any, now: float | None = None) -> tuple[int | None, bool]:
-    """-> (Alter des letzten Prueflaufs in Sekunden, ob er laenger als `CHECK_STALE_AFTER_S` her ist).
-    Ohne (lesbare) Zeitangabe: (None, False) -- "kein Lauf gefunden" ist etwas anderes als "alt"."""
+    """-> (Alter des letzten Prüflaufs in Sekunden, ob er länger als `CHECK_STALE_AFTER_S` her ist). Ohne (lesbare)
+    Zeitangabe: (None, False), denn "kein Lauf gefunden" ist etwas anderes als "alt"."""
     if isinstance(last_check, bool) or not isinstance(last_check, int | float):
         return None, False
     age = max(0, int((time.time() if now is None else now) - last_check))
@@ -45,8 +35,7 @@ def check_age(last_check: Any, now: float | None = None) -> tuple[int | None, bo
 
 
 def version_key(version: str) -> tuple[int, ...]:
-    """"6.8.12-4" -> (6, 8, 12, 4). Reicht fuer Kernel-Versionen; nicht-numerische
-    Teile werden ignoriert statt zu raten."""
+    """"6.8.12-4" -> (6, 8, 12, 4). Reicht für Kernel-Versionen; nicht-numerische Teile werden ignoriert statt zu raten."""
     return tuple(int(part) for part in re.split(r"[.-]", version) if part.isdigit())
 
 
@@ -90,13 +79,14 @@ async def _node_updates(connector: Any, conn_name: str, node_name: str, *, detai
     running = str((status.get("current-kernel") or {}).get("release") or "") or None
     newest = newest_installed_kernel(versions)
     running_version = re.sub(r"-pve$", "", running) if running else None
+    # Nach der Installation eines Kernels läuft bis zum Neustart der alte weiter.
     reboot_pending = bool(newest and running_version and version_key(newest) > version_key(running_version))
     kernel_update = any(KERNEL_PACKAGE_RE.match(str(p.get("Package") or "")) for p in packages)
     summary, badge, tone = summarize(len(packages), kernel_update, reboot_pending, newest)
     manager = str(status.get("pveversion") or "")
     last_start = last[0].get("starttime") if last else None
     last_age, last_stale = check_age(last_start)
-    # Ergebnis des letzten Laufs im Klartext ("OK", "WARNINGS: 1", Fehlertext); leer, solange er noch laeuft.
+    # Ergebnis des letzten Laufs im Klartext ("OK", "WARNINGS: 1", Fehlertext); leer, solange er noch läuft.
     last_status = str(last[0].get("status")) if last and last[0].get("endtime") and last[0].get("status") else None
     result.update({
         "pve_version": manager.split("/")[1] if manager.count("/") >= 1 else manager or None,

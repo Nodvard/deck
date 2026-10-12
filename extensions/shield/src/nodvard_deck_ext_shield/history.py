@@ -1,11 +1,5 @@
-"""Dauerhafte, durchsuchbare Vorfalls-Historie ueber
-`ctx.db.session()` und die eigene Tabelle `ext_nexus_soc_incidents` (models.py).
-
-Suche: ein freier Text trifft Nachricht, Container, Host UND die KI-Zusammenfassung
-(man sucht selten nach dem exakten Containernamen, eher nach "OOM" oder "restart");
-dazu Status, Host, Zeitraum. Sortierung immer neueste zuerst, mit `limit`/`offset`
-und einer Gesamtzahl fuer die Seitennavigation.
-"""
+"""Dauerhafte, durchsuchbare Vorfalls-Historie in der Tabelle `ext_nexus_soc_incidents` (models.py),
+neueste zuerst, mit `limit`/`offset` und Gesamtzahl für die Seitennavigation."""
 
 from __future__ import annotations
 
@@ -32,8 +26,7 @@ STATUS_LABEL = {
     "resolved": "Erledigt",
     "dismissed": "Verworfen",
 }
-"""Deutsche Anzeige je Status -- fuer das Dashboard-Widget UND die Seite, damit beide
-dieselben Woerter zeigen."""
+"""Deutsche Anzeige je Status, gemeinsam für Widget und Seite, damit beide dieselben Wörter zeigen."""
 
 STATUS_TONE = {
     "open": "danger",
@@ -42,9 +35,8 @@ STATUS_TONE = {
     "resolved": "good",
     "dismissed": "neutral",
 }
-"""Farbe je Status, EXPLIZIT statt ueber den `| tone`-Filter: der erkennt Farben an
-Stichworten im Text ("critical", "warning" ...) -- ein deutsches Badge-Wort wuerde
-dort anders oder gar nicht greifen. Text und Farbe sind damit entkoppelt."""
+"""Farbe je Status, ausdrücklich statt über den `| tone`-Filter: Der erkennt Farben an Stichworten im Text
+("critical", "warning" ...), ein deutsches Badge-Wort griffe dort nicht."""
 
 
 def _ts(dt: datetime | None) -> float | None:
@@ -69,8 +61,8 @@ def record_out(r: IncidentRecord) -> dict[str, Any]:
         "host_id": r.host_id,
         "host_name": r.host_name,
         "target": r.target,
-        # Aeltere Titel tragen noch die eingefrorene Docker-Zeit ("... 4 seconds ago"): beim
-        # Anzeigen bereinigt, der gespeicherte Datensatz bleibt unveraendert.
+        # Ältere Titel tragen noch die eingefrorene Docker-Zeit ("... 4 seconds ago"): beim Anzeigen
+        # bereinigt, der gespeicherte Datensatz bleibt unverändert.
         "message": clean_incident_message(r.message),
         "occurrences": occurrences_of(details),
         "last_seen": float(last_seen) if isinstance(last_seen, (int, float)) and not isinstance(last_seen, bool) else _ts(r.created_at),
@@ -82,7 +74,7 @@ def record_out(r: IncidentRecord) -> dict[str, Any]:
         "ai_summary": r.ai_summary,
         "action_id": r.action_id,
         "is_crash": r.is_crash,
-        # Von selbst erledigt (der Container laeuft wieder): der Satz dazu, etwa "laeuft wieder seit 04:12".
+        # Von selbst erledigt (der Container läuft wieder): der Satz dazu, etwa "läuft wieder seit 04:12".
         "auto_resolved": details.get("auto_resolved") if isinstance(details.get("auto_resolved"), str) else None,
     }
 
@@ -92,9 +84,8 @@ class IncidentRepository:
         self._ctx = ctx
 
     async def save(self, incident: "Incident", *, status_changed: bool = False) -> None:
-        """Einfuegen oder aktualisieren (ein Vorfall wird beim Batch-Abschluss
-        gespeichert; derselbe Datensatz bekommt spaeter nur noch Statuswechsel). `status_changed`:
-        der Status wurde gerade gewechselt (etwa von selbst erledigt), Zeitpunkt vermerken."""
+        """Einfügen oder aktualisieren. `status_changed`: Der Status wurde gerade gewechselt (etwa von selbst
+        erledigt), der Zeitpunkt wird vermerkt."""
         async with self._ctx.db.session() as session:
             row = await session.get(IncidentRecord, incident.id)
             if row is None:
@@ -125,24 +116,17 @@ class IncidentRepository:
         window_s: float,
         action_waiting: Callable[[str], Awaitable[bool]] | None = None,
     ) -> dict[str, Any] | None:
-        """Gibt es zu diesem Container schon einen Vorfall, den noch niemand bearbeitet hat
-        (offen, Aktion vorgeschlagen, oder von Nodvard KI automatisch auf "Geprueft" gesetzt),
-        und liegt sein ERSTES Auftreten nicht laenger als `window_s` zurueck? Dann wird dort der
-        Zaehler erhoeht und das neue Auftreten vermerkt, statt einen weiteren Vorfall
-        anzulegen. Nach "Bestaetigen", "Erledigt" oder "Verwerfen" durch einen Menschen beginnt
-        der naechste Absturz wieder einen neuen Vorfall.
-
-        Das Fenster zaehlt ab dem ersten Auftreten, nicht ab dem letzten: sonst bliebe ein
-        Container, der jede Nacht abstuerzt, nach der ersten Meldung fuer immer still.
-
-        Ein Vorfall mit verknuepfter Aktion zaehlt nur mit, solange `action_waiting(action_id)`
-        sagt, dass die Aktion noch wartet oder laeuft. Ist sie erledigt (etwa der Neustart lief
-        schon, und der Container stuerzt trotzdem wieder ab), ist das ein neuer Vorfall.
-        Gibt den Vorfall zurueck oder `None`."""
+        """Zählt ein weiteres Auftreten auf den noch unbearbeiteten Vorfall dieses Containers, statt einen neuen
+        anzulegen. Gibt den Vorfall zurück oder `None`."""
+        # Unbearbeitet: offen, Aktion vorgeschlagen oder von Nodvard KI automatisch auf "Geprüft" gesetzt. Nach
+        # "Bestätigen", "Erledigt" oder "Verwerfen" durch einen Menschen beginnt der nächste Absturz einen
+        # neuen Vorfall.
         unhandled = or_(
             IncidentRecord.status.in_(("open", "proposed")),
             and_(IncidentRecord.status == "reviewed", IncidentRecord.status_changed_at.is_(None)),
         )
+        # Das Fenster zählt ab dem ersten Auftreten, nicht ab dem letzten: sonst bliebe ein Container, der jede Nacht
+        # abstürzt, nach der ersten Meldung für immer still.
         since = datetime.fromtimestamp(seen_at - window_s, UTC)
         async with self._ctx.db.session() as session:
             rows = (
@@ -159,6 +143,8 @@ class IncidentRepository:
                 )
             ).scalars().all()
             for row in rows:
+                # Mit verknüpfter Aktion zählt der Vorfall nur mit, solange sie noch wartet oder läuft; ist sie
+                # erledigt (etwa der Neustart lief und der Container stürzt trotzdem ab), ist es ein neuer Vorfall.
                 if row.action_id and (action_waiting is None or not await action_waiting(row.action_id)):
                     continue
                 details = dict(row.details) if isinstance(row.details, dict) else {}
@@ -166,7 +152,7 @@ class IncidentRepository:
                 last_ts = float(last) if isinstance(last, (int, float)) and not isinstance(last, bool) else _ts(row.created_at)
                 details["occurrences"] = occurrences_of(details) + 1
                 details["last_seen"] = max(seen_at, last_ts or seen_at)
-                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Änderung nicht
                 return record_out(row)
         return None
 
@@ -179,12 +165,9 @@ class IncidentRepository:
         waiting_note: str = "",
         action_waiting: Callable[[str], Awaitable[bool]] | None = None,
     ) -> list[dict[str, Any]]:
-        """Der Container laeuft wieder ruhig: alle noch nicht erledigten Vorfaelle dazu (offen, Aktion vorgeschlagen,
-        geprueft) auf "Erledigt", mit `note` in den Details (`auto_resolved`). Wartet die Aktion eines Vorfalls noch auf
-        Freigabe, haengt `waiting_note` an. Hatte noch niemand den Vorfall bearbeitet (wie in `merge_into_active`), steht
-        der alte Status in `auto_resolved_from` und der Vorfall darf wieder aufgehen, wenn der Container gleich wieder
-        abstuerzt (`reopen_auto_resolved`); einen von einem Menschen bestaetigten nie. Gibt die Vorfaelle mit
-        `previous_status` und `action_waiting` zurueck."""
+        """Der Container läuft wieder ruhig: setzt alle nicht erledigten Vorfälle dazu auf "Erledigt" und vermerkt
+        `note` in den Details (`auto_resolved`). Gibt die Vorfälle mit `previous_status` und `action_waiting`
+        zurück."""
         out: list[dict[str, Any]] = []
         async with self._ctx.db.session() as session:
             rows = (
@@ -199,16 +182,20 @@ class IncidentRepository:
             for row in rows:
                 waiting = bool(row.action_id) and action_waiting is not None and await action_waiting(row.action_id)
                 previous = row.status
+                # Unbearbeitete Vorfälle (wie in `merge_into_active`) merken sich den alten Status in
+                # `auto_resolved_from` und gehen bei einem neuen Absturz wieder auf (`reopen_auto_resolved`), von einem
+                # Menschen bestätigte nie.
                 unhandled = previous in ("open", "proposed") or row.status_changed_at is None
                 row.status = "resolved"
                 row.status_changed_at = datetime.now(UTC)
                 details = dict(row.details) if isinstance(row.details, dict) else {}
+                # Wartet die Aktion noch auf Freigabe, hängt `waiting_note` an.
                 details["auto_resolved"] = note + (f" {waiting_note}" if waiting and waiting_note else "")
                 if unhandled:
                     details["auto_resolved_from"] = previous
                 else:
                     details.pop("auto_resolved_from", None)
-                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Änderung nicht
                 item = record_out(row)
                 item["previous_status"] = previous
                 item["action_waiting"] = waiting
@@ -225,13 +212,11 @@ class IncidentRepository:
         window_s: float,
         action_waiting: Callable[[str], Awaitable[bool]] | None = None,
     ) -> dict[str, Any] | None:
-        """Stuerzt ein Container wieder ab, dessen Vorfall sich gerade von selbst erledigt hatte: diesen Vorfall wieder
-        oeffnen (alter Status aus `auto_resolved_from`) und den Absturz mitzaehlen -- statt ihn in der Ruhezeit zu
-        verlieren. Nur der juengste Vorfall des Containers kommt in Frage, und dieselben Regeln wie `merge_into_active`
-        gelten: nur Vorfaelle, die vor dem Selbst-Erledigen noch niemand
-        bearbeitet hatte (sonst fehlt `auto_resolved_from`), nie von Hand erledigte, und mit Aktion nur, solange sie
-        noch wartet (ist der Neustart gelaufen, ist der neue Absturz ein neuer Vorfall). Gibt den Vorfall mit
-        `previous_status` zurueck (oder `None`)."""
+        """Öffnet den eben von selbst erledigten Vorfall wieder (alter Status aus `auto_resolved_from`) und zählt den
+        neuen Absturz mit, statt ihn in der Ruhezeit zu verlieren. Gibt den Vorfall mit `previous_status` zurück
+        oder `None`."""
+        # Es gelten die Regeln von `merge_into_active`: nur Vorfälle, die vor dem Selbst-Erledigen unbearbeitet waren
+        # (sonst fehlt `auto_resolved_from`), nie von Hand erledigte, und mit Aktion nur, solange sie noch wartet.
         since = datetime.fromtimestamp(seen_at - window_s, UTC)
         async with self._ctx.db.session() as session:
             rows = (
@@ -247,8 +232,8 @@ class IncidentRepository:
                     .limit(1)
                 )
             ).scalars().all()
-            # Nur der juengste Vorfall dieses Containers kommt in Frage: ein aelterer, selbst erledigter darf nicht wieder
-            # aufgehen, wenn danach schon ein neuerer kam (etwa mit gelaufenem Neustart) -- dann ist es ein neuer Vorfall.
+            # Nur der jüngste Vorfall des Containers kommt in Frage: Ein älterer, selbst erledigter darf nicht wieder
+            # aufgehen, wenn danach schon ein neuerer kam (etwa nach einem gelaufenen Neustart).
             for row in rows:
                 details = dict(row.details) if isinstance(row.details, dict) else {}
                 if row.status != "resolved" or not details.get("auto_resolved"):
@@ -261,7 +246,7 @@ class IncidentRepository:
                 details.pop("auto_resolved", None)
                 details["occurrences"] = occurrences_of(details) + 1
                 details["last_seen"] = seen_at
-                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Änderung nicht
                 row.status = previous if previous in ("open", "proposed", "reviewed") else "open"
                 row.status_changed_at = None
                 item = record_out(row)
@@ -270,8 +255,8 @@ class IncidentRepository:
         return None
 
     async def recently_auto_resolved(self, *, host_name: str, target: str, since: float) -> bool:
-        """Hat sich seit `since` (Unix-Zeit) ein Vorfall dieses Containers von selbst erledigt? Dann war das Letzte, was
-        man erfahren hat, "laeuft wieder" -- ein neuer Absturz darf nicht in der Ruhezeit verschwinden."""
+        """Hat sich seit `since` (Unix-Zeit) ein Vorfall dieses Containers von selbst erledigt? Dann darf ein neuer
+        Absturz nicht in der Ruhezeit verschwinden."""
         async with self._ctx.db.session() as session:
             rows = (
                 await session.execute(
@@ -289,7 +274,7 @@ class IncidentRepository:
         return any(isinstance(row.details, dict) and row.details.get("auto_resolved") for row in rows)
 
     async def recent_action_ids(self, *, host_name: str, target: str, limit: int = 5) -> list[tuple[str, bool]]:
-        """Die Aktionen der juengsten Vorfaelle dieses Containers (neueste zuerst, ohne Doppelte), je mit der Angabe, ob
+        """Aktionen der jüngsten Vorfälle dieses Containers (neueste zuerst, ohne Doppelte), je mit der Angabe, ob
         sich der Vorfall danach von selbst erledigt hat (der Container lief also wieder ruhig)."""
         async with self._ctx.db.session() as session:
             rows = (
@@ -329,14 +314,14 @@ class IncidentRepository:
             previous = row.status
             row.status = status
             row.status_changed_at = datetime.now(UTC)
-            # Von Hand geaendert: nie mehr von selbst wieder oeffnen, und nach "Wieder oeffnen" gilt der Satz
-            # "von selbst erledigt" nicht mehr (auch nicht als Erholung fuer `recent_action_ids`).
+            # Von Hand geändert: nie mehr von selbst wieder öffnen, und nach "Wieder öffnen" gilt der Satz
+            # "von selbst erledigt" nicht mehr (auch nicht als Erholung für `recent_action_ids`).
             details = dict(row.details) if isinstance(row.details, dict) else {}
             dropped = [key for key in ("auto_resolved_from",) + (("auto_resolved",) if status != "resolved" else ()) if key in details]
             if dropped:
                 for key in dropped:
                     details.pop(key)
-                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Aenderung nicht
+                row.details = details  # neu zuweisen, sonst merkt SQLAlchemy die JSON-Änderung nicht
             out = record_out(row)
             out["previous_status"] = previous
             return out
@@ -355,6 +340,8 @@ class IncidentRepository:
     ) -> tuple[list[dict[str, Any]], int]:
         conditions = []
         if q:
+            # Der freie Text trifft auch die KI-Zusammenfassung: Man sucht eher nach "OOM" oder "restart" als nach dem
+            # exakten Containernamen.
             needle = f"%{q.strip().lower()}%"
             conditions.append(
                 or_(
@@ -398,7 +385,7 @@ class IncidentRepository:
             return {status: int(count) for status, count in result.all()}
 
     async def hosts(self) -> list[str]:
-        """Alle Hostnamen, die je einen Vorfall hatten -- fuer den Host-Filter der Seite."""
+        """Alle Hostnamen, die je einen Vorfall hatten, für den Host-Filter der Seite."""
         async with self._ctx.db.session() as session:
             result = await session.execute(
                 select(IncidentRecord.host_name).distinct().order_by(IncidentRecord.host_name)

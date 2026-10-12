@@ -1,24 +1,12 @@
-"""Live-Detail eines Linux-Hosts wie im Task-Manager/HWiNFO -- in EINEM SSH-Aufruf.
-
-Moeglichst genau: pro Kern, Takt, Temperaturen,
-RAM-Aufschluesselung, jede Platte und jede Netzwerkkarte einzeln, Prozesse. Alles aus
-`/proc` und `/sys`, ohne root und ohne Zusatzpakete (auf dem Pi zusaetzlich
-`vcgencmd` fuer Drosselung/Unterspannung, falls vorhanden).
-
-Raten (CPU, Platten-/Netz-Durchsatz, Prozess-CPU) brauchen zwei Messpunkte: das Skript
-liest die Zaehler, schlaeft 1 s und liest sie erneut. Die echte Zeitspanne kommt aus
-`/proc/uptime` (Hundertstelsekunden), nicht aus der Annahme "genau 1 s".
-
-`metrics_from_live()` macht daraus die flachen Werte fuer den Verlauf (Kern:
-core/metrics_history.py) -- dieselben Schluessel wie der Proxmox-Anbieter, soweit es
-sie dort gibt.
-"""
+"""Live-Detail eines Linux-Servers wie im Task-Manager, aus `/proc` und `/sys` in einem SSH-Aufruf, ohne root."""
 
 from __future__ import annotations
 
 import re
 from typing import Any
 
+# Raten (CPU, Platten- und Netz-Durchsatz, Prozess-CPU) brauchen zwei Messpunkte: Das Skript liest die Zähler, schläft 1
+# s und liest sie erneut. Die echte Zeitspanne kommt aus `/proc/uptime`, nicht aus der Annahme „genau 1 s“.
 _SNAPSHOT = r"""echo @@t{n}; cut -d' ' -f1 /proc/uptime
 echo @@stat{n}; grep '^cpu' /proc/stat
 echo @@net{n}; tail -n +3 /proc/net/dev
@@ -86,7 +74,7 @@ def _cpu_lines(lines: list[str]) -> dict[str, list[int]]:
 
 
 def _cpu_usage(a: list[int], b: list[int]) -> dict[str, float] | None:
-    """Felder: user nice system idle iowait irq softirq steal ..."""
+    """Felder von `/proc/stat`: user nice system idle iowait irq softirq steal ..."""
     if len(a) < 5 or len(b) < 5:
         return None
     delta = [y - x for x, y in zip(a, b)]
@@ -126,8 +114,8 @@ def _diskstats(lines: list[str]) -> dict[str, list[int]]:
 
 
 def _procs(lines: list[str]) -> dict[int, tuple[str, int, int]]:
-    """/proc/<pid>/stat: `pid (comm) state ...` -- comm darf Leerzeichen/Klammern
-    enthalten, deshalb am LETZTEN ')' trennen. -> pid: (name, utime+stime, rss_pages)."""
+    """`/proc/<pid>/stat` als pid: (Name, utime + stime, rss_pages)."""
+    # `comm` darf Leerzeichen und Klammern enthalten, deshalb wird an der letzten ')' getrennt.
     out: dict[int, tuple[str, int, int]] = {}
     for line in lines:
         head, sep, tail = line.rpartition(")")
@@ -137,7 +125,7 @@ def _procs(lines: list[str]) -> dict[int, tuple[str, int, int]]:
         fields = tail.split()
         if not pid_str.strip().isdigit() or len(fields) < 22:
             continue
-        # tail beginnt bei Feld 3 (state): utime=Feld 14 -> Index 11, stime 12, rss 24 -> 21
+        # `tail` beginnt bei Feld 3 (state): utime ist Feld 14 (Index 11), stime 12, rss Feld 24 (Index 21).
         try:
             out[int(pid_str)] = (name, int(fields[11]) + int(fields[12]), int(fields[21]))
         except ValueError:
@@ -156,10 +144,7 @@ def _meminfo(lines: list[str]) -> dict[str, int]:
 
 
 def _temperatures(lines: list[str]) -> list[dict[str, Any]]:
-    """thermal_zone* und hwmon* melden auf vielen Systemen (z. B. dem Pi) denselben
-    Sensor doppelt: hwmon-Eintraege ohne eigenes Label ("temp1") mit demselben Wert wie
-    eine thermal_zone werden verworfen; beschriftete hwmon-Sensoren ("Core 0",
-    "Composite") bleiben immer."""
+    """Temperaturen aus `thermal_zone*` und `hwmon*`, ohne die doppelt gemeldeten Sensoren."""
     zones: list[dict[str, Any]] = []
     hwmon: list[dict[str, Any]] = []
     for line in lines:
@@ -171,9 +156,9 @@ def _temperatures(lines: list[str]) -> list[dict[str, Any]]:
             chunks = line[len("hwmon "):].split("|")
             if len(chunks) == 3 and chunks[2].strip().lstrip("-").isdigit():
                 hwmon.append({"source": chunks[0].strip(), "label": chunks[1].strip(), "celsius": round(int(chunks[2].strip()) / 1000, 1)})
-    # Derselbe Sensor unter zwei Namen (Pi: thermal_zone "cpu-thermal" == hwmon
-    # "cpu_thermal/temp1"), zwei Lesezeitpunkte -> leicht andere Werte. Ein unbeschrifteter
-    # hwmon-Eintrag faellt weg, wenn eine thermal_zone gleichen Namens oder gleichen Werts existiert.
+    # Derselbe Sensor kommt oft unter zwei Namen (Pi: thermal_zone "cpu-thermal" und hwmon "cpu_thermal/temp1"), wegen
+    # zwei Lesezeitpunkten mit leicht anderem Wert. Ein unbeschrifteter hwmon-Eintrag ("temp1") fällt weg, wenn es eine
+    # thermal_zone gleichen Namens oder Werts gibt; beschriftete ("Core 0", "Composite") bleiben immer.
     def _norm(name: str) -> str:
         return re.sub(r"[^a-z0-9]", "", name.lower())
 
@@ -249,7 +234,7 @@ def parse_live(text: str) -> dict[str, Any]:
             "write_bps": round((b[6] - a[6]) * _SECTOR / dt),
             "read_iops": round((b[0] - a[0]) / dt, 1),
             "write_iops": round((b[4] - a[4]) / dt, 1),
-            # "Aktive Zeit" wie im Task-Manager: Anteil der Zeit mit laufendem I/O.
+            # Wie die „Aktive Zeit“ im Task-Manager: Anteil der Zeit mit laufendem I/O.
             "busy_percent": min(100.0, round((b[9] - a[9]) / (dt * 10), 1)),
         })
 
@@ -286,7 +271,7 @@ def parse_live(text: str) -> dict[str, Any]:
                             "size": size, "used": used, "available": avail,
                             "percent": round(100.0 * used / (used + avail), 1) if used + avail else 0.0})
 
-    # Prozesse: CPU wie im Task-Manager = Anteil an ALLEN Kernen.
+    # Prozesse: CPU wie im Task-Manager als Anteil an allen Kernen.
     p0, p1 = _procs(s.get("proc0", [])), _procs(s.get("proc1", []))
     users: dict[int, str] = {}
     for line in s.get("users", []):
@@ -333,7 +318,7 @@ def parse_live(text: str) -> dict[str, Any]:
 
 
 def metrics_from_live(live: dict[str, Any]) -> dict[str, float]:
-    """Flache Werte fuer Live-Ringe und Verlauf -- Schluessel wie beim Proxmox-Anbieter."""
+    """Flache Werte für Live-Ringe und Verlauf, mit denselben Schlüsseln wie der Proxmox-Anbieter."""
     values: dict[str, float] = {}
     total = live["cpu"].get("total")
     if total:

@@ -11,7 +11,7 @@ from ._legacy import legacy_getattr
 
 
 class NodvardError(Exception):
-    """Basis für alle SDK-Fehler. (Bis zur Umbenennung `LatticeError`: der alte Name bleibt als Alias.)"""
+    """Basis für alle SDK-Fehler (der alte Name `LatticeError` bleibt als veralteter Alias)."""
 
 
 class PermissionDenied(NodvardError):
@@ -31,15 +31,13 @@ class PermissionDenied(NodvardError):
         return (self.__class__, (self.ext_id, self.permission), dict(self.__dict__))
 
 
+# Eigene Geheimnisse sind die, die die Erweiterung unter ihrer Kennung oder einer alten Kennung (`legacy_ids`) angelegt
+# hat, über `ctx.secrets.create()` oder ihre Einstellungsseite. Fremde stammen von einer anderen Erweiterung, vom Kern
+# oder von Hand aus der allgemeinen Tresor-Verwaltung.
 class SecretNotOwned(PermissionDenied):
-    """`ctx.secrets.replace()` oder `ctx.secrets.delete()` auf ein Geheimnis, das nicht dieser Erweiterung gehoert:
-    angelegt von einer anderen Erweiterung, vom Kern oder von Hand ueber die allgemeine Tresor-Verwaltung. Lesen
-    bleibt mit `secrets.read:<label>` erlaubt (etwa ein gemeinsam genutzter Zugang); ersetzen oder loeschen darf eine
-    Erweiterung nur ihre eigenen. Als eigene gelten Geheimnisse, die sie unter ihrer Kennung oder einer frueheren
-    (`legacy_ids`) angelegt hat, ueber `ctx.secrets.create()` oder ueber ihre Einstellungsseite.
-
-    `login_secret=True`: das Geheimnis gehoert zur Zwei-Faktor-Anmeldung eines Kontos. Das darf eine Erweiterung
-    auch nicht lesen (`get_handle()`). Aeltere Kerne kennen den Fehler nicht und pruefen das nicht."""
+    """`ctx.secrets.replace()`/`delete()` auf ein Geheimnis, das nicht dieser Erweiterung gehört (Lesen bleibt mit
+    `secrets.read:<label>` erlaubt). `login_secret=True`: Geheimnis der Zwei-Faktor-Anmeldung eines Kontos, das auch
+    `get_handle()` nicht liefert; ältere Kerne kennen den Fehler nicht und prüfen das nicht."""
 
     def __init__(self, ext_id: str, label: str, *, login_secret: bool = False) -> None:
         if login_secret:
@@ -84,13 +82,12 @@ class HostUnreachable(NodvardError):
     pass
 
 
+# Ältere Kerne haben die Klasse nicht, dort scheitert schon der Import. Eine Erweiterung, die auch dort laufen soll,
+# importiert sie in `try/except ImportError` und kehrt ohne sie einfach zurück (ältere Kerne verbuchen das als `sent`).
 class NotificationSkipped(NodvardError):
-    """Ein Benachrichtigungskanal (`NotificationChannel.send`) gibt diese Meldung bewusst nicht weiter, zum
-    Beispiel weil sie unter der dort eingestellten Mindest-Stufe liegt. Kein Fehler: Der Kern verbucht die
-    Zustellung als `skipped` (nicht `failed`, nicht `sent`), `NotifyResult.skipped` sagt es dem Absender, und
-    `raise_on_failure` wirft deswegen nicht. Ältere Kerne haben die Klasse nicht, dort scheitert schon der Import.
-    Eine Erweiterung, die auch dort laufen soll, importiert sie in `try/except ImportError` und kehrt ohne sie
-    einfach zurück (ältere Kerne verbuchen das als `sent`), siehe docs/02-EXTENSION-API.md §2."""
+    """Ein Kanal (`NotificationChannel.send`) gibt die Meldung bewusst nicht weiter, etwa unter seiner Mindest-Stufe.
+    Kein Fehler: Der Kern verbucht `skipped` (nicht `failed`, nicht `sent`), `NotifyResult.skipped` sagt es dem
+    Absender, und `raise_on_failure` wirft deswegen nicht."""
 
 
 class NotificationNotDelivered(NodvardError):
@@ -120,17 +117,14 @@ class InvalidRegistration(NodvardError):
     """Eine Registrierung verletzt eine Regel der Schnittstelle."""
 
 
+# Entsteht im TLS-Handshake, bevor ein Byte der Anfrage (Kopf, Zugangsdaten, Körper) gesendet wurde. Die HTTP-Schicht
+# reicht sie meist eingepackt weiter (bei `httpx` als `__cause__`/`__context__` eines `ConnectError`); wer sie erkennen
+# will, sucht in der Kette danach. Zugleich ein `ssl.SSLCertVerificationError` (damit ein `ssl.SSLError`): nur so
+# behandeln die TLS-Schichten von asyncio und anyio sie als gescheiterten Handshake.
 class CertificateMismatch(NodvardError, ssl.SSLCertVerificationError):
-    """Ein Aufruf mit `pinned_sha256` (`ctx.http`) traf auf ein anderes Zertifikat als das bestaetigte.
-
-    Entsteht im TLS-Handshake, bevor ein Byte der Anfrage (Kopf, Zugangsdaten, Koerper) gesendet wurde. Die
-    HTTP-Schicht reicht sie meist eingepackt weiter (bei `httpx` als `__cause__`/`__context__` eines
-    `ConnectError`); wer sie erkennen will, sucht in der Kette danach. `expected`/`actual`: die Fingerabdruecke
-    (`AB:CD:...`), `actual` ist leer, wenn der Server gar kein Zertifikat gezeigt hat. Der Text ist ein fester
-    deutscher Satz ohne Angaben vom Server.
-
-    Ist zugleich ein `ssl.SSLCertVerificationError` (und damit ein `ssl.SSLError`): nur so behandeln die
-    TLS-Schichten von asyncio und anyio sie als gescheiterten Handshake."""
+    """Ein Aufruf mit `pinned_sha256` (`ctx.http`) traf auf ein anderes Zertifikat als das bestätigte; es wurde vorher
+    nichts gesendet. `expected`/`actual`: Fingerabdrücke (`AB:CD:...`), `actual` ist leer, wenn der Server kein
+    Zertifikat gezeigt hat. Der Text ist ein fester deutscher Satz ohne Angaben vom Server."""
 
     _TEXT = "Das Zertifikat des Servers passt nicht zum bestätigten Fingerabdruck. Es wurde nichts gesendet."
 
@@ -146,7 +140,7 @@ class CertificateMismatch(NodvardError, ssl.SSLCertVerificationError):
         return self._TEXT
 
 
-# Alter Name vor der Umbenennung: dasselbe Objekt, mit DeprecationWarning (siehe _legacy.py).
+# Veralteter Name `LatticeError`: dasselbe Objekt, mit DeprecationWarning (siehe _legacy.py).
 _LEGACY_NAMES = {"LatticeError": "NodvardError"}
 __getattr__ = legacy_getattr(__name__, _LEGACY_NAMES, globals())
 if typing.TYPE_CHECKING:

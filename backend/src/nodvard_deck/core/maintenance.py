@@ -1,14 +1,6 @@
-"""Wartungsfenster -- docs/03-DATA-MODEL.md §9.
-
-Verallgemeinert das frueher hartcodierte 3:45-4:45-Fenster zu einer Liste aus
-(Cron-Ausdruck fuer den Fensterstart, Dauer in Minuten, betroffene Hosts) --
-docs/03 §9 woertlich. **Symmetrisch** angewandt heisst: `is_in_window()` ist die
-EINZIGE Pruefung, die `services.notifications.send()` fuer JEDE host-bezogene
-Benachrichtigung gleich aufruft, unabhaengig vom Inhalt ("wieder da" vs. "nicht
-erreichbar") -- der dokumentierte Bestandsfehler war genau, dass nur eine Richtung
-unterdrueckt wurde, weil zwei unterschiedliche Codepfade existierten. Hier gibt es nur
-einen.
-"""
+"""Wartungsfenster (`maintenance.windows`): Meldungen zu Servern in einem laufenden Fenster werden unterdrückt.
+`is_in_window()` ist dafür die einzige Prüfung und gilt für jede host-bezogene Meldung gleich, auch für "wieder da";
+sonst würde nur eine Richtung unterdrückt."""
 
 from __future__ import annotations
 
@@ -26,16 +18,10 @@ from .timezone import get_timezone
 async def is_in_window(
     session: AsyncSession, *, host_id: str | None, host_ids: Sequence[str] | None = None
 ) -> bool:
-    """`maintenance.windows` (docs/03 §9) ist eine Liste von
-    `{"cron": "<5-Feld-Crontab fuer den Fensterstart>", "duration_minutes": int,
-    "host_ids": ["<id>", ...] | "all"}`. Nutzt APSchedulers `CronTrigger`
-    (ohnehin schon Abhaengigkeit, D-08) statt einer eigenen Cron-Bibliothek: der
-    juengste Fensterstart im Rueckblick-Fenster `[now - duration, now]` laesst sich
-    darueber exakt bestimmen, ohne selbst Kalenderarithmetik nachzubauen.
-
-    `host_id`: die Meldung betrifft genau diesen Server. `host_ids`: Sammelmeldung ueber
-    mehrere Server -- still nur, wenn alle in einem laufenden Fenster liegen (verschiedene
-    Fenster duerfen sich ergaenzen). `host_id` hat Vorrang."""
+    """Liegt die Meldung in einem laufenden Wartungsfenster? `host_id`: die Meldung betrifft genau diesen Server.
+    `host_ids`: Sammelmeldung, still nur wenn alle in einem laufenden Fenster liegen (verschiedene Fenster dürfen sich
+    ergänzen)."""
+    # Fenster: "cron" (5-Feld-Crontab für den Fensterstart), "duration_minutes" (int), "host_ids" (Liste von IDs oder "all").
     from ..services import settings as settings_service
 
     windows = await settings_service.get_global(session, "maintenance.windows", [])
@@ -44,9 +30,7 @@ async def is_in_window(
 
     targets = [host_id] if host_id else list(dict.fromkeys(host_ids or []))
     if not targets:
-        # Keine Host-Zuordnung -> strukturell kein Wartungsfenster zustaendig
-        # (services.notifications.send()'s Docstring: "eine Benachrichtigung ohne
-        # host_id im Payload wird nie unterdrueckt").
+        # Ohne Host-Zuordnung ist kein Wartungsfenster zuständig (eine Meldung ohne `host_id` wird nie unterdrückt).
         return False
 
     now = utcnow()
@@ -68,14 +52,14 @@ async def is_in_window(
 
 
 def _window_covers_now(cron: str, duration_minutes: float, now, zone: str = LOCAL_TIMEZONE) -> bool:  # noqa: ANN001 - datetime
-    # Der Cron meint die eingestellte Ortszeit (Einstellung `system.timezone`) wie der
-    # Zeitplan-Waehler und die Jobs, nicht UTC -- sonst liegt "03:00" im Sommer bei 05:00
-    # deutscher Zeit.
+    # Der Cron meint die eingestellte Ortszeit (`system.timezone`) wie Zeitplan-Wähler und Jobs, nicht UTC; sonst läge
+    # "03:00" im Sommer bei 05:00 deutscher Zeit.
     try:
         trigger = cron_trigger(cron, timezone=zone)
-    except Exception:  # noqa: BLE001 - ein kaputtes Muster blockt nichts, statt den Aufrufer abzuschiessen
+    except Exception:  # noqa: BLE001 - ein kaputtes Muster blockt nichts, statt den Aufrufer abzuschießen
         return False
 
+    # Letzter Fensterstart im Rückblick `[now - duration, now]`; so braucht es keine eigene Kalenderarithmetik.
     lookback_start = now - timedelta(minutes=duration_minutes)
     last_start = trigger.get_next_fire_time(None, lookback_start)
     return last_start is not None and last_start <= now

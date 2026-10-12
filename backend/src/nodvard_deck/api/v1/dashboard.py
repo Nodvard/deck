@@ -1,11 +1,6 @@
-"""Dashboard-Layouts -- docs/04-API.md (`GET /dashboard/layouts`,
-`GET/PUT /dashboard/layouts/{id}`).
+"""Dashboard-Layouts: `GET /dashboard/layouts` und `GET/PUT /dashboard/layouts/{id}`.
 
-**Bewusst NICHT Teil dieser Runde:** ein `POST /dashboard/layouts` fuer zusaetzliche,
-benannte Layouts -- docs/04 zeigt keinen eigenen Anlege-Endpunkt, nur Lesen/Aendern
-eines (impliziten) Standard-Layouts pro Nutzer. `GET /dashboard/layouts` legt beim
-allerersten Aufruf automatisch ein leeres Standard-Layout an (`services.dashboard.
-get_or_create_default()`), damit ein frischer Nutzer sofort etwas Bearbeitbares hat.
+Das leere Standard-Layout entsteht beim ersten Abruf der Liste; einen Anlege-Endpunkt für weitere Layouts gibt es nicht.
 """
 
 from __future__ import annotations

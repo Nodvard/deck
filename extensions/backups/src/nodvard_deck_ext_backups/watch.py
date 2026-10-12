@@ -1,54 +1,4 @@
-"""Backup-Waechter: meldet von selbst, wenn ein Backup fehlschlaegt -- und wenn derselbe
-Job danach wieder erfolgreich lief. Landet im Kern-Benachrichtigungs-Center
-("Meldungen").
-
-Nur Zustandswechsel, nie derselbe Fehlschlag bei jeder Pruefung erneut. Der Zustand liegt
-in `data_dir/watch-state.json` (ein Neustart von Nodvard Deck loest keine Meldungsflut aus).
-"Laeuft" und "unbekannt" aendern nichts: ein laufender Wiederholungsversuch ist noch kein
-"wieder in Ordnung".
-
-Hintergrund: ein fehlschlagender VZDump-Job (z. B. "Broken pipe" zum NFS-Ziel) kann
-wochenlang unbemerkt bleiben, wenn niemand aktiv nachschaut.
-
-Ursache in Klartext: Bevor eine Fehlschlag-Meldung rausgeht, liest der Waechter das Protokoll des Laufs
-(`ProxmoxBackupProvider.failure_cause`, failure_text.py) und schreibt "Ursache" und "Was tun" dazu -- nur die feste
-Erklaerung, nie die Zeile von Proxmox (die kann Pfade und Adressen enthalten und ginge mit dem Push nach aussen; sie
-steht auf der Seite). Laesst sich das nicht lesen, geht die Meldung ohne diesen Zusatz raus. Gelesen wird nur, wenn
-die Meldung wirklich rausgeht, nicht bei jeder Pruefung. Ein Lauf mit "WARNINGS: n" gilt als erfolgreich.
-
-Backup zu alt: Dass eine VM gar nicht mehr gesichert wird (Job geloescht oder abgeschaltet,
-Ziel weg, Knoten lange aus), faellt in keinem Fehlschlag auf. Darum meldet der Waechter je VM
-einmal, wenn die juengste ERFOLGREICHE Sicherung aelter als ihre Frist ist, und einmal Entwarnung,
-sobald eine neue gelingt. Die Frist ist `backup_max_age_days` (Standard 3, mindestens 2) -- oder, wenn der
-Backup-Job der VM seltener laeuft (z. B. nur samstags), dessen Abstand aus dem Zeitplan (`schedule.py`) -- plus
-`AGE_GRACE_SECONDS` Luft, damit ein Lauf, der gerade erst startet oder spaeter fertig wird, keinen Alarm samt
-Entwarnung ausloest. Gehoert eine VM zu mehreren Jobs, zaehlt der kuerzeste Abstand; abgeschaltete Jobs zaehlen
-nicht, und ein nicht lesbarer Zeitplan heisst: nur die Einstellung. Solange fuer die VM eine Sicherung laeuft,
-kommt keine neue Meldung und der bisherige Zustand bleibt stehen. Geprueft werden VMs mit einem Backup-Job
-(auch einem abgeschalteten) und VMs ohne Job, fuer die noch Sicherungen auf einem Speicher liegen
-(Job geloescht). VMs ohne Job UND ohne Sicherung gehen den Waechter nichts an (die Seite zeigt
-sie als "ungeschuetzt"), ebenso VMs, die dort als "bewusst ohne Backup" markiert sind, und die
-unter `backup_age_skip` (VMID, `Verbindung/VMID` oder Name). Als Zeitpunkt zaehlt der neuere von
-beiden: der letzte erfolgreiche VZDump-Lauf der VM und die neueste Sicherungsdatei auf den Speichern.
-Ein Wert nur aus dem Lauf-Verlauf reicht zum Entwarnen, zum Melden muss auch der Blick auf die
-Speicher moeglich gewesen sein -- eine nicht lesbare Verbindung meldet nie "zu alt". Die Speicher werden
-hoechstens alle `INVENTORY_CACHE_SECONDS` gelesen (`InventoryCache`); vor einer NEUEN Meldung wird frisch gelesen.
-Die Entwarnung, die nur eine neue Datei auf einem Speicher bringt, kann deshalb bis zu drei Stunden dauern; ein neuer
-erfolgreicher Lauf im Verlauf wirkt sofort.
-Hat dieselbe VM schon eine offene Fehlschlag-Meldung (ein Job schlaegt fehl), kommt "zu alt" nicht
-zusaetzlich: es ist dieselbe Stoerung. Sobald die Fehlschlag-Meldung zu ist und die Sicherung noch
-immer zu alt waere, meldet der Waechter es dann. Die Meldungen laufen durch dieselbe Fensterlogik.
-
-Wartungsfenster: beide Meldungen tragen die Host-ID der VM. Hat ein Fenster den
-Fehlschlag stumm geschaltet (`ctx.notify.send()` sagt das), merkt sich der Waechter
-"stumm gemeldet" und fragt danach nur `ctx.notify.would_suppress()` (kein Verlaufseintrag
-je Pruefung). Ist das Fenster vorbei und der Job noch fehlgeschlagen, kommt die Meldung
-einmal hoerbar nach; lief er im Fenster schon wieder erfolgreich, kommt nichts nach.
-Die Entwarnung richtet sich nach dem Fehlschlag: War er hoerbar und faellt nur die
-Entwarnung ins Fenster, kommt sie nach dem Fenster einmal hoerbar nach -- einen gehoerten
-Alarm schliesst immer eine gehoerte Entwarnung, aber nicht mitten in der Nacht
-(docs/02-EXTENSION-API.md §2, "Meldungen und Wartungsfenster").
-"""
+"""Backup-Wächter: meldet Fehlschläge, die Entwarnung danach und zu alte Sicherungen, nur bei Zustandswechsel."""
 
 from __future__ import annotations
 
@@ -75,18 +25,25 @@ IN_WINDOW_TITLE = " (im Wartungsfenster)"
 RECOVERED_IN_WINDOW = "Schon im Wartungsfenster wieder erfolgreich (dort nur im Verlauf, ohne Push)."
 RECOVERED_AFTER_WINDOW = "Der Fehlschlag lag im Wartungsfenster (dort nur im Verlauf, ohne Push)."
 
+# "Backup zu alt": Dass eine VM gar nicht mehr gesichert wird (Job gelöscht oder abgeschaltet, Ziel weg, Knoten lange
+# aus), fällt in keinem Fehlschlag auf. Darum meldet der Wächter je VM einmal, wenn die jüngste erfolgreiche Sicherung
+# älter als ihre Frist ist, und einmal Entwarnung. Frist: `backup_max_age_days` oder, wenn der Job der VM seltener
+# läuft (z. B. nur samstags), dessen Abstand aus dem Zeitplan (`schedule.py`), plus `AGE_GRACE_SECONDS`.
 AGE_MAX_DAYS_DEFAULT = 3
 AGE_MAX_DAYS_MIN = 2
 AGE_MAX_DAYS_MAX = 60
 AGE_GRACE_SECONDS = 6 * 3600
-"""Luft auf jede Frist: ein Job, der gerade erst startet oder etwas spaeter fertig wird, soll keinen Alarm samt
-Entwarnung ausloesen."""
+"""Luft auf jede Frist: ein Job, der gerade erst startet oder etwas später fertig wird, soll keinen Alarm samt
+Entwarnung auslösen."""
 AGE_RUNNING_MAX_SECONDS = 24 * 3600
-"""Eine Sicherung, die laenger als das laeuft, gilt als haengend und haelt "Backup zu alt" nicht mehr zurueck."""
+"""Eine Sicherung, die länger als das läuft, gilt als hängend und hält "Backup zu alt" nicht mehr zurück."""
+# Die Speicher werden höchstens so oft gelesen (`InventoryCache`); vor einer neuen Meldung wird frisch gelesen. Eine
+# Entwarnung, die nur eine neue Datei auf einem Speicher bringt, kann daher bis zu drei Stunden dauern; ein neuer
+# erfolgreicher Lauf im Verlauf wirkt sofort.
 INVENTORY_CACHE_SECONDS = 3 * 3600
 AGE_KEY = "age:"
-"""Praefix der Zustandseintraege "Backup zu alt" (`age:<Verbindung>--<VMID>`). Der Eintrag eines Jobs
-beginnt mit dem Verbindungsnamen und der darf kein ":" enthalten -- die beiden Arten verwechseln sich nie."""
+"""Präfix der Zustandseinträge "Backup zu alt" (`age:<Verbindung>--<VMID>`). Der Eintrag eines Jobs beginnt mit dem
+Verbindungsnamen, der kein ":" enthalten darf; die beiden Arten verwechseln sich also nie."""
 AGE_RECOVERED_AFTER_WINDOW = "Die Meldung lag im Wartungsfenster (dort nur im Verlauf, ohne Push)."
 AGE_RECOVERED_IN_WINDOW = "Schon im Wartungsfenster wieder aktuell (dort nur im Verlauf, ohne Push)."
 BACKUPS_PATH = "/ext/backups/backups"
@@ -106,10 +63,9 @@ def _when(epoch: Any) -> str:
 
 
 def _remember(last_run_at: Any, muted: bool, host_id: str | None = None) -> Any:
-    """Eintrag im Zustand: wie bisher der Zeitpunkt des gemeldeten Laufs; war die Meldung
-    im Wartungsfenster stumm, ein kleines Objekt mit `muted` und dem Host, fuer den das
-    Fenster galt (alte Dateien bleiben lesbar). Den Host merken wir uns, damit die Frage
-    "Fenster vorbei?" auch stimmt, wenn er in der Zeile gerade fehlt."""
+    """Eintrag im Zustand: der Zeitpunkt des gemeldeten Laufs; war die Meldung im Wartungsfenster stumm, ein Objekt
+    mit `muted` und dem Host, für den das Fenster galt (alte Dateien bleiben lesbar)."""
+    # Der Host wird gemerkt, damit die Frage "Fenster vorbei?" auch stimmt, wenn er in der Zeile gerade fehlt.
     if not muted:
         return last_run_at
     return {"run": last_run_at, "muted": True, **({"host": host_id} if host_id else {})}
@@ -124,32 +80,33 @@ def _muted_host(entry: Any) -> str | None:
 
 
 def _ok_pending(entry: Any) -> bool:
-    """Der Fehlschlag war hoerbar, die Entwarnung fiel ins Fenster und steht noch aus."""
+    """Der Fehlschlag war hörbar, die Entwarnung fiel ins Fenster und steht noch aus."""
     return isinstance(entry, dict) and entry.get("ok_pending") is True
 
 
 async def _send(ctx: "ExtensionContext", notification: Notification) -> bool:
-    """-> True, wenn ein Wartungsfenster den Push unterdrueckt hat. Aeltere Kerne liefern
-    kein Ergebnis -- dann gilt die Meldung als zugestellt."""
+    """-> True, wenn ein Wartungsfenster den Push unterdrückt hat. Ältere Kerne liefern kein Ergebnis, dann gilt die
+    Meldung als zugestellt."""
     result = await ctx.notify.send(notification)
     return getattr(result, "suppressed", False) is True
 
 
 async def _still_silenced(ctx: "ExtensionContext", host_id: str | None) -> bool:
-    """Laeuft das Wartungsfenster fuer diesen Host noch? Nur fragen, nichts anlegen. Im
-    Zweifel False: lieber einmal zu viel melden als eine Meldung verlieren."""
+    """Läuft das Wartungsfenster für diesen Host noch? Nur fragen, nichts anlegen.
+
+    Im Zweifel False: lieber einmal zu viel melden als eine Meldung verlieren."""
     if not host_id:
         return False
     try:
         return await ctx.notify.would_suppress(host_id=host_id) is True
-    except Exception:  # noqa: BLE001 - Nachmeldung ist ein Extra, der Waechter muss weiterlaufen
+    except Exception:  # noqa: BLE001 - Nachmeldung ist ein Extra, der Wächter muss weiterlaufen
         return False
 
 
 def _failed_notification(
     job: dict[str, Any], key: str, *, after_window: bool = False, cause: dict[str, Any] | None = None,
 ) -> Notification:
-    """`cause`: Ergebnis von `failure_cause` (oder None). Bei einer bekannten Ursache kommen ihre zwei festen Saetze dazu."""
+    """`cause`: Ergebnis von `failure_cause` (oder None). Bei einer bekannten Ursache kommen ihre zwei festen Sätze dazu."""
     host_id = job.get("host_id")
     body = (
         f"Letzter Lauf {_when(job.get('last_run_at'))} auf {job.get('node') or '?'}, "
@@ -157,6 +114,8 @@ def _failed_notification(
         "Details und 'Erneut versuchen' auf der Seite „Proxmox-Backups“."
     )
     if cause and cause.get("key") not in (None, "unknown"):
+        # Nur die feste Erklärung, nie die Zeile von Proxmox: die kann Pfade und Adressen enthalten und ginge mit
+        # dem Push nach außen (sie steht auf der Seite).
         body = f"Ursache: {cause['what']}\nWas tun: {cause['todo']}\n{body}"
     return Notification(
         title=f"Backup fehlgeschlagen: {job['name']}" + (AFTER_WINDOW_TITLE if after_window else ""),
@@ -168,8 +127,8 @@ def _failed_notification(
 
 
 def _recovered_notification(job: dict[str, Any], key: str, variant: str) -> Notification:
-    """`variant`: "plain" (normal), "after_window" (der Fehlschlag lag im Fenster) oder
-    "in_window" (die Entwarnung fiel ins Fenster und kommt jetzt nach)."""
+    """`variant`: "plain" (normal), "after_window" (der Fehlschlag lag im Fenster) oder "in_window" (die Entwarnung
+    fiel ins Fenster und kommt jetzt nach)."""
     host_id = job.get("host_id")
     note = {"plain": "", "after_window": RECOVERED_AFTER_WINDOW, "in_window": RECOVERED_IN_WINDOW}[variant]
     body = f"Letzter Lauf {_when(job.get('last_run_at'))}."
@@ -183,6 +142,12 @@ def _recovered_notification(job: dict[str, Any], key: str, variant: str) -> Noti
     )
 
 
+# Wartungsfenster: Beide Meldungen tragen die Host-ID der VM. Hat ein Fenster den Fehlschlag stumm geschaltet
+# (`ctx.notify.send()` sagt das), merkt sich der Wächter "stumm gemeldet" und fragt danach nur
+# `ctx.notify.would_suppress()` (kein Verlaufseintrag je Prüfung). Ist das Fenster vorbei und die Störung besteht noch,
+# kommt die Meldung einmal hörbar nach; war sie im Fenster schon wieder weg, kommt nichts nach. Die Entwarnung richtet
+# sich nach dem Fehlschlag: Ein gehörter Alarm schließt immer eine gehörte Entwarnung, aber nicht mitten in der Nacht
+# (docs/02-EXTENSION-API.md §2, "Meldungen und Wartungsfenster").
 async def _step(
     ctx: "ExtensionContext",
     alerted: dict[str, Any],
@@ -193,25 +158,23 @@ async def _step(
     alert: Callable[[bool], Notification],
     recovered: Callable[[str], Notification],
 ) -> int:
-    """Ein Eintrag gegen seinen Zustand (Fehlschlag je Job, "zu alt" je VM -- dieselbe Logik).
+    """Ein Eintrag gegen seinen Zustand (Fehlschlag je Job, "zu alt" je VM) -> Anzahl gesendeter Meldungen (0 oder 1).
 
-    `verdict`: "bad" (Stoerung besteht), "good" (in Ordnung) oder None (unbekannt, nichts aendern).
-    `value`: was im Zustand steht, solange die Meldung hoerbar war. `alert(after_window)` und
-    `recovered(variant)` bauen die Meldungen. -> Anzahl gesendeter Meldungen (0 oder 1)."""
+    `verdict`: "bad" (Störung besteht), "good" oder None (unbekannt, nichts ändern); `value` steht im Zustand."""
     if verdict == "bad" and (key not in alerted or _ok_pending(alerted[key])):
-        # Neue Stoerung (auch nach einer noch ausstehenden Entwarnung: die ist ueberholt)
+        # Neue Störung (auch nach einer noch ausstehenden Entwarnung: die ist überholt)
         alerted[key] = _remember(value, await _send(ctx, alert(False)), host_id)
         return 1
     if verdict == "bad" and _is_muted(alerted[key]) and not await _still_silenced(
         ctx, host_id or _muted_host(alerted[key])
     ):
-        # Im Wartungsfenster nur still gemeldet, Fenster vorbei, noch immer so:
-        # jetzt einmal hoerbar. Faellt auch das in ein Fenster, bleibt es "stumm".
+        # Im Wartungsfenster nur still gemeldet, Fenster vorbei, noch immer so: jetzt einmal hörbar. Fällt auch das
+        # in ein Fenster, bleibt es "stumm".
         scope = host_id or _muted_host(alerted[key])
         alerted[key] = _remember(value, await _send(ctx, alert(True)), scope)
         return 1
     if verdict == "good" and _ok_pending(alerted.get(key)):
-        # Entwarnung aus dem Fenster, weiter in Ordnung: jetzt einmal hoerbar.
+        # Entwarnung aus dem Fenster, weiter in Ordnung: jetzt einmal hörbar.
         if await _still_silenced(ctx, host_id or _muted_host(alerted[key])):
             return 0
         muted = await _send(ctx, recovered("in_window"))
@@ -224,8 +187,8 @@ async def _step(
         was_muted = _is_muted(alerted[key])
         muted = await _send(ctx, recovered("after_window" if was_muted else "plain"))
         if muted and not was_muted:
-            # Den Fehlschlag hat man gehoert, nur die Entwarnung fiel ins Fenster: nach
-            # dem Fenster einmal hoerbar nachholen, damit der Alarm nicht offen bleibt.
+            # Den Fehlschlag hat man gehört, nur die Entwarnung fiel ins Fenster: nach dem Fenster einmal hörbar
+            # nachholen, damit der Alarm nicht offen bleibt.
             alerted[key] = {"ok_pending": True, **({"host": host_id} if host_id else {})}
         else:
             del alerted[key]
@@ -238,8 +201,8 @@ def _now() -> float:
 
 
 def _setting_int(raw: Any, default: int, low: int, high: int) -> int:
-    """Ganze Zahl im erlaubten Bereich; alles andere (Text, Bruch, ausserhalb, nichts) gilt als
-    nicht gesetzt und ergibt den Standard -- ein falscher Wert darf den Waechter nie lahmlegen."""
+    """Ganze Zahl im erlaubten Bereich; alles andere (Text, Bruch, außerhalb, nichts) gilt als nicht gesetzt und
+    ergibt den Standard, ein falscher Wert darf den Wächter nie lahmlegen."""
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return default
     try:
@@ -250,15 +213,15 @@ def _setting_int(raw: Any, default: int, low: int, high: int) -> int:
 
 
 def _setting_days(raw: Any) -> int:
-    """Die Frist aus der Einstellung. Ein gespeicherter Wert 1 war frueher erlaubt und gilt wie die neue
-    Untergrenze (nicht als ungueltig und damit als Standard)."""
+    """Die Frist aus der Einstellung. Ein gespeicherter Wert 1 gilt wie die Untergrenze (nicht als ungültig und
+    damit als Standard)."""
     return max(_setting_int(raw, AGE_MAX_DAYS_DEFAULT, 1, AGE_MAX_DAYS_MAX), AGE_MAX_DAYS_MIN)
 
 
 def _job_gap_days(jobs: list[dict[str, Any]]) -> int | None:
-    """Abstand der Backup-Jobs einer VM in Tagen: der kuerzeste unter den eingeschalteten (der haeufigste Job sichert
-    sie). Kein eingeschalteter Job oder ein Zeitplan, den wir nicht lesen koennen (der koennte der haeufigste sein):
-    `None`, dann gilt nur die Einstellung."""
+    """Abstand der Backup-Jobs einer VM in Tagen: der kürzeste unter den eingeschalteten (der häufigste Job sichert
+    sie). Ohne eingeschalteten Job oder bei einem nicht lesbaren Zeitplan (er könnte der häufigste sein) `None`,
+    dann gilt nur die Einstellung."""
     gaps = []
     for job in jobs:
         if not job.get("enabled"):
@@ -271,8 +234,8 @@ def _job_gap_days(jobs: list[dict[str, Any]]) -> int | None:
 
 
 def _is_running(job: dict[str, Any], now: float) -> bool:
-    """Laeuft fuer diese Zeile (Job und Gast) gerade eine Sicherung? Eine, die schon laenger als
-    `AGE_RUNNING_MAX_SECONDS` laeuft, gilt als haengend."""
+    """Läuft für diese Zeile (Job und Gast) gerade eine Sicherung? Eine, die länger als
+    `AGE_RUNNING_MAX_SECONDS` läuft, gilt als hängend."""
     if job.get("last_status") != "running":
         return False
     started = job.get("last_run_at")
@@ -280,8 +243,8 @@ def _is_running(job: dict[str, Any], now: float) -> bool:
 
 
 class InventoryCache:
-    """Die Sicherungen auf den Speichern, im Arbeitsspeicher und hoechstens `INVENTORY_CACHE_SECONDS` alt: der Waechter
-    laeuft alle 15 Minuten, die Speicher sollen nicht ebenso oft gelesen werden. Nur ein fehlerfreies Ergebnis kommt
+    """Die Sicherungen auf den Speichern, im Arbeitsspeicher und höchstens `INVENTORY_CACHE_SECONDS` alt: der Wächter
+    läuft alle 15 Minuten, die Speicher sollen nicht ebenso oft gelesen werden. Nur ein fehlerfreies Ergebnis kommt
     hinein; nach einem Neustart ist er leer."""
 
     def __init__(self, seconds: float = INVENTORY_CACHE_SECONDS) -> None:
@@ -346,7 +309,7 @@ def _age_recovered_notification(vm: dict[str, Any], key: str, last_ok: float, va
 
 @dataclass
 class _AgeCase:
-    """Eine VM im Lauf der Pruefung "zu alt". `verdict`: "good", "bad" oder None (unbekannt, nichts aendern)."""
+    """Eine VM im Lauf der Prüfung "zu alt". `verdict`: "good", "bad" oder None (unbekannt, nichts ändern)."""
 
     key: str
     conn: str
@@ -361,7 +324,7 @@ def _limit_seconds(vm: dict[str, Any]) -> float:
 
 
 def _acts_on_bad(alerted: dict[str, Any], key: str) -> bool:
-    """Wuerde "zu alt" jetzt etwas ausloesen (neue Meldung, Nachmeldung nach dem Fenster)? Eine offene, schon gehoerte
+    """Würde "zu alt" jetzt etwas auslösen (neue Meldung, Nachmeldung nach dem Fenster)? Eine offene, schon gehörte
     Meldung bleibt einfach stehen."""
     return key not in alerted or _ok_pending(alerted[key]) or _is_muted(alerted[key])
 
@@ -393,8 +356,8 @@ async def _read_files(
 async def _running_without_job(
     ctx: "ExtensionContext", provider: "ProxmoxBackupProvider", now: float
 ) -> tuple[set[tuple[str, str]], set[str]] | None:
-    """Fuer welche Gaeste (Verbindung, VMID) laeuft gerade eine Sicherung, und auf welchen Verbindungen liess sich das
-    nicht lesen? `None`, wenn die Abfrage ganz scheiterte (dann meldet der Waechter vorsichtshalber nichts)."""
+    """Für welche Gäste (Verbindung, VMID) läuft gerade eine Sicherung, und auf welchen Verbindungen ließ sich das
+    nicht lesen? `None`, wenn die Abfrage ganz scheiterte (dann meldet der Wächter vorsichtshalber nichts)."""
     try:
         answer = await provider.running_backups()
     except Exception:
@@ -416,21 +379,27 @@ async def _check_age(
     unreachable: set[str],
     inventory_cache: InventoryCache,
 ) -> int:
-    """Pruefung "Backup zu alt" fuer alle VMs (siehe Modul-Docstring). -> Anzahl Meldungen."""
+    """Prüfung "Backup zu alt" für alle VMs. -> Anzahl Meldungen."""
+    # Geprüft werden VMs mit Backup-Job (auch abgeschaltet) und VMs ohne Job, für die noch Sicherungen auf einem
+    # Speicher liegen. VMs ohne Job und ohne Sicherung gehen den Wächter nichts an (die Seite zeigt sie als
+    # "ungeschützt"), ebenso "bewusst ohne Backup" und `backup_age_skip` (VMID, `Verbindung/VMID` oder Name).
+    # Gehört eine VM zu mehreren Jobs, zählt der kürzeste Abstand; abgeschaltete Jobs zählen nicht, bei einem nicht
+    # lesbaren Zeitplan gilt nur die Einstellung.
     settings = await ctx.settings.get()
     setting_days = _setting_days(settings.get("backup_max_age_days"))
     skip = _skip_names(settings.get("backup_age_skip"))
     now = _now()
 
-    # Wer hat noch eine offene Fehlschlag-Meldung? Fuer diese VM waere "zu alt" dieselbe Stoerung.
+    # Wer hat noch eine offene Fehlschlag-Meldung? Für diese VM wäre "zu alt" dieselbe Störung; ist sie zu und die
+    # Sicherung noch zu alt, meldet der Wächter es dann.
     open_failure = {
         (job["connection"], str(job["vmid"]))
         for job in jobs
         if job["job_ref"] in alerted and not _ok_pending(alerted[job["job_ref"]])
     }
 
-    # VMs mit Backup-Job: Name, Host, der letzte erfolgreiche Lauf aus dem Verlauf, ob gerade eine Sicherung laeuft
-    # und die Frist (Einstellung oder, wenn groesser, der Abstand der Jobs).
+    # VMs mit Backup-Job: Name, Host, der letzte erfolgreiche Lauf aus dem Verlauf, ob gerade eine Sicherung läuft
+    # und die Frist (Einstellung oder, wenn größer, der Abstand der Jobs).
     vms: dict[tuple[str, str], dict[str, Any]] = {}
     for job in jobs:
         vm = vms.setdefault(
@@ -446,7 +415,7 @@ async def _check_age(
         vm["days"] = max(setting_days, _job_gap_days(vm["jobs"]) or 0)
 
     # Wo wir gerade nicht lesen konnten, darf nichts als "zu alt" gelten und kein Zustand wegfallen:
-    # `unsure` je Verbindung; faellt eine ganze Abfrage aus, bleibt der Zustand liegen (`keep_state`),
+    # `unsure` je Verbindung; fällt eine ganze Abfrage aus, bleibt der Zustand liegen (`keep_state`),
     # und fehlt der Blick auf die Speicher ganz, meldet auch keine Verbindung "zu alt" (`unsure_all`).
     unsure = set(unreachable)
     keep_state = False
@@ -458,16 +427,17 @@ async def _check_age(
         unprotected = await provider.unprotected()
         unsure.update(e["connection"] for e in unprotected["errors"])
         for guest in unprotected["guests"]:
-            if not guest.get("acknowledged"):  # "bewusst ohne Backup" gehoert nicht hierher
+            if not guest.get("acknowledged"):  # "bewusst ohne Backup" gehört nicht hierher
                 jobless[(guest["connection"], str(guest["vmid"]))] = {
                     "name": guest["name"], "host_id": guest.get("host_id"), "task_ok": None, "running": False,
                     "jobs": [], "days": setting_days,
                 }
-    except Exception:  # die Liste ist ein Extra, die Pruefung der Jobs laeuft trotzdem
+    except Exception:  # die Liste ist ein Extra, die Prüfung der Jobs läuft trotzdem
         ctx.logger.warning("Backup-Wächter: Gäste ohne Job nicht lesbar, nur Gäste mit Job werden geprüft.", exc_info=True)
         keep_state = True
 
-    # Die Speicher brauchen wir nur, wenn es etwas gibt, das der Verlauf allein nicht klaert.
+    # Die Speicher werden nur gebraucht, wenn der Verlauf allein etwas nicht klärt: zum Entwarnen reicht er, zum Melden
+    # muss auch der Blick auf die Speicher möglich gewesen sein (eine nicht lesbare Verbindung meldet nie "zu alt").
     def stale(vm: dict[str, Any]) -> bool:
         return vm["task_ok"] is None or now - vm["task_ok"] > _limit_seconds(vm)
 
@@ -480,7 +450,7 @@ async def _check_age(
         keep_state = keep_state or unsure_all
 
     def judge() -> tuple[list[_AgeCase], set[str]]:
-        """Urteil je VM aus dem, was gerade gelesen ist. -> (Faelle, Schluessel aller geprueften VMs)."""
+        """Urteil je VM aus dem, was gerade gelesen ist. -> (Fälle, Schlüssel aller geprüften VMs)."""
         candidates = dict(vms)
         for ident, vm in jobless.items():
             if ident not in vms and ident in files:  # ohne Job und ohne jede Sicherung: nicht melden
@@ -492,19 +462,20 @@ async def _check_age(
                 continue
             key = f"{AGE_KEY}{conn}--{vmid}"
             evaluated.add(key)
+            # Als Zeitpunkt zählt der neuere von letztem erfolgreichem VZDump-Lauf und neuester Sicherungsdatei.
             known = [t for t in (vm["task_ok"], files.get((conn, vmid))) if t is not None]
             if not known:
-                continue  # nie erfolgreich gesichert: bei einem Fehlschlag meldet das die andere Pruefung
+                continue  # nie erfolgreich gesichert: bei einem Fehlschlag meldet das die andere Prüfung
             last_ok = max(known)
             verdict: str | None
             if now - last_ok <= _limit_seconds(vm):
                 verdict = "good"
             elif unsure_all or conn in unsure or conn in read_unsure:
-                verdict = None  # die Speicher waren nicht (vollstaendig) lesbar: nicht auf Verdacht melden
+                verdict = None  # die Speicher waren nicht (vollständig) lesbar: nicht auf Verdacht melden
             elif vm["running"]:
-                verdict = None  # gerade laeuft eine Sicherung: abwarten, der bisherige Zustand bleibt
+                verdict = None  # gerade läuft eine Sicherung: abwarten, der bisherige Zustand bleibt
             elif (conn, vmid) in open_failure and key not in alerted:
-                verdict = None  # dieselbe Stoerung steht schon als Fehlschlag da
+                verdict = None  # dieselbe Störung steht schon als Fehlschlag da
             else:
                 verdict = "bad"
             cases.append(_AgeCase(key, conn, vmid, vm, last_ok, verdict))
@@ -512,13 +483,13 @@ async def _check_age(
 
     cases, evaluated = judge()
     if cached and any(c.verdict == "bad" and _acts_on_bad(alerted, c.key) for c in cases):
-        # Eine neue Meldung stuetzt sich nie auf den Zwischenspeicher: inzwischen kann eine Sicherung dazugekommen sein.
+        # Eine neue Meldung stützt sich nie auf den Zwischenspeicher: inzwischen kann eine Sicherung dazugekommen sein.
         files, read_unsure, unsure_all, cached = await _read_files(ctx, provider, inventory_cache, now, fresh=True)
         keep_state = keep_state or unsure_all
         cases, evaluated = judge()
 
-    # Ein Gast ohne Job taucht in der Task-Liste der Jobs nicht auf: laeuft gerade eine Sicherung von Hand, bevor wir
-    # melden, nachsehen.
+    # Ein Gast ohne Job taucht in der Task-Liste der Jobs nicht auf: läuft gerade eine Sicherung von Hand, vor dem
+    # Melden nachsehen.
     pending = [c for c in cases if c.verdict == "bad" and not c.vm["jobs"] and _acts_on_bad(alerted, c.key)]
     if pending:
         answer = await _running_without_job(ctx, provider, now)
@@ -535,8 +506,8 @@ async def _check_age(
             lambda variant, case=case: _age_recovered_notification(case.vm, case.key, case.last_ok, variant),
         )
 
-    # Zustand von VMs, die nicht mehr zu pruefen sind (Job und Sicherungen weg, auf der Ausnahmeliste,
-    # "bewusst ohne Backup"), wegraeumen -- nur nicht, wo wir gerade nicht lesen konnten.
+    # Zustand von VMs, die nicht mehr zu prüfen sind (Job und Sicherungen weg, auf der Ausnahmeliste,
+    # "bewusst ohne Backup"), wegräumen, nur nicht, wo wir gerade nicht lesen konnten.
     if not keep_state:
         for key in [k for k in alerted if k.startswith(AGE_KEY) and k not in evaluated]:
             if key[len(AGE_KEY):].split("--", 1)[0] not in unsure | read_unsure:
@@ -545,7 +516,9 @@ async def _check_age(
 
 
 async def _would_alert(ctx: ExtensionContext, alerted: dict[str, Any], key: str, host_id: str | None) -> bool:
-    """Ginge bei "fehlgeschlagen" jetzt eine Meldung raus (wie in `_step`)? Nur dann lohnt es, das Protokoll zu lesen."""
+    """Ginge bei "fehlgeschlagen" jetzt eine Meldung raus (wie in `_step`)? Nur dann lohnt es, das Protokoll zu lesen.
+
+    Gelesen wird also nur, wenn die Meldung wirklich rausgeht, nicht bei jeder Prüfung."""
     if key not in alerted or _ok_pending(alerted[key]):
         return True
     return _is_muted(alerted[key]) and not await _still_silenced(ctx, host_id or _muted_host(alerted[key]))
@@ -562,9 +535,11 @@ async def _failure_cause(ctx: ExtensionContext, provider: ProxmoxBackupProvider,
 async def run_backup_watch(
     ctx: "ExtensionContext", provider: "ProxmoxBackupProvider", inventory_cache: InventoryCache | None = None
 ) -> dict[str, int]:
-    """`inventory_cache`: der Zwischenspeicher fuer die Sicherungen auf den Speichern; wer immer denselben uebergibt (der
-    Zeitplan-Job), liest sie hoechstens alle drei Stunden. Ohne ihn liest jeder Lauf neu."""
+    """`inventory_cache`: Zwischenspeicher für die Sicherungen auf den Speichern; wer immer denselben übergibt (der
+    Zeitplan-Job), liest sie höchstens alle drei Stunden. Ohne ihn liest jeder Lauf neu."""
     inventory_cache = inventory_cache if inventory_cache is not None else InventoryCache(0)
+    # Der Zustand liegt in einer Datei, damit ein Neustart keine Meldungsflut auslöst. "Läuft" und "unbekannt" ändern
+    # nichts: ein laufender Wiederholungsversuch ist noch kein "wieder in Ordnung".
     path = Path(str(ctx.data_dir)) / "watch-state.json"
     alerted: dict[str, Any] = _load(path)
     rows = await provider.list_jobs()
@@ -586,14 +561,14 @@ async def run_backup_watch(
                 job, key, after_window=after_window, cause=cause),
             lambda variant, job=job, key=key: _recovered_notification(job, key, variant),
         )
-    # Jobs, die es nicht mehr gibt, vergessen (sonst bliebe ihr Zustand ewig liegen) --
-    # aber nur auf erreichbaren Verbindungen, sonst kaeme dieselbe Meldung erneut.
+    # Jobs, die es nicht mehr gibt, vergessen (sonst bliebe ihr Zustand ewig liegen), aber nur auf erreichbaren
+    # Verbindungen, sonst käme dieselbe Meldung erneut.
     known = {job["job_ref"] for job in jobs}
     for key in [k for k in alerted if not k.startswith(AGE_KEY) and k not in known and k.split("--", 1)[0] not in unreachable]:
         del alerted[key]
     try:
         sent += await _check_age(ctx, provider, alerted, jobs, unreachable, inventory_cache)
-    except Exception:  # "zu alt" ist ein Extra: die Fehlschlag-Meldungen und der Zustand duerfen nie darunter leiden
+    except Exception:  # "zu alt" ist ein Extra: die Fehlschlag-Meldungen und der Zustand dürfen nie darunter leiden
         ctx.logger.warning("Backup-Wächter: Prüfung auf zu alte Sicherungen fehlgeschlagen.", exc_info=True)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(alerted, indent=1, sort_keys=True), encoding="utf-8")

@@ -1,17 +1,4 @@
-"""Duenner Client fuer die API des Nginx Proxy Managers (`/api/...`).
-
-- `POST /api/tokens {"identity", "secret"}` -> `{"token", "expires"}` (JWT, ISO-Zeit).
-  Mit Zwei-Faktor-Anmeldung kommt stattdessen `{"requires_2fa", "challenge_token"}` --
-  das unterstuetzen wir (noch) nicht und sagen es deutlich.
-- Danach `Authorization: Bearer <token>`. Das Token wird bis kurz vor Ablauf
-  wiederverwendet; ein 401 zwischendurch -> einmal neu anmelden.
-- `GET /api/nginx/proxy-hosts`, `GET /api/nginx/certificates`,
-  `POST /api/nginx/proxy-hosts/{id}/enable|disable` (-> `true`, bzw. 400 "Host is
-  already enabled/disabled").
-
-Aeltere NPM-Versionen liefern `enabled`/`ssl_forced` als 0/1 und `expires_on` als
-"YYYY-MM-DD HH:MM:SS" statt ISO -- beides wird hier toleriert.
-"""
+"""Dünner Client für die API des Nginx Proxy Managers (`/api/...`), angemeldet mit einem Token (JWT)."""
 
 from __future__ import annotations
 
@@ -36,11 +23,12 @@ from .transport import (
 
 SERVICE = "Nginx Proxy Manager"
 
+# Ab so vielen Tagen vor dem Ablauf gilt ein Zertifikat als "läuft bald ab".
 WARN_DAYS = 14
+# Nach einer abgelehnten Anmeldung so lange nicht erneut versuchen, sonst wäre jede Kachel-Aktualisierung ein Fehlversuch.
 LOGIN_RETRY_AFTER_S = 30.0
+# Das Token so früh erneuern, dass es nicht mitten in einem Aufruf abläuft.
 TOKEN_MARGIN_S = 120.0
-"""Token so lange vor dem Ablauf schon erneuern -- sonst laeuft es mitten in einem
-Aufruf ab."""
 
 
 class NpmError(ServiceError):
@@ -58,6 +46,7 @@ def parse_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
     text = value.strip().replace("Z", "+00:00")
+    # Ältere NPM-Versionen liefern "YYYY-MM-DD HH:MM:SS" statt ISO.
     if len(text) >= 19 and text[10] == " ":
         text = text[:10] + "T" + text[11:]
     try:
@@ -72,8 +61,7 @@ CERT_STATUS_TONE = {"ok": "good", "warn": "warn", "expired": "danger", "unknown"
 
 
 def certificate_state(expires_at: datetime | None, now: datetime, *, warn_days: int = WARN_DAYS) -> tuple[str, int | None]:
-    """(`ok`|`warn`|`expired`|`unknown`, volle Tage bis zum Ablauf -- negativ, wenn
-    schon abgelaufen)."""
+    """(`ok`, `warn`, `expired` oder `unknown`; volle Tage bis zum Ablauf, negativ wenn schon abgelaufen)."""
     if expires_at is None:
         return "unknown", None
     seconds = (expires_at - now).total_seconds()
@@ -148,9 +136,10 @@ def parse_proxy_host(raw: Any, certificates: dict[int, dict[str, Any]]) -> dict[
         "id": host_id,
         "domains": _domains(raw.get("domain_names")),
         "target": target,
-        # Fuer den Adress-Check (`address_check.py`): das Ziel in Teilen.
+        # Für den Adress-Check (`address_check.py`): das Ziel in Teilen.
         "forward_host": forward_host or None,
         "forward_port": port,
+        # Ältere NPM-Versionen liefern `enabled` und `ssl_forced` als 0/1.
         "enabled": as_bool(raw.get("enabled")),
         "ssl_forced": as_bool(raw.get("ssl_forced")),
         "certificate_id": cert_id,
@@ -220,6 +209,7 @@ class NpmClient:
         response = await self._send("POST", "/api/tokens", json={"identity": self._identity, "secret": password})
         body = json_body(response)
         raise_if_redirect(response, SERVICE, NpmError)
+        # POST /api/tokens {"identity", "secret"} liefert {"token", "expires"}.
         if response.status_code == 404 or (response.status_code < 400 and not isinstance(body, dict)):
             raise NpmError(
                 "Unter dieser Adresse antwortet keine Nginx-Proxy-Manager-Schnittstelle. Gemeint ist die "
@@ -230,6 +220,7 @@ class NpmClient:
         if response.status_code >= 400:
             detail = error_message(response)
             raise NpmError(f"Anmeldung beim Nginx Proxy Manager fehlgeschlagen (HTTP {response.status_code}{': ' + detail if detail else ''}).")
+        # Mit Zwei-Faktor-Anmeldung kommt stattdessen {"requires_2fa", "challenge_token"}; das unterstützen wir nicht.
         if body.get("requires_2fa"):
             raise NpmAuthError(
                 "Für dieses Konto ist die Zwei-Faktor-Anmeldung aktiv. Das wird noch nicht unterstützt – bitte im "
@@ -254,6 +245,7 @@ class NpmClient:
         token = await self._current_token()
         response = await self._send(method, path, token=token)
         if response.status_code == 401:
+            # Token abgelaufen oder widerrufen: genau einmal neu anmelden und wiederholen.
             async with self._lock:
                 if self._token == token:
                     self._token = None
@@ -293,9 +285,10 @@ class NpmClient:
         return [h for h in (parse_proxy_host(raw, by_id) for raw in body) if h is not None]
 
     async def set_host_enabled(self, host_id: int, enabled: bool) -> bool:
-        """`True`, wenn sich etwas geaendert hat; `False`, wenn der Host schon so war."""
+        """`True`, wenn sich etwas geändert hat; `False`, wenn der Host schon so war."""
         verb = "enable" if enabled else "disable"
         response = await self._api("POST", f"/api/nginx/proxy-hosts/{int(host_id)}/{verb}")
+        # Ist der Host schon so, antwortet NPM mit 400 "Host is already enabled/disabled".
         if response.status_code == 400 and "already" in (error_message(response) or "").lower():
             return False
         if response.status_code == 404:
@@ -306,6 +299,6 @@ class NpmClient:
         return True
 
     def forget(self) -> None:
-        """NPM kennt kein Abmelden -- das Token einfach verwerfen."""
+        """NPM kennt kein Abmelden: das Token einfach verwerfen."""
         self._token = None
         self._expires_at = 0.0

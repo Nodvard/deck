@@ -1,27 +1,5 @@
-"""Zustand des Starts: `<Datenordner>/.boot/` (nicht Teil von Sicherungen).
-
-Hier treffen sich `nodvard_deck.boot` (laeuft VOR der Anwendung), die Anwendung selbst, `nodvard_deck.admin`
-und die Notseite (`nodvard_deck.rescue`, nur Standardbibliothek -- sie liest dieselben Dateien mit eigenem
-kleinem Code; `tests/test_rescue.py` prueft, dass beide Seiten dasselbe meinen).
-
-* `state.json` -- was der Start ueber die Datenbank weiss: welche Version zuletzt gebootet hat, auf
-  welchen Migrationsstaenden die Datenbank steht, ob die Version nach der letzten Migration
-  **erfolgreich gestartet** ist (`started_ok`), die letzte Migration samt Vorher-Kopie, ein noch nicht
-  abgeschlossener Rueckweg (`revert`), solange eine eingespielte Sicherung noch nicht endgueltig ist der Stand
-  der ALTEN Datenbank (`pre_restore`, siehe `boot.py`) und der Grund des letzten gescheiterten Starts (`failure`,
-  bereinigt: keine Pfade, Passwoerter, SQL-Parameter). Alles darin wird beim Lesen auf Form und
-  Typ geprueft -- die Datei liegt zwar im eigenen Datenordner, aber ein halb geschriebener oder von
-  Hand veraenderter Stand darf nie zu einem Absturz fuehren.
-* `app.lock` -- die Sperre. Die laufende Anwendung (und die Notseite) halten sie, `boot` und
-  `admin restore-backup` pruefen sie: So spielt `boot` nie unter einer laufenden Anwendung ein
-  (z. B. durch ein `compose run` ohne `--entrypoint`), und `admin` raeumt keinen laufenden Upload
-  der Anwendung weg. `flock` gilt je geoeffneter Datei und endet mit dem Prozess -- auch wenn er
-  abstuerzt. Wo es nicht geht (Windows, ein Netzlaufwerk ohne `flock`), gibt es eine Sperre ohne
-  Wirkung (`held=False`), nie einen Fehler.
-* `rollback.json` -- ausdrueckliche Vormerkung "Stand vor dem Update wiederherstellen" (von der
-  Notseite oder spaeter vom Aktualisierungs-Helfer). Gilt 24 Stunden.
-* `rescue_code.txt` -- der Notfallcode der Notseite (siehe `rescue.py`).
-"""
+"""Zustand des Starts in `<Datenordner>/.boot/` (nicht Teil von Sicherungen), gemeinsam genutzt von `nodvard_deck.boot`, der
+Anwendung, `nodvard_deck.admin` und der Notseite."""
 
 from __future__ import annotations
 
@@ -45,6 +23,9 @@ except ImportError:  # pragma: no cover - Windows
 
 logger = logging.getLogger("nodvard_deck.bootstate")
 
+# Dateien: `state.json` (Stand des Starts), `app.lock` (Sperre), `rollback.json` (Vormerkung "Stand vor dem Update
+# wiederherstellen") und `rescue_code.txt` (Notfallcode, siehe `rescue.py`). Die Notseite (nur Standardbibliothek) liest
+# dieselben Dateien mit eigenem kleinem Code; `tests/test_rescue.py` prüft, dass beide Seiten dasselbe meinen.
 BOOT_DIR = ".boot"
 STATE_NAME = "state.json"
 LOCK_NAME = "app.lock"
@@ -55,13 +36,13 @@ ROLLBACK_TTL_S = 24 * 3600
 
 FAILURE_KINDS = (
     "migration_failed",   # die Migration ist gescheitert (die Datenbank ist, wie sie vorher war)
-    "revert_failed",      # ... und der Rueckweg auf die Kopie auch
-    "no_space",           # zu wenig Platz fuer die Kopie vor der Migration
-    "no_copy",            # die Kopie liess sich nicht anlegen
+    "revert_failed",      # ... und der Rückweg auf die Kopie auch
+    "no_space",           # zu wenig Platz für die Kopie vor der Migration
+    "no_copy",            # die Kopie ließ sich nicht anlegen
     "newer_data",         # die Datenbank ist neuer als diese Version
-    "copy_unusable",      # die Kopie fuer den Rueckweg fehlt oder ist kaputt
+    "copy_unusable",      # die Kopie für den Rückweg fehlt oder ist kaputt
     "db_unreadable",      # die Datenbank ist nicht lesbar
-    "rollback_failed",    # der Rueckweg einer Wiederherstellung ist gescheitert / unlesbares Journal
+    "rollback_failed",    # der Rückweg einer Wiederherstellung ist gescheitert / unlesbares Journal
     "unexpected",         # sonst etwas Unerwartetes
 )
 MIGRATION_STATES = ("running", "ok", "failed", "reverted")
@@ -86,9 +67,9 @@ def ensure_dir(data_dir: Path) -> Path:
     return _restore.make_private_dir(boot_dir(data_dir))
 
 
-# ---------------------------------------------------------------------------
-# state.json
-# ---------------------------------------------------------------------------
+# `state.json` hält fest, was der Start über die Datenbank weiß (Version, Migrationsstände, `started_ok`, letzte Migration, offener
+# Rückweg, `pre_restore`, Grund des letzten Fehlstarts). Beim Lesen wird alles auf Form und Typ geprüft: Ein halb geschriebener
+# oder von Hand veränderter Stand darf nie zu einem Absturz führen.
 
 
 def _str(value: object, limit: int = 200) -> str | None:
@@ -122,7 +103,7 @@ def _clean_migration(raw: object) -> dict[str, Any] | None:
         "state": state if state in MIGRATION_STATES else "failed",
     }
     if isinstance(raw.get("had_data"), bool):
-        clean["had_data"] = raw["had_data"]  # gab es vor der Migration etwas zu schuetzen? (siehe boot.decide)
+        clean["had_data"] = raw["had_data"]  # gab es vor der Migration etwas zu schützen? (siehe boot.decide)
     return clean
 
 
@@ -158,7 +139,7 @@ def _clean_failure(raw: object) -> dict[str, Any] | None:
 
 
 def clean_state(raw: object) -> dict[str, Any]:
-    """Nur bekannte Schluessel mit passendem Typ; alles andere faellt weg."""
+    """Nur bekannte Schlüssel mit passendem Typ; alles andere fällt weg."""
     if not isinstance(raw, dict):
         return {}
     state: dict[str, Any] = {"version": STATE_VERSION}
@@ -200,17 +181,19 @@ def state_path(data_dir: Path) -> Path:
 
 
 def read_state(data_dir: Path) -> dict[str, Any]:
-    """Der geprueft gelesene Stand; `{}`, wenn es ihn nicht gibt oder er unbrauchbar ist."""
+    """Der geprüft gelesene Stand; `{}`, wenn es ihn nicht gibt oder er unbrauchbar ist."""
     return clean_state(_restore.read_json(state_path(data_dir), max_bytes=1024 * 1024))
 
 
 def write_state(data_dir: Path, state: dict[str, Any]) -> None:
+    """Schreibt den bereinigten Stand. `scripts/deploy_pi.sh` liest `last_migration.at` und `started_ok` ohne JSON-Parser aus
+    der Datei (eingerückt, Schlüssel sortiert): das Format nicht ändern."""
     ensure_dir(data_dir)
     _restore.write_json_atomic(state_path(data_dir), clean_state(state))
 
 
 def update_state(data_dir: Path, **changes: Any) -> dict[str, Any]:
-    """Liest, setzt die genannten Schluessel (`None` entfernt sie) und schreibt zurueck."""
+    """Liest, setzt die genannten Schlüssel (`None` entfernt sie) und schreibt zurück."""
     state = read_state(data_dir)
     for key, value in changes.items():
         if value is None:
@@ -222,8 +205,8 @@ def update_state(data_dir: Path, **changes: Any) -> dict[str, Any]:
 
 
 def mark_started_ok(data_dir: Path, *, now: float | None = None) -> bool:
-    """Die Anwendung ist (nach einer Migration) vollstaendig gestartet. Nur wenn es schon einen Stand
-    gibt, also `boot` lief -- in Entwicklung und Tests entsteht so nichts im Datenordner."""
+    """Die Anwendung ist (nach einer Migration) vollständig gestartet. Nur wenn es schon einen Stand gibt, also `boot` lief;
+    in Entwicklung und Tests entsteht so nichts im Datenordner."""
     if not os.path.lexists(state_path(data_dir)):
         return False
     state = read_state(data_dir)
@@ -235,20 +218,19 @@ def mark_started_ok(data_dir: Path, *, now: float | None = None) -> bool:
     return True
 
 
-# ---------------------------------------------------------------------------
-# Sperre
-# ---------------------------------------------------------------------------
-
-
+# Die laufende Anwendung (und die Notseite) halten die Sperre, `boot` und `admin restore-backup` prüfen sie. So spielt `boot`
+# nie unter einer laufenden Anwendung ein (z. B. bei einem `compose run` ohne `--entrypoint`), und `admin` räumt keinen
+# laufenden Upload der Anwendung weg. `flock` gilt je geöffneter Datei und endet mit dem Prozess, auch bei einem Absturz. Wo es
+# nicht geht (Windows, Netzlaufwerk ohne `flock`), gibt es eine Sperre ohne Wirkung (`held=False`), nie einen Fehler.
 class LockHeld(Exception):
-    """Ein anderer Prozess haelt die Sperre (die laufende Anwendung, ein anderes `boot`)."""
+    """Ein anderer Prozess hält die Sperre (die laufende Anwendung, ein anderes `boot`)."""
 
 
 @dataclass
 class Lock:
     fd: int | None
     held: bool
-    """`False`: keine Sperre moeglich (Windows, Ordner nicht beschreibbar, Dateisystem ohne `flock`)."""
+    """`False`: keine Sperre möglich (Windows, Ordner nicht beschreibbar, Dateisystem ohne `flock`)."""
 
     def release(self) -> None:
         fd, self.fd = self.fd, None
@@ -259,7 +241,7 @@ class Lock:
 
 
 def _try_lock(path: Path, purpose: str) -> Lock:
-    """Ein Versuch. `LockHeld`, wenn ein anderer sie hat; sonst die Sperre oder eine ohne Wirkung."""
+    """Ein Versuch: `LockHeld`, wenn ein anderer sie hat, sonst die Sperre oder eine ohne Wirkung."""
     if fcntl is None:
         return Lock(None, False)
     try:
@@ -294,7 +276,7 @@ def acquire_lock(data_dir: Path, *, purpose: str = "app", wait_s: float = 0.0, p
 
 
 def is_locked(data_dir: Path) -> bool:
-    """Haelt gerade ein anderer Prozess die Sperre? (Ohne sie zu behalten.)"""
+    """Hält gerade ein anderer Prozess die Sperre? (Ohne sie zu behalten.)"""
     try:
         lock = acquire_lock(data_dir, purpose="pruefung")
     except LockHeld:
@@ -303,14 +285,9 @@ def is_locked(data_dir: Path) -> bool:
     return False
 
 
-# ---------------------------------------------------------------------------
-# Rueckweg-Vormerkung
-# ---------------------------------------------------------------------------
-
-
 def request_rollback(data_dir: Path, copy: str, *, by: str, now: float | None = None) -> None:
-    """Merkt vor: beim naechsten Start den Stand der Kopie `copy` wiederherstellen, auch wenn die neue
-    Version schon einmal gestartet ist (Aenderungen seit dem Update gehen dann verloren)."""
+    """Merkt vor, beim nächsten Start den Stand der Kopie `copy` wiederherzustellen, auch nach einem guten Start der neuen
+    Version (Änderungen seit dem Update gehen dann verloren). Von der Notseite oder vom Update-Helfer; gilt 24 Stunden."""
     if not _copy_name(copy):
         raise ValueError("ungueltiger Name der Kopie")
     ensure_dir(data_dir)
@@ -321,7 +298,7 @@ def request_rollback(data_dir: Path, copy: str, *, by: str, now: float | None = 
 
 
 def read_rollback(data_dir: Path, *, now: float | None = None) -> dict[str, Any] | None:
-    """Die gueltige Vormerkung oder `None` (nicht da, kaputt, abgelaufen, aus der Zukunft)."""
+    """Die gültige Vormerkung oder `None` (nicht da, kaputt, abgelaufen, aus der Zukunft)."""
     raw = _restore.read_json(boot_dir(data_dir) / ROLLBACK_NAME, max_bytes=4096)
     if not isinstance(raw, dict) or not _copy_name(raw.get("copy")):
         return None
@@ -347,10 +324,6 @@ def clear_rescue_code(data_dir: Path) -> bool:
         return False
 
 
-# ---------------------------------------------------------------------------
-# Bereinigtes Protokoll
-# ---------------------------------------------------------------------------
-
 _ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 _CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 _SQL_BLOCK = re.compile(r"\[(?:SQL|parameters):.*", re.IGNORECASE)
@@ -371,9 +344,8 @@ def _shorten_path(match: re.Match[str]) -> str:
 
 
 def sanitize_text(text: str, *, data_dir: Path | None = None, limit: int = _MAX_LINE) -> str:
-    """Ein Protokolltext fuer die Anzeige: ohne Pfade (der Datenordner heisst `<Daten>`), Zugangsdaten,
-    SQL-Parameter und lange undurchsichtige Zeichenketten. Nutzbar fuer die Fehlersuche bleibt die Art
-    des Fehlers, die Dateinamen und Zeilennummern."""
+    """Ein Protokolltext für die Anzeige: ohne Pfade (der Datenordner heißt `<Daten>`), Zugangsdaten, SQL-Parameter und
+    lange undurchsichtige Zeichenketten; für die Fehlersuche bleiben Art des Fehlers, Dateinamen und Zeilennummern."""
     text = _ANSI.sub("", text)
     text = _CONTROL.sub("", text)
     if data_dir is not None:

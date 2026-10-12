@@ -1,25 +1,6 @@
-"""Lesbare Namen für „Vorgeschlagen von“ / „Bestätigt von“.
+"""Lesbare Namen für „Vorgeschlagen von“ und „Bestätigt von“ in Aktionslisten.
 
-In der `actions`-Tabelle stehen nur Art und Kennung des Akteurs (`user` + UUID,
-`extension` + Erweiterungs-ID, `ai` + Modellname ...). Die Oberfläche soll daraus
-einen Namen machen -- der Kern löst ihn hier auf, in EINER Abfrage je Art für alle
-gelisteten Aktionen, statt dass jede Zeile nachfragt.
-
-Preisgegeben wird nur der Anzeigename (Benutzername bzw. Name der Erweiterung), nie
-weitere Nutzerfelder wie E-Mail oder Rollen. Aber: Benutzernamen anderer Nutzer standen
-vorher NICHT auf der Seite (nur die UUID), und `GET /actions` verlangt nur `hosts.read`,
-das auch der Betrachter (viewer) hat -- `GET /users` bleibt ihm dagegen verwehrt. Darum
-gilt:
-
-- den eigenen Namen sieht jeder,
-- die Namen anderer Nutzer sehen nur, wer `users.read` hat oder Aktionen entscheiden darf
-  (`actions.approve:<risiko>`, z. B. Bediener) -- wer freigibt, muss sehen, von wem der
-  Vorschlag kommt, sonst ist der Name für ihn wertlos,
-- alle anderen (Betrachter) sehen wie bisher den rohen Wert `user/<uuid>`.
-
-Namen von Erweiterungen und die festen Bezeichnungen (System, Zeitplan, KI) sind keine
-Nutzerdaten und stehen jedem offen. Ein Akteur, der sich nicht mehr auflösen lässt
-(gelöschter Nutzer, entfernte Erweiterung), fällt auf den rohen Wert `art/kennung` zurück.
+Aufgelöst wird mit einer Abfrage je Art; wer fremde Benutzernamen sehen darf, regelt `may_see_other_users`.
 """
 
 from __future__ import annotations
@@ -34,23 +15,24 @@ from ..models import Action, User
 from .auth import user_permissions
 from .extensions import get_records
 
-# Akteure ohne eigene Kennung, die sich nachschlagen liesse.
+# Akteure ohne eigene Kennung, die sich nachschlagen ließe.
 FIXED_LABELS = {"system": "System", "scheduler": "Zeitplan", "ai": "KI"}
 
-# Feste Kennungen unter der Art `system`, die einen eigenen Namen haben (z. B. Ergebnisse des Update-Helfers,
-# `services.update_helper`: Akteur `system`/`updater`).
+# Feste Kennungen unter `system` mit eigenem Namen, z. B. der Update-Helfer (`services.update_helper`).
 SYSTEM_LABELS = {"updater": "Update-Helfer"}
 
 
 def raw_actor(actor_type: str, actor_id: str) -> str:
-    """Der ungeschönte Wert, wie ihn die Oberfläche früher gezeigt hat."""
+    """Der rohe Wert `art/kennung`, auf den ein nicht aufgelöster Akteur zurückfällt."""
     return f"{actor_type}/{actor_id}"
 
 
+# `GET /actions` verlangt nur `hosts.read`, das auch der Betrachter hat; `GET /users` bleibt ihm verwehrt.
+# Fremde Namen bekommt er deshalb auch hier nicht.
 def may_see_other_users(viewer: User) -> bool:
-    """Darf `viewer` Benutzernamen ANDERER Nutzer sehen? Ja mit `users.read` (kennt sie aus
-    der Nutzerverwaltung ohnehin) oder mit einer beliebigen `actions.approve:*`-Berechtigung
-    (wer Vorschläge entscheidet, muss den Vorschlagenden erkennen). Der Owner hat `*`."""
+    """Darf `viewer` Benutzernamen anderer Nutzer sehen? Der Owner hat `*`.
+
+    Ja mit `users.read` oder `actions.approve:*`: Wer Vorschläge entscheidet, muss den Vorschlagenden erkennen."""
     permissions = user_permissions(viewer)
     return has_permission(permissions, "users.read") or any(
         permission.partition(":")[0] == "actions.approve" for permission in permissions
@@ -79,7 +61,7 @@ class ActorLabels:
         return self.actor(action.proposed_by_type, action.proposed_by_id)
 
     def approved_by(self, action: Action) -> str | None:
-        """Wer bestätigt/abgelehnt/verworfen hat -- immer ein Nutzer, sonst `None`."""
+        """Wer bestätigt, abgelehnt oder verworfen hat (immer ein Nutzer), sonst `None`."""
         if action.approved_by_user_id is None:
             return None
         return self._users.get(action.approved_by_user_id) or action.approved_by_user_id
@@ -88,13 +70,9 @@ class ActorLabels:
 async def load_actor_labels(
     session: AsyncSession, actions: Iterable[Action], *, viewer: User | None
 ) -> ActorLabels:
-    """Sammelt die Nutzer- und Erweiterungs-Kennungen aller `actions` und schlägt sie mit
-    je einer Abfrage nach (keine Abfrage, wenn es keine Kennung der Art gibt).
+    """Löst die Akteure der `actions` mit je einer Abfrage je Art zu Namen auf.
 
-    `viewer` ist, wer die Namen zu sehen bekommt: ohne `may_see_other_users()` werden nur
-    er selbst (ohne Abfrage) und keine anderen Nutzer aufgelöst. `None` heißt "kein
-    Betrachter" und löst alles auf -- nur für Aufrufer, die selbst schon abgesichert sind
-    (`ctx.actions.proposer_labels()` hinter der Route der Erweiterung)."""
+    Ohne `may_see_other_users()` sieht `viewer` nur den eigenen Namen; `None` löst alles auf (abgesicherte Aufrufer)."""
     user_ids: set[str] = set()
     extension_ids: set[str] = set()
     for action in actions:
@@ -119,8 +97,8 @@ async def load_actor_labels(
 
     extensions: dict[str, str] = {}
     if extension_ids:
-        # Die Kennung stammt aus der gespeicherten Aktion und kann die einer frueheren Version sein (nach einer
-        # Umbenennung, `legacy_ids`): `get_records` findet die Zeile fuer die heutige wie fuer jede alte Kennung.
+        # Die Kennung stammt aus der gespeicherten Aktion und kann nach einer Umbenennung eine alte sein (`legacy_ids`);
+        # `get_records` findet die Zeile für beide.
         for ext_id, record in (await get_records(session, extension_ids)).items():
             name = (record.manifest or {}).get("name")
             if isinstance(name, str) and name.strip():
@@ -132,11 +110,9 @@ async def load_actor_labels(
 async def load_user_labels(
     session: AsyncSession, user_ids: Iterable[str], *, viewer: User
 ) -> dict[str, str]:
-    """Namen fuer Benutzer-Kennungen, die NICHT aus einer Aktion stammen (z. B. "gemerkt
-    von" bei einem Server-Schluessel) -- mit derselben Sichtbarkeitsregel wie
-    `load_actor_labels()`: den eigenen Namen sieht jeder, fremde nur, wer
-    `may_see_other_users()`. Nicht aufloesbare Kennungen fehlen im Ergebnis; der Aufrufer
-    faellt dann auf `raw_actor("user", id)` zurueck."""
+    """Namen für Benutzer-Kennungen, die nicht aus einer Aktion stammen (z. B. „gemerkt von“ bei Server-Schlüsseln).
+
+    Sichtbarkeit wie bei `load_actor_labels()`; nicht auflösbare Kennungen fehlen, der Aufrufer nimmt `raw_actor()`."""
     wanted = set(user_ids)
     labels = {viewer.id: viewer.username} if viewer.id in wanted else {}
     wanted.discard(viewer.id)

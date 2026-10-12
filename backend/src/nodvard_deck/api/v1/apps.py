@@ -1,21 +1,6 @@
-"""Eigene App-Kacheln ("+ App hinzufuegen") -- `GET/POST /apps`, `PATCH/DELETE /apps/{id}`,
-`PUT /apps/order`, dazu `GET /apps/suggestions` (Vorschlaege aus den Erweiterungen) (docs/04-API.md "Eigene Apps").
-Pruefung der Eingaben und Begruendung der Begrenzungen: `services/custom_apps.py`.
+"""Eigene App-Kacheln: `GET/POST /apps`, `PATCH/DELETE /apps/{id}`, `PUT /apps/order`, `GET /apps/suggestions`.
 
-**Rechte:**
-
-* Lesen (`GET /apps`): `hosts.read` -- wie die erkannten Apps im Cockpit (`GET /overview`).
-* Schreiben (anlegen, aendern, loeschen, Reihenfolge): neu `apps.write`. Die Kacheln sehen alle Nutzer
-  auf der Startseite; ein Link, den jemand dort hinlegt, ist fuer jeden anderen Nutzer (auch den
-  Administrator) ein Klick-Ziel. Das gehoert nicht zu `hosts.write` (Server und SSH-Zugaenge verwalten --
-  viel mehr Macht) und nicht zu `settings.write` (Einstellungen der ganzen Installation). Eingebaut hat es
-  deshalb nur der Administrator (ueber `*`) und der Inhaber; Bediener und Betrachter bekommen es nicht von
-  selbst. Es ist rein additiv: keine bestehende Rolle verliert oder gewinnt dadurch etwas.
-
-Jede Aenderung steht im Protokoll (`app.created`, `app.updated`, `app.deleted`, `app.reordered`) -- mit
-Name und `https://host:port`, nie mit Pfad oder Parametern der Adresse (dort koennten Zugangsschluessel stehen).
-
-Der Server ruft die Adressen nie selbst ab (keine Statusabfrage, kein SSRF).
+Die Eingaben prüft `services/custom_apps.py`. Der Server ruft die Adressen nie selbst ab (keine Statusabfrage, kein SSRF).
 """
 
 from __future__ import annotations
@@ -35,6 +20,9 @@ from ...services import audit as audit_service
 from ...services import custom_apps as apps_service
 from ..deps import CurrentUser, SessionDep, require_permission
 
+# Lesen braucht `hosts.read` (wie die erkannten Apps im Cockpit). Schreiben braucht `apps.write`: Ein Link auf der
+# Startseite ist für jeden Nutzer ein Klick-Ziel, das passt weder zu `hosts.write` (viel mehr Macht) noch zu
+# `settings.write` (ganze Installation). Eingebaut hat es nur der Administrator und der Inhaber.
 router = APIRouter(prefix="/apps", tags=["apps"])
 
 _NOT_EMPTY = "Dieses Feld darf nicht leer sein."
@@ -45,7 +33,7 @@ class CustomAppOut(BaseModel):
     id: str
     name: str
     url: str | None
-    """`null` nur, wenn eine von Hand veraenderte Datenbank etwas anderes als http/https enthaelt."""
+    """`null` nur, wenn eine von Hand veränderte Datenbank etwas anderes als http/https enthält."""
     icon: str | None
     color: str | None
     group: str | None
@@ -80,7 +68,7 @@ def _check_sort(value: int | None) -> int | None:
 
 
 class AppCreate(BaseModel):
-    # Die Laengen prueft `services.custom_apps` (mit deutscher Meldung), kein `Field(max_length=...)`.
+    # Die Längen prüft `services.custom_apps` (mit deutscher Meldung), kein `Field(max_length=...)`.
     name: str
     url: str
     icon: str | None = None
@@ -128,7 +116,7 @@ class AppCreate(BaseModel):
 
 
 class AppPatch(BaseModel):
-    """Nur die genannten Felder aendern. `icon`, `color`, `group` und `host_id` lassen sich mit `null` leeren."""
+    """Nur die genannten Felder ändern. `icon`, `color`, `group` und `host_id` lassen sich mit `null` leeren."""
 
     name: str | None = None
     url: str | None = None
@@ -183,15 +171,13 @@ class AppPatch(BaseModel):
 
 
 ORDER_SLACK = 50
-"""Platz ueber `MAX_APPS` hinaus: Das Frontend schickt beim Verschieben immer ALLE Apps. Mehr als `MAX_APPS` kann es
-geben (die Beispieldaten, zwei gleichzeitige Anlegen); dann soll das Verschieben nicht an der Obergrenze scheitern.
-Die Liste ist nur nach oben begrenzt, damit niemand eine riesige Liste schickt -- jede genannte ID muss ohnehin eine
-vorhandene, nur einmal genannte App sein (sonst 404/422)."""
+"""Platz über `MAX_APPS` hinaus: Das Frontend schickt beim Verschieben alle Apps, und es kann mehr als `MAX_APPS` geben
+(Beispieldaten, zwei gleichzeitige Anlegen). Jede genannte ID muss ohnehin eine vorhandene, nur einmal genannte App sein."""
 
 
 class AppOrder(BaseModel):
     ids: list[str]
-    """Die Apps in der gewuenschten Reihenfolge; nicht genannte kommen dahinter."""
+    """Die Apps in der gewünschten Reihenfolge; nicht genannte kommen dahinter."""
 
     @field_validator("ids")
     @classmethod
@@ -201,6 +187,7 @@ class AppOrder(BaseModel):
         return value
 
 
+# Das Protokoll enthält Name und `https://host:port`, nie Pfad oder Parameter der Adresse (dort könnten Zugangsschlüssel stehen).
 async def _audit(
     session: AsyncSession, user: User, action: str, *, target_id: str | None, detail: dict[str, Any],
 ) -> None:
@@ -224,7 +211,7 @@ async def list_apps(session: SessionDep) -> list[CustomAppOut]:
 
 
 SUGGESTION_TIMEOUT_S = 12.0
-"""So lange darf jede Quelle fuer `GET /apps/suggestions` hoechstens brauchen (wie im Cockpit)."""
+"""So lange darf jede Quelle für `GET /apps/suggestions` höchstens brauchen (wie im Cockpit)."""
 MAX_SUGGESTIONS = 200
 
 
@@ -243,7 +230,7 @@ class AppSuggestionsOut(BaseModel):
 
 
 def url_key(url: str) -> str:
-    """Vergleichswert einer Adresse: Schema und Rechner klein, ohne abschliessenden Schraegstrich."""
+    """Vergleichswert einer Adresse: Schema und Rechner klein, ohne abschließenden Schrägstrich."""
     try:
         parts = urlsplit(url)
         port = parts.port
@@ -256,7 +243,7 @@ def url_key(url: str) -> str:
 
 
 def _suggestion(name: Any, url: Any, source: str, host: Any) -> AppSuggestionOut | None:
-    """Prueft einen Vorschlag wie eine von Hand angelegte App; ein unbrauchbarer faellt still weg."""
+    """Prüft einen Vorschlag wie eine von Hand angelegte App; ein unbrauchbarer fällt still weg."""
     if not isinstance(name, str) or not isinstance(url, str):
         return None
     try:
@@ -307,10 +294,9 @@ async def _from_catalog(ext_id: str, catalog: Any) -> tuple[list[AppSuggestionOu
 
 @router.get("/suggestions", dependencies=[Depends(require_permission("apps.write"))])
 async def app_suggestions(session: SessionDep) -> AppSuggestionsOut:
-    """Vorschlaege fuer neue App-Kacheln: Proxy-Hosts, erkannte Dienste und alles, was eine Erweiterung als
-    `AppSuggestionProvider` nennt. Geprueft wie eine von Hand angelegte App; was es als App schon gibt (gleiche
-    Adresse), faellt weg, doppelte Adressen kommen einmal. Nur fuer Nutzer, die Apps anlegen duerfen. Ruft selbst keine
-    der Adressen ab."""
+    """Vorschläge für neue App-Kacheln: Proxy-Hosts, erkannte Dienste und alles, was eine Erweiterung als
+    `AppSuggestionProvider` nennt. Geprüft wie eine von Hand angelegte App; Adressen, die es schon gibt, fallen weg.
+    Ruft selbst keine der Adressen ab."""
     from ...ext.runtime import get_extension_runtime
 
     registry = get_extension_runtime().capabilities

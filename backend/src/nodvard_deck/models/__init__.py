@@ -1,8 +1,6 @@
-"""Alle Kern-Modelle. Import hier sorgt dafuer, dass Alembic sie sieht.
+"""Alle Kern-Modelle; der Import hier macht sie für Alembic sichtbar.
 
-Extension-Tabellen stehen NICHT hier — sie liegen bei der jeweiligen Extension, tragen
-zwingend den Praefix `ext_<id>_` und haben einen eigenen Alembic-Branch.
-"""
+Tabellen von Erweiterungen liegen bei der Erweiterung (Präfix `ext_<id>_`, eigener Alembic-Zweig)."""
 
 from __future__ import annotations
 

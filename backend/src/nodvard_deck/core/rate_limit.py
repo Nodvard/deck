@@ -1,9 +1,5 @@
-"""Einfache Mengenbegrenzung: hoechstens `limit` Aufrufe je Schluessel in einem gleitenden
-Zeitfenster (Idee wie `core/login_limit.py`, aber ohne Sperrlogik fuer Anmeldungen).
-
-Gedacht fuer teure oder sensible Aktionen einzelner Nutzer (z. B. SSH-Schluessel erzeugen).
-Der Zustand liegt nur im Prozessspeicher und ist nach einem Neustart weg; die Funktionen
-sind synchron und enthalten kein `await`."""
+"""Mengenbegrenzung für teure oder sensible Aktionen: höchstens `limit` Aufrufe je Schlüssel im gleitenden Zeitfenster
+(nur im Prozessspeicher, synchron und ohne `await`)."""
 
 from __future__ import annotations
 
@@ -30,8 +26,7 @@ class SlidingWindow:
         _windows.add(self)
 
     def hit(self, key: str) -> int:
-        """Zaehlt einen Aufruf. `0` = erlaubt (und gezaehlt); sonst die Sekunden, bis wieder
-        ein Aufruf frei ist -- ein abgelehnter Aufruf zaehlt nicht mit."""
+        """Zählt einen Aufruf: `0` heißt erlaubt, sonst die Wartezeit in Sekunden (abgelehnte Aufrufe zählen nicht)."""
         with self._lock:
             now = _now()
             cutoff = now - self.window_s
@@ -64,7 +59,7 @@ class SlidingWindow:
 
 
 def reset_all() -> None:
-    """Vergisst alle Zaehler aller Fenster (fuer Tests)."""
+    """Vergisst alle Zähler aller Fenster (für Tests)."""
     for window in list(_windows):
         window.reset()
 

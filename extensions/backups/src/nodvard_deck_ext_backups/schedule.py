@@ -1,18 +1,11 @@
-"""Abstand zwischen zwei Laeufen eines Backup-Jobs, gelesen aus seinem Zeitplan.
-
-Proxmox schreibt einen Zeitplan als Kalenderausdruck `[Wochentage] [[Jahr-]Monat-Tag] [Stunde:Minute]`
-(z. B. `21:00`, `*/2:00`, `sat 15:00`, `mon..fri 00:00`, `mon,wed,fri 02:30`, `*-*-* 02:30,22:30`,
-`sat *-1..7 15:00`) oder als Kurzwort (`daily`, `weekly`, `monthly`). `schedule_gap_days()` liefert den
-GROESSTEN Abstand zwischen zwei Laeufen in ganzen Tagen -- der Waechter fuer "Backup zu alt" braucht genau den,
-sonst kippt jede Sicherung eines seltenen Jobs zwischen zwei Laeufen auf "zu alt".
-
-Gelesen wird nur, was sich eindeutig lesen laesst; alles andere ist `None` (nie geraten).
-"""
+"""Abstand zwischen zwei Läufen eines Backup-Jobs, gelesen aus seinem Zeitplan."""
 
 from __future__ import annotations
 
 import re
 
+# Proxmox schreibt einen Zeitplan als Kalenderausdruck `[Wochentage] [[Jahr-]Monat-Tag] [Stunde:Minute]` (z. B.
+# `21:00`, `*/2:00`, `sat 15:00`, `mon..fri 00:00`, `*-*-* 02:30,22:30`, `sat *-1..7 15:00`) oder als Kurzwort.
 _ALIASES = {
     "minutely": 1,
     "hourly": 1,
@@ -37,12 +30,12 @@ _TIME_FIELD = re.compile(r"[0-9*/,.]+")
 _DAY_STEP = re.compile(r"\*/(\d+)")
 
 MONTH_DAYS = 31
-"""Ist ein Tag im Monat festgelegt (`*-1..7`, `*-*-01`, `monthly`), zaehlt ein ganzer Monat."""
+"""Ist ein Tag im Monat festgelegt (`*-1..7`, `*-*-01`, `monthly`), zählt ein ganzer Monat."""
 
 
 def _weekdays(token: str) -> set[int] | None:
-    """`mon..fri`, `sat,sun`, `mon,wed..fri` -> Wochentage (Montag = 0). Eine Spanne ueber den Sonntag
-    hinaus (`fri..mon`) wird im Kreis gelesen."""
+    """`mon..fri`, `sat,sun`, `mon,wed..fri` -> Wochentage (Montag = 0); eine Spanne über den Sonntag hinaus
+    (`fri..mon`) wird im Kreis gelesen."""
     days: set[int] = set()
     for part in token.split(","):
         bounds = part.split("..")
@@ -57,7 +50,7 @@ def _weekdays(token: str) -> set[int] | None:
 
 
 def _largest_weekday_gap(days: set[int]) -> int:
-    """Groesste Luecke zwischen den gewaehlten Tagen, im Kreis: `mon..fri` -> 3 (Freitag bis Montag), `sat` -> 7."""
+    """Größte Lücke zwischen den gewählten Tagen, im Kreis: `mon..fri` -> 3 (Freitag bis Montag), `sat` -> 7."""
     ordered = sorted(days)
     gaps = [later - earlier for earlier, later in zip(ordered, ordered[1:], strict=False)]
     gaps.append(ordered[0] + 7 - ordered[-1])
@@ -87,12 +80,12 @@ def _date_days(token: str) -> int | None:
 
 
 def schedule_gap_days(expression: object) -> int | None:
-    """Groesster Abstand zwischen zwei Laeufen in ganzen Tagen (mindestens 1), `None` wenn der Ausdruck nicht
-    eindeutig lesbar ist.
-
-    - Wochentage angegeben: groesste Luecke zwischen den gewaehlten Tagen (`mon..fri` 3, `sat` 7).
-    - Tag im Monat festgelegt (auch zusammen mit Wochentagen, z. B. der erste Samstag): 31.
-    - `weekly` 7, `monthly` 31; sonst (taeglich oder oefter) 1."""
+    """Größter Abstand zwischen zwei Läufen in ganzen Tagen (mindestens 1), `None` wenn der Ausdruck nicht
+    eindeutig lesbar ist (es wird nie geraten)."""
+    # Der Wächter für "Backup zu alt" braucht den größten Abstand, sonst kippt jede Sicherung eines seltenen Jobs
+    # zwischen zwei Läufen auf "zu alt". Wochentage: größte Lücke zwischen den gewählten Tagen (`mon..fri` 3,
+    # `sat` 7). Tag im Monat festgelegt (auch mit Wochentagen, z. B. der erste Samstag): 31. `weekly` 7,
+    # `monthly` 31; sonst (täglich oder öfter) 1.
     if not isinstance(expression, str):
         return None
     text = expression.strip().lower()

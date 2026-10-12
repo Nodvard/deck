@@ -1,43 +1,4 @@
-"""Der proaktive Docker-Waechter -- ersetzt `docker_proactive_watcher_loop()` aus
-dem Vorgaengersystem: 60s Startverzoegerung, danach ein 8-Sekunden-Takt
-(derselbe Wert wie im Original), der
-`docker ps -a` auf jedem ueberwachten Host abfragt und Zustandswechsel gegen den
-zuletzt gesehenen Zustand diffed.
-
-**Behobener Fehler:** das Vorgaengersystem iterierte eine HARTKODIERTE Hostliste,
-obwohl es eine konfigurierbare Liste gab. Hier: die
-Hosts kommen aus `ctx.hosts.list(tag=docker_host_tag)` (Einstellung, Default
-"docker") -- ein Host wird ueberwacht, weil er getaggt ist, nicht weil sein Name im
-Code steht.
-
-**Bewusst NICHT portiert:** das Vorgaengersystem behandelte die ERSTE Beobachtung eines Containers
-als moeglichen Vorfall, wenn er in `CRITICAL_CONTAINERS` stand (einer von Hand
-gepflegten Liste). `CRITICAL_CONTAINERS`/`WEB_URLS` gehoeren nicht zu Nodvard Shield,
-sondern zur service-matrix-Extension ("entdeckt, nicht handgepflegt"). Diese Version
-behandelt die erste Beobachtung eines Containers deshalb NIE als Vorfall (nur
-Zustands-Baseline), unabhaengig vom Namen --
-etwas strenger als das Vorgaengersystem fuer bereits-offline gestartete Container, aber ohne die
-inzwischen unerwuenschte Handliste.
-
-**Zustand ueberlebt einen Neustart:** der zuletzt gesehene Zustand je Container wird
-pro Host in `ext_nexus_soc_baselines` (Art "docker") gespeichert und beim ersten Takt
-eines Hosts geladen. Ein Container, der waehrend der Dashboard-Pause von "running" auf
-"nicht laufend" gewechselt ist, wird dadurch gemeldet; einer, der schon vorher gestoppt
-war, nicht. Verschwindet ein Container ganz (absichtlich entfernt), ist das kein Vorfall; sein Stand
-wird dann gleich verworfen (nur Namen der aktuellen `docker ps -a`-Ausgabe bleiben), ein
-spaeter gleichnamiger Container faengt mit einer neuen Baseline an. Ein kaputter
-gespeicherter Stand wird verworfen. Der Stand wird
-erst NACH der Uebergabe der Vorfaelle des Taktes gespeichert (die Vorfaelle sind dort
-selbst dauerhaft) und nur, wenn er sich geaendert hat.
-
-**Absturzschleifen zwischen zwei Takten:** ein Container, der zwischen zwei 8-s-Takten
-abstuerzt und von der Restart-Policy gleich wieder gestartet wird, steht bei beiden
-Takten auf "running". Darum fragt jeder Takt mit EINEM zusaetzlichen, nur lesenden
-`docker inspect` (alle laufenden Container auf einmal) den `RestartCount` ab; steigt er
-gegenueber dem letzten Stand (auch ueber einen Neustart hinweg), ist das ein Absturz-
-Vorfall. Ein neu angelegter Container (andere Id) faengt wieder bei einer Baseline an, und
-ein manuelles `docker restart` erhoeht den Zaehler nicht -- beides ist kein Vorfall.
-"""
+"""Proaktiver Docker-Wächter: fragt `docker ps -a` je überwachtem Host ab und meldet Zustandswechsel und Absturzschleifen."""
 
 from __future__ import annotations
 
@@ -56,8 +17,8 @@ logger = logging.getLogger(f"{LOGGER}.watcher")
 _STARTUP_DELAY_S = 60.0
 _TICK_S = 8.0
 RECOVERY_QUIET_S = 300.0
-"""So lange muss ein Container nach einer Stoerung (nicht laufend, oder neu gestartet) ruhig laufen, bis er als erholt
-gilt (`on_recovery`). Docker wartet zwischen zwei Neustarts einer Absturzschleife hoechstens eine Minute."""
+"""So lange muss ein Container nach einer Störung (nicht laufend oder neu gestartet) ruhig laufen, bis er als erholt gilt
+(`on_recovery`). Docker wartet zwischen zwei Neustarts einer Absturzschleife höchstens eine Minute."""
 
 
 _STATE_KIND = "docker"
@@ -70,8 +31,7 @@ class StateStore(Protocol):
 
 
 class BaselineStateStore:
-    """Legt den Container-Stand je Host in `ext_nexus_soc_baselines` (Art "docker") ab --
-    dieselbe Ablage, die Updates/Einbruchschutz fuer ihren letzten Stand nutzen."""
+    """Legt den Container-Stand je Host in `ext_nexus_soc_baselines` (Art "docker") ab, wie Updates und Einbruchschutz."""
 
     def __init__(self, ctx: Any) -> None:
         self._ctx = ctx
@@ -88,8 +48,7 @@ class BaselineStateStore:
 
 
 def parse_restart_counts(output: str) -> dict[str, tuple[int, str]]:
-    """`docker inspect --format '{{.Name}}|{{.RestartCount}}|{{.Id}}'` -> {Name: (Zaehler, Id)}.
-    Zeilen, die nicht passen (Fehlermeldungen, leere Zeilen), werden uebersprungen."""
+    """`docker inspect --format '{{.Name}}|{{.RestartCount}}|{{.Id}}'` -> {Name: (Zähler, Id)}; unpassende Zeilen entfallen."""
     counts: dict[str, tuple[int, str]] = {}
     for line in output.splitlines():
         parts = line.strip().split("|")
@@ -103,7 +62,7 @@ def parse_restart_counts(output: str) -> dict[str, tuple[int, str]]:
 
 
 def inspect_exit_command(names: list[str]) -> str:
-    """Ein nur lesender `docker inspect` fuer die Beendigungs-Fakten mehrerer Container."""
+    """Ein nur lesender `docker inspect` für die Beendigungs-Fakten mehrerer Container."""
     return (
         "docker inspect --type container --format "
         "'{{.Name}}|{{.State.OOMKilled}}|{{.State.ExitCode}}|{{.State.Running}}|{{.State.FinishedAt}}"
@@ -113,19 +72,18 @@ def inspect_exit_command(names: list[str]) -> str:
 
 
 def parse_exit_facts(output: str) -> dict[str, dict[str, Any]]:
-    """Ausgabe von `inspect_exit_command` -> {Name: {oom_killed, exit_code, running, finished_at, error,
-    restart_count, image}}. `State.Error` steht zuletzt (darf selbst ein "|" enthalten); unlesbare
-    Zeilen entfallen. Aeltere Ausgaben ohne Neustart-Zaehler und Image (6 Felder) werden weiter
-    gelesen, dann fehlen `restart_count` und `image`."""
+    """Ausgabe von `inspect_exit_command` -> {Name: {oom_killed, exit_code, running, finished_at, error, restart_count, image}}."""
     facts: dict[str, dict[str, Any]] = {}
     for line in output.splitlines():
         line = line.strip()
         extra: dict[str, Any] = {}
+        # `State.Error` steht zuletzt, weil es selbst ein "|" enthalten darf: darum höchstens 7 Trennungen.
         parts = line.split("|", 7)
         if len(parts) == 8 and parts[5].strip().isdigit():
             name, oom, code, running, finished, restarts, image, error = (p.strip() for p in parts)
             extra = {"restart_count": int(restarts), "image": image}
         else:
+            # Kurzform mit 6 Feldern (ohne Neustart-Zähler und Image): Dann fehlen `restart_count` und `image`.
             parts = line.split("|", 5)
             if len(parts) != 6:
                 continue
@@ -168,8 +126,9 @@ class DockerWatcher:
         on_recovery: Callable[[Any, str, float], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """`on_recovery(host, container, laeuft_seit)`: ein gestoerter Container laeuft wieder, und zwar seit
-        `RECOVERY_QUIET_S` ohne neuen Start (`laeuft_seit` als Unix-Zeit). Einmal je Erholung."""
+        """`on_recovery(host, container, seit)`: ein gestörter Container läuft seit `RECOVERY_QUIET_S` ohne neuen Start wieder.
+
+        `seit` ist Unix-Zeit. Einmal je Erholung."""
         self._ctx = ctx
         self._on_transition = on_transition
         self._state_store = state_store
@@ -178,10 +137,10 @@ class DockerWatcher:
         self._prev_states: dict[str, str] = {}
         self._prev_restarts: dict[str, int] = {}
         self._prev_ids: dict[str, str] = {}
-        # Seit wann ein zuletzt gestoerter Container ruhig laeuft (Uhr `clock`); nur im Speicher: nach einem Neustart
-        # des Dashboards beginnt die Beobachtung neu, der Vorfall bleibt dann eben offen, bis man ihn selbst erledigt.
+        # Seit wann ein zuletzt gestörter Container ruhig läuft (Uhr `clock`). Nur im Speicher: Nach einem Neustart des Dashboards
+        # beginnt die Beobachtung neu, der Vorfall bleibt dann offen, bis man ihn selbst erledigt.
         self._calm_since: dict[str, float] = {}
-        # Container, deren Erholung zuletzt nicht gespeichert werden konnte: nur der erste Fehler mit Traceback.
+        # Container, deren Erholung zuletzt nicht gespeichert werden konnte: Nur der erste Fehler kommt mit Traceback ins Protokoll.
         self._recovery_failed: set[str] = set()
         self._loaded_hosts: set[str] = set()
         self._saved: dict[str, dict[str, Any]] = {}
@@ -195,7 +154,7 @@ class DockerWatcher:
             return
         try:
             data = await self._state_store.load(host.id)
-        except Exception:  # noqa: BLE001 - ohne gespeicherten Stand geht es wie bisher mit einer Baseline los
+        except Exception:  # noqa: BLE001 - ohne gespeicherten Stand geht es mit einer Baseline los
             logger.exception("shield_watcher_state_load_failed")
             return
         try:
@@ -206,6 +165,8 @@ class DockerWatcher:
             # Kaputter gespeicherter Stand: verwerfen und mit einer neuen Baseline anfangen.
             logger.warning("shield_watcher_state_invalid host=%s", host.id)
             return
+        # Ein Container, der während der Dashboard-Pause von "running" auf "nicht laufend" gewechselt ist, wird so gemeldet;
+        # einer, der schon vorher gestoppt war, nicht.
         self._prev_states.update(loaded[0])
         self._prev_restarts.update(loaded[1])
         self._prev_ids.update(loaded[2])
@@ -213,8 +174,7 @@ class DockerWatcher:
 
     @staticmethod
     def _parse_saved_state(host: Any, data: Any) -> tuple[dict[str, str], dict[str, int], dict[str, str]] | None:
-        """Prueft den gespeicherten Stand streng; `None` bei jeder Unstimmigkeit, damit nie
-        ein halb gelesener Stand uebernommen wird."""
+        """Prüft den gespeicherten Stand streng; `None` bei jeder Unstimmigkeit, damit nie ein halb gelesener Stand gilt."""
         if data is None:
             return {}, {}, {}
         if not isinstance(data, dict):
@@ -266,7 +226,7 @@ class DockerWatcher:
         self._saved[host.id] = snapshot
 
     async def _read_restart_counts(self, host: Any, names: list[str]) -> dict[str, tuple[int, str]]:
-        """Ein einziger, nur lesender `docker inspect` fuer alle uebergebenen Container."""
+        """Ein einziger, nur lesender `docker inspect` für alle übergebenen Container."""
         if not names:
             return {}
         command = (
@@ -275,7 +235,7 @@ class DockerWatcher:
         )
         try:
             result = await self._ctx.exec.run(host, command, timeout_s=10)
-        except Exception:  # noqa: BLE001 - Anreicherung: ohne Zaehler bleibt es beim Zustandsvergleich
+        except Exception:  # noqa: BLE001 - Anreicherung: ohne Zähler bleibt es beim Zustandsvergleich
             return {}
         # Auch bei Exit-Code != 0 (z. B. ein Container war inzwischen weg) die lesbaren Zeilen nutzen.
         return parse_restart_counts(result.stdout)
@@ -293,7 +253,7 @@ class DockerWatcher:
                 result = await self._ctx.exec.run(
                     host, "docker ps -a --format '{{.Names}}|{{.State}}|{{.Status}}'", timeout_s=10
                 )
-            except Exception:  # noqa: BLE001 - ein nicht erreichbarer Host darf den Takt nicht abreissen
+            except Exception:  # noqa: BLE001 - ein nicht erreichbarer Host darf den Takt nicht abreißen
                 continue
             if result.exit_code != 0:
                 continue
@@ -313,8 +273,10 @@ class DockerWatcher:
                 prev_state = self._prev_states.get(key)
                 self._prev_states[key] = state
 
-                # Neustarts durch die Restart-Policy seit dem letzten Stand (nur Container, die
-                # vorher UND jetzt laufen -- alles andere sieht der Zustandsvergleich unten).
+                # Neustarts durch die Restart-Policy seit dem letzten Stand. Ein Container, der zwischen zwei Takten abstürzt und
+                # gleich wieder startet, steht bei beiden Takten auf "running"; nur der Zähler verrät es. Ein neu angelegter
+                # Container (andere Id) beginnt wieder bei einer Baseline, und ein manuelles `docker restart` erhöht den Zähler
+                # nicht: Beides ist kein Vorfall.
                 restart_delta = 0
                 current = restart_counts.get(name)
                 if current is not None:
@@ -332,7 +294,7 @@ class DockerWatcher:
 
                 await self._track_recovery(host, name, key, prev_state, state, restart_delta)
                 if prev_state is None:
-                    continue  # erste Beobachtung: nur Baseline, siehe Modul-Docstring
+                    continue  # erste Beobachtung: nur Baseline, nie ein Vorfall (auch nicht bei Containern, die schon offline starten)
                 if prev_state == state:
                     if restart_delta:
                         await self._on_transition(
@@ -353,8 +315,8 @@ class DockerWatcher:
                     continue
 
                 if prev_state == "running" and state != "running":
-                    # Nur exited/dead/restarting koennen ein Absturz sein; "paused" (und alles andere)
-                    # nie. Ob ein Exit 137 ein kill oder ein OOM war, klaeren die Beendigungs-Fakten.
+                    # Nur exited/dead/restarting können ein Absturz sein; "paused" (und alles andere) nie. Ob ein Exit 137 ein
+                    # kill oder ein OOM war, klären die Beendigungs-Fakten.
                     is_crash = state in ("dead", "restarting") or (
                         state == "exited"
                         and "exited (0)" not in status_str.lower()
@@ -370,27 +332,25 @@ class DockerWatcher:
                             is_crash=is_crash,
                         )
                     )
-                # Erholung (prev_state != "running" and state == "running") ist bewusst
-                # kein Vorfall -- nur die Baseline oben wird aktualisiert.
+                # Erholung (vorher nicht laufend, jetzt laufend) ist bewusst kein Vorfall; die Baseline ist oben schon aktualisiert.
 
-            # Nur Container der aktuellen, erfolgreichen `docker ps -a`-Ausgabe behalten: entfernte
-            # Container (z. B. Zufallsnamen) wachsen nicht unbegrenzt im Stand, und ein spaeter
-            # gleichnamiger, nicht laufender Container gilt als neu (Baseline), nicht als Absturz.
+            # Nur Container der aktuellen, erfolgreichen `docker ps -a`-Ausgabe behalten: Entfernte Container (z. B. Zufallsnamen)
+            # wachsen so nicht unbegrenzt im Stand, und ein später gleichnamiger, nicht laufender Container gilt als neu
+            # (Baseline), nicht als Absturz.
             prefix = f"{host.id}:"
             current = {f"{prefix}{name}" for name, _st, _s in rows}
             for table in (self._prev_states, self._prev_restarts, self._prev_ids, self._calm_since):
                 for key in [k for k in table if k.startswith(prefix) and k not in current]:
                     del table[key]
 
-            # Erst jetzt speichern: die Vorfaelle dieses Taktes sind uebergeben (und dort
-            # dauerhaft gemerkt). Stirbt der Prozess dazwischen, wird ein Wechsel nach dem
-            # Start nochmal erkannt, statt still verloren zu gehen.
+            # Erst jetzt speichern: Die Vorfälle dieses Takts sind übergeben (und dort dauerhaft gemerkt). Stirbt der Prozess
+            # dazwischen, wird ein Wechsel nach dem Start nochmal erkannt, statt still verloren zu gehen.
             await self._save_host_state(host)
 
     async def _track_recovery(self, host: Any, name: str, key: str, prev_state: str | None, state: str, restart_delta: int) -> None:
-        """Erholung erkennen: nach einer Stoerung (vorher nicht laufend, oder ein Neustart durch Docker) muss der
-        Container `RECOVERY_QUIET_S` lang ruhig laufen. Erst dann `on_recovery` -- einmal, danach ist der Container
-        wieder normal. Jede neue Stoerung beginnt die Wartezeit neu."""
+        """Erholung erkennen: Nach einer Störung muss der Container `RECOVERY_QUIET_S` ruhig laufen, erst dann `on_recovery` (einmal).
+
+        Jede neue Störung beginnt die Wartezeit neu."""
         if self._on_recovery is None:
             return
         now = self._clock()
@@ -405,7 +365,7 @@ class DockerWatcher:
             return
         try:
             await self._on_recovery(host, name, time.time() - (now - started))
-        except Exception as exc:  # noqa: BLE001 - eine Zugabe: der Waechter laeuft weiter und versucht es im naechsten Takt
+        except Exception as exc:  # noqa: BLE001 - die Erholung ist optional: der Wächter läuft weiter und versucht es im nächsten Takt
             if key in self._recovery_failed:
                 logger.warning("shield_watcher_recovery_failed_again target=%s error=%s", name, exc)
             else:
@@ -420,6 +380,6 @@ class DockerWatcher:
         while True:
             try:
                 await self.tick()
-            except Exception:  # noqa: BLE001 - ein Takt-Fehler darf den Waechter nicht beenden
+            except Exception:  # noqa: BLE001 - ein Takt-Fehler darf den Wächter nicht beenden
                 logger.exception("shield_watcher_tick_failed")
             await asyncio.sleep(_TICK_S)

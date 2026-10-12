@@ -1,12 +1,4 @@
-"""In-Process-Event-Bus mit Pattern-Abo (docs/02-EXTENSION-API.md `ctx.events`).
-
-Nur Prozessspeicher -- kein Redis/RabbitMQ, D-09 gilt sinngemaess: keine zusaetzliche
-Pflicht-Komponente fuer etwas, das ein Dict und `fnmatch` genauso zuverlaessig loesen.
-
-Der kanonische `Event`-Typ ist `nodvard_sdk.types.Event` -- derselbe Vertrag, den
-Extensions ab WP-3 ueber `ctx.events` sehen werden, nicht eine zweite, kernseitige
-Definition.
-"""
+"""In-Process-Event-Bus mit Pattern-Abo (`ctx.events`); nur Prozessspeicher, kein Redis oder RabbitMQ."""
 
 from __future__ import annotations
 
@@ -35,25 +27,13 @@ class EventBus:
             pass
 
     def matching_handlers(self, name: str) -> list[Handler]:
-        """`fnmatchcase` statt `fnmatch`: Letzteres normalisiert Gross-/Kleinschreibung
-        ueber `os.path.normcase` und wuerde sich unter Windows (Entwicklung) anders
-        verhalten als unter Linux (Produktion, D-10) -- ein Dialektunterschied, den
-        D-02 fuer die Datenbank bewusst ausschliesst und der hier genauso wenig
-        hineingehoert."""
+        """`fnmatchcase` statt `fnmatch`: Letzteres normalisiert die Schreibweise über `os.path.normcase` und verhielte
+        sich unter Windows anders als unter Linux."""
         return [h for pattern, h in self._subscribers if fnmatch.fnmatchcase(name, pattern)]
 
     async def publish(self, event: Event) -> None:
-        """Ruft jeden passenden Handler auf. Ein einzelner fehlerhafter Handler darf
-        weder die anderen Handler noch den Aufrufer abbrechen -- sonst koennte eine
-        einzelne kaputte Extension (ab WP-3) den gesamten Bus fuer alle lahmlegen.
-
-        Seit WP-6 zusaetzlich ein Fan-out auf den WS-Kanal `events` (docs/04 §4:
-        "alles, was der Event-Bus publiziert, gefiltert nach RBAC") -- der Bus selbst
-        weiss dabei nichts von WebSockets, er ruft nur denselben Hub auf, den auch
-        `ctx.ws.broadcast()` und die Job-/Notification-Pipelines benutzen. Die
-        RBAC-Filterung haengt am Event-NAMEN (`core.rbac.permission_for_event()`),
-        nicht am Kanal -- `events` bleibt EIN Kanal fuer alle, nur einzelne
-        Nachrichten darin sind je nach Berechtigung unterschiedlich sichtbar."""
+        """Ruft jeden passenden Handler auf und verteilt das Event an den WebSocket-Kanal `events`. Ein fehlerhafter
+        Handler darf weder die anderen noch den Aufrufer abbrechen, sonst legte eine kaputte Extension den Bus lahm."""
         for handler in self.matching_handlers(event.name):
             try:
                 await handler(event)
@@ -64,10 +44,11 @@ class EventBus:
         from .action_output import OUTPUT_PERMISSION, redact_action_event
         from .ws_hub import get_ws_hub
 
+        # Die RBAC-Filterung hängt am Event-Namen (`core.rbac.permission_for_event()`), nicht am Kanal: `events` bleibt
+        # ein Kanal, einzelne Nachrichten sind je nach Berechtigung sichtbar.
         message = {"name": event.name, "data": event.payload, "correlation_id": event.correlation_id}
-        # `action.*` tragen den Befehl der Aktion (Handler im Prozess bekommen ihn, z. B. die
-        # Skripte-Erweiterung). Ueber WebSocket sehen ihn nur Nutzer mit Server-Recht;
-        # alle anderen bekommen die Aktion ohne Befehl (`core/action_output.py`).
+        # `action.*` trägt den Befehl der Aktion (Handler im Prozess bekommen ihn). Über WebSocket sehen ihn nur Nutzer
+        # mit Server-Recht, alle anderen bekommen die Aktion ohne Befehl (`core/action_output.py`).
         reduced = None
         if event.name.split(".", 1)[0] == "action":
             reduced = {**message, "data": redact_action_event(event.payload)}
@@ -91,7 +72,6 @@ def get_event_bus() -> EventBus:
 
 
 def reset_event_bus() -> None:
-    """Nur fuer Tests: erzwingt beim naechsten `get_event_bus()` eine frische, leere
-    Instanz -- Pendant zu `db.session.reset_engine_cache()`."""
+    """Nur für Tests: der nächste `get_event_bus()` liefert eine frische, leere Instanz."""
     global _bus
     _bus = None

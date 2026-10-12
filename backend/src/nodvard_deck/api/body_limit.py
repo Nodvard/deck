@@ -1,25 +1,6 @@
-"""Obergrenze fuer die Groesse einer Anfrage (reine ASGI-Middleware, vor allen Routen).
+"""Obergrenze für die Größe einer Anfrage (reine ASGI-Middleware, vor allen Routen).
 
-Ohne diese Grenze liest FastAPI jeden Koerper vollstaendig in den Speicher, bevor ueberhaupt
-geprueft wird, wer anfragt oder ob der Inhalt gueltig ist -- auch bei `POST /auth/login` ohne
-Anmeldung und auch bei `Content-Type: text/plain`. Eine einzige riesige Anfrage reicht dann,
-um einen kleinen Rechner in den Speichermangel zu treiben.
-
-Ablauf:
-- Steht eine `Content-Length` ueber der Grenze, antwortet die Middleware mit 413, sobald die
-  Anwendung den Koerper anfordert, und liest kein Byte davon. Handler, die ihn gar nicht anfordern
-  (zum Beispiel weil die Anmeldung schon scheitert), antworten wie gewohnt.
-- Ohne Laenge (`Transfer-Encoding: chunked`) zaehlt sie die gelesenen Bytes mit. Wird die Grenze
-  ueberschritten, antwortet sie mit 413 und meldet der Anwendung eine getrennte Verbindung;
-  weitere Antworten der Anwendung werden verworfen.
-- Die allgemeine Grenze ist `Settings.max_body_bytes`. Routen, die bewusst grosse Uploads annehmen,
-  tragen eine eigene, hoehere Grenze (`nodvard_sdk.max_body_bytes`, auch fuer Erweiterungen). Sie
-  wird erst herangezogen, wenn eine Anfrage die allgemeine Grenze ueberschreitet; normale Anfragen
-  kosten also nur einen Zahlenvergleich. Die Route kennt der Router erst, wenn der Handler liest; daher
-  prueft die Middleware beim Lesen und nicht davor.
-- WebSocket-Verbindungen laufen unveraendert durch; dort begrenzt uvicorn die Nachrichten (uvicorn-Standard
-  16 MiB, das Image startet mit `--ws-max-size 1048576`, also 1 MiB).
-"""
+Ohne sie liest FastAPI jeden Körper komplett in den Speicher, bevor geprüft wird, wer anfragt (auch bei `POST /auth/login`)."""
 
 from __future__ import annotations
 
@@ -31,12 +12,12 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 
 NO_LIMIT = sys.maxsize
-"""Fuer `max_body_bytes(...)`: keine eigene Obergrenze (nur fuer Routen, die den Koerper als Strom
-weiterreichen und nie ganz in den Speicher lesen)."""
+"""Für `max_body_bytes(...)`: keine eigene Obergrenze (nur für Routen, die den Körper als Strom weiterreichen und nie
+ganz in den Speicher lesen)."""
 
 
 def format_bytes(value: int) -> str:
-    """Lesbare Groesse fuer die Fehlermeldung (1 MB, 20 MB, 4 GB)."""
+    """Lesbare Größe für die Fehlermeldung (1 MB, 20 MB, 4 GB)."""
     for unit, size in (("GB", 1024**3), ("MB", 1024**2), ("KB", 1024)):
         if value >= size:
             number = value / size
@@ -45,10 +26,9 @@ def format_bytes(value: int) -> str:
 
 
 def route_limit(scope: Scope) -> int | None:
-    """Eigene Grenze der Route, auf die die Anfrage trifft (None: keine erklaert).
+    """Eigene Grenze der Route, auf die die Anfrage trifft (None: keine erklärt).
 
-    Erst lesbar, nachdem der Router die Anfrage einer Route zugeordnet hat; das ist der Fall,
-    sobald ein Handler den Koerper anfordert."""
+    Erst lesbar, nachdem der Router die Anfrage einer Route zugeordnet hat, also sobald ein Handler den Körper anfordert."""
     route = scope.get("route")
     endpoint = getattr(route, "endpoint", None) or scope.get("endpoint")
     declared = getattr(endpoint, MAX_BODY_ATTR, None)
@@ -61,7 +41,7 @@ def route_limit(scope: Scope) -> int | None:
 
 
 def too_large_message(limit: int) -> str:
-    """Text der 413-Antwort; auch fuer Handler, die eine Laenge selbst vor dem Oeffnen des Ziels pruefen."""
+    """Text der 413-Antwort; auch für Handler, die eine Länge selbst vor dem Öffnen des Ziels prüfen."""
     return f"Die Anfrage ist zu groß (erlaubt sind höchstens {format_bytes(limit)})."
 
 
@@ -81,6 +61,12 @@ async def _send_413(send: Send, limit: int) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
+# Steht eine `Content-Length` über der Grenze, antwortet die Middleware mit 413, sobald die Anwendung den Körper anfordert,
+# und liest kein Byte davon (Handler, die ihn nie anfordern, antworten wie gewohnt). Ohne Länge (chunked) zählt sie die
+# gelesenen Bytes mit; bei Überschreitung antwortet sie mit 413, meldet der Anwendung eine getrennte Verbindung und
+# verwirft weitere Antworten. Die höhere Grenze einer Route (`nodvard_sdk.max_body_bytes`) wird erst herangezogen, wenn
+# die allgemeine überschritten ist, und weil der Router die Route erst beim Lesen kennt, prüft die Middleware dort.
+# WebSockets laufen durch; dort begrenzt uvicorn (das Image startet mit `--ws-max-size 1048576`).
 class BodyLimitMiddleware:
     def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
         self.app = app
@@ -127,7 +113,7 @@ class BodyLimitMiddleware:
                 return {"type": "http.disconnect"}
             if not length_checked:
                 length_checked = True
-                # Laenge laut Kopf zu gross: abweisen, ohne ein Byte des Koerpers zu lesen.
+                # Länge laut Kopf zu groß: abweisen, ohne ein Byte des Körpers zu lesen.
                 if declared_length is not None and declared_length > default and declared_length > effective_limit():
                     return await reject()
             message = await receive()

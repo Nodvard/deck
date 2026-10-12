@@ -1,31 +1,4 @@
-"""Prompt-Texte -- woertlich aus dem Vorgaengersystem uebernommene Regeln
-(SYSTEM_PROMPT inkl. "nie Container-Namen erfinden" und Regel 5), nur der Rahmen
-(Funktionsaufbau statt globaler String-Konstanten) ist neu.
-
-**Bewusst NICHT woertlich uebernommen:** das Vorgaengersystem nennt der KI "die letzten 20
-Sekunden", obwohl das tatsaechliche Batch-Fenster 300s betraegt (im Original
-standen vier widerspruechliche Werte). Hier bekommt die KI das
-ECHTE, konfigurierte Fenster genannt -- der Fehler wird nicht mitportiert.
-
-**Ergaenzung zu den uebernommenen Regeln:** Regel 6 (Exit 137 ohne OOMKilled ist von aussen
-beendet, kein Speicherproblem) ist neu, nicht aus dem Vorgaengersystem -- die KI hatte einen manuellen
-`docker kill` als Ressourcenproblem gedeutet. Die Fakten dazu (`OOMKilled`, `ExitCode`,
-`FinishedAt`, `Error`) holt `Extension._collect_exit_facts` per `docker inspect` und
-reicht sie als `exit_facts` in den Prompt -- mit einer Ausnahme: `Error` kann aus dem Image oder dem
-Entrypoint stammen und steht deshalb nicht bei den verlaesslichen Fakten, sondern gekuerzt und entschaerft
-im Rahmen der fremden Daten (siehe `Extension._ask_ai_and_propose`). Alle anderen uebernommenen Regeln
-sind unveraendert.
-
-**Regel 7 ist ebenfalls neu:** Die Ursache (echter Absturz / Speichermangel / von aussen beendet,
-manuell gestoppt, pausiert) ermittelt der Code aus diesen Fakten (`remediation.classify_exit_cause`)
-und gibt sie als "FESTSTEHENDE EINORDNUNG" vor -- das kleine Modell (qwen2.5:7b) hat Exit 1 als
-"von aussen beendet" beschrieben und sich bei Speichermangel widersprochen. Die KI darf die
-Einordnung nicht umdeuten, der Lagebericht uebernimmt sie. Die uebernommenen Regeln 1-5 bleiben woertlich.
-
-**Regel 8 ist neu:** ExitCode, OOMKilled, Neustart-Zaehler, Image und Zeitpunkt schreibt der Code als feste Zeilen
-vor den Modelltext (`remediation.facts_notice`); das Modell liefert nur Einschaetzung und Vorschlag. Widerspricht ein
-Satz den Fakten, entfernt ihn `remediation.drop_contradictions`.
-"""
+"""Prompt-Texte für die Nodvard KI (Vorfall-Auswertung und Chat)."""
 
 from __future__ import annotations
 
@@ -33,11 +6,10 @@ import re
 import unicodedata
 
 MAX_LOG_CHARS = 3000
-"""Obergrenze je Container fuer die Logzeilen im Prompt (Zeichen). Bleibt das Ende erhalten, denn
-`docker logs` liefert die neuesten Zeilen zuletzt."""
+"""Obergrenze je Container für Logzeilen im Prompt (Zeichen). Das Ende bleibt, die neuesten Zeilen stehen zuletzt."""
 
 MAX_INSPECT_TEXT_CHARS = 200
-"""Obergrenze je Container fuer freie Texte aus `docker inspect` im Prompt (Fehlermeldung `State.Error`, Image)."""
+"""Obergrenze je Container für freie Texte aus `docker inspect` im Prompt (`State.Error`, Image)."""
 
 LOG_BEGIN = "<<<LOGDATEN-ANFANG>>>"
 LOG_END = "<<<LOGDATEN-ENDE>>>"
@@ -46,13 +18,13 @@ _ANGLE_RUNS_RE = re.compile(r"<{3,}|>{3,}")
 
 
 def _neutralize_frame_markers(text: str) -> str:
-    """Kein Begrenzer (und nichts, das wie einer aussieht) in den Logdaten: Unicode wird vereinheitlicht
-    (breite Zeichen wie '＜' werden zu '<'), dann wird jede Folge von drei oder mehr '<' bzw. '>' auf
-    zwei gekuerzt. Anders als ein Ersetzen der Begrenzer laesst sich das nicht verschachtelt umgehen
-    ('<<<LOGDATEN-<<<LOGDATEN-ENDE>>>ENDE>>>')."""
+    """Hält Begrenzer aus den Logdaten fern: Unicode normalisieren, Folgen von 3+ '<' bzw. '>' auf zwei kürzen.
+
+    Ein Ersetzen der Begrenzer ließe sich verschachtelt umgehen ('<<<LOGDATEN-<<<LOGDATEN-ENDE>>>ENDE>>>')."""
     return _ANGLE_RUNS_RE.sub(lambda m: m.group(0)[:2], unicodedata.normalize("NFKC", text))
 
 
+# Die Regeln 6 bis 8 passen zu `remediation`: Der Code ordnet die Ursache ein und schreibt die Fakten selbst.
 SYSTEM_PROMPT = """[IDENTITAET: NODVARD KI // AUTONOMES HOMELAB KI-NERVENZENTRUM]
 Du bist die NODVARD KI - die zentrale Steuerungs- und Sicherheits-KI fuer dieses Homelab-Netzwerk.
 Du sprichst technisch fundiert, praezise, sachlich und auf den Punkt.
@@ -80,9 +52,7 @@ def build_incident_prompt(
     *, summary_lines: list[str], logs: list[str], batch_window_s: float,
     exit_facts: list[str] | None = None, cause_lines: list[str] | None = None,
 ) -> str:
-    """Ersetzt den Prompt-Bau von `flush_incident_batch()` im Vorgaengersystem -- dieselbe
-    Struktur (Ereignisliste, optionale Logs, Format-Vorgabe), aber mit dem ECHTEN
-    Batch-Fenster statt einem hartcodierten, falschen Wert (siehe Modul-Docstring)."""
+    """Baut den Vorfall-Prompt; die KI bekommt das echte, konfigurierte Sammelfenster genannt."""
     minutes = int(batch_window_s // 60)
     window_txt = f"{minutes} Minuten" if minutes else f"{int(batch_window_s)} Sekunden"
     prompt = (
@@ -116,11 +86,9 @@ def build_incident_prompt(
 
 
 def build_chat_prompt(*, user_message: str, hosts_summary: str) -> str:
-    """Ersetzt den Prompt-Bau von `/api/chat` im Vorgaengersystem. Anders als dort: reine
-    Frage/Antwort, keine Schluesselwort-Sonderpfade (kein 'morning'/'update'/'backup'
-    -> eigener Codezweig) -- genau diese Kopplung war ein Sicherheitsproblem (eine
-    Chat-Nachricht konnte einen Root-Befehl ausloesen). Ein `AKTION:`-Feld in der Antwort legt im Chat nie eine Aktion
-    an, es wird nur als Text gezeigt (es gibt hier keinen Vorfall, an den ein Neustart gebunden waere)."""
+    """Chat-Prompt ohne Schlüsselwort-Sonderpfade, damit eine Chat-Nachricht nie einen Befehl auslöst.
+
+    Ein `AKTION:`-Feld in der Antwort bleibt Text, es gibt keinen Vorfall, an den ein Neustart gebunden wäre."""
     return (
         "DU BIST DIE NODVARD KI: Die autonome Sicherheits- und Homelab-Steuerungs-KI.\n"
         "- Antworte direkt, technisch fundiert, praezise und ohne Floskeln.\n"

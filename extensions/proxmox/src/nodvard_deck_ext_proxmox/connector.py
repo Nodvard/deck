@@ -1,35 +1,4 @@
-"""Duenner Client fuer die Proxmox-VE-REST-API (`/api2/json/...`).
-
-Nutzt ausschliesslich `ctx.http` (docs/02-EXTENSION-API.md §2) statt eines eigenen
-httpx-Clients -- das ist die Stelle, an der `net.outbound`-Berechtigungen durchgesetzt
-werden (siehe ext/context.py HttpHandle). Ein eigener Client wuerde diese Pruefung
-umgehen.
-
-Authentifizierung ueber einen API-Token (`Authorization: PVEAPIToken=user@realm!name=
-secret`), nicht ueber Benutzername/Passwort + Ticket-Cookie -- kein Session-Refresh
-noetig, das im Vorgaengersystem genutzte SSH+`pvesh`
-funktioniert zwar auch, ist aber ein Nebenkanal mit eigenen Edge-Cases (siehe
-docs/00-DECISIONS.md zu "kein zweiter Ausfuehrungsweg"); die echte REST-API ist hier
-die robustere Wahl fuer eine Extension, die weder SSH-Zugangsdaten noch einen
-SSH-Host-Key-Vertrauensanker fuer den Proxmox-Knoten braucht.
-
-**Task-Ausgang abwarten:** Proxmox beantwortet
-Start/Stop/Reboot/Snapshot mit einer Task-ID (`UPID:...`), nicht mit dem
-Endergebnis -- `wait_for_task()` pollt jetzt `/nodes/{node}/tasks/{upid}/status`
-bis der Task nicht mehr `running` ist oder ein Zeitlimit erreicht wird.
-`ProxmoxActionExecutor.execute()` (capabilities.py) nutzt das, damit
-`ActionResult.success` den TATSAECHLICHEN Ausgang meint (`exitstatus == "OK"`),
-nicht mehr nur "Proxmox hat die Anfrage angenommen".
-
-**Zertifikat:** Ist fuer die Verbindung ein Fingerabdruck gemerkt (`tls_fingerprint_sha256`, siehe
-`certificate.py`), geht er als `pinned_sha256` in JEDEN `ctx.http`-Aufruf, auch in den WebSocket der Konsole:
-Proxmox muss genau dieses Zertifikat zeigen, sonst scheitert schon der Handshake, bevor das Token hinausgeht
-(`ProxmoxApiError` mit `code == "certificate_changed"`). `tls_insecure_skip_verify` (veraltet) gilt dann nicht. Ohne
-Fingerabdruck reicht der Schalter `insecure_tls=True` durch wie bisher -- betrifft ausschliesslich diese eine
-Proxmox-Instanz, nicht andere Ziele, die dieselbe Extension ueber `ctx.http` erreicht (siehe `ext/context.py
-HttpHandle`). Ein ungueltiger Fingerabdruck faellt nie still auf "nicht pruefen" zurueck: Jeder Aufruf scheitert
-dann mit `code == "certificate_invalid"`, ohne etwas zu senden.
-"""
+"""Dünner Client für die Proxmox-VE-REST-API (`/api2/json/...`)."""
 
 from __future__ import annotations
 
@@ -53,13 +22,9 @@ if TYPE_CHECKING:
 
 
 class ProxmoxApiError(Exception):
-    """`status_code`: der HTTP-Status der Antwort, falls es eine gab (sonst `None`). `code`: fester Grund, wo es einen
-    gibt (`"certificate_changed"`, `"certificate_invalid"`), sonst `None`.
-
-    `readable`: Der Text ist ein Satz der Erweiterung, nie der Text einer fremden Ausnahme. Fremd ist höchstens der
-    Grund, den Proxmox selbst nennt, gekürzt und bereinigt (`transport.reason_from`). Der Kern zeigt den Text dann
-    unverändert und wertet den Fall wie einen Netzfehler: Messwerte eines ausgeschalteten Proxmox-Servers sind ein
-    502 mit Grund, kein 500 mit Traceback im Protokoll."""
+    """`status_code`: HTTP-Status der Antwort (falls es eine gab), `code`: fester Grund wie `"certificate_changed"`.
+    `readable`: der Text ist ein Satz der Erweiterung (höchstens der Grund von Proxmox ist fremd, gekürzt in
+    `transport.reason_from`); der Kern zeigt ihn unverändert, als 502 mit Grund statt 500."""
 
     readable = True
 
@@ -70,9 +35,8 @@ class ProxmoxApiError(Exception):
 
 
 class ProxmoxVncSession:
-    """Erfuellt `nodvard_sdk.capabilities.ConsoleSession` -- ein offener
-    `vncwebsocket` zu Proxmox. Reine Byte-Weitergabe (RFB), das Protokoll selbst
-    sprechen erst noVNC im Browser und der VNC-Server auf dem Knoten."""
+    """Erfüllt `nodvard_sdk.capabilities.ConsoleSession`: ein offener `vncwebsocket`, reine Byte-Weitergabe (RFB);
+    das Protokoll sprechen noVNC im Browser und der VNC-Server auf dem Knoten."""
 
     protocol = "vnc"
 
@@ -96,6 +60,9 @@ class ProxmoxVncSession:
 
 
 class ProxmoxConnector:
+    """Alle Aufrufe laufen über `ctx.http`, das die `net.outbound`-Berechtigungen durchsetzt; ein eigener Client würde sie
+    umgehen. Authentifizierung per API-Token (`PVEAPIToken=user@realm!name=secret`), daher kein Session-Refresh."""
+
     def __init__(
         self,
         ctx: "ExtensionContext",
@@ -123,8 +90,9 @@ class ProxmoxConnector:
         return self._pin is not None
 
     def _tls(self) -> dict[str, Any]:
-        """Die TLS-Angaben fuer `ctx.http`: der Fingerabdruck, wenn einer gemerkt ist, sonst der alte Schalter. Bei
-        einem ungueltigen Eintrag nie der Schalter: dann `ProxmoxApiError` (auch fuer kuenftige Aufrufer)."""
+        """TLS-Angaben für `ctx.http`: der gemerkte Fingerabdruck (`pinned_sha256`, auch für den Konsolen-WebSocket),
+        sonst der alte Schalter `insecure_tls` (gilt nur für diese Instanz). Ein ungültiger Eintrag fällt nie auf den
+        Schalter zurück, sondern wirft `ProxmoxApiError`."""
         self._refuse_invalid_pin("TLS")
         if self._pin is not None:
             return {"pinned_sha256": self._pin}
@@ -136,7 +104,7 @@ class ProxmoxConnector:
 
     @property
     def host(self) -> str:
-        """Nur fuer `Host.address` -- der Proxmox-API-Host selbst, ohne Schema/Port."""
+        """Nur für `Host.address`: der Proxmox-API-Host selbst, ohne Schema und Port."""
         from urllib.parse import urlsplit
 
         return urlsplit(self._base_url).hostname or self._base_url
@@ -144,13 +112,10 @@ class ProxmoxConnector:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._base_url}/api2/json{path}"
         headers = {**self._auth_header, **kwargs.pop("headers", {})}
-        # Ein NETZWERK-Fehler (Proxmox nicht erreichbar -- Verbindung abgelehnt, Timeout, DNS) wird hier
-        # einheitlich in `ProxmoxApiError` uebersetzt, nicht in jedem Aufrufer einzeln: `node_load_widget_data()`
-        # (siehe __init__.py) faengt ausschliesslich `ProxmoxApiError`/`RuntimeError` ab, eine rohe
-        # `httpx`-Exception liefe bis zu FastAPI durch und ergaebe einen 500.
-        # In die Meldung kommt nie der Text der Ausnahme oder der Antwort (siehe transport.py), und der Fehler
-        # wird erst ausserhalb des `except`-Blocks geworfen: sonst hinge die Ausnahme von httpx (mit Teilen der
-        # fremden Antwort im Text) als `__context__` an der Meldung.
+        # Netzwerkfehler (nicht erreichbar, Timeout, DNS) werden hier einheitlich zu `ProxmoxApiError`: Aufrufer fangen nur
+        # diesen und `RuntimeError`, eine rohe httpx-Ausnahme gäbe einen 500. In die Meldung kommt nie der Text der Ausnahme
+        # oder der Antwort (siehe transport.py); geworfen wird erst außerhalb des `except`, sonst hinge die httpx-Ausnahme
+        # (mit Teilen der fremden Antwort im Text) als `__context__` an der Meldung.
         self._refuse_invalid_pin(f"{method} {path}")
         problem: str | None = None
         code: str | None = None
@@ -181,9 +146,9 @@ class ProxmoxConnector:
         return await self._request("GET", "/version")
 
     async def user_tokens(self, userid: str) -> Any:
-        """Die API-Tokens eines Benutzers aus `GET /access/users/{userid}` (`tokens`: ID -> privsep, Ablauf,
-        Kommentar; nie ein Geheimnis). Braucht nur `Sys.Audit` -- `GET .../token` verlangt von einem Token dagegen
-        `User.Modify`, weil "der eigene Benutzer" fuer eine Token-ID nicht gilt."""
+        """Die API-Tokens eines Benutzers aus `GET /access/users/{userid}` (`tokens`: ID -> privsep, Ablauf, Kommentar;
+        nie ein Geheimnis). Braucht nur `Sys.Audit`; `GET .../token` verlangt von einem Token `User.Modify`, weil
+        „der eigene Benutzer“ für eine Token-ID nicht gilt."""
         from urllib.parse import quote
 
         data = await self._request("GET", f"/access/users/{quote(userid, safe='@')}") or {}
@@ -202,19 +167,16 @@ class ProxmoxConnector:
         return await self._request("GET", f"/nodes/{node}/qemu/{vmid}/status/current") or {}
 
     async def qemu_action(self, node: str, vmid: str, action: str, params: dict[str, Any] | None = None) -> str:
-        """`action` in {"start", "shutdown", "stop", "reboot"} -- Proxmox-eigene Endpunktnamen
-        (`shutdown` = geordnet herunterfahren, `stop` = hart ausschalten). `params` geht als
-        JSON-Body mit, z. B. `{"timeout": 180}` beim Herunterfahren (sonst bricht Proxmox
-        den Task schon nach etwa 60 s ab)."""
+        """`action` in {"start", "shutdown", "stop", "reboot"} (Proxmox-Endpunktnamen; `shutdown` fährt geordnet herunter,
+        `stop` schaltet hart aus). `params` geht als JSON-Body mit, z. B. `{"timeout": 180}` beim Herunterfahren, sonst
+        bricht Proxmox den Task nach etwa 60 s ab."""
         kwargs: dict[str, Any] = {"json": params} if params else {}
         return await self._request("POST", f"/nodes/{node}/qemu/{vmid}/status/{action}", **kwargs)
 
     async def qemu_snapshot(self, node: str, vmid: str, snapname: str) -> str:
         return await self._request("POST", f"/nodes/{node}/qemu/{vmid}/snapshot", json={"snapname": snapname})
 
-    # -- LXC (WP-8-Blocker-Nachtrag: strukturell fast identisch zu /qemu/... -- ohne
-    # diese vier Methoden sah die Extension auf einem reinen LXC-Knoten schlicht
-    # nichts) --------------------------------------------------------------------
+    # -- LXC (fast identisch zu /qemu/...) ------------------------------------------------------
 
     async def list_lxc(self, node: str) -> list[dict[str, Any]]:
         return await self._request("GET", f"/nodes/{node}/lxc") or []
@@ -231,39 +193,38 @@ class ProxmoxConnector:
     async def lxc_snapshot(self, node: str, vmid: str, snapname: str) -> str:
         return await self._request("POST", f"/nodes/{node}/lxc/{vmid}/snapshot", json={"snapname": snapname})
 
-    # -- Snapshots (frueher konnte Nodvard Deck sie nur ANLEGEN) ------------------------
+    # -- Konfiguration, Messreihen, Snapshots ------------------------------------------------
 
     async def guest_config(self, node: str, kind: str, vmid: str) -> dict[str, Any]:
-        """Rohkonfiguration eines Gasts. Enthaelt ggf. `cipassword`/`sshkeys` --
-        NIE ungefiltert weitergeben, siehe guest_config.summarize_config (Whitelist)."""
+        """Rohkonfiguration eines Gasts. Enthält ggf. `cipassword`/`sshkeys`: nie ungefiltert weitergeben, siehe
+        guest_config.summarize_config (Positivliste)."""
         return await self._request("GET", f"/nodes/{node}/{kind}/{vmid}/config") or {}
 
     async def rrddata(self, node: str, kind: str, vmid: str | None, timeframe: str) -> list[dict[str, Any]]:
-        """Proxmox' eigene Messreihen (RRD): `timeframe` hour|day|week|month|year,
-        Mittelwerte je Stuetzstelle. Knoten: `/nodes/{node}/rrddata`, Gaeste zusaetzlich
-        `/{qemu|lxc}/{vmid}`."""
+        """Proxmox' eigene Messreihen (RRD): `timeframe` hour|day|week|month|year, Mittelwerte je Stützstelle. Knoten:
+        `/nodes/{node}/rrddata`, Gäste zusätzlich `/{qemu|lxc}/{vmid}`."""
         path = f"/nodes/{node}/rrddata" if kind == "node" else f"/nodes/{node}/{kind}/{vmid}/rrddata"
         return await self._request("GET", path, params={"timeframe": timeframe, "cf": "AVERAGE"}) or []
 
     async def apt_refresh(self, node: str) -> str:
-        """`apt update` des Knotens (Paketlisten neu laden) -- liefert eine UPID."""
+        """`apt update` des Knotens (Paketlisten neu laden), liefert eine UPID."""
         return await self._request("POST", f"/nodes/{node}/apt/update")
 
     async def node_reboot(self, node: str) -> Any:
         return await self._request("POST", f"/nodes/{node}/status", json={"command": "reboot"})
 
     async def update_guest_config(self, node: str, kind: str, vmid: str, params: dict[str, Any]) -> Any:
-        """PUT = synchron (fuer QEMU gibt es auch POST = asynchron mit Task). Nur mit
-        Parametern aus guest_edit.build_update -- nie mit Nutzereingaben direkt."""
+        """PUT ist synchron (für QEMU gäbe es auch POST, asynchron mit Task). Nur mit Parametern aus
+        guest_edit.build_update, nie mit Nutzereingaben direkt."""
         return await self._request("PUT", f"/nodes/{node}/{kind}/{vmid}/config", json=params)
 
     async def guest_pending(self, node: str, kind: str, vmid: str) -> list[dict[str, Any]]:
-        """Aktuelle vs. vorgemerkte Werte -- was erst nach einem Neustart greift."""
+        """Aktuelle und vorgemerkte Werte: was erst nach einem Neustart greift."""
         return await self._request("GET", f"/nodes/{node}/{kind}/{vmid}/pending") or []
 
     async def list_snapshots(self, node: str, kind: str, vmid: str) -> list[dict[str, Any]]:
-        """`kind` in {"qemu", "lxc"}. Enthaelt immer den Pseudo-Eintrag "current"
-        (der laufende Zustand) -- der Aufrufer filtert ihn."""
+        """`kind` in {"qemu", "lxc"}. Enthält immer den Pseudo-Eintrag "current" (der laufende Zustand), der Aufrufer
+        filtert ihn."""
         return await self._request("GET", f"/nodes/{node}/{kind}/{vmid}/snapshot") or []
 
     async def snapshot_rollback(self, node: str, kind: str, vmid: str, snapname: str) -> str:
@@ -285,11 +246,11 @@ class ProxmoxConnector:
         """Protokollzeilen eines Tasks: `[{"n": Zeilennummer, "t": Text}, ...]`."""
         return await self._request("GET", f"/nodes/{node}/tasks/{upid}/log", params={"limit": limit}) or []
 
-    # -- Datentraeger (Knoten-Gesundheit, rein lesend) -----------------------------------
+    # -- Datenträger (Knoten-Gesundheit, rein lesend) ---------------------------------------
 
     async def node_disks(self, node: str) -> list[dict[str, Any]]:
-        """Physische Datentraeger des Knotens mit SMART-Kurzbefund (`health`) und
-        Abnutzung (`wearout` = Restlebensdauer in %, bei manchen SSDs "N/A")."""
+        """Physische Datenträger des Knotens mit SMART-Kurzbefund (`health`) und Abnutzung (`wearout` = Restlebensdauer
+        in %, bei manchen SSDs "N/A")."""
         return await self._request("GET", f"/nodes/{node}/disks/list", timeout=30.0) or []
 
     async def node_zfs(self, node: str) -> list[dict[str, Any]]:
@@ -297,23 +258,21 @@ class ProxmoxConnector:
         return await self._request("GET", f"/nodes/{node}/disks/zfs", timeout=30.0) or []
 
     async def disk_smart(self, node: str, devpath: str) -> dict[str, Any]:
-        """SMART-Details eines Datentraegers: NVMe als Freitext, SATA als Attributliste."""
+        """SMART-Details eines Datenträgers: NVMe als Freitext, SATA als Attributliste."""
         return await self._request("GET", f"/nodes/{node}/disks/smart", params={"disk": devpath}, timeout=30.0) or {}
 
     # -- Paket-Updates (rein lesend) -----------------------------------------------------
 
     async def apt_updates(self, node: str) -> list[dict[str, Any]]:
-        """Wartende Pakete laut Proxmox' letzter Pruefung. Liest nur -- `POST` auf
-        denselben Pfad wuerde die Paketlisten neu laden, das tut Nodvard Deck nicht.
-        Live gefunden: pve2 lief hier einmal in den Standard-Timeout, beim naechsten
-        Aufruf 0,0 s -- deshalb grosszuegiger Timeout statt eines leeren Widgets."""
+        """Wartende Pakete laut Proxmox' letzter Prüfung. Liest nur: `POST` auf denselben Pfad würde die Paketlisten neu
+        laden, das tut Nodvard Deck hier nicht. Der Timeout ist großzügig, weil Proxmox hier sporadisch länger braucht."""
         return await self._request("GET", f"/nodes/{node}/apt/update", timeout=30.0) or []
 
     async def apt_versions(self, node: str) -> list[dict[str, Any]]:
-        """Installierte Proxmox-Pakete inkl. aller Kernel-Images (fuer "Neustart ausstehend")."""
+        """Installierte Proxmox-Pakete inkl. aller Kernel-Images (für "Neustart ausstehend")."""
         return await self._request("GET", f"/nodes/{node}/apt/versions", timeout=30.0) or []
 
-    # -- Speicher (Speicher-Uebersicht) --------------------------------------------------
+    # -- Speicher (Speicher-Übersicht) ---------------------------------------------------------
 
     async def node_storage(self, node: str) -> list[dict[str, Any]]:
         """Alle Speicher-Pools, die der Knoten sieht, mit `total`/`used`/`avail` in Byte."""
@@ -332,38 +291,31 @@ class ProxmoxConnector:
         return await self._request("GET", f"/nodes/{node}/lxc/{vmid}/interfaces", timeout=5.0) or []
 
     async def qemu_agent_interfaces(self, node: str, vmid: str) -> list[dict[str, Any]]:
-        """Schnittstellen einer VM ueber den qemu-guest-agent. Ohne laufenden Agenten
-        antwortet Proxmox mit HTTP 500 ("QEMU guest agent is not running") -- das
-        wird zu `ProxmoxApiError`, der Aufrufer behandelt es als "unbekannt"."""
+        """Schnittstellen einer VM über den qemu-guest-agent. Ohne laufenden Agenten antwortet Proxmox mit HTTP 500
+        ("QEMU guest agent is not running"); das wird zu `ProxmoxApiError`, der Aufrufer behandelt es als "unbekannt"."""
         data = await self._request("GET", f"/nodes/{node}/qemu/{vmid}/agent/network-get-interfaces", timeout=5.0) or {}
         return list(data.get("result") or [])
 
     # -- Konsole (Bildschirm einer VM/eines Containers in Nodvard Deck) ----------------
 
     async def vncproxy(self, node: str, kind: str, vmid: str) -> dict[str, Any]:
-        """`kind` in {"qemu", "lxc"}. Startet auf dem Knoten einen kurzlebigen
-        VNC-Proxy (wartet ~10s auf die Gegenverbindung) und liefert `port` + `ticket`.
-        `websocket=1`: der Proxy wird ueber `.../vncwebsocket` erreicht, nicht ueber
-        einen rohen TCP-Port -- genau der Weg, den Proxmox' eigene Oberflaeche nimmt.
-        `generate-password=1` nur fuer QEMU: dort ist das VNC-Kennwort sonst das
-        Ticket selbst, QEMUs VNC-Auth nutzt davon aber nur die ersten 8 Zeichen;
-        Proxmox erzeugt dafuer ein eigenes Einmal-Kennwort (`password`). Der
-        LXC-Endpunkt bekommt den Parameter nicht (live gegen pve2: liefert trotzdem
-        ein eigenes `password`); fehlt es, bleibt das Ticket das Kennwort."""
+        """`kind` in {"qemu", "lxc"}. Startet auf dem Knoten einen kurzlebigen VNC-Proxy (wartet ~10 s auf die
+        Gegenverbindung) und liefert `port` und `ticket`; `websocket=1` wie in Proxmox' eigener Oberfläche."""
         body: dict[str, Any] = {"websocket": 1}
         if kind == "qemu":
+            # Sonst ist das VNC-Kennwort das Ticket selbst, QEMUs VNC-Auth nutzt davon aber nur die ersten 8 Zeichen;
+            # Proxmox erzeugt stattdessen ein Einmal-Kennwort (`password`). Der LXC-Endpunkt bekommt den Parameter nicht,
+            # liefert aber ebenfalls ein eigenes `password`; fehlt es, bleibt das Ticket das Kennwort.
             body["generate-password"] = 1
-        # Live gefunden: Proxmox startet dafuer auf dem Knoten einen eigenen Prozess --
-        # bei einer GPU-VM dauerte das einmal laenger als httpx' 5s-Default
-        # (danach wieder schnell). 20s statt eines sporadischen Fehlschlags.
+        # Proxmox startet dafür auf dem Knoten einen eigenen Prozess, das kann länger als httpx' 5-s-Standard dauern
+        # (einmal bei einer GPU-VM beobachtet), daher 20 s.
         return await self._request(
             "POST", f"/nodes/{node}/{kind}/{vmid}/vncproxy", json=body, timeout=20.0
         ) or {}
 
     def vncwebsocket_url(self, node: str, kind: str, vmid: str, *, port: Any, ticket: str) -> str:
-        """Das Ticket enthaelt `+`, `/` und `=` -- ohne vollstaendiges Kodieren kommt
-        es bei Proxmox veraendert an ("PVEVNC Ticket invalid", im Proxmox-Forum
-        mehrfach als Stolperstein dokumentiert)."""
+        """Das Ticket enthält `+`, `/` und `=`: ohne vollständiges Kodieren kommt es bei Proxmox verändert an
+        ("PVEVNC Ticket invalid")."""
         from urllib.parse import quote
 
         if self._base_url.startswith("https://"):
@@ -378,9 +330,8 @@ class ProxmoxConnector:
         )
 
     async def open_vnc(self, node: str, kind: str, vmid: str) -> "ProxmoxVncSession":
-        """vncproxy + vncwebsocket in einem Zug. Der WebSocket traegt denselben
-        `PVEAPIToken`-Header wie jeder REST-Aufruf -- der Browser sieht weder Token
-        noch Proxmox, er spricht nur mit Nodvard Deck (`api/v1/console.py` im Kern)."""
+        """vncproxy und vncwebsocket in einem Zug. Der WebSocket trägt denselben `PVEAPIToken`-Header wie jeder REST-Aufruf;
+        der Browser sieht weder Token noch Proxmox, er spricht nur mit Nodvard Deck (`api/v1/console.py` im Kern)."""
         from contextlib import AsyncExitStack
 
         data = await self.vncproxy(node, kind, vmid)
@@ -414,10 +365,9 @@ class ProxmoxConnector:
     async def wait_for_task(
         self, node: str, upid: str, *, timeout_s: float = 30.0, poll_interval_s: float = 1.0
     ) -> dict[str, Any]:
-        """Pollt bis `status` nicht mehr `"running"` ist oder `timeout_s` erreicht ist
-        -- gibt in BEIDEN Faellen den letzten bekannten Status zurueck (kein Exception
-        bei Timeout, der Aufrufer entscheidet, was "immer noch laufend" bedeutet).
-        `exitstatus` ist `"OK"` bei Erfolg, sonst ein Proxmox-Fehlertext."""
+        """Pollt den Task-Status, bis er nicht mehr `"running"` ist oder `timeout_s` abläuft (Proxmox beantwortet
+        Aktionen nur mit einer UPID, nicht mit dem Ergebnis). Gibt in beiden Fällen den letzten Status zurück, bei
+        Timeout ohne Fehler; `exitstatus` ist `"OK"` bei Erfolg, sonst ein Proxmox-Fehlertext."""
         deadline = time.monotonic() + timeout_s
         status = await self.task_status(node, upid)
         while status.get("status") == "running" and time.monotonic() < deadline:

@@ -1,26 +1,6 @@
-"""Verschluesselungskern des Secrets-Vaults -- Fernet + Key-Versionierung (D-06).
+"""Fernet-Verschlüsselung der Secrets mit versioniertem Keyring (docs/03-DATA-MODEL.md §3).
 
-WP-1 baute hier nur einen einzelnen Master-Key fuer genau einen Zweck (TOTP-Secrets,
-siehe der urspruengliche Modul-Docstring dieser Datei). WP-2 erweitert das um ein
-Trio: Key-Rotation ueber Versionen (`Keyring`),
-die `SecretHandle`/`vault_use()`-Abstraktion fuer (kuenftige) Extensions, und die
-Audit-Pflicht bei jeder Materialisierung (docs/03-DATA-MODEL.md §3, Invarianten 2+3).
-
-**Bewusste Design-Entscheidung, hier dokumentiert statt stillschweigend getroffen:**
-`get_fernet()` und das alte `store_secret(session, fernet, ...)` aus WP-1 sind ENTFERNT,
-nicht als Kompatibilitaets-Shim daneben liegen gelassen. Grund: ein einzelner,
-versionsloser Fernet-Schluessel kann `Secret.key_version` nicht respektieren -- nach
-einer Rotation haette `get_fernet()` weiterhin nur den NEUESTEN Schluessel geliefert,
-und jedes vor der Rotation verschluesselte Secret (z. B. ein TOTP-Secret aus WP-1) waere
-beim naechsten Login-Versuch nicht mehr entschluesselbar gewesen -- ein latenter Bug,
-der erst beim ERSTEN Rotationsaufruf sichtbar geworden waere. Die neuen Funktionen
-`create_secret`/`read_secret_plaintext`/`vault_use` sind deshalb alle Keyring- (also
-versions-) bewusst; `services/auth.py` (TOTP-Flow) wurde entsprechend umgestellt.
-`encrypt_str`/`decrypt_str`/`load_or_create_master_key` bleiben unveraendert -- reine
-Krypto-Bausteine ohne Versionsbezug, die die neuen Funktionen intern weiterverwenden.
-
-**Migration von WP-1-Daten:** `load_keyring()` uebernimmt einen bereits existierenden
-`master.key` unveraendert als Version 1 des Keyrings.
+Kein Endpunkt gibt Klartext zurück: Er entsteht nur innerhalb von `vault_use()` und wird dort ohne Wert protokolliert.
 """
 
 from __future__ import annotations
@@ -44,21 +24,18 @@ from . import audit
 Keyring = dict[int, bytes]
 
 USE_NOTE_INTERVAL = timedelta(hours=1)
-"""Hoechstens so oft je Secret und Verwender halten `vault_use()` fest, dass ein Secret benutzt wurde:
-`Secret.last_used_at`, die Zeile in `secret_usages` und die Audit-Zeile `secret.used`. Module fragen
-regelmaessig ab (alle paar Sekunden); eine Zeile je Zugriff flutete Protokoll und Datenbank."""
+"""Höchstens so oft je Secret und Verwender hält `vault_use()` die Nutzung fest (`last_used_at`, `secret_usages`, Audit
+`secret.used`); Module fragen alle paar Sekunden ab, und eine Zeile je Zugriff flutete Protokoll und Datenbank."""
 
 _now = utcnow
-"""Die Uhr fuer die Drosselung -- in Tests ersetzbar."""
+"""Die Uhr für die Drosselung, in Tests ersetzbar."""
 
 _noted: dict[tuple[str, str, str], datetime] = {}
-"""(Secret, Art, Verwender) -> wann die Nutzung zuletzt festgehalten wurde, in diesem Prozess. Spart die Abfrage
-bei jedem Zugriff und haelt zwei gleichzeitige Zugriffe davon ab, beide zu schreiben. Nach einem Neustart ist sie
-leer; dann entscheidet die Zeile in `secret_usages`."""
+"""(Secret, Art, Verwender) -> wann die Nutzung zuletzt festgehalten wurde (nur dieser Prozess); spart die Abfrage
+und hält zwei gleichzeitige Zugriffe vom doppelten Schreiben ab. Nach einem Neustart leer, dann gilt `secret_usages`."""
 
 _deciding: set[tuple[str, str, str]] = set()
-"""Kennungen, fuer die gerade ein Zugriff in `secret_usages` nachsieht. Ein gleichzeitiger zweiter Zugriff haelt
-dann nichts fest: der erste entscheidet und schreibt, wenn es faellig ist."""
+"""Kennungen, für die gerade ein Zugriff in `secret_usages` nachsieht; ein gleichzeitiger zweiter hält nichts fest."""
 
 
 class VaultError(Exception):
@@ -66,13 +43,7 @@ class VaultError(Exception):
 
 
 def load_or_create_master_key(path) -> bytes:  # noqa: ANN001 - Path, siehe config.py
-    """Laedt den Fernet-Schluessel oder erzeugt ihn beim allerersten Start.
-
-    `0600`-Rechte werden per `os.chmod` gesetzt -- unter Windows (dieser
-    Entwicklungsrechner) ist das wirkungslos, da NTFS-ACLs eigene Rechteverwaltung
-    haben; der Aufruf ist trotzdem harmlos und wird auf echten Linux-Zielsystemen
-    (Raspberry Pi bzw. kleiner x86-Rechner, docs/00 D-10) tatsaechlich wirksam.
-    """
+    """Lädt den Fernet-Schlüssel oder erzeugt ihn beim allerersten Start (Rechte 0600)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
         return path.read_bytes()
@@ -80,6 +51,7 @@ def load_or_create_master_key(path) -> bytes:  # noqa: ANN001 - Path, siehe conf
     key = Fernet.generate_key()
     path.write_bytes(key)
     try:
+        # Unter Windows wirkungslos (NTFS-ACLs), auf den Linux-Zielsystemen wirksam.
         os.chmod(path, 0o600)
     except OSError:
         pass
@@ -97,11 +69,7 @@ def decrypt_str(fernet: Fernet, ciphertext: bytes) -> str:
         raise VaultError("Entschlüsselung fehlgeschlagen (falscher Master-Key?)") from exc
 
 
-# ---------------------------------------------------------------------------
-# Keyring: versionierte Schluessel fuer Rotation ohne Big-Bang (docs/00 D-06)
-# ---------------------------------------------------------------------------
-
-
+# Keyring: versionierte Schlüssel, damit eine Rotation nicht alle Zeilen auf einmal umschlüsseln muss.
 def load_keyring(settings: Settings) -> Keyring:
     path = settings.vault_keyring_path
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,9 +77,7 @@ def load_keyring(settings: Settings) -> Keyring:
         raw = json.loads(path.read_text(encoding="utf-8"))
         return {int(version): key.encode("ascii") for version, key in raw.items()}
 
-    # Erster Zugriff ueberhaupt (oder Umstieg von WP-1): Version 1 uebernimmt den
-    # bestehenden Master-Key unveraendert, damit vor WP-2 verschluesselte Secrets ohne
-    # Re-Encryption lesbar bleiben.
+    # Erster Zugriff überhaupt: Version 1 ist der bestehende Master-Key, damit ältere Secrets lesbar bleiben.
     key = load_or_create_master_key(settings.master_key_path)
     keyring: Keyring = {1: key}
     _save_keyring(path, keyring)
@@ -140,21 +106,12 @@ def fernet_for_version(keyring: Keyring, version: int) -> Fernet:
 
 
 def rotate_master_key(settings: Settings) -> Keyring:
-    """Fuegt eine neue, hoehere Schluesselversion hinzu. Reine Funktion (Rotation als
-    Funktion, UI spaeter) -- schluesselt KEINE bestehende Secret-Zeile
-    um; das passiert lazy beim naechsten Zugriff (siehe `_decrypt_and_maybe_migrate`,
-    docs/03-DATA-MODEL.md §3: "neue Secrets mit v2, alte werden beim naechsten Zugriff
-    migriert")."""
+    """Fügt eine neue, höhere Schlüsselversion hinzu; bestehende Zeilen folgen erst beim nächsten Zugriff."""
     keyring = load_keyring(settings)
     new_version = current_version(keyring) + 1
     keyring[new_version] = Fernet.generate_key()
     _save_keyring(settings.vault_keyring_path, keyring)
     return keyring
-
-
-# ---------------------------------------------------------------------------
-# Secrets: anlegen, lesen, ersetzen, loeschen
-# ---------------------------------------------------------------------------
 
 
 async def create_secret(
@@ -188,10 +145,7 @@ async def create_secret(
 async def replace_secret_value(
     session: AsyncSession, keyring: Keyring, secret_id: str, plaintext: str
 ) -> Secret:
-    """Ersetzt den Wert eines bestehenden Secrets -- Invariante 1 erlaubt genau das
-    ('Schreiben und Ersetzen ja, Lesen nein', docs/03 §3). Verschluesselt immer mit der
-    aktuellen Schluesselversion, unabhaengig davon, mit welcher Version das Secret zuvor
-    lag."""
+    """Ersetzt den Wert eines Secrets (Schreiben ist erlaubt, Lesen nie), immer mit der aktuellen Schlüsselversion."""
     secret = await session.get(Secret, secret_id)
     if secret is None:
         raise VaultError(f"Secret '{secret_id}' nicht gefunden")
@@ -209,7 +163,7 @@ async def _decrypt_and_maybe_migrate(
     plaintext = decrypt_str(fernet_for_version(keyring, secret.key_version), secret.ciphertext)
     latest = current_version(keyring)
     if secret.key_version != latest:
-        # Lazy-Migration bei Zugriff, kein Big-Bang-Umschluesseln aller Zeilen.
+        # Beim Zugriff umschlüsseln, nicht alle Zeilen auf einmal.
         secret.ciphertext = encrypt_str(fernet_for_version(keyring, latest), plaintext)
         secret.key_version = latest
         await session.flush()
@@ -217,10 +171,8 @@ async def _decrypt_and_maybe_migrate(
 
 
 async def read_secret_plaintext(session: AsyncSession, keyring: Keyring, secret_id: str) -> str:
-    """NUR fuer serverseitige Verifikation (z. B. TOTP-Codepruefung) -- schreibt KEINEN
-    Audit-Eintrag, im Unterschied zu `vault_use()` (siehe dortiger Docstring fuer die
-    Begruendung der Trennung). Niemals aus einem API-Endpunkt heraus aufrufen, der den
-    Rueckgabewert weiterreicht (docs/03-DATA-MODEL.md §3, Invariante 1)."""
+    """Klartext nur für serverseitige Prüfungen (z. B. TOTP); nie aus einem Endpunkt, der den Wert weitergibt."""
+    # Ohne Audit-Eintrag (anders als `vault_use()`, der Weg für Extensions): Einer je TOTP-Prüfung wäre Rauschen.
     secret = await session.get(Secret, secret_id)
     if secret is None:
         raise VaultError(f"Secret '{secret_id}' nicht gefunden")
@@ -230,22 +182,15 @@ async def read_secret_plaintext(session: AsyncSession, keyring: Keyring, secret_
 async def delete_secret(session: AsyncSession, secret_id: str) -> None:
     secret = await session.get(Secret, secret_id)
     if secret is not None:
-        # Die Fremdschluessel-Kaskade raeumt `secret_usages` auch selbst ab; ausdruecklich, damit es nicht an
-        # `PRAGMA foreign_keys` haengt.
+        # Die Fremdschlüssel-Kaskade räumt `secret_usages` auch ab; ausdrücklich, damit es nicht an
+        # `PRAGMA foreign_keys` hängt.
         await session.execute(delete(SecretUsage).where(SecretUsage.secret_id == secret_id))
         await session.delete(secret)
 
 
-# ---------------------------------------------------------------------------
-# SecretHandle + vault_use -- der auditierte, extension-taugliche Weg
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class SecretHandle:
-    """Eine Referenz, kein Wert -- entspricht `SecretHandleRef` im SDK-Vertrag
-    (sdk/python/nodvard_sdk/context.py). Absichtlich ohne `ciphertext`-Feld: ein Handle
-    kann strukturell gar keinen Wert transportieren."""
+    """Eine Referenz ohne Wert (wie `SecretHandleRef` im SDK); ohne `ciphertext`-Feld kann sie keinen Wert tragen."""
 
     id: str
     label: str
@@ -270,43 +215,8 @@ async def vault_use(
     actor_id: str,
     correlation_id: str | None = None,
 ) -> AsyncIterator[str]:
-    """Materialisiert den Klartext NUR innerhalb des Blocks (docs/03 §3, Invariante 2)
-    -- entspricht `ExtensionContext.vault_use()` im SDK-Vertrag. Die Nutzung wird mit Label
-    und Verwender festgehalten, nie mit dem Wert (Invariante 3): `secret.used`-Audit-Zeile,
-    `Secret.last_used_at` und `secret_usages`, je Secret und Verwender hoechstens einmal je
-    `USE_NOTE_INTERVAL` (vorher bei JEDEM Aufruf; ein Modul, das alle paar Sekunden abfragt,
-    flutete das Protokoll).
-
-    Anders als `read_secret_plaintext()` (interner Helfer ohne Audit-Pflicht) ist DIES
-    der Weg, der auditiert -- die Trennung ist Absicht: einen TOTP-Codecheck bei jedem
-    Login-Versuch zu auditieren waere Rauschen ohne Sicherheitswert; eine Extension, die
-    ein Secret an sich zieht, ist der Fall, den docs/03 §3 tatsaechlich meint.
-
-    **Isolations-Fix (WP-3, eingeloest gegen den ersten echten Aufrufer -- den
-    Extension-Host, Auflage aus Commit 1ee1dbe):** Dass ein Secret materialisiert wurde,
-    ist eine Tatsache, die unabhaengig davon bestehen bleiben muss, was der
-    Aufrufer-Code NACH `yield` tut. Eine Extension, die nach dem Auslesen eines Secrets
-    an einer voellig anderen Stelle scheitert, darf den `secret.used`-Nachweis nicht mit
-    in ihren eigenen Rollback reissen -- sonst waere ausgerechnet die Verwendung eines
-    Secrets der einzige Vorgang im System, dessen Audit-Spur vom Erfolg des Aufrufers
-    abhaengt. Deshalb laufen alle schreibenden Nebenwirkungen (Lazy-Key-Migration,
-    `last_used_at`, die Audit-Zeile) NICHT in der von der Aufrufer-Session `session`
-    geteilten Transaktion, sondern in einer eigenen, sofort committenden Session ueber
-    `db.session.get_sessionmaker()` -- bewusst NICHT dasselbe Mittel wie
-    `services.auth._commit_before_raising()`: dort war ein Zwischen-Commit auf der
-    GETEILTEN Session sicher, weil an den drei betroffenen Stellen nachweislich nichts
-    anderes im Transaktionspuffer stand. `vault_use()` ist dagegen eine generische
-    Primitive; beliebiger Aufrufer-Code kann zwischen `yield` und einem eigenen Fehler
-    eigene, voneinander unabhaengige Schreibvorgaenge machen, die ein Commit auf der
-    GETEILTEN Session faelschlich mit festschreiben wuerde. Nur eine echte zweite
-    Verbindung vermeidet das. `session` selbst dient nur noch dem lesenden Zugriff auf
-    die Ciphertext-Spalte.
-
-    Getestet gegen eine echte Datei-SQLite-DB mit zwei echten Verbindungen (nicht nur
-    In-Memory/StaticPool, wo beide Sessions dieselbe physische Verbindung teilen wuerden
-    und der Test nichts bewiesen haette): siehe
-    test_vault_use_audit_survives_caller_session_rollback in test_core_vault.py, und
-    live gegen den echten Extension-Host in extensions/hello-world (Boot-Test)."""
+    """Gibt den Klartext nur innerhalb des Blocks heraus und hält die Nutzung ohne Wert fest (Audit `secret.used`,
+    `last_used_at`, `secret_usages`), je Secret und Verwender höchstens einmal je `USE_NOTE_INTERVAL`."""
     from ..db.session import get_sessionmaker
 
     secret = await session.get(Secret, handle.id)
@@ -321,6 +231,10 @@ async def vault_use(
     note = await _use_note_due(session, key, now)
     migrate = secret.key_version != latest
 
+    # Geschrieben wird in einer eigenen, sofort committenden Session (zweite Verbindung): Dass ein Secret materialisiert
+    # wurde, muss auch dann festgehalten bleiben, wenn der Aufrufer nach `yield` scheitert und zurückrollt. Ein
+    # Zwischen-Commit auf `session` risse dessen offene, fremde Schreibvorgänge mit fest; `session` dient nur dem Lesen.
+    # Test: `test_vault_use_audit_survives_caller_session_rollback` (echte Datei-DB, zwei Verbindungen).
     if note or migrate:
         if note:
             # Vor dem ersten `await` des Schreibens: ein gleichzeitiger Zugriff sieht den Eintrag schon.
@@ -358,7 +272,7 @@ async def vault_use(
                     await durable_session.commit()
         except BaseException:
             if note and _noted.get(key) == now:
-                # Nichts festgehalten: der naechste Zugriff versucht es wieder, statt eine Stunde zu schweigen.
+                # Nichts festgehalten: der nächste Zugriff versucht es wieder, statt eine Stunde zu schweigen.
                 del _noted[key]
             raise
 
@@ -366,15 +280,13 @@ async def vault_use(
 
 
 async def _use_note_due(session: AsyncSession, key: tuple[str, str, str], now: datetime) -> bool:
-    """Ist es Zeit, die Nutzung wieder festzuhalten (`USE_NOTE_INTERVAL`)? Erst der Stand dieses Prozesses, sonst
-    die Zeile in `secret_usages` (nach einem Neustart). Geht die Uhr zurueck, gilt die Nutzung als faellig.
-
-    Zwischen dieser Antwort und dem Merken in `vault_use` liegt kein `await`; waehrend der Abfrage haelt
-    `_deciding` einen gleichzeitigen zweiten Zugriff fern (sonst schrieben beide)."""
+    """Ob die Nutzung wieder festzuhalten ist (`USE_NOTE_INTERVAL`), nach Prozessstand, sonst nach `secret_usages`."""
     last = _noted.get(key)
     if last is None:
         if key in _deciding:
             return False
+        # Zwischen dieser Antwort und dem Merken in `vault_use` liegt kein `await`; `_deciding` hält währenddessen
+        # einen zweiten Zugriff fern (sonst schrieben beide).
         _deciding.add(key)
         try:
             last = await _stored_last_use(session, key)
@@ -382,11 +294,12 @@ async def _use_note_due(session: AsyncSession, key: tuple[str, str, str], now: d
             _deciding.discard(key)
         if last is not None:
             _noted[key] = last
+    # Geht die Uhr zurück (`now < last`), gilt die Nutzung als fällig.
     return last is None or now < last or now - last >= USE_NOTE_INTERVAL
 
 
 async def _stored_last_use(session: AsyncSession, key: tuple[str, str, str]) -> datetime | None:
-    """`last_used_at` aus `secret_usages`, frisch aus der Datenbank (nicht aus der Identity-Map der Aufrufer-Session)."""
+    """`last_used_at` aus `secret_usages`, frisch aus der Datenbank (nicht aus der Identity-Map des Aufrufers)."""
     secret_id, consumer_type, consumer_id = key
     result = await session.execute(
         select(SecretUsage.last_used_at).where(

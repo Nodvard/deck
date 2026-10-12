@@ -1,22 +1,4 @@
-"""Der Kern-Scheduler -- docs/00-DECISIONS.md D-08.
-
-**Bewusste Abweichung von D-08s woertlichem "APScheduler 3.x mit SQLAlchemy-
-Jobstore":** APSchedulers eigener `SQLAlchemyJobStore` persistiert Jobs ueber Pickle.
-Unser `JobSpec.handler` (docs/02 §2) ist eine gebundene Methode einer
-Extension-*Instanz*, die bei jedem Boot neu konstruiert wird (docs/02 §1) -- weder
-picklebar noch ueber einen Neustart hinweg gueltig. Zwei unabhaengig persistente
-Quellen (APSchedulers eigene Tabelle UND unsere `jobs`-Tabelle, docs/03 §7) waeren
-ausserdem zwei Wahrheiten, die auseinanderdriften koennen -- exakt das Muster, das
-D-08 mit "ein Scheduler" eigentlich beheben soll.
-
-Deshalb: APSchedulers Default-`MemoryJobStore` (reiner Prozessspeicher). Die `jobs`-
-Tabelle bleibt die EINZIGE dauerhafte Quelle. Rehydrierung nach einem Neustart braucht
-fuer Extension-Jobs KEINEN gesonderten Schritt: `services.extensions.
-load_enabled_from_registry()` laedt jede aktivierte Extension ohnehin neu, und deren
-`setup()` ruft `ctx.scheduler.register_job()` erneut auf (siehe `SchedulerHandle` in
-`ext/context.py`) -- das plant automatisch neu. NUR Kern-Jobs (kein `setup()`, das sie
-neu anmeldet) brauchen einen expliziten Aufruf, siehe `register_core_jobs()`.
-"""
+"""Der Kern-Scheduler: APScheduler mit Speicher im Prozess, dauerhaft ist nur die Tabelle `jobs`."""
 
 from __future__ import annotations
 
@@ -42,6 +24,11 @@ logger = logging.getLogger("nodvard_deck.scheduler")
 Handler = Callable[..., Awaitable[Any]]
 
 
+# Bewusst ohne den SQLAlchemy-Jobstore von APScheduler: Der speichert Jobs per Pickle, und ein `JobSpec.handler` ist
+# eine gebundene Methode einer Extension-Instanz, die bei jedem Start neu entsteht, also weder picklebar noch über einen
+# Neustart gültig. Zwei dauerhafte Quellen (dessen Tabelle und `jobs`) könnten außerdem auseinanderlaufen. Nach einem
+# Neustart planen Erweiterungen ihre Jobs in `setup()` über `ctx.scheduler.register_job()` neu ein; nur Kern-Jobs brauchen
+# dafür `register_core_jobs()`.
 class SchedulerService:
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()
@@ -67,25 +54,8 @@ class SchedulerService:
             task.cancel()
 
     async def schedule(self, job: Job, handler: Handler) -> None:
-        """Fuegt hinzu oder ERSETZT (`replace_existing=True`, `id=job.id`) -- macht
-        ein erneutes `register_job()` beim Re-Enable idempotent auch auf
-        APScheduler-Ebene, nicht nur in der DB (`services.jobs.upsert_job`).
-
-        **Nachtrag:** `Job.next_run_at`
-        wurde hier nie beschrieben, obwohl der Termin sofort berechenbar ist -- jetzt
-        in die `jobs`-Tabelle gespiegelt, dafuer ist diese Methode jetzt async (alle
-        drei Aufrufer sind es bereits).
-
-        **`trigger.get_next_fire_time()` statt `added_job.next_run_time` (live beim
-        vollen Testlauf gefunden, nicht nur gelesen):** main.py's Lifespan registriert
-        laut eigenem Kommentar ALLE Jobs explizit, BEVOR der Scheduler startet
-        (Modul-Docstring oben erklaert warum: `interrupted`-Markierung muss zuerst
-        laufen). `add_job()` gegen einen noch nicht gestarteten `AsyncIOScheduler`
-        liefert ein `Job`-Objekt, das `next_run_time` als Attribut GAR NICHT besitzt
-        (kein `None` -- `AttributeError`) -- jeder Extension-Boot mit einem
-        registrierten Job haette das beim naechsten echten Start ausgeloest, nicht
-        nur ein Testartefakt. Der Trigger selbst kennt seinen naechsten Termin aber
-        unabhaengig vom Laufzustand des Schedulers."""
+        """Fügt den Job hinzu oder ersetzt ihn (`replace_existing`), damit ein erneutes `register_job()` auch hier
+        idempotent ist, und spiegelt den nächsten Termin nach `Job.next_run_at`."""
         if not job.enabled:
             self.unschedule(job.id)
             async with session_scope() as session:
@@ -103,6 +73,8 @@ class SchedulerService:
             },
             misfire_grace_time=60,
         )
+        # Der Trigger statt `next_run_time` des neuen Jobs: Die Jobs werden vor dem Start des Schedulers angelegt, und bis
+        # dahin hat das Job-Objekt dieses Attribut gar nicht (AttributeError).
         next_run_at = trigger.get_next_fire_time(None, utcnow())
         async with session_scope() as session:
             await jobs_service.set_next_run_at(session, job.id, next_run_at)
@@ -143,8 +115,8 @@ class SchedulerService:
         lines = [f"[{utcnow().isoformat()}] gestartet (trigger={trigger_kind}, params={params!r})"]
         status, exit_code, error = "succeeded", 0, None
 
-        # Der Task uebernimmt den Kontext beim Anlegen: so weiss der Handler ueber
-        # `nodvard_sdk.current_job_trigger()`, ob er nach Zeitplan oder von Hand laeuft.
+        # Der Task übernimmt den Kontext beim Anlegen: So weiß der Handler über `nodvard_sdk.current_job_trigger()`, ob er
+        # nach Zeitplan oder von Hand läuft.
         token = _JOB_TRIGGER.set(trigger_kind)
         try:
             task: asyncio.Task = asyncio.ensure_future(handler(**params))
@@ -159,12 +131,12 @@ class SchedulerService:
             lines.append(f"[{utcnow().isoformat()}] {error}")
         except NodvardError as exc:
             # Ein Fehlschlag, den der Handler selbst mit Klartext meldet (z. B. "Das Skript lief auf keinem
-            # Server"): kein Programmfehler, deshalb ohne Traceback -- weder im Lauf-Protokoll noch im
-            # Container-Log, dessen Traceback-Pruefung nach einem Deploy sonst faelschlich zurueckrollt.
+            # Server"): kein Programmfehler, deshalb ohne Traceback, weder im Lauf-Protokoll noch im
+            # Container-Log, dessen Traceback-Prüfung nach einem Deploy sonst fälschlich zurückrollt.
             status, exit_code, error = "failed", 1, str(exc)
             lines.append(f"[{utcnow().isoformat()}] Fehler: {error}")
             logger.warning("job_run_failed job_id=%s run_id=%s error=%s", job_id, run_id, error)
-        except Exception as exc:  # noqa: BLE001 - siehe Modul-Docstring: darf das Protokoll nie verschlucken
+        except Exception as exc:  # noqa: BLE001 - ein Fehler des Handlers landet immer im Lauf-Protokoll
             status, exit_code, error = "failed", 1, str(exc)
             lines.append(f"[{utcnow().isoformat()}] Fehler: {error}\n{traceback.format_exc()}")
             logger.exception("job_run_failed job_id=%s run_id=%s", job_id, run_id)
@@ -173,13 +145,8 @@ class SchedulerService:
 
         log_path = self._runs_dir / f"{run_id}.log"
         content = "\n".join(lines) + "\n"
-        # `configure()` erzeugt das Verzeichnis normalerweise schon (main.py-Lifespan
-        # bzw. core.scheduler.register_core_jobs()) -- aber der Singleton kann auch
-        # OHNE vorherigen configure()-Aufruf benutzt werden (Live gefunden: jeder
-        # Test, der ueber die echte API einen Job ausloest, aber nie main.py's
-        # Lifespan durchlaeuft). `mkdir(exist_ok=True)` hier macht das Schreiben
-        # robust gegen beide Faelle, statt sich auf eine Aufrufreihenfolge zu
-        # verlassen.
+        # `configure()` legt den Ordner normalerweise schon an, der Dienst lässt sich aber auch ohne diesen Aufruf benutzen
+        # (etwa in Tests über die API); darum hier noch einmal.
         await asyncio.to_thread(self._runs_dir.mkdir, parents=True, exist_ok=True)
         await asyncio.to_thread(log_path.write_text, content, encoding="utf-8")
 
@@ -188,10 +155,8 @@ class SchedulerService:
             await jobs_service.finish_run(
                 session, run_row, status=status, exit_code=exit_code, error=error, output_ref=str(log_path)
             )
-            # APScheduler berechnet nach jedem Feuern intern den naechsten Termin neu
-            # (unabhaengig davon, ob dieser Lauf per Zeitplan oder manuell/`trigger_now`
-            # ausgeloest wurde) -- die gespiegelte Spalte muss mitziehen, sonst zeigt
-            # `GET /jobs` nach dem ersten Lauf einen veralteten Termin.
+            # APScheduler berechnet nach jedem Lauf den nächsten Termin neu (auch nach `trigger_now`); die gespiegelte
+            # Spalte muss mitziehen, sonst zeigt `GET /jobs` einen veralteten Termin.
             apscheduler_job = self._scheduler.get_job(job_id)
             await jobs_service.set_next_run_at(
                 session, job_id, getattr(apscheduler_job, "next_run_time", None)
@@ -210,11 +175,8 @@ class SchedulerService:
 
 
 CORE_SCHEDULER_EXT_ID = "__core__"
-"""Sentinel-`ext_id` fuer den `ExtensionRuntime.scheduler`-Registry-Eintrag von
-Kern-Jobs (`Job.ext_id` ist fuer sie `None`, aber `SchedulerRegistry.register()`
-erwartet einen Str-Schluessel) -- erlaubt `api/v1/jobs.py` `patch_job()`, den Handler
-eines Kern-Jobs genauso wie den einer Extension nachzuschlagen, statt zwei getrennte
-Lookup-Pfade zu brauchen."""
+"""Platzhalter-`ext_id` der Kern-Jobs in der `SchedulerRegistry` (`Job.ext_id` ist für sie `None`, die Registry braucht
+einen Text). So findet `api/v1/jobs.py` den Handler eines Kern-Jobs auf demselben Weg wie den einer Erweiterung."""
 
 
 JOB_RUNS_RETENTION_KEY = "job-runs-retention"
@@ -234,17 +196,14 @@ def get_scheduler_service() -> SchedulerService:
 
 
 def reset_scheduler_service() -> None:
-    """Nur fuer Tests."""
+    """Nur für Tests."""
     global _service
     _service = None
 
 
 async def register_core_jobs(runs_dir: Path) -> None:
-    """Kern-Jobs haben kein `setup()`, das sie bei jedem Boot neu anmeldet (anders als
-    Extension-Jobs, siehe Modul-Docstring) -- deshalb hier explizit, aus `main.py`s
-    Lifespan aufgerufen. Die Audit-Retention (WP-2 hat die reine Funktion gebaut, aber
-    bewusst NICHT geplant -- "das ist explizit WP-6", siehe `services/audit.py`), das Aufraeumen
-    alter Job-Laeufe, das Verfallen von Vorschlaegen und die weiteren unten."""
+    """Plant die Kern-Jobs ein (aufgerufen aus der Lifespan in `main.py`); anders als Erweiterungen haben sie kein
+    `setup()`, das sie bei jedem Start neu anmeldet."""
     from ..config import get_settings
     from ..services import audit as audit_service
 
@@ -253,7 +212,7 @@ async def register_core_jobs(runs_dir: Path) -> None:
     async def _purge_audit(**_: Any) -> dict[str, int]:
         settings = get_settings()
         async with session_scope() as session:
-            # Einstellung `audit.retention_days` gewinnt, die Umgebungsvariable ist der Rueckfall.
+            # Einstellung `audit.retention_days` gewinnt, die Umgebungsvariable ist der Rückfall.
             days = await audit_service.effective_retention_days(session, fallback=settings.audit_retention_days)
             deleted = await audit_service.purge_expired(session, retention_days=days)
         return {"deleted": deleted}
@@ -268,8 +227,8 @@ async def register_core_jobs(runs_dir: Path) -> None:
     get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, "audit-retention-purge", _purge_audit)
     await service.schedule(job, _purge_audit)
 
-    # Alte Job-Laeufe samt Protokolldateien aufraeumen (`services.job_retention`): Aufbewahrung aus
-    # `jobs.run_retention_days` (Vorgabe 30 Tage), pro Job bleiben immer die letzten 20 Laeufe.
+    # Alte Job-Läufe samt Protokolldateien aufräumen (`services.job_retention`): Aufbewahrung aus
+    # `jobs.run_retention_days` (Vorgabe 30 Tage), je Job bleiben immer die letzten 20 Läufe.
     from ..services import job_retention as job_retention_service
 
     async def _purge_job_runs(**_: Any) -> dict[str, int]:
@@ -283,9 +242,9 @@ async def register_core_jobs(runs_dir: Path) -> None:
     get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, JOB_RUNS_RETENTION_KEY, _purge_job_runs)
     await service.schedule(runs_job, _purge_job_runs)
 
-    # Alte Meldungen samt Zustellprotokollen loeschen (`services.notification_retention`): Aufbewahrung aus
+    # Alte Meldungen samt Zustellprotokollen löschen (`services.notification_retention`): Aufbewahrung aus
     # `notifications.retention_days` (Vorgabe 90 Tage), nur ungelesene kritische bleiben. Eigene Minute (03:30), damit die
-    # Aufraeum-Jobs (Protokoll 03:00, Job-Laeufe 03:20, alte Staende 03:40) nicht gleichzeitig auf die Schreibsperre warten.
+    # Aufräum-Jobs (Protokoll 03:00, Job-Läufe 03:20, alte Stände 03:40) nicht gleichzeitig auf die Schreibsperre warten.
     from ..services import notification_retention as notification_retention_service
 
     async def _purge_notifications(**_: Any) -> dict[str, int]:
@@ -313,8 +272,8 @@ async def register_core_jobs(runs_dir: Path) -> None:
     get_extension_runtime().scheduler.register(CORE_SCHEDULER_EXT_ID, "actions-expire", _expire_proposals)
     await service.schedule(expire_job, _expire_proposals)
 
-    # Der alte Stand einer Wiederherstellung (`restore/replaced-...`, Konten und Schluessel im Klartext) bleibt 30 Tage
-    # liegen; danach geht er von selbst (die Oberflaeche nennt den Tag).
+    # Der alte Stand einer Wiederherstellung (`restore/replaced-...`, Konten und Schlüssel im Klartext) bleibt 30 Tage
+    # liegen; danach geht er von selbst (die Oberfläche nennt den Tag).
     from ..services import restore as restore_service
 
     async def _cleanup_restore(**_: Any) -> dict[str, int]:
@@ -345,6 +304,14 @@ async def register_core_jobs(runs_dir: Path) -> None:
         await update_check_service.sync_job()
     except Exception:  # noqa: BLE001 - der Start darf daran nie scheitern
         logger.exception("update_check_job_setup_failed")
+
+    # Erinnerung an ablaufende Tresor-Einträge.
+    from ..services import secret_expiry as secret_expiry_service
+
+    try:
+        await secret_expiry_service.sync_job()
+    except Exception:  # der Start darf daran nie scheitern
+        logger.exception("secret_expiry_job_setup_failed")
 
     # Automatische Sicherungen (`services.backups`): Zeitplan und Schalter aus `backup.config`.
     # Ein Fehler hier darf den Start nicht verhindern, er steht im Protokoll.

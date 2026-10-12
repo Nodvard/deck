@@ -1,14 +1,6 @@
-"""„Einrichtung nötig“ für Erweiterungen: fehlen Pflichtfelder oder Pflicht-Zugangsdaten,
-oder ist der letzte Verbindungstest fehlgeschlagen?
+"""„Einrichtung nötig“ für Erweiterungen: fehlende Pflichtfelder oder Zugangsdaten, fehlgeschlagener Verbindungstest.
 
-Alles hier ist generisch und liest nur das Einstellungs-Schema (`required`,
-`x-secrets`) und die gespeicherten Werte -- der Kern kennt keine einzelne Erweiterung.
-
-Das Ergebnis des letzten Verbindungstests liegt als globale Einstellung
-`extension.test.<id>` (`{"ok", "message", "at"}`; `<id>` ist die Speicher-Kennung, also nach einer
-Umbenennung die alte Kennung, siehe `services.extensions.get_record`). Es wird gelöscht, sobald Einstellungen
-oder Zugangsdaten der Erweiterung geändert werden -- ein alter Fehlschlag soll nicht
-stehen bleiben, nachdem der Nutzer das Problem behoben hat.
+Generisch: liest nur das Einstellungs-Schema und die gespeicherten Werte, keine einzelne Erweiterung.
 """
 
 from __future__ import annotations
@@ -23,14 +15,13 @@ from ..db import utcnow
 from ..ext.runtime import get_extension_runtime
 from ..models import Secret, Setting
 
+# Das letzte Testergebnis liegt als globale Einstellung `extension.test.<Speicher-Kennung>` und wird gelöscht, sobald
+# Einstellungen oder Zugangsdaten sich ändern, damit ein alter Fehlschlag nicht stehen bleibt.
 TEST_KEY_PREFIX = "extension.test."
 
 
 def secret_slots_spec(schema: dict[str, Any] | None, values: dict[str, Any]) -> list[dict[str, Any]]:
-    """`x-secrets` im Schema, z. B.
-    `[{"label": "proxmox-token:{name}", "title": "API-Token", "per_item": "connections"}]`
-    -- `per_item` erzeugt ein Geheimnis je Eintrag der genannten Liste (über dessen `name`).
-    `"optional": true` markiert ein Geheimnis, ohne das die Erweiterung trotzdem arbeitet."""
+    """Die Geheimnisse aus `x-secrets`; `per_item` erzeugt eines je Listeneintrag (über dessen `name`)."""
     slots: list[dict[str, Any]] = []
     for spec in (schema or {}).get("x-secrets") or []:
         per_item = spec.get("per_item")
@@ -70,8 +61,7 @@ def _bound_paths(spec: dict[str, Any]) -> list[str]:
 def _target_at(
     values: Any, path: str, schema: dict[str, Any] | None, item_schema: dict[str, Any] | None = None
 ) -> Any:
-    """Das Ziel hinter `path`: der gespeicherte Wert, sonst der Standardwert aus dem Schema
-    (ohne eingetragene Adresse gilt der Standard); leer ist immer `""`."""
+    """Das Ziel hinter `path`: der gespeicherte Wert, sonst der Schema-Standard; leer ist immer `""`."""
     value = _path_value(values, path)
     if value is None:
         value = _default_for(schema, path, item_schema)
@@ -88,20 +78,11 @@ def _targets_moved(
 
 
 def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
-    """Labels der Geheimnisse, die nach einer Aenderung der Einstellungen nicht mehr
-    stehen bleiben duerfen: Ein Geheimnis gehoert zu dem Ziel, bei dem es gesetzt wurde.
-    Aendert sich dieses Ziel (Schema: `x-secrets[].x-secret-bound-to`, Feldnamen oder
-    Pfade wie `pihole.url`), wuerde das Geheimnis sonst an die neue Adresse geschickt.
-    Das gilt fuer JEDE Aenderung eines der genannten Felder, auch fuer eine erste Adresse
-    (leer -> Wert): ein Geheimnis kann an mehrere Felder gebunden sein (ein zweiter Server
-    mit demselben Schluessel), und eines, das schon im Tresor liegt, ohne dass ein Ziel
-    eingetragen war, gehoert zu keinem Server. Neue Geheimnisse nimmt der Tresor erst an,
-    wenn ein Ziel gespeichert ist (`secret_target_missing`), so geht beim ersten Einrichten
-    nichts verloren. Bei Geheimnissen je Listeneintrag (`per_item`) gelten die Feldnamen
-    innerhalb des Eintrags; faellt der Eintrag weg (oder wird umbenannt), faellt sein Geheimnis
-    ebenfalls weg. Ein NEU angelegter Eintrag startet ohne Geheimnis: liegt unter seinem Namen
-    noch eines (etwa von einer frueher entfernten Verbindung), gehoerte es zu einem anderen
-    Ziel. Die Liste nennt Labels, die geloescht werden muessen, falls es sie gibt."""
+    """Labels der Geheimnisse, die nach der Änderung nicht mehr stehen bleiben dürfen (ihr Ziel hat sich geändert)."""
+    # Ein Geheimnis gehört zu dem Ziel (`x-secret-bound-to`), bei dem es gesetzt wurde; zöge das Ziel um, ginge es sonst
+    # an die neue Adresse. Das gilt für jede Änderung eines gebundenen Feldes, auch leer -> Wert: Ein Geheimnis ohne
+    # Ziel im Tresor gehört zu keinem Server. Neue nimmt der Tresor erst mit gespeichertem Ziel an
+    # (`secret_target_missing`).
     out: list[str] = []
     for spec in (schema or {}).get("x-secrets") or []:
         bound = _bound_paths(spec)
@@ -114,6 +95,9 @@ def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: di
             old_names = {
                 str((i or {}).get("name") or "").strip() for i in old.get(per_item) or [] if isinstance(i, dict)
             }
+            # Ein neuer Eintrag startet ohne Geheimnis: Was unter seinem Namen noch liegt (etwa von einer
+            # entfernten Verbindung), gehörte zu einem anderen Ziel. Fällt ein Eintrag weg oder wird
+            # umbenannt, fällt auch sein Geheimnis weg.
             for name in new_by_name:
                 if name and name not in old_names:
                     out.append(spec["label"].replace("{name}", name))
@@ -131,9 +115,7 @@ def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: di
 
 
 def secret_target_missing(schema: dict[str, Any] | None, values: dict[str, Any], slot: dict[str, Any]) -> bool:
-    """Ist das Geheimnis `slot` (ein Eintrag aus `secret_slots_spec`) an Felder gebunden, die alle
-    noch leer sind (auch ohne Standardwert im Schema)? Dann gibt es noch keinen Server, zu dem es
-    gehoeren koennte: erst die Adresse speichern, dann das Geheimnis ablegen."""
+    """Ist das Geheimnis `slot` an Felder gebunden, die alle noch leer sind? Dann zuerst die Adresse speichern."""
     bound = _bound_paths(slot)
     if not bound:
         return False
@@ -161,9 +143,9 @@ def _wanted(key: str, sub: dict[str, Any]) -> str:
 
 
 def missing_fields(schema: dict[str, Any] | None, values: dict[str, Any]) -> list[str]:
-    """Pflichtfelder ohne Wert (und ohne Standardwert im Schema): oben auf der Ebene der
-    Einstellungen und je Eintrag einer Liste von Einträgen (z. B. je Proxmox-Server). Dazu
-    `x-required-any` (Liste von Feldgruppen): mindestens eine Gruppe muss ganz ausgefüllt sein."""
+    """Pflichtfelder ohne Wert und ohne Schema-Standard, oben und je Listeneintrag.
+
+    `x-required-any`: mindestens eine der Feldgruppen muss ganz ausgefüllt sein."""
     out: list[str] = []
     props = (schema or {}).get("properties") or {}
     groups = [g for g in (schema or {}).get("x-required-any") or [] if isinstance(g, list) and g]
@@ -195,7 +177,7 @@ def missing_fields(schema: dict[str, Any] | None, values: dict[str, Any]) -> lis
 def missing_secrets(schema: dict[str, Any] | None, values: dict[str, Any], present_labels: set[str]) -> list[str]:
     out: list[str] = []
     for spec in secret_slots_spec(schema, values):
-        if spec.get("optional") or spec["label"] in present_labels:
+        if spec.get("optional") or spec["label"] in present_labels:  # optional: läuft auch ohne
             continue
         title = str(spec.get("title") or spec["label"])
         out.append(f"Zugangsdaten fehlen: {title}" + (f" ({spec['item']})" if spec.get("item") else "") + ".")
@@ -210,16 +192,12 @@ def setup_reasons(
     *,
     with_test_message: bool = True,
 ) -> list[str]:
-    """`with_test_message=False`: nur "Der letzte Verbindungstest ist fehlgeschlagen." ohne den Text
-    (er nennt Adressen und Fehlergruende -- nur fuer Nutzer, die Erweiterungen verwalten)."""
+    """Die Gründe für "Einrichtung nötig"; `with_test_message=False` lässt den Text weg, der Adressen nennt."""
     reasons = missing_fields(schema, values) + missing_secrets(schema, values, present_labels)
     if last_test is not None and last_test.get("ok") is False:
         detail = f": {last_test.get('message') or 'ohne Angabe'}" if with_test_message else "."
         reasons.append(f"Der letzte Verbindungstest ist fehlgeschlagen{detail}")
     return reasons
-
-
-# -- Speicher für das letzte Testergebnis -------------------------------------------------
 
 
 def _row_key(ext_id: str) -> str:

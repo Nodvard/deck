@@ -1,23 +1,6 @@
-"""service-matrix-Extension -- entdeckt laufende Docker-Container und zeigt sie als
-klickbare Kacheln.
+"""Service-Matrix: entdeckt Docker-Container per SSH und zeigt sie als Kacheln, mit Container-Verwaltung und Image-Updates.
 
-Ersetzt die von Hand gepflegten Container-/URL-Listen des Vorgaengersystems: Container
-werden entdeckt, nicht von Hand gepflegt. Eine Handliste sammelt tote oder falsch
-zugeordnete Eintraege (Container, die es nicht mehr gibt, Dienste am falschen Host),
-weil sie beim naechsten Infrastruktur-Umbau nie nachgezogen wird. Diese Extension hat
-keine Liste, die veralten koennte.
-
-**Container-Verwaltung:** von reiner Anzeige zu echter Verwaltung --
-Start/Stop/Neustart/Loeschen je Container (`container.*`-Aktionen, `DockerContainerExecutor`,
-IMMER ueber das Aktions-Gate) und Live-Logs (`GET .../containers/{host}/{name}/logs`,
-gestreamt ueber `ctx.exec.stream()`), dazu eine Konsole im Container (`shell.py`, ueber das
-Terminal des Kerns). Damit braucht es fuer den Alltag weder Portainer noch eine SSH-Sitzung auf
-dem Docker-Host.
-
-**Image-Updates** (`image_updates.py`): rein lesende Pruefung, ob es fuer laufende
-Container neuere Images gibt (`GET/POST .../image-updates`), optional als Tagesjob mit
-einer Meldung. Einspielen (Compose-Dienste: `docker compose pull` + `up -d`) geht nur ueber
-das Aktions-Gate -- `applier.py` liefert die Uebersicht vorab (`.../image-update/plan`).
+Alles Ändernde (Container-Aktionen, Einspielen von Image-Updates) läuft über das Aktions-Gate.
 """
 
 from __future__ import annotations
@@ -68,7 +51,7 @@ _MAX_TAIL = 5000
 
 class _TileUrlIn(BaseModel):
     url: str | None = Field(..., max_length=MAX_URL_LENGTH)
-    """Eigene Adresse der Kachel; leer oder `null` nimmt wieder die erkannte. Pflichtfeld: `{}` ist kein Zuruecksetzen."""
+    """Eigene Adresse der Kachel; leer oder `null` nimmt wieder die erkannte. Pflichtfeld: `{}` ist kein Zurücksetzen."""
 
     @field_validator("url")
     @classmethod
@@ -78,7 +61,7 @@ class _TileUrlIn(BaseModel):
 
 class _ApplyIn(BaseModel):
     plan_id: str = Field(pattern=r"^[0-9a-f]{16}$")
-    """Die Kennung der Uebersicht, die der Nutzer gesehen hat (`GET .../image-update/plan`)."""
+    """Die Kennung der Übersicht, die der Nutzer gesehen hat (`GET .../image-update/plan`)."""
 
 
 def _apply_docker_tag(ctx: ExtensionContext, tag: str) -> None:
@@ -90,8 +73,8 @@ def _apply_docker_tag(ctx: ExtensionContext, tag: str) -> None:
 
 
 def _register_host_tool(ctx: ExtensionContext, tag: str) -> None:
-    """Kachel "Container" auf der Server-Seite jedes Docker-Hosts. Der Tag ist
-    einstellbar (`docker_host_tag`) -- deshalb bei jeder Aenderung neu gemeldet."""
+    """Kachel "Container" auf der Server-Seite jedes Docker-Hosts. Der Tag ist einstellbar (`docker_host_tag`), deshalb
+    wird sie bei jeder Änderung neu gemeldet."""
     ctx.ui.register_host_tool(HostToolSpec(
         id="containers", title="Container", icon="layout-grid", category="services",
         description="Container starten, stoppen, löschen, Logs, Konsole, Details -- Docker-Speicher aufräumen", path="/matrix?host={host_id}",
@@ -100,9 +83,9 @@ def _register_host_tool(ctx: ExtensionContext, tag: str) -> None:
 
 
 def _register_docker_requirement(ctx: ExtensionContext, tag: str) -> None:
-    """Der Einrichtungsbefehl fuer einen Server (Einstellungen, Server & Zugaenge) bietet auf
-    Docker-Hosts die Gruppe "docker" an, und "Verbindung pruefen" testet sie -- die Extension
-    arbeitet mit dem SSH-Benutzer ohne sudo. Wie die Kachel folgt auch das dem Tag."""
+    """Der Einrichtungsbefehl für einen Server (Einstellungen, Server & Zugänge) bietet auf Docker-Hosts die Gruppe
+    "docker" an, und "Verbindung prüfen" testet sie: die Extension arbeitet mit dem SSH-Benutzer ohne sudo. Wie die
+    Kachel folgt auch das dem Tag."""
     ctx.ui.register_host_requirement(HostRequirementSpec(
         id="docker-group", label="Docker ohne sudo (Service-Matrix)",
         check_command="docker ps -q", ok_text="Docker lässt sich ohne sudo benutzen.",
@@ -124,8 +107,8 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(DockerMaintenanceExecutor(ctx))
         ctx.capabilities.provide(ImageUpdateExecutor(self._applier))
         ctx.capabilities.provide(ContainerShell(ctx))
-        # Nicht in `container_action_specs` (die haengen am Docker-Tag): Den Befehl baut immer
-        # die Extension, die Aktion kommt nur ueber die Route unten -- nie ueber die Server-Seite.
+        # Nicht in `container_action_specs` (die hängen am Docker-Tag): den Befehl baut immer die Extension, die Aktion
+        # kommt nur über die Route unten, nie über die Server-Seite.
         ctx.actions.register(IMAGE_UPDATE_SPEC)
         # Mit dem Standard-Tag; on_start meldet sie mit dem eingestellten Tag neu an.
         for spec in container_action_specs():
@@ -155,22 +138,19 @@ class Extension(NodvardExtension):
 
         @router.get("/stats")
         async def container_stats() -> dict:
-            """CPU/RAM je laufendem Container, getrennt von der Liste (dauert ein paar
-            Sekunden, siehe `DockerServiceCatalog.container_stats()`)."""
+            """CPU/RAM je laufendem Container, getrennt von der Liste (dauert ein paar Sekunden, siehe
+            `DockerServiceCatalog.container_stats()`)."""
             return {"data": await self._catalog.container_stats()}
 
         @router.get("/image-updates")
         async def image_updates() -> dict:
-            """Letzter Stand der Image-Pruefung je Host und Container (nur Speicher, kein
-            Zugriff auf die Hosts -- die Pruefung selbst loest der POST darunter aus). Dazu
-            `applying`/`applied`: laufende und zuletzt beendete Updates."""
-            await self._images.docker_hosts()  # nur die Host-Liste aus der Datenbank; raeumt entfernte Hosts aus dem Stand
+            """Letzter Stand der Image-Prüfung je Host und Container (nur Speicher, kein Zugriff auf die Hosts; die Prüfung
+            löst der POST darunter aus). Dazu `applying`/`applied`: laufende und zuletzt beendete Updates."""
+            await self._images.docker_hosts()  # nur die Host-Liste aus der Datenbank; räumt entfernte Hosts aus dem Stand
             return self._snapshot()
 
-        # Sicherheits-Nachtrag: dieser
-        # Router hing OHNE Berechtigung (`include_router(router)`) -- laut ApiHandle-
-        # Docstring heisst das: oeffentlich, ohne Login erreichbar. Lesen braucht jetzt
-        # `hosts.read`, alles Ausloesende `hosts.execute`.
+        # Ein Router ohne `permission` wäre öffentlich (ohne Login erreichbar, siehe ApiHandle): Lesen braucht
+        # `hosts.read`, alles Auslösende `hosts.execute`.
         ctx.api.include_router(router, permission="hosts.read")
 
         from contextlib import AsyncExitStack
@@ -180,8 +160,8 @@ class Extension(NodvardExtension):
         logs_router = APIRouter()
 
         async def _docker_host(host_id: str):  # noqa: ANN202 - nodvard_sdk.Host
-            """Nur Hosts mit dem Docker-Tag -- sonst liefe `docker ...` per SSH auf
-            beliebigen Hosts, nur weil jemand eine ID kennt."""
+            """Nur Hosts mit dem Docker-Tag, sonst liefe `docker ...` per SSH auf beliebigen Hosts, nur weil jemand eine ID
+            kennt."""
             host = await ctx.hosts.get(host_id)
             tag = (await ctx.settings.get()).get("docker_host_tag") or "docker"
             if host is None or tag not in host.tags:
@@ -190,20 +170,17 @@ class Extension(NodvardExtension):
 
         @logs_router.post("/image-updates/check", status_code=status.HTTP_202_ACCEPTED)
         async def image_updates_check(host_id: str | None = None, force: bool = False) -> dict:
-            """Startet die Pruefung im Hintergrund (alle Docker-Hosts oder nur `host_id`) und
-            antwortet sofort mit dem Stand (`hosts[..].checking`). Lesend -- aber sie
-            oeffnet SSH-Verbindungen und fragt Registries, deshalb `hosts.execute` wie
-            bei den Logs. `force`: Antworten der Registry nicht aus dem 6-Stunden-Speicher
-            nehmen."""
+            """Startet die Prüfung im Hintergrund (alle Docker-Hosts oder nur `host_id`) und antwortet sofort mit dem Stand
+            (`hosts[..].checking`). Lesend, aber sie öffnet SSH-Verbindungen und fragt Registries, deshalb `hosts.execute`
+            wie bei den Logs. `force`: Antworten der Registry nicht aus dem 6-Stunden-Speicher nehmen."""
             hosts = [await _docker_host(host_id)] if host_id else await self._images.docker_hosts()
             self._images.start(hosts, force=force)
             return self._snapshot()
 
         @logs_router.get("/containers/{host_id}/{container}/image-update/plan")
         async def image_update_plan(host_id: str, container: str) -> dict:
-            """Die Uebersicht vor dem Einspielen -- nur lesend: was passiert, welcher Befehl
-            laeuft, was ist betroffen, welche Warnungen gibt es. `ok: false` mit Grund, wenn
-            sich der Container so nicht aktualisieren laesst."""
+            """Die Übersicht vor dem Einspielen, nur lesend: was passiert, welcher Befehl läuft, was ist betroffen, welche
+            Warnungen es gibt. `ok: false` mit Grund, wenn sich der Container so nicht aktualisieren lässt."""
             if not CONTAINER_NAME_RE.match(container):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
             host = await _docker_host(host_id)
@@ -219,9 +196,8 @@ class Extension(NodvardExtension):
 
         @logs_router.post("/containers/{host_id}/{container}/image-update", status_code=status.HTTP_202_ACCEPTED)
         async def image_update_apply(host_id: str, container: str, body: _ApplyIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
-            """Schlaegt das Einspielen vor (Gate-Aktion `container.image_update`) -- fuer genau die
-            Uebersicht, die der Nutzer gesehen hat (`plan_id`). Hat sich der Stand seitdem
-            geaendert, 409 mit Aufforderung, neu zu laden."""
+            """Schlägt das Einspielen vor (Gate-Aktion `container.image_update`), und zwar für genau die Übersicht, die der
+            Nutzer gesehen hat (`plan_id`). Hat sich der Stand seitdem geändert, 409 mit der Aufforderung, neu zu laden."""
             if not CONTAINER_NAME_RE.match(container):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
             host = await _docker_host(host_id)
@@ -255,8 +231,8 @@ class Extension(NodvardExtension):
 
         @logs_router.get("/hosts/{host_id}/docker")
         async def docker_storage(host_id: str) -> dict:
-            """Belegung (Images, Container, Volumes, Build-Cache) und die Images des
-            Hosts -- was man sonst per `docker system df` auf der Konsole nachsieht."""
+            """Belegung (Images, Container, Volumes, Build-Cache) und die Images des Hosts, wie bei `docker system df`
+            auf der Konsole."""
             host = await _docker_host(host_id)
             df = await ctx.exec.run(host, "docker system df --format '{{json .}}'", timeout_s=60)
             images = await ctx.exec.run(host, "docker images --format '{{json .}}'", timeout_s=30)
@@ -275,14 +251,8 @@ class Extension(NodvardExtension):
             follow: bool = True,
         ) -> StreamingResponse:
             """Live-Logs eines Containers als laufender Text-Strom (`docker logs -f`).
-            Lesend, aber nicht harmlos (Logs enthalten gern Tokens/Adressen) -- deshalb
-            dieselbe Berechtigung wie das Terminal (`hosts.execute`, siehe
-            `include_router` unten), nicht nur `hosts.read`.
-
-            Der Strom wird VOR der Antwort geoeffnet: ein nicht erreichbarer Host wird
-            so ein ehrlicher 502, statt eines 200 mit leerem Koerper. Endet die
-            Verbindung zum Browser, beendet das Verlassen von `ctx.exec.stream()` den
-            entfernten Prozess (PTY-Hangup)."""
+            Lesend, aber nicht harmlos (Logs enthalten gern Tokens und Adressen): dieselbe Berechtigung wie das Terminal
+            (`hosts.execute`)."""
             if not CONTAINER_NAME_RE.match(container):
                 raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Containername.")
             host = await ctx.hosts.get(host_id)
@@ -290,6 +260,8 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
 
             command = f"docker logs --tail {tail} --timestamps {'--follow ' if follow else ''}{container}"
+            # Der Strom wird vor der Antwort geöffnet: ein nicht erreichbarer Host wird so ein ehrlicher 502 statt eines 200
+            # mit leerem Körper.
             stack = AsyncExitStack()
             try:
                 chunks = await stack.enter_async_context(ctx.exec.stream(host, command))
@@ -300,9 +272,11 @@ class Extension(NodvardExtension):
                 ) from exc
 
             async def _body():  # noqa: ANN202
+                # Endet die Verbindung zum Browser, beendet das Verlassen von `ctx.exec.stream()` den entfernten Prozess
+                # (PTY-Hangup).
                 try:
                     async for chunk in chunks:
-                        # PTY liefert `\r\n` -- fuer die Log-Ansicht reine Zeilenumbrueche.
+                        # PTY liefert `\r\n`, für die Log-Ansicht reichen Zeilenumbrüche.
                         yield chunk.replace(b"\r", b"")
                 finally:
                     await stack.aclose()
@@ -322,7 +296,7 @@ class Extension(NodvardExtension):
 
         @apps_router.put("/containers/{host_id}/{container}/url")
         async def set_tile_url(host_id: str, container: str, body: _TileUrlIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
-            """Eigene Adresse fuer die Kachel eines Containers (z. B. wenn die erkannte nicht stimmt). Bleibt gespeichert,
+            """Eigene Adresse für die Kachel eines Containers (z. B. wenn die erkannte nicht stimmt). Bleibt gespeichert,
             auch wenn der Container neu erstellt wird (gleicher Name); `url: null` nimmt wieder die erkannte. Wie das
             Bearbeiten der Apps-Seite nur mit `apps.write`."""
             if not CONTAINER_NAME_RE.match(container):
@@ -383,12 +357,12 @@ class Extension(NodvardExtension):
         )
 
     def _snapshot(self) -> dict[str, Any]:
-        """Stand der Pruefung (`data`, `hosts`) plus laufende/beendete Updates (`applying`, `applied`)."""
+        """Stand der Prüfung (`data`, `hosts`) plus laufende/beendete Updates (`applying`, `applied`)."""
         return {**self._images.snapshot(), **self._applier.snapshot()}
 
     async def on_start(self, ctx: ExtensionContext) -> None:
-        # Nicht in setup(): das liest die Einstellungen (I/O, docs/02 "setup = nur
-        # registrieren"). Die Server-Seite fragt die Werkzeuge erst zur Anfragezeit ab.
+        # Nicht in setup(): das liest die Einstellungen (I/O), setup soll nur registrieren. Die Server-Seite fragt die
+        # Werkzeuge erst zur Anfragezeit ab.
         settings = await ctx.settings.get()
         _apply_docker_tag(ctx, settings.get("docker_host_tag") or "docker")
         await register_job(ctx, self._images, settings)

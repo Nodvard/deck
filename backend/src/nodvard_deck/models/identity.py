@@ -1,4 +1,4 @@
-"""Nutzer, Rollen, Berechtigungen, Sitzungen. Siehe docs/03-DATA-MODEL.md §1."""
+"""Nutzer, Rollen, Berechtigungen, Sitzungen."""
 
 from __future__ import annotations
 
@@ -31,16 +31,14 @@ class User(Base, IdMixin, TimestampMixin):
     """Das 2FA-Secret liegt im Vault, nicht in dieser Tabelle."""
 
     totp_confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    """Gesetzt erst NACH einer erfolgreich verifizierten Setup-Bestaetigung
-    (POST /me/totp/confirm) -- solange NULL, ist 2FA angelegt aber nicht aktiv, und der
-    Login verlangt noch keinen Code. Getrennt von `totp_secret_id IS NOT NULL`, weil ein
-    Secret sonst schon waehrend des Scan-QR-Codes im Setup-Schritt "aktiv" waere, bevor
-    der Nutzer bewiesen hat, dass er es wirklich eingerichtet hat."""
+    """Erst nach bestätigter Einrichtung gesetzt (POST /me/totp/confirm); solange leer, verlangt der Login keinen Code.
+
+    Nicht aus `totp_secret_id` ableiten: das Secret existiert schon beim Scannen des QR-Codes."""
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     is_owner: Mapped[bool] = mapped_column(Boolean, default=False)
-    """Genau einer. Umgeht RBAC und kann sich das nicht selbst entziehen — sonst kann
-    eine unglueckliche Rollenaenderung die Installation aussperren."""
+    """Genau einer; umgeht RBAC und kann sich das nicht selbst entziehen, sonst sperrt eine Rollenänderung
+    die Installation aus."""
 
     locale: Mapped[str] = mapped_column(String(8), default="de")
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
@@ -61,12 +59,9 @@ class Role(Base, IdMixin, TimestampMixin):
 
 
 class RolePermission(Base):
-    """Berechtigungen sind Strings, keine Tabelle mit Fremdschluessel.
+    """Berechtigungen sind Strings ohne eigene Tabelle, damit Extensions eigene mitbringen können, ohne Migration.
 
-    Damit koennen Extensions eigene Berechtigungen mitbringen, ohne dass eine Migration
-    noetig ist. Format: <domaene>.<aktion>[:<scope>], Suffix-Wildcard erlaubt
-    (z. B. secrets.read:ssh-*).
-    """
+    Format: <domäne>.<aktion>[:<scope>], Suffix-Wildcard erlaubt (z. B. secrets.read:ssh-*)."""
 
     __tablename__ = "role_permissions"
 
@@ -88,8 +83,7 @@ class RefreshToken(Base, IdMixin):
     """SHA-256 des opaken Werts. Der Wert selbst wird nie gespeichert."""
 
     client_type: Mapped[str] = mapped_column(String(16), default="web")
-    """web | android | cli — entscheidet Cookie vs. Body. Der Access-Token-Pfad ist fuer
-    alle identisch; nur daran haengt die Zusage 'eine API fuer Web und App'."""
+    """web | android | cli: entscheidet Cookie oder Body. Der Access-Token-Pfad ist für alle Clients gleich."""
 
     device_name: Mapped[str | None] = mapped_column(String(128))
     user_agent: Mapped[str | None] = mapped_column(String(255))
@@ -97,23 +91,19 @@ class RefreshToken(Base, IdMixin):
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime)
     revoked_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     replaced_by_id: Mapped[str | None] = mapped_column(String(36))
-    """Nachfolger-Sitzung, wenn dieser Token durch ROTATION widerrufen wurde (Refresh).
-    Bleibt leer bei Abmelden/Passwortwechsel -- nur so weiss die Gnadenfrist in
-    `services.auth.refresh_access_token`, welche Widerrufe sie verzeihen darf."""
+    """Nachfolger-Sitzung, wenn der Token durch Rotation (Refresh) widerrufen wurde; sonst leer.
+
+    Nur daran erkennt die Gnadenfrist in `services.auth.refresh_access_token`, welche Widerrufe sie verzeihen darf."""
     last_used_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class RecoveryCode(Base, IdMixin):
-    """Einmalige Wiederherstellungs-Codes fuer die Zwei-Faktor-Anmeldung (je Nutzer 10).
+    """Einmalige Wiederherstellungs-Codes für die Zwei-Faktor-Anmeldung (je Nutzer 10), nur als Argon2id-Hash."""
 
-    Gespeichert wird nur ein Argon2id-Hash (wie bei Passwoertern), nie der Code selbst. Ein
-    Code hat nur ~50 Bit Zufall und ist damit deutlich schwaecher als ein Token
-    (`RefreshToken.token_hash`, 256 Bit, reicht SHA-256) -- ein schneller Hash liesse sich
-    bei einem Datenbank-Leck offline durchprobieren, ein langsamer nicht. Geprueft wird nur
-    nach richtigem Passwort und hinter der Drosselung, die Kosten (10 Hashes je Versuch)
-    fallen also nicht ins Gewicht."""
-
+    # Argon2id statt SHA-256 wie beim Token: ein Code hat nur etwa 50 Bit Zufall, ein schneller Hash ließe sich nach
+    # einem Datenbank-Leck offline durchprobieren. Geprüft wird nur nach richtigem Passwort und hinter der Drosselung,
+    # die Kosten (10 Hashes je Versuch) fallen also nicht ins Gewicht.
     __tablename__ = "recovery_codes"
 
     user_id: Mapped[str] = mapped_column(
@@ -121,15 +111,12 @@ class RecoveryCode(Base, IdMixin):
     )
     code_hash: Mapped[str] = mapped_column(String(255))
     used_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    """Gesetzt beim Einloesen -- ein benutzter Code gilt nie wieder."""
+    """Gesetzt beim Einlösen; ein benutzter Code gilt nie wieder."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)
 
 
 class ApiToken(Base, IdMixin, TimestampMixin):
-    """Fuer Automatisierung und Langzeitnutzung durch die App.
-
-    Ersatz fuer die heutigen ungeschuetzten Endpunkte, die per Cron angesprochen werden.
-    """
+    """Token für Automatisierung und Langzeitnutzung durch die App."""
 
     __tablename__ = "api_tokens"
 

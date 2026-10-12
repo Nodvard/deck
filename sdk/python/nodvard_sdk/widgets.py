@@ -1,15 +1,6 @@
-"""Deklarative Widget-Spezifikation.
+"""Deklarative Widget-Spezifikation: kein Widget ohne deklarative Form.
 
-**Die Regel: kein Widget ohne deklarative Form.** Eine Extension liefert React; die
-Flutter-App kann React nicht ausführen. Wäre das Widget-Format Code, sähe die Android-App
-von jeder Extension nichts — und der Grundsatz "Web und App teilen sich eine API" wäre
-mit der ersten Extension gebrochen.
-
-Deshalb beschreibt eine Extension *was* angezeigt wird (Typ + Feldbindungen), nicht *wie*
-es gezeichnet wird. React und Flutter implementieren beide denselben endlichen Satz an
-View-Typen.
-
-Siehe docs/02-EXTENSION-API.md §4.
+Eine Extension beschreibt, *was* angezeigt wird, nicht *wie*; React und Flutter nutzen denselben Satz View-Typen.
 """
 
 from __future__ import annotations
@@ -63,8 +54,7 @@ class GridSize(BaseModel):
 class Refresh(BaseModel):
     """Wie das Widget aktuell bleibt.
 
-    `interval_s` ist der Rückfallweg; `ws_channel` ist der bevorzugte — auf dem Telefon
-    ist Polling Akkulaufzeit.
+    `interval_s` (Sekunden) ist der Rückfallweg, `ws_channel` der bevorzugte: Polling kostet auf dem Telefon Akku.
     """
 
     interval_s: int | None = None
@@ -84,7 +74,7 @@ class WidgetAction(BaseModel):
     show_if: Template | None = None
     """Knopf nur zeigen, wenn das Template etwas "Wahres" ergibt (nicht leer, nicht
     "false"/"0"/"none") -- z. B. `{{ can_start }}`, damit ein laufender Dienst keinen
-    "Starten"-Knopf anbietet. Fehlt das Feld, ist der Knopf immer da (wie bisher)."""
+    "Starten"-Knopf anbietet. Fehlt das Feld, ist der Knopf immer da."""
 
 
 class Badge(BaseModel):
@@ -94,6 +84,7 @@ class Badge(BaseModel):
 
 # ---------------------------------------------------------------------------
 # View-Typen — endliche Menge. React und Flutter implementieren alle.
+# Die Flutter-App kann kein React ausführen; wäre das Format Code, sähe sie von jeder Extension nichts.
 # ---------------------------------------------------------------------------
 
 
@@ -217,12 +208,8 @@ class WidgetSpec(BaseModel):
     permissions: list[str] = Field(default_factory=list)
 
     component: str | None = None
-    """Optionale React-Komponente für eine reichere Web-Darstellung.
-
-    **Aufwertung, kein Ersatz.** Ein Widget, das nur als `component` existiert, wird
-    abgelehnt — sonst entsteht genau die Web-only-Schieflage, die §12 verbietet.
-    Das erzwingt bereits der Typ: `view` ist ein Pflichtfeld.
-    """
+    """Optionale React-Komponente für eine reichere Web-Darstellung: Aufwertung, kein Ersatz.
+    Ein Widget nur mit `component` wird abgelehnt (`view` ist Pflichtfeld), damit es keine Web-only-Widgets gibt."""
 
     default_enabled: bool = True
 
@@ -252,19 +239,15 @@ class MobileFallback(str, enum.Enum):
 
 
 HostToolCategory = Literal["control", "monitoring", "services", "data", "settings"]
-"""Gruppen auf der Server-Seite. Bewusst Schluessel statt deutscher Woerter -- die
-Oberflaeche uebersetzt sie (Produkt: mehrsprachig vorbereitet)."""
+"""Gruppen auf der Server-Seite, bewusst als Schlüssel statt deutscher Wörter; die Oberfläche übersetzt sie."""
 
 
+# Bedingungen: `kinds` (Host.kind), `tags` (mindestens einer), `own_hosts_only` (Host stammt aus dieser Extension),
+# `permissions` (der Nutzer hat alle).
 class HostToolSpec(BaseModel):
-    """Ein Werkzeug auf der Server-Seite eines Hosts (Plesk-Stil "Werkzeuge &
-    Einstellungen" je Server). Der Kern zeigt es als Kachel, wenn der Host passt, und
-    kennt dabei keine Extension namentlich. `path` fuehrt auf eine Seite DIESER
-    Extension (wie `PageSpec.path`), `{host_id}` wird durch die Host-ID ersetzt.
-
-    Passt, wenn ALLE gesetzten Bedingungen zutreffen: `kinds` (Host.kind), `tags`
-    (mindestens einer), `own_hosts_only` (Host stammt aus dieser Extension),
-    `permissions` (Nutzer hat alle)."""
+    """Ein Werkzeug auf der Server-Seite eines Hosts; der Kern zeigt es als Kachel, wenn der Host passt.
+    `path` führt auf eine Seite DIESER Extension (wie `PageSpec.path`), `{host_id}` wird durch die Host-ID ersetzt.
+    Passt, wenn ALLE gesetzten Bedingungen zutreffen (`kinds`, `tags`, `own_hosts_only`, `permissions`)."""
 
     id: str
     title: str
@@ -277,23 +260,21 @@ class HostToolSpec(BaseModel):
     own_hosts_only: bool = False
     permissions: list[str] = Field(default_factory=list)
     os_families: list[str] = Field(default_factory=list)
-    """Nur fuer Hosts mit diesem `os_family` (z. B. ["linux"]); leer = alle."""
+    """Nur für Hosts mit diesem `os_family` (z. B. ["linux"]); leer = alle."""
     order: int = 100
 
 
 class HostRequirementSpec(BaseModel):
-    """Was eine Extension auf einem Server braucht (Zugang, Rechte, Gruppen) -- damit der
-    Kern beim Einrichten des SSH-Zugangs und bei "Verbindung pruefen" genau das anbieten
-    bzw. pruefen kann, ohne eine Extension oder ein Werkzeug (Docker, ...) beim Namen zu
-    kennen. Passt zu einem Host, wenn `tags` leer ist oder mindestens einer zutrifft UND
-    sein `os_family` in `os_families` steht (Standard: nur Linux).
+    """Was eine Extension auf einem Server braucht (Zugang, Rechte, Gruppen), damit der Kern es beim Einrichten des
+    SSH-Zugangs anbieten und bei "Verbindung prüfen" prüfen kann. Passt zu einem Host, wenn `tags` leer ist oder
+    mindestens einer zutrifft UND sein `os_family` in `os_families` steht (Standard: nur Linux)."""
 
-    - `check_command`: nur lesend; Exit 0 = in Ordnung, 127 = nicht installiert.
-    - `ok_text` / `fail_hint`: Texte fuer die Pruefung; `fail_hint` darf `{user}` enthalten.
-    - `unix_group`: der Einrichtungsbefehl bietet an, den SSH-Benutzer dieser Gruppe
-      hinzuzufuegen (Name nach `^[a-z_][a-z0-9_-]{0,31}$`, sonst ignoriert der Kern ihn).
-    - `needs_root`/`root_reason`: die Extension braucht root ohne Passwort (sudo);
-      `root_reason` nennt in einem kurzen Satzteil wofuer."""
+    # `check_command`: nur lesend; Exit 0 = in Ordnung, 127 = nicht installiert.
+    # `ok_text` / `fail_hint`: Texte für die Prüfung; `fail_hint` darf `{user}` enthalten.
+    # `unix_group`: der Einrichtungsbefehl bietet an, den SSH-Benutzer dieser Gruppe hinzuzufügen (Name nach
+    # `^[a-z_][a-z0-9_-]{0,31}$`, sonst ignoriert der Kern ihn).
+    # `needs_root` / `root_reason`: die Extension braucht root ohne Passwort (sudo); `root_reason` nennt in einem kurzen
+    # Satzteil, wofür.
 
     id: str
     label: str

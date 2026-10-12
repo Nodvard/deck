@@ -1,12 +1,4 @@
-"""Host-Bezug fuer Meldungen: das Wartungsfenster des Kerns unterdrueckt eine Meldung
-nur ueber den Payload (eine Meldung ohne Host-Bezug wird nie still). Betrifft sie einen
-Server, steht `host_id`; ein Sammelbericht ueber mehrere Server traegt `host_ids` und ist
-nur still, wenn ALLE diese Server in einem laufenden Fenster liegen.
-
-Kritische Sicherheitsmeldungen (Schadsoftware-Fund, kritische Einbruchschutz-Ereignisse)
-tragen bewusst keinen Host-Bezug: ein Fenster soll Lärm durch geplante Arbeiten
-stummschalten, nie einen Fund. Der Tiefenscan läuft ab Werk sonntags um 03:30 -- mitten
-im Fenster, das der Zeitplan-Wähler vorschlägt."""
+"""Host-Bezug im Payload einer Meldung; nur darüber schaltet das Wartungsfenster des Kerns sie still."""
 
 from __future__ import annotations
 
@@ -14,9 +6,11 @@ from collections.abc import Iterable
 from typing import Any
 
 
+# Ein Sammelbericht über mehrere Server (`host_ids`) ist nur still, wenn alle in einem laufenden Fenster liegen.
+# Kritische Meldungen (Fund, Einbruchschutz) tragen bewusst keinen Host-Bezug: Ein Fenster darf nie einen Fund
+# stummschalten, und der Tiefenscan liegt ab Werk (sonntags 03:30) mitten im vorgeschlagenen Fenster.
 def host_scope(host_ids: Iterable[str]) -> dict[str, Any]:
-    """Payload-Teil fuer die Server, die eine Meldung betrifft: `{"host_id": ...}` bei
-    genau einem, `{"host_ids": [...]}` bei mehreren, sonst `{}`."""
+    """Payload-Teil für die betroffenen Server: `host_id` bei genau einem, `host_ids` bei mehreren, sonst `{}`."""
     distinct = sorted(set(host_ids))
     if len(distinct) == 1:
         return {"host_id": distinct[0]}

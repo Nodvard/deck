@@ -1,18 +1,6 @@
-"""Nach Updates suchen: Einstellungen und taeglicher Kern-Job `system-update-check`.
+"""Nach Updates suchen: Einstellungen und täglicher Kern-Job `system-update-check`.
 
-Die Abfrage selbst und der Cache stehen in `core/updates.py`. Hier:
-
-* `system.update_check.enabled` (Vorgabe an): ob der taegliche Job laeuft. Datenschutz: Bei jeder Pruefung
-  sieht GitHub (ghcr.io) die IP-Adresse und den Zeitpunkt; wer das nicht will, schaltet hier ab. Der Knopf "Jetzt suchen"
-  geht trotzdem (ausdruecklicher Klick).
-* `system.update_check.channel`: `stable` (Vorgabe, nur fertige Versionen) oder `beta` (auch Vorabversionen).
-* Laufende Version fuer den Vergleich: `running_version` (beim offiziellen Image dessen genaue Version, auch eine
-  Vorabversion; sonst `version.__version__`).
-
-Beide aendert `PUT /settings/{key}` (`settings.write`); nach einer Aenderung des Schalters plant
-`sync_job()` den Job neu. Ueber `PATCH /jobs/{id}` laesst sich der Job nicht umlegen (409), sonst setzte
-der naechste Start oder die naechste Aenderung der Einstellung ihn still zurueck.
-"""
+Die Abfrage selbst und der Cache stehen in `core/updates.py`."""
 
 from __future__ import annotations
 
@@ -34,6 +22,9 @@ JOB_NAME = "Nach Updates suchen"
 SCHEDULE = "41 4 * * *"
 """Einmal am Tag, nachts in der eingestellten Zeitzone (nicht zur vollen Stunde)."""
 
+# `enabled` (Vorgabe an) schaltet den täglichen Job; der Knopf "Jetzt suchen" geht trotzdem. Bei jeder Prüfung sieht
+# GitHub (ghcr.io) die IP-Adresse und den Zeitpunkt, wer das nicht will, schaltet ab. `channel`: `stable` (Vorgabe, nur
+# fertige Versionen) oder `beta` (auch Vorabversionen). Beide ändert `PUT /settings/{key}` (`settings.write`).
 KEY_ENABLED = "system.update_check.enabled"
 KEY_CHANNEL = "system.update_check.channel"
 DEFAULT_ENABLED = True
@@ -42,7 +33,7 @@ CHANNELS = updates.CHANNELS
 
 
 async def load_config(session: AsyncSession) -> tuple[bool, str]:
-    """(Schalter, Kanal) mit Vorgaben fuer fehlende oder ungueltige Werte."""
+    """(Schalter, Kanal) mit Vorgaben für fehlende oder ungültige Werte."""
     enabled = await settings_service.get_global(session, KEY_ENABLED)
     channel = await settings_service.get_global(session, KEY_CHANNEL)
     return (enabled if isinstance(enabled, bool) else DEFAULT_ENABLED), updates.normalize_channel(channel)
@@ -53,8 +44,7 @@ def _image(settings: Settings) -> str | None:
 
 
 def running_version(settings: Settings) -> str:
-    """Die Version, mit der "Nach Updates suchen" vergleicht (`core.updates.running_version`): beim offiziellen
-    Image dessen genaue Version aus der Datei im Image, auch eine Vorabversion; sonst `version.__version__`."""
+    """Die Version, mit der "Nach Updates suchen" vergleicht (siehe `core.updates.running_version`)."""
     return updates.running_version(settings)
 
 
@@ -80,11 +70,13 @@ async def _job_handler(**_: Any) -> dict[str, Any]:
 
 
 async def sync_job() -> None:
-    """Legt den Kern-Job an bzw. setzt den Schalter und plant neu. Beim Start (`register_core_jobs`) und
-    nach jeder Aenderung von `system.update_check.enabled`."""
+    """Legt den Kern-Job an bzw. setzt den Schalter und plant neu: beim Start (`register_core_jobs`) und
+    nach jeder Änderung von `system.update_check.enabled`."""
     from ..core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
     from ..ext.runtime import get_extension_runtime
 
+    # Der Zeitplan kommt nur aus dieser Einstellung: `PATCH /jobs/{id}` lehnt den Job mit 409 ab, sonst setzte ihn der
+    # nächste Start oder eine Änderung der Einstellung still zurück.
     async with session_scope() as session:
         enabled, _channel = await load_config(session)
         job = await jobs_service.upsert_job(

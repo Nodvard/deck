@@ -1,10 +1,6 @@
-"""terminal-Extension -- Web-Terminal, Shell-Ausfuehrung, SFTP-Dateizugriff
-(docs/02-EXTENSION-API.md §3).
+"""terminal-Erweiterung: Web-Terminal, Shell-Ausführung und SFTP-Dateizugriff.
 
-Kennt asyncssh nicht direkt -- alles laeuft ueber `ctx.exec`, den Kern-Handle, der auf
-`core/ssh.py` (dem gemeinsamen SSH-Layer aus docs/00 D-05) sitzt. Diese Extension ist
-nur der duenne Adapter, der die drei SDK-Capability-Protokolle (`ActionExecutor`,
-`TerminalTarget`, `FileSource`) darauf abbildet.
+Dünner Adapter über `ctx.exec` (den Kern-Handle auf den gemeinsamen SSH-Layer) für `ActionExecutor`, `TerminalTarget` und `FileSource`.
 """
 
 from __future__ import annotations
@@ -38,7 +34,7 @@ from nodvard_sdk.errors import HostUnreachable
 
 
 class _SshTerminalSession:
-    """Erfuellt `nodvard_sdk.capabilities.TerminalSession` strukturell."""
+    """Erfüllt `nodvard_sdk.capabilities.TerminalSession` strukturell."""
 
     def __init__(self, process: Any, stack: AsyncExitStack) -> None:
         self._process = process
@@ -67,17 +63,14 @@ class _SshTerminalSession:
 
 
 class _SshTerminalTarget:
-    """Erfuellt `nodvard_sdk.capabilities.TerminalTarget`."""
+    """Erfüllt `nodvard_sdk.capabilities.TerminalTarget`."""
 
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
 
     async def can_open(self, host) -> bool:  # noqa: ANN001 - nodvard_sdk.types.Host
-        # Frueher immer True --
-        # ein Host ohne SSH-Zugangsdaten erschien als Terminal-Ziel, scheiterte aber
-        # bei jedem echten Verbindungsversuch. `host.has_credential` (SDK-Nachtrag)
-        # macht den Vorab-Check jetzt moeglich, ohne den Credential-Wert selbst zu
-        # kennen (docs/03 §3 Invariante 1 bleibt unangetastet).
+        # Ein Host ohne SSH-Zugangsdaten wäre sonst ein Terminal-Ziel, das bei jedem echten Verbindungsversuch scheitert.
+        # `host.has_credential` erlaubt den Vorab-Check, ohne den Wert der Zugangsdaten zu kennen.
         return host.has_credential
 
     async def open(self, host, *, user: str | None, cols: int, rows: int) -> _SshTerminalSession:  # noqa: ANN001
@@ -86,18 +79,16 @@ class _SshTerminalTarget:
         return _SshTerminalSession(process, stack)
 
 
+# Obergrenze für einen freigegebenen Shell-Befehl. Die 60 s Vorgabe von `ctx.exec.run()` ließen `apt-get upgrade` oder
+# `docker compose pull` als Zeitüberschreitung scheitern, obwohl sie auf dem Server noch liefen (wie SCRIPT_TIMEOUT_S in
+# der scripts-Erweiterung).
 SHELL_TIMEOUT_S = 15 * 60
-"""Obergrenze fuer einen freigegebenen Shell-Befehl. Die 60 s Vorgabe von
-`ctx.exec.run()` liess `apt-get upgrade` oder `docker compose pull` als
-Zeitueberschreitung scheitern, obwohl sie auf dem Server noch liefen --
-dieselbe Loesung wie SCRIPT_TIMEOUT_S in der scripts-Extension."""
 
 
 class _ShellActionExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor` fuer `shell.exec`.
+    """Erfüllt `nodvard_sdk.capabilities.ActionExecutor` für `shell.exec`.
 
-    Extensions rufen das NIE direkt auf -- nur der Kern, NACHDEM das Gate (WP-5)
-    einen Vorschlag genehmigt hat (docs/02 §3)."""
+    Läuft nur über den Kern, nachdem das Gate den Vorschlag genehmigt hat; Erweiterungen rufen es nie direkt auf."""
 
     action_types = frozenset({"shell.exec"})
 
@@ -128,16 +119,14 @@ class _ShellActionExecutor:
         return DryRunReport(would_change=True, summary=f"Würde ausführen: {command}")
 
 
+# Dieselbe Liste wie in der nextcloud-Erweiterung. SFTP liefert nie einen `mime`-Wert (`_attrs_to_entry` setzt ihn immer auf
+# `None`), diese Allowlist ist deshalb der einzige Weg, text- von binärartigen Dateien zu unterscheiden.
 _TEXT_EXTENSIONS = {
     ".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".log",
     ".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf", ".env",
     ".py", ".js", ".ts", ".tsx", ".jsx", ".go", ".rs", ".java", ".c", ".h", ".cpp",
     ".sh", ".bash", ".ps1", ".sql", ".html", ".htm", ".css", ".xml", ".svg",
 }
-"""Identisch zu nextclouds `capabilities.py` (dort die volle Begruendung) -- SFTP
-liefert hier ohnehin nie einen `mime`-Wert (`_attrs_to_entry` unten setzt ihn immer
-auf `None`), diese Allowlist ist deshalb der EINZIGE Weg, text- von binaerartigen
-Dateien zu unterscheiden."""
 
 _MAX_CONTENT_BYTES_PER_FILE = 64 * 1024
 _MAX_CONTENT_READS = 50
@@ -169,7 +158,7 @@ def _is_symlink(attrs: Any) -> bool:
 
 
 def _broken_link_entry(path: PurePosixPath, attrs: Any) -> FileEntry:
-    """Toter Link oder Ziel nicht lesbar: als Datei ohne Groesse zeigen."""
+    """Toter Link oder Ziel nicht lesbar: als Datei ohne Größe zeigen."""
     return FileEntry(
         name=path.name, path=str(path), is_dir=False, size=None,
         modified_at=_mtime(attrs), metadata={"symlink": True, "broken": True},
@@ -177,10 +166,8 @@ def _broken_link_entry(path: PurePosixPath, attrs: Any) -> FileEntry:
 
 
 async def _entry_after_rename(sftp: Any, path: PurePosixPath) -> FileEntry:
-    """Eintrag nach dem Umbenennen. `stat()` folgt Links und wirft bei einem
-    toten Link SFTPNoSuchFile, obwohl die Aktion schon geklappt hat (das Umbenennen
-    eines toten Links endete so mit 502, der Link hiess aber schon anders). Dann
-    zaehlt der Link selbst (`lstat()`); alles andere bleibt ein echter Fehler."""
+    """Eintrag nach dem Umbenennen; bei einem toten Link zählt der Link selbst (`lstat()`)."""
+    # `stat()` folgt Links und wirft bei einem toten Link SFTPNoSuchFile, obwohl die Aktion schon geklappt hat.
     try:
         attrs = await sftp.stat(str(path))
     except Exception:  # nur ein toter Link ist hier kein Fehler, alles andere wird weitergereicht
@@ -192,8 +179,8 @@ async def _entry_after_rename(sftp: Any, path: PurePosixPath) -> FileEntry:
 
 
 async def _write_target(sftp: Any, path: PurePosixPath) -> str:
-    """Der Pfad, der beim Schreiben ersetzt wird. Ein Link wird bis zur echten Datei verfolgt
-    (wie beim direkten Schreiben), sonst wuerde das Ersetzen den Link selbst austauschen."""
+    """Der Pfad, der beim Schreiben ersetzt wird. Ein Link wird bis zur echten Datei verfolgt (wie beim direkten
+    Schreiben), sonst würde das Ersetzen den Link selbst austauschen."""
     target = str(path)
     with contextlib.suppress(Exception):  # gibt es das Ziel (noch) nicht, wird es neu angelegt
         if _is_symlink(await sftp.lstat(target)):
@@ -209,51 +196,48 @@ def _temp_path(target: str, kind: str = "tmp") -> str:
 async def _existing_attrs(sftp: Any, target: str) -> Any | None:
     try:
         return await sftp.stat(target)
-    except Exception:  # noqa: BLE001 - neue Datei: es gibt nichts zu uebernehmen
+    except Exception:  # noqa: BLE001 - neue Datei: es gibt nichts zu übernehmen
         return None
 
 
+# Rechte der Temp-Datei, solange sie eine bestehende Datei ersetzen soll und geschrieben wird: Die alte Datei kann geheim
+# sein, und wer die Temp-Datei in dieser Zeit öffnet, liest sonst mit.
 _PRIVATE_MODE = 0o600
-"""Rechte der Temp-Datei, solange sie eine bestehende Datei ersetzen soll und geschrieben wird:
-die alte Datei kann geheim sein, und wer die Temp-Datei in dieser Zeit oeffnet, liest sonst mit."""
 
 
 async def _take_over_owner(f: Any, old: Any) -> bool:
-    """Besitzer und Gruppe der bestehenden Datei auf die frisch angelegte Temp-Datei uebertragen,
-    BEVOR geschrieben wird. `True`, wenn die neue Datei danach genau diese Werte traegt (oder es
-    nichts zu uebertragen gibt); `False`, wenn nicht: Ein Zugang ohne root darf den Besitzer nicht
-    aendern, die ersetzte Datei gehoerte dann dem SSH-Benutzer, und wer sie vorher schreiben durfte
-    (etwa ein Webserver-Benutzer), verlaere das Recht. Der Aufrufer schreibt dann direkt ins Ziel.
-
-    Nur ueber den OFFENEN Dateigriff, nie ueber den Pfad: SETSTAT auf einen Pfad folgt Links. Wer
-    im Zielordner schreiben darf, koennte die Temp-Datei gegen einen Link auf eine fremde Datei
-    tauschen, und die bekaeme dann (als root) Besitzer und Rechte des Ziels. Das Ergebnis wird am
-    Griff nachgelesen, nicht aus dem Erfolg von `chown` geschlossen (manche Server melden Erfolg,
-    ohne etwas zu aendern). Kann es nicht gelesen werden, gilt es als nicht uebertragen."""
+    """Besitzer und Gruppe der bestehenden Datei vor dem Schreiben auf die Temp-Datei übertragen. `True`, wenn die neue Datei
+    danach genau diese Werte trägt (oder nichts zu übertragen ist), sonst `False`; dann schreibt der Aufrufer direkt ins Ziel."""
+    # Ein Zugang ohne root darf den Besitzer nicht ändern: Die ersetzte Datei gehörte dann dem SSH-Benutzer, und wer sie vorher
+    # schreiben durfte (etwa ein Webserver-Benutzer), verlöre das Recht.
     if old.uid is None or old.gid is None:
         return True
-    with contextlib.suppress(Exception):  # scheitert ohne root, das Ergebnis wird unten geprueft
+    # Nur über den offenen Dateigriff, nie über den Pfad: SETSTAT auf einen Pfad folgt Links. Wer im Zielordner schreiben darf,
+    # könnte die Temp-Datei gegen einen Link auf eine fremde Datei tauschen, und die bekäme dann (als root) Besitzer und Rechte
+    # des Ziels.
+    with contextlib.suppress(Exception):  # scheitert ohne root, das Ergebnis wird unten geprüft
         await f.chown(old.uid, old.gid)
+    # Das Ergebnis wird am Griff nachgelesen, nicht aus dem Erfolg von `chown` geschlossen (manche Server melden Erfolg, ohne
+    # etwas zu ändern).
     try:
         now = await f.stat()
-    except Exception:  # noqa: BLE001 - nicht pruefbar heisst nicht "uebertragen"
+    except Exception:  # noqa: BLE001 - nicht prüfbar heißt nicht „übertragen“
         return False
     return (getattr(now, "uid", None), getattr(now, "gid", None)) == (old.uid, old.gid)
 
 
 async def _copy_mode(f: Any, old: Any) -> None:
-    """Die Rechte der bestehenden Datei auf die neue uebertragen, soweit der Server es erlaubt.
-    Nur ueber den offenen Dateigriff (siehe `_take_over_owner`). Kommt NACH dem Besitzerwechsel,
-    weil der setuid/setgid loescht."""
+    """Die Rechte der bestehenden Datei auf die neue übertragen, soweit der Server es erlaubt (nur über den offenen
+    Dateigriff, siehe `_take_over_owner`); kommt nach dem Besitzerwechsel, weil der setuid/setgid löscht."""
     if old.permissions is not None:
         with contextlib.suppress(Exception):
             await f.chmod(statmod.S_IMODE(old.permissions))
 
 
 async def _write_in_place(sftp: Any, target: str, stream: Any) -> None:
-    """Direkt ins Ziel schreiben (der Weg von frueher), fuer Ziele, die sich nicht ersetzen lassen.
-    Das erste Stueck wird VOR dem Abschneiden gelesen: scheitert die Quelle gleich zu Beginn
-    (fehlt, nicht lesbar), bleibt das Ziel unberuehrt."""
+    """Direkt ins Ziel schreiben, für Ziele, die sich nicht ersetzen lassen.
+
+    Das erste Stück wird vor dem Abschneiden gelesen: Scheitert die Quelle gleich zu Beginn (fehlt, nicht lesbar), bleibt das Ziel unberührt."""
     chunks = stream.__aiter__()
     try:
         first = await chunks.__anext__()
@@ -266,18 +250,16 @@ async def _write_in_place(sftp: Any, target: str, stream: Any) -> None:
             await f.write(chunk)
 
 
+# So viel der Quelle bleibt im Arbeitsspeicher, bevor `_write_in_place_from_copy` sie in eine lokale Temp-Datei auslagert.
 _SPOOL_IN_MEMORY = 8 * 1024 * 1024
-"""So viel der Quelle bleibt im Arbeitsspeicher, bevor `_write_in_place_from_copy` sie in eine
-lokale Temp-Datei auslagert."""
 
 
 async def _write_in_place_from_copy(sftp: Any, target: str, stream: Any) -> None:
-    """Wie `_write_in_place`, liest aber die GANZE Quelle, bevor das Ziel geoeffnet wird. Das erste
-    Stueck zu lesen reicht nicht: meint die Quelle dieselbe Datei wie das Ziel (Hardlink,
-    eingehaengter Ordner unter zwei Pfaden -- das erkennt der Kern nicht immer), schneidet das
-    Oeffnen zum Schreiben die Quelle ab, und es bliebe nur das erste Stueck. So bleibt auch bei
-    einer Quelle, die mittendrin abbricht, das Ziel unberuehrt. Die Kopie liegt in einer lokalen,
-    sofort entfernten Temp-Datei (nur der Prozess selbst kann sie oeffnen)."""
+    """Wie `_write_in_place`, liest aber die ganze Quelle, bevor das Ziel geöffnet wird."""
+    # Das erste Stück zu lesen reicht nicht: Meint die Quelle dieselbe Datei wie das Ziel (Hardlink, eingehängter Ordner unter
+    # zwei Pfaden; das erkennt der Kern nicht immer), schneidet das Öffnen zum Schreiben die Quelle ab, und es bliebe nur das
+    # erste Stück. So bleibt auch bei einer Quelle, die mittendrin abbricht, das Ziel unberührt. Die Kopie liegt in einer
+    # lokalen, sofort entfernten Temp-Datei (nur der Prozess selbst kann sie öffnen).
     with tempfile.SpooledTemporaryFile(max_size=_SPOOL_IN_MEMORY) as spool:
         async for chunk in stream:
             await asyncio.to_thread(spool.write, chunk)
@@ -290,26 +272,26 @@ async def _write_in_place_from_copy(sftp: Any, target: str, stream: Any) -> None
         await _write_in_place(sftp, target, replay())
 
 
+# SFTP-Statuscode „Zugriff verweigert“ (`SSH_FX_PERMISSION_DENIED`).
 _SFTP_PERMISSION_DENIED = 3
-"""SFTP-Statuscode "Zugriff verweigert" (`SSH_FX_PERMISSION_DENIED`)."""
 
+# SFTP-Statuscode „Vorgang nicht unterstützt“ (`SSH_FX_OP_UNSUPPORTED`). Die Erweiterung kennt asyncssh nicht und erkennt den
+# Fall am Code der Ausnahme.
 _SFTP_OP_UNSUPPORTED = 8
-"""SFTP-Statuscode "Vorgang nicht unterstuetzt" (`SSH_FX_OP_UNSUPPORTED`). Die Extension kennt
-asyncssh nicht, erkennt den Fall also am Code der Ausnahme."""
 
 
 async def _replace(sftp: Any, tmp: str, target: str) -> None:
-    """Ersetzt `target` in einem Schritt (`posix-rename@openssh.com`). Kennt der Server das nicht,
-    wird das alte Ziel erst beiseite gelegt und bei einem Fehler zurueckgeholt."""
+    """Ersetzt `target` in einem Schritt (`posix-rename@openssh.com`). Kennt der Server das nicht, wird das alte Ziel erst
+    beiseite gelegt und bei einem Fehler zurückgeholt."""
     try:
         await sftp.posix_rename(tmp, target)
         return
-    except Exception as exc:  # noqa: BLE001 - nur "nicht unterstuetzt" hat den Rueckweg
+    except Exception as exc:  # noqa: BLE001 - nur „nicht unterstützt“ hat den Rückweg
         if getattr(exc, "code", None) != _SFTP_OP_UNSUPPORTED:
             raise
     try:
         await sftp.lstat(target)
-    except Exception:  # noqa: BLE001 - nichts zu ersetzen: ein einfaches Umbenennen genuegt
+    except Exception:  # noqa: BLE001 - nichts zu ersetzen: ein einfaches Umbenennen genügt
         await sftp.rename(tmp, target)
         return
     backup = _temp_path(target, "old")
@@ -333,29 +315,23 @@ _MACHINE_ID = re.compile(r"[0-9a-f]{32}")
 
 
 async def _machine_id(sftp: Any) -> str | None:
-    """`/etc/machine-id`: fest je Rechner, egal unter welcher Adresse er im Deck steht. So erkennt
-    der Kern zwei Eintraege fuer denselben Rechner, ohne zwei per rsync gleich gehaltene Dateien
-    auf verschiedenen Rechnern fuer eine zu halten. `None`, wenn sie fehlt (etwa in einem
-    SFTP-chroot) oder nicht wie eine Kennung aussieht."""
+    """`/etc/machine-id`: fest je Rechner, egal unter welcher Adresse er im Deck steht (`None`, wenn sie fehlt oder nicht wie
+    eine Kennung aussieht)."""
+    # So erkennt der Kern zwei Einträge für denselben Rechner, ohne zwei per rsync gleich gehaltene Dateien auf verschiedenen
+    # Rechnern für eine zu halten.
     try:
         async with sftp.open("/etc/machine-id", "rb") as f:
             data = await f.read(64)
-    except Exception:  # noqa: BLE001 - ohne Kennung entscheidet der Kern ueber die Dateiwerte
+    except Exception:  # noqa: BLE001 - ohne Kennung entscheidet der Kern über die Dateiwerte
         return None
     value = bytes(data).strip().decode("ascii", "replace")
     return value if _MACHINE_ID.fullmatch(value) else None
 
 
 class _SshFileSource:
-    """Erfuellt `nodvard_sdk.capabilities.FileSource` ueber SFTP -- die Grundlage,
-    auf der WP-11 den Dateimanager baut (docs/02 §7).
+    """Erfüllt `nodvard_sdk.capabilities.FileSource` über SFTP, die Grundlage des Dateimanagers.
 
-    **Live gefunden (WP-11-Boot-Test im echten Browser):** ohne `label` zeigte die
-    Seitenleiste des Dateimanagers bei mehreren Hosts mehrfach den IDENTISCHEN Text
-    "SSH (SFTP)" -- fachlich korrekt (jede Instanz hat eine eigene `source_id`),
-    aber fuer einen Menschen ununterscheidbar, welcher Eintrag zu welchem Host
-    gehoert. `label` traegt deshalb jetzt den Host-Anzeigenamen, wenn der Aufrufer
-    ihn kennt (siehe `_TerminalFileSourceProvider.file_sources()` unten)."""
+    `label` trägt den Host-Anzeigenamen (siehe `_TerminalFileSourceProvider`), damit die Seitenleiste mehrere Hosts unterscheidet."""
 
     _MAX_RESULTS = 200
     _MAX_DIRS_VISITED = 500
@@ -387,18 +363,15 @@ class _SshFileSource:
             return _attrs_to_entry(path, attrs)
 
     async def _list_children(self, sftp: Any, path: PurePosixPath) -> list[FileEntry]:
-        """EIN `readdir()` statt `stat()` pro Name: die Attribute kommen
-        wie bei lstat gleich mit, das spart z. B. in /usr/bin ~1500 Netz-Umlaeufe.
-        Nur Symlinks werden per `stat()` aufgeloest (gleichzeitig), damit ein Link auf
-        einen Ordner weiter oeffnbar bleibt. Ein toter Link (z. B. /lib/modules/<ver>/
-        build ohne Header) bleibt als Eintrag sichtbar, statt den ganzen Ordner mit
-        SFTPNoSuchFile scheitern zu lassen."""
+        """Die Einträge eines Ordners mit einem `readdir()` (Attribute wie bei lstat gleich dabei) statt `stat()` pro Name;
+        spart z. B. in /usr/bin ~1500 Netz-Umläufe."""
         entries: list[tuple[PurePosixPath, Any]] = []
         for name in await sftp.readdir(str(path) or "."):
             if name.filename in (".", ".."):
                 continue
             entries.append((path / name.filename, name.attrs))
 
+        # Nur Symlinks werden per `stat()` aufgelöst (gleichzeitig), damit ein Link auf einen Ordner weiter zu öffnen ist.
         link_paths = [p for p, attrs in entries if _is_symlink(attrs)]
         targets = await asyncio.gather(*(sftp.stat(str(p)) for p in link_paths), return_exceptions=True)
         resolved = dict(zip(link_paths, targets, strict=True))
@@ -410,6 +383,8 @@ class _SshFileSource:
                 continue
             target = resolved[entry_path]
             if isinstance(target, BaseException):
+                # Ein toter Link (z. B. /lib/modules/<ver>/build ohne Header) bleibt als Eintrag sichtbar, statt den ganzen
+                # Ordner mit SFTPNoSuchFile scheitern zu lassen.
                 if not isinstance(target, Exception):
                     raise target
                 items.append(_broken_link_entry(entry_path, attrs))
@@ -437,17 +412,16 @@ class _SshFileSource:
                     yield chunk
 
     async def open_write(self, path: PurePosixPath, stream, *, size: int | None = None) -> FileEntry:  # noqa: ANN001
-        """Schreibt in eine temporaere Datei im Zielordner und ersetzt das Ziel erst, wenn alles
-        fehlerfrei angekommen ist. Direkt ins Ziel zu schreiben schnitte es sofort auf 0 Byte ab,
-        bevor die Quelle auch nur gelesen wurde: zeigt sie auf dieselbe Datei (Link, `..`,
-        zweiter Server-Eintrag) oder scheitert das Lesen, waere der Inhalt weg."""
+        """Schreibt in eine temporäre Datei im Zielordner und ersetzt das Ziel erst, wenn alles fehlerfrei angekommen ist."""
+        # Direkt ins Ziel zu schreiben schnitte es sofort auf 0 Byte ab, bevor die Quelle gelesen wurde: Zeigt sie auf dieselbe
+        # Datei (Link, `..`, zweiter Server-Eintrag) oder scheitert das Lesen, wäre der Inhalt weg.
         host = await self._host()
         async with self._ctx.exec.sftp(host) as sftp:
             target = await _write_target(sftp, path)
             old = await _existing_attrs(sftp, target)
             if old is not None and old.permissions is not None and not statmod.S_ISREG(old.permissions):
-                # Pipe, Geraet (etwa /dev/null) oder Ordner: ersetzen tauschte sie gegen eine normale
-                # Datei aus, also hineinschreiben wie frueher (ein Ordner scheitert dabei sofort).
+                # Pipe, Gerät (etwa /dev/null) oder Ordner: Ersetzen tauschte sie gegen eine normale Datei aus, also hineinschreiben
+                # (ein Ordner scheitert dabei sofort).
                 await _write_in_place(sftp, target, stream)
             else:
                 await self._write_replacing(sftp, target, old, stream)
@@ -458,11 +432,11 @@ class _SshFileSource:
     async def _write_replacing(sftp: Any, target: str, old: Any | None, stream: Any) -> None:
         tmp = _temp_path(target)
         try:
-            # Ersetzt die Datei eine bestehende, ist sie bis zum Ende nur fuer den Zugang lesbar.
+            # Ersetzt die Datei eine bestehende, ist sie bis zum Ende nur für den Zugang lesbar.
             f = await (sftp.open(tmp, "xb", type(old)(permissions=_PRIVATE_MODE)) if old is not None else sftp.open(tmp, "xb"))
         except Exception as exc:
-            # Die Datei darf geschrieben werden, im Ordner aber nichts angelegt (etwa eine
-            # gruppen-schreibbare Datei in /etc): dann wie frueher direkt hinein.
+            # Die Datei darf geschrieben werden, im Ordner aber nichts angelegt (etwa eine gruppen-schreibbare Datei in /etc):
+            # dann direkt hinein.
             if old is None or getattr(exc, "code", None) != _SFTP_PERMISSION_DENIED:
                 raise
             await _write_in_place_from_copy(sftp, target, stream)
@@ -483,21 +457,19 @@ class _SshFileSource:
             await _discard(sftp, tmp)
             raise
         if not keeps_owner:
-            # Ohne root laesst sich der Besitzer nicht halten: ersetzen gaebe die Datei dem SSH-Benutzer.
+            # Ohne root lässt sich der Besitzer nicht halten: Ersetzen gäbe die Datei dem SSH-Benutzer.
             await _discard(sftp, tmp)
             await _write_in_place_from_copy(sftp, target, stream)
 
     async def file_identity(self, path: PurePosixPath) -> dict[str, Any] | None:
-        """Woran der Kern erkennt, ob zwei Pfade dieselbe Datei meinen (siehe `FileSource`):
-        aufgeloester Pfad plus Groesse, Aenderungszeit, Besitzer und Rechte, dazu `machine`, die
-        Kennung des Rechners (`/etc/machine-id`), wenn sie lesbar ist. `None`, wenn die Datei nicht
-        existiert oder der Server den Pfad nicht aufloest -- im Zweifel gilt sie als andere."""
+        """Woran der Kern erkennt, ob zwei Pfade dieselbe Datei meinen: aufgelöster Pfad, Größe, Änderungszeit, Besitzer, Rechte
+        und `machine` (Kennung des Rechners). `None`, wenn die Datei nicht existiert oder der Server den Pfad nicht auflöst."""
         host = await self._host()
         async with self._ctx.exec.sftp(host) as sftp:
             try:
                 attrs = await sftp.stat(str(path))
                 resolved = await sftp.realpath(str(path))
-            except Exception:  # noqa: BLE001 - nicht pruefbar heisst nicht "gleich"
+            except Exception:  # noqa: BLE001 - nicht prüfbar heißt nicht „gleich“ (im Zweifel gilt die Datei als andere)
                 return None
             return {
                 "path": str(resolved),
@@ -519,8 +491,8 @@ class _SshFileSource:
     async def remove(self, path: PurePosixPath, *, recursive: bool = False) -> None:
         host = await self._host()
         async with self._ctx.exec.sftp(host) as sftp:
-            # `rmtree` lehnt Links ab ("must not be a symlink"): ein Link auf einen
-            # Ordner wird nur als Link entfernt, das Ziel bleibt unangetastet.
+            # `rmtree` lehnt Links ab („must not be a symlink“): Ein Link auf einen Ordner wird nur als Link entfernt, das Ziel
+            # bleibt unangetastet.
             if recursive and not _is_symlink(await sftp.lstat(str(path))):
                 await sftp.rmtree(str(path))
             else:
@@ -536,17 +508,12 @@ class _SshFileSource:
         try:
             return await self._list_children(sftp, path)
         except Exception:  # noqa: BLE001 - ein einzelnes nicht lesbares Unterverzeichnis
-            # (z. B. Rechte) darf die Suche der anderen nicht abbrechen, dieselbe
-            # Haltung wie `api/v1/files.py::search()`s "eine kaputte Quelle darf die
-            # Suche der anderen nicht verhindern", hier eine Ebene tiefer angewendet.
+            # (z. B. Rechte) darf die Suche der anderen nicht abbrechen.
             return []
 
     async def _content_matches(self, sftp: Any, path: str, needle: str) -> bool:
-        """Nutzt die BEREITS OFFENE `sftp`-Sitzung von `search()` (nicht `open_read()`,
-        das eine eigene, neue `ctx.exec.sftp()`-Sitzung pro Aufruf oeffnen wuerde --
-        genau die Kosten, die `search()`s einzelne geteilte Sitzung laut Docstring
-        oben vermeiden soll). Liest hoechstens `_MAX_CONTENT_BYTES_PER_FILE`, wie
-        nextclouds Pendant."""
+        """Liest höchstens `_MAX_CONTENT_BYTES_PER_FILE` über die offene Sitzung von `search()`; `open_read()` öffnete je Aufruf
+        eine neue."""
         read = 0
         buf = bytearray()
         try:
@@ -562,20 +529,12 @@ class _SshFileSource:
         return needle in buf.decode("utf-8", errors="ignore").lower()
 
     async def search(self, query: str, *, root: PurePosixPath) -> AsyncIterator[FileEntry]:  # noqa: ANN201
-        """`caps.search=True` (Nachtrag, dasselbe Muster wie nextclouds `search()`):
-        SFTP hat KEIN server-seitiges Suchprimitiv (Standard-SFTP-Protokoll kennt
-        nur `listdir`/`stat`) -- deshalb eine echte, aber bewusst begrenzte
-        Breitensuche ab `root`, dieselben Grenzen/`_MAX_CONCURRENCY`-Begruendung wie
-        bei nextcloud. Unterschied zu nextcloud: SFTP ist eine STATEFUL Sitzung
-        (kein zustandsloses HTTP) -- EINE `ctx.exec.sftp()`-Sitzung fuer die ganze
-        Suche offen gehalten (statt einer pro Verzeichnis, wie `list_dir()` es fuer
-        einen einzelnen Aufruf tut), `asyncio.gather()` fuer mehrere gleichzeitige
-        `listdir`/`stat`-Anfragen darueber -- asyncssh multiplext das serverseitig
-        auf DEMSELBEN Kanal (Pipelining ist Teil des SFTP-Protokolls), kein zweiter
-        Kanal noetig.
-
-        **Volltextsuche in Dateiinhalten:** wie bei nextcloud jetzt Name ODER Inhalt, `_looks_like_text`/
-        `_MAX_CONTENT_READS` begrenzen die zusaetzlichen Lese-Aufrufe."""
+        """Sucht `query` in Dateinamen und (bei Textdateien) Inhalten, per begrenzter Breitensuche ab `root`."""
+        # SFTP kennt nur `listdir`/`stat` und kein serverseitiges Suchen, deshalb die bewusst begrenzte Breitensuche (Grenzen wie
+        # bei nextcloud). Eine `ctx.exec.sftp()`-Sitzung bleibt für die ganze Suche offen (statt einer pro Verzeichnis),
+        # `asyncio.gather()` schickt mehrere `listdir`/`stat`-Anfragen gleichzeitig darüber; asyncssh multiplext das auf demselben
+        # Kanal (Pipelining ist Teil des SFTP-Protokolls). `_looks_like_text` und `_MAX_CONTENT_READS` begrenzen die Lesezugriffe
+        # für die Suche im Inhalt.
         host = await self._host()
         needle = query.lower()
         async with self._ctx.exec.sftp(host) as sftp:
@@ -621,23 +580,16 @@ class _SshFileSource:
 
 
 class _TerminalFileSourceProvider:
-    """Erfuellt `nodvard_sdk.capabilities.FileSourceProvider` (WP-11): eine
-    `_SshFileSource` pro AKTUELL bekanntem Host mit Zugangsdaten, frisch bei jedem
-    Aufruf ermittelt.
-
-    **Nur Hosts mit Zugangsdaten:** frueher erschien
-    JEDER Host als Quelle, auch ohne SSH-Zugangsdaten -- deren erster Zugriff
-    (`list_dir()`/`stat()`) scheiterte dann sauber mit einem 502
-    (`api/v1/files.py::_call()`), aber erst nach dem Klick, nicht vorher sichtbar.
-    `host.has_credential` (SDK-Nachtrag, `services/hosts.py::host_to_sdk()`) filtert
-    das jetzt vorab -- ohne den Credential-WERT zu kennen (docs/03 §3 Invariante 1
-    bleibt unangetastet, nur die blosse Existenz ist jetzt sichtbar)."""
+    """Erfüllt `nodvard_sdk.capabilities.FileSourceProvider`: eine `_SshFileSource` pro aktuell bekanntem Host mit
+    Zugangsdaten, bei jedem Aufruf frisch ermittelt."""
 
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
 
     async def file_sources(self) -> list[_SshFileSource]:
         hosts = await self._ctx.hosts.list()
+        # Nur Hosts mit Zugangsdaten: Sonst scheiterte der erste Zugriff erst nach dem Klick mit einem 502.
+        # `host.has_credential` zeigt nur, dass es Zugangsdaten gibt, nicht deren Wert.
         return [
             _SshFileSource(self._ctx, host.id, label=f"SSH (SFTP): {host.display_name or host.name}")
             for host in hosts
@@ -651,6 +603,8 @@ class Extension(NodvardExtension):
         ctx.capabilities.provide(_SshTerminalTarget(ctx))
         ctx.capabilities.provide(_ShellActionExecutor(ctx))
         ctx.capabilities.provide(_TerminalFileSourceProvider(ctx))
+        # Ein Shell-Befehl auf dem Server ist hohes Risiko und braucht `hosts.execute`; ausgeführt wird er erst nach der Freigabe
+        # durch das Gate.
         ctx.actions.register(
             ActionSpec(
                 action_type="shell.exec",
@@ -670,9 +624,5 @@ class Extension(NodvardExtension):
         return HealthReport(healthy=True)
 
     def file_source_for(self, host_id: str) -> _SshFileSource:
-        """Seit WP-11 nicht mehr der einzige Zugang: `_TerminalFileSourceProvider`
-        (siehe oben) registriert automatisch eine Quelle pro bekanntem Host. Diese
-        Methode bleibt als direkter Erweiterungspunkt bestehen, falls ein Aufrufer
-        (z. B. ein Test) gezielt EINE `_SshFileSource` fuer einen einzelnen Host
-        braucht, ohne den ganzen Provider-Umweg zu gehen."""
+        """Eine `_SshFileSource` für genau einen Host, ohne den Umweg über den Provider (z. B. für Tests)."""
         return _SshFileSource(self._ctx, host_id)

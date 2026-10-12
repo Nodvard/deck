@@ -1,30 +1,4 @@
-"""Kopie der Datenbank vor jeder Migration -- und der Rueckweg auf sie.
-
-`nodvard_deck.boot` legt VOR jeder Migration (`alembic upgrade`) eine Kopie der Datenbank an
-(`<Datenordner>/backups/vor-update/<Zeit>_<von>_<nach>.db` plus `<Name>.json`) und migriert
-nie ohne sie. Es bleiben die drei neuesten. Die Kopie entsteht mit der Online-Sicherung von SQLite
-(`snapshot.online_copy`, danach `PRAGMA integrity_check`) in eine `.part`-Datei und wird erst nach
-`fsync` umbenannt -- eine halbe Kopie sieht nie aus wie eine ganze.
-
-**Platz:** vorher muss mindestens das 1,2-fache der Datenbank (samt WAL) frei sein: die Kopie selbst
-und etwas Luft fuer die Migration. Sonst gibt es keine Migration (`NoSpaceForCopy`).
-
-**Nicht Teil der Kopie:** Dateien ausserhalb der Datenbank (Erweiterungsdaten, Schluessel). Migrationen
-fassen sie nicht an. Eine Kopie ist keine vollstaendige Sicherung (dafuer gibt es Einstellungen ->
-System -> Sicherung).
-
-**Rueckweg** (`restore_copy`): die Kopie ersetzt die Datenbank. Sie wird dazu UMBENANNT, nicht kopiert --
-atomar, ohne zusaetzlichen Platz, und eine halb kopierte Datenbank kann es nicht geben. Die Kopie ist
-danach verbraucht (sie IST jetzt die Datenbank). Vorher wird sie geprueft (`integrity_check`), und die
-Nebendateien der Datenbank (`-wal`, `-shm`, `-journal`) werden weggeraeumt oder zusammen mit der alten
-Datenbank beiseite gelegt: eine fremde WAL neben einer anderen Datenbank wuerde SQLite auf diese
-anwenden und sie zerstoeren. Ein Journal in `state.json` (`revert`) macht auch einen Absturz mittendrin
-heilbar (`finish_revert`, `nodvard_deck.boot` ruft es als Erstes auf). Auf Wunsch (`keep_discarded`) wandert
-die verworfene Datenbank nach `restore/replaced-<Zeit>/`; dort raeumt sie die Oberflaeche und
-`restore.sweep` nach 30 Tagen weg. Liegt die Datenbank auf einem anderen Laufwerk als der Datenordner, wird sie dafuer
-kopiert (Platz wird vor dem Journal geprueft, `NoSpaceToSetAside`). Was dort schon liegt, wird nie ueberschrieben: ein
-wiederholter Rueckweg loescht dann nur noch, was am Platz der Datenbank liegt.
-"""
+"""Kopie der Datenbank vor jeder Migration und der Rückweg auf sie."""
 
 from __future__ import annotations
 
@@ -48,10 +22,16 @@ from .errors import DamagedBackup, NotEnoughSpace, UnusableBackup
 
 logger = logging.getLogger("nodvard_deck.premigrate")
 
+# `boot` legt vor jedem `alembic upgrade` eine Kopie der Datenbank an und migriert nie ohne sie:
+# `<Datenordner>/backups/vor-update/<Zeit>_<von>_<nach>.db` mit einer Begleitdatei `.json`; die drei neuesten bleiben.
+# Nicht Teil der Kopie sind Dateien außerhalb der Datenbank (Erweiterungsdaten, Schlüssel), Migrationen fassen sie nicht an.
+# Eine vollständige Sicherung ist das nicht (dafür gibt es Einstellungen -> System -> Sicherung).
 DIR_PARTS = ("backups", "vor-update")
 KEEP = 3
+# Vorher muss mindestens das 1,2-Fache der Datenbank samt WAL frei sein (die Kopie und etwas Luft für die Migration),
+# sonst gibt es keine Migration (`NoSpaceForCopy`).
 SPACE_FACTOR_NUM, SPACE_FACTOR_DEN = 12, 10
-"""1,2 -- als Bruch, damit nichts mit Gleitkommazahlen gerundet wird."""
+"""1,2 als Bruch, damit nichts mit Gleitkommazahlen gerundet wird."""
 NAME_RE = bootstate.COPY_NAME_RE
 SIDECAR_SUFFIX = ".json"
 PART_SUFFIX = ".part"
@@ -71,8 +51,8 @@ class NoSpaceForCopy(NotEnoughSpace):
 
 
 class NoSpaceToSetAside(NotEnoughSpace):
-    """Die Datenbank liegt auf einem anderen Laufwerk als der Datenordner und wird zum Beiseitelegen kopiert -- dafuer
-    fehlt Platz. Kommt VOR dem Journal: es wurde nichts veraendert, und kein Journal blockiert spaetere Starts."""
+    """Die Datenbank liegt auf einem anderen Laufwerk als der Datenordner und wird zum Beiseitelegen kopiert, dafür fehlt Platz.
+    Das kommt vor dem Journal: Nichts ist verändert, und kein Journal blockiert spätere Starts."""
 
     def __init__(self, needed: int, free: int) -> None:
         self.needed = needed
@@ -84,7 +64,7 @@ class NoSpaceToSetAside(NotEnoughSpace):
 
 
 class RevertFailed(Exception):
-    """Der Rueckweg auf die Kopie ist gescheitert. Das Journal in `state.json` bleibt stehen."""
+    """Der Rückweg auf die Kopie ist gescheitert; das Journal in `state.json` bleibt stehen."""
 
 
 def size_text(size: int) -> str:
@@ -128,24 +108,18 @@ class CopyInfo:
     size: int
 
 
-# ---------------------------------------------------------------------------
-# Lesen: die laufende Datenbank und Kopien
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class LiveDb:
     has_data: bool
-    """Es gibt Tabellen, also etwas, das eine Kopie wert ist (eine leere oder neue Datei hat nichts zu schuetzen)."""
+    """Es gibt Tabellen, also etwas, das eine Kopie wert ist (eine leere oder neue Datei hat nichts zu schützen)."""
     heads: list[str]
-    """Migrationsstaende aus `alembic_version` (sortiert; leer ohne die Tabelle)."""
+    """Migrationsstände aus `alembic_version` (sortiert; leer ohne die Tabelle)."""
     accounts: bool | None = None
     """Gibt es ein Konto (`users`)? `False` auch ohne die Tabelle, `None` wenn nicht feststellbar."""
 
 
 def read_live(db_path: Path) -> LiveDb:
-    """Liest die Datenbank der Anwendung (sie wird dabei nie veraendert oder angelegt).
-    `DamagedBackup`, wenn sie sich nicht als SQLite-Datei oeffnen laesst."""
+    """Liest die Datenbank der Anwendung, ohne sie zu verändern oder anzulegen; `DamagedBackup`, wenn sie keine SQLite-Datei ist."""
     try:
         st = os.lstat(db_path)
     except FileNotFoundError:
@@ -180,7 +154,7 @@ def read_live(db_path: Path) -> LiveDb:
 
 
 def read_heads(path: Path) -> list[str]:
-    """Migrationsstaende einer Kopie (nur lesend, ohne Schema-Code auszufuehren)."""
+    """Migrationsstände einer Kopie (nur lesend, ohne Schema-Code auszuführen)."""
     with restore.open_untrusted(path) as conn:
         try:
             rows = conn.execute("SELECT version_num FROM alembic_version LIMIT ?", (_MAX_ROWS,)).fetchall()
@@ -190,7 +164,7 @@ def read_heads(path: Path) -> list[str]:
 
 
 def copy_path(data_dir: Path, name: object) -> Path | None:
-    """Der Pfad einer unserer Kopien -- nur mit unserem Namensmuster und nur als normale Datei."""
+    """Der Pfad einer eigenen Kopie: nur mit unserem Namensmuster und nur als normale Datei."""
     if not isinstance(name, str) or not NAME_RE.match(name):
         return None
     path = copies_dir(data_dir) / name
@@ -201,7 +175,7 @@ def copy_path(data_dir: Path, name: object) -> Path | None:
 
 
 def list_copies(data_dir: Path, *, limit: int = KEEP) -> list[dict[str, Any]]:
-    """Die neuesten Kopien, neueste zuerst: Name, Zeit, Versionen, Groesse. Fuer die Oberflaeche."""
+    """Die neuesten Kopien, neueste zuerst: Name, Zeit, Versionen, Größe. Für die Oberfläche."""
     directory = copies_dir(data_dir)
     try:
         names = sorted((e.name for e in os.scandir(directory) if NAME_RE.match(e.name)), reverse=True)
@@ -231,11 +205,6 @@ def _time_from_name(name: str) -> str:
     return f"{m[1]}-{m[2]}-{m[3]}T{m[4]}:{m[5]}:{m[6]}Z" if m else ""
 
 
-# ---------------------------------------------------------------------------
-# Kopie anlegen
-# ---------------------------------------------------------------------------
-
-
 def _fsync_file(path: Path) -> None:
     fd = os.open(path, os.O_RDONLY)
     try:
@@ -248,7 +217,7 @@ def make_copy(
     layout: restore.Layout, *, from_version: str | None, to_version: str | None, from_heads: list[str], to_heads: list[str],
     now: float | None = None, keep: int = KEEP,
 ) -> CopyInfo:
-    """Legt die Kopie an oder wirft -- ohne etwas zu hinterlassen und ohne eine aeltere Kopie anzufassen.
+    """Legt die Kopie an oder wirft, ohne etwas zu hinterlassen und ohne eine ältere Kopie anzufassen.
     `NoSpaceForCopy` bei zu wenig Platz, `snapshot.IntegrityCheckFailed` bei einer kaputten Kopie."""
     now = time.time() if now is None else now
     directory = store.make_private_dir(copies_dir(layout.data_dir))
@@ -270,6 +239,8 @@ def make_copy(
     with contextlib.suppress(FileNotFoundError):
         os.unlink(part)
     try:
+        # Online-Kopie von SQLite mit anschließendem `integrity_check` in eine `.part`-Datei, nach `fsync` umbenannt:
+        # Eine halbe Kopie sieht nie aus wie eine ganze.
         snapshot.online_copy(layout.db_path, part)
         os.chmod(part, 0o600)
         _fsync_file(part)
@@ -290,8 +261,8 @@ def make_copy(
 
 
 def prune(data_dir: Path, keep: int = KEEP) -> list[str]:
-    """Nur die `keep` neuesten Kopien bleiben (samt Begleitdatei); liegengebliebene `.part`-Dateien
-    gehen auch weg. Gibt die entfernten Kopien zurueck."""
+    """Nur die `keep` neuesten Kopien bleiben (samt Begleitdatei), liegengebliebene `.part`-Dateien gehen auch weg.
+    Gibt die entfernten Kopien zurück."""
     directory = copies_dir(data_dir)
     removed: list[str] = []
     try:
@@ -314,21 +285,21 @@ def prune(data_dir: Path, keep: int = KEEP) -> list[str]:
     return removed
 
 
-# ---------------------------------------------------------------------------
-# Rueckweg
-# ---------------------------------------------------------------------------
+# Rückweg: Die Kopie ersetzt die Datenbank. Sie wird umbenannt, nicht kopiert: atomar, ohne zusätzlichen Platz, und eine
+# halb kopierte Datenbank kann es nicht geben. Danach ist die Kopie verbraucht, sie ist jetzt die Datenbank. Die
+# Nebendateien (`-wal`, `-shm`, `-journal`) werden weggeräumt oder mit der alten Datenbank beiseite gelegt: SQLite würde
+# eine fremde WAL neben einer anderen Datenbank auf diese anwenden und sie zerstören. Das Journal in `state.json`
+# (`revert`) macht auch einen Absturz mittendrin heilbar (`finish_revert`, `boot` ruft es als Erstes auf).
 
 
 def _move(src: Path, dst: Path) -> None:
-    """Verschieben ist `rename` (gleiches Dateisystem, atomar). Eigene Funktion, damit Tests einen
-    Absturz mitten im Rueckweg einbauen koennen."""
+    """Verschieben ist `rename` (gleiches Dateisystem, atomar); eigene Funktion, damit Tests einen Absturz einbauen können."""
     os.rename(src, dst)
 
 
 def _move_aside(src: Path, dst: Path) -> None:
-    """Beiseitelegen: umbenennen. Liegt die Datenbank auf einem anderen Dateisystem als der Datenordner (eigener
-    Datenbank-Pfad), geht das nicht (EXDEV) -- dann kopieren und die Quelle erst loeschen, wenn die Kopie vollstaendig
-    auf der Platte ist. Wiederholbar: Ein Abbruch mittendrin laesst die Quelle stehen, der naechste Lauf kopiert neu."""
+    """Beiseitelegen: umbenennen. Auf einem anderen Dateisystem als der Datenordner (EXDEV) stattdessen kopieren und die
+    Quelle erst löschen, wenn die Kopie ganz auf der Platte ist. Wiederholbar: Ein Abbruch lässt die Quelle stehen."""
     try:
         _move(src, dst)
         return
@@ -353,8 +324,8 @@ def _move_aside(src: Path, dst: Path) -> None:
 
 
 def check_room_to_set_aside(layout: restore.Layout) -> None:
-    """Muss die Datenbank zum Beiseitelegen kopiert werden (anderes Dateisystem), braucht es dafuer Platz im Datenordner.
-    Das wird VOR dem Journal geprueft: sonst bliebe ein Rueckweg stehen, der bei jedem Start an genau diesem Platz scheitert."""
+    """Muss die Datenbank zum Beiseitelegen kopiert werden (anderes Dateisystem), braucht es dafür Platz im Datenordner.
+    Geprüft wird vor dem Journal, sonst bliebe ein Rückweg stehen, der bei jedem Start an diesem Platz scheitert."""
     if store.same_storage(layout.db_path.parent, layout.data_dir):
         return
     needed = sum(_file_size(os.fspath(layout.db_path) + suffix) for suffix in _SUFFIXES)
@@ -367,10 +338,10 @@ def check_room_to_set_aside(layout: restore.Layout) -> None:
 
 
 def _clear_revert(data_dir: Path, journal: dict[str, Any]) -> None:
-    """Der Rueckweg ist fertig: Journal weg und -- im SELBEN Schreibvorgang -- die Migration, zu der die Kopie gehoerte,
-    als zurueckgesetzt vermerken. Getrennt geschrieben stuende sie nach einem Absturz genau dazwischen noch auf
-    `running` mit einer Kopie, die es nicht mehr gibt (sie IST jetzt die Datenbank): jeder weitere Start endete auf der
-    Notseite. Dass die Datenbank danach wieder der Stand vor dem Update ist, weiss nur das Journal."""
+    """Der Rückweg ist fertig: Journal weg und im selben Schreibvorgang die zugehörige Migration als zurückgesetzt vermerken."""
+    # Getrennt geschrieben stünde sie nach einem Absturz dazwischen noch auf `running` mit einer Kopie, die es nicht mehr gibt
+    # (sie ist jetzt die Datenbank): Jeder weitere Start endete auf der Notseite. Dass die Datenbank wieder der Stand vor dem
+    # Update ist, weiß nur das Journal.
     state = bootstate.read_state(data_dir)
     state.pop("revert", None)
     migration = state.get("last_migration")
@@ -389,20 +360,20 @@ def _replaced_name(layout: restore.Layout, now: float) -> str:
 
 
 def _discard_live(layout: restore.Layout, replaced: str | None) -> None:
-    """Die jetzige Datenbank samt Nebendateien weg: beiseite gelegt (`replaced`) oder geloescht. Die Nebendateien zuerst:
-    bricht es mittendrin ab, liegt nie eine fremde WAL neben einer fehlenden Datenbank (SQLite wendete sie auf die
-    naechste an)."""
+    """Die jetzige Datenbank samt Nebendateien weg: beiseite gelegt (`replaced`) oder gelöscht."""
+    # Die Nebendateien zuerst: Bricht es mittendrin ab, liegt nie eine fremde WAL neben einer fehlenden Datenbank
+    # (SQLite wendete sie auf die nächste an).
     db = os.fspath(layout.db_path)
     if not replaced:
         for suffix in _SUFFIXES:
             restore.remove_path(Path(db + suffix))
         return
     directory = restore.make_private_dir(layout.restore_dir / replaced)
-    # Ein Ziel, das schon da ist, wird nie ueberschrieben. Der Ordner ist je Journal neu, und ein Ziel entsteht nur ganz
-    # (umbenannt, oder eine gefsyncte `.part` umbenannt): Ein frueherer Lauf hat diese Datei also schon beiseitegelegt und
-    # brach nur vor dem Loeschen der Quelle ab. Liegt die DATENBANK schon dort (sie kommt als Letzte), ist das Original
+    # Ein Ziel, das schon da ist, wird nie überschrieben. Der Ordner ist je Journal neu, und ein Ziel entsteht nur ganz
+    # (umbenannt, oder eine gefsyncte `.part` umbenannt): Ein vorheriger Lauf hat diese Datei also schon beiseitegelegt und
+    # brach nur vor dem Löschen der Quelle ab. Liegt die Datenbank schon dort (sie kommt als Letzte), ist das Original
     # ganz beiseite; was jetzt am Platz liegt, ist die schon eingesetzte Kopie (anderes Laufwerk: `_install` brach vor dem
-    # Loeschen der Kopie ab) oder derselbe Inhalt noch einmal. Das wird geloescht, nie darueber gelegt.
+    # Löschen der Kopie ab) oder derselbe Inhalt noch einmal. Das wird gelöscht, nie darüber gelegt.
     if os.path.lexists(directory / layout.db_path.name):
         for suffix in (*_SUFFIXES[1:], _SUFFIXES[0]):
             restore.remove_path(Path(db + suffix))
@@ -418,8 +389,7 @@ def _discard_live(layout: restore.Layout, replaced: str | None) -> None:
 
 
 def _install(layout: restore.Layout, src: Path) -> None:
-    """Die Kopie an den Platz der Datenbank. Bevorzugt umbenennen; auf einem anderen Dateisystem
-    (z. B. eigener Datenbank-Pfad) ueber eine Nachbardatei."""
+    """Die Kopie an den Platz der Datenbank: umbenennen, auf einem anderen Dateisystem über eine Nachbardatei."""
     db = layout.db_path
     try:
         os.replace(src, db)
@@ -441,7 +411,7 @@ def _install(layout: restore.Layout, src: Path) -> None:
             raise
         with contextlib.suppress(OSError):
             os.unlink(src)
-        restore._fsync_dir(src.parent)  # das Loeschen der Kopie gleich auf die Platte, nicht erst mit state.json
+        restore._fsync_dir(src.parent)  # das Löschen der Kopie gleich auf die Platte, nicht erst mit state.json
     with contextlib.suppress(OSError):
         os.chmod(db, 0o600)
     restore._fsync_dir(db.parent)
@@ -450,8 +420,8 @@ def _install(layout: restore.Layout, src: Path) -> None:
 
 
 def set_aside(layout: restore.Layout, *, now: float | None = None) -> str:
-    """Die jetzige Datenbank samt Nebendateien nach `restore/replaced-<Zeit>/` legen -- nie loeschen. Fuer die halbe
-    Datenbank einer ersten Migration, die nicht fertig wurde (`boot.decide`). Gibt den Ordnernamen zurueck."""
+    """Legt die jetzige Datenbank samt Nebendateien nach `restore/replaced-<Zeit>/`, ohne zu löschen (für die halbe Datenbank
+    einer ersten Migration, die nicht fertig wurde, `boot.decide`). Gibt den Ordnernamen zurück."""
     now = time.time() if now is None else now
     restore.make_private_dir(layout.restore_dir)
     check_room_to_set_aside(layout)
@@ -461,10 +431,10 @@ def set_aside(layout: restore.Layout, *, now: float | None = None) -> str:
 
 
 def restore_copy(layout: restore.Layout, name: str, *, keep_discarded: bool, reason: str, now: float | None = None) -> None:
-    """Ersetzt die Datenbank durch die Kopie `name`. Prueft die Kopie, BEVOR etwas angefasst wird
-    (`UnusableBackup`: es gibt sie nicht; `DamagedBackup`: kaputt). Danach schreibt sie das Journal und
-    fuehrt den Rueckweg aus (`finish_revert`); scheitert der, bleibt das Journal stehen und der naechste
-    Start macht weiter."""
+    """Ersetzt die Datenbank durch die Kopie `name` und prüft sie vorher (`UnusableBackup`: gibt es nicht, `DamagedBackup`: kaputt)."""
+    # Danach schreibt sie das Journal und führt den Rückweg aus (`finish_revert`); scheitert der, bleibt das Journal stehen
+    # und der nächste Start macht weiter. Mit `keep_discarded` landet die verworfene Datenbank in `restore/replaced-<Zeit>/`,
+    # die Oberfläche und `restore.sweep` räumen sie nach 30 Tagen weg.
     now = time.time() if now is None else now
     src = copy_path(layout.data_dir, name)
     if src is None:
@@ -481,8 +451,8 @@ def restore_copy(layout: restore.Layout, name: str, *, keep_discarded: bool, rea
 
 
 def finish_revert(layout: restore.Layout) -> bool:
-    """Fuehrt einen im Journal (`state.json`, `revert`) stehenden Rueckweg zu Ende -- idempotent, jeder
-    Schritt darf wiederholt werden. `False`: kein Journal. `RevertFailed`: geht nicht (das Journal bleibt)."""
+    """Führt einen im Journal (`state.json`, `revert`) stehenden Rückweg zu Ende; jeder Schritt darf wiederholt werden.
+    `False`: kein Journal. `RevertFailed`: geht nicht (das Journal bleibt)."""
     data_dir = layout.data_dir
     journal = bootstate.read_state(data_dir).get("revert")
     if not journal:
@@ -490,7 +460,7 @@ def finish_revert(layout: restore.Layout) -> bool:
     name = journal["copy"]
     src = copy_path(data_dir, name)
     if src is None:
-        # Die Kopie ist weg: entweder war der Rueckweg schon fertig (Absturz VOR dem Aufraeumen des Journals) ...
+        # Die Kopie ist weg: entweder war der Rückweg schon fertig (Absturz vor dem Aufräumen des Journals) ...
         expected = journal.get("heads") or []
         try:
             live = read_live(layout.db_path)

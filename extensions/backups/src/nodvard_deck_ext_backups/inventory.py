@@ -1,20 +1,5 @@
-"""Vorhandene Sicherungen je Gast: was tatsaechlich auf den Backup-Speichern liegt --
-nicht nur, ob der letzte Task "OK" meldete. Ein Job kann gruen sein, waehrend die
-Aufbewahrung alles Aeltere loescht; ein Gast ohne Job kann trotzdem eine alte, von Hand
-erstellte Sicherung haben.
-
-**Zuordnung ueber VMID UND Typ, verbindungsuebergreifend:** Backup-Speicher koennen
-geteilt sein (z. B. ein gemeinsames NFS-Ziel `backup-nas`), und VMIDs sind nur je
-Proxmox-Instanz eindeutig -- dieselbe VMID kann auf pve1 eine VM und auf pve2 ein
-Container sein. Die Sicherung eines Containers auf pve2 taucht dann auch beim Lesen ueber
-die pve1-Verbindung auf, wo es gar keinen Gast mit dieser VMID gibt. Eine Datei wird
-deshalb dem Gast mit derselben VMID und demselben Typ zugeordnet, bevorzugt auf der lesenden
-Verbindung, sonst auf der einzigen anderen, die ihn kennt. Passt kein bekannter Gast,
-ist die Datei "verwaist" (Gast geloescht/umgezogen) -- sie belegt nur Platz.
-
-Rein lesend: `GET /nodes/{node}/storage?content=backup` und
-`GET /nodes/{node}/storage/{storage}/content?content=backup`.
-"""
+"""Vorhandene Sicherungen je Gast (rein lesend): was tatsächlich auf den Backup-Speichern liegt, nicht nur, ob der
+letzte Task "OK" meldete."""
 
 from __future__ import annotations
 
@@ -33,8 +18,8 @@ KEEP_LABEL = {
 
 
 def retention_label(prune: Any) -> str | None:
-    """`prune-backups` -> Anzeige. Proxmox liefert je nach Version ein Objekt
-    (`{"keep-last": "3"}`, live gesehen) oder einen String ("keep-last=3,keep-daily=7")."""
+    """`prune-backups` als Anzeige; Proxmox liefert je nach Version ein Objekt (`{"keep-last": "3"}`) oder einen
+    String ("keep-last=3,keep-daily=7")."""
     if not prune:
         return None
     if isinstance(prune, str):
@@ -46,7 +31,7 @@ def retention_label(prune: Any) -> str | None:
 
 
 def file_kind(row: dict[str, Any]) -> str | None:
-    """"qemu"/"lxc" aus `subtype` (live vorhanden) oder dem Dateinamen als Rueckfall."""
+    """"qemu"/"lxc" aus `subtype` oder, als Rückfall, dem Dateinamen."""
     subtype = row.get("subtype")
     if subtype in ("qemu", "lxc"):
         return subtype
@@ -58,8 +43,9 @@ def file_kind(row: dict[str, Any]) -> str | None:
 
 
 async def list_backup_files(connector: ProxmoxBackupConnector) -> tuple[list[dict[str, Any]], list[str]]:
-    """Alle Backup-Dateien, die eine Verbindung sieht. Gemeinsame Speicher (`shared`)
-    werden nur einmal gelesen, auch wenn jeder Knoten sie meldet; inaktive gar nicht."""
+    """Alle Backup-Dateien, die eine Verbindung sieht.
+
+    Gemeinsame Speicher (`shared`) werden nur einmal gelesen, auch wenn jeder Knoten sie meldet; inaktive gar nicht."""
     files: list[dict[str, Any]] = []
     errors: list[str] = []
     seen_storages: set[tuple[str, str]] = set()
@@ -93,13 +79,18 @@ def summarize(
     files_by_connection: dict[str, list[dict[str, Any]]],
     known_guests: dict[tuple[str, str], list[str]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """-> (je Gast, verwaiste Dateien je lesender Verbindung + VMID + Typ).
+    """-> (je Gast, verwaiste Dateien je lesender Verbindung, VMID und Typ).
+
     `known_guests`: (Typ, VMID) -> Verbindungen, auf denen es diesen Gast gibt."""
+    # Backup-Speicher können geteilt sein, und VMIDs sind nur je Proxmox-Instanz eindeutig (dieselbe VMID kann
+    # anderswo ein Container sein). Eine Datei taucht darum auch über eine Verbindung auf, die den Gast nicht
+    # kennt. Zugeordnet wird per VMID und Typ, bevorzugt auf der lesenden Verbindung, sonst auf der einzigen
+    # anderen, die ihn kennt. Passt keiner, ist sie "verwaist" (Gast gelöscht oder umgezogen) und belegt nur Platz.
     seen: set[tuple[Any, ...]] = set()
     groups: dict[tuple[str, str, str | None, bool], dict[str, Any]] = {}
     for scanner, files in files_by_connection.items():
         for row in files:
-            # Derselbe NFS-Speicher kann ueber zwei Verbindungen sichtbar sein.
+            # Derselbe NFS-Speicher kann über zwei Verbindungen sichtbar sein.
             identity = (row["volid"], row.get("ctime"), row.get("size"))
             if identity in seen:
                 continue

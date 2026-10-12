@@ -1,29 +1,4 @@
-"""Verschluesselung der Sicherungen im age-Format (https://age-encryption.org/v1).
-
-Zwei Arten, beide ergeben eine normale age-Datei, die auch `age -d` / `rage -d` oeffnet:
-
-* **Sicherungsschluessel (Modus "schluessel")**, fuer automatische Sicherungen und den
-  Download "mit meinem Sicherungsschluessel": verschluesselt wird an einen X25519-
-  Empfaenger (`age1...`) ueber pyrage (Rust-`rage`, Lesen und Schreiben). Der private
-  Schluessel wird NIE gespeichert. Er entsteht bei Bedarf aus dem Sicherungspasswort:
-
-      Passwort (Unicode NFC, UTF-8) --Argon2id(t=3, m=64 MiB, p=1, Salz 16 Byte)--> 32 Byte
-      32 Byte = X25519-Geheimnis = age-Identitaet "AGE-SECRET-KEY-1..." (Bech32, unten)
-
-  Gespeichert werden nur Empfaenger, Salz, KDF-Parameter und `key_id`. Die Identitaet
-  selbst ist der **Wiederherstellungsschluessel**, den der Owner einmal zu sehen bekommt.
-
-* **Einmal-Passwort (Modus "passwort")**, nur fuer den Download: age-scrypt. pyrage kann
-  scrypt nur komplett im Speicher (`pyrage.passphrase`), eine Sicherung kann aber gross
-  sein. Deshalb ist die scrypt-Variante hier selbst geschrieben (Header, HMAC, STREAM nach
-  der age-Spezifikation, Bausteine aus `cryptography`) und arbeitet in 64-KiB-Bloecken.
-  Die Tests pruefen beide Richtungen gegen die Referenz (pyrage.passphrase).
-
-Deckel beim LESEN (eine fremde Datei darf den Rechner nicht minutenlang beschaeftigen und
-einen kleinen Rechner nicht aus dem Speicher werfen -- scrypt mit log2(N)=20 braucht 1 GiB):
-scrypt log2(N) <= 18 (geschrieben wird mit 18, 256 MiB), Argon2id m <= 128 MiB (geschrieben
-mit 64 MiB), t <= 10, p <= 4.
-"""
+"""Verschlüsselung der Sicherungen im age-Format (https://age-encryption.org/v1); `age -d` öffnet sie ebenfalls."""
 
 from __future__ import annotations
 
@@ -47,6 +22,9 @@ from .errors import DamagedBackup, TooExpensive, WrongSecret
 
 MIN_PASSWORD_LENGTH = 12
 
+# Argon2id beim Schreiben des Sicherungsschlüssels. Die Parameter stehen im Kopf der Sicherung; gelesen wird mit denen aus
+# der Datei, aber nur bis zu den Deckeln darunter: Eine fremde Datei darf den Rechner nicht minutenlang beschäftigen oder
+# einen kleinen Rechner aus dem Speicher werfen (scrypt mit log2(N)=20 braucht 1 GiB).
 ARGON2_T = 3
 ARGON2_M_KIB = 64 * 1024
 ARGON2_P = 1
@@ -57,9 +35,8 @@ ARGON2_MAX_M_KIB = 128 * 1024
 ARGON2_MAX_P = 4
 
 SCRYPT_WRITE_LOG_N = 18
-"""Arbeitsfaktor beim Schreiben (N = 2^18, r = 8: 256 MiB, auf einem Pi etwa 1-2 s).
-`age` selbst waehlt ~1 s auf dem schreibenden Rechner; ein fester Wert ist hier besser
-vorhersehbar und liegt sicher unter dem Lesedeckel."""
+"""Arbeitsfaktor beim Schreiben (N = 2^18, r = 8: 256 MiB, auf einem Pi 1-2 s). Fest statt nach Zeit gewählt wie bei `age`,
+damit er vorhersehbar und sicher unter dem Lesedeckel liegt."""
 SCRYPT_MAX_LOG_N = 18
 
 CHUNK_SIZE = 64 * 1024
@@ -71,9 +48,7 @@ _MAX_LINE = 1024
 _MAX_STANZAS = 16
 
 
-# ---------------------------------------------------------------------------
-# Bech32 (BIP-173), wie age es fuer Schluessel nutzt -- ohne die 90-Zeichen-Grenze
-# ---------------------------------------------------------------------------
+# Bech32 (BIP-173), wie age es für Schlüssel nutzt, ohne die 90-Zeichen-Grenze.
 
 _BECH32_CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 _BECH32_GEN = (0x3B6A57B2, 0x26508E6D, 0x1EA119FA, 0x3D4233DD, 0x2A1462B3)
@@ -115,7 +90,7 @@ def _convert_bits(data: bytes | list[int], from_bits: int, to_bits: int, *, pad:
 
 
 def bech32_encode(hrp: str, data: bytes) -> str:
-    """Kleingeschrieben; age schreibt Identitaeten danach komplett gross."""
+    """Kleingeschrieben; age schreibt Identitäten danach komplett groß."""
     hrp = hrp.lower()
     values = _convert_bits(data, 8, 5, pad=True)
     polymod = _bech32_polymod(_bech32_hrp_expand(hrp) + values + [0] * 6) ^ 1
@@ -124,7 +99,7 @@ def bech32_encode(hrp: str, data: bytes) -> str:
 
 
 def bech32_decode(text: str) -> tuple[str, bytes]:
-    """Gegenstueck zu `bech32_encode`; prueft Pruefsumme und gemischte Schreibweise."""
+    """Gegenstück zu `bech32_encode`; prüft Prüfsumme und gemischte Schreibweise."""
     if text.lower() != text and text.upper() != text:
         raise ValueError("gemischte Gross-/Kleinschreibung")
     text = text.lower()
@@ -140,9 +115,9 @@ def bech32_decode(text: str) -> tuple[str, bytes]:
     return hrp, bytes(_convert_bits(values[:-6], 5, 8, pad=False))
 
 
-# ---------------------------------------------------------------------------
-# Sicherungsschluessel: Argon2id -> X25519
-# ---------------------------------------------------------------------------
+# Sicherungsschlüssel (Modus "schluessel"): Aus dem Sicherungspasswort entsteht per Argon2id ein 32-Byte-X25519-Geheimnis,
+# also eine age-Identität (`AGE-SECRET-KEY-1...`). Der private Schlüssel wird nie gespeichert; gespeichert werden nur Empfänger,
+# Salz, KDF-Parameter und `key_id`. Die Identität selbst ist der Wiederherstellungsschlüssel, den der Owner einmal sieht.
 
 
 @dataclass(frozen=True)
@@ -180,14 +155,15 @@ class KdfParams:
             raise TooExpensive(f"Argon2 t={t}, erlaubt bis {ARGON2_MAX_T}")
         if not 1 <= p <= ARGON2_MAX_P:
             raise TooExpensive(f"Argon2 p={p}, erlaubt bis {ARGON2_MAX_P}")
+        # Argon2 braucht mindestens 8 KiB je Spur.
         if not 8 * p <= m <= ARGON2_MAX_M_KIB:
             raise TooExpensive(f"Argon2 m={m} KiB, erlaubt bis {ARGON2_MAX_M_KIB} KiB")
         return cls(t=t, m_kib=m, p=p, salt=salt_bytes)
 
 
 def _password_bytes(password: str) -> bytes:
-    """NFC, damit dasselbe Passwort auf jedem Geraet dieselben Bytes ergibt (ein "ä" kann
-    als ein Zeichen oder als "a" plus Punkte ankommen)."""
+    """NFC, damit dasselbe Passwort auf jedem Gerät dieselben Bytes ergibt (ein "ä" kann als ein Zeichen oder als
+    "a" plus Punkte ankommen)."""
     return unicodedata.normalize("NFC", password).encode("utf-8")
 
 
@@ -213,7 +189,7 @@ def recipient_of(identity: str) -> str:
 
 
 def key_id_of(recipient: str) -> str:
-    """Kurzer Fingerabdruck des Empfaengers (nicht geheim), z. B. fuer die Liste."""
+    """Kurzer Fingerabdruck des Empfängers (nicht geheim), z. B. für die Liste."""
     return hashlib.sha256(recipient.encode("ascii")).hexdigest()[:16]
 
 
@@ -223,7 +199,7 @@ class DerivedKey:
     key_id: str
     kdf: KdfParams
     identity: str
-    """Der Wiederherstellungsschluessel. Nur im Speicher, nie speichern oder protokollieren."""
+    """Der Wiederherstellungsschlüssel. Nur im Speicher, nie speichern oder protokollieren."""
 
     def __repr__(self) -> str:  # nie das Geheimnis in Tracebacks/Logs
         return f"DerivedKey(key_id={self.key_id!r})"
@@ -237,13 +213,12 @@ def derive_key(password: str, kdf: KdfParams | None = None) -> DerivedKey:
 
 
 def is_recovery_key(text: str) -> bool:
-    """Auch kleingeschrieben (abgetippt): Bech32 kennt keine Gross-/Kleinschreibung."""
+    """Auch kleingeschrieben (abgetippt): Bech32 kennt keine Groß-/Kleinschreibung."""
     return bool(re.fullmatch(r"AGE-SECRET-KEY-1[0-9A-Z]{58}", text.strip().upper()))
 
 
-# ---------------------------------------------------------------------------
-# Schluessel-Modus: X25519 ueber pyrage
-# ---------------------------------------------------------------------------
+# Schlüssel-Modus: Verschlüsselt wird an einen X25519-Empfänger (`age1...`) über pyrage; die Blöcke tragen Poly1305-Tags,
+# jede Veränderung oder Kürzung fällt beim Entschlüsseln auf.
 
 
 def encrypt_to_recipient(reader: BinaryIO, writer: BinaryIO, recipient: str) -> None:
@@ -262,16 +237,16 @@ def decrypt_with_identity(reader: BinaryIO, writer: BinaryIO, identity: str) -> 
             raise WrongSecret() from exc
         raise DamagedBackup("Entschlüsselung fehlgeschlagen") from exc
     except OSError as exc:
-        # rage meldet einen veraenderten oder abgeschnittenen Rumpf als E/A-Fehler
-        # "decryption error"; echte Schreibfehler (volle Platte) bleiben, was sie sind.
+        # rage meldet einen veränderten oder abgeschnittenen Rumpf als E/A-Fehler "decryption error";
+        # echte Schreibfehler (volle Platte) bleiben, was sie sind.
         if "decrypt" in str(exc).lower():
             raise DamagedBackup("Inhalt verändert oder abgeschnitten") from exc
         raise
 
 
-# ---------------------------------------------------------------------------
-# Passwort-Modus: age-scrypt, Streaming
-# ---------------------------------------------------------------------------
+# Passwort-Modus (Einmal-Passwort, nur für den Download): age-scrypt. pyrage kann scrypt nur komplett im Speicher, eine
+# Sicherung kann aber groß sein. Deshalb ist die Variante hier selbst nach der age-Spezifikation geschrieben (Header, HMAC,
+# STREAM, Bausteine aus `cryptography`) und arbeitet in 64-KiB-Blöcken. Die Tests prüfen beide Richtungen gegen pyrage.
 
 
 def _b64(data: bytes) -> bytes:
@@ -279,7 +254,7 @@ def _b64(data: bytes) -> bytes:
 
 
 def _unb64(text: bytes) -> bytes:
-    """Kanonisches Base64 ohne Auffuellung (age-Regel), sonst `DamagedBackup`."""
+    """Kanonisches Base64 ohne Auffüllung (age-Regel), sonst `DamagedBackup`."""
     if b"=" in text or not re.fullmatch(rb"[A-Za-z0-9+/]*", text):
         raise DamagedBackup("Kopf ungültig")
     try:
@@ -297,6 +272,7 @@ def _hkdf(ikm: bytes, salt: bytes, info: bytes) -> bytes:
 
 def _scrypt_key(password: str, salt: bytes, log_n: int) -> bytes:
     n = 1 << log_n
+    # OpenSSL begrenzt scrypt sonst auf 32 MiB; gebraucht werden 128 * r * N Byte plus Reserve.
     return hashlib.scrypt(
         _password_bytes(password), salt=_SCRYPT_LABEL + salt, n=n, r=8, p=1, dklen=32,
         maxmem=128 * 8 * n + (32 << 20),
@@ -304,7 +280,7 @@ def _scrypt_key(password: str, salt: bytes, log_n: int) -> bytes:
 
 
 def _read_full(reader: BinaryIO, size: int) -> bytes:
-    """Liest genau `size` Byte oder bis Dateiende (Pipes liefern auch kuerzere Stuecke)."""
+    """Liest genau `size` Byte oder bis Dateiende (Pipes liefern auch kürzere Stücke)."""
     parts: list[bytes] = []
     remaining = size
     while remaining > 0:
@@ -317,6 +293,8 @@ def _read_full(reader: BinaryIO, size: int) -> bytes:
 
 
 def _chunk_nonce(counter: int, last: bool) -> bytes:
+    # STREAM nach age: 11 Byte Zähler und ein Byte, das nur im letzten Block 1 ist. So fällt auch ein abgeschnittenes Ende
+    # auf, weil der letzte vorhandene Block nicht als letzter beglaubigt ist.
     return counter.to_bytes(11, "big") + (b"\x01" if last else b"\x00")
 
 
@@ -331,6 +309,7 @@ def encrypt_with_passphrase(reader: BinaryIO, writer: BinaryIO, password: str, *
     log_n = SCRYPT_WRITE_LOG_N if log_n is None else log_n
     file_key = os.urandom(16)
     salt = os.urandom(16)
+    # Die Nullnonce ist hier sicher: Der Schlüssel hängt vom zufälligen Salz ab und wird nur einmal benutzt.
     wrapped = ChaCha20Poly1305(_scrypt_key(password, salt, log_n)).encrypt(b"\x00" * 12, file_key, None)
     header = (
         _AGE_VERSION_LINE
@@ -340,6 +319,7 @@ def encrypt_with_passphrase(reader: BinaryIO, writer: BinaryIO, password: str, *
     )
     mac = hmac.new(_hkdf(file_key, b"", b"header"), header, hashlib.sha256).digest()
     writer.write(header + b" " + _b64(mac) + b"\n")
+    # Der Schlüssel der Nutzdaten hängt von diesem Zufallswert ab und ist so für jede Datei neu.
     nonce = os.urandom(16)
     writer.write(nonce)
     aead = ChaCha20Poly1305(_hkdf(file_key, nonce, b"payload"))
@@ -364,7 +344,7 @@ def _readline(reader: BinaryIO, budget: list[int]) -> bytes:
 
 
 def _read_age_header(reader: BinaryIO) -> tuple[bytes, list[tuple[list[bytes], bytes]], bytes]:
-    """-> (Kopf bis einschliesslich '---', [(Argumente, Rumpf)], MAC)."""
+    """-> (Kopf bis einschließlich '---', [(Argumente, Rumpf)], MAC)."""
     budget = [_MAX_HEADER_BYTES]
     raw = _readline(reader, budget)
     if raw != _AGE_VERSION_LINE:
@@ -404,7 +384,7 @@ def decrypt_with_passphrase(
     max_log_n = SCRYPT_MAX_LOG_N if max_log_n is None else max_log_n
     header, stanzas, mac = _read_age_header(reader)
     if not any(args[0] == b"scrypt" for args, _ in stanzas):
-        raise WrongSecret()  # mit einem Schluessel verschluesselt, nicht mit einem Passwort
+        raise WrongSecret()  # mit einem Schlüssel verschlüsselt, nicht mit einem Passwort
     if len(stanzas) != 1:
         raise DamagedBackup("scrypt muss allein stehen")
     args, body = stanzas[0]
@@ -420,6 +400,7 @@ def decrypt_with_passphrase(
         file_key = ChaCha20Poly1305(_scrypt_key(password, salt, log_n)).decrypt(b"\x00" * 12, body, None)
     except InvalidTag as exc:
         raise WrongSecret() from exc
+    # Der MAC bindet den Kopf an den Dateischlüssel; ein verändertes Kopfstück fällt hier auf.
     expected = hmac.new(_hkdf(file_key, b"", b"header"), header, hashlib.sha256).digest()
     if not hmac.compare_digest(expected, mac):
         raise DamagedBackup("Kopf verändert")
@@ -438,6 +419,7 @@ def decrypt_with_passphrase(
             plain = aead.decrypt(_chunk_nonce(counter, last), current, None)
         except InvalidTag as exc:
             raise DamagedBackup("Inhalt verändert oder abgeschnitten") from exc
+        # age schreibt hinter vollen Blöcken nie einen leeren letzten Block.
         if last and not plain and counter > 0:
             raise DamagedBackup("leerer Schlussblock")
         writer.write(plain)

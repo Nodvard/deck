@@ -1,4 +1,4 @@
-"""Vault, Audit-Log, Aktions-Journal. Siehe docs/03-DATA-MODEL.md §§3-5."""
+"""Vault, Audit-Log, Aktions-Journal."""
 
 from __future__ import annotations
 
@@ -20,25 +20,19 @@ from ..db.base import Base, IdMixin, TimestampMixin, UTCDateTime, utcnow
 
 
 class Secret(Base, IdMixin, TimestampMixin):
-    """Verschluesselt mit Fernet. Invarianten (im Code erzwungen, nicht nur dokumentiert):
+    """Mit Fernet verschlüsseltes Secret; der Master-Key liegt nie in der Datenbank."""
 
-    1. Kein API-Endpunkt gibt `ciphertext` oder Klartext zurueck. Nie, auch nicht fuer den
-       Owner. Schreiben und Ersetzen ja, Lesen nein.
-    2. Extensions bekommen ein Handle; der Klartext lebt nur in `ctx.vault_use(...)`.
-    3. Materialisierungen werden protokolliert (Label + Verwender, ohne Wert), gebuendelt: hoechstens
-       eine Audit-Zeile je Stunde und Verwender (`core.vault.USE_NOTE_INTERVAL`). Module fragen regelmaessig
-       ab; eine Zeile je Zugriff flutete das Protokoll.
-    4. Der Master-Key liegt nie in der Datenbank.
-    """
-
+    # Kein API-Endpunkt gibt `ciphertext` oder Klartext zurück, auch nicht dem Owner (schreiben und ersetzen ja, lesen
+    # nein). Extensions bekommen ein Handle; Klartext gibt es nur in `ctx.vault_use(...)`. Jede Materialisierung wird
+    # protokolliert (Label und Verwender, ohne Wert), gebündelt auf höchstens eine Audit-Zeile je Stunde und Verwender
+    # (`core.vault.USE_NOTE_INTERVAL`), weil Module regelmäßig abfragen und das Protokoll sonst überflutet würde.
     __tablename__ = "secrets"
 
     label: Mapped[str] = mapped_column(String(128), unique=True, index=True)
     kind: Mapped[str] = mapped_column(String(32))
     ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
     key_version: Mapped[int] = mapped_column(Integer, default=1)
-    """Ermoeglicht Rotation ohne Big-Bang: neue Secrets mit v2, alte werden beim naechsten
-    Zugriff migriert."""
+    """Ermöglicht Rotation ohne Big-Bang: neue Secrets mit v2, alte werden beim nächsten Zugriff migriert."""
 
     owner_ext_id: Mapped[str | None] = mapped_column(String(64), index=True)
     description: Mapped[str] = mapped_column(String(255), default="")
@@ -48,17 +42,17 @@ class Secret(Base, IdMixin, TimestampMixin):
     secret_metadata: Mapped[dict] = mapped_column("metadata", JSON, default=dict)
     """Nie sensibel — z. B. der Fingerprint eines Public Keys."""
     expires_at: Mapped[datetime | None] = mapped_column(UTCDateTime)
-    """Wann der Zugang ablaeuft oder erneuert werden soll (z. B. ein Token mit Ablaufdatum). Nur Angabe,
-    das Dashboard sperrt nichts danach."""
+    """Wann der Zugang abläuft oder erneuert werden soll (z. B. Token mit Ablaufdatum); nur eine Angabe,
+    das Dashboard sperrt danach nichts."""
 
 
 class SecretUsage(Base):
-    """Wer ein Secret tatsaechlich benutzt hat und wann zuletzt -- je Verwender eine Zeile.
+    """Wer ein Secret tatsächlich benutzt hat und wann zuletzt, je Verwender eine Zeile.
 
-    Geschrieben von `core.vault.vault_use()`, gedrosselt wie `Secret.last_used_at` (hoechstens einmal je
-    Stunde und Verwender). Feste Bindungen (Besitzer-Modul, Server-Zugang, Zwei-Faktor) stehen nicht hier,
-    sondern werden beim Lesen aus `owner_ext_id`, `host_credentials` und `users` abgeleitet."""
+    Geschrieben von `core.vault.vault_use()`, höchstens einmal je Stunde und Verwender wie `Secret.last_used_at`."""
 
+    # Feste Bindungen (Besitzer-Modul, Server-Zugang, Zwei-Faktor) stehen nicht hier, sondern werden beim Lesen aus
+    # `owner_ext_id`, `host_credentials` und `users` abgeleitet.
     __tablename__ = "secret_usages"
 
     secret_id: Mapped[str] = mapped_column(
@@ -81,13 +75,7 @@ class SecretGrant(Base):
 
 
 class AuditEntry(Base, IdMixin):
-    """Append-only. Kein UPDATE, kein DELETE aus der Anwendung — nur der Retention-Job
-    loescht jenseits von `audit.retention_days`.
-
-    `outcome='proposed'` von `outcome='success'` zu trennen ist der Unterschied zwischen
-    "die KI wollte" und "die KI tat". Genau diese Unterscheidung fehlte im Bestand, und
-    genau daraus entstanden Meldungen ueber Aktionen, die nie stattgefunden haben.
-    """
+    """Append-only: kein UPDATE und kein DELETE aus der Anwendung, nur der Retention-Job löscht (`audit.retention_days`)."""
 
     __tablename__ = "audit_log"
     __table_args__ = (
@@ -101,11 +89,12 @@ class AuditEntry(Base, IdMixin):
     action: Mapped[str] = mapped_column(String(128), index=True)
     target_type: Mapped[str | None] = mapped_column(String(64))
     target_id: Mapped[str | None] = mapped_column(String(128))
+    # "proposed" (die KI wollte) ist nicht "success" (die KI tat): ohne die Trennung würden Aktionen als geschehen
+    # gemeldet, die nie stattgefunden haben.
     outcome: Mapped[str] = mapped_column(String(16))  # success|failure|denied|proposed
 
     reason: Mapped[str | None] = mapped_column(Text)
-    """Hier landet die BEGRUENDUNG. Jede ausgefuehrte UND jede abgelehnte
-    Aktion wird mit Begruendung geloggt."""
+    """Die Begründung; jede ausgeführte und jede abgelehnte Aktion wird mit Begründung protokolliert."""
 
     detail: Mapped[dict] = mapped_column(JSON, default=dict)
     correlation_id: Mapped[str | None] = mapped_column(String(36))
@@ -114,12 +103,9 @@ class AuditEntry(Base, IdMixin):
 
 
 class Action(Base, IdMixin):
-    """Das Gate-Journal — jede vorgeschlagene Aktion wird ein nachvollziehbarer Datensatz.
+    """Das Gate-Journal: jede vorgeschlagene Aktion ist ein Datensatz, die Bestätigungskarte eine Zeile mit 'proposed'.
 
-    Die Bestaetigungs-Karte in der UI *ist* eine Zeile mit status='proposed'.
-    "Volle Autonomie" heisst, dass das Gate direkt auf 'approved' setzt: derselbe
-    Datensatz, dieselbe Nachvollziehbarkeit, nur ohne Klick.
-    """
+    Bei voller Autonomie setzt das Gate sie direkt auf 'approved', derselbe Datensatz, nur ohne Klick."""
 
     __tablename__ = "actions"
     __table_args__ = (
@@ -140,8 +126,7 @@ class Action(Base, IdMixin):
     proposed_by_id: Mapped[str] = mapped_column(String(128))
 
     reason: Mapped[str] = mapped_column(Text, nullable=False)
-    """NOT NULL. Die Begruendungspflicht ist im Schema verankert, nicht nur in der
-    Anwendungslogik."""
+    """NOT NULL: die Begründungspflicht steht im Schema, nicht nur in der Anwendungslogik."""
 
     gate_decision: Mapped[dict] = mapped_column(JSON, default=dict)
     """Welche Regel griff: deny_pattern, flap_limit, autonomy, rbac …"""
@@ -160,13 +145,9 @@ class Action(Base, IdMixin):
 
 
 class ActionFlapHistory(Base, IdMixin):
-    """Generalisiertes Anti-Flapping.
+    """Anti-Flapping über alle Extensions: Fingerprint aus (host, action_type, normalisierter Payload).
 
-    Fingerprint ueber (host, action_type, normalisierter Payload) — greift damit bei jedem
-    wiederholten Befehl, nicht nur bei Docker-Restarts wie in der alten Fassung. Und es
-    gilt fuer *alle* Extensions, weil es im Kern sitzt: die autonome Remediation kann es
-    nicht mehr umgehen, indem sie einen anderen Codepfad nimmt.
-    """
+    Weil es im Kern sitzt, kann die autonome Remediation es nicht über einen anderen Codepfad umgehen."""
 
     __tablename__ = "action_flap_history"
     __table_args__ = (Index("ix_flap_fingerprint_ts", "fingerprint", "ts"),)

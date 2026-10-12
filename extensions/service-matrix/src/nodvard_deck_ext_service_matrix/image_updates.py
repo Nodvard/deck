@@ -1,55 +1,6 @@
-"""Image-Updates pruefen (Teil C der Docker-Verwaltung) -- dieser Teil ist rein LESEND.
+"""Image-Updates prüfen, rein lesend: hat die Registry unter demselben Tag eine neuere Fassung als der Container nutzt?
 
-Fuer jeden LAUFENDEN Container eines Docker-Hosts: welches Image steckt drin, und hat
-die Registry unter demselben Namen (Tag) inzwischen eine neuere Fassung? Verglichen
-werden nur Pruefsummen (Digests) -- es wird nichts heruntergeladen (gepullt), nichts
-neu erstellt und nichts neu gestartet. Das Einspielen ist eine Gate-Aktion und steht in
-`applier.py` (`container.image_update`); hier bleibt `ctx.exec.run()` bei lesenden Befehlen.
-
-Ablauf je Host (alles per `ctx.exec.run()`):
-  1. `docker ps -q` -> laufende IDs, `docker container inspect` -> Name, Image-Name
-     (so wie der Container angelegt wurde) und die ID des Images, das er WIRKLICH nutzt.
-  2. Je Image lokal: `docker image inspect` -> RepoDigests (Pruefsummen aus der
-     Registry) und ID. Ohne RepoDigests kam das Image nie aus einer Registry (lokal
-     gebaut) -- dann gibt es nichts zu vergleichen, es wird gar nicht erst gefragt, und
-     das Ergebnis ist "selbst gebaut" (`LOCAL`), kein Problem.
-  3. Je Image-Name bei der Registry: `docker buildx imagetools inspect` (liest nur den
-     Manifest-Kopf); fehlt buildx, `docker manifest inspect -v` (dort zaehlt die
-     Plattform des Hosts).
-  4. Vergleich -> "aktuell" / "Update verfuegbar" / "selbst gebaut" / "nicht pruefbar (Grund)".
-     "Selbst gebaut" heisst auch: ein Name OHNE Namespace und Registry (`lattice:latest`,
-     also ein offizielles Docker-Hub-Image), zu dem die Registry den Zugriff verweigert
-     (401/"denied" -- so antwortet Docker Hub auf ein Repository, das es gar nicht gibt).
-     Jedes echte offizielle Image ist oeffentlich -- so eines kann nur selbst gebaut sein
-     (z. B. per `docker load` aufs Geraet gebracht: mit dem containerd-Image-Speicher hat
-     es dann trotzdem RepoDigests). "Nicht gefunden" zaehlt dafuer NICHT: ein echtes Image,
-     dessen Tag entfernt wurde (`nginx:1.27`), antwortet mit "manifest unknown" und bleibt
-     "nicht pruefbar" -- ebenso alle anderen Namen.
-
-Jeder Image-Name, der in ein SSH-Kommando wandert, geht vorher durch `IMAGE_REF_RE`
-(Dockers eigene Namensregel, streng) UND `shlex.quote` -- ein Name wie `x; rm -rf /`
-kommt nie bis zur Shell. Die Kommando-Bauer pruefen selbst, nicht der Aufrufer.
-
-Ergebnisse liegen 6 Stunden je Host im Speicher (`CACHE_TTL_S`): die Antworten der
-Registry werden in dieser Zeit wiederverwendet (schont das Abruflimit von Docker Hub),
-der lokale Stand wird bei jeder Pruefung frisch gelesen -- wer ein Update eingespielt
-hat, sieht es sofort. Ein Neustart von Nodvard Deck leert den Speicher.
-
-Antwortet die Registry nicht (Abruflimit, nicht erreichbar), wird sie im selben Lauf nicht
-weiter gefragt, und eine noch gueltige letzte Antwort bleibt sichtbar (`stale`, mit Grund)
--- auch bei "Registry neu abfragen". Die Meldung des Tagesjobs vergisst einen Container
-nur bei einem klaren Ergebnis (aktuell, Update, selbst gebaut), nicht bei "nicht pruefbar".
-
-Bekannte Grenze: verglichen wird die Pruefsumme des Tags (bei Multi-Arch-Images die des
-Index). Aendert die Registry nur andere Plattformen desselben Tags, meldet der Vergleich
-"Update verfuegbar", obwohl das eigene Image gleich bleibt -- ein Pull wuerde dann nur
-die Pruefsumme nachziehen. Der Rueckfall ueber `manifest inspect -v` vergleicht dagegen
-die Plattform des Hosts.
-
-**Live noch nicht geprueft** (in der Testumgebung gibt es weder die Docker-Hosts noch
-Registry-Zugang): das genaue Ausgabeformat von `imagetools inspect --format` und
-`manifest inspect -v` je Docker-Version, RepoDigests beim containerd-Image-Speicher
-(Docker 29), Abruflimits von Docker Hub und private Registries mit Anmeldung.
+Verglichen werden nur Prüfsummen (Digests), nichts wird geladen, neu erstellt oder gestartet. Einspielen: `applier.py`.
 """
 
 from __future__ import annotations
@@ -76,12 +27,14 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("nodvard_deck.ext.service-matrix")
 
+# Antworten der Registry gelten 6 Stunden je Host (schont das Abruflimit von Docker Hub); der lokale Stand wird bei jeder
+# Prüfung frisch gelesen, ein Neustart von Nodvard Deck leert den Speicher.
 CACHE_TTL_S = 6 * 3600
 MATRIX_PATH = "/ext/service-matrix/matrix"
 STATE_FILE = "image-updates-state.json"
 DEFAULT_CRON = "30 6 * * *"
 JOB_ID = "image-updates"
-_NEVER = "0 0 31 2 *"  # 31. Februar -- Job existiert, laeuft aber nie (wie bei Shield)
+_NEVER = "0 0 31 2 *"  # 31. Februar: der Job existiert, läuft aber nie (wie bei Shield)
 
 MAX_PARALLEL_HOSTS = 3
 LOCAL_TIMEOUT_S = 20
@@ -89,19 +42,20 @@ REMOTE_TIMEOUT_S = 45
 
 CURRENT, UPDATE, UNKNOWN, LOCAL = "current", "update", "unknown", "local"
 LOCAL_REASON = "Selbst gebautes Image – es gibt dafür keine Registry, Updates kommen über den eigenen Build (beim Dashboard: Deploy)."
-"""`LOCAL`: Container mit selbst gebautem Image. Ein klares Ergebnis wie "aktuell" -- kein
-Problem, keine Meldung, und die Registry wird dadurch nicht gesperrt."""
+"""`LOCAL`: Container mit selbst gebautem Image. Ein klares Ergebnis wie "aktuell": kein Problem, keine Meldung, und die
+Registry wird dadurch nicht gesperrt."""
 TRANSIENT = frozenset({"rate_limit", "network"})
-"""Registry-Probleme, die vorbeigehen: dann bleibt die letzte Antwort der Registry stehen,
-und bis zum Ende der Pruefung wird dieselbe Registry nicht weiter gefragt."""
+"""Registry-Probleme, die vorbeigehen: dann bleibt die letzte Antwort der Registry stehen (auch bei "Registry neu
+abfragen"), und bis zum Ende der Prüfung wird dieselbe Registry nicht weiter gefragt."""
+# Docker Hub antwortet mit 401/denied auch auf ein Repository, das es nicht gibt, und jedes echte offizielle Image ist
+# öffentlich: bei einem offiziellen Hub-Namen (`is_official_hub_repo`) heißt `auth` darum "selbst gebaut" (etwa per
+# `docker load` aufs Gerät gebracht; mit dem containerd-Image-Speicher hat es dann trotzdem RepoDigests). Bewusst nicht
+# `not_found`: ein entfernter Tag eines echten Images (`nginx:1.27`) heißt "manifest unknown" und bleibt "nicht prüfbar".
 SELF_BUILT_HINTS = frozenset({"auth"})
-"""Antwort der Registry, die bei einem offiziellen Hub-Namen (`is_official_hub_repo`) "selbst
-gebaut" heisst: Zugriff verweigert (401/denied) -- so antwortet Docker Hub auf ein Repository,
-das es nicht gibt. Bewusst NICHT `not_found`: ein entfernter Tag eines echten Images
-(`nginx:1.27`) heisst "manifest unknown" und bleibt ein Befund. `auth` ist nicht vorbeigehend
-(nicht in `TRANSIENT`) und sperrt die Registry darum nicht."""
+"""Registry-Antworten, die bei einem offiziellen Hub-Namen "selbst gebaut" heißen. `auth` ist nicht vorbeigehend und
+sperrt die Registry darum nicht (nicht in `TRANSIENT`)."""
 
-# --- Namen pruefen ---------------------------------------------------------------------
+# --- Namen prüfen ----------------------------------------------------------------------
 
 _NAME_COMPONENT = r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
 _DOMAIN_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
@@ -113,7 +67,7 @@ IMAGE_REF_RE = re.compile(
 )
 """`[registry[:port]/]pfad[:tag][@sha256:...]` nach Dockers Referenzgrammatik. Beginnt
 immer mit Buchstabe/Ziffer (nie mit `-`: kein Optionsschmuggel) und kennt weder
-Leerzeichen noch Shell-Zeichen. `\\Z` statt `$`: ein Zeilenumbruch am Ende ist KEIN Treffer."""
+Leerzeichen noch Shell-Zeichen. `\\Z` statt `$`: ein Zeilenumbruch am Ende ist kein Treffer."""
 IMAGE_REF_MAX_LEN = 255
 _IMAGE_ID_RE = re.compile(r"^sha256:[0-9a-f]{64}\Z")
 _ID_LIKE_RE = re.compile(r"^(?:sha256:)?[0-9a-f]{12,64}\Z")
@@ -127,8 +81,8 @@ def is_valid_ref(ref: str) -> bool:
 
 
 def split_ref(ref: str) -> tuple[str, str, str | None]:
-    """`registry/pfad:tag@digest` -> (Name ohne Tag, Tag, Digest). Der Doppelpunkt eines
-    Tags steht hinter dem letzten Schraegstrich (davor waere es ein Registry-Port)."""
+    """`registry/pfad:tag@digest` -> (Name ohne Tag, Tag, Digest). Der Doppelpunkt eines Tags steht hinter dem letzten
+    Schrägstrich (davor wäre es ein Registry-Port)."""
     name, _, digest = ref.partition("@")
     colon = name.rfind(":")
     if colon > name.rfind("/"):
@@ -144,8 +98,8 @@ def registry_of(repo: str) -> str:
 
 
 def canonical_repo(repo: str) -> str:
-    """Docker Hub in einer Schreibweise (`docker.io/library/nginx` == `nginx`) --
-    RepoDigests nennen die Images in ihrer kurzen Form."""
+    """Docker Hub in einer Schreibweise (`docker.io/library/nginx` == `nginx`); RepoDigests nennen die Images in ihrer
+    kurzen Form."""
     first, sep, rest = repo.partition("/")
     if sep and first in _HUB_HOSTS:
         repo = rest
@@ -154,10 +108,9 @@ def canonical_repo(repo: str) -> str:
 
 
 def is_official_hub_repo(repo: str) -> bool:
-    """Docker Hub OHNE Namespace und ohne eigene Registry -- ein offizielles `library/`-Image
-    (`lattice`, `library/lattice`, `docker.io/library/lattice`). Nach `canonical_repo` bleibt
-    dann kein Schraegstrich uebrig; `someuser/lattice`, `ghcr.io/x` und `registry.local:5000/x`
-    behalten ihren."""
+    """Docker Hub ohne Namespace und ohne eigene Registry, also ein offizielles `library/`-Image
+    (`lattice`, `library/lattice`, `docker.io/library/lattice`). Nach `canonical_repo` bleibt dann kein Schrägstrich
+    übrig; `someuser/lattice`, `ghcr.io/x` und `registry.local:5000/x` behalten ihren."""
     return "/" not in canonical_repo(repo)
 
 
@@ -169,7 +122,7 @@ class RefInfo:
     query: str = ""
     """So wird die Registry gefragt -- immer mit Tag (ohne Angabe gilt `latest`)."""
     problem: str | None = None
-    """Grund fuer "nicht pruefbar", schon vor jedem Befehl klar."""
+    """Grund für "nicht prüfbar", schon vor jedem Befehl klar."""
 
 
 def analyze_ref(ref: str) -> RefInfo:
@@ -188,6 +141,8 @@ def analyze_ref(ref: str) -> RefInfo:
 
 # --- Befehle bauen ---------------------------------------------------------------------
 
+# Jeder Image-Name, der in ein SSH-Kommando wandert, geht vorher durch `IMAGE_REF_RE` und `shlex.quote`: ein Name wie
+# `x; rm -rf /` kommt nie bis zur Shell. Die Befehlsbauer prüfen selbst, nicht der Aufrufer.
 _q = shlex.quote
 
 CMD_LIST_IDS = "docker ps -q"
@@ -211,7 +166,7 @@ def cmd_inspect_containers(ids: list[str]) -> str:
 
 
 def cmd_inspect_named(names: list[str]) -> str:
-    """Wie `cmd_inspect_containers`, aber nach Container-NAMEN (auch gestoppte)."""
+    """Wie `cmd_inspect_containers`, aber nach Container-Namen (auch gestoppte)."""
     for name in names:
         if not CONTAINER_NAME_RE.match(name):
             raise ValueError(f"Ungültiger Containername: {name!r}")
@@ -219,7 +174,7 @@ def cmd_inspect_named(names: list[str]) -> str:
 
 
 def cmd_local_inspect(target: str) -> str:
-    """`target`: die Image-ID des Containers (sha256:...) oder ein gueltiger Image-Name."""
+    """`target`: die Image-ID des Containers (sha256:...) oder ein gültiger Image-Name."""
     quoted = _q(target) if _IMAGE_ID_RE.match(target) else _checked_ref(target)
     return f"docker image inspect --format {_q(_LOCAL_FORMAT)} {quoted}"
 
@@ -266,8 +221,8 @@ def parse_local_image(text: str) -> LocalImage | None:
 
 
 def digests_for_repo(repo_digests: tuple[str, ...], repo: str) -> set[str]:
-    """Nur die RepoDigests, die zu DIESEM Namen gehoeren -- dasselbe Image kann unter
-    mehreren Namen/Registries geladen sein, jeder mit eigener Pruefsumme."""
+    """Nur die RepoDigests, die zu diesem Namen gehören: dasselbe Image kann unter mehreren Namen/Registries geladen
+    sein, jeder mit eigener Prüfsumme."""
     wanted = canonical_repo(repo)
     found: set[str] = set()
     for entry in repo_digests:
@@ -280,7 +235,7 @@ def digests_for_repo(repo_digests: tuple[str, ...], repo: str) -> set[str]:
 @dataclass(frozen=True)
 class RemoteAnswer:
     digest: str
-    """Zum Anzeigen und Merken (Meldung nur bei einer NEUEN Version)."""
+    """Zum Anzeigen und Merken (Meldung nur bei einer neuen Version)."""
     matches: frozenset[str]
     """Alles, womit ein lokales Image als "gleich" gilt."""
     source: str  # "imagetools" | "manifest"
@@ -298,10 +253,9 @@ def parse_imagetools_digest(text: str) -> str | None:
 
 
 def parse_manifest_inspect(text: str, platform: str) -> RemoteAnswer | None:
-    """`docker manifest inspect -v <name>`: bei mehreren Plattformen eine Liste, sonst ein
-    Objekt. Nur die Eintraege der Plattform des Hosts (`linux/arm64`) zaehlen. Als
-    "gleich" gilt die Pruefsumme des Manifests UND die der Image-Konfiguration -- die
-    ist bei klassischem Image-Speicher die lokale Image-ID (`.Id`)."""
+    """`docker manifest inspect -v <name>`: bei mehreren Plattformen eine Liste, sonst ein Objekt. Nur die Einträge der
+    Plattform des Hosts (`linux/arm64`) zählen. Als "gleich" gilt die Prüfsumme des Manifests und die der
+    Image-Konfiguration; die ist bei klassischem Image-Speicher die lokale Image-ID (`.Id`)."""
     try:
         data = json.loads(text)
     except ValueError:
@@ -341,10 +295,9 @@ class RegistryProblem:
 
 
 def classify_registry_error(stderr: str, exit_code: int = 1) -> RegistryProblem:
-    """Fehlertext der Registry -> verstaendlicher Grund. Die Reihenfolge zaehlt: Docker
-    Hubs Abruflimit heisst `toomanyrequests` und darf nicht als "Anmeldung" enden; ein
-    fehlendes Anmelde-Hilfsprogramm (`docker-credential-...: executable file not found`)
-    darf weder als "Anmeldung verweigert" noch als "Image nicht gefunden" enden."""
+    """Fehlertext der Registry -> verständlicher Grund. Die Reihenfolge zählt: Docker Hubs Abruflimit (`toomanyrequests`)
+    darf nicht als "Anmeldung" enden, ein fehlendes Anmelde-Hilfsprogramm (`docker-credential-...: executable file not
+    found`) weder als "Anmeldung verweigert" noch als "Image nicht gefunden"."""
     text = (stderr or "").strip()
     low = text.lower()
     if "toomanyrequests" in low or "too many requests" in low or "rate limit" in low or re.search(r"\b429\b", low):
@@ -393,8 +346,8 @@ def _failed(what: str, result: Any) -> str:
 
 
 class HostProblem(Exception):
-    """Der Host selbst antwortet nicht (SSH weg, Docker-Daemon aus) -- die ganze Pruefung
-    dieses Hosts bricht ab, statt jedes Image einzeln in denselben Fehler laufen zu lassen."""
+    """Der Host selbst antwortet nicht (SSH weg, Docker-Daemon aus): die ganze Prüfung dieses Hosts bricht ab, statt jedes
+    Image einzeln in denselben Fehler laufen zu lassen."""
 
 
 @dataclass
@@ -410,7 +363,7 @@ class HostState:
 
 @dataclass
 class _Run:
-    """Zustand EINER Pruefung eines Hosts."""
+    """Zustand einer Prüfung eines Hosts."""
 
     host: Any
     now: float
@@ -419,18 +372,18 @@ class _Run:
     local: dict[str, LocalImage | str] = field(default_factory=dict)
     remote: dict[str, RemoteAnswer] = field(default_factory=dict)
     fallback: dict[str, RemoteAnswer] = field(default_factory=dict)
-    """Letzte (noch gueltige) Antworten der Registry -- auch bei `force`, damit ein
-    Abruflimit oder eine Netzstoerung sie nicht loescht."""
+    """Letzte (noch gültige) Antworten der Registry, auch bei `force`, damit ein Abruflimit oder eine Netzstörung sie
+    nicht löscht."""
     kept: dict[str, RemoteAnswer] = field(default_factory=dict)
     """Davon die, die diesmal gezeigt wurden, weil die Registry nicht antwortete."""
     blocked: dict[str, RegistryProblem] = field(default_factory=dict)
-    """Registry -> voruebergehendes Problem (`TRANSIENT`): in diesem Lauf nicht weiter fragen
-    (jede Frage an eine unerreichbare Registry kostet bis zu `REMOTE_TIMEOUT_S`)."""
+    """Registry -> vorübergehendes Problem (`TRANSIENT`): in diesem Lauf nicht weiter fragen (jede Frage an eine
+    unerreichbare Registry kostet bis zu `REMOTE_TIMEOUT_S`)."""
 
 
 def _write_atomic(path: Path, text: str) -> None:
-    """Erst in eine Nachbardatei, dann umbenennen: ein Absturz mitten im Schreiben laesst
-    nie eine halbe Datei zurueck (sonst begaenne der Stand bei {} und alles wuerde neu gemeldet)."""
+    """Erst in eine Nachbardatei, dann umbenennen: ein Absturz mitten im Schreiben lässt nie eine halbe Datei zurück
+    (sonst begänne der Stand bei {} und alles würde neu gemeldet)."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(text, encoding="utf-8")
@@ -443,11 +396,11 @@ class ImageUpdateService:
         self._hosts: dict[str, HostState] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._checking: set[str] = set()
-        self._tasks: set[asyncio.Task[Any]] = set()  # Referenz halten, sonst raeumt der GC sie weg
-        self._clock = time.time  # Test-Einhaenger
+        self._tasks: set[asyncio.Task[Any]] = set()  # Referenz halten, sonst räumt der GC sie weg
+        self._clock = time.time  # Test-Einhänger
         self.apply_hints: Callable[[Any, list[str]], Awaitable[dict[str, dict[str, Any]]]] | None = None
-        """Haken fuer `applier.py`: bekommt den Host und die Namen der Container mit Update und
-        liefert je Name `{"mode": "compose"|"none", ...}` -- steht dann als `apply` im Ergebnis."""
+        """Haken für `applier.py`: bekommt den Host und die Namen der Container mit Update und liefert je Name
+        `{"mode": "compose"|"none", ...}`; das steht dann als `apply` im Ergebnis."""
 
     # --- Lesen ---------------------------------------------------------------------
 
@@ -460,10 +413,9 @@ class ImageUpdateService:
         return hosts
 
     def _prune(self, current: set[str]) -> None:
-        """Hosts, die keine Docker-Hosts mehr sind (Markierung weg, Host geloescht), aus dem
-        Stand nehmen -- sonst zaehlen sie bis zum Neustart in der Zusammenfassung mit. Wer
-        weiter Docker-Host ist, behaelt seinen Stand, auch wenn er nicht antwortet. Eine
-        laufende Pruefung (Lock oder `_checking`) bleibt unberuehrt."""
+        """Hosts, die keine Docker-Hosts mehr sind (Markierung weg, Host gelöscht), aus dem Stand nehmen, sonst zählen sie
+        bis zum Neustart in der Zusammenfassung mit. Wer weiter Docker-Host ist, behält seinen Stand, auch wenn er nicht
+        antwortet. Eine laufende Prüfung (Lock oder `_checking`) bleibt unberührt."""
         for host_id in set(self._hosts) - current - self._checking:
             del self._hosts[host_id]
         for host_id, lock in list(self._locks.items()):
@@ -471,7 +423,7 @@ class ImageUpdateService:
                 del self._locks[host_id]
 
     def snapshot(self) -> dict[str, Any]:
-        """Stand fuer die Seite. Schluessel wie `list_services()` (`host_id:container`)."""
+        """Stand für die Seite. Schlüssel wie `list_services()` (`host_id:container`)."""
         data: dict[str, Any] = {}
         hosts: dict[str, Any] = {}
         for host_id in sorted(set(self._hosts) | self._checking):
@@ -485,14 +437,13 @@ class ImageUpdateService:
                 data[f"{host_id}:{name}"] = result
         return {"data": data, "hosts": hosts, "cache_ttl_s": CACHE_TTL_S}
 
-    # --- Pruefen -------------------------------------------------------------------
+    # --- Prüfen --------------------------------------------------------------------
 
     def start(self, hosts: list[Any], *, force: bool = False) -> list[str]:
-        """Pruefung im Hintergrund (ein Klick soll nicht eine Minute auf die Antwort
-        warten). Hosts, die schon geprueft werden, bleiben dabei. Gibt die IDs zurueck,
-        die neu gestartet wurden."""
+        """Prüfung im Hintergrund (ein Klick soll nicht eine Minute auf die Antwort warten). Hosts, die schon geprüft
+        werden, bleiben dabei. Gibt die IDs zurück, die neu gestartet wurden."""
         todo = [h for h in hosts if h.id not in self._checking]
-        self._checking.update(h.id for h in todo)  # sofort sichtbar: "prueft ..."
+        self._checking.update(h.id for h in todo)  # sofort sichtbar: "prüft ..."
         if todo:
             task = asyncio.ensure_future(self.check_hosts(todo, force=force))
             self._tasks.add(task)
@@ -509,8 +460,8 @@ class ImageUpdateService:
         await asyncio.gather(*(one(h) for h in hosts))
 
     async def check_host(self, host: Any, *, force: bool = False) -> None:
-        # Ein Host wird nie zweimal gleichzeitig geprueft; wer zweites Mal kommt (z. B.
-        # der Tagesjob waehrend eines Klicks), wartet und prueft danach selbst frisch.
+        # Ein Host wird nie zweimal gleichzeitig geprüft; wer ein zweites Mal kommt (z. B. der Tagesjob während eines
+        # Klicks), wartet und prüft danach selbst frisch.
         lock = self._locks.setdefault(host.id, asyncio.Lock())
         async with lock:
             self._checking.add(host.id)
@@ -525,8 +476,8 @@ class ImageUpdateService:
                 self._checking.discard(host.id)
 
     def _record_error(self, host_id: str, message: str) -> None:
-        # Der letzte gute Stand bleibt sichtbar; nur die Meldung kommt dazu. Gab es noch
-        # keinen, bleibt `checked_at` leer -- ein Fehler ist keine Pruefung.
+        # Der letzte gute Stand bleibt sichtbar; nur die Meldung kommt dazu. Gab es noch keinen, bleibt `checked_at` leer:
+        # ein Fehler ist keine Prüfung.
         state = self._hosts.get(host_id) or HostState(checked_at=None, results={})
         state.error = message
         self._hosts[host_id] = state
@@ -537,6 +488,10 @@ class ImageUpdateService:
         except Exception as exc:
             raise HostProblem(f"Nicht erreichbar: {exc}") from exc
 
+    # Ablauf je Host: `docker ps -q` und `docker container inspect` liefern Name, Image-Name (wie angelegt) und die ID des
+    # Images, das der Container wirklich nutzt. Je Image folgt lokal `docker image inspect` (RepoDigests und ID), je
+    # Image-Name bei der Registry `docker buildx imagetools inspect` (liest nur den Manifest-Kopf) oder, wenn buildx fehlt,
+    # `docker manifest inspect -v` (dort zählt die Plattform des Hosts).
     async def _check_locked(self, host: Any, force: bool) -> None:
         now = self._clock()
         previous = self._hosts.get(host.id)
@@ -553,25 +508,24 @@ class ImageUpdateService:
         containers: list[tuple[str, str, str]] = []
         if ids:
             inspected = await self._exec(host, cmd_inspect_containers(ids), LOCAL_TIMEOUT_S)
-            # Ein Container, der zwischen `ps` und `inspect` verschwindet, laesst den
-            # Exit-Code auf 1 springen, die uebrigen Zeilen sind trotzdem da.
+            # Ein Container, der zwischen `ps` und `inspect` verschwindet, lässt den Exit-Code auf 1 springen, die
+            # übrigen Zeilen sind trotzdem da.
             if inspected.exit_code != 0 and not inspected.stdout.strip():
                 raise HostProblem(_failed("docker inspect", inspected))
             containers = parse_containers(inspected.stdout)
 
         results = {name: await self._check_container(run, ref, image_id) for name, ref, image_id in containers}
         await self._add_hints(host, results)
-        # Nur Antworten behalten, die zu heutigen Containern gehoeren (sonst wuchse der Speicher).
+        # Nur Antworten behalten, die zu heutigen Containern gehören (sonst wüchse der Speicher).
         wanted = {analyze_ref(ref).query for _, ref, _ in containers}
-        # Antworten, die diesmal nicht erneuerbar waren, bleiben mit ihrem Alter stehen, bis
-        # ihre Zeit um ist.
+        # Antworten, die diesmal nicht erneuerbar waren, bleiben mit ihrem Alter stehen, bis ihre Zeit um ist.
         remote = {q: a for q, a in (run.kept | run.remote).items() if q in wanted}
-        # Frisch von der Registry geholt -> jetzt; wiederverwendet -> behaelt sein Alter.
+        # Frisch von der Registry geholt -> jetzt; wiederverwendet -> behält sein Alter.
         self._hosts[host.id] = HostState(checked_at=now, results=results, remote=remote)
 
     async def _add_hints(self, host: Any, results: dict[str, dict[str, Any]]) -> None:
-        """Ein zusaetzlicher LESENDER Aufruf je Host -- nur wenn es Container mit Update gibt.
-        Ein Fehler dabei aendert nichts am Ergebnis der Pruefung (dann gibt es kein `apply`)."""
+        """Ein zusätzlicher lesender Aufruf je Host, nur wenn es Container mit Update gibt. Ein Fehler dabei ändert nichts
+        am Ergebnis der Prüfung (dann gibt es kein `apply`)."""
         if self.apply_hints is None:
             return
         names = sorted(n for n, r in results.items() if r["status"] == UPDATE)
@@ -579,7 +533,7 @@ class ImageUpdateService:
             return
         try:
             hints = await self.apply_hints(host, names)
-        except Exception:  # noqa: BLE001 - die Pruefung selbst ist wichtiger als der Hinweis
+        except Exception:  # noqa: BLE001 - die Prüfung selbst ist wichtiger als der Hinweis
             log.exception("image_updates_apply_hints_failed host=%s", host.id)
             return
         for name, hint in hints.items():
@@ -591,11 +545,9 @@ class ImageUpdateService:
         return state.results.get(container) if state else None
 
     async def recheck_container(self, host: Any, name: str) -> dict[str, Any] | None:
-        """Nach einem Update: NUR diesen Container neu bewerten und in den Stand einsetzen.
-        Lokal wird frisch gelesen; die Registry wird nur gefragt, wenn ihre letzte Antwort
-        aelter als `CACHE_TTL_S` ist (sonst ist der Container sofort "aktuell", ohne
-        Abruflimit zu verbrauchen). `checked_at` bleibt unangetastet. `None`: der Container
-        ist nicht mehr da (dann verschwindet auch sein Eintrag)."""
+        """Nach einem Update: nur diesen Container neu bewerten; `None`, wenn er nicht mehr da ist (sein Eintrag fällt weg).
+        Lokal wird frisch gelesen, die Registry nur gefragt, wenn ihre letzte Antwort älter als `CACHE_TTL_S` ist (sonst ist
+        der Container sofort "aktuell", ohne das Abruflimit zu verbrauchen). `checked_at` bleibt unangetastet."""
         lock = self._locks.setdefault(host.id, asyncio.Lock())
         async with lock:
             now = self._clock()
@@ -625,8 +577,8 @@ class ImageUpdateService:
         if info.problem:
             return _result(ref, UNKNOWN, reason=info.problem)
 
-        # Lokal: das Image, das der Container WIRKLICH nutzt (die ID), nicht was der Name
-        # heute zeigt -- nach einem Pull ohne Neustart zeigt der Name schon aufs neue.
+        # Lokal: das Image, das der Container wirklich nutzt (die ID), nicht das, worauf der Name heute zeigt: nach einem
+        # Pull ohne Neustart zeigt der Name schon aufs neue.
         target = image_id if _IMAGE_ID_RE.match(image_id) else ref
         if target not in run.local:
             run.local[target] = await self._inspect_local(run, target)
@@ -644,12 +596,11 @@ class ImageUpdateService:
             got = await self._registry_answer(run, info)
             if isinstance(got, RegistryProblem):
                 if got.kind in SELF_BUILT_HINTS and is_official_hub_repo(info.repo):
-                    # Offizielle Images sind oeffentlich: verweigert Docker Hub den Zugriff (401), ist
-                    # das Image selbst gebaut. Eine klare Antwort -- die Registry wird nicht gesperrt.
+                    # Offizielle Images sind öffentlich: verweigert Docker Hub den Zugriff (401), ist das Image selbst
+                    # gebaut. Eine klare Antwort, die Registry wird nicht gesperrt.
                     return _result(ref, LOCAL, reason=LOCAL_REASON)
-                # Vorbeigehendes Problem (Abruflimit, Registry nicht erreichbar): die letzte
-                # Antwort der Registry gilt weiter, gekennzeichnet -- statt eines guten
-                # Stands ein "nicht pruefbar" zu machen.
+                # Vorbeigehendes Problem (Abruflimit, Registry nicht erreichbar): die letzte Antwort der Registry gilt
+                # weiter, gekennzeichnet, statt eines guten Stands ein "nicht prüfbar" zu machen.
                 old = run.fallback.get(info.query) if got.kind in TRANSIENT else None
                 if old is None:
                     return _result(ref, UNKNOWN, reason=got.message)
@@ -659,7 +610,7 @@ class ImageUpdateService:
         return self._compare(ref, repo_digests, local, answer)
 
     async def _registry_answer(self, run: _Run, info: RefInfo) -> RemoteAnswer | RegistryProblem:
-        """Fragt die Registry -- ausser sie hat in diesem Lauf schon vorbeigehend versagt."""
+        """Fragt die Registry, außer sie hat in diesem Lauf schon vorbeigehend versagt."""
         blocked = run.blocked.get(info.registry)
         if blocked is not None:
             return blocked
@@ -673,6 +624,9 @@ class ImageUpdateService:
 
     @staticmethod
     def _compare(ref: str, repo_digests: set[str], local: LocalImage, answer: RemoteAnswer, *, reason: str | None = None, stale: bool = False) -> dict[str, Any]:
+        # Verglichen wird die Prüfsumme des Tags (bei Multi-Arch-Images die des Index). Ändert die Registry nur andere
+        # Plattformen desselben Tags, heißt das "Update verfügbar", obwohl das eigene Image gleich bleibt; ein Pull zöge dann
+        # nur die Prüfsumme nach. (`manifest inspect -v` vergleicht dagegen die Plattform des Hosts.)
         same = bool((repo_digests | ({local.image_id} if local.image_id else set())) & answer.matches)
         return _result(ref, CURRENT if same else UPDATE, reason=reason, remote=answer, stale=stale)
 
@@ -696,7 +650,7 @@ class ImageUpdateService:
                 return RemoteAnswer(digest, frozenset({digest}), "imagetools", run.now)
             if not _NO_IMAGETOOLS_RE.search(result.stderr):
                 return classify_registry_error(result.stderr, result.exit_code)
-            run.imagetools = False  # kein buildx auf diesem Host -> Rueckfall
+            run.imagetools = False  # kein buildx auf diesem Host -> Rückfall
 
         if run.platform is None:
             found = await self._exec(run.host, CMD_PLATFORM, LOCAL_TIMEOUT_S)
@@ -717,8 +671,8 @@ class ImageUpdateService:
 
     @staticmethod
     def _slow_registry_or_raise(exc: HostProblem) -> RegistryProblem:
-        """Eine Zeitueberschreitung heisst hier "die Registry antwortet nicht" -- nur
-        dieses Image ist betroffen. Jeder andere Fehler (SSH weg) betrifft den Host."""
+        """Eine Zeitüberschreitung heißt hier "die Registry antwortet nicht": nur dieses Image ist betroffen. Jeder andere
+        Fehler (SSH weg) betrifft den Host."""
         if isinstance(exc.__cause__, TimeoutError):
             return RegistryProblem("network", "Registry antwortet nicht (Zeitüberschreitung)")
         raise exc
@@ -731,14 +685,9 @@ class ImageUpdateService:
         return await self._notify(hosts)
 
     async def _notify(self, hosts: list[Any]) -> dict[str, Any]:
-        """EINE Meldung, und nur wenn seit der letzten Meldung eine NEUE Version dazugekommen
-        ist (Container + Digest). Schrumpft die Liste, weil jemand aktualisiert hat, gibt
-        es keine Nachricht -- der neue Stand wird trotzdem gemerkt, damit die naechste
-        Version desselben Containers wieder gemeldet wird. Hosts, die diesmal nicht
-        antworteten, behalten ihren alten Stand (sonst kaeme beim naechsten Mal alles neu) --
-        ebenso Container, die diesmal "nicht pruefbar" waren (Abruflimit, Registry weg): nur
-        ein klares Ergebnis (aktuell, andere Version, selbst gebaut, Container weg) vergisst
-        die Meldung. "Selbst gebaut" ist nie eine Meldung und nie "unklar"."""
+        """Eine Meldung, und nur wenn seit der letzten Meldung eine neue Version dazugekommen ist (Container + Digest).
+        Schrumpft die Liste, weil jemand aktualisiert hat, gibt es keine Nachricht; der neue Stand wird trotzdem gemerkt,
+        damit die nächste Version desselben Containers wieder gemeldet wird."""
         path = Path(str(self._ctx.data_dir)) / STATE_FILE
         try:
             stored = json.loads(path.read_text(encoding="utf-8")).get("notified", {})
@@ -750,9 +699,12 @@ class ImageUpdateService:
         lines: list[tuple[str, str, str]] = []
         for host in hosts:
             state = self._hosts.get(host.id)
+            # Ein Host, der diesmal nicht antwortete, behält seinen alten Stand (sonst käme beim nächsten Mal alles neu).
             if state is None or state.error:
                 continue
             found = {n: r for n, r in state.results.items() if r["status"] == UPDATE}
+            # Ebenso Container, die "nicht prüfbar" waren (Abruflimit, Registry weg): nur ein klares Ergebnis (aktuell,
+            # andere Version, selbst gebaut, Container weg) vergisst die Meldung.
             unsure = {n for n, r in state.results.items() if r["status"] == UNKNOWN}
             held = {key for key in previous.get(host.id, set()) if key.rsplit("|", 1)[0] in unsure}
             current[host.id] = held | {f"{n}|{r['remote_digest']}" for n, r in found.items()}
@@ -775,7 +727,7 @@ class ImageUpdateService:
 
 
 class ImageUpdateJobSpec:
-    """Taeglicher Lauf (Einstellung `image_updates_enabled`, Standard: aus)."""
+    """Täglicher Lauf (Einstellung `image_updates_enabled`, Standard: aus)."""
 
     id = JOB_ID
     name = "Image-Updates prüfen"
@@ -791,7 +743,7 @@ class ImageUpdateJobSpec:
 
 
 async def register_job(ctx: ExtensionContext, service: ImageUpdateService, settings: dict[str, Any]) -> None:
-    """Bei jedem Start und nach jeder Einstellungsaenderung (`register_job` ist ein Upsert)."""
+    """Bei jedem Start und nach jeder Einstellungsänderung (`register_job` ist ein Upsert)."""
     enabled = bool(settings.get("image_updates_enabled", False))
     schedule = (settings.get("image_updates_cron") or "").strip() or DEFAULT_CRON
     try:

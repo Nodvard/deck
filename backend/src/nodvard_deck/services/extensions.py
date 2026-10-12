@@ -1,13 +1,6 @@
-"""Registry-Sync, Laden/Entladen von Extensions.
+"""Registry-Sync sowie Laden und Entladen von Extensions, verdrahtet mit der Datenbank und der App.
 
-Trennung wie ueberall im Projekt: `ext/` sind die reinen Bausteine (Entdeckung,
-Kontext-Bau, Laufzeit-Bestand), hier wird das mit der DB und der laufenden FastAPI-App
-verdrahtet -- Endpunkte in `api/v1/extensions.py` rufen nur diese Funktionen auf.
-
-**Fehler-Isolation ist das Leitmotiv (docs/02 §1):** jede Phase (Import, `setup()`,
-`on_start()`) faengt ihre eigenen Fehler, markiert `state=error` mit `last_error`, und
-gibt zurueck -- niemals wirft `enable_extension()` weiter nach oben in eine
-Boot-Sequenz, die dadurch fuer ALLE anderen Extensions abbrechen wuerde.
+Jede Phase fängt ihre eigenen Fehler und setzt `state=error`; `enable_extension()` wirft nie in den Start (docs/02 §1).
 """
 
 from __future__ import annotations
@@ -41,12 +34,10 @@ from . import settings as settings_service
 
 log = logging.getLogger(__name__)
 
+# Globale Einstellung `extension.untouched.<Speicher-Kennung>`: neu entdeckt und seither von niemandem ein- oder
+# ausgeschaltet. Nur dann darf der Kern die Erweiterung bei einem Anlass aus `enable_on` selbst einschalten; ältere
+# Erweiterungen haben den Eintrag nie und bleiben, wie jemand sie hinterlassen hat.
 UNTOUCHED_KEY_PREFIX = "extension.untouched."
-"""Globale Einstellung `extension.untouched.<id>`: die Erweiterung wurde neu entdeckt und seither
-von niemandem bewusst ein- oder ausgeschaltet. Nur dann darf der Kern sie bei einem Anlass aus
-`enable_on` (Manifest) von selbst einschalten. Erweiterungen, die es schon vor dieser Funktion
-gab, haben den Eintrag nie -- sie bleiben so unangetastet, auch wenn jemand sie vor langer Zeit
-ausgeschaltet hat. `<id>` ist die Speicher-Kennung (`id` der Registry-Zeile, siehe `get_record`)."""
 
 
 class ExtensionLoadError(Exception):
@@ -54,22 +45,16 @@ class ExtensionLoadError(Exception):
 
 
 async def get_record(session: AsyncSession, ext_id: str) -> ExtensionRecord | None:
-    """Die Registry-Zeile zu einer Kennung (heutige oder alte, siehe `ExtensionManifest.legacy_ids`).
+    """Die Registry-Zeile zu einer Kennung (heutige oder alte), gesucht über `ExtensionRuntime.store_id`.
 
-    Gesucht wird ueber die Speicher-Kennung (`ExtensionRuntime.store_id`): nach einer Umbenennung ist das
-    die Zeile, in der Einstellungen und Zeitplaene liegen; ein verwaister Zwilling kommt so nie zurueck.
-    Ohne Umbenennung ist es die Zeile mit genau dieser Kennung. Alle Zugriffe auf eine einzelne Zeile
-    laufen hierueber (ein Test verbietet direkte `session.get(ExtensionRecord, ...)` ausserhalb dieser Datei)."""
+    Ein verwaister Zwilling kommt so nie zurück. Einzelzugriffe laufen hierüber, ein Test verbietet sie sonst."""
     return await session.get(ExtensionRecord, get_extension_runtime().store_id(ext_id))
 
 
 async def get_records(session: AsyncSession, ext_ids: Iterable[str]) -> dict[str, ExtensionRecord]:
-    """Die Registry-Zeilen zu mehreren Kennungen (heutige oder alte) mit EINER Abfrage, wie `get_record` je Kennung.
+    """Die Registry-Zeilen zu mehreren Kennungen mit einer Abfrage, wie `get_record` je Kennung.
 
-    Der Schluessel ist die Kennung, wie sie uebergeben wurde: `get_records(s, ["alt", "neu"])` liefert fuer beide
-    dieselbe Zeile, wenn `alt` eine alte Kennung von `neu` ist. Kennungen ohne Zeile fehlen im Ergebnis. Fuer Anzeigen
-    wie „Vorgeschlagen von“, bei denen die Kennung aus gespeicherten Daten kommt und auch die einer frueheren Version
-    sein kann."""
+    Der Schlüssel ist die Kennung, wie sie übergeben wurde; Kennungen ohne Zeile fehlen im Ergebnis."""
     runtime = get_extension_runtime()
     row_ids = {ext_id: runtime.store_id(ext_id) for ext_id in ext_ids}
     if not row_ids:
@@ -80,11 +65,9 @@ async def get_records(session: AsyncSession, ext_ids: Iterable[str]) -> dict[str
 
 
 async def is_stale_twin_address(session: AsyncSession, ext_id: str) -> bool:
-    """`ext_id` ist eine alte Kennung, unter der noch eine eigene Registry-Zeile liegt, die die umbenannte
-    Erweiterung nicht nutzt (verwaister Zwilling, `ExtensionRuntime.is_stale_twin`). Die Adresse ist dann
-    mehrdeutig: `get_record` liefert zwar die Zeile der Erweiterung, wer aber noch die alte Kennung benutzt,
-    kennt sie womoeglich aus der Zeit, in der der Zwilling galt (Rueckweg aufs alte Image). Aendern darf die
-    API ueber so eine Adresse deshalb nichts. Ohne `legacy_ids` immer `False`."""
+    """`ext_id` ist eine alte Kennung mit eigener, ungenutzter Registry-Zeile (verwaister Zwilling).
+
+    Die Adresse ist dann mehrdeutig (Rückweg aufs alte Image), die API darf darüber nichts ändern."""
     if not get_extension_runtime().is_stale_twin(ext_id):
         return False
     return await session.get(ExtensionRecord, ext_id) is not None
@@ -98,16 +81,12 @@ async def _clear_untouched(session: AsyncSession, ext_id: str) -> None:
 
 
 async def record_user_choice(session: AsyncSession, ext_id: str) -> None:
-    """Jemand hat die Erweiterung bewusst ein- oder ausgeschaltet: ab jetzt schaltet der Kern sie
-    nie mehr von selbst ein."""
+    """Jemand hat die Erweiterung bewusst ein- oder ausgeschaltet; der Kern schaltet sie nie mehr selbst ein."""
     await _clear_untouched(session, get_extension_runtime().store_id(ext_id))
 
 
 def public_route_prefixes(ext_id: str) -> list[str]:
-    """Adressen (`/api/v1/ext/<id>/...`), die die geladene Erweiterung mit `public=True`
-    ohne Anmeldung anbietet. Fuer das Protokoll beim Einschalten; leer, wenn es keine gibt
-    oder die Erweiterung nicht geladen ist. Eine umbenannte Erweiterung ist zusaetzlich unter
-    ihren alten Kennungen erreichbar (`enable_extension`); diese Adressen stehen mit darin."""
+    """Adressen (`/api/v1/ext/<id>/...`), die die geladene Erweiterung ohne Anmeldung anbietet, samt alter Kennungen."""
     runtime = get_extension_runtime()
     ext_id = runtime.canonical(ext_id)
     loaded = runtime.loaded.get(ext_id)
@@ -125,18 +104,16 @@ def public_route_prefixes(ext_id: str) -> list[str]:
 async def auto_enable_for(
     app: FastAPI, session: AsyncSession, settings: Settings, trigger: str, *, user_id: str | None = None
 ) -> list[str]:
-    """Schaltet alle Erweiterungen ein, die `trigger` in `enable_on` nennen, noch ausgeschaltet
-    und unberuehrt sind (siehe `UNTOUCHED_KEY_PREFIX`). Rueckgabe: die IDs, die danach laufen.
-    Der Kern kennt keine Erweiterung beim Namen -- nur die Kennzeichnung im Manifest. Jeder
-    Fehler bleibt hier haengen: der Aufrufer (z. B. das Anlegen eines Zugangs) darf daran nie
-    scheitern."""
+    """Schaltet ausgeschaltete, unberührte Erweiterungen mit `trigger` in `enable_on` ein; gibt die laufenden zurück.
+
+    Jeder Fehler bleibt hier, der Aufrufer (etwa das Anlegen eines Zugangs) scheitert daran nie."""
     enabled: list[str] = []
     runtime = get_extension_runtime()
     try:
         records = (await session.execute(select(ExtensionRecord).where(ExtensionRecord.state == "disabled"))).scalars().all()
         for record in list(records):
             if runtime.is_stale_twin(record.id):
-                continue  # gehoert zu einer umbenannten Erweiterung, die eine andere Zeile nutzt
+                continue  # gehört zu einer umbenannten Erweiterung, die eine andere Zeile nutzt
             if trigger not in ((record.manifest or {}).get("enable_on") or []):
                 continue
             if await session.get(Setting, (UNTOUCHED_KEY_PREFIX + record.id, "global", "")) is None:
@@ -144,15 +121,13 @@ async def auto_enable_for(
             ext_id = runtime.canonical(record.id)
             found = runtime.discovered.get(ext_id)
             if found is None or not found.ok:
-                # Fehlt gerade (z. B. nach einem Rueckweg aufs alte Image): nichts anfassen. Weder
-                # `state` noch die Markierung "unberuehrt" aendern sich -- der Anlass gilt spaeter wieder.
+                # Fehlt gerade (etwa nach Rückweg aufs alte Image): nichts anfassen, der Anlass gilt später wieder.
                 continue
-            # Die Entscheidung gilt ab jetzt als getroffen -- auch wenn das Einschalten scheitert:
-            # ein zweiter Versuch beim naechsten Zugang waere nur Laerm.
+            # Gilt auch bei Fehlschlag als entschieden: ein zweiter Versuch beim nächsten Zugang wäre nur Lärm.
             await _clear_untouched(session, record.id)
             try:
                 await enable_extension(app, session, settings, ext_id)
-            except Exception:  # noqa: BLE001 - siehe Docstring
+            except Exception:  # noqa: BLE001 - der Aufrufer darf daran nie scheitern
                 log.exception("Automatisches Einschalten von '%s' fehlgeschlagen", ext_id)
                 record.state = "error"
                 record.last_error = "Automatisches Einschalten fehlgeschlagen."
@@ -177,8 +152,7 @@ async def auto_enable_for(
 
 
 def _stored_manifest(manifest: ExtensionManifest) -> dict:
-    """Das Manifest, wie es in der Registry-Zeile steht. Eine leere `legacy_ids`-Liste bleibt weg:
-    die Zeilen von Erweiterungen, die nie umbenannt wurden, bleiben genau wie vorher."""
+    """Das Manifest, wie es in der Registry-Zeile steht; eine leere `legacy_ids`-Liste bleibt weg."""
     data = manifest.model_dump(mode="json")
     if not data.get("legacy_ids"):
         data.pop("legacy_ids", None)
@@ -186,10 +160,10 @@ def _stored_manifest(manifest: ExtensionManifest) -> dict:
 
 
 async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> ExtensionRecord | None:
-    """Die Zeile, die fuer einen Fund gilt: die mit seiner Kennung, sonst die erste vorhandene einer alten
-    Kennung in der Reihenfolge von `legacy_ids` (umbenannte Erweiterung auf einer bestehenden Installation).
-    Jede weitere vorhandene Zeile einer alten Kennung ist ein verwaister Zwilling und bleibt liegen."""
-    assert d.manifest is not None  # nur fuer gueltige Funde
+    """Die Zeile mit der Kennung des Funds, sonst die erste einer alten Kennung in der Reihenfolge von `legacy_ids`.
+
+    Jede weitere Zeile einer alten Kennung ist ein verwaister Zwilling und bleibt liegen."""
+    assert d.manifest is not None  # nur für gültige Funde
     chosen: ExtensionRecord | None = None
     for candidate in (d.id, *d.manifest.legacy_ids):
         record = await session.get(ExtensionRecord, candidate)
@@ -208,13 +182,9 @@ async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> Extensi
 
 
 async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[str, DiscoveredExtension]:
-    """Voller Scan (Verzeichnis + Entry-Points), Registry-Zeilen fuer neue Funde
-    anlegen (Default `state=disabled` -- ein Admin muss bewusst aktivieren), Ergebnis
-    im Runtime-Bestand fuer spaetere `enable()`-Aufrufe zwischenspeichern.
+    """Scannt, legt Zeilen für neue Funde an (`state=disabled`, aktiviert wird bewusst) und merkt sich das Ergebnis.
 
-    Umbenannte Erweiterungen (`legacy_ids`): gibt es keine Zeile mit der Kennung, gilt die einer alten
-    Kennung weiter (Speicher-Kennung, `ExtensionRuntime.store_ids`) -- nichts wird kopiert oder
-    umbenannt, das alte Image findet nach einem Rueckweg genau seine Zeile wieder."""
+    Bei Umbenennungen gilt die Zeile der alten Kennung weiter; nichts wird kopiert, ein Rückweg findet sie wieder."""
     resolution = resolve_legacy(discover_all(settings.extensions_dir))
     for refused in resolution.refused:
         log.warning("Erweiterung '%s' wird nicht geladen: %s", refused.id, refused.error)
@@ -223,7 +193,7 @@ async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[s
     for d in resolution.found:
         if not d.ok:
             continue
-        assert d.manifest is not None  # d.ok garantiert das
+        assert d.manifest is not None  # `d.ok` garantiert das
         by_id[d.id] = d
         record = await _find_record(session, d)
         if record is None:
@@ -258,50 +228,33 @@ async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[s
 
 
 async def load_enabled_from_registry(app: FastAPI, session: AsyncSession, settings: Settings) -> None:
-    """Boot-Reconciliation: alles, was von einem frueheren Lauf noch `state=enabled`
-    ist, jetzt tatsaechlich laden -- "Extension aktivieren" ist eine dauerhafte
-    Admin-Entscheidung, kein Prozess-Neustart soll sie stillschweigend vergessen.
+    """Lädt beim Start alles, was noch `state=enabled` ist; ein Neustart vergisst keine Aktivierung.
 
-    Das gilt auch, wenn eine Erweiterung gerade fehlt (zurueckgerolltes Image, noch nicht
-    kopierter Ordner): `at_boot=True` laesst ihren Zustand dann stehen und merkt sich nur
-    den Grund in `last_error`. Kommt sie zurueck, laedt der naechste Start sie wieder."""
+    Fehlt eine Erweiterung (zurückgerolltes Image), bleibt ihr Zustand stehen; `last_error` nennt den Grund."""
     runtime = get_extension_runtime()
     result = await session.execute(select(ExtensionRecord).where(ExtensionRecord.state == "enabled"))
     records = result.scalars().all()
     for record in records:
         if runtime.is_stale_twin(record.id):
-            continue  # Zeile einer alten Kennung, die Erweiterung nutzt eine andere (siehe get_record)
+            continue  # Zeile einer alten Kennung, die Erweiterung nutzt eine andere
         await enable_extension(app, session, settings, record.id, at_boot=True)
     _announce_loaded(runtime, records)
 
 
+# Beginn der Zeile im Container-Protokoll, die `deploy/pi_switch.sh` sucht (die letzte zählt); ein Test prüft beide.
 LOADED_LINE_PREFIX = "Erweiterungen geladen: "
-"""Beginn der Zeile, die jeder Start (genau eine) und jedes Ein- oder Ausschalten danach ins Container-Protokoll
-schreibt (`_announce_loaded`). `deploy/pi_switch.sh` sucht genau diesen Text, die letzte Zeile zaehlt; ein Test haelt
-beide gleich."""
+# Steht dahinter, wenn nichts läuft; Klammern kommen in Kennungen nie vor.
 LOADED_LINE_NONE = "(keine)"
-"""Steht hinter `LOADED_LINE_PREFIX`, wenn keine Erweiterung laeuft. Kein Zeichen
-einer Kennung (Klammern), also nie mit einer verwechselbar."""
 
 
 def _announce_loaded(runtime: ExtensionRuntime, records: list[ExtensionRecord]) -> None:
-    """Schreibt eine Zeile `Erweiterungen geladen: <Speicher-Kennungen, sortiert, durch Komma getrennt>`.
+    """Schreibt `Erweiterungen geladen: <Speicher-Kennungen, sortiert, kommagetrennt>` ins Container-Protokoll.
 
-    Gemeint ist, was gerade wirklich laeuft: eingeschaltet, geladen UND `on_start()` ohne Fehler
-    (`state == "enabled"` der Zeile, die die Erweiterung nutzt; ein verwaister Zwilling zaehlt nie). Eine
-    eingeschaltete, aber fehlende oder abgestuerzte Erweiterung steht nicht darin. Mit der letzten dieser
-    Zeilen vergleicht `deploy/pi_switch.sh` beim Ausliefern den alten mit dem neuen Container: Fehlt danach
-    eine Kennung, wird zurueckgeschaltet. Deshalb schreibt nicht nur der Start sie, sondern auch jedes Ein-
-    und Ausschalten danach (`_announce_current`): Eine seit dem Start ausgeschaltete Erweiterung galte sonst
-    beim naechsten Ausliefern als verloren. Es zaehlt die Speicher-Kennung (`id` der Registry-Zeile), nicht
-    die heutige Kennung: sie bleibt auch bei einer Umbenennung gleich, der Vergleich zwischen altem und neuem
-    Image also eindeutig. Kennungen bestehen nur aus `a-z`, `0-9` und `-` (`nodvard_sdk.manifest.ID_RE`),
-    ein Komma kommt darin nie vor.
-
-    Mit `print` statt `logging`: Der Dienst richtet kein Logging ein, ausser fuer uvicorn selbst. Eine
-    `log.info`-Zeile erreichte das Container-Protokoll deshalb nie (die Stufe des Wurzel-Loggers ist
-    `WARNING`). Wie bei der Einrichtungs-Zeile in `services/auth.py` und den `[boot]`-Zeilen. Ein
-    Schreibfehler (Ausgabe geschlossen) darf den Start nie aufhalten."""
+    Gemeint ist, was wirklich läuft: eingeschaltet, geladen und `on_start()` ohne Fehler."""
+    # `deploy/pi_switch.sh` vergleicht damit beim Ausliefern alten und neuen Container und schaltet zurück, wenn eine
+    # Kennung fehlt; deshalb schreibt auch jedes Ein- und Ausschalten sie. Die Speicher-Kennung bleibt bei einer
+    # Umbenennung gleich. Kennungen bestehen aus `a-z`, `0-9` und `-`, ein Komma kommt darin nie vor.
+    # `print` statt `logging`: Der Dienst richtet kein Logging ein, eine `log.info`-Zeile erreichte das Protokoll nie.
     ids = sorted(
         {
             ext.store_id or ext.manifest.id
@@ -316,12 +269,9 @@ def _announce_loaded(runtime: ExtensionRuntime, records: list[ExtensionRecord]) 
 
 
 async def _announce_current(session: AsyncSession) -> None:
-    """`_announce_loaded` nach einem Ein- oder Ausschalten im laufenden Betrieb, mit dem Zustand im Speicher.
-
-    Liest alle Zeilen ohne vorher zu schreiben (`no_autoflush`): Der Aufrufer schreibt erst spaeter, und ein
-    Schreibvorgang hier hielte die Sperre der Datenbank, waehrend er womoeglich noch Code einer Erweiterung
-    aufruft (siehe `enable_extension`). Zeilen, die die Sitzung schon kennt, behalten dabei ihren noch nicht
-    geschriebenen Zustand; gefiltert wird darauf erst in `_announce_loaded`."""
+    """`_announce_loaded` nach einem Ein- oder Ausschalten im laufenden Betrieb, mit dem Zustand im Speicher."""
+    # Ohne Autoflush: Ein Schreibvorgang hielte die Datenbanksperre, während der Aufrufer womöglich noch Code einer
+    # Erweiterung ausführt (siehe `enable_extension`).
     with session.no_autoflush:
         records = (await session.execute(select(ExtensionRecord))).scalars().all()
     _announce_loaded(get_extension_runtime(), list(records))
@@ -330,17 +280,9 @@ async def _announce_current(session: AsyncSession) -> None:
 async def enable_extension(
     app: FastAPI, session: AsyncSession, settings: Settings, ext_id: str, *, at_boot: bool = False
 ) -> None:
-    """Erweiterung laden und `state` auf das Ergebnis setzen.
+    """Lädt die Erweiterung (`ext_id` darf eine alte Kennung sein) und setzt `state` auf das Ergebnis.
 
-    `at_boot=True` nur aus `load_enabled_from_registry()`: Die Entscheidung "eingeschaltet" stammt
-    dann aus einem frueheren Lauf und gilt weiter, auch wenn die Erweiterung diesmal nicht
-    auffindbar ist. Ein ausdrueckliches Einschalten (Standard) einer nicht auffindbaren
-    Erweiterung wirft dagegen `ExtensionLoadError` (die API antwortet 404) und aendert nichts.
-    Ausser beim Start (der schreibt sie einmal am Ende) steht danach die Zeile `Erweiterungen geladen` neu im
-    Protokoll (`_announce_loaded`), auch wenn die Erweiterung dabei abgestuerzt ist; nur nach `ExtensionLoadError`
-    nicht, dann hat sich nichts geaendert.
-
-    `ext_id` darf auch eine alte Kennung sein (`legacy_ids`); geladen wird immer unter der heutigen."""
+    `at_boot=True` nur beim Start: Eine fehlende Erweiterung behält ihren Zustand, sonst `ExtensionLoadError`."""
     await _enable_extension(app, session, settings, ext_id, at_boot=at_boot)
     if not at_boot:
         await _announce_current(session)
@@ -355,11 +297,8 @@ async def _enable_extension(
     if ext_id in runtime.loaded:
         existing = await get_record(session, ext_id)
         if existing is None or existing.state != "error":
-            return  # idempotent -- zweimal aktivieren ist kein Fehler
-        # on_start() ist beim letzten Mal abgestuerzt: die Extension blieb halb geladen
-        # (damit disable() sie aufraeumen kann). Ein erneutes "Einschalten" darf dann
-        # nicht stillschweigend nichts tun, sondern entlaedt sie sauber und startet neu --
-        # der Zustand spiegelt danach das neue Ergebnis.
+            return  # idempotent
+        # on_start() ist beim letzten Mal abgestürzt, die Extension blieb halb geladen: sauber entladen und neu starten.
         await _unload_extension(app, session, ext_id)
 
     record = await get_record(session, ext_id)
@@ -368,19 +307,17 @@ async def _enable_extension(
 
     discovered = runtime.discovered.get(ext_id)
     if discovered is None or not discovered.ok:
-        # Abgelehnt wegen einer alten Kennung (`legacy_ids`): dann den eigentlichen Grund nennen. Auch fuer die
-        # Zeile einer alten Kennung, deren neue Version abgelehnt wurde (Update einer bestehenden Installation).
+        # Wegen einer alten Kennung abgelehnt: den eigentlichen Grund nennen, auch für die Zeile der alten Kennung.
         refused = runtime.refused.get(ext_id) or runtime.refused_old.get(ext_id)
         if not at_boot:
-            # Ausdruecklich eingeschaltet, aber nicht da: nichts schreiben (auch `state` bleibt).
+            # Ausdrücklich eingeschaltet, aber nicht da: nichts schreiben, auch `state` bleibt.
             if refused:
                 raise ExtensionLoadError(f"Extension '{ext_id}' wird nicht geladen: {refused}")
             raise ExtensionLoadError(
                 f"Extension '{ext_id}' wurde nicht gefunden (Ordner oder Paket fehlt, oder das Manifest ist ungültig)."
             )
-        # Beim Start fehlt die Erweiterung nur: `state` bleibt wie er war (ein Rueckweg aufs alte
-        # Image oder ein erneutes Update soll die Entscheidung "eingeschaltet" nicht loeschen), die
-        # API meldet solange "error" (siehe `ExtensionOut.from_model`).
+        # Beim Start fehlt sie nur: `state` bleibt, damit ein Rückweg aufs alte Image die Entscheidung "eingeschaltet"
+        # nicht löscht; die API meldet solange "error" (siehe `ExtensionOut.from_model`).
         if refused:
             # Die Warnung dazu steht schon im Protokoll (`discover_and_sync`).
             record.last_error = (
@@ -400,7 +337,7 @@ async def _enable_extension(
         return
 
     manifest = discovered.manifest
-    assert manifest is not None  # discovered.ok garantiert das
+    assert manifest is not None  # `discovered.ok` garantiert das
 
     if not is_compatible(manifest.api_version):
         record.state = "incompatible"
@@ -410,10 +347,7 @@ async def _enable_extension(
         record.last_error_at = utcnow()
         return
 
-    # WP-3 kennt noch keine Einzelauswahl-UI fuer Permissions -- Aktivieren gewaehrt
-    # das gesamte im Manifest deklarierte Set. Eine granulare "weniger als beantragt"-
-    # Bestaetigung (docs/03 §6 ExtensionRecord.granted_permissions-Kommentar) ist eine
-    # spaetere UI-Aufgabe, keine Host-Mechanik.
+    # Aktivieren gewährt das ganze im Manifest deklarierte Set; eine Auswahl gibt es noch nicht.
     granted = list(manifest.permissions)
     record.granted_permissions = granted
 
@@ -427,7 +361,7 @@ async def _enable_extension(
         module = importlib.import_module(module_name)
         extension_cls = getattr(module, class_name)
         instance = extension_cls()
-    except Exception as exc:  # noqa: BLE001 - Fehler-Isolation, siehe Modul-Docstring
+    except Exception as exc:  # noqa: BLE001 - Fehler-Isolation
         record.state = "error"
         record.last_error = f"Import von '{manifest.entrypoint}' fehlgeschlagen: {exc}"
         record.last_error_at = utcnow()
@@ -439,31 +373,19 @@ async def _enable_extension(
     ctx = build_context(runtime, loaded, manifest, granted, _data_dir(settings, manifest, record.id), settings)
     loaded.ctx = ctx
 
-    # Live gefunden (WP-8, dasselbe Muster wie der Fix in core/gate.py::execute_action()
-    # -- siehe dortiger Docstring und docs/00-DECISIONS.md D-14): der Aufrufer (z. B.
-    # die Boot-Reconciliation `load_enabled_from_registry()` oder ein API-Request mit
-    # `SessionDep`) haelt `session` ueber den gesamten Aufruf offen, mit dem gerade
-    # gesetzten `record.granted_permissions` als anstehendem Schreibvorgang.
-    # `instance.setup()`/`instance.on_start()` sind Extension-Code -- rufen sie einen
-    # Handle auf, der selbst eine unabhaengige `session_scope()` oeffnet und schreibt
-    # (z. B. `ctx.scheduler.register_job()` in setup(), `ctx.audit.log()` in on_start(),
-    # wie hello-world es tut), blockiert SQLites Ein-Schreiber-Regel die verschachtelte
-    # Transaktion -- rueckwirkend die wahrscheinlichste Erklaerung fuer die seit WP-6
-    # wiederholt beobachteten, nie sicher diagnostizierten "database is locked"-
-    # Vorfaelle beim Neustart. Fix: vor JEDEM Uebergang in Extension-Code committen.
+    # Vor jedem Übergang in Extension-Code committen: setup() und on_start() öffnen über ihre Handles eigene
+    # `session_scope()`-Sitzungen, und neben einer offenen Transaktion hier sperrt SQLite ("database is locked").
     await session.commit()
     try:
         await instance.setup(ctx)
-        # Auch Routen, die setup() erst nach include_router() angehaengt hat.
+        # Auch Routen, die setup() erst nach include_router() angehängt hat.
         ctx.api.check_routes()
     except Exception as exc:  # noqa: BLE001
         record.state = "error"
         record.last_error = f"setup() fehlgeschlagen: {exc}"
         record.last_error_at = utcnow()
-        # Was setup() vor dem Absturz schon angemeldet hat (Ereignis-Abos, Aufgaben,
-        # Seiten, Capabilities ...), gehoert niemandem mehr: `runtime.loaded` kennt die
-        # Extension nicht, `_unload_extension` fasst sie nie an. Ohne Aufraeumen liefe
-        # nach dem erneuten Einschalten alles doppelt.
+        # Was setup() schon angemeldet hat (Abos, Aufgaben, Seiten ...), kennt `runtime.loaded` nicht, und
+        # `_unload_extension` fasst es nie an; ohne Aufräumen liefe nach dem erneuten Einschalten alles doppelt.
         try:
             await _cleanup_loaded(app, loaded)
         except Exception:  # der setup()-Fehler bleibt die eigentliche Meldung
@@ -471,8 +393,7 @@ async def _enable_extension(
         return
 
     if loaded.router is not None:
-        # Unter der heutigen Kennung und (umbenannt, `legacy_ids`) unter jeder alten. Sie stehen in
-        # `mounted_routes`, damit das Ausschalten sie mit entfernt.
+        # Unter der heutigen Kennung und jeder alten; `mounted_routes` lässt das Ausschalten alle entfernen.
         loaded.mounted_routes = _mount_routes(app, runtime, manifest.id, loaded.router)
 
     await session.commit()
@@ -482,9 +403,8 @@ async def _enable_extension(
     except Exception as exc:  # noqa: BLE001
         start_error = exc
 
-    # Der Router steht seit setup() und ist live: Routen, die on_start() (auch kurz vor
-    # einem Absturz) angehaengt hat, bekommen die Anmeldepruefung nicht. Sie fliegen raus,
-    # und die Erweiterung wird wie bei einem setup()-Fehler zurueckgebaut.
+    # Der Router ist seit setup() live: Routen, die on_start() (auch kurz vor einem Absturz) anhängt, bekommen
+    # keine Anmeldeprüfung. Die Erweiterung wird dann wie bei einem setup()-Fehler zurückgebaut.
     try:
         ctx.api.check_routes()
     except Exception as exc:  # noqa: BLE001
@@ -493,7 +413,7 @@ async def _enable_extension(
         record.last_error_at = utcnow()
         try:
             await instance.on_stop(ctx)
-        except Exception:  # Aufraeumen darf nicht an einer kaputten Extension scheitern
+        except Exception:  # Aufräumen darf nicht an einer kaputten Extension scheitern
             log.exception("on_stop() nach abgelehnten Routen von '%s' fehlgeschlagen", manifest.id)
         try:
             await _cleanup_loaded(app, loaded)
@@ -502,10 +422,8 @@ async def _enable_extension(
         return
 
     if start_error is not None:
-        # setup() ist bereits durchgelaufen (Seiten/Widgets/Router stehen) -- das ist
-        # bewusst so belassen (halb registriert ist immer noch nuetzlicher als gar
-        # nicht sichtbar), aber der Fehler wird gemeldet und die Extension bleibt
-        # trackbar, damit disable() sie sauber wieder entfernen kann.
+        # setup() lief durch, Seiten, Widgets und Router stehen bewusst weiter (halb registriert hilft mehr als
+        # unsichtbar); die Extension bleibt in `runtime.loaded`, damit disable() sie entfernen kann.
         runtime.loaded[manifest.id] = loaded
         record.state = "error"
         record.last_error = f"on_start() fehlgeschlagen: {start_error}"
@@ -517,26 +435,16 @@ async def _enable_extension(
     record.last_error = None
     record.last_error_at = None
 
-    # WP-7: das Dashboard haelt Seiten-/Widget-Katalog per WS aktuell, statt sie zu
-    # pollen -- ohne dieses Event wuesste ein offener Browser-Tab erst nach einem
-    # manuellen Reload, dass gerade neue Widgets aufgetaucht sind (live im Boot-Test
-    # gefunden: der Katalog aenderte sich serverseitig sofort, sichtbar wurde das aber
-    # nirgends). `ctx.events`-Konvention wiederverwendet (core/events.py faechert
-    # automatisch auf den RBAC-gefilterten "events"-WS-Kanal aus), keine neue Kanal-Art.
+    # Per WebSocket hält der Browser den Katalog aktuell; ohne das Ereignis sähe er neue Widgets erst nach einem Reload.
     await get_event_bus().publish(Event(name="extension.enabled", payload={"ext_id": ext_id}))
 
 
 def _mount_routes(app: FastAPI, runtime: ExtensionRuntime, ext_id: str, router: APIRouter) -> list[BaseRoute]:
-    """Router unter der heutigen Kennung einhaengen und, nach einer Umbenennung (`legacy_ids`), unter jeder
-    alten. Gleiche Route-Objekte des Routers, also auch dieselbe Anmeldepruefung; die alten sind im
-    OpenAPI-Schema als veraltet markiert.
+    """Hängt den Router unter der heutigen und jeder alten Kennung ein (alte als veraltet markiert, gleiche Routen).
 
-    `mount_router` fuegt immer an derselben Stelle ein, Spaeteres steht also davor: erst die alten Kennungen
-    rueckwaerts, die heutige zuletzt. Dann steht die heutige vorne (`url_path_for` bzw. `request.url_for`
-    bauen ihre Adresse, im Schema kommt sie zuerst), die alten folgen wie im Manifest.
-
-    Wirft ein Einhaengen, werden die in diesem Aufruf schon eingehaengten Routen wieder entfernt (wie beim
-    Ausschalten) und der Fehler geht weiter nach oben: sonst blieben sie verwaist in der App stehen."""
+    Wirft ein Einhängen, werden die schon eingehängten Routen wieder entfernt, sonst blieben sie verwaist stehen."""
+    # `mount_router` fügt immer an derselben Stelle ein, Späteres steht also davor: erst die alten Kennungen rückwärts,
+    # die heutige zuletzt, damit die heutige vorn steht (`url_for`, OpenAPI) und die alten wie im Manifest folgen.
     legacy_routes: list[BaseRoute] = []
     try:
         for old in reversed(runtime.legacy_ids_of(ext_id)):
@@ -549,12 +457,9 @@ def _mount_routes(app: FastAPI, runtime: ExtensionRuntime, ext_id: str, router: 
 
 
 def _data_dir(settings: Settings, manifest: ExtensionManifest, store_id: str) -> Path:
-    """`data/ext/<Speicher-Kennung>`, ohne Umbenennung also `data/ext/<Kennung>`.
-
-    Nach einer Umbenennung (`legacy_ids`): Fehlt der Ordner der Speicher-Kennung, gilt der erste vorhandene
-    Ordner der Kennung oder einer alten Kennung -- dort liegen die Dateien zu den Zeilen in den Tabellen der
-    Erweiterung, die alle Kennungen teilen. Gibt es keinen, wird der Ordner der Speicher-Kennung angelegt;
-    so findet ein Rueckweg aufs alte Image auch neue Dateien. Verschoben wird nie etwas."""
+    """`data/ext/<Speicher-Kennung>`; fehlt der Ordner, gilt der erste vorhandene der Kennung oder einer alten."""
+    # Dort liegen die Dateien zu den Tabellenzeilen, die alle Kennungen teilen. Verschoben wird nie etwas, ein Rückweg
+    # aufs alte Image findet auch neue Dateien.
     for name in dict.fromkeys((store_id, manifest.id, *manifest.legacy_ids)):
         if (settings.ext_data_dir / name).is_dir():
             return settings.ext_data_dir / name
@@ -562,27 +467,23 @@ def _data_dir(settings: Settings, manifest: ExtensionManifest, store_id: str) ->
 
 
 async def _unload_extension(app: FastAPI, session: AsyncSession, ext_id: str) -> None:
-    """Geladene Extension sauber entfernen (on_stop, Tasks, Routen, Registrierungen).
-    Der Registry-Zustand bleibt Sache des Aufrufers. `ext_id` ist die heutige Kennung."""
+    """Entfernt die geladene Extension (on_stop, Tasks, Routen, Registrierungen); `state` bleibt Sache des Aufrufers."""
     runtime = get_extension_runtime()
     loaded = runtime.loaded.pop(ext_id, None)
     if loaded is None:
         return
 
-    # Siehe D-14/enable_extension() oben: derselbe Schutz, auch wenn `session` hier
-    # beim Aufruf typischerweise noch keinen anstehenden Schreibvorgang hat --
-    # struktureller Schutz statt einer Annahme ueber den jeweils aktuellen Aufrufer.
+    # Wie in `enable_extension`: vor Extension-Code committen, ohne den Aufrufer zu prüfen.
     await session.commit()
     try:
         await loaded.instance.on_stop(loaded.ctx)
-    except Exception:  # noqa: BLE001 - Aufraeumen darf nicht an einer kaputten Extension scheitern
+    except Exception:  # noqa: BLE001 - Aufräumen darf nicht an einer kaputten Extension scheitern
         pass
     await _cleanup_loaded(app, loaded)
 
 
 async def _cleanup_loaded(app: FastAPI, loaded: LoadedExtension) -> None:
-    """Alles entfernen, was eine Extension angemeldet hat (Tasks, Routen, Registrierungen,
-    Ereignis-Abos, Zeitplan, HTTP-Client) -- fuer `_unload_extension` und den setup()-Fehlerfall."""
+    """Entfernt alles, was eine Extension angemeldet hat; für `_unload_extension` und den setup()-Fehlerfall."""
     runtime = get_extension_runtime()
     ext_id = loaded.manifest.id
     await runtime.cancel_tasks(loaded)
@@ -591,7 +492,7 @@ async def _cleanup_loaded(app: FastAPI, loaded: LoadedExtension) -> None:
     runtime.ui.clear_extension(ext_id)
     runtime.capabilities.clear_extension(ext_id)
     runtime.actions.clear_extension(ext_id)
-    # Jobs haengen an der Speicher-Kennung (siehe `SchedulerHandle`), nicht an der Kennung.
+    # Jobs hängen an der Speicher-Kennung (siehe `SchedulerHandle`).
     runtime.scheduler.clear_extension(loaded.store_id or ext_id)
     events_handle = getattr(loaded.ctx, "events", None)
     if events_handle is not None:

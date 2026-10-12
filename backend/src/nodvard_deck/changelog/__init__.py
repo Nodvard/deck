@@ -1,22 +1,6 @@
-"""Aenderungsprotokoll mit Versionen -- wird im Dashboard unter "Über Nodvard Deck" gezeigt.
+"""Änderungsprotokoll mit Versionen, gezeigt in den Einstellungen unter „Über“.
 
-Die Daten liegen als kleine TOML-Dateien NEBEN dem Code (Paketdaten, siehe
-`backend/pyproject.toml`), damit sie mit jedem Image mitkommen:
-
-- `versions/<version>.toml`: eine Datei je veroeffentlichter Version (`version`, `date`,
-  optional `title`, dazu `[[entries]]`-Tabellen mit `kind`, `text`, optional `prs`).
-- `unreleased/<name>.toml`: Bruchstuecke NUR mit `[[entries]]`, eine Datei je PR/Branch,
-  damit parallele PRs sich nie in die Quere kommen. `scripts/release.py` fasst sie bei
-  einem Release zu einer Versionsdatei zusammen.
-
-Dieses Modul hat bewusst nur Standardbibliothek als Abhaengigkeit: `scripts/release.py`
-nutzt dieselben Pruefungen, auch auf einem Rechner ohne installiertes Nodvard Deck.
-
-Zwei Betriebsarten: die `parse_*`/`read_*`-Funktionen sind STRENG (werfen
-`ChangelogError`, das Release-Skript und die Tests brauchen das), `load_changelog()` ist
-GNAEDIG -- eine kaputte Datei wird uebersprungen und protokolliert, damit ein Tippfehler
-im Protokoll nie das Dashboard lahmlegt.
-"""
+Nur Standardbibliothek: `scripts/release.py` nutzt dieselben Prüfungen auch ohne installiertes Dashboard."""
 
 from __future__ import annotations
 
@@ -31,11 +15,15 @@ from typing import Any
 
 logger = logging.getLogger("nodvard_deck.changelog")
 
+# Die Daten liegen als TOML-Dateien neben dem Code (Paketdaten, `backend/pyproject.toml`) und kommen so mit jedem Image mit.
+# `versions/<version>.toml`: eine Datei je veröffentlichter Version (`version`, `date`, optional `title`, dazu
+# `[[entries]]` mit `kind`, `text`, optional `prs`). `unreleased/<name>.toml`: Bruchstücke nur mit `[[entries]]`, eine Datei
+# je Branch, damit parallele Änderungen sich nicht in die Quere kommen; `scripts/release.py` fasst sie beim Release zusammen.
 CHANGELOG_DIR = Path(__file__).resolve().parent
 """Ordner mit `versions/` und `unreleased/`. Tests biegen ihn per monkeypatch um."""
 
 KINDS = ("neu", "verbessert", "behoben", "sicherheit")
-"""Art einer Aenderung -- die Reihenfolge ist auch die Anzeigereihenfolge."""
+"""Art einer Änderung; die Reihenfolge ist auch die Anzeigereihenfolge."""
 
 MAX_TEXT_LENGTH = 1000
 MAX_TITLE_LENGTH = 100
@@ -50,7 +38,7 @@ _FRAGMENT_KEYS = {"entries"}
 
 
 class ChangelogError(ValueError):
-    """Eine Datei des Aenderungsprotokolls ist ungueltig (Meldung nennt die Datei)."""
+    """Eine Datei des Änderungsprotokolls ist ungültig (Meldung nennt die Datei)."""
 
 
 @dataclass(frozen=True)
@@ -74,18 +62,18 @@ class Changelog:
     versions: tuple[Release, ...]
     """Neueste Version zuerst (numerisch sortiert, nicht als Text)."""
     unreleased: tuple[Entry, ...]
-    """Eintraege aus `unreleased/`, noch ohne Versionsnummer."""
+    """Einträge aus `unreleased/`, noch ohne Versionsnummer."""
 
     @property
     def latest(self) -> str | None:
         return self.versions[0].version if self.versions else None
 
 
-# --- Pruefen ------------------------------------------------------------------------
+# --- Prüfen -------------------------------------------------------------------------
 
 
 def parse_version(text: object) -> tuple[int, int, int]:
-    """`"0.10.2"` -> `(0, 10, 2)`. Nur Zahlen ohne fuehrende Nullen, genau drei Teile."""
+    """`"0.10.2"` -> `(0, 10, 2)`. Nur Zahlen ohne führende Nullen, genau drei Teile."""
     if not isinstance(text, str) or not (match := _VERSION_RE.match(text)):
         raise ChangelogError(f"ungueltige Versionsnummer {text!r} (erwartet z. B. 0.5.0)")
     major, minor, patch = match.groups()
@@ -93,7 +81,7 @@ def parse_version(text: object) -> tuple[int, int, int]:
 
 
 def parse_entries(data: object) -> tuple[Entry, ...]:
-    """Prueft die `[[entries]]`-Tabellen (mindestens eine)."""
+    """Prüft die `[[entries]]`-Tabellen (mindestens eine)."""
     if not isinstance(data, list) or not data:
         raise ChangelogError("es fehlen [[entries]]-Eintraege")
     entries: list[Entry] = []
@@ -116,7 +104,7 @@ def parse_entries(data: object) -> tuple[Entry, ...]:
         if _CONTROL_RE.search(text):
             raise ChangelogError(f"{where}: text darf keine Zeilenumbrueche oder Steuerzeichen enthalten")
         prs = raw.get("prs", [])
-        # bool ist in Python ein int -- `prs = [true]` waere sonst "PR 1".
+        # bool ist in Python ein int: `prs = [true]` wäre sonst "PR 1".
         if not isinstance(prs, list) or not all(isinstance(n, int) and not isinstance(n, bool) and n > 0 for n in prs):
             raise ChangelogError(f"{where}: prs muss eine Liste positiver Zahlen sein")
         entries.append(Entry(kind=kind, text=text, prs=tuple(prs)))
@@ -124,9 +112,8 @@ def parse_entries(data: object) -> tuple[Entry, ...]:
 
 
 def _parse_date(value: object) -> str:
-    # TOML kennt echte Datumswerte (`date = 2026-09-30`), die Dateien schreiben aber
-    # Text -- beides ist erlaubt. `datetime` ist eine Unterklasse von `date`, gemeint
-    # ist hier aber nur ein reines Datum.
+    # TOML kennt echte Datumswerte (`date = 2026-09-30`), die Dateien schreiben aber Text; beides ist erlaubt.
+    # `datetime` ist eine Unterklasse von `date`, gemeint ist hier nur ein reines Datum.
     if isinstance(value, datetime):
         raise ChangelogError("date darf keine Uhrzeit enthalten")
     if isinstance(value, date):
@@ -195,8 +182,10 @@ def read_fragment(path: Path) -> tuple[Entry, ...]:
 # --- Laden --------------------------------------------------------------------------
 
 
+# Die `parse_*`/`read_*`-Funktionen sind streng (werfen `ChangelogError`, Release-Skript und Tests brauchen das);
+# `load_changelog()` überspringt kaputte Dateien und protokolliert sie, damit ein Tippfehler nie das Dashboard lahmlegt.
 def load_changelog(root: Path | None = None) -> Changelog:
-    """Laedt alle Dateien; ungueltige werden uebersprungen und protokolliert."""
+    """Lädt alle Dateien; ungültige werden übersprungen und protokolliert."""
     base = root if root is not None else CHANGELOG_DIR
 
     releases: list[Release] = []
@@ -223,8 +212,7 @@ def _load_cached(root: Path) -> Changelog:
 
 
 def get_changelog() -> Changelog:
-    """Wie `load_changelog()`, aber einmal pro Prozess gelesen: die Dateien aendern sich
-    nur mit einem neuen Image, also mit einem Neustart."""
+    """Wie `load_changelog()`, aber einmal pro Prozess gelesen (die Dateien ändern sich nur mit einem neuen Image)."""
     return _load_cached(CHANGELOG_DIR)
 
 

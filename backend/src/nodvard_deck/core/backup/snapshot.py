@@ -1,17 +1,4 @@
-"""Inhalt einer Sicherung erzeugen und wieder auspacken (synchron, laeuft in Threads).
-
-**Online-Kopie der Datenbank:** `sqlite3.Connection.backup()` in EINEM Schritt (`pages=-1`).
-Die Datenbank laeuft im WAL-Modus (db/session.py): eine Lesetransaktion sieht einen festen
-Stand und blockiert keine Schreiber. Schrittweise Kopien (`pages=1024` mit Pausen) beginnen
-dagegen bei jedem Schreibzugriff einer anderen Verbindung von vorn -- bei einem
-beschaeftigten Dashboard im ungluecklichen Fall endlos. Danach `PRAGMA integrity_check` auf
-der Kopie; scheitert er, entsteht keine Sicherung.
-
-**tar-Strom:** gzip (Stufe 6) um ein unkomprimiertes tar-Stream-Archiv. Jede Datei wird
-beim Einpacken gehasht (genau die Bytes, die im Archiv landen); das Manifest kommt deshalb
-als LETZTER Eintrag. Erweiterungsdateien sind nicht transaktional: wird eine Datei waehrend
-des Einpackens kuerzer, scheitert die Sicherung ehrlich, statt still Muell zu sichern.
-"""
+"""Inhalt einer Sicherung erzeugen und wieder auspacken (synchron, läuft in Threads)."""
 
 from __future__ import annotations
 
@@ -47,18 +34,13 @@ class IntegrityCheckFailed(BackupError):
         super().__init__(f"Die Datenbank-Kopie ist nicht in Ordnung ({detail}). Es wurde keine Sicherung geschrieben.")
 
 
-# ---------------------------------------------------------------------------
-# Quellen
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class Sources:
     db_path: Path
     single_files: list[tuple[str, Path]] = field(default_factory=list)
     """(Name im Archiv unter files/, Pfad) -- z. B. ("master.key", data/master.key)."""
     trees: list[tuple[str, Path]] = field(default_factory=list)
-    """(Praefix im Archiv unter files/, Ordner) -- z. B. ("ext", data/ext)."""
+    """(Präfix im Archiv unter files/, Ordner) -- z. B. ("ext", data/ext)."""
 
 
 @dataclass(frozen=True)
@@ -72,14 +54,12 @@ class Entry:
 class Collected:
     entries: list[Entry]
     skipped_links: list[str] = field(default_factory=list)
-    """Verknuepfungen (Symlinks), die bewusst NICHT mitgesichert werden (Pfade wie im Archiv,
-    ohne `files/`, z. B. `ext/beispiel/link`)."""
+    """Verknüpfungen (Symlinks), die bewusst nicht mitgesichert werden (Pfade wie im Archiv, ohne `files/`)."""
 
 
 def collect_all(sources: Sources) -> Collected:
-    """Alle regulaeren Dateien, ohne Symlinks, ohne die Ausschlussliste. Uebersprungene
-    Symlinks (Dateien wie Ordner, auch einzelne Quelldateien) werden mitgezaehlt, damit der
-    Aufrufer sie melden kann, statt sie still zu verlieren."""
+    """Alle regulären Dateien ohne Symlinks und ohne die Ausschlussliste.
+    Übersprungene Symlinks werden mitgeliefert, damit der Aufrufer sie meldet, statt sie still zu verlieren."""
     entries: list[Entry] = []
     skipped: list[str] = []
     for name, path in sources.single_files:
@@ -134,14 +114,12 @@ def collect(sources: Sources) -> list[Entry]:
     return collect_all(sources).entries
 
 
-# ---------------------------------------------------------------------------
-# Datenbank
-# ---------------------------------------------------------------------------
-
-
 def online_copy(src: Path, dst: Path) -> None:
-    """Konsistente Kopie einer laufenden SQLite-Datenbank, danach Integritaetspruefung.
+    """Konsistente Kopie einer laufenden SQLite-Datenbank mit anschließender Integritätsprüfung.
     Die Kopie steht im Journal-Modus DELETE (eine einzelne Datei, kein -wal daneben)."""
+    # `backup()` in einem Schritt (`pages=-1`): Die Datenbank läuft im WAL-Modus, eine Lesetransaktion sieht einen festen
+    # Stand und blockiert keine Schreiber. Schrittweise Kopien (`pages=1024` mit Pausen) beginnen bei jedem Schreibzugriff
+    # einer anderen Verbindung von vorn, bei einem beschäftigten Dashboard im unglücklichen Fall endlos.
     source = sqlite3.connect(str(src), timeout=30)
     try:
         target = sqlite3.connect(str(dst))
@@ -157,7 +135,7 @@ def online_copy(src: Path, dst: Path) -> None:
         result = _integrity_result(check)
     finally:
         check.close()
-    if result != ["ok"]:
+    if result != ["ok"]:  # keine Sicherung aus einer kaputten Kopie
         raise IntegrityCheckFailed("; ".join(str(r) for r in result[:3]))
 
 
@@ -166,9 +144,9 @@ def _integrity_result(conn: sqlite3.Connection) -> list[str]:
 
 
 def integrity_check(path: Path) -> None:
-    """`PRAGMA integrity_check` auf einer (fremden) Datei: nur lesend und unveraenderlich, und mit
-    `trusted_schema=OFF` -- die Pruefung wertet CHECK-Bedingungen und Indexausdruecke aus, und die
-    duerfen in einer fremden Datenbank keinen Funktionen vertrauen."""
+    """`PRAGMA integrity_check` auf einer fremden Datei: nur lesend und unveränderlich, mit `trusted_schema=OFF`."""
+    # Die Prüfung wertet CHECK-Bedingungen und Indexausdrücke aus, und die dürfen in einer fremden Datenbank keinen
+    # Funktionen vertrauen.
     uri = "file:" + urllib.parse.quote(os.fspath(path)) + "?mode=ro&immutable=1"
     try:
         conn = sqlite3.connect(uri, uri=True)
@@ -186,7 +164,7 @@ def integrity_check(path: Path) -> None:
 
 
 def db_facts(db_copy: Path, extensions_dir: Path | None) -> tuple[list[str], list[dict[str, Any]]]:
-    """-> (alembic-Koepfe, [{id, version, alembic_heads}]) aus der KOPIE."""
+    """-> (Alembic-Köpfe, [{id, version, alembic_heads}]) aus der Kopie."""
     conn = sqlite3.connect(f"file:{db_copy}?mode=ro", uri=True)
     try:
         try:
@@ -208,17 +186,15 @@ def db_facts(db_copy: Path, extensions_dir: Path | None) -> tuple[list[str], lis
 
 
 REVISION_RE = re.compile(r"^revision\s*(?::\s*str)?\s*=\s*['\"]([^'\"]+)['\"]", re.MULTILINE)
-"""Die Revisions-ID in einer Alembic-Skriptdatei (ohne Alembic zu laden); auch `migrate.py` nutzt sie."""
+"""Die Revisions-ID in einer Alembic-Skriptdatei, ohne Alembic zu laden; auch `migrate.py` nutzt sie."""
 
 _EXT_ID_RE = re.compile(r"^[a-z][a-z0-9-]{1,63}$")
 
 
 def extension_ids(ext_dir: Path) -> list[str]:
-    """Ordnername, Kennung und alte Kennungen (`legacy_ids`) einer installierten Erweiterung.
-
-    Gelesen mit `tomllib` aus `<ordner>/extension.toml` -- nur Standardbibliothek, weil `boot` dieses Modul
-    ohne SDK laedt. Ist die Datei nicht lesbar, gilt nur der Ordnername (wie frueher). So passen die
-    Zeilen einer umbenannten Erweiterung (Registry-Zeile mit der alten Kennung) weiter zu ihrem Ordner."""
+    """Ordnername, Kennung und alte Kennungen (`legacy_ids`) einer installierten Erweiterung aus `extension.toml`."""
+    # Nur Standardbibliothek, weil `boot` dieses Modul ohne SDK lädt. So passen die Zeilen einer umbenannten Erweiterung
+    # (Registry-Zeile mit der alten Kennung) weiter zu ihrem Ordner; ist die Datei nicht lesbar, gilt nur der Ordnername.
     names = [ext_dir.name]
     try:
         data = tomllib.loads((ext_dir / "extension.toml").read_text(encoding="utf-8"))
@@ -235,8 +211,7 @@ def extension_ids(ext_dir: Path) -> list[str]:
 
 
 def _extension_revisions(extensions_dir: Path | None) -> dict[str, set[str]]:
-    """Kennung -> Revisionen ihres eigenen Migrationszweigs, je Ordner unter allen Namen aus
-    `extension_ids()` (Ordnername, Kennung, alte Kennungen)."""
+    """Kennung -> Revisionen ihres Migrationszweigs, je Ordner unter allen Namen aus `extension_ids()`."""
     out: dict[str, set[str]] = {}
     if extensions_dir is None or not extensions_dir.is_dir():
         return out
@@ -263,11 +238,6 @@ def sha256_file(path: Path) -> tuple[str, int]:
             digest.update(chunk)
             size += len(chunk)
     return digest.hexdigest(), size
-
-
-# ---------------------------------------------------------------------------
-# Archiv schreiben
-# ---------------------------------------------------------------------------
 
 
 class _HashingReader(io.RawIOBase):
@@ -298,10 +268,12 @@ def _add_file(tar: tarfile.TarFile, arcname: str, path: Path) -> dict[str, Any]:
         info.size = st.st_size
         info.mtime = int(st.st_mtime)
         info.mode = stat.S_IMODE(st.st_mode) & 0o777
-        reader = _HashingReader(fh)
+        reader = _HashingReader(fh)  # gehasht wird genau, was im Archiv landet
         try:
             tar.addfile(info, reader)
         except OSError as exc:
+            # Erweiterungsdateien sind nicht transaktional: Wird eine Datei beim Einpacken kürzer, scheitert die Sicherung
+            # ehrlich, statt still Müll zu sichern.
             raise BackupError(f"{arcname} hat sich beim Sichern verändert, bitte erneut versuchen.") from exc
     return {"path": arcname, "sha256": reader.digest.hexdigest(), "size": info.size, "mode": info.mode}
 
@@ -309,8 +281,8 @@ def _add_file(tar: tarfile.TarFile, arcname: str, path: Path) -> dict[str, Any]:
 def write_archive(
     out: BinaryIO, *, db_copy: Path, entries: list[Entry], manifest_for: Callable[[dict, list[dict]], dict]
 ) -> dict[str, Any]:
-    """Schreibt das tar.gz nach `out`. `manifest_for(db_info, files)` baut das Manifest,
-    das als letzter Eintrag folgt, und wird auch zurueckgegeben."""
+    """Schreibt das tar.gz nach `out`; `manifest_for(db_info, files)` baut das Manifest, das als letzter Eintrag folgt."""
+    # gzip Stufe 6 um ein tar-Stromarchiv; das Manifest steht am Ende, weil die Prüfsummen erst beim Einpacken entstehen.
     with (
         gzip.GzipFile(fileobj=out, mode="wb", compresslevel=6, mtime=0) as gz,
         tarfile.open(fileobj=gz, mode="w|", format=tarfile.PAX_FORMAT) as tar,
@@ -328,23 +300,18 @@ def write_archive(
     return manifest
 
 
-# ---------------------------------------------------------------------------
-# Archiv lesen (Pruefen; Grundlage fuer das Wiederherstellen)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class ExtractLimits:
-    """Grenzen beim Auspacken einer fremden Datei (Bomben: ein winziges gzip kann sich auf
-    Terabyte entpacken, ein tar kann Millionen leerer Eintraege haben)."""
+    """Grenzen beim Auspacken einer fremden Datei, gegen Bomben (ein winziges gzip kann sich auf Terabyte entpacken,
+    ein tar Millionen leerer Einträge haben)."""
 
     max_entries: int
     max_total_bytes: int
-    """Alles, was aus dem gzip herauskommt (Nutzdaten plus tar-Kopfzeilen und Auffuellung)."""
+    """Alles, was aus dem gzip herauskommt (Nutzdaten plus tar-Kopfzeilen und Auffüllung)."""
     max_file_bytes: int
     space_limited: bool = False
-    """`max_total_bytes` stammt aus dem freien Platz (statt aus der festen Obergrenze): wird er
-    ueberschritten, heisst die Meldung "zu wenig Speicher" statt "zu gross"."""
+    """`max_total_bytes` stammt aus dem freien Platz (statt aus der festen Obergrenze): Wird er überschritten,
+    heißt die Meldung "zu wenig Speicher" statt "zu groß"."""
 
 
 def _over_limit(limits: ExtractLimits) -> BackupError:
@@ -355,15 +322,14 @@ def _over_limit(limits: ExtractLimits) -> BackupError:
 
 
 class _CountingReader(io.RawIOBase):
-    """Zaehlt die entpackten Bytes und bricht an der Grenze ab -- schon waehrend gelesen wird
-    (tarfile liest in Stuecken von ~10 KB), nicht erst danach."""
+    """Zählt die entpackten Bytes und bricht schon beim Lesen an der Grenze ab (tarfile liest in Stücken von ~10 KB)."""
 
     def __init__(self, fh: BinaryIO, limits: ExtractLimits | None) -> None:
         self._fh = fh
         self._limits = limits
         self.total = 0
         self.header_start: int | None = 0
-        """Gesetzt, solange tarfile den Kopf des naechsten Eintrags liest (siehe `MAX_HEADER_BYTES`)."""
+        """Gesetzt, solange tarfile den Kopf des nächsten Eintrags liest (siehe `MAX_HEADER_BYTES`)."""
 
     def readable(self) -> bool:
         return True
@@ -380,10 +346,9 @@ class _CountingReader(io.RawIOBase):
 
 
 MAX_HEADER_BYTES = 1024 * 1024
-"""So viel darf tarfile zwischen zwei Eintraegen lesen (Kopf, pax-/GNU-Erweiterungen, Rest des
-vorigen Eintrags). tarfile haelt einen pax- oder GNU-Langnamen-Kopf GANZ im Speicher: ein
-Eintrag, der einen Namen von einem Gigabyte verspricht, ist als gzip nur ein Megabyte gross und
-wuerde einen kleinen Rechner aus dem Speicher werfen. Unsere Namen sind hoechstens 1024 Zeichen."""
+"""So viel darf tarfile zwischen zwei Einträgen lesen. tarfile hält einen pax- oder GNU-Langnamen-Kopf ganz im Speicher:
+Ein Eintrag, der einen Namen von einem Gigabyte verspricht, ist als gzip nur ein Megabyte groß und würfe einen kleinen
+Rechner aus dem Speicher. Unsere Namen sind höchstens 1024 Zeichen lang."""
 
 
 def _filter_member(member: tarfile.TarInfo, dest: Path) -> None:
@@ -404,19 +369,14 @@ def extract_archive(
     skip_entry: Callable[[str, bool], bool] | None = None,
     skipped: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Packt nach `dest` aus und prueft alles: erlaubte Namen, nur normale Dateien (mit
-    `allow_dir` auch Ordner), jede Datei genau einmal, sha256 und Groesse gegen das Manifest,
-    Kopf gegen Manifest, `integrity_check` der Datenbank.
-
-    Mit `limits` (fremde Dateien beim Wiederherstellen) zusaetzlich: Obergrenzen fuer Zahl der
-    Eintraege, Einzeldatei und entpackte Gesamtmenge, gemessen am entpackten Strom. Mit
-    `allow_file` eine strengere Namens-Erlaubnisliste als `is_safe_member`. Pro Eintrag laeuft
-    ausserdem `tarfile.data_filter` (zweite Sicherung neben unserer eigenen Pruefung -- wir
-    schreiben jede Datei selbst und nie ueber `tar.extract`). `skip_entry(name, ist_ordner)` nennt
-    Eintraege, die nicht abgelehnt, sondern einfach nicht geschrieben werden (nur normale Dateien und
-    Ordner; ihre Namen landen in `skipped`). Ihr Inhalt wird trotzdem gelesen und gegen das Manifest
-    geprueft, damit die Pruefsummen-Pruefung dieselbe bleibt. Entpackt wird nur nach `dest`;
-    scheitert etwas, liegen dort schon Dateien -- der Aufrufer raeumt `dest` dann weg."""
+    """Packt nach `dest` aus und prüft alles: erlaubte Namen, nur normale Dateien, jede Datei einmal, Prüfsummen,
+    Größen und Kopf gegen das Manifest, `integrity_check` der Datenbank. Scheitert etwas, räumt der Aufrufer `dest` weg."""
+    # `limits` (fremde Dateien beim Wiederherstellen) setzt Obergrenzen für Einträge, Einzeldatei und entpackte Gesamtmenge,
+    # gemessen am entpackten Strom; `allow_file` ist dann eine strengere Namens-Erlaubnisliste als `is_safe_member`, mit
+    # `allow_dir` sind auch Ordner erlaubt. `tarfile.data_filter` läuft pro Eintrag zusätzlich als zweite Sicherung;
+    # geschrieben wird jede Datei selbst, nie über `tar.extract`. `skip_entry(name, ist_ordner)` nennt Einträge, die nicht
+    # abgelehnt, sondern nicht geschrieben werden (Namen in `skipped`); ihr Inhalt wird trotzdem gelesen und gegen das
+    # Manifest geprüft, damit die Prüfsummen-Prüfung dieselbe bleibt.
     seen: dict[str, tuple[str, int]] = {}
     manifest: Any = None
     entries = 0
@@ -431,8 +391,7 @@ def extract_archive(
                 reader.header_start = None
                 if member is None:
                     break
-                # Im Strom-Modus merkt sich tarfile jeden Eintrag (`members`) -- bei 200 000 Eintraegen
-                # Hunderte MB. Wir brauchen die Liste nicht.
+                # Im Strom-Modus merkt sich tarfile jeden Eintrag (`members`), bei 200 000 Einträgen Hunderte MB.
                 tar.members.clear()
                 name = member.name
                 entries += 1
@@ -463,8 +422,8 @@ def extract_archive(
                     allowed = fmt.is_safe_member(name)
                 else:
                     allowed = allow_file(name) if allow_file is not None else fmt.is_safe_member(name)
-                # Nur gewoehnliche Dateien: GNU-Sparse-Eintraege "entpacken" sich zu Nullen, die der Zaehler am
-                # Strom nicht sieht (kleiner Eintrag, riesige Datei).
+                # Nur gewöhnliche Dateien: GNU-Sparse-Einträge "entpacken" sich zu Nullen, die der Zähler am Strom nicht
+                # sieht (kleiner Eintrag, riesige Datei).
                 if not allowed or not is_plain_file or name in seen:
                     raise DamagedBackup("unerwarteter Eintrag im Archiv")
                 if limits is not None:
@@ -496,8 +455,8 @@ def extract_archive(
                     target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
                 except OSError as exc:
-                    # "files/a" und "files/a/b" im selben Archiv, ein Name, den das Dateisystem nicht kann
-                    # (zu lang, gleich bis auf Gross-/Kleinschreibung): das schreibt Nodvard Deck nie.
+                    # "files/a" und "files/a/b" im selben Archiv, ein Name, den das Dateisystem nicht kann (zu lang, gleich
+                    # bis auf Groß-/Kleinschreibung): Das schreibt das Dashboard nie.
                     if exc.errno == errno.ENOSPC:
                         raise
                     raise DamagedBackup("unerwarteter Eintrag im Archiv") from exc
@@ -531,15 +490,9 @@ def extract_archive(
     return manifest
 
 
-# ---------------------------------------------------------------------------
-# Pipe zwischen zwei Threads (tar <-> Verschluesselung), ohne alles im Speicher
-# ---------------------------------------------------------------------------
-
-
 def run_pipeline(producer: Callable[[BinaryIO], None], consumer: Callable[[BinaryIO], T]) -> T:
-    """`producer` schreibt in eine Pipe, `consumer` liest sie (bis zum Ende, Rest wird
-    nachgelesen, damit der Erzeuger bis zum Schluss pruefen kann, z. B. den letzten
-    age-Block). Ein Fehler des Erzeugers gewinnt gegen Folgefehler des Lesers."""
+    """`producer` schreibt in eine Pipe, `consumer` liest sie (tar <-> Verschlüsselung), ohne dass alles im Speicher liegt.
+    Ein Fehler des Erzeugers gewinnt gegen Folgefehler des Lesers."""
     read_fd, write_fd = os.pipe()
     reader = os.fdopen(read_fd, "rb")
     writer = os.fdopen(write_fd, "wb")
@@ -560,6 +513,7 @@ def run_pipeline(producer: Callable[[BinaryIO], None], consumer: Callable[[Binar
     thread.start()
     try:
         result = consumer(reader)
+        # Den Rest nachlesen, damit der Erzeuger bis zum Schluss prüfen kann (z. B. den letzten age-Block).
         while reader.read(_READ_SIZE):
             pass
     except BaseException as exc:

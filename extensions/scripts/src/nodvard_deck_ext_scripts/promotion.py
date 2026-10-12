@@ -1,14 +1,4 @@
-"""KI "befoerdert" einen wiederkehrenden Fix zu einem Skript-Entwurf
-(docs/02-EXTENSION-API.md Paragraph 6, letzte Zeile): "`ctx.events.subscribe(
-'action.executed')` in der scripts-Extension; Vorschlag als Entwurf im Repo. Die beiden
-Extensions reden ueber den Event-Bus, nicht miteinander."
-
-Setzt voraus, dass `core.gate.execute_action()` ein `action.executed`-Event publiziert
-(siehe `test_core_gate.py::test_execute_action_publishes_action_executed_event`).
-
-Schwelle `MAX_COUNT=3` -- dieselbe Konvention wie die Flap-Erkennung (`core/flap.py`,
-WP-5), fuer Konsistenz wiederverwendet statt neu erfunden.
-"""
+"""Erkennt Befehle, die dreimal erfolgreich liefen, und schlägt dafür einen Skript-Entwurf vor."""
 
 from __future__ import annotations
 
@@ -18,12 +8,11 @@ from typing import Any
 
 from .params import escape_dollars
 
+# Gleiche Schwelle wie die Flap-Erkennung (`core/flap.py`).
 MAX_COUNT = 3
 
+# Eigene `script.run`-Läufe zählen nie, sonst schlüge sich ein bereits übernommenes Skript immer wieder selbst vor.
 _PROMOTABLE_ACTION_TYPES = frozenset({"shell.exec"})
-"""Nur `shell.exec` (z. B. von Nodvard Shield oder direkt aus dem Terminal vorgeschlagen)
-wird beobachtet. Eigene `script.run`-Ausfuehrungen NIE -- sonst wuerde ein bereits
-befoerdertes, wiederkehrend laufendes Skript sich selbst immer wieder neu vorschlagen."""
 
 
 def fingerprint(action_type: str, host_id: str | None, command: str) -> str:
@@ -31,28 +20,20 @@ def fingerprint(action_type: str, host_id: str | None, command: str) -> str:
 
 
 def draft_content(command: str) -> str:
-    """Inhalt des Entwurfs fuer einen uebernommenen Befehl. Jedes `$` steht darin als
-    `$$`: Beim Ausfuehren macht `substitute_params()` aus `$$` wieder `$`, das Skript
-    fuehrt also genau den Befehl aus, der wiederholt lief (auch mit `$$`, `$HOME`
-    oder `$(...)` darin)."""
+    """Inhalt des Entwurfs für einen übernommenen Befehl; jedes `$` steht als `$$`, damit er unverändert läuft."""
     return f"#!/bin/sh\n{escape_dollars(command)}\n"
 
 
 @dataclass
 class RecurringFixTracker:
-    """Reiner Prozessspeicher (wie der `IncidentStore` von Nodvard Shield, WP-9) -- ein Neustart
-    faengt bewusst bei null an. Ein Reboot ist selten genug, dass das erneute Zaehlen
-    von drei echten Wiederholungen kein reales Problem ist; ein Zaehlstand, der einen
-    Neustart unbegrenzt ueberlebt, waere unnoetige Komplexitaet hier."""
+    """Zählt im Arbeitsspeicher; nach einem Neustart beginnt das Zählen bewusst von vorn."""
 
     _counts: dict[str, int] = field(default_factory=lambda: defaultdict(int))
     _promoted: set[str] = field(default_factory=set)
 
     def observe(self, *, action_type: str, host_id: str | None, outcome: str, payload: dict[str, Any]) -> str | None:
-        """Gibt den fingerprint zurueck, GENAU WENN er in diesem Aufruf die Schwelle
-        erreicht -- der Aufrufer soll dann (und nur dann) einen Entwurf anlegen.
-        Kein erneutes Zurueckgeben fuer denselben fingerprint danach, sonst wuerde jede
-        weitere Wiederholung einen weiteren, ueberfluessigen Entwurf erzeugen."""
+        """Gibt den Fingerabdruck nur in dem Aufruf zurück, der die Schwelle erreicht; danach nie wieder (ein Entwurf je
+        Befehl)."""
         if action_type not in _PROMOTABLE_ACTION_TYPES or outcome != "success":
             return None
         command = payload.get("command")

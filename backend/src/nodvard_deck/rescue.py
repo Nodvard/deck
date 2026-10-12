@@ -1,50 +1,12 @@
-"""Die Notseite: `python -m nodvard_deck.rescue` (startet `deploy/entrypoint.sh`, wenn `nodvard_deck.boot` scheitert).
-
-**Nur Standardbibliothek.** Dieses Modul importiert nichts, was nicht zu Python gehoert (ein Test prueft das
-ueber den Syntaxbaum und startet es ohne jedes installierte Paket). Der Grund: Die Notseite ist fuer genau
-den Fall da, dass im neuen Image etwas fehlt oder kaputt ist -- eine fehlende Abhaengigkeit (pydantic,
-SQLAlchemy, ...) darf sie nie mitreissen. Darum auch kein Import aus `nodvard_deck.core`: was sie von dort
-braucht (Zustandsdatei lesen, Sperre, Notfallcode, Rueckweg-Vormerkung), hat sie als kleinen eigenen Code;
-`tests/test_rescue.py` stellt sicher, dass beide Seiten dasselbe meinen. Auch die Seite selbst kommt ohne
-fremde Dateien aus: ein Stueck HTML mit eingebettetem Stil, kein Skript, keine Schrift, kein Bild.
-
-**Ein eigener Server** (`http.server.ThreadingHTTPServer`) auf dem Port der Anwendung (Standard 8080;
-`--port`/`--host` uebernimmt der Entrypoint aus dem Startbefehl).
-
-* `GET /api/v1/health` -> **503** `{"status":"rescue"}`. Nie `ok` im Inhalt: Docker-Healthcheck,
-  `scripts/deploy_pi.sh` (`grep "status":"ok"`) und ein Aktualisierungs-Helfer erkennen so, dass NICHT alles
-  in Ordnung ist, und schalten zurueck. Jeder andere Pfad unter `/api/` -> 503 JSON.
-* `GET <alles andere>` -> die Seite (503, Deutsch). **Ohne Code** nur Allgemeines: was passiert ist (dass
-  Nodvard Deck nicht gestartet ist), wo der Notfallcode steht, die allgemeinen Wege zurueck. Keine
-  Fehlerdetails, keine Versionen, keine Aktionen.
-* **Notfallcode** wie der Einrichtungscode (`core/setup_code.py`): 3 x 4 Zeichen ohne verwechselbare, in der Datei
-  `<Datenordner>/.boot/rescue_code.txt` (0600), als Banner im Protokoll des Containers. Eingabe gedrosselt
-  (je Absender und insgesamt), danach ein kurzlebiges Cookie (HttpOnly, SameSite=Strict, 15 Minuten).
-* **Mit Code**: Fehlergrund, Versionen, bereinigtes Protokoll und die Aktionen
-  - `POST /rescue/retry` -> Prozessende mit 75, der Container startet neu (Restart-Regel) und `boot` laeuft noch einmal;
-  - `POST /rescue/rollback` -> "Stand vor dem Update wiederherstellen" **vormerken** (`rollback.json`, die Kopie
-    kommt aus dem Zustand von `boot`, nie aus der Anfrage), dann wie `retry`; eingespielt wird beim Start;
-  - `GET /rescue/log` (bereinigt), `POST /rescue/unlock`, `POST /rescue/lock`.
-* **Keine Aktion "Kopie herunterladen".** Eine unverschluesselte Datenbank ueber HTTP herauszugeben waere
-  unverantwortlich, und die Verschluesselung (age) braucht `pyrage`, das nicht zur Standardbibliothek gehoert.
-  Die Kopie liegt im Datenordner (`backups/vor-update/`) und laesst sich dort sichern.
-* Aktionen (POST) pruefen `Origin` gegen `Host`; das Cookie ist SameSite=Strict.
-* Haertung: kleine Obergrenzen (Inhalt 4 KiB, Kopfzeilen zusammen 32 KiB und hoechstens 100, 64 gleichzeitige
-  Verbindungen, davon hoechstens 8 je Absender -- bei IPv6 je /64-Netz --, dazu ein eigener kleiner Vorrat fuer
-  127.0.0.1/::1, damit der Health-Check des Containers immer durchkommt; 3 s fuer die Kopfzeilen und 10 s fuer die
-  ganze Verbindung, beides als Frist fuer das Ganze und nicht je Lesevorgang), nie Dateien ausliefern, alles
-  Dynamische maskiert, auch im Protokoll (Steuerzeichen aus der Anfrage erscheinen dort als `\\x1b` usw.).
-* Eine Sperre nach Fehlversuchen weist nur FALSCHE Codes ab, jeden erst nach einer kurzen Bremse; der richtige Code geht
-  immer sofort durch (siehe `try_code`).
-
-Die Notseite haelt die Sperre des Datenordners (`.boot/app.lock`), solange sie laeuft: ein `compose run` mit `boot`
-daneben aendert dann nichts.
-
-Rueckgabe von `main`: 75 = Neustart gewuenscht (`retry`/`rollback`), 0 = beendet (SIGTERM), 2 = Port belegt o. ae.
-"""
+"""Die Notseite (`python -m nodvard_deck.rescue`, vom Entrypoint gestartet, wenn `boot` scheitert): ein eigener kleiner
+HTTP-Server auf dem Port der Anwendung, nur mit der Standardbibliothek."""
 
 from __future__ import annotations
 
+# Nur Standardbibliothek (ein Test prüft das über den Syntaxbaum): Die Notseite ist für den Fall da, dass im neuen Image
+# etwas fehlt, eine fehlende Abhängigkeit darf sie nie mitreißen. Darum auch kein Import aus `nodvard_deck.core`; was sie
+# von dort braucht, hat sie als kleinen eigenen Code, und `tests/test_rescue.py` stellt sicher, dass beide dasselbe meinen.
+# Die Seite selbst ist ein Stück HTML mit eingebettetem Stil: kein Skript, keine Schrift, kein Bild.
 import argparse
 import hashlib
 import html
@@ -69,7 +31,7 @@ try:  # nicht unter Windows
 except ImportError:  # pragma: no cover
     fcntl = None  # type: ignore[assignment]
 
-# --- Namen und Formate: dieselben wie `core/bootstate.py` (ein Test vergleicht) ---------------------------------
+# Namen und Formate wie in `core/bootstate.py` (ein Test vergleicht).
 BOOT_DIR = ".boot"
 STATE_NAME = "state.json"
 LOCK_NAME = "app.lock"
@@ -80,44 +42,43 @@ FAILURE_KINDS = (
     "migration_failed", "revert_failed", "no_space", "no_copy", "newer_data", "copy_unusable", "db_unreadable", "rollback_failed", "unexpected",
 )
 
+# Der Port der Anwendung; der Entrypoint übernimmt `--port` und `--host` aus dem Startbefehl.
 DEFAULT_PORT = 8080
 EXIT_RETRY = 75
 
-# --- Notfallcode (wie `core/setup_code.py`) ---------------------------------------------------------------------
+# Notfallcode wie der Einrichtungscode (`core/setup_code.py`): 3 x 4 Zeichen ohne verwechselbare. Er steht im Protokoll des
+# Containers (Banner) und in `<Datenordner>/.boot/rescue_code.txt` (0600).
 ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 GROUPS, GROUP_LEN = 3, 4
 _STRIP = re.compile(r"[^A-Za-z0-9]")
 
-# --- Grenzen -----------------------------------------------------------------------------------------------------
 MAX_BODY = 4096
 MAX_CONNECTIONS = 64
 MAX_CONNECTIONS_PER_CLIENT = 8
-"""Ein einzelner Rechner kann so nie alle Plaetze belegen (z. B. mit vielen halb geschickten Anfragen). Bei IPv6 zaehlt das
-ganze /64-Netz als ein Absender: wer ein Netz hat, hat auch Milliarden Adressen."""
+"""Ein einzelner Rechner kann so nie alle Plätze belegen (z. B. mit vielen halb geschickten Anfragen). Bei IPv6 zählt das
+ganze /64-Netz als ein Absender: Wer ein Netz hat, hat auch Milliarden Adressen."""
 RESERVED_LOCAL_CONNECTIONS = 8
-"""Eigener Vorrat fuer 127.0.0.1 und ::1 (Health-Check im Container, `docker exec`): zaehlt nicht zu `MAX_CONNECTIONS`, damit
-auch dann noch jemand durchkommt, wenn andere alle Plaetze belegen. Von aussen laesst sich diese Adresse nicht vortaeuschen."""
+"""Eigener Vorrat für 127.0.0.1 und ::1 (Health-Check im Container, `docker exec`): zählt nicht zu `MAX_CONNECTIONS`, damit
+auch dann noch jemand durchkommt, wenn andere alle Plätze belegen. Von außen lässt sich diese Adresse nicht vortäuschen."""
 MAX_HEADER_BYTES = 32 * 1024
-"""Anfragezeile und Kopfzeilen zusammen. Die Standardbibliothek erlaubt sonst 100 Zeilen zu je 64 KiB je Verbindung.
-Grosszuegig bemessen, weil Cookies je Adresse gelten und nicht je Port: Liegen auf derselben Adresse noch andere Dienste
-(Anmeldung ueber einen Proxy, Nextcloud, Proxmox ...), schickt der Browser deren Cookies mit, und die Notseite muss
-gerade im Notfall erreichbar bleiben. Die Kopfzeilen selbst belegen bei 72 Verbindungen (64 plus der Vorrat fuer
-127.0.0.1) zusammen hoechstens rund 2,3 MiB; beim Zerlegen kommen ein paar Kopien dazu."""
+"""Anfragezeile und Kopfzeilen zusammen (die Standardbibliothek erlaubt sonst 100 Zeilen zu je 64 KiB). Großzügig, weil
+Cookies je Adresse und nicht je Port gelten: Der Browser schickt die Cookies anderer Dienste auf derselben Adresse mit,
+und die Notseite muss gerade im Notfall erreichbar bleiben. Bei 72 Verbindungen sind das höchstens rund 2,3 MiB."""
 MAX_HEADERS = 100
-"""Hoechstzahl der Kopfzeilen; die Standardbibliothek erzwingt sie selbst (`http.client._MAXHEADERS`), hier steht sie der Klarheit wegen."""
+"""Höchstzahl der Kopfzeilen; die Standardbibliothek erzwingt sie selbst (`http.client._MAXHEADERS`), hier steht sie der Klarheit wegen."""
 HEAD_TIMEOUT_S = 3
-"""Frist fuer Anfragezeile und Kopfzeilen (eine ehrliche Anfrage ist in Millisekunden da)."""
+"""Frist für Anfragezeile und Kopfzeilen (eine ehrliche Anfrage ist in Millisekunden da)."""
 REQUEST_TIMEOUT_S = 10
-"""Frist fuer die GANZE Verbindung (siehe `_Handler.setup`), nicht nur fuer jeden einzelnen Lesevorgang."""
+"""Frist für die ganze Verbindung (siehe `_Handler.setup`), nicht nur für jeden einzelnen Lesevorgang."""
 SESSION_TTL_S = 15 * 60
 MAX_SESSIONS = 20
 MAX_FAILURES_PER_IP = 5
 MAX_FAILURES_GLOBAL = 25
 LOCK_S = 10 * 60
-"""Fenster der Fehlversuche UND Dauer der Sperre: eine Sperre endet, wenn der aelteste Fehlversuch aus dem Fenster faellt."""
+"""Fenster der Fehlversuche und Dauer der Sperre: Eine Sperre endet, wenn der älteste Fehlversuch aus dem Fenster fällt."""
 LOCKED_DELAY_S = 0.5
-"""Bremse waehrend einer Sperre: die Antwort auf einen falschen Code kommt erst nach dieser Zeit. Der richtige Code wartet nie.
-Mit 64 Plaetzen sind so hoechstens 128 Versuche je Sekunde moeglich, egal wie schnell der Rechner ist."""
+"""Bremse während einer Sperre: Die Antwort auf einen falschen Code kommt erst nach dieser Zeit, der richtige wartet nie.
+Mit 64 Plätzen sind so höchstens 128 Versuche je Sekunde möglich, egal wie schnell der Rechner ist."""
 MAX_TRACKED_CLIENTS = 512
 ROLLBACK_BY = "notseite"
 
@@ -132,11 +93,6 @@ def _generate_code() -> str:
 
 def _pretty(normalized: str) -> str:
     return "-".join(normalized[i : i + GROUP_LEN] for i in range(0, len(normalized), GROUP_LEN))
-
-
-# ---------------------------------------------------------------------------
-# Dateien (eigener kleiner Code, siehe Modul-Docstring)
-# ---------------------------------------------------------------------------
 
 
 def _read_bytes(path: Path, limit: int) -> bytes | None:
@@ -206,7 +162,7 @@ def _int(value: object) -> int | None:
 
 
 def read_state(data_dir: Path) -> dict[str, Any]:
-    """Das, was die Seite aus `state.json` braucht -- geprueft und begrenzt, nie ein Absturz."""
+    """Das, was die Seite aus `state.json` braucht, geprüft und begrenzt; nie ein Absturz."""
     raw = _read_json(_boot_dir(data_dir) / STATE_NAME)
     if not isinstance(raw, dict):
         return {}
@@ -246,7 +202,7 @@ def read_state(data_dir: Path) -> dict[str, Any]:
 
 
 def write_rollback(data_dir: Path, copy: str, *, now: float | None = None) -> None:
-    """Merkt vor: beim naechsten Start (`nodvard_deck.boot`) den Stand der Kopie `copy` wiederherstellen."""
+    """Merkt vor, beim nächsten Start (`nodvard_deck.boot`) den Stand der Kopie `copy` wiederherzustellen."""
     if not isinstance(copy, str) or not COPY_NAME_RE.match(copy):
         raise ValueError("ungueltiger Name der Kopie")
     directory = _boot_dir(data_dir, create=True)
@@ -272,7 +228,8 @@ class _Lock:
 
 
 def take_lock(data_dir: Path) -> _Lock:
-    """Haelt die Sperre des Datenordners (wie die Anwendung). Geht das nicht, laeuft die Notseite trotzdem."""
+    """Hält die Sperre des Datenordners wie die Anwendung, damit ein `boot` daneben (z. B. `compose run`) nichts ändert.
+    Geht das nicht, läuft die Notseite trotzdem."""
     if fcntl is None:
         return _Lock(None)
     try:
@@ -293,12 +250,9 @@ def take_lock(data_dir: Path) -> _Lock:
     return _Lock(fd)
 
 
-# ---------------------------------------------------------------------------
-# Zustand der Notseite: Code, Drosselung, Sitzungen
-# ---------------------------------------------------------------------------
-
-
 class Rescue:
+    """Zustand der Notseite: Notfallcode, Drosselung und Sitzungen."""
+
     def __init__(self, data_dir: Path) -> None:
         self.data_dir = Path(data_dir)
         self.exit_code: int | None = None
@@ -309,10 +263,9 @@ class Rescue:
         self._failures_global: list[float] = []
         self._sessions: dict[str, float] = {}  # sha256(Token) -> Ablauf
 
-    # --- Code ---
     def ensure_code(self) -> str:
-        """Der Notfallcode: aus der Datei, sonst neu gewuerfelt und gespeichert. Geht das Schreiben nicht
-        (Datenordner schreibgeschuetzt), gilt er nur fuer diesen Lauf -- er steht ja im Protokoll."""
+        """Der Notfallcode: aus der Datei, sonst neu gewürfelt und gespeichert. Geht das Schreiben nicht
+        (Datenordner schreibgeschützt), gilt er nur für diesen Lauf; er steht ja im Protokoll."""
         path = _boot_dir(self.data_dir) / CODE_NAME
         raw = _read_bytes(path, 200)
         existing = normalize(raw.decode("utf-8", "replace")) if raw else ""
@@ -328,25 +281,13 @@ class Rescue:
         self._code = code
         return code
 
-    # --- Drosselung und Sitzungen ---
     def try_code(self, ip: str, candidate: object, *, now: float | None = None) -> tuple[str, Any]:
-        """-> ("ok", Sitzungstoken) | ("wrong", None) | ("locked", Sekunden bis zum naechsten Versuch).
-
-        Der Code wird IMMER geprueft, auch waehrend einer Sperre (immer mit `compare_digest`, vor jeder Auskunft ueber
-        die Sperre). Eine Sperre, ob je Absender oder insgesamt, weist nur FALSCHE Versuche mit "locked" ab; der richtige
-        Code kommt trotzdem durch. Sonst koennte jeder im Netz mit ein paar Fehlversuchen von wenigen Adressen die Notseite
-        fuer alle verschliessen -- gerade den Rueckweg, der sie braucht.
-
-        Raten bleibt aussichtslos: der Code hat 32^12 = 2^60 (rund 10^18) Moeglichkeiten. Waehrend einer Sperre darf zwar
-        jeder weiterraten, aber jede Antwort auf einen falschen Code kommt erst nach `LOCKED_DELAY_S` (siehe `_Handler._post`):
-        bei 64 Plaetzen hoechstens 128 Versuche je Sekunde. Im Mittel braeuchte man 2^59 / 128, rund 4,5 * 10^15 Sekunden,
-        weit ueber hundert Millionen Jahre (selbst ohne Bremse, bei 10.000 je Sekunde, knapp zwei Millionen). Die Antwort
-        verraet nichts ausser dem Erfolg: "locked" und "wrong" sagen bei einem falschen Code nichts darueber, wie nah er war.
-
-        Fehlversuche zaehlen nur, solange keine Sperre greift: waehrend einer Sperre kommt nichts mehr dazu (die Sperre
-        laesst sich nicht verlaengern, und die Listen im Speicher bleiben klein, egal wie viel jemand schickt)."""
+        """-> ("ok", Sitzungstoken) | ("wrong", None) | ("locked", Sekunden bis zum nächsten Versuch)."""
         now = time.monotonic() if now is None else now
         expected = normalize(self._code).encode()
+        # Der Code wird immer geprüft, auch während einer Sperre (mit `compare_digest`, vor jeder Auskunft über die Sperre).
+        # Eine Sperre weist nur falsche Versuche ab; sonst könnten ein paar Fehlversuche von wenigen Adressen die Notseite für
+        # alle verschließen, gerade den Rückweg, der sie braucht.
         good = secrets.compare_digest(normalize(candidate).encode(), expected) and bool(expected)
         with self._lock:
             if good:
@@ -356,7 +297,12 @@ class Rescue:
             attempts = [t for t in self._failures_by_ip.get(ip, []) if t > horizon]
             for limit, window in ((MAX_FAILURES_GLOBAL, self._failures_global), (MAX_FAILURES_PER_IP, attempts)):
                 if len(window) >= limit:
+                    # Raten bleibt aussichtslos: 32^12 = 2^60 Möglichkeiten, und jede Antwort auf einen falschen Code kommt
+                    # in der Sperre erst nach `LOCKED_DELAY_S` (`_Handler._post`), bei 64 Plätzen höchstens 128 Versuche je
+                    # Sekunde: im Mittel weit über hundert Millionen Jahre. "locked" und "wrong" verraten nicht, wie nah ein
+                    # Code war.
                     return "locked", max(1, int(min(window) + LOCK_S - now) + 1)
+            # Fehlversuche zählen nur ohne Sperre: Sie lässt sich so nicht verlängern, und die Listen bleiben klein.
             self._failures_global.append(now)
             attempts.append(now)
             self._failures_by_ip[ip] = attempts
@@ -405,20 +351,15 @@ class Rescue:
                 self._sessions.pop(self._digest(token), None)
 
     def request_exit(self, code: int = EXIT_RETRY) -> None:
-        """Beendet den Server kurz nach der Antwort; `main` gibt `code` zurueck."""
+        """Beendet den Server kurz nach der Antwort; `main` gibt `code` zurück."""
         self.exit_code = code
         server = self.server
         if server is not None:
             threading.Timer(0.3, server.shutdown).start()
 
-    # --- Seite ---
     def render(self, *, unlocked: bool, flash: str | None = None) -> str:
         return render_page(read_state(self.data_dir), unlocked=unlocked, flash=flash)
 
-
-# ---------------------------------------------------------------------------
-# Die Seite
-# ---------------------------------------------------------------------------
 
 _FLASH = {
     "falsch": ("bad", "Der Notfallcode stimmt nicht."),
@@ -431,7 +372,7 @@ _LOCKED_TEXT = (
     "Der eingegebene Code stimmt nicht – prüfe die Eingabe. "
     "Der richtige Code funktioniert weiterhin sofort, auch wenn du schon mehrmals falsch getippt hast."
 )
-"""Antwort auf einen falschen Code waehrend einer Sperre (siehe `Rescue.try_code`): Die Sperre weist nur falsche Codes ab."""
+"""Antwort auf einen falschen Code während einer Sperre (siehe `Rescue.try_code`): Die Sperre weist nur falsche Codes ab."""
 
 _CSS = """
 :root{color-scheme:light dark;--bg:#f4f5f7;--fg:#1b1f24;--muted:#5b6470;--card:#fff;--line:#d5d9e0;--accent:#2b5fd9;--bad:#b3261e;--good:#1b7a3a;--warn:#8a5a00;--warnbg:#fff4d6;--code:#eef0f4}
@@ -488,7 +429,7 @@ _NEEDS_FEATURE = (
 
 
 def _kind_text(kind: str, failure: dict[str, Any], rollback: dict[str, Any] | None) -> tuple[str, str, list[str]]:
-    """(Titel, Einleitung, Schritte) -- alles schon maskiert."""
+    """(Titel, Einleitung, Schritte), alles schon maskiert."""
     app = _version(failure.get("app_version"))
     data = _version(failure.get("data_version"))
     previous = failure.get("previous_version")
@@ -586,6 +527,8 @@ def render_page(state: dict[str, Any], *, unlocked: bool, flash: str | None = No
         "Die Daten auf dem Server ändert diese Seite nicht von selbst.</p></section>"
     )
     if not unlocked:
+        # Ohne Code nur Allgemeines: dass der Start nicht gelang, wo der Notfallcode steht und die allgemeinen Wege zurück.
+        # Keine Fehlerdetails, keine Versionen, keine Aktionen.
         add(
             '<section class="card"><h2>Notfallcode eingeben</h2>'
             "<p>Einzelheiten und Möglichkeiten gibt es nur mit dem Notfallcode. Er steht im <strong>Protokoll des Containers</strong> "
@@ -608,6 +551,7 @@ def render_page(state: dict[str, Any], *, unlocked: bool, flash: str | None = No
         add('<p class="muted small">Diese Seite ersetzt Nodvard Deck, bis der Start wieder gelingt.</p></main></body></html>')
         return "".join(parts)
 
+    # Mit Code: Fehlergrund, Versionen, bereinigtes Protokoll und die Aktionen. Alles Dynamische ist maskiert (`_e`).
     failure = state.get("failure")
     if failure:
         kind = failure["kind"]
@@ -659,32 +603,28 @@ def _info_page(title: str, text: str) -> str:
     )
 
 
-# ---------------------------------------------------------------------------
-# Server
-# ---------------------------------------------------------------------------
-
 _SECURITY_HEADERS = {
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
     "X-Frame-Options": "DENY",
-    # NICHT `no-referrer`: Browser schicken dann bei einem Formular `Origin: null`, und die Pruefung von `Origin` unten wuerde
+    # Nicht `no-referrer`: Browser schicken dann bei einem Formular `Origin: null`, und die Prüfung von `Origin` unten würde
     # jede Eingabe abweisen. `same-origin` schickt den Ursprung nur an die eigene Seite und sonst nichts.
     "Referrer-Policy": "same-origin",
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
 }
 _LOG_ESCAPE = {c: f"\\x{c:02x}" for c in (*range(0x20), *range(0x7F, 0xA0))}
-"""Steuerzeichen fuers Protokoll maskieren -- wie die Standardbibliothek in ihrem `log_message` (gh-100001), das hier
-ersetzt ist. Sonst koennte eine Anfrage ohne Code Escape-Folgen ins Protokoll schreiben, die beim Lesen im Terminal
-wirken (Zeilen loeschen, Zwischenablage setzen)."""
+"""Steuerzeichen fürs Protokoll maskieren wie die Standardbibliothek in ihrem `log_message` (gh-100001), das hier ersetzt
+ist. Sonst könnte eine Anfrage ohne Code Escape-Folgen ins Protokoll schreiben, die beim Lesen im Terminal wirken (Zeilen
+löschen, Zwischenablage setzen)."""
+# Nie `ok` im Inhalt: Der Health-Check des Containers, `scripts/deploy_pi.sh` (sucht `"status":"ok"`) und der Update-Helfer
+# erkennen so, dass nicht alles in Ordnung ist, und schalten zurück. Jeder andere Pfad unter `/api/` antwortet ebenso mit 503.
 _HEALTH_BODY = b'{"status":"rescue"}'
 _API_BODY = json.dumps({"status": "rescue", "detail": "Nodvard Deck läuft im Notfallmodus."}, ensure_ascii=False, separators=(",", ":")).encode()
 
 
 def _sender(address: Any) -> tuple[str, bool]:
-    """-> (Schluessel fuer die Zaehlung je Absender, ob die Verbindung von diesem Rechner selbst kommt).
-
-    IPv6 zaehlt je /64-Netz, IPv4-in-IPv6 als IPv4. Nur 127.0.0.1 und ::1 gelten als "lokal" (Health-Check im Container),
-    nicht jede Adresse aus 127.0.0.0/8."""
+    """Gibt (Schlüssel für die Zählung je Absender, ob die Verbindung vom Rechner selbst kommt) zurück. IPv6 zählt je
+    /64-Netz, IPv4-in-IPv6 als IPv4; "lokal" sind nur 127.0.0.1 und ::1 (Health-Check im Container), nicht das ganze Netz 127.0.0.0/8."""
     raw = str(address[0]) if isinstance(address, tuple) and address else ""
     try:
         ip = ipaddress.ip_address(raw.split("%", 1)[0])
@@ -700,17 +640,16 @@ def _sender(address: Any) -> tuple[str, bool]:
 
 
 class _HeadReader:
-    """Umhuellt `rfile` und begrenzt Anfragezeile und Kopfzeilen zusammen auf `MAX_HEADER_BYTES`.
-
-    Die Standardbibliothek erlaubt je Kopfzeile 64 KiB und 100 Zeilen: 64 Verbindungen koennten so Hunderte MB belegen.
-    Ist das Budget aufgebraucht, loest die naechste Zeile `http.client.HTTPException` aus; `parse_request` beantwortet das
-    mit 431. Den Inhalt (`read`) und alles andere reicht der Umschlag unveraendert durch (der Inhalt ist anderweitig begrenzt)."""
+    """Umhüllt `rfile` und begrenzt Anfragezeile und Kopfzeilen zusammen auf `MAX_HEADER_BYTES` (die Standardbibliothek
+    erlaubt je Zeile 64 KiB und 100 Zeilen, 64 Verbindungen könnten so Hunderte MB belegen)."""
 
     def __init__(self, raw: Any, limit: int) -> None:
         self._raw = raw
         self._left = limit
 
     def readline(self, size: int = -1) -> bytes:
+        # Ist das Budget aufgebraucht, beantwortet `parse_request` die Ausnahme mit 431. Den Inhalt (`read`) reicht der
+        # Umschlag unverändert durch, er ist anderweitig begrenzt.
         if self._left <= 0:
             raise http.client.HTTPException("Kopfzeilen zu gross")
         n = self._left if size is None or size < 0 else min(size, self._left)
@@ -725,15 +664,14 @@ class _HeadReader:
 class _Handler(http.server.BaseHTTPRequestHandler):
     server_version = "NodvardDeckRescue"
     sys_version = ""
-    protocol_version = "HTTP/1.0"  # eine Anfrage je Verbindung: nichts bleibt haengen
+    protocol_version = "HTTP/1.0"  # eine Anfrage je Verbindung: nichts bleibt hängen
     timeout = REQUEST_TIMEOUT_S
 
-    # --- Frist fuer die ganze Verbindung ---
     def setup(self) -> None:
         super().setup()
         self._expired = threading.Event()
         self.rfile = _HeadReader(self.rfile, MAX_HEADER_BYTES)
-        # Zwei Fristen: kurz fuer die Kopfzeilen (laeuft bis `parse_request` fertig ist), lang fuer die ganze Verbindung.
+        # Zwei Fristen: kurz für die Kopfzeilen (bis `parse_request` fertig ist), lang für die ganze Verbindung.
         self._head_deadline = threading.Timer(HEAD_TIMEOUT_S, self._expire)
         self._deadline = threading.Timer(REQUEST_TIMEOUT_S, self._expire)
         for timer in (self._head_deadline, self._deadline):
@@ -741,7 +679,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             timer.start()
 
     def _expire(self) -> None:
-        """Die Frist ist um: Verbindung zu. `timeout` allein gilt nur je Lesevorgang -- wer alle paar Sekunden ein Byte
+        """Die Frist ist um: Verbindung zu. `timeout` allein gilt nur je Lesevorgang; wer alle paar Sekunden ein Byte
         schickt, hielte sie sonst beliebig lange offen."""
         self._expired.set()
         try:
@@ -758,12 +696,11 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             pass
 
     def parse_request(self) -> bool:
-        # Nach dem Abbruch liefert das Lesen "Ende": eine abgeschnittene Anfrage darf nie als vollstaendig gelten.
+        # Nach dem Abbruch liefert das Lesen "Ende": Eine abgeschnittene Anfrage darf nie als vollständig gelten.
         ok = super().parse_request()
-        self._head_deadline.cancel()  # die Kopfzeilen sind da; Inhalt und Antwort haben die Frist der ganzen Verbindung
+        self._head_deadline.cancel()  # Inhalt und Antwort haben nur noch die Frist der ganzen Verbindung
         return ok and not self._expired.is_set()
 
-    # --- Helfer ---
     @property
     def rescue(self) -> Rescue:
         return self.server.rescue  # type: ignore[attr-defined]
@@ -812,12 +749,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return self.rescue.session_valid(self._session_token())
 
     def _origin_ok(self) -> bool:
+        """POST nur von der eigenen Seite (`Origin` gegen `Host`); dazu hat das Cookie SameSite=Strict."""
         site = (self.headers.get("Sec-Fetch-Site") or "").lower()
         if site and site not in ("same-origin", "none"):
             return False  # der Browser sagt selbst, dass die Anfrage von einer anderen Seite kommt
         origin = self.headers.get("Origin")
         if origin is None:
-            return True  # kein Browser-Formular (curl o. ae.); das Cookie gilt trotzdem nur mit gueltiger Sitzung
+            return True  # kein Browser-Formular (curl o. ä.); das Cookie gilt trotzdem nur mit gültiger Sitzung
         parts = urlsplit(origin)
         if parts.scheme not in ("http", "https") or not parts.netloc:
             return False
@@ -828,7 +766,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         return parts.netloc.lower() in allowed
 
     def _read_body(self) -> bytes | None:
-        """Der Inhalt einer POST-Anfrage -- oder `None` (die Antwort ist dann schon gesendet, oder die Verbindung ist
+        """Der Inhalt einer POST-Anfrage oder `None` (dann ist die Antwort schon gesendet, oder die Verbindung ist
         abgebrochen bzw. ihre Frist um)."""
         if self.headers.get("Transfer-Encoding"):
             self._json(411, {"status": "rescue", "detail": "Content-Length fehlt."})
@@ -850,7 +788,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(length) if length else b""
         if len(body) != length or self._expired.is_set():
             self.close_connection = True
-            return None  # abgebrochen oder Frist um: es gibt niemanden mehr, dem man antworten koennte
+            return None  # abgebrochen oder Frist um: Es gibt niemanden mehr, dem man antworten könnte
         return body
 
     @staticmethod
@@ -867,11 +805,10 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         except (ValueError, RecursionError, UnicodeDecodeError):
             return None
 
-    # --- Anfragen ---
     def do_GET(self) -> None:  # noqa: N802
         try:
             self._get()
-        except Exception as exc:  # noqa: BLE001 - nie etwas verraten, nie abstuerzen
+        except Exception as exc:  # noqa: BLE001 - nie etwas verraten, nie abstürzen
             print(f"[notseite] Fehler bei GET: {type(exc).__name__}", file=sys.stderr, flush=True)
             self._json(500, {"status": "rescue"})
 
@@ -914,6 +851,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path == "/api" or path.startswith("/api/"):
             self._read_body()
             return self._send(503, _API_BODY, "application/json; charset=utf-8")
+        # Bewusst keine Aktion "Kopie herunterladen": Eine unverschlüsselte Datenbank über HTTP herauszugeben wäre unverantwortlich,
+        # und die Verschlüsselung (age) braucht `pyrage`, das nicht zur Standardbibliothek gehört. Die Kopie liegt im
+        # Datenordner (`backups/vor-update/`) und lässt sich dort sichern.
         if path not in ("/rescue/unlock", "/rescue/retry", "/rescue/rollback", "/rescue/lock"):
             return self._json(404, {"status": "rescue", "detail": "Unbekannt."})
         if not self._origin_ok():
@@ -927,7 +867,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(400, {"status": "rescue", "detail": "Ungültige Anfrage."})
             outcome, value = self.rescue.try_code(self.client_address[0], fields.get("code"))
             if outcome == "locked":
-                self._expired.wait(LOCKED_DELAY_S)  # Bremse fuers Raten waehrend der Sperre; der richtige Code kommt nie hierher
+                self._expired.wait(LOCKED_DELAY_S)  # Bremse fürs Raten während der Sperre; der richtige Code kommt nie hierher
                 print(f"[notseite] {self.client_address[0]}: zu viele Fehlversuche beim Notfallcode, gesperrt.", file=sys.stderr, flush=True)
                 return self._send(
                     429, _info_page("Zu viele Fehlversuche", _LOCKED_TEXT).encode(),
@@ -945,6 +885,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if not self._unlocked():
             return self._json(401, {"status": "rescue", "detail": "Notfallcode nötig."})
         if path == "/rescue/rollback":
+            # Vorgemerkt wird die Kopie aus dem Zustand von `boot`, nie eine aus der Anfrage; eingespielt wird beim Start.
             failure = read_state(self.rescue.data_dir).get("failure") or {}
             rollback = failure.get("rollback") if failure.get("kind") == "newer_data" else None
             if not rollback:
@@ -959,7 +900,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 202, _info_page("Der Rückweg ist vorgemerkt", "Nodvard Deck wird neu gestartet und stellt dabei den Stand von vor dem Update wieder her. "
                                 "Startet der Container nicht von selbst neu, starte ihn bitte von Hand.").encode(), "text/html; charset=utf-8",
             )
-        # retry
+        # retry: Prozessende mit 75, der Container startet neu (Restart-Regel) und `boot` läuft noch einmal.
         print("[notseite] Neustart auf Wunsch.", file=sys.stderr, flush=True)
         self.rescue.request_exit(EXIT_RETRY)
         return self._send(
@@ -970,7 +911,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
     def _method_not_allowed(self) -> None:
         path = urlsplit(self.path).path
         if path == "/api" or path.startswith("/api/"):
-            return self._send(503, _API_BODY, "application/json; charset=utf-8")  # fuer die Anwendung ist es immer "Notfallmodus"
+            return self._send(503, _API_BODY, "application/json; charset=utf-8")  # für die Anwendung ist es immer "Notfallmodus"
         self._json(405, {"status": "rescue", "detail": "Methode nicht erlaubt."}, {"Allow": "GET, HEAD, POST"})
 
     do_PUT = do_DELETE = do_PATCH = do_OPTIONS = _method_not_allowed  # noqa: N815
@@ -996,7 +937,7 @@ class _Server(http.server.ThreadingHTTPServer):
         sender, local = _sender(client_address)
         with self._per_client_lock:
             if local:
-                taken = self._local_slots.acquire(blocking=False)  # eigener Vorrat: andere koennen ihn nicht leeren
+                taken = self._local_slots.acquire(blocking=False)  # eigener Vorrat: Andere können ihn nicht leeren
             else:
                 taken = self._per_client.get(sender, 0) < MAX_CONNECTIONS_PER_CLIENT and self._slots.acquire(blocking=False)
             if not taken:
@@ -1035,11 +976,6 @@ def make_server(rescue: Rescue, host: str, port: int) -> _Server:
     return _Server((host, port), _Handler, rescue)
 
 
-# ---------------------------------------------------------------------------
-# Aufruf
-# ---------------------------------------------------------------------------
-
-
 def resolve_data_dir(arg: str | None) -> Path:
     """`--data-dir`, sonst `NODVARD_DECK_DATA_DIR`, sonst der alte Name `LATTICE_DATA_DIR`, sonst `./data` (wie die Anwendung)."""
     if arg:
@@ -1064,6 +1000,7 @@ def print_banner(code: str, port: int) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Rückgabe: 75 = Neustart gewünscht (`retry`/`rollback`), 0 = beendet (SIGTERM), 2 = Port belegt o. ä."""
     parser = argparse.ArgumentParser(prog="python -m nodvard_deck.rescue", description="Notseite von Nodvard Deck (nur Standardbibliothek).")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)

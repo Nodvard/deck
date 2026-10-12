@@ -1,19 +1,6 @@
-"""Grafische Konsole (Bildschirm einer VM/eines Containers).
-
-Dasselbe Muster wie `terminal.py` (Autorisierung beim `POST` ueber die normale
-Bearer-Pruefung, danach ein kurzlebiges Einmal-Ticket im WS-Pfad), mit einem
-Unterschied: die Sitzung wird schon beim `POST` GEOEFFNET, weil das Einmal-Kennwort
-fuer die RFB-Authentifizierung erst dabei entsteht und der Browser es vor dem
-WS-Aufbau braucht (Begruendung: `core/console_sessions.py`).
-
-Kennt keinen Hypervisor: findet einen `ConsoleTarget`-Anbieter ueber die
-Capability-Registry (docs/02 §3) und pumpt danach nur Bytes. Der Kern versteht das
-Bildschirmprotokoll selbst nicht -- er reicht `protocol`/`password` an den Browser
-durch, der Rest ist Sache von Client und Anbieter.
-
-Jede geoeffnete (oder gescheiterte) Konsole landet im Audit-Log: ein Bildschirm ist
-gleichwertig mit physischem Tastaturzugriff auf die Maschine.
-"""
+"""Grafische Konsole (Bildschirm einer VM oder eines Containers), im Ablauf wie `terminal.py`. Die Sitzung wird
+schon beim `POST` geöffnet, weil das Einmal-Kennwort für die RFB-Authentifizierung erst dabei entsteht
+(`core/console_sessions.py`)."""
 
 from __future__ import annotations
 
@@ -48,10 +35,11 @@ class ConsoleSessionOut(BaseModel):
     ws_url: str
     protocol: str
     password: str | None
-    """Einmal-Kennwort fuer die protokolleigene Authentifizierung (RFB) -- gilt nur
-    fuer genau diese, bereits geoeffnete Sitzung, siehe Modul-Docstring."""
+    """Einmal-Kennwort für die protokolleigene Authentifizierung (RFB), gilt nur für diese geöffnete Sitzung."""
 
 
+# Der Kern kennt weder Hypervisor noch Bildschirmprotokoll: der Anbieter kommt aus der Capability-Registry,
+# `protocol` und `password` gehen unverändert an den Browser, danach werden nur Bytes gepumpt.
 async def _find_console_target(host: Any) -> Any | None:
     for candidate in get_extension_runtime().capabilities.query(ConsoleTarget):
         try:
@@ -64,8 +52,7 @@ async def _find_console_target(host: Any) -> Any | None:
 
 @router.get("/console/hosts", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_console_hosts(session: SessionDep) -> list[str]:
-    """IDs aller Hosts, fuer die gerade ein Anbieter eine Konsole liefern kann -- damit
-    Oberflaechen den Knopf nur dort zeigen, wo er auch funktioniert."""
+    """IDs aller Hosts, für die gerade ein Anbieter eine Konsole liefern kann; nur dort zeigt die Oberfläche den Knopf."""
     targets = get_extension_runtime().capabilities.query(ConsoleTarget)
     if not targets:
         return []
@@ -87,8 +74,8 @@ async def create_console_session(
     host = await session.get(Host, payload.host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
-    # D-12: ein Host, der in DIESER Session schon als frisch angelegtes Objekt lebt,
-    # hat `credentials` nicht geladen -- `host_to_sdk()` liest es synchron.
+    # Ein Host, der in dieser Session als frisch angelegtes Objekt lebt, hat `credentials` nicht geladen,
+    # `host_to_sdk()` liest es synchron.
     await refresh_relationships(session, host, "tags", "credentials")
     sdk_host = host_to_sdk(host)
 
@@ -99,6 +86,7 @@ async def create_console_session(
             detail="Für diesen Host ist keine Konsole verfügbar.",
         )
 
+    # Geöffnet wie gescheitert kommt jede Konsole ins Protokoll: ein Bildschirm ist wie physischer Tastaturzugriff.
     try:
         console = await target.open_console(sdk_host)
     except Exception as exc:  # noqa: BLE001 - dem Nutzer sichtbar machen, nicht als 500 verstecken
@@ -129,16 +117,15 @@ async def create_console_session(
 
 _WS_UNKNOWN_TICKET = 4404
 _WS_ACCESS_ENDED = 4401
-"""Konto deaktiviert, Berechtigung entzogen, Passwort geaendert oder abgemeldet."""
+"""Konto deaktiviert, Berechtigung entzogen, Passwort geändert oder abgemeldet."""
 
 
 @router.websocket("/ws/console/{session_id}")
 async def console_ws(
     websocket: WebSocket, session_id: str, settings: Annotated[Settings, Depends(get_settings)]
 ) -> None:
-    # noVNC fragt je nach Version das Subprotokoll "binary" an. Ein Server, der ein
-    # angefragtes Subprotokoll nicht bestaetigt, laesst Browser den Handshake
-    # verwerfen -- deshalb spiegeln, wenn angefragt, sonst ohne.
+    # noVNC fragt je nach Version das Subprotokoll "binary" an. Bestätigt der Server ein angefragtes Subprotokoll
+    # nicht, verwirft der Browser den Handshake, deshalb spiegeln, wenn angefragt, sonst ohne.
     requested = websocket.scope.get("subprotocols") or []
     await websocket.accept(subprotocol="binary" if "binary" in requested else None)
 
@@ -157,16 +144,16 @@ async def console_ws(
     stop_watchdog = asyncio.Event()
 
     async def _watchdog() -> bool:
-        """Beendet die Konsole, wenn Konto, Berechtigung oder Anmeldung nicht mehr gelten (die Pruefung
-        beim Aufbau ist bis zu 30 s alt, danach liefe sie sonst unbegrenzt weiter). `True` = Zugriff
-        beendet, `False` = anders gestoppt. Wird nie abgebrochen, sondern ueber `stop_watchdog` gestoppt
-        -- eine mitten in der Datenbankabfrage abgebrochene Aufgabe wuerde deren Verbindung mit wegreissen."""
+        """Beendet die Konsole, wenn Konto, Berechtigung oder Anmeldung nicht mehr gelten (die Prüfung beim Aufbau ist
+        bis zu 30 s alt). `True` = Zugriff beendet, `False` = anders gestoppt."""
+        # Wird nie abgebrochen, sondern über `stop_watchdog` gestoppt: eine mitten in der Datenbankabfrage
+        # abgebrochene Aufgabe risse deren Verbindung mit.
         interval = max(0.05, settings.terminal_recheck_interval_s)
         while True:
             try:
                 if await _access_ended() is not None:
                     return True
-            except Exception:  # noqa: BLE001 - ein Datenbank-Haenger beendet keine laufende Konsole
+            except Exception:  # noqa: BLE001 - ein Datenbank-Hänger beendet keine laufende Konsole
                 pass
             try:
                 await asyncio.wait_for(stop_watchdog.wait(), timeout=interval)
@@ -201,9 +188,8 @@ async def console_ws(
         await asyncio.wait({reader, writer, watchdog}, return_when=asyncio.FIRST_COMPLETED)
         ended = watchdog.done() and not watchdog.cancelled() and watchdog.exception() is None and watchdog.result()
     finally:
-        # Dieselbe Begrenzung wie in terminal.py (dort live gefunden): ein in
-        # `websocket.receive()` haengender Writer reagiert nicht immer sofort auf
-        # `cancel()` -- ohne Zeitlimit bliebe die Verbindung unbestimmt offen.
+        # Dieselbe Begrenzung wie in terminal.py: ein in `websocket.receive()` hängender Writer reagiert nicht immer
+        # sofort auf `cancel()`, ohne Zeitlimit bliebe die Verbindung unbestimmt offen.
         reader.cancel()
         writer.cancel()
         stop_watchdog.set()
@@ -217,5 +203,5 @@ async def console_ws(
             pass
         try:
             await websocket.close(code=_WS_ACCESS_ENDED if ended else 1000)
-        except Exception:  # noqa: BLE001 - moeglicherweise schon zu
+        except Exception:  # noqa: BLE001 - möglicherweise schon zu
             pass

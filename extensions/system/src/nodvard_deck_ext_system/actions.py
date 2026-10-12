@@ -1,19 +1,4 @@
-"""Dienst neu starten -- die einzige verändernde Aktion des Moduls „Server-Zustand“ (Kennung `system`).
-
-Läuft durch das Aktions-Gate des Kerns: die Seite schlägt vor (`ctx.actions.propose`),
-wer freigeben darf, gibt selbst frei, erst dann ruft der Kern `SystemActionExecutor`.
-
-Der Payload (`host_id` + `unit`) steht zwischen Vorschlag und Ausführung in der
-Datenbank und wird deshalb im Executor NOCHMAL streng geprüft. Der Befehl entsteht
-nur hier, aus dem geprüften Einheitennamen (mit `shlex.quote`) -- nie aus einem
-Text, den jemand mitgeschickt hat.
-
-Prüfung nach der Aktion (`check_after_restart`): `systemctl restart` meldet Erfolg, sobald
-der Dienst gestartet ist. Stürzt er Sekunden später ab, fiel das bisher nicht auf. Deshalb
-liest der Executor danach bis zu `CHECK_TIMEOUT_S` lang den Zustand (`systemctl show`, nur
-lesend, ohne root): Ein laufender Dienst gilt erst nach zwei Lesungen `CHECK_STABLE_S`
-auseinander ohne neuen Start (`NRestarts`, `MainPID`) als stabil.
-"""
+"""Dienst neu starten: die einzige verändernde Aktion der Erweiterung „Server-Zustand“, durch das Aktions-Gate."""
 
 from __future__ import annotations
 
@@ -48,26 +33,23 @@ ACTION_SPECS = [
     ),
 ]
 
-# Erlaubt ist nur, was systemd als Einheitenname kennt (ohne Platzhalter wie * ? [ ]).
-# Kein Bindestrich am Anfang, sonst läse `systemctl` den Namen als Option.
+# Erlaubt ist nur, was systemd als Einheitenname kennt (ohne Platzhalter wie * ? [ ]). Kein Bindestrich am Anfang, sonst
+# läse `systemctl` den Namen als Option.
 UNIT_RE = re.compile(r"[A-Za-z0-9@._:][A-Za-z0-9@._:-]{0,127}\.(?:service|socket|timer)")
 MAX_HOST_ID_LEN = 64
 
-# Sperrliste: was sich nicht "mal eben" neu starten lässt, ohne den Server oder den
-# Weg dorthin zu kappen. Verglichen wird der Name ohne Endung und ohne Instanz
-# ("getty@tty1.service" -> "getty"), klein geschrieben.
+# Sperrliste: Was sich nicht „mal eben“ neu starten lässt, ohne den Server oder den Weg dorthin zu kappen. Verglichen
+# wird der Name ohne Endung und ohne Instanz („getty@tty1.service“ -> „getty“), klein geschrieben.
 DENY_SSH = (frozenset({"ssh", "sshd"}), ("sshd-", "ssh-"))
 DENY_SYSTEM = (frozenset({"dbus", "dbus-broker"}), ("systemd-", "dbus-"))
 DENY_NETWORK = (frozenset({"networking", "networkmanager", "dhcpcd", "wpa_supplicant"}), ())
-# Das Dashboard selbst (systemd-Dienst "lattice…" oder "nodvard-deck…"): auf jedem Server
-# gesperrt, weil ein Neustart mitten in der Aktion die Oberfläche abschaltet. Der blanke
-# Name "nodvard" ist nur als Tippvariante gesperrt, nicht als Präfix: andere Nodvard-Dienste
-# (etwa "nodvard-link") bleiben neu startbar.
+# Das Dashboard selbst (systemd-Dienst "lattice…" oder "nodvard-deck…") ist auf jedem Server gesperrt, weil ein Neustart
+# mitten in der Aktion die Oberfläche abschaltet. Der blanke Name "nodvard" ist nur als Tippvariante gesperrt, nicht als
+# Präfix: Andere Nodvard-Dienste (etwa "nodvard-link") bleiben neu startbar.
 DENY_DASHBOARD = (frozenset({"nodvard"}), ("lattice", "nodvard-deck"))
 # Server-Markierungen (Tags), die einen Server als Dashboard-Rechner kennzeichnen.
 DASHBOARD_HOST_TAGS = ("dashboard", "lattice", "nodvard-deck")
-# Ein Neustart von Docker oder containerd nimmt alle Container mit -- auf dem Server,
-# auf dem das Dashboard läuft, also auch das Dashboard.
+# Ein Neustart von Docker oder containerd nimmt alle Container mit, auf dem Dashboard-Server also auch das Dashboard.
 DENY_ON_DASHBOARD_HOST = (frozenset({"docker", "containerd"}), ("docker-", "containerd-"))
 
 
@@ -102,18 +84,16 @@ def _base_name(unit: str) -> str:
 
 
 def validate_unit(value: Any) -> str:
-    """Nur ganz normale Dienst-/Socket-/Timer-Namen. `fullmatch`, damit auch ein
-    angehängter Zeilenumbruch durchfällt."""
+    """Nur ganz normale Dienst-, Socket- und Timer-Namen; `fullmatch`, damit auch ein angehängter Zeilenumbruch
+    durchfällt."""
     if not isinstance(value, str) or UNIT_RE.fullmatch(value) is None:
         raise PayloadError("Ungültiger Dienstname – erlaubt sind nur Namen wie „nginx.service“.")
     return value
 
 
 def deny_reason(unit: str, *, dashboard_host: bool | None) -> str | None:
-    """Warum `unit` nicht neu gestartet wird -- deutscher Text, oder `None`.
-
-    `dashboard_host`: läuft das Dashboard auf diesem Server? `None` = nicht
-    feststellbar (dann bleibt Docker vorsichtshalber gesperrt)."""
+    """Warum `unit` nicht neu gestartet wird (deutscher Text), sonst `None`; bei `dashboard_host=None` bleibt Docker
+    gesperrt."""
     name = _base_name(unit)
     for rule, text in ((DENY_SSH, REFUSAL_SSH), (DENY_SYSTEM, REFUSAL_SYSTEM), (DENY_NETWORK, REFUSAL_NETWORK), (DENY_DASHBOARD, REFUSAL_DASHBOARD)):
         if _matches(name, rule):
@@ -127,9 +107,8 @@ def deny_reason(unit: str, *, dashboard_host: bool | None) -> str | None:
 
 
 def is_restartable(unit: str, *, dashboard_host: bool | None = False) -> bool:
-    """Darf `unit` grundsätzlich neu gestartet werden? Rein nach Namen, ohne Rückfrage beim
-    Server -- für die Knöpfe der Seite. Ohne Angabe gilt Docker als möglich; wer schon weiß,
-    ob auf dem Server das Dashboard läuft (`is_dashboard_host`), reicht das durch."""
+    """Darf `unit` grundsätzlich neu gestartet werden? Rein nach Namen, ohne Rückfrage beim Server, für die Knöpfe der
+    Seite."""
     try:
         validate_unit(unit)
     except PayloadError:
@@ -142,7 +121,9 @@ def needs_dashboard_check(unit: str) -> bool:
 
 
 def validate_payload(payload: Any) -> tuple[str, str]:
-    """`{"host_id": ..., "unit": ...}` -- genau diese beiden Felder, sonst nichts."""
+    """`{"host_id": ..., "unit": ...}`, genau diese beiden Felder."""
+    # Der Payload liegt zwischen Vorschlag und Ausführung in der Datenbank, deshalb prüft der Executor ihn noch einmal
+    # streng. Der Befehl entsteht nur aus dem geprüften Einheitennamen (mit `shlex.quote`), nie aus mitgeschicktem Text.
     if not isinstance(payload, dict):
         raise PayloadError("Ungültige Aktion: Daten fehlen.")
     extra = sorted(set(payload) - {"host_id", "unit"})
@@ -155,9 +136,11 @@ def validate_payload(payload: Any) -> tuple[str, str]:
 
 
 def as_root(command: str) -> str:
-    """Führt `command` als root aus: direkt, wenn schon root, sonst über `sudo -n`
-    (ohne Passwortabfrage). Geht beides nicht, bricht es mit NO_ROOT ab -- ein
-    Neustart als normaler Benutzer hätte ohnehin keine Wirkung."""
+    """Führt `command` als root aus: direkt, sonst über `sudo -n` (ohne Passwortabfrage); geht beides nicht, bricht es
+    mit NO_ROOT ab."""
+    # Das Dashboard ist auf manchen Servern (z. B. einem Raspberry Pi) nicht als root angemeldet. `sudo -n` fragt nie
+    # nach einem Passwort, das hier niemand eintippen könnte; fehlt das Recht, gibt es NO_ROOT und keinen
+    # Neustart-Versuch.
     inner = shlex.quote(command)
     return (
         f"if [ \"$(id -u)\" -eq 0 ]; then sh -c {inner}; "
@@ -167,20 +150,16 @@ def as_root(command: str) -> str:
 
 
 def restart_command(unit: str) -> str:
-    """Neu starten, Rückgabewert festhalten, danach den Zustand nennen. `--` schützt
-    zusätzlich davor, dass ein Name als Option gelesen wird."""
+    """Neu starten, Rückgabewert festhalten, danach den Zustand nennen; `--` verhindert, dass ein Name als Option gilt."""
     quoted = shlex.quote(validate_unit(unit))
     return f"systemctl restart -- {quoted}; echo \"@@rc=$?\"; systemctl is-active -- {quoted}"
 
 
 def own_container_probe(container_id: str) -> str:
-    """Läuft auf dem Ziel-Server ein Container mit unserer Kennung? Das Dashboard läuft
-    als Docker-Container, dessen Hostname die kurze Container-ID ist.
-
-    Drei Antworten: `@@own` (gefunden), `@@other` (Docker antwortet, den Container gibt es
-    dort nicht) und `@@unknown` -- keine Rechte, Docker-Dienst nicht erreichbar oder kein
-    docker-Programm. Nur "gibt es nicht" darf als "anderer Server" gelten: ein abgestürzter
-    dockerd lässt die Container unter containerd weiterlaufen."""
+    """Läuft auf dem Server ein Container mit der Kennung des Dashboards? Antwort: `@@own`, `@@other` oder `@@unknown`."""
+    # Das Dashboard läuft als Docker-Container, dessen Hostname die kurze Container-ID ist. `@@other` gilt nur, wenn
+    # Docker antwortet und den Container nicht kennt; ohne Rechte, ohne erreichbaren Dienst oder ohne docker-Programm
+    # heißt es `@@unknown`, denn ein abgestürzter dockerd lässt die Container unter containerd weiterlaufen.
     quoted = shlex.quote(container_id)
     inspect = f"docker inspect --format '{{{{.Id}}}}' {quoted}"
     missing = "*'No such object'*|*'No such container'*|*'No such image, container'*"
@@ -192,11 +171,10 @@ def own_container_probe(container_id: str) -> str:
 
 
 async def is_dashboard_host(ctx: ExtensionContext, host: Host) -> bool | None:
-    """Läuft das Dashboard auf `host`? `True`/`False`, `None` wenn nicht feststellbar.
-
-    Dieselbe Erkennung steht in Nodvard Shield (`patching.UpdateCenter._is_dashboard_host`). Bewusst doppelt:
-    Erweiterungen importieren einander nicht, und ein Hilfsding gehört nicht in den festen Vertrag des SDK.
-    Wer eine Stelle ändert, ändert die andere mit."""
+    """Läuft das Dashboard auf `host`? `True` oder `False`, `None` wenn nicht feststellbar."""
+    # Dieselbe Erkennung steht in Nodvard Shield (`patching.UpdateCenter._is_dashboard_host`). Bewusst doppelt, denn
+    # Erweiterungen importieren einander nicht und ins SDK gehört das nicht; wer eine Stelle ändert, ändert die andere
+    # mit.
     if any(tag in DASHBOARD_HOST_TAGS for tag in host.tags):
         return True
     own = socket.gethostname().strip()
@@ -204,7 +182,7 @@ async def is_dashboard_host(ctx: ExtensionContext, host: Host) -> bool | None:
         return None
     try:
         result = await ctx.exec.run(host, own_container_probe(own), timeout_s=20)
-    except Exception:  # noqa: BLE001 - nicht erreichbar heisst: unbekannt, nicht "nein"
+    except Exception:  # noqa: BLE001 - nicht erreichbar heißt: unbekannt, nicht "nein"
         return None
     if "@@own" in result.stdout:
         return True
@@ -237,6 +215,10 @@ def parse_restart_output(stdout: str) -> tuple[int | None, str]:
     return rc, state
 
 
+# `systemctl restart` meldet Erfolg, sobald der Dienst gestartet ist; stürzt er Sekunden später ab, fällt das nur durch
+# erneutes Lesen auf (`systemctl show`, nur lesend, ohne root). Gelesen wird bis zu `CHECK_TIMEOUT_S` lang; ein
+# laufender Dienst gilt erst nach zwei Lesungen im Abstand `CHECK_STABLE_S` ohne neuen Start (`NRestarts`, `MainPID`)
+# als stabil.
 CHECK_TIMEOUT_S = 45
 CHECK_INTERVAL_S = 3
 CHECK_STABLE_S = 10
@@ -257,8 +239,7 @@ class UnitState:
     active: str
     sub: str
     result: str
-    restarts: int | None
-    """`NRestarts` (ab systemd 235; bei Sockets und Timern gibt es den Wert nicht)."""
+    restarts: int | None  # `NRestarts`, ab systemd 235; bei Sockets und Timern gibt es den Wert nicht
     main_pid: int | None
     exit_status: int | None
     type: str = ""
@@ -302,7 +283,8 @@ def judge_state(st: UnitState, final: bool) -> tuple[bool, str] | None:
         detail = _failure_detail(st)
         return False, f"ist aber gleich wieder ausgefallen (Zustand: failed{', ' + detail if detail else ''}). {LOG_HINT}"
     if st.active == "activating" and st.sub == "auto-restart":
-        # Zwischen zwei Versuchen: einmal kann eine Abhaengigkeit noch nicht bereit sein. Bleibt es so, ist es eine Schleife.
+        # Zwischen zwei Versuchen: Einmal kann eine Abhängigkeit noch nicht bereit sein. Bleibt es so, ist es eine
+        # Schleife.
         return (False, CRASH_LOOP_TEXT) if final else None
     if st.active == "active":
         if st.sub == "exited":
@@ -323,10 +305,9 @@ def judge_state(st: UnitState, final: bool) -> tuple[bool, str] | None:
 
 
 async def check_after_restart(ctx: ExtensionContext, host: Host, unit: str) -> tuple[bool, str] | None:
-    """Läuft der Dienst nach dem Neustart wie gewollt -- und bleibt er dabei? `None`: nicht prüfbar (keine Antwort).
-
-    Gezählt werden automatische Neustarts seit der ersten Lesung (`NRestarts`; fehlt der Wert, ein Wechsel von
-    `MainPID`). Einer wird hingenommen (die ruhige Beobachtung beginnt dann neu), erst der zweite ist eine Schleife."""
+    """Läuft der Dienst nach dem Neustart wie gewollt und bleibt er dabei? `None`: nicht prüfbar (keine Antwort)."""
+    # Gezählt werden automatische Neustarts seit der ersten Lesung (`NRestarts`; fehlt der Wert, ein Wechsel von
+    # `MainPID`). Einer wird hingenommen (die ruhige Beobachtung beginnt neu), erst der zweite ist eine Schleife.
     deadline = time.monotonic() + CHECK_TIMEOUT_S
     first: tuple[UnitState, float, int] | None = None  # erste ruhige Lesung, Zeit, Neustarts bis dahin
     baseline: UnitState | None = None
@@ -404,6 +385,7 @@ class SystemActionExecutor:
         except PayloadError as exc:
             return ActionResult(success=False, error=str(exc))
         where = host_name(host)
+        # Ohne root oder sudo meldet `as_root` NO_ROOT, dann wird nichts ausgeführt.
         result = await self._ctx.exec.run(host, as_root(restart_command(unit)), timeout_s=90)
         if NO_ROOT in (result.stdout or ""):
             return ActionResult(success=False, exit_code=result.exit_code, error=NO_ROOT_MESSAGE)

@@ -1,18 +1,6 @@
-"""Image-Updates EINSPIELEN (service-matrix) -- die REINEN Teile: erkennen, ob und wie sich
-ein Container aktualisieren laesst, Befehle bauen, Ausgaben lesen, Ergebnis beurteilen.
-Alles, was Hosts anspricht, steht in `applier.py`.
+"""Image-Updates einspielen, die reinen Teile: erkennen, ob sich ein Container aktualisieren lässt, Befehle bauen.
 
-Eingespielt wird nur bei Containern, die mit Docker Compose (v2) gestartet wurden UND
-deren Compose-Dateien auf dem Host liegen: `docker compose pull <dienst>` und
-`docker compose up -d --no-deps --no-build <dienst>` mit genau den Angaben, mit denen das
-Projekt angelegt wurde (Projektname, Ordner, alle Dateien). Alles andere (Portainer-
-Stacks, Swarm, `docker run`, Nodvard Deck selbst) bekommt statt eines Knopfes den Grund.
-
-Sicherheit: Jeder Wert, der aus Container-Labels stammt, wandert in ein SSH-Kommando --
-er wird streng geprueft (Regeln mit `\\Z`, nicht `$`: ein Zeilenumbruch am Ende ist kein
-Treffer), und jeder Befehlsbauer prueft NOCHMAL selbst (`check_target`). Werte werden mit
-`shlex` gequotet. Umgebungsvariablen-Werte verlassen den Host nie: `docker compose
-config` wird nur ausgewertet, seine Ausgabe nie gespeichert, geloggt oder zurueckgegeben.
+Ausgaben lesen und beurteilen gehört dazu; alles, was Hosts anspricht, steht in `applier.py`.
 """
 
 from __future__ import annotations
@@ -32,7 +20,10 @@ from .capabilities import CONTAINER_NAME_RE
 from .detached import busy_check_command
 from .image_updates import _IMAGE_ID_RE, canonical_repo, classify_registry_error, is_valid_ref, split_ref
 
-# --- Etiketten und strenge Pruefung -----------------------------------------------------
+# --- Etiketten und strenge Prüfung ------------------------------------------------------
+
+# Jeder Wert aus Container-Etiketten wandert in ein SSH-Kommando: streng prüfen (Regeln mit `\Z`, nicht `$`: ein
+# Zeilenumbruch am Ende ist kein Treffer), in jedem Befehlsbauer noch einmal (`check_target`) und mit `shlex` quoten.
 
 LABEL_PROJECT = "com.docker.compose.project"
 LABEL_SERVICE = "com.docker.compose.service"
@@ -47,8 +38,7 @@ LABEL_SWARM = ("com.docker.swarm.service.name", "com.docker.stack.namespace")
 PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}\Z")
 SERVICE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 PATH_RE = re.compile(r"^/[A-Za-z0-9._+@=/ -]{0,1023}\Z")
-"""Leerzeichen sind erlaubt (shlex quotet sie) -- aber kein Hochkomma, kein `$`, kein
-Zeilenumbruch, kein `;|&*~`."""
+"""Leerzeichen sind erlaubt (shlex quotet sie), aber kein Hochkomma, kein `$`, kein Zeilenumbruch, kein `;|&*~`."""
 MAX_FILES = 8
 PORTAINER_PREFIX = "/data/compose/"
 
@@ -101,7 +91,7 @@ class NotUpdatable:
 
 
 def check_target(t: ComposeTarget) -> None:
-    """Jeder Befehlsbauer ruft das selbst auf (egal, ob der Aufrufer schon geprueft hat)."""
+    """Jeder Befehlsbauer ruft das selbst auf (egal, ob der Aufrufer schon geprüft hat)."""
     if not CONTAINER_NAME_RE.match(t.container or ""):
         raise ValueError(f"Ungültiger Containername: {t.container!r}")
     if not is_valid_ref(t.image or ""):
@@ -120,13 +110,13 @@ def check_target(t: ComposeTarget) -> None:
         raise ValueError("Ungültige env-Dateien.")
 
 
-# --- Erkennen: laesst sich der Container so aktualisieren? ------------------------------
+# --- Erkennen: lässt sich der Container so aktualisieren? -------------------------------
 
 APPLY_FORMAT = (
     '{"id":{{json .Id}},"name":{{json .Name}},"image":{{json .Config.Image}},"image_id":{{json .Image}},'
     '"state":{{json .State.Status}},"labels":{{json .Config.Labels}}}'
 )
-"""Ein JSON-Objekt je Zeile. Etiketten sind JSON-maskiert, es gibt also keine Zeilenumbrueche.
+"""Ein JSON-Objekt je Zeile. Etiketten sind JSON-maskiert, es gibt also keine Zeilenumbrüche.
 Umgebungsvariablen (`.Config.Env`) werden bewusst nicht gelesen."""
 
 
@@ -162,16 +152,16 @@ def _bad_field(field: str) -> NotUpdatable:
 
 # Bildnamen (letzter Teil des Repositorys), an denen das Dashboard sich selbst erkennt.
 SELF_IMAGE_NAMES = frozenset({"lattice", "nodvard-deck", "nodvard"})
-# Registry-Images: `<registry>/nodvard/deck` (das Dashboard) und `<registry>/nodvard/deck-updater` (sein
-# Update-Helfer). Den Helfer tauscht die Service-Matrix nie aus: Er hat Zugriff auf Docker, und mitten in einem
-# Update des Dashboards neu angelegt, liesse er es halb fertig liegen.
+# Registry-Images: `<registry>/nodvard/deck` (das Dashboard) und `<registry>/nodvard/deck-updater` (sein Update-Helfer).
+# Den Helfer tauscht die Service-Matrix nie aus: Er hat Zugriff auf Docker, und mitten in einem Update des Dashboards
+# neu angelegt, ließe er es halb fertig liegen.
 OFFICIAL_IMAGE_PATH = ("nodvard", "deck")
 HELPER_IMAGE_PATH = ("nodvard", "deck-updater")
 SELF_IMAGE_PATHS = (OFFICIAL_IMAGE_PATH, HELPER_IMAGE_PATH)
 OFFICIAL_REGISTRY = "ghcr.io"
 LABEL_IMAGE_TITLE = "org.opencontainers.image.title"
 HELPER_IMAGE_TITLE = "Nodvard Deck Update-Helfer"
-"""Titel im Image des Update-Helfers (`deploy/updater/Dockerfile`, `release.yml`). Docker uebernimmt die Labels des
+"""Titel im Image des Update-Helfers (`deploy/updater/Dockerfile`, `release.yml`). Docker übernimmt die Labels des
 Images in die des Containers (`.Config.Labels`): So wird der Helfer auch erkannt, wenn sein Image gespiegelt unter
 einem anderen Namen liegt (eigene Registry, Proxy-Cache)."""
 
@@ -199,12 +189,12 @@ def is_self_image(image: str) -> bool:
 
 
 def is_helper_labels(labels: dict[str, str] | None) -> bool:
-    """Traegt der Container den Titel aus dem Image des Update-Helfers (`HELPER_IMAGE_TITLE`)?"""
+    """Trägt der Container den Titel aus dem Image des Update-Helfers (`HELPER_IMAGE_TITLE`)?"""
     return bool(labels) and labels.get(LABEL_IMAGE_TITLE) == HELPER_IMAGE_TITLE
 
 
 def self_why(image: str, labels: dict[str, str] | None = None) -> str:
-    """Der Grund ohne Knopf fuer Nodvard Deck selbst: beim Helfer (nach Name oder Label), wie man ihn aktualisiert;
+    """Der Grund ohne Knopf für Nodvard Deck selbst: beim Helfer (nach Name oder Label), wie man ihn aktualisiert;
     beim offiziellen Image (`ghcr.io/nodvard/deck`) der Weg zu den Updates im Dashboard; sonst (selbst gebaut) das
     Deploy-Skript."""
     parts = _repo_parts(image) or []
@@ -216,16 +206,17 @@ def self_why(image: str, labels: dict[str, str] | None = None) -> str:
 
 
 def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable:
-    """Ein `docker container inspect` (`APPLY_FORMAT`) -> Ziel oder Grund. Die Reihenfolge
-    zaehlt (siehe Kommentare)."""
+    """Ein `docker container inspect` (`APPLY_FORMAT`) -> Ziel oder Grund; die Reihenfolge der Prüfungen zählt.
+
+    Nur Compose-v2-Container mit Compose-Dateien auf dem Host lassen sich einspielen, alles andere bekommt den Grund.
+    """
     raw_labels = info.get("labels")
     labels = {str(k): str(v) for k, v in raw_labels.items()} if isinstance(raw_labels, dict) else {}
     image = str(info.get("image") or "")
     name = str(info.get("name") or "").lstrip("/")
 
-    # 1. Das Dashboard selbst: nie ueber sich selbst aktualisieren. Bildname `lattice` (alt),
-    # `nodvard-deck` (neu), `nodvard` (Tippvariante), `<registry>/nodvard/deck` und sein Helfer
-    # `<registry>/nodvard/deck-updater` -- der Helfer auch an seinem Label, falls sein Image anders heisst.
+    # 1. Das Dashboard selbst nie über sich selbst aktualisieren: Bildname `lattice` (alt), `nodvard-deck` (neu), `nodvard`
+    # (Tippvariante), `<registry>/nodvard/deck`; sein Helfer `<registry>/nodvard/deck-updater` auch an seinem Label.
     if own or is_self_image(image) or is_helper_labels(labels):
         return _why("self", self_why(image, labels))
     # 2. Swarm.
@@ -244,11 +235,11 @@ def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable
     if working_dir.startswith(PORTAINER_PREFIX) or any(f.startswith(PORTAINER_PREFIX) for f in raw_files.split(",")):
         return _why("portainer", "Von Portainer verwaltet – bitte in Portainer aktualisieren (Stack → „Update the stack“ mit „Re-pull image and redeploy“).")
     service = labels.get(LABEL_SERVICE, "")
-    # 6. Compose v1 nennt Container `projekt_dienst_1`; v2 wuerde sie umbenennen.
+    # 6. Compose v1 nennt Container `projekt_dienst_1`; v2 würde sie umbenennen.
     if labels.get(LABEL_VERSION, "").startswith("1.") and re.fullmatch(rf"{re.escape(project)}_{re.escape(service)}_\d+", name):
         return _why("compose_v1", "Mit dem alten docker-compose (v1) angelegt – Compose v2 würde den Containernamen ändern. Bitte von Hand aktualisieren.")
 
-    # 7. Strenge Pruefung jedes Wertes, der in einen Befehl wandert.
+    # 7. Strenge Prüfung jedes Wertes, der in einen Befehl wandert.
     if not CONTAINER_NAME_RE.match(name):
         return _bad_field("Containername")
     if not is_valid_ref(image):
@@ -282,8 +273,8 @@ def classify(info: dict[str, Any], *, own: bool) -> ComposeTarget | NotUpdatable
 
 
 def _split_files(raw: str, working_dir: str) -> tuple[str, ...] | None:
-    """Komma-Liste -> absolute, gepruefte Pfade (relative Eintraege aelterer Compose-Versionen
-    gehoeren zum Projektordner). `None`, sobald ein Eintrag nicht passt."""
+    """Komma-Liste -> absolute, geprüfte Pfade (relative Einträge älterer Compose-Versionen gehören zum Projektordner).
+    `None`, sobald ein Eintrag nicht passt."""
     out: list[str] = []
     for entry in raw.split(","):
         path = entry
@@ -299,8 +290,8 @@ def _split_files(raw: str, working_dir: str) -> tuple[str, ...] | None:
 
 
 def compose_argv(t: ComposeTarget, *args: str) -> list[str]:
-    """`docker compose -p P --project-directory D -f F... [--env-file E...] <args>` -- genau
-    die Angaben des urspruenglichen Projekts."""
+    """`docker compose -p P --project-directory D -f F... [--env-file E...] <args>`, genau mit den Angaben des
+    ursprünglichen Projekts."""
     check_target(t)
     argv = ["docker", "compose", "--ansi", "never", "-p", t.project, "--project-directory", t.working_dir]
     for f in t.config_files:
@@ -315,8 +306,8 @@ def pull_command(t: ComposeTarget) -> str:
 
 
 def up_command(t: ComposeTarget) -> str:
-    # --no-deps: nur DIESER Dienst wird neu erstellt. --no-build: nie bauen. Kein --wait
-    # (haengt von der Compose-Version ab) -- der Start wird selbst geprueft (`cmd_verify`).
+    # --no-deps: nur dieser Dienst wird neu erstellt. --no-build: nie bauen. Kein --wait (hängt von der Compose-Version
+    # ab), der Start wird selbst geprüft (`cmd_verify`).
     return shlex.join(compose_argv(t, "up", "-d", "--no-deps", "--no-build", t.service))
 
 
@@ -326,9 +317,9 @@ def display_command(t: ComposeTarget) -> str:
 
 
 def rollback_ref(container: str) -> str:
-    """`lattice-rollback/<name>-<kurzer Hash>:previous` -- der Name des Sicherungs-Images. Der Hash
-    des ECHTEN Containernamens hindert `foo_bar`, `foo-bar` und `Foo.Bar` daran, dasselbe
-    Sicherungs-Image zu teilen und sich gegenseitig zu ueberschreiben."""
+    """`lattice-rollback/<name>-<kurzer Hash>:previous`, der Name des Sicherungs-Images.
+
+    Der Hash des echten Containernamens hindert `foo_bar`, `foo-bar` und `Foo.Bar` daran, dasselbe Image zu teilen."""
     slug = re.sub(r"[^a-z0-9]+", "-", container.lower()).strip("-")[:60].strip("-") or "container"
     ref = f"lattice-rollback/{slug}-{hashlib.sha256(container.encode()).hexdigest()[:8]}:previous"
     if not is_valid_ref(ref):
@@ -337,7 +328,7 @@ def rollback_ref(container: str) -> str:
 
 
 def apply_script(t: ComposeTarget, *, old_image_id: str, rollback: str) -> str:
-    """Das Skript, das entkoppelt auf dem Host laeuft (`detached.py`)."""
+    """Das Skript, das entkoppelt auf dem Host läuft (`detached.py`)."""
     if not _IMAGE_ID_RE.match(old_image_id or ""):
         raise ValueError(f"Ungültige Image-ID: {old_image_id!r}")
     if not is_valid_ref(rollback):
@@ -345,9 +336,8 @@ def apply_script(t: ComposeTarget, *, old_image_id: str, rollback: str) -> str:
     q = shlex.quote
     tag = shlex.join(["docker", "tag", old_image_id, rollback])
     inspect_id = f"docker image inspect --format {q('{{.Id}}')} {q(t.image)} 2>/dev/null"
-    # Reihenfolge pull -> tag -> up: Ein gescheiterter oder wirkungsloser Pull (dieselbe Image-ID)
-    # ueberschreibt eine aeltere Sicherung nicht; nur wenn wirklich etwas Neues da ist, wird das
-    # alte Image als Sicherung markiert.
+    # Reihenfolge pull -> tag -> up: Ein gescheiterter oder wirkungsloser Pull (dieselbe Image-ID) überschreibt eine ältere
+    # Sicherung nicht; nur wenn wirklich etwas Neues da ist, wird das alte Image als Sicherung markiert.
     return (
         f"echo @@step=pull; {pull_command(t)} || exit {RC_PULL}; "
         f"echo @@step=tag; new=$({inspect_id}); "
@@ -360,8 +350,8 @@ RC_BACK_TAG, RC_BACK_UP = 30, 31
 
 
 def rollback_script(t: ComposeTarget, rollback: str) -> str:
-    """Der automatische Ruecksprung (entkoppelt wie `apply_script`): das Sicherungs-Image wieder unter dem Namen aus
-    der Compose-Datei, dann den Dienst damit neu erstellen. Dieselben Befehle wie `rollback_commands`."""
+    """Der automatische Rücksprung (entkoppelt wie `apply_script`): das Sicherungs-Image wieder unter dem Namen aus der
+    Compose-Datei, dann den Dienst damit neu erstellen. Dieselben Befehle wie `rollback_commands`."""
     check_target(t)
     if not is_valid_ref(rollback):
         raise ValueError(f"Ungültiger Sicherungs-Name: {rollback!r}")
@@ -370,7 +360,7 @@ def rollback_script(t: ComposeTarget, rollback: str) -> str:
 
 
 def rollback_commands(t: ComposeTarget, rollback: str) -> str:
-    """Zurueck auf die alte Version (auf dem Host). Das alte Image bleibt unter `rollback`."""
+    """Zurück auf die alte Version (auf dem Host). Das alte Image bleibt unter `rollback`."""
     return "\n".join([shlex.join(["docker", "tag", rollback, t.image]), up_command(t)])
 
 
@@ -386,8 +376,8 @@ def _members_filters(t: ComposeTarget) -> str:
 
 
 def cmd_probe(t: ComposeTarget) -> str:
-    """Ein Aufruf: Compose v2 da? Ordner und Dateien da und lesbar? (Ohne sudo -- was der
-    SSH-Benutzer nicht lesen kann, blockiert das Update mit einem Hinweis.)"""
+    """Ein Aufruf: Compose v2 da? Ordner und Dateien da und lesbar? (Ohne sudo: was der SSH-Benutzer nicht lesen kann,
+    blockiert das Update mit einem Hinweis.)"""
     check_target(t)
     q = shlex.quote
     files = " ".join(q(f) for f in (*t.config_files, *t.env_files))
@@ -474,7 +464,7 @@ def parse_config_hash(text: str, service: str) -> str | None:
 
 
 def normalize_image(ref: str) -> str:
-    """Zum Vergleichen: Docker Hub in einer Schreibweise, Tag `latest` ergaenzt."""
+    """Zum Vergleichen: Docker Hub in einer Schreibweise, Tag `latest` ergänzt."""
     repo, tag, digest = split_ref(ref)
     return f"{canonical_repo(repo)}:{tag or 'latest'}" + (f"@{digest}" if digest else "")
 
@@ -483,17 +473,18 @@ def _first_line(text: str, limit: int = 200) -> str:
     for line in text.splitlines():
         line = line.strip()
         if line and not line.startswith("WARN"):
-            # Fehlermeldungen von Compose zitieren gern den Wert einer Variablen ("geheim$123"):
-            # Angaben in Anfuehrungszeichen kommen nie bis zur Anzeige.
+            # Fehlermeldungen von Compose zitieren gern den Wert einer Variablen ("geheim$123"): Angaben in
+            # Anführungszeichen kommen nie bis zur Anzeige.
             line = re.sub(r"\"[^\"]*\"|'[^']*'", "\"…\"", line)
             return line[:limit]
     return ""
 
 
 def check_config(stdout: str, stderr: str, exit_code: int, t: ComposeTarget) -> NotUpdatable | None:
-    """Wertet `docker compose config --format json` aus. Die Ausgabe enthaelt aufgeloeste
-    Umgebungswerte (Passwoerter!) -- sie wird nur gelesen, nie zurueckgegeben oder gespeichert,
-    und keine Fehlermeldung zitiert sie."""
+    """Wertet `docker compose config --format json` aus.
+
+    Die Ausgabe enthält aufgelöste Umgebungswerte (Passwörter!): sie wird nur gelesen, nie zurückgegeben oder gespeichert.
+    """
     missing = sorted(set(_MISSING_VAR_RE.findall(stderr or "")))
     if missing:
         return _why("env_missing", f"In der Compose-Datei fehlen Variablen ({', '.join(missing[:8])}) – sie kamen beim ersten Start wohl aus der Shell. Update von Hand.")
@@ -523,14 +514,14 @@ def check_config(stdout: str, stderr: str, exit_code: int, t: ComposeTarget) -> 
     return None
 
 
-# --- Risiko, Warnungen, Begruendung -----------------------------------------------------
+# --- Risiko, Warnungen, Begründung ------------------------------------------------------
 
 
 def is_database_image(image: str, service: str) -> bool:
     if service.lower() in _DB_SERVICES:
         return True
     segment = canonical_repo(split_ref(image)[0]).rsplit("/", 1)[-1].lower()
-    # Oberflaechen und Messfuehler zu Datenbanken sind selbst keine (mongo-express, postgres-exporter, ...).
+    # Oberflächen und Messfühler zu Datenbanken sind selbst keine (mongo-express, postgres-exporter, ...).
     helper = any(word in segment for word in ("exporter", "express", "admin")) or segment.endswith("-ui") or "-ui-" in segment
     return segment.startswith(_DB_WORDS) and not helper
 
@@ -539,11 +530,11 @@ _STORE_WORDS = (
     "redis", "valkey", "keydb", "dragonfly", "memcached", "mssql", "percona", "cockroach", "etcd", "rabbitmq", "minio",
     "nats", "zookeeper", "kafka", "opensearch", "meilisearch", "typesense", "qdrant", "weaviate", "milvus", "chroma",
 )
-"""Datenspeicher, die keine "Datenbank" im Sinne der Warnung sind, aber ihre Dateien beim Update umstellen koennen."""
+"""Datenspeicher, die keine "Datenbank" im Sinne der Warnung sind, aber ihre Dateien beim Update umstellen können."""
 
 
 def is_data_store(image: str, service: str) -> bool:
-    """Datenbank oder anderer Datenspeicher -- fuer diese Dienste gibt es nie einen automatischen Rueckweg. Prueft jeden
+    """Datenbank oder anderer Datenspeicher: für diese Dienste gibt es nie einen automatischen Rückweg. Prüft jeden
     Teil des Image-Namens (`mcr.microsoft.com/mssql/server`)."""
     if is_database_image(image, service):
         return True
@@ -565,8 +556,8 @@ def _utc_text(iso: str | None) -> str:
 def warnings_for(
     *, image: str, service: str, affected: list[str], stopped: list[str], drift: bool, stale: bool, registry_at: str | None,
 ) -> list[str]:
-    """Die Hinweise unter der Uebersicht (die Standard-Warnung vor kurzer Nichterreichbarkeit
-    zeigt die Seite immer -- `DOWNTIME_TEXT`)."""
+    """Die Hinweise unter der Übersicht; die Standard-Warnung vor kurzer Nichterreichbarkeit (`DOWNTIME_TEXT`) zeigt die
+    Seite immer."""
     out: list[str] = []
     if is_database_image(image, service):
         out.append(
@@ -597,7 +588,7 @@ AUTO_ROLLBACK_REASON = " Startet die neue Version nicht (Absturz), geht es autom
 def reason_text(
     host_name: str, container: str, image: str, project: str, service: str, risk: Risk, *, auto_rollback: bool = False,
 ) -> str:
-    """Das Einzige, was die Aktionen-Seite zeigt -- deshalb steht hier das Wesentliche (auch der automatische Rueckweg:
+    """Das Einzige, was die Aktionen-Seite zeigt, deshalb steht hier das Wesentliche (auch der automatische Rückweg:
     der Freigebende gibt ihn mit frei)."""
     text = (
         f"Image-Update: „{container}“ auf {host_name} – {image} neu laden und Container neu erstellen "
@@ -614,7 +605,7 @@ def short_id(image_id: str | None) -> str:
     return (image_id or "").removeprefix("sha256:")[:12]
 
 
-# --- Nach dem Lauf: Zustand pruefen -----------------------------------------------------
+# --- Nach dem Lauf: Zustand prüfen ------------------------------------------------------
 
 VERIFY_FORMAT = (
     '{"name":{{json .Name}},"image_id":{{json .Image}},"status":{{json .State.Status}},"exit_code":{{json .State.ExitCode}},'
@@ -623,8 +614,8 @@ VERIFY_FORMAT = (
 
 
 def cmd_verify(t: ComposeTarget, rollback: str | None = None) -> str:
-    """Alle Container des Dienstes + welche Image-ID der Name heute hat (+ die des
-    Sicherungs-Images `rollback`, falls angegeben)."""
+    """Alle Container des Dienstes + welche Image-ID der Name heute hat (+ die des Sicherungs-Images `rollback`, falls
+    angegeben)."""
     check_target(t)
     if rollback is not None and not is_valid_ref(rollback):
         raise ValueError(f"Ungültiger Sicherungs-Name: {rollback!r}")
@@ -648,9 +639,9 @@ class Member:
     exit_code: int | None
     health: str | None
     restarts: int | None = None
-    """`RestartCount` -- steigt, wenn Docker den Container wegen eines Absturzes neu startet."""
+    """`RestartCount` steigt, wenn Docker den Container wegen eines Absturzes neu startet."""
     started: str | None = None
-    """`State.StartedAt` -- aendert sich bei jedem Start."""
+    """`State.StartedAt` ändert sich bei jedem Start."""
 
 
 @dataclass(frozen=True)
@@ -699,26 +690,25 @@ class Verdict:
     """Ein Satz zum Ergebnis."""
     new_image_id: str | None = None
     changed: bool = True
-    """`False`: der Container laeuft mit demselben Image wie vorher."""
+    """`False`: der Container läuft mit demselben Image wie vorher."""
     health: str | None = None
     crashed: bool = False
-    """Eindeutiger Fehlstart: beendet, Absturz-Kreislauf oder gar kein Container. Nicht bei blossem "ungesund" -- eine
-    App kann mitten in einer langen Datenumstellung so aussehen (siehe `allows_auto_rollback`)."""
+    """Eindeutiger Fehlstart: beendet, Absturz-Kreislauf oder gar kein Container. Nicht bei bloßem "ungesund": eine App
+    kann mitten in einer langen Datenumstellung so aussehen (der automatische Rückweg bleibt dann aus)."""
 
 
 CRASH_LOOP_TEXT = "Container startet immer wieder neu. Logs über den Knopf „Logs“."
 
 
 def needs_stability_check(snap: Snapshot) -> bool:
-    """Ohne Healthcheck sagt "running" nichts darueber, ob der Container bleibt: ein Absturz-
-    Kreislauf steht zwischen zwei Neustarts kurz auf "running". Erst zwei Lesungen im Abstand
-    ohne neuen Start belegen einen ruhigen Betrieb."""
+    """Ohne Healthcheck sagt "running" nichts darüber, ob der Container bleibt: ein Absturz-Kreislauf steht zwischen
+    zwei Neustarts kurz auf "running". Erst zwei Lesungen im Abstand ohne neuen Start belegen einen ruhigen Betrieb."""
     return bool(snap.members) and any(m.health is None for m in snap.members)
 
 
 def restarted_since(before: Snapshot, after: Snapshot) -> bool:
-    """Hat sich ein Container zwischen den Lesungen neu gestartet (hoeherer `RestartCount`,
-    anderes `StartedAt`) oder ist eines seiner Mitglieder verschwunden/neu?"""
+    """Hat sich ein Container zwischen den Lesungen neu gestartet (höherer `RestartCount`, anderes `StartedAt`)
+    oder ist eines seiner Mitglieder verschwunden/neu?"""
     old = {m.name: m for m in before.members}
     for m in after.members:
         prev = old.get(m.name)
@@ -738,8 +728,7 @@ def describe_members(snap: Snapshot) -> str:
 
 
 def judge_verify(snap: Snapshot, *, old_image_id: str, final: bool) -> Verdict | None:
-    """`None`: noch nicht entschieden, weiter warten. `final`: die Zeit ist um -- jetzt muss
-    ein Urteil her."""
+    """`None`: noch nicht entschieden, weiter warten. `final`: die Zeit ist um, jetzt muss ein Urteil her."""
     members = snap.members
     if not members:
         return Verdict(False, "Kein Container des Dienstes gefunden – er läuft nicht wieder an.", crashed=True) if final else None
@@ -783,14 +772,13 @@ def _judge_image(snap: Snapshot, old_image_id: str, *, health: str | None, note:
 
 
 DETAILS_HINT = "Einzelheiten stehen in der Aktion."
-"""Ersatz fuer eine Zeile vom Host in Texten, die auch ohne Server-Recht sichtbar sind."""
+"""Ersatz für eine Zeile vom Host in Texten, die auch ohne Server-Recht sichtbar sind."""
 
 
 def describe_pull_failure(log: str, *, public: bool = False) -> str:
-    """Grund, warum `docker compose pull` scheiterte -- plus die gute Nachricht.
+    """Grund, warum `docker compose pull` scheiterte, plus die gute Nachricht (der Container läuft unverändert weiter).
 
-    `public=True`: ohne die Zeile aus der Ausgabe des Hosts (die steht nur in der Ausgabe der
-    Aktion), fuer Protokoll, Meldung und die Uebersicht der Seite."""
+    `public=True`: ohne die Zeile aus der Ausgabe des Hosts (für Protokoll, Meldung und die Übersicht der Seite)."""
     lines = [ln.strip() for ln in (log or "").splitlines() if ln.strip() and not ln.startswith("@@")]
     recent = "\n".join(lines[-20:])
     if "no space left" in recent.lower():
@@ -838,8 +826,8 @@ def failure_headline(t: ComposeTarget, message: str) -> str:
 def failure_output(
     t: ComposeTarget, message: str, *, rollback: str | None, log: str, state: str | None = None, show_rollback: bool = False,
 ) -> str:
-    """`show_rollback`: nur wenn schon etwas veraendert wurde (nach dem Pull); `rollback=None`
-    heisst dann: die Sicherung konnte nicht angelegt werden."""
+    """`show_rollback`: nur wenn schon etwas verändert wurde (nach dem Pull); `rollback=None` heißt dann: die Sicherung
+    konnte nicht angelegt werden."""
     parts = [failure_headline(t, message)]
     if state:
         parts.append(f"Aktueller Zustand: {state}")

@@ -1,10 +1,4 @@
-"""Host-, Gruppen- und Zugangsdaten-Verwaltung (docs/03-DATA-MODEL.md §2,
-docs/04-API.md §3).
-
-Der Kern besitzt die Host-Identitaet (docs/01-ARCHITECTURE.md §5) -- diese Datei ist
-die Orchestrierung dafuer, analog zu `services/auth.py`/`services/extensions.py`:
-reine DB-Verdrahtung, keine HTTP-Kenntnis.
-"""
+"""Verwaltung von Servern, Gruppen und Zugangsdaten (reine DB-Verdrahtung, keine HTTP-Kenntnis)."""
 
 from __future__ import annotations
 
@@ -36,17 +30,14 @@ _HOST_STATUS_VALUES = {s.value for s in HostStatus}
 
 
 CONFIRM_NEW_KEYS_SETTING = "ssh.confirm_new_host_keys"
-"""Globale Einstellung (Tabelle `settings`): neue Server-Schluessel nur nach Bestaetigung merken.
-Der Bootstrap des ersten Kontos schaltet sie bei NEUEN Installationen ein; fehlt sie (bestehende
-Installationen), gilt `False` -- das alte Verhalten."""
+"""Globale Einstellung (Tabelle `settings`): neue Server-Schlüssel nur nach Bestätigung merken.
+Der Bootstrap des ersten Kontos schaltet sie bei neuen Installationen ein; fehlt sie (bestehende Installationen), gilt `False`."""
 
+# `core/ssh.connect` prüft den Merker zusätzlich direkt vor dem Verbindungsaufbau.
 HOST_KEY_CONFIRM_REQUIRED = ssh.HOST_KEY_CONFIRM_REQUIRED
-"""Merker je Server (Tabelle `settings`, `scope="host"`, `user_id=<host_id>`): nach "Schluessel
-vergessen" darf der Server nie wieder still einen Schluessel unterschoben bekommen -- erst die
-ausdrueckliche Bestaetigung ("Verbindung pruefen", `POST /hosts/{id}/known-hosts`) nimmt ihn weg.
-Bewusst nicht in `Host.host_metadata`: das ueberschreibt der Abgleich der Anbieter-Erweiterungen bei
-jedem Lauf, und Erweiterungen sehen es. `core/ssh.connect` prueft ihn zusaetzlich direkt vor dem
-Verbindungsaufbau."""
+"""Merker je Server (Tabelle `settings`, `scope="host"`, `user_id=<host_id>`): Nach "Schlüssel vergessen" bekommt der
+Server nie wieder still einen Schlüssel untergeschoben, erst die Bestätigung (`POST /hosts/{id}/known-hosts`) nimmt ihn
+weg. Nicht in `Host.host_metadata`: Das überschreibt der Abgleich der Anbieter-Erweiterungen, und Erweiterungen sehen es."""
 _HOST_SCOPE = ssh.HOST_KEY_CONFIRM_SCOPE
 
 
@@ -68,7 +59,7 @@ def record_login_ok(host: Host, credential: HostCredential, at: datetime | None 
 
 
 def clear_login_ok(host: Host, credential_id: str | None = None) -> None:
-    """Die Anmeldung hat zuletzt nicht geklappt: der frühere Beleg gilt nicht mehr. Mit `credential_id`
+    """Die Anmeldung hat zuletzt nicht geklappt: der gespeicherte Beleg gilt nicht mehr. Mit `credential_id`
     nur, wenn der Beleg zu genau diesem Zugang gehört -- scheitert ein anderer Zugang, bleibt der
     Beleg des funktionierenden stehen."""
     record = (host.host_metadata or {}).get(LOGIN_OK_KEY)
@@ -80,9 +71,8 @@ def clear_login_ok(host: Host, credential_id: str | None = None) -> None:
 
 
 def login_confirmed_at(host: Host, credential: HostCredential | None) -> datetime | None:
-    """Wann hat sich Nodvard Deck zuletzt wirklich per SSH angemeldet -- mit GENAU diesem Zugang,
-    an dieser Adresse und diesem Port? Sonst `None` (nie, oder der Zugang bzw. die Adresse
-    wurde seitdem geändert)."""
+    """Wann hat sich das Dashboard zuletzt per SSH angemeldet, mit genau diesem Zugang, an dieser Adresse und diesem Port?
+    Sonst `None` (nie, oder der Zugang bzw. die Adresse wurde seitdem geändert)."""
     record = (host.host_metadata or {}).get(LOGIN_OK_KEY)
     if credential is None or not isinstance(record, dict):
         return None
@@ -99,45 +89,39 @@ class HostServiceError(Exception):
 
 
 class HostBusyError(HostServiceError):
-    """Auf dem Host laeuft gerade eine Aktion -- Loeschen waere mitten im Lauf."""
+    """Auf dem Host läuft gerade eine Aktion; Löschen wäre mitten im Lauf."""
 
 
 async def drop_pooled_connections(session: AsyncSession, host_id: str) -> None:
-    """Offene SSH-Verbindungen zu `host_id` sofort schliessen UND nach dem Commit der
-    Session nochmals -- siehe `ssh.drop_host_after_commit`."""
+    """Schließt offene SSH-Verbindungen zu `host_id` sofort und nach dem Commit noch einmal (`ssh.drop_host_after_commit`)."""
     await ssh.get_ssh_pool().drop_host(host_id)
     ssh.drop_host_after_commit(session, host_id)
 
 
 async def forget_address_bound_access(session: AsyncSession, host: Host, *, spare_pinned: bool = False) -> int:
-    """Nach einer geaenderten Adresse des Servers: gespeicherte SSH-Passwoerter loeschen und offene
-    Verbindungen schliessen. Ein Passwort gehoert zu dem Server, bei dem es eingegeben wurde; unter
-    einer neuen Adresse wuerde es sonst bei jemand anderem landen. Schluessel bleiben (der Server
-    prueft ihn, das Dashboard verraet ihn nicht). Eine gepoolte Verbindung geht sonst weiter an die
-    ALTE Adresse.
-
-    `spare_pinned`: Passwoerter bleiben, wenn fuer den Server schon ein Schluessel gemerkt ist. Die
-    Anmeldung beginnt erst nach dem Schluesseltausch (`core/ssh.connect`): ein anderer Server an der
-    neuen Adresse zeigt einen anderen Schluessel und bekommt nie ein Passwort zu sehen. Gedacht fuer
-    Adressen, die der Anbieter selbst fuehrt und die sich legitim aendern (DHCP).
-
-    Liefert die Zahl der geloeschten Passwoerter."""
+    """Löscht nach einer geänderten Adresse die gespeicherten SSH-Passwörter und schließt offene Verbindungen; liefert die
+    Zahl der gelöschten Passwörter. Mit `spare_pinned` bleiben sie, wenn für den Server schon ein Schlüssel gemerkt ist."""
     from ..db import refresh_relationships
 
     removed = 0
+    # Ein Passwort gehört zu dem Server, bei dem es eingegeben wurde; unter einer neuen Adresse würde es sonst bei jemand
+    # anderem landen. Schlüssel bleiben (der Server prüft ihn, das Dashboard verrät ihn nicht). Mit `spare_pinned` (für
+    # Adressen, die der Anbieter selbst führt, z. B. DHCP) bleiben auch Passwörter: Die Anmeldung beginnt erst nach dem
+    # Schlüsseltausch (`core/ssh.connect`), ein anderer Server an der neuen Adresse zeigt einen anderen Schlüssel und
+    # bekommt nie ein Passwort zu sehen.
     if not (spare_pinned and await ssh.load_known_fingerprints(session, host.id)):
         await refresh_relationships(session, host, "credentials")
         for credential in [c for c in host.credentials if c.kind == "ssh_password"]:
             if await delete_credential(session, host.id, credential.id):
                 removed += 1
+    # Eine gepoolte Verbindung ginge sonst weiter an die alte Adresse.
     await drop_pooled_connections(session, host.id)
     return removed
 
 
 def host_to_sdk(host: Host) -> SdkHost:
-    """Kern-ORM -> SDK-Vertragstyp -- die einzige Stelle, die das tut, damit
-    `ext/context.py` (Extension-facing) und `api/v1/terminal.py` (core-facing, fuer
-    die WS-Terminal-Bruecke) dieselbe Umwandlung benutzen."""
+    """Kern-ORM -> SDK-Vertragstyp; die einzige Stelle, die das tut, damit `ext/context.py` und `api/v1/terminal.py` dieselbe
+    Umwandlung benutzen."""
     status = HostStatus(host.status) if host.status in _HOST_STATUS_VALUES else HostStatus.UNKNOWN
     return SdkHost(
         id=host.id,
@@ -152,12 +136,9 @@ def host_to_sdk(host: Host) -> SdkHost:
         provider_ref=host.provider_ref,
         is_managed=host.is_managed,
         metadata=host.host_metadata or {},
-        # `host.credentials`
-        # ist wie `host.tags` (oben) `lazy="selectin"` -- synchroner Zugriff hier ist
-        # sicher, keine neue Query noetig. Der WERT eines Credentials bleibt weiterhin
-        # unsichtbar fuer Extensions (docs/03 §3 Invariante 1) -- nur OB ueberhaupt
-        # eines existiert, damit eine Datei-/Terminal-Quelle vorab entscheiden kann,
-        # ob sie sich als nutzbar anbietet.
+        # `host.credentials` ist wie `host.tags` `lazy="selectin"`, der Zugriff braucht keine neue Query. Erweiterungen
+        # sehen nie den Wert eines Zugangs, nur ob einer existiert (damit z. B. eine Datei- oder Terminal-Quelle vorab
+        # entscheiden kann, ob sie nutzbar ist).
         has_credential=any(c.is_default for c in host.credentials),
         # Nur der Benutzername (kein Geheimnis): z. B. erlischt eine Dauerfreigabe der
         # Skripte, wenn ein Server danach unter einem anderen Konto angesprochen wird.
@@ -190,10 +171,8 @@ async def create_host(
     for tag in tags or []:
         session.add(HostTag(host_id=host.id, tag=tag))
     await session.flush()
-    # docs/00-DECISIONS.md D-12: IMMER refreshen, nicht nur wenn `tags` nicht leer
-    # war -- ein frisch angelegter Host OHNE Tags hat `.tags` genauso wenig geladen
-    # wie einer MIT welchen. Live gefunden: `if tags:` liess genau den (haeufigeren)
-    # taglosen Fall durchrutschen, MissingGreenlet beim ersten `HostOut.from_model()`.
+    # Immer neu laden, auch ohne Tags: Ein frisch angelegter Host hat `.tags` nie geladen, sonst gibt es beim ersten
+    # `HostOut.from_model()` ein MissingGreenlet.
     from ..db import refresh_relationships
 
     await refresh_relationships(session, host, "tags", "credentials")
@@ -229,8 +208,7 @@ async def update_host(session: AsyncSession, host_id: str, **fields: object) -> 
     if tags is not None:
         await refresh_relationships(session, host, "tags")
         wanted = set(tags)  # type: ignore[arg-type]
-        # Nur MANUELLE Tags (managed_by_ext_id None) anfassen; Tags einer Extension bleiben
-        # und werden nicht doppelt angelegt.
+        # Nur manuelle Tags (managed_by_ext_id None) anfassen; Tags einer Erweiterung bleiben und werden nicht doppelt angelegt.
         taken = {t.tag for t in host.tags if t.managed_by_ext_id is not None}
         for row in list(host.tags):
             if row.managed_by_ext_id is None and row.tag not in wanted:
@@ -239,9 +217,8 @@ async def update_host(session: AsyncSession, host_id: str, **fields: object) -> 
         for tag in sorted(wanted - taken - present):
             host.tags.append(HostTag(tag=tag))
     await session.flush()
-    # Immer beide neu laden: `HostOut` zeigt Markierungen UND die Zugangs-Zusammenfassung,
-    # und ein Zugang, der erst NACH dem Laden des Hosts angelegt wurde, steht sonst nicht
-    # in der gecachten Collection (D-12).
+    # Immer beide neu laden: `HostOut` zeigt Markierungen und Zugangs-Zusammenfassung, und ein Zugang, der erst nach dem
+    # Laden des Hosts angelegt wurde, steht sonst nicht in der gecachten Collection.
     await refresh_relationships(session, host, "tags", "credentials")
     if address_changed:
         await forget_address_bound_access(session, host)
@@ -249,27 +226,16 @@ async def update_host(session: AsyncSession, host_id: str, **fields: object) -> 
 
 
 async def delete_host(session: AsyncSession, host_id: str) -> bool:
-    """Live gefunden (admin-seitige Bereinigung eines doppelt
-    entdeckten Hosts): `Host.credentials`/`Host.tags` sind `cascade="all,
-    delete-orphan"`, `lazy="selectin"` -- die Collection wird beim Laden von `host`
-    EINMAL eifrig abgefragt und danach NICHT automatisch synchronisiert, wenn ein
-    Credential per direkter FK-Zuweisung (`cred.host_id = anderer_host.id`) einem
-    ANDEREN Host zugeordnet wird (kein `back_populates`, also keine automatische
-    Pflege der Gegenseite). `session.delete(host)` kaskadierte deshalb ueber die
-    NOCH ALTE, im Speicher gecachte Collection und loeschte ein Credential mit, das
-    laengst einem anderen Host gehoerte. `refresh_relationships()` (docs/00-
-    DECISIONS.md D-12) erzwingt hier einen frischen Nachlade-Versuch direkt vor dem
-    Loeschen, damit die Kaskade nur noch trifft, was WIRKLICH noch zu `host`
-    gehoert."""
+    """Löscht den Server samt Zugangsdaten und Markierungen; `False`, wenn er unbekannt ist, `HostBusyError`, wenn auf ihm
+    gerade eine Aktion läuft."""
     from ..db import refresh_relationships
 
     host = await session.get(Host, host_id)
     if host is None:
         return False
-    # Erst einen (wirkungslosen) Schreibzugriff, DANN pruefen: SQLite vergibt die
-    # Schreibsperre nur einmal -- zwischen Pruefung und Loeschen kann so keine Aktion mehr
-    # auf "executing" wechseln (TOCTOU). Nach dem Loeschen selbst wuerde der Check nichts
-    # mehr finden, weil `actions.host_id` dann auf NULL gesetzt ist.
+    # Erst einen wirkungslosen Schreibzugriff, dann prüfen: SQLite vergibt die Schreibsperre nur einmal, so kann zwischen
+    # Prüfung und Löschen keine Aktion mehr auf "executing" wechseln (TOCTOU). Nach dem Löschen fände der Check nichts
+    # mehr, weil `actions.host_id` dann NULL ist.
     await session.execute(update(Host).where(Host.id == host_id).values(name=Host.name))
     running = await session.execute(
         select(Action.id)
@@ -278,17 +244,18 @@ async def delete_host(session: AsyncSession, host_id: str) -> bool:
     )
     if running.first() is not None:
         raise HostBusyError("Auf diesem Server läuft gerade eine Aktion. Bitte warten, bis sie fertig ist.")
+    # Frisch nachladen: Wurde ein Zugang per Fremdschlüssel einem anderen Server zugeordnet, kennt die gecachte Collection
+    # (`lazy="selectin"`, kein `back_populates`) ihn noch hier, und die Kaskade würde ihn mitlöschen.
     await refresh_relationships(session, host, "credentials", "tags")
-    # Die Secret-IDs VOR dem Loeschen merken: `secrets` hat einen RESTRICT-Fremdschluessel
-    # von den Zugangsdaten aus, das Secret darf also erst NACH den Zugangsdaten weg.
+    # Die Secret-IDs vor dem Löschen merken: `secrets` hat einen RESTRICT-Fremdschlüssel von den Zugangsdaten aus, das
+    # Secret darf also erst nach den Zugangsdaten weg.
     secret_ids = [c.secret_id for c in host.credentials]
-    # Eigene App-Kacheln mit diesem Server als Bezug bleiben stehen, nur ohne Server (nicht vom SQLite-Pragma abhaengig).
+    # Eigene App-Kacheln mit diesem Server als Bezug bleiben stehen, nur ohne Server (nicht vom SQLite-Pragma abhängig).
     await custom_apps.unlink_host(session, host_id)
     await host_key_was_confirmed(session, host_id)
     await session.delete(host)
-    # Ohne Flush bleibt `host` im Identity-Map als "zum Loeschen vorgemerkt", aber
-    # noch auffindbar -- ein zweiter delete_host()-Aufruf im selben Request wuerde
-    # ihn faelschlich nochmal finden (live gefunden ueber den Regressionstest).
+    # Ohne Flush bliebe `host` in der Identity-Map auffindbar, und ein zweiter `delete_host()`-Aufruf im selben Request
+    # fände ihn noch einmal.
     await session.flush()
     for secret_id in secret_ids:
         await vault.delete_secret(session, secret_id)
@@ -362,15 +329,14 @@ async def delete_credential(session: AsyncSession, host_id: str, credential_id: 
         return False
     await vault.delete_secret(session, credential.secret_id)
     await session.delete(credential)
-    # Siehe delete_host(): ohne Flush waere sowohl das Secret als auch die
-    # Credential-Zeile noch ueber die Identity-Map auffindbar.
+    # Siehe delete_host(): Ohne Flush wären Secret und Zugangszeile noch über die Identity-Map auffindbar.
     await session.flush()
     host = await session.get(Host, host_id)
     if host is not None:
         from ..db import refresh_relationships
 
         await refresh_relationships(session, host, "credentials")
-    # Eine noch offene Verbindung mit dem geloeschten Zugang darf nicht weiterlaufen.
+    # Eine noch offene Verbindung mit dem gelöschten Zugang darf nicht weiterlaufen.
     await drop_pooled_connections(session, host_id)
     return True
 
@@ -378,19 +344,16 @@ async def delete_credential(session: AsyncSession, host_id: str, credential_id: 
 async def make_default_credential(
     session: AsyncSession, host_id: str, credential_id: str, *, delete_previous: bool = False
 ) -> tuple[HostCredential, HostCredential | None] | None:
-    """Macht einen Zugang zum Standard des Servers (Schluesselwechsel: erst den neuen
-    pruefen, dann umstellen). Mit `delete_previous` wird der bisherige Standard samt
-    Geheimnis in DERSELBEN Transaktion geloescht (und seine Verbindungen sofort geschlossen);
-    sonst wird der Pool nur ausgemustert (`retire_host`). Rueckgabe: `(Zugang, geloeschter alter
-    Standard oder None)`; `None` bei unbekanntem Zugang. Ist der Zugang schon der Standard,
-    aendert sich nichts -- auch `delete_previous` loescht dann nichts."""
+    """Macht einen Zugang zum Standard (Schlüsselwechsel: erst den neuen prüfen, dann umstellen). Mit `delete_previous`
+    fällt der bisherige Standard samt Geheimnis in derselben Transaktion weg. Rückgabe: `(Zugang, gelöschter alter
+    Standard oder None)`, `None` bei unbekanntem Zugang."""
     from ..db import refresh_relationships
 
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
         return None
     host = await session.get(Host, host_id)
-    assert host is not None  # der Zugang verweist per Fremdschluessel darauf
+    assert host is not None  # der Zugang verweist per Fremdschlüssel darauf
     others = (
         await session.execute(
             select(HostCredential).where(
@@ -400,13 +363,14 @@ async def make_default_credential(
     ).scalars().all()
     previous = others[0] if others else None
     if credential.is_default and not others:
+        # Schon der Standard: nichts ändern, auch `delete_previous` löscht dann nichts.
         return credential, None
     for row in others:
         row.is_default = False
     credential.is_default = True
     deleted: HostCredential | None = None
     if delete_previous and previous is not None:
-        # Erst die Zugangszeile, dann das Geheimnis (RESTRICT-Fremdschluessel, siehe delete_host).
+        # Erst die Zugangszeile, dann das Geheimnis (RESTRICT-Fremdschlüssel, siehe delete_host).
         deleted = previous
         secret_id = previous.secret_id
         await session.delete(previous)
@@ -415,11 +379,11 @@ async def make_default_credential(
     await session.flush()
     await refresh_relationships(session, host, "credentials")
     if deleted is not None:
-        # Der geloeschte Zugang darf keine Verbindung mehr offenhalten.
+        # Der gelöschte Zugang darf keine Verbindung mehr offenhalten.
         await drop_pooled_connections(session, host_id)
     else:
-        # Nichts wurde geloescht: neue Aufrufer verbinden mit dem neuen Standard, laufende
-        # Terminals und Live-Protokolle duerfen in Ruhe zu Ende laufen (Gnadenfrist).
+        # Nichts wurde gelöscht: neue Aufrufer verbinden mit dem neuen Standard, laufende Terminals und Live-Protokolle
+        # dürfen in Ruhe zu Ende laufen (Gnadenfrist).
         ssh.get_ssh_pool().retire_host(host_id)
     return credential, deleted
 
@@ -434,12 +398,10 @@ async def default_credential(session: AsyncSession, host_id: str) -> HostCredent
 async def resolve_connection_target(
     session: AsyncSession, settings: Settings, host: Host, credential: HostCredential
 ) -> ssh.ConnectionTarget:
-    """Loest die Zugangsdaten-Referenz ueber den Vault auf -- der Klartext lebt nur
-    kurzlebig im Speicher dieses Aufrufs (docs/03 §3, Invariante 2)."""
-    # Stand des Pool-Zaehlers festhalten: wird der Host danach geaendert (drop_host),
-    # erkennt `SshPool.get()` dieses Ziel als veraltet. Host und Zugang hat der Aufrufer
-    # schon vorher gelesen -- dieses kleine Fenster deckt der Drop nach dem Commit ab
-    # (`drop_pooled_connections`).
+    """Löst die Zugangsdaten-Referenz über den Vault auf; der Klartext lebt nur kurz im Speicher dieses Aufrufs."""
+    # Stand des Pool-Zählers festhalten: Wird der Host danach geändert (drop_host), erkennt `SshPool.get()` dieses Ziel
+    # als veraltet. Host und Zugang hat der Aufrufer schon vorher gelesen; dieses kleine Fenster deckt der Drop nach dem
+    # Commit ab (`drop_pooled_connections`).
     generation = ssh.get_ssh_pool().generation(host.id)
     keyring = vault.load_keyring(settings)
     plaintext = await vault.read_secret_plaintext(session, keyring, credential.secret_id)
@@ -447,20 +409,17 @@ async def resolve_connection_target(
         host_id=host.id, address=host.address, port=credential.port,
         username=credential.username, kind=credential.kind, secret_value=plaintext,
         generation=generation,
-        # Muss der Schluessel bestaetigt werden, merken Hintergrundjobs, Terminal und Status keinen
-        # neuen Server-Schluessel mehr still, nur "Verbindung pruefen" (Bestaetigen) tut es.
+        # Muss der Schlüssel bestätigt werden, merken Hintergrundjobs, Terminal und Status keinen neuen Server-Schlüssel
+        # mehr still, nur "Verbindung prüfen" (Bestätigen) tut es.
         allow_tofu=not await host_key_confirmation_required(session, settings, host.id),
     )
 
 
 async def host_key_confirmation_required(session: AsyncSession, settings: Settings, host_id: str) -> bool:
-    """Darf fuer diesen Server ein unbekannter Schluessel NICHT still gemerkt werden?
-
-    Reihenfolge (die erste Antwort gilt):
-    1. Merker am Server (nach "Schluessel vergessen"): immer ja, auch gegen die Umgebungsvariable.
-    2. Umgebungsvariable `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true`/`false`), falls gesetzt.
-    3. Gespeicherte Einstellung `ssh.confirm_new_host_keys` (neue Installationen: an).
-    4. Sonst nein (bestehende Installationen, wie bisher)."""
+    """Darf für diesen Server ein unbekannter Schlüssel nicht still gemerkt werden?"""
+    # Die erste Antwort gilt: Merker am Server (nach "Schlüssel vergessen", auch gegen die Umgebungsvariable), dann
+    # `NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS` (`true`/`false`), dann die Einstellung `ssh.confirm_new_host_keys`
+    # (neue Installationen: an), sonst nein.
     if await ssh.host_key_confirm_pending(session, host_id):
         return True
     if settings.ssh_confirm_new_host_keys is not None:
@@ -476,7 +435,7 @@ async def require_host_key_confirmation(session: AsyncSession, host_id: str) -> 
 
 
 async def host_key_was_confirmed(session: AsyncSession, host_id: str) -> None:
-    """Nimmt den Merker weg. Nur der Bestaetigen-Weg (`POST /hosts/{id}/known-hosts`) ruft das auf."""
+    """Nimmt den Merker weg. Nur der Bestätigen-Weg (`POST /hosts/{id}/known-hosts`) ruft das auf."""
     row = await session.get(Setting, (HOST_KEY_CONFIRM_REQUIRED, _HOST_SCOPE, host_id))
     if row is not None:
         await session.delete(row)
@@ -484,10 +443,9 @@ async def host_key_was_confirmed(session: AsyncSession, host_id: str) -> None:
 
 
 async def clear_known_host_key(session: AsyncSession, host_id: str, key_type: str) -> bool:
-    """Admin-Weg, eine Host-Key-Aenderung NACH manueller Pruefung erneut zuzulassen
-    (docs/03 §2: "Abweichung => Verbindung scheitert sichtbar", die Wiederherstellung
-    des Vertrauens ist eine bewusste, protokollierte Handlung, kein automatischer
-    Fallback)."""
+    """Admin-Weg, eine Host-Key-Änderung nach manueller Prüfung erneut zuzulassen.
+
+    Das Vertrauen wiederherzustellen ist eine bewusste, protokollierte Handlung, kein automatischer Fallback."""
     result = await session.execute(
         select(KnownHostKey).where(KnownHostKey.host_id == host_id, KnownHostKey.key_type == key_type)
     )
@@ -495,12 +453,11 @@ async def clear_known_host_key(session: AsyncSession, host_id: str, key_type: st
     if row is None:
         return False
     await session.delete(row)
-    # Ab jetzt darf KEIN Hintergrunddienst den naechsten Schluessel still merken (auch nicht, wenn
-    # die Einstellung es sonst erlaubt): erst die ausdrueckliche Bestaetigung nimmt den Merker weg.
-    # Im selben Commit wie das Loeschen.
+    # Ab jetzt darf kein Hintergrunddienst den nächsten Schlüssel still merken, auch wenn die Einstellung es sonst erlaubt;
+    # erst die Bestätigung nimmt den Merker weg. Im selben Commit wie das Löschen.
     await require_host_key_confirmation(session, host_id)
-    # Das Vertrauen ist weg -- eine offene Verbindung, die auf dem alten Schluessel
-    # beruht, wird geschlossen; die naechste muss den Schluessel neu bestaetigen.
+    # Das Vertrauen ist weg: Eine offene Verbindung, die auf dem alten Schlüssel beruht, wird geschlossen; die nächste
+    # muss den Schlüssel neu bestätigen.
     await drop_pooled_connections(session, host_id)
     return True
 
@@ -540,7 +497,7 @@ async def delete_group(session: AsyncSession, group_id: str) -> bool:
     group = await session.get(HostGroup, group_id)
     if group is None:
         return False
-    # Zuordnungen ausdruecklich mitloeschen, statt sich nur auf den FK-Cascade zu verlassen.
+    # Zuordnungen ausdrücklich mitlöschen, statt sich nur auf den FK-Cascade zu verlassen.
     await session.execute(delete(host_group_members).where(host_group_members.c.group_id == group_id))
     await session.delete(group)
     await session.flush()
@@ -548,7 +505,7 @@ async def delete_group(session: AsyncSession, group_id: str) -> bool:
 
 
 async def add_group_member(session: AsyncSession, group_id: str, host_id: str) -> bool:
-    """Idempotent: ist der Host schon in der Gruppe, passiert nichts (Rueckgabe False).
+    """Idempotent: Ist der Host schon in der Gruppe, passiert nichts (Rückgabe False).
     Unbekannte Gruppe oder unbekannter Host -> `HostServiceError` (API: 404)."""
     if await session.get(HostGroup, group_id) is None:
         raise HostServiceError("Unbekannte Gruppe.")

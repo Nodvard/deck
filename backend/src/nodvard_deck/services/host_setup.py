@@ -1,17 +1,6 @@
-"""Einrichtungsbefehl fuer einen Server: legt (falls noetig) den Benutzer an, traegt den
-oeffentlichen Schluessel ein und gibt auf Wunsch Gruppen und sudo ohne Passwort.
+"""Einrichtungsbefehl für einen Server: Benutzer anlegen, Schlüssel eintragen, auf Wunsch Gruppen und sudo ohne Passwort.
 
-Reine Funktionen, kein I/O. Der Befehl wird vom Menschen auf dem Server ausgefuehrt --
-deshalb gilt: **nichts Ungeprueftes kommt in das Skript.** Benutzer, Gruppen und
-oeffentlicher Schluessel werden streng per Zeichenliste geprueft (Fehlermeldungen nennen den
-Wert nie), ein Wert mit Anfuehrungszeichen, `$`, Backtick, Backslash oder Zeilenumbruch kommt
-gar nicht erst durch (`_dq`), und das ganze Skript wird fuer `sh -c` mit `shlex.quote`
-verpackt. Das Skript selbst enthaelt kein einfaches Hochkommas -- es liest sich so leichter und
-laesst sich in `sh -c '...'` einbetten.
-
-Beim Einrichten mit Passwort fuehrt Nodvard Deck dasselbe Skript selbst aus (`remote_setup_command`,
-ausgewertet mit `evaluate_setup_run`); die einmalige Anmeldung dafuer regelt `services/one_time_password.py`.
-"""
+Reine Funktionen ohne I/O; beim Einrichten mit Passwort führt das Dashboard das Skript selbst aus (`remote_setup_command`)."""
 
 from __future__ import annotations
 
@@ -22,9 +11,13 @@ from dataclasses import dataclass
 
 import asyncssh
 
+# Der Befehl wird von Hand auf dem Server ausgeführt, deshalb kommt nichts Ungeprüftes ins Skript: Benutzer, Gruppen und
+# öffentlicher Schlüssel werden streng per Zeichenliste geprüft (Fehlermeldungen nennen den Wert nie), ein Wert mit
+# Anführungszeichen, `$`, Backtick, Backslash oder Zeilenumbruch kommt gar nicht erst durch (`_dq`), und das ganze Skript
+# wird für `sh -c` mit `shlex.quote` verpackt. Es enthält kein einfaches Hochkomma, so lässt es sich in `sh -c '...'` einbetten.
 USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
-"""Benutzer auf dem Server (Linux-Namensregel). Strenger als der Benutzername, den Nodvard Deck
-fuer Windows-Zugaenge speichern darf: hier wird er in ein Shell-Skript eingesetzt."""
+"""Benutzer auf dem Server (Linux-Namensregel). Strenger als der Benutzername, den das Dashboard
+für Windows-Zugänge speichern darf: Hier wird er in ein Shell-Skript eingesetzt."""
 GROUP_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 
 _PUBLIC_KEY_RE = re.compile(
@@ -40,7 +33,7 @@ _FORBIDDEN_IN_DOUBLE_QUOTES = set("\"'$`\\!")
 
 
 class SetupError(ValueError):
-    """Ein Wert taugt nicht fuer den Einrichtungsbefehl. Der Text nennt den Wert nie."""
+    """Ein Wert taugt nicht für den Einrichtungsbefehl. Der Text nennt den Wert nie."""
 
 
 def _check_user(user: str) -> str:
@@ -62,37 +55,32 @@ def _check_public_key(public_key: str) -> str:
 
 
 def _dq(value: str) -> str:
-    """Zweite Sicherung fuer einen Wert, der in doppelte Anfuehrungszeichen kommt: alles
-    ausser sichtbarem ASCII und jedes Zeichen, das die Shell dort deuten wuerde, wird
-    abgelehnt (statt maskiert) -- die Werte sind vorher schon streng geprueft."""
+    """Zweite Sicherung für einen Wert, der in doppelte Anführungszeichen kommt: alles
+    außer sichtbarem ASCII und jedes Zeichen, das die Shell dort deuten würde, wird
+    abgelehnt (statt maskiert) -- die Werte sind vorher schon streng geprüft."""
     if any(ord(c) < 32 or ord(c) > 126 or c in _FORBIDDEN_IN_DOUBLE_QUOTES for c in value):
         raise SetupError(_KEY_ERROR)
     return value
 
 
 def key_comment(host_name: str) -> str:
-    """Kommentar des erzeugten Schluessels: `nodvard@<Kurzname>`, auf sichere Zeichen
-    reduziert (Server, die eine Erweiterung entdeckt hat, koennen beliebige Namen tragen).
-
-    Aeltere Schluessel tragen auf den Servern noch `lattice@<Kurzname>`. Der Kommentar wird bei
-    jedem Aufruf neu abgeleitet und gehoert nicht zur Anmeldung; damit der Einrichtungsbefehl
-    einen alten Eintrag trotzdem erkennt und nicht doppelt anlegt, sucht er nur nach Art und
-    Schluesseltext (siehe `build_setup_script`)."""
+    """Kommentar des erzeugten Schlüssels: `nodvard@<Kurzname>`, auf sichere Zeichen reduziert (entdeckte Server können
+    beliebige Namen tragen). Alte Einträge mit `lattice@<Kurzname>` erkennt der Befehl trotzdem, weil er nur nach Art und
+    Schlüsseltext sucht (`build_setup_script`)."""
     return "nodvard@" + re.sub(r"[^A-Za-z0-9_.-]", "-", host_name)[:64]
 
 
 @dataclass(frozen=True)
 class PublicKeyInfo:
     public_key: str
-    """`<Art> <Schluessel> <Kommentar>` in einer Zeile."""
+    """`<Art> <Schlüssel> <Kommentar>` in einer Zeile."""
     fingerprint: str
     """`SHA256:...` wie bei `ssh-keygen -l`."""
 
 
 def derive_public_key(private_key: str, *, comment: str) -> PublicKeyInfo:
-    """Der oeffentliche Schluessel zu einem privaten. Der Kommentar ist IMMER `comment` --
-    der im privaten Schluessel eingetragene (bei einem eingefuegten Schluessel frei waehlbar)
-    wird nie uebernommen. Fehler nennen nie Schluesselmaterial."""
+    """Der öffentliche Schlüssel zu einem privaten. Der Kommentar ist immer `comment`: Der im privaten Schlüssel
+    eingetragene (bei einem eingefügten Schlüssel frei wählbar) wird nie übernommen. Fehler nennen nie Schlüsselmaterial."""
     try:
         key = asyncssh.import_private_key(private_key)
         line = key.convert_to_public().export_public_key("openssh").decode("ascii")
@@ -106,11 +94,9 @@ def derive_public_key(private_key: str, *, comment: str) -> PublicKeyInfo:
 def build_setup_script(
     user: str, public_key: str, *, groups: Iterable[str] = (), sudo: bool = False
 ) -> tuple[str, str]:
-    """`(skript, einzeiler)`. `skript` ist zum Lesen (eine Anweisung je Zeile); `einzeiler` ist der
-    Befehl zum Einfuegen: als root direkt, sonst ueber `sudo`, als EIN Argument fuer `sh -c`.
-
-    `groups` nur fuer Benutzer ausser root (root braucht sie nicht), `sudo` ebenso. Ein
-    ungueltiger Wert ergibt `SetupError`."""
+    """`(skript, einzeiler)`: `skript` zum Lesen (eine Anweisung je Zeile), `einzeiler` zum Einfügen (als root direkt, sonst
+    über `sudo`, als ein Argument für `sh -c`). `groups` und `sudo` gelten nur für Benutzer außer root; ein ungültiger
+    Wert ergibt `SetupError`."""
     user = _check_user(user)
     key = _check_public_key(public_key)
     wanted: list[str] = []
@@ -120,8 +106,8 @@ def build_setup_script(
             wanted.append(group)
     is_root = user == "root"
 
-    # `B` = Art und Schluesseltext ohne Kommentar: ein schon eingetragener Schluessel wird auch dann erkannt,
-    # wenn er mit einem anderen Kommentar (frueher `lattice@...`) auf dem Server steht.
+    # `B` = Art und Schlüsseltext ohne Kommentar: Ein schon eingetragener Schlüssel wird auch dann erkannt, wenn er mit
+    # einem anderen Kommentar (z. B. `lattice@...`) auf dem Server steht.
     lines = ["set -e", f"U={shlex.quote(user)}", f'K="{_dq(key)}"', 'B=$(echo "$K" | cut -d" " -f1,2)']
     if not is_root:
         # "*" statt "!": sshd mit `UsePAM no` behandelt ein mit "!" gesperrtes Konto als gesperrt.
@@ -136,9 +122,9 @@ def build_setup_script(
     if is_root:
         lines += [
             # root: das Home ist /root. Proxmox: authorized_keys ist ein Link ins Cluster-Dateisystem,
-            # dort scheitert chmod -- der Link bleibt unberuehrt.
+            # dort scheitert chmod -- der Link bleibt unberührt.
             'install -d -m 700 -o "$U" -g "$G" "$H/.ssh"; A="$H/.ssh/authorized_keys"; [ -e "$A" ] || touch "$A"',
-            # Fehlt das Zeilenende der letzten Zeile, wuerde der neue Eintrag an sie gehaengt.
+            # Fehlt das Zeilenende der letzten Zeile, würde der neue Eintrag an sie gehängt.
             '[ ! -s "$A" ] || [ -z "$(tail -c1 "$A")" ] || echo >> "$A"',
             # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
             # Befehle und SFTP gehen weiter.
@@ -146,10 +132,9 @@ def build_setup_script(
             '[ -L "$A" ] || { chown "$U:$G" "$A"; chmod 600 "$A"; }',
         ]
     else:
-        # Alles an ~/.ssh und authorized_keys laeuft ALS der Benutzer (R): so kann ein Link dort
-        # (auf /root/.ssh, /etc, eine sudoers-Datei) dem Benutzer keine Rechte an fremden Dateien
-        # verschaffen -- weder per chown noch durch Anhaengen als root. Zusaetzlich bricht das
-        # Skript bei einem Link ab, statt ihm zu folgen.
+        # Alles an ~/.ssh und authorized_keys läuft als der Benutzer (R): So kann ein Link dort (auf /root/.ssh, /etc,
+        # eine sudoers-Datei) dem Benutzer keine Rechte an fremden Dateien verschaffen, weder per chown noch durch
+        # Anhängen als root. Zusätzlich bricht das Skript bei einem Link ab, statt ihm zu folgen.
         lines += [
             'R() { if command -v runuser >/dev/null 2>&1; then runuser -u "$U" -- "$@"; '
             'else su -s /bin/sh "$U" -c "exec \\"\\$@\\"" -- sh "$@"; fi; }',
@@ -157,7 +142,7 @@ def build_setup_script(
             '[ ! -L "$S" ] || { echo "FEHLER: $S ist ein Link und wird nicht angefasst. Bitte selbst prüfen."; exit 1; }',
             '[ ! -L "$A" ] || { echo "FEHLER: $A ist ein Link und wird nicht angefasst. Bitte selbst prüfen."; exit 1; }',
             'R mkdir -p -m 700 "$S"; R chmod 700 "$S"',
-            # Fehlt das Zeilenende der letzten Zeile, wuerde der neue Eintrag an sie gehaengt.
+            # Fehlt das Zeilenende der letzten Zeile, würde der neue Eintrag an sie gehängt.
             '[ -z "$(R tail -c1 "$A" 2>/dev/null)" ] || printf "\\n" | R tee -a "$A" >/dev/null',
             # `restrict,pty`: kein Weiterleiten, kein Agent; ein Terminal (Terminal, `docker logs -f`),
             # Befehle und SFTP gehen weiter.
@@ -172,10 +157,10 @@ def build_setup_script(
                 f'else echo "Hinweis: Gruppe {group} gibt es hier nicht – übersprungen."; fi'
             )
         if sudo:
-            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine aeltere Regel lattice-<Benutzer> wird erst nach
-            # erfolgreicher Pruefung der neuen entfernt, und nur, wenn sie Byte fuer Byte die Regel ist, die dieser Befehl
-            # frueher selbst angelegt hat (`cmp` gegen die neue Datei). Alles andere bleibt stehen (Hinweis).
-            # Bei einem Fehler wird nichts entfernt, und `visudo -c -q` muss am Ende gelten.
+            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel lattice-<Benutzer> wird erst nach erfolgreicher
+            # Prüfung der neuen entfernt, und nur, wenn sie Byte für Byte die Regel ist, die dieser Befehl selbst angelegt
+            # hat (`cmp` gegen die neue Datei). Alles andere bleibt stehen (Hinweis). Bei einem Fehler wird nichts entfernt,
+            # und `visudo -c -q` muss am Ende gelten.
             lines.append(
                 'if command -v visudo >/dev/null; then T=$(mktemp); trap "rm -f \\"\\$T\\"" EXIT; N="/etc/sudoers.d/nodvard-$U"; O="/etc/sudoers.d/lattice-$U"; '
                 'echo "$U ALL=(root) NOPASSWD: ALL" > "$T"; '
@@ -240,34 +225,30 @@ def setup_notes(user: str, *, groups: Iterable[str], sudo: bool) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# Nodvard Deck fuehrt den Befehl selbst aus (Einrichten mit Passwort)
+# Das Dashboard führt den Befehl selbst aus (Einrichten mit Passwort)
 # ---------------------------------------------------------------------------
 
 SETUP_STARTED = "@@nodvard-setup-started"
-"""Marke, die die Shell VOR dem Skript ausgibt: Fehlt sie in der Ausgabe, ist schon `sudo` (oder der
+"""Marke, die die Shell vor dem Skript ausgibt: Fehlt sie in der Ausgabe, ist schon `sudo` (oder der
 Start der Shell) gescheitert, nicht das Skript."""
 
 _MESSAGE_PREFIXES = (
     "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt",
 )
-"""Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberflaeche;
-`Fertig. ...` nicht, denn danach prueft Nodvard Deck die Verbindung selbst."""
+"""Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberfläche;
+`Fertig. ...` nicht, denn danach prüft das Dashboard die Verbindung selbst."""
 _MAX_MESSAGES = 20
 _MAX_MESSAGE_LENGTH = 300
 
 
 def remote_setup_command(script: str, *, as_root: bool, sudo_with_password: bool) -> str:
-    """Der Befehl, mit dem Nodvard Deck das Skript aus `build_setup_script` unveraendert selbst ausfuehrt.
-
-    - `as_root`: angemeldet als root, `sh -c` direkt.
-    - sonst ueber sudo: mit `sudo_with_password` liest `sudo -S` das Passwort von der Standardeingabe
-      (ohne Eingabeaufforderung, `-p ''`), sonst `sudo -n` (nur wenn das Konto sudo ohne Passwort darf).
-
-    **Das Passwort steht nie in diesem Befehl** -- die Befehlszeile ist auf dem Server fuer alle sichtbar
-    (`ps`) und steht in Fehlern von asyncssh. Vor dem Skript stehen nur zwei Dinge: `exec </dev/null`
-    (braucht sudo das Passwort gar nicht, laege es sonst noch in der Standardeingabe, wo das Skript es
-    lesen koennte) und die Marke `SETUP_STARTED`. `env LC_ALL=C`: sudo meldet sich auf Englisch, die
-    Meldung laesst sich so einordnen (`evaluate_setup_run`)."""
+    """Der Befehl, mit dem das Dashboard das Skript aus `build_setup_script` unverändert selbst ausführt: als root direkt
+    mit `sh -c`, sonst über sudo (mit `sudo_with_password` liest `sudo -S` das Passwort von der Standardeingabe, sonst
+    `sudo -n`)."""
+    # Das Passwort steht nie in diesem Befehl: Die Befehlszeile ist auf dem Server für alle sichtbar (`ps`) und steht in
+    # Fehlern von asyncssh. Vor dem Skript stehen nur `exec </dev/null` (braucht sudo das Passwort gar nicht, läge es sonst
+    # noch in der Standardeingabe, wo das Skript es lesen könnte) und die Marke `SETUP_STARTED`. `-p ''` unterdrückt die
+    # Eingabeaufforderung. `env LC_ALL=C`: sudo meldet sich auf Englisch, so lässt sich die Meldung einordnen.
     inner = f"exec </dev/null; echo {SETUP_STARTED}\n{script}"
     if as_root:
         return f"sh -c {shlex.quote(inner)}"
@@ -276,9 +257,8 @@ def remote_setup_command(script: str, *, as_root: bool, sudo_with_password: bool
 
 
 def setup_messages(stdout: str) -> list[str]:
-    """Die Meldungen des Skripts aus seiner Ausgabe: nur Zeilen, die das Skript selbst schreibt (feste
-    Anfaenge), nur druckbare Zeichen, gekuerzt. Alles andere (Ausgaben der Systembefehle, Fehler von
-    sudo) bleibt draussen."""
+    """Die Meldungen des Skripts aus seiner Ausgabe: nur Zeilen mit festem Anfang, nur druckbare Zeichen, gekürzt.
+    Alles andere (Ausgaben der Systembefehle, Fehler von sudo) bleibt draußen."""
     messages: list[str] = []
     for raw in stdout.splitlines():
         line = "".join(c for c in raw if c.isprintable()).strip()
@@ -319,8 +299,8 @@ SETUP_FLAGS: dict[str, Callable[[str, str], bool]] = {
     "sudo_needs_tty": _in_stderr("terminal is required", "no tty present", "requiretty"),
     "sudo_missing": _in_stderr("not found"),
 }
-"""Fuer `one_time_password.run_once(flags=SETUP_FLAGS)`: ausgewertet wird auf der UNVERAENDERTEN Ausgabe, bevor
-das Passwort unkenntlich gemacht wird -- sonst zerstoerte ein Passwort wie „setup“ die Marke. Zurueck kommen nur
+"""Für `one_time_password.run_once(flags=SETUP_FLAGS)`: ausgewertet wird auf der unveränderten Ausgabe, bevor
+das Passwort unkenntlich gemacht wird (sonst zerstörte ein Passwort wie „setup“ die Marke). Zurück kommen nur
 die Namen."""
 
 
@@ -350,9 +330,9 @@ def evaluate_setup_run(
     exit_status: int | None, stdout: str, stderr: str, *, via_sudo: bool, sudo_with_password: bool,
     flags: frozenset[str] | None = None,
 ) -> SetupRun:
-    """Ordnet den Lauf von `remote_setup_command` ein. Die Ausgabe des Servers wird nie weitergereicht,
-    nur feste Saetze und `setup_messages`. `flags` sind die Namen aus `SETUP_FLAGS`, ermittelt auf der
-    unveraenderten Ausgabe (`RemoteResult.flags`); ohne sie werden sie aus `stdout`/`stderr` gebildet."""
+    """Ordnet den Lauf von `remote_setup_command` ein; die Ausgabe des Servers wird nie weitergereicht, nur feste Sätze
+    und `setup_messages`. `flags` sind die Namen aus `SETUP_FLAGS`, ermittelt auf der unveränderten Ausgabe
+    (`RemoteResult.flags`); ohne sie werden sie aus `stdout`/`stderr` gebildet."""
     flags = setup_flags(stdout, stderr) if flags is None else flags
     started = "started" in flags
     messages = setup_messages(stdout)

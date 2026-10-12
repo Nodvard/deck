@@ -1,18 +1,4 @@
-"""Secrets-Metadaten -- docs/04-API.md §3, docs/03-DATA-MODEL.md §3.
-
-Strukturelle Umsetzung von Invariante 1: kein Response-Modell hier enthaelt
-`ciphertext` oder Klartext -- auch nicht fuer den Owner. `SecretOut` listet explizit
-nur die erlaubten Felder, statt das ORM-Objekt ungefiltert zu serialisieren (genau DAS
-waere der Fehler, den diese Datei strukturell verhindern soll). Lesen liefert nur
-Metadaten, Schreiben/Ersetzen ja -- Invariante 1 woertlich.
-
-Bewusst NICHT Teil dieser Runde: `secret_grants`-Verwaltung (wer darf ein Secret lesen)
--- relevant wird das erst, wenn Extensions (WP-3+) eigene Secrets anfordern.
-
-"Wo benutzt" (`used_by`): feste Bindungen werden beim Lesen abgeleitet (Besitzer-Modul,
-Server-Zugang, Zwei-Faktor eines Kontos), dazu kommt, wer das Secret tatsaechlich benutzt hat
-(`secret_usages`, geschrieben von `core.vault.vault_use`, mit "zuletzt benutzt").
-"""
+"""Secrets-Metadaten: keine Antwort enthält `ciphertext` oder Klartext, auch nicht für den Owner (docs/04-API.md)."""
 
 from __future__ import annotations
 
@@ -36,8 +22,8 @@ SecretKind = Literal["password", "ssh_private_key", "api_token", "totp", "generi
 
 class SecretUsageOut(BaseModel):
     """Ein Verwender des Secrets. `type`: `extension` (Modul), `host` (Server-Zugang), `login`
-    (Zwei-Faktor eines Kontos); weitere Arten koennen dazukommen. `last_used_at` nur, wenn eine
-    Nutzung festgehalten wurde (hoechstens einmal je Stunde, siehe `core.vault.USE_NOTE_INTERVAL`)."""
+    (Zwei-Faktor eines Kontos); weitere Arten können dazukommen. `last_used_at` nur, wenn eine
+    Nutzung festgehalten wurde (höchstens einmal je Stunde, siehe `core.vault.USE_NOTE_INTERVAL`)."""
 
     type: str
     id: str
@@ -45,6 +31,7 @@ class SecretUsageOut(BaseModel):
     last_used_at: datetime | None = None
 
 
+# Die erlaubten Felder stehen einzeln da, das ORM-Objekt wird nie ungefiltert serialisiert.
 class SecretOut(BaseModel):
     id: str
     label: str
@@ -90,7 +77,7 @@ class SecretValueUpdate(BaseModel):
 
 
 class SecretPatch(BaseModel):
-    """Nur die angegebenen Felder aendern sich; `expires_at: null` entfernt das Ablaufdatum. Eine Zeit
+    """Nur die angegebenen Felder ändern sich; `expires_at: null` entfernt das Ablaufdatum. Eine Zeit
     ohne Zeitzone gilt als UTC."""
 
     description: str | None = Field(default=None, max_length=255)
@@ -101,14 +88,15 @@ _USAGE_ORDER = {"login": 0, "host": 1, "extension": 2}
 
 
 async def _used_by(session: AsyncSession, secret_ids: list[str]) -> dict[str, list[SecretUsageOut]]:
-    """Secret-ID -> Verwender, sortiert (Konto, Server, Modul, Rest; je nach Name)."""
+    """Secret-ID -> Verwender, sortiert (Konto, Server, Modul, Rest): feste Bindungen aus Besitzer-Modul,
+    Server-Zugang und Zwei-Faktor, dazu die festgehaltenen Nutzungen aus `secret_usages`."""
     found: dict[str, dict[tuple[str, str], SecretUsageOut]] = {sid: {} for sid in secret_ids}
     if not secret_ids:
         return {}
     runtime = get_extension_runtime()
 
     def extension(ext_id: str) -> tuple[str, str]:
-        """(heutige Kennung, Name) -- auch fuer eine alte Kennung oder ein Modul, das gerade nicht geladen ist."""
+        """(heutige Kennung, Name), auch für eine alte Kennung oder ein Modul, das gerade nicht geladen ist."""
         current = runtime.canonical(ext_id)
         loaded = runtime.loaded.get(current)
         manifest = loaded.manifest if loaded is not None else getattr(runtime.discovered.get(current), "manifest", None)
@@ -156,7 +144,7 @@ async def _used_by(session: AsyncSession, secret_ids: list[str]) -> dict[str, li
 
 def _as_utc(value: datetime | None) -> datetime | None:
     """In UTC; ohne Zeitzone gilt die Zeit als UTC. Ein Datum am Rand des Kalenders (Jahr 1 oder 9999 mit
-    Versatz) laesst sich nicht umrechnen: 422 statt eines Absturzes."""
+    Versatz) lässt sich nicht umrechnen: 422 statt eines Absturzes."""
     if value is None:
         return None
     try:
@@ -211,10 +199,9 @@ LOGIN_SECRET_MESSAGE = (
 
 
 async def _refuse_login_secret(session: SessionDep, secret_id: str) -> None:
-    """Der Schluessel der Zwei-Faktor-Anmeldung liegt im Tresor wie jedes andere Secret. Ueber
-    diese Endpunkte ersetzt, haette jeder mit `secrets.write` einen eigenen Authenticator fuer
-    ein fremdes Konto (auch das des Inhabers), ohne Passwortabfrage und am Protokoll von
-    `user.2fa_reset` vorbei; geloescht, kaeme der Besitzer nicht mehr hinein."""
+    """Der Zwei-Faktor-Schlüssel eines Kontos ist hier tabu (409)."""
+    # Ersetzt hätte jeder mit `secrets.write` einen eigenen Authenticator für ein fremdes Konto; gelöscht käme der
+    # Besitzer nicht mehr hinein.
     owner_of = await session.execute(select(User.id).where(User.totp_secret_id == secret_id).limit(1))
     if owner_of.first() is not None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=LOGIN_SECRET_MESSAGE)
@@ -238,7 +225,7 @@ async def replace_secret_value(
 
 @router.patch("/{secret_id}", dependencies=[Depends(require_permission("secrets.write"))])
 async def update_secret(secret_id: str, payload: SecretPatch, session: SessionDep) -> SecretOut:
-    """Beschreibung und Ablaufdatum aendern -- der Wert bleibt (dafuer `PUT /{secret_id}/value`)."""
+    """Beschreibung und Ablaufdatum ändern; der Wert bleibt (dafür `PUT /{secret_id}/value`)."""
     await _refuse_login_secret(session, secret_id)
     secret = await session.get(Secret, secret_id)
     if secret is None:
@@ -258,8 +245,6 @@ async def update_secret(secret_id: str, payload: SecretPatch, session: SessionDe
     dependencies=[Depends(require_permission("secrets.write"))],
 )
 async def delete_secret(secret_id: str, session: SessionDep) -> None:
-    """Idempotent -- ein bereits geloeschtes/unbekanntes Secret ist kein Fehler,
-    gleiche Haltung wie `services.auth.logout()` gegenueber einem unbekannten
-    Refresh-Token."""
+    """Idempotent: ein bereits gelöschtes oder unbekanntes Secret ist kein Fehler (wie `services.auth.logout()`)."""
     await _refuse_login_secret(session, secret_id)
     await vault.delete_secret(session, secret_id)

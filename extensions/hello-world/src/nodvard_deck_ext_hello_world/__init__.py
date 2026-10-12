@@ -1,15 +1,6 @@
-"""Referenz-Extension `hello-world` -- der Integrationstest der Schnittstelle
-(docs/02-EXTENSION-API.md).
+"""Beispiel-Erweiterung `hello-world` (zugleich Integrationstest der Schnittstelle).
 
-Registriert genau die fuenf Grundbausteine einer Extension (Seite, Widget, Job,
-Einstellung, Capability) und demonstriert zusaetzlich `ctx.spawn`, `ctx.events`,
-`ctx.audit` und `ctx.vault_use()` inklusive der Isolations-Garantie:
-`POST /vault-use-and-fail` (nur mit `extensions.manage`) materialisiert ein Secret und
-scheitert danach absichtlich, um zu beweisen, dass der `secret.used`-Audit-Eintrag
-trotzdem stehen bleibt. Dazu kommen `POST /notify-test` (ebenfalls nur mit
-`extensions.manage`; echtes `ctx.notify.send()`, sonst kein HTTP-Weg dafuer -- das
-Notification-Center ist absichtlich nur lesend ueber die API) und ein Job-Handler, den
-der Kern-Scheduler ausfuehrt.
+Zeigt Seite, Widget, Job, Einstellung und Capability sowie `ctx.spawn`, `ctx.events`, `ctx.audit`, `ctx.vault_use()` und `ctx.notify`.
 """
 
 from __future__ import annotations
@@ -35,17 +26,15 @@ from nodvard_sdk import (
 
 
 class _DummySearchProvider:
-    """Erfuellt `nodvard_sdk.capabilities.SearchProvider` strukturell (Protocol,
-    `@runtime_checkable` prueft nur Attributnamen) -- kein Erben noetig."""
+    """Erfüllt `nodvard_sdk.capabilities.SearchProvider` strukturell: Das Protocol prüft nur Attributnamen, Erben ist nicht nötig."""
 
     async def search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return [{"title": f"hello-world Treffer für '{query}'", "id": "1"}][:limit]
 
 
 class _HelloJobSpec:
-    """Erfuellt `nodvard_sdk.context.JobSpec` strukturell. Seit WP-6 fuehrt der
-    Kern-Scheduler `handler` wirklich aus (bei Faelligkeit UND ueber `POST /jobs/{id}/
-    run`) -- `register_job()` legt zusaetzlich die `jobs`-Zeile an (docs/03 §7)."""
+    """Erfüllt `nodvard_sdk.context.JobSpec` strukturell; der Kern-Scheduler führt `handler` bei Fälligkeit und über
+    `POST /jobs/{id}/run` aus."""
 
     id = "hello-ping"
     name = "Hello-Ping"
@@ -64,8 +53,8 @@ class Extension(NodvardExtension):
     async def setup(self, ctx: ExtensionContext) -> None:
         router = APIRouter()
 
-        # Ohne `permission=` verlangt der Kern eine gueltige Anmeldung (Standard der
-        # SDK-Methode `include_router`); fuer ein Demo-Widget reicht das.
+        # Ohne `permission=` verlangt der Kern eine gültige Anmeldung (Standard von `include_router`); für ein Demo-Widget
+        # reicht das.
         @router.get("/widgets/hello")
         async def hello_widget_data() -> dict:
             return {
@@ -79,26 +68,21 @@ class Extension(NodvardExtension):
 
         @protected_router.get("/protected-widget")
         async def protected_widget_data() -> dict:
-            """WP-6: demonstriert `ctx.api.include_router(..., permission=...)` --
-            im Gegensatz zu `/widgets/hello` (nur Anmeldung, der Standard) verlangt
-            DIESE Route zusaetzlich `hosts.read`."""
+            """Zeigt `ctx.api.include_router(..., permission=...)`: Anders als `/widgets/hello` (nur Anmeldung) verlangt diese
+            Route zusätzlich `hosts.read`."""
             return {"ok": True}
 
         ctx.api.include_router(protected_router, permission="hosts.read")
 
-        # Die beiden schreibenden Demo-Routen loesen echte Wirkungen aus (Push-Meldung,
-        # Tresor-Eintrag, Fehler im Protokoll) -- deshalb nur fuer Verwalter von
-        # Erweiterungen, nicht fuer jeden angemeldeten Nutzer.
+        # Die beiden schreibenden Demo-Routen lösen echte Wirkungen aus (Push-Meldung, Tresor-Eintrag, Fehler im Protokoll),
+        # deshalb nur für Verwalter von Erweiterungen, nicht für jeden angemeldeten Nutzer.
         admin_router = APIRouter()
 
         @admin_router.post("/notify-test")
         async def notify_test(host_id: str | None = None) -> dict:
-            """Reine Boot-Test-Demo (WP-6), wie `/vault-use-and-fail` fuer
-            `vault_use()`: es gibt sonst keinen HTTP-Weg, `ctx.notify.send()` real
-            auszuloesen (das Notification-Center ist absichtlich nur lesend ueber die
-            API, siehe api/v1/notifications.py). `host_id`, falls gesetzt, macht die
-            Benachrichtigung fuer die Wartungsfenster-Pruefung sichtbar
-            (services.notifications.send()s `payload.get("host_id")`-Konvention)."""
+            """Löst `ctx.notify.send()` aus; `host_id` macht die Meldung für die Wartungsfenster-Prüfung sichtbar."""
+            # Es gibt sonst keinen HTTP-Weg dafür: Die Meldungen sind über die API absichtlich nur lesbar. Die Wartungsfenster
+            # lesen die Konvention `payload["host_id"]`.
             await ctx.notify.send(
                 Notification(
                     title="Testmeldung von hello-world",
@@ -111,6 +95,8 @@ class Extension(NodvardExtension):
 
         @admin_router.post("/vault-use-and-fail")
         async def vault_use_and_fail() -> dict:
+            # Materialisiert ein Geheimnis und scheitert danach absichtlich: Der `secret.used`-Audit-Eintrag muss trotzdem
+            # stehen bleiben.
             if not await ctx.secrets.exists("hello-world-demo"):
                 await ctx.secrets.create(
                     label="hello-world-demo", kind="generic", value="demo-wert"
@@ -141,15 +127,15 @@ class Extension(NodvardExtension):
                 title="Hallo Welt",
                 icon="sparkles",
                 size=GridSize(w=2, h=1),
-                # ws_channel zusaetzlich zu interval_s (WP-7-Live-Demo-Vorgabe): der
-                # Ticker unten sendet ueber genau diesen Kanal, das Widget muss also
-                # nicht 30s auf den naechsten Poll warten, um den neuen Stand zu zeigen.
+                # `ws_channel` zusätzlich zu `interval_s`: Der Ticker unten sendet über genau diesen Kanal, das Widget muss also
+                # nicht 30 s auf den nächsten Poll warten.
                 refresh=Refresh(interval_s=30, ws_channel="ext.hello-world.tick"),
                 data_endpoint="widgets/hello",
                 view=ListView(item=ListItem(title="{{ title }}", subtitle="{{ subtitle }}")),
             )
         )
 
+        # Legt zusätzlich die `jobs`-Zeile an.
         await ctx.scheduler.register_job(_HelloJobSpec())
 
         ctx.settings.declare(
@@ -163,11 +149,8 @@ class Extension(NodvardExtension):
             while True:
                 self._tick_count += 1
                 await ctx.events.publish(Event(name="hello.tick", payload={"count": self._tick_count}))
-                # ctx.events.publish() faechert nur auf den EINEN geteilten "events"-
-                # Kanal aus (core/events.py) -- ctx.ws.broadcast() zusaetzlich, damit
-                # das Widget genau den in seinem Refresh.ws_channel genannten,
-                # themenspezifischen Kanal abonnieren kann (docs/02 §4s Beispiel
-                # "ext.shield.incidents" folgt demselben Muster).
+                # `ctx.events.publish()` fächert nur auf den einen geteilten „events“-Kanal aus; `ctx.ws.broadcast()` zusätzlich,
+                # damit das Widget den in seinem `Refresh.ws_channel` genannten, themenspezifischen Kanal abonnieren kann.
                 await ctx.ws.broadcast("tick", {"count": self._tick_count})
                 await asyncio.sleep(2.0)
 

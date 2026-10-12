@@ -1,24 +1,6 @@
-"""Cockpit-Uebersicht: EINE Abfrage fuer die Startseite -- wie
-viele Dienste laufen, wie stehen die Backups, was wartet auf Freigabe, was ist an
-Warnungen ungelesen.
+"""Cockpit-Übersicht: eine Abfrage für die Startseite (Dienste, Backups, offene Freigaben, ungelesene Warnungen).
 
-Bleibt herstellerneutral wie der ganze Kern (docs/01 §1): Dienste und Backups kommen
-ausschliesslich ueber die SDK-Capabilities `ServiceCatalog` und `BackupProvider` --
-welche Extension sie liefert (heute service-matrix bzw. backups), weiss dieser Code
-nicht. Eine Extension, die haengt oder wirft, verdeckt die anderen nicht: je Quelle
-ein Zeitlimit, Fehler werden als `errors` gemeldet statt die ganze Seite zu leeren.
-
-Dienste/Backups sind teuer (SSH `docker ps`, Proxmox-Task-Index) -- deshalb 30 s im
-Prozess zwischengespeichert, mit Sperre gegen gleichzeitiges Neuladen. Die Zaehler aus
-der eigenen Datenbank (Freigaben, Meldungen) sind billig und immer frisch.
-
-**Apps ("+ App hinzufuegen"):** `apps` fuehrt die erkannten Dienste und die von Hand angelegten
-Kacheln (`custom_apps`) in EINER Liste zusammen, jede mit `source` = `detected` oder `custom`. Die
-eigenen stehen zuerst (nach ihrer Position), danach die erkannten in der Reihenfolge von `services`.
-Rein additiv: `services` und `services_running` bleiben, wie sie waren -- nur erkannte Dienste, die
-Dienst-Kennzahl zaehlt keine Links --, damit aeltere Clients nichts Neues falsch deuten. Die eigenen
-Kacheln sind billig und kommen immer frisch aus der Datenbank, nicht aus dem Zwischenspeicher: wer eine
-anlegt, sieht sie sofort. Der Server fragt ihre Adressen nie selbst ab.
+Dienste und Backups kommen über `ServiceCatalog` und `BackupProvider`, je Quelle mit Zeitlimit; Fehler stehen in `errors`.
 """
 
 from __future__ import annotations
@@ -41,6 +23,8 @@ from ..deps import SessionDep, require_permission
 
 router = APIRouter(prefix="/overview", tags=["overview"])
 
+# Dienste und Backups sind teuer (Abfragen per SSH oder API): 30 s im Prozess zwischengespeichert, mit Sperre gegen
+# gleichzeitiges Neuladen. Zähler aus der eigenen Datenbank sind billig und immer frisch.
 CACHE_TTL_S = 30.0
 SOURCE_TIMEOUT_S = 12.0
 
@@ -59,15 +43,15 @@ class ServiceOut(BaseModel):
     image: str | None = None
     unreachable: bool = False
     """`true` bei der Platzhalterkachel eines Servers, dessen Dienste gerade nicht gelesen werden konnten. Sie
-    ist kein Dienst und zaehlt nicht als "laeuft nicht"."""
+    ist kein Dienst und zählt nicht als "läuft nicht"."""
 
 
 class AppTileOut(BaseModel):
     """Eine Kachel im Bereich "Apps": ein erkannter Dienst (`source="detected"`) oder eine eigene App
-    (`source="custom"`). Felder, die es fuer die andere Art nicht gibt, sind `null`."""
+    (`source="custom"`). Felder, die es für die andere Art nicht gibt, sind `null`."""
 
     id: str
-    """Bei erkannten Diensten wie `ServiceOut.id`; bei eigenen die ID aus `/apps` (fuer Aendern/Loeschen)."""
+    """Bei erkannten Diensten wie `ServiceOut.id`; bei eigenen die ID aus `/apps` (für Ändern/Löschen)."""
     source: str
     name: str
     url: str | None = None
@@ -90,8 +74,8 @@ class BackupSummary(BaseModel):
     running: int = 0
     unknown: int = 0
     failed_names: list[str] = []
-    # Verbindungen, die nicht antworten (z. B. Proxmox-Knoten aus): zaehlen NICHT als Job,
-    # sonst waeren sie ein "unbekannter" Lauf -- sie sind eine Warnung fuer sich.
+    # Verbindungen ohne Antwort (z. B. ein ausgeschalteter Server) zählen nicht als Job, sonst wären sie ein
+    # "unbekannter" Lauf; sie sind eine Warnung für sich.
     unreachable_names: list[str] = []
 
 
@@ -108,9 +92,10 @@ class OverviewOut(BaseModel):
     services_running: int
     services_unreachable_hosts: list[str] = []
     """Namen der Server, deren Dienste nicht gelesen werden konnten (Kacheln mit `unreachable`). Leer, wenn alle
-    antworten. Die Kennzahl "x von y laufen" gilt dann nur fuer die uebrigen Server."""
+    antworten. Die Kennzahl "x von y laufen" gilt dann nur für die übrigen Server."""
     apps: list[AppTileOut] = []
-    """Eigene Apps (zuerst) und erkannte Dienste (danach), siehe Modul-Docstring."""
+    """Eigene Apps (zuerst, nach Position) und erkannte Dienste (danach). `services` und `services_running` zählen
+    weiter nur erkannte Dienste, damit ältere Clients nichts Neues falsch deuten."""
     backups: BackupSummary | None
     pending_actions: int
     unread_notifications: int
@@ -129,7 +114,7 @@ async def _collect_services(errors: list[str]) -> list[ServiceOut]:
             continue
         for row in rows:
             if not row.get("name"):
-                continue  # Fehlerkacheln einer Extension ("Host nicht erreichbar") sind keine Dienste
+                continue  # Fehlerkacheln einer Erweiterung ("Host nicht erreichbar") sind keine Dienste
             services.append(ServiceOut(
                 id=str(row.get("id") or row["name"]), name=str(row["name"]), host=row.get("host"),
                 host_id=row.get("host_id"), state=row.get("state"), tone=row.get("tone"),
@@ -149,6 +134,8 @@ def _unreachable_hosts(services: list[ServiceOut]) -> list[str]:
 
 
 async def _app_tiles(session: AsyncSession, services: list[ServiceOut]) -> list[AppTileOut]:
+    # Eigene Kacheln kommen immer frisch aus der Datenbank, nicht aus dem Zwischenspeicher: Wer eine anlegt, sieht sie
+    # sofort. Der Server fragt ihre Adressen nie selbst ab.
     custom = await custom_apps_service.list_apps(session)
     names = await custom_apps_service.host_names(session, (a.host_id for a in custom))
     tiles = [
@@ -211,7 +198,7 @@ async def _expensive_part() -> dict[str, Any]:
 
 
 def reset_cache() -> None:
-    """Fuer Tests -- der Zwischenspeicher lebt im Prozess."""
+    """Für Tests: Der Zwischenspeicher lebt im Prozess."""
     _cache.update(at=0.0, value=None)
 
 

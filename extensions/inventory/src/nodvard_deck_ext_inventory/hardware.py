@@ -1,18 +1,4 @@
-"""Teile eines Linux-Servers per SSH auslesen -- als Vorschläge fürs Inventar.
-
-Ein einziger, nur lesender Befehl (`SCAN_COMMAND`) sammelt, was ohne root lesbar ist:
-- Hersteller und Modell aus `/sys/class/dmi/id` (ohne Seriennummern, die gibt der Kernel nur root), beim Raspberry Pi
-  aus `/proc/device-tree/model`
-- ob es eine VM oder ein Container ist (`systemd-detect-virt`)
-- Prozessor (`lscpu`), Arbeitsspeicher gesamt (`/proc/meminfo`; einzelne Riegel bräuchten `dmidecode` als root)
-- Datenträger (`lsblk`, mit Seriennummer), Grafik- und Netzwerkkarten (`lspci`, falls installiert)
-
-`parse_scan()` macht daraus Vorschläge; angelegt wird erst, was der Nutzer auswählt. Was fehlt (etwa `lspci`),
-steht in `missing`, damit die Seite sagen kann, warum Karten fehlen.
-
-Auf einer VM oder in einem Container sind die Teile nachgebildet oder gehören dem Wirt: dann meldet `virtual`
-das, und die Seite kreuzt nichts vorab an.
-"""
+"""Teile eines Linux-Servers per SSH auslesen und als Vorschläge fürs Inventar aufbereiten."""
 
 from __future__ import annotations
 
@@ -26,6 +12,12 @@ _log = logging.getLogger(__name__)
 
 SECTIONS = ("dmi", "virt", "cpu", "mem", "disks", "pci", "missing")
 
+# Ein einziger, nur lesender Befehl, der sammelt, was ohne root lesbar ist:
+# - Hersteller und Modell aus `/sys/class/dmi/id` (Seriennummern gibt der Kernel nur root), beim Raspberry Pi aus
+#   `/proc/device-tree/model`
+# - VM oder Container (`systemd-detect-virt`)
+# - Prozessor (`lscpu`), Arbeitsspeicher gesamt (`/proc/meminfo`; einzelne Riegel bräuchten `dmidecode` als root)
+# - Datenträger (`lsblk`, mit Seriennummer), Grafik- und Netzwerkkarten (`lspci`, falls installiert)
 _SCRIPT = (
     "echo @@dmi; for f in sys_vendor product_name product_version board_vendor board_name; do "
     'printf "%s=" "$f"; cat "/sys/class/dmi/id/$f" 2>/dev/null || echo; done; '
@@ -39,14 +31,14 @@ _SCRIPT = (
     "true"
 )
 
+# Ohne Eingaben von außen. Läuft über `sh -c`, damit auch eine andere Login-Shell (fish, csh) ihn versteht. Fehlt ein
+# Programm, bleibt sein Abschnitt leer, der Rest kommt trotzdem.
 SCAN_COMMAND = f"sh -c '{_SCRIPT}'"
-"""Nur lesend, ohne Eingaben von außen. Läuft über `sh -c`, damit auch eine andere Login-Shell (fish, csh) ihn
-versteht. Fehlt ein Programm, bleibt sein Abschnitt leer -- der Rest kommt trotzdem."""
 
+# Mehr liest `parse_scan` nicht: die echte Ausgabe hat wenige KB, ein präparierter Server soll nichts aufhalten.
 MAX_OUTPUT = 256_000
-"""Mehr liest `parse_scan` nicht: die echte Ausgabe hat wenige KB, ein präparierter Server soll nichts aufhalten."""
+# Längster Wert (Hersteller, Modell, Zeile von lspci), der berücksichtigt wird.
 _MAX_VALUE = 300
-"""Längster Wert (Hersteller, Modell, Zeile von lspci), der berücksichtigt wird."""
 
 # Platzhalter, die Hersteller statt echter Angaben in die Firmware schreiben.
 _PLACEHOLDERS = {
@@ -74,8 +66,8 @@ _DISK_VENDORS = {
 
 # Geräte, die keine eigenen Teile sind: virtuelle und Teil-Geräte (ZFS-Volumes, DRBD, eMMC-Bootbereiche).
 _SKIP_DISK = re.compile(r"^(loop|zram|ram|rbd|nbd|zd|drbd|md|dm-|sr|fd)\d*|^mmcblk\d+(boot\d+|rpmb)$")
+# Kleiner ist kein Datenträger, den man inventarisiert (leerer Kartenleser, Bootbereich).
 _MIN_DISK_BYTES = 1_000_000_000
-"""Kleiner ist kein Datenträger, den man inventarisiert (leerer Kartenleser, Bootbereich)."""
 
 _PCI_KINDS = {
     "vga compatible controller": "Grafikkarte", "3d controller": "Grafikkarte", "display controller": "Grafikkarte",
@@ -92,8 +84,8 @@ _VENDORS = {
 
 # Hersteller, die Mainboards einzeln verkaufen: nur bei ihnen kann „Gerät“ in Wahrheit das Mainboard sein.
 _BOARD_MAKERS = {"ASUS", "ASRock", "Biostar", "Gigabyte", "MSI"}
+# So lang dürfen Hersteller, Modell und Seriennummer im Inventar sein.
 _FIELD_MAX = 200
-"""So lang dürfen Hersteller, Modell und Seriennummer im Inventar sein."""
 
 _LEGAL_SUFFIX = re.compile(r",?\s+(Corporation|Corp\.?|Inc\.?|Co\.,?\s*Ltd\.?|Ltd\.?|GmbH|AG|LLC|Technology|Semiconductor(\s+Co\.,?\s*Ltd\.?)?)\s*$", re.IGNORECASE)
 
@@ -349,7 +341,9 @@ def parse_scan(output: str) -> dict[str, Any]:
             _log.warning("Ein Abschnitt beim Auslesen war nicht lesbar (%s), die übrigen Teile kommen trotzdem", type(exc).__name__)
 
     if virtual:
+        # Auf einer VM oder in einem Container sind die Teile nachgebildet oder gehören dem Wirt: nichts vorab ankreuzen.
         for entry in suggestions:
             entry["preselect"] = False
+    # `missing` nennt fehlende Programme (etwa `lspci`), damit die Seite sagen kann, warum Karten fehlen.
     missing = [p.strip() for p in sections["missing"].splitlines() if p.strip() in ("lscpu", "lsblk", "lspci")]
     return {"virtual": virtual, "missing": missing, "suggestions": suggestions}

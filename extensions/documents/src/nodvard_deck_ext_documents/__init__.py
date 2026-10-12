@@ -1,18 +1,6 @@
-"""documents-Extension -- Paperless-ngx-artiges Dokumentenarchiv: Upload, OCR
-ueber die Tesseract-BIBLIOTHEK (pytesseract, siehe ocr.py -- ausdruecklich
-NICHT der separate Paperless-ngx-Container), automatisches Verschlagworten
-anhand des erkannten Texts, Volltextsuche.
+"""Dokumentenarchiv (Paperless-ngx-artig): Upload, Texterkennung, automatische Tags nach Stichwort, Volltextsuche.
 
-Zweite Extension mit echten eigenen Datenbank-Tabellen nach `inventory`
-(docs/02-EXTENSION-API.md §7: eigener Alembic-Branch) -- `models.py`
-deklariert eine eigene `Base`/`MetaData`, `migrations/versions/
-9f1e2d3c4b5a_create_documents_tables.py` ist ein eigener, unabhaengiger
-Alembic-Kopf. `ctx.db.declare_tables(Base.metadata)` unten validiert den
-Pflicht-Praefix `ext_documents_`.
-
-Dokument-BYTES liegen auf der Platte unter `ctx.data_dir/documents/`
-(storage.py), nicht in der Datenbank -- dasselbe Muster wie
-`nodvard_deck_ext_inventory.images`."""
+Eigene Tabellen mit eigenem Alembic-Zweig (`models.py`); die Dateien liegen auf der Platte (`storage.py`)."""
 
 from __future__ import annotations
 
@@ -60,11 +48,11 @@ from .storage import (
 
 logger = logging.getLogger(__name__)
 
+# So viele Kennungen je Nachfrage beim Inventar (dort gilt dieselbe Grenze).
 ITEM_CHECK_BATCH = 500
-"""So viele Kennungen je Nachfrage beim Inventar (dort gilt dieselbe Grenze)."""
 
+# So lange gilt die Antwort auf „Ist die Nextcloud eingerichtet?“ (siehe `_nextcloud_ready`).
 INBOX_READY_CACHE_S = 60.0
-"""So lange gilt die Antwort auf „Ist die Nextcloud eingerichtet?“ (siehe `_nextcloud_ready`)."""
 
 
 class TagIn(BaseModel):
@@ -95,7 +83,7 @@ class DocumentOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     tags: list[TagOut]
-    # Gegenstände im Inventar, zu denen das Dokument gehört (Rechnung, Handbuch). Neu, ältere Aufrufer übersehen es.
+    # Gegenstände im Inventar, zu denen das Dokument gehört (Rechnung, Handbuch).
     item_ids: list[str] = []
 
 
@@ -139,9 +127,9 @@ class _InboxJobSpec:
         return await self._run()
 
 
+# Kennung eines Gegenstands im Inventar (wie dort vergeben). Mehr wird nicht geprüft: die Dokumente kennen das
+# Inventar nicht, die Seite bietet nur vorhandene Gegenstände an.
 _ITEM_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
-"""Kennung eines Gegenstands im Inventar (wie dort vergeben). Mehr wird nicht geprüft: die Dokumente kennen das
-Inventar nicht, die Seite bietet nur vorhandene Gegenstände an."""
 
 
 def _check_item_id(item_id: str) -> str:
@@ -164,20 +152,17 @@ _UNTRUSTED_FILE_HEADERS = {
 
 
 def _sanitize_for_header(value: str) -> str:
-    """Verhindert Header-Injection/Response-Splitting ueber einen
-    Original-Dateinamen, der vom Client frei gewaehlt wird (Upload-Query-Param
-    `filename`) -- CR/LF UND Anfuehrungszeichen raus, bevor der Wert in einen
-    `Content-Disposition`-Header eingebettet wird."""
+    """Entfernt CR/LF und Anführungszeichen aus dem frei gewählten Dateinamen (Upload-Parameter `filename`), bevor er
+    in `Content-Disposition` kommt: verhindert Header-Injection und Response-Splitting."""
     return value.replace("\r", "").replace("\n", "").replace('"', "'")
 
 
 def _content_disposition(filename: str) -> str:
-    """`Content-Disposition` fuer beliebige Dateinamen: Starlette kodiert
-    Header als latin-1, "Rechnung 49€.pdf", "Vertrag – Kopie.pdf" oder ein schmales
-    Leerzeichen (U+202F, macOS-Screenshots) liessen Vorschau/Download mit HTTP 500
-    scheitern. Deshalb `filename=` nur mit ASCII-Ersatz (Umlaute ohne Punkte, alles
-    andere "_") plus den echten Namen UTF-8-kodiert in `filename*=` (RFC 6266) --
-    den nehmen alle aktuellen Browser."""
+    """`Content-Disposition` für beliebige Dateinamen: `filename=` nur als ASCII-Ersatz, der echte Name UTF-8-kodiert
+    in `filename*=` (RFC 6266), den alle aktuellen Browser nehmen."""
+    # Starlette kodiert Header als latin-1: "Rechnung 49€.pdf", "Vertrag – Kopie.pdf" oder ein schmales Leerzeichen
+    # (U+202F, macOS-Screenshots) ließen Vorschau und Download sonst mit HTTP 500 scheitern. Der Ersatz behält
+    # Umlaute ohne Punkte, alles andere wird "_".
     safe_name = _sanitize_for_header(filename)
     fallback = "".join(
         ch if 32 <= ord(ch) < 127 and ch != "\\" else "_"
@@ -188,11 +173,9 @@ def _content_disposition(filename: str) -> str:
 
 
 def _run_ocr(content: bytes, content_type: str) -> tuple[str | None, int | None, str, str | None]:
-    """Synchrone Huelle um `ocr.extract_text()` -- IMMER ueber
-    `asyncio.to_thread()` aufrufen (siehe ocr.py-Docstring). Ein OCR-Fehler
-    (Tesseract nicht installiert, kaputtes PDF, fehlendes Sprachpaket auch im
-    Fallback) darf den Upload nicht scheitern lassen -- das Dokument bleibt
-    gespeichert und sichtbar, nur ohne durchsuchbaren Text."""
+    """Synchrone Hülle um `ocr.extract_text()`, nur über `asyncio.to_thread()` aufrufen (siehe ocr.py).
+
+    Ein OCR-Fehler darf den Upload nicht scheitern lassen: das Dokument bleibt gespeichert, nur ohne durchsuchbaren Text."""
     try:
         text, page_count = extract_text(content, content_type)
         return text, page_count, "done", None
@@ -203,6 +186,7 @@ def _run_ocr(content: bytes, content_type: str) -> tuple[str | None, int | None,
 class Extension(NodvardExtension):
     async def setup(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
+        # Der Kern prüft die Tabellennamen auf den Präfix `ext_documents_` und weist die Erweiterung sonst ab.
         ctx.db.declare_tables(Base.metadata)
 
         async def _tags_for(session: Any, document_id: str) -> list[TagOut]:
@@ -249,13 +233,9 @@ class Extension(NodvardExtension):
             den Nextcloud-Ordner (`inbox.py`) derselbe Weg; `on_saved(session, id)` schreibt dort in derselben
             Transaktion mit, welche Datei übernommen ist."""
             extension = ALLOWED_CONTENT_TYPES[content_type]
-            # OCR VOR dem Oeffnen einer DB-Session laufen lassen (kann bei einem
-            # mehrseitigen PDF mehrere Sekunden dauern) -- ueber `asyncio.to_thread`,
-            # weil `pytesseract` blockierend einen Subprocess aufruft, siehe ocr.py.
-            # Denselben Fehler NICHT wiederholen, den WP-8 in
-            # services/extensions.py schon einmal gefunden hat: keine offene
-            # Session/Transaktion ueber einen langlaufenden, session-unabhaengigen
-            # Aufruf offenhalten.
+            # OCR vor dem Öffnen der Datenbank-Session (bei einem mehrseitigen PDF mehrere Sekunden) und per
+            # `asyncio.to_thread`, weil `pytesseract` blockierend einen Subprozess startet. So bleibt keine
+            # Transaktion über einen langen, sitzungsunabhängigen Aufruf offen.
             ocr_text, page_count, ocr_status_, ocr_error = await asyncio.to_thread(_run_ocr, content, content_type)
 
             async with ctx.db.session() as session:
@@ -334,20 +314,16 @@ class Extension(NodvardExtension):
         @write_router.post("/documents", status_code=status.HTTP_201_CREATED)
         @max_body_bytes(MAX_DOCUMENT_BYTES)
         async def upload_document(filename: str, request: Request, item_id: str | None = None) -> DocumentOut:
-            """Rohkoerper-Upload wie `POST /branding/logo` bzw.
-            `nodvard_deck_ext_inventory`s Bild-Upload -- derselbe Grund: keine
-            zusaetzliche `multipart/form-data`-Konvention im Projekt. Der
-            Original-Dateiname kommt als Query-Param (wie `path` bei
-            `POST /files/{source_id}/upload`), nicht aus einem Formularfeld.
+            """Rohkörper-Upload wie `POST /branding/logo`; der Dateiname kommt als Query-Parameter `filename`.
 
-            `item_id` (optional): gleich mit diesem Gegenstand im Inventar verknüpfen, etwa wenn die Rechnung
-            direkt am Gerät hochgeladen wird."""
+            `item_id` (optional): gleich mit diesem Gegenstand im Inventar verknüpfen, etwa die Rechnung am Gerät."""
             if item_id is not None:
                 _check_item_id(item_id)
             content_type = (request.headers.get("content-type") or "").split(";")[0].strip()
             if content_type not in ALLOWED_CONTENT_TYPES:
                 raise HTTPException(status_code=415, detail=f"Nicht unterstützter Dokumenttyp: {content_type or '(keiner)'}")
 
+            # Erst die Angabe im Kopf prüfen, dann die tatsächliche Größe: sie kann fehlen oder falsch sein.
             content_length = request.headers.get("content-length")
             if content_length is not None and content_length.isdigit() and int(content_length) > MAX_DOCUMENT_BYTES:
                 raise HTTPException(status_code=413, detail=f"Dokument zu gross (max. {MAX_DOCUMENT_BYTES // 1024 // 1024} MB).")
@@ -384,8 +360,10 @@ class Extension(NodvardExtension):
 
         @write_router.patch("/documents/{document_id}")
         async def rename_document(document_id: str, payload: _RenameIn) -> DocumentOut:
-            """Anzeigename aendern (z. B. "scan_0042.pdf" -> "Stromrechnung 2026.pdf") --
-            die Datei auf der Platte behaelt ihren internen Namen."""
+            """Anzeigename ändern (z. B. "scan_0042.pdf" -> "Stromrechnung 2026.pdf"); die Datei auf der Platte
+            behält ihren internen Namen."""
+            # Der Name wird nur angezeigt und in Header eingebaut, nie als Pfad benutzt; trotzdem keine Pfadtrenner,
+            # Zeilenumbrüche oder NUL.
             name = payload.original_filename.strip()
             if not name or len(name) > 300 or any(ch in name for ch in "/\\\r\n\x00"):
                 raise HTTPException(status_code=422, detail="Ungültiger Dateiname.")
@@ -403,10 +381,9 @@ class Extension(NodvardExtension):
                 row = await session.get(Document, document_id)
                 if row is None:
                     raise HTTPException(status_code=404, detail="Dokument nicht gefunden.")
-                # DocumentTag-Zeilen kaskadieren ueber die FK (ondelete="CASCADE"),
-                # die Datei auf der Platte nicht -- muss explizit weg, wie bei
-                # ItemImage in nodvard_deck_ext_inventory. Die Zuordnungen zu Gegenständen
-                # ausdrücklich: ohne `PRAGMA foreign_keys` (etwa in Tests) griffe die Kaskade nicht.
+                # Die Tag-Zeilen kaskadieren über den Fremdschlüssel (ondelete="CASCADE"), die Datei auf der Platte
+                # nicht: sie muss explizit weg. Die Zuordnungen zu Gegenständen ebenfalls ausdrücklich, weil die
+                # Kaskade ohne `PRAGMA foreign_keys` (etwa in Tests) nicht griffe.
                 await session.execute(delete(DocumentItemLink).where(DocumentItemLink.document_id == document_id))
                 delete_document_file(ctx.data_dir, row.filename)
                 await session.delete(row)
@@ -580,8 +557,8 @@ class Extension(NodvardExtension):
                     "meta": {},
                 }
 
-        # Sicherheits-Nachtrag: hing ohne Berechtigung (= oeffentlich, siehe
-        # ApiHandle.include_router()) -- Namen waren ohne Login lesbar.
+        # Mit Berechtigung einhängen: ohne wäre der Router öffentlich (siehe `ApiHandle.include_router()`), und die
+        # Namen wären ohne Login lesbar.
         ctx.api.include_router(widget_router, permission="documents.read")
 
         ctx.ui.register_page(

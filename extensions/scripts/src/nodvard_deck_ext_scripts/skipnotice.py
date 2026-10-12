@@ -1,12 +1,4 @@
-"""Merkt sich je Skript, welche Server bei 'Alle Server'/'Gruppe' uebersprungen wurden
-(Schritt 1) -- damit ein naechtlicher Zeitplan die Liste nur EINMAL meldet
-und danach erst wieder, wenn sich die Liste aendert (Server dazugekommen oder anderer
-Grund), nicht jede Nacht dieselbe Push-Nachricht.
-
-Der Stand liegt als kleine JSON-Datei im Datenverzeichnis der Extension (ausserhalb des
-Git-Repos `repo/`, es sind keine Skript-Inhalte). Kann sie nicht geschrieben werden,
-liefert `update()` nichts Neues zurueck: dann lieber keine Meldung als jede Nacht eine.
-"""
+"""Merkt sich je Skript, welche Server übersprungen wurden, damit ein nächtlicher Zeitplan die Liste nur einmal meldet."""
 
 from __future__ import annotations
 
@@ -18,15 +10,15 @@ from typing import ClassVar
 
 _log = logging.getLogger(__name__)
 
-# So oft wird eine Meldung hoechstens versucht, wenn das Senden scheitert (z. B. ntfy nicht
-# erreichbar). Jeder Versuch legt im Dashboard einen eigenen Eintrag an -- ein dauerhaft
-# kaputter Kanal soll nicht bei jedem Zeitplan-Lauf einen weiteren erzeugen.
+# Höchstzahl der Sendeversuche (z. B. ntfy nicht erreichbar). Jeder Versuch legt im Dashboard einen eigenen Eintrag an,
+# ein dauerhaft kaputter Kanal soll nicht bei jedem Lauf einen neuen erzeugen.
 MAX_SEND_TRIES = 3
 
 
 class SkipNotices:
-    # Fehlversuche je Skript, nur im Speicher: nach einem Neustart zaehlt es von vorn,
-    # das sind dann hoechstens ein paar Versuche mehr.
+    """Stand als kleine JSON-Datei im Datenverzeichnis der Extension, außerhalb des Git-Repos (keine Skript-Inhalte)."""
+
+    # Fehlversuche je Skript, nur im Speicher; nach einem Neustart zählt es von vorn.
     _failed: ClassVar[dict[tuple[Path, str], int]] = {}
 
     def __init__(self, path: Path) -> None:
@@ -52,12 +44,8 @@ class SkipNotices:
         os.replace(tmp, self._path)
 
     def update(self, script_id: str, current: dict[str, str]) -> tuple[dict[str, str], dict[str, str]]:
-        """`current` = {host_id: Grund} der jetzt uebersprungenen Server. Speichert das
-        als neuen Stand (wer nicht mehr uebersprungen wird, faellt raus) und gibt zurueck
-        (NEUE oder mit anderem Grund uebersprungene Server, bisheriger Stand). Laesst sich
-        der Stand nicht speichern, sind die neuen Server {} (dann wird nichts gemeldet).
-        Mit dem bisherigen Stand kann der Aufrufer per `restore()` zurueck, wenn das
-        Senden der Meldung scheitert -- sonst ginge sie still verloren."""
+        """Speichert `current` ({host_id: Grund}) als Stand; gibt (neu oder mit anderem Grund übersprungene Server,
+        bisheriger Stand) zurück."""
         state = self._read()
         previous = state.get(script_id, {})
         if previous == current:
@@ -70,12 +58,13 @@ class SkipNotices:
         try:
             self._write(state)
         except OSError:
+            # Lieber keine Meldung als jede Nacht dieselbe.
             _log.warning("Skript-Hinweise: Stand konnte nicht gespeichert werden -- keine Meldung.", exc_info=True)
             return {}, previous
         return new, previous
 
     def restore(self, script_id: str, previous: dict[str, str]) -> None:
-        """Stellt den Stand von vor `update()` wieder her (Meldung nicht gesendet)."""
+        """Stellt den Stand von vor `update()` wieder her, damit eine nicht gesendete Meldung nicht still verloren geht."""
         state = self._read()
         if previous:
             state[script_id] = dict(previous)
@@ -87,10 +76,8 @@ class SkipNotices:
             _log.warning("Skript-Hinweise: Stand konnte nicht zurückgesetzt werden.", exc_info=True)
 
     def send_failed(self, script_id: str, previous: dict[str, str]) -> bool:
-        """Das Senden der Meldung ist gescheitert. Noch Versuche uebrig: stellt den Stand von
-        vor `update()` wieder her (der naechste Lauf meldet erneut) und gibt True zurueck.
-        Sonst gibt es auf -- der neue Stand bleibt gemerkt, wie nach einer gesendeten
-        Meldung -- und gibt False zurueck."""
+        """True, wenn noch ein Versuch bleibt (Stand zurückgesetzt, der nächste Lauf meldet erneut); sonst False und der
+        neue Stand gilt."""
         key = (self._path, script_id)
         tries = self._failed.get(key, 0) + 1
         if tries >= MAX_SEND_TRIES:
@@ -101,7 +88,7 @@ class SkipNotices:
         return True
 
     def send_done(self, script_id: str) -> None:
-        """Die Meldung ist raus: die Fehlversuche zaehlen nicht weiter."""
+        """Die Meldung ist raus; die Fehlversuche zählen nicht weiter."""
         self._failed.pop((self._path, script_id), None)
 
     def forget(self, script_id: str) -> None:

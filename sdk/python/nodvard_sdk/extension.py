@@ -11,31 +11,25 @@ from .types import HealthReport
 
 
 class NodvardExtension:
-    """Einstiegspunkt einer Extension. Im Manifest ueber `entrypoint` referenziert.
-    (Bis zur Umbenennung `LatticeExtension`: der alte Name bleibt als Alias, es ist dieselbe Klasse.)
+    """Einstiegspunkt einer Extension, im Manifest über `entrypoint` referenziert.
 
-    Die Trennung von `setup` und `on_start` ist keine Kosmetik: der Kern sammelt erst
-    *alle* Registrierungen ein (und baut Router, Navigation und Widget-Katalog in einem
-    Rutsch), bevor irgendein Hintergrundtask laeuft und Ereignisse in einen halbfertigen
-    Bus schiebt.
+    Der alte Name `LatticeExtension` bleibt als veralteter Alias (dieselbe Klasse).
     """
 
+    # `setup` und `on_start` sind getrennt, weil der Kern erst alle Registrierungen einsammelt (und Router, Navigation
+    # und Widget-Katalog in einem Rutsch baut), bevor ein Hintergrundtask läuft und Ereignisse in einen halbfertigen
+    # Bus schiebt.
     async def setup(self, ctx: ExtensionContext) -> None:
-        """Nur registrieren: Routen, Seiten, Widgets, Connector-Typen, Capabilities,
-        Aktionen, Jobs, Einstellungen.
-
-        Kein I/O, kein Netzwerk, kein DB-Schreiben. Wirft diese Methode, wird die
-        Extension als `state=error` markiert und uebersprungen — der Kern startet
-        trotzdem. Eine defekte Erweiterung darf nie das Dashboard lahmlegen.
-        """
+        """Nur registrieren: Routen, Seiten, Widgets, Connector-Typen, Capabilities, Aktionen, Jobs, Einstellungen.
+        Kein I/O, kein Netzwerk, kein DB-Schreiben. Wirft sie, wird die Extension als `state=error` markiert und
+        übersprungen, der Kern startet trotzdem."""
         raise NotImplementedError
 
     async def on_start(self, ctx: ExtensionContext) -> None:
-        """Hintergrundarbeit anlaufen lassen. Tasks ueber ctx.spawn(), nie ueber
-        asyncio.create_task()."""
+        """Hintergrundarbeit anlaufen lassen; Tasks über `ctx.spawn()`, nie über `asyncio.create_task()`."""
 
     async def on_stop(self, ctx: ExtensionContext) -> None:
-        """Aufraeumen. Ueber ctx.spawn gestartete Tasks beendet der Kern selbst."""
+        """Aufräumen. Über `ctx.spawn` gestartete Tasks beendet der Kern selbst."""
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         """Speist Registry-UI und Notification-Center."""
@@ -44,13 +38,13 @@ class NodvardExtension:
     async def on_settings_changed(
         self, ctx: ExtensionContext, values: dict[str, Any]
     ) -> None:
-        """Optional. Wird nach einer Aenderung der Extension-Einstellungen aufgerufen."""
+        """Optional. Wird nach einer Änderung der Extension-Einstellungen aufgerufen."""
 
     async def drop_data(self, ctx: ExtensionContext) -> None:
-        """Optional. Bei der Deinstallation, wenn der Admin "Daten entfernen" waehlt."""
+        """Optional. Bei der Deinstallation, wenn der Admin "Daten entfernen" wählt."""
 
 
-# Alter Name vor der Umbenennung: dasselbe Objekt, mit DeprecationWarning (siehe _legacy.py).
+# Veralteter Name `LatticeExtension`: dasselbe Objekt, mit DeprecationWarning (siehe _legacy.py).
 _LEGACY_NAMES = {"LatticeExtension": "NodvardExtension"}
 __getattr__ = legacy_getattr(__name__, _LEGACY_NAMES, globals())
 if typing.TYPE_CHECKING:

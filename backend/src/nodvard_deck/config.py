@@ -1,11 +1,5 @@
-"""Konfiguration aus Umgebung/.env.
-
-Siehe docs/00-DECISIONS.md D-02 (Datenbank), D-06 (Vault), D-11 (Beobachtbarkeit).
-Umgebungsvariablen heissen `NODVARD_DECK_<FELD>`; die alten `LATTICE_<FELD>` gelten als
-Rueckfall weiter (siehe `Settings.settings_customise_sources`).
-Branding steht bewusst NICHT hier — das ist ein Laufzeitwert in der Tabelle `settings`,
-siehe branding.py und docs/01-ARCHITECTURE.md §6.
-"""
+"""Konfiguration aus Umgebung und `.env`: Die Variablen heißen `NODVARD_DECK_<FELD>`, die alten `LATTICE_<FELD>` gelten als
+Rückfall weiter (siehe `Settings.settings_customise_sources`)."""
 
 from __future__ import annotations
 
@@ -30,22 +24,19 @@ from . import image_info
 _log = logging.getLogger("nodvard_deck.config")
 
 ENV_PREFIX = "NODVARD_DECK_"
-"""Neues Praefix der Umgebungsvariablen (technischer Name des Dashboards: nodvard_deck)."""
+"""Präfix der Umgebungsvariablen (technischer Name des Dashboards: nodvard_deck)."""
 
 LEGACY_ENV_PREFIX = "LATTICE_"
-"""Alter Name, gilt als Rueckfall weiter: Bestehende `.env`-Dateien, Compose-Dateien und
-Container mit `LATTICE_*` laufen unveraendert. Ein neuer Name gewinnt immer."""
+"""Alter Name, gilt als Rückfall weiter: Bestehende `.env`-Dateien, Compose-Dateien und Container mit `LATTICE_*` laufen
+unverändert. Ein neuer Name gewinnt immer."""
 
 _warned_legacy: set[str] = set()
-"""Alte Namen, ueber die schon gewarnt wurde (einmal je Prozess und Name)."""
+"""Alte Namen, über die schon gewarnt wurde (einmal je Prozess und Name)."""
 
 LOCAL_TIMEZONE = "Europe/Berlin"
-"""Rueckfall fuer die Ortszeit, wenn weder Einstellung noch Umgebung eine nennen. Die
-EINGESTELLTE Zone (`system.timezone`, `core.timezone.get_timezone`) gilt fuer alles, was der
-Nutzer als Uhrzeit einstellt: Jobs (`Job.timezone`) und Wartungsfenster
-(`core.maintenance`). EINE Quelle, damit ein "03:00" im Zeitplan-Waehler ueberall dieselbe
-Uhrzeit meint. Die Spaltenvorgabe von `Job.timezone` bleibt diese Konstante
-(Bestands-Jobs tragen sie)."""
+"""Rückfall für die Ortszeit, wenn weder Einstellung noch Umgebung eine nennen. Die eingestellte Zone
+(`core.timezone.get_timezone`) gilt für alles, was der Nutzer als Uhrzeit einstellt (Jobs, Wartungsfenster), damit "03:00"
+im Zeitplan-Wähler überall dieselbe Uhrzeit meint. Auch die Spaltenvorgabe von `Job.timezone` (Bestands-Jobs tragen sie)."""
 
 
 @functools.lru_cache(maxsize=1)
@@ -55,7 +46,7 @@ def known_timezones() -> frozenset[str]:
 
 
 def _clean_zone(raw: str | None) -> str | None:
-    """Gueltiger Zonenname oder `None`. `TZ` darf mit ":" beginnen (POSIX-Schreibweise)."""
+    """Gültiger Zonenname oder `None`; `TZ` darf mit ":" beginnen (POSIX-Schreibweise)."""
     if not raw:
         return None
     name = raw.strip().removeprefix(":")
@@ -63,7 +54,7 @@ def _clean_zone(raw: str | None) -> str | None:
 
 
 class _LegacyNameCollector:
-    """Sammelt die NAMEN (nie Werte) alter Variablen aus beiden Rueckfall-Quellen."""
+    """Sammelt die Namen (nie Werte) alter Variablen aus beiden Rückfall-Quellen."""
 
     def __init__(self) -> None:
         self.names: list[str] = []
@@ -117,13 +108,13 @@ def _present_names(source: EnvSettingsSource) -> list[str]:
 
 
 _EMPTY_MEANS_UNSET = ("build", "image", "ssh_confirm_new_host_keys", "trusted_proxies")
-"""Felder, bei denen eine leere Variable als nicht gesetzt gilt: Dann greift der naechste Name (z. B. `LATTICE_BUILD`
-hinter einem leeren `NODVARD_DECK_BUILD`) und danach die Datei im Image (`image_info`). Bei
-`ssh_confirm_new_host_keys` und `trusted_proxies` heisst das: keine Uebersteuerung, es gilt die gespeicherte Einstellung."""
+"""Felder, bei denen eine leere Variable als nicht gesetzt gilt: Dann greift der nächste Name (z. B. `LATTICE_BUILD` hinter
+einem leeren `NODVARD_DECK_BUILD`) und danach die Datei im Image (`image_info`). Bei `ssh_confirm_new_host_keys` und
+`trusted_proxies` heißt das: keine Übersteuerung, es gilt die gespeicherte Einstellung."""
 
 
 class _SkipEmpty(PydanticBaseSettingsSource):
-    """Huelle um eine Quelle: laesst leere Werte der Felder aus `_EMPTY_MEANS_UNSET` weg."""
+    """Hülle um eine Quelle: lässt leere Werte der Felder aus `_EMPTY_MEANS_UNSET` weg."""
 
     def __init__(self, inner: PydanticBaseSettingsSource) -> None:
         super().__init__(inner.settings_cls)
@@ -150,10 +141,8 @@ class _SkipEmpty(PydanticBaseSettingsSource):
 
 
 class _LegacyNameReporter(PydanticBaseSettingsSource):
-    """Steht als letzte Quelle und liefert nichts; meldet nur einmalig die alten Namen.
-
-    Die Meldung enthaelt ausschliesslich Variablennamen. Werte (z. B. `JWT_SECRET`)
-    duerfen nie im Log landen."""
+    """Steht als letzte Quelle und liefert nichts; meldet nur einmalig die alten Namen. Die Meldung enthält ausschließlich
+    Variablennamen, Werte (z. B. `JWT_SECRET`) dürfen nie im Log landen."""
 
     def __init__(self, settings_cls: type[BaseSettings], collector: _LegacyNameCollector) -> None:
         super().__init__(settings_cls)
@@ -176,6 +165,8 @@ class _LegacyNameReporter(PydanticBaseSettingsSource):
 
 
 class Settings(BaseSettings):
+    """Einstellungen aus der Umgebung. Das Branding steht bewusst nicht hier, sondern als Laufzeitwert in der Tabelle `settings`."""
+
     model_config = SettingsConfigDict(env_prefix=ENV_PREFIX, env_file=".env", extra="ignore")
 
     @classmethod
@@ -187,12 +178,9 @@ class Settings(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
-        """Reihenfolge (vorne gewinnt): init, Umgebung neu, Umgebung alt, `.env` neu,
-        `.env` alt, Secrets. `env_settings`/`dotenv_settings` sind die Quellen fuer das neue
-        Praefix (`env_prefix`). Die alten `LATTICE_*`-Namen haengen sich je Quelle dahinter,
-        damit die Prozess-Umgebung immer vor der `.env` gewinnt und innerhalb jeder Quelle
-        der neue Name vor dem alten. Bei `build`/`image` zaehlt ein leerer Wert als nicht gesetzt
-        (`_SkipEmpty`); was dann noch fehlt, kommt aus der Datei im Image (`_image_info_fallback`)."""
+        """Reihenfolge (vorne gewinnt): init, Umgebung neu, Umgebung alt, `.env` neu, `.env` alt, Secrets. Die alten Namen
+        hängen sich je Quelle dahinter, damit die Prozess-Umgebung immer vor der `.env` gewinnt und in jeder Quelle der neue
+        Name vor dem alten."""
         assert isinstance(dotenv_settings, DotEnvSettingsSource)
         collector = _LegacyNameCollector()
         return (
@@ -209,92 +197,79 @@ class Settings(BaseSettings):
     log_json: bool = False
 
     data_dir: Path = Path("./data")
-    """Alles Zustandsbehaftete lebt hier: DB, Master-Key, Extension-Daten, Run-Logs."""
+    """Alles Zustandsbehaftete lebt hier: Datenbank, Master-Key, Extension-Daten, Protokolle der Läufe."""
 
     updater_dir: Path = Path("/app/updater")
-    """Kanal zum Update-Helfer (`core.updater_client`): ein eigenes Volume, das der Helfer einrichtet und das root
-    gehoert. Bewusst ein fester Pfad ohne Eintrag im Image: Fehlt der Ordner (Entwicklung, Tests, Installation ohne
-    Helfer), gibt es eben keinen Helfer. Nur fuer Tests aendern."""
+    """Kanal zum Update-Helfer (`core.updater_client`): ein eigenes Volume, das der Helfer einrichtet und das root gehört.
+    Bewusst ein fester Pfad ohne Eintrag im Image: Fehlt der Ordner (Entwicklung, Tests, Installation ohne Helfer), gibt es
+    keinen Helfer. Nur für Tests ändern."""
 
     database_url: str = "sqlite+aiosqlite:///./data/lattice.db"
-    """SQLite ist der Default (D-02). postgresql+asyncpg://... funktioniert ohne
-    Codeaenderung, solange die Disziplin-Regeln aus D-02 eingehalten werden."""
+    """SQLite ist die Vorgabe; `postgresql+asyncpg://...` geht ohne Codeänderung, solange die Regeln aus
+    docs/00-DECISIONS.md (Datenbank) eingehalten werden."""
 
     master_key_path: Path = Path("./data/master.key")
-    """Fernet-Schluessel fuer den Secrets-Vault (D-06). Wird bei Erstinbetriebnahme
-    erzeugt (0600), niemals in der Datenbank abgelegt."""
+    """Fernet-Schlüssel für den Secrets-Vault. Wird bei der Erstinbetriebnahme erzeugt (0600), nie in der Datenbank abgelegt."""
 
     vault_keyring_path: Path = Path("./data/vault_keyring.json")
-    """Versionierte Schluessel fuer Rotation ohne Big-Bang (D-06).
-    Version 1 uebernimmt beim allerersten Zugriff unveraendert den Wert aus
-    `master_key_path` -- vor WP-2 verschluesselte Secrets (z. B. TOTP aus WP-1) bleiben
-    dadurch ohne Re-Encryption lesbar. Siehe core/vault.py `load_keyring()`."""
+    """Versionierte Schlüssel für Rotation ohne Big-Bang. Version 1 übernimmt beim ersten Zugriff unverändert den Wert aus
+    `master_key_path`, vorhandene verschlüsselte Secrets bleiben so ohne Neuverschlüsselung lesbar (`load_keyring()` in
+    core/vault.py)."""
 
     audit_retention_days: int = 90
-    """Rueckfall fuer den reservierten Schluessel `audit.retention_days`
-    (docs/03-DATA-MODEL.md §9). Gilt nur, solange unter Einstellungen, System keine
-    Aufbewahrungsdauer gesetzt ist (`services.audit.effective_retention_days`)."""
+    """Rückfall für den reservierten Schlüssel `audit.retention_days` (docs/03-DATA-MODEL.md §9): gilt nur, solange unter
+    Einstellungen, System keine Aufbewahrungsdauer gesetzt ist (`services.audit.effective_retention_days`)."""
 
     timezone: str | None = None
-    """NODVARD_DECK_TIMEZONE: Vorgabe fuer die Zeitzone aller Zeitplaene und
-    Wartungsfenster (z. B. `Europe/Berlin`). Leer = `TZ` der Umgebung, sonst Europe/Berlin
-    (`default_timezone`). Die Einstellung `system.timezone` gewinnt ueber diese Vorgabe."""
+    """NODVARD_DECK_TIMEZONE: Vorgabe für die Zeitzone aller Zeitpläne und Wartungsfenster (z. B. `Europe/Berlin`). Leer =
+    `TZ` der Umgebung, sonst Europe/Berlin (`default_timezone`). Die Einstellung `system.timezone` gewinnt über diese Vorgabe."""
 
     jwt_secret: str | None = None
-    """Ueberschreibt jwt_secret_path, wenn gesetzt -- fuer Docker/K8s-Secret-Mounts
-    (NODVARD_DECK_JWT_SECRET als Env-Var). Im Normalfall leer; dann greift die Datei."""
+    """Überschreibt `jwt_secret_path`, wenn gesetzt, für Docker/K8s-Secret-Mounts (NODVARD_DECK_JWT_SECRET). Im Normalfall
+    leer, dann greift die Datei."""
 
     jwt_secret_path: Path = Path("./data/jwt_secret.key")
-    """Wie master_key_path: wird beim ersten Start erzeugt, wenn weder diese Datei
-    noch `jwt_secret` existiert. Bewusst eine ANDERE Datei/ein anderer Schluessel als
-    der Vault-Master-Key (D-06) -- JWT-Signatur und Secret-Verschluesselung sind zwei
-    unabhaengige Zwecke, ein kompromittierter Schluessel soll nicht automatisch den
-    anderen mitkompromittieren."""
+    """Wie `master_key_path`: wird beim ersten Start erzeugt, wenn weder diese Datei noch `jwt_secret` existiert. Bewusst
+    ein anderer Schlüssel als der Vault-Master-Key: JWT-Signatur und Secret-Verschlüsselung sind zwei unabhängige Zwecke,
+    ein kompromittierter Schlüssel soll nicht den anderen mitkompromittieren."""
 
     access_token_ttl_seconds: int = 15 * 60
     refresh_token_ttl_days: int = 30
     mfa_token_ttl_seconds: int = 5 * 60
-    """Kurzlebiges Zwischentoken zwischen Passwort-Login und TOTP-Bestaetigung
-    (POST /auth/login -> 202 mfa_required -> POST /auth/mfa)."""
+    """Kurzlebiges Zwischentoken zwischen Passwort-Login und TOTP-Bestätigung (POST /auth/login -> 202 mfa_required ->
+    POST /auth/mfa)."""
 
     cookie_secure: bool | None = None
-    """`Secure`-Flag am Refresh-Cookie (D-07). `None` (Standard) = automatisch: gesetzt,
-    wenn die Anfrage ueber HTTPS kam, sonst nicht -- ein Browser verwirft ein
-    Secure-Cookie ueber Klartext-HTTP still (z. B. env=prod unter
-    http://...:8080 im Heimnetz). Hinter einem TLS-Proxy zaehlt dessen X-Forwarded-Proto, sobald er als
-    vertrauenswuerdig eingetragen ist (`system.trusted_proxies`). NODVARD_DECK_COOKIE_SECURE=1/0 erzwingt es."""
+    """`Secure`-Flag am Refresh-Cookie. `None` (Standard) = automatisch: nur bei HTTPS, denn ein Browser verwirft ein
+    Secure-Cookie über Klartext-HTTP still (z. B. env=prod unter http://...:8080 im Heimnetz). Hinter einem TLS-Proxy zählt
+    dessen X-Forwarded-Proto, sobald er unter `system.trusted_proxies` steht; NODVARD_DECK_COOKIE_SECURE=1/0 erzwingt es."""
 
     setup_code: str | None = None
-    """LATTICE_SETUP_CODE: Einrichtungscode fuer die Erstinbetriebnahme vorgeben (mindestens
-    8 Zeichen). Leer = Nodvard Deck wuerfelt einen und schreibt ihn bei jedem Start ins Protokoll,
-    bis das erste Konto angelegt ist (core/setup_code.py)."""
+    """LATTICE_SETUP_CODE: Einrichtungscode für die Erstinbetriebnahme vorgeben (mindestens 8 Zeichen). Leer = das
+    Dashboard würfelt einen und schreibt ihn bei jedem Start ins Protokoll, bis das erste Konto angelegt ist
+    (core/setup_code.py)."""
 
     demo_mode: bool = False
-    """NODVARD_DECK_DEMO_MODE=1 speist Fake-Daten statt echter Connectoren (D-10)."""
+    """NODVARD_DECK_DEMO_MODE=1 speist Fake-Daten statt echter Connectoren."""
 
     api_docs: bool | None = None
-    """NODVARD_DECK_API_DOCS: ob die API-Doku (`/docs`, `/redoc`, `/openapi.json`) OHNE Anmeldung
-    ausgeliefert wird. Leer (Standard) = nur im Entwicklungsmodus (`env=dev`), in einer Installation
-    mit `env=prod` (Docker-Image, Compose-Datei) also nicht; `1`/`0` erzwingt es. Unabhaengig davon
-    liefert `GET /api/v1/system/openapi.json` das API-Dokument an angemeldete Admins (Recht
-    `system.read`). Gelesen wird der Wert einmal beim Erzeugen der App (`main.create_app`)."""
+    """NODVARD_DECK_API_DOCS: ob die API-Doku (`/docs`, `/redoc`, `/openapi.json`) ohne Anmeldung ausgeliefert wird. Leer =
+    nur mit `env=dev`, `1`/`0` erzwingt es. Angemeldete Admins (`system.read`) bekommen sie immer über
+    `GET /api/v1/system/openapi.json`. Der Wert wird einmal beim Erzeugen der App gelesen (`main.create_app`)."""
 
     build: str | None = None
-    """NODVARD_DECK_BUILD: Kennung des laufenden Builds. Ohne (nicht leere) Variable gilt die Version aus der
-    Datei im Image (`image_info`, beim Release-Image z. B. `0.6.0` oder `0.6.0-rc1`), sonst `None`.
-    Angezeigt unter "Über Nodvard Deck" (`GET /app/changelog`, ohne Wert zeigt die Oberflaeche ihren
-    eigenen Bauzeitpunkt), in `GET /system/info` und im Manifest einer Sicherung. "Nach Updates suchen" und die
-    Kopien vor Updates nehmen beim offiziellen Image die Version aus der Datei im Image, nur ohne sie diese Angabe
-    (jeweils nur, wenn es eine gueltige Version ist; `core.updates.running_version`)."""
+    """NODVARD_DECK_BUILD: Kennung des laufenden Builds. Ohne (nicht leere) Variable gilt die Version aus der Datei im Image
+    (`image_info`, z. B. `0.6.0` oder `0.6.0-rc1`), sonst `None`. Angezeigt in `GET /app/changelog`, `GET /system/info` und im
+    Manifest einer Sicherung. Update-Suche und Kopien vor Updates nehmen beim offiziellen Image die Version aus der Datei,
+    nur ohne sie diese Angabe, und nur wenn sie gültig ist (`core.updates.running_version`)."""
 
     image: str | None = None
-    """NODVARD_DECK_IMAGE: aus welchem Image der Container stammt, ohne Tag. Ohne (nicht leere) Variable gilt
-    die Angabe aus der Datei im Image (`image_info`; das Release-Image traegt `ghcr.io/nodvard/deck`), sonst
-    `None` = selbst gebaut. Nur damit unterscheidet "Nach Updates suchen" (`core.updates.is_official_image`)
-    das offizielle Image von einem selbst gebauten."""
+    """NODVARD_DECK_IMAGE: aus welchem Image der Container stammt, ohne Tag. Ohne (nicht leere) Variable gilt die Angabe aus
+    der Datei im Image (`image_info`), sonst `None` = selbst gebaut. Nur daran erkennt die Update-Suche
+    (`core.updates.is_official_image`) das offizielle Image."""
 
     image_info_path: Path = image_info.PATH
-    """Datei mit Herkunft und Version des Images (`image_info`). Nur fuer Tests aendern."""
+    """Datei mit Herkunft und Version des Images (`image_info`). Nur für Tests ändern."""
 
     @field_validator("build", "image", mode="before")
     @classmethod
@@ -306,7 +281,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _image_info_fallback(self) -> Settings:
-        """`image`/`build` ohne Variable: aus der Datei im Image (fehlt sie oder ist sie kaputt: `None`)."""
+        """`image` und `build` ohne Variable aus der Datei im Image (fehlt sie oder ist sie kaputt: `None`)."""
         if self.image is None or self.build is None:
             info = image_info.read(self.image_info_path)
             if self.image is None:
@@ -316,90 +291,79 @@ class Settings(BaseSettings):
         return self
 
     extensions_dir: Path = Path("./extensions")
-    """Verzeichnis-Scan-Wurzel fuer mitgelieferte/lokale Extensions (docs/02 §1) --
-    Konvention: alle Befehle laufen aus dem Repository-Root, dieser Pfad also relativ
-    dazu. Pip-installierte Extensions werden zusaetzlich ueber Entry-Points entdeckt,
-    siehe ext/discovery.py."""
+    """Wurzel für den Scan nach mitgelieferten und lokalen Extensions (docs/02 §1); alle Befehle laufen aus dem Repository-Root,
+    der Pfad ist relativ dazu. Pip-installierte Extensions werden zusätzlich über Entry-Points entdeckt (ext/discovery.py)."""
 
     skip_pre_migrate_backup: bool = False
-    """NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1: Notausgang. Ohne Wert (Standard) legt `nodvard_deck.boot`
-    vor JEDER Migration eine Kopie der Datenbank an (`<Datenordner>/backups/vor-update/`) und
-    migriert nie ohne sie. Mit diesem Schalter entfaellt die Kopie, z. B. wenn der Platz fuer
-    sie nie reicht. Dann gibt es bei einer gescheiterten Migration keinen Rueckweg."""
+    """NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1: Notausgang. Ohne Wert legt `nodvard_deck.boot` vor jeder Migration eine Kopie
+    der Datenbank an (`<Datenordner>/backups/vor-update/`) und migriert nie ohne sie. Mit dem Schalter entfällt die Kopie,
+    z. B. wenn der Platz nie reicht; eine gescheiterte Migration hat dann keinen Rückweg."""
 
     max_body_bytes: int = 1024**2
-    """NODVARD_DECK_MAX_BODY_BYTES: groesster Anfragekoerper einer normalen Anfrage (Standard 1 MiB).
-    Darueber antwortet der Server sofort mit 413, ohne den Koerper zu lesen. Gilt auch ohne Anmeldung.
-    Routen mit bewusst grossen Uploads (Sicherung wiederherstellen, Dateien hochladen, Logo, Dokumente,
-    Bilder) haben eigene, hoehere Grenzen."""
+    """NODVARD_DECK_MAX_BODY_BYTES: größter Anfragekörper einer normalen Anfrage (Standard 1 MiB). Darüber antwortet der Server
+    sofort mit 413, ohne den Körper zu lesen, auch ohne Anmeldung. Routen mit bewusst großen Uploads (Sicherung, Dateien,
+    Logo, Dokumente, Bilder) haben eigene, höhere Grenzen."""
 
     files_max_upload_bytes: int = 0
-    """NODVARD_DECK_FILES_MAX_UPLOAD_BYTES: groesste Datei, die im Dateibrowser hochgeladen werden darf.
-    0 (Standard): keine Grenze, wie bisher -- der Upload geht als Strom direkt an die Quelle (SFTP, WebDAV)
-    und landet nie ganz im Speicher; ISO-Abbilder und VM-Images sind oft groesser als 4 GB. Ein Wert ueber 0
-    wird schon am Kopf der Anfrage geprueft, bevor die Quelle das Ziel oeffnet. Bei Uploads ohne Laenge
-    (chunked) zaehlt nur die Middleware mit, und zwar mindestens bis `max_body_bytes`; dort hat die Quelle das
-    Ziel beim Abbruch schon geoeffnet (SFTP schreibt in eine Temp-Datei und laesst das Ziel dann unberuehrt)."""
+    """NODVARD_DECK_FILES_MAX_UPLOAD_BYTES: größte Datei im Dateibrowser. 0 (Standard) = keine Grenze: Der Upload geht als
+    Strom direkt an die Quelle (SFTP, WebDAV) und landet nie ganz im Speicher; ISO- und VM-Images sind oft größer als 4 GB.
+    Ein Wert über 0 wird am Kopf der Anfrage geprüft, bevor die Quelle das Ziel öffnet."""
+    # Bei Uploads ohne Länge (chunked) zählt nur die Middleware mit, mindestens bis `max_body_bytes`; die Quelle hat das Ziel
+    # beim Abbruch dann schon geöffnet (SFTP schreibt in eine Temp-Datei und lässt das Ziel unberührt).
 
     restore_max_upload_bytes: int = 4 * 1024**3
-    """NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES: groesste Sicherungsdatei, die beim Wiederherstellen
-    hochgeladen werden darf (Standard 4 GiB). Wird schon am Kopf der Anfrage geprueft, nicht erst
-    nach dem Hochladen."""
+    """NODVARD_DECK_RESTORE_MAX_UPLOAD_BYTES: größte Sicherungsdatei beim Wiederherstellen (Standard 4 GiB), schon am Kopf
+    der Anfrage geprüft, nicht erst nach dem Hochladen."""
 
     restore_max_unpacked_bytes: int = 16 * 1024**3
-    """NODVARD_DECK_RESTORE_MAX_UNPACKED_BYTES: wie gross eine Sicherung entpackt werden darf
-    (Standard 16 GiB; zusaetzlich nie mehr als der freie Platz). Schutz vor Bomben."""
+    """NODVARD_DECK_RESTORE_MAX_UNPACKED_BYTES: wie groß eine Sicherung entpackt werden darf (Standard 16 GiB, nie mehr als
+    der freie Platz). Schutz vor Bomben."""
 
     restore_max_entries: int = 200_000
-    """NODVARD_DECK_RESTORE_MAX_ENTRIES: wie viele Dateien und Ordner eine Sicherung hoechstens enthalten darf."""
+    """NODVARD_DECK_RESTORE_MAX_ENTRIES: wie viele Dateien und Ordner eine Sicherung höchstens enthalten darf."""
 
     ext_data_dir: Path = Path("./data/ext")
-    """Wurzel fuer `ExtensionContext.data_dir` -- je Extension ein Unterverzeichnis
-    `<ext_data_dir>/<ext_id>/` (docs/02-EXTENSION-API.md §2)."""
+    """Wurzel für `ExtensionContext.data_dir`: je Extension ein Unterverzeichnis `<ext_data_dir>/<ext_id>/`
+    (docs/02-EXTENSION-API.md §2)."""
 
     metrics_interval_s: int = 30
-    """Takt des Verlaufs-Sammlers (core/metrics_history.py) fuer Hosts ohne eigene
-    Historie beim Anbieter (z. B. den Pi per SSH). 0 schaltet ihn ab."""
+    """Takt des Verlaufs-Sammlers (core/metrics_history.py) für Hosts ohne eigene Historie beim Anbieter (z. B. den Pi per
+    SSH). 0 schaltet ihn ab."""
 
     metrics_raw_retention_h: int = 48
     metrics_rollup_retention_d: int = 35
 
     ssh_connect_timeout_s: float = 10.0
-    """D-05: gemeinsamer asyncssh-Layer fuer Terminal, Skripte und KI-Remediation."""
+    """Zeitlimit für den Verbindungsaufbau des gemeinsamen asyncssh-Layers (Terminal, Skripte, KI-Remediation)."""
 
     ssh_confirm_new_host_keys: bool | None = None
-    """NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: Uebersteuerung fuer ALLE Server.
-    `true`: neue Server-Schluessel werden nicht still gemerkt (TOFU, core/ssh.py), wenn
-    Hintergrundjobs, Terminal oder Status zum ersten Mal mit einem Server sprechen -- das
-    scheitert mit `HostKeyUnknown`, bis jemand den Fingerabdruck unter Einstellungen -> Server &
-    Zugaenge ("Verbindung pruefen") bestaetigt hat. `false`: wie frueher, still merken.
-    Nicht gesetzt (`None`, Standard): es gilt die gespeicherte Einstellung `ssh.confirm_new_host_keys`
-    (neue Installationen: an, bestehende: aus; siehe `services.hosts.host_key_confirmation_required`).
-    Bereits gemerkte Schluessel sind nie betroffen; ein "Schluessel vergessen" verlangt immer eine
-    Bestaetigung, egal was hier steht."""
+    """NODVARD_DECK_SSH_CONFIRM_NEW_HOST_KEYS: Übersteuerung für alle Server. `true`: Neue Server-Schlüssel werden nicht still
+    gemerkt (TOFU, core/ssh.py), die Verbindung scheitert mit `HostKeyUnknown`, bis jemand den Fingerabdruck bestätigt hat;
+    `false`: still merken. Nicht gesetzt gilt die gespeicherte Einstellung `ssh.confirm_new_host_keys` (neue Installationen
+    an, bestehende aus; `services.hosts.host_key_confirmation_required`)."""
+    # Bereits gemerkte Schlüssel sind nie betroffen; "Schlüssel vergessen" verlangt immer eine Bestätigung, egal was hier steht.
 
     trusted_proxies: str | None = None
-    """NODVARD_DECK_TRUSTED_PROXIES: Adressen oder Netze der Reverse-Proxys, deren `X-Forwarded-For` und
-    `X-Forwarded-Proto` gelten (Komma-getrennt, z. B. `172.18.0.5, 192.168.2.0/24`). Gesetzt gewinnt sie ueber die
-    Einstellung `system.trusted_proxies` (die dann nicht aenderbar ist); ungueltige Eintraege werden mit Warnung
-    uebersprungen (`core.trusted_proxies`). Nicht gesetzt oder leer (Standard): es gilt die gespeicherte Einstellung."""
+    """NODVARD_DECK_TRUSTED_PROXIES: Adressen oder Netze der Reverse-Proxys, deren `X-Forwarded-For` und `X-Forwarded-Proto`
+    gelten (kommagetrennt, z. B. `192.0.2.10, 198.51.100.0/24`). Gesetzt gewinnt sie über die Einstellung
+    `system.trusted_proxies` (dann nicht änderbar); ungültige Einträge werden mit Warnung übersprungen (`core.trusted_proxies`)."""
 
     terminal_session_ttl_s: float = 30.0
-    """Wie lange ein per `POST /terminal/sessions` gemintetes, noch nicht per WS
-    eingeloestes Session-Ticket gueltig bleibt (core/terminal_sessions.py)."""
+    """Wie lange ein per `POST /terminal/sessions` erzeugtes, noch nicht per WebSocket eingelöstes Session-Ticket gültig
+    bleibt (core/terminal_sessions.py)."""
 
     terminal_idle_timeout_s: float = 30 * 60
-    """Eine Terminal-Sitzung ohne jede Eingabe UND Ausgabe wird nach so vielen Sekunden beendet
-    (`api/v1/terminal.py`). Solange ein Befehl noch Text liefert, laeuft sie weiter. 0 = aus."""
+    """Eine Terminal-Sitzung ohne jede Eingabe und Ausgabe wird nach so vielen Sekunden beendet (`api/v1/terminal.py`).
+    Solange ein Befehl noch Text liefert, läuft sie weiter. 0 = aus."""
 
     terminal_recheck_interval_s: float = 15.0
-    """Wie oft eine offene Terminal-Sitzung pruefen laesst, ob Konto, Berechtigung und Anmeldung
-    noch gelten (`services/session_guard.py`). Wer deaktiviert, abgemeldet oder ausgesperrt wird,
-    verliert die Shell spaetestens nach so vielen Sekunden."""
+    """Wie oft eine offene Terminal-Sitzung prüfen lässt, ob Konto, Berechtigung und Anmeldung noch gelten
+    (`services/session_guard.py`). Wer deaktiviert, abgemeldet oder ausgesperrt wird, verliert die Shell spätestens nach so
+    vielen Sekunden."""
 
     @property
     def api_docs_public(self) -> bool:
-        """Soll die API-Doku ohne Anmeldung erreichbar sein? Ausdruecklicher Wert gewinnt, sonst `env == "dev"`."""
+        """Soll die API-Doku ohne Anmeldung erreichbar sein? Ein ausdrücklicher Wert gewinnt, sonst `env == "dev"`."""
         if self.api_docs is not None:
             return self.api_docs
         return self.env.strip().lower() == "dev"
@@ -408,9 +372,8 @@ class Settings(BaseSettings):
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
     def get_or_create_jwt_secret(self) -> str:
-        """`jwt_secret` (Env-Var) gewinnt, wenn gesetzt; sonst Datei laden/erzeugen --
-        gleiches Muster wie `core.vault.load_or_create_master_key`, absichtlich nicht
-        dieselbe Funktion (unterschiedlicher Wertetyp: Text-Secret vs. Fernet-Key)."""
+        """`jwt_secret` (Env-Var) gewinnt, wenn gesetzt; sonst Datei laden oder erzeugen. Wie
+        `core.vault.load_or_create_master_key`, aber absichtlich nicht dieselbe Funktion (Text-Secret statt Fernet-Key)."""
         if self.jwt_secret:
             return self.jwt_secret
 
@@ -435,9 +398,8 @@ _settings: Settings | None = None
 
 
 def default_timezone(settings: Settings | None = None) -> str:
-    """Vorgabe der Zeitzone, solange `system.timezone` nicht gesetzt ist:
-    `NODVARD_DECK_TIMEZONE` (alt `LATTICE_TIMEZONE`), sonst `TZ`, sonst `LOCAL_TIMEZONE`.
-    Ein ungueltiger Name wird uebersprungen (mit Warnung), nie zum Absturz."""
+    """Vorgabe der Zeitzone, solange `system.timezone` nicht gesetzt ist: `NODVARD_DECK_TIMEZONE` (alt `LATTICE_TIMEZONE`),
+    sonst `TZ`, sonst `LOCAL_TIMEZONE`. Ein ungültiger Name wird mit Warnung übersprungen, nie zum Absturz."""
     settings = settings or get_settings()
     for source, raw in (("NODVARD_DECK_TIMEZONE", settings.timezone), ("TZ", os.environ.get("TZ"))):
         if not raw:
@@ -450,8 +412,7 @@ def default_timezone(settings: Settings | None = None) -> str:
 
 
 def get_settings() -> Settings:
-    """Gecachte Singleton-Instanz. In Tests: `get_settings.cache_clear()`-Ersatz ist,
-    das Modul-Attribut `_settings` direkt zurueckzusetzen (siehe tests/conftest.py)."""
+    """Gecachte Singleton-Instanz; Tests setzen dafür das Modul-Attribut `_settings` direkt zurück (siehe tests/conftest.py)."""
     global _settings
     if _settings is None:
         _settings = Settings()

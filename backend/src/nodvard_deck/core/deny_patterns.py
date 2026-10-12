@@ -1,21 +1,5 @@
-r"""Die Sperrliste des Gates.
-
-**Herkunft: wörtlich übernommen aus dem Vorgängersystem.**
-
-Das sind Daten, keine Struktur — jede Umformulierung riskiert, einen bereits bezahlten
-Bug erneut einzubauen. Der auffälligste Fall: `rm -rf /` wurde in einer früheren Fassung
-NICHT geblockt, weil das Muster ein Zeichen nach dem Schrägstrich verlangte (`\s`), der
-Befehl aber direkt danach endete. Gefunden wurde das nur durch einen echten
-Funktionstest, nicht durch Lesen. Deshalb hier unverändert: `(\s|$)`.
-
-Philosophie (ausdrückliche Vorgabe des Betreibers): **schmale Sperrliste statt
-Fähigkeits-Whitelist.** Die KI soll alles können; Sicherheit entsteht über
-Nachvollziehbarkeit, nicht über Einschränkung. Bewusst NICHT gesperrt sind deshalb
-reboot, shutdown und Service-Neustarts.
-
-Diese Liste ist der Default-Seed für die Einstellung `security.deny_patterns`.
-Extensions dürfen ergänzen, niemand darf sie leeren.
-"""
+"""Die Sperrliste des Gates (Standard der Einstellung `security.deny_patterns`); sie darf ergänzt, aber nicht geleert
+werden."""
 
 from __future__ import annotations
 
@@ -28,18 +12,19 @@ class DenyPattern:
     id: str
     pattern: re.Pattern[str]
     description: str
-    origin: str = "ported"      # "ported" = 1:1 aus dem Vorgängersystem | "added" = neu
+    origin: str = "ported"      # "ported" = Grundbestand | "added" = Ergänzung
 
 
 def _p(pattern: str) -> re.Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
 
-# ---------------------------------------------------------------------------
-# 1:1 aus dem Vorgängersystem — Reihenfolge und Regex-Text unverändert.
-# Beim Ändern hier: erst den zugehörigen Regressionstest anfassen, nie umgekehrt.
-# ---------------------------------------------------------------------------
+# Schmale Sperrliste statt Fähigkeits-Whitelist: Die KI soll handlungsfähig bleiben, Sicherheit kommt aus
+# Nachvollziehbarkeit (Protokoll, Freigabe) und nicht aus Einschränkung. Die Muster sind eng gefasst und getestet; beim
+# Ändern erst den Regressionstest anfassen.
 PORTED_DENY_PATTERNS: tuple[DenyPattern, ...] = (
+    # `(\s|$)`: Auch `rm -rf /` am Ende des Befehls muss greifen, ein Pflichtzeichen nach dem Schrägstrich ließ es
+    # durch.
     DenyPattern("rm-rf-root", _p(r"rm\s+-rf\s+/(\s|$)"),
                 "Löschen des Wurzelverzeichnisses"),
     DenyPattern("rm-rf-root-glob", _p(r"rm\s+-rf\s+/\*"),
@@ -72,11 +57,7 @@ PORTED_DENY_PATTERNS: tuple[DenyPattern, ...] = (
                 "Skript aus dem Netz direkt in eine Shell pipen"),
 )
 
-# ---------------------------------------------------------------------------
-# Ergänzungen, die im Bestand fehlen. Bewusst getrennt gehalten, damit beim Vergleich
-# von altem und neuem Verhalten (Schattenbetrieb) jede Abweichung
-# eindeutig zuordenbar bleibt: trifft ein "added"-Muster, ist das kein Portierungsfehler.
-# ---------------------------------------------------------------------------
+# Ergänzungen zum Grundbestand, bewusst getrennt gehalten.
 ADDED_DENY_PATTERNS: tuple[DenyPattern, ...] = (
     DenyPattern("wipefs", _p(r"\bwipefs\b"),
                 "Dateisystem-Signaturen löschen", origin="added"),
@@ -93,30 +74,15 @@ DEFAULT_DENY_PATTERNS: tuple[DenyPattern, ...] = (
     *ADDED_DENY_PATTERNS,
 )
 
-# Bewusst NICHT gesperrt — dokumentiert, damit niemand sie "aus Versehen" ergänzt:
-#   reboot, shutdown, systemctl restart, docker restart, docker stop,
-#   pct stop, qm stop, apt upgrade
-# Begründung: die Betreibervorgabe lautet ausdrücklich, dass die KI handlungsfähig
-# bleiben muss. Diese Befehle sind reversibel und gehören zum Alltagsgeschäft der
-# Remediation. Der Schutz dagegen ist das Anti-Flapping, nicht ein Verbot.
+# Bewusst nicht gesperrt: reboot, shutdown, systemctl restart, docker restart/stop, pct stop, qm stop, apt upgrade.
+# Sie sind reversibel und gehören zur Remediation; der Schutz dagegen ist das Anti-Flapping, nicht ein Verbot.
 #
-# Ebenfalls bewusst NICHT hier: die Vendor-spezifische Erweiterung von "kill-ssh-access"
-# um einen konkreten Access-Gateway-Prozessnamen. Der generische, verkaufbare Kern
-# schuetzt universell vor Selbstaussperrung (ssh/sshd) -- ein Betreiber, der zusaetzlich
-# einen bestimmten dritten Zugangsdienst schuetzen will, ergaenzt das ueber
-# `security.deny_patterns` (docs/03-DATA-MODEL.md §9: "Extensions duerfen ergaenzen"),
-# nicht ueber einen hartcodierten Produktnamen im Kern.
+# Ebenfalls nicht hier: der Name eines bestimmten Zugangsdienstes in "kill-ssh-access". Wer einen weiteren Dienst
+# schützen will, ergänzt das über `security.deny_patterns`.
 
 
-# ---------------------------------------------------------------------------
-# Was hier bewusst NICHT steht: die "Hostname-als-Containername"-Pruefung des Vorgaengersystems
-# (FORBIDDEN_KEYWORDS -- fest verdrahtete Flotten-Hostnamen). Sie faengt den real
-# beobachteten Fehlschluss "Host offline -> docker restart <hostname>_server", ist aber
-# an konkrete Hostnamen EINER Installation gebunden -- keine generische Kern-Regel.
-# Sie gehoert in die Erweiterung Nodvard Shield,
-# nicht in den Kern. Eine erste Fassung stand faelschlich in diesem Modul --
-# scripts/check_core_purity.py hat den Platzierungsfehler aufgedeckt, bevor er sich
-# festsetzen konnte.
+# Ebenfalls nicht hier: die Prüfung auf feste Hostnamen einer Installation (Fehlschluss "Host offline -> restart
+# <hostname>_server"). Sie ist keine generische Regel und gehört in eine Erweiterung.
 
 
 def match_deny_patterns(

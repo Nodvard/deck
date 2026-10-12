@@ -1,33 +1,5 @@
-"""Einstellungen einer Extension ueber die Oberflaeche pflegen (Einstellungen ->
-Erweiterungen -> Konfigurieren).
-
-- `GET  /extensions/{id}/settings` liefert Schema (aus `settings.schema.json` bzw.
-  `ctx.settings.declare()`), aktuelle Werte und welche Geheimnisse gesetzt sind.
-- `PUT  /extensions/{id}/settings` prueft die Werte grob gegen das Schema und
-  speichert NUR die Schluessel, die das Schema kennt -- interne Zustaende einer
-  Extension (z. B. `acknowledged_unprotected` bei backups) bleiben unangetastet.
-  Felder mit `x-hidden` gehoeren den eigenen Routen der Extension und werden hier nie
-  uebernommen; was nicht mitgeschickt wird, bleibt wie gespeichert, ein `null` entfernt
-  den Wert (dann gilt wieder der Standard). Felder mit `x-widget: "schedule"` muessen ein
-  gueltiger Cron-Ausdruck sein (sonst 422): ein kaputter Zeitplan wuerde die Extension beim
-  naechsten Start lahmlegen. Aendert sich ein Ziel, an das ein Geheimnis
-  gebunden ist (`x-secrets[].x-secret-bound-to`), wird dieses Geheimnis geloescht (auch bei
-  einer ersten Adresse und wenn nur eines von mehreren gebundenen Feldern wechselt).
-  Laeuft die Extension, geht das Speichern ueber `ctx.settings.set()`, damit ihr
-  `on_settings_changed` sofort greift.
-- `PUT  /extensions/{id}/secrets` setzt oder ersetzt ein Geheimnis im Vault. Welche
-  Labels erlaubt sind, beschreibt das Schema unter `x-secrets`; gelesen werden
-  Geheimnisse hier nie. Ist es an Felder gebunden (`x-secret-bound-to`), die alle noch leer
-  sind, antwortet die Route mit 409: erst die Adresse speichern, dann das Geheimnis.
-- `DELETE /extensions/{id}/secrets?label=...` entfernt ein solches Geheimnis wieder
-  (idempotent).
-- `POST /extensions/{id}/test` prueft die Verbindung (`health()` der Extension bzw. bei
-  Benachrichtigungskanaelen eine Testnachricht) und antwortet `{ok, message, details?}`
-  auf Deutsch, ohne Geheimnisse im Text. Hoechstens 10 Tests je Minute und Nutzer.
-
-`{id}` darf auch eine alte Kennung einer umbenannten Erweiterung sein (`legacy_ids`); alles laeuft dann
-ueber die heutige Kennung und die Zeile der Speicher-Kennung (`extensions.resolve_extension`).
-"""
+"""Einstellungen, Geheimnisse und Verbindungstest einer Erweiterung. `{id}` darf auch eine alte Kennung sein
+(`legacy_ids`), es gilt dann die heutige (`extensions.resolve_extension`)."""
 
 from __future__ import annotations
 
@@ -72,8 +44,7 @@ class ExtensionSettingsOut(BaseModel):
     values: dict[str, Any]
     secrets: list[SecretSlot]
     secrets_cleared: list[str] = Field(default_factory=list)
-    """Nur nach `PUT .../settings`: Labels der Geheimnisse, die geloescht wurden, weil sich
-    das Ziel geaendert hat, zu dem sie gehoerten (sie sind dann wieder „nicht gesetzt“)."""
+    """Nur nach `PUT .../settings`: Labels der Geheimnisse, die gelöscht wurden, weil sich ihr Ziel geändert hat."""
 
     model_config = {"populate_by_name": True}
 
@@ -91,8 +62,7 @@ class TestIn(BaseModel):
     __test__ = False  # kein pytest-Testfall, nur ein Name
 
     mode: Literal["connection", "message"] = "connection"
-    """`connection`: Verbindung pruefen. `message`: eine Testnachricht ueber den
-    Benachrichtigungskanal der Extension senden."""
+    """`connection`: Verbindung prüfen. `message`: eine Testnachricht über den Benachrichtigungskanal senden."""
 
 
 class TestDetailOut(BaseModel):
@@ -112,17 +82,15 @@ class TestOut(BaseModel):
     """Bei Erweiterungen mit mehreren Verbindungen: das Ergebnis je Verbindung."""
 
 
-# Hoechstens 10 Tests je Minute und Nutzer -- ein Test ruft echte Server an.
+# Höchstens 10 Tests je Minute und Nutzer, ein Test ruft echte Server an.
 _TEST_LIMIT = 10
 _TEST_WINDOW_S = 60
 _test_window = rate_limit.SlidingWindow(_TEST_LIMIT, _TEST_WINDOW_S)
 
 
 def schema_for(ext_id: str) -> dict[str, Any] | None:
-    """`settings.schema.json` zuerst -- dort stehen Titel, Beschreibungen und
-    `x-secrets` fuer die Oberflaeche. `ctx.settings.declare()` nur als Rueckfall
-    fuer Extensions ohne Schema-Datei. `ext_id` ist die heutige Kennung (nicht die
-    Speicher-Kennung `ExtensionRecord.id`, die nach einer Umbenennung eine alte sein kann)."""
+    """Zuerst `settings.schema.json` (Titel, Beschreibungen, `x-secrets`), sonst `ctx.settings.declare()`.
+    `ext_id` ist die heutige Kennung, nicht die Speicher-Kennung `ExtensionRecord.id`."""
     runtime = get_extension_runtime()
     manifest = getattr(runtime.discovered.get(ext_id), "manifest", None)
     if getattr(manifest, "settings_schema", None):
@@ -135,13 +103,12 @@ _secret_slots_spec = extension_setup.secret_slots_spec
 
 
 _PATTERN_MAX_LENGTH = 2000
-"""Laengere Werte werden vor der Musterpruefung abgelehnt (die Pruefung laeuft synchron)."""
+"""Längere Werte werden vor der Musterprüfung abgelehnt (die Prüfung läuft synchron)."""
 
 
 def _js_anchors(pattern: str) -> str:
-    """`$` heisst in JavaScript "Ende des Textes", in Python auch "vor einem `\\n` am Ende".
-    Damit Oberflaeche und Backend gleich urteilen, wird ein `$` ausserhalb von Zeichenklassen
-    zu `\\Z`."""
+    """`$` heißt in JavaScript „Ende des Textes“, in Python auch „vor einem `\\n` am Ende“.
+    Damit Oberfläche und Backend gleich urteilen, wird ein `$` außerhalb von Zeichenklassen zu `\\Z`."""
     out: list[str] = []
     in_class = False
     i = 0
@@ -178,11 +145,10 @@ _SCHEDULE_HINT = (
 
 
 def _check_schedule(value: str, schema: dict[str, Any], path: str) -> None:
-    """Ein Zeitplan-Feld (`x-widget: "schedule"`) muss sich wirklich planen lassen -- dieselbe
-    Pruefung wie beim Anmelden des Jobs (`core.cron.cron_trigger`). Leer bleibt erlaubt: dann
-    gilt der Standard der Extension."""
+    """Ein Zeitplan-Feld muss sich planen lassen (wie beim Anmelden des Jobs, `core.cron.cron_trigger`), sonst
+    legt es die Extension beim nächsten Start lahm."""
     if value == "":
-        return
+        return  # leer: es gilt der Standard der Extension
     try:
         cron_trigger(value)
     except ValueError as exc:
@@ -202,7 +168,7 @@ def _bound(schema: dict[str, Any], key: str) -> float | None:
 
 
 def _number_text(value: float) -> str:
-    """Zahl fuer eine Meldung: ganze Zahlen ohne Nachkommastellen, sonst mit deutschem Komma (wie die Oberflaeche)."""
+    """Zahl für eine Meldung: ganze Zahlen ohne Nachkommastellen, sonst mit deutschem Komma (wie die Oberfläche)."""
     if isinstance(value, float) and value.is_integer():
         value = int(value)
     return str(value).replace(".", ",")
@@ -217,9 +183,9 @@ def _range_text(low: float | None, high: float | None) -> str:
 
 
 def _check_number(value: float, schema: dict[str, Any], path: str) -> None:
-    """Zahlenfelder: `minimum` und `maximum` (Grenzen eingeschlossen, wie JSON-Schema). Die Oberflaeche prueft
-    dasselbe (`rangeError` in SchemaForm.tsx). `NaN` und unendlich (der JSON-Leser von Python nimmt sie an) waeren
-    gespeichert kein gueltiges JSON mehr, die Seite liesse sich dann nicht mehr laden -- sie fallen immer heraus."""
+    """Zahlenfelder: `minimum` und `maximum` gelten einschließlich der Grenzen (wie `rangeError` in der Oberfläche)."""
+    # NaN und unendlich nimmt der JSON-Leser von Python an, gespeichert wären sie kein gültiges JSON mehr
+    # und die Seite ließe sich nicht mehr laden.
     if not math.isfinite(value):
         raise HTTPException(status_code=422, detail=f"„{_field_name(schema, path)}“: Bitte eine Zahl eintragen.")
     low, high = _bound(schema, "minimum"), _bound(schema, "maximum")
@@ -241,8 +207,8 @@ _TYPES: dict[str, tuple[type, ...]] = {
 
 
 def _check(value: Any, schema: dict[str, Any], path: str) -> None:
-    """Bewusst schmal (keine jsonschema-Abhaengigkeit): Typ, Pflichtfelder, Enum, `pattern`,
-    Zeitplan-Felder (`x-widget: "schedule"`), `minimum`/`maximum` bei Zahlen, `maxItems` bei Listen."""
+    """Bewusst schmal (keine jsonschema-Abhängigkeit): Typ, Pflichtfelder, Enum, `pattern`, Zeitplan-Felder
+    (`x-widget: "schedule"`), `minimum`/`maximum` bei Zahlen, `maxItems` bei Listen."""
     expected = schema.get("type")
     if value is None:
         return
@@ -319,24 +285,26 @@ async def put_extension_settings(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Diese Erweiterung hat keine Einstellungen.")
 
     known = schema["properties"]
-    # `x-hidden`-Felder pflegt die Erweiterung ueber ihre eigenen Routen (z. B. die Profile
-    # der Gameserver); eine alte Kopie aus der Oberflaeche darf sie nicht ueberschreiben.
+    # Gespeichert werden nur Schlüssel des Schemas, interne Zustände der Erweiterung bleiben unangetastet.
+    # `x-hidden`-Felder pflegt die Erweiterung über eigene Routen (z. B. die Profile der Gameserver);
+    # eine alte Kopie aus der Oberfläche darf sie nicht überschreiben.
     writable = {k: v for k, v in known.items() if not (isinstance(v, dict) and v.get("x-hidden"))}
     incoming = {k: v for k, v in payload.values.items() if k in writable}
     _check(incoming, {"type": "object", "properties": writable}, "Einstellungen")
 
     stored = dict(record.settings or {})
     merged = {**stored, **incoming}
+    # Ein `null` entfernt den Wert, dann gilt wieder der Standard.
     for key, value in incoming.items():
         if value is None:
             merged.pop(key, None)
-    # Pflichtfelder gelten fuer den Stand nach dem Zusammenfuehren (die Oberflaeche schickt nur
-    # Geaendertes); ein Standardwert im Schema zaehlt wie in der Einrichtungs-Pruefung als gesetzt.
+    # Pflichtfelder gelten für den Stand nach dem Zusammenführen (die Oberfläche schickt nur Geändertes);
+    # ein Standardwert im Schema zählt wie in der Einrichtungsprüfung als gesetzt.
     required = [k for k in schema.get("required") or [] if (known.get(k) or {}).get("default") is None]
     _check(merged, {"type": "object", "properties": {}, "required": required}, "Einstellungen")
     changed = sorted(k for k in incoming if stored.get(k) != merged.get(k))
 
-    # Ein Geheimnis gehoert zu seinem Ziel: wer die Adresse aendert, gibt es neu ein.
+    # Ein Geheimnis gehört zu seinem Ziel: wer die Adresse ändert, gibt es neu ein.
     # Gemeldet (Antwort und Protokoll) wird nur, was wirklich im Tresor lag.
     cleared = []
     for label in extension_setup.secrets_to_clear(schema, stored, merged):
@@ -349,7 +317,7 @@ async def put_extension_settings(
 
     loaded = get_extension_runtime().loaded.get(ext_id)
     if loaded is not None:
-        # Eigene Session der Extension; sie ruft danach on_settings_changed auf.
+        # Über die Extension speichern: ihre eigene Session ruft danach on_settings_changed auf.
         await session.commit()
         await loaded.ctx.settings.set(merged)
         await session.refresh(record)
@@ -377,7 +345,7 @@ async def put_extension_secret(
     if slot is None:
         raise HTTPException(status_code=422, detail="Dieses Geheimnis gehört nicht zu dieser Erweiterung.")
     if extension_setup.secret_target_missing(schema, values, slot):
-        # Ohne gespeichertes Ziel gehoert das Geheimnis zu keinem Server; es bekaeme sonst die
+        # Ohne gespeichertes Ziel gehört das Geheimnis zu keinem Server; es bekäme sonst die
         # Adresse, die später als Erstes eingetragen wird (auch die eines fremden Servers).
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -402,8 +370,8 @@ async def put_extension_secret(
 
 @router.delete("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_extension_secret(ext_id: str, label: str, session: SessionDep, user: CurrentUser) -> None:
-    """Entfernt ein Geheimnis der Erweiterung (nur Labels aus `x-secrets`). Idempotent:
-    ein nicht gesetztes Geheimnis ist kein Fehler."""
+    """Entfernt ein Geheimnis der Erweiterung (nur Labels aus `x-secrets`). Idempotent: ein nicht gesetztes
+    Geheimnis ist kein Fehler."""
     ext_id, record = await _record(session, ext_id, change=True)
     allowed = {s["label"] for s in _secret_slots_spec(schema_for(ext_id), dict(record.settings or {}))}
     if label not in allowed:
@@ -420,8 +388,8 @@ async def delete_extension_secret(ext_id: str, label: str, session: SessionDep, 
 
 
 async def _known_secret_values(session, settings, ext_id: str, values: dict[str, Any]) -> list[str]:  # noqa: ANN001
-    """Die Klartexte der Geheimnisse dieser Erweiterung -- nur, um sie aus Fehlertexten zu
-    schwaerzen (`extension_test.scrub`). Verlassen diese Funktion nie."""
+    """Klartexte der Geheimnisse dieser Erweiterung, nur um sie aus Fehlertexten zu schwärzen
+    (`extension_test.scrub`). Sie verlassen diese Funktion nie."""
     keyring = vault.load_keyring(settings)
     out: list[str] = []
     for spec in _secret_slots_spec(schema_for(ext_id), values):
@@ -443,9 +411,8 @@ async def test_extension(
     user: CurrentUser,
     payload: Annotated[TestIn, Body()] = TestIn(),
 ) -> TestOut:
-    """Verbindung der Erweiterung pruefen. Gleiches Recht wie beim Bearbeiten der
-    Einstellungen (`extensions.manage`). Das Ergebnis wird als „letzter Test“ gemerkt
-    (`needs_setup` in der Erweiterungsliste) und im Protokoll vermerkt."""
+    """Verbindung der Erweiterung prüfen, mit dem Recht zum Bearbeiten der Einstellungen (`extensions.manage`).
+    Das Ergebnis wird als „letzter Test“ gemerkt (`needs_setup` in der Erweiterungsliste) und protokolliert."""
     ext_id, record = await _record(session, ext_id, change=True)
     runtime = get_extension_runtime()
     loaded = runtime.loaded.get(ext_id)
@@ -478,7 +445,7 @@ async def test_extension(
         outcome = await extension_test.run_connection_test(
             loaded, settings=values, schema=schema, secrets=secrets, channel=channel
         )
-    del secrets  # nach dem Schwaerzen nicht laenger als noetig im Speicher halten
+    del secrets  # nach dem Schwärzen nicht länger als nötig im Speicher halten
 
     await extension_setup.save_last_test(session, ext_id, ok=outcome.ok, message=outcome.message)
     await audit_service.log(

@@ -1,53 +1,5 @@
-"""Zustandswaechter: meldet von selbst, wenn etwas kippt --
-Verbindung/Knoten nicht erreichbar, Datentraeger mit SMART-Befund oder fast
-verschlissen, Speicher-Pool fast voll -- und wenn es wieder in Ordnung ist. Landet im Kern-Benachrichtigungs-
-Center ("Meldungen") und von dort in jedem aktiven Benachrichtigungskanal.
-
-Nur Zustandswechsel werden gemeldet, nie derselbe Zustand alle 5 Minuten erneut. Der
-Zustand liegt in `data_dir/watch-state.json`, damit ein Deploy/Neustart von Nodvard
-Deck keine Meldungsflut ausloest.
-
-Entprellung: Knoten, die planmaessig neu starten, sind jeweils ~2-4 Minuten weg.
-Erreichbarkeit wird deshalb erst nach
-`UNREACHABLE_STREAK` aufeinanderfolgenden Fehlpruefungen (bei 5-Minuten-Takt also
->= 10 Minuten) gemeldet -- ein normaler Neustart bleibt still.
-
-Speicher-Pools: je Pool eine Meldung, wenn die Belegung `storage_warn_percent` (Standard 90)
-erreicht -- ab `STORAGE_CRITICAL` Prozent als "kritisch", und wenn ein schon gemeldeter Pool spaeter
-diese Marke erreicht, einmal erneut als "kritisch". Die Entwarnung kommt erst, wenn die
-Belegung mindestens `STORAGE_HYSTERESIS` Punkte unter der Schwelle liegt (sonst gaebe es um
-die Grenze herum eine Meldungsflut). Gemessen wird in ganzen Prozent, so wie sie in der Meldung
-stehen. Ein geteilter Speicher (NFS ...) steht in der Antwort jedes Knotens, zaehlt aber nur
-einmal (am ersten Knoten, auf dem er Werte liefert). Nicht aktive Speicher und solche ohne Groesse sind
-"unbekannt": sie aendern nichts, weder Meldung noch Entwarnung. `storage_skip` nimmt Speicher
-nach Namen ganz aus (z. B. eine absichtlich volle ISO-Ablage). Zwei Pruefungen in Folge
-(`STORAGE_STREAK`) -- ein kurzer Spitzenwert, etwa waehrend ein Backup auf einen lokalen
-Speicher laeuft, bleibt still.
-
-ZFS-Pools: jeder Pool, der nicht ONLINE ist (DEGRADED als Warnung, FAULTED/UNAVAIL/SUSPENDED/REMOVED als
-"kritisch"; wird ein gemeldeter Pool spaeter kritisch, einmal erneut). Ein Pool ohne lesbaren Zustand aendert nichts.
-Fehlt ein Pool, den der Waechter auf diesem Knoten schon gesehen hat, in einer erfolgreichen Abfrage (nach einem
-Neustart nicht eingebunden, alle Platten weg), meldet er das nach `ZFS_GONE_STREAK` Pruefungen als "kritisch" und
-entwarnt, sobald der Pool wieder da ist. Ist er `ZFS_FORGET_SECONDS` lang weg, gilt er als absichtlich entfernt und
-wird ohne weitere Meldung vergessen. Eine gescheiterte Abfrage und ein Knoten offline aendern daran nichts.
-
-Temperatur der Datentraeger: ab `disk_temp_warn_c` (nicht gesetzt: HDD 55 °C, SSD 65 °C, NVMe 70 °C), siehe
-`DISK_TEMP_STREAK` und `TEMP_HYSTERESIS`. Ohne Messwert aendert sich nichts. Die Knotenseite faerbt mit derselben
-Schwelle (`node_health.temperature_limit`).
-
-Wartungsfenster: die Meldungen tragen die Host-ID des Knotens, ein Fenster des Kerns
-stellt sie dann stumm (der Verlaufseintrag bleibt). `ctx.notify.send()` sagt, ob das
-passiert ist; dann steht der Zustand auf "stumm gemeldet". Bei den folgenden Pruefungen
-fragt der Waechter nur `ctx.notify.would_suppress()` (legt nichts an, also kein
-Verlaufseintrag je Pruefung). Ist das Fenster vorbei und der Zustand noch schlecht, kommt
-die Meldung einmal hoerbar nach ("... (seit dem Wartungsfenster)"). Ist er schon im
-Fenster wieder gut, kommt nichts nach; die Entwarnung laeuft wie jede Meldung durch die
-Fensterpruefung. Die Entwarnung richtet sich nach der Ausfallmeldung: War der Ausfall
-hoerbar und faellt nur die Entwarnung ins Fenster, kommt sie nach dem Fenster einmal
-hoerbar nach ("... (im Wartungsfenster)") -- einen gehoerten Alarm schliesst immer eine
-gehoerte Entwarnung, aber nicht mitten in der Nacht (docs/02-EXTENSION-API.md §2,
-"Meldungen und Wartungsfenster").
-"""
+"""Zustandswächter: meldet von selbst, wenn etwas kippt (Verbindung, Knoten, Datenträger, Speicher, ZFS, Temperatur) und
+wenn es wieder in Ordnung ist, über das Meldungs-Center des Kerns. Gemeldet werden nur Zustandswechsel."""
 
 from __future__ import annotations
 
@@ -76,19 +28,22 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("nodvard_deck.ext.proxmox")
 
+# Knoten, die planmäßig neu starten, sind je ~2-4 Minuten weg: Erreichbarkeit wird erst nach so vielen Fehlprüfungen in
+# Folge gemeldet (bei 5-Minuten-Takt ab 10 Minuten), ein normaler Neustart bleibt still.
 UNREACHABLE_STREAK = 3
 DISK_STREAK = 1
+# Zwei Prüfungen in Folge, damit ein kurzer Spitzenwert (etwa während ein Backup auf einen lokalen Speicher läuft) still bleibt.
 STORAGE_STREAK = 2
+# Die Temperatur schwankt: erst nach drei Prüfungen in Folge (10 bis 15 Minuten) melden, wieder normal erst
+# `TEMP_HYSTERESIS` Grad unter der Schwelle.
 DISK_TEMP_STREAK = 3
-"""Temperatur schwankt: erst nach drei Pruefungen in Folge (10 bis 15 Minuten) eine Meldung, wieder normal erst
-`TEMP_HYSTERESIS` Grad unter der Schwelle -- so flattert nichts."""
+# Ein ZFS-Pool wechselt seinen Zustand nicht von selbst hin und her: sofort melden.
 ZFS_STREAK = 1
-"""Ein ZFS-Pool wechselt seinen Zustand nicht von selbst hin und her: sofort melden."""
+# Ein fehlender Pool wird erst nach zwei Prüfungen in Folge gemeldet (kurz nach dem Start des Knotens kann er noch beim
+# Einbinden sein).
 ZFS_GONE_STREAK = 2
-"""Ein Pool fehlt in der Liste: erst nach zwei Pruefungen in Folge melden (ein Pool kann kurz nach dem Start des
-Knotens noch beim Einbinden sein)."""
+# So lange ohne einen bekannten Pool, dann gilt er als absichtlich entfernt und wird vergessen.
 ZFS_FORGET_SECONDS = 7 * 86400
-"""So lange ohne einen bekannten Pool, dann gilt er als absichtlich entfernt und wird vergessen."""
 
 PAGE_PATH = "/ext/proxmox/nodes"
 STORAGE_WARN_DEFAULT = 90
@@ -106,10 +61,9 @@ RECOVERED_IN_WINDOW = "Schon im Wartungsfenster wieder in Ordnung (dort nur im V
 
 
 class AlertState:
-    """Pro Schluessel: wie oft in Folge schlecht, ob schon gemeldet wurde, ob diese
-    Meldung ein Wartungsfenster stumm geschaltet hat (`muted`, dazu `host`: der Host, fuer
-    den das Fenster galt) und ob nach einem hoerbaren Ausfall eine im Fenster stumme
-    Entwarnung aussteht (`ok_pending`: Host-ID)."""
+    """Pro Schlüssel: wie oft in Folge schlecht, ob schon gemeldet wurde, ob die Meldung ein Wartungsfenster stumm
+    geschaltet hat (`muted`, dazu `host`: der Host, für den das Fenster galt) und ob nach einem hörbaren Ausfall eine im
+    Fenster stumme Entwarnung aussteht (`ok_pending`: Host-ID)."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -129,7 +83,7 @@ class AlertState:
             entry["streak"] += 1
             if not entry["alerted"] and entry["streak"] >= threshold:
                 entry["alerted"] = True
-                entry.pop("ok_pending", None)  # neue Stoerung: die ausstehende Entwarnung ist ueberholt
+                entry.pop("ok_pending", None)  # neue Störung: die ausstehende Entwarnung ist überholt
                 return "alert"
             return None
         was_alerted = entry["alerted"]
@@ -143,10 +97,9 @@ class AlertState:
         return bool(self._data.get(key, {}).get("muted"))
 
     def muted_host(self, key: str) -> str | None:
-        """Host, fuer den das Fenster die Meldung stumm geschaltet hat. Damit bleibt die
-        Frage "Fenster vorbei?" richtig, auch wenn die Host-Zuordnung gerade nicht lesbar
-        ist -- sonst kaemen alle stummen Meldungen sofort hoerbar, womoeglich mitten im
-        Fenster."""
+        """Host, für den das Fenster die Meldung stumm geschaltet hat. Damit bleibt die Frage "Fenster vorbei?" richtig,
+        auch wenn die Host-Zuordnung gerade nicht lesbar ist, sonst kämen alle stummen Meldungen sofort hörbar, womöglich
+        mitten im Fenster."""
         return self._data.get(key, {}).get("host")
 
     def set_muted(self, key: str, muted: bool, host_id: str | None) -> None:
@@ -162,12 +115,12 @@ class AlertState:
         return bool(self._data.get(key, {}).get("alerted"))
 
     def critical(self, key: str) -> bool:
-        """Die Meldung steht auf "kritisch" (nur bei Speicher-Pools, siehe `set_critical`)."""
+        """Die Meldung steht auf "kritisch" (Speicher-Pools und ZFS, siehe `set_critical`)."""
         return bool(self._data.get(key, {}).get("crit"))
 
     def set_critical(self, key: str, critical: bool) -> None:
-        """Merkt sich, ob ein gemeldeter Zustand schon als "kritisch" gemeldet wurde. Nur fuer
-        gemeldete Zustaende; sonst gibt es nichts zu merken."""
+        """Merkt sich, ob ein gemeldeter Zustand schon als "kritisch" gemeldet wurde. Nur für gemeldete Zustände, sonst gibt
+        es nichts zu merken."""
         entry = self._data.get(key)
         if entry is None or not entry.get("alerted"):
             return
@@ -177,15 +130,15 @@ class AlertState:
             entry.pop("crit", None)
 
     def rearm(self, key: str, threshold: int) -> None:
-        """Ein schon gemeldeter Zustand ist schlimmer geworden: die naechste schlechte Pruefung
-        meldet ihn noch einmal (`observe` liefert wieder "alert")."""
+        """Ein schon gemeldeter Zustand ist schlimmer geworden: die nächste schlechte Prüfung meldet ihn noch einmal
+        (`observe` liefert wieder "alert")."""
         entry = self._data.get(key)
         if entry is not None and entry.get("alerted"):
             entry["alerted"] = False
             entry["streak"] = threshold - 1
 
     def seen(self, key: str) -> dict[str, float]:
-        """Was der Waechter unter `key` zuletzt gesehen hat: Name -> Zeitpunkt (Sekunden). Kein Meldungszustand."""
+        """Was der Wächter unter `key` zuletzt gesehen hat: Name -> Zeitpunkt (Sekunden). Kein Meldungszustand."""
         raw = self._data.get(key, {}).get("seen")
         if not isinstance(raw, dict):
             return {}
@@ -207,8 +160,8 @@ class AlertState:
         return self._data.get(key, {}).get("ok_pending")
 
     def set_ok_pending(self, key: str, host_id: str | None) -> None:
-        """Entwarnung im Fenster stumm, der Ausfall davor war hoerbar: nach dem Fenster
-        einmal nachholen (`host_id`). Mit None erledigt."""
+        """Entwarnung im Fenster stumm, der Ausfall davor war hörbar: nach dem Fenster einmal nachholen (`host_id`).
+        Mit None erledigt."""
         if host_id:
             self._data[key] = {"streak": 0, "alerted": False, "ok_pending": host_id}
         elif self._data.get(key, {}).get("ok_pending") and not self._data[key].get("alerted"):
@@ -220,23 +173,20 @@ def _now() -> float:
 
 
 async def _node_host_ids(ctx: "ExtensionContext") -> dict[str, str]:
-    """`provider_ref` ("<Verbindung>/node/<Knoten>") -> Host-ID der von Proxmox
-    entdeckten Knoten. Der Kern unterdrueckt Meldungen im Wartungsfenster nur ueber
-    `payload.host_id` -- ohne den Host blieben Knoten-/Verbindungsmeldungen beim
-    nächtlichen Neustart trotz Fenster hörbar. Ein Fehler hier darf die Meldung selbst
-    nie verhindern: dann geht sie eben ohne Host-Bezug raus."""
+    """`provider_ref` ("<Verbindung>/node/<Knoten>") -> Host-ID der von Proxmox entdeckten Knoten. Der Kern unterdrückt
+    Meldungen im Wartungsfenster nur über `payload.host_id`; ein Fehler hier darf die Meldung selbst nie verhindern, sie
+    geht dann ohne Host-Bezug raus."""
     try:
         hosts = await ctx.hosts.list(tag="node")
-    except Exception:  # noqa: BLE001 - Wartungsfenster sind ein Extra, der Waechter muss weitermelden
+    except Exception:  # noqa: BLE001 - Wartungsfenster sind ein Extra, der Wächter muss weitermelden
         _log.warning("Proxmox-Wächter: Knoten-Hosts nicht lesbar, Meldungen ohne Host-Bezug.", exc_info=True)
         return {}
     return {h.provider_ref: h.id for h in hosts if h.provider_ext_id == "proxmox" and h.provider_ref}
 
 
 def _connection_host_id(node_hosts: dict[str, str], conn_name: str) -> str | None:
-    """Host der Verbindung -- nur eindeutig, wenn sie genau einen Knoten hat (pve1 und
-    pve2 sind je eine eigene Verbindung). Bei einem Cluster steht kein einzelner Host
-    fuer die Verbindung, dann bleibt die Meldung ohne Host-Bezug (nie faelschlich still)."""
+    """Host der Verbindung, nur eindeutig, wenn sie genau einen Knoten hat. Bei einem Cluster steht kein einzelner Host
+    für die Verbindung, dann bleibt die Meldung ohne Host-Bezug (nie fälschlich still)."""
     ids = [host_id for ref, host_id in node_hosts.items() if ref.startswith(f"{conn_name}/node/")]
     return ids[0] if len(ids) == 1 else None
 
@@ -245,9 +195,8 @@ async def _send(
     ctx: "ExtensionContext", severity: Severity, title: str, body: str, key: str, host_id: str | None = None,
     path: str | None = None,
 ) -> bool:
-    """-> True, wenn ein Wartungsfenster den Push unterdrueckt hat (nur im Verlauf).
-    Aeltere Kerne liefern kein Ergebnis -- dann gilt die Meldung als zugestellt.
-    `path`: Seite, die ein Tipp auf die Meldung oeffnet (Konvention im `payload`)."""
+    """-> True, wenn ein Wartungsfenster den Push unterdrückt hat (nur im Verlauf). Ältere Kerne liefern kein Ergebnis,
+    dann gilt die Meldung als zugestellt. `path`: Seite, die ein Tipp auf die Meldung öffnet (Konvention im `payload`)."""
     payload: dict[str, Any] = {"host_id": host_id} if host_id else {}
     if path:
         payload["path"] = path
@@ -258,25 +207,25 @@ async def _send(
 
 
 async def _still_silenced(ctx: "ExtensionContext", host_id: str | None) -> bool:
-    """Laeuft das Wartungsfenster fuer diesen Host noch? Nur fragen, nichts anlegen. Im
-    Zweifel (Fehler) False: lieber einmal zu viel melden als eine Meldung verlieren."""
+    """Läuft das Wartungsfenster für diesen Host noch? Nur fragen (`would_suppress`), nichts anlegen, damit nicht je Prüfung
+    ein Verlaufseintrag entsteht. Im Zweifel (Fehler) False: lieber einmal zu viel melden als eine Meldung verlieren."""
     if not host_id:
         return False
     try:
         return await ctx.notify.would_suppress(host_id=host_id) is True
-    except Exception:  # noqa: BLE001 - Nachmeldung ist ein Extra, der Waechter muss weiterlaufen
+    except Exception:  # noqa: BLE001 - Nachmeldung ist ein Extra, der Wächter muss weiterlaufen
         _log.warning("Proxmox-Wächter: Wartungsfenster nicht prüfbar, Meldung kommt hörbar.", exc_info=True)
         return False
 
 
 def _whole(value: float) -> int:
-    """Kaufmaennisch gerundet -- die Zahl, die in der Meldung steht, entscheidet auch."""
+    """Kaufmännisch gerundet, denn die Zahl in der Meldung entscheidet auch."""
     return int(value + 0.5)
 
 
 def _setting_int(raw: Any, default: int, low: int, high: int) -> int:
-    """Ganze Zahl im erlaubten Bereich; alles andere (Text, Bruch, ausserhalb, nichts) gilt als
-    nicht gesetzt und ergibt den Standard -- ein falscher Wert darf den Waechter nie lahmlegen."""
+    """Ganze Zahl im erlaubten Bereich; alles andere (Text, Bruch, außerhalb, nichts) gilt als nicht gesetzt und ergibt
+    den Standard, denn ein falscher Wert darf den Wächter nie lahmlegen."""
     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
         return default
     try:
@@ -287,15 +236,16 @@ def _setting_int(raw: Any, default: int, low: int, high: int) -> int:
 
 
 def _skip_names(raw: Any) -> set[str]:
+    """Namen aus `storage_skip` (klein geschrieben): diese Speicher sind ganz ausgenommen, z. B. eine absichtlich volle ISO-Ablage."""
     if not isinstance(raw, list):
         return set()
     return {item.strip().lower() for item in raw if isinstance(item, str) and item.strip()}
 
 
 def _pool_reading(pool: dict[str, Any]) -> tuple[int, float, float] | None:
-    """(ganze Prozent, belegt, gesamt) oder None, wenn der Speicher gerade nichts Verlaessliches
-    sagt: nicht aktiv, abgeschaltet oder ohne Groesse (ein nicht erreichbares NFS-Ziel meldet
-    keine Zahlen). Solche Speicher gelten als "unbekannt", nie als "voll"."""
+    """(ganze Prozent, belegt, gesamt) oder None, wenn der Speicher gerade nichts Verlässliches sagt: nicht aktiv,
+    abgeschaltet oder ohne Größe (ein nicht erreichbares NFS-Ziel meldet keine Zahlen). Solche Speicher gelten als
+    "unbekannt", nie als "voll"."""
     for field in ("active", "enabled"):
         if str(pool.get(field, 1)).strip().lower() in ("0", "false", "none", ""):
             return None
@@ -325,6 +275,7 @@ def _pool_alert(
 
 
 async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
+    # Der Zustand liegt in einer Datei, damit ein Deploy oder Neustart von Nodvard Deck keine Meldungsflut auslöst.
     state = AlertState(Path(str(ctx.data_dir)) / "watch-state.json")
     settings = await ctx.settings.get()
     storage_warn = _setting_int(settings.get("storage_warn_percent"), STORAGE_WARN_DEFAULT, STORAGE_WARN_MIN, STORAGE_WARN_MAX)
@@ -339,15 +290,14 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
         key: str, bad: bool, threshold: int, alert: tuple[Severity, str, str], ok_title: str, host_id: str | None,
         late_body: str | None = None, ok_note: str | None = None, path: str | None = None,
     ) -> None:
-        """`late_body`: Text fuer die Nachmeldung nach dem Fenster, wenn der normale Text
-        dafuer nicht passt (z. B. "~10 Minuten" nach einem einstuendigen Fenster).
-        `ok_note`: Zusatz zum Standardtext der Entwarnung. `path`: Seite hinter der Meldung."""
+        """Verbucht eine Prüfung und meldet den Wechsel. Fällt eine Meldung in ein Wartungsfenster, ist sie stumm (nur im
+        Verlauf) und kommt nach dem Fenster einmal hörbar nach, wenn der Zustand noch besteht. `late_body`: Text dafür,
+        `ok_note`: Zusatz zur Entwarnung, `path`: Seite hinter der Meldung."""
         nonlocal sent, checked
         note = f" {ok_note}" if ok_note else ""
         checked += 1
         was_muted = state.muted(key)
-        # Host der stummen Meldung bzw. der ausstehenden Entwarnung -- vor observe(), das
-        # den Eintrag bei "wieder gut" entfernt.
+        # Host der stummen Meldung bzw. der ausstehenden Entwarnung, vor observe(), das den Eintrag bei "wieder gut" entfernt.
         scope = host_id or state.muted_host(key)
         pending_ok = state.ok_pending(key)
         change = state.observe(key, bad, threshold)
@@ -359,19 +309,19 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
                 ctx, Severity.INFO, ok_title, (RECOVERED_AFTER_WINDOW if was_muted else RECOVERED) + note, key, scope, path,
             )
             if muted and not was_muted:
-                # Den Ausfall hat man gehoert, nur die Entwarnung fiel ins Fenster: nach dem
-                # Fenster einmal hoerbar nachholen, damit der Alarm nicht offen bleibt.
+                # Den Ausfall hat man gehört, nur die Entwarnung fiel ins Fenster: nach dem Fenster einmal hörbar nachholen,
+                # damit der Alarm nicht offen bleibt.
                 state.set_ok_pending(key, scope)
             sent += 1
         elif bad and was_muted and not await _still_silenced(ctx, state.muted_host(key) or host_id):
-            # Im Wartungsfenster nur still gemeldet, Fenster vorbei, Zustand noch da:
-            # jetzt einmal hoerbar. Faellt auch das in ein Fenster, bleibt es "stumm".
+            # Im Wartungsfenster nur still gemeldet, Fenster vorbei, Zustand noch da: jetzt einmal hörbar. Fällt auch das in
+            # ein Fenster, bleibt es "stumm".
             state.set_muted(key, await _send(
                 ctx, alert[0], alert[1] + AFTER_WINDOW_TITLE, f"{late_body or alert[2]}\n{AFTER_WINDOW_NOTE}", key, scope, path,
             ), scope)
             sent += 1
         elif not bad and pending_ok and not await _still_silenced(ctx, pending_ok):
-            # Entwarnung aus dem Fenster, Zustand weiter gut: jetzt einmal hoerbar.
+            # Entwarnung aus dem Fenster, Zustand weiter gut: jetzt einmal hörbar.
             muted = await _send(
                 ctx, Severity.INFO, ok_title + IN_WINDOW_TITLE, RECOVERED_IN_WINDOW + note, key, host_id or pending_ok, path,
             )
@@ -384,8 +334,8 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
     ) -> None:
         percent, used, total = reading
         where = f"(geteilt, {conn_name})" if shared else f"auf {node_name}"
-        # Einmal gemeldet, gilt der Speicher erst als in Ordnung, wenn er STORAGE_HYSTERESIS Punkte
-        # unter der Schwelle liegt. Dazwischen bleibt er "schlecht" -- ohne neue Meldung.
+        # Einmal gemeldet, gilt der Speicher erst als in Ordnung, wenn er STORAGE_HYSTERESIS Punkte unter der Schwelle liegt
+        # (sonst Meldungsflut um die Grenze). Dazwischen bleibt er "schlecht", ohne neue Meldung.
         was_alerted = state.alerted(key)
         bad = percent >= storage_warn or (was_alerted and percent > storage_warn - STORAGE_HYSTERESIS)
         was_critical = state.critical(key)
@@ -406,7 +356,7 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
     async def check_temperature(conn_name: str, node_name: str, node_host_id: str | None, disk: dict[str, Any]) -> None:
         temp = disk.get("temperature_c")
         if not isinstance(temp, int) or isinstance(temp, bool):
-            return  # kein Messwert: nichts aendert sich
+            return  # kein Messwert: nichts ändert sich
         key = f"disktemp:{conn_name}/{node_name}/{disk['devpath']}"
         limit = temperature_limit(disk.get("type"), temp_setting)
         bad = temp >= limit or (state.alerted(key) and temp > limit - TEMP_HYSTERESIS)
@@ -442,8 +392,9 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
         state.set_critical(key, critical)
 
     async def check_zfs_gone(conn_name: str, node_name: str, node_host_id: str | None, present: set[str]) -> None:
-        """Pools, die der Waechter auf diesem Knoten schon gesehen hat und die jetzt fehlen (siehe Modul-Docstring).
-        Nur nach einer erfolgreichen Abfrage aufrufen."""
+        """Pools, die der Wächter auf diesem Knoten schon gesehen hat und die jetzt fehlen (nicht eingebunden, Platten weg).
+        Nur nach einer erfolgreichen Abfrage aufrufen: eine gescheiterte Abfrage und ein Knoten offline ändern nichts;
+        nach `ZFS_FORGET_SECONDS` gilt ein fehlender Pool als absichtlich entfernt."""
         seen_key = f"zfsseen:{conn_name}/{node_name}"
         seen = state.seen(seen_key)
         for name in present:
@@ -473,7 +424,7 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
             conn_error = None
         except ProxmoxApiError as exc:
             nodes, conn_error = [], str(exc)
-        pools_complete = conn_error is None  # nur dann ist "Speicher nicht mehr da" verlaesslich
+        pools_complete = conn_error is None  # nur dann ist "Speicher nicht mehr da" verlässlich
         pools_seen: set[str] = set()
         shared_done: set[str] = set()
         await handle(
@@ -514,14 +465,14 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
                 if reading is None or pool_key in shared_done:
                     continue
                 if shared:
-                    shared_done.add(pool_key)  # derselbe Speicher steht bei jedem Knoten -- nur einmal zaehlen
+                    shared_done.add(pool_key)  # derselbe Speicher steht bei jedem Knoten, nur einmal zählen
                 await check_pool(conn_name, node_name, node_host_id, pool_key, name, shared, reading)
             try:
                 disks = await collect_disks(connector, conn_name, node_name, temp_setting)
             except ProxmoxApiError:
-                disks = []  # Datentraeger-Abfrage allein ist kein Alarmgrund
+                disks = []  # Datenträger-Abfrage allein ist kein Alarmgrund
             for disk in disks:
-                # Temperatur nicht hier: sie schwankt und hat eine eigene Pruefung mit Abstand (`check_temperature`).
+                # Temperatur nicht hier: sie schwankt und hat eine eigene Prüfung mit Abstand (`check_temperature`).
                 bad = disk["tone"] in ("danger", "warn") and not disk["badge"].endswith("°C")
                 await handle(
                     f"disk:{conn_name}/{node_name}/{disk['devpath']}", bad, DISK_STREAK,
@@ -539,8 +490,8 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
                 await check_zfs(conn_name, node_name, node_host_id, pool)
             await check_zfs_gone(conn_name, node_name, node_host_id, {pool["name"] for pool in pools})
         if pools_complete:
-            # Gibt es einen Speicher nicht mehr (oder steht er jetzt auf der Ausnahmeliste), faellt sein
-            # Zustand weg -- aber nur, wenn alle Knoten der Verbindung geantwortet haben.
+            # Gibt es einen Speicher nicht mehr (oder steht er jetzt auf der Ausnahmeliste), fällt sein Zustand weg, aber nur,
+            # wenn alle Knoten der Verbindung geantwortet haben.
             for stale in [k for k in state.keys(f"storage:{conn_name}/") if k not in pools_seen]:
                 state.forget(stale)
     state.save()

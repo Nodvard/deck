@@ -1,35 +1,4 @@
-"""Globale Einstellungen -- docs/04-API.md (`GET /settings`, `PUT /settings/{key}`),
-docs/03-DATA-MODEL.md §9.
-
-**Gap-Fill-Entscheidung (siehe `services.settings` fuer die volle Begruendung):** kein
-bisheriges WP hat diesen Endpunkt gebaut. WP-5 brauchte einen echten Schreibweg fuer
-`autonomy.mode`/`autonomy.max_risk`/`security.deny_patterns` (sonst waere "volle
-Autonomie" nie ueber die echte API vorfuehrbar); WP-6 ergaenzt `maintenance.windows`
-aus demselben Grund -- live gefunden, nicht vorher bedacht: `core.maintenance.
-is_in_window()` liest den Schluessel bereits, aber ohne diese Ergaenzung gaebe es
-keinen Weg, ein Fenster ueber die echte API zu setzen, "symmetrisch angewandt" waere
-nur automatisiert, nie live zu zeigen gewesen. Bewusst weiterhin NICHT `branding.*`
-(eigener Endpunkt, docs/01 §6) und NICHT `notifications.defaults`/`locale.default`
-(kein Aufrufer braucht sie bisher). Ein generischer Beliebiger-Schluessel-Store waere
-hier mehr, als irgendein Aufrufer aktuell verlangt.
-
-**System (seit der Runde "Zeitzone und Aufbewahrung"):** `system.timezone` (Zeitzone aller Zeitplaene
-und Wartungsfenster, Vorgabe aus `NODVARD_DECK_TIMEZONE`/`TZ`) und `audit.retention_days` (7 bis
-3650 Tage, Rueckfall `NODVARD_DECK_AUDIT_RETENTION_DAYS`) sowie `jobs.run_retention_days` (1 bis 3650
-Tage, Vorgabe 30: wie lange Job-Laeufe samt Protokolldateien stehen bleiben, `services.job_retention`) sowie
-`notifications.retention_days` (1 bis 3650 Tage, Vorgabe 90: ab wann der naechtliche Kern-Job alte Meldungen loescht;
-ungelesene kritische bleiben stehen, `services.notification_retention`).
-`system.update_check.enabled`/`.channel` steuern "Nach Updates suchen" (`services.update_check`).
-`system.trusted_proxies` (Liste von Adressen/Netzen, `core.trusted_proxies`) sagt, wessen `X-Forwarded-*` gelten; der
-neue Wert greift sofort (`api/proxy_headers.py` liest ihn aus dem Speicher). Die Zeitzone hat einen Nebeneffekt
-(`core.timezone.set_timezone`: Jobs umstellen, neu planen); alle landen als
-`system.settings.changed` im Protokoll. Ebenso die vier Schluessel, die das Freigabe-Gate steuern
-(`autonomy.mode`, `autonomy.max_risk`, `security.deny_patterns`, `maintenance.windows`).
-
-Permission: `settings.write` fuer BEIDE Richtungen -- docs/03 §1 listet nur diesen
-einen Schluessel (kein separates `settings.read`), Lesen und Schreiben globaler
-Einstellungen ist in dieser Runde eine einheitlich administrative Angelegenheit.
-"""
+"""Globale Einstellungen (`GET /settings`, `PUT /settings/{key}`; docs/04-API.md, docs/03-DATA-MODEL.md)."""
 
 from __future__ import annotations
 
@@ -52,12 +21,14 @@ from ...services import settings as settings_service
 from ...services import update_check as update_check_service
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 
+# `settings.write` gilt für Lesen und Schreiben: docs/03-DATA-MODEL.md kennt kein eigenes `settings.read`.
 router = APIRouter(
     prefix="/settings",
     tags=["settings"],
     dependencies=[Depends(require_permission("settings.write"))],
 )
 
+# Nur diese Schlüssel, kein generischer Store; `branding.*` hat einen eigenen Endpunkt.
 _MANAGED_KEYS: dict[str, type] = {
     "autonomy.mode": str,
     "autonomy.max_risk": str,
@@ -88,8 +59,7 @@ _DEFAULTS: dict[str, Any] = {
     "ssh.confirm_new_host_keys": False,
     "system.trusted_proxies": [],
 }
-"""Feste Vorgaben. `system.timezone` und `audit.retention_days` haben keine feste: ihre Vorgabe
-kommt aus der Umgebung (`_default_for`)."""
+"""Feste Vorgaben; `system.timezone` und `audit.retention_days` kommen aus der Umgebung (`_default_for`)."""
 _AUDITED_KEYS = {
     "autonomy.mode", "autonomy.max_risk", "security.deny_patterns", "maintenance.windows",
     "system.timezone", "audit.retention_days", "jobs.run_retention_days", "notifications.retention_days",
@@ -97,10 +67,10 @@ _AUDITED_KEYS = {
     "system.update_check.channel", "ssh.confirm_new_host_keys", "system.trusted_proxies",
 }
 """Diese Einstellungen landen mit altem und neuem Wert im Protokoll (`system.settings.changed`).
-Dazu gehoeren die vier, die das Freigabe-Gate steuern: wer die Autonomie lockert oder Sperrmuster
-und Wartungsfenster aendert, hinterlaesst eine Spur."""
+Dazu gehören die vier, die das Freigabe-Gate steuern: wer die Autonomie lockert oder Sperrmuster
+und Wartungsfenster ändert, hinterlässt eine Spur."""
 _AUDIT_MAX_JSON_CHARS = 8000
-"""Laenger darf eine Liste im Protokoll nicht werden (JSON-Zeichen)."""
+"""Länger darf eine Liste im Protokoll nicht werden (JSON-Zeichen)."""
 _REACHABILITY_KEYS = {"hosts.reachability.enabled", "hosts.reachability.interval_minutes"}
 _UPDATE_CHECK_JOB_KEYS = {"system.update_check.enabled"}
 _VALID_AUTONOMY_MODES = {"propose", "full"}
@@ -108,9 +78,8 @@ _VALID_RISKS = {"low", "medium", "high", "critical"}
 
 
 def _audit_value(value: Any) -> Any:
-    """Der Wert fuers Protokoll. Sperrmuster und Wartungsfenster sind Listen ohne Obergrenze; eine
-    sehr lange steht nur mit ihrer Laenge da (`{"truncated": true, "count": n}`), damit eine einzelne
-    Zeile nicht beliebig waechst. Alle anderen Werte sind kurz und bleiben, wie sie sind."""
+    """Der Wert fürs Protokoll; eine sehr lange Liste (Sperrmuster und Wartungsfenster haben keine Obergrenze) steht
+    nur mit ihrer Länge da (`{"truncated": true, "count": n}`), damit eine Zeile nicht beliebig wächst."""
     if isinstance(value, list) and len(json.dumps(value, ensure_ascii=False)) > _AUDIT_MAX_JSON_CHARS:
         return {"truncated": True, "count": len(value)}
     return value
@@ -161,7 +130,7 @@ async def _default_for(key: str, session: AsyncSession, settings: Settings) -> A
 
 def _validate(key: str, value: Any) -> None:
     expected_type = _MANAGED_KEYS[key]
-    # `bool` ist in Python ein `int` -- `true` ist aber keine Zahl von Tagen.
+    # `bool` ist in Python ein `int`, `true` ist aber keine Zahl von Tagen.
     if not isinstance(value, expected_type) or (expected_type is int and isinstance(value, bool)):
         raise HTTPException(
             status_code=422,
@@ -237,9 +206,9 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
     out: list[SettingOut] = []
     for key in _MANAGED_KEYS:
         if key == "ssh.confirm_new_host_keys" and settings.ssh_confirm_new_host_keys is not None:
-            value = settings.ssh_confirm_new_host_keys  # Umgebungsvariable uebersteuert
+            value = settings.ssh_confirm_new_host_keys  # Umgebungsvariable übersteuert
         elif key == trusted_proxies_service.SETTING_KEY and settings.trusted_proxies is not None:
-            value = trusted_proxies_service.env_entries(settings, warn=False)  # Umgebungsvariable uebersteuert
+            value = trusted_proxies_service.env_entries(settings, warn=False)  # Umgebungsvariable übersteuert
         else:
             value = stored[key] if key in stored else await _default_for(key, session, settings)
         out.append(SettingOut(key=key, value=value))
@@ -260,8 +229,8 @@ async def put_setting(
     user: CurrentUser,
 ) -> SettingOut:
     if key == trusted_proxies_service.SETTING_KEY and not user.is_owner:
-        # Wer hier eintraegt, entscheidet, wessen Angaben zur Absender-Adresse gelten (Sperre, Protokoll, HTTPS):
-        # das ist Sache des Inhabers, nicht jedes Admins. Vor der Pruefung des Werts, damit es immer 403 ist.
+        # Wer hier einträgt, entscheidet, wessen Angaben zur Absender-Adresse gelten (Sperre, Protokoll, HTTPS):
+        # das ist Sache des Inhabers, nicht jedes Admins. Vor der Prüfung des Werts, damit es immer 403 ist.
         await audit_service.log(
             session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="denied",
             target_type="setting", target_id=key, reason="Nur der Inhaber darf die Proxy-Liste ändern.",
@@ -300,8 +269,8 @@ async def put_setting(
         await settings_service.set_global(session, key, value, updated_by_user_id=user.id)
         changed_jobs = None
         if key in _REACHABILITY_KEYS:
-            # Schalter/Intervall betreffen den Kern-Job: neu planen. `schedule()` schreibt `next_run_at`
-            # ueber eine EIGENE Sitzung -- vorher committen, sonst wartet sie auf unsere Schreibsperre (D-14).
+            # Schalter und Intervall betreffen den Kern-Job: neu planen. `schedule()` schreibt `next_run_at` über eine
+            # eigene Sitzung, deshalb vorher committen, sonst wartet sie auf unsere Schreibsperre.
             await session.commit()
             await reachability_service.sync_job()
         if key in _UPDATE_CHECK_JOB_KEYS:
@@ -316,7 +285,7 @@ async def put_setting(
             target_type="setting", target_id=key, detail=detail,
         )
     if key == trusted_proxies_service.SETTING_KEY:
-        # Erst gespeichert, dann gueltig: ohne Neustart, ab der naechsten Anfrage.
+        # Erst gespeichert, dann gültig: ohne Neustart, ab der nächsten Anfrage.
         await session.commit()
         trusted_proxies_service.apply(value)
     return SettingOut(key=key, value=value)

@@ -1,13 +1,6 @@
 """„Verbindung testen“ für Erweiterungen (`POST /extensions/{id}/test`).
 
-Ruft `health()` der Erweiterung auf (und bei Benachrichtigungskanälen `channel.test()`
-bzw. sendet eine Testnachricht) und macht aus dem Ergebnis eine kurze, verständliche
-deutsche Antwort. Technische Fehler werden übersetzt (Zeitüberschreitung, abgelehnte
-Zugangsdaten, Zertifikat, Adresse nicht gefunden …). In den Text kommt nie ein
-Geheimnis: bekannte Werte aus dem Tresor und typische Muster (Bearer-Token, Passwörter in
-Adressen) werden vorher geschwärzt.
-
-Alles hier ist generisch; der Kern kennt keine einzelne Erweiterung.
+Übersetzt `health()` und Kanaltests in kurze deutsche Sätze; Geheimnisse werden vorher geschwärzt. Generisch.
 """
 
 from __future__ import annotations
@@ -24,8 +17,7 @@ from nodvard_sdk.capabilities import NotificationChannel
 
 TEST_TIMEOUT_S = 25.0
 _MAX_TEXT = 300
-_MAX_VERBATIM = 1500
-"""Fuer Saetze, die mehrere Ziele zusammenfassen (`verbatim`): einer je Ziel, deshalb laenger."""
+_MAX_VERBATIM = 1500  # für Sätze, die mehrere Ziele zusammenfassen (`verbatim`): einer je Ziel
 
 _SECRET_KEYS = r"(?:token|password|passwort|passwd|secret|api[_-]?key|apikey|authorization|session(?:[_-]?id)?|cookie)"
 _REDACTIONS: list[tuple[re.Pattern[str], str]] = [
@@ -56,23 +48,20 @@ def scrub(text: str, secrets: list[str] | None = None, *, limit: int = _MAX_TEXT
     return out if len(out) <= limit else out[: limit - 1] + "…"
 
 
-# Quellen, deren Ausnahmetexte Teile der fremden Antwort oder der eigenen Anfrage zitieren (siehe `_text_is_foreign`).
+# Quellen, deren Ausnahmetexte die fremde Antwort oder die eigene Anfrage zitieren können (siehe `_text_is_foreign`).
 _FOREIGN_TEXT_MODULES = frozenset({"httpx", "httpcore", "h11", "idna", "websockets"})
-# Bibliotheken, deren eigene Ausnahmen immer als fremd gelten: unter einem `httpx.RemoteProtocolError` haengen
-# die Fehler von httpcore und h11 mit derselben zitierten Zeile, `websockets` nennt Kopfzeilen und den
-# Schliessgrund der Gegenseite. httpx fehlt hier mit Absicht: seine Verbindungsfehler tragen nur den Text des
-# Betriebssystems (Zertifikat, Namensaufloesung), den die Erkennung braucht; seine fremden Arten stehen in
-# `_text_is_foreign` einzeln.
+# Ausnahmen dieser Bibliotheken gelten immer als fremd (h11 und httpcore zitieren dieselbe Zeile wie der
+# `httpx.RemoteProtocolError` darüber, `websockets` Kopfzeilen und den Schließgrund der Gegenseite). httpx fehlt mit
+# Absicht: Seine Verbindungsfehler tragen nur den Text des Betriebssystems (Zertifikat, Namensauflösung), den die
+# Erkennung braucht; seine fremden Arten stehen einzeln in `_text_is_foreign`.
 _FOREIGN_CLASS_MODULES = frozenset({"httpcore", "h11", "idna", "websockets"})
 _FOREIGN_TEXT_NAMES = frozenset({"InvalidHandshake", "InvalidURI", "InvalidMessage"})  # websockets
 
 
 def _text_is_foreign(exc: BaseException) -> bool:
-    """Ob der Text von `exc` aus der fremden Antwort oder der eigenen Anfrage stammen kann. h11 zitiert
-    kaputte Zeilen der Antwort (auch den `Location`-Header), httpx nennt bei einer 3xx-Antwort das
-    Weiterleitungsziel und bei der eigenen Anfrage den kaputten Header samt Wert, ein ungueltiger
-    Punycode-Name in der Weiterleitung nennt Teile des fremden Namens. Solche Texte dienen hier nie als
-    Meldung: es bleiben der Name der Ausnahme und der Statuscode (`exception_status`)."""
+    """Ob der Text von `exc` aus der fremden Antwort oder der eigenen Anfrage stammen kann (dann nie angezeigt)."""
+    # h11 zitiert kaputte Antwortzeilen, httpx das Weiterleitungsziel und kaputte Header; es bleiben Ausnahmename und
+    # Statuscode (`exception_status`).
     if isinstance(exc, (httpx.ProtocolError, httpx.InvalidURL, httpx.DecodingError, httpx.HTTPStatusError)):
         return True
     if str(type(exc).__module__).split(".")[0] in _FOREIGN_CLASS_MODULES:
@@ -88,16 +77,15 @@ def _text_is_foreign(exc: BaseException) -> bool:
     return False
 
 
-# Die Schritte, in denen httpx eine Weiterleitung zusammenbaut. httpx baut sie auch dann, wenn es ihr nicht folgt,
-# und scheitert dabei an einem kaputten `Location`-Header (z. B. einem ungueltigen Punycode-Namen).
+# Die Schritte, in denen httpx eine Weiterleitung zusammenbaut, auch wenn es ihr nicht folgt; ein kaputter
+# `Location`-Header (z. B. ein ungültiger Punycode-Name) lässt sie scheitern.
 _REDIRECT_STEPS = frozenset(
     {"_build_redirect_request", "_redirect_url", "_redirect_method", "_redirect_headers", "_redirect_stream"}
 )
 
 
 def _came_from_redirect(exc: BaseException) -> bool:
-    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand: an der Stelle im Traceback, ersatzweise am Wort
-    "location" im Text. Beides waehlt nur den festen Satz, der Text selbst wird nie angezeigt."""
+    """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand (Traceback, ersatzweise das Wort "location")."""
     tb = exc.__traceback__
     while tb is not None:
         if tb.tb_frame.f_code.co_name in _REDIRECT_STEPS:
@@ -114,10 +102,9 @@ def _status_of(exc: BaseException) -> int | None:
 
 
 def describe_exception(exc: BaseException) -> str:
-    """Text für die Erkennung: Typnamen und Meldungen der ganzen Ursachenkette (ein
-    `ConnectError` trägt die eigentliche Ursache oft nur in `__cause__`) und ein
-    HTTP-Status, falls die Ausnahme eine Antwort mitbringt. Von Ausnahmen, deren Text aus der
-    fremden Antwort stammen kann (`_text_is_foreign`), steht nur der Typname darin."""
+    """Text für die Erkennung: Typnamen und Meldungen der ganzen Ursachenkette und ein HTTP-Status.
+
+    Ein `ConnectError` trägt die Ursache oft nur in `__cause__`; fremde Texte (`_text_is_foreign`) fehlen."""
     parts: list[str] = []
     seen: set[int] = set()
     current: BaseException | None = exc
@@ -137,8 +124,7 @@ def describe_exception(exc: BaseException) -> str:
 
 
 def exception_status(exc: BaseException) -> int | None:
-    """Der HTTP-Status aus der Ursachenkette, als Zahl. Die Erkennung einer Weiterleitung (3xx) hängt so
-    nicht daran, dass „HTTP 302“ im Text steht, den `scrub()` bei 300 Zeichen abschneidet."""
+    """Der HTTP-Status aus der Ursachenkette als Zahl; so hängt die 3xx-Erkennung nicht am gekürzten Text."""
     seen: set[int] = set()
     current: BaseException | None = exc
     while current is not None and id(current) not in seen and len(seen) < 5:
@@ -151,8 +137,7 @@ def exception_status(exc: BaseException) -> int | None:
 
 
 def readable_text(exc: BaseException) -> str | None:
-    """Der Text einer Ausnahme, die sich als fertiger deutscher Satz kennzeichnet (`readable = True`, wie
-    bei `core.ssh.SshError`), sonst `None`."""
+    """Der Text einer Ausnahme, die sich als fertiger deutscher Satz kennzeichnet (`readable = True`), sonst `None`."""
     text = str(exc).strip()
     if getattr(exc, "readable", False) and text and not _text_is_foreign(exc):
         return text
@@ -186,7 +171,7 @@ _ALREADY_GERMAN = re.compile(r"konfiguriert|nicht eingerichtet|fehlt|fehlen", re
 _UNEXPECTED_FORMAT = re.compile(
     r"Die Antwort von [\w .-]{1,40}? hat nicht das erwartete Format(?: \(HTTP \d{3}\))?\. Stimmt die Adresse\?"
 )
-# Der Rueckfallsatz der Erweiterungen, wenn keiner der festen Saetze passt: in der Klammer nur der Name der Ausnahme.
+# Der Rückfallsatz der Erweiterungen, wenn keiner der festen Sätze passt: in der Klammer nur der Name der Ausnahme.
 _FAILED = re.compile(r"Die Verbindung zu [\w .-]{1,40}? ist fehlgeschlagen \(\w{1,60}\)\.")
 _REDIRECT_NO_CODE = re.compile(r"leitet auf eine andere Adresse um|auf eine andere Adresse umgeleitet", re.I)
 _NOT_SENT = re.compile(r"ließ sich nicht senden|LocalProtocolError", re.I)
@@ -195,8 +180,7 @@ _BROKEN_ANSWER = re.compile(r"fehlerhafte Antwort geschickt|ProtocolError|Invali
 
 
 def redirect_message(code: int | None = None) -> str:
-    """Derselbe Satz wie bei der Konsole (`ctx.http.websocket`): ohne die Zieladresse, die vom
-    Server stammt. Ohne `code`, wenn der Statuscode unbekannt ist (kaputter `Location`-Header)."""
+    """Derselbe Satz wie bei der Konsole (`ctx.http.websocket`), ohne die Zieladresse, die vom Server stammt."""
     shown = f" (HTTP {code})" if code else ""
     return (
         f"Der Server hat die Verbindung auf eine andere Adresse umgeleitet{shown}. "
@@ -238,8 +222,7 @@ def _first_url_host(data: Any) -> str | None:
 
 
 def guess_host(settings: dict[str, Any], item_name: str | None = None) -> str | None:
-    """Der Server, um den es geht: bei einem benannten Eintrag dessen Adresse, sonst die erste
-    Adresse in den Einstellungen."""
+    """Der Server, um den es geht: bei einem benannten Eintrag dessen Adresse, sonst die erste in den Einstellungen."""
     if item_name:
         for value in settings.values():
             if isinstance(value, list):
@@ -272,8 +255,7 @@ def tls_option_title(schema: dict[str, Any] | None) -> str | None:
 
 
 def tls_pin_title(schema: dict[str, Any] | None) -> str | None:
-    """Titel des Felds für den Fingerabdruck des Zertifikats (`tls_fingerprint_sha256`), falls es eines gibt. Dann
-    rät der Hinweis zum Fingerabdruck statt zum Abschalten der Prüfung."""
+    """Titel des Felds für den Fingerabdruck des Zertifikats (`tls_fingerprint_sha256`), falls es eines gibt."""
     return _field_title(schema, "tls_fingerprint_sha256")
 
 
@@ -283,10 +265,7 @@ def translate(
 ) -> Translation:
     """Macht aus einer technischen Fehlermeldung einen verständlichen deutschen Satz.
 
-    `status`: der HTTP-Status als Zahl, wenn er bekannt ist (geht vor einer Zahl im Text). `readable`: der fertige
-    Satz einer Ausnahme, die sich als lesbar kennzeichnet; er ersetzt nur den Vorspann „Technische Meldung“.
-    `tls_pin`: Titel des Felds für den Fingerabdruck (`tls_pin_title`); gibt es ihn, nennt der Hinweis zu einem
-    Zertifikatsfehler den Fingerabdruck statt `tls_hint` (Zertifikat nicht prüfen)."""
+    `status` geht vor einer Zahl im Text; `readable` ersetzt den Vorspann „Technische Meldung“."""
     where = host or host_of(text)
     code_match = _HTTP_CODE.search(text)
     code = status if status is not None else (int(code_match.group(1)) if code_match else None)
@@ -356,10 +335,9 @@ def translate(
 def translate_exception(
     exc: BaseException, *, host: str | None, tls_hint: str | None, secrets: list[str], tls_pin: str | None = None
 ) -> Translation:
-    """`translate()` für eine Ausnahme: Text der Ursachenkette (ohne Texte aus fremden Antworten), der Status als
-    Zahl und, falls die Ausnahme sich als lesbar kennzeichnet, ihr fertiger Satz. Kennzeichnet sie sich zusätzlich als
-    `verbatim = True`, gilt ihr Satz unverändert (er fasst z. B. die Fehler mehrerer Ziele zusammen; die Übersetzung
-    nähme sonst den ersten HTTP-Code darin und verlöre die anderen)."""
+    """`translate()` für eine Ausnahme; mit `verbatim = True` gilt ihr Satz unverändert.
+
+    Sonst nähme die Übersetzung den ersten HTTP-Code in einem Satz über mehrere Ziele und verlöre die anderen."""
     ready = readable_text(exc)
     if ready and getattr(exc, "verbatim", False):
         return Translation("readable", scrub(str(exc).strip(), secrets, limit=_MAX_VERBATIM))
@@ -389,8 +367,7 @@ class CheckOutcome:
 
 
 def _detail_items(report_details: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
-    """Das Muster „ein Eintrag je Verbindung“ in `HealthReport.details`:
-    `{"pve1": {"healthy": True, ...}, ...}`."""
+    """Das Muster „ein Eintrag je Verbindung“ in `HealthReport.details`: `{"pve1": {"healthy": True, ...}}`."""
     return [(k, v) for k, v in report_details.items() if isinstance(v, dict) and isinstance(v.get("healthy"), bool)]
 
 
@@ -427,8 +404,7 @@ async def run_connection_test(
                 noted = noted or bool(note)
                 details.append(Detail(name, True, scrub(str(note), secrets) if note else "Verbindung funktioniert."))
             elif entry.get("verbatim") is True and entry.get("error"):
-                # Ein fertiger Satz der Erweiterung (z. B. „Telegram lässt den Bot nicht in diesen Chat schreiben
-                # (HTTP 403) …“): unverändert, die Übersetzung nähme nur den HTTP-Code darin.
+                # Fertiger Satz der Erweiterung: unverändert, die Übersetzung nähme nur den HTTP-Code darin.
                 details.append(Detail(name, False, scrub(str(entry["error"]), secrets, limit=_MAX_VERBATIM)))
             else:
                 t = tr(str(entry.get("error") or entry.get("message") or ""), name)

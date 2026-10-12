@@ -1,9 +1,6 @@
-"""Dashboard-Layouts -- docs/03-DATA-MODEL.md §9 (`dashboard_layouts`).
+"""Dashboard-Layouts je Nutzer (Tabelle `dashboard_layouts`).
 
-Layouts sind PERSOENLICH (`user_id`) -- kein RBAC-Permission-Modell noetig ausser
-"eingeloggt": jeder Nutzer sieht/aendert nur seine EIGENEN Layouts, erzwungen auf der
-Query-Ebene hier (nicht nur als UI-Konvention), damit ein erratener/geteilter
-`layout_id`-Wert keinem anderen Nutzer je eine fremde Zeile zeigt.
+Die Zuordnung zum Nutzer (`user_id`) erzwingt schon die Abfrage, damit eine erratene `layout_id` keine fremde Zeile liefert.
 """
 
 from __future__ import annotations
@@ -26,9 +23,7 @@ async def list_layouts(session: AsyncSession, *, user_id: str) -> list[Dashboard
 
 
 async def get_or_create_default(session: AsyncSession, *, user_id: str) -> DashboardLayout:
-    """`GET /dashboard/layouts` darf nie leer sein -- ein frisch angelegter Nutzer
-    braucht sofort EIN bearbeitbares Layout, statt erst einen Anlege-Schritt zu
-    verlangen, den docs/04 gar nicht als eigenen Endpunkt vorsieht."""
+    """Liefert das Standard-Layout und legt es an, falls der Nutzer noch keins hat (die Liste darf nie leer sein)."""
     result = await session.execute(
         select(DashboardLayout).where(DashboardLayout.user_id == user_id, DashboardLayout.is_default.is_(True))
     )

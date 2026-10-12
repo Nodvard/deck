@@ -1,6 +1,6 @@
 version = "0.8.0"
 date = "2026-10-12"
-title = "Proxmox in einem Schritt, Apps-Seite, Inventar-Baukasten, einfachere Bedienung und Sicherheits-Updates"
+title = "Proxmox in einem Schritt, Apps-Seite, Inventar-Baukasten, einfachere Bedienung, Sicherheits-Updates"
 
 [[entries]]
 kind = "neu"

@@ -1,16 +1,4 @@
-"""Hosts, Gruppen, Zugangsdaten -- docs/04-API.md §3.
-
-`/hosts/{id}/credentials` ist in docs/04 nicht explizit aufgefuehrt (das Dokument
-zeigt keinen eigenen Zugangsdaten-Endpunkt) -- Gap-Fill-Entscheidung wie `client_type`
-in WP-1: ohne IRGENDeinen Weg, Zugangsdaten anzulegen, waere kein Host je per SSH
-erreichbar. Metadaten-only wie bei `/secrets` (docs/03 §3, Invariante 1) -- kein
-Response transportiert je den Klartext.
-
-`GET/POST /hosts/{id}/actions...` (WP-5) gehen durch dasselbe `core.gate` wie
-`ctx.actions.propose()` -- der Unterschied ist nur, WER vorschlaegt (ein Nutzer statt
-einer Extension) und woher die `ActionSpec` kommt (der generische
-`ExtensionRuntime.actions`-Katalog, ergaenzt um den `HostProvider` des Hosts, falls
-einer existiert -- in dieser Runde nur `terminal`s `shell.exec`, siehe Abnahmebericht)."""
+"""Server, Gruppen und Zugangsdaten (docs/04-API.md, Abschnitt 3)."""
 
 from __future__ import annotations
 
@@ -54,8 +42,8 @@ async def _audit(
     session: SessionDep, user: User, action: str, *, target_id: str, target_type: str = "host",
     detail: dict[str, Any] | None = None,
 ) -> None:
-    """Eintrag im Protokoll fuer eine erfolgreiche Aenderung. NIE Zugangsdaten, Schluessel
-    oder Passwoerter in `detail` -- nur Kennungen und Metadaten."""
+    """Eintrag im Protokoll für eine erfolgreiche Änderung. NIE Zugangsdaten, Schlüssel oder Passwörter in `detail`,
+    nur Kennungen und Metadaten."""
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action=action, outcome="success",
         target_type=target_type, target_id=target_id, detail=detail,
@@ -73,9 +61,9 @@ class ActionSpecOut(BaseModel):
     confirm_text: str | None
     command_field: str | None
     params_schema: dict[str, Any] | None = None
-    # "host": der HostProvider bietet sie genau fuer DIESEN Host an (VM starten, ...);
-    # "global": fuer jeden Host registriert (Shell-Befehl, Container-Aktionen, ...).
-    # Die Server-Seite zeigt "host" als Knoepfe, "global" unter "Weitere Aktionen".
+    # "host": der HostProvider bietet sie genau für DIESEN Host an (VM starten, ...);
+    # "global": für jeden Host registriert (Shell-Befehl, Container-Aktionen, ...).
+    # Die Server-Seite zeigt "host" als Knöpfe, "global" unter "Weitere Aktionen".
     source: Literal["host", "global"] = "global"
 
     @classmethod
@@ -95,7 +83,7 @@ class TriggerActionIn(BaseModel):
 
 
 class HostCredentialSummary(BaseModel):
-    """Der Standard-Zugang eines Servers -- nur Art, Benutzer und Port, nie ein Geheimnis."""
+    """Der Standard-Zugang eines Servers: nur Art, Benutzer und Port, nie ein Geheimnis."""
 
     id: str
     kind: str
@@ -112,8 +100,7 @@ class HostOut(BaseModel):
     kind: str | None
     tags: list[str]
     managed_tags: list[str] = Field(default_factory=list)
-    """Die Markierungen, die eine Erweiterung verwaltet (Teilmenge von `tags`) -- von
-    Hand nicht aenderbar."""
+    """Die Markierungen, die eine Erweiterung verwaltet (Teilmenge von `tags`); von Hand nicht änderbar."""
     credential: HostCredentialSummary | None = None
     """Der Standard-Zugang, `null` ohne Zugang."""
     is_managed: bool
@@ -184,10 +171,9 @@ def _validate_name(value: str) -> str:
 
 
 def _validate_address(value: str) -> str:
-    """IP-Adresse (nicht `0.0.0.0`/`::`, keine Multicast-Adresse) oder Rechnername nach
-    RFC 1123 (Labels aus Buchstaben, Ziffern, `-`, zusammen hoechstens 253 Zeichen). Kein
-    Schema, kein `user@`, kein Pfad, kein Leerzeichen, kein Port."""
-    # Ein einzelner Punkt am Ende ("pve.fritz.box.") ist ein vollqualifizierter Name -- weglassen.
+    """IP-Adresse (nicht `0.0.0.0`/`::`, keine Multicast-Adresse) oder Rechnername nach RFC 1123 (Labels aus Buchstaben,
+    Ziffern, `-`, zusammen höchstens 253 Zeichen). Kein Schema, kein `user@`, kein Pfad, kein Leerzeichen, kein Port."""
+    # Ein Punkt am Ende ("pve.fritz.box.") kennzeichnet einen vollqualifizierten Namen; weglassen.
     address = value.strip().lower().removesuffix(".")
     if not address or "%" in address:
         raise ValueError(_ADDRESS_ERROR)
@@ -200,15 +186,14 @@ def _validate_address(value: str) -> str:
             raise ValueError(_ADDRESS_ERROR)
         return address
     labels = address.split(".")
-    # Ein rein numerischer letzter Teil ("999.1.1.1", "1.2.3") ist eine kaputte IP-Adresse,
-    # kein Rechnername.
+    # Ein rein numerischer letzter Teil ("999.1.1.1", "1.2.3") ist eine kaputte IP-Adresse, kein Rechnername.
     if len(address) > 253 or labels[-1].isdigit() or not all(_HOSTNAME_LABEL_RE.fullmatch(label) for label in labels):
         raise ValueError(_ADDRESS_ERROR)
     return address
 
 
 class HostCreate(BaseModel):
-    # Laenge prueft der Validator (mit deutscher Meldung), kein `Field(max_length=...)`.
+    # Die Länge prüft der Validator (mit deutscher Meldung), kein `Field(max_length=...)`.
     name: str
     display_name: str = ""
     address: str
@@ -240,8 +225,7 @@ class HostUpdate(BaseModel):
     enabled: bool | None = None
     is_managed: bool | None = None
     tags: list[str] | None = None
-    """Setzt die MANUELLEN Markierungen exakt auf diese Liste; von Extensions verwaltete
-    bleiben unberührt."""
+    """Setzt die MANUELLEN Markierungen exakt auf diese Liste; von Erweiterungen verwaltete bleiben unberührt."""
 
     @field_validator("address")
     @classmethod
@@ -305,7 +289,7 @@ class CredentialOut(BaseModel):
 
 
 # Auch Windows-Benutzer: "Max Mustermann", "user@domain.local", "DOMAIN\\user". Keine Steuerzeichen,
-# Zeilenumbrueche oder Anfuehrungszeichen; beginnt nicht mit "-" (wuerde wie ein Schalter aussehen).
+# Zeilenumbrüche oder Anführungszeichen; beginnt nicht mit "-" (würde wie ein Schalter aussehen).
 _SSH_USER_RE = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.@\\ -]{0,63}")
 
 
@@ -323,10 +307,9 @@ def validate_ssh_port(value: int) -> int:
 
 
 def _validate_ssh_key(value: str) -> str:
-    """Muss sich mit asyncssh als privater Schluessel ohne Passphrase einlesen lassen.
-    Die Ausnahme selbst wird NIE weitergereicht (sie koennte Schluesselmaterial
-    enthalten) -- nur eine der beiden festen Meldungen."""
-    # Zeilenenden und Rand aufraeumen: Einfuegen aus Windows bringt \r\n mit.
+    """Muss sich mit asyncssh als privater Schlüssel ohne Passphrase einlesen lassen."""
+    # Die Ausnahme selbst wird NIE weitergereicht (sie könnte Schlüsselmaterial enthalten), nur eine feste Meldung.
+    # Zeilenenden und Rand aufräumen: Einfügen aus Windows bringt \r\n mit.
     key = value.replace("\r\n", "\n").replace("\r", "\n").strip() + "\n"
     try:
         asyncssh.import_private_key(key)
@@ -361,8 +344,8 @@ class CredentialCreate(BaseModel):
     @field_validator("secret_value")
     @classmethod
     def _check_secret(cls, value: str, info: ValidationInfo) -> str:
-        # `kind` steht in der Feldreihenfolge VOR `secret_value`; war es selbst ungueltig,
-        # fehlt es hier und der Fehler dort reicht.
+        # `kind` steht in der Feldreihenfolge VOR `secret_value`; war es selbst ungültig, fehlt es hier und der Fehler
+        # dort reicht.
         if info.data.get("kind") == "ssh_key":
             return _validate_ssh_key(value)
         return value
@@ -394,11 +377,6 @@ class GroupUpdate(BaseModel):
     description: str | None = Field(None, max_length=255)
 
     _strip_name = field_validator("name", mode="before")(_strip)
-
-
-# ---------------------------------------------------------------------------
-# Hosts
-# ---------------------------------------------------------------------------
 
 
 @router.get("/hosts", dependencies=[Depends(require_permission("hosts.read"))])
@@ -485,15 +463,14 @@ class KnownHostKeyOut(BaseModel):
     first_seen_at: datetime
     accepted_by_user_id: str | None
     accepted_by_label: str | None
-    """Name dessen, der den Schluessel bestaetigt hat; `null` bei automatischem Merken
-    (erster Kontakt). Fremde Namen sieht nur, wer `users.read` oder Aktionen freigeben darf
-    -- sonst steht hier `user/<id>` (wie bei den Aktionen)."""
+    """Name dessen, der den Schlüssel bestätigt hat; `null` bei automatischem Merken (erster Kontakt). Fremde Namen
+    sieht nur, wer `users.read` oder Aktionen freigeben darf, sonst steht hier `user/<id>` (wie bei den Aktionen)."""
 
 
 @router.get("/hosts/{host_id}/known-hosts", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_known_host_keys(host_id: str, session: SessionDep, user: CurrentUser) -> list[KnownHostKeyOut]:
-    """Die gemerkten Server-Schluessel (Fingerabdruecke) dieses Servers -- Grundlage, um
-    einen geaenderten Schluessel bewusst zu vergessen (`DELETE .../known-hosts/{key_type}`)."""
+    """Die gemerkten Server-Schlüssel (Fingerabdrücke) dieses Servers, Grundlage zum bewussten Vergessen eines
+    geänderten Schlüssels (`DELETE .../known-hosts/{key_type}`)."""
     if await session.get(Host, host_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     rows = (
@@ -517,11 +494,8 @@ async def list_known_host_keys(host_id: str, session: SessionDep, user: CurrentU
 
 @router.get("/hosts/{host_id}/status", dependencies=[Depends(require_permission("hosts.read"))])
 async def get_host_status(host_id: str, session: SessionDep, settings: SettingsDep) -> HostStatusOut:
-    """Versucht bei vorhandenen Zugangsdaten eine echte, kurze SSH-Pruefung; ohne
-    Zugangsdaten (z. B. ein per `HostProvider` entdeckter Host, der ueber dessen
-    eigene API statt SSH erreichbar ist -- WP-8) wird stattdessen dessen
-    `HostProvider.host_status()` gefragt, falls einer registriert ist. Erst ganz ohne
-    beides bleibt es beim zuletzt gespeicherten Status."""
+    """Prüft mit Zugangsdaten per kurzer SSH-Verbindung; ohne Zugangsdaten fragt es den `HostProvider` des Hosts
+    (`host_status()`), falls einer registriert ist. Ohne beides bleibt der zuletzt gespeicherte Status."""
     host = await session.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
@@ -560,23 +534,22 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
         await session.flush()
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True)
     except (ssh.HostKeyMismatch, ssh.HostKeyUnknown) as exc:
-        # Geaenderter oder (bei `ssh_confirm_new_host_keys`) noch nicht bestaetigter Server-Schluessel:
-        # weder "oben" noch "unten", sondern ein Fall fuer "Verbindung pruefen".
+        # Geänderter oder (bei `ssh_confirm_new_host_keys`) noch nicht bestätigter Server-Schlüssel:
+        # weder "oben" noch "unten", sondern ein Fall für "Verbindung prüfen".
         host.status = "unknown"
         if isinstance(exc, ssh.HostKeyMismatch):
-            hosts_service.clear_login_ok(host)  # die fruehere Anmeldung galt einem anderen Gegenueber
+            hosts_service.clear_login_ok(host)  # die frühere Anmeldung galt einem anderen Gegenüber
         await session.flush()
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True, detail=str(exc))
     except ssh.SshTargetChanged as exc:
-        # Die Verbindungsdaten wurden gerade geaendert -- das heisst nicht "Server down".
+        # Die Verbindungsdaten wurden gerade geändert, das heißt nicht "Server down".
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=False, detail=str(exc))
     except (ssh.SshError, asyncssh.Error, OSError) as exc:
-        # Eine tote gepoolte Verbindung wirft beim Befehl TimeoutError
-        # (ein OSError), ConnectionLost oder ChannelOpenError statt SshError -- das
-        # heisst genauso "nicht erreichbar", kein Serverfehler.
+        # Eine tote gepoolte Verbindung wirft beim Befehl TimeoutError (ein OSError), ConnectionLost oder
+        # ChannelOpenError statt SshError; das heißt genauso "nicht erreichbar", kein Serverfehler.
         host.status = "down"
         if isinstance(exc, ssh.SshAuthError):
-            hosts_service.clear_login_ok(host)  # Anmeldung abgelehnt: der fruehere Beleg gilt nicht mehr
+            hosts_service.clear_login_ok(host)  # Anmeldung abgelehnt: der frühere Beleg gilt nicht mehr
         await session.flush()
         detail = str(exc) or "Der Server hat nicht rechtzeitig geantwortet."
         return HostStatusOut(status=host.status, last_seen_at=host.last_seen_at, checked_live=True, detail=detail)
@@ -584,12 +557,8 @@ async def get_host_status(host_id: str, session: SessionDep, settings: SettingsD
 
 @router.get("/hosts/{host_id}/metrics", dependencies=[Depends(require_permission("hosts.read"))])
 async def get_host_metrics(host_id: str, session: SessionDep) -> HostMetricsOut:
-    """Nicht in docs/04-API.md explizit gelistet -- Gap-Fill wie `/pages` in WP-7:
-    das symmetrische Gegenstueck zu `/hosts/{id}/actions` (dort `HostProvider`,
-    hier `MetricsProvider`), ohne das `MetricsProvider` erst mit WP-8 einen einzigen
-    echten Aufrufer haette (kein "proxmox" im Kern: dieser Endpunkt kennt nur das
-    Protokoll, nie eine konkrete Extension). Reine
-    Momentaufnahme, keine Historie (docs/00-DECISIONS.md D-02)."""
+    """Momentaufnahme der Messwerte eines Servers über seinen `MetricsProvider` (404 ohne Anbieter), keine Historie."""
+    # Kein "proxmox" im Kern: der Endpunkt kennt nur das Protokoll, nie eine konkrete Extension.
     host = await session.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
@@ -605,8 +574,8 @@ async def get_host_metrics(host_id: str, session: SessionDep) -> HostMetricsOut:
     except Exception as exc:  # noqa: BLE001 - nur "Server nicht erreichbar" wird zur sauberen Antwort, alles andere bleibt ein Fehler
         if not is_expected_connection_error(exc):
             raise
-        # Ausgeschalteter oder nicht erreichbarer Server: kein Fehler im Programm. Frueher ein 500 mit
-        # Traceback im Protokoll (`deploy_pi.sh` wertet "Traceback" als gescheiterten Start).
+        # Ausgeschalteter oder nicht erreichbarer Server ist kein Programmfehler; ein 500 mit Traceback im Protokoll
+        # würde `deploy_pi.sh` als gescheiterten Start werten.
         reason = describe_connection_error(exc, address=host.address)
         logger.info("host_metrics_unreachable host=%s reason=%s", host_id, reason)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=reason) from exc
@@ -621,12 +590,11 @@ def _percent(used: float | None, total: float | None) -> float | None:
 
 @router.get("/hosts/metrics/latest", dependencies=[Depends(require_permission("hosts.read"))])
 async def get_hosts_latest_metrics(session: SessionDep) -> HostsLatestMetricsOut:
-    """Letzte Messwerte ALLER Server in einer Abfrage -- fuer die Auslastungs-Karten im Cockpit.
-
-    Liest nur den schon gefuehrten Verlauf (`metrics.db`, Sammler alle 30 s), nie per SSH: Das Cockpit
-    loest damit keine Messung aus und wird mit mehr Servern nicht langsamer. Nur Server mit einem Wert
-    der letzten `LATEST_WINDOW_S` Sekunden stehen drin; `stale` ab `STALE_AFTER_S`. Server, deren Anbieter
-    eine eigene Historie fuehrt (Hypervisor-Knoten), kommen hier nicht vor -- sie werden live gefragt."""
+    """Letzte Messwerte ALLER Server in einer Abfrage, für die Auslastungs-Karten im Cockpit. Nur Server mit einem Wert
+    der letzten `LATEST_WINDOW_S` Sekunden stehen drin, `stale` ab `STALE_AFTER_S`; Server, deren Anbieter eine eigene
+    Historie führt (Hypervisor-Knoten), fehlen hier, sie werden live gefragt."""
+    # Liest nur den Verlauf (`metrics.db`, Sammler alle 30 s), nie per SSH: Das Cockpit löst so keine Messung aus und
+    # wird mit mehr Servern nicht langsamer.
     import time as _time
 
     from ...core.metrics_history import LATEST_WINDOW_S, STALE_AFTER_S, get_metrics_collector
@@ -663,9 +631,8 @@ class HostMetricsHistoryOut(BaseModel):
 
 @router.get("/hosts/{host_id}/metrics/history", dependencies=[Depends(require_permission("hosts.read"))])
 async def get_host_metrics_history(host_id: str, session: SessionDep, range: str = "1h") -> HostMetricsHistoryOut:  # noqa: A002 - Query-Name
-    """Verlauf fuer die Diagramme der Server-Seite. Hat der Anbieter eigene Historie
-    (`MetricsProvider.history()`, z. B. Proxmox-RRD), kommt sie von dort -- sonst aus
-    dem eigenen Sammler von Nodvard Deck (core/metrics_history.py, D-02-Nachtrag)."""
+    """Verlauf für die Diagramme der Server-Seite: vom Anbieter (`MetricsProvider.history()`, z. B. Proxmox-RRD),
+    sonst vom eigenen Sammler (`core/metrics_history.py`)."""
     import time as _time
 
     from ...core.metrics_history import RANGES, get_metrics_collector
@@ -694,17 +661,8 @@ async def get_host_metrics_history(host_id: str, session: SessionDep, range: str
     return HostMetricsHistoryOut(range=range, source="lattice", **data)
 
 
-# ---------------------------------------------------------------------------
-# Aktionen -- WP-5, gehen durch dasselbe core.gate wie ctx.actions.propose()
-# ---------------------------------------------------------------------------
-
-
 async def _resolve_action_spec(host: Host, action_type: str) -> Any | None:
-    """Generischer Katalog zuerst (`terminal`s `shell.exec` steht hier), dann der
-    `HostProvider` des Hosts, falls einer existiert -- in dieser Runde erfuellt keine
-    Extension `HostProvider` wirklich (kein Proxmox/Docker-Discovery in Phase 1), der
-    Pfad ist trotzdem verdrahtet und getestet (mit einem Test-Double), nicht nur
-    angenommen."""
+    """Zuerst der generische Katalog (dort steht `shell.exec` von `terminal`), dann der `HostProvider` des Hosts."""
     runtime = get_extension_runtime()
     entry = runtime.actions.get(action_type)
     if entry is not None:
@@ -719,10 +677,8 @@ async def _resolve_action_spec(host: Host, action_type: str) -> Any | None:
 
 
 def _offered_for(spec: Any, host: Host) -> bool:  # noqa: ANN401 - nodvard_sdk.actions.ActionSpec
-    """Liste UND Ausloesen pruefen dasselbe: `host_bound=False` heisst "nur
-    ueber die Extension selbst" (ctx.actions.propose, z. B. mit Befehlen, die sie aus
-    eigenen Feldern baut) -- nie als Formular auf der Server-Seite, nie per POST hier.
-    `ActionSpec.host_tags`: nur fuer Hosts mit mindestens einem dieser Tags."""
+    """Liste UND Auslösen prüfen dasselbe: `host_bound=False` heißt "nur über die Extension selbst" (nie als Formular
+    auf der Server-Seite, nie per POST hier); `ActionSpec.host_tags` nur für Hosts mit einem dieser Tags."""
     if not getattr(spec, "host_bound", True):
         return False
     wanted = getattr(spec, "host_tags", None) or []
@@ -765,10 +721,8 @@ class HostToolOut(BaseModel):
 
 @router.get("/hosts/{host_id}/tools", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_host_tools(host_id: str, session: SessionDep, user: CurrentUser) -> list[HostToolOut]:
-    """Werkzeug-Kacheln der Server-Seite (Plesk-Stil): was Extensions per
-    `ctx.ui.register_host_tool()` fuer passende Hosts anbieten -- gefiltert nach
-    Host-Art, Tags, Herkunft und den Rechten des Nutzers. Der Kern kennt dabei keine
-    Extension namentlich (docs/02-EXTENSION-API.md)."""
+    """Werkzeug-Kacheln der Server-Seite: was Extensions per `ctx.ui.register_host_tool()` für passende Hosts anbieten,
+    gefiltert nach Host-Art, Tags, Herkunft und den Rechten des Nutzers."""
     host = await session.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
@@ -803,16 +757,11 @@ async def trigger_host_action(
     response: Response,
     wait: float | None = Query(None, ge=0, le=gate_service.WAIT_S),
 ) -> ActionOut:
-    """Ein Nutzer loest eine Aktion direkt aus (docs/04-API.md §3) -- `proposed_by`
-    ist `Actor.user(...)`, sonst identisch zu `ctx.actions.propose()`: dieselbe
-    Sperrliste, dasselbe Anti-Flapping, dieselbe Autonomie-Entscheidung (die bei einem
-    Nutzer nur relevant waere, wenn `autonomy.mode=full` UND niemand die Bestaetigung
-    erzwingt -- praktisch heisst das: ein Nutzerklick fuehrt bei low-risk-Aktionen im
-    Vollautonomie-Modus sofort aus, sonst landet er wie ein KI-Vorschlag als
-    `proposed`).
-
-    Wird sofort ausgefuehrt, laeuft das im Hintergrund: fertig innerhalb
-    von `wait` Sekunden (Standard 20) -> 200, sonst 202 mit Status 'executing'."""
+    """Ein Nutzer löst eine Aktion direkt aus (docs/04-API.md §3). Wird sie sofort ausgeführt, läuft das im Hintergrund:
+    fertig innerhalb von `wait` Sekunden (Standard 20) -> 200, sonst 202 mit Status 'executing'."""
+    # Geht durch dasselbe `core.gate` wie `ctx.actions.propose()` (Sperrliste, Anti-Flapping, Autonomie); nur der
+    # Vorschlagende ist ein Nutzer. Bei Vollautonomie führt ein Klick low-risk-Aktionen sofort aus, sonst bleibt die
+    # Aktion wie ein KI-Vorschlag `proposed`.
     host = await session.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
@@ -855,11 +804,7 @@ async def trigger_host_action(
     return await action_out(session, action, user)
 
 
-# ---------------------------------------------------------------------------
-# Zugangsdaten
-# ---------------------------------------------------------------------------
-
-
+# Antworten enthalten nur Metadaten, nie den Klartext (docs/03 §3, Invariante 1).
 @router.get("/hosts/{host_id}/credentials", dependencies=[Depends(require_permission("hosts.read"))])
 async def list_credentials(host_id: str, session: SessionDep) -> list[CredentialOut]:
     return [CredentialOut.from_model(c) for c in await hosts_service.list_credentials(session, host_id)]
@@ -913,8 +858,7 @@ async def delete_credential(host_id: str, credential_id: str, session: SessionDe
 
 @router.delete("/hosts/{host_id}/known-hosts/{key_type}", status_code=status.HTTP_204_NO_CONTENT)
 async def clear_known_host_key(host_id: str, key_type: str, session: SessionDep, user: WriteUser) -> None:
-    """Admin-Weg, eine per `HostKeyMismatch` sichtbar gewordene Aenderung NACH
-    manueller Pruefung erneut zuzulassen (docs/00 D-05)."""
+    """Admin-Weg, eine per `HostKeyMismatch` sichtbar gewordene Änderung NACH manueller Prüfung erneut zuzulassen."""
     known = (
         await session.execute(
             select(KnownHostKey).where(KnownHostKey.host_id == host_id, KnownHostKey.key_type == key_type)
@@ -924,11 +868,6 @@ async def clear_known_host_key(host_id: str, key_type: str, session: SessionDep,
     if not await hosts_service.clear_known_host_key(session, host_id, key_type):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Kein gespeicherter Schlüssel dieses Typs.")
     await _audit(session, user, "host.known_key_forgotten", target_id=host_id, detail=detail)
-
-
-# ---------------------------------------------------------------------------
-# Gruppen
-# ---------------------------------------------------------------------------
 
 
 @router.get("/host-groups", dependencies=[Depends(require_permission("hosts.read"))])
@@ -965,7 +904,7 @@ async def patch_group(group_id: str, payload: GroupUpdate, session: SessionDep, 
     if group is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Gruppe.")
     if group.name != old_name:
-        # Wurde die Beschreibung im selben Zug geaendert, steht das im selben Eintrag.
+        # Wurde die Beschreibung im selben Zug geändert, steht das im selben Eintrag.
         extra = {"description_changed": True} if group.description != old_description else {}
         await _audit_group(session, user, group.id, "renamed", **{"from": old_name, "to": group.name}, **extra)
     elif group.description != old_description:
@@ -975,8 +914,8 @@ async def patch_group(group_id: str, payload: GroupUpdate, session: SessionDep, 
 
 @router.delete("/host-groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_group(group_id: str, session: SessionDep, user: WriteUser) -> None:
-    """Loescht nur die Gruppe und ihre Zuordnungen, nie die Server darin. Skripte, die
-    die Gruppe als Ziel hatten, loesen sie danach zu einer leeren Liste auf."""
+    """Löscht nur die Gruppe und ihre Zuordnungen, nie die Server darin. Skripte, die die Gruppe als Ziel hatten, lösen
+    sie danach zu einer leeren Liste auf."""
     existing = await session.get(HostGroup, group_id)
     name = existing.name if existing is not None else None
     if not await hosts_service.delete_group(session, group_id):

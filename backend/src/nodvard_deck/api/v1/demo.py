@@ -1,16 +1,4 @@
-"""Beispieldaten -- `GET /demo`, `POST /demo/seed`, `DELETE /demo` (docs/04-API.md,
-docs/00-DECISIONS.md D-10-Nachtrag). Logik und Begruendung der Markierung: `core/demo_seed.py`.
-
-**Berechtigungen:**
-
-* `GET /demo`: `hosts.read`. Das Band "Du siehst Beispieldaten" sehen alle, die auch die
-  Server sehen; es verraet nichts, was die Server-Liste nicht ohnehin zeigt.
-* `POST /demo/seed` und `DELETE /demo`: `hosts.write` UND `settings.write`. Beispieldaten legen
-  und entfernen Server an (`hosts.write`), schreiben Meldungen fuer ALLE Nutzer und aendern das
-  Dashboard -- also die Installation als Ganzes (`settings.write`, die Berechtigung fuer
-  installationsweite Einstellungen). Eingebaut hat das nur der Administrator (und der Owner).
-  `extensions.manage` passt nicht: Module sind hier gar nicht betroffen.
-"""
+"""Beispieldaten: `GET /demo` (braucht `hosts.read`), `POST /demo/seed` und `DELETE /demo` (Logik in `core/demo_seed.py`)."""
 
 from __future__ import annotations
 
@@ -25,6 +13,8 @@ from ..deps import CurrentUser, SessionDep, require_permission
 
 router = APIRouter(prefix="/demo", tags=["demo"])
 
+# Beispieldaten legen Server an (`hosts.write`), schreiben Meldungen für alle Nutzer und ändern das Dashboard
+# der ganzen Installation (`settings.write`).
 _WriteGuards = [Depends(require_permission("hosts.write")), Depends(require_permission("settings.write"))]
 
 
@@ -36,14 +26,14 @@ class DemoStatusOut(BaseModel):
     apps: int = 0
     """Beispiel-Apps (eigene Kacheln im Cockpit)."""
     layout_replaced: bool
-    """Das Dashboard-Layout wurde durch ein Beispiel-Layout ersetzt und wird beim Loeschen zurueckgesetzt."""
+    """Das Dashboard-Layout wurde durch ein Beispiel-Layout ersetzt und wird beim Löschen zurückgesetzt."""
     hosts_with_access: list[str] = Field(default_factory=list)
-    """Beispiel-Server, an denen inzwischen ein Zugang haengt -- sie werden beim Loeschen mit entfernt."""
+    """Beispiel-Server, an denen inzwischen ein Zugang hängt; sie werden beim Löschen mit entfernt."""
 
 
 class DemoSeedOut(DemoStatusOut):
     created: bool
-    """`false`: es gab schon Beispieldaten, nichts wurde veraendert."""
+    """`false`: es gab schon Beispieldaten, nichts wurde verändert."""
 
 
 class DemoRemoveOut(BaseModel):
@@ -71,7 +61,7 @@ async def get_demo(session: SessionDep) -> DemoStatusOut:
 
 @router.post("/seed", dependencies=_WriteGuards)
 async def seed_demo(session: SessionDep, user: CurrentUser) -> DemoSeedOut:
-    # Widgets, die dieser Nutzer sehen darf -- dieselbe Auswahl wie `GET /widgets`.
+    # Dieselbe Auswahl wie `GET /widgets`.
     widgets = [
         (ext_id, spec)
         for ext_id, spec in get_extension_runtime().ui.all_widgets()
@@ -83,7 +73,7 @@ async def seed_demo(session: SessionDep, user: CurrentUser) -> DemoSeedOut:
         )
     except demo_seed.DemoBlockedError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    except HostServiceError as exc:  # zwei Aufrufe gleichzeitig: der Name "demo-..." war schon vergeben
+    except HostServiceError as exc:  # zwei Aufrufe gleichzeitig: Name "demo-..." schon vergeben
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return DemoSeedOut(**_status_out(current), created=created)
 

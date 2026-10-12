@@ -1,13 +1,6 @@
 """nodvard_sdk — der stabile Vertrag zwischen Kern und Extensions.
 
-Eine Extension importiert ausschliesslich von hier. Der Kern importiert nie eine
-Extension. Das ist die eine Regel, aus der die gesamte Architektur folgt
-(docs/01-ARCHITECTURE.md §1).
-
-**Alter Name:** Bis zur Umbenennung hiess das Paket `lattice_sdk`, die Basisklassen `LatticeExtension` und
-`LatticeError`. Alle drei Namen funktionieren weiter, mit DeprecationWarning und als **dieselben Objekte**
-(`lattice_sdk` ist ein Alias dieses Pakets, siehe `sdk/python/lattice_sdk/__init__.py`; `LatticeExtension is
-NodvardExtension`). Entfernt wird davon nichts ohne angekuendigte Major-Version (docs/04-API.md).
+Eine Extension importiert nur von hier; der Kern importiert nie eine Extension.
 """
 
 from __future__ import annotations
@@ -118,7 +111,7 @@ __all__ = [
     "API_VERSION",
     "is_compatible",
     "NodvardExtension",
-    "LatticeExtension",  # alter Name, dasselbe Objekt (Alias mit DeprecationWarning)
+    "LatticeExtension",  # veraltet: dasselbe Objekt wie NodvardExtension (Alias mit DeprecationWarning)
     "ExtensionContext",
     "ExtensionManifest",
     "load_manifest",
@@ -207,7 +200,7 @@ __all__ = [
     "LogView",
     # Fehler
     "NodvardError",
-    "LatticeError",  # alter Name, dasselbe Objekt (Alias mit DeprecationWarning)
+    "LatticeError",  # veraltet: dasselbe Objekt wie NodvardError (Alias mit DeprecationWarning)
     "PermissionDenied",
     "ActionBlocked",
     "SecretUnavailable",
@@ -220,7 +213,8 @@ __all__ = [
     "CertificateMismatch",
 ]
 
-# Alte Namen vor der Umbenennung: dieselben Objekte, mit DeprecationWarning (siehe _legacy.py).
+# Veraltete Namen `lattice_sdk`, `LatticeExtension` und `LatticeError`: dieselben Objekte, mit DeprecationWarning
+# (`lattice_sdk` ist ein Alias dieses Pakets, siehe _legacy.py). Entfernt wird nichts ohne angekündigte Major-Version.
 _LEGACY_NAMES = {"LatticeExtension": "NodvardExtension", "LatticeError": "NodvardError"}
 __getattr__ = legacy_getattr(__name__, _LEGACY_NAMES, globals())
 if typing.TYPE_CHECKING:

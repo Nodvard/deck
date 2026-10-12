@@ -1,32 +1,6 @@
 """Kanal zum Update-Helfer: Status lesen, Anforderungen schreiben.
 
-Der Helfer ist ein eigenes kleines Programm neben dem Dashboard. Beide teilen sich nur ein Volume (im Dashboard
-`Settings.updater_dir`, Vorgabe `/app/updater`), das der Helfer selbst einrichtet::
-
-    /app/updater/          root 0755   Wurzel: gehoert root, fuer Gruppe/Welt nicht beschreibbar
-      status.json          root 0644   schreibt nur der Helfer (feste Codes, hoechstens 16 KiB)
-      requests/            root 1777   sticky: das Dashboard legt an, kann aber nichts Fremdes ersetzen
-        <uuid4>.json       0644        Anforderungen des Dashboards (hoechstens 4096 Byte)
-
-Hier steht nur die Leitung, keine Entscheidung (die steht in `services.update_helper`, verbindlich entscheidet
-ohnehin der Helfer):
-
-* **Status lesen** (`read_status`): Wurzel und Datei werden ueber Deskriptoren geoeffnet (`O_NOFOLLOW`, danach nur
-  noch `dir_fd`), am Deskriptor geprueft (Besitzer root, Modus, regulaere Datei, ein Link, Groesse) und streng
-  gelesen (keine doppelten Schluessel, kein `NaN`). Bekannte Felder muessen genau stimmen, unbekannte fallen weg (ein
-  neuerer Helfer darf Felder dazunehmen). Gruende und Codes sind nur Bezeichner (`CODE_RE`), nie Freitext. Stimmt
-  etwas nicht, ist der Helfer nicht da (`present=False`) mit einem Grund: `missing`, `stale` (Herzschlag aelter als
-  90 s oder mehr als 300 s in der Zukunft), `unsafe`, `proto` oder `invalid`.
-* **Anforderung schreiben** (`write_request`): `requests/` muss root gehoeren und genau 1777 haben, sonst
-  `ChannelError`. Die Datei entsteht unter `.<id>.tmp` (`O_CREAT|O_EXCL|O_NOFOLLOW`), bekommt ausdruecklich 0644
-  (`fchmod`: das Dashboard laeuft mit umask 077, und root ohne `CAP_DAC_OVERRIDE` liest keine 0600-Datei eines anderen
-  Nutzers), wird mit fsync geschrieben und dann umbenannt; danach fsync des Ordners.
-
-Die Werte hier muessen zum Helfer passen (`deploy/updater/tests/vectors/*.json`); ein Gleichlauf-Test prueft das.
-Der Kern importiert nichts aus dem Helfer-Paket.
-
-Der erwartete Besitzer ist root (`EXPECTED_UID`). Tests ohne root setzen den Modulwert um, nie ueber die Umgebung.
-"""
+Nur die Leitung, keine Entscheidung (verbindlich entscheidet der Helfer); importiert nichts aus dem Helfer-Paket."""
 
 from __future__ import annotations
 
@@ -46,6 +20,14 @@ from typing import Any
 # Protokoll (gleich dem Helfer)
 # ---------------------------------------------------------------------------
 
+# Die Werte müssen zum Helfer passen (`deploy/updater/tests/vectors/*.json`), ein Gleichlauf-Test prüft das.
+#
+# Aufbau des Volumes (`Settings.updater_dir`, Vorgabe /app/updater), das der Helfer selbst einrichtet:
+#   Wurzel        root 0755  gehört root, für Gruppe und Welt nicht beschreibbar
+#   status.json   root 0644  schreibt nur der Helfer (feste Codes, höchstens 16 KiB)
+#   requests/     root 1777  sticky: das Dashboard legt an, kann aber nichts Fremdes ersetzen
+#   <uuid4>.json  0644       Anforderungen des Dashboards (höchstens 4096 Byte)
+
 PROTOCOL = 1
 """Version von `status.json` (Feld `proto`)."""
 REQUEST_VERSION = 1
@@ -63,10 +45,10 @@ RESULTS_MAX = 10
 HEARTBEAT_MAX_AGE_S = 90
 HEARTBEAT_MAX_FUTURE_S = 300
 MAX_PENDING_SCAN = 1000
-"""Hoechstens so viele Eintraege in `requests/` ansehen, wenn nach offenen Anforderungen gesucht wird."""
+"""Höchstens so viele Einträge in `requests/` ansehen, wenn nach offenen Anforderungen gesucht wird."""
 
 EXPECTED_UID = 0
-"""Besitzer von Wurzel, `requests/` und `status.json`: root (der Helfer). Nur Tests setzen das um."""
+"""Besitzer von Wurzel, `requests/` und `status.json`: root (der Helfer). Nur Tests setzen das um (nie über die Umgebung)."""
 
 ACTIONS = ("update", "rollback")
 STATES = ("idle", "busy", "unsafe", "error")
@@ -78,17 +60,17 @@ STEPS = (
 REQUEST_KEYS = ("action", "created_at", "id", "v", "version")
 
 CODE_RE = re.compile(r"[a-z_]{1,40}", re.ASCII)
-"""Gruende und Codes des Helfers. Unbekannte, aber passende Codes werden angenommen (ein neuerer Helfer darf neue
-dazunehmen; die Oberflaeche zeigt dann einen allgemeinen Text), alles andere gilt als Freitext und wird abgelehnt."""
+"""Gründe und Codes des Helfers. Unbekannte, aber passende Codes werden angenommen (ein neuerer Helfer darf neue
+dazunehmen, die Oberfläche zeigt dann einen allgemeinen Text); alles andere gilt als Freitext und wird abgelehnt."""
 _NUM = r"(0|[1-9][0-9]{0,8})"
 VERSION_RE = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}", re.ASCII)
-"""Fertige Version `X.Y.Z`: nur ASCII-Ziffern, ohne fuehrende Nullen, je Teil hoechstens 9 Stellen."""
+"""Fertige Version `X.Y.Z`: nur ASCII-Ziffern, ohne führende Nullen, je Teil höchstens 9 Stellen."""
 MINOR_TAG_RE = re.compile(rf"{_NUM}\.{_NUM}", re.ASCII)
 UUID4_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}", re.ASCII)
 REQUEST_NAME_RE = re.compile(rf"({UUID4_RE.pattern})\.json", re.ASCII)
 TMP_NAME_RE = re.compile(rf"\.(?:{UUID4_RE.pattern})\.tmp", re.ASCII)
 
-# Gruende fuer `present=False`
+# Gründe für `present=False`
 MISSING = "missing"
 STALE = "stale"
 UNSAFE = "unsafe"
@@ -118,7 +100,7 @@ class _Invalid(Exception):
 
 @dataclass(frozen=True)
 class HelperStatus:
-    """Ergebnis von `read_status`. `doc` ist der bereinigte Status, auch wenn er nur veraltet ist (`reason="stale"`:
+    """Ergebnis von `read_status`. `doc` ist der bereinigte Status, auch wenn er nur veraltet ist (`reason="stale"`,
     die Ergebnisse darin stimmen trotzdem); bei `missing`, `unsafe`, `proto` und `invalid` ist er `None`."""
 
     present: bool
@@ -127,12 +109,12 @@ class HelperStatus:
 
 
 # ---------------------------------------------------------------------------
-# Kleine Pruefungen
+# Kleine Prüfungen
 # ---------------------------------------------------------------------------
 
 
 def is_version(value: object) -> bool:
-    """Fertige Version im Sinne des Helfers (keine Vorabversion, keine fuehrende Null)."""
+    """Fertige Version im Sinne des Helfers (keine Vorabversion, keine führende Null)."""
     return isinstance(value, str) and len(value) <= 32 and VERSION_RE.fullmatch(value) is not None
 
 
@@ -160,8 +142,8 @@ def tag_fits_version(tag: object, version: object) -> bool:
 
 
 MAX_INT = 2 ** 53
-"""Groesste Zahl im Status (Zeiten, Zaehler). JSON erlaubt beliebig lange Zahlen; eine Zeit wie `10**400` liesse
-jede Rechnung mit der Uhr ueberlaufen (`OverflowError`) und darf deshalb gar nicht erst durchkommen."""
+"""Größte Zahl im Status (Zeiten, Zähler): JSON erlaubt beliebig lange Zahlen, und eine Zeit wie `10**400` ließe
+jede Rechnung mit der Uhr überlaufen (`OverflowError`)."""
 
 
 def _int(value: object) -> bool:
@@ -195,7 +177,7 @@ def _finite(text: str) -> float:
 
 
 def loads_strict(data: bytes) -> Any:
-    """JSON ohne doppelte Schluessel, `NaN`, `Infinity` und Ueberlauf; jede Ausnahme wird `ValueError` ohne Inhalt."""
+    """JSON ohne doppelte Schlüssel, `NaN`, `Infinity` und Überlauf; jede Ausnahme wird zu `ValueError` ohne Inhalt."""
     try:
         return json.loads(bytes(data).decode("utf-8"), object_pairs_hook=_no_duplicates, parse_constant=_no_constant,
                           parse_float=_finite)
@@ -204,7 +186,7 @@ def loads_strict(data: bytes) -> Any:
 
 
 def _pick(obj: object, keys: tuple[str, ...]) -> dict[str, Any]:
-    """Genau diese Schluessel muessen da sein; weitere fallen weg."""
+    """Genau diese Schlüssel müssen da sein; weitere fallen weg (ein neuerer Helfer darf Felder dazunehmen)."""
     if not isinstance(obj, dict) or any(key not in obj for key in keys):
         raise _Invalid()
     return {key: obj[key] for key in keys}
@@ -242,7 +224,7 @@ def _clean_previous(raw: object) -> dict[str, Any] | None:
 
 
 def _clean_result(raw: object) -> dict[str, Any] | None:
-    """Ein Ergebnis oder `None`, wenn es nicht passt (dann faellt nur dieser Eintrag weg)."""
+    """Ein Ergebnis oder `None`, wenn es nicht passt (dann fällt nur dieser Eintrag weg)."""
     try:
         result = _pick(raw, ("id", "action", "from", "to", "outcome", "code", "finished_at"))
     except _Invalid:
@@ -259,11 +241,9 @@ def _clean_result(raw: object) -> dict[str, Any] | None:
 
 
 def clean_status(raw: object) -> dict[str, Any]:
-    """Der bereinigte Status oder `_Invalid` (mit `reason` `proto` oder `invalid`).
+    """Der bereinigte Status oder `_Invalid` (nach dem Muster von `bootstate.clean_state`).
 
-    Fuer die Felder, nach denen das Dashboard handelt (`ready`, `state`, `reason`, `target`, `busy`, `previous`),
-    gilt: falsch heisst, der ganze Status gilt nicht. Ein unpassendes Ergebnis faellt nur einzeln weg, eine kaputte
-    Helfer-Version wird `None`. Nach dem Muster von `bootstate.clean_state`."""
+    Ein falsches Feld, nach dem das Dashboard handelt, macht den Status ungültig; ein einzelnes Ergebnis fällt weg."""
     if not isinstance(raw, dict):
         raise _Invalid()
     if type(raw.get("proto")) is not int or raw["proto"] != PROTOCOL:
@@ -314,13 +294,13 @@ def _expected_uid(value: int | None) -> int:
 
 
 def _open_root(updater_dir: Path, uid: int) -> int:
-    """Wurzel per `O_NOFOLLOW` oeffnen und am Deskriptor pruefen. `ChannelError("missing"/"unsafe")`."""
+    """Wurzel per `O_NOFOLLOW` öffnen und am Deskriptor prüfen; wirft `ChannelError("missing"/"unsafe")`."""
     try:
         fd = os.open(os.fspath(updater_dir), _DIR_FLAGS)
     except FileNotFoundError:
         raise ChannelError(MISSING) from None
     except OSError:
-        raise ChannelError(UNSAFE) from None  # ELOOP/ENOTDIR: die Wurzel ist ein Symlink oder keine Ordner
+        raise ChannelError(UNSAFE) from None  # ELOOP/ENOTDIR: die Wurzel ist ein Symlink oder kein Ordner
     try:
         st = os.fstat(fd)
         if not stat.S_ISDIR(st.st_mode) or st.st_uid != uid or st.st_mode & (stat.S_IWGRP | stat.S_IWOTH):
@@ -331,6 +311,7 @@ def _open_root(updater_dir: Path, uid: int) -> int:
     return fd
 
 
+# `requests/` muss root gehören und genau 1777 haben, sonst `ChannelError`.
 def _open_requests(root_fd: int, uid: int) -> int:
     try:
         fd = os.open(REQUESTS_DIR, _DIR_FLAGS, dir_fd=root_fd)
@@ -348,6 +329,7 @@ def _open_requests(root_fd: int, uid: int) -> int:
     return fd
 
 
+# Geprüft wird am geöffneten Deskriptor, nicht am Pfad: so lässt sich zwischen Prüfen und Lesen nichts austauschen.
 def _read_status_bytes(root_fd: int, uid: int) -> bytes:
     try:
         fd = os.open(STATUS_NAME, _READ_FLAGS, dir_fd=root_fd)
@@ -378,7 +360,7 @@ def _read_status_bytes(root_fd: int, uid: int) -> bytes:
 
 
 def read_status(updater_dir: Path, *, now: float | None = None, expected_uid: int | None = None) -> HelperStatus:
-    """Liest `status.json` sicher (siehe Modulkopf). Wirft nie."""
+    """Liest `status.json` sicher und wirft nie; ohne passenden Helfer ist `present` falsch, mit einem Grund."""
     if not _SUPPORTED:
         return HelperStatus(False, MISSING, None)
     uid = _expected_uid(expected_uid)
@@ -390,7 +372,7 @@ def read_status(updater_dir: Path, *, now: float | None = None, expected_uid: in
             os.close(root_fd)
     except ChannelError as exc:
         return HelperStatus(False, exc.code, None)
-    except Exception:  # noqa: BLE001 - ein Lesefehler heisst nur: kein Helfer
+    except Exception:  # noqa: BLE001 - ein Lesefehler heißt nur: kein Helfer
         return HelperStatus(False, UNSAFE, None)
     try:
         doc = clean_status(loads_strict(data))
@@ -398,6 +380,7 @@ def read_status(updater_dir: Path, *, now: float | None = None, expected_uid: in
         return HelperStatus(False, exc.reason, None)
     except ValueError:
         return HelperStatus(False, INVALID, None)
+    # Herzschlag zu alt oder zu weit in der Zukunft: Der Helfer gilt als nicht da, die Ergebnisse stimmen trotzdem.
     current = time.time() if now is None else now
     beat = doc["heartbeat_at"]
     if current - beat > HEARTBEAT_MAX_AGE_S or beat - current > HEARTBEAT_MAX_FUTURE_S:
@@ -406,8 +389,8 @@ def read_status(updater_dir: Path, *, now: float | None = None, expected_uid: in
 
 
 def pending_requests(updater_dir: Path, *, expected_uid: int | None = None) -> list[str]:
-    """IDs der Anforderungen, die noch in `requests/` liegen (der Helfer hat sie noch nicht abgeholt). Fehlt der Kanal
-    oder ist er unsicher: `ChannelError`."""
+    """IDs der Anforderungen, die noch in `requests/` liegen (der Helfer hat sie nicht abgeholt).
+    Fehlt der Kanal oder ist er unsicher: `ChannelError`."""
     if not _SUPPORTED:
         raise ChannelError(MISSING)
     uid = _expected_uid(expected_uid)
@@ -438,7 +421,7 @@ def pending_requests(updater_dir: Path, *, expected_uid: int | None = None) -> l
 
 
 def encode_request(*, request_id: str, action: str, version: str, created_at: int) -> bytes:
-    """Die Anforderung als kompaktes ASCII-JSON (genau die fuenf Schluessel)."""
+    """Die Anforderung als kompaktes ASCII-JSON (genau die fünf Schlüssel)."""
     if not is_request_id(request_id) or action not in ACTIONS or not is_version(version) or not _int(created_at):
         raise ValueError("ungueltige Anforderung")
     body = {"v": REQUEST_VERSION, "id": request_id, "action": action, "version": version, "created_at": created_at}
@@ -457,8 +440,9 @@ def write_request(
     request_id: str | None = None,
     expected_uid: int | None = None,
 ) -> dict[str, Any]:
-    """Schreibt eine Anforderung atomar mit Modus 0644 (siehe Modulkopf) und gibt sie zurueck. `ChannelError`, wenn der
-    Kanal fehlt oder nicht sicher ist; `ValueError` bei ungueltigen Werten. Nur Owner-Code ruft das auf."""
+    """Schreibt eine Anforderung atomar mit Modus 0644 und gibt sie zurück; nur Owner-Code ruft das auf.
+
+    Wirft `ChannelError`, wenn der Kanal fehlt oder nicht sicher ist, und `ValueError` bei ungültigen Werten."""
     if not _SUPPORTED:
         raise ChannelError(MISSING)
     request_id = request_id or str(uuid.uuid4())
@@ -470,6 +454,8 @@ def write_request(
         dfd = _open_requests(root_fd, uid)
     finally:
         os.close(root_fd)
+    # Erst unter `.<id>.tmp` mit fsync schreiben, dann umbenennen und den Ordner syncen: So sieht der Helfer nie eine
+    # halbe Datei.
     tmp = f".{request_id}.tmp"
     final = f"{request_id}.json"
     try:
@@ -480,7 +466,9 @@ def write_request(
             raise ChannelError(UNSAFE) from exc
         try:
             try:
-                os.fchmod(fd, REQUEST_MODE)  # die umask (077) haette sonst 0600 daraus gemacht
+                # Ausdrücklich 0644: Das Dashboard läuft mit umask 077, und root ohne CAP_DAC_OVERRIDE liest keine
+                # 0600-Datei eines anderen Nutzers.
+                os.fchmod(fd, REQUEST_MODE)
                 view = memoryview(data)
                 while view:
                     written = os.write(fd, view)

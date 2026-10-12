@@ -1,11 +1,6 @@
-"""Nodvard Deck (Paket `nodvard_deck`, frueher `lattice`) — generischer Kern einer modularen Self-Hosting-Plattform.
+"""Nodvard Deck (Paket `nodvard_deck`, alter Name `lattice`): generischer Kern ohne Wissen über einzelne Erweiterungen.
 
-Dieses Paket kennt keine Extension. Wenn hier jemals das Wort "Proxmox", "Shield" oder
-"Ollama" auftaucht, ist das Design falsch — nicht der Check, der es findet
-(scripts/check_core_purity.py).
-
-Der alte Name `lattice` bleibt als Alias-Paket erhalten (derselbe Ordner `src`, gleiche Distribution): dieselben
-Module und Objekte, mit DeprecationWarning (Mechanik: `sdk/python/_nodvard_alias.py`).
+`scripts/check_core_purity.py` prüft das. Der alte Name bleibt als Alias-Paket mit Warnung (`sdk/python/_nodvard_alias.py`).
 """
 
 from .version import __version__

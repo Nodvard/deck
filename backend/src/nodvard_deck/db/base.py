@@ -1,9 +1,4 @@
-"""SQLAlchemy-Basis.
-
-Dialektneutral. Die Regeln aus docs/00-DECISIONS.md D-02 gelten hier woertlich:
-kein JSONB, kein ARRAY, kein ILIKE, keine Dialekt-Funktionen. Listen als
-Assoziationstabelle, Zeitstempel UTC-aware und in Python gesetzt.
-"""
+"""SQLAlchemy-Basis, dialektneutral: keine Dialekt-Funktionen, Listen als Assoziationstabelle, Zeitstempel UTC-aware."""
 
 from __future__ import annotations
 
@@ -30,11 +25,8 @@ class Base(DeclarativeBase):
 
 
 def new_id() -> str:
-    """UUIDv7-artig: zeitsortierter Praefix + Zufall.
-
-    Sortierbar (gut fuer Index-Lokalitaet), dialektneutral als String(36), in Logs lesbar.
-    TODO(phase1): auf uuid.uuid7() umstellen, sobald in der Standardbibliothek.
-    """
+    """UUIDv7-artig: zeitsortierter Präfix plus Zufall, als String(36) dialektneutral und in Logs lesbar."""
+    # TODO: auf uuid.uuid7() umstellen, sobald die Standardbibliothek es hat.
     ts = int(datetime.now(UTC).timestamp() * 1000)
     rand = uuid.uuid4().hex
     return f"{ts:012x}-{rand[0:4]}-{rand[4:8]}-{rand[8:12]}-{rand[12:24]}"
@@ -45,27 +37,11 @@ def utcnow() -> datetime:
 
 
 class UTCDateTime(TypeDecorator):
-    """`DateTime(timezone=True)` mit SQLite-Rundreise-Garantie.
+    """`DateTime(timezone=True)`, das auch unter SQLite aware zurückkommt."""
 
-    **Gefunden live beim WP-1-Boot-Test, nicht beim Lesen:** SQLite hat keinen nativen
-    `timestamptz`-Typ. Ein als UTC-aware geschriebener Wert wird korrekt gespeichert,
-    kommt beim naechsten Lesen ueber eine NEUE Query aber als *naive* `datetime` zurueck
-    (SQLite kennt nur Text/Zahlen, die Zeitzone geht beim Zwischenspeichern verloren).
-    Jeder Vergleich einer so gelesenen Zeit gegen `datetime.now(UTC)` wirft
-    `TypeError: can't compare offset-naive and offset-aware datetimes` -- exakt das
-    Bild, das `RefreshToken.expires_at < utcnow()` beim Refresh-Rotation-Test lieferte.
-
-    Auf Postgres (echtes `timestamptz`) sind `process_result_value`/`process_bind_param`
-    Kein-Op, weil dort bereits aware datetimes ankommen -- die Behandlung ist also
-    dialektneutral im Sinne von D-02, kein SQLite-Spezialpfad im Anwendungscode.
-
-    Ersetzt `DateTime(timezone=True)` in JEDER Modelldatei (identity/infra/security/
-    platform) -- nicht nur an der einen Stelle, die live gecrasht ist. Der Fehler war
-    strukturell, nicht lokal: jede kuenftige "vergleiche DB-Zeit gegen jetzt"-Stelle
-    (Audit-Retention in WP-2, Aktions-Ablauf in WP-5, Job-Terminierung in WP-6) haette
-    ihn sonst einzeln neu gefunden.
-    """
-
+    # SQLite hat keinen timestamptz: ein aware geschriebener Wert käme beim nächsten Lesen naiv zurück, und der
+    # Vergleich mit datetime.now(UTC) würde mit TypeError scheitern. Auf Postgres tun beide Methoden nichts, dort
+    # kommen aware Werte an.
     impl = DateTime(timezone=True)
     cache_ok = True
 
@@ -81,21 +57,10 @@ class UTCDateTime(TypeDecorator):
 
 
 async def refresh_relationships(session: AsyncSession, obj: Any, *names: str) -> None:
-    """Pflicht nach `session.add(obj)` + Flush, BEVOR eine `relationship()` auf `obj`
-    gelesen ODER beschrieben wird -- siehe docs/00-DECISIONS.md D-12 fuer die volle
-    Herleitung. Kurzfassung: ein frisch per `session.add()` angelegtes Objekt hat seine
-    `lazy="selectin"`-Collections nicht automatisch geladen (das passiert nur bei
-    Objekten, die aus einer awaiteten Query kommen); jeder Zugriffsversuch loest einen
-    synchronen Lazy-Load aus, der im Async-Kontext mit `MissingGreenlet` crasht.
-
-    Dreimal live gefunden, nicht beim Lesen: `ensure_builtin_roles()` (WP-1, `Role.
-    permissions`), ein eigener Test dafuer (WP-1, `User.roles`), `HostsHandle.
-    upsert_discovered()` (WP-3, `Host.tags`). Diese Funktion macht den Fix an einer
-    Stelle benennbar und grep-bar (`refresh_relationships`), ersetzt aber nicht das
-    Nachdenken darueber, ob eine neu angelegte Zeile ueberhaupt eine kurz danach
-    gelesene Relationship hat -- ein automatischer Check dafuer wurde bewusst NICHT
-    gebaut (D-12 nennt den Grund: Daten-/Kontrollfluss-Analyse noetig, hohe Falsch-
-    Positiv-/Negativ-Rate bei nur vier betroffenen Feldern im gesamten Schema)."""
+    """Nach `session.add(obj)` und Flush nötig, bevor eine `relationship()` von `obj` gelesen oder beschrieben wird."""
+    # Ein frisch angelegtes Objekt hat seine `lazy="selectin"`-Collections nicht geladen (das passiert nur bei
+    # Objekten aus einer awaiteten Query); der Zugriff löst sonst einen synchronen Lazy-Load aus, der im
+    # Async-Kontext mit MissingGreenlet scheitert.
     await session.refresh(obj, attribute_names=list(names))
 
 

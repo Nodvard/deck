@@ -1,22 +1,4 @@
-"""Vorfall-Warteschlange (laufender Batch + Cooldowns) -- ersetzt
-`incident_batch_queue`/`INCIDENT_COOLDOWNS`/`queue_incident()` aus dem Skript des
-Vorgaengersystems.
-
-**Vorfalls-Historie:** die abgeschlossenen Vorfaelle liegen inzwischen dauerhaft in
-`ext_nexus_soc_incidents` (models.py/history.py) -- der Alembic-Branch-Mechanismus pro
-Extension, der beim ersten Bau dieser Datei noch fehlte, existiert seit inventory.
-Hier bleibt nur, was die naechsten Minuten beschreibt: der offene Batch und die
-Cooldowns (wie das globale Dict des Vorgaengersystems). Der offene Batch ist zusaetzlich in
-`ext_nexus_soc_incident_queue` abgesichert (incident_queue.py): ein Neustart im
-Sammelfenster nimmt ihn beim Start wieder auf (`restore()`); die Cooldowns sind nach
-einem Neustart leer, dafuer setzt `restore()` sie fuer die wieder aufgenommenen Vorfaelle neu.
-
-**Behobener Fehler:** das Vorgaengersystem startete den Batch-Timer bei JEDEM neuen
-Ereignis neu (`incident_batch_timer.cancel()` + Neustart) -- unter
-Dauerlast ueber viele verschiedene (Host, Ziel)-Paare wird der Flush unbegrenzt
-verzoegert (Verhungern). Hier startet der Timer nur beim ERSTEN Ereignis eines
-leeren Batches (siehe `enqueue()`s Rueckgabewert und dessen Nutzung in `__init__.py`).
-"""
+"""Offener Vorfall-Batch des laufenden Sammelfensters und die Cooldowns je Host und Ziel, im Speicher."""
 
 from __future__ import annotations
 
@@ -45,6 +27,8 @@ class Incident:
 
 
 class IncidentStore:
+    """Den Batch sichert `incident_queue.py` über einen Neustart (`restore()`); Erledigtes liegt in `history.py`."""
+
     def __init__(self) -> None:
         self._pending: list[Incident] = []
         self._cooldowns: dict[tuple[str, str], float] = {}
@@ -55,8 +39,8 @@ class IncidentStore:
         return last is not None and (time.time() - last) < cooldown_s
 
     def merge_pending(self, host_name: str, target: str, *, is_crash: bool, seen_at: float) -> Incident | None:
-        """Steht derselbe Container (gleicher Host und Name, gleiche Art) schon im offenen
-        Batch? Dann zaehlt dort das neue Auftreten mit, es entsteht kein zweiter Vorfall."""
+        """Steht derselbe Container (gleicher Host und Name, gleiche Art) schon im offenen Batch?
+        Dann zählt dort das neue Auftreten mit, es entsteht kein zweiter Vorfall."""
         key = (host_name.lower(), target.lower())
         for incident in self._pending:
             if (incident.host_name.lower(), incident.target.lower()) == key and bool(
@@ -68,9 +52,8 @@ class IncidentStore:
         return None
 
     def enqueue(self, incident: Incident) -> bool:
-        """Merkt sich den Cooldown, haengt an die Warteschlange an. Gibt `True`
-        zurueck, wenn dies das ERSTE Ereignis eines zuvor leeren Batches ist -- nur
-        dann soll der Aufrufer einen neuen Flush-Timer starten (Fund G)."""
+        """Merkt den Cooldown und hängt an. `True`, wenn der Batch vorher leer war: Nur dann startet der Aufrufer
+        den Flush-Timer; bei jedem Ereignis neu gestartet, käme der Flush unter Dauerlast nie."""
         key = (incident.host_name.lower(), incident.target.lower())
         self._cooldowns[key] = time.time()
         is_first = len(self._pending) == 0
@@ -78,9 +61,8 @@ class IncidentStore:
         return is_first
 
     def restore(self, incidents: list[Incident]) -> bool:
-        """Nimmt beim Start die noch offenen Vorfaelle wieder auf (Cooldown inklusive,
-        damit derselbe Container nicht gleich nochmal gemeldet wird). Gibt `True`
-        zurueck, wenn danach ein Flush-Timer noetig ist."""
+        """Nimmt beim Start die noch offenen Vorfälle wieder auf, samt Cooldown, damit derselbe Container nicht gleich
+        nochmal gemeldet wird. `True`, wenn danach ein Flush-Timer nötig ist."""
         is_first = len(self._pending) == 0
         for incident in incidents:
             self._cooldowns[(incident.host_name.lower(), incident.target.lower())] = time.time()

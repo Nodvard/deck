@@ -1,12 +1,6 @@
-"""Erfuellt `nodvard_sdk.capabilities.ServiceCatalog` ueber `docker ps` per SSH
-(`ctx.exec.run()`, derselbe gemeinsame Layer wie ueberall sonst, docs/00 D-05) --
-kein Docker-Python-SDK, kein zweiter Ausfuehrungsweg.
+"""Dienstkatalog (`ServiceCatalog`) und Container-Aktionen der Service-Matrix, per `docker ps` über SSH (`ctx.exec.run()`).
 
-Ersetzt die von Hand gepflegten Container-/URL-Listen des Vorgaengersystems (die
-veralteten: tote Eintraege, Dienste am falschen Host). Hier gibt es keine Liste zu
-pflegen -- jeder laufende Container auf einem
-getaggten Host erscheint automatisch, verschwindet automatisch wieder, wenn er
-gestoppt/entfernt wird.
+Jeder Container eines getaggten Hosts erscheint von selbst und verschwindet wieder, sobald er entfernt wird.
 """
 
 from __future__ import annotations
@@ -29,17 +23,15 @@ if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
 CONTAINER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\Z")
-"""Dockers eigene Namensregel (`[a-zA-Z0-9][a-zA-Z0-9_.-]+`). Jeder Containername, der
-in ein SSH-Kommando wandert, MUSS hier durch -- sonst waere `container=x; rm -rf /`
-ein Weg an der Sperrliste vorbei in eine Shell. `\\Z` statt `$`: ein Zeilenumbruch am
-Ende ist KEIN Treffer."""
+"""Dockers Namensregel (`[a-zA-Z0-9][a-zA-Z0-9_.-]+`). Jeder Containername, der in ein SSH-Kommando wandert, muss hier
+durch, sonst wäre `container=x; rm -rf /` ein Weg an der Sperrliste vorbei in eine Shell. `\\Z` statt `$`: ein
+Zeilenumbruch am Ende ist kein Treffer."""
 COMPOSE_PROJECT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,62}\Z")
-"""Composes eigene Regel fuer Projektnamen -- wandert wie der Containername in ein
-SSH-Kommando und muss deshalb hier durch (ebenfalls mit `\\Z`)."""
+"""Composes Regel für Projektnamen; wandert wie der Containername in ein SSH-Kommando (ebenfalls mit `\\Z`)."""
 
 
 def _json_pattern(regex: re.Pattern[str]) -> str:
-    """Fuer das JSON-Schema (ECMA-Syntax kennt `\\Z` nicht): `\\Z` -> `$`."""
+    """Für das JSON-Schema (ECMA-Syntax kennt `\\Z` nicht): `\\Z` -> `$`."""
     return regex.pattern.replace("\\Z", "$")
 
 
@@ -47,17 +39,14 @@ _PS_FORMAT = (
     """'{{.ID}}|{{.Names}}|{{.State}}|{{.Status}}|{{.Image}}|{{.Label "com.docker.compose.project"}}|{{.Ports}}"""
     """|{{.Label "com.docker.compose.project.working_dir"}}'"""
 )
-"""`.ID`: erkennt den Container, in dem Nodvard Deck
-selbst laeuft -- Docker setzt dessen Hostnamen standardmaessig auf die kurze ID.
-`.Image` wie in Portainer: welches Image hinter einem Container steckt.
-Ganz hinten der Projektordner des Compose-Projekts (fuer die Orte im Dateimanager); er steht nach den Ports, damit
-ein `|` im Ordnernamen nichts davor verschiebt. Aeltere Ausgaben ohne das Feld werden weiter gelesen."""
+"""`.ID` erkennt den Container von Nodvard Deck selbst (Docker setzt dessen Hostnamen auf die kurze ID).
+Der Projektordner steht ganz hinten, nach den Ports: so verschiebt ein `|` im Ordnernamen nichts davor."""
 
 COMPOSE_DIRS_TTL_S = 600.0
 """So lange gilt der gemerkte Stand der Projektordner eines Hosts, bevor die Orte ihn neu lesen."""
 MAX_COMPOSE_DIRS = 20
 _PORTAINER_DIR_PREFIX = "/data/compose/"
-"""Portainer legt seine Stacks in SEINEM Container unter `/data/compose/<n>` ab -- diesen Ordner gibt es auf dem Host nicht."""
+"""Portainer legt seine Stacks in seinem Container unter `/data/compose/<n>` ab; diesen Ordner gibt es auf dem Host nicht."""
 
 
 def parse_compose_dirs(text: str) -> dict[str, str]:
@@ -86,7 +75,7 @@ _SIZE_FACTOR = {
 
 
 def parse_size(text: str) -> int | None:
-    """"45.3MiB" -> Byte; Dockers eigene Schreibweise (binaer UND dezimal)."""
+    """"45.3MiB" -> Byte; Dockers eigene Schreibweise (binär und dezimal)."""
     match = _SIZE_RE.match(text or "")
     if match is None:
         return None
@@ -95,9 +84,7 @@ def parse_size(text: str) -> int | None:
 
 
 def parse_stats_line(line: str) -> tuple[str, dict[str, Any]] | None:
-    """Eine Zeile `docker stats --no-stream`. Meldet der Host keinen Speicher
-    ("0B / 0B" -- live auf dem Raspberry Pi: dort ist die Speicher-Abrechnung der
-    cgroups im Kernel standardmaessig aus), ist RAM UNBEKANNT, nicht 0."""
+    """Eine Zeile von `docker stats --no-stream` -> (Name, Werte); `None` bei einer unlesbaren Zeile."""
     parts = line.split("|")
     if len(parts) < 4 or not parts[0].strip():
         return None
@@ -107,6 +94,8 @@ def parse_stats_line(line: str) -> tuple[str, dict[str, Any]] | None:
         cpu = None
     used_text, _, limit_text = parts[2].partition("/")
     mem_used, mem_limit = parse_size(used_text), parse_size(limit_text)
+    # "0B / 0B": der Host meldet keinen Speicher (auf dem Raspberry Pi ist die Speicher-Abrechnung der cgroups im Kernel
+    # standardmäßig aus). Dann ist der RAM unbekannt, nicht 0.
     if not mem_limit:
         mem_used = mem_limit = None
     return parts[0].strip(), {"cpu_percent": cpu, "mem_used": mem_used, "mem_limit": mem_limit}
@@ -117,58 +106,60 @@ def _own_container_id() -> str:
 
 
 def is_own_container(container_id: str) -> bool:
-    """Nodvard Deck laeuft oft selbst als Container auf einem ueberwachten Host --
-    "Stoppen" darauf wuerde die Oberflaeche abschalten, aus der man ihn wieder
-    starten muesste. Vergleich auf die kurze ID (12 Zeichen, Docker-Hostname-Default)."""
+    """Läuft dieser Container Nodvard Deck selbst? Vergleich auf die kurze ID (12 Zeichen, Hostname-Vorgabe von Docker).
+
+    "Stoppen" darauf würde die Oberfläche abschalten, aus der man ihn wieder starten müsste.
+    """
     own = _own_container_id()
     if not container_id or len(own) < 12:
         return False
     return container_id.startswith(own) or own.startswith(container_id)
 
+# Nur IPv4-Host-Bindungen (`0.0.0.0:8080->80/tcp`): `docker ps` listet denselben Port oft zusätzlich als IPv6-Zwilling
+# (`:::8080->80/tcp`). Gleich nummerierte Bindungen fasst Docker zu Bereichen zusammen (`0.0.0.0:80-81->80-81/tcp`),
+# Bereiche gleicher Länge werden Port für Port aufgelöst.
 _PORT_RE = re.compile(
     r"(?:^|[\s,])(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})(?:-(\d{1,5}))?->(\d{1,5})(?:-(\d{1,5}))?/tcp"
 )
-"""Nimmt bewusst nur IPv4-Host-Bindungen (`0.0.0.0:8080->80/tcp`) -- Dockers
-`--format '{{.Ports}}'` listet fuer denselben veroeffentlichten Port oft eine IPv6-
-Zwillingszeile (`:::8080->80/tcp`), die zum selben Port fuehrt. Docker fasst Bindungen mit gleicher Nummer zu
-Bereichen zusammen (der Nginx Proxy Manager mit `80:80` und `81:81` erscheint als `0.0.0.0:80-81->80-81/tcp`):
-Bereiche gleicher Laenge werden deshalb Port fuer Port aufgeloest."""
 MAX_RANGE_PORTS = 256
-"""Hoechstens so viele Ports je Bereich (wie bei `published_ports`)."""
+"""Höchstens so viele Ports je Bereich (wie bei `published_ports`)."""
 
 WEB_PORTS: tuple[int, ...] = (
     80, 8080, 443, 8443, 9443, 9000, 3000, 3001, 5000, 8096, 8920, 32400, 8123, 1880, 8384, 8989, 7878, 9696, 8686,
     6767, 5055, 8081, 8088, 8090, 8888, 9090, 2283, 5678, 7575, 61208, 19999, 81,
 )
-"""Ports im Container, hinter denen ueblicherweise eine Weboberflaeche steckt -- in dieser Reihenfolge bevorzugt
-(80 vor 443: ein eigenes Zertifikat wuerde im Browser erst eine Warnung zeigen)."""
+"""Ports im Container, hinter denen üblicherweise eine Weboberfläche steckt, in dieser Reihenfolge bevorzugt
+(80 vor 443: ein eigenes Zertifikat würde im Browser erst eine Warnung zeigen)."""
 NON_WEB_PORTS = frozenset({
     20, 21, 22, 23, 25, 53, 67, 68, 110, 111, 123, 137, 138, 139, 143, 161, 389, 445, 465, 554, 587, 636, 993, 995,
     1194, 1883, 1935, 2049, 2181, 3306, 3478, 4369, 5349, 5353, 5432, 5672, 5900, 6379, 6881, 8009, 8333, 8545, 8546,
     8554, 8555, 8883, 9092, 11211, 25565, 27015, 27017, 51413, 51820,
 })
-"""Ports im Container, die nie eine Weboberflaeche sind (DNS, SSH, Mail, Datenbanken, MQTT, VPN, Torrent, Kamera-
+"""Ports im Container, die nie eine Weboberfläche sind (DNS, SSH, Mail, Datenbanken, MQTT, VPN, Torrent, Kamera-
 Streams per RTSP/RTMP, VNC, AJP, Blockchain-Knoten ...)."""
 TLS_PORTS = frozenset({443, 8443, 9443})
 """Hinter diesen Ports im Container spricht die App https (Ausnahmen: `_ImageRule.scheme`)."""
 PLAIN_HTTP_PORTS = frozenset({80})
 """Hier spricht die App immer http, auch wenn als Link-Schema https eingestellt ist."""
 FALLBACK_WEB_RANGE = range(8000, 9000)
-"""Kein bekannter Web-Port: ein Port im Container aus diesem Bereich ist fast immer eine Weboberflaeche."""
+"""Kein bekannter Web-Port: ein Port im Container aus diesem Bereich ist fast immer eine Weboberfläche."""
 
 
 @dataclass(frozen=True)
 class _ImageRule:
     prefer: tuple[int, ...] = ()
-    """Ports im Container, die bei diesem Image die Weboberflaeche sind (vor allen anderen)."""
+    """Ports im Container, die bei diesem Image die Weboberfläche sind (vor allen anderen)."""
     never: frozenset[int] = frozenset()
-    """Ports im Container, die bei diesem Image keine Weboberflaeche sind."""
+    """Ports im Container, die bei diesem Image keine Weboberfläche sind."""
     path: str = ""
     no_web: bool = False
     scheme: str | None = None
-    """Fester Schema-Wert, wenn das Image anders spricht, als der Port vermuten laesst."""
+    """Fester Schema-Wert, wenn das Image anders spricht, als der Port vermuten lässt."""
 
 
+# Was sich nicht aus den Ports allein ablesen lässt: Pi-hole hat seine Oberfläche unter `/admin/`, Portainer belegt 8000 für
+# den Edge-Tunnel, Portainer-Agent und Docker-Registry haben gar keine Oberfläche, beim Nginx Proxy Manager liegt die
+# Verwaltung auf 81 (80/443 sind die Weiterleitungen selbst), code-server spricht auf 8443 http.
 _PORTAINER = _ImageRule(prefer=(9443, 9000), never=frozenset({8000, 9001}))
 _PIHOLE = _ImageRule(prefer=(80, 443), path="/admin/")
 _PLEX = _ImageRule(prefer=(32400,), path="/web")
@@ -191,11 +182,8 @@ IMAGE_RULES: dict[str, _ImageRule] = {
     "jacobalberty/unifi": _UNIFI,
     "registry": _ImageRule(no_web=True),
 }
-"""Was sich nicht aus den Ports allein ablesen laesst: Pi-hole hat seine Oberflaeche unter `/admin/`, Portainer
-belegt 8000 fuer den Edge-Tunnel, der Portainer-Agent und die Docker-Registry haben gar keine Oberflaeche, beim Nginx
-Proxy Manager ist die Verwaltung auf 81 (80/443 sind die Weiterleitungen selbst), code-server spricht auf 8443 http.
-Zeigt `docker ps` statt des Namens nur die Image-ID (der Tag zeigt schon auf ein neueres Image, etwa nach
-`docker compose pull` ohne `up`), greift keine Regel -- dann zaehlen nur die Ports."""
+"""Keine Regel greift, wenn `docker ps` statt des Namens nur die Image-ID zeigt (der Tag zeigt dann schon auf ein neueres
+Image, etwa nach `docker compose pull` ohne `up`); es zählen nur die Ports."""
 
 
 def image_key(image: str) -> str:
@@ -222,7 +210,7 @@ def _port_mappings(ports: str) -> dict[int, int]:
         host_end = int(match.group(3)) if match.group(3) else host_start
         container_end = int(match.group(5)) if match.group(5) else container_start
         if host_end < host_start or host_end - host_start != container_end - container_start:
-            continue  # unterschiedlich lange Bereiche: welcher Port wohin gehoert, steht nicht fest
+            continue  # unterschiedlich lange Bereiche: welcher Port wohin gehört, steht nicht fest
         if not (0 < host_start and host_end <= 65535 and 0 < container_start and container_end <= 65535):
             continue
         for offset in range(min(host_end - host_start + 1, MAX_RANGE_PORTS)):
@@ -231,9 +219,8 @@ def _port_mappings(ports: str) -> dict[int, int]:
 
 
 def _guess_url(ports: str, address: str, scheme: str, image: str = "") -> str | None:
-    """Adresse der Weboberflaeche eines Containers, oder None, wenn keine erkennbar ist. Entscheidend ist der Port IM
-    Container (rechts von `->`): `0.0.0.0:8088->80/tcp` ist die Weboberflaeche auf Port 8088, `0.0.0.0:53->53/tcp`
-    ist DNS. https bei 443/8443/9443 im Container, http bei 80, sonst das eingestellte Schema."""
+    """Adresse der Weboberfläche eines Containers, oder None. Entscheidend ist der Port im Container (rechts von `->`):
+    `0.0.0.0:8088->80/tcp` ist Web auf Port 8088, `0.0.0.0:53->53/tcp` ist DNS."""
     rule = IMAGE_RULES.get(image_key(image), _ImageRule())
     if rule.no_web:
         return None
@@ -255,7 +242,7 @@ def _guess_url(ports: str, address: str, scheme: str, image: str = "") -> str | 
 
 
 MAX_URL_OVERRIDES = 500
-"""Hoechstens so viele eigene Kachel-Adressen (Einstellung `url_overrides`)."""
+"""Höchstens so viele eigene Kachel-Adressen (Einstellung `url_overrides`)."""
 MAX_URL_LENGTH = 2000
 
 
@@ -263,10 +250,9 @@ _HOST_RE = re.compile(r"[\w.-]+")
 
 
 def clean_tile_url(value: str) -> str:
-    """Eine eigene Kachel-Adresse, nach denselben Regeln wie die Apps-Seite (`services/custom_apps.clean_url` im Kern):
-    nur http/https mit Rechnername oder IP-Adresse, ohne Benutzername und Passwort (die stuenden sonst fuer jeden lesbar
-    in der Kachel), ohne Leer-, Steuer- und unsichtbare Zeichen und ohne Rueckwaerts-Schraegstrich. Wirft `ValueError`
-    mit einem Satz fuer die Oberflaeche."""
+    """Prüft eine eigene Kachel-Adresse wie die Apps-Seite (`services/custom_apps.clean_url` im Kern), sonst `ValueError`.
+    Nur http/https mit Rechnername oder IP, ohne Benutzername und Passwort (sie stünden für jeden lesbar in der Kachel) und
+    ohne Leer-, Steuer- und unsichtbare Zeichen oder Rückwärts-Schrägstrich."""
     text = (value or "").strip()
     if not text:
         raise ValueError("Bitte eine Adresse angeben.")
@@ -308,7 +294,7 @@ def url_origin(url: str) -> str:
 
 
 def url_overrides(settings: dict[str, Any]) -> dict[str, str]:
-    """Eigene Kachel-Adressen aus den Einstellungen: `<host_id>:<container>` -> Adresse. Kaputte Eintraege fallen weg."""
+    """Eigene Kachel-Adressen aus den Einstellungen: `<host_id>:<container>` -> Adresse. Kaputte Einträge fallen weg."""
     raw = settings.get("url_overrides")
     if not isinstance(raw, dict):
         return {}
@@ -317,7 +303,7 @@ def url_overrides(settings: dict[str, Any]) -> dict[str, str]:
         if not isinstance(key, str) or not isinstance(value, str):
             continue
         try:
-            # Auch beim Lesen pruefen: Kommt die Liste an der Route vorbei in die Einstellungen (Datenbank von Hand,
+            # Auch beim Lesen prüfen: kommt die Liste an der Route vorbei in die Einstellungen (Datenbank von Hand,
             # Wiederherstellung), soll trotzdem nie ein `javascript:`-Link in eine Kachel.
             out[key] = clean_tile_url(value)
         except ValueError:
@@ -331,27 +317,27 @@ _PUBLISHED_RE = re.compile(
 
 
 def _loopback_bind(host_ip: str) -> bool:
-    """Nur am Server selbst erreichbar (`127.0.0.1:8080->80`, `[::1]:8080->80`): kein Ziel fuer `server-adresse:port`."""
+    """Nur am Server selbst erreichbar (`127.0.0.1:8080->80`, `[::1]:8080->80`): kein Ziel für `server-adresse:port`."""
     ip = host_ip.strip("[]")
     return ip.startswith("127.") or ip == "::1"
 MAX_PUBLISHED_PORTS = 256
-"""Obergrenze je Container -- ein grosser Bereich (`8000-9000->...`) soll die Liste nicht aufblaehen."""
+"""Obergrenze je Container: ein großer Bereich (`8000-9000->...`) soll die Liste nicht aufblähen."""
 
 
 _INSPECT_PORTS_FORMAT = "'{{.Id}}|{{json .HostConfig.PortBindings}}'"
 _DOCKER_ID_RE = re.compile(r"^[0-9a-f]{12,64}\Z")
-"""Kurze (`docker ps`) oder volle Container-ID. Eigener Name, weil andere Pruefungen im Modul nur volle IDs annehmen."""
+"""Kurze (`docker ps`) oder volle Container-ID. Eigener Name, weil andere Prüfungen im Modul nur volle IDs annehmen."""
 STOPPED_STATES = frozenset({"exited", "created", "dead", "restarting"})
-"""Zustaende, in denen `docker ps` keine Ports zeigt -- die Zuordnung steht dann nur in der Container-Konfiguration
-(`restarting`: zwischen zwei Starts laeuft der Container nicht)."""
+"""Zustände, in denen `docker ps` keine Ports zeigt: die Zuordnung steht dann nur in der Container-Konfiguration
+(`restarting`: zwischen zwei Starts läuft der Container nicht)."""
 INSPECT_TIMEOUT_S = 5
 MAX_INSPECT_PER_HOST = 50
 
 
 def parse_port_bindings(stdout: str) -> dict[str, list[int]]:
     """Zeilen `<volle ID>|<HostConfig.PortBindings als JSON>` (`docker inspect`) -> kurze ID (12 Zeichen) -> die TCP-Ports,
-    die der Container beim Start auf dem Server belegt. Ein leerer `HostPort` (Docker waehlt den Port erst beim Start)
-    und eine Bindung nur an `127.0.0.1`/`::1` zaehlen nicht; kaputte Zeilen werden uebersprungen."""
+    die der Container beim Start auf dem Server belegt. Ein leerer `HostPort` (Docker wählt den Port erst beim Start)
+    und eine Bindung nur an `127.0.0.1`/`::1` zählen nicht; kaputte Zeilen werden übersprungen."""
     out: dict[str, list[int]] = {}
     for line in (stdout or "").splitlines():
         container_id, sep, raw = line.strip().partition("|")
@@ -377,10 +363,9 @@ def parse_port_bindings(stdout: str) -> dict[str, list[int]]:
 
 
 def published_ports(ports: str) -> list[int]:
-    """Alle TCP-Ports, die der Container auf dem Server veroeffentlicht (IPv4 und IPv6, auch Bereiche), aufsteigend
-    und ohne Doppelte. Nur intern freigegebene Ports (`80/tcp` ohne `->`) zaehlen nicht. Fuer den Adress-Check der
-    Netzwerk-Erweiterung: Er ordnet ein Proxy-Ziel `server:port` dem Container zu, der diesen Port belegt. Nur an
-    `127.0.0.1`/`::1` gebundene Ports zaehlen nicht, sie sind von aussen nicht erreichbar."""
+    """Alle TCP-Ports, die der Container auf dem Server veröffentlicht (IPv4 und IPv6, auch Bereiche), aufsteigend.
+    Nicht gezählt: intern freigegebene Ports (`80/tcp` ohne `->`) und Bindungen nur an `127.0.0.1`/`::1`. Damit ordnet
+    der Adress-Check der Netzwerk-Erweiterung ein Proxy-Ziel `server:port` dem Container zu, der den Port belegt."""
     found: set[int] = set()
     for match in _PUBLISHED_RE.finditer(ports or ""):
         if _loopback_bind(match.group(1)):
@@ -397,25 +382,19 @@ def published_ports(ports: str) -> list[int]:
 
 
 def _error_tile(host: Any, message: str) -> dict[str, Any]:
-    """Nachtrag (Detailseite): `host` trug hier urspruenglich die
-    Fehlermeldung (fuer das Widget, dessen `tile_subtitle="{{ host }}"" davon
-    profitierte) -- die neue ServiceMatrixPage.tsx gruppiert Eintraege aber NACH
-    `host`, eine Fehlermeldung als "Hostname" haette dort eine eigene, falsche
-    Gruppe erzeugt. `host` ist jetzt wieder der echte Host-Anzeigename wie bei
-    jedem normalen Eintrag, die Meldung steht ausschliesslich in `status` (das die
-    Seite bereits als eigene Spalte zeigt; das Widget zeigt sie nicht extra an --
-    hinnehmbar, `tone=danger` bleibt dort trotzdem sichtbar)."""
+    """Platzhalter-Kachel für einen Server, der sich nicht lesen ließ."""
     return {
         "id": f"{host.id}:__error__",
         "name": f"⚠ {host.display_name or host.name}",
+        # Die Seite gruppiert nach `host`: hier muss der echte Anzeigename stehen, die Meldung gehört nur in `status`.
         "host": host.display_name or host.name,
         "state": "error",
         "status": message,
         "tone": "danger",
         "url": None,
-        # Marker fuer Leser (Cockpit): Platzhalter eines Servers, den wir nicht lesen konnten -- kein Container.
+        # Marker für Leser (Cockpit): Platzhalter eines Servers, den wir nicht lesen konnten, kein Container.
         "unreachable": True,
-        # Fuer den Adress-Check: ein Ziel `adresse:port` dieses Servers heisst dann "nicht erreichbar", nicht "unbekannt".
+        # Für den Adress-Check: ein Ziel `adresse:port` dieses Servers heißt dann "nicht erreichbar", nicht "unbekannt".
         "host_address": host.address,
     }
 
@@ -429,23 +408,20 @@ def _tone_for_state(state: str) -> str:
 
 
 class DockerServiceCatalog:
-    """`list_services()` liefert lose typisierte Dicts (`ServiceCatalog`-Vertrag,
-    docs/02 Paragraph 3, kennt keine strengere Form) -- die Felder sind genau die,
-    die `StatusGridView`s Templates (`__init__.py`) referenzieren."""
+    """Dienstkatalog über `docker ps`; `list_services()` liefert lose Dicts, deren Felder die Templates der Kachel nutzen."""
 
     def __init__(self, ctx: "ExtensionContext") -> None:
         self._ctx = ctx
         self._compose_dirs: dict[str, tuple[float, dict[str, str]]] = {}
         """Host-ID -> (Zeitpunkt, Projekt -> Ordner): der Stand aus dem letzten `docker ps`, das `list_services()` ohnehin liest."""
         self._stopped_ports: dict[str, dict[str, list[int]]] = {}
-        """Host-ID -> kurze Container-ID -> Ports gestoppter Container. Ein gestoppter Container aendert seine Zuordnung nicht
+        """Host-ID -> kurze Container-ID -> Ports gestoppter Container. Ein gestoppter Container ändert seine Zuordnung nicht
         (ein neu angelegter bekommt eine neue ID), deshalb fragt `list_services()` je Container nur einmal nach."""
 
     async def compose_dirs(self, host: Any) -> dict[str, str]:
-        """Projektordner der Compose-Projekte eines Hosts. Aus dem Stand, den `list_services()` (Cockpit, Service-Matrix)
-        beim letzten Lesen gemerkt hat; ist er aelter als `COMPOSE_DIRS_TTL_S` oder fehlt er, liest dieser Aufruf
-        denselben `docker ps -a` einmal fuer diesen Host. Ein Host, der ausgeschaltet ist oder nicht antwortet, zeigt den
-        alten Stand (oder nichts)."""
+        """Projektordner der Compose-Projekte eines Hosts, aus dem Stand vom letzten Lesen in `list_services()`.
+        Ist er älter als `COMPOSE_DIRS_TTL_S` oder fehlt er, liest dieser Aufruf `docker ps -a` einmal für diesen Host;
+        ein ausgeschalteter oder stummer Host zeigt den alten Stand (oder nichts)."""
         remembered = self._compose_dirs.get(host.id)
         if remembered is not None and time.monotonic() - remembered[0] < COMPOSE_DIRS_TTL_S:
             return remembered[1]
@@ -467,13 +443,10 @@ class DockerServiceCatalog:
         return dirs
 
     async def list_services(self) -> list[dict[str, Any]]:
-        """Ein Host ohne
-        laufenden Docker-Daemon (SSH klappt, `docker ps` scheitert) oder ganz
-        unerreichbarer Host lieferte bisher STILLE eine leere Liste -- fachlich
-        korrekt fuer "keine Container", ununterscheidbar von "der Host ist kaputt".
-        Beide Faelle erzeugen jetzt eine eigene, sichtbare `tone="danger"`-Kachel
-        statt zu verschwinden -- ein anderer, erreichbarer Host darf davon
-        unberuehrt bleiben (deshalb weiterhin pro Host `continue`, nicht `return`)."""
+        """Alle Container der Docker-Hosts als lose Dicts.
+
+        Ein Host ohne laufenden Docker-Daemon oder ganz unerreichbar erscheint als `tone="danger"`-Kachel statt zu fehlen.
+        """
         settings = await self._ctx.settings.get()
         tag = settings.get("docker_host_tag") or "docker"
         scheme = settings.get("url_scheme") or "http"
@@ -494,8 +467,8 @@ class DockerServiceCatalog:
             self._remember_compose_dirs(host.id, result.stdout)
             stopped: list[tuple[dict[str, Any], str]] = []
             for line in result.stdout.splitlines():
-                # Seit Roadmap Punkt 2 mit Compose-Projekt vor den Ports (7 Felder), seit den Orten im Dateimanager
-                # mit dem Projektordner als achtem; 6 Felder = altes Format ohne Projekt, weiterhin gelesen.
+                # ID|Name|Zustand|Status|Image|Projekt|Ports|Ordner; ältere Ausgaben ohne Projekt (6 Felder) oder Ordner
+                # werden weiter gelesen.
                 parts = line.split("|", 7)
                 if len(parts) < 5:
                     continue
@@ -514,8 +487,7 @@ class DockerServiceCatalog:
                     "id": f"{host.id}:{name}",
                     "name": name,
                     "host": host.display_name or host.name,
-                    # Was die Seite fuer Aktionen
-                    # (POST /hosts/{host_id}/actions/container.*) und Logs braucht.
+                    # Was die Seite für Aktionen (POST /hosts/{host_id}/actions/container.*) und Logs braucht.
                     "host_id": host.id,
                     "container": name,
                     "is_self": is_own_container(container_id),
@@ -525,10 +497,10 @@ class DockerServiceCatalog:
                     "status": status_str,
                     "tone": _tone_for_state(state),
                     "url": custom or detected,
-                    # Was Nodvard Deck selbst erkannt hat, und ob der Nutzer die Adresse ueberschrieben hat.
+                    # Was Nodvard Deck selbst erkannt hat, und ob der Nutzer die Adresse überschrieben hat.
                     "url_detected": detected,
                     "url_custom": custom is not None,
-                    # Fuer den Adress-Check (Netzwerk-Erweiterung): Proxy-Ziel `adresse:port` -> Container.
+                    # Für den Adress-Check (Netzwerk-Erweiterung): Proxy-Ziel `adresse:port` -> Container.
                     "host_address": host.address,
                     "published_ports": published_ports(ports),
                 }
@@ -539,9 +511,9 @@ class DockerServiceCatalog:
         return services
 
     async def _fill_stopped_ports(self, host: Any, stopped: list[tuple[dict[str, Any], str]]) -> None:
-        """Gestoppte Container zeigen in `docker ps` keine Ports. Fuer den Adress-Check steht die Zuordnung dann aus
-        `docker inspect` in `published_ports` -- je Container nur beim ersten Mal gelesen, danach aus dem Speicher.
-        Scheitert das Lesen, bleibt die Liste leer und der naechste Aufruf versucht es wieder."""
+        """Gestoppte Container zeigen in `docker ps` keine Ports; die Zuordnung kommt aus `docker inspect`.
+        Je Container wird nur beim ersten Mal gelesen. Scheitert das, bleibt `published_ports` leer und der nächste
+        Aufruf versucht es wieder."""
         known = self._stopped_ports.get(host.id, {})
         current = {short_id for _, short_id in stopped}
         known = {cid: ports for cid, ports in known.items() if cid in current}
@@ -556,7 +528,7 @@ class DockerServiceCatalog:
                 result = None
             if result is not None:
                 # Auch bei Exit != 0 (ein Container verschwand zwischen `ps` und `inspect`) gelten die lesbaren Zeilen;
-                # was fehlt, wird beim naechsten Aufruf wieder versucht.
+                # was fehlt, wird beim nächsten Aufruf wieder versucht.
                 parsed = parse_port_bindings(result.stdout)
                 known.update({cid: parsed[cid] for cid in missing if cid in parsed})
         self._stopped_ports[host.id] = known
@@ -565,10 +537,9 @@ class DockerServiceCatalog:
                 row["published_ports"] = known[short_id]
 
     async def container_stats(self) -> dict[str, dict[str, Any]]:
-        """CPU/RAM je LAUFENDEM Container (`docker stats --no-stream`, dauert je Host
-        ~2-3s, weil Docker eine Messperiode abwartet) -- deshalb ein eigener Aufruf,
-        nicht Teil der Liste. Schluessel wie `list_services()`s `id`. Ein Host, der
-        nicht antwortet, fehlt einfach (die Liste zeigt seinen Fehler schon)."""
+        """CPU/RAM je laufendem Container (`docker stats --no-stream`), mit den Schlüsseln von `list_services()`.
+        Ein eigener Aufruf, nicht Teil der Liste: Docker wartet eine Messperiode ab, das dauert je Host ~2-3 s.
+        Ein Host, der nicht antwortet, fehlt einfach (die Liste zeigt seinen Fehler schon)."""
         settings = await self._ctx.settings.get()
         tag = settings.get("docker_host_tag") or "docker"
         stats: dict[str, dict[str, Any]] = {}
@@ -589,9 +560,9 @@ class DockerServiceCatalog:
 
 _VERBS = {"container.start": "start", "container.stop": "stop", "container.restart": "restart", "container.remove": "rm"}
 _VERB_LABEL = {"start": "starten", "stop": "stoppen", "restart": "neu starten", "rm": "löschen"}
+# Zustände von `docker inspect`, in denen gelöscht werden darf (nicht `running`, `paused`, `restarting`).
 _REMOVABLE_STATES = frozenset({"created", "exited", "dead"})
 _CONTAINER_ID_RE = re.compile(r"^[0-9a-f]{64}\Z")
-"""`docker inspect`-Zustaende, in denen geloescht werden darf -- nicht `running`, `paused`, `restarting`."""
 _PARAMS_SCHEMA = {
     "type": "object",
     "properties": {"container": {"type": "string", "pattern": _json_pattern(CONTAINER_NAME_RE)}},
@@ -599,8 +570,8 @@ _PARAMS_SCHEMA = {
 }
 
 def container_action_specs(tag: str = "docker") -> list[ActionSpec]:
-    """Nur fuer Docker-Hosts (`host_tags`) -- der Tag ist einstellbar, deshalb eine
-    Funktion: bei geaenderter Einstellung meldet die Extension die Specs neu an."""
+    """Nur für Docker-Hosts (`host_tags`); der Tag ist einstellbar, deshalb eine Funktion: bei geänderter Einstellung
+    meldet die Extension die Specs neu an."""
     return [
         ActionSpec(
             action_type="container.start", label="Container starten", icon="play",
@@ -629,8 +600,7 @@ def container_action_specs(tag: str = "docker") -> list[ActionSpec]:
             confirm_text="Der Container wird gelöscht. Volumes und das Image bleiben erhalten, aber Daten, die nur im "
             "Container selbst lagen, sind weg. Fortfahren?",
         ),
-        # Roadmap Punkt 2 (Portainer-Ersatz): Speicher aufraeumen. Feste Befehle, kein
-        # Nutzertext -- deshalb kein command_field.
+        # Speicher aufräumen: feste Befehle, kein Nutzertext, deshalb kein command_field.
         ActionSpec(
             action_type="docker.prune_images", label="Verwaiste Images entfernen", icon="trash-2",
             description="Entfernt Images ohne Namen, die kein Container mehr nutzt (docker image prune).",
@@ -667,9 +637,11 @@ _PRUNE_COMMANDS = {
 
 
 async def _checked(ctx: ExtensionContext, host: Any, refs: list[str], duration_ms: int | None, done: str) -> ActionResult:
-    """Nach erfolgreichem Start/Neustart: Pruefung nach der Aktion (`after_check`). Laeuft der Container danach nicht
-    stabil, ist die Aktion fehlgeschlagen -- der Befehl lief, das Ziel (ein laufender Dienst) ist aber nicht erreicht."""
-    from . import after_check as ac  # spaet: after_check braucht dieses Modul
+    """Prüfung nach einem erfolgreichen Start/Neustart (`after_check`).
+
+    Läuft der Container danach nicht stabil, ist die Aktion fehlgeschlagen: der Befehl lief, das Ziel nicht.
+    """
+    from . import after_check as ac  # spät: after_check braucht dieses Modul
 
     started = time.monotonic()
     verdict, _snap = await ac.check_running(ctx, host, refs)
@@ -682,7 +654,7 @@ async def _checked(ctx: ExtensionContext, host: Any, refs: list[str], duration_m
 
 
 class DockerMaintenanceExecutor:
-    """Aufraeumen (`docker.prune_*`) -- nur nach dem Gate, feste Befehle."""
+    """Aufräumen (`docker.prune_*`) und Stack-Neustart, nur nach dem Gate und mit festen Befehlen."""
 
     action_types = frozenset(_PRUNE_COMMANDS) | {"docker.stack_restart"}
 
@@ -697,14 +669,13 @@ class DockerMaintenanceExecutor:
             host = await self._ctx.hosts.get(req.host_ref) if req.host_ref else None
             if host is None:
                 return ActionResult(success=False, error="Host nicht gefunden.")
-            from . import after_check as ac  # spaet: after_check braucht dieses Modul
+            from . import after_check as ac  # spät: after_check braucht dieses Modul
 
-            # Welche Container liefen vorher? Nur die muessen danach wieder laufen -- ein Container fuer einmalige
-            # Aufgaben (Migration, Init) endet auch nach dem Neustart wieder, das ist kein Fehler.
+            # Welche Container liefen vorher? Nur die müssen danach wieder laufen: ein Container für einmalige Aufgaben
+            # (Migration, Init) endet auch nach dem Neustart wieder, das ist kein Fehler.
             before = await self._ctx.exec.run(host, ac.cmd_stack_running(project), timeout_s=ac.CHECK_CALL_TIMEOUT_S)
             running = [line.strip() for line in before.stdout.splitlines() if _CONTAINER_ID_RE.match(line.strip())]
-            # Ohne Compose-Datei: Compose v2+ findet die Container ueber ihre Labels
-            # (live geprueft mit Compose 5.5.1 auf dem Pi).
+            # Ohne Compose-Datei: Compose v2+ findet die Container über ihre Labels (geprüft mit Compose 5.5.1).
             result = await self._ctx.exec.run(host, f"docker compose -p {shlex.quote(project)} restart", timeout_s=300)
             if result.exit_code == 0 and running and before.exit_code == 0:
                 return await _checked(self._ctx, host, running, result.duration_ms, f"Stack '{project}' neu gestartet.")
@@ -726,7 +697,7 @@ class DockerMaintenanceExecutor:
         if host is None:
             return ActionResult(success=False, error=f"Host '{req.host_ref}' nicht gefunden.")
         result = await self._ctx.exec.run(host, command, timeout_s=600)
-        # Docker schliesst mit "Total reclaimed space: 1.2GB" -- das ist die Nachricht.
+        # Docker schließt mit "Total reclaimed space: 1.2GB": das ist die Nachricht.
         reclaimed = next((line for line in reversed(result.stdout.splitlines()) if "reclaimed" in line.lower()), None)
         return ActionResult(
             success=result.exit_code == 0,
@@ -741,15 +712,10 @@ class DockerMaintenanceExecutor:
 
 
 class DockerContainerExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor` fuer Start/Stop/Neustart
-    einzelner Container (damit braucht es fuer den Alltag weder Portainer noch eine
-    Konsole auf dem Docker-Host). Laeuft wie jede Aktion NUR nach dem Gate -- die
-    Seite loest ueber `POST /hosts/{id}/actions/container.*` aus, der Nutzer steht
-    damit als Ausloeser im Journal, nicht die Extension.
+    """Start/Stop/Neustart/Löschen einzelner Container (`ActionExecutor`), nur nach dem Gate.
 
-    Der Befehl entsteht hier aus einem festen Verb und einem gegen Dockers
-    Namensregel geprueften Namen -- kein freier Befehlstext im Payload, deshalb auch
-    kein `command_field`."""
+    Der Befehl entsteht aus einem festen Verb und einem gegen Dockers Namensregel geprüften Namen, ohne freien Befehlstext.
+    """
 
     action_types = frozenset(_VERBS)
 
@@ -782,12 +748,12 @@ class DockerContainerExecutor:
             refusal, container_id = await self._check_remove(host, name)
             if refusal is not None:
                 return ActionResult(success=False, error=refusal)
-            # Die volle ID aus der Pruefung, nicht noch einmal der Name: ein Container, der inzwischen unter diesem
-            # Namen neu angelegt wurde, bleibt unberuehrt.
+            # Die volle ID aus der Prüfung, nicht noch einmal der Name: ein Container, der inzwischen unter diesem Namen
+            # neu angelegt wurde, bleibt unberührt.
             target = container_id
 
-        # `docker rm` ohne `-f` und ohne `-v`: Docker selbst lehnt einen laufenden Container ab (auch wenn er
-        # zwischen Pruefung und Befehl gestartet wurde), Volumes bleiben in jedem Fall stehen.
+        # `docker rm` ohne `-f` und ohne `-v`: Docker selbst lehnt einen laufenden Container ab (auch wenn er zwischen
+        # Prüfung und Befehl gestartet wurde), Volumes bleiben in jedem Fall stehen.
         result = await self._ctx.exec.run(host, f"docker {verb} {target}", timeout_s=120)
         if result.exit_code == 0 and verb in ("start", "restart"):
             return await _checked(self._ctx, host, [name], result.duration_ms, f"Container '{name}' "
@@ -801,8 +767,8 @@ class DockerContainerExecutor:
         )
 
     async def _check_remove(self, host: Any, name: str) -> tuple[str | None, str]:
-        """(Grund, warum `name` nicht geloescht wird, oder None; volle ID des Containers). Nur gestoppte Container,
-        nie Nodvard Deck selbst. Laesst sich der Container nicht eindeutig lesen, wird nichts geloescht."""
+        """(Grund, warum `name` nicht gelöscht wird, oder None; volle ID des Containers). Nur gestoppte Container, nie
+        Nodvard Deck selbst. Lässt sich der Container nicht eindeutig lesen, wird nichts gelöscht."""
         inspected = await self._ctx.exec.run(
             host, f"docker inspect --type container -f '{{{{.Id}}}}|{{{{.State.Status}}}}' {name}", timeout_s=15
         )

@@ -1,19 +1,4 @@
-"""Erfuellt `nodvard_sdk.capabilities.BackupProvider`/`ActionExecutor` gegen die
-Proxmox-Backup-API.
-
-**Warum:** ein VZDump-Job, der strukturell fehlschlaegt (z. B. "Broken pipe" zu einem
-langsamen NFS-Ziel), kann wochenlang unbemerkt bleiben, wenn das Ergebnis nur in einem
-Freitext-Bericht steht, den niemand systematisch liest (so war es im Vorgaengersystem).
-`list_jobs()` zeigt den Status PRO VM als strukturierten Datensatz (nicht als Prosa), `retry()`
-macht einen fehlgeschlagenen Lauf mit einem Klick wiederholbar -- durchs Gate,
-wie jede andere Aktion.
-
-**Multi-Instanz-Nachtrag:** `job_ref` traegt jetzt den Verbindungsnamen mit
-(`f"{connection}--{job_id}--{vmid}"`) -- ohne ihn waere ein Retry nach dem Wechsel
-von einer auf mehrere Verbindungen nicht mehr eindeutig einer Proxmox-Instanz
-zuordenbar (dieselbe VMID kann auf pve1 UND pve2 vorkommen, siehe
-`nodvard_deck_ext_proxmox.capabilities`-Docstring fuer denselben Fall dort).
-"""
+"""Backup-Provider und Aktions-Ausführung gegen die Proxmox-API: Jobs, Läufe und Retry."""
 
 from __future__ import annotations
 
@@ -44,6 +29,7 @@ ConnectorsFactory = Callable[[], Awaitable[dict[str, ProxmoxBackupConnector]]]
 
 
 def _job_ref(connection: str, job_id: str, vmid: str) -> str:
+    # Der Verbindungsname gehört dazu, weil dieselbe VMID auf mehreren Proxmox-Instanzen vorkommen kann.
     return f"{connection}--{job_id}--{vmid}"
 
 
@@ -53,10 +39,8 @@ def _parse_job_ref(job_ref: str) -> tuple[str, str, str]:
 
 
 def _vzdump_tasks(tasks: list[dict[str, Any]], vmid: str, *, group_job: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-    """Laeufe fuer einen Gast. Beobachtet: ein Container stand auf "nie gelaufen",
-    obwohl nachts gesichert wurde -- ein Job fuer MEHRERE Gaeste laeuft in Proxmox als
-    EINE Aufgabe ohne Gast-ID. Mit `group_job` zaehlt so eine Aufgabe fuer jeden Gast
-    des Jobs (nur auf dessen Knoten, falls der Job einen festlegt)."""
+    """Läufe für einen Gast, neueste zuerst. Ein Job für mehrere Gäste läuft in Proxmox als eine Aufgabe ohne
+    Gast-ID; mit `group_job` zählt sie für jeden Gast des Jobs (nur auf dessen Knoten, falls einer festgelegt ist)."""
 
     def belongs(t: dict[str, Any]) -> bool:
         if t.get("type") != "vzdump":
@@ -74,11 +58,8 @@ def _vzdump_tasks(tasks: list[dict[str, Any]], vmid: str, *, group_job: dict[str
 
 
 def job_vmids(job: dict[str, Any], resources: list[dict[str, Any]]) -> list[str]:
-    """Welche Gaeste ein Job sichert. Live nur explizite Listen (`vmid: "102"`), aber
-    Proxmox kennt auch "alle Gaeste" (`all: 1`, optional `exclude`, optional auf
-    `node` beschraenkt) und Pools (`pool`) -- dort fehlt `vmid` ganz. Vorher ergab so
-    ein Job stillschweigend KEINE Zeile: ein Backup-Job, der alles sichert, war auf
-    der Seite unsichtbar."""
+    """Welche Gäste ein Job sichert. Neben expliziten Listen (`vmid: "102"`) kennt Proxmox „alle Gäste“ (`all: 1`,
+    optional `exclude` und `node`) und Pools (`pool`); dort fehlt `vmid` ganz."""
     explicit = [v.strip() for v in str(job.get("vmid") or "").split(",") if v.strip()]
     if explicit:
         return explicit
@@ -96,10 +77,9 @@ def job_vmids(job: dict[str, Any], resources: list[dict[str, Any]]) -> list[str]
 
 
 def unreachable_row(connection: str, error: str) -> dict[str, Any]:
-    """Platzhalterzeile fuer eine Verbindung, die nicht antwortet -- dieselben Felder wie
-    ein Job, damit jeder Leser von `list_jobs()` sie ohne Sonderweg verarbeiten kann
-    (die Kern-Uebersicht zaehlt sie nicht als Job, sondern meldet "Verbindung nicht
-    erreichbar"). Ohne `job_ref` blendet die Kachel "Erneut versuchen" aus."""
+    """Platzhalterzeile für eine Verbindung, die nicht antwortet, mit den Feldern eines Jobs.
+
+    Die Kern-Übersicht zählt sie nicht als Job; ohne `job_ref` blendet die Kachel „Erneut versuchen“ aus."""
     return {
         "job_ref": "", "vmid": "", "name": f"Verbindung {connection}", "host_id": None,
         "connection": connection, "node": None, "storage": error, "schedule": None,
@@ -109,11 +89,11 @@ def unreachable_row(connection: str, error: str) -> dict[str, Any]:
 
 
 WARNINGS_RE = re.compile(r"WARNINGS: (\d+)")
-"""So endet ein Lauf, der geklappt hat, aber Warnungen hatte (z. B. ein Gast-Agent, der nicht lief). Die Sicherung ist
-da -- Proxmox zeigt ihn gelb, nicht rot. Vorher galt er hier als fehlgeschlagen und loeste "Backup fehlgeschlagen" aus."""
+"""So endet ein Lauf, der geklappt hat, aber Warnungen hatte (z. B. Gast-Agent lief nicht). Die Sicherung ist da,
+Proxmox zeigt ihn gelb, nicht rot."""
 CAUSE_CACHE_SIZE = 64
-"""So viele Protokolle fehlgeschlagener Laeufe bleiben im Speicher (nur die Zeilen, die `explain` braucht). Ein beendeter
-Lauf aendert sein Protokoll nicht mehr; der Waechter und die Seite fragen dann nicht jedes Mal erneut."""
+"""So viele Protokolle fehlgeschlagener Läufe bleiben im Speicher (nur die Zeilen für `explain`); ein beendeter Lauf
+ändert sein Protokoll nicht mehr."""
 
 
 def _task_status(task: dict[str, Any] | None) -> str:
@@ -137,16 +117,9 @@ class ProxmoxBackupProvider:
         self._logs: dict[tuple[str, str], list[str]] = {}
 
     async def _vm_name_and_host(self, connection: str, vmid: str) -> tuple[str, str | None]:
-        """`ctx.hosts` kennt Proxmox nicht -- nur `Host.provider_ref` (`"<connection>/
-        qemu|lxc/<node>/<vmid>"`, von der proxmox-Extension geschrieben, siehe WP-8
-        und deren Multi-Instanz-Nachtrag). Ein Treffer ist reine Bonus-Anreicherung
-        (Klarname statt nackter VMID); ohne proxmox-Extension, ohne vorherige
-        Discovery, oder wenn `connection` dort anders heisst als hier, bleibt die
-        VMID der Anzeigename. Filtert bewusst auch auf `connection`, weil dieselbe
-        VMID auf mehreren Proxmox-Instanzen vorkommen kann (auf pve1 eine VM, auf pve2
-        ein Container) -- und auf LXC genauso wie QEMU (Live gefunden: die alte Version
-        pruefte nur "qemu/", Backups von LXC-Containern -- z. B. allem auf pve2 --
-        zeigten deshalb nie einen Klarnamen)."""
+        """Klarname und Host-ID aus `Host.provider_ref` (`<connection>/qemu|lxc/<node>/<vmid>`), sonst "VM <vmid>"."""
+        # Die Proxmox-Erweiterung schreibt den Verweis; ohne sie oder bei abweichendem Verbindungsnamen bleibt die VMID.
+        # Der Treffer muss zur Verbindung passen (gleiche VMID auf mehreren Instanzen) und gilt für LXC wie QEMU.
         prefix_qemu = f"{connection}/qemu/"
         prefix_lxc = f"{connection}/lxc/"
         for host in await self._ctx.hosts.list():
@@ -156,9 +129,8 @@ class ProxmoxBackupProvider:
         return f"VM {vmid}", None
 
     async def list_jobs(self) -> list[dict[str, Any]]:
-        """Je Gast und Job eine Zeile. Eine nicht erreichbare Verbindung (pve2
-        aus) versteckte vorher ALLE Jobs und legte den Waechter lahm -- jetzt steht sie
-        als eigene Zeile `last_status="unreachable"` (ohne `job_ref`) in der Liste."""
+        """Je Gast und Job eine Zeile; eine nicht erreichbare Verbindung steht als eigene Zeile
+        `last_status="unreachable"` (ohne `job_ref`), damit sie weder Jobs versteckt noch den Wächter lahmlegt."""
         rows: list[dict[str, Any]] = []
         for connection, connector in (await self._connectors_factory()).items():
             try:
@@ -177,8 +149,8 @@ class ProxmoxBackupProvider:
                     name, host_id = await self._vm_name_and_host(connection, vmid)
                     latest = _vzdump_tasks(tasks, vmid, group_job=group)
                     latest_task = latest[0] if latest else None
-                    # Letzter ERFOLGREICHER Lauf (der letzte kann fehlgeschlagen sein): Grundlage fuer die
-                    # Meldung "Backup zu alt" im Waechter. Ende des Laufs, sonst sein Beginn.
+                    # Letzter erfolgreicher Lauf (der letzte kann fehlgeschlagen sein), Grundlage für „Backup zu alt“
+                    # im Wächter; als Zeitpunkt zählt das Ende des Laufs, sonst sein Beginn.
                     latest_ok = next((t for t in latest if _task_status(t) == "ok"), None)
                     rows.append(
                         {
@@ -194,7 +166,7 @@ class ProxmoxBackupProvider:
                             "last_status": _task_status(latest_task),
                             "last_run_at": latest_task.get("starttime") if latest_task else None,
                             "last_ok_at": (latest_ok.get("endtime") or latest_ok.get("starttime")) if latest_ok else None,
-                            # Beides steht schon in der Job-Definition -- kein Extra-Aufruf.
+                            # Beides steht schon in der Job-Definition, kein Extra-Aufruf.
                             "next_run_at": job.get("next-run"),
                             "retention": retention_label(job.get("prune-backups")),
                         }
@@ -202,10 +174,8 @@ class ProxmoxBackupProvider:
         return rows
 
     async def unprotected(self) -> dict[str, Any]:
-        """Gaeste ohne jeden Backup-Job, je Verbindung. Ohne diese Liste zeigt die
-        Backup-Seite nur, was gesichert WIRD, nie, was fehlt -- und das ist oft der
-        groessere Teil der Gaeste. Eine nicht
-        erreichbare Verbindung wird gemeldet, nicht verschwiegen."""
+        """Gäste ohne Backup-Job, je Verbindung; eine nicht erreichbare Verbindung wird gemeldet, nicht verschwiegen."""
+        # Ohne diese Liste zeigt die Seite nur, was gesichert wird, nie, was fehlt.
         guests: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         acknowledged = {
@@ -237,8 +207,9 @@ class ProxmoxBackupProvider:
         return {"guests": guests, "errors": errors}
 
     async def inventory(self) -> dict[str, Any]:
-        """Vorhandene Sicherungen je Gast (inventory.py), ueber alle Verbindungen --
-        Zuordnung ueber VMID + Typ gegen die entdeckten Gaeste, verwaiste Dateien extra."""
+        """Vorhandene Sicherungen je Gast (inventory.py) über alle Verbindungen.
+
+        Zuordnung über VMID und Typ gegen die entdeckten Gäste; verwaiste Dateien stehen extra."""
         known: dict[tuple[str, str], list[str]] = {}
         for host in await self._ctx.hosts.list():
             parts = (host.provider_ref or "").split("/")
@@ -258,10 +229,9 @@ class ProxmoxBackupProvider:
         return {"guests": guests, "orphans": orphans, "errors": errors}
 
     async def running_backups(self) -> dict[str, Any]:
-        """Gaeste, fuer die gerade eine Sicherung laeuft (ein VZDump-Task dieses Gastes ohne Ende), je Verbindung:
-        `{"running": [{"connection", "vmid", "started_at"}], "errors": [{"connection", "error"}]}`. Fuer Gaeste ohne
-        Job -- bei Gaesten mit Job steht der Lauf schon in den Zeilen von `list_jobs()`. Sammel-Laeufe ohne Gast-ID
-        sind hier nicht dabei (sie gehoeren zu einem Job)."""
+        """Gäste, für die gerade eine Sicherung läuft (VZDump-Task ohne Ende), je Verbindung.
+
+        Für Gäste ohne Job; bei Gästen mit Job steht der Lauf in `list_jobs()`, Sammelläufe ohne Gast-ID fehlen hier."""
         running: list[dict[str, Any]] = []
         errors: list[dict[str, str]] = []
         for connection, connector in (await self._connectors_factory()).items():
@@ -284,11 +254,10 @@ class ProxmoxBackupProvider:
         return connector
 
     async def _job_tasks(self, connector: ProxmoxBackupConnector, job_id: str, vmid: str) -> list[dict[str, Any]]:
-        """Die Laeufe eines Jobs fuer diesen Gast, neueste zuerst."""
+        """Die Läufe eines Jobs für diesen Gast, neueste zuerst."""
         tasks = await connector.list_tasks()
         job = next((j for j in await connector.list_jobs() if str(j.get("id")) == job_id), None)
-        # "Alle Gaeste"/Pool-Jobs haben keine VMID-Liste -- ohne Ressourcen
-        # ergab job_vmids() [], und der Verlauf blieb leer (wie needs_resources in list_jobs).
+        # „Alle Gäste“- und Pool-Jobs haben keine VMID-Liste; ohne Ressourcen bliebe der Verlauf leer (wie in list_jobs).
         needs_resources = job is not None and not str(job.get("vmid") or "").strip()
         resources = await connector.guest_resources() if needs_resources else []
         group = job if job is not None and len(job_vmids(job, resources)) > 1 else None
@@ -311,10 +280,9 @@ class ProxmoxBackupProvider:
         ]
 
     async def failure_cause(self, job_ref: str, upid: str | None = None) -> dict[str, Any] | None:
-        """Der Grund fuer den neuesten fehlgeschlagenen Lauf dieses Jobs fuer den Gast (oder fuer den Lauf `upid`), in
-        Klartext (failure_text.py): `{"upid", "node", "started_at", "finished_at", "status", "log_readable", "key",
-        "what", "todo", "detail"}`. `None`, wenn es keinen solchen fehlgeschlagenen Lauf gibt. Liest dazu das
-        Aufgabenprotokoll; laesst es sich nicht lesen (fehlendes Recht `Sys.Audit`), zaehlt nur der Status."""
+        """Grund für den neuesten fehlgeschlagenen Lauf des Jobs für den Gast (oder den Lauf `upid`), in Klartext.
+
+        `None` ohne solchen Lauf; ist das Protokoll nicht lesbar (Recht `Sys.Audit` fehlt), zählt nur der Status."""
         connection, job_id, vmid = _parse_job_ref(job_ref)
         connector = await self._connector_for(connection)
         task = next(
@@ -342,9 +310,7 @@ class ProxmoxBackupProvider:
         }
 
     async def retry(self, job_ref: str) -> ActionRequest:
-        """Gibt einen *Vorschlag* zurueck (docs/02 §3-Vertrag) -- der Aufrufer
-        (`__init__.py`s `/jobs/{ref}/retry`-Route) reicht ihn an `ctx.actions.
-        propose()` weiter, geht also durchs Gate wie jede andere Aktion."""
+        """Gibt einen Vorschlag zurück; der Aufrufer reicht ihn an `ctx.actions.propose()` weiter (durchs Gate)."""
         connection, job_id, vmid = _parse_job_ref(job_ref)
         connectors = await self._connectors_factory()
         connector = connectors.get(connection)
@@ -357,9 +323,8 @@ class ProxmoxBackupProvider:
 
         node = job.get("node")
         if not node:
-            # Job mit Knoten "-- Alle --" (PVE-Standard). Verlaesslich ist der
-            # Knoten, auf dem der Gast liegt; sonst der des letzten Laufs -- bei Sammel-Jobs
-            # hat der keine Gast-ID, zaehlt also nur mit `group_job` (wie list_jobs).
+            # Job mit Knoten „-- Alle --“ (PVE-Standard): verlässlich ist der Knoten, auf dem der Gast liegt,
+            # sonst der des letzten Laufs. Bei Sammel-Jobs hat der keine Gast-ID und zählt nur mit `group_job`.
             resources = await connector.guest_resources()
             node = next((r.get("node") for r in resources if str(r.get("vmid")) == vmid and r.get("node")), None)
             if not node:
@@ -369,9 +334,8 @@ class ProxmoxBackupProvider:
         if not node:
             raise NodvardError(f"Kein Proxmox-Knoten für VMID {vmid} bekannt -- Retry nicht möglich.")
 
-        # Der Stand des Jobs, den der Freigebende zu sehen bekommt, wird festgehalten. Gelesen wird
-        # wie beim Ausfuehren ueber `get_job` (nicht aus der Liste), damit beide Staende dieselbe
-        # Form haben und der Vergleich nicht an Schreibweisen scheitert.
+        # Festgehalten wird der Stand, den der Freigebende sieht. Gelesen wird wie beim Ausführen über
+        # `get_job` (nicht aus der Liste), damit beide Stände dieselbe Form haben.
         current = await connector.get_job(job_id)
         if not current:
             raise NodvardError(f"Backup-Job '{job_id}' existiert nicht (mehr).")
@@ -401,13 +365,9 @@ VZDUMP_PERMISSION_HINT = (
 
 
 class BackupActionExecutor:
-    """Erfuellt `nodvard_sdk.capabilities.ActionExecutor` fuer `backup.run`.
+    """Führt `backup.run`, `backup.job_update` und `backup.job_create` aus.
 
-    **Ehrlich abgegrenzt** (wie proxmoxs `qemu_action()`): wartet NICHT auf den
-    tatsaechlichen Abschluss des VZDump-Laufs -- `success=True` heisst "Proxmox hat
-    den Auftrag angenommen (UPID erhalten)", nicht "das Backup ist fertig/fehlerfrei".
-    Der naechste `list_jobs()`-Aufruf zeigt das echte Ergebnis, sobald der Task in
-    `/cluster/tasks` erscheint."""
+    Bei `backup.run` heißt `success=True` nur „Auftrag angenommen“ (UPID); den Ausgang zeigt später `list_jobs()`."""
 
     action_types = frozenset({"backup.run", "backup.job_update", "backup.job_create"})
 
@@ -429,10 +389,9 @@ class BackupActionExecutor:
             connector = connectors.get(connection)
             if connector is None:
                 return ActionResult(success=False, error=f"Backup-Verbindung '{connection}' ist nicht (mehr) konfiguriert.")
-            # Gestartet wird nur mit den Einstellungen, die beim Vorschlag freigegeben wurden. Hat sich der
-            # Job seitdem geaendert (oder ist er nicht lesbar), wird nichts gestartet: der Freigebende hat
-            # dann einen anderen Stand gesehen, vor allem was aufgeraeumt wird. Ein Vorschlag ohne Job
-            # (aus einer aelteren Version) laeuft mit `keep-all=1`, raeumt also nichts auf.
+            # Gestartet wird nur mit den freigegebenen Einstellungen. Hat sich der Job seitdem geändert (oder
+            # ist er nicht lesbar), geschieht nichts: der Freigebende hat sonst einen anderen Stand gesehen,
+            # vor allem bei dem, was aufgeräumt wird. Ein Vorschlag ohne Job läuft mit `keep-all=1`.
             options: dict[str, Any] | None = None
             job_id = str(req.payload.get("job_id") or "")
             if job_id:
@@ -456,8 +415,8 @@ class BackupActionExecutor:
             except ProxmoxBackupApiError as exc:
                 if exc.status_code != 403:
                     raise
-                # Die Aufbewahrung geht immer mit (auch `keep-all=1`), dafuer verlangt Proxmox
-                # `Datastore.Allocate` auf dem Speicher -- ohne Hinweis sieht man nur "HTTP 403".
+                # Die Aufbewahrung geht immer mit (auch `keep-all=1`); dafür verlangt Proxmox `Datastore.Allocate`
+                # auf dem Speicher, ohne Hinweis sähe man nur „HTTP 403“.
                 return ActionResult(success=False, error=f"{VZDUMP_PERMISSION_HINT} ({exc})")
         except ProxmoxBackupApiError as exc:
             return ActionResult(success=False, error=str(exc))
@@ -478,7 +437,7 @@ class BackupActionExecutor:
         return ActionResult(success=True, output=text)
 
     async def _job_update(self, req: ActionRequest) -> ActionResult:
-        """Liest den Job frisch (digest!), prueft erneut gegen die Whitelist, schreibt."""
+        """Liest den Job frisch (Digest), prüft erneut gegen die Erlaubnisliste und schreibt."""
         connection = str(req.payload.get("connection") or "")
         job_id = str(req.payload.get("job_id") or "")
         try:

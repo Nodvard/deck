@@ -1,13 +1,6 @@
-"""Der ExtensionContext — das einzige Objekt, das eine Extension vom Kern bekommt.
+"""Der ExtensionContext, das einzige Objekt, das eine Extension vom Kern bekommt (hier nur das Protokoll).
 
-Jeder Handle ist permission-geprueft und auditiert. Was hier nicht steht, ist bewusst
-nicht verfuegbar: direkter Zugriff auf Kern-Tabellen, das asyncio-Loop-Objekt, andere
-Extensions (nur ueber ctx.events und deklarierte `requires`).
-
-Diese Datei ist eine Protokoll-Definition — die Implementierung liegt im Kern unter
-`nodvard_deck/ext/context.py`. Extensions importieren nur von hier.
-
-Siehe docs/02-EXTENSION-API.md §2.
+Jeder Handle ist permission-geprüft und auditiert. Nicht verfügbar: Kern-Tabellen, asyncio-Loop, andere Extensions.
 """
 
 from __future__ import annotations
@@ -40,11 +33,27 @@ from .widgets import HostRequirementSpec, HostToolSpec, PageSpec, WidgetSpec
 
 class ApiHandle(Protocol):
     current_actor: Any
-    """FastAPI-Dependency (D-15): `actor: Actor = Depends(ctx.api.current_actor)` in einer
-    Extension-Route liefert `Actor.user(...)` des angemeldeten Nutzers -- fuer
-    `proposed_by` und das Audit-Log, damit dort der klickende Mensch steht statt der
-    Extension."""
+    """FastAPI-Dependency: `actor: Actor = Depends(ctx.api.current_actor)` in einer Extension-Route liefert
+    `Actor.user(...)` des angemeldeten Nutzers, für `proposed_by` und das Audit-Log (dort steht der klickende Mensch
+    statt der Extension)."""
 
+    # Mit `permission` braucht die Extension keine eigene Auth-Abhängigkeit. Ohne `permission` verlangt der Kern
+    # mindestens eine gültige Anmeldung (401 ohne Token, keine bestimmte Berechtigung nötig). Anmeldung ist keine
+    # Berechtigung: Routen, die Daten zeigen oder etwas ändern, setzen `permission=` oder prüfen selbst.
+    #
+    # `public=True` ist die ausdrückliche Ausnahme für Routen, die bewusst für jeden erreichbar sein sollen (z. B. ein
+    # Webhook): dann prüft der Kern nichts. Dafür braucht die Erweiterung die Manifest-Berechtigung `api.public` (sonst
+    # `PermissionDenied`); der Host schreibt die öffentlichen Präfixe beim Einschalten ins Protokoll. `public=True` und
+    # `permission` zusammen sind ein Fehler (`InvalidRegistration`).
+    #
+    # Die Anmeldeprüfung greift nur bei normalen FastAPI-Routen (`@router.get` usw.). WebSocket-Routen,
+    # `router.add_route()` und `router.mount()` (z. B. StaticFiles) lehnt der Kern ohne `public=True` mit
+    # `InvalidRegistration` ab; mit `public=True` muss die Erweiterung sie selbst absichern (z. B. Einmal-Ticket wie das
+    # Terminal).
+    #
+    # Der Host prüft die Router nach `setup()` und nach `on_start()`. Was eine Erweiterung erst später zur Laufzeit an
+    # einen schon montierten Router hängt (etwa aus einem Hintergrundtask), sieht er nicht mehr: solche Routen müssen
+    # sich selbst absichern.
     def include_router(
         self,
         router: Any,
@@ -54,37 +63,9 @@ class ApiHandle(Protocol):
         permission: str | None = None,
         public: bool = False,
     ) -> None:
-        """Montiert einen FastAPI-Router unter /api/v1/ext/<ext_id><prefix>.
-
-        `permission`, falls gesetzt, macht die Bearer-Authentifizierung UND die
-        RBAC-Pruefung dieser einen Berechtigung fuer ALLE Routen des Routers zur
-        Kern-Aufgabe -- die Extension definiert dafuer keine eigene Auth-Abhaengigkeit.
-
-        **Ohne `permission` verlangt der Kern mindestens eine gueltige Anmeldung**
-        (401 ohne Token, keine bestimmte Berechtigung noetig). Frueher blieb so eine
-        Route ganz ohne Pruefung und war ohne Anmeldung erreichbar; wer das Argument
-        vergass, veroeffentlichte den Endpunkt fuer alle. Der Standard ist deshalb
-        umgedreht (sichere Richtung): bestehende Aufrufe laufen weiter, nur ohne
-        Anmeldung kommt nichts mehr durch. **Anmeldung ist keine Berechtigung:** Routen,
-        die Daten zeigen oder etwas aendern, setzen `permission=` oder pruefen selbst.
-
-        `public=True` ist die ausdrueckliche Ausnahme fuer Routen, die bewusst fuer
-        jeden erreichbar sein sollen (z. B. ein Webhook): dann prueft der Kern nichts.
-        Dafuer braucht die Erweiterung die Manifest-Berechtigung `api.public` (sonst
-        `PermissionDenied`), und der Host schreibt die oeffentlichen Praefixe beim
-        Einschalten ins Protokoll. `public=True` und `permission` zusammen sind ein
-        Fehler (`InvalidRegistration`).
-
-        Die Anmeldepruefung greift nur bei normalen FastAPI-Routen (`@router.get` usw.).
-        WebSocket-Routen, `router.add_route()` und `router.mount()` (z. B. StaticFiles)
-        lehnt der Kern ohne `public=True` mit `InvalidRegistration` ab; mit `public=True`
-        muss die Erweiterung sie selbst absichern (z. B. Einmal-Ticket wie das Terminal).
-
-        Der Host prueft die Router nach `setup()` und nach `on_start()`. Was eine
-        Erweiterung erst spaeter zur Laufzeit an einen schon montierten Router haengt,
-        etwa aus einem Hintergrundtask, sieht der Host nicht mehr: solche Routen muessen
-        sich selbst absichern.
-        """
+        """Montiert einen FastAPI-Router unter /api/v1/ext/<ext_id><prefix>. Mit `permission` übernimmt der Kern
+        Bearer-Anmeldung und RBAC-Prüfung dieser Berechtigung für ALLE Routen des Routers, ohne sie verlangt er
+        mindestens eine gültige Anmeldung. `public=True` nimmt Routen von der Prüfung aus und braucht `api.public`."""
         ...
 
 
@@ -98,7 +79,7 @@ class UiHandle(Protocol):
 
     def register_host_requirement(self, spec: HostRequirementSpec) -> None:
         """Meldet, was diese Extension auf passenden Servern braucht (Gruppe, root ohne
-        Passwort, ein lesender Pruefbefehl) -- siehe HostRequirementSpec. Dieselbe `id`
+        Passwort, ein lesender Prüfbefehl) -- siehe HostRequirementSpec. Dieselbe `id`
         erneut registrieren ersetzt die Meldung (z. B. in `on_settings_changed`)."""
         ...
 
@@ -129,40 +110,32 @@ class CapabilitiesHandle(Protocol):
         ...
 
     async def query(self, protocol: type) -> list[Any]:
-        """Fragt Implementierungen *anderer* Extensions ab — nur fuer in `requires`
-        deklarierte Abhaengigkeiten."""
+        """Fragt Implementierungen *anderer* Extensions ab — nur für in `requires`
+        deklarierte Abhängigkeiten."""
         ...
 
 
 class ActionsHandle(Protocol):
     def register(self, spec: ActionSpec) -> None: ...
 
+    # Die Extension führt nie selbst aus. Hintergrund-Jobs, die das Ergebnis brauchen, übergeben `wait_s=None`.
     async def propose(self, request: ActionRequest, *, wait_s: float | None = None) -> GateDecision:
-        """Der einzige Weg zu einer zustandsveraendernden Aktion.
-
-        Gibt je nach Autonomie-Modus, Risiko und Regelwerk `proposed`, `approved` oder
-        `denied` zurueck. Die Extension fuehrt nie selbst aus.
-
-        Wird die Aktion sofort freigegeben (Modus `full`), laeuft sie im Hintergrund.
-        `wait_s=None` wartet bis zum Ende (Hintergrund-Jobs, die das Ergebnis brauchen);
-        HTTP-Routen geben `wait_s=REQUEST_WAIT_S` mit und bekommen danach ggf.
-        `executing` zurueck.
-        """
+        """Der einzige Weg zu einer zustandsverändernden Aktion: `proposed`, `approved` oder `denied`, je nach Modus,
+        Risiko und Regelwerk. Eine sofort freigegebene Aktion (Modus `full`) läuft im Hintergrund; `wait_s=None` wartet
+        bis zum Ende, HTTP-Routen übergeben `REQUEST_WAIT_S` (Sekunden) und bekommen danach ggf. `executing`."""
         ...
 
     async def result(self, action_id: str) -> Any: ...
 
     async def check_standing_approval(self, granted_by_user_id: str, *, risk: Risk) -> str | None:
-        """Gaelte eine Dauerfreigabe (`StandingApproval`) von `granted_by_user_id` heute fuer
-        Aktionen der Stufe `risk`? None = ja, sonst der Grund in einfachen Worten (Person
-        gesperrt, kein Owner/Admin mehr ...). Dieselbe Pruefung wie im Gate, nur lesend --
-        damit eine Seite nie "gilt" anzeigt, wo das Gate ablehnen wuerde. Braucht die
-        Berechtigung `actions.standing_approval`."""
+        """Gälte eine Dauerfreigabe (`StandingApproval`) von `granted_by_user_id` heute für Aktionen der Stufe `risk`?
+        `None` = ja, sonst der Grund in einfachen Worten (Person gesperrt, kein Owner/Admin mehr ...). Dieselbe Prüfung
+        wie im Gate, nur lesend; braucht die Berechtigung `actions.standing_approval`."""
         ...
 
     async def list(self, *, correlation_id: str | None = None, limit: int = 20) -> list[Any]:
-        """Juengste eigene Aktionen (Zeilen mit status/result/proposed_by_*/created_at),
-        optional nur zu einer correlation_id -- z. B. die Laeufe eines Skripts."""
+        """Jüngste eigene Aktionen (Zeilen mit status/result/proposed_by_*/created_at),
+        optional nur zu einer correlation_id -- z. B. die Läufe eines Skripts."""
         ...
 
     async def waiting_count(self) -> int:
@@ -171,13 +144,11 @@ class ActionsHandle(Protocol):
         Lagebericht: vergessene Freigaben fallen so auf). Braucht die Berechtigung `hosts.read`."""
         ...
 
+    # Ob eine Zeile zur eigenen Extension gehört, entscheidet die Datenbank, nicht die übergebene Zeile.
     async def proposer_labels(self, rows: list[Any]) -> dict[str, str]:
-        """Lesbare Namen der Vorschlagenden zu Zeilen aus `list()`/`result()`:
-        `{action_id: "admin" | "Skripte" | "KI" | ...}` -- statt `user/<uuid>` anzuzeigen.
-        Nicht aufloesbar (geloeschter Nutzer) -> der rohe Wert `art/kennung`. Nur Zeilen der
-        eigenen Extension werden aufgeloest (nach der Datenbank, nicht nach den uebergebenen
-        Zeilen), fremde bekommen den rohen Wert. Die Namen gehen an jeden, den die Route der
-        Extension durchlaesst -- die Route also absichern (z. B. `hosts.execute`)."""
+        """Lesbare Namen der Vorschlagenden zu Zeilen aus `list()`/`result()`: `{action_id: "admin" | "Skripte" | ...}`.
+        Nicht auflösbar (gelöschter Nutzer) und fremde Zeilen bekommen den rohen Wert `art/kennung`. Die Namen gehen an
+        jeden, den die Route der Extension durchlässt, die Route also absichern (z. B. `hosts.execute`)."""
         ...
 
 
@@ -188,27 +159,23 @@ class HostsHandle(Protocol):
     async def get(self, host_id: str) -> Host | None: ...
     async def by_name(self, name: str) -> Host | None: ...
     async def upsert_discovered(self, hosts: list[DiscoveredHost]) -> list[Host]:
-        """Gleicht entdeckte Hosts gegen die Kern-Tabelle ab (Schluessel: ext + ref)."""
+        """Gleicht entdeckte Hosts gegen die Kern-Tabelle ab (Schlüssel: ext + ref)."""
         ...
 
 
 class ExecHandle(Protocol):
+    # `log_command` ist nur relevant, wenn die Sperrliste greift.
     async def run(
         self, host: Host, command: str, *, timeout_s: int = 60, user: str | None = None,
         log_command: str | None = None,
     ) -> ExecResult:
-        """Nur fuer *lesende* Kommandos ohne Nebenwirkung (Status, Logs, Inventar).
-
-        Alles Veraendernde geht ueber ctx.actions.propose() — das Gate prueft das anhand
-        des ActionSpec, nicht anhand guter Absicht.
-
-        `log_command`: maskierte Fassung des Befehls fuer die Audit-Zeile, falls `command`
-        Geheimnisse enthaelt (nur relevant, wenn die Sperrliste greift).
-        """
+        """Nur für *lesende* Kommandos ohne Nebenwirkung (Status, Logs, Inventar); `timeout_s` in Sekunden.
+        Alles Verändernde geht über `ctx.actions.propose()`: Das Gate prüft anhand des ActionSpec, nicht der Absicht.
+        `log_command`: maskierte Fassung des Befehls für die Audit-Zeile, falls `command` Geheimnisse enthält."""
         ...
 
     def stream(self, host: Host, command: str) -> AsyncContextManager[AsyncIterator[bytes]]:
-        """Wie `run()` nur fuer *lesende* Kommandos, deren Ausgabe laufend kommt und
+        """Wie `run()` nur für *lesende* Kommandos, deren Ausgabe laufend kommt und
         die nicht von selbst enden (Live-Logs). Beim Verlassen des Kontexts wird der
         entfernte Prozess beendet."""
         ...
@@ -217,7 +184,7 @@ class ExecHandle(Protocol):
         self, host: Host, *, cols: int, rows: int, command: str | None = None
     ) -> AsyncContextManager[Any]:
         """Interaktive Sitzung mit PTY. Ohne `command` die Login-Shell des Hosts; mit `command` genau dieses
-        Kommando (z. B. eine Shell in einem Container), geprueft gegen dieselbe Sperrliste wie `run()`."""
+        Kommando (z. B. eine Shell in einem Container), geprüft gegen dieselbe Sperrliste wie `run()`."""
         ...
     def sftp(self, host: Host) -> AsyncContextManager[Any]: ...
 
@@ -241,20 +208,18 @@ class SecretsHandle(Protocol):
         self, *, label: str, kind: str, value: str, description: str | None = None
     ) -> SecretHandleRef: ...
     async def exists(self, label: str) -> bool: ...
+    # Anders als Löschen und neu Anlegen steht das Geheimnis nie zwischendurch leer da.
     async def replace(self, *, label: str, value: str) -> SecretHandleRef:
-        """Ersetzt den Wert eines vorhandenen Geheimnisses in einem Schritt (gleiches Recht wie `create`:
-        `secrets.read:<label>`). Scheitert es, bleibt der alte Wert -- anders als Loeschen und neu Anlegen steht das
-        Geheimnis nie zwischendurch leer da. `SecretUnavailable`, wenn es unter dem Label keines gibt;
-        `SecretNotOwned`, wenn es nicht dieser Erweiterung gehoert (siehe dort) -- dann bleibt es unveraendert.
-        Aeltere Kerne haben die Methode nicht."""
+        """Ersetzt den Wert eines vorhandenen Geheimnisses in einem Schritt (Recht `secrets.read:<label>`, wie bei
+        `create`); scheitert es, bleibt der alte Wert. `SecretUnavailable`, wenn es unter dem Label keines gibt;
+        `SecretNotOwned`, wenn es nicht dieser Erweiterung gehört (unverändert). Ältere Kerne haben sie nicht."""
         ...
 
+    # Gedacht für Zugangsdaten, die zu einem Ziel gehören, das die Extension gerade entfernt oder umstellt.
     async def delete(self, label: str) -> bool:
-        """Loescht das Geheimnis mit diesem Label (gleiches Recht wie `get_handle`:
-        `secrets.read:<label>`). Liefert `True`, wenn es eines gab, sonst `False`
-        (kein Fehler). Gedacht fuer Zugangsdaten, die zu einem Ziel gehoeren, das die
-        Extension gerade entfernt oder umstellt. Nur eigene Geheimnisse: sonst `SecretNotOwned`,
-        und es bleibt stehen. Aeltere Kerne haben die Methode nicht."""
+        """Löscht das Geheimnis mit diesem Label (Recht `secrets.read:<label>`, wie `get_handle`): `True`, wenn es eines
+        gab, sonst `False` (kein Fehler). Nur eigene Geheimnisse, sonst `SecretNotOwned` und es bleibt stehen.
+        Ältere Kerne haben die Methode nicht."""
         ...
 
 
@@ -268,14 +233,13 @@ class SettingsHandle(Protocol):
 
 
 _JOB_TRIGGER: ContextVar[str | None] = ContextVar("nodvard_job_trigger", default=None)
-"""Setzt der Kern-Scheduler fuer die Dauer eines Job-Laufs (siehe `current_job_trigger`)."""
+"""Setzt der Kern-Scheduler für die Dauer eines Job-Laufs (siehe `current_job_trigger`)."""
 
 
 def current_job_trigger() -> str | None:
-    """Wie der gerade laufende Job gestartet wurde: "schedule" (nach Zeitplan), "manual"
-    ("Jetzt ausfuehren" ueber die Jobs-Schnittstelle) oder None ausserhalb eines Job-Laufs.
-    Damit kann ein `JobSpec.handler` z. B. eine Dauerfreigabe nur fuer echte Zeitplan-Laeufe
-    nutzen."""
+    """Wie der laufende Job gestartet wurde: "schedule" (nach Zeitplan), "manual" ("Jetzt ausführen") oder `None`
+    außerhalb eines Job-Laufs. Damit kann ein `JobSpec.handler` z. B. eine Dauerfreigabe nur für echte
+    Zeitplan-Läufe nutzen."""
     return _JOB_TRIGGER.get()
 
 
@@ -291,18 +255,13 @@ class JobSpec(Protocol):
 
 class SchedulerHandle(Protocol):
     def register_job(self, spec: JobSpec) -> None:
-        """Ein Scheduler fuer alles.
-
-        Keine Cron-Eintraege auf Hosts. Genau die haben den doppelten, ins Leere
-        laufenden Eintrag produziert, den niemand bemerkt hat.
-        """
+        """Ein Scheduler für alles: keine Cron-Einträge auf Hosts, sondern Jobs im Kern."""
         ...
 
     def validate_schedule(self, schedule: str) -> None:
-        """Prueft einen Cron-Ausdruck (5 Felder) genau so, wie `register_job()` ihn braucht, ohne etwas
-        anzumelden: `ValueError` mit deutscher Meldung, wenn er sich nicht planen laesst. Fuer Zeitplaene,
-        die eine Erweiterung selbst speichert (z. B. den eines Skripts): erst pruefen, dann speichern --
-        ein gespeicherter kaputter Zeitplan liesse `register_job()` beim naechsten Start scheitern."""
+        """Prüft einen Cron-Ausdruck (5 Felder) genau so, wie `register_job()` ihn braucht, ohne etwas anzumelden:
+        `ValueError` mit deutscher Meldung, wenn er sich nicht planen lässt. Für Zeitpläne, die eine Erweiterung selbst
+        speichert: erst prüfen, dann speichern, sonst scheitert `register_job()` beim nächsten Start."""
         ...
 
     async def trigger(self, job_id: str, **params: Any) -> str: ...
@@ -318,33 +277,25 @@ class EventsHandle(Protocol):
 
 
 class NotifyHandle(Protocol):
+    # `None` als Rückgabe (ältere Kerne, Test-Doubles) wie `suppressed=False` und `delivered=None` (unbekannt)
+    # behandeln; die Felder von `NotifyResult` stehen dort.
     async def send(self, notification: Notification, *, raise_on_failure: bool = False) -> NotifyResult | None:
-        """Legt die Benachrichtigung an und stellt sie über die Kanäle zu. Ein ausgefallener
-        Kanal stoppt den Aufrufer nicht. Wer bei totalem Ausfall erneut versuchen will,
-        übergibt `raise_on_failure=True`: dann wirft `NotificationNotDelivered`, wenn es
-        Kanäle gab, aber keiner zugestellt hat (kein Kanal oder Wartungsfenster: kein Fehler).
-
-        Liefert `NotifyResult` (Verlaufs-ID; `suppressed`: ein Wartungsfenster hat den Push
-        unterdrückt; `delivered`: `True`, wenn mindestens ein Kanal die Meldung zugestellt hat,
-        `False`, wenn keiner es getan hat -- kein Kanal eingerichtet, alle ausgefallen oder
-        unterdrückt -- und `None`, wenn der Kern es nicht weiß; `skipped`: `True`, wenn kein Kanal
-        zugestellt hat, mindestens einer sie bewusst übersprungen hat, etwa unter seiner Mindest-Stufe,
-        und keiner ausgefallen ist, `None` bei älteren Kernen). Ältere Kerne und Test-Doubles
-        liefern `None` -- wie `suppressed=False` und `delivered=None` (unbekannt) behandeln."""
+        """Legt die Benachrichtigung an und stellt sie über die Kanäle zu; ein ausgefallener Kanal stoppt den Aufrufer
+        nicht. `raise_on_failure=True` wirft `NotificationNotDelivered`, wenn es Kanäle gab, aber keiner zugestellt hat
+        (kein Kanal oder Wartungsfenster: kein Fehler). Liefert `NotifyResult`, ältere Kerne und Test-Doubles `None`."""
         ...
 
+    # Für Wächter, die eine im Fenster stumme Meldung nach dem Fenster einmal hörbar nachholen wollen, ohne bei jeder
+    # Prüfung einen Verlaufseintrag zu erzeugen.
     async def would_suppress(self, *, host_id: str | None = None, host_ids: Sequence[str] | None = None) -> bool:
-        """Würde eine Meldung mit diesem Host-Bezug (`payload["host_id"]` bzw.
-        `payload["host_ids"]`) JETZT still geschaltet? Dieselbe Regel wie `send()`, legt aber
-        nichts an -- für Wächter, die eine im Fenster stumme Meldung nach dem Fenster einmal
-        hörbar nachholen wollen, ohne bei jeder Prüfung einen Verlaufseintrag zu erzeugen.
-        Ohne Host-Bezug immer `False`."""
+        """Würde eine Meldung mit diesem Host-Bezug (`payload["host_id"]` bzw. `payload["host_ids"]`) JETZT still
+        geschaltet? Dieselbe Regel wie `send()`, legt aber nichts an; ohne Host-Bezug immer `False`."""
         ...
 
 
 class AuditHandle(Protocol):
     """Aktionen, die mit `mfa.`, `auth.`, `login.` oder `system.` beginnen, schreibt nur der Kern (er liest
-    sie wieder, etwa fuer die Sperre nach falschen Zwei-Faktor-Codes): `log()` wirft dafuer `ValueError` und
+    sie wieder, etwa für die Sperre nach falschen Zwei-Faktor-Codes): `log()` wirft dafür `ValueError` und
     schreibt nichts. Eine Erweiterung nimmt ihre eigene Kennung als Anfang (`<kennung>.<ereignis>`)."""
 
     async def log(
@@ -364,42 +315,36 @@ class AuditHandle(Protocol):
 class WsHandle(Protocol):
     async def broadcast(self, channel: str, payload: dict[str, Any]) -> None:
         """Kanal wird automatisch zu ext.<ext_id>.<channel> erweitert. Nach einer Umbenennung (`legacy_ids`)
-        geht dieselbe Nachricht zusaetzlich an die Kanaele der alten Kennungen."""
+        geht dieselbe Nachricht zusätzlich an die Kanäle der alten Kennungen."""
         ...
 
 
 class DbHandle(Protocol):
     def session(self) -> AsyncContextManager[Any]:
-        """AsyncSession, beschraenkt auf Tabellen mit dem Praefix der Extension."""
+        """AsyncSession, beschränkt auf Tabellen mit dem Präfix der Extension."""
         ...
 
 
+# Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) werden nie benutzt: jede Anfrage geht direkt an die
+# geprüfte Adresse, auch mit `insecure_tls=True`. `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter.
+#
+# Weiterleitungen (3xx) werden nie verfolgt: Eine Antwort mit Status 3xx kommt unverändert zurück, die Erweiterung fragt
+# die neue Adresse selbst ab. `follow_redirects=True` wirft `ValueError` (die Zielprüfung kennt nur die Adresse des
+# Aufrufs, nicht das Ziel einer Weiterleitung), auch mit `insecure_tls` und bei `stream()`; `False` ist erlaubt.
+#
+# `pinned_sha256` (ein SHA-256-Fingerabdruck, Schreibweise wie `sha256_fingerprint()` sie annimmt) bindet den Aufruf an
+# GENAU dieses eine Zertifikat: Der Kern vergleicht den Fingerabdruck des Zertifikats, das der Server im TLS-Handshake
+# zeigt, und bricht mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist. Die Prüfung über
+# Zertifizierungsstellen und Rechnernamen entfällt dabei (das gepinnte Zertifikat ersetzt sie), deshalb braucht auch das
+# die Berechtigung `net.outbound.insecure_tls`. Für `http://`-Adressen wirft es `ValueError` (dort gibt es kein
+# Zertifikat), zusammen mit `insecure_tls=True` ebenfalls. Woher der Fingerabdruck kommt (z. B. ein Mensch hat ihn mit
+# dem auf dem Server verglichen), entscheidet die Erweiterung; `peer_certificate()` liefert ihn, ohne etwas zu senden.
+# Aufrufe mit `pinned_sha256` merken sich keine Cookies des Servers (ein Cookie geht nur mit, wenn der Aufruf ihn selbst
+# setzt). Ältere Kerne kennen den Parameter nicht und lehnen den Aufruf ab (`TypeError`), statt ungeprüft zu senden.
 class HttpHandle(Protocol):
-    """`insecure_tls=True` (WP-8-Blocker-Nachtrag) schaltet die TLS-Zertifikatspruefung
-    fuer genau diesen Aufruf ab -- fuer Ziele mit einem selbstsignierten Zertifikat
-    (z. B. Proxmox VEs Standard-Auslieferung). Braucht zusaetzlich zu `net.outbound`
-    die eigene Berechtigung `net.outbound.insecure_tls` im Manifest; ohne sie wirft
-    der Aufruf `PermissionDenied`, auch wenn `net.outbound` bereits gewaehrt ist.
-
-    Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`) werden nie benutzt:
-    jede Anfrage geht direkt an die gepruefte Adresse, auch mit `insecure_tls=True`.
-    `SSL_CERT_FILE` und `SSL_CERT_DIR` gelten weiter.
-
-    Weiterleitungen (3xx) werden nie verfolgt: eine Antwort mit Status 3xx kommt unveraendert zurueck, die
-    Erweiterung fragt die neue Adresse selbst ab. `follow_redirects=True` wirft `ValueError` (die Zielpruefung
-    kennt nur die Adresse des Aufrufs, nicht das Ziel einer Weiterleitung), auch mit `insecure_tls` und bei
-    `stream()`; `follow_redirects=False` ist erlaubt.
-
-    `pinned_sha256` (ein SHA-256-Fingerabdruck, Schreibweise wie `sha256_fingerprint()` sie annimmt) bindet den
-    Aufruf an GENAU dieses eine Zertifikat: Der Kern vergleicht den Fingerabdruck des Zertifikats, das der Server
-    im TLS-Handshake zeigt, und bricht mit `CertificateMismatch` ab, bevor ein Byte der Anfrage gesendet ist. Die
-    Pruefung ueber Zertifizierungsstellen und Rechnernamen entfaellt dabei (das gepinnte Zertifikat ersetzt sie),
-    deshalb braucht auch das die Berechtigung `net.outbound.insecure_tls`. Fuer `http://`-Adressen wirft es
-    `ValueError` (dort gibt es kein Zertifikat); zusammen mit `insecure_tls=True` ebenfalls. Woher der
-    Fingerabdruck kommt (z. B. ein Mensch hat ihn mit dem auf dem Server verglichen), entscheidet die
-    Erweiterung -- `peer_certificate()` liefert ihn, ohne etwas zu senden. Aufrufe mit `pinned_sha256` merken sich
-    keine Cookies des Servers (ein Cookie geht nur mit, wenn der Aufruf ihn selbst setzt). Aeltere Kerne kennen den
-    Parameter nicht und lehnen den Aufruf ab (`TypeError`), statt ungeprueft zu senden."""
+    """Ausgehende HTTP-Aufrufe (Berechtigung `net.outbound`), jede Anfrage direkt an die geprüfte Adresse.
+    `insecure_tls=True` schaltet die Zertifikatsprüfung für genau diesen Aufruf ab (z. B. Proxmox VE mit
+    selbstsigniertem Zertifikat) und braucht zusätzlich `net.outbound.insecure_tls`, sonst `PermissionDenied`."""
 
     async def get(
         self, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
@@ -411,15 +356,17 @@ class HttpHandle(Protocol):
         self, method: str, url: str, *, insecure_tls: bool = False, pinned_sha256: str | None = None, **kwargs: Any
     ) -> Any: ...
 
+    # Erst mit der üblichen Prüfung (Zertifizierungsstellen wie bei jedem `ctx.http`-Aufruf, Rechnername); scheitert
+    # sie, noch einmal ohne Prüfung, nur um das Zertifikat zu lesen (`trusted=False`). Dieselbe Zielprüfung
+    # (`net.outbound`) wie jeder Aufruf, kein Proxy aus der Umgebung.
     async def peer_certificate(self, url: str, *, timeout_s: float = 10.0) -> PeerCertificate:
-        """Holt das Zertifikat, das der Server unter `url` (`https://` oder `wss://`) zeigt -- nur den
-        TLS-Handshake, ohne eine Anfrage, Kopfzeilen oder Zugangsdaten zu senden. Erst mit der ueblichen Pruefung
-        (Zertifizierungsstellen wie bei jedem `ctx.http`-Aufruf, Rechnername); scheitert sie, noch einmal ohne
-        Pruefung, nur um das Zertifikat zu lesen (`trusted=False`). Dieselbe Zielpruefung (`net.outbound`) wie
-        jeder Aufruf, kein Proxy aus der Umgebung. Ist der Server nicht erreichbar oder spricht er kein TLS, wirft
-        es `OSError` bzw. `TimeoutError`; eine andere Adresse als `https://`/`wss://` ist ein `ValueError`."""
+        """Holt das Zertifikat, das der Server unter `url` (`https://` oder `wss://`) zeigt: nur der TLS-Handshake, ohne
+        Anfrage, Kopfzeilen oder Zugangsdaten. Nicht erreichbar oder kein TLS: `OSError` bzw. `TimeoutError`;
+        eine andere Adresse als `https://`/`wss://`: `ValueError`."""
         ...
 
+    # Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `WS_PROXY`, `WSS_PROXY`, `SOCKS_PROXY`) werden nie benutzt.
+    # Die Zielprüfung kennt nur die Start-Adresse, deshalb entsteht nach einer Weiterleitung keine zweite Verbindung.
     def websocket(
         self,
         url: str,
@@ -430,17 +377,9 @@ class HttpHandle(Protocol):
         open_timeout_s: float = 10.0,
         pinned_sha256: str | None = None,
     ) -> AsyncContextManager["WebSocketConnection"]:
-        """Ausgehende WebSocket-Verbindung (`ws://`/`wss://`) -- dieselben
-        `net.outbound`-/`insecure_tls`-Pruefungen wie die HTTP-Methoden. Erster Bedarf:
-        eine Hypervisor-Konsole, die nur ueber einen WebSocket erreichbar ist.
-
-        Weiterleitungen (3xx) beim Verbindungsaufbau werden nie verfolgt: `async with` wirft
-        ein `ConnectionError` mit fertigem deutschem Text, eine zweite Verbindung entsteht
-        nicht (die Zielpruefung kennt nur die Start-Adresse).
-
-        Proxys aus der Umgebung (`HTTP_PROXY`, `HTTPS_PROXY`, `WS_PROXY`, `WSS_PROXY`,
-        `SOCKS_PROXY`) werden nie benutzt: die Verbindung geht immer direkt an die
-        gepruefte Adresse."""
+        """Ausgehende WebSocket-Verbindung (`ws://`/`wss://`) mit denselben `net.outbound`-/`insecure_tls`-Prüfungen wie
+        die HTTP-Methoden, immer direkt an die geprüfte Adresse. Eine Weiterleitung (3xx) beim Verbindungsaufbau wird
+        nie verfolgt: `async with` wirft ein `ConnectionError` mit fertigem deutschem Text."""
         ...
 
 
@@ -456,12 +395,14 @@ class WebSocketConnection(Protocol):
 # ---------------------------------------------------------------------------
 
 
+# Andere Extensions erreicht eine Extension nur über `ctx.events` und deklarierte `requires`. Die Implementierung des
+# Protokolls liegt im Kern unter `nodvard_deck/ext/context.py`.
 @runtime_checkable
 class ExtensionContext(Protocol):
     ext_id: str
     version: str
     data_dir: PurePosixPath
-    """Beschreibbares Verzeichnis unter /data/ext/<ext_id>/ — z. B. fuer das Git-Repo
+    """Beschreibbares Verzeichnis unter /data/ext/<ext_id>/ — z. B. für das Git-Repo
     des Script-Repositories."""
 
     api: ApiHandle
@@ -483,14 +424,8 @@ class ExtensionContext(Protocol):
     logger: Any
 
     def vault_use(self, handle: SecretHandleRef) -> AsyncContextManager[str]:
-        """Materialisiert einen Secret-Wert nur innerhalb des Blocks.
-
-            async with ctx.vault_use(h) as key:
-                ...
-
-        Die Nutzung wird protokolliert (ohne den Wert), je Secret und Modul hoechstens
-        einmal pro Stunde.
-        """
+        """Materialisiert einen Secret-Wert nur innerhalb des Blocks (`async with ctx.vault_use(h) as key:`).
+        Die Nutzung wird protokolliert (ohne den Wert), je Secret und Modul höchstens einmal pro Stunde."""
         ...
 
     def spawn(
@@ -501,12 +436,8 @@ class ExtensionContext(Protocol):
         restart: bool = True,
         restart_delay_s: float = 5.0,
     ) -> None:
-        """Ueberwachter Hintergrundtask.
-
-        Statt asyncio.create_task(): der Kern bricht ihn beim Stop sauber ab, startet
-        ihn nach einem Absturz neu und meldet wiederholte Abstuerze als
-        Extension-Gesundheitsproblem, statt sie im Log verschwinden zu lassen.
-        """
+        """Überwachter Hintergrundtask statt `asyncio.create_task()`: Der Kern bricht ihn beim Stop sauber ab, startet
+        ihn nach einem Absturz neu und meldet wiederholte Abstürze als Extension-Gesundheitsproblem."""
         ...
 
     def notify_sync(

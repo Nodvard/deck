@@ -1,9 +1,6 @@
-"""Einstellungen der Netzwerk-Extension lesen -- Pi-hole und Nginx Proxy Manager sind
-beide optional. Nichts eingetragen heisst "nicht eingerichtet", nie ein Fehler.
+"""Einstellungen der Netzwerk-Erweiterung lesen; Pi-hole und Nginx Proxy Manager sind beide optional.
 
-Die Passwoerter liegen ausschliesslich im Vault (Labels unten, siehe `x-secrets` in
-settings.schema.json) -- gesetzt ueber die Einstellungsseite des Kerns
-(`PUT /extensions/network/secrets`), gelesen nur im Moment der Anmeldung.
+Passwörter liegen nur im Tresor (`x-secrets` im Schema) und werden erst bei der Anmeldung gelesen.
 """
 
 from __future__ import annotations
@@ -19,8 +16,7 @@ SETTINGS_PATH = "/settings/extensions/network"
 
 
 class NotConfigured(Exception):
-    """Dienst nicht (vollstaendig) eingetragen -- `str(exc)` ist ein freundlicher
-    deutscher Hinweis, was fehlt."""
+    """Dienst nicht (vollständig) eingetragen; `str(exc)` sagt auf Deutsch, was fehlt."""
 
 
 @dataclass(frozen=True)
@@ -38,8 +34,9 @@ class NpmConfig:
 
 
 def normalize_url(raw: Any, *, strip_suffixes: tuple[str, ...] = ()) -> str | None:
-    """`192.168.1.2` -> `http://192.168.1.2`; `http://pi.hole/admin/` ->
-    `http://pi.hole`. `None` bei leer; `ValueError` bei offensichtlich unbrauchbar."""
+    """`192.0.2.10` wird `http://192.0.2.10`, `http://pi.hole/admin/` wird `http://pi.hole`.
+
+    `None` bei leer, `ValueError` bei offensichtlich unbrauchbar."""
     text = str(raw or "").strip()
     if not text:
         return None
@@ -76,7 +73,7 @@ def pihole_config(settings: dict[str, Any]) -> PiholeConfig:
 
 
 def npm_config(settings: dict[str, Any]) -> NpmConfig:
-    """Ohne Passwort-Pruefung (das braucht den Vault, siehe `service.py`)."""
+    """Ohne Passwortprüfung (die braucht den Tresor, siehe `service.py`)."""
     section = _section(settings, "npm")
     try:
         url = normalize_url(section.get("url"), strip_suffixes=("/api",))

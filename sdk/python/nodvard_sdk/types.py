@@ -1,9 +1,6 @@
-"""Gemeinsame Datentypen des SDK.
+"""Gemeinsame Datentypen des SDK, alle serialisierbar.
 
-Alles hier ist serialisierbar. Das ist Absicht: der ExtensionContext ist so geschnitten,
-dass über die Kern/Extension-Grenze nur Daten wandern — damit ein späterer Wechsel auf
-Out-of-Process-Extensions möglich bleibt, ohne dass eine Extension sich ändert
-(siehe docs/01-ARCHITECTURE.md §2).
+Über die Kern/Extension-Grenze wandern nur Daten, damit Out-of-Process-Extensions später ohne Änderung laufen.
 """
 
 from __future__ import annotations
@@ -85,18 +82,15 @@ class Host(BaseModel):
     is_managed: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
     has_credential: bool = True
-    """Ob ein Standard-
-    Zugangsdatensatz existiert -- NIE der Wert selbst (docs/03 §3 Invariante 1 bleibt
-    unangetastet). Default `True` aus Rueckwaertskompatibilitaet fuer Code, der diese
-    Klasse ohne das Feld konstruiert (z. B. bestehende Tests) -- `host_to_sdk()`
-    (services/hosts.py) setzt es fuer echte Hosts immer explizit."""
+    """Ob ein Standard-Zugangsdatensatz existiert, nie der Wert selbst. Vorgabe `True` aus Rückwärtskompatibilität
+    für Code, der die Klasse ohne das Feld konstruiert; der Kern setzt es für echte Hosts immer explizit."""
     credential_username: str | None = None
     """Unter welchem Konto `ctx.exec.run()` auf diesem Host anmeldet (Benutzername des
-    Standard-Zugangs, z. B. "root"); None ohne Zugang oder bei aelteren Kernen. Nur der
+    Standard-Zugangs, z. B. "root"); None ohne Zugang oder bei älteren Kernen. Nur der
     Name, nie das Geheimnis."""
     credential_port: int | None = None
-    """SSH-Port, ueber den `ctx.exec.run()` auf diesem Host anmeldet (Port des Standard-Zugangs,
-    meist 22); None ohne Zugang oder bei aelteren Kernen."""
+    """SSH-Port, über den `ctx.exec.run()` auf diesem Host anmeldet (Port des Standard-Zugangs,
+    meist 22); None ohne Zugang oder bei älteren Kernen."""
 
 
 class DiscoveredHost(BaseModel):
@@ -112,10 +106,9 @@ class DiscoveredHost(BaseModel):
     tags: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     address_verified: bool = False
-    """`True`, wenn der Anbieter die Adresse vom Gast SELBST kennt (Gast-Agent,
-    Container-Schnittstellen) -- dann uebernimmt der Kern sie auch fuer einen schon
-    bekannten VM-/Container-Host. `False` (Default): moeglicherweise nur ein
-    Platzhalter; eine vorhandene, ggf. von Hand korrigierte Adresse bleibt stehen."""
+    """`True`, wenn der Anbieter die Adresse vom Gast selbst kennt (Gast-Agent, Container-Schnittstellen): Dann
+    übernimmt der Kern sie auch für einen schon bekannten VM-/Container-Host. `False` (Vorgabe): möglicherweise nur
+    ein Platzhalter, eine vorhandene, ggf. von Hand korrigierte Adresse bleibt stehen."""
 
 
 class FileEntry(BaseModel):
@@ -164,10 +157,9 @@ class FilePlace(BaseModel):
 
 
 class AppSuggestion(BaseModel):
-    """Ein Vorschlag fuer eine App-Kachel (`AppSuggestionProvider`): Name und Adresse, die eine Erweiterung schon kennt
-    (etwa ein Proxy-Host im Nginx Proxy Manager). `source` nennt kurz, woher er stammt ("Nginx Proxy Manager"), `host`
-    optional den Server. Der Kern prueft und kuerzt alles wie bei einer von Hand angelegten App und zeigt nur Adressen mit
-    `http://` oder `https://`; uebernommen wird ein Vorschlag erst, wenn ein Nutzer ihn speichert."""
+    """Ein Vorschlag für eine App-Kachel (`AppSuggestionProvider`): Name und Adresse, die eine Erweiterung schon kennt.
+    `source` nennt kurz, woher er stammt ("Nginx Proxy Manager"), `host` optional den Server. Der Kern prüft und kürzt
+    alles wie bei einer von Hand angelegten App und zeigt nur Adressen mit `http://` oder `https://`."""
 
     name: str
     url: str
@@ -189,21 +181,16 @@ class Notification(BaseModel):
 
 
 class NotifyResult(BaseModel):
-    """Was `ctx.notify.send()` zurückgibt: die ID des Verlaufseintrags und ob ein
-    Wartungsfenster den Versand an die Kanäle (Push) unterdrückt hat. Der Eintrag im
-    Verlauf entsteht in beiden Fällen.
-
-    Ältere Kerne und Test-Doubles liefern `None` -- wer den Wert auswertet, behandelt
-    `None` wie `suppressed=False` (docs/02-EXTENSION-API.md §2).
-
-    `delivered`: `True`, wenn mindestens ein Kanal die Meldung wirklich zugestellt hat.
-    `False`, wenn keiner zugestellt hat -- es gibt keinen Kanal, alle sind ausgefallen oder
-    noch nicht eingerichtet, oder ein Wartungsfenster hat den Push unterdrückt (`suppressed`).
-    `None`: unbekannt (ältere Kerne). Damit kann eine Seite ehrlich sagen, ob etwas auf dem
-    Handy ankommt, statt nur "gesendet" zu melden."""
+    """Was `ctx.notify.send()` zurückgibt: die ID des Verlaufseintrags (er entsteht immer) und ob ein Wartungsfenster
+    den Versand an die Kanäle (Push) unterdrückt hat. Ältere Kerne und Test-Doubles liefern `None`; wer den Wert
+    auswertet, behandelt `None` wie `suppressed=False`."""
 
     notification_id: str
     suppressed: bool = False
+    # `delivered`: `True`, wenn mindestens ein Kanal die Meldung wirklich zugestellt hat. `False`, wenn keiner es getan
+    # hat: kein Kanal, alle ausgefallen oder noch nicht eingerichtet, oder ein Wartungsfenster hat den Push unterdrückt
+    # (`suppressed`). `None`: unbekannt (ältere Kerne). So kann eine Seite ehrlich sagen, ob etwas auf dem Handy
+    # ankommt.
     delivered: bool | None = None
     skipped: bool | None = None
     """`True`, wenn kein Kanal zugestellt hat, mindestens einer die Meldung bewusst übersprungen hat
@@ -241,13 +228,13 @@ class ExecResult(BaseModel):
 
 class PeerCertificate(BaseModel):
     """Das Zertifikat, das ein Server beim Verbindungsaufbau zeigt (`ctx.http.peer_certificate()`).
+    `sha256`: Fingerabdruck über das ganze Zertifikat (Großbuchstaben, Paare durch Doppelpunkte getrennt).
+    `trusted`: gilt nach den Zertifizierungsstellen eines normalen `ctx.http`-Aufrufs und passt zum Rechnernamen."""
 
-    `sha256`: Fingerabdruck ueber das ganze Zertifikat in der ueblichen Schreibweise (Grossbuchstaben, je zwei
-    Zeichen durch Doppelpunkte getrennt) -- so zeigen ihn auch `openssl x509 -fingerprint -sha256` und viele
-    Oberflaechen (z. B. Proxmox VE unter Knoten -> System -> Zertifikate). `trusted`: Das Zertifikat gilt nach den
-    Zertifizierungsstellen, denen auch ein normaler `ctx.http`-Aufruf vertraut, und passt zum Rechnernamen; ein
-    Aufruf ohne `insecure_tls` und ohne `pinned_sha256` klappt dann. Die uebrigen Felder sind nur zum Anzeigen
-    (kommen vom Server, ungeprueft, gekuerzt): Inhaber, Aussteller, Ablauf (ISO 8601, UTC) und weitere Namen."""
+    # `sha256` ist derselbe Wert wie bei `openssl x509 -fingerprint -sha256` und in vielen Oberflächen (z. B. Proxmox VE
+    # unter Knoten -> System -> Zertifikate). Bei `trusted=True` klappt ein Aufruf ohne `insecure_tls` und ohne
+    # `pinned_sha256`. Die übrigen Felder sind nur zum Anzeigen (vom Server, ungeprüft, gekürzt): Inhaber, Aussteller,
+    # Ablauf (ISO 8601, UTC) und weitere Namen.
 
     model_config = {"frozen": True}
 

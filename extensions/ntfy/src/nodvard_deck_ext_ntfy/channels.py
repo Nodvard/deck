@@ -1,17 +1,7 @@
-"""Weitere Kanaele fuer Push-Nachrichten: Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost und eine
-vorhandene Apprise-API -- schlank und selbst gebaut, jede Anfrage ueber `ctx.http`.
+"""Weitere Kanäle für Push-Nachrichten: Telegram, Discord, Gotify, Pushover, Matrix, Slack, Mattermost und Apprise-API.
 
-Warum nicht die Apprise-Bibliothek: Sie baut eigene Verbindungen und umginge damit die Zielpruefung, das
-Weiterleitungsverbot und die Proxy-Regel von `ctx.http`, dazu kaemen neue Abhaengigkeiten im Image. Die Adressen
-schreibt man trotzdem wie bei Apprise (`tgram://…`, `discord://…`), damit Anleitungen und vorhandene Adressen passen;
-fuer alles andere gibt es den Weg ueber eine eigene Apprise-API (`apprise://` bzw. `apprises://`).
-
-Die Adresse eines Kanals traegt Zugangsdaten (Bot-Token, Webhook-Schluessel) und liegt deshalb im Tresor
-(`push-kanal:<name>`), nie in den Einstellungen. Kein Fehlertext nennt sie: Saetze sind fest, und der Text einer
-Ausnahme der HTTP-Schicht wird nie weitergegeben (httpx und h11 zitieren dort Teile der Anfrage, und bei Telegram
-steckt das Token im Pfad).
+Schlank selbst gebaut, jede Anfrage über `ctx.http`; die Adressen schreibt man wie bei Apprise (`tgram://…`).
 """
-
 from __future__ import annotations
 
 import asyncio
@@ -27,20 +17,29 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 from nodvard_sdk import Notification, Severity
 
+# Keine Apprise-Bibliothek: Sie baut eigene Verbindungen und umginge die Zielprüfung, das Weiterleitungsverbot und die
+# Proxy-Regel von `ctx.http`, dazu kämen neue Abhängigkeiten im Image. Die Adressen sind trotzdem wie bei Apprise
+# geschrieben, damit Anleitungen passen; alles andere läuft über eine eigene Apprise-API (`apprise://`, `apprises://`).
+#
+# Die Adresse eines Kanals trägt Zugangsdaten (Bot-Token, Webhook-Schlüssel) und liegt deshalb im Tresor
+# (`push-kanal:<name>`), nie in den Einstellungen. Kein Fehlertext nennt sie: Die Sätze sind fest, und der Text einer
+# Ausnahme der HTTP-Schicht wird nie weitergegeben (httpx und h11 zitieren Teile der Anfrage, bei Telegram steckt das
+# Token im Pfad).
+
 SECRET_PREFIX = "push-kanal"
+# Wie `channels[].name` in settings.schema.json; „ntfy“ ist vergeben (der ntfy-Server selbst).
 NAME_PATTERN = re.compile(r"^(?![Nn][Tt][Ff][Yy]$)[A-Za-z0-9_.-]{1,40}$")
-"""Wie `channels[].name` in settings.schema.json; „ntfy“ ist vergeben (der ntfy-Server selbst)."""
 MAX_URL = 2000
 MAX_CHANNELS = 10
+# Grenze je Phase einer Anfrage (Verbindungsaufbau, Lesen ...), wie httpx sie zählt.
 TIMEOUT_S = 10.0
-"""Grenze je Phase einer Anfrage (Verbindungsaufbau, Lesen ...), wie httpx sie zaehlt."""
+# Grenze für eine ganze Anfrage. Die Empfänger eines Kanals laufen nebeneinander, Matrix braucht höchstens zwei Runden
+# (Raum-Namen auflösen, dann senden): So endet ein Kanal immer vor `CHANNEL_TIMEOUT_S`, und ein Teilerfolg geht nicht als
+# Totalausfall verloren (sonst schickte ein Wiederholversuch den erreichten Empfängern doppelt).
 REQUEST_TIMEOUT_S = 7.0
-"""Grenze fuer eine ganze Anfrage. Die Empfaenger eines Kanals laufen nebeneinander, Matrix braucht hoechstens zwei
-Runden (Raum-Namen aufloesen, dann senden): so endet ein Kanal immer vor `CHANNEL_TIMEOUT_S`, und ein Teilerfolg
-geht nicht als Totalausfall verloren (sonst schickte ein Wiederholversuch den erreichten Empfaengern doppelt)."""
+# Sicherheitsgrenze für einen ganzen Kanal. Die Kanäle laufen nebeneinander, so bleibt auch die Testnachricht mit acht
+# toten Kanälen unter der Frist des Kerns (25 s).
 CHANNEL_TIMEOUT_S = 18.0
-"""Sicherheitsgrenze fuer einen ganzen Kanal. Die Kanaele laufen nebeneinander, so bleibt auch die Testnachricht mit
-acht toten Kanaelen unter der Frist des Kerns (25 s)."""
 
 KIND_LABELS = {
     "telegram": "Telegram",
@@ -53,8 +52,8 @@ KIND_LABELS = {
     "apprise": "Apprise-API",
 }
 
+# Wie `default` von `channels[].min_severity` in settings.schema.json.
 DEFAULT_MIN_SEVERITY = Severity.WARNING
-"""Wie `default` von `channels[].min_severity` in settings.schema.json."""
 _SEVERITY_RANK = {Severity.INFO: 0, Severity.WARNING: 1, Severity.CRITICAL: 2}
 _SEVERITY_MARK = {Severity.INFO: "ℹ️", Severity.WARNING: "⚠️", Severity.CRITICAL: "🚨"}
 _GOTIFY_PRIORITY = {Severity.INFO: 4, Severity.WARNING: 6, Severity.CRITICAL: 8}
@@ -69,8 +68,8 @@ _PUSHOVER_KEY = re.compile(r"^[A-Za-z0-9]{20,40}$")
 _PUSHOVER_DEVICE = re.compile(r"^[A-Za-z0-9_-]{1,25}$")
 _SLACK_PART = re.compile(r"^[A-Za-z0-9]{6,40}$")
 _MATRIX_ROOM = re.compile(r"^[!#][^\s:/]{1,200}(:[A-Za-z0-9.-]{1,253}(:\d{1,5})?)?$")
+# Mit Unterstrich: Namen von Docker-Containern im selben Netz enthalten oft einen.
 _HOSTNAME = re.compile(r"^[A-Za-z0-9_]([A-Za-z0-9._-]{0,251}[A-Za-z0-9_])?$")
-"""Mit Unterstrich: Namen von Docker-Containern im selben Netz enthalten oft einen."""
 
 FORMAT_HELP = (
     "So sieht die Adresse aus: tgram://BOT-TOKEN/CHAT-ID, discord://WEBHOOK-ID/WEBHOOK-TOKEN, "
@@ -98,7 +97,7 @@ class ChannelRequest:
 
 @dataclass(frozen=True)
 class Target:
-    """Ein gelesener Kanal. `parts` haelt die Angaben aus der Adresse (auch Zugangsdaten) und erscheint nie in `repr`."""
+    """Ein gelesener Kanal. `parts` hält die Angaben aus der Adresse (auch Zugangsdaten) und erscheint nie in `repr`."""
 
     kind: str
     parts: Mapping[str, Any] = field(repr=False)
@@ -118,7 +117,7 @@ def _clean(value: str) -> str:
 
 
 def _host_port(netloc: str, kind: str) -> tuple[str, int | None]:
-    """`rechner[:port]` (auch `[IPv6]:port`) -- ohne Zugangsdaten. `ChannelError`, wenn es kein Rechnername ist."""
+    """`rechner[:port]` (auch `[IPv6]:port`) ohne Zugangsdaten; `ChannelError`, wenn es kein Rechnername ist."""
     try:
         parts = urlsplit(f"//{netloc}")
         host = parts.hostname
@@ -145,7 +144,7 @@ def _segments(path: str) -> list[str]:
 
 def parse_channel_url(raw: Any) -> Target:
     """Liest eine Adresse in Apprise-Schreibweise (dazu die Webhook-Adressen von Discord und Slack, wie die Dienste sie
-    anzeigen). `ChannelError` mit festem Satz, wenn sie nicht passt -- die Adresse selbst steht nie im Text."""
+    anzeigen). `ChannelError` mit festem Satz, wenn sie nicht passt; die Adresse selbst steht nie im Text."""
     if not isinstance(raw, str):
         raise _bad()
     text = raw.strip()
@@ -251,7 +250,7 @@ def _text(notification: Notification, dashboard_url: str | None) -> str:
 
 
 def _body(notification: Notification, dashboard_url: str | None) -> str:
-    """Text ohne Titel (fuer Dienste mit eigenem Titelfeld), mit dem Link ins Dashboard."""
+    """Text ohne Titel (für Dienste mit eigenem Titelfeld), mit dem Link ins Dashboard."""
     parts = [notification.body] if notification.body else []
     link = open_link(notification, dashboard_url)
     if link:
@@ -268,8 +267,7 @@ def open_link(notification: Notification, dashboard_url: str | None) -> str | No
 
 
 def build_requests(target: Target, notification: Notification, dashboard_url: str | None) -> list[ChannelRequest]:
-    """Die Anfragen fuer eine Meldung (bei Telegram, Pushover und Matrix je Empfaenger eine; Matrix-Raeume mit
-    Alias-Namen loest `MatrixRooms` vorher auf)."""
+    """Die Anfragen für eine Meldung (bei Telegram je Chat eine); Matrix läuft über `matrix_requests`."""
     p = target.parts
     severity = notification.severity
     text = _text(notification, dashboard_url)
@@ -282,7 +280,7 @@ def build_requests(target: Target, notification: Notification, dashboard_url: st
     if target.kind == "discord":
         return [ChannelRequest(
             "POST", f"https://discord.com/api/webhooks/{p['id']}/{quote(p['token'], safe='')}?wait=true",
-            # Keine Erwaehnungen: ein Text mit "@everyone" aus einer Meldung pingt sonst den ganzen Server an.
+            # Keine Erwähnungen: Ein Text mit „@everyone“ aus einer Meldung pingt sonst den ganzen Server an.
             json={"content": text[:2000], "allowed_mentions": {"parse": []}},
         )]
     if target.kind == "gotify":
@@ -302,7 +300,7 @@ def build_requests(target: Target, notification: Notification, dashboard_url: st
         if link:
             base["url"] = link[:512]
         if p["devices"]:
-            base["device"] = ",".join(p["devices"])  # eine Anfrage fuer alle Geraete: nie doppelt bei einem Fehler
+            base["device"] = ",".join(p["devices"])  # eine Anfrage für alle Geräte: nie doppelt bei einem Fehler
         return [ChannelRequest("POST", "https://api.pushover.net/1/messages.json", data=base)]
     if target.kind == "matrix":
         raise ValueError("Matrix braucht die aufgeloesten Raeume (matrix_requests).")
@@ -323,8 +321,8 @@ def build_requests(target: Target, notification: Notification, dashboard_url: st
 
 
 def slack_escape(text: str) -> str:
-    """Slacks eigene Maskierung: aus `<!channel>` in einer Meldung (Benutzername, Dateiname -- Text, den ein
-    Angreifer mitbestimmen kann) wird so keine Erwaehnung, die den ganzen Kanal anpingt."""
+    """Slacks eigene Maskierung: Aus `<!channel>` in einer Meldung (Benutzername, Dateiname; Text, den ein Angreifer
+    mitbestimmen kann) wird so keine Erwähnung, die den ganzen Kanal anpingt."""
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
@@ -342,8 +340,8 @@ def matrix_requests(target: Target, room_ids: list[str], notification: Notificat
             "PUT",
             f"{base}/_matrix/client/v3/rooms/{quote(room, safe='')}/send/m.room.message/{uuid.uuid4().hex}",
             headers={"Authorization": f"Bearer {p['token']}"},
-            # `m.text`, nicht `m.notice`: Fuer Hinweise schickt Matrix nach seiner Standardregel keine Push-Nachricht.
-            # Leeres `m.mentions`: ein "@room" im Text pingt so nicht den ganzen Raum an.
+            # `m.text`, nicht `m.notice`: Für Hinweise schickt Matrix nach seiner Standardregel keine Push-Nachricht.
+            # Leeres `m.mentions`: Ein „@room“ im Text pingt so nicht den ganzen Raum an.
             json={"msgtype": "m.text", "body": text[:20000], "m.mentions": {}},
         )
         for room in room_ids
@@ -390,7 +388,7 @@ def status_text(kind: str, status_code: int) -> str | None:
 
 
 def transport_text(kind: str, exc: BaseException) -> str:
-    """Fester Satz zu einer Ausnahme beim Senden -- nie ihr Text (er kann die Adresse samt Token tragen)."""
+    """Fester Satz zu einer Ausnahme beim Senden, nie ihr Text (er kann die Adresse samt Token tragen)."""
     label = KIND_LABELS[kind]
     if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
         return f"{label} antwortet nicht (Zeitüberschreitung). Versuche es später erneut."
@@ -405,11 +403,11 @@ def transport_text(kind: str, exc: BaseException) -> str:
 
 
 def below_minimum(notification: Notification, minimum: Any) -> bool:
-    """Ob die Meldung unter der Mindest-Stufe des Kanals liegt. Die Testnachricht geht immer raus. Fehlt die Stufe,
-    gilt die Vorgabe des Formulars ("Ab Warnung" -- das Formular zeigt sie an, speichert sie aber erst, wenn man das
-    Feld anfasst); eine unbekannte Stufe gilt als "alles" (lieber eine Meldung zu viel)."""
+    """Ob die Meldung unter der Mindest-Stufe des Kanals liegt; die Testnachricht geht immer raus."""
     if (notification.payload or {}).get("test") is True:
         return False
+    # Fehlt die Stufe, gilt die Vorgabe des Formulars („Ab Warnung“): Es zeigt sie an, speichert sie aber erst, wenn man
+    # das Feld anfasst. Eine unbekannte Stufe gilt als „alles“ (lieber eine Meldung zu viel).
     if minimum is None or (isinstance(minimum, str) and not minimum.strip()):
         level = DEFAULT_MIN_SEVERITY
     else:
@@ -428,7 +426,7 @@ _MATRIX_ROOM_ID = re.compile(r"^![^\s/]{1,250}$")
 
 
 def _merge(problems: list[str]) -> str:
-    """Die Saetze ohne Wiederholung, in der Reihenfolge ihres Auftretens."""
+    """Die Sätze ohne Wiederholung, in der Reihenfolge ihres Auftretens."""
     return " ".join(dict.fromkeys(problems))
 
 
@@ -448,7 +446,7 @@ async def _resolve_room(http: Any, target: Target, room: str) -> str:
 
 
 async def _each(coros: list[Any]) -> tuple[list[Any], list[str]]:
-    """Fuehrt die Aufrufe nebeneinander aus: (Ergebnisse der gelungenen, Saetze der gescheiterten)."""
+    """Führt die Aufrufe nebeneinander aus: (Ergebnisse der gelungenen, Sätze der gescheiterten)."""
     results = await asyncio.gather(*coros, return_exceptions=True)
     done = [r for r in results if not isinstance(r, BaseException)]
     problems: list[str] = []
@@ -461,11 +459,9 @@ async def _each(coros: list[Any]) -> tuple[list[Any], list[str]]:
 
 
 async def send_to(http: Any, target: Target, notification: Notification, dashboard_url: str | None) -> str | None:
-    """Schickt die Meldung an alle Empfaenger eines Kanals (Chats, Raeume) nebeneinander -- ein Fehler bei einem
-    haelt die anderen nicht auf. `None`, wenn alle sie bekamen; ein Satz, wenn nur ein Teil sie bekam (dann zaehlt
-    der Kanal als zugestellt, und ein Wiederholversuch schickt sie den anderen nicht doppelt); `ChannelError`, wenn
-    keiner sie bekam. Fehler werden ausserhalb von `except`-Bloecken geworfen: sonst hinge die Ausnahme der
-    HTTP-Schicht (mit der Adresse samt Token) als `__context__` daran."""
+    """Schickt die Meldung an alle Empfänger eines Kanals (Chats, Räume) nebeneinander; ein Fehler hält die anderen nicht auf.
+
+    `None`, wenn alle sie bekamen; ein Satz, wenn nur ein Teil sie bekam; `ChannelError`, wenn keiner sie bekam."""
     problems: list[str] = []
     if target.kind == "matrix":
         room_ids, problems = await _each([_resolve_room(http, target, room) for room in target.parts["rooms"]])
@@ -477,6 +473,7 @@ async def send_to(http: Any, target: Target, notification: Notification, dashboa
     if not sent:
         raise ChannelError(_merge(problems) or f"Die Nachricht an {target.label} ließ sich nicht senden.")
     if problems:
+        # Teilerfolg: Der Kanal zählt als zugestellt, und ein Wiederholversuch schickt die Meldung den anderen nicht doppelt.
         return f"{len(problems)} von {len(problems) + len(sent)} Empfängern nicht erreicht: {_merge(problems)}"
     return None
 
@@ -500,9 +497,8 @@ async def _telegram_chat_problem(http: Any, token: str, bot_id: int, chat: str) 
 
 
 async def probe(http: Any, target: Target) -> str | None:
-    """Prueft einen Kanal, OHNE eine Nachricht zu senden (fuer "Verbindung testen"). `None`, wenn der Dienst Token
-    bzw. Schluessel und Empfaenger bestaetigt hat; sonst ein Satz, was sich so nicht pruefen liess (ein Fehler vom
-    letzten Senden zaehlt dann weiter). `ChannelError`, wenn etwas nicht stimmt."""
+    """Prüft einen Kanal, ohne zu senden (für „Verbindung testen“): `None`, wenn der Dienst Token bzw. Schlüssel und Empfänger
+    bestätigt hat, sonst ein Satz zu dem, was sich so nicht prüfen ließ; `ChannelError`, wenn etwas nicht stimmt."""
     p = target.parts
     if target.kind == "telegram":
         me = await _exchange(http, "telegram", ChannelRequest("GET", f"https://api.telegram.org/bot{p['token']}/getMe"))
@@ -511,7 +507,7 @@ async def probe(http: Any, target: Target) -> str | None:
             bot_id = int(me.json()["result"]["id"])
         except (ValueError, KeyError, TypeError, RecursionError):
             pass
-        if bot_id is None:  # ausserhalb von `except`: kein `__context__` mit Teilen der Antwort
+        if bot_id is None:  # außerhalb von `except`: kein `__context__` mit Teilen der Antwort
             raise ChannelError("Telegram hat eine unerwartete Antwort geschickt. Prüfe das Bot-Token.")
         groups = [c for c in p["chats"] if c.startswith(("-", "@"))]
         _, problems = await _each([_telegram_chat_problem(http, p["token"], bot_id, chat) for chat in groups])
@@ -552,7 +548,7 @@ async def probe(http: Any, target: Target) -> str | None:
             raise ChannelError(_merge(problems))
         return "Zugriffstoken stimmt, und das Konto ist in allen Räumen. Ob es dort schreiben darf, zeigt die Testnachricht."
     if target.kind == "apprise":
-        # `privacy=1`: die Apprise-API nennt ihre Ziele ohne deren Zugangsdaten (gebraucht wird hier nur, ob es welche gibt).
+        # `privacy=1`: Die Apprise-API nennt ihre Ziele ohne deren Zugangsdaten (hier zählt nur, ob es welche gibt).
         answer = await _exchange(http, "apprise", ChannelRequest(
             "GET", _base(p["secure"], p["host"], p["port"], f"{p['prefix']}/json/urls/{quote(p['token'], safe='')}?privacy=1"),
         ))
@@ -584,6 +580,8 @@ async def _exchange(http: Any, kind: str, request: ChannelRequest) -> Any:
             response = await http.request(request.method, request.url, **kwargs)
     except Exception as exc:  # noqa: BLE001 - jeder Fehler wird ein fester Satz (auch TimeoutError)
         problem = transport_text(kind, exc)
+    # Außerhalb des `except`-Blocks: Sonst hinge die Ausnahme der HTTP-Schicht (mit der Adresse samt Token) als
+    # `__context__` am Fehler.
     if problem is not None:
         raise ChannelError(problem)
     problem = status_text(kind, response.status_code)

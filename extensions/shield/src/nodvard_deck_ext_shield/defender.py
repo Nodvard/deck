@@ -1,12 +1,4 @@
-"""Virenschutz-Ablauf: Scans ausfuehren, Funde speichern und in Quarantaene
-verschieben, Haertungs-Audits, Schutzstatus je Server.
-
-**Quarantaene ohne Freigabe-Schritt, bewusst:** ein Virenschutz muss einen Fund sofort
-unschaedlich machen, nicht erst nach einer Freigabe am naechsten Morgen. Das
-automatische Verschieben ist eine eigene Einstellung (`auto_quarantine`, an wie im
-Original), ist umkehrbar (Wiederherstellen) und steht jedes Mal im Kern-Audit-Log.
-Loeschen, Wiederherstellen und Installieren gehen dagegen durch das Aktions-Gate.
-"""
+"""Virenschutz-Ablauf: Scans ausführen, Funde speichern und in Quarantäne verschieben, Härtungs-Audits, Schutzstatus."""
 
 from __future__ import annotations
 
@@ -45,9 +37,8 @@ if TYPE_CHECKING:
 
 SCAN_TIMEOUTS = {"quick": 20 * 60, "deep": 4 * 60 * 60, "watch": 5 * 60, "custom": 60 * 60}
 STATUS_TIMEOUT = 20
-# Haertungs-Audit: laeuft entkoppelt auf dem Server (`audit_job.py`), das Dashboard fragt nur kurz nach. Obergrenze je Lauf
-# auf dem Server (`timeout` dort). Ist ein Lauf danach noch nicht zu Ende (`timeout` fehlt oder half nicht), beendet ihn das
-# Dashboard nach der Frist selbst (`audit_job.stop_command`).
+# Härtungs-Audit (`audit_job.py`): Obergrenze je Lauf auf dem Server (`timeout` dort). Ist ein Lauf danach noch nicht zu
+# Ende (`timeout` fehlt oder half nicht), beendet ihn das Dashboard nach der Frist selbst (`audit_job.stop_command`).
 AUDIT_LIMIT_S = aj.LIMIT_S
 AUDIT_STOP_GRACE_S = 5 * 60
 AUDIT_LAUNCH_TIMEOUT_S = 90  # Ordner anlegen, Lauf abkoppeln, bis 5 s auf die pid warten
@@ -57,25 +48,23 @@ AUDIT_STOP_TIMEOUT_S = 60
 AUDIT_UNKNOWN_GRACE_S = 60  # so lange darf ein gerade gestarteter Lauf auf dem Server noch "unbekannt" sein
 AUDIT_REACH_GRACE_S = 3 * 60  # nach einem gescheiterten Start: so lange muss sich der Server wenigstens einmal melden
 AUDIT_RESUME_DELAY_S = 5  # nach dem Start des Dashboards kurz warten, bis Netz und SSH da sind
-# Stand eines laufenden (oder wartenden) Audits je Server in der Baselines-Tabelle (`<host_id>:audit_run`): ueberdauert einen
-# Neustart des Dashboards. Ist der Lauf fertig, steht das Ergebnis in `AuditRecord` (gleiche ID) und die Zeile ist weg.
+# Stand eines laufenden (oder wartenden) Audits je Server in der Baselines-Tabelle (`<host_id>:audit_run`): überdauert einen
+# Neustart. Ist der Lauf fertig, steht das Ergebnis in `AuditRecord` (gleiche ID) und die Zeile ist weg.
 AUDIT_STATE_KIND = "audit_run"
 _AUDIT_ID_RE = re.compile(r"^audit_[0-9a-f]{16}$")
 QUARANTINE_TIMEOUT = 60
 MAX_PARALLEL = 3
-# So lange wartet ein Scan (nicht der Waechter) auf die Sperre des Servers (`av.guard_command`), wenn dort gerade ein anderer
-# Lauf sie haelt: etwas laenger, als ein Waechter-Lauf hoechstens dauert.
+# So lange wartet ein Scan (nicht der Wächter) auf die Sperre des Servers (`av.guard_command`): etwas länger, als ein
+# Wächter-Lauf höchstens dauert.
 SCAN_LOCK_WAIT_S = SCAN_TIMEOUTS["watch"] + 60
-# Der Waechter prueft Dateien, die seit dem Beginn seines letzten Laufs geaendert wurden (plus 2 Minuten Puffer), mindestens
-# das eingestellte Intervall plus 2 Minuten. Fiel ein Lauf aus (Server belegt, grosser Scan lief), wird das Fenster des naechsten
-# entsprechend groesser, hoechstens so gross: Das deckt einen Tiefenscan (bis 4 Stunden) ab, ohne dass nach einer langen Pause
-# (Waechter aus, Dashboard aus) ein Lauf alles der letzten Tage pruefen muss.
+# Der Wächter prüft Dateien, die seit dem Beginn seines letzten Laufs geändert wurden (plus 2 Minuten Puffer), mindestens
+# das Intervall plus 2 Minuten. Fiel ein Lauf aus, wächst das Fenster mit, höchstens bis hierher: Das deckt einen Tiefenscan
+# (bis 4 Stunden) ab, ohne dass nach einer langen Pause ein Lauf alles der letzten Tage prüfen muss.
 WATCH_MAX_WINDOW_MIN = 6 * 60
-# Setzt der Waechter so lange aus, dass sein Fenster die Grenze erreicht, gehen Dateien ungeprueft verloren: Dann wird aus dem
-# stillen Aussetzen eine sichtbare Fehlerzeile, hoechstens eine je `WATCH_MAX_WINDOW_MIN`. Haelt ein Lauf die Sperre dauerhaft
-# (clamscan haengt an einem toten Netzlaufwerk und laesst sich nicht einmal mit KILL beenden, oder auf dem Server fehlt
-# `timeout`), saehe man sonst nie, dass der Waechter nicht mehr laeuft. Die Zeile zaehlt beim Fenster nicht als Lauf
-# (`_watch_minutes`): Wird die Sperre frei, prueft der naechste Lauf weiter so weit zurueck wie moeglich.
+# Setzt der Wächter so lange aus, dass sein Fenster die Grenze erreicht, gehen Dateien ungeprüft verloren: Dann wird aus dem
+# stillen Aussetzen eine sichtbare Fehlerzeile, höchstens eine je `WATCH_MAX_WINDOW_MIN`. Hält ein Lauf die Sperre dauerhaft
+# (clamscan an einem toten Netzlaufwerk, oder auf dem Server fehlt `timeout`), sähe man sonst nie, dass der Wächter nicht
+# mehr läuft. Die Zeile zählt beim Fenster nicht als Lauf (`_watch_minutes`).
 _WATCH_MAX_WINDOW_TEXT = av.duration_text(WATCH_MAX_WINDOW_MIN * 60)
 WATCH_BLOCKED_MESSAGE = (
     f"Der Echtzeit-Wächter konnte seit etwa {_WATCH_MAX_WINDOW_TEXT} nicht prüfen: Auf dem Server lief die ganze Zeit ein "
@@ -84,8 +73,8 @@ WATCH_BLOCKED_MESSAGE = (
     "erreichbar ist), und starte danach einen Schnellscan."
 )
 
-# Ein Lauf, dessen Fund-Zeilen nicht verlaesslich lesbar waren (`ScanResult.unreliable`): Hinweis am Scan,
-# Notiz an jedem Fund und Text der Push-Meldung. Es wird nichts automatisch verschoben.
+# Ein Lauf, dessen Fund-Zeilen nicht verlässlich lesbar waren (`ScanResult.unreliable`): Hinweis am Scan, Notiz an jedem
+# Fund und Text der Push-Meldung. Es wird nichts automatisch verschoben.
 UNRELIABLE_HINT = (
     "Die Meldung von ClamAV ist nicht eindeutig lesbar (zum Beispiel ein Zeilenumbruch im Dateinamen). "
     "Es wurde nichts automatisch verschoben – bitte auf dem Server nachsehen."
@@ -96,19 +85,18 @@ UNRELIABLE_NOTE = (
 )
 
 KIND_LABEL = {"quick": "Schnellscan", "deep": "Tiefenscan", "watch": "Echtzeit-Wächter", "custom": "Scan"}
-# Die "grossen" Scans: je Server laeuft hoechstens einer davon, und der Waechter wartet,
-# bis er fertig ist -- jeder clamscan laedt die ganze Datenbank (~1 GB RAM).
+# Die "großen" Scans: je Server läuft höchstens einer davon, und der Wächter wartet, bis er fertig ist
+# (jeder clamscan lädt die ganze Datenbank, ~1 GB RAM).
 BIG_SCAN_KINDS = ("quick", "deep", "custom")
 
 _log = logging.getLogger(LOGGER)
 
-# Scans und Update-Laeufe leben als Hintergrund-Task im Prozess -- nach einem Neustart
-# des Dashboards kommt ein abgebrochener Lauf nie zurueck.
+# Scans und Update-Läufe leben als Hintergrund-Task im Prozess: Nach einem Neustart kommt ein abgebrochener Lauf nie zurück.
 ABORTED_BY_RESTART = "Abgebrochen – Dashboard wurde neu gestartet"
 
 
-# Grenzen wie in settings.schema.json. Ein Wert, der vor diesen Grenzen gespeichert wurde (0, -5, 5000), landete sonst
-# im Befehl auf dem Server; ueber 1000 MB laege `--max-scansize` (das Vierfache) jenseits dessen, was ClamAV annimmt.
+# Grenzen wie in settings.schema.json. Ein älter gespeicherter Wert (0, -5, 5000) landete sonst im Befehl; über 1000 MB
+# läge `--max-scansize` (das Vierfache) jenseits dessen, was ClamAV annimmt.
 def max_filesize_mb(settings: dict[str, Any]) -> int:
     return max(1, min(1000, int(settings.get("max_filesize_mb") or 50)))
 
@@ -118,8 +106,7 @@ def watch_interval_min(settings: dict[str, Any]) -> int:
 
 
 def _unreliable_hint(parsed: av.ScanResult) -> str:
-    """Hinweistext zu einem Lauf, der keine automatische Quarantaene bekommt: unleserliche Pfade, nicht gepruefte Dateien
-    (Obergrenze des Waechters) oder beides."""
+    """Hinweistext zu einem Lauf ohne automatische Quarantäne: unleserliche Pfade, ungeprüfte Dateien oder beides."""
     if not parsed.skipped:
         return UNRELIABLE_HINT
     if not parsed.paths_unsure:
@@ -144,10 +131,9 @@ def _new_id(prefix: str) -> str:
 
 
 def scan_outcome(statuses: dict[str, int] | None) -> str | None:
-    """Was aus den Funden eines befallenen Scans geworden ist: "open" (mindestens einer offen), "quarantined"
-    (keiner offen, mindestens einer in Quarantaene), "accepted" (mindestens einer ignoriert oder wiederhergestellt:
-    die Datei liegt noch da, ein Mensch hat sie fuer harmlos erklaert) oder "cleaned" (alle geloescht).
-    None, wenn zu dem Scan kein Fund gespeichert ist -- dann bleibt es bei "Bedrohung", nie bei einer Entwarnung."""
+    """Was aus den Funden eines befallenen Scans geworden ist: "open", "quarantined", "accepted" (ignoriert oder
+    wiederhergestellt, ein Mensch hat die Datei für harmlos erklärt) oder "cleaned" (alle gelöscht). Ohne gespeicherten
+    Fund None: Dann bleibt es bei "Bedrohung", nie bei einer Entwarnung."""
     if not statuses:
         return None
     if statuses.get("detected"):
@@ -187,9 +173,8 @@ def audit_out(r: AuditRecord) -> dict[str, Any]:
 
 
 def audit_run_out(state: dict[str, Any]) -> dict[str, Any]:
-    """Ein laufendes Audit fuer die Seite: seit wann angefordert (`requested_at`), seit wann es auf dem Server laeuft
-    (`started_at`; None, solange es noch nicht gestartet ist), Ausloeser, und ob es auf einen freien Platz wartet
-    (`waiting`, es laufen schon `MAX_PARALLEL` andere)."""
+    """Ein laufendes Audit für die Seite: `requested_at`, `started_at` (None bis zum Start), Auslöser und `waiting`
+    (wartet auf einen freien Platz, es laufen schon `MAX_PARALLEL` andere)."""
     return {
         "run_id": state.get("run_id"), "requested_at": state.get("requested_at"), "started_at": state.get("started_at"),
         "trigger": state.get("trigger"), "waiting": bool(state.get("waiting")),
@@ -207,15 +192,13 @@ def _valid_audit_state(data: Any) -> bool:
 class Defender:
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
-        self._running: set[tuple[str, str]] = set()  # (host_id, kind) -- kein doppelter Lauf
+        self._running: set[tuple[str, str]] = set()  # (host_id, kind), kein doppelter Lauf
         self._status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
-        # Seit wann der Waechter je Server wegen der belegten Sperre aussetzt (nur im Speicher; fuer einen Server, auf dem
-        # er noch nie eine Zeile hinterlassen hat, an der `_watch_minutes` das ablesen koennte).
+        # Seit wann der Wächter je Server wegen der belegten Sperre aussetzt; im Speicher, da er keine Zeile hinterlässt.
         self._watch_busy_since: dict[str, datetime] = {}
-        # Laufende (oder auf einen Platz wartende) Audits je Server: derselbe Stand wie in der Baselines-Tabelle
-        # (`AUDIT_STATE_KIND`). Je Server hoechstens eines; ein zweiter Klick zeigt das laufende.
+        # Laufende (oder wartende) Audits je Server, derselbe Stand wie in der Baselines-Tabelle (`AUDIT_STATE_KIND`).
         self._audits: dict[str, dict[str, Any]] = {}
-        # Hoechstens so viele Audits starten gleichzeitig (Server auf derselben Hardware, z. B. VMs eines Proxmox).
+        # Höchstens so viele Audits starten gleichzeitig (Server auf derselben Hardware, z. B. VMs eines Proxmox).
         self._audit_slots = asyncio.Semaphore(MAX_PARALLEL)
         self._audit_tasks: set[asyncio.Future[Any]] = set()
         # Beim Start aus der Datenbank geholte Audits, die `resume_audits` weiter abfragt.
@@ -242,9 +225,7 @@ class Defender:
         return any(self.is_running(host_id, k) for k in BIG_SCAN_KINDS)
 
     async def abort_interrupted_scans(self) -> int:
-        """Beim Start: Scans, die beim letzten Beenden noch liefen, als abgebrochen
-        markieren -- sonst stuenden sie fuer immer auf "laeuft", und die Scan-Liste
-        fragte endlos alle paar Sekunden nach."""
+        """Beim Start: Scans, die beim letzten Beenden noch liefen, als abgebrochen markieren (sonst stünden sie ewig auf "läuft")."""
         async with self._ctx.db.session() as session:
             result = await session.execute(
                 update(ScanRecord).where(ScanRecord.status == "running")
@@ -253,7 +234,7 @@ class Defender:
             return result.rowcount or 0
 
     async def start_scans(self, hosts: list[Host], kind: str, *, paths: list[str] | None, trigger: str) -> list[str]:
-        """Legt je Server einen Scan an und startet ihn im Hintergrund; gibt die IDs zurueck."""
+        """Legt je Server einen Scan an und startet ihn im Hintergrund; gibt die IDs zurück."""
         settings = await self._settings()
         if paths is None:
             paths = {
@@ -265,10 +246,9 @@ class Defender:
         todo: list[tuple[Host, str]] = []
         async with self._ctx.db.session() as session:
             for host in hosts:
-                # Nie zwei clamscan gleichzeitig auf einem Server: gleiche Art
-                # laeuft schon, oder ein grosser Scan laeuft -- dann weder ein zweiter
-                # grosser noch der Waechter. Ein laufender Waechter (kurz) haelt einen
-                # grossen Scan nicht auf.
+                # Nie zwei clamscan gleichzeitig auf einem Server: Läuft die gleiche Art oder ein großer Scan schon,
+                # startet weder ein zweiter großer noch der Wächter. Ein laufender Wächter (kurz) hält einen großen
+                # Scan nicht auf.
                 if self.is_running(host.id, kind) or self._big_scan_running(host.id):
                     if kind == "watch" and not self.is_running(host.id, kind):
                         _log.debug("shield_watch_skipped_big_scan_running host=%s", host.id)
@@ -300,11 +280,9 @@ class Defender:
 
     @staticmethod
     async def _drop_previous_capped_watch_row(session: Any, host_id: str, scan_id: str) -> None:
-        """Haelt die Scan-Liste bei dauerhaft vielen neuen Dateien kurz: War auch der Waechter-Lauf davor (derselbe Server)
-        nur wegen der Obergrenze unvollstaendig, ersetzt die Zeile dieses Laufs die alte. Sonst legte ein Server mit
-        ununterbrochen vielen Aenderungen alle zehn Minuten eine sichtbare Fehlerzeile an und drueckte die echten Schnell-
-        und Tiefenscans aus der Liste. Eine saubere Zeile dazwischen, ein Fund oder ein anderer Fehler unterbrechen die
-        Folge: Dann bleiben beide Zeilen."""
+        """Hält die Scan-Liste bei dauerhaft vielen neuen Dateien kurz: Die Zeile dieses Wächter-Laufs ersetzt die des vorigen,
+        wenn auch sie nur wegen der Obergrenze unvollständig war. Eine saubere Zeile, ein Fund oder ein anderer Fehler
+        dazwischen unterbrechen die Folge; sonst verdrängten sie die echten Scans aus der Liste."""
         previous = (await session.execute(
             select(ScanRecord).where(ScanRecord.host_id == host_id, ScanRecord.kind == "watch", ScanRecord.id != scan_id)
             .order_by(ScanRecord.started_at.desc()).limit(1)
@@ -313,13 +291,9 @@ class Defender:
             await session.delete(previous)
 
     async def _watch_minutes(self, host_id: str, scan_id: str, interval_min: int) -> int:
-        """Fenster des Waechters in Minuten (`find -mmin`): ab dem Beginn des letzten Waechter-Laufs auf diesem Server, der
-        wirklich lief (ein uebersprungener hinterlaesst keine Zeile), plus 2 Minuten; mindestens Intervall plus 2 Minuten,
-        hoechstens `WATCH_MAX_WINDOW_MIN`. Ein Lauf mit Fehler zaehlt als gelaufen: sonst wuerde nach einer Zeitueberschreitung
-        das Fenster immer groesser, und jeder weitere Lauf braeuchte noch laenger. Nicht als Lauf zaehlen nur Zeilen, hinter
-        denen kein Scan steht: ein Lauf, den ein Neustart des Dashboards abgebrochen hat (`ABORTED_BY_RESTART`, sein Ergebnis
-        kam nie an, und ein Neustart wiederholt sich nicht von selbst), und die Meldung, dass der Waechter zu lange aussetzen
-        musste (`WATCH_BLOCKED_MESSAGE`)."""
+        """Fenster des Wächters in Minuten (`find -mmin`): ab Beginn des letzten wirklich gelaufenen Laufs plus 2, mindestens
+        Intervall plus 2, höchstens `WATCH_MAX_WINDOW_MIN`. Ein Fehlerlauf zählt (sonst wüchse das Fenster endlos), ein von
+        einem Neustart abgebrochener (`ABORTED_BY_RESTART`) und `WATCH_BLOCKED_MESSAGE` nicht."""
         base = interval_min + 2
         async with self._ctx.db.session() as session:
             last = (await session.execute(
@@ -336,7 +310,7 @@ class Defender:
         return max(base, min(since, WATCH_MAX_WINDOW_MIN))
 
     async def _recently_blocked(self, host_id: str, scan_id: str) -> bool:
-        """Steht fuer diesen Server schon eine Meldung `WATCH_BLOCKED_MESSAGE` aus den letzten `WATCH_MAX_WINDOW_MIN` Minuten?"""
+        """Steht für diesen Server schon eine Meldung `WATCH_BLOCKED_MESSAGE` aus den letzten `WATCH_MAX_WINDOW_MIN` Minuten?"""
         async with self._ctx.db.session() as session:
             row = (await session.execute(
                 select(ScanRecord.id)
@@ -351,28 +325,26 @@ class Defender:
         settings = await self._settings()
         max_mb = max_filesize_mb(settings)
         limit = SCAN_TIMEOUTS.get(kind, 3600)
-        # Zufallsmarke je Lauf: im Befehl und bei der Auswertung dieselbe, einem
-        # Dateinamen auf dem Server nicht vorhersagbar.
+        # Zufallsmarke je Lauf, im Befehl und bei der Auswertung dieselbe; ein Dateiname auf dem Server kann sie nicht erraten.
         mark = av.new_rc_mark()
         minutes = 0
         if kind == "watch":
             minutes = await self._watch_minutes(host.id, scan_id, watch_interval_min(settings))
-            # Einstellung "Echtzeit-Waechter mit clamdscan" (Standard aus): nur der
-            # Waechter; Schnell- und Tiefenscan bleiben bei clamscan.
+            # Einstellung "Wächter über clamdscan" (Standard aus): nur der Wächter, die anderen Scans bleiben bei clamscan.
             command = av.build_watch_command(paths, minutes=minutes, max_filesize_mb=max_mb,
                                              use_clamd=bool(settings.get("watch_use_clamdscan", False)), mark=mark,
                                              skip_folders=settings.get("exclude_paths") or [])
         else:
             command = av.build_scan_command(paths, max_filesize_mb=max_mb, exclude=settings.get("exclude_paths") or [],
                                             mark=mark)
-        # Nie zwei Laeufe zugleich auf einem Server (auch nicht aus einem zweiten Dashboard oder einem Lauf, der einen
-        # Neustart ueberdauert hat): der Waechter setzt aus, ein Scan wartet. Dazu ein Zeitlimit auf dem Server selbst.
+        # Nie zwei Läufe zugleich auf einem Server (auch nicht aus einem zweiten Dashboard oder einem Lauf, der einen
+        # Neustart überdauert hat): Der Wächter setzt aus, ein Scan wartet. Dazu ein Zeitlimit auf dem Server selbst.
         command = av.guard_command(command, mark=mark, limit_s=limit, wait_s=None if kind == "watch" else SCAN_LOCK_WAIT_S)
         command = av.as_root(command, required=False)
         try:
             result = await self._ctx.exec.run(host, command, timeout_s=limit)
             output = (result.stdout or "") + (result.stderr or "")
-            # Die Wurzeln sind genau die Pfade, die der Befehl gescannt hat: Funde ausserhalb davon sind nie echt.
+            # Die Wurzeln sind genau die Pfade, die der Befehl gescannt hat: Funde außerhalb davon sind nie echt.
             parsed = av.parse_scan_output(output, mark, roots=paths, limit_s=limit)
             if result.exit_code == 127:
                 parsed = av.ScanResult(status="error", error=av.NOT_INSTALLED_MESSAGE)
@@ -384,8 +356,8 @@ class Defender:
             busy_since = self._watch_busy_since.setdefault(host.id, _now())
             too_long = minutes >= WATCH_MAX_WINDOW_MIN or _now() - busy_since >= timedelta(minutes=WATCH_MAX_WINDOW_MIN)
             if not too_long or await self._recently_blocked(host.id, scan_id):
-                # Auf dem Server lief gerade ein anderer Lauf: Der Waechter setzt diesmal aus, ohne Fehler und ohne Zeile in
-                # der Liste. Das Fenster des naechsten Laufs beginnt dann beim letzten, der wirklich lief (`_watch_minutes`).
+                # Auf dem Server lief gerade ein anderer Lauf: Der Wächter setzt diesmal aus, ohne Fehler und ohne Zeile in
+                # der Liste. Das Fenster des nächsten Laufs beginnt dann beim letzten, der wirklich lief (`_watch_minutes`).
                 async with self._ctx.db.session() as session:
                     scan = await session.get(ScanRecord, scan_id)
                     if scan is not None:
@@ -393,7 +365,7 @@ class Defender:
                 _log.info("shield_watch_skipped_host_busy host=%s", host.id)
                 await self._ctx.ws.broadcast("defender", {"scan": scan_id, "skipped": True})
                 return
-            # So lange belegt, dass Dateien ungeprueft verloren gehen: sichtbar als Fehler.
+            # So lange belegt, dass Dateien ungeprüft verloren gehen: sichtbar als Fehler.
             _log.warning("shield_watch_blocked_host_busy host=%s", host.id)
             parsed, output = av.ScanResult(status="error", error=WATCH_BLOCKED_MESSAGE), ""
         elif kind == "watch":
@@ -428,10 +400,9 @@ class Defender:
                         existing.note = UNRELIABLE_NOTE
                     finding_ids.append(existing.id)
                     continue
-                # Vom Menschen entschieden: ignoriert ("Die Datei bleibt, wo sie ist") oder nach Freigabe
-                # wiederhergestellt (Fehlalarm). Dieselbe Datei mit derselben Signatur ist dann kein neuer
-                # Fund -- keine Quarantaene, kein Alarm; nur der juengste Scan wird daran vermerkt. Nicht bei
-                # unsicheren Pfaden: ein vorgetaeuschter Pfad darf keinen echten Fund als bekannt tarnen.
+                # Vom Menschen entschieden (ignoriert oder nach Freigabe wiederhergestellt): Dieselbe Datei mit derselben
+                # Signatur ist kein neuer Fund, ohne Quarantäne und Alarm; nur der jüngste Scan wird vermerkt. Nicht bei
+                # unsicheren Pfaden: Ein vorgetäuschter Pfad darf keinen echten Fund als bekannt tarnen.
                 known = None if parsed.paths_unsure else (await session.execute(
                     select(FindingRecord).where(
                         FindingRecord.host_id == host.id, FindingRecord.path == path,
@@ -460,9 +431,9 @@ class Defender:
                 correlation_id=scan_id,
             )
             quarantined = 0
-            # Nie automatisch, wenn die Pfade nicht verlaesslich sind: Ein Dateiname mit Zeilenumbruch
-            # kann einen Fund fuer einen fremden Pfad vortaeuschen (`/etc/passwd: ... FOUND`), und die
-            # Quarantaene laeuft als root. Dann entscheidet der Mensch (die Funde tragen eine Notiz).
+            # Nie automatisch, wenn die Pfade nicht verlässlich sind: Ein Dateiname mit Zeilenumbruch kann einen Fund für
+            # einen fremden Pfad vortäuschen (`/etc/passwd: ... FOUND`), und die Quarantäne läuft als root. Dann
+            # entscheidet der Mensch (die Funde tragen eine Notiz).
             if settings.get("auto_quarantine", True) and not parsed.unreliable:
                 for fid in finding_ids:
                     ok, _msg = await self.quarantine(fid, actor=None)
@@ -482,24 +453,26 @@ class Defender:
                     title=f"Schadsoftware auf {host.display_name or host.name} gefunden",
                     body=body,
                     severity=Severity.CRITICAL,
-                    # Absichtlich ohne `host_id`: ein Fund ist nie Wartungslärm, ein Wartungsfenster
-                    # (Tiefenscan sonntags 03:30!) darf ihn nicht stummschalten (hostscope.py).
+                    # Absichtlich ohne `host_id`: Ein Fund ist nie Wartungslärm, ein Wartungsfenster (Tiefenscan
+                    # sonntags 03:30) darf ihn nicht stummschalten (hostscope.py).
                     payload={"path": f"{SOC_PATH}?tab=quarantine", "tags": ["biohazard"],
                              "actions": [{"label": "Quarantäne öffnen", "path": f"{SOC_PATH}?tab=quarantine"}]},
                 ))
         await self._ctx.ws.broadcast("defender", {"scan": scan_id, "status": parsed.status})
 
-    # --- Quarantaene -------------------------------------------------------------
+    # --- Quarantäne --------------------------------------------------------------
 
     async def _finding(self, finding_id: str) -> FindingRecord | None:
         async with self._ctx.db.session() as session:
             return await session.get(FindingRecord, finding_id)
 
     async def finding_record(self, finding_id: str) -> FindingRecord | None:
-        """Frische Zeile (u. a. mit original_mode) -- fuer den Befehlsbau der Aktionen."""
+        """Frische Zeile (u. a. mit original_mode) für den Befehlsbau der Aktionen."""
         return await self._finding(finding_id)
 
     async def quarantine(self, finding_id: str, *, actor: Actor | None) -> tuple[bool, str]:
+        # Bewusst ohne Freigabe: Ein Fund muss sofort unschädlich werden, nicht erst am nächsten Morgen. Das ist umkehrbar
+        # (Wiederherstellen) und steht im Audit-Log; Löschen, Wiederherstellen und Installieren gehen dagegen durchs Gate.
         finding = await self._finding(finding_id)
         if finding is None:
             return False, "Unbekannter Fund."
@@ -538,7 +511,7 @@ class Defender:
         return ok, "In Quarantäne verschoben." if ok else message
 
     async def apply_action_result(self, finding_id: str, action: str, ok: bool, message: str) -> None:
-        """Nach Wiederherstellen/Loeschen (ueber das Gate) den Fund nachziehen."""
+        """Zieht den Fund nach Wiederherstellen oder Löschen (über das Gate) nach."""
         async with self._ctx.db.session() as session:
             row = await session.get(FindingRecord, finding_id)
             if row is None:
@@ -560,20 +533,19 @@ class Defender:
             return True
 
     # --- Audits ----------------------------------------------------------------
-    # Lynis braucht auf manchen Servern weit ueber eine halbe Stunde. Der Lauf haengt deshalb nicht am SSH-Kanal, sondern
-    # laeuft entkoppelt auf dem Server (`audit_job.py`); das Dashboard fragt alle `AUDIT_POLL_INTERVAL_S` Sekunden kurz
-    # nach. Sein Stand steht sofort beim Anfordern im Speicher und in der Datenbank: Die Seite zeigt "laeuft seit ...",
-    # auch nach dem Neuladen und fuer den Lauf nach Zeitplan, ein zweiter Klick startet keinen zweiten Lauf, und nach
-    # einem Neustart des Dashboards nimmt `resume_audits` die Abfrage wieder auf.
+    # Lynis braucht auf manchen Servern weit über eine halbe Stunde und läuft deshalb entkoppelt auf dem Server
+    # (`audit_job.py`); das Dashboard fragt alle `AUDIT_POLL_INTERVAL_S` Sekunden nach. Der Stand steht sofort in Speicher
+    # und Datenbank: Die Seite zeigt "läuft seit ..." (auch nach dem Neuladen), ein zweiter Klick startet keinen zweiten
+    # Lauf, und nach einem Neustart nimmt `resume_audits` die Abfrage wieder auf.
 
     def audit_run(self, host_id: str) -> dict[str, Any] | None:
-        """Das laufende (oder wartende) Audit eines Servers fuer die Seite, sonst None."""
+        """Das laufende (oder wartende) Audit eines Servers für die Seite, sonst None."""
         state = self._audits.get(host_id)
         return audit_run_out(state) if state is not None else None
 
     def _claim_audits(self, hosts: list[Host], trigger: str) -> tuple[list[tuple[Host, dict[str, Any]]], list[tuple[Host, dict[str, Any]]]]:
-        """Belegt die Server sofort (ohne await dazwischen): Zwei gleichzeitige Anforderungen (zwei Klicks, Klick und
-        Zeitplan) starten so nie zwei Laeufe. Rueckgabe: neu angeforderte und schon laufende, je mit ihrem Stand."""
+        """Belegt die Server sofort, ohne await dazwischen: So starten zwei gleichzeitige Anforderungen (zwei Klicks,
+        Klick und Zeitplan) nie zwei Läufe. Rückgabe: neu angeforderte und schon laufende, je mit ihrem Stand."""
         fresh: list[tuple[Host, dict[str, Any]]] = []
         already: list[tuple[Host, dict[str, Any]]] = []
         now = _now().timestamp()
@@ -604,7 +576,7 @@ class Defender:
         except BaseException:
             for host, state in fresh:
                 self._release_audit(host.id, state)
-                try:  # sonst startete der naechste Start des Dashboards ein Audit, das hier als gescheitert galt
+                try:  # sonst startete der nächste Start des Dashboards ein Audit, das hier als gescheitert galt
                     await self._drop_audit_state(host.id, state["run_id"])
                 except Exception:  # noqa: BLE001 - die Datenbank klemmt ohnehin
                     _log.exception("shield_audit_state_cleanup_failed host=%s", host.id)
@@ -618,8 +590,8 @@ class Defender:
         return fresh, already, batch
 
     async def start_audits(self, hosts: list[Host], *, trigger: str = "manual") -> dict[str, Any]:
-        """Fordert je Server ein Audit an und kehrt sofort zurueck. Laeuft auf einem Server schon eines, startet kein
-        zweites: Es steht mit seinem Stand unter `running` (und in `audits` mit `already_running`)."""
+        """Fordert je Server ein Audit an und kehrt sofort zurück. Läuft schon eines, startet kein zweites: Es steht
+        unter `running` (und in `audits` mit `already_running`)."""
         fresh, already, _batch = await self._begin_audits(hosts, trigger)
         audits = [
             {"host_id": h.id, "host_name": h.display_name or h.name, **audit_run_out(st), "already_running": False}
@@ -631,22 +603,22 @@ class Defender:
         return {"started": [h.id for h, _ in fresh], "running": [h.id for h, _ in already], "audits": audits}
 
     async def run_audits(self, hosts: list[Host], *, trigger: str = "schedule") -> list[tuple[Host, av.LynisResult]]:
-        """Wie `start_audits`, wartet aber, bis die neu angeforderten Audits fertig sind (Zeitplan). Bricht jemand das
-        Warten ab (Lauf des Zeitplans abgebrochen), laufen die Audits trotzdem zu Ende."""
+        """Wie `start_audits`, wartet aber, bis die neu angeforderten Audits fertig sind (Zeitplan); sie laufen auch
+        zu Ende, wenn das Warten abgebrochen wird."""
         _fresh, _already, batch = await self._begin_audits(hosts, trigger)
         if batch is None:
             return []
         return await asyncio.shield(batch)
 
     def cancel_audit_tasks(self) -> None:
-        """Beim Beenden der Erweiterung: nicht weiter nachfragen. Die Laeufe auf den Servern gehen weiter; ihr Stand bleibt
-        in der Datenbank, und der naechste Start nimmt sie wieder auf (`load_running_audits`, `resume_audits`)."""
+        """Beim Beenden der Erweiterung: nicht weiter nachfragen. Die Läufe auf den Servern gehen weiter; ihr Stand bleibt
+        in der Datenbank, und der nächste Start nimmt sie wieder auf (`load_running_audits`, `resume_audits`)."""
         for task in list(self._audit_tasks):
             task.cancel()
 
     async def load_running_audits(self) -> int:
-        """Beim Start, vor der ersten Anfrage: Audits, die beim letzten Beenden noch liefen oder warteten, wieder als
-        laufend eintragen (sonst startete ein Klick einen zweiten Lauf). Abgefragt werden sie von `resume_audits`."""
+        """Beim Start, vor der ersten Anfrage: noch laufende oder wartende Audits wieder eintragen, sonst startete ein
+        Klick einen zweiten Lauf. Abgefragt werden sie von `resume_audits`."""
         states = await load_baselines(self._ctx, AUDIT_STATE_KIND)
         loaded = 0
         for host_id, data in states.items():
@@ -661,8 +633,8 @@ class Defender:
         return loaded
 
     async def resume_audits(self) -> int:
-        """Als Hintergrund-Aufgabe nach dem Start: die von `load_running_audits` geholten Audits weiter abfragen
-        (ein wartendes startet jetzt) und abschliessen wie sonst, mit Meldung."""
+        """Hintergrund-Aufgabe nach dem Start: die von `load_running_audits` geholten Audits weiter abfragen (ein
+        wartendes startet jetzt) und wie sonst abschließen, mit Meldung."""
         pending, self._audits_to_resume = self._audits_to_resume, []
         if not pending:
             return 0
@@ -673,13 +645,13 @@ class Defender:
                 if self._audits.get(host_id) is not state:
                     continue
                 host = await self._ctx.hosts.get(host_id)
-                if host is None:  # Server inzwischen geloescht: nichts mehr abzufragen
+                if host is None:  # Server inzwischen gelöscht: nichts mehr abzufragen
                     await self._drop_audit_state(host_id, state["run_id"])
                     self._release_audit(host_id, state)
                     continue
                 items.append((host, state))
         except BaseException:
-            # Nicht dauerhaft als "laeuft" stehen lassen; der Stand in der Datenbank bleibt fuer den naechsten Start.
+            # Nicht dauerhaft als "läuft" stehen lassen; der Stand in der Datenbank bleibt für den nächsten Start.
             for host_id, state in pending:
                 self._release_audit(host_id, state)
             raise
@@ -706,7 +678,7 @@ class Defender:
             try:
                 if state.get("started_at") is None:
                     if self._audit_slots.locked():
-                        state["waiting"] = True  # nur fuer die Seite ("wartet seit ...")
+                        state["waiting"] = True  # nur für die Seite ("wartet seit ...")
                     async with self._audit_slots:
                         state.pop("waiting", None)
                         state["started_at"] = _now().timestamp()
@@ -723,7 +695,7 @@ class Defender:
                 result = av.LynisResult(status="error", error=_describe(exc))
             try:
                 await self._record_audit(host, state, result)
-            except Exception:  # noqa: BLE001 - der Server darf nicht dauerhaft als "laeuft" stehen bleiben
+            except Exception:  # noqa: BLE001 - der Server darf nicht dauerhaft als "läuft" stehen bleiben
                 _log.exception("shield_audit_record_failed host=%s run_id=%s", host.id, run_id)
             return result
         finally:
@@ -737,7 +709,7 @@ class Defender:
             res = await self._ctx.exec.run(host, launch, timeout_s=AUDIT_LAUNCH_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             # Der Start kann trotzdem geklappt haben (Verbindung erst danach weg): nachsehen. Meldet sich der Server
-            # aber gar nicht mehr, nicht drei Stunden lang "laeuft" zeigen.
+            # aber gar nicht mehr, nicht drei Stunden lang "läuft" zeigen.
             unknown = f"Das Audit konnte nicht gestartet werden: {_describe(exc)}"
             reach_grace_s = AUDIT_REACH_GRACE_S
         else:
@@ -753,8 +725,7 @@ class Defender:
                                       unknown_summary=unknown, reach_grace_s=reach_grace_s)
 
     async def _poll_audit(self, host: Host, run_id: str) -> dt.Poll | av.LynisResult | None:
-        """Eine Abfrage: der Stand (`dt.Poll`), ein Fehler, der den Lauf beendet (keine root-Rechte), oder None, wenn
-        keine Antwort kam."""
+        """Eine Abfrage: der Stand (`dt.Poll`), ein Fehler, der den Lauf beendet (keine root-Rechte), oder None ohne Antwort."""
         try:
             res = await self._ctx.exec.run(host, av.as_root(aj.poll_command(run_id)), timeout_s=AUDIT_POLL_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - Verbindung weg: weiter nachfragen
@@ -767,9 +738,8 @@ class Defender:
 
     async def _wait_audit(self, host: Host, run_id: str, started_ts: float, *, unknown_grace_s: float,
                           unknown_summary: str, reach_grace_s: float | None = None) -> av.LynisResult:
-        """Fragt nach, bis der Lauf fertig ist. Verbindungsfehler zwischendurch werden ausgesessen. Ist die Obergrenze
-        samt Frist (gerechnet ab `started_ts`, also auch ueber einen Neustart des Dashboards hinweg) erreicht, wird der
-        Lauf auf dem Server beendet (`_stop_audit`)."""
+        """Fragt nach, bis der Lauf fertig ist; Verbindungsfehler werden ausgesessen. Ist die Obergrenze samt Frist erreicht
+        (ab `started_ts`, auch über einen Neustart hinweg), wird der Lauf auf dem Server beendet (`_stop_audit`)."""
         deadline = started_ts + AUDIT_LIMIT_S + AUDIT_STOP_GRACE_S
         unknown_until = time.monotonic() + unknown_grace_s
         reach_until = None if reach_grace_s is None else time.monotonic() + reach_grace_s
@@ -795,7 +765,7 @@ class Defender:
             await asyncio.sleep(AUDIT_POLL_INTERVAL_S)
 
     async def _stop_audit(self, host: Host, run_id: str) -> av.LynisResult:
-        """Beendet einen Lauf ueber der Obergrenze auf dem Server (Lynis samt Unterprozessen, `audit_job.stop_command`)."""
+        """Beendet einen Lauf über der Obergrenze auf dem Server (Lynis samt Unterprozessen, `audit_job.stop_command`)."""
         try:
             res = await self._ctx.exec.run(host, av.as_root(aj.stop_command(run_id)), timeout_s=AUDIT_STOP_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
@@ -818,8 +788,8 @@ class Defender:
         return av.LynisResult(status="error", error=aj.LOST_MESSAGE)
 
     async def _record_audit(self, host: Host, state: dict[str, Any], result: av.LynisResult) -> None:
-        """Ergebnis speichern (ID = Lauf-ID, ein zweites Speichern desselben Laufs aendert nichts) und den Stand
-        "laeuft" in derselben Transaktion entfernen."""
+        """Speichert das Ergebnis (ID = Lauf-ID, ein zweites Speichern ändert nichts) und entfernt den Stand "läuft"
+        in derselben Transaktion."""
         run_id = state["run_id"]
         async with self._ctx.db.session() as session:
             if await session.get(AuditRecord, run_id) is None:
@@ -850,11 +820,11 @@ class Defender:
                 payload={"path": f"{SOC_PATH}?tab=hardening", "tags": ["shield"], **host_scope(h.id for h, _ in results)},
             ))
 
-    # --- Status / Uebersicht -------------------------------------------------------
+    # --- Status / Übersicht --------------------------------------------------------
 
     def forget_status(self, host_id: str) -> None:
-        """Den gemerkten Stand eines Servers verwerfen (z. B. nach einer Installation): Die naechste Abfrage
-        fragt den Server neu, statt bis zu 10 Minuten den alten Stand zu zeigen."""
+        """Verwirft den gemerkten Stand eines Servers (z. B. nach einer Installation), statt bis zu 10 Minuten den alten
+        zu zeigen."""
         self._status_cache.pop(host_id, None)
 
     async def host_status(self, host: Host, *, refresh: bool = False) -> dict[str, Any]:
@@ -887,8 +857,8 @@ class Defender:
                 select(ScanRecord).where(ScanRecord.kind.in_(("quick", "deep", "custom"))).order_by(ScanRecord.started_at.desc()).limit(500)
             )).scalars():
                 last_scans.setdefault(row.host_id, row)
-            # Fuer den Schutzwert zaehlt der letzte FERTIGE Scan: Ein gerade laufender (oder abgebrochener) soll den Wert
-            # nicht senken, solange der vorige noch frisch ist (eigene Abfrage, damit viele neue Laeufe ihn nicht verdraengen).
+            # Für den Schutzwert zählt der letzte fertige Scan: Ein gerade laufender (oder abgebrochener) soll den Wert
+            # nicht senken, solange der vorige noch frisch ist (eigene Abfrage, damit viele neue Läufe ihn nicht verdrängen).
             last_done_at: dict[str, datetime] = {}
             for host_id, started_at in (await session.execute(
                 select(ScanRecord.host_id, func.max(ScanRecord.started_at)).where(
@@ -905,14 +875,14 @@ class Defender:
             counts = dict((await session.execute(
                 select(FindingRecord.status, func.count()).group_by(FindingRecord.status)
             )).all())
-            # Je Server dieselbe Quelle wie die Gesamtzahl oben: die Funde und ihr Zustand, nicht nur das Ergebnis des
-            # letzten Scans. Sonst stand nach Quarantaene oder Loeschen oben "keine Bedrohung", in der Zeile aber
-            # "Bedrohung" -- und ein offener Fund des Waechters fehlte in der Zeile ganz.
+            # Je Server dieselbe Quelle wie die Gesamtzahl oben (die Funde und ihr Zustand, nicht nur das Ergebnis des
+            # letzten Scans), sonst widersprächen sich Kopf und Zeile nach Quarantäne oder Löschen, und ein offener Fund
+            # des Wächters fehlte in der Zeile.
             open_by_host = dict((await session.execute(
                 select(FindingRecord.host_id, func.count()).where(FindingRecord.status == "detected").group_by(FindingRecord.host_id)
             )).all())
-            # Was aus den Funden des letzten befallenen Scans wurde. Ein spaeterer Lauf (etwa der Waechter) haengt einen
-            # Fund, den er wieder findet, an sich selbst (`scan_id`): deshalb zaehlen die Funde aller Laeufe des Servers
+            # Was aus den Funden des letzten befallenen Scans wurde. Ein späterer Lauf (etwa der Wächter) hängt einen
+            # Fund, den er wieder findet, an sich selbst (`scan_id`): Deshalb zählen die Funde aller Läufe des Servers
             # ab dem Start dieses Scans, nicht nur die mit seiner Kennung.
             infected_last = {s.host_id: s for s in last_scans.values() if s.status == "infected"}
             scan_findings: dict[str, dict[str, int]] = {}
@@ -959,7 +929,7 @@ class Defender:
                                   "created_at": _ts(ok_audit.created_at), "error": None} if ok_audit else None,
                 "scanning": self._big_scan_running(host.id),
                 "auditing": host.id in self._audits,
-                # Laufendes (oder wartendes) Audit: seit wann, damit die Seite "laeuft seit ..." zeigen kann.
+                # Laufendes (oder wartendes) Audit: seit wann, damit die Seite "läuft seit ..." zeigen kann.
                 "audit_run": self.audit_run(host.id),
             })
 
@@ -967,7 +937,7 @@ class Defender:
         protected = sum(1 for r in rows if r.get("clamav_installed"))
         indices = [r["last_ok_audit"]["hardening_index"] for r in rows if r.get("last_ok_audit")]
         settings = await self._settings()
-        # Der Schutzwert zaehlt auch Updates, Einbruchschutz und SSH-Einstellungen (protection.posture_penalty).
+        # Der Schutzwert zählt auch Updates, Einbruchschutz und SSH-Einstellungen (protection.posture_penalty).
         penalty, reasons = protection.posture_penalty(
             [r["host_id"] for r in rows], await load_baselines(self._ctx, "updates"), await load_baselines(self._ctx, "guard"),
             int(critical_events),
@@ -976,8 +946,8 @@ class Defender:
         return {
             "hosts": rows,
             "summary": {
-                # "hosts" sind nur die pruefbaren Server (Linux, verwaltet, mit SSH-Zugang, ggf. passende Markierung);
-                # "hosts_known" alle eingerichteten -- die Seite unterscheidet "keiner angelegt" von "keiner pruefbar".
+                # "hosts" sind nur die prüfbaren Server (Linux, verwaltet, mit SSH-Zugang, ggf. passende Markierung);
+                # "hosts_known" alle eingerichteten: Die Seite unterscheidet "keiner angelegt" von "keiner prüfbar".
                 "hosts": len(rows), "hosts_known": hosts_known, "protected": protected, "open_threats": open_threats,
                 "quarantined": int(counts.get("quarantined", 0)),
                 "neutralized_total": int(counts.get("quarantined", 0)) + int(counts.get("deleted", 0)),
@@ -985,7 +955,7 @@ class Defender:
                 "avg_hardening": round(sum(indices) / len(indices)) if indices else None,
                 "stale_signatures": sum(1 for r in rows if r.get("clamav_installed") and r.get("signature_stale") is True),
                 "score": max(0, _score(rows, open_threats, indices) - penalty),
-                # Was den Wert drueckt, als kurze Saetze mit Punkten (offene Funde, Signaturen, Updates, Einbruchschutz, SSH).
+                # Was den Wert drückt, als kurze Sätze mit Punkten (offene Funde, Signaturen, Updates, Einbruchschutz, SSH).
                 "score_reasons": ([f"{'1 offene Bedrohung' if open_threats == 1 else f'{open_threats} offene Bedrohungen'} (−{min(40, open_threats * 20)})"] if open_threats else [])
                 + reasons,
             },
@@ -1021,10 +991,9 @@ class Defender:
             return None
 
     async def _container_crashes(self) -> list[dict[str, Any]]:
-        """Abstuerze der Container-Wache in den letzten `BRIEFING_CRASH_WINDOW_H` Stunden, je Container (Server + Name):
-        Anzahl (Wiederholungen eines zusammengefassten Vorfalls zaehlen mit) und ob einer davon noch niemand bearbeitet
-        hat (wie `IncidentHistory.merge_into_active`). Noch offene zuerst, dann die meisten. Ist die Datenbank gerade
-        nicht lesbar, kommt der Bericht ohne diese Zeile."""
+        """Abstürze der Container-Wache der letzten `BRIEFING_CRASH_WINDOW_H` Stunden je Container (Server + Name): Anzahl
+        samt Wiederholungen und ob einer noch unbearbeitet ist (wie `IncidentHistory.merge_into_active`). Offene zuerst,
+        dann die meisten; ohne lesbare Datenbank kommt der Bericht ohne diese Zeile."""
         since = _now() - timedelta(hours=BRIEFING_CRASH_WINDOW_H)
         try:
             async with self._ctx.db.session() as session:
@@ -1078,21 +1047,16 @@ DEFAULT_CRONS = {"quick": "0 2 * * *", "deep": "30 3 * * 0", "audit": "0 1 * * *
 
 
 def push_state(result: Any) -> str:
-    """Was ist mit der Meldung auf dem Weg aufs Handy passiert? Ehrlich, nicht "gesendet":
-
-    - `sent`: mindestens ein Kanal (z. B. ntfy) hat sie zugestellt
-    - `suppressed`: ein Wartungsfenster hat den Push unterdrueckt (die Meldung steht trotzdem unter "Meldungen")
-    - `skipped`: kein Kanal hat sie zugestellt, weil sie unter der dort eingestellten Mindest-Stufe liegt
-    - `not_delivered`: kein Kanal hat sie zugestellt -- keiner eingerichtet oder einer ausgefallen (auch wenn ein
-      anderer sie nur uebersprungen hat: der Ausfall geht vor)
-    - `unknown`: aeltere Kerne liefern kein Ergebnis"""
+    """Was mit der Meldung auf dem Weg aufs Handy passiert ist: sent, suppressed, skipped, not_delivered oder unknown."""
     delivered = getattr(result, "delivered", None)
     if result is None or delivered is None:
-        return "unknown"
+        return "unknown"  # ältere Kerne liefern kein Ergebnis
     if getattr(result, "suppressed", False):
-        return "suppressed"
+        return "suppressed"  # Wartungsfenster; die Meldung steht trotzdem unter "Meldungen"
     if delivered:
         return "sent"
+    # skipped: Mindest-Stufe des Kanals nicht erreicht. not_delivered: keiner eingerichtet oder einer ausgefallen,
+    # und ein Ausfall geht vor, auch wenn ein anderer Kanal nur übersprungen hat.
     return "skipped" if getattr(result, "skipped", None) is True else "not_delivered"
 
 
@@ -1101,8 +1065,7 @@ BRIEFING_MAX_BUTTONS = 3
 
 
 def briefing_buttons(waiting: int | None, crashes: list[dict[str, Any]] | None) -> list[dict[str, str]]:
-    """Knoepfe der Meldung (hoechstens `BRIEFING_MAX_BUTTONS`): was gerade auf dich wartet zuerst (Freigaben, Container
-    mit offenen Abstuerzen), dann die festen Reiter Updates und Einbruchschutz."""
+    """Knöpfe der Meldung (höchstens `BRIEFING_MAX_BUTTONS`): erst, was auf dich wartet (Freigaben, Abstürze), dann feste Reiter."""
     urgent: list[dict[str, str]] = []
     if waiting:
         urgent.append({"label": "Freigaben", "path": "/actions"})
@@ -1117,11 +1080,9 @@ def build_briefing(
     guard: tuple[str | None, list[str]] | None = None, *, waiting: int | None = None,
     crashes: list[dict[str, Any]] | None = None,
 ) -> tuple[str, str, str]:
-    """Titel, Text und Stufe des Lageberichts (wie im alten Skript: ein Blick
-    aufs Handy genuegt, um zu wissen, ob etwas zu tun ist).
+    """Titel, Text und Stufe des Lageberichts; ein Blick aufs Handy soll genügen.
 
-    Der Titel nennt keine Tageszeit: der Bericht kommt zum eingestellten Zeitpunkt, aber auch
-    auf Knopfdruck um 21:45 Uhr -- "Guten Morgen" waere dann falsch."""
+    Der Titel nennt keine Tageszeit, denn der Bericht kommt auch auf Knopfdruck um 21:45 Uhr."""
     sm = overview["summary"]
     down = [h.display_name or h.name for h in hosts_all if getattr(h.status, "value", h.status) == "down"]
     if not hosts_all:
@@ -1129,13 +1090,13 @@ def build_briefing(
     else:
         lines = [f"Server: {len(hosts_all) - len(down)}/{len(hosts_all)} erreichbar" + (f" – aus/weg: {', '.join(down[:6])}" if down else "")]
     if sm["hosts"] == 0:
-        # Ohne pruefbaren Server gibt es nichts zu bewerten -- kein "Schutzwert 0/100". Offene Funde aus frueheren
-        # Scans bleiben aber offen (auch wenn der Server inzwischen fehlt): die gehoeren trotzdem in den Bericht.
+        # Ohne prüfbaren Server gibt es nichts zu bewerten, kein "Schutzwert 0/100". Offene Funde aus älteren Scans
+        # bleiben aber offen (auch wenn der Server fehlt) und gehören in den Bericht.
         lines.append("Virenschutz: noch nichts zu prüfen – geprüft werden Linux-Server mit SSH-Zugang (und, falls eingestellt, der passenden Markierung).")
         if sm["open_threats"]:
             lines.append(f"Bedrohungen: {sm['open_threats']} offen, {sm['quarantined']} in Quarantäne, {sm['findings_30d']} Funde in 30 Tagen")
     else:
-        # Der Schutzwert zaehlt mehr als den Virenschutz (Updates, SSH, Ereignisse) -- deshalb nicht "Virenschutz: …".
+        # Der Schutzwert zählt mehr als den Virenschutz (Updates, SSH, Ereignisse), deshalb nicht "Virenschutz: …".
         lines.append(f"Schutzwert {sm['score']}/100 · Virenschutz: {sm['protected']}/{sm['hosts']} Server mit ClamAV")
         lines.append(f"Bedrohungen: {sm['open_threats']} offen, {sm['quarantined']} in Quarantäne, {sm['findings_30d']} Funde in 30 Tagen")
     if sm.get("avg_hardening") is not None:
@@ -1154,7 +1115,7 @@ def build_briefing(
     if guard and guard[0]:
         lines.append(guard[0])
         problems.extend(guard[1])
-    # Vergessene Freigaben und Sorgenkinder der Container-Wache sollen auffallen (Paket "Ruhe statt Laerm").
+    # Vergessene Freigaben und Sorgenkinder der Container-Wache sollen auffallen.
     if waiting:
         lines.append(
             f"Freigaben: {waiting} Vorschlag wartet" if waiting == 1 else f"Freigaben: {waiting} Vorschläge warten"
@@ -1167,8 +1128,8 @@ def build_briefing(
     attention = bool(waiting) or any(c["open"] for c in crashes or [])
     for h in overview["hosts"]:
         scan = h.get("last_scan") or {}
-        # Alte Signaturen und ausgeschaltetes Update sind fast immer dasselbe Problem: ein Eintrag je Server,
-        # sonst verdraengen sie bei mehreren Servern die uebrigen Punkte (die Liste ist auf sechs begrenzt).
+        # Alte Signaturen und ausgeschaltetes Update sind fast immer dasselbe Problem: ein Eintrag je Server, sonst
+        # verdrängen sie bei mehreren Servern die übrigen Punkte (die Liste ist auf sechs begrenzt).
         sig_problem = protection.signature_problem(h)
         if not h.get("clamav_installed") and h.get("reachable") is not False:
             problems.append(f"{h['host_name']}: kein ClamAV")
@@ -1188,7 +1149,7 @@ def build_briefing(
     elif not hosts_all:
         title = "Lagebericht – noch kein Server eingerichtet"
     elif sm["hosts"] == 0:
-        # Server sind da, aber keiner ist pruefbar (z. B. ohne SSH-Zugang): "alles im gruenen Bereich" waere gelogen.
+        # Server sind da, aber keiner ist prüfbar (z. B. ohne SSH-Zugang): "alles im grünen Bereich" wäre gelogen.
         title = "Lagebericht – noch nichts geprüft"
     else:
         title = "Lagebericht – alles im grünen Bereich"
@@ -1196,8 +1157,8 @@ def build_briefing(
 
 
 def _completed_scan_at(row: dict[str, Any]) -> float | None:
-    """Beginn des letzten fertigen Scans (sauber oder mit Fund). Ein laufender Scan zaehlt nicht: Waehrend eines
-    Schnellscans fiel der Schutzwert sonst von „gut“ auf „Verbesserungsbedarf“ und sprang danach zurueck."""
+    """Beginn des letzten fertigen Scans (sauber oder mit Fund); ein laufender zählt nicht, sonst fiele der Schutzwert
+    währenddessen und spränge danach zurück."""
     if "last_completed_scan_at" in row:
         return row["last_completed_scan_at"]
     scan = row.get("last_scan") or {}
@@ -1205,7 +1166,7 @@ def _completed_scan_at(row: dict[str, Any]) -> float | None:
 
 
 SCAN_FRESH_S = 8 * 86400
-"""So lange zaehlt ein fertiger Scan als aktuell."""
+"""So lange zählt ein fertiger Scan als aktuell."""
 SCAN_FRESH_POINTS = 25
 
 
@@ -1214,9 +1175,8 @@ def _scan_fresh(row: dict[str, Any], now: float) -> bool:
 
 
 def _scan_reasons(rows: list[dict[str, Any]]) -> list[str]:
-    """Saetze fuer „Was den Schutzwert senkt“ zum Scannen: Server ohne fertigen Scan in 8 Tagen (mit Abzug, sonst
-    springt der Wert ohne Erklaerung) und Server, deren letzter Scan gescheitert ist (ohne Abzug: es zaehlt der vorige
-    fertige Scan, aber ein dauerhaft scheiternder Scan soll nicht still hinter einem guten Wert verschwinden)."""
+    """Sätze für „Was den Schutzwert senkt“ zum Scannen: Server ohne fertigen Scan in 8 Tagen (mit Abzug) und Server mit
+    gescheitertem letztem Scan (ohne Abzug, es zählt der vorige; ein dauerhaft scheiternder Scan soll aber auffallen)."""
     if not rows:
         return []
     now = _now().timestamp()
@@ -1233,9 +1193,7 @@ def _scan_reasons(rows: list[dict[str, Any]]) -> list[str]:
 
 
 def _score(rows: list[dict[str, Any]], open_threats: int, indices: list[int]) -> int:
-    """Grobe Schutz-Note 0-100: Abdeckung (ClamAV installiert, aktuelle Scans),
-    offene Funde, Haertungsindex, Abzug fuer veraltete Signaturen (Gewichtung in `protection.py`).
-    Bewusst einfach und nachvollziehbar."""
+    """Grobe Schutz-Note 0-100 aus Abdeckung, aktuellen Scans, offenen Funden, Härtungsindex und veralteten Signaturen."""
     if not rows:
         return 0
     now = _now().timestamp()
@@ -1249,22 +1207,18 @@ def _score(rows: list[dict[str, Any]], open_threats: int, indices: list[int]) ->
 
 
 def _describe(exc: BaseException, *, timeout_s: float | None = None) -> str:
-    """Lesbarer Grund zu einer Ausnahme aus `ctx.exec.run` (und dem Weg dorthin).
-
-    - Fehler der SSH-Verbindung (`core.ssh.SshError` und Unterklassen) tragen `readable = True`, ihr Text ist schon ein
-      fertiger deutscher Satz ("Server antwortet nicht (Zeitüberschreitung bei ...)", "Anmeldung abgelehnt" ...). Sie kommen
-      vor dem `TimeoutError`: `SshTimeout` ist auch einer, und sonst sah "Server nach 10 Sekunden nicht erreichbar" genauso
-      aus wie "Lauf dauerte zu lange".
-    - Ein reiner `TimeoutError` ist das Zeitlimit des Laufs (`timeout_s`, falls bekannt, steht als Dauer im Text).
-    - Bricht die Verbindung mitten im Lauf ab, kommt der Fehler der SSH-Bibliothek ohne deutschen Text an (`ConnectionLost`
-      u. Ae., die Erweiterung kennt die Bibliothek nicht): erkannt am Modul der Klasse, wie `ConnectionError`."""
+    """Lesbarer Grund zu einer Ausnahme aus `ctx.exec.run` (und dem Weg dorthin); ein Zeitlimit nennt die Dauer `timeout_s`."""
     text = str(exc).strip()
+    # SSH-Fehler (`core.ssh.SshError`) tragen `readable` und schon einen deutschen Satz. Sie gehen dem `TimeoutError`
+    # vor: `SshTimeout` ist auch einer, und "Server nicht erreichbar" soll nicht wie "Lauf dauerte zu lange" aussehen.
     if getattr(exc, "readable", False) and text:
         return text
     if isinstance(exc, (asyncio.TimeoutError, TimeoutError)):
         if timeout_s:
             return f"Zeitüberschreitung: Der Vorgang dauerte länger als {av.duration_text(timeout_s)} und wurde abgebrochen."
         return "Zeitüberschreitung – der Vorgang hat zu lange gebraucht."
+    # Bricht die Verbindung mitten im Lauf ab, kommt der Fehler der SSH-Bibliothek ohne deutschen Text an (`ConnectionLost`
+    # u. ä.); die Erweiterung kennt die Bibliothek nicht und erkennt ihn am Modul der Klasse.
     if isinstance(exc, ConnectionError) or any(cls.__module__.split(".")[0] == "asyncssh" for cls in type(exc).__mro__):
         return f"Die Verbindung zum Server ist abgebrochen ({text})." if text else "Die Verbindung zum Server ist abgebrochen."
     return text or type(exc).__name__

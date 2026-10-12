@@ -1,9 +1,5 @@
-"""Zeitplan- und Lauf-Verwaltung -- docs/03-DATA-MODEL.md §7.
-
-Reine DB-Operationen. `core/scheduler.py` verdrahtet das mit APScheduler und der
-tatsaechlichen Ausfuehrung -- Trennung wie ueberall im Projekt (`services/hosts.py`
-vs. `core/ssh.py` ist dasselbe Muster).
-"""
+"""Zeitplan- und Lauf-Verwaltung: reine DB-Operationen; `core/scheduler.py` verdrahtet sie mit APScheduler und der
+Ausführung."""
 
 from __future__ import annotations
 
@@ -32,14 +28,9 @@ async def upsert_job(
     target: dict[str, Any] | None = None,
     created_by_user_id: str | None = None,
 ) -> Job:
-    """Upsert ueber `(ext_id, ext_job_key)` -- macht ein erneutes `register_job()`
-    (jedes Extension-Enable) idempotent statt einer Blind-Insert-Dopplung
-    (docs/00-DECISIONS.md D-08: "der doppelte, ins Leere laufende Cron-Eintrag").
-
-    `timezone=None` heisst: die eingestellte Zone (`core.timezone`, Einstellung
-    `system.timezone`). Ein neuer Job bekommt sie; ein bestehender behaelt seine, sonst
-    wuerde jedes Neuladen einer Erweiterung eine umgestellte Zone zuruecksetzen. Nur eine
-    ausdruecklich uebergebene Zone ueberschreibt."""
+    """Upsert über `(ext_id, ext_job_key)`, damit jedes erneute `register_job()` idempotent ist.
+    `timezone=None` heißt: die eingestellte Zone (`core.timezone`). Ein bestehender Job behält seine, sonst setzte jedes
+    Neuladen einer Erweiterung eine umgestellte Zone zurück; nur eine ausdrücklich übergebene überschreibt."""
     result = await session.execute(
         select(Job).where(Job.ext_id == ext_id, Job.ext_job_key == ext_job_key)
     )
@@ -81,26 +72,11 @@ async def get_job(session: AsyncSession, job_id: str) -> Job | None:
 
 
 async def set_next_run_at(session: AsyncSession, job_id: str, next_run_at: datetime | None) -> None:
-    """`Job.next_run_at`
-    existierte seit WP-6 als Spalte, wurde aber vom Scheduler nie beschrieben --
-    `GET /jobs` zeigte das Feld dauerhaft als `null`. `core/scheduler.py::schedule()`
-    ruft das direkt nach dem Planen bei APScheduler auf (dessen eigenes
-    `next_run_time` ist die Wahrheit, hier nur in die `jobs`-Tabelle gespiegelt,
-    damit die API es zeigen kann, ohne den Scheduler-Prozessspeicher zu kennen),
-    UND nach jedem Lauf erneut (APScheduler berechnet den naechsten Termin danach
-    neu).
-
-    **`astimezone(UTC)` ist kein Kosmetik-Detail, live im Regressionstest
-    gefunden:** `Job.timezone` ist standardmaessig `"Europe/Berlin"`
-    (models/platform.py) -- APSchedulers `next_run_time` kommt deshalb Berlin-aware
-    zurueck, nicht UTC. `db.base.UTCDateTime.process_bind_param()` normalisiert nur
-    NAIVE Werte auf UTC (nimmt an, sie seien bereits UTC gemeint) -- ein bereits
-    aware, aber nicht-UTC Wert wird unveraendert durchgereicht. SQLite serialisiert
-    dabei die WALL-CLOCK-Zahlen, verliert den Offset; beim Lesen bekommt der naive
-    Rueckgabewert dann faelschlich `tzinfo=UTC` aufgeklebt -- aus "0:38 Uhr Berlin"
-    wird stillschweigend "0:38 Uhr UTC", zwei verschiedene Momente. Ohne die
-    explizite Konvertierung hier waere `next_run_at` fuer JEDEN Job mit
-    Nicht-UTC-Zeitzone (dem Standardfall) falsch, sobald Berlin nicht UTC+0 ist."""
+    """Spiegelt den nächsten Termin (APSchedulers `next_run_time` ist die Wahrheit) in `Job.next_run_at`, damit die API
+    ihn zeigt."""
+    # `astimezone(UTC)` ist nötig: APScheduler liefert den Termin in der Zone des Jobs, `UTCDateTime` normalisiert aber
+    # nur naive Werte. Ein aware Wert in anderer Zone verlöre beim Speichern den Offset und läse sich als UTC zurück
+    # (aus "0:38 Uhr Berlin" würde "0:38 Uhr UTC").
     if next_run_at is not None:
         next_run_at = next_run_at.astimezone(UTC)
     job = await session.get(Job, job_id)
@@ -160,11 +136,8 @@ async def list_runs(session: AsyncSession, *, job_id: str | None = None, limit: 
 
 
 async def prune_runs(session: AsyncSession, *, job_id: str, older_than: datetime) -> list[str]:
-    """Loescht die beendeten Laeufe eines Jobs, die vor `older_than` begannen, und liefert die
-    Pfade ihrer Protokolldateien (`output_ref`), damit der Aufrufer sie ebenfalls entfernt.
-    Fuer Jobs, die sehr oft laufen (Erreichbarkeitspruefung alle 2 Minuten): ohne Aufraeumen
-    wuerde jeder Lauf fuer immer eine Zeile und eine Datei hinterlassen. Laufende Laeufe
-    bleiben immer stehen."""
+    """Löscht die beendeten Läufe eines Jobs, die vor `older_than` begannen, und liefert die Pfade ihrer Protokolldateien.
+    Nötig für Jobs, die sehr oft laufen (Erreichbarkeitsprüfung alle 2 Minuten); laufende Läufe bleiben immer stehen."""
     where = (JobRun.job_id == job_id, JobRun.started_at < older_than, JobRun.status != "running")
     refs = (await session.execute(select(JobRun.output_ref).where(*where))).scalars().all()
     await session.execute(delete(JobRun).where(*where))
@@ -176,10 +149,9 @@ async def get_run(session: AsyncSession, run_id: str) -> JobRun | None:
 
 
 async def mark_interrupted_on_boot(session: AsyncSession) -> int:
-    """docs/03 §7: "interrupted existiert, damit ein Neustart mitten im Lauf sichtbar
-    wird statt zu verschwinden -- beim Start markiert der Kern alle noch als running
-    gefuehrten Laeufe um." Muss VOR jeder neuen Job-Ausfuehrung laufen (main.py
-    Lifespan), sonst markiert ein sofort danach gestarteter echter Lauf sich selbst."""
+    """Markiert beim Start alle noch als `running` geführten Läufe als `interrupted`, damit ein Neustart mitten im Lauf
+    sichtbar wird. Muss vor jeder neuen Job-Ausführung laufen (Lifespan), sonst markiert sich ein sofort gestarteter
+    echter Lauf selbst."""
     result = await session.execute(
         update(JobRun).where(JobRun.status == "running").values(status="interrupted", finished_at=utcnow())
     )

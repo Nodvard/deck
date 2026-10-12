@@ -1,29 +1,6 @@
-"""„Verbindung prüfen“: Schritt für Schritt testen, ob sich Nodvard Deck mit einem Server
-verbinden kann (docs/04-API.md §3, `POST /hosts/{id}/check`).
+"""„Verbindung prüfen“ (`POST /hosts/{id}/check`): testet Schritt für Schritt die Verbindung zu einem Server.
 
-**Sicherheit zuerst -- zwei Regeln, auf die alles andere aufbaut:**
-
-1. *Ohne bestätigten Server-Schlüssel gehen keine Anmeldedaten an den Server.* Die Prüfung
-   verbindet mit `ssh.connect(tofu=False)`: ist der Schlüssel noch nicht gemerkt, bricht schon der
-   Schlüsseltausch ab (`HostKeyUnknown`), bevor Benutzername, Passwort oder Schlüssel gesendet
-   werden, und es wird nichts gespeichert. Ohne Zugang liest `ssh.inspect_host_key` den Schlüssel,
-   ohne sich anzumelden. Ein *geänderter* Schlüssel (`HostKeyMismatch`) ist immer ein Fehler und
-   wird nie zum Bestätigen angeboten.
-2. *Gemerkt wird ein Schlüssel nur auf ausdrücklichen Befehl*, und nur der, den diese Prüfung
-   gerade selbst gesehen hat (`consume_seen_key`): ein angegebener Fingerabdruck allein genügt
-   nicht, er muss frisch vom Server kommen.
-
-Die Prüfung nutzt eine eigene, **nicht gepoolte** Verbindung, die danach geschlossen wird. Geprüft
-wird nur `host.address` und der Port des Zugangs -- nie ein Ziel aus der Anfrage. Antworten
-enthalten nur eingeordnete, feste deutsche Texte: nie die Ausnahme-Texte von asyncssh oder der
-Vault, keine Fehlerausgabe des Servers, nie Passwort oder Schlüssel. Nur das SSH-Banner (auf
-druckbares ASCII gekürzt), die OS-Angaben (gekürzt) und der Fingerabdruck des Server-Schlüssels
-werden weitergereicht.
-
-Zustand nur im Prozessspeicher: das Gemerkte zum Bestätigen (15 Minuten), das Ergebnis der
-letzten erfolgreichen Anmeldung je Zugang (10 Minuten, für „alten Zugang löschen“) und die
-Mengenbegrenzung. Nach einem Neustart ist alles weg und die Prüfung muss einfach neu laufen.
-"""
+Der Zustand liegt nur im Prozessspeicher; nach einem Neustart muss die Prüfung einfach neu laufen."""
 
 from __future__ import annotations
 
@@ -75,12 +52,12 @@ OS_COMMAND = (
 )
 SUDO_COMMAND = "env LC_ALL=C sudo -n true"
 """`LC_ALL=C`: sudo meldet sonst in der Sprache des Servers („ein Passwort ist notwendig“) und
-die Meldung liesse sich nicht einordnen. `env` statt `LC_ALL=C sudo ...`, damit es in jeder
+die Meldung ließe sich nicht einordnen. `env` statt `LC_ALL=C sudo ...`, damit es in jeder
 Login-Shell geht."""
 
 
 class CheckRefused(Exception):
-    """Die Prüfung läuft gar nicht erst (zu viele, oder es läuft schon eine) -- für den Aufrufer HTTP 429."""
+    """Die Prüfung läuft gar nicht erst (zu viele, oder es läuft schon eine); für den Aufrufer HTTP 429."""
 
     def __init__(self, message: str, retry_after: int | None = None) -> None:
         super().__init__(message)
@@ -180,8 +157,7 @@ def _semaphore() -> asyncio.Semaphore:
 
 
 def remember_seen_key(host: Host, port: int, key_type: str, fingerprint: str) -> None:
-    """Merkt den Schlüssel, den die Prüfung gerade von `host.address:port` gesehen hat -- nur so
-    kann er anschließend bestätigt werden."""
+    """Merkt den Schlüssel, den die Prüfung gerade von `host.address:port` gesehen hat; nur so lässt er sich bestätigen."""
     _seen_keys[host.id] = _SeenKey(host.address, port, key_type, fingerprint, _now())
 
 
@@ -190,10 +166,9 @@ def forget_seen_key(host_id: str) -> None:
 
 
 def consume_seen_key(host: Host, port: int, key_type: str, fingerprint: str) -> bool:
-    """`True` (und der Merkzettel ist weg), wenn `key_type`/`fingerprint` genau der Schlüssel sind,
-    den die letzte Prüfung dieses Servers gesehen hat, höchstens 15 Minuten her, und Adresse und
-    `port` (der des Standard-Zugangs, sonst `DEFAULT_SSH_PORT`) seitdem unverändert sind. Ein
-    Merkzettel gilt nur einmal. Bewusst ohne `await`."""
+    """`True` (und der Merkzettel ist weg), wenn `key_type`/`fingerprint` der Schlüssel der letzten Prüfung dieses Servers sind,
+    höchstens 15 Minuten her, bei unveränderter Adresse und unverändertem `port` (Standard-Zugang, sonst `DEFAULT_SSH_PORT`).
+    Ein Merkzettel gilt nur einmal; kein `await` darin, damit Prüfen und Verbrauchen nicht unterbrochen werden."""
     seen = _seen_keys.get(host.id)
     if seen is None:
         return False
@@ -207,10 +182,9 @@ def consume_seen_key(host: Host, port: int, key_type: str, fingerprint: str) -> 
 
 
 def mark_login_ok(host: Host, credential: HostCredential) -> None:
-    """Hält fest: die Anmeldung mit `credential` hat gerade geklappt. Für „alten Zugang löschen“ gilt das
-    je Zugang (`login_was_ok`); der dauerhafte Beleg am Server aber nur für den Standard-Zugang: wer
-    einen neuen Zugang vor dem Umstellen prüft, soll den Beleg des bisherigen nicht überschreiben
-    (`carry_over_login_ok` übernimmt ihn beim Umstellen)."""
+    """Hält fest: Die Anmeldung mit `credential` hat gerade geklappt (je Zugang, siehe `login_was_ok`).
+    Der dauerhafte Beleg am Server gilt nur für den Standard-Zugang: Wer einen neuen Zugang vor dem Umstellen prüft,
+    soll den Beleg des bisherigen nicht überschreiben (`carry_over_login_ok` übernimmt ihn beim Umstellen)."""
     checked_at = utcnow()
     _logins_ok[credential.id] = _LoginOk(host.address, credential.port, _now(), checked_at)
     if credential.is_default:
@@ -228,7 +202,7 @@ def carry_over_login_ok(host: Host, credential: HostCredential) -> bool:
 
 
 def login_was_ok(host: Host, credential: HostCredential) -> bool:
-    """Hat eine Prüfung mit GENAU diesem Zugang in den letzten 10 Minuten die Anmeldung geschafft
+    """Hat eine Prüfung mit genau diesem Zugang in den letzten 10 Minuten die Anmeldung geschafft
     (und Adresse und Port sind seitdem gleich)?"""
     record = _logins_ok.get(credential.id)
     return (
@@ -245,7 +219,7 @@ def login_was_ok(host: Host, credential: HostCredential) -> bool:
 
 
 def _printable(text: str, limit: int) -> str:
-    """Nur druckbares ASCII, gekürzt -- Text, der vom Server kommt, wird nie ungeprüft weitergereicht."""
+    """Nur druckbares ASCII, gekürzt: Text, der vom Server kommt, wird nie ungeprüft weitergereicht."""
     return "".join(c for c in text if " " <= c <= "~")[:limit].strip()
 
 
@@ -284,6 +258,17 @@ class _State:
 # Die Prüfung
 # ---------------------------------------------------------------------------
 
+# Ohne bestätigten Server-Schlüssel gehen keine Anmeldedaten an den Server: Die Prüfung verbindet mit
+# `ssh.connect(tofu=False)`, ist der Schlüssel noch nicht gemerkt, bricht schon der Schlüsseltausch ab (`HostKeyUnknown`),
+# bevor Benutzername, Passwort oder Schlüssel gesendet werden, und es wird nichts gespeichert. Ohne Zugang liest
+# `ssh.inspect_host_key` den Schlüssel, ohne sich anzumelden. Ein geänderter Schlüssel (`HostKeyMismatch`) ist immer ein
+# Fehler und wird nie zum Bestätigen angeboten. Gemerkt wird ein Schlüssel nur auf ausdrücklichen Befehl und nur der, den
+# diese Prüfung gerade selbst gesehen hat (`consume_seen_key`); ein angegebener Fingerabdruck allein genügt nicht.
+# Die Prüfung nutzt eine eigene, nicht gepoolte Verbindung und prüft nur `host.address` und den Port des Zugangs, nie ein
+# Ziel aus der Anfrage. Antworten enthalten nur eingeordnete, feste deutsche Texte (nie Ausnahme-Texte von asyncssh oder
+# Vault, keine Fehlerausgabe des Servers, nie Passwort oder Schlüssel); weitergereicht werden nur das auf druckbares ASCII
+# gekürzte SSH-Banner, die gekürzten OS-Angaben und der Fingerabdruck des Server-Schlüssels.
+
 
 async def run_check(
     session: AsyncSession,
@@ -294,10 +279,9 @@ async def run_check(
     *,
     user_id: str,
 ) -> ConnectionCheckOut:
-    """Prüft `host` mit `credential` (`None`: ohne Zugang, nur Erreichbarkeit und Server-Schlüssel).
-    `requirements` sind die zum Server passenden Meldungen der Extensions (`HostRequirementSpec`).
-    Wirft `CheckRefused`, wenn gerade schon für diesen Server geprüft wird, der Nutzer zu oft
-    geprüft hat oder der Pi schon mit Prüfungen ausgelastet ist."""
+    """Prüft `host` mit `credential` (`None`: nur Erreichbarkeit und Server-Schlüssel); `requirements` kommen von den
+    Erweiterungen. `CheckRefused`, wenn für diesen Server schon geprüft wird, der Nutzer zu oft geprüft hat oder der Pi
+    mit Prüfungen ausgelastet ist."""
     if host.id in _busy:
         raise CheckRefused("Für diesen Server läuft gerade schon eine Prüfung.")
     _busy.add(host.id)  # kein await zwischen Abfrage und Eintrag
@@ -353,14 +337,14 @@ async def _run(
     else:
         if credential is not None:
             _logins_ok.pop(credential.id, None)
-            # Nur wenn die Anmeldung selbst scheiterte: ein Server, der gerade nicht antwortet, hat
-            # damit nicht widerrufen, dass sie früher klappte.
+            # Nur wenn die Anmeldung selbst scheiterte: Ein Server, der gerade nicht antwortet, hat
+            # damit nicht widerrufen, dass sie bisher klappte.
             # Und nur der Beleg dieses Zugangs: scheitert ein anderer als der Standard (etwa ein neuer, dessen
             # Einrichtungsbefehl noch nicht gelaufen ist), bleibt der Beleg des funktionierenden stehen.
             if not state.unreachable and not state.key_problem and any(i.id == "login" and i.status == "fail" for i in state.items):
                 hosts_service.clear_login_ok(host, credential.id)
         if state.host_key is not None and state.host_key.status == "changed":
-            # Ein anderer Server-Schlüssel: die frühere Anmeldung galt einem anderen Gegenüber, mit jedem Zugang.
+            # Ein anderer Server-Schlüssel: Die bisherige Anmeldung galt einem anderen Gegenüber, mit jedem Zugang.
             hosts_service.clear_login_ok(host)
         if state.unreachable:
             host.status = "down"
@@ -560,7 +544,7 @@ async def _step_key_and_login(
 
 
 def _login_failed(state: _State, credential: HostCredential, label: str, exc: BaseException) -> None:
-    """Ordnet einen Anmeldefehler ein. Der Text der Ausnahme wird bewusst NICHT weitergereicht."""
+    """Ordnet einen Anmeldefehler ein. Der Text der Ausnahme wird bewusst nicht weitergereicht."""
     offered = getattr(exc, "key_type", None)
     if offered:  # der Schlüsseltausch war durch, der Server-Schlüssel war bekannt
         state.add("host_key", "Server-Schlüssel", "ok", f"Bekannt ({offered}).")

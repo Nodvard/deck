@@ -1,23 +1,6 @@
-"""`GET /ws` -- der generische WS-Multiplex-Hub (docs/04-API.md §4).
-
-Authentifizierung laeuft NICHT wie bei jedem anderen Endpunkt ueber
-`Authorization: Bearer` (WebSockets kennen keine benutzerdefinierten Header vom
-Browser aus) -- die erste Nachricht nach dem Verbinden traegt den Access-Token
-(docs/04 §4: "keine Tokens in der URL, sie landen in Proxy-Logs").
-
-RBAC-Filterung des `events`-Kanals (docs/04 §4): siehe `core/ws_hub.py`
-Modul-Docstring fuer die volle Begruendung -- kurz: jede Verbindung bekommt beim
-Auth-Handshake einen Berechtigungs-Schnappschuss (`services.auth.
-user_permissions()`), `core.rbac.permission_for_event()`/`EVENT_PREFIX_PERMISSIONS`
-ordnet jedem Event-Namens-Praefix eine Berechtigung zu, `WsHub.publish(...,
-required_permission=...)` liefert nur an Verbindungen, die sie erfuellen.
-
-Offene Verbindungen: Konto und Anmeldung werden nicht nur beim Aufbau geprueft, sondern bei
-jedem Ping (alle 30 s) erneut (`services/session_guard.py`, wie beim Terminal). Wer deaktiviert,
-abgemeldet oder wessen Passwort geaendert wurde, verliert die Verbindung (Code 4401); geaenderte
-Rollen frischen den Berechtigungs-Schnappschuss auf. Dazu endet die Verbindung, wenn das
-Zugangs-Token ablaeuft, mit dem sie sich angemeldet hat (wie bei HTTP nach hoechstens 15 Minuten);
-die Seite verbindet sich dann mit dem erneuerten Token selbst neu (lib/ws.ts)."""
+"""`GET /ws`: der generische WebSocket-Hub. Der Access-Token kommt als erste Nachricht, nicht im Header (den
+Browser-WebSockets nicht setzen können) und nicht in der URL (Proxy-Logs). Die Rechtefilterung der Kanäle steht
+in `core/ws_hub.py`."""
 
 from __future__ import annotations
 
@@ -42,15 +25,14 @@ logger = logging.getLogger("nodvard_deck.ws")
 
 _AUTH_TIMEOUT_S = 10.0
 _PING_INTERVAL_S = 30.0
-"""So oft pingt eine offene Verbindung und liest dabei Konto, Anmeldung und Rechte ihres Nutzers
-neu. Zusaetzlich endet sie, wenn das Zugangs-Token ablaeuft, mit dem sie sich angemeldet hat."""
+"""So oft pingt eine offene Verbindung und liest dabei Konto, Anmeldung und Rechte ihres Nutzers neu
+(`services/session_guard.py`). Zusätzlich endet sie, wenn das Zugangs-Token abläuft, mit dem sie sich anmeldete."""
 
-# Private WS-Fehlercodes (RFC 6455 erlaubt 4000-4999 fuer Anwendungen) -- analog zu
-# api/v1/terminal.py, das dasselbe Schema fuer denselben Zweck nutzt.
+# Private WS-Fehlercodes (RFC 6455 erlaubt 4000-4999 für Anwendungen), wie in api/v1/terminal.py.
 _WS_AUTH_TIMEOUT = 4401
 _WS_AUTH_FAILED = 4401
 _WS_ACCESS_ENDED = 4401
-"""Konto deaktiviert, Passwort geaendert, abgemeldet oder Zugangs-Token abgelaufen (laufende Verbindung)."""
+"""Konto deaktiviert, Passwort geändert, abgemeldet oder Zugangs-Token abgelaufen (laufende Verbindung)."""
 
 TOKEN_EXPIRED_MESSAGE = "Die Anmeldung der Live-Verbindung ist abgelaufen."
 """Die Seite verbindet sich danach mit ihrem erneuerten Zugangs-Token selbst neu (lib/ws.ts)."""
@@ -59,9 +41,8 @@ TOKEN_EXPIRED_MESSAGE = "Die Anmeldung der Live-Verbindung ist abgelaufen."
 async def _authenticate(
     raw_message: str, settings: Settings
 ) -> tuple[User, list[str], session_guard.SessionWatch, float] | None:
-    """Prueft die Anmeldenachricht. Liefert Nutzer, Rechte, die Anmeldung, an der die Verbindung
-    haengt, und den Ablaufzeitpunkt (`exp`, Unix-Sekunden) des Tokens; ein Token ohne `exp` gibt
-    es nicht (core/security.py setzt es immer)."""
+    """Prüft die Anmeldenachricht und liefert Nutzer, Rechte, die Anmeldung, an der die Verbindung hängt, und den
+    Ablaufzeitpunkt (`exp`, Unix-Sekunden) des Tokens. Ein Token ohne `exp` gibt es nicht (core/security.py)."""
     try:
         envelope = json.loads(raw_message)
     except ValueError:
@@ -86,10 +67,9 @@ async def _authenticate(
         user = await session.get(User, payload["sub"])
         if user is None or not user.is_active:
             return None
-        # Woran die Verbindung haengt: die Anmeldung (`sid` im Token, ohne `sid` bei aelteren
-        # Tokens irgendeine gueltige des Kontos) und das Passwort von jetzt. Eine Anmeldung, die
-        # schon beendet ist (abgemeldet, widerrufen), darf sich auch nicht neu verbinden, solange
-        # ihr Zugangs-Token noch laeuft.
+        # Woran die Verbindung hängt: die Anmeldung (`sid` im Token, bei älteren Tokens irgendeine gültige des
+        # Kontos) und das Passwort von jetzt. Eine schon beendete Anmeldung (abgemeldet, widerrufen) darf sich
+        # nicht neu verbinden, solange ihr Zugangs-Token noch läuft.
         sid = payload.get("sid")
         watch = session_guard.SessionWatch(
             user_id=user.id,
@@ -98,18 +78,14 @@ async def _authenticate(
         )
         if await watch.ended_reason(session) is not None:
             return None
-        # `user_permissions()` liest `user.roles`/`role.permissions`, beides ueber
-        # `lazy="selectin"` bereits eager-geladen (das Objekt kam aus session.get(),
-        # nicht aus session.add() -- D-12 betrifft das hier nicht). Losgeloest von der
-        # Session zurueckgeben, die hier gleich schliesst -- `expire_on_commit=False`
-        # (db/session.py) haelt die bereits geladenen Attribute verwendbar.
+        # `user.roles` und `role.permissions` sind per `lazy="selectin"` schon geladen (das Objekt kam aus
+        # session.get()) und bleiben dank `expire_on_commit=False` (db/session.py) nutzbar, wenn die Session schließt.
         return user, user_permissions(user), watch, float(expires_at)
 
 
 @router.websocket("/ws")
 async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depends(get_settings)]) -> None:
-    # `accept()` zuerst, immer -- siehe api/v1/terminal.py fuer die volle Begruendung
-    # (ASGI konsumiert das ausstehende "websocket.connect" sonst nie).
+    # `accept()` zuerst, immer (Begründung in api/v1/terminal.py).
     await websocket.accept()
 
     try:
@@ -118,11 +94,8 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
         await websocket.close(code=_WS_AUTH_TIMEOUT)
         return
     except WebSocketDisconnect:
-        # Der Client ist schon weg (z.B. Tab/Navigation waehrend des 10s-Auth-Fensters
-        # geschlossen) -- ein `close()` auf einem bereits getrennten Socket wirft selbst
-        # wieder WebSocketDisconnect (live gefunden beim WP-7-Boot-Test: ein
-        # nachladender Extension-Loader oeffnet/schliesst WS-Verbindungen schneller, als
-        # es vorher ein manueller Test je getan haette). Nichts mehr zu tun.
+        # Der Client ist schon weg (z. B. Tab im Auth-Fenster geschlossen); ein `close()` auf einem getrennten
+        # Socket wirft selbst wieder WebSocketDisconnect. Nichts mehr zu tun.
         return
 
     authenticated = await _authenticate(first_message, settings)
@@ -142,8 +115,8 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
     stop = asyncio.Event()
 
     async def _recheck() -> str | None:
-        """Grund (Klartext), warum die Verbindung enden muss, sonst `None`. Gilt noch alles, werden
-        dabei die Berechtigungen im Hub aufgefrischt (eine geaenderte Rolle wirkt so ohne neue Verbindung)."""
+        """Grund (Klartext), warum die Verbindung enden muss, sonst `None`. Gilt noch alles, werden dabei die
+        Berechtigungen im Hub aufgefrischt: eine geänderte Rolle wirkt so ohne neue Verbindung."""
         try:
             async with session_scope() as db_session:
                 reason = await watch.ended_reason(db_session)
@@ -152,21 +125,19 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
                     if current is not None:
                         hub.set_permissions(conn_id, user_permissions(current))
                 return reason
-        except Exception:  # ein Datenbank-Haenger beendet keine laufende Verbindung
+        except Exception:  # ein Datenbank-Hänger beendet keine laufende Verbindung
             logger.warning("ws_recheck_failed conn_id=%s", conn_id, exc_info=True)
             return None
 
     async def _pinger() -> str | None:
-        """Pingt alle `_PING_INTERVAL_S` Sekunden und prueft dabei, ob Konto und Anmeldung noch
-        gelten; laeuft vorher das Zugangs-Token der Verbindung ab, endet sie zu diesem Zeitpunkt.
-        Ein einziger Takt fuer beides. Rueckgabe: der Grund, wenn die Verbindung enden muss; sonst
-        `None` (Verbindung weg oder Abbau). Eine beendete Verbindung kommt sofort aus dem Hub: bis
-        sie geschlossen ist, geht keine Nachricht mehr an sie (auch nicht auf Kanaelen ohne
-        Rechtepruefung). Wird nie mitten in der Datenbankabfrage abgebrochen, sondern ueber `stop`
-        gestoppt (siehe api/v1/terminal.py)."""
+        """Pingt alle `_PING_INTERVAL_S` Sekunden und prüft dabei, ob Konto und Anmeldung noch gelten; läuft vorher das
+        Zugangs-Token ab, endet die Verbindung dann. Rückgabe: der Grund, wenn sie enden muss, sonst `None`."""
+        # Wird nie mitten in der Datenbankabfrage abgebrochen, sondern über `stop` gestoppt (siehe api/v1/terminal.py).
+        # Eine beendete Verbindung kommt sofort aus dem Hub: bis zum Schließen geht keine Nachricht mehr an sie,
+        # auch nicht auf Kanälen ohne Rechteprüfung.
         try:
             while True:
-                # Hoechstens bis zum Ablauf des Tokens warten, nicht eine ganze Runde darueber hinaus.
+                # Höchstens bis zum Ablauf des Tokens warten, nicht eine ganze Runde darüber hinaus.
                 wait_s = max(0.0, min(_PING_INTERVAL_S, token_expires_at - time.time()))
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=wait_s)
@@ -222,7 +193,7 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
     try:
         await asyncio.wait({serve_task, ping_task}, return_when=asyncio.FIRST_COMPLETED)
         if serve_task.done():
-            serve_task.result()  # ein Fehler der Schleife geht wie bisher nach oben
+            serve_task.result()  # ein Fehler der Schleife geht nach oben
         elif not ping_task.cancelled() and ping_task.exception() is None:
             ended_reason = ping_task.result()
             if ended_reason is not None:
@@ -239,9 +210,9 @@ async def ws_multiplex(websocket: WebSocket, settings: Annotated[Settings, Depen
             logger.info("ws_access_ended conn_id=%s user_id=%s", conn_id, watch.user_id)
             try:
                 await websocket.send_json({"type": "error", "payload": {"title": ended_reason}})
-            except Exception:  # noqa: BLE001 - der Client ist moeglicherweise schon weg
+            except Exception:  # noqa: BLE001 - der Client ist möglicherweise schon weg
                 pass
         try:
             await websocket.close(code=close_code)
-        except Exception:  # noqa: BLE001 - moeglicherweise schon zu
+        except Exception:  # noqa: BLE001 - möglicherweise schon zu
             pass

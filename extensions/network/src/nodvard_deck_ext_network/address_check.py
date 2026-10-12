@@ -1,29 +1,6 @@
-"""Adress-Check: Wohin fuehrt jeder Proxy-Host, und laeuft das Ziel?
+"""Adress-Check: ordnet das Ziel jedes Proxy-Hosts einem Docker-Container zu und meldet, ob der läuft.
 
-Ordnet das Ziel eines Proxy-Hosts (`forward_host`, `forward_port`) einem Docker-Container zu. Die Container kommen
-nur lesend aus der `ServiceCatalog`-Faehigkeit der Service-Matrix (`requires` in `extension.toml`); ohne sie gibt es
-keinen Check, aber auch keinen Fehler.
-
-Regeln, in dieser Reihenfolge:
-
-1. Das Ziel ist die Adresse oder der Name eines Docker-Servers: der Container auf diesem Server, der den Port belegt
-   (`published_ports`, bei gestoppten Containern aus der Container-Konfiguration). Haelt genau ein laufender Container
-   den Port, gewinnt er (alte gestoppte Container mit derselben Port-Zuordnung sind haeufig). Ein Name mit Domain
-   (`docker.fritz.box`) passt zum Server `docker` nur ueber ein lokales Suffix oder dasselbe Suffix wie der Server
-   bzw. der Proxy Manager -- `docker.example.com` ist nicht der Server `docker`.
-2. Das Ziel ist `host.docker.internal` oder ein Docker-Gateway (`172.17.0.1` usw.): wie 1, auf dem Server, auf dem
-   der Nginx Proxy Manager selbst laeuft. Erkannt am Image `nginx-proxy-manager` (ein laufender vor einem gestoppten),
-   sonst an der Adresse aus den Einstellungen. `localhost`/`127.0.0.1` nur, wenn der Proxy Manager im Host-Netz laeuft;
-   im Bridge-Netz ist das der Proxy Manager selbst, dann keine Zuordnung. Die Adresse eines Servers geht immer vor.
-   An `127.0.0.1` gebundene Ports zaehlen nicht (von aussen nicht erreichbar).
-3. Sonst gilt das Ziel als Containername. Docker loest Namen nur im eigenen Netz auf, also nur auf dem Server des Proxy
-   Managers: gleicher Name, oder genau der Compose-Dienst `<projekt>-<ziel>-<n>` bzw. `<projekt>_<ziel>_<n>` (das
-   Projekt steht in der Zeile, `app` passt also nicht zu `proj-web-app-1`). Ist der Server des Proxy Managers
-   unbekannt, heisst ein Treffer nur "vermutlich": nie rot, kein Start-Knopf.
-
-Mehrere Treffer heissen "nicht eindeutig", keiner heisst "nicht zugeordnet". Das ist kein Fehler, das Ziel kann ein
-Dienst ausserhalb von Docker sein (etwa die Proxmox-Oberflaeche). Grenzen: Container im Host-Netz zeigen keine Ports,
-Netzwerk-Aliase und zusaetzliche Orte (`locations`) eines Proxy-Hosts werden nicht geprueft.
+Die Container kommen nur lesend aus der `ServiceCatalog`-Fähigkeit der Service-Matrix; ohne sie gibt es keinen Check.
 """
 
 from __future__ import annotations
@@ -35,20 +12,20 @@ from typing import Any
 from urllib.parse import urlsplit
 
 NPM_IMAGE_HINT = "nginx-proxy-manager"
+# Ziel "dieser Rechner": der Server des Proxy Managers nur, wenn er im Host-Netz läuft. Im Bridge-Netz ist es der
+# Proxy Manager selbst.
 LOOPBACK_TARGETS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
-"""Der Server des Proxy Managers -- aber nur, wenn er im Host-Netz laeuft. Im Docker-Bridge-Netz ist es der Proxy
-Manager selbst (dann veroeffentlicht sein Container Ports)."""
 HOST_TARGETS = frozenset({"host.docker.internal"})
+# Gateways der Docker-Netze (`docker0` ist 172.17.0.1, Compose-Netze folgen ab 172.18.0.1). 172.16.0.1 nicht: das ist
+# öfter ein Router im Heimnetz.
 _DOCKER_GATEWAY_RE = re.compile(r"^172\.(?:1[7-9]|2\d|3[01])\.0\.1$")
-"""Gateways der Docker-Netze (`docker0` ist 172.17.0.1, Compose-Netze folgen mit 172.18.0.1 usw.). 172.16.0.1 nicht:
-das ist oefter ein Router im Heimnetz."""
 
 RUNNING = "running"
 STOPPED_STATES = frozenset({"exited", "created", "dead"})
+# `docker start` lehnt einen Container im Zustand `dead` ab, dafür gibt es keinen Start-Knopf.
 STARTABLE_STATES = frozenset({"exited", "created"})
-"""`docker start` lehnt einen Container im Zustand `dead` ab -- dafuer kein Start-Knopf."""
+# Domains im Heimnetz: `web.fritz.box` ist der Server `web`, `web.example.com` nicht.
 LOCAL_SUFFIXES = ("fritz.box", "lan", "local", "home.arpa", "internal", "localdomain", "home", "intranet")
-"""Domains im Heimnetz: `docker.fritz.box` ist der Server `docker`, `docker.example.com` nicht."""
 STATE_TEXT = {
     "running": ("läuft", "good"),
     "restarting": ("startet ständig neu", "warn"),
@@ -123,9 +100,8 @@ def _is_local_suffix(rest: str, extra: frozenset[str]) -> bool:
 
 
 def _matches_address(target: str, host: DockerHost, suffixes: frozenset[str] = frozenset()) -> bool:
-    """Ziel = Adresse oder Name des Servers. Ein Name ohne Domain passt zum Server mit Domain und umgekehrt; ein Name
-    MIT Domain nur, wenn die Domain dieselbe ist, eine lokale (`LOCAL_SUFFIXES`) oder eine aus `suffixes` (die des
-    Proxy Managers). Nie ueber eine IP-Adresse."""
+    """Ziel = Adresse oder Name des Servers. Ein Name mit Domain passt nur bei gleicher, lokaler (`LOCAL_SUFFIXES`)
+    oder der Domain des Proxy Managers (`suffixes`); nie über eine IP-Adresse."""
     if not target:
         return False
     name = _norm(host.name)
@@ -159,8 +135,8 @@ def _npm_containers(host: DockerHost) -> list[dict[str, Any]]:
 
 
 def npm_docker_host(hosts: dict[str, DockerHost], npm_url: str | None) -> DockerHost | None:
-    """Der Server, auf dem der Nginx Proxy Manager laeuft: am Image erkannt (ein laufender zaehlt vor einem alten,
-    gestoppten), sonst an der Adresse aus den Einstellungen. Mehrdeutig -> keiner."""
+    """Der Server des Nginx Proxy Managers: am Image erkannt (laufender vor gestopptem), sonst an der Adresse aus den
+    Einstellungen. Mehrdeutig: keiner."""
     for running_only in (True, False):
         by_image = [
             h for h in hosts.values()
@@ -234,6 +210,12 @@ def _container_result(host: DockerHost, container: dict[str, Any], *, sure: bool
 def check_proxy_host(
     proxy: dict[str, Any], hosts: dict[str, DockerHost], npm_host: DockerHost | None, suffixes: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
+    # Reihenfolge: 1. Ziel ist ein Docker-Server (Adresse oder Name): der Container dort, der den Port belegt.
+    # 2. Ziel ist host.docker.internal, ein Docker-Gateway oder localhost: dasselbe auf dem Server des Proxy Managers.
+    # 3. Sonst gilt das Ziel als Containername; Docker löst Namen nur im eigenen Netz auf, also dort suchen.
+    # Mehrere Treffer sind "nicht eindeutig", keiner ist "nicht zugeordnet" (kann ein Dienst außerhalb von Docker sein,
+    # etwa die Proxmox-Oberfläche). Nicht geprüft: Container im Host-Netz (zeigen keine Ports), Netzwerk-Aliase und
+    # zusätzliche Orte (`locations`) eines Proxy-Hosts. An 127.0.0.1 gebundene Ports zählen nicht (von außen unerreichbar).
     target = _norm(proxy.get("forward_host"))
     port = proxy.get("forward_port")
     port = port if isinstance(port, int) and 0 < port <= 65535 else None
@@ -252,8 +234,8 @@ def check_proxy_host(
             )
         if target in LOOPBACK_TARGETS:
             npm = _npm_containers(npm_host)
-            # Nur im Host-Netz ist `localhost` der Server. Im Bridge-Netz (Container veroeffentlicht Ports) oder wenn der
-            # Container nicht erkennbar ist, waere jede Zuordnung geraten.
+            # Nur im Host-Netz ist `localhost` der Server. Im Bridge-Netz (der Container veröffentlicht Ports) oder bei
+            # nicht erkennbarem Container wäre jede Zuordnung geraten.
             if len(npm) != 1 or npm[0].get("published_ports"):
                 return _result(
                     "unknown", "neutral",
@@ -271,7 +253,7 @@ def check_proxy_host(
         found = [(server, c) for c in server.containers if port in (c.get("published_ports") or [])]
         running = [(h, c) for h, c in found if str(c.get("state") or "").lower() == RUNNING]
         if len(running) == 1:
-            found = running  # alte gestoppte Container mit derselben Port-Zuordnung machen es nicht "nicht eindeutig"
+            found = running  # alte gestoppte Container mit derselben Port-Zuordnung sind häufig und zählen nicht mit
         if len(found) == 1:
             return _container_result(*found[0])
         if len(found) > 1:
@@ -285,7 +267,7 @@ def check_proxy_host(
     if _is_ip(target):
         return _result("unknown", "neutral", "Das Ziel ist kein bekannter Docker-Server. Vielleicht ein Dienst außerhalb von Docker.")
 
-    # Docker loest Namen nur im eigenen Netz auf: bekannt ist der Server des Proxy Managers -> nur dort suchen.
+    # Docker löst Namen nur im eigenen Netz auf: ist der Server des Proxy Managers bekannt, nur dort suchen.
     searched = [npm_host] if npm_host is not None else list(hosts.values())
     found = [(h, c) for h in searched for c in h.containers if _service_match(c, target)]
     if len(found) == 1:
@@ -310,8 +292,7 @@ def check_proxy_host(
 
 
 def check_all(proxies: list[dict[str, Any]], rows: list[dict[str, Any]], *, npm_url: str | None) -> list[dict[str, Any]]:
-    """Je Proxy-Host ein Ergebnis (`proxy_id` + Felder aus `_result`). Ein ausgeschalteter Proxy-Host wird zugeordnet,
-    sein Ergebnis ist aber nie rot und bietet keinen Start an: Dass dahinter nichts laeuft, ist dann meist so gewollt."""
+    """Je Proxy-Host ein Ergebnis (`proxy_id` und Felder aus `_result`); ausgeschaltete Hosts werden nie rot."""
     hosts = docker_hosts(rows)
     npm_host = npm_docker_host(hosts, npm_url)
     suffixes = _domain_of(npm_url)
@@ -319,7 +300,7 @@ def check_all(proxies: list[dict[str, Any]], rows: list[dict[str, Any]], *, npm_
     for proxy in proxies:
         result = check_proxy_host(proxy, hosts, npm_host, suffixes)
         if not proxy.get("enabled"):
-            # Ausgeschaltet: dass dahinter nichts laeuft, ist meist gewollt -- nicht rot, kein Start-Knopf.
+            # Ausgeschaltet: dass dahinter nichts läuft, ist meist gewollt (nicht rot, kein Start-Knopf).
             result["can_start"] = False
             if result["tone"] in ("bad", "warn"):
                 result["tone"] = "neutral"

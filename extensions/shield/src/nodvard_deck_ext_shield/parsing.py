@@ -1,23 +1,4 @@
-r"""Reine Funktionen, kein I/O, keine Nebenwirkung. "PARSEN" ist hier zu Ende,
-"VORSCHLAGEN" (per `ctx.actions.propose()`) und "MELDEN" (aus dem Ergebnis, nie aus
-der Absicht) passieren danach, ausserhalb dieses Moduls.
-
-Ersetzt `parse_and_execute_remediation()` aus dem Vorgaengersystem, das
-Parsen UND Ausfuehren in einem Zug machte. Der neue Name `parse_ai_response`
-signalisiert die Trennung selbst.
-
-**Zwei im Vorgaengersystem gefundene, hier gezielt behobene Fehler:**
-- Das Vorgaengersystem suchte `BEGRUENDUNG:` nur zeilen-verankert (`line.startswith(...)`) --
-  ein Modell, das seine Antwort einzeilig ausgibt (kein Zeilenumbruch), oder den
-  Tippfehler `BEGRUNDUNG` (fehlendes zweites E) schreibt, wurde nie erkannt.
-  Hier: ein Regex-Scan ueber den GESAMTEN Text (`re.search`, nicht pro Zeile), mit
-  `BEGR\S{0,4}NDUNG` als Toleranz fuer Tippfehler/Umlaut-Variante.
-- Das Vorgaengersystem extrahierte den Befehl mit `(.+)` gierig bis zum Zeilenende
-  (`re.search(..., clean_line)`) -- bei einzeiliger Modellausgabe landete der Text
-  DANACH (Status-Emoji, naechster Abschnitt) im auszufuehrenden Befehl. Hier: ein
-  Lookahead auf bekannte Abschnittsmarker (🟢/📌/⚡/BEGRUENDUNG/AKTION) oder Textende
-  beendet die Erfassung, nicht das Zeilenende.
-"""
+"""Zerlegt die Antwort der KI in Begründung und Aktion; reine Funktionen ohne I/O."""
 
 from __future__ import annotations
 
@@ -27,8 +8,11 @@ from enum import Enum
 
 from .remediation import looks_like_host_not_container
 
+# Die Erfassung endet am nächsten Abschnittsmarker oder am Textende, nicht am Zeilenende: Gibt ein Modell die Antwort
+# einzeilig aus, würde sonst der Text danach im auszuführenden Befehl landen.
 _SECTION_BOUNDARY = r"(?=\s*(?:🟢|📌|⚡|BEGR\S{0,4}NDUNG\s*:|AKTION\s*:|$))"
 
+# Gesucht wird im ganzen Text, nicht zeilenweise; `\S{0,4}` toleriert den Tippfehler BEGRUNDUNG und Umlaut-Varianten.
 _BEGRUENDUNG_RE = re.compile(
     r"BEGR\S{0,4}NDUNG\s*:\s*(?P<reason>.+?)" + _SECTION_BOUNDARY,
     re.IGNORECASE | re.DOTALL,
@@ -44,13 +28,11 @@ _PLACEHOLDER_MARKERS = ("<host>", "<target>", "<befehl>", "<command>")
 
 class ParsedActionKind(str, Enum):
     NONE = "none"
-    """Kein AKTION-Feld gefunden, oder explizit 'AKTION: KEINE'/'AKTION: NONE'."""
+    """Kein AKTION-Feld gefunden oder ausdrücklich „AKTION: KEINE“ bzw. „AKTION: NONE“."""
     EXEC = "exec"
-    """Ein auszufuehrender Befehl auf einem Host -- geht als Vorschlag ans Gate."""
+    """Ein auszuführender Befehl auf einem Host; geht als Vorschlag ans Gate."""
     REJECTED = "rejected"
-    """Erkannt, aber von einer Extension-eigenen Pruefung verworfen (aktuell nur
-    `looks_like_host_not_container` -- die Sperrlisten-Pruefung selbst macht das
-    Kern-Gate anhand von `command_field`, nicht dieses Modul)."""
+    """Erkannt, aber von `looks_like_host_not_container` verworfen; die Sperrliste prüft das Gate im Kern."""
 
 
 @dataclass(frozen=True)
@@ -69,12 +51,9 @@ def _clean(text: str) -> str:
 def parse_ai_response(
     ai_text: str, *, forbidden_keywords: tuple[str, ...] | None = None
 ) -> list[ParsedAction]:
-    """Liefert `[]` bei 'AKTION: KEINE' oder wenn gar kein AKTION-Feld erkennbar ist
-    (konservativ -- ein nicht verstandenes Format schlaegt NICHTS vor,
-    anders als ein Format-Fehler, der eine Aktion vortaeuscht). Sonst genau EIN
-    Eintrag -- das Vorgaengersystem kannte nie mehr als ein AKTION-Feld pro Modellantwort, die
-    Listenform ist der dokumentierte Vertrag, nicht ein beobachtetes
-    Mehrfach-Vorkommen."""
+    """Liefert `[]` bei „AKTION: KEINE“ oder ohne erkennbares AKTION-Feld, sonst genau einen Eintrag.
+
+    Ein nicht verstandenes Format schlägt nichts vor, statt eine Aktion vorzutäuschen."""
     text = ai_text or ""
 
     reason_match = _BEGRUENDUNG_RE.search(text)
@@ -91,7 +70,7 @@ def parse_ai_response(
     command = _clean(exec_match.group("command"))
 
     if not command or any(marker in command.lower() for marker in _PLACEHOLDER_MARKERS):
-        return []  # Platzhalter-Verbot, SYSTEM_PROMPT Regel 4 (aus dem Vorgaengersystem)
+        return []  # Platzhalter aus dem Prompt-Beispiel sind kein Befehl (SYSTEM_PROMPT Regel 4)
 
     forbidden_target = looks_like_host_not_container(command, forbidden_keywords=forbidden_keywords)
     if forbidden_target is not None:
@@ -127,12 +106,9 @@ _BLANK_LINE_RUNS_RE = re.compile(r"\n{3,}")
 
 
 def strip_decision_block(ai_text: str) -> str:
-    """Entfernt den rohen BEGRUENDUNG/AKTION-Block aus einem Modelltext fuer die
-    Anzeige (ntfy/Widget) -- woertlich portiert aus `flush_incident_batch()` des Vorgaengersystems.
-    Was tatsaechlich passiert ist, steht separat in der Aktions-Zeile, die aus dem
-    ECHTEN `ActionResult` gebaut wird (die Meldung kann nicht luegen, weil ihr Text
-    den `actions`-Datensatz als einzige Quelle hat), NICHT aus diesem bereinigten
-    Modelltext."""
+    """Entfernt den rohen BEGRÜNDUNG/AKTION-Block aus dem Modelltext für die Anzeige (ntfy, Widget).
+
+    Was tatsächlich passiert ist, steht in der Aktions-Zeile, die aus dem echten `ActionResult` gebaut wird."""
     text = _DECISION_BLOCK_RE.sub("", ai_text or "")
     text = _WHITESPACE_RUNS_RE.sub(" ", text)
     text = _BLANK_LINE_RUNS_RE.sub("\n\n", text)

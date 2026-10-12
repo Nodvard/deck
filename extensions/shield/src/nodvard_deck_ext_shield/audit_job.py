@@ -1,25 +1,4 @@
-"""Haertungs-Audit (Lynis) entkoppelt vom SSH-Kanal: Befehle bauen und Ausgaben auswerten.
-
-Vorher lief `lynis audit system` direkt im SSH-Kanal, mit 30 Minuten Zeitlimit. Auf einem Server mit vielen Benutzern und
-Containern braucht Lynis aber gut eine Stunde: Das Dashboard gab nach 30 Minuten auf, Lynis lief auf dem Server ohne
-Zeitlimit weiter, und den Bericht, den es am Ende schrieb, las niemand mehr.
-
-Jetzt startet ein kurzer SSH-Aufruf den Lauf auf dem Server (`detached.launch_command` mit der Art `AUDITS`: eigener Ordner
-`AUDIT_DIR`, systemd-Unit `nodvard-shield-audit-<lauf>` bzw. `setsid`), und das Dashboard fragt nur kurz nach
-(`poll_command`), auch nach einem eigenen Neustart. Auf dem Server (`lynis_command`):
-
-- Lynis laeuft mit niedriger Prioritaet: `nice -n 19`, dazu `ionice -c3`, wenn es das gibt und es sich setzen laesst.
-- `timeout` aus den coreutils beendet Lynis samt allen Unterprozessen nach `LIMIT_S` (TERM, eine Minute spaeter KILL).
-  Fehlt `timeout`, beendet das Dashboard den Lauf nach der Obergrenze selbst (`stop_command`).
-- Es startet kein zweites Lynis, solange eines laeuft: Sperre im eigenen Ordner (`flock`, wenn vorhanden) und die
-  PID-Datei von Lynis selbst. Auch ein von Hand oder von einer frueheren Version gestartetes Lynis zaehlt -- zwei
-  gleichzeitige Laeufe schreiben in denselben Bericht.
-- Direkt nach dem Ende wird `/var/log/lynis-report.dat` gelesen, aber nur, wenn der Bericht neuer ist als der Start
-  dieses Laufs (`<lauf>.start`): Ein alter Bericht gilt nie als Ergebnis. Die Zeilen stehen danach im Protokoll des
-  Laufs (`<lauf>.log`) und kommen auch nach einem Neustart des Dashboards noch an.
-
-Nur die REINEN Teile (wie `detached.py`); Ausfuehren, Speichern und Melden steht in `defender.py`.
-"""
+"""Lynis-Härtungs-Audit entkoppelt vom SSH-Kanal: reine Befehle und Auswertung, Ausführen und Speichern in `defender.py`."""
 
 from __future__ import annotations
 
@@ -34,12 +13,11 @@ AUDITS = dt.JobKind(prefix="audit", base_dir=AUDIT_DIR, unit_prefix="nodvard-shi
 REPORT_FILE = "/var/log/lynis-report.dat"
 # Lynis legt als root seine PID-Datei unter /var/run an (auf neueren Systemen ein Verweis auf /run).
 LYNIS_PID_FILES = ("/run/lynis.pid", "/var/run/lynis.pid")
-# Obergrenze eines Laufs auf dem Server. Grosszuegig: Auf einem Docker-Host mit vielen Benutzern dauert Lynis gut eine
-# Stunde, mit niedriger Prioritaet auf einem ausgelasteten Server auch laenger.
+# Obergrenze eines Laufs: Lynis braucht auf einem Docker-Host mit vielen Benutzern gut eine Stunde, ausgelastet länger.
 LIMIT_S = 3 * 60 * 60
-KILL_AFTER_S = 60  # so lange nach dem TERM bei der Obergrenze folgt KILL
+KILL_AFTER_S = 60  # Sekunden zwischen TERM und KILL bei der Obergrenze
 NICE = 19
-# So viel vom Ende des Protokolls holt die Abfrage eines fertigen Laufs (der Bericht steht ganz am Ende).
+# Vom Protokoll eines fertigen Laufs reicht das Ende, der Bericht steht ganz hinten.
 TAIL_BYTES = 256 * 1024
 
 _PATH_RE = re.compile(r"^/[A-Za-z0-9._/-]+$")
@@ -90,18 +68,10 @@ def lynis_command(
     run_id: str, *, base_dir: str = AUDIT_DIR, limit_s: int = LIMIT_S, report: str = REPORT_FILE,
     pid_files: tuple[str, ...] = LYNIS_PID_FILES,
 ) -> str:
-    """Der Befehl, der auf dem Server entkoppelt laeuft (als root, im Wrapper von `detached.launch_command`, die
-    Ausgabe landet in `<lauf>.log`). Zeilen fuer `parse_result`, je Lauf genau eine davon:
+    """Shell-Befehl für den entkoppelten Lauf (root, Ausgabe in `<lauf>.log`); `parse_result` liest seine Marker.
 
-    - `@@nolynis`: Lynis ist nicht installiert.
-    - `@@busy`: Es laeuft schon ein Lynis (Sperre belegt oder PID-Datei von Lynis mit lebendem Prozess).
-    - `@@timeout`: `timeout` hat Lynis nach `limit_s` beendet.
-    - `@@killed`: Lynis wurde vorher hart beendet (Rueckgabecode 137), meist bei Speichermangel.
-    - `@@lynis-rc=<n>`, dann `@@report` und die Zeilen des frischen Berichts, oder `@@stale` (kein neuer Bericht).
-
-    Davor steht `@@prio=...` (womit Lynis gestartet wurde) und, was Lynis selbst ausgibt. `base_dir`, `report` und
-    `pid_files` sind nur fuer Tests anders."""
-    dt.paths(run_id, base_dir, kind=AUDITS)  # ValueError bei ungueltiger ID oder ungueltigem Ordner
+    Marker: `@@nolynis`, `@@busy`, `@@timeout`, `@@killed` oder `@@lynis-rc=<n>` mit `@@report` bzw. `@@stale`."""
+    dt.paths(run_id, base_dir, kind=AUDITS)  # ValueError bei ungültiger ID oder ungültigem Ordner
     limit = int(limit_s)
     if limit < 1:
         raise ValueError("Ungültige Obergrenze.")
@@ -111,36 +81,38 @@ def lynis_command(
     rep = _checked_path(report)
     pids = " ".join(_checked_path(p) for p in pid_files)
     return (
-        # Als root ist /usr/sbin meist im Suchpfad, ueber `sudo` (secure_path) und systemd auch; sicher ist sicher.
+        # /usr/sbin ist nicht überall im Suchpfad (sudo, systemd); sicherheitshalber ergänzen.
         'PATH="$PATH:/usr/local/sbin:/usr/sbin:/sbin"; '
         "command -v lynis >/dev/null 2>&1 || { echo @@nolynis; exit 0; }; "
-        # Lynis loescht beim Start ein `./lynis.pid` im aktuellen Ordner: nur im eigenen Ordner laufen.
+        # Lynis löscht beim Start ein `./lynis.pid` im aktuellen Ordner: nur im eigenen Ordner laufen.
         f"cd {d} || exit 1; "
         "L=; command -v flock >/dev/null 2>&1 && L=1; "
         "( "
-        # Sperre: Rueckgabe 1 heisst "belegt"; jeder andere Fehler (z. B. ein Dateisystem ohne Sperren) laesst den Lauf zu.
+        # Zwei Läufe würden in denselben Bericht schreiben. flock: Rückgabe 1 heißt "belegt", andere Fehler
+        # (z. B. ein Dateisystem ohne Sperren) lassen den Lauf zu.
         'if [ -n "$L" ]; then flock -n 9; [ $? -ne 1 ] || { echo @@busy; exit 0; }; fi; '
-        # Lynis selbst: lebt der Prozess aus seiner PID-Datei noch, laeuft gerade ein Audit (sonst ist die Datei ein Rest).
+        # Auch ein von Hand gestartetes Lynis zählt: Lebt der Prozess aus seiner PID-Datei noch, läuft ein Audit.
         f"for f in {pids}; do p=$(cat \"$f\" 2>/dev/null); case \"$p\" in ''|*[!0-9]*) continue;; esac; "
         "if [ -r \"/proc/$p/cmdline\" ] && tr '\\000' ' ' <\"/proc/$p/cmdline\" | grep -q 'lynis audit'; then "
         "echo @@busy; exit 0; fi; done; "
         f": >{start} || exit 1; "
         f'N=; command -v nice >/dev/null 2>&1 && N="nice -n {NICE}"; '
-        # `ionice -c3` (nur lesen und schreiben, wenn sonst niemand will): nicht ueberall vorhanden oder erlaubt.
+        # `ionice -c3` gibt es nicht überall oder es ist nicht erlaubt.
         'if command -v ionice >/dev/null 2>&1 && ionice -c3 true >/dev/null 2>&1; then N="$N ionice -c3"; fi; '
-        # Nur `timeout` aus den coreutils, das `-k` kennt (wie `antivirus.guard_command`). Es setzt sich in eine eigene
-        # Prozessgruppe und beendet bei der Obergrenze die ganze Gruppe: Lynis und alles, was es gerade aufgerufen hat.
+        # Nur `timeout` aus den coreutils, das `-k` kennt (wie `antivirus.guard_command`). Es läuft in einer eigenen
+        # Prozessgruppe und beendet bei der Obergrenze Lynis samt Unterprozessen.
         "T=; case \"$(timeout --version 2>/dev/null)\" in *coreutils*) "
         f"timeout -k 1 5 true >/dev/null 2>&1 && T=\"timeout -k {KILL_AFTER_S} {limit}\";; esac; "
         'echo "@@prio=${N:-normal}"; '
         "S=$(date +%s 2>/dev/null); $T $N lynis audit system --quick --quiet --no-colors </dev/null; R=$?; "
         'if [ -n "$T" ] && [ "$R" -eq 124 ]; then echo @@timeout; exit 0; fi; '
-        # 137 (KILL) kommt von `timeout` erst nach der Obergrenze. Frueher beendet hat Lynis jemand anderes, meist der
-        # Kernel bei Speichermangel. Ohne Uhrzeit bleibt es wie bisher bei „zu lange“.
+        # 137 (KILL) kommt von `timeout` erst nach der Obergrenze; vorher hat jemand anderes Lynis beendet, meist der
+        # Kernel bei Speichermangel. Ohne Uhrzeit gilt es als "zu lange".
         'if [ "$R" -eq 137 ]; then E=$(date +%s 2>/dev/null); '
         f'if [ -n "$T" ] && {{ [ -z "$S" ] || [ -z "$E" ] || [ $((E - S)) -ge {limit} ]; }}; then echo @@timeout; '
         "else echo @@killed; fi; exit 0; fi; "
         'echo "@@lynis-rc=$R"; '
+        # Nur ein Bericht, der neuer ist als der Start dieses Laufs, zählt; ein alter nie.
         f"if [ -f {rep} ] && [ ! -L {rep} ] && [ {rep} -nt {start} ]; then echo @@report; "
         f"grep -E '^(warning\\[\\]|suggestion\\[\\]|hardening_index|finish)=' {rep}; else echo @@stale; fi"
         f" ) 9>>{lock}"
@@ -148,8 +120,7 @@ def lynis_command(
 
 
 def poll_command(run_id: str, *, base_dir: str = AUDIT_DIR) -> str:
-    """Stand eines Laufs (als root), im Format von `detached.parse_poll`: `@@running`, `@@rc=<n>` samt Ende des
-    Protokolls, `@@lost` (Prozess weg ohne Rueckgabecode) oder `@@unknown` (der Server kennt den Lauf nicht)."""
+    """Stand eines Laufs (als root) im Format von `detached.parse_poll`: `@@running`, `@@rc=<n>`, `@@lost` oder `@@unknown`."""
     dt.paths(run_id, base_dir, kind=AUDITS)
     d = _checked_path(base_dir)
     alive = dt.running_test(run_id, base_dir, kind=AUDITS)
@@ -163,20 +134,17 @@ def poll_command(run_id: str, *, base_dir: str = AUDIT_DIR) -> str:
 
 
 def stop_command(run_id: str, *, base_dir: str = AUDIT_DIR) -> str:
-    """Beendet einen Lauf, der die Obergrenze ueberschritten hat (als root), samt Lynis und allen Unterprozessen.
-
-    Der Wrapper ist Anfuehrer einer eigenen Sitzung (`detached.launch_command`, systemd und `setsid`): beendet wird alles
-    mit dieser Sitzungsnummer (`pkill -s`), dazu seine Prozessgruppe und er selbst. `timeout` laeuft in einer eigenen
-    Gruppe, aber in derselben Sitzung. Erst TERM (Lynis raeumt dabei seine PID-Datei weg), nach bis zu 10 Sekunden KILL.
-    Ausgabe: `@@stopped`, `@@stuck` (es laeuft danach noch etwas) oder `@@notrunning` (der Lauf war schon zu Ende)."""
+    """Beendet einen Lauf über der Obergrenze samt Lynis (als root); Ausgabe `@@stopped`, `@@stuck` oder `@@notrunning`."""
     dt.paths(run_id, base_dir, kind=AUDITS)
     unit = f"{AUDITS.unit_prefix}{run_id}.service"
     alive = dt.running_test(run_id, base_dir, kind=AUDITS)
+    # Der Wrapper führt eine eigene Session (`detached.launch_command`): `pkill -s` trifft alles darin, auch `timeout`
+    # (eigene Gruppe, gleiche Session). Erst TERM, damit Lynis seine PID-Datei wegräumt, nach 10 Sekunden KILL.
     return (
         f"if {alive}; then "
         f"systemctl stop --no-block {unit} >/dev/null 2>&1; "
-        # Die Gruppe als `kill -TERM -<nr>`, ohne `--`: das `kill` von dash (Debian, Ubuntu) bricht bei
-        # `kill -TERM -- -<nr>` mit „Illegal number“ ab, und ohne `pkill` (procps fehlt) lief Lynis dann weiter.
+        # Gruppe als `kill -TERM -<nr>` ohne `--`: das `kill` von dash (Debian, Ubuntu) bricht sonst mit
+        # „Illegal number“ ab, und ohne `pkill` (procps fehlt) liefe Lynis weiter.
         'pkill -TERM -s "$p" 2>/dev/null; kill -TERM "-$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; '
         'i=0; while [ $i -lt 10 ] && kill -0 "$p" 2>/dev/null; do sleep 1; i=$((i+1)); done; '
         'pkill -KILL -s "$p" 2>/dev/null; kill -KILL "-$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null; sleep 1; '

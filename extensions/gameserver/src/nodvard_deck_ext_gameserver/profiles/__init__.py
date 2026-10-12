@@ -1,14 +1,7 @@
-"""Spiel-Profile: was ein
-Gameserver KANN (Status, Spieler, Welt sichern, Neustart), ist fuer jedes Spiel gleich;
-WIE man es auf dem Host abfragt, ist je Spiel (und Betriebssystem/Dienst-Art)
-verschieden. Ein Profil kapselt genau das Wie -- ein neues Spiel (Minecraft auf
-Linux/systemd, ...) ist ein neues Modul hier, kein Umbau der Extension.
+"""Spiel-Profile: Was ein Gameserver kann, ist für jedes Spiel gleich, wie man es auf dem Host abfragt, steckt im Profil.
 
-Die Konfiguration kommt je Server aus den Extension-Einstellungen (`servers.<host_id>`,
-in der Oberflaeche pflegbar) und faellt auf die Profil-Defaults zurueck. Wo es geht,
-erkennt das Profil selbst (z. B. den Dienstnamen), statt dass ein Nutzer ihn kennen muss.
+Ein neues Spiel ist ein neues Modul hier. Die Konfiguration je Server kommt aus `servers.<host_id>` und fällt auf die Profil-Defaults zurück.
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -42,7 +35,7 @@ class GameProfile(Protocol):
         ...
 
     def parse_status(self, stdout: str) -> dict[str, Any]:
-        """JSON -> einheitliches Status-Objekt (siehe GameStatus-Felder in valheim.py)."""
+        """JSON -> einheitliches Status-Objekt (Felder siehe `ValheimWindowsProfile.parse_status`)."""
         ...
 
     def action_command(self, action: str, config: ServerConfig) -> str:
@@ -66,8 +59,8 @@ def get_profile(profile_id: str | None) -> GameProfile:
 
 
 def config_for(settings: dict[str, Any], host_id: str) -> ServerConfig:
-    """Per-Server-Eintrag aus den Einstellungen; alte, globale Einzelwerte
-    (`service_name`) gelten als Rueckfall, damit bestehende Installationen weiterlaufen."""
+    """Eintrag des Servers aus den Einstellungen; der alte globale `service_name` gilt als Rückfall, damit bestehende
+    Installationen weiterlaufen."""
     entry = dict((settings.get("servers") or {}).get(host_id) or {})
     profile = str(entry.pop("profile", "") or DEFAULT_PROFILE)
     if settings.get("service_name") and not entry.get("service_name"):

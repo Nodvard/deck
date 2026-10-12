@@ -1,17 +1,6 @@
-"""Audit-Abfrage und -Export -- docs/04-API.md, docs/03-DATA-MODEL.md §4.
+"""Audit-Abfrage und -Export (docs/04-API.md), nur lesend.
 
-Server-Ausgabe in den Details (Ergebnisse ausgefuehrter Aktionen, auch aus alten
-Eintraegen) sieht nur, wer `hosts.execute` hat (`core/action_output.py`).
-
-Nur Lesen. Geschrieben wird ausschliesslich serverseitig ueber `core.audit.write_entry`
-(derzeit aus `services/auth.py` und `core/vault.py`) -- kein Endpunkt hier legt eine
-Zeile an.
-
-**Ehrlich offen gelassen:** `/export` deckelt auf die letzten 1000 Zeilen (derselbe
-Deckel wie `services.audit.list_entries`) und streamt nicht -- fuer einen wirklich
-vollstaendigen NDJSON-Export eines langlebigen Audit-Logs muesste das paginieren oder
-streamen. Fuer diese Runde reicht die Deckelung, um die Grundfunktion (Filter -> NDJSON)
-echt zu testen.
+Server-Ausgabe in den Details (auch aus alten Einträgen) sieht nur, wer `hosts.execute` hat (`core/action_output.py`).
 """
 
 from __future__ import annotations
@@ -53,7 +42,7 @@ class AuditEntryOut(BaseModel):
 
     @classmethod
     def from_model(cls, entry, *, show_output: bool) -> "AuditEntryOut":  # noqa: ANN001 - AuditEntry-ORM-Objekt
-        """Ohne `show_output` fehlen Server-Ausgabe und Befehle in `detail` (auch in alten Eintraegen)."""
+        """Ohne `show_output` fehlen Server-Ausgabe und Befehle in `detail` (auch in alten Einträgen)."""
         detail, output_hidden = (entry.detail, False) if show_output else hide_audit_detail(entry.action, entry.detail)
         return cls(
             id=entry.id,
@@ -74,11 +63,9 @@ class AuditEntryOut(BaseModel):
 
 
 async def _for_viewer(session, user, entries):
-    """Eingetippte Anmeldenamen sieht niemand: bei neuen Eintraegen stehen sie gar nicht erst
-    im Protokoll, bei alten hat sie die Migration entfernt (und die Antwort schwaerzt sie zur
-    Sicherheit trotzdem). Ihre Kennungen und Laengen sieht nur der Owner; fuer alle anderen,
-    auch Admins, werden sie geschwaerzt. Sonst kaeme ein Admin so an das Owner-Konto, das
-    ihm sonst verschlossen bleibt."""
+    """Eingetippte Anmeldenamen sieht niemand: neue Einträge enthalten sie gar nicht, bei alten hat sie die Migration
+    entfernt (die Antwort schwärzt sie zur Sicherheit trotzdem). Kennungen und Längen davon sieht nur der Owner, für
+    alle anderen, auch Admins, werden sie geschwärzt, sonst käme ein Admin so an das Owner-Konto."""
     return await audit_service.hide_typed_names(session, entries, keep_traces=user.is_owner)
 
 
@@ -127,6 +114,7 @@ async def export_audit(
     since: datetime | None = None,
     until: datetime | None = None,
 ) -> Response:
+    # Auf 1000 Zeilen gedeckelt (wie `list_entries`) und ohne Streaming; ein vollständiger Export müsste paginieren.
     entries = await audit_service.list_entries(
         session,
         actor_type=actor_type,

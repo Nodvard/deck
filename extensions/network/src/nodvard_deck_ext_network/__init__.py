@@ -1,17 +1,6 @@
-"""network-Extension ("Netzwerk") -- Pi-hole (v6) und Nginx Proxy Manager im Dashboard.
+"""Netzwerk-Erweiterung: Pi-hole (v6) und Nginx Proxy Manager, beide optional.
 
-- Lesen (`hosts.read`): `GET /pihole`, `GET /npm`, die beiden Kachel-Endpunkte und der Adress-Check
-  `GET /npm/address-check` (welcher Container hinter jedem Proxy-Host steckt, `address_check.py`).
-- Aendern (`hosts.execute`): Blockierung pausieren/fortsetzen, Proxy-Host ein/aus --
-  immer als Vorschlag ans Aktions-Gate (`ctx.actions.propose`), ausgefuehrt erst nach
-  Freigabe durch `NetworkActionExecutor` (actions.py). Die Seite gibt selbst frei,
-  wenn der Nutzer `actions.approve:<risk>` hat -- wie Backups/Nodvard Shield.
-- Beide Dienste sind optional; ohne Eintrag melden Seite, Kacheln und API sauber
-  "nicht eingerichtet" statt eines Fehlers.
-
-Passwoerter liegen nur im Vault (`network-pihole-password`, `network-npm-password`,
-gesetzt ueber die Einstellungsseite des Kerns) und verlassen die Extension nie --
-keine Route gibt sie zurueck, keine Meldung enthaelt sie.
+Passwörter liegen nur im Tresor; keine Route gibt sie zurück, keine Meldung enthält sie.
 """
 
 from __future__ import annotations
@@ -68,7 +57,7 @@ class Extension(NodvardExtension):
         service = self._service
 
         ctx.capabilities.provide(NetworkActionExecutor(service))
-        # Proxy-Hosts als Vorschlaege fuer App-Kacheln (Seite "Apps"), nur lesend.
+        # Proxy-Hosts als Vorschläge für App-Kacheln, nur lesend.
         ctx.capabilities.provide(NpmAppSuggestions(service))
         for spec in ACTION_SPECS:
             ctx.actions.register(spec)
@@ -130,6 +119,7 @@ class Extension(NodvardExtension):
             if not await service.pihole_configured():
                 raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Pi-hole ist nicht eingerichtet.")
 
+        # Ändern nur als Vorschlag ans Aktions-Gate; ausgeführt wird erst nach der Freigabe.
         act_router = APIRouter()
 
         @act_router.post("/pihole/pause")
@@ -229,7 +219,7 @@ class Extension(NodvardExtension):
         return None
 
     async def on_stop(self, ctx: ExtensionContext) -> None:
-        # Pi-hole hat nur wenige API-Plaetze -- die eigene Sitzung wieder freigeben.
+        # Pi-hole hat nur wenige API-Plätze: die eigene Sitzung wieder freigeben.
         await self._service.close()
 
     async def on_settings_changed(self, ctx: ExtensionContext, values: dict[str, Any]) -> None:

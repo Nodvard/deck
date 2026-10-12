@@ -1,30 +1,6 @@
-"""Alte Meldungen aufraeumen (Kern-Job `notifications-retention`).
-
-Jede Meldung (`notifications`) steht samt ihrer Zustellprotokolle (`notification_deliveries`) so
-lange in der Datenbank, bis jemand sie loescht. Haeufige Meldungen (Erreichbarkeit, Wachen,
-Lageberichte) kommen so ueber die Jahre auf tausende Zeilen; die Meldungsseite und die Glocke
-laden die neuesten, alles darunter liest niemand mehr.
-
-Regeln:
-
-* Geloescht wird, was **vor mehr als N Tagen entstand** (`ts`, Einstellung
-  `notifications.retention_days`, 1 bis 3650, Vorgabe 90) -- gelesen oder ungelesen. **Ausnahme: eine
-  ungelesene kritische Meldung (`severity` `critical`) bleibt stehen**, bis jemand sie liest: eine
-  kritische Meldung, die noch niemand gesehen hat, soll nicht still verschwinden. Gelesen und kritisch geht
-  nach der Frist wie alles andere. Die Oberflaeche sagt das bei der Einstellung.
-* Die Zustellprotokolle gehen **ausdruecklich mit**, nicht nur ueber `ON DELETE CASCADE`: die
-  Fremdschluessel-Pruefung (`PRAGMA foreign_keys`) haengt an der Verbindung und ist in Test-Datenbanken
-  ohne `create_engine_for` aus, und eine verwaiste Zeile waere nie wieder erreichbar.
-* Zeilen gehen in **Haeppchen** weg (Vorgabe 5000 je Durchgang, Commit dazwischen, kurze Pause):
-  SQLite hat nur einen Schreiber, ein langer Loeschlauf liesse alles andere (Anmeldung, Zeitplaene,
-  neue Meldungen) bis zum `busy_timeout` warten.
-* **Meldungen von heute sind nie betroffen**: die kleinste Einstellung ist ein Tag, eine Meldung, die
-  gerade zugestellt wird (`services.notifications.deliver`), ist also immer juenger. Von Hand
-  geloeschte Meldungen waehrend einer Zustellung faengt `deliver()` selbst ab.
-
-Kein `VACUUM`, aus demselben Grund wie in `services.job_retention` (WAL, `auto_vacuum=NONE`, freie
-Seiten fuellt SQLite wieder auf).
-"""
+"""Alte Meldungen aufräumen (Kern-Job `notifications-retention`): Gelöscht wird, was vor mehr als
+`notifications.retention_days` Tagen entstand (1 bis 3650, Vorgabe 90), samt Zustellprotokollen. Ausnahme: ungelesene
+kritische Meldungen bleiben stehen."""
 
 from __future__ import annotations
 
@@ -45,11 +21,14 @@ from .notifications import delete_notifications
 logger = logging.getLogger("nodvard_deck.notification_retention")
 
 KEEP_UNREAD_SEVERITY = Severity.CRITICAL.value
-"""Eine ungelesene Meldung dieser Wichtigkeit (`critical`) loescht der Job nie."""
+"""Eine ungelesene Meldung dieser Wichtigkeit (`critical`) bleibt stehen, bis jemand sie liest; gelesen geht sie nach der
+Frist wie jede andere."""
 RETENTION_KEY = "notifications.retention_days"
 RETENTION_MIN_DAYS = 1
 RETENTION_MAX_DAYS = 3650
 DEFAULT_RETENTION_DAYS = 90
+# Häppchen mit Commit und kurzer Pause: SQLite hat nur einen Schreiber, ein langer Löschlauf ließe Anmeldung, Zeitpläne
+# und neue Meldungen bis zum `busy_timeout` warten.
 CHUNK_SIZE = 5000
 CHUNK_PAUSE_SECONDS = 0.05
 
@@ -68,9 +47,9 @@ def is_valid_retention(value: object) -> bool:
 
 
 async def effective_retention_days(session: AsyncSession) -> int:
-    """Aufbewahrung der Meldungen in Tagen: die Einstellung `notifications.retention_days`, sonst 90.
-    Ein gespeicherter Wert ausserhalb von 1 bis 3650 (von Hand in die Tabelle geschrieben) zaehlt als
-    nicht gesetzt: lieber die Vorgabe nehmen als den Verlauf fast leer zu raeumen."""
+    """Aufbewahrung in Tagen: die Einstellung `notifications.retention_days`, sonst 90. Ein Wert außerhalb von 1 bis
+    3650 (von Hand in die Tabelle geschrieben) zählt als nicht gesetzt, damit der Verlauf nicht fast leer geräumt
+    wird."""
     stored = await settings_service.get_global(session, RETENTION_KEY)
     return stored if is_valid_retention(stored) else DEFAULT_RETENTION_DAYS
 
@@ -79,7 +58,8 @@ async def purge_old_notifications(
     session: AsyncSession, *, retention_days: int, chunk_size: int = CHUNK_SIZE,
     pause: float = CHUNK_PAUSE_SECONDS, now: datetime | None = None,
 ) -> PurgeResult:
-    """Siehe Moduldoku. Committet selbst (nach jedem Haeppchen)."""
+    """Löscht Meldungen, die vor mehr als `retention_days` Tagen entstanden, und committet selbst nach jedem Häppchen.
+    Meldungen von heute sind nie betroffen (kleinste Einstellung: ein Tag), eine gerade zugestellte also auch nicht."""
     cutoff = (now or utcnow()) - timedelta(days=retention_days)
     result = PurgeResult()
     while True:
@@ -103,15 +83,16 @@ async def purge_old_notifications(
         result.chunks += 1
         if len(ids) < chunk_size:
             break
-        # Anderen Schreibern (Anmeldung, Zeitplaene, neue Meldungen) eine Luecke lassen.
+        # Anderen Schreibern (Anmeldung, Zeitpläne, neue Meldungen) eine Lücke lassen.
         await asyncio.sleep(pause)
+    # Kein VACUUM, siehe `services.job_retention`.
     if result.deleted:
         logger.info("notifications_purged deleted=%d chunks=%d", result.deleted, result.chunks)
     return result
 
 
 async def run_purge() -> dict[str, int]:
-    """Der Kern-Job: Aufbewahrung aus den Einstellungen lesen und aufraeumen."""
+    """Der Kern-Job: Aufbewahrung aus den Einstellungen lesen und aufräumen."""
     from ..db.session import session_scope
 
     async with session_scope() as session:

@@ -1,21 +1,4 @@
-"""Einmal-Tickets fuer den Download einer Sicherung (Muster: core/terminal_sessions.py).
-
-Der Download ist ein normaler Browser-Download (`GET /system/backups/download/{ticket}`),
-ohne Authorization-Header und ohne die Datei im Speicher des Browsers. Das Ticket ersetzt
-die Anmeldung fuer genau diese eine Datei:
-
-* zufaellig (256 Bit), nur im Prozessspeicher,
-* der Stand wird NICHT ueber das Ticket abgefragt, sondern ueber eine eigene Zufalls-ID
-  (`job_id`): die steht in jeder Abfrage-Adresse (jede Sekunde, Zugriffsprotokoll) und taugt
-  deshalb nicht zum Herunterladen,
-* an den Nutzer gebunden (beim Einloesen muss er noch aktiver Owner sein; den Stand eines
-  Tickets darf nur er abfragen),
-* gilt 5 Minuten ab dem Moment, in dem die Datei fertig ist,
-* wird beim Einloesen entfernt -- auch wenn es abgelaufen war.
-
-Eine fuer den Download gebaute Datei (`delete_after`) wird nach dem Ausliefern bzw. beim
-Verfall geloescht; bei einer automatischen Sicherung bleibt die Datei natuerlich liegen.
-"""
+"""Einmal-Tickets für den Download einer Sicherung: Das Ticket ersetzt die Anmeldung für genau diese eine Datei."""
 
 from __future__ import annotations
 
@@ -26,6 +9,9 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+# Der Download ist ein normaler Browser-Download ohne Authorization-Header. Das Ticket ist zufällig (256 Bit), liegt nur im
+# Prozessspeicher, gilt fünf Minuten ab dem Moment, in dem die Datei fertig ist, und wird beim Einlösen entfernt, auch
+# abgelaufen. Der Download-Endpunkt löst es nur ein, solange sein Nutzer noch aktiver Owner ist.
 TICKET_TTL_S = 300.0
 
 
@@ -38,7 +24,7 @@ class DownloadTicket:
     delete_after: bool
     created_at: float
     job_id: str = field(default_factory=lambda: secrets.token_urlsafe(16))
-    """Nur zum Abfragen des Stands, nie zum Herunterladen."""
+    """Nur zum Abfragen des Stands, nie zum Herunterladen: Sie steht in jeder Abfrage-Adresse (Zugriffsprotokoll)."""
     status: str = "building"
     """building | ready | failed"""
     ready_at: float | None = None
@@ -47,7 +33,7 @@ class DownloadTicket:
 
     def expired(self, ttl_s: float, now: float) -> bool:
         start = self.ready_at if self.ready_at is not None else self.created_at
-        # Ein Bau darf laenger dauern als die Gueltigkeit (grosse Sicherungen), nur nicht ewig.
+        # Ein Bau darf länger dauern als die Gültigkeit (große Sicherungen), nur nicht ewig.
         limit = ttl_s if self.status != "building" else max(ttl_s, 6 * 3600)
         return now - start > limit
 
@@ -98,9 +84,8 @@ class DownloadTicketRegistry:
             ticket.status, ticket.ready_at, ticket.error = "failed", time.monotonic(), error
 
     def consume(self, ticket_id: str, *, ttl_s: float = TICKET_TTL_S) -> DownloadTicket | None:
-        """Gibt das Ticket genau einmal heraus, wenn die Datei fertig und das Ticket noch
-        gueltig ist. Ein Ticket im Bau bleibt liegen (der Knopf kam zu frueh), alles andere
-        ist danach weg."""
+        """Gibt das Ticket genau einmal heraus, wenn die Datei fertig und das Ticket noch gültig ist.
+        Ein Ticket im Bau bleibt liegen (der Knopf kam zu früh), alles andere ist danach weg."""
         ticket = self._tickets.get(ticket_id)
         if ticket is None or ticket.status == "building":
             return None
@@ -128,6 +113,7 @@ class DownloadTicketRegistry:
 
 
 def _discard(ticket: DownloadTicket) -> None:
+    # Nur für den Download gebaute Dateien; eine automatische Sicherung bleibt liegen.
     if ticket.delete_after:
         with contextlib.suppress(OSError):
             os.unlink(ticket.path)
@@ -144,7 +130,7 @@ def get_ticket_registry() -> DownloadTicketRegistry:
 
 
 def reset_ticket_registry() -> None:
-    """Nur fuer Tests."""
+    """Nur für Tests."""
     global _registry
     if _registry is not None:
         _registry.clear()

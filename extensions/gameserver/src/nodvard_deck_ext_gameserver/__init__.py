@@ -1,22 +1,7 @@
-"""gameserver-Extension -- Gameserver steuern und beobachten: Status, Spieler, Join-Code,
-Welt sichern, Start/Stop/Neustart.
+"""gameserver-Erweiterung: Gameserver steuern und beobachten (Status, Spieler, Join-Code, Welt sichern, Start/Stop/Neustart).
 
-**Spiel-Profile:** alles Spiel-/Betriebssystem-
-Spezifische steckt in `profiles/` (heute: Valheim unter Windows). Pro Server waehlbar
-und konfigurierbar (`settings.servers.<host_id>`, ueber die Oberflaeche); was das Profil
-selbst erkennen kann (Dienstname, Log-Pfad, Weltordner), muss niemand eintragen. Live
-gefunden: die alte feste Voreinstellung "valheim" traf den echten Dienst
-"ValheimServer" nie -- Start/Stop aus Nodvard Deck liefen ins Leere.
-
-**Aelterer Nachtrag, weiterhin gueltig:** eigene Aktionstypen `gameserver.*` mit eigenem
-Executor -- steuern den Spiel-DIENST per SSH (derselbe `ctx.exec.run()`-Weg wie die
-Statusabfrage, docs/00 D-05), nicht die ganze VM.
-
-Kompatibilitaet: die fruehen Einzel-Einstellungen (`log_command`, `join_code_pattern`,
-`start_command`, `stop_command`) wirken weiter, wenn gesetzt -- als Ausweg fuer Setups,
-die kein Profil abdeckt.
+Alles Spiel- und Betriebssystem-Spezifische steckt in `profiles/`, pro Server wählbar (`settings.servers.<host_id>`).
 """
-
 from __future__ import annotations
 
 import time
@@ -49,11 +34,13 @@ from .joincode import DEFAULT_JOIN_CODE_PATTERN, extract_join_code
 from .profiles import PROFILES, config_for, get_profile
 from .watch import LIVE_HOST_STATUSES, run_gameserver_watch
 
+# Deutsche Anzeige für den Host-Status (GameServerPage.tsx hat dieselben Wörter).
 _STATUS_LABEL = {"up": "läuft", "down": "gestoppt", "unknown": "unbekannt", "maintenance": "Wartung"}
-"""Deutsche Anzeige fuer den Host-Status (GameServerPage.tsx hat dieselben Woerter)."""
 
 _SERVICE_LABEL = {"running": "läuft", "stopped": "gestoppt", "startpending": "startet", "stoppending": "stoppt", "missing": "kein Dienst"}
 
+# Eigene Aktionstypen `gameserver.*`: Sie steuern per SSH (wie die Statusabfrage über `ctx.exec.run()`) den Spiel-Dienst, nicht die
+# ganze VM.
 ACTIONS: dict[str, tuple[str, Risk]] = {
     "start": ("gameserver.start", Risk.LOW),
     "stop": ("gameserver.stop", Risk.HIGH),
@@ -67,8 +54,7 @@ UNREACHABLE_TTL_S = 60.0
 
 
 class GameServerStatus:
-    """Statusabfrage je Host mit kurzem Zwischenspeicher -- Liste, Widget, Detailseite
-    und Waechter teilen sich EINE SSH-Abfrage statt jede einzeln."""
+    """Statusabfrage je Host mit kurzem Zwischenspeicher: Liste, Widget, Detailseite und Wächter teilen sich eine SSH-Abfrage."""
 
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
@@ -87,8 +73,8 @@ class GameServerStatus:
         config = config_for(settings, host.id)
         profile = get_profile(config.profile)
         if getattr(host.status, "value", host.status) == "down":
-            # VM/Server ist aus: keine SSH-Verbindung versuchen -- die lief sonst in
-            # den Verbindungs-Timeout und die Seite hing so lange auf "Lade …".
+            # Der Server ist aus: keine SSH-Verbindung versuchen, sie liefe in den Verbindungs-Timeout, und die Seite hinge so
+            # lange auf „Lade …“.
             data = {"profile": profile.id, "running": False, "service_state": "stopped", "error": "Server ist ausgeschaltet."}
             self._cache[host.id] = (time.monotonic(), data)
             return data
@@ -100,7 +86,7 @@ class GameServerStatus:
             data["error"] = None
         except Exception as exc:  # noqa: BLE001 - ein nicht erreichbarer Server ist ein Zustand, kein Absturz
             data = {"profile": profile.id, "running": False, "service_state": "unknown", "error": str(exc) or type(exc).__name__}
-        # Ausweg fuer Setups ohne passendes Profil: eigener Join-Code-Befehl.
+        # Ausweg für Setups ohne passendes Profil: eigener Join-Code-Befehl (`log_command`, `join_code_pattern`).
         if settings.get("log_command") and data.get("error") is None:
             data["join_code"] = await _legacy_join_code(self._ctx, host, settings)
         self._cache[host.id] = (time.monotonic(), data)
@@ -118,8 +104,8 @@ async def _legacy_join_code(ctx: ExtensionContext, host: Any, settings: dict[str
 
 
 class _GameServerActionExecutor:
-    """`gameserver.start/stop/restart/backup` -- der Befehl kommt aus dem Profil des
-    Servers; `start_command`/`stop_command` (alt) haben Vorrang, wenn gesetzt."""
+    """`gameserver.start/stop/restart/backup`: Der Befehl kommt aus dem Profil des Servers, die alten `start_command`/`stop_command`
+    haben Vorrang, wenn gesetzt."""
 
     action_types = frozenset(action_type for action_type, _ in ACTIONS.values())
 
@@ -216,8 +202,7 @@ class Extension(NodvardExtension):
             return await ctx.hosts.list(tag=settings.get("host_tag") or "gameserver")
 
         async def _host_or_404(host_id: str) -> Any:
-            """Nur getaggte Hosts sind Gameserver: sonst loeste ein Betrachter
-            das Statusskript per SSH auf jedem beliebigen Host aus."""
+            """Nur getaggte Hosts sind Gameserver: Sonst löste ein Betrachter das Statusskript per SSH auf jedem Host aus."""
             host = await ctx.hosts.get(host_id)
             settings = await ctx.settings.get()
             if host is None or (settings.get("host_tag") or "gameserver") not in (host.tags or []):
@@ -243,8 +228,7 @@ class Extension(NodvardExtension):
                 "version": data.get("version"),
                 "profile": data.get("profile"),
                 "error": data.get("error"),
-                # Nur die sinnvollen Knoepfe anbieten (Screenshot: "Starten" neben einem
-                # laufenden Server). Unbekannter Zustand -> beide.
+                # Nur die sinnvollen Knöpfe anbieten (kein „Starten“ neben einem laufenden Server); unbekannter Zustand: beide.
                 "can_start": not running,
                 "can_stop": running or data.get("service_state") == "unknown",
                 "join_code": join_code,
@@ -267,8 +251,7 @@ class Extension(NodvardExtension):
             ]
 
         async def _details(host_id: str, *, fresh: bool, with_log: bool) -> dict[str, Any]:
-            """Alles fuer die Detailansicht: Zusammenfassung, Profil-Status (Spieler,
-            Welt, Sicherungen, Log) und die aktuelle Konfiguration."""
+            """Alles für die Detailansicht: Zusammenfassung, Profil-Status (Spieler, Welt, Sicherungen, Log) und Konfiguration."""
             host = await _host_or_404(host_id)
             if fresh:
                 statuses.invalidate(host.id)
@@ -281,17 +264,16 @@ class Extension(NodvardExtension):
 
         @router.get("/servers/{host_id}")
         async def server_details(host_id: str) -> dict[str, Any]:
-            """Fuer Leser (`hosts.read`): ohne Server-Log (Spielernamen, Verbindungsdaten
-            -- wie die Container-Logs der Service-Matrix nur mit `hosts.execute`) und
-            immer aus dem Zwischenspeicher, `fresh` gibt es nur unten."""
+            """Details für Leser (`hosts.read`): ohne Server-Log, immer aus dem Zwischenspeicher."""
+            # Das Log enthält Spielernamen und Verbindungsdaten und gibt es nur mit `hosts.execute` (wie die Container-Logs der
+            # Service-Matrix); `fresh` ebenso.
             return await _details(host_id, fresh=False, with_log=False)
 
         config_router = APIRouter()
 
         @config_router.put("/servers/{host_id}/config")
         async def set_config(host_id: str, payload: _ConfigIn) -> dict[str, Any]:
-            """Profil + Werte je Server (Konfiguration -> `settings.write`). Leere Werte
-            heissen "automatisch erkennen" und werden nicht gespeichert."""
+            """Profil und Werte je Server (`settings.write`); leere Werte heißen „automatisch erkennen“ und werden nicht gespeichert."""
             await _host_or_404(host_id)
             if payload.profile not in PROFILES:
                 raise HTTPException(status_code=422, detail=f"Unbekanntes Profil '{payload.profile}'.")
@@ -301,6 +283,7 @@ class Extension(NodvardExtension):
                 if key not in allowed:
                     raise HTTPException(status_code=422, detail=f"Unbekanntes Feld '{key}'.")
                 value = value.strip()
+                # Die Werte landen in einem einfach-quotierten PowerShell-Literal (`profiles.valheim._ps_literal`).
                 if any(ch in value for ch in "\r\n\x00'"):
                     raise HTTPException(status_code=422, detail=f"Ungültiges Zeichen in '{key}'.")
                 if value:
@@ -330,8 +313,7 @@ class Extension(NodvardExtension):
 
         @action_router.get("/servers/{host_id}/details")
         async def server_details_full(host_id: str, fresh: bool = False) -> dict[str, Any]:
-            """Wie `/servers/{host_id}`, aber mit Server-Log und `fresh` (am Cache vorbei,
-            z. B. direkt nach einer Aktion) -- nur mit `hosts.execute`."""
+            """Wie `/servers/{host_id}`, aber mit Server-Log und `fresh` (am Cache vorbei, z. B. direkt nach einer Aktion)."""
             return await _details(host_id, fresh=fresh, with_log=True)
 
         @action_router.post("/servers/{host_id}/start")
@@ -350,9 +332,7 @@ class Extension(NodvardExtension):
         async def backup_world(host_id: str, actor: Actor = Depends(ctx.api.current_actor)) -> dict[str, Any]:
             return await _propose_action(host_id, "backup", actor)
 
-        # Sicherheits-Nachtrag: Lesen
-        # braucht `hosts.read`, alles Ausloesende `hosts.execute`, Konfiguration
-        # `settings.write`.
+        # Lesen braucht `hosts.read`, alles Auslösende `hosts.execute`, die Konfiguration `settings.write`.
         ctx.api.include_router(router, permission="hosts.read")
         ctx.api.include_router(action_router, permission="hosts.execute")
         ctx.api.include_router(config_router, permission="settings.write")
@@ -382,7 +362,7 @@ class Extension(NodvardExtension):
                     item=ListItem(
                         title="{{ name }}",
                         subtitle="{{ join_code_display }} · {{ players_display }}",
-                        # Deutsch statt "running"/"stopped"; Farbe im Backend entschieden.
+                        # Deutsche Wörter statt „running“/„stopped“; die Farbe entscheidet das Backend.
                         badge=Badge(text="{{ service_label }}", tone="{{ tone }}"),
                         actions=[
                             WidgetAction(id="start", label="Starten", endpoint="servers/{{ host_id }}/start", method="POST", style="primary", permissions=["hosts.execute"], show_if="{{ can_start }}"),

@@ -1,10 +1,4 @@
-"""Vorschlaege fuer App-Kacheln aus dem Nginx Proxy Manager (`nodvard_sdk.AppSuggestionProvider`).
-
-Jeder eingeschaltete Proxy-Host wird mit seinem ersten Namen vorgeschlagen: `https://`, wenn er ein Zertifikat hat,
-sonst `http://`. Platzhalter-Namen (`*.example.org`) fallen weg, sie sind keine Adresse. Ohne eingerichteten Nginx
-Proxy Manager gibt es keine Vorschlaege (kein Fehler). Uebernommen wird ein Vorschlag erst, wenn jemand ihn als App
-speichert; der Kern prueft die Adresse dabei wie jede andere.
-"""
+"""Vorschläge für App-Kacheln aus den eingeschalteten Proxy-Hosts des Nginx Proxy Managers."""
 
 from __future__ import annotations
 
@@ -22,6 +16,8 @@ MAX_SUGGESTIONS = 200
 
 
 def suggestions_from_hosts(hosts: list[dict]) -> list[AppSuggestion]:
+    # Erster Name des Hosts, `https://` bei Zertifikat, sonst `http://`. Platzhalter (`*.example.org`) sind keine
+    # Adresse. Übernommen wird ein Vorschlag erst, wenn jemand ihn als App speichert; der Kern prüft ihn dann wie jede.
     out: list[AppSuggestion] = []
     for host in hosts:
         if not isinstance(host, dict) or not host.get("enabled"):

@@ -1,9 +1,4 @@
-"""Eine Sicherungsdatei als Ganzes schreiben und lesen: Kopf + age(tar.gz).
-
-Beides arbeitet als Strom (Pipe zwischen tar und Verschluesselung), die Sicherung liegt nie
-komplett im Speicher. Der einzige Klartext auf der Platte ist die kurzlebige Kopie der
-Datenbank im Temp-Ordner unter dem Datenordner (0700), nie im Zielordner.
-"""
+"""Eine Sicherungsdatei als Ganzes schreiben und lesen: Kopf + age(tar.gz), als Strom ohne die ganze Datei im Speicher."""
 
 from __future__ import annotations
 
@@ -39,9 +34,10 @@ def write_backup(
     extensions_dir: Path | None,
     on_skipped_links: Callable[[list[str]], None] | None = None,
 ) -> dict[str, Any]:
-    """Schreibt die komplette Datei nach `out` und gibt das Manifest zurueck. Scheitert
-    irgendetwas, ist `out` unbrauchbar und muss vom Aufrufer verworfen werden.
-    `on_skipped_links` bekommt die Pfade der Verknuepfungen, die nicht mitgesichert wurden."""
+    """Schreibt die komplette Datei nach `out` und gibt das Manifest zurück; scheitert etwas, muss der Aufrufer `out`
+    verwerfen. `on_skipped_links` bekommt die Pfade der Verknüpfungen, die nicht mitgesichert wurden."""
+    # Der einzige Klartext auf der Platte ist diese kurzlebige Datenbank-Kopie im Temp-Ordner unter dem Datenordner (0700),
+    # nie im Zielordner.
     db_copy = tmp_dir / "lattice.db"
     snapshot.online_copy(sources.db_path, db_copy)
     heads, extensions = snapshot.db_facts(db_copy, extensions_dir)
@@ -67,14 +63,15 @@ def write_backup(
 
 
 def decryptor_for(header: dict[str, Any], secret: str) -> Encryptor:
-    """Passt das Geheimnis zum Modus: Einmal-Passwort, Sicherungspasswort (ueber die KDF aus
-    dem Kopf, mit Deckeln) oder Wiederherstellungsschluessel."""
+    """Wählt zum Modus passend Einmal-Passwort, Sicherungspasswort (KDF aus dem Kopf, mit Deckeln) oder
+    Wiederherstellungsschlüssel."""
     if header["mode"] == "passwort":
         return lambda reader, writer: crypto.decrypt_with_passphrase(reader, writer, secret)
     if crypto.is_recovery_key(secret):
         identity = secret.strip().upper()
     else:
         key = crypto.derive_key(secret, crypto.KdfParams.from_dict(header.get("kdf")))
+        # Eine andere Kennung heißt: falsches Passwort. So kommt die klare Meldung, bevor der Strom angefasst wird.
         if key.key_id != header.get("key_id"):
             raise WrongSecret()
         identity = key.identity
@@ -82,12 +79,9 @@ def decryptor_for(header: dict[str, Any], secret: str) -> Encryptor:
 
 
 def read_backup(reader: BinaryIO, secret: str, dest: Path, **extract: Any) -> dict[str, Any]:
-    """Liest, entschluesselt und prueft eine Sicherung vollstaendig nach `dest`. `extract`
-    reicht `limits`, `allow_file` und `allow_dir` an `snapshot.extract_archive` weiter
-    (Wiederherstellen einer fremden Datei, `core/backup/restore.py`).
+    """Liest, entschlüsselt und prüft eine Sicherung vollständig nach `dest`; `extract` geht an `snapshot.extract_archive`.
 
-    **Achtung:** Schon vor dem Ende der Pruefung liegen Dateien in `dest`. Wer `dest` danach
-    verwendet, tut das erst nach erfolgreicher Rueckkehr und raeumt es bei jedem Fehler weg."""
+    Schon vor dem Ende der Prüfung liegen Dateien in `dest`: erst nach erfolgreicher Rückkehr verwenden, bei jedem Fehler wegräumen."""
     header = fmt.read_header(reader)
     decrypt = decryptor_for(header, secret)
     return snapshot.run_pipeline(

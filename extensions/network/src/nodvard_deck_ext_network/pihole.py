@@ -1,20 +1,4 @@
-"""Duenner Client fuer die REST-API von Pi-hole v6 (`/api/...`).
-
-Ablauf (Pi-hole-Doku "Authentication"):
-- `POST /api/auth {"password": ...}` -> `{"session": {"valid", "sid", "validity", ...}}`.
-  Ein App-Passwort funktioniert an derselben Stelle wie das normale Passwort.
-- Jede weitere Anfrage traegt die Sitzung im Header `X-FTL-SID`. Jede Anfrage
-  verlaengert die Sitzung; laeuft sie trotzdem ab, kommt 401 -> einmal neu anmelden.
-- `DELETE /api/auth` meldet ab. Pi-hole hat nur wenige API-Plaetze
-  (`webserver.api.max_sessions`) -- deshalb EINE zwischengespeicherte Sitzung je
-  Pi-hole statt einer Anmeldung pro Aufruf, und Abmelden beim Stoppen.
-
-Das Passwort wird NUR im Moment der Anmeldung aus dem Vault geholt (`password()`),
-nicht bei jedem Aufruf -- jeder Vault-Zugriff schreibt eine Audit-Zeile, und die
-Kacheln fragen jede Minute.
-
-Pi-hole v5 (`/admin/api.php`) wird bewusst nicht nachgebaut, nur erkannt.
-"""
+"""Dünner Client für die REST-API von Pi-hole v6 (`/api/...`), angemeldet mit einer Sitzung (SID)."""
 
 from __future__ import annotations
 
@@ -36,9 +20,9 @@ from .transport import (
 
 SERVICE = "Pi-hole"
 
+# Nach einer abgelehnten Anmeldung so lange nicht erneut versuchen: sonst wäre jede Kachel-Aktualisierung ein
+# Fehlversuch, und Pi-hole sperrt irgendwann (429).
 LOGIN_RETRY_AFTER_S = 30.0
-"""Nach einer abgelehnten Anmeldung so lange nicht erneut versuchen -- sonst meldet
-jede Kachel-Aktualisierung einen Fehlversuch, und Pi-hole sperrt irgendwann (429)."""
 
 
 class PiholeError(ServiceError):
@@ -96,6 +80,9 @@ def parse_blocking(body: Any) -> dict[str, Any]:
 
 
 class PiholeClient:
+    """Pi-hole hat nur wenige API-Plätze (`webserver.api.max_sessions`): darum eine zwischengespeicherte Sitzung je
+    Pi-hole statt einer Anmeldung pro Aufruf, und Abmelden beim Stoppen."""
+
     def __init__(
         self,
         http: HttpLike,
@@ -135,6 +122,7 @@ class PiholeClient:
         )
 
     async def _looks_like_v5(self) -> bool:
+        # Pi-hole v5 (`/admin/api.php`) wird nicht unterstützt, nur erkannt.
         try:
             response = await self._send("GET", "/admin/api.php?version")
         except PiholeError:
@@ -154,6 +142,8 @@ class PiholeClient:
         self._login_error = self._login_failed_at = None
 
     async def _do_login(self) -> None:
+        # Das Passwort kommt nur bei der Anmeldung aus dem Tresor: jeder Zugriff schreibt eine Audit-Zeile, und die
+        # Kacheln fragen jede Minute. Ein App-Passwort geht an derselben Stelle wie das normale.
         password = await self._password()
         response = await self._send("POST", "/api/auth", json={"password": password or ""})
         body = json_body(response)
@@ -184,7 +174,7 @@ class PiholeClient:
         if not isinstance(session, dict) or not session.get("valid"):
             raise PiholeAuthError("Pi-hole hat die Anmeldung nicht bestätigt. Bei Zwei-Faktor-Anmeldung bitte ein App-Passwort verwenden.")
         sid = session.get("sid")
-        self._sid = str(sid) if sid else None  # ohne Passwort am Pi-hole: keine Sitzung noetig
+        self._sid = str(sid) if sid else None  # ohne Passwort am Pi-hole ist keine Sitzung nötig
         self._authed = True
 
     async def _session(self) -> str | None:
@@ -196,10 +186,11 @@ class PiholeClient:
     async def _api(self, method: str, path: str, *, json: Any = None) -> Any:
         sid = await self._session()
         response = await self._send(method, path, sid=sid, json=json)
+        # Jede Anfrage trägt die Sitzung im Header `X-FTL-SID` und verlängert sie; läuft sie trotzdem ab, kommt 401.
         if response.status_code == 401:
             async with self._lock:
                 if self._authed and self._sid == sid:
-                    # Sitzung abgelaufen -- niemand hat inzwischen neu angemeldet.
+                    # Sitzung abgelaufen, und niemand hat inzwischen neu angemeldet.
                     self._authed, self._sid = False, None
                 if not self._authed:
                     await self._login()

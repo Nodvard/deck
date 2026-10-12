@@ -1,11 +1,6 @@
-"""Audit-Log-Kern: Zeilen schreiben, NDJSON-Zeilen serialisieren
-(docs/03-DATA-MODEL.md §4).
+"""Audit-Log-Kern: Zeilen schreiben und als NDJSON serialisieren.
 
-Reine Bausteine ohne Filter-/Retentionslogik -- das liegt in `services/audit.py`,
-analog zum security/vault-Schnitt aus WP-1: hier nur das, was JEDER Aufrufer (auch
-`core.vault.vault_use`, das denselben Layer nicht hoeher importieren soll) direkt
-braucht.
-"""
+Filter und Aufbewahrung liegen in `services/audit.py`; hier steht nur, was jeder Aufrufer braucht (auch `core.vault`)."""
 
 from __future__ import annotations
 
@@ -19,11 +14,10 @@ from .action_output import hide_audit_detail
 
 VALID_OUTCOMES = frozenset({"success", "failure", "denied", "proposed"})
 
-# Laengen der Textspalten mit fester Laenge in `models.security.AuditEntry`; SQLite prueft sie
-# nicht, ohne Kuerzung liesse sich das Protokoll ueber lange Eingaben (z. B. ein Benutzername
-# beim Login ohne Anmeldung) beliebig aufblaehen. `reason` ist bewusst nicht dabei: die Spalte
-# hat keine Grenze, und Begruendungen (z. B. beim Freigeben oder Ablehnen einer Aktion) sollen
-# vollstaendig bleiben. Beim Login stehen dort nur feste Saetze, nie getippter Text.
+# Längen der Textspalten mit fester Länge in `models.security.AuditEntry`. SQLite prüft sie nicht; ohne Kürzung ließe
+# sich das Protokoll über lange Eingaben (z. B. ein Benutzername beim Login ohne Anmeldung) aufblähen. `reason` fehlt
+# bewusst: Die Spalte hat keine Grenze, Begründungen sollen vollständig bleiben (beim Login stehen dort nur feste
+# Sätze).
 _MAX_LEN = {
     "actor_type": 16,
     "actor_id": 128,
@@ -57,9 +51,8 @@ async def write_entry(
     ip: str | None = None,
     user_agent: str | None = None,
 ) -> AuditEntry:
-    """Die EINZIGE Stelle, die eine `AuditEntry`-Zeile anlegt -- append-only, kein
-    UPDATE/DELETE hier (docs/03 §4). `services.audit.purge_expired()` ist die
-    dokumentierte Ausnahme fuer DELETE (der Retention-Job)."""
+    """Die einzige Stelle, die eine `AuditEntry`-Zeile anlegt: append-only, kein UPDATE oder DELETE
+    (Ausnahme ist die Aufbewahrung in `services.audit.purge_expired()`)."""
     if outcome not in VALID_OUTCOMES:
         raise ValueError(f"Ungültiger outcome '{outcome}' (erlaubt: {sorted(VALID_OUTCOMES)})")
 
@@ -82,7 +75,7 @@ async def write_entry(
 
 
 def to_ndjson_line(entry: AuditEntry, *, hide_output: bool = False) -> str:
-    """`hide_output=True` laesst Server-Ausgabe in den Details weg (siehe `action_output`)."""
+    """`hide_output=True` lässt Server-Ausgabe in den Details weg (siehe `action_output`)."""
     detail = hide_audit_detail(entry.action, entry.detail)[0] if hide_output else entry.detail
     row = {
         "id": entry.id,

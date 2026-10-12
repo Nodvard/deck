@@ -1,16 +1,6 @@
-"""Generalisiertes Anti-Flapping -- docs/03-DATA-MODEL.md §5.
-
-1:1 aus dem Vorgaengersystem uebernommen: `RESTART_HISTORY`/`MAX_RESTARTS`(=3)/
-`FLAP_WINDOW_SECONDS`(=900) -- dort nur fuer Docker-Restarts und nur im synchronen
-`execute_remote`-Pfad, den `check_and_restart()` nie tatsaechlich benutzt hat (die
-autonome KI-Remediation konnte das Limit also stillschweigend umgehen). Hier gilt es
-fuer JEDEN Aktionstyp und JEDEN Aufrufer, weil es im Kern-Gate sitzt -- also auch fuer
-die, die es bisher umgangen haben.
-
-Fingerprint statt Rohstring-Schluessel (der Bestand nutzte `host + "::" + cmd[:80]`):
-ein SHA-256 ueber (host, action_type, normalisierter Payload) erfasst auch
-strukturierte Payloads, nicht nur wortgleiche Shell-Kommandos.
-"""
+"""Anti-Flapping im Gate: Dieselbe Aktion (Fingerprint) darf im Zeitfenster nur begrenzt oft laufen, für jeden Aufrufer.
+Der Fingerprint ist ein SHA-256 über (Host, Aktionstyp, normalisierte Payload) und erfasst auch strukturierte Payloads,
+nicht nur wortgleiche Befehle."""
 
 from __future__ import annotations
 
@@ -38,10 +28,8 @@ def fingerprint(host_id: str | None, action_type: str, payload: dict[str, Any]) 
 async def check_and_record(
     session: AsyncSession, *, host_id: str | None, action_type: str, payload: dict[str, Any]
 ) -> tuple[str, bool]:
-    """Zaehlt bisherige, NICHT geblockte Versuche desselben Fingerprints im
-    Zeitfenster; ist das Limit erreicht, wird DIESER Versuch als `blocked=True`
-    aufgezeichnet (er zaehlt fuer sich selbst nicht als weiterer "erlaubter"
-    Versuch) und `True` zurueckgegeben. Gibt `(fingerprint, blocked)` zurueck."""
+    """Gibt `(fingerprint, blocked)` zurück. Gezählt werden nicht geblockte Versuche im Zeitfenster; ist das Limit
+    erreicht, wird dieser Versuch als `blocked` aufgezeichnet und zählt selbst nicht als erlaubter Versuch."""
     fp = fingerprint(host_id, action_type, payload)
     since = utcnow() - timedelta(seconds=WINDOW_SECONDS)
     result = await session.execute(

@@ -1,23 +1,5 @@
-"""Herkunft des laufenden Images: aus welchem Image (ohne Tag) es stammt und welche Version es ist.
-
-Das Release-Image (`.github/workflows/release.yml`) bekommt beim Bauen die Build-Argumente `IMAGE` (z. B.
-`ghcr.io/nodvard/deck`) und `VERSION` (z. B. `0.6.0` oder `0.6.0-rc1`). `deploy/Dockerfile` ruft damit
-`python -m nodvard_deck.image_info /app/image-info.json` auf und legt so die Datei `PATH` an
-(`{"image": ..., "version": ...}`, nur die Angaben, die nicht leer sind). Ein selbst gebautes Image ohne diese
-Build-Argumente (z. B. ueber `scripts/deploy_pi.sh`) hat keine Datei.
-
-Bewusst eine Datei im Image und keine Umgebungsvariable (`ENV` im Dockerfile): Docker uebernimmt die ENV eines
-Images in die Einstellungen jedes Containers. Wer einen Container mit dessen Einstellungen neu anlegt und dabei nur
-das Image tauscht (Portainer "Recreate", Update-Helfer, die die Konfiguration klonen), nimmt so die alte Version
-in den neuen Container mit; dort ueberdeckte sie die des neuen Images. Eine Datei im Image kommt dagegen immer aus
-dem Image, das gerade laeuft.
-
-Gelesen wird sie von `config.Settings` (Felder `image` und `build`): Eine ausdruecklich gesetzte, nicht leere
-Umgebungsvariable `NODVARD_DECK_IMAGE`/`NODVARD_DECK_BUILD` (Rueckfall `LATTICE_*`) geht vor, dann diese Datei,
-sonst gibt es keinen Wert. Fehlt die Datei oder ist sie kaputt, gilt sie als nicht da -- nie ein Fehler beim Start.
-
-Nur Standardbibliothek: Das Modul laeuft auch beim Bauen des Images.
-"""
+"""Herkunft des laufenden Images (Image ohne Tag und Version) aus einer Datei, die beim Bauen angelegt wird. Nur
+Standardbibliothek, weil das Modul auch beim Bauen des Images läuft."""
 
 from __future__ import annotations
 
@@ -27,8 +9,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+# Bewusst eine Datei im Image und keine Umgebungsvariable (`ENV` im Dockerfile): Docker übernimmt die ENV eines Images in die
+# Einstellungen jedes Containers. Wer einen Container mit dessen Einstellungen neu anlegt und nur das Image tauscht (Portainer
+# "Recreate", Update-Helfer, die die Konfiguration klonen), nähme sonst die alte Version mit, und sie überdeckte die des neuen
+# Images. Eine Datei im Image kommt immer aus dem Image, das gerade läuft.
 PATH = Path("/app/image-info.json")
-"""Ort der Datei im Image (`deploy/Dockerfile`). Ueberschreibbar mit `NODVARD_DECK_IMAGE_INFO_PATH`, nur fuer Tests."""
+"""Ort der Datei im Image (`{"image": ..., "version": ...}`, `deploy/Dockerfile`). Ein selbst gebautes Image ohne die
+Build-Argumente hat keine. Überschreibbar mit `NODVARD_DECK_IMAGE_INFO_PATH`, nur für Tests."""
 
 FIELDS = ("image", "version")
 MAX_BYTES = 4096
@@ -46,7 +33,8 @@ def clean(value: Any) -> str | None:
 
 
 def read(path: Path | str = PATH) -> dict[str, str]:
-    """Inhalt der Datei (nur gueltige Angaben aus `FIELDS`) oder `{}`: fehlt, zu gross, kein JSON, kein Objekt."""
+    """Inhalt der Datei (nur gültige Angaben aus `FIELDS`) oder `{}` (fehlt, zu groß, kein JSON, kein Objekt): nie ein
+    Fehler beim Start. `config.Settings` liest sie hinter einer ausdrücklich gesetzten Umgebungsvariable."""
     try:
         with open(path, "rb") as fh:
             raw = fh.read(MAX_BYTES + 1)
@@ -73,8 +61,8 @@ def write(path: Path | str, *, image: str | None, version: str | None) -> bool:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Beim Bauen des Images: `python -m nodvard_deck.image_info [PFAD]`, mit `IMAGE` und `VERSION` aus der
-    Umgebung (die Build-Argumente). Eine gesetzte, aber unbrauchbare Angabe bricht den Build ab."""
+    """Beim Bauen des Images: `python -m nodvard_deck.image_info [PFAD]`, mit `IMAGE` (z. B. `ghcr.io/nodvard/deck`) und
+    `VERSION` (z. B. `0.6.0-rc1`) aus den Build-Argumenten. Eine gesetzte, aber unbrauchbare Angabe bricht den Build ab."""
     args = sys.argv[1:] if argv is None else argv
     path = Path(args[0]) if args else PATH
     given = {key: os.environ.get(key.upper(), "") for key in FIELDS}

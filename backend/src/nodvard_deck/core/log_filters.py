@@ -1,16 +1,5 @@
-"""Filter fuer das Zugriffsprotokoll von uvicorn (`uvicorn.access`).
-
-uvicorn schreibt zu jeder Anfrage eine Zeile mit der vollen Adresse. Das Einmal-Ticket fuer
-den Sicherungs-Download steht in der Adresse (`GET /api/v1/system/backups/download/{ticket}`,
-der Browser laedt ohne Anmelde-Header) -- und wer Container-Protokolle sammelt oder
-weitergibt, haette damit einen gueltigen Download-Link. Darum wird das Ticket hier durch
-`…` ersetzt, bevor die Zeile geschrieben wird. Der Filter haengt am Logger selbst, gilt also
-fuer jeden Handler, auch fuer eine eigene Logging-Konfiguration des Betreibers.
-
-Der Stand eines Downloads wird ueber eine eigene ID abgefragt (nicht das Ticket, siehe
-`core/backup/tickets.py`); der Filter deckt zusaetzlich den einen echten Download-Aufruf und
-die alte Status-Adresse mit dem Ticket ab.
-"""
+"""Filter für das Zugriffsprotokoll von uvicorn (`uvicorn.access`): Das Ticket des Sicherungs-Downloads wird aus der Adresse
+entfernt."""
 
 from __future__ import annotations
 
@@ -20,8 +9,11 @@ import re
 ACCESS_LOGGER = "uvicorn.access"
 REDACTED = "…"
 
-# Praefix-unabhaengig (`/api/v1` koennte hinter einem Proxy anders heissen). Gekuerzt wird
-# nur der Teil nach `download/`; ein folgendes `/status` bleibt stehen, eine Query entfaellt.
+# Das Einmal-Ticket steht in der Adresse (`GET /api/v1/system/backups/download/{ticket}`, der Browser lädt ohne Anmelde-Header);
+# wer Container-Protokolle weitergibt, hätte damit einen gültigen Download-Link. Der Stand eines Downloads wird über eine
+# eigene ID abgefragt (`core/backup/tickets.py`); der Filter deckt den echten Download-Aufruf und die alte Status-Adresse ab.
+# Präfix-unabhängig (`/api/v1` kann hinter einem Proxy anders heißen). Gekürzt wird nur der Teil nach `download/`, ein
+# folgendes `/status` bleibt stehen, eine Query entfällt.
 _TICKET_PATH = re.compile(r"^(?P<head>[^?#]*/system/backups/download/)(?P<ticket>[^/?#]+)(?P<rest>/[^?#]*)?(?:[?#].*)?$")
 
 
@@ -34,7 +26,7 @@ def redact_path(path: str) -> str:
 
 
 class TicketRedactFilter(logging.Filter):
-    """Kuerzt Download-Tickets in Zeilen des Zugriffsprotokolls (Argumente wie bei uvicorn:
+    """Kürzt Download-Tickets in Zeilen des Zugriffsprotokolls (Argumente wie bei uvicorn:
     `(client, methode, adresse, http_version, status)`)."""
 
     def filter(self, record: logging.LogRecord) -> bool:
@@ -47,8 +39,8 @@ class TicketRedactFilter(logging.Filter):
 
 
 def install_access_log_filters() -> None:
-    """Idempotent. Aufruf beim Erzeugen der App und beim Start: uvicorn richtet sein Logging
-    vor dem Import der App ein, ein spaeter angehaengter Filter bleibt erhalten."""
+    """Idempotent; der Filter hängt am Logger selbst und gilt für jeden Handler, auch für eine eigene Logging-Konfiguration.
+    Aufruf beim Erzeugen der App und beim Start: uvicorn richtet sein Logging vor dem Import der App ein."""
     logger = logging.getLogger(ACCESS_LOGGER)
     if not any(isinstance(f, TicketRedactFilter) for f in logger.filters):
         logger.addFilter(TicketRedactFilter())

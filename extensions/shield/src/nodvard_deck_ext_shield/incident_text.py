@@ -1,19 +1,11 @@
-"""Texte fuer Container-Vorfaelle: aus dem Docker-Status wird ein verstaendlicher deutscher
-Titel OHNE relative Zeitangabe.
-
-`docker ps` liefert z. B. "Exited (137) 4 seconds ago". Die Zeitangabe stimmt nur in der
-Sekunde der Abfrage; im gespeicherten Titel stuende sie tagelang falsch da. Die Oberflaeche
-zeigt die Zeit ohnehin aus dem Zeitstempel des Vorfalls. Darum steht im Titel nur, was
-dauerhaft stimmt (Art des Ereignisses, Exit-Code).
-
-`clean_incident_message()` raeumt zusaetzlich die Titel bereits gespeicherter Vorfaelle beim
-Anzeigen auf (rein in der Ausgabe, die Datensaetze bleiben unveraendert).
-"""
+"""Titel und Erklärtexte für Container-Vorfälle, aus dem Docker-Status und ohne relative Zeitangabe."""
 
 from __future__ import annotations
 
 import re
 
+# `docker ps` liefert z. B. "Exited (137) 4 seconds ago". Die Zeitangabe stimmt nur in der Sekunde der Abfrage und
+# stünde im gespeicherten Titel tagelang falsch da; die Oberfläche zeigt die Zeit aus dem Zeitstempel des Vorfalls.
 _UNIT = r"(?:second|sec|minute|min|hour|hr|day|week|month|year)s?"
 # "4 seconds ago", "About an hour ago", "Less than a second ago", "2s ago", "3 days ago"
 _RELATIVE_AGO_RE = re.compile(
@@ -100,12 +92,12 @@ CAUSE_TEXTS: dict[str, dict[str, str]] = {
                 "Einstellung, ein falsches Passwort oder eine Datenbank, die nicht erreichbar ist.",
     },
 }
-"""Je Art der festen Einordnung (`remediation.Cause.key`) zwei feste Saetze: "Was heisst das?" und "Was kannst du tun?".
-Sie stimmen immer, auch ohne Nodvard KI. Nur hier stehen sie (eine englische Oberflaeche uebersetzt diese Sammlung)."""
+"""Je Art der festen Einordnung (`remediation.Cause.key`) zwei feste Sätze: "Was heißt das?" und "Was kannst du tun?".
+Sie stimmen auch ohne Nodvard KI; nur hier stehen sie (eine englische Oberfläche übersetzt diese Sammlung)."""
 
 
 def cause_texts(key: str) -> dict[str, str] | None:
-    """Die beiden Saetze zu einer Einordnung oder None (unbekannte Art)."""
+    """Die beiden Sätze zu einer Einordnung oder None (unbekannte Art)."""
     return CAUSE_TEXTS.get(f"shield.cause.{key}") if key else None
 
 
@@ -122,7 +114,7 @@ _OLD_STATE_BY_STATUS = (
 
 
 def clean_incident_message(message: str) -> str:
-    """Bringt einen gespeicherten (auch aelteren) Titel in die heutige Form, ohne relative Zeit."""
+    """Bringt einen gespeicherten Titel in die heutige Form ohne relative Zeit (nur in der Ausgabe)."""
     text = message or ""
     match = _OLD_TITLE_RE.match(text.strip())
     if match is None:

@@ -1,7 +1,4 @@
-"""Baut die konfigurierten `ProxmoxBackupConnector`-Instanzen frisch aus den
-aktuellen Einstellungen + Vault-Secrets -- wie
-`nodvard_deck_ext_proxmox.config.build_connectors()`, unabhaengig dupliziert (siehe
-connector.py-Docstring: backups haelt bewusst eine eigene Proxmox-Verbindung)."""
+"""Baut die `ProxmoxBackupConnector`-Instanzen frisch aus den Einstellungen und den Tresor-Geheimnissen."""
 
 from __future__ import annotations
 
@@ -20,7 +17,7 @@ def _token_label(name: str) -> str:
 
 
 def foreign_secret_text(label: str) -> str:
-    """Satz fuer ein Geheimnis unter dem Label einer Verbindung, das nicht von dieser Erweiterung stammt."""
+    """Satz für ein Geheimnis unter dem Label einer Verbindung, das nicht von dieser Erweiterung stammt."""
     return (
         f"Im Tresor liegt schon ein Geheimnis „{label}“, das nicht von Proxmox-Backups stammt (etwa von Hand angelegt). "
         "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst über "
@@ -34,9 +31,8 @@ async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxBackupCo
 
     result: dict[str, ProxmoxBackupConnector] = {}
     for conn in connections:
-        # Nachtrag (unabhaengiges Aktivieren/Deaktivieren, wie proxmox.config): eine
-        # Verbindung mit enabled=False gilt als nicht konfiguriert, behaelt aber ihr
-        # Token-Secret. Fehlendes Feld (aeltere Eintraege) = enabled=True.
+        # Eine Verbindung mit enabled=False gilt als nicht konfiguriert, behält aber ihr Token-Geheimnis.
+        # Fehlt das Feld (ältere Einträge), gilt enabled=True.
         if conn.get("enabled") is False:
             continue
         name = conn.get("name")
@@ -55,7 +51,7 @@ async def build_connectors(ctx: "ExtensionContext") -> dict[str, ProxmoxBackupCo
                 token_id=str(token_id),
                 token_secret=token_secret,
                 tls_insecure_skip_verify=bool(conn.get("tls_insecure_skip_verify") or False),
-                # Roh weiter: der Connector prueft ihn, ein ungueltiger sperrt die Verbindung (nie "nicht pruefen").
+                # Roh weiter: der Connector prüft ihn, ein ungültiger sperrt die Verbindung (nie „nicht prüfen“).
                 tls_fingerprint_sha256=conn.get("tls_fingerprint_sha256"),
             )
     return result

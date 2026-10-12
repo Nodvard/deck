@@ -1,47 +1,5 @@
-"""Start vor der Anwendung: `python -m nodvard_deck.boot` (ruft `deploy/entrypoint.sh` auf, nach dem
-Wechsel zum Dienstbenutzer, VOR `uvicorn`).
-
-Ablauf (jeder Schritt eine eigene Funktion; Zustand und Sperre in `core/bootstate.py`):
-
-0. **Sperre** (`<Datenordner>/.boot/app.lock`): haelt die laufende Anwendung sie (z. B. bei einem `compose run`
-   ohne `--entrypoint` neben dem laufenden Container), beendet sich `boot` mit Code 75 und aendert NICHTS.
-1. **Unvollendeten Rueckweg zu Ende fuehren** (`premigrate.finish_revert`): ein Absturz mitten im Zuruecksetzen
-   auf eine Kopie darf nie einen halben Stand hinterlassen.
-2. **Unterbrochenes Einspielen zurueckrollen** und 3. **vorgemerkte Wiederherstellung einspielen**
-   (`core/backup/restore.py`).
-4. **Migrationsstand pruefen** (`decide`): Datenbank-Revisionen gegen die Koepfe dieses Images.
-   * Alles bekannt und schon aktuell: weiter.
-   * Aelter, aber bekannt: **Kopie** der Datenbank nach `data/backups/vor-update/` (Platz >= 1,2 x Datenbank,
-     drei bleiben, `integrity_check`), **ohne Kopie keine Migration** (Notausgang
-     `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1`), dann `alembic upgrade`. Scheitert sie, geht die Datenbank
-     auf die Kopie zurueck (der Zustand steht vorher als `running` in `state.json`: stirbt der Prozess mitten
-     drin, macht der naechste Start dasselbe).
-   * **Unbekannt** (die Daten sind neuer als dieses Image -- man hat auf eine aeltere Version zurueckgestellt):
-     Die Kopie von vor dem Update kommt nur unter ALLEN drei Bedingungen automatisch zurueck:
-     (1) `state.json` sagt, die letzte Migration lief von MEINEN Staenden (bekannte Revisionen) aus und hat
-     genau den jetzigen Stand erzeugt, (2) die Kopie existiert, ist heil und hat genau diese Staende,
-     (3) die neue Version ist nach der Migration NIE erfolgreich gestartet (`started_ok=false`) -- es
-     gingen also keine Nutzerdaten verloren. Oder eine ausdrueckliche, noch gueltige Rueckweg-Vormerkung
-     (`rollback.json`, von der Notseite) liegt vor: dann kommt sie auch nach einem guten Start zurueck. In beiden
-     Faellen bleiben die neueren Daten 30 Tage unter `restore/replaced-...` liegen (nur umbenannt, nie geloescht).
-     In allen anderen Faellen: Notseite ("Die Daten stammen von Version X, bitte wieder auf X").
-5. Eine gescheiterte Migration direkt nach einem Einspielen nimmt das Einspielen zurueck (der alte Stand ist
-   dann wieder da und wird wie gewohnt migriert). Bis das Einspielen endgueltig ist, steht der Migrationsstand der
-   ALTEN Datenbank als `pre_restore` in `state.json`: Wird das Einspielen zurueckgenommen -- hier oder nach einem
-   Absturz mitten in der Migration der Sicherung beim naechsten Start --, gilt wieder er, und ein Rueckweg-Journal
-   der Sicherung wird verworfen. Nie ersetzt eine Kopie der Sicherung die zurueckgeholte alte Datenbank.
-
-**Rueckgabe:** 0 = weiter mit der Anwendung. 75 = die Sperre gehoert einem anderen Prozess (nichts geaendert,
-KEINE Notseite). Alles andere (1) = Notseite statt Anwendung: der Grund steht, bereinigt, in `state.json`
-(`failure`), `deploy/entrypoint.sh` startet dann `nodvard_deck.rescue`. Auch ein unerwarteter Fehler wird so
-behandelt statt als Absturz mit Neustart-Schleife. Ein Importfehler beim Laden dieses Moduls selbst
-(fehlende Abhaengigkeit im Image) kommt nicht hierher -- die Notseite zeigt dann ohne Einzelheiten, dass der
-Start abgebrochen ist; das Protokoll des Containers hat die Fehlermeldung.
-
-Eine gescheiterte Wiederherstellung ist KEIN Grund, nicht zu starten (der alte Stand ist ja zurueck,
-`restore/result.json` und das Protokoll der Anwendung sagen warum); nur wenn der Rueckweg selbst scheitert
-oder ein Journal unlesbar ist, gibt es die Notseite (`rollback_failed`).
-"""
+"""Start vor der Anwendung (`python -m nodvard_deck.boot`, aus `deploy/entrypoint.sh`): bringt die Datenbank auf den Stand
+dieses Images oder hält den Grund für die Notseite fest."""
 
 from __future__ import annotations
 
@@ -72,7 +30,7 @@ LOCK_WAIT_S = 10.0
 """So lange wartet `boot` auf eine belegte Sperre (z. B. ein Container, der gerade endet), dann Code 75."""
 
 _LOG: deque[str] = deque(maxlen=400)
-"""Die Zeilen dieses Starts (eigene Meldungen, Ausgabe der Migration, Traceback) -- Grundlage des Fehlerprotokolls."""
+"""Die Zeilen dieses Starts (eigene Meldungen, Ausgabe der Migration, Traceback) als Grundlage des Fehlerprotokolls."""
 
 
 def _say(text: str) -> None:
@@ -81,7 +39,7 @@ def _say(text: str) -> None:
 
 
 class BootFailure(Exception):
-    """Der Start kann nicht weitergehen -> Notseite. `kind` aus `bootstate.FAILURE_KINDS`, `reason` ist ein
+    """Der Start kann nicht weitergehen, es kommt die Notseite. `kind` aus `bootstate.FAILURE_KINDS`, `reason` ist ein
     ganzer deutscher Satz ohne Pfade."""
 
     def __init__(
@@ -95,16 +53,10 @@ class BootFailure(Exception):
         self.free_bytes = free_bytes
 
 
-# ---------------------------------------------------------------------------
-# Schritt 2 und 3: Wiederherstellung
-# ---------------------------------------------------------------------------
-
-
 def _settle_pre_restore(data_dir, layout: restore.Layout) -> None:
-    """Ueber eine eingespielte Sicherung ist entschieden (endgueltig oder zurueckgenommen). Wurde sie zurueckgenommen --
-    auch von `recover_interrupted` nach einem Absturz mitten in ihrer Migration --, gilt wieder der Stand der ALTEN
-    Datenbank (`pre_restore`). Sonst hielte `decide` den Eintrag `running` der Sicherung fuer den der alten Datenbank
-    und setzte die Kopie der Sicherung ein: die alte Datenbank waere weg."""
+    """Wurde eine eingespielte Sicherung zurückgenommen, gilt wieder der Migrationsstand der alten Datenbank (`pre_restore`)."""
+    # Sonst hielte `decide` den Eintrag `running` der Sicherung für den der alten Datenbank und setzte die Kopie der
+    # Sicherung ein: die alte Datenbank wäre weg.
     pre = bootstate.read_state(data_dir).get("pre_restore")
     if pre is None or os.path.lexists(layout.restore_dir / restore.JOURNAL_NAME):
         return  # noch nicht entschieden
@@ -116,7 +68,7 @@ def _settle_pre_restore(data_dir, layout: restore.Layout) -> None:
 
 
 def restore_step(settings: Settings) -> restore.Applied | None:
-    """Gibt das noch nicht endgueltige Einspielen zurueck (oder `None`)."""
+    """Spielt eine vorgemerkte Sicherung ein und gibt das noch nicht endgültige Einspielen zurück (oder `None`)."""
     try:
         layout = restore.Layout.from_settings(settings)
     except Exception:  # noqa: BLE001 - keine SQLite-Datenbank: es gibt nichts einzuspielen
@@ -135,13 +87,14 @@ def restore_step(settings: Settings) -> restore.Applied | None:
         logger.exception("boot_known_revisions_failed")
         known = None
     if known is None:
-        # Ohne die Liste bekannter Staende koennte eine fremde Datenbank durchrutschen.
+        # Ohne die Liste bekannter Stände könnte eine fremde Datenbank durchrutschen.
         restore.clear_pending(layout)
         restore.finish_failed(layout, None, "Die Migrationen dieser Installation sind nicht lesbar; es wurde nichts eingespielt.")
         return None
     try:
         applied = restore.apply_pending(layout, known=known, current_version=__version__)
     except restore.RestoreFailed as exc:
+        # Kein Grund, nicht zu starten: der alte Stand ist ja zurück, `restore/result.json` und das Protokoll sagen warum.
         _say(f"Wiederherstellung nicht eingespielt: {exc}")
         return None
     if applied is not None:
@@ -149,17 +102,12 @@ def restore_step(settings: Settings) -> restore.Applied | None:
     return applied
 
 
-# ---------------------------------------------------------------------------
-# Schritt 4: Was ist mit der Datenbank zu tun?
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class Plan:
     action: str
     """`noop` (schon aktuell), `migrate`, `revert` (Kopie wiederherstellen) oder `refuse` (Notseite)."""
     copy: bool = False
-    """`migrate`: vorher eine Kopie anlegen (es gibt Daten, die schuetzenswert sind)."""
+    """`migrate`: vorher eine Kopie anlegen (es gibt Daten, die schützenswert sind)."""
     copy_name: str | None = None
     keep_discarded: bool = False
     set_aside: bool = False
@@ -174,16 +122,14 @@ def decide(
     live: premigrate.LiveDb, known: set[str], script_heads: set[str], state: dict,
     *, copy_heads: Callable[[str], list[str] | None], rollback: dict | None,
 ) -> Plan:
-    """Was tun mit dieser Datenbank? Reine Entscheidung (die Platte fragt nur `copy_heads`:
-    die Staende einer Kopie, `None` wenn sie fehlt oder kaputt ist)."""
+    """Was tun mit dieser Datenbank? Reine Entscheidung; die Platte fragt nur `copy_heads` (Stände einer Kopie, `None`
+    wenn sie fehlt oder kaputt ist)."""
     migration = state.get("last_migration") or {}
     from_heads = migration.get("from_heads") or []
     copy = migration.get("copy")
 
-    # Eine Migration, die mittendrin gestorben ist: die Datenbank kann halb migriert sein. Es lief seitdem keine
-    # Anwendung, also gingen keine Daten verloren -- zurueck auf die Kopie, dann sauber neu versuchen. Der halbe Stand
-    # wird trotzdem beiseitegelegt (Sicherheitsnetz, falls der Eintrag doch nicht zu dieser Datenbank gehoert), wenn dafuer
-    # Platz ist (`_revert`).
+    # Migration mittendrin gestorben: Die Datenbank kann halb migriert sein, es lief seitdem keine Anwendung, also gingen
+    # keine Daten verloren. Zurück auf die Kopie und neu versuchen; der halbe Stand wird beiseitegelegt (`_revert`).
     if migration.get("state") == "running" and copy:
         heads = copy_heads(copy)
         if heads is not None and heads == sorted(from_heads) and all(h in known for h in heads):
@@ -195,10 +141,9 @@ def decide(
         )
 
     unknown = [h for h in live.heads if h not in known]
-    # Die allererste Migration einer neuen Installation ist abgebrochen oder gescheitert: Vorher gab es nichts zu schuetzen
-    # (`had_data` false), die Anwendung lief seitdem nie, und es gibt kein Konto. SQLite legt Tabellen sofort an,
-    # `alembic_version` kommt erst am Ende der Revision -- ein neuer Versuch auf dem halben Stand scheiterte jedes Mal an
-    # "table already exists". Der halbe Stand wird beiseitegelegt (nicht geloescht), dann frisch migriert.
+    # Allererste Migration einer neuen Installation abgebrochen: nichts zu schützen, die Anwendung lief nie, es gibt kein
+    # Konto. SQLite legt Tabellen sofort an, `alembic_version` kommt erst am Ende der Revision; ein neuer Versuch auf dem
+    # halben Stand scheiterte an "table already exists". Darum beiseitelegen (nicht löschen) und frisch migrieren.
     if (migration.get("state") in ("running", "failed") and not copy and migration.get("had_data") is False
             and live.has_data and live.accounts is False and not unknown):
         return Plan("migrate", copy=False, set_aside=True)
@@ -209,7 +154,11 @@ def decide(
             return Plan("noop")
         return Plan("migrate", copy=True)
 
-    # Die Datenbank hat Staende, die dieses Image nicht kennt: sie ist neuer.
+    # Die Datenbank hat Stände, die dieses Image nicht kennt: sie ist neuer. Die Kopie von vor dem Update kommt nur zurück,
+    # wenn (1) die letzte Migration von bekannten Ständen aus lief und genau den jetzigen Stand erzeugte, (2) die Kopie heil
+    # ist und genau diese Stände hat und (3) die neue Version nie erfolgreich gestartet ist (`started_ok` false), es also
+    # keine Nutzerdaten zu verlieren gibt. Oder eine ausdrückliche, noch gültige Vormerkung der Notseite (`rollback.json`)
+    # liegt vor; dann auch nach einem guten Start. Sonst Notseite.
     condition_one = bool(
         migration.get("state") == "ok" and from_heads and all(h in known for h in from_heads)
         and sorted(migration.get("to_heads") or []) == sorted(live.heads)
@@ -220,7 +169,7 @@ def decide(
     requested = bool(rollback and copy and rollback.get("copy") == copy)
     if condition_two:
         if never_started:
-            # `started_ok` wird nur nach bestem Bemuehen gesetzt: die neueren Daten deshalb nie loeschen, nur beiseitelegen.
+            # `started_ok` wird nur nach bestem Bemühen gesetzt: die neueren Daten deshalb nie löschen, nur beiseitelegen.
             return Plan("revert", copy_name=copy, reason="downgrade", keep_discarded=True)
         if requested:
             return Plan("revert", copy_name=copy, reason="rollback_requested", keep_discarded=True)
@@ -247,7 +196,7 @@ def decide(
 
 
 class _Tee(io.TextIOBase):
-    """Leitet Ausgabe weiter UND merkt sich die Zeilen (fuer das Fehlerprotokoll)."""
+    """Leitet Ausgabe weiter und merkt sich die Zeilen für das Fehlerprotokoll."""
 
     def __init__(self, target) -> None:
         self._target = target
@@ -295,10 +244,9 @@ def _revert(settings: Settings, layout: restore.Layout, plan: Plan) -> None:
     }
     keep = plan.keep_discarded
     if keep and plan.reason == "interrupted":
-        # Den halben Stand aufzuheben ist hier nur ein Sicherheitsnetz (seit dem Update lief keine Anwendung, es gibt nichts
-        # darin, was nicht in der Kopie ist). Liegt die Datenbank auf einem anderen Laufwerk und fehlt im Datenordner der Platz,
-        # sie dorthin zu kopieren, wird der halbe Stand wie frueher verworfen -- sonst endete jeder Start auf der Notseite, bis jemand
-        # von Hand Platz schafft. Neuere Daten (`downgrade`, `rollback_requested`) werden dagegen nie verworfen.
+        # Den halben Stand aufzuheben ist nur ein Sicherheitsnetz (seit dem Update lief keine Anwendung). Fehlt im
+        # Datenordner der Platz dafür (Datenbank auf anderem Laufwerk), wird er verworfen, sonst endete jeder Start auf der
+        # Notseite. Neuere Daten (`downgrade`, `rollback_requested`) werden nie verworfen.
         try:
             premigrate.check_room_to_set_aside(layout)
         except premigrate.NoSpaceToSetAside as exc:
@@ -334,11 +282,13 @@ def _revert(settings: Settings, layout: restore.Layout, plan: Plan) -> None:
 
 def _running_version(settings: Settings) -> str:
     """Die genaue Version dieses Containers (beim offiziellen Image auch eine Vorabversion wie `0.6.0-rc1`), sonst
-    `version.__version__`: so nennen Kopien, Startzustand und Notseite dieselbe Version wie "Nach Updates suchen"."""
+    `version.__version__`; Kopien, Startzustand und Notseite nennen so dieselbe wie die Update-Suche."""
     return updates.running_version(settings, __version__)
 
 
 def _copy_before_migration(settings: Settings, layout: restore.Layout, live: premigrate.LiveDb, script_heads: set[str], state: dict):
+    """Kopie der Datenbank nach `data/backups/vor-update/` (Platz mindestens 1,2 x Datenbank, drei bleiben, `integrity_check`).
+    Ohne Kopie keine Migration; Notausgang ist `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1`."""
     if settings.skip_pre_migrate_backup:
         _say("ACHTUNG: Die Kopie vor der Migration ist ausgeschaltet (NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP). Scheitert die Migration, gibt es keinen Rückweg.")
         return None
@@ -372,11 +322,14 @@ def _migrate(settings: Settings, layout: restore.Layout, live: premigrate.LiveDb
              "es wird frisch migriert …")
         live = premigrate.LiveDb(False, [], False)
     copy = _copy_before_migration(settings, layout, live, script_heads, state) if plan.copy else None
+    # `last_migration.at` und `started_ok` liest `scripts/deploy_pi.sh`: Hat das neue Image die Datenbank schon umgebaut und
+    # ist gestartet, rollt das Skript nicht aufs alte Image zurück, das die Daten ablehnen würde.
     migration = {
         "at": bootstate.now_iso(), "from_version": state.get("app_version"), "to_version": _running_version(settings), "from_heads": live.heads,
         "to_heads": sorted(script_heads), "copy": copy.name if copy else None, "state": "running", "had_data": live.has_data,
     }
-    # VOR der Migration festhalten: stirbt der Prozess mitten drin, weiss der naechste Start, was zu tun ist.
+    # Vor der Migration als `running` festhalten: Stirbt der Prozess mitten drin, setzt der nächste Start die Datenbank auf die
+    # Kopie zurück (`decide`).
     bootstate.update_state(data_dir, last_migration=migration, started_ok=False)
     try:
         _run_migration()
@@ -427,9 +380,9 @@ def _heads_of_copy(settings: Settings, name: str) -> list[str] | None:
 
 
 def ensure_current(settings: Settings, layout: restore.Layout) -> None:
-    """Schritt 4. Bringt die Datenbank auf die Staende dieses Images oder wirft `BootFailure`."""
+    """Bringt die Datenbank auf die Stände dieses Images oder wirft `BootFailure`."""
     data_dir = settings.data_dir
-    for _attempt in range(3):  # nach einem Rueckweg wird neu entschieden
+    for _attempt in range(3):  # nach einem Rückweg wird neu entschieden
         state = bootstate.read_state(data_dir)
         try:
             known, script_heads = migrate.known_revisions()
@@ -457,7 +410,7 @@ def ensure_current(settings: Settings, layout: restore.Layout) -> None:
         if plan.action == "migrate":
             _migrate(settings, layout, live, script_heads, state, plan)
             bootstate.clear_rollback(data_dir)
-        else:  # noop: schon aktuell. Das (leere) `upgrade` laeuft trotzdem, wie frueher.
+        else:  # noop: schon aktuell; das (leere) `upgrade` läuft trotzdem als Prüfung
             try:
                 _run_migration()
             except Exception as exc:
@@ -471,14 +424,9 @@ def ensure_current(settings: Settings, layout: restore.Layout) -> None:
     raise BootFailure("unexpected", "Der Start kommt nicht zu einem Ergebnis (der Rückweg wurde mehrfach wiederholt).")
 
 
-# ---------------------------------------------------------------------------
-# Gesamtablauf
-# ---------------------------------------------------------------------------
-
-
 def _record_failure(settings: Settings, exc: BootFailure) -> None:
-    """Grund und die letzten 50 Zeilen, bereinigt, nach `state.json` -- fuer die Notseite. Ein Fehler hierbei
-    verdeckt nie den eigentlichen Fehler."""
+    """Schreibt Grund und die letzten 50 Zeilen, bereinigt, für die Notseite nach `state.json`; ein Fehler hierbei verdeckt
+    nie den eigentlichen."""
     data_dir = settings.data_dir
     try:
         state = bootstate.read_state(data_dir)
@@ -502,6 +450,7 @@ def _record_failure(settings: Settings, exc: BootFailure) -> None:
 
 
 def _boot(settings: Settings) -> None:
+    """Rückweg zu Ende führen, unterbrochenes und vorgemerktes Einspielen, dann den Migrationsstand prüfen."""
     data_dir = settings.data_dir
     try:
         layout = restore.Layout.from_settings(settings)
@@ -509,7 +458,7 @@ def _boot(settings: Settings) -> None:
         layout = None
 
     if layout is None:
-        # Keine Kopie moeglich: wie frueher migrieren, nur dass ein Fehler zur Notseite fuehrt.
+        # Keine Kopie möglich: nur migrieren, ein Fehler führt zur Notseite.
         _say("Die Datenbank ist keine SQLite-Datei: Es gibt keine Kopie vor der Migration. Bitte vorher selbst sichern.")
         try:
             _run_migration()
@@ -520,6 +469,7 @@ def _boot(settings: Settings) -> None:
             ) from exc
         return
 
+    # Ein Absturz mitten im Zurücksetzen auf eine Kopie darf nie einen halben Stand hinterlassen.
     try:
         premigrate.finish_revert(layout)
     except premigrate.RevertFailed as exc:
@@ -533,9 +483,9 @@ def _boot(settings: Settings) -> None:
         raise BootFailure("rollback_failed", str(exc)) from exc
     pre: dict = {}
     if applied is not None:
-        # Der Eintrag ueber die letzte Migration (und `started_ok`) gehoerte zur ALTEN Datenbank. Er wird auf der Platte
-        # aufgehoben, nicht nur hier: stirbt der Prozess mitten in der Migration der Sicherung, nimmt der naechste Start
-        # das Einspielen zurueck und braucht ihn wieder (`_settle_pre_restore`).
+        # Die letzte Migration (und `started_ok`) gehörte zur alten Datenbank. Sie liegt auch auf der Platte: Stirbt der
+        # Prozess mitten in der Migration der Sicherung, nimmt der nächste Start das Einspielen zurück und braucht sie
+        # wieder (`_settle_pre_restore`).
         before = bootstate.read_state(data_dir)
         pre = {"id": applied.pending["id"], "last_migration": before.get("last_migration"), "started_ok": before.get("started_ok")}
         bootstate.update_state(data_dir, last_migration=None, pre_restore=pre)
@@ -546,8 +496,9 @@ def _boot(settings: Settings) -> None:
         if applied is None:
             raise
         _say(f"Die Migration der eingespielten Sicherung ist gescheitert ({exc.kind}). Der alte Stand kommt zurück.")
-        # ERST den Zustand der alten Datenbank zurueck, dann sie selbst: Ein Rueckweg-Journal, das hier noch steht, zeigt auf
-        # eine Kopie der Sicherung -- bliebe es stehen, ersetzte es beim naechsten Start die alte Datenbank durch diese Kopie.
+        # Eine gescheiterte Migration direkt nach dem Einspielen nimmt es zurück. Erst der Zustand der alten Datenbank, dann
+        # sie selbst: Ein noch stehendes Rückweg-Journal zeigt auf eine Kopie der Sicherung und ersetzte beim nächsten Start
+        # die alte Datenbank durch diese.
         bootstate.update_state(data_dir, last_migration=pre["last_migration"], started_ok=pre["started_ok"], revert=None)
         try:
             applied.rollback(
@@ -572,11 +523,16 @@ def _boot(settings: Settings) -> None:
         _say("Wiederherstellung abgeschlossen.")
 
 
+# Ein Importfehler beim Laden dieses Moduls (fehlende Abhängigkeit im Image) kommt nicht bis hierher; die Notseite zeigt
+# dann ohne Einzelheiten, dass der Start abgebrochen ist, und das Protokoll des Containers hat die Meldung.
 def main(argv: Sequence[str] | None = None) -> int:
+    """Rückgabe: 0 weiter mit der Anwendung, 75 die Sperre gehört einem anderen Prozess (nichts geändert, keine Notseite),
+    1 Notseite statt Anwendung; auch ein unerwarteter Fehler endet so statt in einer Neustart-Schleife."""
     settings = get_settings()
     settings.ensure_data_dir()
     data_dir = settings.data_dir
 
+    # Hält die laufende Anwendung die Sperre (z. B. ein `compose run` neben dem laufenden Container), ändert `boot` nichts.
     try:
         lock = bootstate.acquire_lock(data_dir, purpose="boot", wait_s=LOCK_WAIT_S)
     except bootstate.LockHeld:
@@ -589,6 +545,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         try:
             _boot(settings)
         except BootFailure as exc:
+            # Der Grund steht bereinigt in `state.json` (`failure`); `deploy/entrypoint.sh` startet dann die Notseite.
             _say(f"FEHLER ({exc.kind}): {exc.reason}")
             _record_failure(settings, exc)
             return EXIT_FAILED
@@ -599,7 +556,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _say(f"FEHLER (unexpected): {failure.reason}")
             _record_failure(settings, failure)
             return EXIT_FAILED
-        # Geschafft: ein frueherer Fehler ist erledigt, der Notfallcode wird nicht mehr gebraucht.
+        # Geschafft: Ein vorheriger Fehler ist erledigt, der Notfallcode wird nicht mehr gebraucht.
         with contextlib.suppress(Exception):
             bootstate.update_state(data_dir, app_version=_running_version(settings), failure=None)
             bootstate.clear_rescue_code(data_dir)
@@ -609,6 +566,6 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    # Auch ohne den Entrypoint (`compose exec` erbt dessen umask nicht): neue Dateien nur fuer den Besitzer.
+    # Auch ohne den Entrypoint (`compose exec` erbt dessen umask nicht): neue Dateien nur für den Besitzer.
     os.umask(0o077)
     sys.exit(main())

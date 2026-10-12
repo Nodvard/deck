@@ -1,21 +1,6 @@
-"""Pruefung nach der Aktion: Laeuft ein Container nach dem Starten wirklich -- und bleibt er laufen?
+"""Prüfung nach dem Starten von Containern: laufen sie wirklich, und bleiben sie laufen?
 
-Eine einzige Pruefung fuer alles, was Container startet: "Container starten" und "neu starten", "Stack neu starten"
-(`capabilities`) und das Image-Update samt automatischem Ruecksprung (`applier`). `docker start`/`restart` melden
-Erfolg, sobald der Prozess laeuft; ein Absturz Sekunden spaeter faellt so nicht auf. Deshalb liest `wait_settled` den
-Zustand mehrmals:
-
-- Ohne Healthcheck reicht ein einzelnes "running" nicht: ein Absturz-Kreislauf steht zwischen zwei Neustarts kurz auf
-  "running". Erst zwei Lesungen mindestens `stable_s` auseinander, ohne neuen Start dazwischen (`StartedAt`,
-  `RestartCount`), gelten als ruhiger Betrieb.
-- Mit Healthcheck entscheidet "healthy"/"unhealthy"; bleibt er bis zum Ende auf "starting", ist das ein Erfolg mit
-  Hinweis.
-- Beendet mit einem Fehler, bis zum Ende "ungesund" oder dauernd "restarting" ist ein Fehlschlag mit einem Satz, warum.
-  Beendet mit Exit-Code 0 ist kein Fehler (Container fuer einmalige Aufgaben), sondern ein Hinweis.
-- Nach "Container starten/neu starten" darf ein Container einmal neu starten (eine Abhaengigkeit war noch nicht
-  bereit); erst ein zweiter Neustart gilt als Absturz-Kreislauf. Das Image-Update bleibt strenger (`restarts_allowed=0`).
-
-Die Pruefung liest nur (`docker container inspect`), sie aendert nichts.
+Gemeinsam für Start, Neustart, Stack-Neustart (`capabilities`) und Image-Update samt Rücksprung (`applier`). Nur lesend.
 """
 
 from __future__ import annotations
@@ -34,7 +19,7 @@ if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
 CHECK_TIMEOUT_S = 60
-"""So lange wartet die Pruefung nach "Container starten/neu starten" hoechstens auf ein klares Bild."""
+"""So lange wartet die Prüfung nach "Container starten/neu starten" höchstens auf ein klares Bild."""
 CHECK_INTERVAL_S = 3
 CHECK_STABLE_S = 15
 CHECK_CALL_TIMEOUT_S = 20
@@ -46,16 +31,20 @@ LoopText = Callable[["ia.Snapshot", "ia.Snapshot"], str]
 ONE_RESTART_NOTE = " Dabei gab es einen Neustart (vielleicht war eine Abhängigkeit noch nicht bereit)."
 
 
+# `docker start`/`restart` melden Erfolg, sobald der Prozess läuft; ein Absturz Sekunden später fiele nicht auf. Deshalb
+# liest `wait_settled` den Zustand mehrmals:
+# - Ohne Healthcheck reicht ein einzelnes "running" nicht: ein Absturz-Kreislauf steht zwischen zwei Neustarts kurz
+#   auf "running". Ruhig heißt: zwei Lesungen mindestens `stable_s` auseinander, ohne neuen Start dazwischen
+#   (`StartedAt`, `RestartCount`).
+# - Mit Healthcheck entscheidet "healthy"/"unhealthy"; bleibt er bis zum Ende auf "starting", ist das ein Erfolg mit Hinweis.
 async def wait_settled(
     read: Read, judge: Judge, *, timeout_s: float, interval_s: float, stable_s: float,
     restarts_allowed: int = 0, loop_text: LoopText | None = None,
 ) -> tuple[ia.Verdict, ia.Snapshot | None]:
-    """Liest den Zustand, bis `judge` entschieden hat (oder die Zeit um ist). `judge(snap, final)` gibt `None` zurueck,
-    solange noch nicht klar ist, wie es ausgeht; mit `final=True` muss es entscheiden. Ein Lesefehler (kurzer Aussetzer)
-    zaehlt nicht; meldet sich der Host bis zum Ende nicht, ist der Zustand "nicht pruefbar".
+    """Liest den Zustand, bis `judge(snap, final)` entschieden hat; mit `final=True` (Zeit um) muss es entscheiden.
 
-    `restarts_allowed`: so viele neue Starts zwischen zwei ruhigen Lesungen werden hingenommen (die Beobachtung beginnt
-    dann neu), erst der naechste ist ein Absturz-Kreislauf. `loop_text(vorher, nachher)` sagt dann, welcher Container."""
+    Ein Lesefehler zählt nicht; meldet sich der Host bis zum Ende nicht, ist der Zustand "nicht prüfbar".
+    """
     deadline = time.monotonic() + timeout_s
     snap: ia.Snapshot | None = None
     first_ok: tuple[ia.Snapshot, float] | None = None
@@ -69,6 +58,8 @@ async def wait_settled(
         final = now >= deadline
         if snap is not None:
             if first_ok is not None and ia.restarted_since(first_ok[0], snap):
+                # So viele Neustarts werden hingenommen (`restarts_allowed`), erst der nächste ist ein Absturz-Kreislauf.
+                # Nach "Container starten/neu starten" ist einer erlaubt, das Image-Update ist strenger (0).
                 if restarts >= restarts_allowed or final:
                     text = loop_text(first_ok[0], snap) if loop_text else ia.CRASH_LOOP_TEXT
                     return ia.Verdict(False, text, crashed=True), snap
@@ -105,15 +96,16 @@ def cmd_stack_running(project: str) -> str:
     if not COMPOSE_PROJECT_RE.match(project):
         raise ValueError(f"Ungültiger Projektname: {project!r}")
     label = shlex.quote(f"label={ia.LABEL_PROJECT}={project}")
-    # Ohne `compose run`-Container: die fasst `compose restart` nicht an, sie gehoeren nicht zum Stack.
+    # Ohne `compose run`-Container: die fasst `compose restart` nicht an, sie gehören nicht zum Stack.
     oneoff = shlex.quote(f"label={ia.LABEL_ONEOFF}=False")
     return f"docker ps -q --no-trunc --filter {label} --filter {oneoff}"
 
 
 def judge_running(snap: ia.Snapshot, final: bool, *, expected: int) -> ia.Verdict | None:
-    """Laufen alle `expected` Container? `None`: noch nicht entschieden. Wie `ia.judge_verify`, nur ohne den Vergleich
-    der Images (es wurde ja nur gestartet). Ein Container, der sich mit Exit-Code 0 beendet hat, ist fertig, nicht kaputt
-    (einmalige Aufgaben wie Migrationen oder certbot); "ungesund" gilt erst zum Ende, ein Healthcheck kann sich erholen."""
+    """Laufen alle `expected` Container? `None`: noch nicht entschieden.
+
+    Wie `ia.judge_verify`, nur ohne den Vergleich der Images: es wurde ja nur gestartet.
+    """
     members = snap.members
 
     def who(m: ia.Member) -> str:
@@ -128,12 +120,14 @@ def judge_running(snap: ia.Snapshot, final: bool, *, expected: int) -> ia.Verdic
             return None
         return ia.Verdict(False, "Container nicht mehr vorhanden." if expected == 1 else
                           f"{expected - len(members)} von {expected} Containern nicht mehr vorhanden.", crashed=True)
-    done = [m for m in members if m.status == "exited"]  # mit Exit-Code 0 (siehe oben)
+    # Exit-Code 0 ist fertig, nicht kaputt: einmalige Aufgaben wie Migrationen oder certbot.
+    done = [m for m in members if m.status == "exited"]
     live = [m for m in members if m.status != "exited"]
     settled = all(m.status == "running" and m.health in (None, "healthy") for m in live)
     if not settled:
         if not final:
             return None
+        # "ungesund" gilt erst zum Ende, ein Healthcheck kann sich erholen.
         unhealthy = [m for m in live if m.health == "unhealthy"]
         if unhealthy:
             return ia.Verdict(False, f"{who(unhealthy[0])}Container meldet „ungesund“. Logs über den Knopf „Logs“.")
@@ -172,7 +166,7 @@ def _loop_text(before: ia.Snapshot, after: ia.Snapshot) -> str:
 async def check_running(
     ctx: ExtensionContext, host: Any, refs: list[str], *, timeout_s: float | None = None,
 ) -> tuple[ia.Verdict, ia.Snapshot | None]:
-    """Prueft nach einem Start, ob diese Container laufen und laufen bleiben."""
+    """Prüft nach einem Start, ob diese Container laufen und laufen bleiben."""
 
     async def read() -> ia.Snapshot:
         res = await ctx.exec.run(host, cmd_state(refs), timeout_s=CHECK_CALL_TIMEOUT_S)

@@ -1,11 +1,4 @@
-"""Backup-Job bearbeiten (Roadmap Punkt 1: "Backup-Jobs"): Zeitplan, aktiv, Speicher,
-Modus, Aufbewahrung -- ueber das Gate.
-
-WHITELIST wie beim Gast-Editor der proxmox-Extension. Geschrieben wird mit dem `digest`
-des gerade gelesenen Jobs. Weniger Aufbewahrung oder Abschalten ist HOHES Risiko:
-Proxmox loescht beim naechsten Lauf alles ueber der neuen Grenze -- das laesst sich
-nicht zuruecknehmen.
-"""
+"""Backup-Jobs bearbeiten (Zeitplan, aktiv, Speicher, Modus, Aufbewahrung) über das Gate, nur für feste Felder."""
 
 from __future__ import annotations
 
@@ -13,8 +6,8 @@ import re
 from typing import Any
 
 KEEPS = ("keep-last", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly")
-# Alle Regeln, die Proxmox kennt, in dessen Reihenfolge. keep-hourly und keep-all sind in
-# Nodvard Deck nicht editierbar -- sie duerfen beim Schreiben aber auch nicht verschwinden.
+# Alle Regeln, die Proxmox kennt, in dessen Reihenfolge. keep-hourly und keep-all sind in Nodvard Deck nicht
+# editierbar, dürfen beim Schreiben aber nicht verschwinden.
 _ALL_KEEPS = ("keep-all", "keep-last", "keep-hourly", "keep-daily", "keep-weekly", "keep-monthly", "keep-yearly")
 FIELDS = ("schedule", "enabled", "storage", "mode", *KEEPS)
 LABEL = {
@@ -23,19 +16,19 @@ LABEL = {
     "keep-monthly": "Monatliche", "keep-yearly": "Jährliche",
 }
 MODES = ("snapshot", "suspend", "stop")
+# Zeitplan und Speichername gehen als Parameter an Proxmox: kurz und nur mit harmlosen Zeichen.
 _SCHEDULE_RE = re.compile(r"^[A-Za-z0-9 ,:*/.\-]{1,64}$")
 _STORAGE_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.\-]{0,63}$")
 
 
 class JobEditError(ValueError):
-    """Ungueltige Aenderung -- die Meldung geht so an den Nutzer."""
+    """Ungültige Änderung; die Meldung geht so an den Nutzer."""
 
 
 def parse_prune(value: Any) -> dict[str, int]:
-    """`prune-backups` -> {"keep-last": 3, "keep-weekly": 2}. Proxmox liefert ein Objekt
-    ({"keep-daily": "7"}, live gesehen, siehe inventory.retention_label), aeltere Wege
-    einen String ("keep-last=3,keep-weekly=2") -- beides lesen, sonst sieht das
-    Formular ueberall 0 und das Speichern loescht die Regeln still."""
+    """`prune-backups` -> {"keep-last": 3, "keep-weekly": 2}; liest Objekt und String ("keep-last=3,keep-weekly=2")."""
+    # Proxmox liefert je nach Version ein Objekt ({"keep-daily": "7"}, siehe inventory.retention_label) oder einen
+    # String. Beides lesen, sonst sieht das Formular überall 0 und Speichern löscht die Regeln still.
     if isinstance(value, dict):
         items = [(str(k), str(v).strip()) for k, v in value.items()]
     else:
@@ -58,21 +51,21 @@ def current_values(job: dict[str, Any]) -> dict[str, Any]:
         **{k: prune.get(k, 0) for k in KEEPS},
     }
     if prune.get("keep-all"):
-        values["keep-all"] = True  # nur Anzeige -- das Formular sperrt dann die Aufbewahrung
+        values["keep-all"] = True  # nur Anzeige; das Formular sperrt dann die Aufbewahrung
     return values
 
 
 def job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
-    """Der Stand eines Jobs, auf dem das Risiko einer Aenderung berechnet wurde (alle editierbaren
-    Werte plus die Aufbewahrungsregeln, die Nodvard Deck nicht anzeigt). Wird beim Vorschlag in
-    die Aktion geschrieben und bei der Ausfuehrung mit dem frisch gelesenen Job verglichen."""
+    """Der Stand eines Jobs, auf dem das Risiko einer Änderung berechnet wurde (editierbare Werte plus die
+    Aufbewahrungsregeln, die Nodvard Deck nicht anzeigt). Steht beim Vorschlag in der Aktion und wird bei der
+    Ausführung mit dem frisch gelesenen Job verglichen."""
     return {**{k: v for k, v in current_values(job).items() if k != "keep-all"}, "prune": parse_prune(job.get("prune-backups"))}
 
 
-# Einstellungen des Jobs, die ein manueller Lauf uebernimmt (nur einfache Werte, nie Nutzereingaben).
-# `remove` gehoert dazu: ein Job mit `remove=0` raeumt nie auf, der Nachlauf darf es dann auch nicht
-# (ohne den Schluessel gilt in Proxmox `remove=1`). `tmpdir` (wie `dumpdir`/`script`) nimmt Proxmox
-# nur von `root@pam` an, nie von einem API-Token -- mitgeschickt wuerde jeder Nachlauf abgelehnt.
+# Einstellungen des Jobs, die ein manueller Lauf übernimmt (nur einfache Werte, nie Nutzereingaben).
+# `remove` gehört dazu: ein Job mit `remove=0` räumt nie auf, der Nachlauf darf es dann auch nicht (ohne den
+# Schlüssel gilt in Proxmox `remove=1`). `tmpdir` (wie `dumpdir`/`script`) nimmt Proxmox nur von `root@pam` an,
+# nie von einem API-Token; mitgeschickt würde jeder Nachlauf abgelehnt.
 VZDUMP_JOB_KEYS = (
     "storage", "mode", "compress", "notes-template", "bwlimit", "ionice", "zstd", "pigz",
     "stopwait", "lockwait", "protected", "remove",
@@ -81,9 +74,9 @@ VZDUMP_RETENTION_KEYS = ("prune-backups", "maxfiles")
 
 
 def run_retention(job: dict[str, Any] | None) -> dict[str, str]:
-    """Aufbewahrung fuer einen manuellen Lauf: die des Jobs. Ohne eigene (oder nicht sicher
-    lesbare) Regel `keep-all=1` -- sonst raeumt Proxmox nach der Regel des Speichers auf und
-    loescht womoeglich Sicherungen, die der Job behalten haette."""
+    """Aufbewahrung für einen manuellen Lauf: die des Jobs, ohne eigene (oder nicht sicher lesbare) Regel `keep-all=1`.
+
+    Sonst räumt Proxmox nach der Regel des Speichers auf und löscht womöglich Sicherungen, die der Job behalten hätte."""
     job = job or {}
     prune = {k: v for k, v in parse_prune(job.get("prune-backups")).items() if v}
     if prune:
@@ -95,7 +88,7 @@ def run_retention(job: dict[str, Any] | None) -> dict[str, str]:
 
 
 def vzdump_options(job: dict[str, Any] | None) -> dict[str, Any]:
-    """Parameter fuer `POST /nodes/{node}/vzdump` aus einem (frisch gelesenen) Job."""
+    """Parameter für `POST /nodes/{node}/vzdump` aus einem (frisch gelesenen) Job."""
     options: dict[str, Any] = {}
     for key in VZDUMP_JOB_KEYS:
         value = (job or {}).get(key)
@@ -128,7 +121,7 @@ def retention_note(options: dict[str, Any]) -> str:
 
 
 def build_job_update(job: dict[str, Any], changes: Any) -> tuple[dict[str, Any], list[dict[str, Any]], bool]:
-    """-> (Parameter fuer PUT /cluster/backup/{id}, echte Aenderungen, destruktiv?)."""
+    """-> (Parameter für PUT /cluster/backup/{id}, echte Änderungen, destruktiv?)."""
     if not isinstance(changes, dict) or not changes:
         raise JobEditError("Keine Änderung angegeben.")
     unknown = sorted(set(changes) - set(FIELDS))
@@ -178,7 +171,7 @@ def build_job_update(job: dict[str, Any], changes: Any) -> tuple[dict[str, Any],
         else:
             params[key] = after[key]
     if any(d["key"] in KEEPS for d in diff):
-        # Nicht editierbare Regeln (keep-hourly) unveraendert mitschicken.
+        # Nicht editierbare Regeln (keep-hourly) unverändert mitschicken.
         merged = {**prune, **{k: after[k] for k in KEEPS}}
         keeps = ",".join(f"{k}={merged[k]}" for k in _ALL_KEEPS if merged.get(k))
         if keeps:
@@ -188,12 +181,13 @@ def build_job_update(job: dict[str, Any], changes: Any) -> tuple[dict[str, Any],
     if deletes:
         params["delete"] = ",".join(deletes)
     if job.get("digest"):
+        # Der Digest des gelesenen Jobs verhindert, dass eine zwischenzeitliche Änderung überschrieben wird.
         params["digest"] = job["digest"]
 
-    # Weniger aufbewahren loescht beim naechsten Lauf; "0" = keine eigene Regel mehr,
-    # dann greift die (unbekannte) Speicher-Regel -- ebenfalls als destruktiv werten.
-    # Umgekehrt genauso: ohne eigene Regel galt die des Speichers (oft "alle behalten"),
-    # eine neue eigene Regel kann also weniger behalten.
+    # Weniger aufbewahren oder abschalten ist hohes Risiko: Proxmox löscht beim nächsten Lauf alles über der
+    # neuen Grenze, nicht rückgängig zu machen. "0" heißt keine eigene Regel mehr, dann greift die unbekannte
+    # Speicher-Regel, ebenfalls destruktiv. Umgekehrt: ohne eigene Regel galt die des Speichers (oft "alle
+    # behalten"), eine neue eigene Regel kann also weniger behalten.
     had_rule = any(prune.get(k) for k in _ALL_KEEPS)
     destructive = (
         (before["enabled"] and not after["enabled"])
@@ -215,13 +209,14 @@ def describe(diff: list[dict[str, Any]]) -> str:
 
 
 def build_job_create(vmid: Any, values: Any) -> tuple[dict[str, Any], str]:
-    """Neuer Job fuer EINEN Gast (aus "Ohne Backup-Job"). Zeitplan und Speicher sind
-    Pflicht, der Rest wie beim Bearbeiten. -> (Parameter fuer POST /cluster/backup, Text)."""
+    """Neuer Job für einen Gast (aus "Ohne Backup-Job"); Zeitplan und Speicher sind Pflicht, der Rest wie beim
+    Bearbeiten. -> (Parameter für POST /cluster/backup, Text)."""
+    # Die VMID landet als Parameter bei Proxmox: nur eine kurze Zahl.
     if not re.fullmatch(r"\d{1,9}", str(vmid)):
         raise JobEditError("Ungültige VMID.")
     if not isinstance(values, dict) or not values.get("schedule") or not values.get("storage"):
         raise JobEditError("Zeitplan und Speicher angeben.")
-    # Gegen einen leeren "Job" pruefen -- so gelten exakt dieselben Regeln wie beim Bearbeiten.
+    # Gegen einen leeren "Job" prüfen, damit exakt dieselben Regeln wie beim Bearbeiten gelten.
     params, _diff, _destructive = build_job_update({"schedule": "", "storage": "", "enabled": 1, "mode": "snapshot"}, values)
     params["vmid"] = str(vmid)
     params.pop("delete", None)

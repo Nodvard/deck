@@ -1,11 +1,4 @@
-"""Taegliche Pruefung: laeuft ein Zertifikat im Nginx Proxy Manager in den naechsten
-14 Tagen ab (oder ist schon abgelaufen), gibt es eine Meldung -- hoechstens EINE je
-Zertifikat und Tag, auch wenn der Job manuell oder nach einem Neustart erneut laeuft.
-Der Stand liegt in `data_dir/cert-notified.json` (`{zertifikat-id: "JJJJ-MM-TT"}`).
-
-Normalerweise erneuert NPM Let's-Encrypt-Zertifikate selbst ~30 Tage vor Ablauf --
-eine Meldung hier heisst also meist, dass die Erneuerung klemmt.
-"""
+"""Tägliche Prüfung auf ablaufende Zertifikate im Nginx Proxy Manager, höchstens eine Meldung je Zertifikat und Tag."""
 
 from __future__ import annotations
 
@@ -23,6 +16,7 @@ if TYPE_CHECKING:
 
     from .service import NetworkService
 
+# {Zertifikat-ID: "JJJJ-MM-TT"}: so gibt es auch bei einem manuellen Lauf oder nach einem Neustart nur eine Meldung am Tag.
 STATE_FILE = "cert-notified.json"
 SCHEDULE = "20 7 * * *"
 PAGE_PATH = "/ext/network/network"
@@ -65,6 +59,8 @@ async def run_cert_watch(ctx: ExtensionContext, service: NetworkService, *, now:
             if expired
             else f"Das Zertifikat für {domains} läuft am {when} ab ({cert['days_text']})."
         )
+        # NPM erneuert Let's-Encrypt-Zertifikate normalerweise selbst ~30 Tage vor Ablauf: eine Meldung heißt meist,
+        # dass die Erneuerung klemmt.
         body += " Im Nginx Proxy Manager unter „SSL-Zertifikate“ erneuern, falls das nicht von selbst passiert."
         await ctx.notify.send(Notification(
             title=f"Zertifikat {'abgelaufen' if expired else 'läuft bald ab'}: {cert['name']}",
@@ -75,7 +71,7 @@ async def run_cert_watch(ctx: ExtensionContext, service: NetworkService, *, now:
         ))
         notified[key] = today
         sent += 1
-    # Erneuerte oder geloeschte Zertifikate vergessen.
+    # Erneuerte oder gelöschte Zertifikate vergessen.
     notified = {k: v for k, v in notified.items() if k in urgent_ids}
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(notified, indent=1, sort_keys=True), encoding="utf-8")
@@ -83,7 +79,7 @@ async def run_cert_watch(ctx: ExtensionContext, service: NetworkService, *, now:
 
 
 class CertWatchJob:
-    """`JobSpec` fuer `ctx.scheduler.register_job()` (wie backups' Waechter)."""
+    """`JobSpec` für `ctx.scheduler.register_job()`."""
 
     id = "cert-watch"
     name = "Zertifikats-Warnung (Nginx Proxy Manager)"

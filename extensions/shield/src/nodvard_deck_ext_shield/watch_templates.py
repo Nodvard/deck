@@ -1,20 +1,4 @@
-"""Waechter-Vorlagen: Ordner, in denen fremde Dateien landen -- Samba- und NFS-Freigaben, die Daten einer Nextcloud --,
-auf den Servern finden und mit einem Klick zum Echtzeit-Waechter hinzufuegen.
-
-Der Waechter prueft standardmaessig nur Orte, an denen Schadsoftware typischerweise abgelegt wird (`av.WATCH_PATHS`:
-/tmp, /home ...). Hochgeladenes landet aber oft woanders. Die Suche ist rein lesend (`DETECT_SCRIPT`: liest
-smb.conf, /etc/exports und die config.php einer Nextcloud, schaut nach Docker-Volumes mit "nextcloud" im Namen) und
-laeuft als root, wenn das geht (`as_root`, ohne Passwortabfrage; sonst als normaler Benutzer, dann fehlt meist die
-Nextcloud). Suchen braucht das Recht `soc.manage` (wie Scans starten). Gefundene Ordner gehen nie von selbst in die
-Einstellungen: erst ein Klick (`POST /defender/watch-paths`, Recht `settings.write` wie die Konfigurations-Routen anderer
-Erweiterungen) haengt einen an `watch_paths` an, mit Eintrag im Protokoll.
-
-Der Server liefert nur Rohzeilen (Abschnitte und `path =` der smb.conf, die Zeilen der /etc/exports); zerlegt wird hier
-(`parse_detection`), damit Anfuehrungszeichen, `\040` und Drucker-Freigaben richtig behandelt werden.
-
-`watch_paths` gilt fuer alle Server; ein Ordner, den es auf einem Server nicht gibt, kostet dort nichts (`find` ueberspringt
-ihn). Ein grosser Ordner kostet bei jedem Waechterlauf Zeit, weil `find` jede Datei ansieht -- das sagt die Oberflaeche.
-"""
+"""Wächter-Vorlagen: Ordner mit fremden Dateien (Samba, NFS, Nextcloud) finden und per Klick zum Echtzeit-Wächter hinzufügen."""
 
 from __future__ import annotations
 
@@ -36,6 +20,8 @@ if TYPE_CHECKING:
     from .defender import Defender
 
 KINDS = ("samba", "nfs", "nextcloud")
+# Der Server liefert nur Rohzeilen (Abschnitte und `path =` der smb.conf, Zeilen der /etc/exports); zerlegt wird in `parse_detection`,
+# damit Anführungszeichen, `\040` und Drucker-Freigaben richtig behandelt werden.
 DETECT_SCRIPT = (
     "echo @@samba; grep -iE '^[[:space:]]*(\\[[^]]*\\]|(path|directory)[[:space:]]*=)' /etc/samba/smb.conf 2>/dev/null "
     "| head -n 300; "
@@ -44,33 +30,35 @@ DETECT_SCRIPT = (
     "for f in /var/www/nextcloud/config/config.php /var/www/html/nextcloud/config/config.php "
     "/var/www/html/config/config.php; do "
     "sed -n \"s/^[[:space:]]*'datadirectory'[[:space:]]*=>[[:space:]]*'\\([^']*\\)'.*/\\1/p\" \"$f\" 2>/dev/null; done | head -n 10; "
-    # Ein Datenordner der Nextcloud enthaelt immer `appdata_<Kennung>`: so findet sich das Volume des offiziellen Images
-    # (`…/_data/data`) ebenso wie das von Nextcloud AIO (`…_nextcloud_data/_data`).
+    # Ein Datenordner der Nextcloud enthält immer `appdata_<Kennung>`: So findet sich das Volume des offiziellen Images (`…/_data/data`)
+    # ebenso wie das von Nextcloud AIO (`…_nextcloud_data/_data`).
     "for d in /var/lib/docker/volumes/*nextcloud*/_data /var/lib/docker/volumes/*nextcloud*/_data/data; do "
     "for a in \"$d\"/appdata_*; do [ -d \"$a\" ] && echo \"$d\"; break; done; done 2>/dev/null | head -n 10; "
     "echo @@end"
 )
-"""Nur lesend. Jede Liste ist begrenzt; was fehlt (kein Samba, keine Nextcloud), bleibt einfach leer."""
+"""Nur lesend. Jede Liste ist begrenzt; was fehlt (kein Samba, keine Nextcloud), bleibt leer."""
 DETECT_TIMEOUT_S = 20
 MAX_PARALLEL = 4
 SYSTEM_DIRS = frozenset({"/etc", "/usr", "/bin", "/sbin", "/lib", "/lib64", "/var", "/var/lib", "/var/lib/docker"})
-"""Ganze Systemordner sind keine Upload-Ordner (und wuerden den Waechter bei jedem Lauf lange beschaeftigen)."""
+"""Ganze Systemordner sind keine Upload-Ordner (und würden den Wächter bei jedem Lauf lange beschäftigen)."""
 SYSTEM_TREES = ("/proc", "/sys", "/dev", "/run", "/boot")
-"""Hier auch nichts darunter: Kernel-, Geraete- und Laufzeit-Dateien."""
+"""Auch nichts darunter: Kernel-, Geräte- und Laufzeit-Dateien."""
 SAMBA_SKIP_SECTIONS = frozenset({"global", "printers", "print$", "homes"})
-"""Keine Upload-Ordner: Drucker-Warteschlangen und `[homes]` (liegt unter /home, das der Waechter ohnehin prueft)."""
+"""Keine Upload-Ordner: Drucker-Warteschlangen und `[homes]` (liegt unter /home, das der Wächter ohnehin prüft)."""
 _OCTAL_RE = re.compile(r"\\([0-7]{3})")
 
 _log = logging.getLogger(LOGGER)
 
 
 def detect_command() -> str:
+    # Als root, wenn das geht (ohne Passwortabfrage); als normaler Benutzer fehlt meist die Nextcloud.
     return av.as_root(DETECT_SCRIPT, required=False)
 
 
 def clean_path(raw: str) -> str | None:
-    """Ein gefundener Ordner als vereinfachter absoluter Pfad, oder None. Wie die Ausnahmen (`av.exclude_folder`:
-    absolut, kein `..`, keine Steuerzeichen), dazu: keine Samba-Platzhalter (`%U`), keine Systemordner, nicht `/`."""
+    """Ein gefundener Ordner als vereinfachter absoluter Pfad, oder None.
+
+    Wie bei `av.exclude_folder`, dazu: keine Samba-Platzhalter (`%U`), keine Systemordner, nicht `/`."""
     path = raw.strip().strip('"')
     if "%" in path or any(ord(ch) < 32 for ch in path):
         return None
@@ -83,7 +71,7 @@ def clean_path(raw: str) -> str | None:
 
 
 def _samba_paths(lines: list[str]) -> list[str]:
-    """`path =`/`directory =` je Abschnitt (gross/klein egal, wie bei Samba), ohne Drucker und `[homes]`."""
+    """`path =`/`directory =` je Abschnitt (Groß-/Kleinschreibung egal, wie bei Samba), ohne Drucker und `[homes]`."""
     out: list[str] = []
     section = ""
     for line in lines:
@@ -98,8 +86,8 @@ def _samba_paths(lines: list[str]) -> list[str]:
 
 
 def _nfs_paths(lines: list[str]) -> list[str]:
-    """Das erste Feld jeder Zeile von /etc/exports: in Anfuehrungszeichen, wenn es Leerzeichen enthaelt, und mit
-    `\\ooo` (oktal, etwa `\\040` fuer ein Leerzeichen) wie in exports(5)."""
+    """Das erste Feld jeder Zeile von /etc/exports: in Anführungszeichen, wenn es Leerzeichen enthält, und mit `\\ooo` (oktal,
+    etwa `\\040` für ein Leerzeichen) wie in exports(5)."""
     out: list[str] = []
     for line in lines:
         text = line.strip()
@@ -115,8 +103,9 @@ def _nfs_paths(lines: list[str]) -> list[str]:
 
 
 def parse_detection(output: str) -> tuple[list[tuple[str, str]], bool]:
-    """-> ([(Art, Ordner)] in der Reihenfolge der Ausgabe, ohne Dopplungen je Art; vollstaendig?). Ohne `@@end` ist die
-    Antwort abgeschnitten (Zeitlimit, Abbruch): was da ist, zaehlt, aber es fehlt vielleicht etwas."""
+    """-> ([(Art, Ordner)] in der Reihenfolge der Ausgabe, ohne Dopplungen je Art; vollständig?).
+
+    Ohne `@@end` ist die Antwort abgeschnitten (Zeitlimit, Abbruch): Was da ist, zählt, aber es fehlt vielleicht etwas."""
     raw: dict[str, list[str]] = {kind: [] for kind in KINDS}
     kind: str | None = None
     complete = False
@@ -142,7 +131,7 @@ def parse_detection(output: str) -> tuple[list[tuple[str, str]], bool]:
 
 
 def covered_by(folder: str, watched: list[str]) -> str | None:
-    """Der ueberwachte Ordner, der `folder` schon enthaelt (er selbst oder ein Ober-Ordner), oder None."""
+    """Der überwachte Ordner, der `folder` schon enthält (er selbst oder ein Ober-Ordner), oder None."""
     for entry in watched:
         base = av.exclude_folder(entry)
         if base is not None and (folder == base or folder.startswith(base.rstrip("/") + "/")):
@@ -151,17 +140,22 @@ def covered_by(folder: str, watched: list[str]) -> str | None:
 
 
 def current_watch_paths(settings: dict[str, Any]) -> list[str]:
+    # Der Standard (`av.WATCH_PATHS`) deckt nur Orte ab, an denen Schadsoftware typischerweise landet; Hochgeladenes liegt oft
+    # woanders. Die Liste gilt für alle Server: Fehlt ein Ordner auf einem Server, überspringt `find` ihn. Ein großer Ordner
+    # kostet bei jedem Lauf Zeit.
     return list(settings.get("watch_paths") or av.WATCH_PATHS)
 
 
 def excluded_paths(settings: dict[str, Any]) -> list[str]:
-    """"Ausgenommene Ordner" (`exclude_paths`): dort sucht der Waechter nicht, ein Vorschlag darunter waere wirkungslos."""
+    """Die „Ausgenommenen Ordner“ (`exclude_paths`): Dort sucht der Wächter nicht, ein Vorschlag darunter wäre wirkungslos."""
     value = settings.get("exclude_paths") or []
     return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
 
 
 async def find_templates(ctx: ExtensionContext, defender: Defender) -> dict[str, Any]:
-    """Sucht auf allen pruefbaren Servern. -> `{"suggestions": [{"path", "kinds", "hosts", "covered_by"}], "errors"}`."""
+    """Sucht auf allen prüfbaren Servern.
+
+    -> `{"suggestions": [{"path", "kinds", "hosts", "covered_by", "excluded_by"}], "errors", "watch_paths"}`."""
     hosts = await defender.target_hosts()
     settings = await ctx.settings.get()
     watched = current_watch_paths(settings)
@@ -172,7 +166,7 @@ async def find_templates(ctx: ExtensionContext, defender: Defender) -> dict[str,
         async with gate:
             try:
                 result = await ctx.exec.run(host, detect_command(), timeout_s=DETECT_TIMEOUT_S)
-            except Exception:  # noqa: BLE001 - ein nicht erreichbarer Server kostet nur seine Vorschlaege
+            except Exception:  # noqa: BLE001 - ein nicht erreichbarer Server kostet nur seine Vorschläge
                 _log.info("shield_watch_templates_failed host=%s", host.id, exc_info=True)
                 return host, None
             return host, parse_detection(result.stdout or "")
@@ -205,11 +199,11 @@ class _WatchPathIn(BaseModel):
 
 
 def build_routers(ctx: ExtensionContext, defender: Defender) -> tuple[APIRouter, APIRouter]:
-    """-> (lesen: `GET /defender/watch-templates`, aendern: `POST /defender/watch-paths`)."""
+    """-> (lesen: `GET /defender/watch-templates`, ändern: `POST /defender/watch-paths`)."""
     read = APIRouter()
     change = APIRouter()
-    # Lesen, anhaengen, schreiben am Stueck: zwei gleichzeitige Klicks (zwei Tabs) tragen sonst doppelt ein oder
-    # verlieren einen Eintrag.
+    # Lesen, anhängen und schreiben am Stück: Zwei gleichzeitige Klicks (zwei Tabs) tragen sonst doppelt ein oder verlieren einen
+    # Eintrag.
     lock = asyncio.Lock()
 
     @read.get("/defender/watch-templates")
