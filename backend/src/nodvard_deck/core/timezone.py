@@ -37,8 +37,7 @@ def reset_timezone_cache() -> None:
 
 
 async def get_timezone(session: AsyncSession) -> str:
-    """Die eingestellte Zone, sonst die Vorgabe; ein ungültiger gespeicherter Wert (z. B. von Hand bearbeitet) zählt als
-    nicht gesetzt."""
+    """Die eingestellte Zone, sonst die Vorgabe; ein ungültiger Wert (z. B. von Hand bearbeitet) zählt als nicht gesetzt."""
     global _cached
     if _cached is not None:
         return _cached

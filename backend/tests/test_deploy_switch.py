@@ -259,6 +259,33 @@ def helper_container(a):
             sys.stderr.write("mv: cannot move: Input/output error\n")
             sys.exit(2)
         sys.exit(0)
+    if entry == "python" and "backup-key" in cmd:
+        # STUB_BACKUP_KEY: leer = kein Schluessel, `alt` = Image ohne den Befehl, `kaputt` = DB unlesbar, sonst key_id.
+        if "-T" not in a:
+            sys.stderr.write("the input device is not a TTY\n")
+            sys.exit(1)
+        key = env("STUB_BACKUP_KEY", "")
+        if key == "alt":
+            sys.stderr.write("python -m nodvard_deck.admin: error: argument BEFEHL: invalid choice: 'backup-key'\n")
+            sys.exit(2)
+        if key == "kaputt":
+            sys.stderr.write("Fehler: Die Datenbank liess sich nicht oeffnen (OperationalError: disk I/O error).\n")
+            sys.exit(2)
+        sys.stdout.write(("schluessel " + key if key else "kein-schluessel") + "\n")
+        sys.exit(0)
+    if entry == "python" and "create-backup" in cmd:
+        if "-T" not in a:
+            sys.stderr.write("the input device is not a TTY\n")
+            sys.exit(1)
+        data = b"NODVARD-DECK-BACKUP/1\n" + b'{"mode": "schluessel"}\n' + os.urandom(4096)
+        if env("STUB_NDBAK_NOISE") == "1":  # Fremdausgabe vor der Sicherung
+            data = b"Container deploy-nodvard-deck-run-1 Creating\n" + data
+        sys.stdout.buffer.write(data[: len(data) // 2] if env("STUB_NDBAK_FAILS_HALFWAY") == "1" else data)
+        sys.stdout.buffer.flush()
+        if env("STUB_NDBAK_FAILS_HALFWAY") == "1":
+            sys.stderr.write("Fehler: Die Sicherung liess sich nicht erstellen (Zu wenig freier Speicher).\n")
+            sys.exit(2)
+        sys.exit(0)
     if entry == "python" and "restore-backup" in cmd:
         # Haelt fest, WAS der Container unter /backup zu sehen bekommt (Ordner und Datei, mit Rechten).
         info = []
@@ -365,7 +392,8 @@ elif cmd == "compose":
         c["running"] = rest[0] != "stop"
         save()
     elif rest and rest[0] == "run":
-        if env("STUB_RUN_FAILS") == "1" and not is_check(rest):
+        # Die Frage nach dem Sicherungsschluessel gehoert zur Vorabpruefung; scheitern soll der Lauf, der Daten bewegt.
+        if env("STUB_RUN_FAILS") == "1" and not is_check(rest) and "backup-key" not in rest:
             sys.exit(1)
         helper_container(rest[1:])
         sys.exit(0)
@@ -1443,9 +1471,16 @@ def _is_check_call(call: str) -> bool:
     return call.startswith("compose -p deploy run") and ".restore-austausch" in call and "exit 3" in call and "tar xzf -" not in call
 
 
+def _is_key_call(call: str) -> bool:
+    """Die Frage von backup.sh nach dem Sicherungsschluessel (aendert nichts)."""
+    return call.startswith("compose -p deploy run") and "nodvard_deck.admin backup-key" in call
+
+
 def _run_call(machine: Machine) -> str:
-    """Der erste Hilfscontainer, der Daten bewegt (tar bzw. Entpacken), ohne die Vorabpruefung."""
-    return next(c for c in machine.calls if c.startswith("compose -p deploy run") and not _is_check_call(c))
+    """Der erste Hilfscontainer, der Daten bewegt (tar bzw. Entpacken), ohne die Vorabpruefungen."""
+    return next(
+        c for c in machine.calls if c.startswith("compose -p deploy run") and not _is_check_call(c) and not _is_key_call(c)
+    )
 
 
 @needs_bash
@@ -1523,6 +1558,74 @@ def test_backup_that_goes_wrong_does_not_touch_an_older_backup_in_the_same_folde
     older.write_bytes(b"alt")
     assert backup_env("backup.sh", str(out), STUB_TAR_FAILS_HALFWAY="1").returncode != 0
     assert _backups_in(out) == [older] and older.read_bytes() == b"alt"
+
+
+# Verschluesselte Sicherung: mit Sicherungsschluessel aus der Oberflaeche eine `.ndbak` statt des tar.gz.
+
+
+@needs_bash
+def test_backup_with_a_key_writes_an_encrypted_backup_instead_of_a_tar(machine, backup_env, tmp_path):
+    _up(machine)
+    out = tmp_path / "sicherungen"
+    result = backup_env("backup.sh", str(out), STUB_BACKUP_KEY="0123456789abcdef")
+    assert result.returncode == 0, result.stdout + result.stderr
+    (backup,) = _backups_in(out)
+    assert backup.name.startswith("nodvard-deck-backup-") and backup.name.endswith(".ndbak"), backup
+    assert backup.read_bytes().startswith(b"NODVARD-DECK-BACKUP/1\n")
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    assert f"Fertig: {backup}\n" in result.stdout
+    assert "0123456789abcdef" in result.stdout and "WARNUNG" not in result.stderr
+    call = _run_call(machine)
+    assert "--entrypoint python" in call and "nodvard_deck.admin create-backup" in call
+    assert " -T " in call and "--user 1000:1000" in call and " -v " not in call
+    assert not any("--entrypoint tar" in c for c in machine.calls)
+    # Erst fragen (vor dem Anhalten), dann stoppen, sichern, wieder starten.
+    calls = machine.calls
+    key_call = next(c for c in calls if _is_key_call(c))
+    assert calls.index(key_call) < calls.index("compose -p deploy stop nodvard-deck") < calls.index(call)
+    assert calls.index(call) < calls.index("compose -p deploy start nodvard-deck")
+
+
+@needs_bash
+@pytest.mark.parametrize(("key", "reason"), [("", "kein Sicherungsschluessel"), ("alt", "aeltere Version")])
+def test_backup_without_a_usable_key_writes_the_tar_and_warns(machine, backup_env, tmp_path, key, reason):
+    # Kein Schluessel eingerichtet, oder ein Image, das `backup-key` noch nicht kennt: weiter tar.gz, aber mit Warnung.
+    _up(machine)
+    out = tmp_path / "sicherungen"
+    result = backup_env("backup.sh", str(out), STUB_BACKUP_KEY=key)
+    assert result.returncode == 0, result.stdout + result.stderr
+    (backup,) = _backups_in(out)
+    assert backup.name.endswith(".tar.gz"), backup
+    assert f"Fertig: {backup}\n" in result.stdout
+    assert result.stderr.count("NICHT verschluesselt") == 2, "vor dem Anhalten und noch einmal am Ende"
+    assert reason in result.stderr and "Master-Key" in result.stderr
+
+
+@needs_bash
+def test_backup_that_cannot_ask_for_the_key_stops_nothing(machine, backup_env, tmp_path):
+    # Laesst sich nicht feststellen, ob es einen Schluessel gibt, wird nicht still unverschluesselt gesichert.
+    _up(machine)
+    out = tmp_path / "ziel"
+    result = backup_env("backup.sh", str(out), STUB_BACKUP_KEY="kaputt")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Sicherungsschluessel" in result.stderr and "disk I/O error" in result.stderr
+    assert "nichts angehalten" in result.stderr
+    assert _backups_in(out) == []
+    assert "compose -p deploy stop nodvard-deck" not in machine.calls
+    assert machine.containers[NEW_C]["running"] is True
+
+
+@needs_bash
+@pytest.mark.parametrize("fault", ["STUB_NDBAK_FAILS_HALFWAY", "STUB_NDBAK_NOISE"])
+def test_encrypted_backup_that_goes_wrong_leaves_no_file_and_starts_the_service(machine, backup_env, tmp_path, fault):
+    _up(machine)
+    out = tmp_path / "ziel"
+    result = backup_env("backup.sh", str(out), STUB_BACKUP_KEY="0123456789abcdef", **{fault: "1"})
+    assert result.returncode != 0, result.stdout + result.stderr
+    assert "FEHLER" in result.stderr and "Fertig" not in result.stdout
+    assert _backups_in(out) == [], "weder eine fertige noch eine halbe Datei"
+    assert "compose -p deploy start nodvard-deck" in machine.calls
+    assert machine.containers[NEW_C]["running"] is True
 
 
 @needs_bash
@@ -2823,7 +2926,9 @@ def test_a_user_can_run_while_the_lock_file_belongs_to_root_and_is_still_kept_ou
     assert machine.calls == []
     free = as_user()
     assert free.returncode == 0, shlex.join(free.args) + free.stdout + free.stderr
-    assert "WARNUNG" not in free.stderr and (lock.stat().st_uid, stat.S_IMODE(lock.stat().st_mode)) == (0, 0o644)
+    # Ohne Sicherungsschluessel warnt backup.sh zweimal vor der unverschluesselten Datei, sonst darf nichts warnen.
+    assert free.stderr.count("WARNUNG") == free.stderr.count("NICHT verschluesselt") == 2, free.stderr
+    assert (lock.stat().st_uid, stat.S_IMODE(lock.stat().st_mode)) == (0, 0o644)
     (archive,) = _backups_in(out)
     assert archive.stat().st_uid == uid
 

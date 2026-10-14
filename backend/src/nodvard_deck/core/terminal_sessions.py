@@ -1,6 +1,6 @@
 """Registry für Terminal-Tickets im Speicher.
 
-`POST /terminal/sessions` erzeugt ein Einmal-Ticket für den WebSocket-Aufbau; Tokens gehören nicht in die URL (Proxy-Logs)."""
+`POST /terminal/sessions` erzeugt ein Einmal-Ticket für den WebSocket; Tokens gehören nicht in die URL (Proxy-Logs)."""
 
 from __future__ import annotations
 

@@ -8,7 +8,10 @@ export const REPO_URL = "https://github.com/nodvard/deck";
 
 const BLOB_BASE = `${REPO_URL}/blob/main/`;
 
-/** Adresse einer Datei im Quellcode, optional mit Anker auf eine Überschrift (`repoFile("deploy/README.md", "update-helfer")`). */
+/**
+ * Adresse einer Datei im Quellcode, optional mit Anker auf eine Überschrift
+ * (`repoFile("deploy/README.md", "update-helfer")`).
+ */
 export function repoFile(path: string, anchor?: string): string {
   return `${BLOB_BASE}${path}${anchor ? `#${anchor}` : ""}`;
 }

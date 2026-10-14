@@ -1,14 +1,7 @@
 /**
- * Rendert die winzige Template-Sprache aus docs/02-EXTENSION-API.md §4:
- * `{{ feld.pfad }}` plus feste Filterliste, KEIN Ausdruck, KEINE Bedingung, KEINE
- * Schleife -- absichtlich nicht Turing-vollstaendig, damit die Flutter-Seite keinen
- * zweiten Interpreter braucht. Backend-Quelle der Filterliste:
- * sdk/python/nodvard_sdk/widgets.py ALLOWED_FILTERS (definiert, aber dort selbst nicht
- * konsumiert -- die Engine existiert bisher nur hier im Frontend).
- *
- * Ein String ohne "{{" ist kein Template, sondern ein Literal (z.B. `Badge.tone` ist
- * `Template | Tone` -- "danger" ohne geschweifte Klammern ist der Tone-Enum-Wert
- * direkt, kein zu interpolierender Ausdruck). Der Regex unten aendert daran nichts.
+ * Rendert die winzige Template-Sprache aus docs/02-EXTENSION-API.md: `{{ feld.pfad }}` plus feste Filterliste, ohne
+ * Ausdruck, Bedingung und Schleife, damit die Flutter-Seite keinen zweiten Interpreter braucht. Die Filterliste steht
+ * auch im SDK (`ALLOWED_FILTERS`, sdk/python/nodvard_sdk/widgets.py).
  */
 import type { Tone } from "./types";
 
@@ -36,9 +29,8 @@ function toDate(value: unknown): Date | null {
   if (value instanceof Date) return value;
   const num = toNumber(value);
   if (num !== null) {
-    // Sekunden- vs. Millisekunden-Epoch unterscheiden: alles unter ~ Jahr 5138 in ms
-    // waere vor 1970 in s-Interpretation unwahrscheinlich fuer Zeitstempel -> Heuristik
-    // ueber Groessenordnung (Sekunden-Epochen liegen aktuell < 1e11).
+    // Sekunden- oder Millisekunden-Epoch: Heuristik über die Größenordnung
+    // (Sekunden-Epochen liegen aktuell unter 1e11).
     const ms = num < 1e11 ? num * 1000 : num;
     return new Date(ms);
   }
@@ -149,9 +141,8 @@ const TONE_KEYWORDS: [Tone, string[]][] = [
 ];
 
 /**
- * Bildet einen rohen Feld-Wert (z.B. `severity: "critical"`) auf einen Tone ab.
- * ANNAHME (kein fester Vertrag): Stichwort-Heuristik ueber uebliche
- * Severity-/Status-Vokabeln.
+ * Bildet einen rohen Feld-Wert (z. B. `severity: "critical"`) auf einen Tone ab. Annahme (kein fester Vertrag):
+ * Stichwort-Heuristik über übliche Severity-/Status-Vokabeln.
  */
 function filterTone(value: unknown): Tone {
   const str = String(value ?? "").toLowerCase();
@@ -192,11 +183,9 @@ const FILTERS: Record<string, (value: unknown) => string> = {
 export const ALLOWED_FILTERS = Object.keys(FILTERS);
 
 /**
- * Rendert einen Template-String gegen ein Datenobjekt. Ein String ohne "{{" wird
- * unveraendert zurueckgegeben (Literal, siehe Modul-Kommentar). Ein unbekannter
- * Feldpfad ergibt einen leeren String statt eines Wurfs -- ein einzelnes fehlendes
- * Feld soll das Widget nicht abstuerzen lassen (die Formvalidierung dafuer sitzt in
- * WidgetCard, nicht hier).
+ * Rendert einen Template-String gegen ein Datenobjekt. Ein String ohne "{{" ist ein Literal und kommt unverändert
+ * zurück. Ein unbekannter Feldpfad ergibt einen leeren String statt eines Wurfs: Ein fehlendes Feld soll das Widget
+ * nicht abstürzen lassen (die Formvalidierung sitzt in WidgetCard).
  */
 export function renderTemplate(template: string, data: unknown): string {
   if (!template.includes("{{")) return template;
@@ -206,9 +195,8 @@ export function renderTemplate(template: string, data: unknown): string {
     for (const filterName of filterParts) {
       const filterFn = FILTERS[filterName];
       if (!filterFn) {
-        // Unbekannter Filtername -- keine stille Verschluckung, aber auch kein Crash:
-        // Rohwert durchreichen und in der Konsole auf den Extension-Fehler hinweisen
-        // (docs/02 §4: "meldet Abweichungen als Extension-Fehler statt als kaputtes UI").
+        // Unbekannter Filtername: nicht stillschweigend schlucken, aber auch kein Crash. Rohwert durchreichen und in
+        // der Konsole auf den Extension-Fehler hinweisen.
         // eslint-disable-next-line no-console
         console.warn(`[widget-template] unbekannter Filter "${filterName}" in "${template}"`);
         continue;
@@ -219,7 +207,10 @@ export function renderTemplate(template: string, data: unknown): string {
   });
 }
 
-/** Wie renderTemplate, aber gibt einen Tone zurueck statt eines Strings (Badge/Tile-Tone-Felder). */
+/**
+ * Wie renderTemplate, aber gibt einen Tone zurück statt eines Strings (Badge/Tile-Tone-Felder); ein Literal wie
+ * "danger" ohne "{{" ist der Tone-Wert selbst.
+ */
 export function renderTone(template: string, data: unknown): Tone {
   const rendered = renderTemplate(template, data);
   const valid: Tone[] = ["neutral", "good", "warn", "danger", "accent"];

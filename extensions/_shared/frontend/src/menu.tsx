@@ -1,10 +1,7 @@
 /**
- * Menü „Mehr“: seltene Aktionen hinter einem Knopf, damit eine Zeile nicht aus lauter Knöpfen
- * besteht. Schließt nach einer Wahl (Fokus zurück auf „Mehr“), mit Escape, bei einem Klick oder
- * Antippen daneben und wenn der Fokus das Menü verlässt.
- *
- * Eigene Datei aus demselben Grund wie AuthImage.tsx: nur Bundles, die das Menü einbinden,
- * ändern sich.
+ * Menü „Mehr“: seltene Aktionen hinter einem Knopf, damit eine Zeile nicht aus lauter Knöpfen besteht. Schließt nach einer
+ * Wahl (Fokus zurück auf „Mehr“), mit Escape, bei Klick oder Antippen daneben und wenn der Fokus das Menü verlässt.
+ * Eigene Datei wie AuthImage.tsx: Nur Bundles, die das Menü einbinden, ändern sich.
  */
 import { useEffect, useRef, useState } from "react";
 

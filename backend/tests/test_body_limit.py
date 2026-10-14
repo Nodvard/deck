@@ -192,7 +192,7 @@ def test_routes_with_bigger_uploads_declare_their_limits():
 
     assert declared(system.restore_upload) == settings.restore_max_upload_bytes
     assert declared(auth.bootstrap_restore_upload) == settings.restore_max_upload_bytes
-    assert declared(files.upload_file) > 64 * 1024**3  # Standard: keine eigene Grenze (ISO-Abbilder, VM-Images)
+    assert declared(files.upload_file) == settings.files_max_upload_bytes == 10 * 1024**3  # Standard: 10 GiB
     assert declared(branding.upload_logo) == MAX_LOGO_BYTES
     assert not hasattr(auth.login, MAX_BODY_ATTR)
 
@@ -236,16 +236,18 @@ async def test_bootstrap_restore_upload_larger_than_the_general_limit_reaches_it
     assert r.status_code == 422 and "keine Sicherung" in r.json()["detail"]
 
 
-def test_file_upload_limit_can_be_set_and_zero_means_no_limit(monkeypatch):
+def test_file_upload_limit_is_ten_gib_by_default_can_be_set_and_zero_means_no_limit(monkeypatch):
     from nodvard_deck.api.body_limit import NO_LIMIT
     from nodvard_deck.api.v1 import files
     from nodvard_deck.config import get_settings
     from nodvard_sdk.http import MAX_BODY_ATTR
 
     limit = getattr(files.upload_file, MAX_BODY_ATTR)
-    assert get_settings().files_max_upload_bytes == 0 and limit() == NO_LIMIT
+    assert get_settings().files_max_upload_bytes == 10 * 1024**3 and limit() == 10 * 1024**3
     monkeypatch.setattr(get_settings(), "files_max_upload_bytes", 8 * 1024**3)
     assert limit() == 8 * 1024**3
+    monkeypatch.setattr(get_settings(), "files_max_upload_bytes", 0)
+    assert limit() == NO_LIMIT
 
 
 # --- Ablauf auf ASGI-Ebene --------------------------------------------------

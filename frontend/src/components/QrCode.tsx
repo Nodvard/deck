@@ -1,8 +1,7 @@
 /**
- * QR-Code als SVG, komplett im Browser erzeugt (Bibliothek `qrcode-generator`, MIT) -- der Text
- * (z. B. der Schluessel fuer die Authenticator-App) verlaesst den Rechner nie, es gibt keinen
- * externen Dienst. Immer dunkel auf weissem Grund mit Ruhezone: Scanner-Apps erkennen helle
- * Codes auf dunklem Grund nicht zuverlaessig, auch wenn die Oberflaeche dunkel ist.
+ * QR-Code als SVG, komplett im Browser erzeugt (Bibliothek `qrcode-generator`, MIT): Der Text (z. B. der Schlüssel
+ * für die Authenticator-App) verlässt den Rechner nie. Immer dunkel auf weißem Grund mit Ruhezone, denn Scanner-Apps
+ * erkennen helle Codes auf dunklem Grund nicht zuverlässig, auch wenn die Oberfläche dunkel ist.
  */
 import qrcode from "qrcode-generator";
 import { useMemo } from "react";
@@ -24,7 +23,7 @@ export function qrPath(text: string): { path: string; size: number } | null {
     }
     return { path, size: count + QUIET_ZONE * 2 };
   } catch {
-    return null; // Text zu lang fuer einen QR-Code
+    return null; // Text zu lang für einen QR-Code
   }
 }
 

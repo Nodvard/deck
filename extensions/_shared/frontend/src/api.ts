@@ -1,22 +1,7 @@
 /**
- * Gemeinsame Aufrufe der Erweiterungsseiten gegen die Dashboard-API.
- *
- * Bisher hatte jede Seite ihr eigenes `authedFetch` -- alle nur mit dem aktuellen
- * Token, ohne zweiten Versuch. Nach 15 min Leerlauf (Hintergrund-Tab) kam beim
- * Speichern "Nicht authentifiziert". Jetzt holt sich der Aufruf bei 401 einmal ein
- * neues Token ueber den Kern (`window.__nodvardDeck.refreshAccessTokenResult()`, bei aelterem
- * Kern `refreshAccessToken()`) und wiederholt sich.
- *
- * Antwortet der Server gar nicht (Container startet nach einem Deploy neu, WLAN weg),
- * wirft der Aufruf `ServerUnavailableError` mit derselben Meldung wie der Kern
- * (frontend/src/lib/api.ts) -- bei einem echten Serverfehler beim Erneuern (z. B. 507) mit
- * dessen Grund ("Server meldet: ...") -- auch dann, wenn genau in diesem Moment das Token
- * ablaeuft: das Erneuern haengt am Kern (state/auth.ts: gemeinsamer Aufruf, Zeitlimit,
- * Wiederholen im Hintergrund), der meldet "Server antwortet nicht" getrennt von
- * "Anmeldung abgelehnt". Nur Letzteres kommt als 401 zurueck ("Nicht authentifiziert").
- *
- * Keine React-Hooks in dieser Datei (siehe AuthImage.tsx): so aendern sich nur die
- * Bundles, die sie wirklich einbinden.
+ * Gemeinsame Aufrufe der Erweiterungsseiten gegen die Dashboard-API: Bei 401 holt `authedFetch` einmal ein neues Token
+ * über den Kern und wiederholt sich. Antwortet der Server nicht, kommt `ServerUnavailableError` (wie im Kern); nur eine
+ * abgelehnte Anmeldung kommt als 401 zurück. Keine React-Hooks hier (siehe AuthImage.tsx).
  */
 import { deck } from "./deck";
 
@@ -24,13 +9,9 @@ import { deck } from "./deck";
 export const SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
 
 /**
- * `authedFetch` wirft das, wenn keine brauchbare Antwort kommt: Netzwerkfehler, 502/503/504
- * ohne eigenen Grund (Proxy, solange der Server nicht laeuft) oder der Kern kann das Token
- * gerade nicht erneuern. Die Anmeldung bleibt; spaeter noch einmal versuchen hilft.
- *
- * Hat der Server beim Erneuern mit einem echten Fehler geantwortet (z. B. 507 "Speicherplatz
- * voll"), sind `status` und `message` ("Server meldet: <Grund>") gesetzt -- wie im Kern
- * (frontend/src/routes/RequireAuth.tsx).
+ * `authedFetch` wirft das ohne brauchbare Antwort: Netzwerkfehler, 502/503/504 ohne eigenen Grund (Proxy) oder der Kern
+ * kann das Token gerade nicht erneuern; die Anmeldung bleibt. Antwortete der Server beim Erneuern mit einem echten Fehler
+ * (z. B. 507), tragen `status` und `message` („Server meldet: <Grund>“) ihn, wie im Kern (RequireAuth.tsx).
  */
 export class ServerUnavailableError extends Error {
   status?: number;
@@ -41,7 +22,7 @@ export class ServerUnavailableError extends Error {
   }
 }
 
-/** Antworten, die ein Proxy schickt, solange der Server nicht (fertig) laeuft. */
+/** Antworten, die ein Proxy schickt, solange der Server nicht (fertig) läuft. */
 const SERVER_DOWN_STATUS = new Set([502, 503, 504]);
 
 /** Request gegen `/api/v1<path>` mit Login-Token; bei 401 einmal Token erneuern und wiederholen. */
@@ -74,7 +55,7 @@ export async function authedFetch(path: string, init: RequestInit = {}): Promise
   if (res.status !== 401 || (!shell.refreshAccessTokenResult && !shell.refreshAccessToken)) return res;
 
   // Ein anderer Aufruf war evtl. schneller und hat das Token schon erneuert -- dann
-  // reicht der zweite Versuch damit. Sonst erneuern (haengt sich an einen laufenden
+  // reicht der zweite Versuch damit. Sonst erneuern (hängt sich an einen laufenden
   // Refresh an, siehe state/auth.ts).
   let token = shell.getAccessToken();
   if (!token || token === sent) token = await renewToken();
@@ -93,7 +74,7 @@ async function renewToken(): Promise<string | null> {
   if (shell.refreshAccessTokenResult) {
     const result = await shell.refreshAccessTokenResult().catch((): NodvardDeckTokenRefreshResult => ({ status: "unavailable" }));
     if (result.status === "unavailable") {
-      // Aeltere Kerne kennen httpStatus/message nicht -- dann wie bisher "nicht erreichbar".
+      // Ältere Kerne kennen httpStatus/message nicht: dann "nicht erreichbar".
       const reason = typeof result.message === "string" && result.message.trim() !== "" ? result.message : undefined;
       if (typeof result.httpStatus === "number" && reason !== undefined) {
         throw new ServerUnavailableError({ status: result.httpStatus, message: reason });
@@ -102,7 +83,7 @@ async function renewToken(): Promise<string | null> {
     }
     return result.status === "ok" ? result.token : null;
   }
-  // Aelterer Kern: kennt nur "Token oder null", null heisst dort auch "Server antwortet nicht".
+  // Älterer Kern: kennt nur "Token oder null", null heißt dort auch "Server antwortet nicht".
   return shell.refreshAccessToken ? shell.refreshAccessToken().catch(() => null) : null;
 }
 
@@ -125,7 +106,7 @@ function bodyDetail(body: unknown): string | null {
 }
 
 /** Meldung aus dem Body einer Fehlerantwort: `detail` (Text oder Liste aus FastAPI-
- * Pruefung), sonst der Grund der Gate-Entscheidung, sonst "HTTP <status>" -- bei
+ * Prüfung), sonst der Grund der Gate-Entscheidung, sonst "HTTP <status>" -- bei
  * 502/503/504 ohne Grund dieselbe Meldung wie bei fehlender Verbindung. */
 export function errorFromBody(body: unknown, status: number): string {
   return bodyDetail(body) ?? (SERVER_DOWN_STATUS.has(status) ? SERVER_UNAVAILABLE_TEXT : `HTTP ${status}`);

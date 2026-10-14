@@ -1,11 +1,7 @@
 /**
- * Bausteine zum Update-Helfer für die Karten „Updates“ (Update per Knopf) und „Kopien vor Updates“ (Rückweg):
- * Zustand des Helfers, Bestätigung mit Passwort (und, wenn Zwei-Faktor an ist, dem Code aus der App), Fortschritt und
- * Ergebnis. Daten und Ablauf: lib/updater.ts; Texte zu den Codes: updaterTexts.ts.
- *
- * Passwort und Code stehen nur im lokalen State des Formulars und gehen direkt an `requestUpdate`/`requestRollback`;
- * nach dem Absenden ist das Passwortfeld leer. Fragt der Server nach dem Code (`totp_missing`) oder stimmt er nicht
- * (`totp_wrong`/`totp_used`), bleibt das Passwort stehen und nur das Codefeld wird geleert (wie bei Sicherungen).
+ * Bausteine zum Update-Helfer für die Karten „Updates“ und „Kopien vor Updates“: Zustand, Bestätigung mit Passwort (und
+ * Code aus der App bei Zwei-Faktor), Fortschritt und Ergebnis (Daten: lib/updater.ts, Texte: updaterTexts.ts).
+ * Passwort und Code stehen nur im lokalen State des Formulars und gehen direkt an `requestUpdate`/`requestRollback`.
  */
 import { AlertTriangle, CheckCircle2, ExternalLink, Info, Loader2, RotateCcw, ShieldAlert, XCircle } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -283,8 +279,8 @@ function ManualSteps() {
 }
 
 /**
- * Ein Ergebnis mit Titel, Satz und – bei `failed_manual` – den Schritten auf dem Server. `dataRevert`: der Rückweg sollte
- * die Daten mitnehmen (siehe `outcomeText`).
+ * Ein Ergebnis mit Titel, Satz und – bei `failed_manual` – den Schritten auf dem Server. `dataRevert`: der Rückweg
+ * sollte die Daten mitnehmen (siehe `outcomeText`).
  */
 export function ResultBox({ result, footer, dataRevert = false }: {
   result: Pick<HelperResult, "action" | "from" | "to" | "outcome" | "code">; footer?: ReactNode; dataRevert?: boolean;
@@ -305,7 +301,7 @@ export function ResultBox({ result, footer, dataRevert = false }: {
   );
 }
 
-/** So lange bleibt „Bitte von Hand nachsehen“ bzw. „von außen geändert“ ein deutlicher Kasten, auch wenn der Helfer bereit ist. */
+/** So lange bleiben „Bitte von Hand nachsehen“ und „von außen geändert“ ein Kasten, auch wenn der Helfer bereit ist. */
 export const ALARM_RESULT_S = 24 * 3600;
 
 /**

@@ -1,18 +1,21 @@
-"""Globale Einstellungen (`GET /settings`, `PUT /settings/{key}`; docs/04-API.md, docs/03-DATA-MODEL.md)."""
+"""Globale Einstellungen (`GET /settings`, `PUT /settings/{key}`, `PUT /settings/autonomy`; docs/04-API.md,
+docs/03-DATA-MODEL.md)."""
 
 from __future__ import annotations
 
 import json
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ...config import Settings
 from ...core import timezone as timezone_service
 from ...core import trusted_proxies as trusted_proxies_service
 from ...core.cron import cron_trigger
+from ...models import User
 from ...services import audit as audit_service
 from ...services import job_retention as job_retention_service
 from ...services import notification_retention as notification_retention_service
@@ -20,6 +23,8 @@ from ...services import reachability as reachability_service
 from ...services import settings as settings_service
 from ...services import update_check as update_check_service
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from ..errors import CodedHTTPException
+from .auth import TotpMissing, confirm_current_password, confirm_current_totp
 
 # `settings.write` gilt für Lesen und Schreiben: docs/03-DATA-MODEL.md kennt kein eigenes `settings.read`.
 router = APIRouter(
@@ -71,6 +76,13 @@ Dazu gehören die vier, die das Freigabe-Gate steuern: wer die Autonomie lockert
 und Wartungsfenster ändert, hinterlässt eine Spur."""
 _AUDIT_MAX_JSON_CHARS = 8000
 """Länger darf eine Liste im Protokoll nicht werden (JSON-Zeichen)."""
+_OWNER_CONFIRMED_KEYS = {"autonomy.mode", "autonomy.max_risk", "ssh.confirm_new_host_keys"}
+"""Diese Einstellungen entscheiden, was ohne Rückfrage auf den Servern läuft (Selbstständigkeit) und ob Deck einem neuen
+Server-Schlüssel ohne Bestätigung vertraut. Ändern darf sie nur der Inhaber, mit seinem Passwort und, wenn Zwei-Faktor an
+ist, dem Code aus der App. Eine gestohlene Sitzung allein reicht dafür nicht, die eines Admins auch mit Passwort nicht."""
+OWNER_PASSWORD_REQUIRED = "Zur Bestätigung brauchst du dein Passwort."
+OWNER_PASSWORD_MISSING_CODE = "password_missing"
+"""`code` der 403-Antwort ohne `current_password` (wie bei `PUT /users/{id}`): die Oberfläche zeigt daran das Passwortfeld."""
 _REACHABILITY_KEYS = {"hosts.reachability.enabled", "hosts.reachability.interval_minutes"}
 _UPDATE_CHECK_JOB_KEYS = {"system.update_check.enabled"}
 _VALID_AUTONOMY_MODES = {"propose", "full"}
@@ -112,6 +124,24 @@ def _validate_maintenance_windows(value: list) -> None:
 
 class SettingIn(BaseModel):
     value: Any
+    current_password: str = Field(default="", max_length=1024)
+    """Nur für `autonomy.mode`, `autonomy.max_risk` und `ssh.confirm_new_host_keys`: das Passwort des Inhabers."""
+    totp_code: str = Field(default="", max_length=64)
+    """Dazu der Code aus der App, wenn der Inhaber Zwei-Faktor an hat (sonst 403 mit `code: "totp_missing"`)."""
+
+
+class AutonomyIn(BaseModel):
+    """Modus und Risikostufe der Selbstständigkeit in einem Schritt, mit einer Bestätigung (ein Code gilt nur einmal)."""
+
+    mode: str = Field(max_length=32)
+    max_risk: str = Field(max_length=32)
+    current_password: str = Field(default="", max_length=1024)
+    totp_code: str = Field(default="", max_length=64)
+
+
+class AutonomyOut(BaseModel):
+    mode: str
+    max_risk: str
 
 
 class SettingOut(BaseModel):
@@ -215,6 +245,91 @@ async def list_settings(session: SessionDep, settings: SettingsDep) -> list[Sett
     return out
 
 
+_OWNER_ONLY: dict[str, tuple[str, str]] = {
+    # Wer hier einträgt, entscheidet, wessen Angaben zur Absender-Adresse gelten (Sperre, Protokoll, HTTPS).
+    trusted_proxies_service.SETTING_KEY: (
+        "Nur der Inhaber darf die Proxy-Liste ändern.",
+        "Die Liste der vertrauenswürdigen Proxys ändert nur der Inhaber (Owner).",
+    ),
+    "autonomy": (
+        "Nur der Inhaber darf die Selbstständigkeit ändern.",
+        "Die Selbstständigkeit ändert nur der Inhaber (Owner).",
+    ),
+    "ssh.confirm_new_host_keys": (
+        "Nur der Inhaber darf die Regel für neue Server-Schlüssel ändern.",
+        "Ob neue Server-Schlüssel erst bestätigt werden müssen, legt nur der Inhaber (Owner) fest.",
+    ),
+}
+"""Einstellungen nur für den Inhaber, nicht für jeden Admin: Grund fürs Protokoll und Antwort (403). `autonomy` steht für
+`autonomy.mode` und `autonomy.max_risk`."""
+
+
+def _owner_only_entry(key: str) -> str | None:
+    return "autonomy" if key in ("autonomy.mode", "autonomy.max_risk", "autonomy") else (key if key in _OWNER_ONLY else None)
+
+
+async def _refuse_unless_owner(session: AsyncSession, user: User, key: str) -> None:
+    """403 für alle außer dem Inhaber, mit Eintrag im Protokoll. Vor jeder Prüfung des Werts, damit es immer 403 ist."""
+    entry = _owner_only_entry(key)
+    if entry is None or user.is_owner:
+        return
+    reason, detail = _OWNER_ONLY[entry]
+    await audit_service.log(
+        session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="denied",
+        target_type="setting", target_id=key, reason=reason,
+    )
+    await session.commit()
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
+async def _confirm_owner(
+    request: Request, session: AsyncSession, settings: Settings, user: User, password: str, code: str, action: str
+) -> JSONResponse | None:
+    """Passwort und, wenn Zwei-Faktor an ist, der Code aus der App (nur der App-Code, kein Wiederherstellungs-Code).
+    Fehlt das Passwort 403 `password_missing`, falsch 400, zu oft 429; fehlt der Code 403 `totp_missing` als fertige
+    Antwort. `None` heißt bestätigt. Erst aufrufen, wenn der Wert geprüft ist, sonst kostet eine Ablehnung einen Code."""
+    if not password:
+        raise CodedHTTPException(status.HTTP_403_FORBIDDEN, OWNER_PASSWORD_REQUIRED, OWNER_PASSWORD_MISSING_CODE)
+    await confirm_current_password(request, session, user, password, action)
+    try:
+        await confirm_current_totp(request, session, settings, user, code, action)
+    except TotpMissing as exc:
+        return exc.response()
+    return None
+
+
+async def _log_change(session: AsyncSession, user: User, key: str, previous: Any, value: Any, **extra: Any) -> None:
+    detail: dict[str, Any] = {"key": key, "old": _audit_value(previous), "new": _audit_value(value), **extra}
+    await audit_service.log(
+        session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="success",
+        target_type="setting", target_id=key, detail=detail,
+    )
+
+
+@router.put("/autonomy")
+async def put_autonomy(
+    payload: AutonomyIn, request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser
+) -> AutonomyOut:
+    """Modus und Risikostufe der Selbstständigkeit zusammen: eine Bestätigung, beide Werte in einem Schritt gespeichert,
+    kein Zwischenstand. Nur der Inhaber, mit Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App. Im Protokoll
+    steht jede geänderte Einstellung einzeln (`system.settings.changed`)."""
+    await _refuse_unless_owner(session, user, "autonomy")
+    _validate("autonomy.mode", payload.mode)
+    _validate("autonomy.max_risk", payload.max_risk)
+    refused = await _confirm_owner(
+        request, session, settings, user, payload.current_password, payload.totp_code, "selbststaendigkeit_aendern"
+    )
+    if refused is not None:
+        return refused
+    for key, value in (("autonomy.mode", payload.mode), ("autonomy.max_risk", payload.max_risk)):
+        previous = await _current(key, session, settings)
+        if previous == value:
+            continue
+        await settings_service.set_global(session, key, value, updated_by_user_id=user.id)
+        await _log_change(session, user, key, previous, value)
+    return AutonomyOut(mode=payload.mode, max_risk=payload.max_risk)
+
+
 @router.put("/{key}")
 async def put_setting(
     key: Literal[
@@ -224,19 +339,12 @@ async def put_setting(
         "system.update_check.channel", "ssh.confirm_new_host_keys", "system.trusted_proxies",
     ],
     payload: SettingIn,
+    request: Request,
     session: SessionDep,
     settings: SettingsDep,
     user: CurrentUser,
 ) -> SettingOut:
-    if key == trusted_proxies_service.SETTING_KEY and not user.is_owner:
-        # Wer hier einträgt, entscheidet, wessen Angaben zur Absender-Adresse gelten (Sperre, Protokoll, HTTPS):
-        # das ist Sache des Inhabers, nicht jedes Admins. Vor der Prüfung des Werts, damit es immer 403 ist.
-        await audit_service.log(
-            session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="denied",
-            target_type="setting", target_id=key, reason="Nur der Inhaber darf die Proxy-Liste ändern.",
-        )
-        await session.commit()
-        raise HTTPException(status_code=403, detail="Die Liste der vertrauenswürdigen Proxys ändert nur der Inhaber (Owner).")
+    await _refuse_unless_owner(session, user, key)
     _validate(key, payload.value)
     value = payload.value
     if key == trusted_proxies_service.SETTING_KEY:
@@ -260,6 +368,13 @@ async def put_setting(
                 "und lässt sich hier nicht ändern."
             ),
         )
+    if key in _OWNER_CONFIRMED_KEYS:
+        action = "selbststaendigkeit_aendern" if key.startswith("autonomy.") else "server_schluessel_regel_aendern"
+        refused = await _confirm_owner(
+            request, session, settings, user, payload.current_password, payload.totp_code, action
+        )
+        if refused is not None:
+            return refused
     if key in _AUDITED_KEYS:
         previous = await _current(key, session, settings)
     if key == "system.timezone":
@@ -277,13 +392,8 @@ async def put_setting(
             await session.commit()
             await update_check_service.sync_job()
     if key in _AUDITED_KEYS:
-        detail: dict[str, Any] = {"key": key, "old": _audit_value(previous), "new": _audit_value(value)}
-        if changed_jobs is not None:
-            detail["jobs_rescheduled"] = changed_jobs
-        await audit_service.log(
-            session, actor_type="user", actor_id=user.id, action="system.settings.changed", outcome="success",
-            target_type="setting", target_id=key, detail=detail,
-        )
+        extra = {"jobs_rescheduled": changed_jobs} if changed_jobs is not None else {}
+        await _log_change(session, user, key, previous, value, **extra)
     if key == trusted_proxies_service.SETTING_KEY:
         # Erst gespeichert, dann gültig: ohne Neustart, ab der nächsten Anfrage.
         await session.commit()

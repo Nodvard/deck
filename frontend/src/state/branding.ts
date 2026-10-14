@@ -1,12 +1,7 @@
 /**
- * Geteilter Branding-Zustand.
- *
- * Vorher rief `AppShell.tsx` `fetchBranding()`/`applyBranding()` selbst auf, beim
- * Mount NACH dem Login (docs/01-ARCHITECTURE.md §6 verlangt aber ausdruecklich, dass
- * schon die Login-Seite unauthentifiziert brandet). `main.tsx` laedt jetzt EINMAL beim
- * Boot, vor dem ersten Render der Router-Kinder -- Login- UND der neue
- * Erstinbetriebnahme-Assistent (SetupPage) sehen dadurch von Anfang an das echte
- * Branding statt der eingebauten Default-Farben.
+ * Geteilter Branding-Zustand. `main.tsx` lädt ihn einmal beim Boot, vor dem ersten Render der Router-Kinder, damit
+ * schon die Login-Seite und der Einrichtungs-Assistent ohne Anmeldung das echte Branding zeigen statt der eingebauten
+ * Default-Farben (docs/01-ARCHITECTURE.md).
  */
 import { create } from "zustand";
 
@@ -29,8 +24,8 @@ export const useBrandingStore = create<BrandingState>((set) => ({
       applyBranding(branding);
       set({ branding, loaded: true });
     } catch {
-      // Kein Branding-Server erreichbar (z. B. Backend noch nicht oben) -- die
-      // eingebauten CSS-Defaults aus index.css greifen weiter, kein Absturz.
+      // Kein Branding-Server erreichbar (z. B. Backend noch nicht oben): die eingebauten CSS-Defaults aus
+      // index.css greifen weiter, kein Absturz.
       set({ loaded: true });
     }
   },

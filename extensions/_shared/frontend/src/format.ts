@@ -1,7 +1,7 @@
 /** Gemeinsame Anzeige-Helfer der Erweiterungsseiten. */
 
 /**
- * Groesse in 1024er-Einheiten. Standard: unter 10 eine Nachkommastelle, sonst keine
+ * Größe in 1024er-Einheiten. Standard: unter 10 eine Nachkommastelle, sonst keine
  * ("8.5 GB", "45 MB"); `null`/`undefined` als "?". `fixed`: immer eine Nachkommastelle
  * ("2.0 GB", "45.0 GB") und 0 als "0 B" -- so zeigt Proxmox Speicherplatz.
  */

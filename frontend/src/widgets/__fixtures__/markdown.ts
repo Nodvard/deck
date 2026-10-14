@@ -6,9 +6,7 @@ export const view: MarkdownView = {
 };
 
 export const data = {
-  // Deckt auch die
-  // Faehigkeiten ab, die der vorherige handgerollte Parser nicht kannte (Liste,
-  // Codeblock, Tabelle) -- nicht nur die urspruenglichen Ueberschrift/fett/XSS-Faelle.
+  // Deckt auch Listen, Codeblock und Tabelle ab, nicht nur Überschrift, fett und XSS.
   content:
     "# Status\n\nAlles **gut**, <script>alert(1)</script>\n\n" +
     "- Punkt eins\n- Punkt zwei\n\n" +

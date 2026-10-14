@@ -82,10 +82,9 @@ def summarize(
     """-> (je Gast, verwaiste Dateien je lesender Verbindung, VMID und Typ).
 
     `known_guests`: (Typ, VMID) -> Verbindungen, auf denen es diesen Gast gibt."""
-    # Backup-Speicher können geteilt sein, und VMIDs sind nur je Proxmox-Instanz eindeutig (dieselbe VMID kann
-    # anderswo ein Container sein). Eine Datei taucht darum auch über eine Verbindung auf, die den Gast nicht
-    # kennt. Zugeordnet wird per VMID und Typ, bevorzugt auf der lesenden Verbindung, sonst auf der einzigen
-    # anderen, die ihn kennt. Passt keiner, ist sie "verwaist" (Gast gelöscht oder umgezogen) und belegt nur Platz.
+    # Speicher können geteilt sein, VMIDs sind nur je Proxmox-Instanz eindeutig: Zugeordnet wird per VMID und Typ,
+    # bevorzugt auf der lesenden Verbindung, sonst auf der einzigen anderen, die den Gast kennt. Passt keiner, ist die
+    # Datei "verwaist" (Gast gelöscht oder umgezogen) und belegt nur Platz.
     seen: set[tuple[Any, ...]] = set()
     groups: dict[tuple[str, str, str | None, bool], dict[str, Any]] = {}
     for scanner, files in files_by_connection.items():

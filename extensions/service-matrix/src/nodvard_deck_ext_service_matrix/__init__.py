@@ -160,8 +160,7 @@ class Extension(NodvardExtension):
         logs_router = APIRouter()
 
         async def _docker_host(host_id: str):  # noqa: ANN202 - nodvard_sdk.Host
-            """Nur Hosts mit dem Docker-Tag, sonst liefe `docker ...` per SSH auf beliebigen Hosts, nur weil jemand eine ID
-            kennt."""
+            """Nur Hosts mit Docker-Tag, sonst liefe `docker ...` per SSH auf jedem Host, dessen ID jemand kennt."""
             host = await ctx.hosts.get(host_id)
             tag = (await ctx.settings.get()).get("docker_host_tag") or "docker"
             if host is None or tag not in host.tags:
@@ -231,8 +230,7 @@ class Extension(NodvardExtension):
 
         @logs_router.get("/hosts/{host_id}/docker")
         async def docker_storage(host_id: str) -> dict:
-            """Belegung (Images, Container, Volumes, Build-Cache) und die Images des Hosts, wie bei `docker system df`
-            auf der Konsole."""
+            """Belegung (Images, Container, Volumes, Build-Cache) und Images des Hosts, wie `docker system df` sie zeigt."""
             host = await _docker_host(host_id)
             df = await ctx.exec.run(host, "docker system df --format '{{json .}}'", timeout_s=60)
             images = await ctx.exec.run(host, "docker images --format '{{json .}}'", timeout_s=30)
@@ -260,8 +258,7 @@ class Extension(NodvardExtension):
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
 
             command = f"docker logs --tail {tail} --timestamps {'--follow ' if follow else ''}{container}"
-            # Der Strom wird vor der Antwort geöffnet: ein nicht erreichbarer Host wird so ein ehrlicher 502 statt eines 200
-            # mit leerem Körper.
+            # Strom vor der Antwort öffnen: ein unerreichbarer Host wird so ein ehrlicher 502 statt 200 mit leerem Körper.
             stack = AsyncExitStack()
             try:
                 chunks = await stack.enter_async_context(ctx.exec.stream(host, command))
@@ -272,8 +269,7 @@ class Extension(NodvardExtension):
                 ) from exc
 
             async def _body():  # noqa: ANN202
-                # Endet die Verbindung zum Browser, beendet das Verlassen von `ctx.exec.stream()` den entfernten Prozess
-                # (PTY-Hangup).
+                # Bricht der Browser ab, beendet das Verlassen von `ctx.exec.stream()` den entfernten Prozess (PTY-Hangup).
                 try:
                     async for chunk in chunks:
                         # PTY liefert `\r\n`, für die Log-Ansicht reichen Zeilenumbrüche.

@@ -1,7 +1,6 @@
 /**
- * Formularfeld fuer „Server & Zugaenge“: Beschriftung, Eingabe, Hinweis und Fehlermeldung
- * getrennt, damit die Beschriftung allein das Feld benennt (Screenreader, Tests) und der
- * Hinweis nicht mit dazugehoert.
+ * Formularfeld für „Server & Zugänge“: Beschriftung, Eingabe, Hinweis und Fehlermeldung getrennt, damit die
+ * Beschriftung allein das Feld benennt (Screenreader, Tests) und der Hinweis nicht mit dazugehört.
  */
 import { useId, type ReactNode } from "react";
 
@@ -12,7 +11,7 @@ export function FormField({
   hint?: ReactNode;
   error?: string;
   className?: string;
-  /** Bekommt die `id` und `aria-describedby`, die auf die Eingabe gehoeren. */
+  /** Bekommt die `id` und `aria-describedby`, die auf die Eingabe gehören. */
   children: (props: { id: string; "aria-describedby": string | undefined; "aria-invalid": boolean }) => ReactNode;
 }) {
   const id = useId();

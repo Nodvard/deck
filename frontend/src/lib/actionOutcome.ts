@@ -1,14 +1,7 @@
 /**
- * Gemeinsame Auswertung einer Gate-Aktion fuer die Anzeige: Aktionen-Seite,
- * Server-Seite und Widget-Knoepfe meldeten frueher "Bestätigt" bzw.
- * das englische Rohwort ("failed"), auch wenn die Ausfuehrung gescheitert oder vom
- * Gate gesperrt war -- den Grund sah man nur im Protokoll.
- *
- * Eingabe ist `ActionOut` aus api/v1/actions.py (bzw. die kurze Antwort der
- * Extensions `{action_id, status, risk}`, dann ohne Grund): `result` ist das
- * `ActionResult` des Executors (`error` bei Fehlschlag, core/gate.py
- * _record_outcome()), `gate_decision` die Regel samt `detail` (Sperrliste,
- * Flap-Schutz) bzw. `user_reason` bei einer Ablehnung von Hand (gate.reject()).
+ * Gemeinsame Auswertung einer Gate-Aktion für die Anzeige, damit bei Fehlschlag oder Sperre der Grund dasteht.
+ * Eingabe ist `ActionOut` (api/v1/actions.py) oder die kurze Antwort der Extensions `{action_id, status, risk}` (dann
+ * ohne Grund): `result.error` kommt vom Executor, `gate_decision` ist die Regel samt `detail`/`user_reason`.
  */
 
 /** Hinweis, wenn das Backend Ausgabe und Fehlertext weglässt (Nutzer ohne Server-Rechte). */
@@ -29,7 +22,7 @@ export interface ActionOutcome {
   text: string;
 }
 
-/** Textfarbe je Ergebnis, fuer Meldungszeilen unter Knoepfen/Tabellen. */
+/** Textfarbe je Ergebnis, für Meldungszeilen unter Knöpfen/Tabellen. */
 export const OUTCOME_TEXT_CLASS: Record<OutcomeTone, string> = {
   success: "text-emerald-300",
   error: "text-red-400",
@@ -46,8 +39,10 @@ function isUserReject(a: ActionOutcomeSource): boolean {
   return a.gate_decision?.rule === "user:reject";
 }
 
-/** Warum eine Aktion nicht lief: Fehlermeldung der Ausfuehrung bzw. Begruendung der
- * Sperre/Ablehnung. `null` bei allen anderen Zustaenden oder ohne Angabe. */
+/**
+ * Warum eine Aktion nicht lief: Fehlermeldung der Ausführung bzw. Begründung der Sperre/Ablehnung. `null` bei allen
+ * anderen Zuständen oder ohne Angabe.
+ */
 export function actionReason(a: ActionOutcomeSource): string | null {
   if (a.status === "failed") return nonEmpty(a.result?.error);
   if (a.status === "denied") return nonEmpty(a.gate_decision?.detail) ?? nonEmpty(a.gate_decision?.user_reason);
@@ -79,8 +74,10 @@ export function describeActionOutcome(a: ActionOutcomeSource): ActionOutcome {
   }
 }
 
-/** Sieht `value` wie eine ActionOut-Antwort aus? Z. B. der Body einer 403 von
- * `POST /hosts/{id}/actions/{type}`, wenn das Gate sperrt (api/v1/hosts.py). */
+/**
+ * Sieht `value` wie eine ActionOut-Antwort aus? Z. B. der Body einer 403 von `POST /hosts/{id}/actions/{type}`, wenn
+ * das Gate sperrt (api/v1/hosts.py).
+ */
 export function isActionOutcomeSource(value: unknown): value is ActionOutcomeSource {
   if (typeof value !== "object" || value === null) return false;
   const v = value as Record<string, unknown>;

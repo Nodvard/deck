@@ -17,7 +17,7 @@ class DuplicateRevisions(RuntimeError):
 
 
 def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
-    """Läuft vor Alembic, das sonst mit einer unverständlichen Meldung abbricht (Zweigname vergeben, Revision mehrfach da)."""
+    """Läuft vor Alembic, das sonst mit unverständlicher Meldung abbricht (Zweigname vergeben, Revision mehrfach da)."""
     from .core.backup.snapshot import REVISION_RE
 
     seen: dict[str, str] = {}
@@ -43,9 +43,10 @@ def _check_duplicate_revisions(extension_locations: list[Path]) -> None:
 
 
 def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path]:
-    """Der Kern plus jedes vorhandene `extensions/<id>/migrations/versions`, damit eine neue Erweiterung nichts nachziehen muss."""
-    # Alembic liest `version_locations`, bevor `env.py` läuft; ein statischer Eintrag in `alembic.ini` müsste bei jeder neuen
-    # Erweiterung von Hand ergänzt werden. Sie legt nur ihre erste Revision mit `down_revision=None` und eigenem `branch_labels` an.
+    """Der Kern plus jedes `extensions/<id>/migrations/versions`, damit eine neue Erweiterung nichts nachziehen muss."""
+    # Alembic liest `version_locations`, bevor `env.py` läuft; ein statischer Eintrag in `alembic.ini` müsste bei jeder
+    # neuen Erweiterung von Hand ergänzt werden. Sie legt nur ihre erste Revision mit `down_revision=None` und eigenem
+    # `branch_labels` an.
     locations = [backend_dir / "migrations" / "versions"]
     extensions_dir = repo_root / "extensions"
     if extensions_dir.is_dir():
@@ -59,9 +60,10 @@ def _discover_version_locations(repo_root: Path, backend_dir: Path) -> list[Path
 
 def alembic_config(database_url: str | None = None, repo_root: Path | None = None) -> tuple[Config, list[Path]]:
     """Alembic-Konfiguration samt der gefundenen `version_locations`. Ohne `database_url` bleibt die URL leer (Abfragen am
-    Skriptordner brauchen keine Datenbank). Wirft `DuplicateRevisions`, wenn zwei Erweiterungsordner dieselbe Revision enthalten."""
-    # Der Arbeitsordner, nicht `Path(__file__)`: Im Container liegt das Paket nicht editierbar in site-packages, dort steht
-    # neben `__file__` kein `backend/alembic.ini`. Der Entrypoint wechselt vorher nach `/app`, die README ruft vom Repo-Root aus.
+    Skriptordner brauchen keine Datenbank). `DuplicateRevisions` bei derselben Revision in zwei Erweiterungsordnern."""
+    # Der Arbeitsordner, nicht `Path(__file__)`: Im Container liegt das Paket nicht editierbar in site-packages, neben
+    # `__file__` steht kein `backend/alembic.ini`. Der Entrypoint wechselt vorher nach `/app`, die README ruft vom Repo
+    # aus auf.
     repo_root = repo_root or Path.cwd()
     backend_dir = repo_root / "backend"
     cfg = Config(str(backend_dir / "alembic.ini"))
@@ -75,8 +77,7 @@ def alembic_config(database_url: str | None = None, repo_root: Path | None = Non
 
 
 def known_revisions(repo_root: Path | None = None) -> tuple[set[str], set[str]]:
-    """-> (alle Revisionen, die dieses Image kennt; deren Köpfe), um eine fremde Datenbank vor dem Einspielen auf bekannte
-    Stände zu prüfen."""
+    """-> (alle Revisionen dieses Images; deren Köpfe), zum Prüfen einer fremden Datenbank auf bekannte Stände."""
     from alembic.script import ScriptDirectory
 
     cfg, _ = alembic_config(repo_root=repo_root)

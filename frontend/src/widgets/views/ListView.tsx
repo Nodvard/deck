@@ -19,10 +19,8 @@ const TONE_DOT: Record<Tone, string> = {
 };
 
 /**
- * Liste im Widget: Statuspunkt links (Farbe = Badge-Ton), Titel und
- * Untertitel in voller Laenge, Badge und Aktionen rechts.
- * Die Karten sind jetzt mindestens 4 Spalten breit (DashboardPage MIN_SIZE) -- vorher
- * wurde bei ~170 px Breite umgebrochen und gescrollt.
+ * Liste im Widget: Statuspunkt links (Farbe = Badge-Ton), Titel und Untertitel in voller Länge, Badge und Aktionen
+ * rechts. Die Karten sind mindestens 4 Spalten breit (DashboardPage MIN_SIZE).
  */
 export function ListView({ view, data, extId, onAction }: { view: ListViewSpec; data: unknown; extId: string; onAction: () => void }) {
   const rows = Array.isArray(data) ? data : [];
@@ -41,8 +39,7 @@ export function ListView({ view, data, extId, onAction }: { view: ListViewSpec; 
         const title = renderTemplate(item.title, row);
         const subtitle = item.subtitle ? renderTemplate(item.subtitle, row) : null;
         return (
-          // Volle Namen (umbrechen statt
-          // "..."), und Badge/Knoepfe rutschen bei Platzmangel in eine eigene Zeile.
+          // Volle Namen (umbrechen statt "..."), Badge und Knöpfe rutschen bei Platzmangel in eine eigene Zeile.
           <li key={idx} className="flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-lg px-2 py-1.5 hover:bg-white/[0.03]">
             {badgeTone && <span className={`status-dot ${TONE_DOT[badgeTone]}`} />}
             <div className="min-w-0 flex-1 basis-32">

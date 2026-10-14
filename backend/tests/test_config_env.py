@@ -157,7 +157,8 @@ def test_lowercase_variable_names_still_work(monkeypatch: pytest.MonkeyPatch):
 
 def test_defaults_without_any_variable():
     s = Settings()
-    assert s.env == "dev" and s.database_url.endswith("/lattice.db")
+    # Ohne Angabe gilt der Betrieb (`prod`); `dev` setzen nur Entwicklung und Tests ausdrücklich.
+    assert s.env == "prod" and s.database_url.endswith("/lattice.db")
 
 
 # --- Warnung nur mit Namen -------------------------------------------------------------
@@ -245,9 +246,10 @@ def _compose() -> dict:
 
 def test_compose_file_uses_new_names_with_nested_fallback_for_dns():
     service = _compose()["services"]["nodvard-deck"]
+    # Keine Vorgabe: ohne Wert fällt der Eintrag weg, und der Container fragt den Resolver des Hosts.
     assert service["dns"] == [
-        "${NODVARD_DECK_DNS_1:-${LATTICE_DNS_1:-1.1.1.1}}",
-        "${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-1.0.0.1}}",
+        "${NODVARD_DECK_DNS_1:-${LATTICE_DNS_1:-}}",
+        "${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-}}",
     ]
     env = service["environment"]
     assert set(env) == {
@@ -318,9 +320,15 @@ def compose_config(tmp_path: Path):
     return run
 
 
-def test_compose_config_without_any_dns_variable_uses_defaults(compose_config):
+def test_compose_file_names_no_resolver_outside_of_comments():
+    code = [line.split("#", 1)[0] for line in (REPO / "deploy" / "docker-compose.yml").read_text(encoding="utf-8").splitlines()]
+    addresses = {match.group(0) for line in code for match in re.finditer(r"\b\d{1,3}(\.\d{1,3}){3}\b", line)}
+    assert addresses <= {"127.0.0.1"}  # nur die Prüfung im Container selbst (healthcheck)
+
+
+def test_compose_config_without_any_dns_variable_has_no_dns(compose_config):
     service = compose_config()
-    assert service["dns"] == ["1.1.1.1", "1.0.0.1"]
+    assert "dns" not in service
     assert service["environment"]["NODVARD_DECK_ENV"] == "prod"
 
 
@@ -329,8 +337,13 @@ def test_compose_config_with_only_old_dns_variable(compose_config):
     assert service["dns"] == ["192.0.2.10", "192.0.2.11"]
 
 
-def test_compose_config_with_only_dns_1_old_keeps_default_for_2(compose_config):
-    assert compose_config(LATTICE_DNS_1="192.0.2.10")["dns"] == ["192.0.2.10", "1.0.0.1"]
+def test_compose_config_with_only_dns_1_old_has_no_second_resolver(compose_config):
+    assert compose_config(LATTICE_DNS_1="192.0.2.10")["dns"] == ["192.0.2.10"]
+
+
+def test_compose_config_with_empty_values_has_no_dns(compose_config):
+    # So schreibt `scripts/deploy_pi.sh` einen nicht gesetzten Wert nach deploy/.env.
+    assert "dns" not in compose_config(NODVARD_DECK_DNS_1="", NODVARD_DECK_DNS_2="", LATTICE_DNS_1="", LATTICE_DNS_2="")
 
 
 def test_compose_config_with_both_names_new_wins(compose_config):
@@ -344,4 +357,4 @@ def test_compose_config_with_both_names_new_wins(compose_config):
 
 
 def test_compose_config_with_only_new_names(compose_config):
-    assert compose_config(NODVARD_DECK_DNS_1="198.51.100.10")["dns"] == ["198.51.100.10", "1.0.0.1"]
+    assert compose_config(NODVARD_DECK_DNS_1="198.51.100.10")["dns"] == ["198.51.100.10"]

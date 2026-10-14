@@ -1,6 +1,6 @@
 """Gemeinsame Fehlerantworten der API.
 
-Bei 422 bleiben nur `type`, `loc` und `msg` (deutsch); `input` und `ctx` könnten Passwörter, Tokens oder Schlüssel enthalten."""
+Bei 422 bleiben nur `type`, `loc`, `msg` (deutsch); `input` und `ctx` könnten Passwörter, Tokens, Schlüssel enthalten."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ _VALUE_ERROR_PREFIX = "Value error, "
 
 
 def _german_message(error_type: str, ctx: Mapping[str, Any], fallback: str) -> str:
-    """Deutscher Satz zu den Standard-Prüfungen von pydantic, gebaut aus `type` und `ctx` (`ctx` selbst kommt nie in die Antwort).
+    """Deutscher Satz zu den pydantic-Standardprüfungen, gebaut aus `type` und `ctx` (`ctx` selbst kommt nie in die Antwort).
 
     Eigene Prüfungen (`value_error`) tragen schon einen deutschen Text und bleiben unverändert, ebenso alles Unbekannte."""
     if error_type == "missing":

@@ -281,6 +281,8 @@ def _build_mock_proxmox_app() -> tuple[FastAPI, dict]:
 
     @app.get("/api2/json/nodes/{node}/disks/list")
     async def disk_list(node: str, _: None = Depends(_check_auth)) -> dict:
+        if state.get("disks_forbidden"):
+            raise HTTPException(status_code=403, detail="Permission check failed (/nodes/pve1, Sys.Audit)")
         return {"data": state["disks"]}
 
     @app.get("/api2/json/nodes/{node}/disks/zfs")
@@ -2340,6 +2342,24 @@ async def test_disk_widget_puts_the_worst_disk_first(client, db_session, test_se
     assert rows[1]["temperature_c"] is None
 
 
+@pytest.mark.asyncio
+async def test_disk_widget_names_a_fixed_sentence_and_the_node_page_the_reason(client, db_session, test_settings, mock_proxmox):
+    """Die Kachel gibt nie den Text einer Ausnahme weiter; den Grund von Proxmox zeigt die Seite des Knotens."""
+    base_url, state = mock_proxmox
+    token = await _setup_proxmox(client, db_session, test_settings, base_url)
+    await _run_discovery()
+    state["disks_forbidden"] = True
+
+    response = await client.get("/api/v1/ext/proxmox/widgets/disks", headers=_auth_header(token))
+    assert [(r["model"], r["summary"], r["badge"]) for r in response.json()["data"]] == [
+        ("Datenträger", "Datenträger nicht abrufbar. Den Grund zeigt die Seite des Knotens.", "nicht abrufbar"),
+    ]
+    assert "Permission check failed" not in response.text
+    node = (await db_session.execute(select(Host).where(Host.kind == "hypervisor"))).scalar_one()
+    health = (await client.get(f"/api/v1/ext/proxmox/nodes/{node.id}/health", headers=_auth_header(token))).json()
+    assert "Permission check failed (/nodes/pve1, Sys.Audit)" in health["disks_error"]
+
+
 def test_disk_assessment_order_smart_then_wear_then_temperature():
     sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "proxmox" / "src"))  # _cleanup_sys_path raeumt auf
     from nodvard_deck_ext_proxmox.node_health import disk_assessment, smart_details
@@ -3444,7 +3464,7 @@ async def test_proxmox_broken_answers_never_reach_the_test_or_the_pages(client, 
         _UMLEITUNG_OHNE_CODE if answer in REDIRECT_ANSWERS else "Prüfe die Adresse in den Einstellungen (https:// und Port 8006)."
     )
     (row,) = disks.json()["data"]
-    assert row["summary"] == error["error"]
+    assert row["summary"] == "Verbindung gestört. Den Grund zeigt „Verbindung testen“ in den Einstellungen des Moduls."
 
 
 @pytest.mark.asyncio

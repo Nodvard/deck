@@ -1,4 +1,4 @@
-"""Wächter-Vorlagen: Ordner mit fremden Dateien (Samba, NFS, Nextcloud) finden und per Klick zum Echtzeit-Wächter hinzufügen."""
+"""Wächter-Vorlagen: Ordner mit fremden Dateien (Samba, NFS, Nextcloud) finden und per Klick zum Wächter hinzufügen."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     from .defender import Defender
 
 KINDS = ("samba", "nfs", "nextcloud")
-# Der Server liefert nur Rohzeilen (Abschnitte und `path =` der smb.conf, Zeilen der /etc/exports); zerlegt wird in `parse_detection`,
+# Der Server liefert nur Rohzeilen (smb.conf-Abschnitte und `path =`, /etc/exports); zerlegt wird in `parse_detection`,
 # damit Anführungszeichen, `\040` und Drucker-Freigaben richtig behandelt werden.
 DETECT_SCRIPT = (
     "echo @@samba; grep -iE '^[[:space:]]*(\\[[^]]*\\]|(path|directory)[[:space:]]*=)' /etc/samba/smb.conf 2>/dev/null "
@@ -30,8 +30,8 @@ DETECT_SCRIPT = (
     "for f in /var/www/nextcloud/config/config.php /var/www/html/nextcloud/config/config.php "
     "/var/www/html/config/config.php; do "
     "sed -n \"s/^[[:space:]]*'datadirectory'[[:space:]]*=>[[:space:]]*'\\([^']*\\)'.*/\\1/p\" \"$f\" 2>/dev/null; done | head -n 10; "
-    # Ein Datenordner der Nextcloud enthält immer `appdata_<Kennung>`: So findet sich das Volume des offiziellen Images (`…/_data/data`)
-    # ebenso wie das von Nextcloud AIO (`…_nextcloud_data/_data`).
+    # Ein Datenordner der Nextcloud enthält immer `appdata_<Kennung>`: So findet sich das Volume des offiziellen Images
+    # (`…/_data/data`) ebenso wie das von Nextcloud AIO (`…_nextcloud_data/_data`).
     "for d in /var/lib/docker/volumes/*nextcloud*/_data /var/lib/docker/volumes/*nextcloud*/_data/data; do "
     "for a in \"$d\"/appdata_*; do [ -d \"$a\" ] && echo \"$d\"; break; done; done 2>/dev/null | head -n 10; "
     "echo @@end"
@@ -86,8 +86,7 @@ def _samba_paths(lines: list[str]) -> list[str]:
 
 
 def _nfs_paths(lines: list[str]) -> list[str]:
-    """Das erste Feld jeder Zeile von /etc/exports: in Anführungszeichen, wenn es Leerzeichen enthält, und mit `\\ooo` (oktal,
-    etwa `\\040` für ein Leerzeichen) wie in exports(5)."""
+    """Das erste Feld jeder Zeile von /etc/exports, ggf. in Anführungszeichen, mit `\\ooo` (oktal) wie in exports(5)."""
     out: list[str] = []
     for line in lines:
         text = line.strip()
@@ -140,14 +139,14 @@ def covered_by(folder: str, watched: list[str]) -> str | None:
 
 
 def current_watch_paths(settings: dict[str, Any]) -> list[str]:
-    # Der Standard (`av.WATCH_PATHS`) deckt nur Orte ab, an denen Schadsoftware typischerweise landet; Hochgeladenes liegt oft
-    # woanders. Die Liste gilt für alle Server: Fehlt ein Ordner auf einem Server, überspringt `find` ihn. Ein großer Ordner
-    # kostet bei jedem Lauf Zeit.
+    # Der Standard (`av.WATCH_PATHS`) deckt nur Orte ab, an denen Schadsoftware typischerweise landet; Hochgeladenes
+    # liegt oft woanders. Die Liste gilt für alle Server (`find` überspringt fehlende Ordner); ein großer Ordner kostet
+    # bei jedem Lauf Zeit.
     return list(settings.get("watch_paths") or av.WATCH_PATHS)
 
 
 def excluded_paths(settings: dict[str, Any]) -> list[str]:
-    """Die „Ausgenommenen Ordner“ (`exclude_paths`): Dort sucht der Wächter nicht, ein Vorschlag darunter wäre wirkungslos."""
+    """Die „Ausgenommenen Ordner“ (`exclude_paths`): Dort sucht der Wächter nicht, ein Vorschlag wäre wirkungslos."""
     value = settings.get("exclude_paths") or []
     return [p for p in value if isinstance(p, str)] if isinstance(value, list) else []
 
@@ -202,8 +201,8 @@ def build_routers(ctx: ExtensionContext, defender: Defender) -> tuple[APIRouter,
     """-> (lesen: `GET /defender/watch-templates`, ändern: `POST /defender/watch-paths`)."""
     read = APIRouter()
     change = APIRouter()
-    # Lesen, anhängen und schreiben am Stück: Zwei gleichzeitige Klicks (zwei Tabs) tragen sonst doppelt ein oder verlieren einen
-    # Eintrag.
+    # Lesen, anhängen und schreiben am Stück: Zwei gleichzeitige Klicks (zwei Tabs) tragen sonst doppelt ein oder
+    # verlieren einen Eintrag.
     lock = asyncio.Lock()
 
     @read.get("/defender/watch-templates")

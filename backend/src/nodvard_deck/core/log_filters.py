@@ -1,5 +1,4 @@
-"""Filter für das Zugriffsprotokoll von uvicorn (`uvicorn.access`): Das Ticket des Sicherungs-Downloads wird aus der Adresse
-entfernt."""
+"""Filter für das Zugriffsprotokoll von uvicorn (`uvicorn.access`): entfernt das Download-Ticket aus der Adresse."""
 
 from __future__ import annotations
 
@@ -9,11 +8,9 @@ import re
 ACCESS_LOGGER = "uvicorn.access"
 REDACTED = "…"
 
-# Das Einmal-Ticket steht in der Adresse (`GET /api/v1/system/backups/download/{ticket}`, der Browser lädt ohne Anmelde-Header);
-# wer Container-Protokolle weitergibt, hätte damit einen gültigen Download-Link. Der Stand eines Downloads wird über eine
-# eigene ID abgefragt (`core/backup/tickets.py`); der Filter deckt den echten Download-Aufruf und die alte Status-Adresse ab.
-# Präfix-unabhängig (`/api/v1` kann hinter einem Proxy anders heißen). Gekürzt wird nur der Teil nach `download/`, ein
-# folgendes `/status` bleibt stehen, eine Query entfällt.
+# Das Einmal-Ticket steht in der Adresse (`GET .../system/backups/download/{ticket}`, der Browser lädt ohne
+# Anmelde-Header); in weitergegebenen Container-Protokollen stünde ein gültiger Download-Link. Der Filter deckt den
+# Download-Aufruf und die alte Status-Adresse ab, unabhängig vom Präfix (hinter einem Proxy kann `/api/v1` anders heißen).
 _TICKET_PATH = re.compile(r"^(?P<head>[^?#]*/system/backups/download/)(?P<ticket>[^/?#]+)(?P<rest>/[^?#]*)?(?:[?#].*)?$")
 
 

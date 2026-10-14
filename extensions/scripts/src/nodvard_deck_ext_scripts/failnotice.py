@@ -1,5 +1,4 @@
-"""Merkt sich je Skript den zuletzt gemeldeten Fehler, damit ein Zeitplan, der immer wieder scheitert, nur einmal
-meldet."""
+"""Merkt sich je Skript den zuletzt gemeldeten Fehler, damit ein Zeitplan, der immer wieder scheitert, nur einmal meldet."""
 
 from __future__ import annotations
 

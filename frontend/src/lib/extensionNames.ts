@@ -1,17 +1,16 @@
 /**
- * Erweiterungen mit ihrem Namen statt ihrer Kennung anzeigen: „Nodvard Shield“ statt „shield“.
- * Die Liste kommt aus `GET /extensions` (jede angemeldete Person darf sie lesen) und wird mit allen
- * anderen Stellen geteilt. Fehlt der Name (Erweiterung entfernt, Liste nicht geladen), steht die Kennung da.
- *
- * Gespeicherte Meldungen, Protokolleinträge und Aufträge tragen die Kennung, die zur Zeit ihrer Entstehung
- * galt. Wurde die Erweiterung seither umbenannt, steht diese alte Kennung in `legacy_ids`: sie führt zum selben Namen.
+ * Erweiterungen mit ihrem Namen statt ihrer Kennung anzeigen („Nodvard Shield“ statt „shield“); fehlt der Name, steht
+ * die Kennung da. Die Liste kommt aus `GET /extensions`. Gespeicherte Meldungen, Protokolleinträge und Aufträge
+ * tragen die Kennung von damals; nach einer Umbenennung führt sie über `legacy_ids` zum selben Namen.
  */
 import { useCallback } from "react";
 
 import { useExtensions, type ExtensionInfo } from "./firstSteps";
 
-/** Die Erweiterung zu einer Kennung, der heutigen oder einer früheren (`legacy_ids`). Die heutige Kennung hat
- * Vorrang: eine frühere kann inzwischen von einer anderen Erweiterung belegt sein. */
+/**
+ * Die Erweiterung zu einer Kennung, der heutigen oder einer alten (`legacy_ids`). Die heutige Kennung hat Vorrang:
+ * eine alte kann inzwischen von einer anderen Erweiterung belegt sein.
+ */
 export function findExtension(list: readonly ExtensionInfo[] | undefined, id: string): ExtensionInfo | undefined {
   return list?.find((e) => e.id === id) ?? list?.find((e) => e.legacy_ids?.includes(id));
 }

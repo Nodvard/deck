@@ -27,10 +27,9 @@ if(-not $B -and $pp.AppDirectory){$B=Join-Path ([string]$pp.AppDirectory) 'backu
 $wn=if($a -match '(?i)-world\s+("([^"]*)"|(\S+))'){@(@($Matches[2],$Matches[3])|?{$_})[0]}else{''}
 """
 
-# Ausgewertete Log-Zeilen (echte Beispiele im Test): „Connections N ZDOS:“ (alle 10 Minuten, aktuelle Spielerzahl), „Got
-# character ZDOID from NAME“, „Session ... registered with join code NNN“, „Valheim version: 1.0.12“, „World save (5/5)
-# done“. Das Passwort verlässt die VM nie: Es wird schon im Skript aus den Startparametern entfernt, Log-Zeilen mit
-# „password“ werden dort verworfen.
+# Ausgewertete Log-Zeilen (echte Beispiele im Test): „Connections N ZDOS:“ (alle 10 Minuten, Spielerzahl), „Got character
+# ZDOID from NAME“, „Session ... registered with join code NNN“, „Valheim version: 1.0.12“, „World save (5/5) done“. Das
+# Passwort verlässt die VM nie: Das Skript entfernt es aus den Startparametern und verwirft Log-Zeilen mit „password“.
 _STATUS = r"""$o=[ordered]@{now=(Get-Date).ToString('s');service_name=$(if($svc){$svc.Name}else{''});service=$(if($svc){[string]$svc.Status}else{'missing'})}
 $o.has_password=$a -match '(?i)-password\s'
 $o.args=[regex]::Replace($a,'(?i)-password\s+("[^"]*"|\S+)','')
@@ -49,10 +48,9 @@ if($B -and (Test-Path $B)){$o.backups=@(Get-ChildItem -Path $B -Directory|sort N
 $o|ConvertTo-Json -Depth 4 -Compress
 """
 
-# Das Prelude schaltet Fehler stumm (SilentlyContinue): Ein gescheitertes Start-Service/Copy-Item fiele sonst nicht auf (der
-# letzte Befehl gelingt, Exit 0, Nodvard Deck meldete „erledigt“). Deshalb `-ErrorAction Stop` im try/catch und bei Diensten
-# danach eine Prüfung des Zustands. Write-Error bliebe unter SilentlyContinue ebenfalls stumm, Meldungen gehen direkt nach
-# stderr.
+# Das Prelude schaltet Fehler stumm (SilentlyContinue), ein gescheitertes Start-Service/Copy-Item fiele also nicht auf
+# (Exit 0, „erledigt“). Deshalb `-ErrorAction Stop` im try/catch, bei Diensten danach eine Prüfung des Zustands, und
+# Meldungen direkt nach stderr (Write-Error bliebe ebenfalls stumm).
 _NO_SERVICE = "if(-not $svc){[Console]::Error.WriteLine('Kein Valheim-Dienst gefunden');exit 2}\n"
 
 
@@ -71,9 +69,8 @@ _ACTIONS = {
     "start": _service_action("Start-Service -Name $svc.Name", "Starten", "Running"),
     "stop": _service_action("Stop-Service -Name $svc.Name -Force", "Stoppen", "Stopped"),
     "restart": _service_action("Restart-Service -Name $svc.Name -Force", "Neustart", "Running"),
-    # Kopie des letzten Speicherstands in einen Zeitstempel-Ordner: der Weltordner (aktuelle Valheim-Versionen) bzw. .db/.fwl
-    # (ältere). Rein additiv, überschreibt und löscht nichts; nur ein eigener, halb kopierter Ordner wird wieder entfernt,
-    # damit er nicht als Sicherung in der Liste steht.
+    # Kopiert den letzten Speicherstand (Weltordner, bei alten Versionen .db/.fwl) in einen Zeitstempel-Ordner. Rein
+    # additiv: nur ein eigener, halb kopierter Ordner wird wieder entfernt, damit er nicht als Sicherung in der Liste steht.
     "backup": r'''if(-not $W -or -not $wn){[Console]::Error.WriteLine('Weltordner oder Weltname unbekannt');exit 2};if(-not $B){[Console]::Error.WriteLine('Kein Sicherungsordner');exit 2}
 $f=@(Get-ChildItem -Path $W|?{$_.Name -in @($wn,"$wn.db","$wn.fwl")})
 if(-not $f){[Console]::Error.WriteLine("Keine Weltdaten fuer $wn in $W");exit 3}
@@ -130,8 +127,7 @@ def _parse_ts(value: str | None) -> datetime | None:
 
 def _age(ts: datetime | None, now: datetime | None) -> int | None:
     """Sekunden, relativ zur Uhr der VM; ein Zeitstempel „in der Zukunft“ ist keine Angabe, der man trauen kann: `None`."""
-    # Die VM-Uhr stand schon auf Pazifik-Zeit und springt beim Booten, deshalb zählt nur der Abstand zwischen Zeitstempel und
-    # `now`, beides von derselben Uhr.
+    # Die VM-Uhr läuft auf Pazifik-Zeit und springt beim Booten; es zählt nur der Abstand zu `now`, beides VM-Zeit.
     if ts is None or now is None:
         return None
     delta = int((now - ts).total_seconds())

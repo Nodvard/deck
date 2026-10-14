@@ -1,6 +1,6 @@
 """Obergrenze für die Größe einer Anfrage (reine ASGI-Middleware, vor allen Routen).
 
-Ohne sie liest FastAPI jeden Körper komplett in den Speicher, bevor geprüft wird, wer anfragt (auch bei `POST /auth/login`)."""
+Ohne sie liest FastAPI jeden Körper ganz in den Speicher, bevor geprüft wird, wer anfragt (auch bei `POST /auth/login`)."""
 
 from __future__ import annotations
 
@@ -61,12 +61,10 @@ async def _send_413(send: Send, limit: int) -> None:
     await send({"type": "http.response.body", "body": body})
 
 
-# Steht eine `Content-Length` über der Grenze, antwortet die Middleware mit 413, sobald die Anwendung den Körper anfordert,
-# und liest kein Byte davon (Handler, die ihn nie anfordern, antworten wie gewohnt). Ohne Länge (chunked) zählt sie die
-# gelesenen Bytes mit; bei Überschreitung antwortet sie mit 413, meldet der Anwendung eine getrennte Verbindung und
-# verwirft weitere Antworten. Die höhere Grenze einer Route (`nodvard_sdk.max_body_bytes`) wird erst herangezogen, wenn
-# die allgemeine überschritten ist, und weil der Router die Route erst beim Lesen kennt, prüft die Middleware dort.
-# WebSockets laufen durch; dort begrenzt uvicorn (das Image startet mit `--ws-max-size 1048576`).
+# Eine zu große `Content-Length` wird mit 413 beantwortet, sobald die Anwendung den Körper anfordert (ohne ein Byte zu
+# lesen); ohne Länge (chunked) wird mitgezählt und beim Überschreiten mit 413 und getrennter Verbindung abgebrochen.
+# Die höhere Grenze einer Route (`nodvard_sdk.max_body_bytes`) kennt der Router erst beim Lesen, daher prüft die
+# Middleware dort. WebSockets begrenzt uvicorn (`--ws-max-size` im Image).
 class BodyLimitMiddleware:
     def __init__(self, app: ASGIApp, *, max_body_bytes: int) -> None:
         self.app = app

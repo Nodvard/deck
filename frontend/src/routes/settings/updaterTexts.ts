@@ -1,15 +1,7 @@
 /**
- * Texte zum Update-Helfer (Einstellungen → System, Karten „Updates“ und „Kopien vor Updates“).
- *
- * Die API liefert nur feste Codes, nie Freitext: Gründe für „nicht bereit“ (Vorprüfung), Ablehnungen eines Auftrags,
- * Fehler im Ablauf, Schritte und Ergebnisse. Die Sätze dazu stehen hier, in der Du-Form: was los ist und in einem Satz,
- * was du tun kannst. Quelle der Codes ist der Helfer selbst (`deploy/updater/nodvard_deck_updater/policy.py`, gleich
- * `deploy/updater/tests/vectors/protocol.json`), dazu die wenigen der Ansicht im Dashboard
- * (`backend/src/nodvard_deck/services/update_helper.py`, `core/updater_client.py`).
- *
- * Kommt im Helfer ein Code dazu, schlagen `updaterTexts.test.ts` (liest protocol.json und status.json) und
- * `backend/tests/test_updater_texts.py` (liest policy.py) fehl, bis er hier einen Text hat. Ein unbekannter Code eines
- * neueren Helfers bekommt bis dahin `fallbackText`.
+ * Texte zum Update-Helfer (Einstellungen → System, Karten „Updates“ und „Kopien vor Updates“). Die API liefert nur
+ * feste Codes (Quelle: `policy.py` des Helfers, dazu wenige der Dashboard-Ansicht), die Sätze dazu stehen hier.
+ * Fehlt zu einem Code der Text, schlagen die Tests fehl; ein unbekannter Code eines neueren Helfers: `fallbackText`.
  */
 
 import { repoFile } from "../../lib/docs";

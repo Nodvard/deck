@@ -52,7 +52,7 @@ async def test_list_settings_returns_defaults_when_unset(client):
 async def test_put_and_get_roundtrip(client):
     token = await _bootstrap_owner(client)
     put = await client.put(
-        "/api/v1/settings/autonomy.mode", json={"value": "full"}, headers=_auth_header(token)
+        "/api/v1/settings/autonomy.mode", json={"value": "full", "current_password": "correct-horse-battery"}, headers=_auth_header(token)
     )
     assert put.status_code == 200
     assert put.json() == {"key": "autonomy.mode", "value": "full"}

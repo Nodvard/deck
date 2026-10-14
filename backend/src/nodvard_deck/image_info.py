@@ -9,10 +9,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# Bewusst eine Datei im Image und keine Umgebungsvariable (`ENV` im Dockerfile): Docker übernimmt die ENV eines Images in die
-# Einstellungen jedes Containers. Wer einen Container mit dessen Einstellungen neu anlegt und nur das Image tauscht (Portainer
-# "Recreate", Update-Helfer, die die Konfiguration klonen), nähme sonst die alte Version mit, und sie überdeckte die des neuen
-# Images. Eine Datei im Image kommt immer aus dem Image, das gerade läuft.
+# Bewusst eine Datei im Image statt `ENV` im Dockerfile: Docker übernimmt die ENV eines Images in die Einstellungen
+# jedes Containers. Wer einen Container mit dessen Einstellungen neu anlegt und nur das Image tauscht (Portainer
+# "Recreate", klonende Update-Helfer), nähme sonst die alte Version mit.
 PATH = Path("/app/image-info.json")
 """Ort der Datei im Image (`{"image": ..., "version": ...}`, `deploy/Dockerfile`). Ein selbst gebautes Image ohne die
 Build-Argumente hat keine. Überschreibbar mit `NODVARD_DECK_IMAGE_INFO_PATH`, nur für Tests."""

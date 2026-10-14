@@ -1,10 +1,7 @@
 /**
- * Hilfen fuer Leerzustaende der Erweiterungsseiten (zusammen mit `EmptyState` aus ui.tsx):
- * ein Knopf zur passenden Einstellungsseite im Kern -- nur mit dem Recht dafuer -- und der
- * Wert einer Einstellung der Erweiterung (z. B. die Server-Markierung) fuer den Hinweistext.
- *
- * Eigene Datei aus demselben Grund wie AuthImage.tsx und location.ts: nur Bundles, die sie
- * wirklich einbinden, aendern sich.
+ * Hilfen für Leerzustände der Erweiterungsseiten (mit `EmptyState` aus ui.tsx): ein Knopf zur passenden Einstellungsseite
+ * im Kern, nur mit dem Recht dafür, und der Wert einer Einstellung der Erweiterung für den Hinweistext. Eigene Datei
+ * wie AuthImage.tsx: Nur Bundles, die sie einbinden, ändern sich.
  */
 import { useEffect, useState, type ReactNode } from "react";
 

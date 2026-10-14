@@ -5,10 +5,9 @@ import { retryDelayMs } from "../lib/tokenRefresh";
 import { ServerUnavailableError, useAuthStore } from "../state/auth";
 
 /**
- * Adresse, zu der die Anmeldung zurueckfuehren soll. Seiten wie Nodvard Shield schreiben Reiter
- * und Filter per replaceState in die Adresszeile (`_shared/location.ts`), am Router vorbei:
- * dessen `location` kennt nur die letzte echte Navigation. Ist die Seite dieselbe, gilt
- * deshalb die Adresszeile. Sonst (z. B. in Tests mit MemoryRouter) der Router-Stand.
+ * Adresse, zu der die Anmeldung zurückführen soll. Seiten wie Nodvard Shield schreiben Reiter und Filter per
+ * replaceState in die Adresszeile (`_shared/location.ts`), am Router vorbei; dessen `location` kennt nur die letzte
+ * echte Navigation. Bei derselben Seite gilt daher die Adresszeile, sonst (z. B. in Tests) der Router-Stand.
  */
 function returnAddress(location: { pathname: string; search: string; hash: string }): string {
   const { pathname, search, hash } = window.location;
@@ -16,24 +15,9 @@ function returnAddress(location: { pathname: string; search: string; hash: strin
 }
 
 /**
- * Ein Reload haelt keinen Access-Token im Speicher (D-07, absichtlich) -- beim
- * allerersten Mount ist `status` deshalb "unknown" und wir versuchen einen stillen
- * Refresh ueber das HttpOnly-Cookie, bevor wir auf den Login umleiten.
- *
- * Antwortet der Server dabei nicht (Netzwerkfehler, Zeitlimit, 502/503/504 ohne Grund),
- * sagt das nichts ueber das Cookie: dann bleibt die Seite auf "Server nicht erreichbar"
- * stehen und versucht es von selbst wieder, statt auf den Login zu werfen. Antwortet er
- * mit einem echten Fehler (z. B. 507 "Speicherplatz voll" oder ein 500), steht stattdessen
- * "Server meldet: <Grund>" da -- ebenfalls ohne Abmelden und mit weiteren Versuchen. Umgeleitet wird erst, wenn der
- * Server das Cookie ablehnt. Damit man bei einem dauerhaften Fehler (z. B. falscher
- * Proxy-Pfad) nicht festhaengt, gibt es dabei "Jetzt erneut versuchen" und einen Link zur
- * Anmeldung.
- *
- * Wann der Hinweis erscheint: NICHT bei einem Reload, waehrend der Container beim Deploy
- * gestoppt ist -- dann zeigt der Browser seine eigene Fehlerseite, diese Seite wird gar
- * nicht erst geladen. Er erscheint, sobald `index.html` da ist, die API aber nicht
- * (sinnvoll) antwortet: Seite aus dem Cache (Zurueck/Vor), ein Ausfall kurz nach dem Laden
- * oder ein Server, der antwortet, aber einen Fehler meldet.
+ * Ein Reload hält keinen Access-Token im Speicher: Bei "unknown" versucht die Seite einen stillen Refresh über das
+ * Cookie, bevor sie zum Login umleitet. Antwortet der Server nicht oder mit einem Fehler, bleibt sie mit Hinweis und
+ * neuen Versuchen stehen; bei einem dauerhaften Fehler helfen "Jetzt erneut versuchen" und der Link zur Anmeldung.
  */
 export function RequireAuth() {
   const status = useAuthStore((s) => s.status);
@@ -42,9 +26,9 @@ export function RequireAuth() {
   const [unavailable, setUnavailable] = useState(false);
   /** Grund, den der Server bei einem echten Fehler (507, 500, ...) genannt hat; `null` = nicht erreichbar. */
   const [serverText, setServerText] = useState<string | null>(null);
-  /** Ein Versuch laeuft gerade (sperrt den Knopf). */
+  /** Ein Versuch läuft gerade (sperrt den Knopf). */
   const [trying, setTrying] = useState(false);
-  /** Zaehlt die Klicks auf "Jetzt erneut versuchen" -- ein neuer Wert startet den Effekt neu. */
+  /** Zählt die Klicks auf "Jetzt erneut versuchen": ein neuer Wert startet den Effekt neu. */
   const [manualTries, setManualTries] = useState(0);
 
   useEffect(() => {
@@ -55,7 +39,7 @@ export function RequireAuth() {
 
     const attempt = () => {
       setTrying(true);
-      // Bei Erfolg oder Ablehnung aendert refresh() den Status -- der Effekt endet dann.
+      // Bei Erfolg oder Ablehnung ändert refresh() den Status, der Effekt endet dann.
       refresh().then(
         () => {
           if (!active) return;
@@ -80,6 +64,8 @@ export function RequireAuth() {
     };
   }, [status, refresh, manualTries]);
 
+  // Der Hinweis erscheint nur, wenn `index.html` da ist, die API aber nicht antwortet (Seite aus dem Cache, Ausfall
+  // kurz nach dem Laden, Server mit Fehlermeldung). Bei gestopptem Container zeigt der Browser seine eigene Seite.
   if (status === "unknown") {
     return unavailable ? (
       <div className="p-6 text-sm">
@@ -109,8 +95,8 @@ export function RequireAuth() {
       <p className="p-6 text-sm opacity-60">Lade …</p>
     );
   }
-  // Mit Abfrage und Anker: ntfy-Links wie /ext/shield/soc?tab=guard&host=... sollen
-  // nach der Anmeldung im richtigen Reiter landen.
+  // Mit Abfrage und Anker: ntfy-Links wie /ext/shield/soc?tab=guard&host=... sollen nach der Anmeldung im richtigen
+  // Reiter landen.
   if (status !== "authenticated") {
     return <Navigate to="/login" state={{ from: returnAddress(location) }} replace />;
   }

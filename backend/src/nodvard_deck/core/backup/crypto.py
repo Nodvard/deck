@@ -116,8 +116,8 @@ def bech32_decode(text: str) -> tuple[str, bytes]:
 
 
 # Sicherungsschlüssel (Modus "schluessel"): Aus dem Sicherungspasswort entsteht per Argon2id ein 32-Byte-X25519-Geheimnis,
-# also eine age-Identität (`AGE-SECRET-KEY-1...`). Der private Schlüssel wird nie gespeichert; gespeichert werden nur Empfänger,
-# Salz, KDF-Parameter und `key_id`. Die Identität selbst ist der Wiederherstellungsschlüssel, den der Owner einmal sieht.
+# also eine age-Identität (`AGE-SECRET-KEY-1...`). Der private Schlüssel wird nie gespeichert, nur Empfänger, Salz,
+# KDF-Parameter und `key_id`. Die Identität ist der Wiederherstellungsschlüssel, den der Owner einmal sieht.
 
 
 @dataclass(frozen=True)

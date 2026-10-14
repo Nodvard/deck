@@ -81,7 +81,7 @@ def decryptor_for(header: dict[str, Any], secret: str) -> Encryptor:
 def read_backup(reader: BinaryIO, secret: str, dest: Path, **extract: Any) -> dict[str, Any]:
     """Liest, entschlüsselt und prüft eine Sicherung vollständig nach `dest`; `extract` geht an `snapshot.extract_archive`.
 
-    Schon vor dem Ende der Prüfung liegen Dateien in `dest`: erst nach erfolgreicher Rückkehr verwenden, bei jedem Fehler wegräumen."""
+    Schon vor dem Ende der Prüfung liegen Dateien in `dest`: nur nach erfolgreicher Rückkehr verwenden, sonst wegräumen."""
     header = fmt.read_header(reader)
     decrypt = decryptor_for(header, secret)
     return snapshot.run_pipeline(

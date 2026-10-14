@@ -15,15 +15,9 @@ export function StatusGridView({ view, data }: { view: StatusGridViewSpec; data:
     return <p className="text-sm opacity-60">Keine Einträge</p>;
   }
 
-  // Nicht `grid-cols-2 sm:grid-cols-3`: `sm:` reagiert
-  // auf die VIEWPORT-Breite, nicht auf die der Karte. Eine schmale Dashboard-Karte
-  // (GridSize w=2 von 12 Spalten) bekam auf einem breiten Bildschirm drei Kachelspalten
-  // in ~130px gequetscht, dazu `truncate` -- Namen waren praktisch unlesbar. Jetzt
-  // richtet sich die Spaltenzahl nach der Kartenbreite (mind. 7.5rem pro Kachel), und
-  // lange Namen brechen um statt abgeschnitten zu werden (Kartenkoerper scrollt ohnehin).
-  // `min(7.5rem, 100%)`: in der schmalsten Karte (~114px Inhalt) waere ein 7.5rem-Track
-  // breiter als die Karte selbst -- so wird eine einzelne Spalte nie breiter als der
-  // Container (sonst entstuende ein waagerechter Mini-Scrollbalken in der Karte).
+  // Spaltenzahl nach der Kartenbreite statt `sm:` (das reagiert auf den Viewport: Schmale Karten quetschten auf breiten
+  // Bildschirmen drei Spalten in ~130px), mind. 7.5rem pro Kachel; lange Namen brechen um. `min(7.5rem,100%)`: In der
+  // schmalsten Karte wäre der Track sonst breiter als sie (waagerechter Scrollbalken).
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(min(7.5rem,100%),1fr))] gap-2">
       {tiles.map((tile, idx) => {

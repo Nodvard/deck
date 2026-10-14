@@ -1,7 +1,7 @@
 /**
- * Einstellungen -> Server & Zugaenge -> ein Server (`/settings/hosts/:hostId`): Allgemeines,
- * SSH-Zugang samt Einrichtungsbefehl, „Verbindung pruefen“, gemerkte Server-Schluessel, Gruppen
- * und Loeschen. Nach „Server anlegen“ (`?neu=1`) klappt das Erzeugen des Schluessels gleich auf.
+ * Einstellungen → Server & Zugänge → ein Server (`/settings/hosts/:hostId`): Allgemeines, SSH-Zugang samt
+ * Einrichtungsbefehl, „Verbindung prüfen“, gemerkte Server-Schlüssel, Gruppen und Löschen. Nach „Server anlegen“
+ * (`?neu=1`) klappt das Erzeugen des Schlüssels gleich auf.
  */
 import { ArrowLeft } from "lucide-react";
 import { useState } from "react";

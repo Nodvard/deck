@@ -1,23 +1,7 @@
 /**
  * Update-Helfer (Einstellungen → System, Karten „Updates“ und „Kopien vor Updates“): Zustand lesen, Update und Rückweg
- * anfordern und einem Vorgang bis zum Ergebnis folgen. Server: `GET /system/updates/helper`,
- * `POST /system/updates/apply`, `POST /system/updates/rollback` (docs/04-API.md, Abschnitt System; Backend
- * `services/update_helper.py`).
- *
- * Ein Vorgang wird in zwei Phasen verfolgt:
- *  1. Solange das Dashboard antwortet: `GET /system/updates/helper` (Schritt des Helfers, `busy.step`).
- *  2. Antwortet es nicht mehr (der Helfer schaltet den Container um): `/api/v1/health`, bis wieder eine Version gesund
- *     antwortet (die neue oder, nach einem Rückbau, wieder die alte), dann zurück zu 1., wo das Ergebnis steht.
- * Nach 30 Minuten ohne Ergebnis sagt die Anzeige das (Zeitüberschreitung). Der Helfer selbst darf länger brauchen: bis zu
- * 30 Minuten für den Download, danach 15 für den Start und bei einem Fehler noch einmal 15 für den Rückbau. Solange er an
- * diesem Auftrag arbeitet (oder nicht antwortet), fragt die Anzeige deshalb danach seltener weiter nach
- * (`updaterTiming.latePollMs`) und zeigt das Ergebnis aus `last_result`, sobald es da ist. Ein Vorgang, dem die Karte
- * beim Laden wieder folgt (Seite neu geladen, „Schließen“), bekommt die Frist ab da.
- * Nach einem gelungenen Update oder Rückweg lädt die Seite neu, wie nach dem Einspielen einer Sicherung
- * (`browserNavigation` aus lib/restore.ts): Es läuft ja eine andere Version.
- *
- * Zustand und Vorgang liegen in einem kleinen Store, damit beide Karten dasselbe sehen. Passwort und Code laufen nie
- * hier durch, nur als Argument der Aufrufe (wie in lib/restore.ts).
+ * anfordern und einem Vorgang bis zum Ergebnis folgen (docs/04-API.md, Backend `services/update_helper.py`). Zustand
+ * und Vorgang liegen in einem Store, damit beide Karten dasselbe sehen; Passwort und Code laufen nie hindurch.
  */
 import { create } from "zustand";
 
@@ -44,7 +28,8 @@ export interface HelperBusy {
 export interface HelperPrevious {
   version: string;
   until: number;
-  /** `true`: die Daten gehen mit zurück (alles seit `data_since` geht verloren), `false`: sie bleiben, `null`: unklar. */
+  /** `true`: die Daten gehen mit zurück (alles seit `data_since` geht verloren), `false`: sie bleiben,
+   * `null`: unklar. */
   data_revert?: boolean | null;
   data_since?: number | null;
 }
@@ -90,8 +75,8 @@ export interface UpdateRequested {
 }
 
 /**
- * Abfragetakt, Frist, Takt nach der Frist und Pause vor dem Neuladen; als Objekt, damit Tests und Vorschau sie verkürzen
- * können.
+ * Abfragetakt, Frist, Takt nach der Frist und Pause vor dem Neuladen; als Objekt, damit Tests und Vorschau sie
+ * verkürzen können.
  */
 export const updaterTiming = { pollMs: 3000, timeoutMs: 30 * 60 * 1000, latePollMs: 30_000, reloadDelayMs: 3000 };
 
@@ -159,7 +144,7 @@ export interface FollowState {
   result: HelperResult | null;
   /** Gleich wird die Seite neu geladen (nach `applied` bzw. `reverted`). */
   reloading: boolean;
-  /** Nach der Frist: Die Anzeige fragt weiter nach, weil der Helfer noch an diesem Auftrag arbeitet oder nicht antwortet. */
+  /** Nach der Frist: Die Anzeige fragt weiter nach (der Helfer arbeitet noch am Auftrag oder antwortet nicht). */
   watching: boolean;
 }
 
@@ -203,12 +188,15 @@ function mine(view: HelperView, requestId: string): HelperResult | null {
 }
 
 /**
- * Schritte, bei denen schon umgeschaltet ist. Antwortet danach wieder eine Version (Phase 2), bleibt `busy.step` stehen,
- * solange der Helfer sie prüft oder zurückbaut (der Rückbau ändert den Schritt nicht).
+ * Schritte, bei denen schon umgeschaltet ist. Antwortet danach wieder eine Version (Phase 2), bleibt `busy.step`
+ * stehen, solange der Helfer sie prüft oder zurückbaut (der Rückbau ändert den Schritt nicht).
  */
 const SWITCHED_STEPS = new Set(["old_stopped", "started"]);
 
 export const useUpdateHelper = create<UpdateHelperState>((set, get) => {
+  // Phase 1: Solange das Dashboard antwortet, `GET /system/updates/helper` (`busy.step`). Phase 2: Antwortet es
+  // nicht mehr (der Helfer schaltet den Container um), `/api/v1/health`, bis wieder eine Version gesund antwortet
+  // (die neue oder nach einem Rückbau die alte), dann zurück zu Phase 1, wo das Ergebnis steht.
   async function followLoop(signal: AbortSignal): Promise<void> {
     const start = get().follow;
     if (!start) return;
@@ -222,13 +210,13 @@ export const useUpdateHelper = create<UpdateHelperState>((set, get) => {
       const success = result.outcome === "applied" || result.outcome === "reverted";
       update({ phase: "done", result, reloading: success });
       if (success) {
-        // Es läuft jetzt eine andere Version: neu laden, damit auch die Oberfläche passt (wie nach einer Wiederherstellung).
+        // Es läuft jetzt eine andere Version: neu laden, damit die Oberfläche passt (wie nach einer Wiederherstellung).
         reloadTimer = setTimeout(() => browserNavigation.assign(AFTER_SUCCESS_PATH), updaterTiming.reloadDelayMs);
       }
     };
     // Abgemeldet (etwa nach einem Rückweg mit Daten, die alte Datenbank kennt die Anmeldung nicht): Die Anmeldeseite
-    // übernimmt. Nichts Halbes zurücklassen: Nach der Anmeldung liest die Karte den Zustand neu, das Ergebnis steht dann
-    // als letzter Vorgang da.
+    // übernimmt. Nichts Halbes zurücklassen: Nach der Anmeldung liest die Karte den Zustand neu, das Ergebnis steht
+    // dann als letzter Vorgang da.
     const signedOut = (): boolean => {
       if (useAuthStore.getState().status !== "anonymous") return false;
       set({ follow: null, loaded: false });
@@ -275,8 +263,8 @@ export const useUpdateHelper = create<UpdateHelperState>((set, get) => {
       }
       await sleep(updaterTiming.pollMs, signal);
     }
-    // Frist vorbei. Solange der Helfer an diesem Auftrag arbeitet (oder gerade nicht antwortet), seltener weiter nachfragen
-    // und das Ergebnis zeigen, sobald es da ist; arbeitet er nicht mehr daran und gibt es kein Ergebnis, aufhören.
+    // Frist vorbei, aber der Helfer darf länger brauchen (Download bis 30 Minuten, Start 15, Rückbau 15): Solange er
+    // am Auftrag arbeitet oder nicht antwortet, seltener nachfragen und das Ergebnis zeigen; sonst aufhören.
     let first = true;
     while (!signal.aborted) {
       let view: HelperView | null = null;

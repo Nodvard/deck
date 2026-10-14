@@ -1,6 +1,6 @@
 """Beispiel-Erweiterung `hello-world` (zugleich Integrationstest der Schnittstelle).
 
-Zeigt Seite, Widget, Job, Einstellung und Capability sowie `ctx.spawn`, `ctx.events`, `ctx.audit`, `ctx.vault_use()` und `ctx.notify`.
+Zeigt Seite, Widget, Job, Einstellung, Capability, `ctx.spawn`, `ctx.events`, `ctx.audit`, `ctx.vault_use()`, `ctx.notify`.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from nodvard_sdk import (
 
 
 class _DummySearchProvider:
-    """Erfüllt `nodvard_sdk.capabilities.SearchProvider` strukturell: Das Protocol prüft nur Attributnamen, Erben ist nicht nötig."""
+    """Erfüllt `nodvard_sdk.capabilities.SearchProvider` nur strukturell; das Protocol prüft nur Attributnamen."""
 
     async def search(self, query: str, *, limit: int = 20) -> list[dict[str, Any]]:
         return [{"title": f"hello-world Treffer für '{query}'", "id": "1"}][:limit]
@@ -68,8 +68,8 @@ class Extension(NodvardExtension):
 
         @protected_router.get("/protected-widget")
         async def protected_widget_data() -> dict:
-            """Zeigt `ctx.api.include_router(..., permission=...)`: Anders als `/widgets/hello` (nur Anmeldung) verlangt diese
-            Route zusätzlich `hosts.read`."""
+            """Zeigt `ctx.api.include_router(..., permission=...)`: Anders als `/widgets/hello` (nur Anmeldung) verlangt
+            diese Route zusätzlich `hosts.read`."""
             return {"ok": True}
 
         ctx.api.include_router(protected_router, permission="hosts.read")
@@ -81,7 +81,7 @@ class Extension(NodvardExtension):
         @admin_router.post("/notify-test")
         async def notify_test(host_id: str | None = None) -> dict:
             """Löst `ctx.notify.send()` aus; `host_id` macht die Meldung für die Wartungsfenster-Prüfung sichtbar."""
-            # Es gibt sonst keinen HTTP-Weg dafür: Die Meldungen sind über die API absichtlich nur lesbar. Die Wartungsfenster
+            # Sonst gibt es keinen HTTP-Weg dafür, Meldungen sind über die API absichtlich nur lesbar. Die Wartungsfenster
             # lesen die Konvention `payload["host_id"]`.
             await ctx.notify.send(
                 Notification(
@@ -95,8 +95,7 @@ class Extension(NodvardExtension):
 
         @admin_router.post("/vault-use-and-fail")
         async def vault_use_and_fail() -> dict:
-            # Materialisiert ein Geheimnis und scheitert danach absichtlich: Der `secret.used`-Audit-Eintrag muss trotzdem
-            # stehen bleiben.
+            # Materialisiert ein Geheimnis und scheitert absichtlich: der `secret.used`-Audit-Eintrag muss trotzdem bleiben.
             if not await ctx.secrets.exists("hello-world-demo"):
                 await ctx.secrets.create(
                     label="hello-world-demo", kind="generic", value="demo-wert"
@@ -127,8 +126,7 @@ class Extension(NodvardExtension):
                 title="Hallo Welt",
                 icon="sparkles",
                 size=GridSize(w=2, h=1),
-                # `ws_channel` zusätzlich zu `interval_s`: Der Ticker unten sendet über genau diesen Kanal, das Widget muss also
-                # nicht 30 s auf den nächsten Poll warten.
+                # `ws_channel` neben `interval_s`: der Ticker sendet darüber, das Widget wartet nicht 30 s auf den Poll.
                 refresh=Refresh(interval_s=30, ws_channel="ext.hello-world.tick"),
                 data_endpoint="widgets/hello",
                 view=ListView(item=ListItem(title="{{ title }}", subtitle="{{ subtitle }}")),
@@ -149,8 +147,8 @@ class Extension(NodvardExtension):
             while True:
                 self._tick_count += 1
                 await ctx.events.publish(Event(name="hello.tick", payload={"count": self._tick_count}))
-                # `ctx.events.publish()` fächert nur auf den einen geteilten „events“-Kanal aus; `ctx.ws.broadcast()` zusätzlich,
-                # damit das Widget den in seinem `Refresh.ws_channel` genannten, themenspezifischen Kanal abonnieren kann.
+                # `ctx.events.publish()` geht nur auf den geteilten „events“-Kanal, `ctx.ws.broadcast()` zusätzlich auf den
+                # themenspezifischen aus `Refresh.ws_channel`, den das Widget abonniert.
                 await ctx.ws.broadcast("tick", {"count": self._tick_count})
                 await asyncio.sleep(2.0)
 

@@ -93,7 +93,7 @@ class HostBusyError(HostServiceError):
 
 
 async def drop_pooled_connections(session: AsyncSession, host_id: str) -> None:
-    """Schließt offene SSH-Verbindungen zu `host_id` sofort und nach dem Commit noch einmal (`ssh.drop_host_after_commit`)."""
+    """Schließt SSH-Verbindungen zu `host_id` sofort und nach dem Commit noch einmal (`ssh.drop_host_after_commit`)."""
     await ssh.get_ssh_pool().drop_host(host_id)
     ssh.drop_host_after_commit(session, host_id)
 
@@ -104,11 +104,11 @@ async def forget_address_bound_access(session: AsyncSession, host: Host, *, spar
     from ..db import refresh_relationships
 
     removed = 0
-    # Ein Passwort gehört zu dem Server, bei dem es eingegeben wurde; unter einer neuen Adresse würde es sonst bei jemand
-    # anderem landen. Schlüssel bleiben (der Server prüft ihn, das Dashboard verrät ihn nicht). Mit `spare_pinned` (für
-    # Adressen, die der Anbieter selbst führt, z. B. DHCP) bleiben auch Passwörter: Die Anmeldung beginnt erst nach dem
+    # Ein Passwort gehört zu dem Server, bei dem es eingegeben wurde; unter einer neuen Adresse landete es sonst bei
+    # jemand anderem. Schlüssel bleiben (der Server prüft ihn, das Dashboard verrät ihn nicht). Mit `spare_pinned`
+    # (Adressen, die der Anbieter selbst führt, z. B. DHCP) bleiben auch Passwörter: Die Anmeldung beginnt erst nach dem
     # Schlüsseltausch (`core/ssh.connect`), ein anderer Server an der neuen Adresse zeigt einen anderen Schlüssel und
-    # bekommt nie ein Passwort zu sehen.
+    # sieht nie ein Passwort.
     if not (spare_pinned and await ssh.load_known_fingerprints(session, host.id)):
         await refresh_relationships(session, host, "credentials")
         for credential in [c for c in host.credentials if c.kind == "ssh_password"]:
@@ -208,7 +208,7 @@ async def update_host(session: AsyncSession, host_id: str, **fields: object) -> 
     if tags is not None:
         await refresh_relationships(session, host, "tags")
         wanted = set(tags)  # type: ignore[arg-type]
-        # Nur manuelle Tags (managed_by_ext_id None) anfassen; Tags einer Erweiterung bleiben und werden nicht doppelt angelegt.
+        # Nur manuelle Tags (managed_by_ext_id None) anfassen; Tags einer Erweiterung bleiben und entstehen nicht doppelt.
         taken = {t.tag for t in host.tags if t.managed_by_ext_id is not None}
         for row in list(host.tags):
             if row.managed_by_ext_id is None and row.tag not in wanted:

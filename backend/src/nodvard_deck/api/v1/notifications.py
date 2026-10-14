@@ -10,7 +10,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -78,7 +78,7 @@ class MarkReadIn(BaseModel):
 
 @router.get("")
 async def list_notifications(
-    session: SessionDep, unread: bool | None = None, limit: int = 100, offset: int = 0
+    session: SessionDep, unread: bool | None = None, limit: int = Query(100, ge=1, le=1000), offset: int = Query(0, ge=0)
 ) -> list[NotificationOut]:
     rows = await notifications_service.list_notifications(session, unread=unread, limit=limit, offset=offset)
     return [NotificationOut.from_model(n) for n in rows]

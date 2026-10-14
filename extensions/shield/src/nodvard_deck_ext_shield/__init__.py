@@ -310,7 +310,7 @@ class Extension(NodvardExtension):
 
         @router.get("/ai/models")
         async def get_ai_models(which: Literal["primary", "failover"] = Query(default="primary")) -> dict:
-            """Auswahlliste für die Einstellung "KI-Modell" (`x-widget: "remote-select"`); fragt nur gespeicherte Adressen."""
+            """Auswahlliste für "KI-Modell" (`x-widget: "remote-select"`); fragt nur gespeicherte Adressen."""
             from .ollama import list_models
 
             return await list_models(ctx, which)
@@ -319,7 +319,7 @@ class Extension(NodvardExtension):
 
         @token_router.post("/token", status_code=status.HTTP_204_NO_CONTENT)
         async def set_token(payload: _TokenIn) -> None:
-            """Optionales Ollama-API-Token (z. B. hinter einem Reverse-Proxy mit Auth), wie bei ntfy und proxmox im Tresor."""
+            """Optionales Ollama-Token (z. B. für einen Reverse-Proxy mit Auth), im Tresor wie bei ntfy und proxmox."""
             from .ollama import _TOKEN_LABEL
 
             if await ctx.secrets.exists(_TOKEN_LABEL):
@@ -469,9 +469,7 @@ class Extension(NodvardExtension):
         return HealthReport(healthy=result.ok, message=result.message, details={"pending_incidents": self._store.pending_count()})
 
     async def _restart_that_did_not_help(self, host: Any, target: str, *, crashed_at: float) -> float | None:
-        """Zeit (Unix) des freigegebenen Neustarts, der diesen Container neu startete und nicht geholfen hat, sonst `None`.
-
-        Gemeint: erfolgreich, Server und Befehl stimmen, höchstens `RESTART_HELP_WINDOW_S` her, Absturz später als `RESTART_SETTLE_S`."""
+        """Zeit (Unix) des freigegebenen Neustarts, der diesen Container neu startete und nicht half, sonst `None`."""
         try:
             expected = build_restart_command(target)
         except ValueError:
@@ -562,10 +560,9 @@ class Extension(NodvardExtension):
         if merged is not None:
             await self._ctx.ws.broadcast("incidents", {"changed": merged["id"]})
             return
-        # Hatte sich der Vorfall gerade von selbst erledigt und der Container stürzt in der Ruhezeit wieder ab: denselben
-        # Vorfall wieder öffnen und mitzählen (sonst ginge der Absturz verloren und er stünde auf "Erledigt"). Geht das
-        # nicht (ein Mensch hatte ihn bestätigt, oder der Neustart ist schon gelaufen), ist es ein neuer Vorfall mit
-        # Meldung, auch in der Ruhezeit: Zuletzt hieß es ja "läuft wieder". Nach der Ruhezeit ohnehin ein neuer Vorfall.
+        # Erledigte sich der Vorfall gerade von selbst und der Container stürzt in der Ruhezeit wieder ab: denselben Vorfall
+        # wieder öffnen und mitzählen (sonst ginge der Absturz verloren). Geht das nicht (Mensch hat bestätigt oder Neustart
+        # schon gelaufen), ist es ein neuer Vorfall mit Meldung, auch in der Ruhezeit ("läuft wieder" war der letzte Stand).
         cooldown_s = settings.get("host_target_cooldown_s") or 1800
         in_cooldown = self._store.is_in_cooldown(transition.host.name, transition.target, cooldown_s=cooldown_s)
         reopened = None
@@ -865,7 +862,7 @@ class Extension(NodvardExtension):
             )
 
         # Neustart-Ziele: jeder Absturz-Vorfall dieses Batches. Risiko "mittel" nur für echte Abstürze (nicht von außen
-        # per kill beendet, nicht wieder aufgenommen oder wiederholt, Fakten vorhanden; `restart_risk_eligible`), sonst "hoch".
+        # per kill beendet, nicht wieder aufgenommen oder wiederholt, Fakten da; `restart_risk_eligible`), sonst "hoch".
         crash_targets = {(i.host_id, i.target) for i in batch if i.details.get("is_crash")}
         eligible = {
             (i.host_id, i.target)
@@ -1012,12 +1009,9 @@ class Extension(NodvardExtension):
         """Vorschlags-Schritt für Chat und Batch: Aus KI-Text entsteht höchstens der Neustart eines Containers aus
         `restart_targets`. Server, Befehl und Begründung baut der Code selbst, von der KI kommt nur der Wunsch; alles
         andere wird nur als Text gemeldet. Rückgabe: Anzeige-Texte, `outcome` und die entstandene `action_id`."""
-        # `restart_targets` sind (Host-ID, Name) der Absturz-Vorfälle des Batches. Risiko "mittel", wenn das Paar auch in
-        # `medium_targets` steht, sonst "hoch".
-        # `causes` (nur Batch): die feste Einordnung je Container. Sie steht als "[Speichermangel] ..." vorn in der
-        # Begründung, damit unter Aktionen die vom System ermittelte Ursache steht, nicht die Deutung der KI.
-        # `show_unchecked_command` (nur Chat): Die Antwort geht nur an den Fragenden, deshalb nennt der nicht angelegte
-        # Vorschlag den Befehl. Im Bericht fehlt er (siehe unten).
+        # `restart_targets`: (Host-ID, Name) der Absturz-Vorfälle; Risiko "mittel", wenn auch in `medium_targets`.
+        # `causes` (nur Batch): vom System ermittelte Ursache je Container, vorn in der Begründung ("[Speichermangel] ...").
+        # `show_unchecked_command` (nur Chat): Antwort geht nur an den Fragenden, daher nennt der Vorschlag den Befehl.
         settings = await ctx.settings.get()
         forbidden = settings.get("forbidden_host_keywords")
         forbidden_keywords = tuple(forbidden) if forbidden else None
@@ -1074,8 +1068,8 @@ class Extension(NodvardExtension):
             reason = f"Container {container} neu starten nach Absturz"
             if tag:
                 reason = f"[{tag}] {reason}"
-            # `shell.exec` führt die `terminal`-Extension aus. Ohne sie schlägt der Vorschlag sichtbar mit "Kein ActionExecutor"
-            # fehl; ein `requires` ist nicht nötig, das Gate sucht Executoren ohnehin uneingeschränkt.
+            # `shell.exec` führt die `terminal`-Extension aus; ohne sie scheitert der Vorschlag sichtbar. Ein `requires`
+            # ist nicht nötig, das Gate sucht Executoren ohnehin uneingeschränkt.
             decision = await ctx.actions.propose(
                 ActionRequest(
                     action_type="shell.exec",

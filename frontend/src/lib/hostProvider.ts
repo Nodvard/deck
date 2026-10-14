@@ -1,8 +1,7 @@
 /**
- * Server, die ein Modul eingelesen hat (z. B. Proxmox), und was daraus wird, wenn das Modul ausgeschaltet ist:
- * Die Server bleiben in der Liste stehen, ihr Zustand wird aber nicht mehr nachgeführt. Die Oberfläche sagt das
- * an mehreren Stellen (Cockpit, Server-Seite, Löschen, Modul ausschalten); dieser Text und diese Entscheidung
- * stehen nur hier.
+ * Server, die ein Modul eingelesen hat (z. B. Proxmox), und was daraus wird, wenn das Modul ausgeschaltet ist: Die
+ * Server bleiben in der Liste, ihr Zustand wird nicht mehr nachgeführt. Text und Entscheidung dazu stehen nur hier
+ * (Cockpit, Server-Seite, Löschen, Modul ausschalten).
  */
 import { findExtension } from "./extensionNames";
 import type { ExtensionInfo } from "./firstSteps";
@@ -18,8 +17,10 @@ export interface HostProvider {
   problem: ProviderProblem | null;
 }
 
-/** Das Modul, das den Server eingelesen hat. `undefined`: von Hand angelegt, oder die Modul-Liste ist noch nicht da
- * (dann lieber nichts behaupten). */
+/**
+ * Das Modul, das den Server eingelesen hat. `undefined`: von Hand angelegt, oder die Modul-Liste ist noch nicht da
+ * (dann lieber nichts behaupten).
+ */
 export function hostProvider(host: Pick<HostOut, "provider_ext_id">, extensions: readonly ExtensionInfo[] | undefined): HostProvider | undefined {
   const id = host.provider_ext_id;
   if (!id || !extensions) return undefined;
@@ -43,7 +44,10 @@ export function providerNote(provider: HostProvider): string {
   return `Eingelesen vom Modul „${provider.name}“. Das Modul ${providerStateText(provider)}, darum wird der Zustand dieses Servers nicht mehr aktualisiert.`;
 }
 
-/** Zusatz im Löschen-Dialog, wenn das Modul nicht läuft: Der Server kommt nicht wieder, denn es gleicht nichts mehr ab. */
+/**
+ * Zusatz im Löschen-Dialog, wenn das Modul nicht läuft: Der Server kommt nicht wieder,
+ * denn es gleicht nichts mehr ab.
+ */
 export function providerDeleteNote(provider: HostProvider): string {
   const stays = provider.problem === "disabled" ? "solange es aus bleibt" : provider.problem === "missing" ? "" : "solange es nicht läuft";
   return `Das Modul „${provider.name}“, das diesen Server eingelesen hat, ${provider.problem === "disabled" ? "ist aus" : providerStateText(provider)}; der Server kommt nicht wieder${stays ? `, ${stays}` : ""}.`;

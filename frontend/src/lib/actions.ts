@@ -1,16 +1,13 @@
 /**
- * Genehmigte Aktionen laufen im Hintergrund (core/gate.py). Die API wartet
- * hoechstens etwa 20 s auf das Ergebnis; ist die Aktion dann nicht fertig (Update,
- * langes Skript), antwortet sie mit 202 und Status `executing`. Das Ergebnis holt sich
- * die Oberflaeche danach hier ueber `GET /actions/{id}` ab -- frueher hing der Knopf
- * bis zu 45 Minuten, und der Browser meldete irgendwann einen Netzwerkfehler, obwohl
- * die Aktion weiterlief.
+ * Genehmigte Aktionen laufen im Hintergrund (core/gate.py): Die API wartet höchstens etwa 20 s, ist die Aktion dann
+ * nicht fertig (Update, langes Skript), antwortet sie mit 202 und Status `executing`. Das Ergebnis holt sich die
+ * Oberfläche hier über `GET /actions/{id}` ab, sonst hinge der Knopf bis zu 45 Minuten.
  */
 import { api, ApiError } from "./api";
 
 /** Abstand zwischen zwei Nachfragen. */
 export const ACTION_POLL_INTERVAL_MS = 3000;
-/** So lange wird hoechstens nachgefragt (ein Update darf bis zu 45 min dauern). */
+/** So lange wird höchstens nachgefragt (ein Update darf bis zu 45 min dauern). */
 export const ACTION_POLL_MAX_MS = 60 * 60 * 1000;
 
 export const RUNNING_IN_BACKGROUND_TEXT = "Läuft im Hintergrund – das Ergebnis erscheint hier und unter „Aktionen“.";
@@ -68,9 +65,8 @@ export interface WaitOptions {
 }
 
 /**
- * Fragt `GET /actions/{id}` alle paar Sekunden ab, bis die Aktion fertig ist, und
- * liefert dann ihren Endstand. Kurze Aussetzer (Neustart des Dashboards, WLAN weg,
- * 5xx) zaehlen nicht als Ergebnis, es wird einfach weiter gefragt. Wirft
+ * Fragt `GET /actions/{id}` alle paar Sekunden ab, bis die Aktion fertig ist, und liefert dann ihren Endstand. Kurze
+ * Aussetzer (Neustart des Dashboards, WLAN weg, 5xx) zählen nicht als Ergebnis, es wird einfach weiter gefragt. Wirft
  * `ActionWaitTimeout` nach `maxMs` und einen AbortError bei `signal`.
  */
 export async function waitForAction<T extends { status?: string | null }>(
@@ -86,7 +82,7 @@ export async function waitForAction<T extends { status?: string | null }>(
       if (!isActionRunning(action?.status)) return action;
     } catch (err) {
       if (isAbortError(err)) throw err;
-      // 4xx (z. B. Aktion geloescht, keine Rechte mehr) aendert sich durch Warten nicht.
+      // 4xx (z. B. Aktion gelöscht, keine Rechte mehr) ändert sich durch Warten nicht.
       if (err instanceof ApiError && err.status < 500) throw err;
     }
     if (Date.now() >= deadline) throw new ActionWaitTimeout();

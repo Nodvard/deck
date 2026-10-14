@@ -33,10 +33,9 @@ from . import backups as backups_service
 
 logger = logging.getLogger("nodvard_deck.restore")
 
-# Die eigentliche Arbeit (Entpacken, Prüfen, Einspielen) steht in `core/backup/restore.py` und läuft beim nächsten Start in
-# `boot`. Hier ist, was die laufende Anwendung dazu tut: Hochladen als roher Datenstrom (nie der ganze Inhalt im Speicher,
-# Obergrenze schon am Kopf der Anfrage, Platzprüfung vorher, höchstens ein Zwischenstand), Prüfen, Vormerken und nach dem
-# Start das Ergebnis ins Audit-Protokoll schreiben.
+# Die eigentliche Arbeit steht in `core/backup/restore.py` und läuft beim nächsten Start in `boot`. Die laufende Anwendung
+# lädt als roher Datenstrom hoch (nie der ganze Inhalt im Speicher, Obergrenze schon am Kopf der Anfrage, Platzprüfung
+# vorher, höchstens ein Zwischenstand), prüft, merkt vor und schreibt nach dem Start das Ergebnis ins Audit-Protokoll.
 FILES_NAME = "files.json"
 _WRITE_BUFFER = 1024 * 1024
 
@@ -323,9 +322,9 @@ async def inspect(settings: Settings, scope: Scope, rid: str, *, secret: str, in
         raise WrongState("Diese Sicherung ist nicht (mehr) zum Prüfen bereit.")
     if _upload_active or _inspect_active is not None:
         raise RestoreBusy("Es wird gerade eine Sicherung hochgeladen oder geprüft. Bitte warten, bis das fertig ist.")
-    # Es darf immer nur eine Prüfung laufen (die Schlüsselberechnung braucht bis zu 256 MiB), darum teilt sie die Sperre mit den
-    # Sicherungen. Sie läuft als eigener Task: Bricht die Anfrage ab, läuft die Prüfung sauber zu Ende, statt halb im
-    # Hintergrund weiterzuarbeiten.
+    # Es darf immer nur eine Prüfung laufen (die Schlüsselberechnung braucht bis zu 256 MiB), darum teilt sie die Sperre
+    # mit den Sicherungen. Sie läuft als eigener Task: Bricht die Anfrage ab, läuft die Prüfung sauber zu Ende, statt
+    # halb im Hintergrund weiterzuarbeiten.
     try:
         token = await backups_service.acquire_exclusive(backups_service.EXCLUSIVE_CHECK)
     except backups_service.BackupBusy as exc:

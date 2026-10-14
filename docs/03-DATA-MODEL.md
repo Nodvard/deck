@@ -128,17 +128,23 @@ wird beim ersten Verbinden nur dann automatisch gemerkt, wenn keine Bestätigung
 | owner_ext_id | null = gehört dem Kern/Admin |
 | description | |
 | created_by_user_id, created_at, rotated_at, last_used_at | |
-| metadata | JSON, **nie sensibel** (z. B. Public-Key-Fingerprint) |
+| expires_at | Ablaufdatum, nur als Angabe: danach wird nichts gesperrt. Daran erinnert der Kern-Job `secret-expiry-reminder` |
+| metadata | JSON, **nie sensibel** (z. B. Public-Key-Fingerprint). Unter `expiry_notice` `{for, stage}` steht, welche Erinnerung für welches Ablaufdatum schon verschickt ist |
 
 `secret_grants(secret_id, grantee_type ext|role, grantee_id)` — wer darf lesen.
+
+`secret_usages(secret_id, consumer_type, consumer_id, first_used_at, last_used_at)` — je Verwender eine Zeile, geschrieben
+von `vault_use`. Feste Bindungen (Besitzer-Modul, Server-Zugang, Zwei-Faktor) stehen nicht dort, sie werden beim Lesen
+abgeleitet (`used_by` in `GET /secrets`).
 
 **Invarianten, die im Code erzwungen werden:**
 1. Kein API-Endpunkt gibt `ciphertext` oder Klartext zurück. Nie. Auch nicht für `owner`.
    Schreiben und Ersetzen ja, Lesen nein.
 2. Extensions bekommen ein `SecretHandle`; der Klartext existiert nur innerhalb eines
    `async with ctx.vault_use(handle) as value:`-Blocks.
-3. Jede Materialisierung schreibt eine Audit-Zeile (`secret.used`, mit Label und
-   Verwender, ohne Wert).
+3. Jede Materialisierung wird festgehalten (Label und Verwender, ohne Wert), gebündelt: höchstens eine Audit-Zeile
+   `secret.used` je Stunde, Geheimnis und Verwender. Wann ein Verwender ein Geheimnis zuletzt benutzt hat, steht
+   zusätzlich in `secret_usages` und in `secrets.last_used_at`.
 4. Der Master-Key liegt nie in der DB.
 5. `PUT /secrets/{id}/value` und `DELETE /secrets/{id}` lehnen das Secret hinter `users.totp_secret_id`
    (Zwei-Faktor-Schlüssel eines Kontos) mit `409` ab: Ersetzen oder Löschen geht dort nicht. Abschalten geht nur über

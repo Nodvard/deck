@@ -1,12 +1,7 @@
 /**
- * Befehle so darstellen, dass nichts Verstecktes mitläuft.
- *
- * Wer eine Aktion freigibt, muss genau den Befehl lesen, der ausgeführt wird. Manche Zeichen
- * sind unsichtbar oder verändern die Anzeige (Richtungsumkehr, Zeichen ohne Breite, Zeilenanfang
- * per Wagenrücklauf, Escape-Folgen). Sie werden hier durch eine sichtbare Marke wie `⟦U+202E⟧`
- * ersetzt. Zeilenumbruch und Tabulator bleiben, normale Leerzeichen auch; andere Leerzeichen-
- * Arten (geschütztes Leerzeichen, schmale Leerzeichen) bekommen eine Marke, weil die Shell sie
- * nicht als Trenner liest.
+ * Befehle so darstellen, dass nichts Verstecktes mitläuft: Wer eine Aktion freigibt, muss genau den Befehl lesen, der
+ * ausgeführt wird. Unsichtbare oder die Anzeige verändernde Zeichen (Richtungsumkehr, Breite null, Wagenrücklauf,
+ * Escape-Folgen, Leerzeichen, die die Shell nicht als Trenner liest) werden durch eine Marke wie `⟦U+202E⟧` ersetzt.
  */
 
 // Steuerzeichen (ohne Zeilenumbruch und Tabulator, inkl. \r, \x1b und C1), Formatzeichen

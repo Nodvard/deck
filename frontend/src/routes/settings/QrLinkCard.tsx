@@ -1,8 +1,7 @@
 /**
- * Karte unter dem Einstellungs-Formular einer Erweiterung, wenn deren Schema `x-qr-url` nennt: ein Pfad
- * unter /api/v1, der `{url, text, error}` liefert. `url` steckt im QR-Code (und steht als Text darunter),
- * `text` sagt, was man damit tut, `error` ist ein fertiger Satz, wenn sich kein Link berechnen laesst.
- * Die Erweiterung rechnet aus den GESPEICHERTEN Einstellungen; nach jedem Speichern wird neu geladen.
+ * Karte unter dem Einstellungs-Formular einer Erweiterung, wenn deren Schema `x-qr-url` nennt (Pfad unter /api/v1,
+ * Antwort `{url, text, error}`): `url` steckt im QR-Code, `text` sagt, was man damit tut, `error` ersetzt den Code,
+ * wenn sich kein Link berechnen lässt. Nach jedem Speichern wird aus den gespeicherten Einstellungen neu geladen.
  */
 import { useEffect, useState } from "react";
 
@@ -24,9 +23,9 @@ export function QrLinkCard({
   path: string;
   /** Eine ausgeschaltete Erweiterung hat die Route nicht: dann gar nicht erst fragen. */
   enabled: boolean;
-  /** Aendert sich nach jedem Speichern, dann wird neu geladen. */
+  /** Ändert sich nach jedem Speichern, dann wird neu geladen. */
   reloadKey: number;
-  /** Das Formular hat Aenderungen, die noch nicht gespeichert sind (der Code zeigt den gespeicherten Stand). */
+  /** Das Formular hat Änderungen, die noch nicht gespeichert sind (der Code zeigt den gespeicherten Stand). */
   unsaved: boolean;
 }) {
   const [result, setResult] = useState<Loaded>({ state: "loading" });

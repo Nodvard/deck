@@ -1,16 +1,10 @@
 /**
- * Lesbarer Text aus der Fehlerliste, die der Server bei einer abgelehnten Eingabe schickt (422):
- * `[{ type, loc: ["body", "password"], msg: "Mindestens 8 Zeichen." }, ...]`.
- *
- * Der Server liefert `msg` auf Deutsch (api/errors.py). Eigene Pruefungen (`type: "value_error"`)
- * nennen ihr Feld schon im Satz ("Kurzname: nur Kleinbuchstaben ..."), sie stehen unveraendert da.
- * Bei den Standard-Pruefungen ("Mindestens 8 Zeichen.", "Pflichtangabe fehlt.") kommt der Name des
- * Feldes davor -- als deutsches Wort aus `labels`, sonst so, wie ihn der Server nennt.
- *
- * Eigene Datei (statt in lib/api.ts), weil auch state/auth.ts sie braucht und api.ts selbst den
- * Auth-Zustand importiert.
+ * Lesbarer Text aus der Fehlerliste einer abgelehnten Eingabe (422, `[{ type, loc, msg }, ...]`). `msg` kommt deutsch
+ * vom Server (api/errors.py); eigene Prüfungen (`value_error`) nennen ihr Feld schon im Satz, bei Standard-Prüfungen
+ * steht der Feldname davor (aus `labels`, sonst wie vom Server).
  */
 
+// Eigene Datei statt in lib/api.ts: auch state/auth.ts braucht sie, und api.ts importiert selbst den Auth-Zustand.
 /** Feldnamen der Anmeldung und Einrichtung, so wie die Person sie auf der Seite sieht. */
 export const AUTH_FIELD_LABELS: Record<string, string> = {
   username: "Benutzername",

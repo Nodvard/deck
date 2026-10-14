@@ -11,7 +11,7 @@ import { useBrandingStore } from "../../state/branding";
 import { AccountSettings } from "./AccountSettings";
 import { AppearanceSettings } from "./AppearanceSettings";
 import { AuditSettings, targetText } from "./AuditSettings";
-import { AutomationSettings, autonomySteps } from "./AutomationSettings";
+import { AutomationSettings } from "./AutomationSettings";
 import { ExtensionConfigPage } from "./ExtensionConfigPage";
 import { ExtensionsSettings } from "./ExtensionsSettings";
 import { SettingsLayout } from "./SettingsLayout";
@@ -43,16 +43,17 @@ function mockApi(routes: Record<string, Handler>) {
     const handler = routes[`${method} ${path}`];
     if (!handler) throw new Error(`Unerwarteter Fetch: ${method} ${path}`);
     const result = handler(method, body);
+    if (result instanceof Response) return result;
     return result === undefined ? new Response(null, { status: 204 }) : new Response(JSON.stringify(result), { status: 200 });
   });
   vi.stubGlobal("fetch", fn);
   return calls;
 }
 
-function setUser(permissions: string[]) {
+function setUser(permissions: string[], isOwner = false) {
   useAuthStore.setState({
     accessToken: "tok", status: "authenticated", mfaToken: null,
-    user: { id: "u1", username: "nico", display_name: "Nico", email: null, is_owner: false, locale: "de", permissions },
+    user: { id: "u1", username: "nico", display_name: "Nico", email: null, is_owner: isOwner, locale: "de", permissions },
   });
 }
 
@@ -565,14 +566,15 @@ describe("Einstellungen", () => {
   });
 
   it("Automatik: Modus und Risikostufe, eigenes Sperrmuster, Wartungsfenster", async () => {
+    setUser(["*"], true);
     const calls = mockApi({
       "GET /settings": () => [
         { key: "autonomy.mode", value: "propose" }, { key: "autonomy.max_risk", value: "low" },
         { key: "security.deny_patterns", value: [] }, { key: "maintenance.windows", value: [] },
       ],
       "GET /hosts": () => [{ id: "h1", name: "pi", display_name: "Raspberry Pi" }],
-      "PUT /settings/autonomy.mode": (_m, b) => ({ key: "autonomy.mode", ...(b as object) }),
-      "PUT /settings/autonomy.max_risk": (_m, b) => ({ key: "autonomy.max_risk", ...(b as object) }),
+      "GET /me": () => ({ totp_enabled: false }),
+      "PUT /settings/autonomy": (_m, b) => ({ mode: (b as { mode: string }).mode, max_risk: (b as { max_risk: string }).max_risk }),
       "PUT /settings/security.deny_patterns": (_m, b) => ({ key: "security.deny_patterns", ...(b as object) }),
       "PUT /settings/maintenance.windows": (_m, b) => ({ key: "maintenance.windows", ...(b as object) }),
     });
@@ -580,10 +582,12 @@ describe("Einstellungen", () => {
     fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
     fireEvent.click(screen.getByRole("button", { name: /Mittel/ }));
     fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+    fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "mein-passwort" } });
+    fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
     await screen.findByText("Gespeichert.");
-    // Lockern (Vorschlagen -> Selbstständig): erst die Risikostufe, dann der Modus.
+    // Beides in einem Schritt, mit der Bestätigung des Inhabers.
     expect(calls.filter((c) => c.method === "PUT").map((c) => [c.path, c.body])).toEqual([
-      ["/settings/autonomy.max_risk", { value: "medium" }], ["/settings/autonomy.mode", { value: "full" }],
+      ["/settings/autonomy", { mode: "full", max_risk: "medium", current_password: "mein-passwort", totp_code: "" }],
     ]);
 
     fireEvent.change(screen.getByLabelText("Neues Muster"), { target: { value: "(" } });
@@ -606,152 +610,88 @@ describe("Einstellungen", () => {
     expect(calls.at(-1)?.body).toEqual({ value: [{ cron: "0 2 * * 0", duration_minutes: 60, host_ids: ["h1"] }] });
   });
 
-  describe("Automatik: Selbstständigkeit wird in zwei Schritten gespeichert", () => {
-    type Stored = { mode: string; risk: string };
-
-    /** Ein Server, der beide Schlüssel einzeln speichert; `failOn` lässt genau diese Anfrage wie einen Verbindungsabbruch scheitern. */
-    function autonomyServer(stored: Stored, opts: { failOn?: string; failReload?: boolean } = {}) {
-      const writes: string[] = [];
-      let attempts = 0;
-      let reloads = 0;
+  describe("Automatik: Selbstständigkeit nur für den Inhaber", () => {
+    function autonomyServer(opts: { totpEnabled?: boolean; firstPut?: Response } = {}) {
+      let first = opts.firstPut;
       const calls = mockApi({
-        "GET /settings": () => {
-          if (attempts > 0) {
-            reloads += 1;
-            if (opts.failReload) throw new TypeError("Failed to fetch");
-          }
-          return [
-            { key: "autonomy.mode", value: stored.mode }, { key: "autonomy.max_risk", value: stored.risk },
-            { key: "security.deny_patterns", value: [] }, { key: "maintenance.windows", value: [] },
-          ];
-        },
+        "GET /settings": () => [
+          { key: "autonomy.mode", value: "full" }, { key: "autonomy.max_risk", value: "low" },
+          { key: "security.deny_patterns", value: [] }, { key: "maintenance.windows", value: [] },
+        ],
         "GET /hosts": () => [],
-        "PUT /settings/autonomy.mode": (_m, b) => {
-          attempts += 1;
-          if (opts.failOn === "mode") throw new TypeError("Failed to fetch");
-          writes.push("mode");
-          stored.mode = (b as { value: string }).value;
-          return { key: "autonomy.mode", ...(b as object) };
-        },
-        "PUT /settings/autonomy.max_risk": (_m, b) => {
-          attempts += 1;
-          if (opts.failOn === "max_risk") throw new TypeError("Failed to fetch");
-          writes.push("max_risk");
-          stored.risk = (b as { value: string }).value;
-          return { key: "autonomy.max_risk", ...(b as object) };
+        "GET /me": () => ({ totp_enabled: opts.totpEnabled ?? false }),
+        "PUT /settings/autonomy": (_m, b) => {
+          if (first) {
+            const answer = first;
+            first = undefined;
+            return answer;
+          }
+          return { mode: (b as { mode: string }).mode, max_risk: (b as { max_risk: string }).max_risk };
         },
       });
-      return { calls, writes, reloads: () => reloads };
+      return calls;
     }
 
-    const puts = (calls: { method: string; path: string; body: unknown }[]) =>
-      calls.filter((c) => c.method === "PUT").map((c) => `${c.path.replace("/settings/autonomy.", "")}=${(c.body as { value: string }).value}`);
-
-    it("Lockern: erst die Risikostufe, dann der Modus", async () => {
-      const { calls } = autonomyServer({ mode: "propose", risk: "low" });
-      render(<AutomationSettings />);
-      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
-      fireEvent.click(screen.getByRole("button", { name: /Hoch/ }));
-      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
-      await screen.findByText("Gespeichert.");
-      expect(puts(calls)).toEqual(["max_risk=high", "mode=full"]);
-    });
-
-    it("Verschärfen: erst der Modus, dann die Risikostufe", async () => {
-      const { calls } = autonomyServer({ mode: "full", risk: "high" });
-      render(<AutomationSettings />);
-      fireEvent.click(await screen.findByRole("button", { name: /Mittel/ }));
-      fireEvent.click(screen.getByRole("radio", { name: /Nur vorschlagen/ }));
-      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
-      await screen.findByText("Gespeichert.");
-      expect(puts(calls)).toEqual(["mode=propose", "max_risk=medium"]);
-    });
+    const puts = (calls: { method: string; path: string; body: unknown }[]) => calls.filter((c) => c.method === "PUT").map((c) => c.body);
 
     it("nennt bei der Stufe „Hoch“ auch das Wiederherstellen von Gästen aus Sicherungen", async () => {
-      autonomyServer({ mode: "full", risk: "low" });
+      autonomyServer();
       render(<AutomationSettings />);
       expect((await screen.findByRole("button", { name: /Hoch/ })).textContent).toContain("Gäste aus Sicherungen wiederherstellen");
     });
 
-    it("schreibt nur, was sich geändert hat", async () => {
-      const { calls } = autonomyServer({ mode: "full", risk: "low" });
+    it("andere als der Inhaber sehen die Einstellung, ändern sie aber nicht", async () => {
+      const calls = autonomyServer();
+      render(<AutomationSettings />);
+      expect(await screen.findByRole("radio", { name: /Nur vorschlagen/ })).toBeDisabled();
+      expect(screen.getByRole("button", { name: /Hoch/ })).toBeDisabled();
+      expect(screen.getByText(/Das ändert nur der Inhaber/)).toBeInTheDocument();
+      // Der einzige „Speichern“-Knopf gehört zum Wartungsfenster, nicht zur Selbstständigkeit.
+      expect(screen.queryAllByRole("button", { name: "Speichern" })).toHaveLength(1);
+      expect(puts(calls)).toEqual([]);
+    });
+
+    it("mit Zwei-Faktor steht das Codefeld gleich da; Passwort und Code gehen mit", async () => {
+      setUser(["*"], true);
+      const calls = autonomyServer({ totpEnabled: true });
       render(<AutomationSettings />);
       fireEvent.click(await screen.findByRole("button", { name: /Hoch/ }));
       fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
+      fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "pw-inhaber" } });
+      const code = await screen.findByLabelText(/Zwei-Faktor-Code/);
+      expect(screen.getByRole("button", { name: "Bestätigen und speichern" })).toBeDisabled();
+      fireEvent.change(code, { target: { value: "123456" } });
+      fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
       await screen.findByText("Gespeichert.");
-      expect(puts(calls)).toEqual(["max_risk=high"]);
+      expect(puts(calls)).toEqual([{ mode: "full", max_risk: "high", current_password: "pw-inhaber", totp_code: "123456" }]);
     });
 
-    it("Lockern, zweiter Schritt scheitert: lädt neu und zeigt den echten Stand (es läuft weiter nichts ohne Rückfrage)", async () => {
-      const server = autonomyServer({ mode: "propose", risk: "low" }, { failOn: "mode" });
+    it("fragt der Server nach dem Code, bleibt das Passwort stehen und das Codefeld erscheint", async () => {
+      setUser(["*"], true);
+      const missing = new Response(JSON.stringify({ detail: "Bitte gib den Zwei-Faktor-Code ein.", code: "totp_missing" }), { status: 403 });
+      const calls = autonomyServer({ firstPut: missing });
       render(<AutomationSettings />);
-      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
-      fireEvent.click(screen.getByRole("button", { name: /Hoch/ }));
+      fireEvent.click(await screen.findByRole("radio", { name: /Nur vorschlagen/ }));
       fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
-      expect(await screen.findByText(/Aktuell gespeichert: Nur vorschlagen\./)).toBeInTheDocument();
-      expect(puts(server.calls)).toEqual(["max_risk=high", "mode=full"]); // der zweite ist gescheitert, gespeichert ist nur der erste
-      expect(server.reloads()).toBe(1);
-      expect(screen.getByRole("radio", { name: /Nur vorschlagen/ })).toHaveAttribute("aria-checked", "true");
-      expect(screen.getByRole("radio", { name: /Selbstständig handeln/ })).toHaveAttribute("aria-checked", "false");
-      expect(screen.getByRole("button", { name: /Hoch/ })).toHaveAttribute("aria-pressed", "true"); // so steht es auf dem Server
+      fireEvent.change(await screen.findByLabelText("Anmeldepasswort zur Bestätigung"), { target: { value: "pw-inhaber" } });
+      fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
+      expect(await screen.findByText("Bitte gib den Zwei-Faktor-Code ein.")).toBeInTheDocument();
+      expect(screen.getByLabelText("Anmeldepasswort zur Bestätigung")).toHaveValue("pw-inhaber");
+      fireEvent.change(screen.getByLabelText(/Zwei-Faktor-Code/), { target: { value: "654321" } });
+      fireEvent.click(screen.getByRole("button", { name: "Bestätigen und speichern" }));
+      await screen.findByText("Gespeichert.");
+      expect(puts(calls).at(-1)).toEqual({ mode: "propose", max_risk: "low", current_password: "pw-inhaber", totp_code: "654321" });
     });
 
-    it("Verschärfen, zweiter Schritt scheitert: lädt neu, der Modus steht schon auf „Nur vorschlagen“", async () => {
-      const server = autonomyServer({ mode: "full", risk: "high" }, { failOn: "max_risk" });
+    it("Abbrechen schließt die Bestätigung, gespeichert wird nichts", async () => {
+      setUser(["*"], true);
+      const calls = autonomyServer();
       render(<AutomationSettings />);
-      fireEvent.click(await screen.findByRole("button", { name: /Niedrig/ }));
-      fireEvent.click(screen.getByRole("radio", { name: /Nur vorschlagen/ }));
+      fireEvent.click(await screen.findByRole("button", { name: /Mittel/ }));
       fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
-      expect(await screen.findByText(/Aktuell gespeichert: Nur vorschlagen\./)).toBeInTheDocument();
-      expect(screen.getByRole("radio", { name: /Nur vorschlagen/ })).toHaveAttribute("aria-checked", "true");
-      expect(screen.getByRole("button", { name: /Hoch/ })).toHaveAttribute("aria-pressed", "true");
-      expect(server.reloads()).toBe(1);
-    });
-
-    it("Der erste Schritt scheitert: nichts ist gespeichert, die Seite zeigt den Stand vom Server", async () => {
-      const server = autonomyServer({ mode: "propose", risk: "low" }, { failOn: "max_risk" });
-      render(<AutomationSettings />);
-      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
-      fireEvent.click(screen.getByRole("button", { name: /Hoch/ }));
-      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
-      expect(await screen.findByText(/Server gerade nicht erreichbar.*Aktuell gespeichert: Nur vorschlagen\./)).toBeInTheDocument();
-      expect(puts(server.calls)).toEqual(["max_risk=high"]); // der Versuch, geschrieben wurde nichts
-      expect(server.writes).toEqual([]);
-    });
-
-    it("Klappt auch das Neuladen nicht, steht da, dass der Stand unklar ist (der Entwurf bleibt)", async () => {
-      autonomyServer({ mode: "propose", risk: "low" }, { failOn: "mode", failReload: true });
-      render(<AutomationSettings />);
-      fireEvent.click(await screen.findByRole("radio", { name: /Selbstständig handeln/ }));
-      fireEvent.click(screen.getAllByRole("button", { name: "Speichern" })[0]);
-      expect(await screen.findByText(/Ob etwas davon gespeichert wurde, ist unklar/)).toBeInTheDocument();
-      expect(screen.getByRole("radio", { name: /Selbstständig handeln/ })).toHaveAttribute("aria-checked", "true");
-    });
-
-    it("autonomySteps: in keinem Zwischenstand ist mehr erlaubt als vorher und nachher", () => {
-      const risks = ["low", "medium", "high", "critical"];
-      const modes = ["propose", "full"];
-      /** Was ohne Rückfrage laufen darf: im Modus „propose“ nichts, sonst alles bis zur Risikostufe. */
-      const allowed = (mode: string, risk: string) => (mode === "full" ? risks.slice(0, risks.indexOf(risk) + 1) : []);
-      const subset = (a: string[], b: string[]) => a.every((x) => b.includes(x));
-
-      let checked = 0;
-      for (const m0 of modes) for (const r0 of risks) for (const m1 of modes) for (const r1 of risks) {
-        const before = { mode: m0, maxRisk: r0 };
-        const after = { mode: m1, maxRisk: r1 };
-        let state = { ...before };
-        const steps = autonomySteps(before, after);
-        steps.forEach((step, i) => {
-          state = step.key === "autonomy.mode" ? { ...state, mode: step.value } : { ...state, maxRisk: step.value };
-          if (i === steps.length - 1) return; // der letzte Schritt ist der Endstand, nur davor gibt es einen Zwischenstand
-          const now = allowed(state.mode, state.maxRisk);
-          expect(subset(now, allowed(m0, r0)) && subset(now, allowed(m1, r1)), `${m0}/${r0} -> ${m1}/${r1}: Zwischenstand ${state.mode}/${state.maxRisk}`).toBe(true);
-        });
-        expect(state).toEqual(after); // am Ende steht der gewünschte Stand
-        checked += 1;
-      }
-      expect(checked).toBe(64);
-      expect(autonomySteps({ mode: "full", maxRisk: "low" }, { mode: "full", maxRisk: "low" })).toEqual([]);
+      fireEvent.click(await screen.findByRole("button", { name: "Abbrechen" }));
+      expect(screen.queryByLabelText("Anmeldepasswort zur Bestätigung")).toBeNull();
+      expect(puts(calls)).toEqual([]);
     });
   });
 

@@ -48,11 +48,10 @@ def has_any(granted: Iterable[str], required: Iterable[str]) -> bool:
     return any(has_permission(granted, r) for r in required)
 
 
-# Der Präfix eines Event-Namens (vor dem ersten Punkt) bestimmt die Berechtigung, die ein WS-Client zum Sehen braucht.
-# Gefiltert wird die Zustellung, nicht das Abonnieren des Kanals `events`. Dieselbe Tabelle gilt für die themenreinen
-# Kanäle (`notifications`, `jobs.{id}`, `runs.{id}`, `actions`, `hosts`).
-# Unbekannte Präfixe (`ext.<id>.*`, `hello.tick`, `system.*`) brauchen nur eine Anmeldung: Events tragen nie sensible
-# Werte, und Extensions sind vertrauenswürdiger Code (docs/01 §7), keine Sandbox.
+# Der Präfix eines Event-Namens bestimmt die Berechtigung, die ein WS-Client zum Sehen braucht; gefiltert wird die
+# Zustellung, nicht das Abonnieren; dieselbe Tabelle gilt für die themenreinen Kanäle. Unbekannte Präfixe (z. B.
+# `ext.<id>.*`, `system.*`) brauchen nur eine Anmeldung: Events tragen nie sensible Werte, und Extensions sind
+# vertrauenswürdiger Code (docs/01 §7), keine Sandbox.
 EVENT_PREFIX_PERMISSIONS: dict[str, str] = {
     "host": "hosts.read",
     "action": "hosts.read",
@@ -71,9 +70,8 @@ def permission_for_event(event_name: str) -> str | None:
 # Eingebaute Rollen. `owner` steht nicht hier: Er umgeht RBAC ganz (`User.is_owner`), damit eine Rollenänderung die
 # Installation nicht aussperren kann.
 #
-# `system.read` (Einstellungen, System ansehen) hat nur `admin` über `*`. Alles Kritische dort (Sicherung herunterladen,
-# Schlüssel, Löschen, Wiederherstellen) verlangt den Owner selbst (`api.deps.require_owner`), eine Berechtigung allein
-# reicht dafür nie, auch `*` nicht.
+# `system.read` (Einstellungen, System ansehen) hat nur `admin` über `*`; alles Kritische dort (Sicherung herunterladen,
+# Schlüssel, Löschen, Wiederherstellen) verlangt den Owner selbst (`api.deps.require_owner`), auch `*` reicht dafür nie.
 SYSTEM_READ = "system.read"
 
 BUILTIN_ROLES: dict[str, tuple[str, ...]] = {

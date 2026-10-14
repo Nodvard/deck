@@ -1,21 +1,15 @@
 /**
- * Zeitzone des Dashboards (Einstellung `system.timezone`, GET /me -> `timezone`).
- *
- * Zeitplaene und Wartungsfenster meinen ihre Uhrzeit in dieser Zone, nicht in der des Geraets.
- * Der Wert liegt auf `window.__nodvardDeck.timezone` (alt: `window.__lattice`, dasselbe Objekt):
- * Erweiterungsseiten sind eigene Bundles mit eigenen Modulkopien, nur `window` teilen sich Kern
- * und Bundles. Aenderungen meldet das Ereignis `nodvard-deck:timezone`, die Kern-Shell feuert
- * zusaetzlich das alte `lattice:timezone`; Zuhoerer nehmen nur eines (lib/deckGlobal.ts).
- *
- * Bewusst nur React und `window`, keine weiteren Abhaengigkeiten: der Zeitplan-Waehler des UI-Kits
- * (extensions/_shared/frontend/src/SchedulePicker.tsx) holt diese Datei ueber die Kit-Bruecke
- * `_shared/frontend/src/timezone.ts` und wird so in Erweiterungs-Bundles einkompiliert.
+ * Zeitzone des Dashboards (`system.timezone`, `GET /me` -> `timezone`), in der Zeitpläne und Wartungsfenster ihre
+ * Uhrzeit meinen. Sie liegt auf `window.__nodvardDeck.timezone`, weil Erweiterungsseiten eigene Bundles mit eigenen
+ * Modulkopien sind und sich nur `window` teilen.
  */
+// Nur React und `window`, keine weiteren Abhängigkeiten: Der Zeitplan-Wähler des UI-Kits holt diese Datei über die
+// Kit-Brücke `_shared/frontend/src/timezone.ts`, so landet sie in den Erweiterungs-Bundles.
 import { useSyncExternalStore } from "react";
 
 import { deckEventName, dispatchDeckEvent, findDeck } from "./deckGlobal";
 
-/** Zone des Geraets, `"UTC"` wenn der Browser sie nicht nennt. */
+/** Zone des Geräts, `"UTC"` wenn der Browser sie nicht nennt. */
 export function browserTimeZone(): string {
   try {
     return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -24,7 +18,7 @@ export function browserTimeZone(): string {
   }
 }
 
-/** Zone des Dashboards oder `null`, solange sie nicht geladen ist (aelterer Kern, keine Anmeldung). */
+/** Zone des Dashboards oder `null`, solange sie nicht geladen ist (älterer Kern, keine Anmeldung). */
 export function getDeckTimezone(): string | null {
   const zone = findDeck()?.timezone;
   return typeof zone === "string" && zone ? zone : null;
@@ -49,7 +43,7 @@ export function useDeckTimezone(): string | null {
   return useSyncExternalStore(subscribe, getDeckTimezone, () => null);
 }
 
-/** Die Zone, in der Uhrzeiten gemeint sind, wenn sie von der des Geraets abweicht, sonst `null`. */
+/** Die Zone, in der Uhrzeiten gemeint sind, wenn sie von der des Geräts abweicht, sonst `null`. */
 export function foreignDeckTimezone(deck: string | null): string | null {
   return deck && deck !== browserTimeZone() ? deck : null;
 }

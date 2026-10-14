@@ -1,30 +1,18 @@
 import { ServerUnavailableError, useAuthStore } from "../state/auth";
 
 /**
- * `window.__nodvardDeck.refreshAccessTokenResult()` fuer Extension-Seiten: erneuert das Login-Token
- * und sagt, wie es ausging (wirft nie):
- *
- * - `ok`: das neue Token.
- * - `rejected`: der Server lehnt die Anmeldung ab -- man ist wirklich abgemeldet, die Shell
- *   zeigt die Anmeldung.
- * - `unavailable`: der Server antwortet gerade nicht (Neustart nach einem Deploy, WLAN weg).
- *   Die Anmeldung bleibt, die Seite kann "Server gerade nicht erreichbar" zeigen statt
- *   "Nicht authentifiziert" (extensions/_shared/frontend/src/api.ts).
- *   Hat der Server geantwortet, aber mit einem echten Fehler (z. B. 507 "Speicherplatz voll",
- *   500), tragen `httpStatus` und `message` seinen Status und Grund -- `status` bleibt
- *   "unavailable", damit aeltere Seiten weiter "nicht erreichbar" zeigen. Ohne diese Felder
- *   (Netzwerkfehler, Zeitlimit, 502/503/504 ohne lesbaren Grund) gibt es keine Aussage des Servers.
- *
- * `refresh()` haengt sich an einen schon laufenden Aufruf an (state/auth.ts), parallele
- * Seiten rotieren das Cookie also nicht gegeneinander.
+ * `window.__nodvardDeck.refreshAccessTokenResult()` für Extension-Seiten: erneuert das Token und sagt, wie es ausging
+ * (wirft nie): `ok`, `rejected` (wirklich abgemeldet) oder `unavailable` (Server antwortet nicht, die Anmeldung
+ * bleibt). `refresh()` knüpft an einen laufenden Aufruf an, parallele Seiten rotieren das Cookie nicht gegeneinander.
  */
 export async function refreshAccessTokenResult(): Promise<NodvardDeckTokenRefreshResult> {
   let ok: boolean;
   try {
     ok = await useAuthStore.getState().refresh();
   } catch (err) {
-    // refresh() wirft nur, wenn der Server nicht (sinnvoll) geantwortet hat (ServerUnavailableError);
-    // `status` ist gesetzt, wenn er mit einem echten Fehler geantwortet hat.
+    // refresh() wirft nur, wenn der Server nicht (sinnvoll) geantwortet hat. `status` ist gesetzt, wenn er mit einem
+    // echten Fehler geantwortet hat; der Status bleibt "unavailable", damit ältere Seiten weiter "nicht erreichbar"
+    // zeigen.
     if (err instanceof ServerUnavailableError && err.status !== undefined) {
       return { status: "unavailable", httpStatus: err.status, message: err.message };
     }
@@ -35,11 +23,9 @@ export async function refreshAccessTokenResult(): Promise<NodvardDeckTokenRefres
 }
 
 /**
- * `window.__nodvardDeck.refreshAccessToken()` fuer Extension-Seiten: erneuert das
- * Login-Token und liefert das neue -- oder `null`, wenn das nicht klappt (Refresh abgelehnt,
- * Server nicht erreichbar). Wirft nie; so steht es in der Schnittstelle, aeltere Bundles
- * verlassen sich darauf. Wer "abgelehnt" und "nicht erreichbar" unterscheiden will, nimmt
- * `refreshAccessTokenResult()`.
+ * `window.__nodvardDeck.refreshAccessToken()` für Extension-Seiten: erneuert das Token und liefert das neue, sonst
+ * `null` (Refresh abgelehnt, Server nicht erreichbar). Wirft nie, darauf verlassen sich ältere Bundles. Wer
+ * "abgelehnt" und "nicht erreichbar" unterscheiden will, nimmt `refreshAccessTokenResult()`.
  */
 export async function refreshAccessToken(): Promise<string | null> {
   const result = await refreshAccessTokenResult();

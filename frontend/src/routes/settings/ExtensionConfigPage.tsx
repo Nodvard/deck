@@ -1,7 +1,7 @@
 /**
- * Einstellungen -> Erweiterungen -> <Erweiterung>: Formular aus dem Schema der
- * Erweiterung, darunter die Verbindungskarte: Zugangsdaten (Tokens, Passwoerter), die nur
- * gesetzt, ersetzt oder entfernt, nie wieder angezeigt werden, und der Verbindungstest.
+ * Einstellungen → Erweiterungen → <Erweiterung>: Formular aus dem Schema der Erweiterung, darunter die
+ * Verbindungskarte: Zugangsdaten (Tokens, Passwörter), die nur gesetzt, ersetzt oder entfernt, nie wieder angezeigt
+ * werden, und der Verbindungstest.
  */
 import { AlertTriangle, ArrowLeft, CheckCircle2, KeyRound, Lock, RotateCcw, Send, XCircle, Zap } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -52,9 +52,11 @@ interface ExtInfo {
   last_test?: { ok: boolean; message: string; at?: string } | null;
 }
 
-/** Nur das, was in diesem Formular geändert wurde: Gespeichertes, das hier unverändert blieb
- * (auch in einem anderen Tab oder von jemand anderem inzwischen geändert), wird nicht überschrieben.
- * Ein entferntes Feld geht als `null` (der Server nimmt den Wert dann heraus). */
+/**
+ * Nur das, was in diesem Formular geändert wurde: Gespeichertes, das hier unverändert blieb (auch in einem anderen
+ * Tab oder von jemand anderem inzwischen geändert), wird nicht überschrieben. Ein entferntes Feld geht als `null`
+ * (der Server nimmt den Wert dann heraus).
+ */
 function changedValues(schema: JsonSchema | null, saved: Record<string, unknown>, current: Record<string, unknown>) {
   const out: Record<string, unknown> = {};
   for (const key of new Set([...Object.keys(saved), ...Object.keys(current)])) {
@@ -96,14 +98,16 @@ function targetAt(node: JsonSchema | undefined, values: unknown, path: string): 
   return isEmptyTarget(value) ? "" : value;
 }
 
-/** Jede Änderung eines gebundenen Felds zählt, auch eine erste Adresse (leer -> Wert): dieselbe Regel wie im Backend. */
+/** Jede Änderung eines gebundenen Felds zählt, auch eine erste Adresse (leer -> Wert), wie im Backend. */
 function targetMoved(node: JsonSchema | undefined, path: string, before: unknown, after: unknown): boolean {
   return !sameTarget(targetAt(node, before, path), targetAt(node, after, path));
 }
 
-/** Welche Zugangsdaten der Server beim Speichern dieses Formulars löschen würde, weil sich die
- * Adresse geändert hat, zu der sie gehören (gleiche Regel wie im Backend). Wer in diesem Zustand
- * erst das neue Token einträgt und dann speichert, verlöre es sofort wieder. */
+/**
+ * Welche Zugangsdaten der Server beim Speichern dieses Formulars löschen würde, weil sich die Adresse geändert hat,
+ * zu der sie gehören (gleiche Regel wie im Backend). Wer in diesem Zustand erst das neue Token einträgt und dann
+ * speichert, verlöre es sofort wieder.
+ */
 function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | null, saved: Record<string, unknown>, current: Record<string, unknown>): Set<string> {
   const out = new Set<string>();
   const specs = Array.isArray(schema?.["x-secrets"]) ? (schema["x-secrets"] as SecretSpec[]) : [];
@@ -128,8 +132,10 @@ function pendingSecretClears(schema: (JsonSchema & { "x-secrets"?: unknown }) | 
   return out;
 }
 
-/** Zugangsdaten, die an Felder gebunden sind, die gespeichert noch alle leer sind: Sie gehören zu keinem
- * Server, der Server nimmt sie erst an, wenn die Adresse gespeichert ist (409). */
+/**
+ * Zugangsdaten, die an Felder gebunden sind, die gespeichert noch alle leer sind: Sie gehören zu keinem Server, der
+ * Server nimmt sie erst an, wenn die Adresse gespeichert ist (409).
+ */
 function secretsWithoutTarget(schema: (JsonSchema & { "x-secrets"?: unknown }) | null, saved: Record<string, unknown>): Set<string> {
   const out = new Set<string>();
   const specs = Array.isArray(schema?.["x-secrets"]) ? (schema["x-secrets"] as SecretSpec[]) : [];
@@ -160,7 +166,7 @@ export function ExtensionConfigPage(): JSX.Element {
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
-  // Zaehlt die gespeicherten Staende: danach rechnet die Erweiterung den QR-Code (`x-qr-url`) neu.
+  // Zählt die gespeicherten Stände: danach rechnet die Erweiterung den QR-Code (`x-qr-url`) neu.
   const [saves, setSaves] = useState(0);
   // Die Erweiterung, deren Seite gerade offen ist (`null`: Seite verlassen). Eine Antwort, die erst nach dem Verlassen
   // oder nach dem Wechsel auf eine andere Erweiterung ankommt, ändert nichts mehr und leitet vor allem nicht mehr um.
@@ -174,7 +180,7 @@ export function ExtensionConfigPage(): JSX.Element {
     api.get<ExtInfo>(`/extensions/${extId}`)
       .then((loaded) => {
         if (!stillOpen(extId)) return;
-        // Die Adresse nennt eine frühere Kennung der Erweiterung (Lesezeichen, alter Link): die Seite lebt unter der
+        // Die Adresse nennt eine alte Kennung der Erweiterung (Lesezeichen, alter Link): die Seite lebt unter der
         // heutigen. Ersetzend, damit „Zurück“ nicht wieder auf die alte Adresse führt; alle Aufrufe darunter laufen
         // dann mit der heutigen Kennung.
         if (loaded.id && loaded.id !== extId) {

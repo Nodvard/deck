@@ -1813,6 +1813,8 @@ async def test_auto_update_handles_the_dashboard_host_last_and_reboots_it_after_
             events.append(("check", host.id))
         if "shutdown" in command:
             events.append(("reboot", host.id))
+        if "docker inspect" in command:  # Docker antwortet und kennt den Container nicht: ein anderer Server
+            return SimpleNamespace(exit_code=0, stdout="@@other\n", stderr="", duration_ms=1)
         res = await run_orig(host, command, timeout_s)
         if "@@pm" in command:  # beide Server brauchen einen Neustart
             res.stdout = re.sub(r"@@reboot\n\w+", "@@reboot\nyes\nlinux-image-6.1.0-26-amd64", res.stdout)
@@ -1876,6 +1878,128 @@ async def test_auto_update_never_reboots_a_server_from_the_no_reboot_list():
     assert "- nas-box: " in body and "Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu starten." in body
     assert (await center.overview())["config"]["auto_reboot_skip"] == ["nas-box"]
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("probe_reply", ["@@unknown\n", "", RuntimeError("Zeitüberschreitung")])
+async def test_auto_update_treats_an_unknown_server_like_the_dashboard_host(probe_reply):
+    """Ist nicht feststellbar, ob das Dashboard auf dem Server läuft (Docker nur mit sudo erreichbar, kein Docker, nicht
+    erreichbar), gilt das nicht als "anderer Server": Er kommt zuletzt, und sein Neustart folgt erst nach der Zusammenfassung.
+    Nur wo Docker antwortet und den Container nicht kennt, startet der Server sofort neu."""
+    import re
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+    from nodvard_sdk import Host
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx._host = Host(id="h1", name="pi", display_name="Raspberry Pi", address="10.0.0.2", tags=["auto-update"])
+    pve2 = Host(id="h2", name="pve2", display_name="pve2", address="10.0.0.3", tags=["auto-update"])
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, pve2)
+    events: list[tuple[str, str]] = []
+    run_orig, notify_orig = ctx.exec.run, ctx.notify.send
+
+    async def run(host, command, timeout_s=60):
+        if "@@pm" in command:
+            events.append(("check", host.id))
+        if "shutdown" in command:
+            events.append(("reboot", host.id))
+        if "docker inspect" in command:  # h1: nicht feststellbar, h2: Docker antwortet, den Container gibt es dort nicht
+            if host.id == "h2":
+                return SimpleNamespace(exit_code=0, stdout="@@other\n", stderr="", duration_ms=1)
+            if isinstance(probe_reply, Exception):
+                raise probe_reply
+            return SimpleNamespace(exit_code=0, stdout=probe_reply, stderr="", duration_ms=1)
+        res = await run_orig(host, command, timeout_s)
+        if "@@pm" in command:  # beide Server brauchen einen Neustart
+            res.stdout = re.sub(r"@@reboot\n\w+", "@@reboot\nyes\nlinux-image-6.1.0-26-amd64", res.stdout)
+        return res
+
+    async def notify(n):
+        events.append(("notify", n.title))
+        await notify_orig(n)
+
+    ctx.exec.run, ctx.notify.send = run, notify
+    res = await UpdateCenter(ctx, Defender(ctx)).auto_update()
+
+    assert res == {"hosts": 2, "failed": 0}
+    checks = [h for kind, h in events if kind == "check"]
+    assert checks.index("h2") < checks.index("h1")  # der nicht eindeutig andere Server kommt zuletzt
+    assert [e for e in events if e[0] != "check"] == [
+        ("reboot", "h2"),  # Docker sagt sicher "anderer Server": Neustart sofort
+        ("notify", "Automatische Updates: 2 Server"),
+        ("reboot", "h1"),  # nicht feststellbar: der Neustart wird nur verschoben, er fällt nicht weg
+        ("notify", "Automatische Updates: Neustart von Raspberry Pi"),
+    ]
+    assert "Neustart folgt nach dieser Meldung (ob hier das Dashboard läuft, ließ sich nicht prüfen)" in ctx.notes[0].body
+    assert "(hier läuft das Dashboard)" not in ctx.notes[0].body  # nichts behaupten, was niemand weiß
+    assert "Ob hier das Dashboard läuft, ließ sich nicht prüfen" in ctx.notes[-1].body
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_the_sure_dashboard_host_reboots_after_the_unclear_ones():
+    """Startet der sichere Dashboard-Server neu, endet die Schleife: Er kommt deshalb auch hinter die unklaren Server."""
+    import re
+
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+    from nodvard_sdk import Host
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, {"auto_updates_mode": "security", "auto_updates_host_tag": "auto-update", "auto_reboot": True})
+    ctx._host = Host(id="h1", name="deck", display_name="Deck", address="10.0.0.2", tags=["auto-update", "dashboard"])
+    unclear = Host(id="h2", name="nas", display_name="NAS", address="10.0.0.3", tags=["auto-update"])
+    other = Host(id="h3", name="pve", display_name="PVE", address="10.0.0.4", tags=["auto-update"])
+    ctx.hosts.list = lambda tag=None: _hosts(ctx._host, unclear, other)
+    reboots: list[str] = []
+    run_orig = ctx.exec.run
+
+    async def run(host, command, timeout_s=60):
+        if "shutdown" in command:
+            reboots.append(host.id)
+        if "docker inspect" in command:
+            reply = "@@other\n" if host.id == "h3" else "@@unknown\n"
+            return SimpleNamespace(exit_code=0, stdout=reply, stderr="", duration_ms=1)
+        res = await run_orig(host, command, timeout_s)
+        if "@@pm" in command:
+            res.stdout = re.sub(r"@@reboot\n\w+", "@@reboot\nyes\nlinux-image-6.1.0-26-amd64", res.stdout)
+        return res
+
+    ctx.exec.run = run
+    res = await UpdateCenter(ctx, Defender(ctx)).auto_update()
+
+    assert res == {"hosts": 3, "failed": 0}
+    assert reboots == ["h3", "h2", "h1"]
+    await engine.dispose()
+
+
+def test_the_container_probe_has_no_sudo_fallback():
+    from nodvard_deck_ext_shield.patching import own_container_probe
+
+    assert "sudo" not in own_container_probe("abc123")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+def test_the_container_probe_without_docker_rights_says_unknown_and_never_tries_sudo(tmp_path):
+    """Ist Docker nur mit sudo lesbar, bleibt es bei "nicht feststellbar": das Dashboard-Konto holt sich keine Rechte dazu."""
+    import shlex
+
+    from nodvard_deck_ext_shield.patching import own_container_probe
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    sudo_called = tmp_path / "sudo-called"
+    # Wuerde die Probe `sudo` anfassen, klappte `docker` dort und die Antwort lautete `@@own`.
+    for name, body in (("docker", "echo 'permission denied' >&2; exit 1"),
+                       ("sudo", f"touch {shlex.quote(str(sudo_called))}\necho sha256:abc")):
+        (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
+        (bin_dir / name).chmod(0o755)
+    out = subprocess.run(["/bin/sh", "-c", own_container_probe("ab12cd34ef56")], capture_output=True, text=True,
+                         env={"PATH": f"{bin_dir}:/usr/bin:/bin"}, timeout=30, check=False)
+    assert out.stdout.strip() == "@@unknown"
+    assert not sudo_called.exists()
 
 
 def test_the_container_probe_quotes_the_id_and_only_a_hit_counts():

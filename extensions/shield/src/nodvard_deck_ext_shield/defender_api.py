@@ -7,7 +7,7 @@ import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from nodvard_sdk import REQUEST_WAIT_S, Actor, ActionRequest, ActionResult, ActionSpec, DryRunReport, GateDecision, Notification, Risk, Severity
 from pydantic import BaseModel, Field
 
@@ -377,7 +377,7 @@ def build_routers(
 
     async def _submit(host: Any, action_type: str, fields: dict, reason: str, actor: Actor, risk: Risk,
                       *, error_status: int = status.HTTP_400_BAD_REQUEST, wait_s: float | None = REQUEST_WAIT_S) -> GateDecision:
-        """Der Befehl entsteht hier aus `fields`, derselbe Weg wie beim Ausführen; `command` dient nur Anzeige und Sperrliste."""
+        """Der Befehl entsteht hier aus `fields`, wie beim Ausführen; `command` dient nur Anzeige und Sperrliste."""
         try:
             command = await commands.build(action_type, host, fields)
         except ValueError as exc:
@@ -523,7 +523,9 @@ def build_routers(
         return {"data": rows, "meta": {}}
 
     @read.get("/scans")
-    async def scans(host: str | None = None, limit: int = 100, include_watch: bool = False) -> list[dict]:
+    async def scans(
+        host: str | None = None, limit: int = Query(100, ge=1, le=1000), include_watch: bool = False
+    ) -> list[dict]:
         return await defender.list_scans(host=host, limit=max(1, min(limit, 500)), include_watch=include_watch)
 
     @read.get("/findings")
@@ -590,7 +592,7 @@ def build_routers(
     async def _open_upgrades() -> dict[str, Any]:
         """Je Server die neueste offene Aktion `ACTION_UPGRADE` (wartet auf Freigabe, freigegeben oder läuft).
 
-        Quelle: die jüngsten eigenen Aktionen (`ctx.actions.list`, auch unter der alten Kennung); Abgelaufene zählen nicht."""
+        Quelle: die jüngsten eigenen Aktionen (`ctx.actions.list`, auch mit alter Kennung); Abgelaufene zählen nicht."""
         now = datetime.now(UTC)
         found: dict[str, Any] = {}
         for row in await ctx.actions.list(limit=_OPEN_LOOKUP_LIMIT):  # neueste zuerst
@@ -673,7 +675,7 @@ def build_routers(
                     detail={"mode": mode, **counts, "host_ids": [r["host_id"] for r in results if r["result"] == "proposed"]},
                     actor=actor,
                 )
-            except Exception:  # noqa: BLE001 - die Vorschläge stehen schon unter "Aktionen", die Antwort darf nicht am Protokoll scheitern
+            except Exception:  # noqa: BLE001 - Vorschläge stehen schon unter "Aktionen", das Protokoll darf nichts kippen
                 logging.getLogger(LOGGER).exception("shield_propose_all_audit_failed")
             return {"mode": mode, "results": results, "counts": counts}
         finally:

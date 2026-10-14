@@ -14,10 +14,9 @@ from .action_output import hide_audit_detail
 
 VALID_OUTCOMES = frozenset({"success", "failure", "denied", "proposed"})
 
-# Längen der Textspalten mit fester Länge in `models.security.AuditEntry`. SQLite prüft sie nicht; ohne Kürzung ließe
-# sich das Protokoll über lange Eingaben (z. B. ein Benutzername beim Login ohne Anmeldung) aufblähen. `reason` fehlt
-# bewusst: Die Spalte hat keine Grenze, Begründungen sollen vollständig bleiben (beim Login stehen dort nur feste
-# Sätze).
+# Längen der Textspalten in `models.security.AuditEntry`. SQLite prüft sie nicht; ohne Kürzung ließe sich das Protokoll
+# über lange Eingaben (z. B. ein Benutzername beim Login ohne Anmeldung) aufblähen. `reason` fehlt bewusst: Die Spalte
+# hat keine Grenze, Begründungen bleiben vollständig (beim Login nur feste Sätze).
 _MAX_LEN = {
     "actor_type": 16,
     "actor_id": 128,

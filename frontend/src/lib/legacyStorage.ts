@@ -1,26 +1,19 @@
 /**
- * Browser-Speicher: Schluessel unter dem alten Namen (`lattice.…`) werden einmal unter den
- * neuen (`nodvard-deck.…`) uebernommen, damit nichts verloren geht (z. B. "Aenderungsprotokoll
- * schon gesehen", gemerkte Konsolen-Ansicht).
- *
- * Regeln (docs/02-EXTENSION-API.md, Uebergang):
- * - `migrateLegacyStorage()` laeuft einmal vor dem ersten Rendern (main.tsx).
- * - Kopiert wird nur, wenn der neue Schluessel noch fehlt: ein schon gesetzter neuer Wert gewinnt.
- * - Der alte Schluessel wird NICHT geloescht, damit ein Zurueck auf das alte Image seine Werte
- *   noch findet. Aufgeraeumt wird erst in einer spaeteren Version.
- * - Idempotent und ohne Wirkung, wenn der Speicher fehlt oder wirft (privates Fenster,
- *   gesperrte Website-Daten): dann passiert einfach nichts.
- *
- * sessionStorage wird nicht umgezogen: `lib/chunkLoad.ts` liest dort beide Namen.
+ * Browser-Speicher: Schlüssel unter dem alten Namen (`lattice.…`) werden einmal unter den neuen (`nodvard-deck.…`)
+ * übernommen, damit nichts verloren geht. `migrateLegacyStorage()` läuft einmal vor dem ersten Rendern (main.tsx);
+ * `sessionStorage` wird nicht umgezogen (`lib/chunkLoad.ts` liest beide Namen).
  */
 
-/** Schluessel in `localStorage`: alt -> neu. Neue Schluessel beginnen mit `nodvard-deck.`; nur Ersatz fuer einen alten kommt hierher. */
+/**
+ * Schlüssel in `localStorage`: alt -> neu. Neue Schlüssel beginnen mit `nodvard-deck.`; nur Ersatz
+ * für einen alten kommt hierher.
+ */
 export const LOCAL_STORAGE_MIGRATIONS = [
   { from: "lattice.changelogSeen", to: "nodvard-deck.changelogSeen" },
   { from: "lattice.console.layout", to: "nodvard-deck.console.layout" },
 ] as const;
 
-/** Kopiert alte Schluessel unter ihren neuen Namen, wo diese fehlen. Wirft nie. */
+/** Kopiert alte Schlüssel unter ihren neuen Namen, wo diese fehlen. Wirft nie, auch nicht bei gesperrtem Speicher. */
 export function migrateLegacyStorage(storage?: Storage): void {
   let store: Storage;
   try {
@@ -30,11 +23,13 @@ export function migrateLegacyStorage(storage?: Storage): void {
   }
   for (const { from, to } of LOCAL_STORAGE_MIGRATIONS) {
     try {
+      // Ein schon gesetzter neuer Wert gewinnt. Der alte Schlüssel bleibt stehen, damit ein Zurück auf das alte
+      // Image seine Werte noch findet.
       if (store.getItem(to) !== null) continue;
       const value = store.getItem(from);
       if (value !== null) store.setItem(to, value);
     } catch {
-      // Dieser Schluessel geht nicht (Speicher voll, gesperrt): die uebrigen trotzdem versuchen.
+      // Dieser Schlüssel geht nicht (Speicher voll, gesperrt): die übrigen trotzdem versuchen.
     }
   }
 }

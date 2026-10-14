@@ -234,7 +234,7 @@ async def vault_use(
     # Geschrieben wird in einer eigenen, sofort committenden Session (zweite Verbindung): Dass ein Secret materialisiert
     # wurde, muss auch dann festgehalten bleiben, wenn der Aufrufer nach `yield` scheitert und zurückrollt. Ein
     # Zwischen-Commit auf `session` risse dessen offene, fremde Schreibvorgänge mit fest; `session` dient nur dem Lesen.
-    # Test: `test_vault_use_audit_survives_caller_session_rollback` (echte Datei-DB, zwei Verbindungen).
+    # Test: `test_vault_use_audit_survives_caller_session_rollback`.
     if note or migrate:
         if note:
             # Vor dem ersten `await` des Schreibens: ein gleichzeitiger Zugriff sieht den Eintrag schon.

@@ -114,9 +114,10 @@ DNS_2="${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-}}"
 if [ -n "$DNS_1" ] || [ -n "$DNS_2" ]; then
   say "DNS-Einstellung fuer den Container auf dem Ziel ablegen (deploy/.env)"
   # BEIDE Namen schreiben: Compose liest den neuen, ein Rueckweg aufs alte Image oder eine
-  # alte Compose-Datei den alten.
+  # alte Compose-Datei den alten. Ein nicht gesetzter Wert bleibt leer (keine Vorgabe, Compose
+  # laesst den Eintrag weg).
   printf 'NODVARD_DECK_DNS_1=%s\nNODVARD_DECK_DNS_2=%s\nLATTICE_DNS_1=%s\nLATTICE_DNS_2=%s\n' \
-    "${DNS_1:-1.1.1.1}" "${DNS_2:-1.0.0.1}" "${DNS_1:-1.1.1.1}" "${DNS_2:-1.0.0.1}" \
+    "$DNS_1" "$DNS_2" "$DNS_1" "$DNS_2" \
     | "${SSH[@]}" "cat > ~/$COMPOSE_DIR/.env" || fail "deploy/.env konnte nicht geschrieben werden."
 fi
 

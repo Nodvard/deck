@@ -56,7 +56,7 @@ _LAST_STATUS_TONE = {
 
 
 def _space_warning_response(warning: dict[str, Any]) -> JSONResponse:
-    """409 statt Vorschlag: die Seite fragt nach und schickt bei „trotzdem“ dieselbe Anfrage mit `ignore_space: true` erneut."""
+    """409 statt Vorschlag: die Seite fragt nach und schickt bei „trotzdem“ dieselbe Anfrage mit `ignore_space: true`."""
     return JSONResponse(
         status_code=status.HTTP_409_CONFLICT,
         content={"detail": warning["message"], "space_warning": warning},

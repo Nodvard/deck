@@ -22,10 +22,9 @@ from ..db.base import Base, IdMixin, TimestampMixin, UTCDateTime, utcnow
 class Secret(Base, IdMixin, TimestampMixin):
     """Mit Fernet verschlüsseltes Secret; der Master-Key liegt nie in der Datenbank."""
 
-    # Kein API-Endpunkt gibt `ciphertext` oder Klartext zurück, auch nicht dem Owner (schreiben und ersetzen ja, lesen
-    # nein). Extensions bekommen ein Handle; Klartext gibt es nur in `ctx.vault_use(...)`. Jede Materialisierung wird
-    # protokolliert (Label und Verwender, ohne Wert), gebündelt auf höchstens eine Audit-Zeile je Stunde und Verwender
-    # (`core.vault.USE_NOTE_INTERVAL`), weil Module regelmäßig abfragen und das Protokoll sonst überflutet würde.
+    # Kein API-Endpunkt gibt `ciphertext` oder Klartext zurück, auch nicht dem Owner (schreiben ja, lesen nein).
+    # Extensions bekommen ein Handle; Klartext gibt es nur in `ctx.vault_use(...)`. Jede Materialisierung wird
+    # protokolliert (ohne Wert), gebündelt auf eine Zeile je Stunde und Verwender, weil Module regelmäßig abfragen.
     __tablename__ = "secrets"
 
     label: Mapped[str] = mapped_column(String(128), unique=True, index=True)

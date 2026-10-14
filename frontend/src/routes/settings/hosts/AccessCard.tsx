@@ -1,4 +1,6 @@
-/** Kleine Zugangs-Karte fuer die Server-Seite: wie sich Nodvard Deck anmeldet, „Verbindung pruefen“, Link zur Einrichtung. */
+/**
+ * Kleine Zugangs-Karte für die Server-Seite: wie sich Nodvard Deck anmeldet, „Verbindung prüfen“, Link zur Einrichtung.
+ */
 import { useState } from "react";
 import { Link } from "react-router-dom";
 

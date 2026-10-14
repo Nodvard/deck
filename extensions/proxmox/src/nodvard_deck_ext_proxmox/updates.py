@@ -20,8 +20,8 @@ KERNEL_PACKAGE_RE = re.compile(r"^(proxmox|pve)-kernel-")
 KERNEL_IMAGE_RE = re.compile(r"^(?:proxmox|pve)-kernel-(\d+\.\d+\.\d+-\d+)-pve(?:-signed)?$")
 
 
-# Proxmox startet den nächtlichen Check (`pve-daily-update.timer`) mit einer zufälligen Verzögerung von mehreren Stunden;
-# zwei gesunde Läufe liegen deshalb bis zu rund 29 Stunden auseinander. Erst deutlich darüber gilt der Check als ausgeblieben.
+# Proxmox startet den nächtlichen Check (`pve-daily-update.timer`) mit zufälliger Verzögerung von mehreren Stunden; zwei
+# gesunde Läufe liegen bis zu rund 29 Stunden auseinander. Erst deutlich darüber gilt der Check als ausgeblieben.
 CHECK_STALE_AFTER_S = 36 * 3600
 
 

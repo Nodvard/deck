@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Fremde Webseiten können Nodvard Deck nicht mehr unsichtbar einbetten, und beim Klick auf einen Link nach draußen erfährt die andere Seite nicht, welche Deck-Seite offen war."

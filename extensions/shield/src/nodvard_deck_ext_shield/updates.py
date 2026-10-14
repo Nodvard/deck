@@ -315,7 +315,7 @@ KEPT_BACK_SHOWN = 5
 def parse_kept_back(output: str) -> list[str]:
     """Namen der von apt zurückgehaltenen Pakete: aus dem apt-Abschnitt oder aus der Zeile `@@kept-back: a b c`.
 
-    Die Zeile zieht `detached.poll_command` aus dem Protokoll, denn bei langen Läufen steht der Abschnitt nicht mehr im Ende."""
+    Die Zeile holt `detached.poll_command` aus dem Protokoll; bei langen Läufen fehlt der Abschnitt im Ende."""
     names: list[str] = []
     lines = output.splitlines()
     for i, raw in enumerate(lines):

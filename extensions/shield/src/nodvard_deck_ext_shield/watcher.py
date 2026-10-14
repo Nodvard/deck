@@ -48,7 +48,7 @@ class BaselineStateStore:
 
 
 def parse_restart_counts(output: str) -> dict[str, tuple[int, str]]:
-    """`docker inspect --format '{{.Name}}|{{.RestartCount}}|{{.Id}}'` -> {Name: (Zähler, Id)}; unpassende Zeilen entfallen."""
+    """`docker inspect --format '{{.Name}}|{{.RestartCount}}|{{.Id}}'` -> {Name: (Zähler, Id)}; andere Zeilen entfallen."""
     counts: dict[str, tuple[int, str]] = {}
     for line in output.splitlines():
         parts = line.strip().split("|")
@@ -72,7 +72,7 @@ def inspect_exit_command(names: list[str]) -> str:
 
 
 def parse_exit_facts(output: str) -> dict[str, dict[str, Any]]:
-    """Ausgabe von `inspect_exit_command` -> {Name: {oom_killed, exit_code, running, finished_at, error, restart_count, image}}."""
+    """`inspect_exit_command` -> {Name: {oom_killed, exit_code, running, finished_at, error, restart_count, image}}."""
     facts: dict[str, dict[str, Any]] = {}
     for line in output.splitlines():
         line = line.strip()
@@ -126,7 +126,7 @@ class DockerWatcher:
         on_recovery: Callable[[Any, str, float], Awaitable[None]] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        """`on_recovery(host, container, seit)`: ein gestörter Container läuft seit `RECOVERY_QUIET_S` ohne neuen Start wieder.
+        """`on_recovery(host, container, seit)`: ein gestörter Container läuft seit `RECOVERY_QUIET_S` ohne Neustart wieder.
 
         `seit` ist Unix-Zeit. Einmal je Erholung."""
         self._ctx = ctx
@@ -137,10 +137,10 @@ class DockerWatcher:
         self._prev_states: dict[str, str] = {}
         self._prev_restarts: dict[str, int] = {}
         self._prev_ids: dict[str, str] = {}
-        # Seit wann ein zuletzt gestörter Container ruhig läuft (Uhr `clock`). Nur im Speicher: Nach einem Neustart des Dashboards
-        # beginnt die Beobachtung neu, der Vorfall bleibt dann offen, bis man ihn selbst erledigt.
+        # Seit wann ein zuletzt gestörter Container ruhig läuft (Uhr `clock`). Nur im Speicher: Nach einem Neustart des
+        # Dashboards beginnt die Beobachtung neu, der Vorfall bleibt dann offen, bis man ihn selbst erledigt.
         self._calm_since: dict[str, float] = {}
-        # Container, deren Erholung zuletzt nicht gespeichert werden konnte: Nur der erste Fehler kommt mit Traceback ins Protokoll.
+        # Container, deren Erholung nicht gespeichert wurde: Nur der erste Fehler kommt mit Traceback ins Protokoll.
         self._recovery_failed: set[str] = set()
         self._loaded_hosts: set[str] = set()
         self._saved: dict[str, dict[str, Any]] = {}
@@ -273,10 +273,9 @@ class DockerWatcher:
                 prev_state = self._prev_states.get(key)
                 self._prev_states[key] = state
 
-                # Neustarts durch die Restart-Policy seit dem letzten Stand. Ein Container, der zwischen zwei Takten abstürzt und
-                # gleich wieder startet, steht bei beiden Takten auf "running"; nur der Zähler verrät es. Ein neu angelegter
-                # Container (andere Id) beginnt wieder bei einer Baseline, und ein manuelles `docker restart` erhöht den Zähler
-                # nicht: Beides ist kein Vorfall.
+                # Neustarts durch die Restart-Policy: Ein Container, der zwischen zwei Takten abstürzt und gleich wieder
+                # startet, steht beide Male auf "running", nur der Zähler verrät es. Kein Vorfall: ein neu angelegter
+                # Container (andere Id: neue Baseline) und ein manuelles `docker restart` (zählt nicht mit).
                 restart_delta = 0
                 current = restart_counts.get(name)
                 if current is not None:
@@ -294,7 +293,8 @@ class DockerWatcher:
 
                 await self._track_recovery(host, name, key, prev_state, state, restart_delta)
                 if prev_state is None:
-                    continue  # erste Beobachtung: nur Baseline, nie ein Vorfall (auch nicht bei Containern, die schon offline starten)
+                    # Erste Beobachtung: nur Baseline, nie ein Vorfall (auch nicht für Container, die schon offline starten).
+                    continue
                 if prev_state == state:
                     if restart_delta:
                         await self._on_transition(
@@ -315,8 +315,8 @@ class DockerWatcher:
                     continue
 
                 if prev_state == "running" and state != "running":
-                    # Nur exited/dead/restarting können ein Absturz sein; "paused" (und alles andere) nie. Ob ein Exit 137 ein
-                    # kill oder ein OOM war, klären die Beendigungs-Fakten.
+                    # Nur exited/dead/restarting können ein Absturz sein; "paused" (und alles andere) nie. Ob ein Exit
+                    # 137 ein kill oder ein OOM war, klären die Beendigungs-Fakten.
                     is_crash = state in ("dead", "restarting") or (
                         state == "exited"
                         and "exited (0)" not in status_str.lower()
@@ -332,11 +332,11 @@ class DockerWatcher:
                             is_crash=is_crash,
                         )
                     )
-                # Erholung (vorher nicht laufend, jetzt laufend) ist bewusst kein Vorfall; die Baseline ist oben schon aktualisiert.
+                # Erholung (vorher nicht laufend, jetzt laufend) ist bewusst kein Vorfall; Baseline ist oben schon aktuell.
 
-            # Nur Container der aktuellen, erfolgreichen `docker ps -a`-Ausgabe behalten: Entfernte Container (z. B. Zufallsnamen)
-            # wachsen so nicht unbegrenzt im Stand, und ein später gleichnamiger, nicht laufender Container gilt als neu
-            # (Baseline), nicht als Absturz.
+            # Nur Container der aktuellen, erfolgreichen `docker ps -a`-Ausgabe behalten: Entfernte Container (z. B.
+            # Zufallsnamen) wachsen so nicht unbegrenzt im Stand, und ein später gleichnamiger, nicht laufender
+            # Container gilt als neu (Baseline), nicht als Absturz.
             prefix = f"{host.id}:"
             current = {f"{prefix}{name}" for name, _st, _s in rows}
             for table in (self._prev_states, self._prev_restarts, self._prev_ids, self._calm_since):
@@ -348,7 +348,7 @@ class DockerWatcher:
             await self._save_host_state(host)
 
     async def _track_recovery(self, host: Any, name: str, key: str, prev_state: str | None, state: str, restart_delta: int) -> None:
-        """Erholung erkennen: Nach einer Störung muss der Container `RECOVERY_QUIET_S` ruhig laufen, erst dann `on_recovery` (einmal).
+        """Erholung: Nach einer Störung muss der Container `RECOVERY_QUIET_S` ruhig laufen, dann einmal `on_recovery`.
 
         Jede neue Störung beginnt die Wartezeit neu."""
         if self._on_recovery is None:
@@ -365,7 +365,7 @@ class DockerWatcher:
             return
         try:
             await self._on_recovery(host, name, time.time() - (now - started))
-        except Exception as exc:  # noqa: BLE001 - die Erholung ist optional: der Wächter läuft weiter und versucht es im nächsten Takt
+        except Exception as exc:  # noqa: BLE001 - die Erholung ist optional, der Wächter versucht es im nächsten Takt wieder
             if key in self._recovery_failed:
                 logger.warning("shield_watcher_recovery_failed_again target=%s error=%s", name, exc)
             else:

@@ -1,9 +1,7 @@
 /**
- * Server anlegen und bearbeiten (Einstellungen -> Server & Zugaenge). Die Pruefung der
- * Eingaben macht das Backend; seine deutschen Meldungen erscheinen direkt am Feld. Beim
- * Bearbeiten geht nur das ueber die Leitung, was sich wirklich geaendert hat -- vor allem die
- * Adresse: eine unveraenderte Adresse mitzuschicken leert sonst ohne Grund die offenen
- * SSH-Verbindungen (Hinweis aus dem Review von PR A).
+ * Server anlegen und bearbeiten (Einstellungen → Server & Zugänge). Die Prüfung der Eingaben macht das Backend, seine
+ * deutschen Meldungen erscheinen am Feld. Beim Bearbeiten geht nur das über die Leitung, was sich geändert hat: Eine
+ * unveränderte Adresse mitzuschicken leert sonst ohne Grund die offenen SSH-Verbindungen.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
@@ -79,7 +77,7 @@ export function HostForm({
         const changes: Record<string, unknown> = {};
         const shownName = displayName.trim() || host.name;
         if (shownName !== host.display_name) changes.display_name = shownName;
-        // Die Adresse nur, wenn sie sich geaendert hat.
+        // Die Adresse nur, wenn sie sich geändert hat.
         if (address.trim() !== host.address) changes.address = address.trim();
         if (osFamily !== host.os_family) changes.os_family = osFamily;
         if (enabled !== host.enabled) changes.enabled = enabled;

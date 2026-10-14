@@ -367,7 +367,11 @@ async def test_settings_api_shows_and_changes_the_switch(client, db_session, tes
         return next(r["value"] for r in listing if r["key"] == "ssh.confirm_new_host_keys")
 
     assert _value((await client.get("/api/v1/settings", headers=_auth(token))).json()) is True, "neue Installation: an"
-    r = await client.put("/api/v1/settings/ssh.confirm_new_host_keys", json={"value": False}, headers=_auth(token))
+    r = await client.put(
+        "/api/v1/settings/ssh.confirm_new_host_keys",
+        json={"value": False, "current_password": "correct-horse-battery"},
+        headers=_auth(token),
+    )
     assert r.status_code == 200, r.text
     assert _value((await client.get("/api/v1/settings", headers=_auth(token))).json()) is False
     bad = await client.put("/api/v1/settings/ssh.confirm_new_host_keys", json={"value": "ja"}, headers=_auth(token))

@@ -1,14 +1,7 @@
 /**
- * „Mit Passwort einrichten“: Statt den Einrichtungsbefehl selbst einzufügen, gibt man EINMAL Benutzer und Passwort
- * eines Kontos ein, das sich per SSH anmelden darf (root oder ein Konto mit sudo). Nodvard Deck meldet sich damit an,
- * führt genau denselben Befehl aus, vergisst das Passwort und prüft danach die Anmeldung mit dem neuen Schlüssel
- * (`POST /hosts/{id}/credentials/{cid}/setup-with-password`).
- *
- * Das Passwort lebt nur im Feld, bis es abgeschickt wird: Im selben Augenblick wird das Feld geleert (noch vor der
- * Antwort). Es läuft nie durch `useMutation`, nie in einen Query-Key, nie in die Adresse oder den Browser-Speicher;
- * `autocomplete="new-password"`, damit der Browser weder ein gespeichertes Passwort einsetzt noch anbietet, es zu merken
- * („off“ übergehen viele Browser bei Passwortfeldern).
- * Läuft die Seite ohne HTTPS (und nicht direkt auf diesem Rechner), steht ein deutlicher Hinweis da – keine Sperre.
+ * „Mit Passwort einrichten“: Man gibt einmal Benutzer und Passwort eines Kontos ein, das sich per SSH anmelden darf
+ * (root oder mit sudo); Nodvard Deck führt damit denselben Befehl aus, vergisst das Passwort und prüft danach die
+ * Anmeldung mit dem neuen Schlüssel (`POST /hosts/{id}/credentials/{cid}/setup-with-password`).
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
@@ -83,7 +76,7 @@ export function PasswordSetup({
   groups: string[];
   /** Sind die Haken schon vorbelegt (was die Erweiterungen brauchen)? Vorher kein Absenden. */
   ready?: boolean;
-  /** Hinweise, die schon beim Befehl stehen -- im Ergebnis nicht noch einmal. */
+  /** Hinweise, die schon beim Befehl stehen: im Ergebnis nicht noch einmal. */
   knownNotes?: string[];
   /** Ergebnis der Prüfung mit dem neuen Schlüssel (z. B. um „Neuen Zugang verwenden“ freizugeben). */
   onChecked?: (result: CheckResult) => void;
@@ -98,12 +91,14 @@ export function PasswordSetup({
   const [failure, setFailure] = useState<SetupWithPasswordError | null>(null);
   const [result, setResult] = useState<SetupWithPasswordOut | null>(null);
   const [notice, setNotice] = useState<Notice>(null);
+  // Ohne HTTPS (und nicht direkt auf diesem Rechner) steht ein deutlicher Hinweis da, aber keine Sperre.
   const inClear = sendsInClear(window.location);
   const asRoot = loginUser.trim() === "root";
 
   async function submit(e: FormEvent) {
     e.preventDefault();
-    // Das Passwort sofort aus dem Zustand nehmen -- es lebt nur noch in dieser einen Anfrage.
+    // Das Passwort sofort aus dem Zustand nehmen: Es lebt nur noch in dieser einen Anfrage, nie in `useMutation`,
+    // einem Query-Key, der Adresse oder dem Browser-Speicher.
     const typed = password;
     setPassword("");
     setErrors({});
@@ -146,6 +141,8 @@ export function PasswordSetup({
 
   const extraNotes = result ? result.notes.filter((n) => !knownNotes.includes(n)) : [];
 
+  // Das Passwortfeld nutzt `autocomplete="new-password"`, weil viele Browser „off“ bei Passwortfeldern übergehen: So
+  // setzt der Browser kein gespeichertes Passwort ein und bietet nicht an, es zu merken.
   return (
     <form onSubmit={(e) => void submit(e)} noValidate className="space-y-4" data-testid="password-setup">
       <p className="text-sm text-white/70">

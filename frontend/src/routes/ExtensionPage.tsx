@@ -97,11 +97,9 @@ function ModuleLoadError({ extId, message }: { extId: string; message: string })
 }
 
 /**
- * ESM-Loader (docs/02-EXTENSION-API.md §5): laedt `/api/v1/extensions/<ext_id>/
- * frontend/index.js` per `import()` und rendert den in `PageSpec.component`
- * benannten Export. `@vite-ignore`, weil das Ziel erst zur Laufzeit feststeht --
- * Vite kann diesen Import nicht statisch analysieren/bundlen, was hier gewollt ist
- * (das Bundle gehoert der Extension, nicht dem Kern-Build).
+ * ESM-Loader (docs/02-EXTENSION-API.md): lädt `/api/v1/extensions/<ext_id>/frontend/index.js` per `import()` und
+ * rendert den in `PageSpec.component` benannten Export. `@vite-ignore`, weil das Ziel erst zur Laufzeit feststeht und
+ * das Bundle der Extension gehört, nicht dem Kern-Build.
  */
 export function ExtensionPage() {
   const { extId } = useParams();
@@ -144,20 +142,15 @@ export function ExtensionPage() {
     };
   }, [page?.ext_id, page?.component]);
 
-  // Der Router navigiert per pushState -- das meldet der Browser bei niemandem. Seiten, die ihrer
-  // Query folgen (Reiter, Server-Filter), erfahren von jeder Navigation ueber dieses Ereignis, auch
-  // wenn sich nur der Verlaufsschluessel aendert (gleiche Adresse, die Seite hat ihre per
-  // replaceState geaendert). Kindeffekte laufen vor diesem: ein frisch eingehaengter Zuhoerer hoert es.
-  // Gefeuert wird unter beiden Namen (`nodvard-deck:navigate` und das alte `lattice:navigate`, damit
-  // auch Erweiterungen mit aelterem UI-Kit es hoeren); das Kit hoert immer nur auf einen
-  // (extensions/_shared/frontend/src/location.ts), nichts reagiert doppelt.
+  // Der Router navigiert per pushState, das meldet der Browser bei niemandem: Seiten, die ihrer Query folgen, erfahren
+  // jede Navigation über dieses Ereignis, auch bei gleicher Adresse (`location.key` ändert sich). Kindeffekte laufen
+  // davor, ein frisch eingehängter Zuhörer hört es. Es geht unter beiden Namen raus, das UI-Kit hört nur auf einen.
   useEffect(() => {
     dispatchDeckEvent("navigate");
   }, [location.key]);
 
-  // Das gilt auch fuer Zurueck/Vor: die Seiten sollen dann nicht zusaetzlich selbst auf popstate
-  // hoeren (location.ts), sonst fragen sie doppelt ab. Layout-Effekt, damit die Marke vor den
-  // Effekten der Seite steht.
+  // Das gilt auch für Zurück/Vor: Die Seiten sollen dann nicht zusätzlich selbst auf popstate hören (location.ts),
+  // sonst fragen sie doppelt ab. Layout-Effekt, damit die Marke vor den Effekten der Seite steht.
   useLayoutEffect(() => {
     const shell = findDeck();
     if (!shell) return;
@@ -173,9 +166,8 @@ export function ExtensionPage() {
   if (!page) return <PageMissing extId={extId} />;
   if (error) return <ModuleLoadError extId={page.ext_id} message={error} />;
   if (!Component) return <p className="p-6 text-sm opacity-60">Lade Modul …</p>;
-  // Neu aufbauen, wenn sich nur die Query aendert (Server-Seite -> `?host=`): fuer Seiten, die
-  // ihre Query nur beim Mount lesen. Die mitgelieferten folgen ihr zusaetzlich ueber das
-  // Ereignis oben, auch bei derselben Adresse (docs/02-EXTENSION-API.md, Host-Werkzeuge).
+  // Neu aufbauen, wenn sich nur die Query ändert (Server-Seite -> `?host=`), für Seiten, die ihre Query nur beim Mount
+  // lesen. Die mitgelieferten folgen ihr zusätzlich über das Ereignis oben, auch bei derselben Adresse.
   const content = <Component key={location.search} />;
   // Beta-Module: eine schmale Zeile darüber (die Seite des Moduls bringt ihren eigenen Kopf mit und bleibt unberührt).
   return isBeta(page.stage) ? <><BetaPageNotice />{content}</> : content;

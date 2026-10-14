@@ -62,10 +62,9 @@ def job_snapshot(job: dict[str, Any]) -> dict[str, Any]:
     return {**{k: v for k, v in current_values(job).items() if k != "keep-all"}, "prune": parse_prune(job.get("prune-backups"))}
 
 
-# Einstellungen des Jobs, die ein manueller Lauf übernimmt (nur einfache Werte, nie Nutzereingaben).
-# `remove` gehört dazu: ein Job mit `remove=0` räumt nie auf, der Nachlauf darf es dann auch nicht (ohne den
-# Schlüssel gilt in Proxmox `remove=1`). `tmpdir` (wie `dumpdir`/`script`) nimmt Proxmox nur von `root@pam` an,
-# nie von einem API-Token; mitgeschickt würde jeder Nachlauf abgelehnt.
+# Was ein manueller Lauf vom Job übernimmt (nur einfache Werte, nie Nutzereingaben). `remove` gehört dazu, sonst räumte
+# der Nachlauf eines Jobs mit `remove=0` auf (ohne Schlüssel gilt `remove=1`). `tmpdir`, `dumpdir` und `script` nimmt
+# Proxmox nur von `root@pam` an, nie von einem API-Token: Mitgeschickt würde jeder Nachlauf abgelehnt.
 VZDUMP_JOB_KEYS = (
     "storage", "mode", "compress", "notes-template", "bwlimit", "ionice", "zstd", "pigz",
     "stopwait", "lockwait", "protected", "remove",
@@ -184,10 +183,9 @@ def build_job_update(job: dict[str, Any], changes: Any) -> tuple[dict[str, Any],
         # Der Digest des gelesenen Jobs verhindert, dass eine zwischenzeitliche Änderung überschrieben wird.
         params["digest"] = job["digest"]
 
-    # Weniger aufbewahren oder abschalten ist hohes Risiko: Proxmox löscht beim nächsten Lauf alles über der
-    # neuen Grenze, nicht rückgängig zu machen. "0" heißt keine eigene Regel mehr, dann greift die unbekannte
-    # Speicher-Regel, ebenfalls destruktiv. Umgekehrt: ohne eigene Regel galt die des Speichers (oft "alle
-    # behalten"), eine neue eigene Regel kann also weniger behalten.
+    # Weniger aufbewahren ist hohes Risiko: Proxmox löscht beim nächsten Lauf unwiderruflich alles über der neuen Grenze.
+    # Ebenso "0" (keine eigene Regel, dann gilt die unbekannte des Speichers) und eine erste eigene Regel, denn die des
+    # Speichers behält oft alles.
     had_rule = any(prune.get(k) for k in _ALL_KEEPS)
     destructive = (
         (before["enabled"] and not after["enabled"])

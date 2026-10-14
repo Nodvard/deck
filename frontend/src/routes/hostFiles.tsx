@@ -1,10 +1,7 @@
 /**
- * „Dateien“ auf der Server-Seite: der Knopf zum Dateimanager dieses Servers (`/files?host=<id>`), seine wichtigen Orte
- * als kleine Links und, wenn es fuer den Server keine Dateiquelle gibt, ein Satz dazu, woran es liegt und wo man es behebt.
- *
- * Ob es eine Quelle gibt, sagt `GET /files/sources` (die Quelle nennt ihren Server in `host_id`): eine Abfrage fuer alle
- * Server-Seiten, zwischengespeichert. Die SFTP-Quelle liefert das Modul „Terminal“; es schaltet sich ein, sobald ein
- * Server einen SSH-Zugang hat, und die Quelle zeigt der Kern nur Nutzern mit dem Recht, Befehle auf Servern auszufuehren.
+ * „Dateien“ auf der Server-Seite: Knopf zum Dateimanager dieses Servers, wichtige Orte als Links und, wenn es keine
+ * Dateiquelle gibt, ein Satz dazu. Ob es eine Quelle gibt, sagt `GET /files/sources` (zwischengespeichert); die
+ * SFTP-Quelle liefert das Modul „Terminal“, der Kern zeigt sie nur Nutzern mit dem Recht, Befehle auszuführen.
  */
 import { useQuery } from "@tanstack/react-query";
 import { FolderOpen } from "lucide-react";
@@ -16,14 +13,17 @@ import { api } from "../lib/api";
 import { type HostOut } from "../lib/overview";
 import { useAuthStore } from "../state/auth";
 
-/** Das Modul, das die Dateien eines Servers per SSH liefert. Eine allgemeine Kennzeichnung ueber die API gibt es (noch) nicht. */
+/**
+ * Das Modul, das die Dateien eines Servers per SSH liefert. Eine allgemeine Kennzeichnung
+ * über die API gibt es (noch) nicht.
+ */
 const SFTP_EXTENSION_ID = "terminal";
-/** So viele Orte stehen hoechstens als Links auf der Server-Seite; alle zeigt der Dateimanager. */
+/** So viele Orte stehen höchstens als Links auf der Server-Seite; alle zeigt der Dateimanager. */
 const MAX_PLACES = 4;
 
 interface FileSourceInfo {
   source_id: string;
-  /** Server hinter der Quelle; fehlt bei Quellen ohne Server und bei aelteren Versionen. */
+  /** Server hinter der Quelle; fehlt bei Quellen ohne Server und bei älteren Versionen. */
   host_id?: string | null;
 }
 
@@ -69,7 +69,10 @@ export function HostFilesButton({ files, hostId }: { files: HostFiles; hostId: s
   );
 }
 
-/** Warum es fuer diesen Server keine Dateiquelle gibt, in einem Satz, mit dem Weg, es zu beheben (falls man ihn gehen darf). */
+/**
+ * Warum es für diesen Server keine Dateiquelle gibt, in einem Satz, mit dem Weg, es zu
+ * beheben (falls man ihn gehen darf).
+ */
 function missingSourceReason(
   host: HostOut,
   can: { execute: boolean; writeHosts: boolean; manageExtensions: boolean },

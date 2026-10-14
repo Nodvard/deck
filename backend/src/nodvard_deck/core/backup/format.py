@@ -11,13 +11,13 @@ from typing import Any, BinaryIO
 
 from .errors import DamagedBackup, NewerBackup
 
-# Aufbau einer Sicherungsdatei: Zeile 1 die Kennung mit Formatversion, Zeile 2 ein JSON-Kopf, danach eine age-Datei mit
-# einem tar.gz. Ohne das Dashboard lässt sie sich öffnen, wenn man die ersten zwei Zeilen abschneidet
-# (`tail -n +3 datei.ndbak > datei.age`) und mit `age -d` entschlüsselt: im Modus "passwort" mit dem Einmal-Passwort,
-# im Modus "schluessel" mit dem Wiederherstellungsschlüssel (`age -d -i schluessel.txt`).
-# Der Kopf ist Klartext und nicht authentifiziert. Er enthält nie Geheimnisse (nur Modus, Version, Zeit, Schlüssel-Kennung
-# und Parameter der Schlüsselableitung); Datenbank, Tresorschlüssel und Zugangsdaten stehen nur im verschlüsselten Teil.
-# Damit ein veränderter Kopf auffällt, liegt eine Kopie im Manifest (verschlüsselt), `check_manifest` vergleicht beide.
+# Aufbau: Zeile 1 Kennung mit Formatversion, Zeile 2 JSON-Kopf, danach eine age-Datei mit einem tar.gz. Ohne Dashboard
+# öffnet man sie, indem man die ersten zwei Zeilen abschneidet (`tail -n +3 datei.ndbak > datei.age`) und mit `age -d`
+# entschlüsselt (Modus "passwort": Einmal-Passwort; "schluessel": Wiederherstellungsschlüssel, `-i schluessel.txt`).
+#
+# Der Kopf ist Klartext und nicht authentifiziert, daher nie Geheimnisse darin (nur Modus, Version, Zeit,
+# Schlüssel-Kennung, KDF-Parameter); Datenbank, Tresorschlüssel und Zugangsdaten stehen nur im verschlüsselten Teil.
+# Eine Kopie des Kopfs im verschlüsselten Manifest lässt eine Veränderung auffallen (`check_manifest`).
 MAGIC_PREFIX = b"NODVARD-DECK-BACKUP/"
 MAGIC = MAGIC_PREFIX + b"1\n"
 # Bisher die einzige Version. Eine neuere Datei lehnen `read_header` und `validate_header` mit `NewerBackup` ab, damit erst
@@ -159,7 +159,7 @@ def check_manifest(manifest: object, header: dict[str, Any]) -> dict[str, Any]:
 
 
 def is_safe_member(name: str) -> bool:
-    """Nur `manifest.json`, `db/lattice.db` und Dateien unter `files/`, ohne absoluten Pfad, `..`, Rückwärtsstriche, leere Teile."""
+    """Nur `manifest.json`, `db/lattice.db` und Dateien unter `files/`, ohne absoluten Pfad, `..`, Backslash, leere Teile."""
     if not name or len(name) > 1024 or "\\" in name or "\x00" in name:
         return False
     if name in (ARC_MANIFEST, ARC_DB):
@@ -277,7 +277,7 @@ def is_restore_file(name: str) -> bool:
 
 
 def is_restore_dir(name: str) -> bool:
-    """Ordner-Einträge (tar kennt sie, das Dashboard schreibt keine): nur Ordner, die eine erlaubte Datei enthalten dürfte."""
+    """Ordner-Einträge (tar kennt sie, wir schreiben keine): nur Ordner, die eine erlaubte Datei enthalten dürfte."""
     parts = _clean_parts(name)
     if parts is None:
         return False

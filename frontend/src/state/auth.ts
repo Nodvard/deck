@@ -1,13 +1,7 @@
 /**
- * Auth-Zustand -- docs/00-DECISIONS.md D-07, docs/04-API.md §1/§2.
- *
- * Der Access-Token lebt NUR im Speicher (D-07: "im Speicher des Clients"), nie in
- * localStorage/sessionStorage -- ein XSS-Angriff, der localStorage lesen kann, koennte
- * sonst einen 30 Tage gueltigen Zugang stehlen statt nur einen 15-Minuten-Token. Der
- * Refresh-Token fuer Web ist ein HttpOnly-Cookie, den JavaScript ohnehin nie sieht.
- *
- * Zustand (nicht Redux, D-03) fuer den globalen Auth-Zustand -- `apiFetch` (lib/api.ts)
- * liest ihn ausserhalb von React-Komponenten ueber `useAuthStore.getState()`.
+ * Auth-Zustand. Der Access-Token lebt nur im Speicher, nie in localStorage: Ein XSS-Angriff, der localStorage liest,
+ * könnte sonst einen 30 Tage gültigen Zugang stehlen statt nur einen 15-Minuten-Token. Der Refresh-Token ist ein
+ * HttpOnly-Cookie; `apiFetch` (lib/api.ts) liest den Zustand außerhalb von React über `useAuthStore.getState()`.
  */
 import { create } from "zustand";
 
@@ -61,11 +55,8 @@ async function parseJsonResponse<T>(res: Response): Promise<T> {
 }
 
 /**
- * Fehlertext einer abgelehnten Auth-Antwort. Der Server schickt `detail` als deutschen
- * Satz -- bei 429 z. B. "Zu viele Fehlversuche. Bitte in 4 Minuten erneut versuchen."
- * Ein 422 liefert `detail` als Liste (zu kurzes Passwort, ...): die wird zu einem
- * Satz zusammengesetzt (`lib/validation.ts`) -- als React-Kind gerendert liesse sie die
- * Anmeldeseite abstuerzen, und "HTTP 422" sagt der Person nichts.
+ * Fehlertext einer abgelehnten Auth-Antwort. Die 422-Liste wird zu einem Satz zusammengesetzt, weil sie als
+ * React-Kind gerendert die Anmeldeseite abstürzen ließe.
  */
 export async function authErrorText(res: Response): Promise<string> {
   const body = await parseJsonResponse<{ detail?: unknown }>(res).catch(() => ({}) as { detail?: unknown });
@@ -87,18 +78,9 @@ export async function authErrorText(res: Response): Promise<string> {
 export const SERVER_UNAVAILABLE_TEXT = "Server gerade nicht erreichbar – bitte gleich noch einmal versuchen.";
 
 /**
- * `refresh()` wirft das, wenn die Anmeldung nicht erneuert werden konnte, das Cookie aber
- * NICHT als ungueltig abgelehnt wurde: Netzwerkfehler, Zeitlimit, 5xx (z. B. 502/503/504
- * vom Proxy, waehrend der Container nach einem Deploy neu startet) oder eine unlesbare
- * Antwort. Die Anmeldung ist dann NICHT ungueltig -- der Zustand im Store bleibt, wie er
- * war, und der Aufrufer versucht es spaeter noch einmal. Nur `false` (Server lehnt das
- * Refresh-Cookie ab) bedeutet "abgemeldet".
- *
- * Ohne `status` ist der Server wirklich "nicht erreichbar" (Netzwerkfehler, Zeitlimit,
- * 502/503/504 ohne lesbaren Grund). Mit `status` hat er geantwortet und nennt einen Grund
- * (z. B. 507 "Speicherplatz voll" oder ein 500): `message` ist dann sein Text (oder
- * "HTTP <status>"), `detail` der geparste Body -- der Aufrufer zeigt das statt des festen
- * "nicht erreichbar"-Texts an, meldet aber ebenfalls nicht ab.
+ * `refresh()` wirft das, wenn die Erneuerung scheitert, das Cookie aber nicht abgelehnt wurde (Netzwerk, Zeitlimit,
+ * 5xx, unlesbare Antwort). Der Store bleibt dann unverändert, nur `false` heißt abgemeldet. Mit `status` nennt der
+ * Server einen Grund (`message`, `detail` = Body), ohne `status` ist er nicht erreichbar.
  */
 export class ServerUnavailableError extends Error {
   status?: number;
@@ -111,13 +93,12 @@ export class ServerUnavailableError extends Error {
   }
 }
 
-/** Antworten, die ein Proxy schickt, solange der Server nicht (fertig) laeuft. */
+/** Antworten, die ein Proxy schickt, solange der Server nicht (fertig) läuft. */
 const SERVER_DOWN_STATUS = new Set([502, 503, 504]);
 
 /**
- * Antwort von /auth/refresh, die weder Erfolg noch Ablehnung des Cookies ist: Text und
- * Body lesen. 502/503/504 ohne lesbaren Grund (HTML vom Proxy) heissen weiter "nicht
- * erreichbar"; alles andere traegt Status und Grund des Servers.
+ * Fehler zu einer /auth/refresh-Antwort ohne Erfolg und ohne Ablehnung; 502/503/504 ohne lesbaren Grund
+ * (HTML vom Proxy) heißen weiter "nicht erreichbar", alles andere trägt Status und Grund des Servers.
  */
 async function refreshFailure(res: Response): Promise<ServerUnavailableError> {
   const text = await res.text().catch(() => "");
@@ -134,29 +115,19 @@ async function refreshFailure(res: Response): Promise<ServerUnavailableError> {
 }
 
 /**
- * So lange wartet `refresh()` hoechstens auf die Antwort. Steht die Verbindung, der Server
- * antwortet aber nicht (Container wird gerade ersetzt, schlechtes Netz am Handy), wuerde
- * das Promise sonst nie enden -- und mit ihm alles, was sich daran haengt (Wiederholung
- * in lib/tokenRefresh.ts, "Lade ..." in RequireAuth, jeder 401-Retry in lib/api.ts).
- * Bewusst grosszuegig: der Server rotiert das Cookie schon beim Einloesen, eine zu
- * knapp abgebrochene Anfrage koennte ein Cookie verbrauchen, dessen Antwort wir nie sehen.
+ * So lange wartet `refresh()` höchstens auf die Antwort: Schweigt der Server, hinge sonst alles daran (Wiederholung,
+ * "Lade ..." in RequireAuth, 401-Retry). Bewusst großzügig: Der Server rotiert das Cookie schon beim Einlösen, ein zu
+ * knapper Abbruch könnte eines verbrauchen, dessen Antwort nie ankommt.
  */
 export const REFRESH_TIMEOUT_MS = 20_000;
 
-/** Nur diese Antworten von /auth/refresh heissen: das Refresh-Cookie ist wirklich ungueltig. */
+/** Nur diese Antworten von /auth/refresh bedeuten: Das Refresh-Cookie ist wirklich ungültig. */
 const REFRESH_REJECTED_STATUS = new Set([400, 401, 403]);
 
 /**
- * Geteilter In-Flight-Zustand fuer `refresh()` -- das Race schlaegt unter React 18
- * StrictMode sogar bei JEDER Erstinstallation deterministisch zu: `services/auth.py::
- * refresh_access_token()` rotiert das Refresh-Token bei jeder Einloesung (sofortiger
- * Widerruf + Neuausgabe, kein Gnadenfenster) -- ein ZWEITER gleichzeitiger Aufruf mit
- * demselben (durch den ersten bereits verbrauchten) Cookie bekam bisher sofort 401 und
- * warf den Nutzer auf den Login-Bildschirm zurueck, obwohl der erste Aufruf erfolgreich
- * war. Modulweite Variable statt Store-State: ein Promise gehoert nicht in reaktiven
- * Zustand (loest sonst unnoetige Re-Renders aus, sobald es sich aendert), muss aber
- * ausserhalb von `create()` leben, damit ALLE gleichzeitigen `refresh()`-Aufrufer
- * (RequireAuth, jeder von `apiFetch` ausgeloeste 401-Retry) dieselbe Instanz sehen.
+ * Laufender `refresh()`, den gleichzeitige Aufrufer teilen (unter StrictMode schon beim Start): Der Server rotiert das
+ * Cookie bei jeder Einlösung und nimmt das verbrauchte nur noch kurz an. Modulweit statt im Store, weil ein Promise
+ * keine Re-Renders auslösen soll, aber alle Aufrufer dieselbe Instanz sehen müssen.
  */
 let inFlightRefresh: Promise<boolean> | null = null;
 
@@ -194,9 +165,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       body: JSON.stringify({ username, password, setup_code: setupCode }),
     });
     if (!res.ok) return { ok: false, error: await authErrorText(res) };
-    // Erstellt nur den Owner (api/v1/auth.py::bootstrap) -- kein Token in der Antwort.
-    // `login()` danach ist derselbe Weg, den jeder spaetere Login auch nimmt, statt
-    // die Token-Ausgabe hier zu duplizieren.
+    // Bootstrap legt nur den Owner an und liefert kein Token; `login()` danach ist derselbe Weg wie jeder spätere
+    // Login, statt die Token-Ausgabe hier zu duplizieren.
     return get().login(username, password) as Promise<{ ok: true } | { ok: false; error: string }>;
   },
 
@@ -210,8 +180,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
     if (!res.ok) {
       const error = await authErrorText(res);
-      // 429: zu viele falsche Codes (das Token ist verbraucht) oder die Anmeldung ist
-      // gesperrt -- so oder so muss man sich neu anmelden, also zurueck zum Passwort.
+      // 429: zu viele falsche Codes (das Token ist verbraucht) oder die Anmeldung ist gesperrt: so oder so
+      // zurück zum Passwort.
       if (res.status === 429) set({ mfaToken: null });
       return { ok: false, error };
     }
@@ -221,16 +191,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   refresh() {
-    // Haengt sich an einen bereits laufenden Refresh an, statt einen zweiten mit dem
-    // (nach dem ersten erfolgreichen Aufruf bereits verbrauchten) Cookie auszuloesen --
-    // siehe `inFlightRefresh`-Kommentar oben. Bewusst KEIN `async`/`await` hier: die
-    // Zuweisung an `inFlightRefresh` muss SYNCHRON vor jedem `await`-Punkt passieren,
-    // sonst koennten zwei im selben Tick gestartete Aufrufe die Pruefung `if
-    // (inFlightRefresh)` beide noch als `null` sehen.
+    // Hängt sich an einen laufenden Refresh an. Bewusst kein `async`: Die Zuweisung an `inFlightRefresh` muss vor
+    // jedem `await` passieren, sonst sähen zwei im selben Tick gestartete Aufrufe beide `null`.
     if (inFlightRefresh) return inFlightRefresh;
 
     inFlightRefresh = (async () => {
-      // Abbruch nach REFRESH_TIMEOUT_MS -- gilt auch fuers Lesen der Antwort (unten).
+      // Abbruch nach REFRESH_TIMEOUT_MS, gilt auch fürs Lesen der Antwort (unten).
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), REFRESH_TIMEOUT_MS);
       try {
@@ -243,18 +209,16 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             signal: controller.signal,
           });
         } catch {
-          // Verbindung abgelehnt/abgebrochen oder keine Antwort in REFRESH_TIMEOUT_MS
-          // (Container startet neu, WLAN weg): keine Aussage ueber das Cookie -- Zustand
-          // behalten, Aufrufer versucht es spaeter.
+          // Verbindung abgelehnt/abgebrochen oder keine Antwort in REFRESH_TIMEOUT_MS (Neustart, WLAN weg):
+          // keine Aussage über das Cookie, Zustand behalten, der Aufrufer versucht es später.
           throw new ServerUnavailableError();
         }
         if (REFRESH_REJECTED_STATUS.has(res.status)) {
           set({ accessToken: null, user: null, status: "anonymous" });
           return false;
         }
-        // Alles andere ausser Erfolg (5xx, aber auch 429 oder ein 404 vom Proxy) sagt
-        // nichts darueber, ob das Cookie noch gilt -- nicht abmelden, aber den Grund des
-        // Servers weitergeben (siehe `ServerUnavailableError`).
+        // Alles andere außer Erfolg (5xx, 429, 404 vom Proxy) sagt nichts über das Cookie: nicht abmelden, aber
+        // den Grund des Servers weitergeben (siehe `ServerUnavailableError`).
         if (!res.ok) throw await refreshFailure(res);
         let body: { access_token?: string; user?: CurrentUser };
         try {

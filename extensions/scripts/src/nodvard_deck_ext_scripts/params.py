@@ -11,9 +11,8 @@ class ParamError(Exception):
     pass
 
 
-# Wie `string.Template.idpattern` (nur ASCII), aber hier festgeschrieben: Was an die Shell geht, darf sich nicht mit der
-# Python-Version ändern. `$hostname` ist der Name `hostname` und ersetzt nicht den Parameter `host` (dafür
-# `${host}name`).
+# Wie `string.Template.idpattern` (nur ASCII), aber festgeschrieben, damit sich nicht mit der Python-Version ändert, was
+# an die Shell geht. `$hostname` ist der Name `hostname`, nicht der Parameter `host` (dafür `${host}name`).
 _NAME = r"[_a-zA-Z][_a-zA-Z0-9]*"
 
 # Wie `string.Template.pattern`, nur ohne `invalid`: Ein `$`, auf das nichts davon folgt, bleibt stehen.

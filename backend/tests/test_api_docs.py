@@ -37,6 +37,15 @@ def test_ausdruecklicher_wert_gewinnt_ueber_die_umgebung():
     assert Settings(env="dev", api_docs=False).api_docs_public is False
 
 
+def test_ohne_angabe_gilt_prod(monkeypatch: pytest.MonkeyPatch):
+    """Ohne `NODVARD_DECK_ENV` läuft Deck wie im Betrieb; `dev` gibt es nur, wo es ausdrücklich gesetzt ist."""
+    for name in ("NODVARD_DECK_ENV", "LATTICE_ENV", "NODVARD_DECK_API_DOCS", "LATTICE_API_DOCS"):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings(_env_file=None)
+    assert settings.env == "prod"
+    assert settings.api_docs_public is False
+
+
 def test_umgebungsvariable_und_alter_name(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("NODVARD_DECK_ENV", "prod")
     monkeypatch.delenv("NODVARD_DECK_API_DOCS", raising=False)

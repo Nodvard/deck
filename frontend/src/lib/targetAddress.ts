@@ -1,13 +1,6 @@
 /**
- * Vergleichsform einer Zieladresse -- dieselbe Rechnung wie `sdk/python/nodvard_sdk/addresses.py`
- * (beide pruefen dieselben Beispiele aus `sdk/python/tests/vectors/same_target.json`).
- *
- * Zugangsdaten gehoeren zu dem Server, bei dem sie eingegeben wurden. Gleich bleiben:
- * Gross-/Kleinschreibung von Schema und Rechnername, der Standardport (`:80` bei http, `:443` bei
- * https), Schraegstriche am Ende des Pfads, ein Fragment (`#...`) und ein fehlendes Schema
- * (`pi.hole` gilt wie `http://pi.hole`). Nicht gleich sind ein anderer Pfad, eine andere Abfrage
- * oder andere Anmeldedaten in der Adresse. Was sich nicht als Adresse lesen laesst, bleibt, wie es
- * ist (ohne Leerraum an den Raendern), und gilt damit im Zweifel als verschieden.
+ * Vergleichsform einer Zieladresse, gerechnet wie `sdk/python/nodvard_sdk/addresses.py` (gemeinsame Beispiele in
+ * `sdk/python/tests/vectors/same_target.json`): Zugangsdaten gehören zu dem Server, bei dem sie eingegeben wurden.
  */
 
 const DEFAULT_PORTS: Record<string, number> = { http: 80, https: 443 };
@@ -78,6 +71,11 @@ function netlocSurvivesNfkc(netloc: string): boolean {
   return n === normalized || !/[/?#@:]/.test(normalized);
 }
 
+/**
+ * Gleich bleiben Groß-/Kleinschreibung von Schema und Rechnername, Standardport, Schrägstriche am Pfadende, Fragment
+ * und fehlendes Schema (`pi.hole` = `http://pi.hole`); Pfad, Abfrage und Anmeldedaten zählen. Was sich nicht als
+ * Adresse lesen lässt, bleibt getrimmt, wie es ist, und gilt damit im Zweifel als verschieden.
+ */
 export function targetForm(value: unknown): unknown {
   if (value === null || value === undefined) return "";
   if (typeof value !== "string") return value;

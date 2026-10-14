@@ -1,8 +1,7 @@
 /**
- * Passwortabfrage vor dem Einrichten der Zwei-Faktor-Anmeldung. Der Server verlangt das aktuelle
- * Passwort (wie beim Abschalten), damit eine fremde, offen gebliebene Sitzung die Anmeldung nicht
- * mit einer eigenen App einschalten und dich aussperren kann. Gemeinsam genutzt von Mein Konto
- * und dem Einrichtungsassistenten.
+ * Passwortabfrage vor dem Einrichten der Zwei-Faktor-Anmeldung: Der Server verlangt das aktuelle Passwort (wie beim
+ * Abschalten), damit eine fremde, offen gebliebene Sitzung die Anmeldung nicht mit einer eigenen App einschalten und
+ * dich aussperren kann. Gemeinsam genutzt von Mein Konto und dem Einrichtungsassistenten.
  */
 import { useState } from "react";
 

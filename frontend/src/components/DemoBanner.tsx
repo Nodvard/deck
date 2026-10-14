@@ -1,8 +1,7 @@
 /**
- * Band ganz oben, solange Beispieldaten da sind: „Du siehst Beispieldaten.“ mit dem Knopf, sie mit
- * einem Klick (nach Rueckfrage) wieder zu loeschen. Wer Server sehen darf, sieht das Band; den Knopf
- * gibt es nur mit dem Recht dazu (`hosts.write` und `settings.write`). Auf dem Handy rutscht der Knopf
- * unter den Text.
+ * Band ganz oben, solange Beispieldaten da sind: „Du siehst Beispieldaten.“ mit dem Knopf, sie mit einem Klick (nach
+ * Rückfrage) wieder zu löschen. Wer Server sehen darf, sieht das Band; den Knopf gibt es nur mit dem Recht dazu
+ * (`hosts.write` und `settings.write`). Auf dem Handy rutscht der Knopf unter den Text.
  */
 import { FlaskConical, Loader2 } from "lucide-react";
 import { Link } from "react-router-dom";

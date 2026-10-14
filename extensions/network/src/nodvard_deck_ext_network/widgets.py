@@ -1,6 +1,6 @@
 """Daten für die Kacheln "Pi-hole" und "Zertifikate": `ListView`-Zeilen `{title, subtitle, label, tone}`.
 
-Die Texte entstehen hier fertig (Widget-Templates kennen keine Bedingungen), `tone` ist `good`, `warn`, `danger` oder `neutral`.
+Die Texte entstehen hier fertig (Widget-Templates kennen keine Bedingungen); `tone`: `good`, `warn`, `danger`, `neutral`.
 """
 
 from __future__ import annotations

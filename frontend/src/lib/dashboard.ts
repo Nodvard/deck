@@ -9,9 +9,11 @@ export interface DashboardLayoutItem {
   y: number;
   w: number;
   h: number;
-  /** `config.hidden === true`: vom Nutzer entfernt. Der Eintrag bleibt bewusst stehen --
-   * ein geloeschter waere fuer die Auto-Platzierung (`appendMissingWidgets`) "neu" und
-   * kaeme beim naechsten Laden zurueck. Gilt fuer Web UND die geplante App (gleiches Layout). */
+  /**
+   * `config.hidden === true`: vom Nutzer entfernt. Der Eintrag bleibt bewusst stehen: Ein gelöschter wäre für die
+   * Auto-Platzierung (`appendMissingWidgets`) "neu" und käme beim nächsten Laden zurück. Gilt für Web und die
+   * geplante App (gleiches Layout).
+   */
   config: Record<string, unknown>;
 }
 
@@ -29,10 +31,9 @@ export interface LayoutOut {
 }
 
 /**
- * GET /dashboard/layouts liefert eine Liste (mehrere benannte Layouts sind im Schema
- * vorgesehen), legt aber beim ersten Aufruf automatisch ein Standard-Layout an
- * (api/v1/dashboard.py) -- die Oberflaeche zeigt nur dieses eine Standard-Layout pro Nutzer,
- * ein Layout-Umschalter ist ein offener Punkt.
+ * GET /dashboard/layouts liefert eine Liste (mehrere benannte Layouts sind im Schema vorgesehen), legt aber beim
+ * ersten Aufruf automatisch ein Standard-Layout an (api/v1/dashboard.py); die Oberfläche zeigt nur dieses eine Layout
+ * pro Nutzer, ein Layout-Umschalter ist ein offener Punkt.
  */
 export function useDashboardLayout() {
   const queryClient = useQueryClient();

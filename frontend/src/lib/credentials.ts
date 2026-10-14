@@ -1,11 +1,7 @@
 /**
- * Regeln fuer neue Benutzernamen und Passwoerter, im Browser vorab geprueft. Dieselben Regeln prueft
- * der Server (`services/auth.py::validate_new_username`, Laenge der Passwoerter in den Schemas);
- * hier kommen sie nur schneller und mit einem Satz, den die Person versteht, statt erst nach dem
- * Absenden als „HTTP 422“.
- *
- * Gilt nur fuer NEUE Konten: wer ein aelteres Konto mit Leerzeichen im Namen hat, kann sich weiter
- * anmelden (die Anmeldeseite prueft den Namen nicht).
+ * Regeln für neue Benutzernamen und Passwörter, im Browser vorab geprüft (der Server prüft dieselben,
+ * `services/auth.py::validate_new_username`), damit ein verständlicher Satz statt „HTTP 422“ erscheint. Gilt nur für
+ * neue Konten: Ältere mit Leerzeichen im Namen melden sich weiter an, die Anmeldeseite prüft den Namen nicht.
  */
 
 export const USERNAME_MIN_LENGTH = 3;
@@ -17,7 +13,10 @@ export const PASSWORD_HINT = `Mindestens ${PASSWORD_MIN_LENGTH} Zeichen.`;
 
 const USERNAME_PATTERN = /^[a-z0-9][a-z0-9._-]*$/;
 
-/** Was am Namen nicht stimmt (als Satz), oder `null`, wenn er in Ordnung ist. Wie der Server: erst getrimmt und kleingeschrieben. */
+/**
+ * Was am Namen nicht stimmt (als Satz), oder `null`, wenn er in Ordnung ist. Wie der Server: erst
+ * getrimmt und kleingeschrieben.
+ */
 export function usernameProblem(raw: string): string | null {
   const name = raw.trim().toLowerCase();
   if (name.length < USERNAME_MIN_LENGTH) return `Benutzername: Mindestens ${USERNAME_MIN_LENGTH} Zeichen.`;
@@ -35,9 +34,9 @@ export function passwordProblem(password: string): string | null {
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+$/;
 
 /**
- * Was an der E-Mail-Adresse nicht stimmt (als Satz), oder `null`. Leer ist erlaubt (die Angabe ist
- * freiwillig). Der Server prueft die Adresse nicht; die Formulare haben `noValidate` (eigene Saetze
- * statt der Browser-Sprechblase), also faengt diese einfache Pruefung den offensichtlichen Tippfehler ab.
+ * Was an der E-Mail-Adresse nicht stimmt (als Satz), oder `null`. Leer ist erlaubt (die Angabe ist freiwillig). Der
+ * Server prüft die Adresse nicht; die Formulare haben `noValidate` (eigene Sätze statt der Browser-Sprechblase), also
+ * fängt diese einfache Prüfung den offensichtlichen Tippfehler ab.
  */
 export function emailProblem(raw: string): string | null {
   const email = raw.trim();

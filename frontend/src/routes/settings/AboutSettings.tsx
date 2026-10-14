@@ -87,7 +87,7 @@ function VersionCard({ release, running, open }: { release: ChangelogVersion; ru
 export function AboutSettings(): JSX.Element {
   const { data, error, isPending } = useChangelog();
 
-  // Wer die Seite öffnet, kennt den Stand -- die Neu-Markierung in der Seitenleiste verschwindet.
+  // Wer die Seite öffnet, kennt den Stand: Die Neu-Markierung in der Seitenleiste verschwindet.
   useEffect(() => {
     if (data && typeof data.current === "string") markChangelogSeen(changelogFingerprint(data));
   }, [data]);

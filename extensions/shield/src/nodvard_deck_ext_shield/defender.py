@@ -61,10 +61,9 @@ SCAN_LOCK_WAIT_S = SCAN_TIMEOUTS["watch"] + 60
 # das Intervall plus 2 Minuten. Fiel ein Lauf aus, wächst das Fenster mit, höchstens bis hierher: Das deckt einen Tiefenscan
 # (bis 4 Stunden) ab, ohne dass nach einer langen Pause ein Lauf alles der letzten Tage prüfen muss.
 WATCH_MAX_WINDOW_MIN = 6 * 60
-# Setzt der Wächter so lange aus, dass sein Fenster die Grenze erreicht, gehen Dateien ungeprüft verloren: Dann wird aus dem
-# stillen Aussetzen eine sichtbare Fehlerzeile, höchstens eine je `WATCH_MAX_WINDOW_MIN`. Hält ein Lauf die Sperre dauerhaft
-# (clamscan an einem toten Netzlaufwerk, oder auf dem Server fehlt `timeout`), sähe man sonst nie, dass der Wächter nicht
-# mehr läuft. Die Zeile zählt beim Fenster nicht als Lauf (`_watch_minutes`).
+# Setzt der Wächter so lange aus, dass sein Fenster die Grenze erreicht, gehen Dateien ungeprüft verloren: Dann gibt es
+# eine sichtbare Fehlerzeile (höchstens eine je `WATCH_MAX_WINDOW_MIN`), sonst bliebe unbemerkt, dass der Wächter nicht
+# mehr läuft (Sperre dauerhaft belegt: toter Netzlaufwerk-Scan, fehlendes `timeout`).
 _WATCH_MAX_WINDOW_TEXT = av.duration_text(WATCH_MAX_WINDOW_MIN * 60)
 WATCH_BLOCKED_MESSAGE = (
     f"Der Echtzeit-Wächter konnte seit etwa {_WATCH_MAX_WINDOW_TEXT} nicht prüfen: Auf dem Server lief die ganze Zeit ein "
@@ -225,7 +224,7 @@ class Defender:
         return any(self.is_running(host_id, k) for k in BIG_SCAN_KINDS)
 
     async def abort_interrupted_scans(self) -> int:
-        """Beim Start: Scans, die beim letzten Beenden noch liefen, als abgebrochen markieren (sonst stünden sie ewig auf "läuft")."""
+        """Beim Start: Scans, die beim letzten Beenden noch liefen, als abgebrochen markieren (sonst "läuft" ewig)."""
         async with self._ctx.db.session() as session:
             result = await session.execute(
                 update(ScanRecord).where(ScanRecord.status == "running")
@@ -280,9 +279,9 @@ class Defender:
 
     @staticmethod
     async def _drop_previous_capped_watch_row(session: Any, host_id: str, scan_id: str) -> None:
-        """Hält die Scan-Liste bei dauerhaft vielen neuen Dateien kurz: Die Zeile dieses Wächter-Laufs ersetzt die des vorigen,
-        wenn auch sie nur wegen der Obergrenze unvollständig war. Eine saubere Zeile, ein Fund oder ein anderer Fehler
-        dazwischen unterbrechen die Folge; sonst verdrängten sie die echten Scans aus der Liste."""
+        """Die Wächter-Zeile ersetzt die des vorigen Laufs, wenn auch die nur wegen der Obergrenze unvollständig war,
+        damit solche Zeilen die echten Scans nicht aus der Liste verdrängen; eine saubere Zeile, ein Fund oder ein
+        anderer Fehler dazwischen unterbrechen die Folge."""
         previous = (await session.execute(
             select(ScanRecord).where(ScanRecord.host_id == host_id, ScanRecord.kind == "watch", ScanRecord.id != scan_id)
             .order_by(ScanRecord.started_at.desc()).limit(1)
@@ -310,7 +309,7 @@ class Defender:
         return max(base, min(since, WATCH_MAX_WINDOW_MIN))
 
     async def _recently_blocked(self, host_id: str, scan_id: str) -> bool:
-        """Steht für diesen Server schon eine Meldung `WATCH_BLOCKED_MESSAGE` aus den letzten `WATCH_MAX_WINDOW_MIN` Minuten?"""
+        """Gab es für diesen Server in den letzten `WATCH_MAX_WINDOW_MIN` Minuten schon `WATCH_BLOCKED_MESSAGE`?"""
         async with self._ctx.db.session() as session:
             row = (await session.execute(
                 select(ScanRecord.id)
@@ -325,7 +324,7 @@ class Defender:
         settings = await self._settings()
         max_mb = max_filesize_mb(settings)
         limit = SCAN_TIMEOUTS.get(kind, 3600)
-        # Zufallsmarke je Lauf, im Befehl und bei der Auswertung dieselbe; ein Dateiname auf dem Server kann sie nicht erraten.
+        # Zufallsmarke je Lauf, im Befehl und bei der Auswertung dieselbe; ein Dateiname kann sie nicht erraten.
         mark = av.new_rc_mark()
         minutes = 0
         if kind == "watch":
@@ -533,10 +532,10 @@ class Defender:
             return True
 
     # --- Audits ----------------------------------------------------------------
-    # Lynis braucht auf manchen Servern weit über eine halbe Stunde und läuft deshalb entkoppelt auf dem Server
-    # (`audit_job.py`); das Dashboard fragt alle `AUDIT_POLL_INTERVAL_S` Sekunden nach. Der Stand steht sofort in Speicher
-    # und Datenbank: Die Seite zeigt "läuft seit ..." (auch nach dem Neuladen), ein zweiter Klick startet keinen zweiten
-    # Lauf, und nach einem Neustart nimmt `resume_audits` die Abfrage wieder auf.
+
+    # Lynis läuft entkoppelt auf dem Server (`audit_job.py`), weil es weit über eine halbe Stunde brauchen kann; das
+    # Dashboard fragt alle `AUDIT_POLL_INTERVAL_S` Sekunden nach. Der Stand steht sofort in Speicher und Datenbank (kein
+    # zweiter Lauf per Klick, `resume_audits` setzt nach einem Neustart fort).
 
     def audit_run(self, host_id: str) -> dict[str, Any] | None:
         """Das laufende (oder wartende) Audit eines Servers für die Seite, sonst None."""
@@ -725,7 +724,7 @@ class Defender:
                                       unknown_summary=unknown, reach_grace_s=reach_grace_s)
 
     async def _poll_audit(self, host: Host, run_id: str) -> dt.Poll | av.LynisResult | None:
-        """Eine Abfrage: der Stand (`dt.Poll`), ein Fehler, der den Lauf beendet (keine root-Rechte), oder None ohne Antwort."""
+        """Eine Abfrage: der Stand (`dt.Poll`), ein den Lauf beendender Fehler (keine root-Rechte) oder None ohne Antwort."""
         try:
             res = await self._ctx.exec.run(host, av.as_root(aj.poll_command(run_id)), timeout_s=AUDIT_POLL_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - Verbindung weg: weiter nachfragen
@@ -823,8 +822,7 @@ class Defender:
     # --- Status / Übersicht --------------------------------------------------------
 
     def forget_status(self, host_id: str) -> None:
-        """Verwirft den gemerkten Stand eines Servers (z. B. nach einer Installation), statt bis zu 10 Minuten den alten
-        zu zeigen."""
+        """Verwirft den gemerkten Stand eines Servers (etwa nach Installation), statt ihn bis zu 10 Minuten zu zeigen."""
         self._status_cache.pop(host_id, None)
 
     async def host_status(self, host: Host, *, refresh: bool = False) -> dict[str, Any]:
@@ -1065,7 +1063,7 @@ BRIEFING_MAX_BUTTONS = 3
 
 
 def briefing_buttons(waiting: int | None, crashes: list[dict[str, Any]] | None) -> list[dict[str, str]]:
-    """Knöpfe der Meldung (höchstens `BRIEFING_MAX_BUTTONS`): erst, was auf dich wartet (Freigaben, Abstürze), dann feste Reiter."""
+    """Knöpfe der Meldung (höchstens `BRIEFING_MAX_BUTTONS`): erst, was wartet (Freigaben, Abstürze), dann feste Reiter."""
     urgent: list[dict[str, str]] = []
     if waiting:
         urgent.append({"label": "Freigaben", "path": "/actions"})
@@ -1207,7 +1205,7 @@ def _score(rows: list[dict[str, Any]], open_threats: int, indices: list[int]) ->
 
 
 def _describe(exc: BaseException, *, timeout_s: float | None = None) -> str:
-    """Lesbarer Grund zu einer Ausnahme aus `ctx.exec.run` (und dem Weg dorthin); ein Zeitlimit nennt die Dauer `timeout_s`."""
+    """Lesbarer Grund zu einer Ausnahme aus `ctx.exec.run` (und dem Weg dorthin); bei Zeitlimit mit Dauer `timeout_s`."""
     text = str(exc).strip()
     # SSH-Fehler (`core.ssh.SshError`) tragen `readable` und schon einen deutschen Satz. Sie gehen dem `TimeoutError`
     # vor: `SshTimeout` ist auch einer, und "Server nicht erreichbar" soll nicht wie "Lauf dauerte zu lange" aussehen.

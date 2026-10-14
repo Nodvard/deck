@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from nodvard_sdk import (
     HostToolSpec,
     Badge,
@@ -52,10 +52,13 @@ _KIND_LABEL = {"vm": "VM", "lxc": "LXC", "hypervisor": "Knoten"}
 
 
 GATEWAY_FALLBACK = "Proxmox hat die Anfrage nicht beantwortet. Einzelheiten stehen im Protokoll des Dashboards."
+# Die Kachel nennt nur feste Sätze; den Grund zeigen der Verbindungstest und die Seite des Knotens.
+DISKS_CONNECTION_FAILED = "Verbindung gestört. Den Grund zeigt „Verbindung testen“ in den Einstellungen des Moduls."
+DISKS_NODE_FAILED = "Datenträger nicht abrufbar. Den Grund zeigt die Seite des Knotens."
 
 
 def bad_gateway(exc: BaseException, logger: Any) -> HTTPException:
-    """502 für die Oberfläche; der Text der Ausnahme geht nur an den Client, wenn sie `readable` ist (z. B. `ProxmoxApiError`)."""
+    """502 für die Oberfläche; den Text der Ausnahme sieht der Client nur bei `readable` (etwa `ProxmoxApiError`)."""
     text = str(exc).strip()
     if getattr(exc, "readable", False) and text:
         return HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=text)
@@ -354,7 +357,7 @@ class Extension(NodvardExtension):
 
         @data_router.get("/guests/{host_id}/details")
         async def guest_details(host_id: str) -> dict:
-            """Kerne, RAM, Disks, Netzwerk und Gast-Agent (guest_config.py); nur Felder der Positivliste, keine Rohkonfiguration."""
+            """Kerne, RAM, Disks, Netzwerk und Gast-Agent (guest_config.py), nur Felder der Positivliste."""
             host = await ctx.hosts.get(host_id)
             if host is None or host.provider_ext_id != ctx.ext_id or not host.provider_ref:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Gast.")
@@ -385,14 +388,14 @@ class Extension(NodvardExtension):
 
         @data_router.get("/widgets/disks")
         async def disks_widget_data() -> dict:
-            """Alle Datenträger aller Knoten, schlechtester Zustand zuerst; ein nicht erreichbarer Knoten erscheint als eigene Zeile."""
+            """Datenträger aller Knoten, schlechtester Zustand zuerst; ein unerreichbarer Knoten wird eine eigene Zeile."""
             rows: list[dict] = []
             temp_setting = temperature_setting((await ctx.settings.get()).get("disk_temp_warn_c"))
             for conn_name, connector in (await build_connectors(ctx)).items():
                 try:
                     nodes = await connector.list_nodes()
-                except ProxmoxApiError as exc:
-                    rows.append({"node": conn_name, "model": "Verbindung", "summary": str(exc), "badge": "nicht erreichbar", "tone": "danger"})
+                except ProxmoxApiError:
+                    rows.append({"node": conn_name, "model": "Verbindung", "summary": DISKS_CONNECTION_FAILED, "badge": "nicht erreichbar", "tone": "danger"})
                     continue
                 for entry in nodes:
                     node_name = entry.get("node")
@@ -403,14 +406,14 @@ class Extension(NodvardExtension):
                         continue
                     try:
                         rows.extend(await collect_disks(connector, conn_name, node_name, temp_setting))
-                    except ProxmoxApiError as exc:
-                        rows.append({"node": node_name, "model": "Datenträger", "summary": str(exc), "badge": "nicht abrufbar", "tone": "neutral"})
+                    except ProxmoxApiError:
+                        rows.append({"node": node_name, "model": "Datenträger", "summary": DISKS_NODE_FAILED, "badge": "nicht abrufbar", "tone": "neutral"})
             order = {"danger": 0, "warn": 1, "neutral": 2, "good": 3}
             rows.sort(key=lambda r: (order.get(r["tone"], 2), r["node"]))
             return {"data": rows, "meta": {}}
 
         @data_router.get("/tasks")
-        async def task_history(limit: int = 50, include_console: bool = False) -> dict:
+        async def task_history(limit: int = Query(50, ge=1, le=1000), include_console: bool = False) -> dict:
             """Aufgabenverlauf aller Knoten (tasks.py); Konsolen-Öffnungen sind standardmäßig ausgeblendet."""
             return await collect_tasks(ctx, limit=max(1, min(limit, 200)), include_console=include_console)
 
@@ -451,7 +454,7 @@ class Extension(NodvardExtension):
         async def storage_widget_data() -> dict:
             """Nur die Belegung (eine Abfrage je Knoten); der Pool-Inhalt wäre für das Neuladen alle 60 s zu teuer."""
             overview = await collect_storage(ctx, details=False, merge_connections=True)
-            # Fehler als eigene rote Zeile; die Texte kommen fertig aus dem Backend, damit die Zeile keine leeren Zahlen zeigt.
+            # Fehler als eigene rote Zeile mit fertigem Text aus dem Backend, damit sie keine leeren Zahlen zeigt.
             rows: list[dict] = [
                 {
                     "connection": e["connection"],

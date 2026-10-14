@@ -52,19 +52,21 @@ services:
     # Hintergrund: ohne dieses Feld erbt der Container den Host-Resolver. Zeigt der auf
     # einen Router, der die internen Namen des eigenen Netzes (z. B. `cloud.home.example`,
     # aufgeloest von einem lokalen Pi-hole/AdGuard) nicht kennt, scheitern Quellen wie
-    # Nextcloud mit "Name or service not known". Standard: oeffentliche Resolver
-    # (Cloudflare). Wer einen lokalen Resolver braucht, legt neben dieser Datei eine
+    # Nextcloud mit "Name or service not known". Ohne Angabe gibt es keine Vorgabe: Der
+    # Container fragt den Resolver des Hosts, und keine Anfrage geht ungefragt an einen
+    # fremden Dienst. Wer einen eigenen Resolver braucht, legt neben dieser Datei eine
     # `.env` an (git-ignoriert), zum Beispiel:
     #
     #   NODVARD_DECK_DNS_1=192.168.1.10   # lokaler Pi-hole/AdGuard
-    #   NODVARD_DECK_DNS_2=1.1.1.1        # Rueckfall fuer oeffentliche Namen
+    #   NODVARD_DECK_DNS_2=1.1.1.1        # nur ein Beispiel: oeffentlicher Resolver (Cloudflare)
     #
-    # Die alten Namen LATTICE_DNS_1/2 gelten weiter (verschachtelte Vorgabe: neu, sonst
-    # alt, sonst Standard). `scripts/deploy_pi.sh` schreibt beide Namen auf den Zielrechner,
-    # wenn DNS_1/2 lokal gesetzt sind (siehe deploy/README.md).
+    # Die alten Namen LATTICE_DNS_1/2 gelten weiter (verschachtelt: neu, sonst alt). Ein leerer
+    # Eintrag faellt weg, ohne beide Werte hat der Container keine eigene DNS-Einstellung.
+    # `scripts/deploy_pi.sh` schreibt beide Namen auf den Zielrechner, wenn DNS_1/2 lokal gesetzt
+    # sind (siehe deploy/README.md).
     dns:
-      - ${NODVARD_DECK_DNS_1:-${LATTICE_DNS_1:-1.1.1.1}}
-      - ${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-1.0.0.1}}
+      - ${NODVARD_DECK_DNS_1:-${LATTICE_DNS_1:-}}
+      - ${NODVARD_DECK_DNS_2:-${LATTICE_DNS_2:-}}
     # Log-Rotation: begrenzt die Docker-Logdatei des Dashboards (3 x 10 MB), damit sie auf
     # dem Pi nicht ungebremst waechst (z. B. bei wiederholten Fehlern im Log).
     logging:

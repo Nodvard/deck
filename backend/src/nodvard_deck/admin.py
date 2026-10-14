@@ -1,4 +1,4 @@
-"""Notfall-Werkzeug auf dem Server (`python -m nodvard_deck.admin`): Zugang wiederherstellen, ohne dass jemand angemeldet ist."""
+"""Notfall-Werkzeug (`python -m nodvard_deck.admin`): Zugang wiederherstellen, ohne dass jemand angemeldet ist."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import sys
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -24,11 +25,11 @@ from .db.session import create_engine_for
 from .models import User
 from .services import audit as audit_service
 from .services import auth as auth_service
+from .services import backups as backups_service
 
-# Aufruf im Container: `docker compose exec nodvard-deck python -m nodvard_deck.admin <Befehl>`, die Befehle zeigt `--help`.
-# Gedacht für den Fall, dass der Inhaber Passwort oder Handy (Zwei-Faktor) verloren hat. Wer den Befehl ausführen kann, hat
-# ohnehin Zugriff auf den Server und das Datenverzeichnis (Datenbank, Schlüssel); er braucht deshalb keine Anmeldung, jede
-# Änderung kommt aber ins Audit-Protokoll (Akteur `system/cli`). Arbeitet gegen die konfigurierte Datenbank wie die Anwendung.
+# Aufruf im Container: `docker compose exec nodvard-deck python -m nodvard_deck.admin <Befehl>` (Befehle: `--help`).
+# Für verlorenes Passwort oder Handy (Zwei-Faktor): Wer das ausführen kann, hat ohnehin Zugriff auf Server und Daten,
+# braucht also keine Anmeldung. Jede Änderung kommt ins Audit-Protokoll (Akteur `system/cli`).
 ACTOR_TYPE = "system"
 ACTOR_ID = "cli"
 
@@ -38,6 +39,10 @@ _PASSWORD_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 class CliError(Exception):
     """Erwarteter Fehler (z. B. Benutzer nicht gefunden): Meldung ausgeben, Exit-Code 1."""
+
+
+class NoBackupKeyError(CliError):
+    """`create-backup` ohne eingerichteten Sicherungsschlüssel: Exit-Code 3, auf der Standardausgabe steht nichts."""
 
 
 def generate_temporary_password() -> str:
@@ -126,6 +131,54 @@ def _read_secret() -> str:
         return getpass.getpass("Passwort der Sicherung (oder Wiederherstellungsschlüssel): ")
     line = sys.stdin.readline()
     return line.rstrip("\r\n")
+
+
+async def _backup_key(settings: Settings, *, with_instance: bool) -> tuple[dict | None, str, bool]:
+    """Sicherungsschlüssel (Empfänger, `key_id`, KDF), Kennung der Installation und ob Laufprotokolle mitkommen."""
+    engine = create_engine_for(settings)
+    try:
+        maker = async_sessionmaker(engine, expire_on_commit=False)
+        async with maker() as session:
+            key = await backups_service.load_key(session)
+            if key is None or not with_instance:
+                return key, "", False
+            # Wie bei der ersten Sicherung aus der Oberfläche: fehlt die Kennung, wird sie einmal angelegt.
+            instance = await backups_service.instance_id(session)
+            include_runs = (await backups_service.load_config(session)).include_runs
+            await session.commit()
+            return key, instance, include_runs
+    finally:
+        await engine.dispose()
+
+
+def backup_key_status(settings: Settings) -> list[str]:
+    """Eine Zeile für `deploy/backup.sh`: `schluessel <key_id>` oder `kein-schluessel`."""
+    key, _instance, _runs = asyncio.run(_backup_key(settings, with_instance=False))
+    return [f"schluessel {key['key_id']}" if key else "kein-schluessel"]
+
+
+def create_backup(settings: Settings, out: Any) -> list[str]:
+    """Schreibt eine verschlüsselte Sicherung (`.ndbak`, wie aus der Oberfläche) nach `out`; zurück kommen Hinweise für
+    die Fehlerausgabe. Ohne Sicherungsschlüssel `NoBackupKeyError`, ohne dass etwas geschrieben wurde."""
+    if out.isatty():
+        raise CliError("Die Sicherung ist eine Binärdatei. Bitte in eine Datei umleiten: … create-backup > sicherung.ndbak")
+    key, instance, include_runs = asyncio.run(_backup_key(settings, with_instance=True))
+    if key is None:
+        raise NoBackupKeyError(
+            "Es ist kein Sicherungsschlüssel eingerichtet (Einstellungen → Sicherung). Ohne ihn gibt es keine verschlüsselte "
+            "Sicherung."
+        )
+    try:
+        skipped = backups_service.write_backup_stream(
+            settings, out, key=key, include_runs=include_runs, instance=instance
+        )
+    except BackupError as exc:
+        raise CliError(f"Die Sicherung ließ sich nicht erstellen: {exc}") from exc
+    out.flush()
+    return [
+        f"Sicherung verschlüsselt mit dem Sicherungsschlüssel {key['key_id']}.",
+        *backups_service.link_warnings(skipped),
+    ]
 
 
 def restore_backup(settings: Settings, file: str, *, assume_yes: bool = False) -> list[str]:
@@ -235,6 +288,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     back.add_argument("file", help="Pfad der Sicherungsdatei (im Container sichtbar)")
     back.add_argument("--yes", action="store_true", help="ohne Rückfrage vormerken (nur wenn Passwort aus der Standardeingabe kommt)")
+    sub.add_parser("backup-key", help="zeigen, ob ein Sicherungsschlüssel eingerichtet ist (für deploy/backup.sh)")
+    sub.add_parser(
+        "create-backup",
+        help="eine verschlüsselte Sicherung (.ndbak) mit dem Sicherungsschlüssel auf die Standardausgabe schreiben",
+    )
     return parser
 
 
@@ -298,14 +356,26 @@ def main(argv: Sequence[str] | None = None, settings: Settings | None = None) ->
         drop_root_to_data_owner(settings)
         if args.command == "restore-backup":
             lines = restore_backup(settings, args.file, assume_yes=args.yes)
+        elif args.command == "backup-key":
+            lines = backup_key_status(settings)
+        elif args.command == "create-backup":
+            # Auf der Standardausgabe steht nur die Sicherung, alles andere geht in die Fehlerausgabe.
+            print("\n".join(create_backup(settings, sys.stdout.buffer)), file=sys.stderr)
+            return 0
         else:
             lines = asyncio.run(_run(args, settings))
+    except NoBackupKeyError as exc:
+        print(f"Fehler: {exc}", file=sys.stderr)
+        return 3
     except CliError as exc:
         print(f"Fehler: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:  # noqa: BLE001 - kaputte DB/Verbindung: verständlich melden
         if getattr(args, "command", "") == "restore-backup":
             print(f"Fehler: Die Sicherung ließ sich nicht prüfen oder vormerken ({type(exc).__name__}: {exc}).", file=sys.stderr)
+            return 2
+        if getattr(args, "command", "") == "create-backup":
+            print(f"Fehler: Die Sicherung ließ sich nicht erstellen ({type(exc).__name__}: {exc}).", file=sys.stderr)
             return 2
         print(
             f"Fehler: Die Datenbank ließ sich nicht öffnen oder ändern ({type(exc).__name__}: {exc}).\n"

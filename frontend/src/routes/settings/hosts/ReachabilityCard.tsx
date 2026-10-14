@@ -1,8 +1,7 @@
 /**
- * Karte „Erreichbarkeit prüfen“ (Einstellungen -> Server & Zugänge): Schalter und Abstand der
- * regelmäßigen Prüfung für von Hand angelegte Server (`hosts.reachability.enabled` und
- * `hosts.reachability.interval_minutes`, GET/PUT /settings/{key}, Recht `settings.write`).
- * Ohne das Recht gibt es die Karte nicht.
+ * Karte „Erreichbarkeit prüfen“ (Einstellungen → Server & Zugänge): Schalter und Abstand der regelmäßigen Prüfung für
+ * von Hand angelegte Server (`hosts.reachability.enabled`, `hosts.reachability.interval_minutes`, Recht
+ * `settings.write`; ohne das Recht gibt es die Karte nicht).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";

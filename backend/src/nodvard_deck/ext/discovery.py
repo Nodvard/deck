@@ -131,10 +131,9 @@ def discover_all(
 
 
 # Berechtigungen, die Daten unter der Kennung speichern und sie darüber wiederfinden (`hosts.write`:
-# `Host.provider_ext_id`, `HostTag.managed_by_ext_id`). Nach einer Umbenennung gäbe es doppelte Server, und ein
-# Rückweg aufs alte Image fände die neuen nicht. Die Grenze liegt in der Kern-Speicherung und fällt weg, sobald der
-# Kern die alten Kennungen dort mitliest. `secrets.*`, `notify.send` und `audit.write` halten die Kennung nur als
-# Herkunft, nichts sucht danach. Wert: Satzteil für die Meldung.
+# `Host.provider_ext_id`, `HostTag.managed_by_ext_id`): Nach einer Umbenennung gäbe es doppelte Server, und ein Rückweg
+# aufs alte Image fände die neuen nicht. Die Grenze fällt weg, sobald der Kern die alten Kennungen dort mitliest.
+# `secrets.*`, `notify.send`, `audit.write` halten die Kennung nur als Herkunft, nichts sucht danach.
 LEGACY_BLOCKING_PERMISSIONS: dict[str, str] = {"hosts.write": "Server anlegen"}
 
 

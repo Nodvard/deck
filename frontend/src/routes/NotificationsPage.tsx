@@ -1,7 +1,7 @@
 /**
- * Benachrichtigungs-Center: zeigt die Meldungen aus `api/v1/notifications.py` (z. B.
- * die Lageberichte von Nodvard Shield), die sonst nur in der Datenbank stuenden. Neue Meldungen kommen
- * live ueber den WS-Kanal `notifications` (services/notifications.py publiziert dort).
+ * Benachrichtigungs-Center: zeigt die Meldungen aus `api/v1/notifications.py` (z. B. die Lageberichte von Nodvard
+ * Shield), die sonst nur in der Datenbank stünden. Neue Meldungen kommen live über den WS-Kanal `notifications`
+ * (services/notifications.py publiziert dort).
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Trash2 } from "lucide-react";
@@ -24,7 +24,7 @@ export interface NotificationOut {
   source_ext_id: string | null;
   correlation_id: string | null;
   read_at: string | null;
-  /** Konvention: `path` = Seite im Dashboard, die zur Meldung gehoert. */
+  /** Konvention: `path` = Seite im Dashboard, die zur Meldung gehört. */
   payload?: { path?: string } & Record<string, unknown>;
 }
 
@@ -41,14 +41,17 @@ export const UNREAD_QUERY_KEY = ["notifications", "unread-count"];
 /** So viele Meldungen lädt die Seite höchstens auf einmal. */
 const LIST_LIMIT = 200;
 
-/** Die Rückfrage vor „Alle gelesenen löschen“. Kennt die Seite nicht alle gelesenen (die Liste ist am Limit), sagt sie das. */
+/**
+ * Die Rückfrage vor „Alle gelesenen löschen“. Kennt die Seite nicht alle gelesenen (die
+ * Liste ist am Limit), sagt sie das.
+ */
 export function deleteReadQuestion(readShown: number, listIsComplete: boolean): string {
   const tail = "Das lässt sich nicht rückgängig machen.";
   if (!listIsComplete) return `Alle gelesenen Meldungen löschen, auch die, die hier nicht mehr in der Liste stehen? ${tail}`;
   return `${readShown} gelesene ${readShown === 1 ? "Meldung" : "Meldungen"} löschen? ${tail}`;
 }
 
-/** Zaehler fuer das Menue -- alle 60s und sofort bei jeder neuen Meldung (WS). */
+/** Zähler für das Menü: alle 60 s und sofort bei jeder neuen Meldung (WS). */
 export function useUnreadNotifications(enabled: boolean): number {
   const queryClient = useQueryClient();
   const { data } = useQuery({
@@ -116,7 +119,7 @@ function NotificationItem({
 
 export function NotificationsPage() {
   const queryClient = useQueryClient();
-  // Der Lesestatus gilt fuer alle Nutzer gemeinsam; markieren und loeschen duerfen nur Nutzer mit Schreibrecht.
+  // Der Lesestatus gilt für alle Nutzer gemeinsam; markieren und löschen dürfen nur Nutzer mit Schreibrecht.
   const canWrite = useAuthStore((s) => s.hasPermission)("notifications.write");
   const [onlyUnread, setOnlyUnread] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -127,7 +130,7 @@ export function NotificationsPage() {
     placeholderData: (previous) => previous,
   });
 
-  // Alles unter ["notifications"] neu laden: die Liste und den Zaehler der ungelesenen (Glocke, Menue).
+  // Alles unter ["notifications"] neu laden: die Liste und den Zähler der ungelesenen (Glocke, Menü).
   const refresh = () => void queryClient.invalidateQueries({ queryKey: ["notifications"] });
   async function run(work: () => Promise<unknown>) {
     setActionError(null);

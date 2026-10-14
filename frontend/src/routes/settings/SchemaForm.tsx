@@ -1,17 +1,7 @@
 /**
- * Baut ein Formular aus dem Einstellungs-Schema einer Erweiterung
- * (settings.schema.json). Unterstuetzt: Text, Zahl, Ja/Nein, Auswahl (enum),
- * Wortlisten (Array aus Strings), Listen von Eintraegen (Array aus Objekten) und
- * verschachtelte Objekte. Alles andere wird als JSON bearbeitet.
- *
- * Schema-Zusaetze fuer die Oberflaeche: `title`, `description`, `x-advanced`
- * (unter "Erweitert" eingeklappt), `x-hidden` (nicht anzeigen), `x-item-title`,
- * `x-enum-labels` (lesbare Texte fuer die Werte einer Auswahl), `x-widget`
- * ("schedule", "host", "host-tag", "remote-select"), `x-empty-label`,
- * `x-options-url` (remote-select), `pattern` und `x-pattern-message`, bei Zahlen `minimum`/`maximum`,
- * `x-generate` (Knopf "Zufaellig waehlen" neben einem Textfeld). Auf der obersten Ebene zeigt
- * `x-qr-url` die Seite der Erweiterung (siehe QrLinkCard.tsx), nicht dieses Formular.
- * Alle Zusaetze sind in docs/02-EXTENSION-API.md beschrieben.
+ * Baut ein Formular aus dem Einstellungs-Schema einer Erweiterung (settings.schema.json): Text, Zahl, Ja/Nein, Auswahl,
+ * Wortlisten, Listen von Objekten und verschachtelte Objekte, alles andere als JSON. Die Schema-Zusätze für die
+ * Oberfläche (`x-advanced`, `x-widget`, `x-generate` ...) beschreibt docs/02-EXTENSION-API.md.
  */
 import { ChevronDown, ChevronRight, Dices, Plus, Trash2, X } from "lucide-react";
 import { useState } from "react";
@@ -34,28 +24,28 @@ export interface JsonSchema {
   "x-item-title"?: string;
   "x-enum-labels"?: Record<string, string>;
   /**
-   * "schedule": Cron-Feld als Zeitplan-Waehler (Wecker-Stil) statt Textfeld.
-   * "host": Server aus der Serverliste (Text oder Liste von Namen).
-   * "host-tag": Markierung (Tag) aus der Serverliste (Text oder Liste).
-   * "remote-select": Auswahlliste von `x-options-url`, mit Textfeld als Rueckfall.
+   * "schedule": Cron-Feld als Zeitplan-Wähler (Wecker-Stil) statt Textfeld.
+   * "host" / "host-tag": Server bzw. Markierung (Tag) aus der Serverliste (Text oder Liste).
+   * "remote-select": Auswahlliste von `x-options-url`, mit Textfeld als Rückfall.
    */
   "x-widget"?: string;
-  /** Text fuer "nichts gewaehlt" bei einer Auswahl (Standard: "– nicht gesetzt –"). */
+  /** Text für "nichts gewählt" bei einer Auswahl (Standard: "– nicht gesetzt –"). */
   "x-empty-label"?: string;
   /** remote-select: Pfad unter /api/v1, der `{options: [{value, label}], error}` liefert. */
   "x-options-url"?: string;
-  /** Regulaerer Ausdruck, den ein Text erfuellen muss (wie JSON-Schema, nicht verankert). */
+  /** Regulärer Ausdruck, den ein Text erfüllen muss (wie JSON-Schema, nicht verankert). */
   pattern?: string;
-  /** Laengste erlaubte Laenge eines Textes mit `pattern` (Standard 2000, wie im Backend). */
+  /** Längste erlaubte Länge eines Textes mit `pattern` (Standard 2000, wie im Backend). */
   maxLength?: number;
   /** Deutsche Meldung, wenn `pattern` nicht passt. */
   "x-pattern-message"?: string;
-  /** Kleinster und groesster erlaubter Wert eines Zahlenfelds (eingeschlossen, wie im Backend). */
+  /** Kleinster und größter erlaubter Wert eines Zahlenfelds (eingeschlossen, wie im Backend). */
   minimum?: number;
   maximum?: number;
   /** Kopfebene: die Erweiterung kann Nachrichten senden -> Knopf "Testnachricht senden". */
   "x-test-message"?: boolean;
-  /** Textfeld: Knopf, der `prefix` plus `length` zufaellige Zeichen (a-z, 0-9) einsetzt; das Ergebnis muss zum `pattern` passen. */
+  /** Textfeld: Knopf, der `prefix` plus `length` zufällige Zeichen (a-z, 0-9) einsetzt; das Ergebnis muss zum
+   * `pattern` passen. */
   "x-generate"?: { label?: string; prefix?: string; length?: number };
   /** Kopfebene: Pfad unter /api/v1, der `{url, text, error}` liefert -> Karte mit QR-Code unter dem Formular. */
   "x-qr-url"?: string;
@@ -65,7 +55,7 @@ const GENERIC_PATTERN_MESSAGE = "Das Format stimmt nicht.";
 const PATTERN_MAX_LENGTH = 2000;
 
 /** Die Meldung, wenn `value` das `pattern` des Schemas verletzt, sonst `null`. Leere Werte
- * sind immer erlaubt (Pflichtfelder prueft das Backend). */
+ * sind immer erlaubt (Pflichtfelder prüft das Backend). */
 export function patternError(schema: JsonSchema, value: unknown): string | null {
   if (!schema.pattern || typeof value !== "string" || value === "") return null;
   const limit = schema.maxLength && schema.maxLength > 0 ? schema.maxLength : PATTERN_MAX_LENGTH;
@@ -81,12 +71,12 @@ function finiteOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
-/** Zahl fuer eine Meldung, mit deutschem Komma (wie das Backend). */
+/** Zahl für eine Meldung, mit deutschem Komma (wie das Backend). */
 function numberText(value: number): string {
   return String(value).replace(".", ",");
 }
 
-/** Die Meldung, wenn eine Zahl ausserhalb von `minimum`/`maximum` liegt, sonst `null`. Gleiche Saetze wie im
+/** Die Meldung, wenn eine Zahl außerhalb von `minimum`/`maximum` liegt, sonst `null`. Gleiche Sätze wie im
  * Backend (`_check_number` in api/v1/extension_settings.py). Leere Felder sind erlaubt (dann gilt der Standard). */
 export function rangeError(schema: JsonSchema, value: unknown): string | null {
   if ((schema.type !== "number" && schema.type !== "integer") || typeof value !== "number") return null;
@@ -99,7 +89,7 @@ export function rangeError(schema: JsonSchema, value: unknown): string | null {
   return low !== null ? `Erlaubt sind Werte ab ${numberText(low)}.` : `Erlaubt sind Werte bis ${numberText(high as number)}.`;
 }
 
-/** Ein gespeicherter Wert, den die Auswahl (`enum`) nicht mehr anbietet (z. B. ein Abstand von 7 Minuten von frueher). */
+/** Ein gespeicherter Wert, den die Auswahl (`enum`) nicht mehr anbietet (z. B. ein alter Abstand von 7 Minuten). */
 export function enumError(schema: JsonSchema, value: unknown): string | null {
   if (!schema.enum || value === undefined || value === null || value === "") return null;
   return schema.enum.includes(value) ? null : "Diesen Wert gibt es nicht mehr, bitte einen der angebotenen wählen.";
@@ -109,7 +99,7 @@ function fieldError(schema: JsonSchema, value: unknown): string | null {
   return enumError(schema, value) ?? patternError(schema, value) ?? rangeError(schema, value);
 }
 
-/** Alle Verstoesse (Muster, Zahlengrenzen) in `values` als Liste lesbarer Meldungen (leer = alles in Ordnung). */
+/** Alle Verstöße (Muster, Zahlengrenzen) in `values` als Liste lesbarer Meldungen (leer = alles in Ordnung). */
 export function validateValues(schema: JsonSchema, values: Values, prefix = ""): string[] {
   const out: string[] = [];
   for (const [key, sub] of Object.entries(schema.properties ?? {})) {
@@ -141,7 +131,7 @@ const GENERATE_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";
 const GENERATE_DEFAULT_LENGTH = 16;
 const GENERATE_MAX_LENGTH = 128;
 
-/** `count` zufaellige Zeichen aus a-z und 0-9 vom Zufall des Browsers (`crypto.getRandomValues`, nie `Math.random`).
+/** `count` zufällige Zeichen aus a-z und 0-9 vom Zufall des Browsers (`crypto.getRandomValues`, nie `Math.random`).
  * Gleichverteilt: Bytes ab 252 werden verworfen (256 geht nicht glatt durch 36). `null` ohne sicheren Zufall. */
 function randomChars(count: number): string | null {
   const source = globalThis.crypto;
@@ -156,8 +146,8 @@ function randomChars(count: number): string | null {
   return out;
 }
 
-/** Der Wert fuer `x-generate`: `prefix` plus zufaellige Zeichen. `null`, wenn es keinen Zufall gibt oder das Ergebnis
- * nicht zum `pattern` (oder zu `maxLength`) des Felds passt: ein Wert, der sich nicht speichern liesse, wird nie eingesetzt. */
+/** Der Wert für `x-generate`: `prefix` plus zufällige Zeichen. `null`, wenn es keinen Zufall gibt oder das Ergebnis
+ * nicht zum `pattern` (oder zu `maxLength`) passt: Ein nicht speicherbarer Wert wird nie eingesetzt. */
 export function generateText(schema: JsonSchema): string | null {
   const spec = schema["x-generate"];
   if (!spec) return null;
@@ -248,7 +238,7 @@ function FieldFor({
   const fallback = schema.default;
 
   if (schema.enum) {
-    // Zahlen bleiben Zahlen (das Backend prueft den Typ); ein alter Wert, den es nicht mehr gibt, bleibt sichtbar.
+    // Zahlen bleiben Zahlen (das Backend prüft den Typ); ein alter Wert, den es nicht mehr gibt, bleibt sichtbar.
     const numeric = schema.type === "integer" || schema.type === "number";
     const stale = enumError(schema, value);
     return (
@@ -378,7 +368,7 @@ function FieldFor({
   return <JsonField id={id} head={head} value={value} onChange={onChange} />;
 }
 
-/** Zahlenfeld mit `minimum`/`maximum`: der Browser begrenzt die Pfeile, die Meldung erklaert einen getippten Wert. */
+/** Zahlenfeld mit `minimum`/`maximum`: der Browser begrenzt die Pfeile, die Meldung erklärt einen getippten Wert. */
 function NumberInput({ id, schema, value, fallback, onChange }: { id: string; schema: JsonSchema; value: unknown; fallback: unknown; onChange: (v: unknown) => void }) {
   const error = rangeError(schema, value);
   return (
@@ -401,7 +391,7 @@ function NumberInput({ id, schema, value, fallback, onChange }: { id: string; sc
   );
 }
 
-/** Einzeiliges Textfeld mit Musterpruefung (`pattern`); mit `x-generate` daneben der Knopf "Zufaellig waehlen". */
+/** Einzeiliges Textfeld mit Musterprüfung (`pattern`); mit `x-generate` daneben der Knopf "Zufällig wählen". */
 function TextInput({ id, schema, value, fallback, onChange }: { id: string; schema: JsonSchema; value: unknown; fallback: unknown; onChange: (v: unknown) => void }) {
   const [generateFailed, setGenerateFailed] = useState(false);
   const error = patternError(schema, value);

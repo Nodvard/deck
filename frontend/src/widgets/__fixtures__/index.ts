@@ -9,9 +9,8 @@ import * as statusGrid from "./status_grid";
 import * as table from "./table";
 
 /**
- * Ein Eintrag pro View-Kind (docs/02-EXTENSION-API.md §4 nennt genau diese neun) --
- * WidgetRenderers.test.tsx iteriert diese Liste, damit ein zehntes Widget-Kind ohne
- * Fixture beim Test sofort auffaellt (Laenge der Liste wird mitgeprueft).
+ * Ein Eintrag pro View-Kind (docs/02-EXTENSION-API.md nennt genau diese neun): WidgetRenderers.test.tsx iteriert diese
+ * Liste und prüft ihre Länge mit, damit ein zehntes Widget-Kind ohne Fixture sofort auffällt.
  */
 export const fixtures = [
   { name: "stat", ...statFixture },

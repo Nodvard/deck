@@ -9,9 +9,8 @@ import pypdfium2 as pdfium
 import pytesseract
 from PIL import Image
 
-# `deu+eng` zuerst (Homelab-Kontext ist deutschsprachig), Fallback auf `eng` allein, falls das `deu`-Sprachpaket
-# nicht installiert ist (z. B. lokale Windows-Entwicklungsumgebung): Tesseract wirft dafür einen harten Fehler, kein
-# leises Leerergebnis.
+# `deu+eng` zuerst (deutschsprachiges Homelab), sonst `eng` allein, falls das `deu`-Sprachpaket fehlt (etwa unter Windows):
+# Tesseract wirft dafür einen harten Fehler, kein leises Leerergebnis.
 _OCR_LANGS_PRIMARY = "deu+eng"
 _OCR_LANGS_FALLBACK = "eng"
 
@@ -64,11 +63,10 @@ def _render_page(doc: pdfium.PdfDocument, index: int) -> Image.Image:
 def extract_text(content: bytes, content_type: str) -> tuple[str, int | None]:
     """(erkannter Text, Seitenzahl); die Seitenzahl ist bei Einzelbildern None.
 
-    Blockiert (Tesseract läuft als Subprozess): nur über `asyncio.to_thread()` aufrufen. Ein kaputtes oder verschlüsseltes PDF wirft `pypdfium2.PdfiumError`."""
+    Blockiert (Tesseract): nur über `asyncio.to_thread()`. Kaputte oder verschlüsselte PDFs werfen `PdfiumError`."""
     if content_type == "application/pdf":
-        # Erst den eingebetteten Textlayer lesen (schnell und exakt; pypdfium2 statt PyMuPDF, das AGPL oder eine
-        # kommerzielle Lizenz bräuchte). Nur ohne Textlayer (reines Scan-PDF) wird jede Seite gerastert und per
-        # Tesseract erkannt, so wird keine Seite doppelt erkannt, deren Text schon vorliegt.
+        # Erst den eingebetteten Textlayer lesen (schnell, exakt; pypdfium2 statt PyMuPDF, das AGPL oder eine Kauflizenz
+        # bräuchte). Nur ohne Textlayer (reines Scan-PDF) wird jede Seite gerastert und per Tesseract erkannt.
         with _PDFIUM_LOCK:
             doc = pdfium.PdfDocument(content)
             try:

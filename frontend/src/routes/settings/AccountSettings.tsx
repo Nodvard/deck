@@ -1,6 +1,6 @@
 /**
- * Mein Konto: Profil (Anzeigename, E-Mail), Passwort aendern und
- * Zwei-Faktor-Anmeldung per Authenticator-App einrichten oder abschalten.
+ * Mein Konto: Profil (Anzeigename, E-Mail), Passwort ändern und Zwei-Faktor-Anmeldung per
+ * Authenticator-App einrichten oder abschalten.
  */
 import { KeyRound, ShieldCheck, ShieldOff } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -135,9 +135,9 @@ const PASSWORD_CODE_HINT =
   "Den Code zeigt deine Authenticator-App, zum Beispiel Google Authenticator, Microsoft Authenticator oder Aegis. Hast du das Handy nicht zur Hand, nimm einen Wiederherstellungs-Code; er ist danach verbraucht.";
 
 /**
- * Ist die Zwei-Faktor-Anmeldung an, verlangt der Server fürs Ändern des Passworts auch einen Code. Das Feld steht gleich
- * da, wenn `GET /me` es sagt; wurde Zwei-Faktor gerade in einem anderen Fenster eingeschaltet, erscheint es nach der
- * Rückfrage des Servers (`totp_missing`).
+ * Ist die Zwei-Faktor-Anmeldung an, verlangt der Server fürs Ändern des Passworts auch einen Code. Das Feld steht
+ * gleich da, wenn `GET /me` es sagt; wurde Zwei-Faktor gerade in einem anderen Fenster eingeschaltet, erscheint es
+ * nach der Rückfrage des Servers (`totp_missing`).
  */
 function PasswordCard({ totpEnabled, onChanged }: { totpEnabled: boolean; onChanged?: () => void }) {
   const [current, setCurrent] = useState("");

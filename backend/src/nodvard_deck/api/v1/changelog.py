@@ -1,6 +1,6 @@
 """Änderungsprotokoll für die Seite „Über“ in den Einstellungen und den Versionshinweis in der Seitenleiste.
 
-Für jeden angemeldeten Nutzer ohne eigene Berechtigung: Es enthält nur Änderungen an der Software, keine Daten der Installation.
+Für jeden angemeldeten Nutzer ohne eigene Berechtigung: nur Änderungen an der Software, keine Daten der Installation.
 """
 
 from __future__ import annotations

@@ -187,7 +187,7 @@ class AppOrder(BaseModel):
         return value
 
 
-# Das Protokoll enthält Name und `https://host:port`, nie Pfad oder Parameter der Adresse (dort könnten Zugangsschlüssel stehen).
+# Protokoll: Name und `https://host:port`, nie Pfad oder Parameter der Adresse (dort könnten Zugangsschlüssel stehen).
 async def _audit(
     session: AsyncSession, user: User, action: str, *, target_id: str | None, detail: dict[str, Any],
 ) -> None:

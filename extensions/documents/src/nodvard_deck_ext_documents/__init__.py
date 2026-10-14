@@ -142,9 +142,8 @@ def _tag_out(row: Tag) -> TagOut:
     return TagOut(id=row.id, name=row.name, match_keyword=row.match_keyword, created_at=row.created_at)
 
 
-# Die Dateien kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen
-# noch der Browser den Typ erraten. Die Vorschau im Dashboard lädt die Datei als Blob und ist
-# davon nicht betroffen.
+# Die Dateien kommen von Nutzern. Wird die Adresse direkt geöffnet, soll weder ein Skript laufen noch der Browser den Typ
+# erraten. Die Vorschau im Dashboard lädt die Datei als Blob und ist davon nicht betroffen.
 _UNTRUSTED_FILE_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
     "X-Content-Type-Options": "nosniff",
@@ -233,9 +232,8 @@ class Extension(NodvardExtension):
             den Nextcloud-Ordner (`inbox.py`) derselbe Weg; `on_saved(session, id)` schreibt dort in derselben
             Transaktion mit, welche Datei übernommen ist."""
             extension = ALLOWED_CONTENT_TYPES[content_type]
-            # OCR vor dem Öffnen der Datenbank-Session (bei einem mehrseitigen PDF mehrere Sekunden) und per
-            # `asyncio.to_thread`, weil `pytesseract` blockierend einen Subprozess startet. So bleibt keine
-            # Transaktion über einen langen, sitzungsunabhängigen Aufruf offen.
+            # OCR (bei mehrseitigen PDFs Sekunden) vor der Datenbank-Session und per `asyncio.to_thread`, weil `pytesseract`
+            # blockierend einen Subprozess startet: so bleibt keine Transaktion über den langen Aufruf offen.
             ocr_text, page_count, ocr_status_, ocr_error = await asyncio.to_thread(_run_ocr, content, content_type)
 
             async with ctx.db.session() as session:
@@ -362,8 +360,7 @@ class Extension(NodvardExtension):
         async def rename_document(document_id: str, payload: _RenameIn) -> DocumentOut:
             """Anzeigename ändern (z. B. "scan_0042.pdf" -> "Stromrechnung 2026.pdf"); die Datei auf der Platte
             behält ihren internen Namen."""
-            # Der Name wird nur angezeigt und in Header eingebaut, nie als Pfad benutzt; trotzdem keine Pfadtrenner,
-            # Zeilenumbrüche oder NUL.
+            # Nur angezeigt und in Header eingebaut, nie als Pfad benutzt; trotzdem keine Pfadtrenner, Umbrüche oder NUL.
             name = payload.original_filename.strip()
             if not name or len(name) > 300 or any(ch in name for ch in "/\\\r\n\x00"):
                 raise HTTPException(status_code=422, detail="Ungültiger Dateiname.")
@@ -557,8 +554,7 @@ class Extension(NodvardExtension):
                     "meta": {},
                 }
 
-        # Mit Berechtigung einhängen: ohne wäre der Router öffentlich (siehe `ApiHandle.include_router()`), und die
-        # Namen wären ohne Login lesbar.
+        # Ohne Berechtigung wäre der Router öffentlich (`ApiHandle.include_router()`), die Namen also ohne Login lesbar.
         ctx.api.include_router(widget_router, permission="documents.read")
 
         ctx.ui.register_page(
@@ -603,10 +599,9 @@ class Extension(NodvardExtension):
 
         ctx.events.subscribe("inventory.item_deleted", _on_item_deleted)
 
-        # Waren die Dokumente aus, während im Inventar ein Gegenstand gelöscht wurde, blieb die Zuordnung stehen.
-        # Beim Start (und wenn das Inventar später startet) darum nachfragen: Das Inventar meldet jeden Gegenstand,
-        # den es nicht mehr gibt, wie beim Löschen, und `_on_item_deleted` räumt auf. Ist das Inventar aus, passiert
-        # nichts; die Seite zeigt solche Zuordnungen als „Gegenstand nicht mehr da“.
+        # Waren die Dokumente aus, während im Inventar ein Gegenstand gelöscht wurde, bliebe die Zuordnung stehen. Darum beim
+        # Start (und wenn das Inventar später startet) nachfragen: Das Inventar meldet Verschwundenes wie beim Löschen. Ist
+        # es aus, zeigt die Seite solche Zuordnungen als „Gegenstand nicht mehr da“.
         async def _request_item_check(_event: Event | None = None) -> None:
             # Nur Aufräumen: scheitert es (etwa weil die Datenbank noch nicht bereit ist), darf das den Start der
             # Dokumente nie kippen. Dann eben beim nächsten Start.

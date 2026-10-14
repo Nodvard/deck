@@ -1,14 +1,7 @@
 /**
- * Eigenstaendige Terminal-Seite: Host waehlen, echte SSH-Sitzung, mehrere Tabs
- * nebeneinander -- statt fuer jede Shell einen eigenen SSH-Client aufzumachen.
- * Kern-Seite ohne PageSpec wie Dateien/Konsole: sie kennt kein SSH, nur die
- * Terminal-API (`POST /terminal/sessions` + WS-Bruecke,
- * `api/v1/terminal.py`); welcher Anbieter dahinter steht (heute die terminal-
- * Extension ueber `core/ssh.py`), sieht sie nicht.
- *
- * Tabs bleiben beim Umschalten GEMOUNTET (nur ausgeblendet) -- sonst risse jeder
- * Tabwechsel die SSH-Sitzung ab. xterm.js wird erst hier dynamisch geladen, das
- * Haupt-Bundle zahlt nicht dafuer.
+ * Eigenständige Terminal-Seite (Host wählen, echte SSH-Sitzung, mehrere Tabs). Sie kennt nur die Terminal-API
+ * (`POST /terminal/sessions` + WebSocket-Brücke, `api/v1/terminal.py`), nicht den Anbieter dahinter. Tabs bleiben beim
+ * Umschalten gemountet (sonst risse der Wechsel die SSH-Sitzung ab); xterm.js wird erst hier dynamisch geladen.
  */
 import "@xterm/xterm/css/xterm.css";
 
@@ -40,7 +33,7 @@ interface TerminalSessionOut {
 
 type TabStatus = "connecting" | "connected" | "closed" | "error";
 
-/** Shell IN etwas auf dem Server statt auf dem Server selbst (z. B. in einem Container): `scope` = worin, `ref` = welches. */
+/** Shell in etwas auf dem Server statt auf ihm selbst (z. B. in einem Container): `scope` = worin, `ref` = welches. */
 interface ShellScope {
   scope: string;
   ref: string;
@@ -72,7 +65,7 @@ const STATUS_DOT: Record<TabStatus, string> = {
   error: "bg-red-400",
 };
 
-/** Close-Codes aus api/v1/terminal.py -- in Worte gefasst statt nur als Zahl. */
+/** Close-Codes aus api/v1/terminal.py: in Worte gefasst statt nur als Zahl. */
 const CLOSE_REASON: Record<number, string> = {
   4404: "Sitzungsticket unbekannt oder abgelaufen.",
   4501: "Dafür bietet kein Modul ein Terminal an.",
@@ -81,9 +74,8 @@ const CLOSE_REASON: Record<number, string> = {
   4408: "Die Sitzung wurde wegen Leerlauf beendet.",
 };
 
-/** Einmal laden, fuer alle Tabs teilen -- jeder neue Tab wartete sonst auf einen
- * eigenen dynamischen Import desselben Pakets. Ein Fehlschlag (alter Chunk nach einem
- * Deploy) bleibt nicht gespeichert, "Neu verbinden" versucht es wieder. */
+/** Einmal laden und für alle Tabs teilen, sonst wartete jeder neue Tab auf einen eigenen Import desselben Pakets.
+ * Ein Fehlschlag (alter Chunk nach einem Deploy) bleibt nicht gespeichert, "Neu verbinden" versucht es wieder. */
 const loadXterm = loadOnce(() => Promise.all([import("@xterm/xterm"), import("@xterm/addon-fit")]));
 
 export function terminalSocketUrl(wsPath: string, loc: Pick<Location, "protocol" | "host"> = window.location): string {
@@ -218,15 +210,14 @@ function TerminalView({
     };
   }, [hostId, inside?.scope, inside?.ref, attempt]);
 
-  // Beim Einblenden und bei jeder Groessenaenderung neu einpassen -- xterm misst
-  // in einem ausgeblendeten Container 0x0.
+  // Beim Einblenden und bei jeder Größenänderung neu einpassen: xterm misst in einem ausgeblendeten Container 0x0.
   useEffect(() => {
     if (!visible) return;
     const refit = () => {
       try {
         fitRef.current?.fit();
       } catch {
-        /* noch nicht geoeffnet */
+        /* noch nicht geöffnet */
       }
     };
     refit();
@@ -259,7 +250,7 @@ function TerminalView({
   );
 }
 
-/** Warum die Liste leer ist, und der Knopf zum naechsten Schritt (nur mit dem passenden Recht). */
+/** Warum die Liste leer ist, und der Knopf zum nächsten Schritt (nur mit dem passenden Recht). */
 function NoTerminalHosts({
   hasHosts, hasAccess, canWriteHosts, canManageExtensions,
 }: { hasHosts: boolean; hasAccess: boolean; canWriteHosts: boolean; canManageExtensions: boolean }) {
@@ -287,7 +278,7 @@ function NoTerminalHosts({
       />
     );
   }
-  // Zugaenge gibt es, aber keiner taugt fuers Terminal: meist ist das Modul „Terminal“ aus.
+  // Zugänge gibt es, aber keiner taugt fürs Terminal: meist ist das Modul „Terminal“ aus.
   return (
     <EmptyState
       compact
@@ -338,15 +329,15 @@ export function TerminalPage() {
     setActive(key);
   }, []);
 
-  // `?host=<id>` (z. B. von einer Host- oder Proxmox-Seite) oeffnet direkt einen Tab; mit `&scope=…&ref=…`
-  // (z. B. „Konsole“ eines Containers) eine Shell darin -- ob es die gibt, entscheidet das Backend.
+  // `?host=<id>` (z. B. von einer Host- oder Proxmox-Seite) öffnet direkt einen Tab; mit `&scope=…&ref=…` (z. B.
+  // „Konsole“ eines Containers) eine Shell darin; ob es die gibt, entscheidet das Backend.
   useEffect(() => {
     const wanted = searchParams.get("host");
     if (!wanted || !hosts) return;
     const host = hosts.find((h) => h.id === wanted);
     const inside = shellScopeFrom(searchParams);
     if (!inside && (searchParams.has("scope") || searchParams.has("ref"))) {
-      // Ein halber oder ungültiger Link auf eine Shell IN etwas: nichts öffnen -- nie stattdessen die Shell des Servers.
+      // Ein halber oder ungültiger Link auf eine Shell in etwas: nichts öffnen, nie stattdessen die Shell des Servers.
       setLinkError("Der Link auf diese Konsole ist unvollständig oder ungültig. Es wurde nichts geöffnet.");
     } else if (host && (inside || terminalIds.has(host.id))) {
       openTab(host, inside ?? undefined);
@@ -386,8 +377,8 @@ export function TerminalPage() {
   if (error) return <p className="p-6 text-sm text-red-400">Fehler: {error}</p>;
 
   return (
-    // Handy: Hostliste ueber dem Terminal statt 240 px daneben; die Liste
-    // scrollt dort in sich, das Terminal behaelt eine brauchbare Mindesthoehe.
+    // Handy: Hostliste über dem Terminal statt 240 px daneben; die Liste scrollt dort in sich, das Terminal behält eine
+    // brauchbare Mindesthöhe.
     <div className="flex h-full flex-col gap-4 p-4 lg:flex-row">
       <aside className="flex w-full shrink-0 flex-col gap-2 lg:w-60">
         <h2 className="text-lg font-semibold">Terminal</h2>

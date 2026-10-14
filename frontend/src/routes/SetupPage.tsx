@@ -17,30 +17,9 @@ import { TimezoneStep } from "./setup/TimezoneStep";
 import { TotpStep } from "./setup/TotpStep";
 
 /**
- * Einrichtungs-Assistent einer frischen Installation. Ohne diese Seite waere ohne API-Client
- * nichts bedienbar: `POST /api/v1/auth/bootstrap` legt den ersten Account an, `/login` kann ohne
- * Nutzer nie klappen. Sechs Schritte, nur der erste ist Pflicht:
- *
- *   1. Konto (Einrichtungscode aus dem Container-Protokoll, Benutzername, Passwort) -- oder
- *      „Sicherung einspielen“ (`RestoreFlow`: dieselben Ablauf-Schritte wie in den Einstellungen, nur
- *      mit dem Einrichtungscode statt mit einem Konto; danach startet Nodvard Deck neu und die
- *      Anmeldung mit den Konten aus der Sicherung folgt)
- *   2. Zeitzone (vorbelegt mit der des Geraets; `PUT /settings/system.timezone`)
- *   3. Module ("Was willst du nutzen?", Schalter je Modul)
- *   4. Zwei-Faktor (QR-Code, Bestaetigung, Wiederherstellungs-Codes) -- freiwillig
- *   5. Aussehen (Produktname, Akzentfarbe) -- freiwillig
- *   6. Fertig (Hinweis auf "Erste Schritte" im Cockpit, Notfall-Befehl)
- *
- * Wiederherstellungs-Codes gibt es erst MIT Zwei-Faktor (api/v1/me.py); sie erscheinen deshalb
- * direkt nach der Bestaetigung in Schritt 4 (RecoveryCodesPanel, einmalig).
- *
- * Selbstlimitierend wie der Backend-Endpunkt selbst: `GET /auth/bootstrap` entscheidet beim Mount,
- * ob diese Seite ueberhaupt gezeigt wird -- ein zweiter Aufruf (z. B. per Lesezeichen) landet auf
- * /login statt auf einem 409 vom Absenden.
- *
- * Neuladen mitten drin: Das Konto existiert dann schon (`needed: false`). Der erreichte Schritt
- * steht in `sessionStorage`; ist er da und die Anmeldung per Cookie noch gueltig, geht es dort
- * weiter, sonst auf /login (danach uebernimmt die Karte "Erste Schritte" im Cockpit).
+ * Einrichtungs-Assistent einer frischen Installation, sechs Schritte, nur der erste (Konto oder Sicherung einspielen)
+ * ist Pflicht. Die Seite erscheint nur, solange `GET /auth/bootstrap` ein Konto verlangt, sonst geht es auf /login
+ * statt auf einen 409 beim Absenden.
  */
 type Step = "account" | "timezone" | "modules" | "totp" | "branding" | "done";
 
@@ -53,7 +32,7 @@ const STEPS: { id: Step; title: string }[] = [
   { id: "done", title: "Fertig" },
 ];
 
-/** Merkzettel fuers Neuladen: der zuletzt erreichte Schritt (nur pro Browser-Tab, nie das Konto selbst). */
+/** Merkzettel fürs Neuladen: der zuletzt erreichte Schritt (nur pro Browser-Tab, nie das Konto selbst). */
 const RESUME_KEY = "deck.setup.step";
 
 function readResumeStep(): Step | null {
@@ -76,7 +55,7 @@ function writeResumeStep(step: Step | null): void {
 
 export function SetupPage() {
   const navigate = useNavigate();
-  /** `null` = wird geprueft, `false` = nichts zu tun (-> /login). */
+  /** `null` = wird geprüft, `false` = nichts zu tun (-> /login). */
   const [needed, setNeeded] = useState<boolean | null>(null);
   const bootstrap = useAuthStore((s) => s.bootstrap);
   const brandingLoaded = useBrandingStore((s) => s.loaded);
@@ -111,12 +90,14 @@ export function SetupPage() {
         const res = await fetch("/api/v1/auth/bootstrap");
         isNeeded = ((await res.json()) as { needed: boolean }).needed;
       } catch {
-        isNeeded = false; // API nicht erreichbar -- lieber /login zeigen als eine tote Seite
+        isNeeded = false; // API nicht erreichbar: lieber /login zeigen als eine tote Seite
       }
       if (!alive) return;
       if (isNeeded) return setNeeded(true);
 
-      // Das Konto gibt es schon. Mitten im Assistenten neu geladen? Dann dort weitermachen.
+      // Das Konto gibt es schon. Mitten im Assistenten neu geladen? Der erreichte Schritt steht in `sessionStorage`;
+      // ist er da und die Anmeldung per Cookie noch gültig, geht es dort weiter, sonst auf /login (dort übernimmt
+      // die Karte "Erste Schritte" im Cockpit).
       const saved = readResumeStep();
       let signedIn = false;
       if (saved) {
@@ -161,8 +142,7 @@ export function SetupPage() {
       setError("Bitte den Einrichtungscode eingeben.");
       return;
     }
-    // Vorab im Browser pruefen (dieselben Regeln wie der Server): so steht gleich da, was nicht passt,
-    // statt erst nach dem Absenden.
+    // Vorab im Browser prüfen (dieselben Regeln wie der Server), damit gleich dasteht, was nicht passt.
     const problem = usernameProblem(username) ?? passwordProblem(password);
     if (problem) {
       setError(problem);
@@ -177,7 +157,7 @@ export function SetupPage() {
     try {
       result = await bootstrap(username, password, setupCode.trim());
     } catch {
-      // fetch wirft ohne Antwort -- sonst bliebe der Knopf fuer immer auf "…" (wie auf der Anmeldeseite).
+      // fetch wirft ohne Antwort, sonst bliebe der Knopf für immer auf "…" (wie auf der Anmeldeseite).
       setError("Server nicht erreichbar – bitte gleich noch einmal versuchen.");
       return;
     } finally {
@@ -216,13 +196,9 @@ export function SetupPage() {
   }
 
   function finish() {
-    // Client-seitige Navigation, KEIN window.location.assign -- ein Hard-Reload
-    // wuerde den In-Memory-Access-Token verwerfen (D-07) und RequireAuth zu einem
-    // stillen Refresh zwingen. Unter React 18 StrictMode loest das
-    // den bekannten Refresh-Token-Race (siehe `refresh()` in state/auth.ts) aus --
-    // hier waere er sonst bei JEDER Erstinstallation deterministisch statt nur
-    // gelegentlich. `status` ist nach bootstrap()/login() bereits "authenticated",
-    // RequireAuth muss also gar nicht erst refreshen.
+    // Clientseitige Navigation statt window.location.assign: Ein Hard-Reload verwürfe den Access-Token im Speicher und
+    // zwänge RequireAuth zu einem stillen Refresh, der unter StrictMode den Refresh-Race auslöst (siehe state/auth.ts).
+    // `status` ist nach bootstrap()/login() bereits "authenticated".
     writeResumeStep(null);
     navigate("/", { replace: true });
   }
@@ -258,7 +234,8 @@ export function SetupPage() {
             codeHelp={<CodeHelp />}
             onLeave={() => setRestoring(false)}
             onDone={(outcome) => {
-              // Bei Erfolg wechselt der Ablauf selbst zur Anmeldung (harter Seitenwechsel): der Code wird nicht mehr gebraucht.
+              // Bei Erfolg wechselt der Ablauf selbst zur Anmeldung (harter Seitenwechsel),
+              // der Code wird nicht mehr gebraucht.
               if (outcome.ok) setSetupCode("");
             }}
           />

@@ -7,13 +7,19 @@
 /** Was „Beta“ heißt, in einem Satz. */
 export const BETA_HINT = "Funktioniert, ist aber noch nicht so gründlich erprobt wie der Rest. Rückmeldungen helfen.";
 
-/** Nur der Wert `beta` kennzeichnet; fehlt die Angabe (älteres Backend) oder ist sie unbekannt, gilt das Modul als fertig. */
+/**
+ * Nur der Wert `beta` kennzeichnet; fehlt die Angabe (älteres Backend) oder ist sie
+ * unbekannt, gilt das Modul als fertig.
+ */
 export function isBeta(stage: string | null | undefined): boolean {
   return stage === "beta";
 }
 
-/** Kleines Abzeichen „Beta“ neben dem Namen eines Moduls. Der Tooltip erklärt es (`tooltip`), Hilfsprogramme lesen den
- * Satz mit (`spoken`). Beides aus, wo der Satz ohnehin daneben steht; im Menü nur der Tooltip, damit der Name des Links kurz bleibt. */
+/**
+ * Kleines Abzeichen „Beta“ neben dem Namen eines Moduls. Der Tooltip erklärt es (`tooltip`), Hilfsprogramme
+ * lesen den Satz mit (`spoken`). Beides aus, wo der Satz ohnehin daneben steht; im Menü nur der Tooltip, damit
+ * der Name des Links kurz bleibt.
+ */
 export function BetaBadge({ className = "", tooltip = true, spoken = true }: { className?: string; tooltip?: boolean; spoken?: boolean }) {
   return (
     <span

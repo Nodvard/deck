@@ -165,7 +165,7 @@ class _LegacyNameReporter(PydanticBaseSettingsSource):
 
 
 class Settings(BaseSettings):
-    """Einstellungen aus der Umgebung. Das Branding steht bewusst nicht hier, sondern als Laufzeitwert in der Tabelle `settings`."""
+    """Einstellungen aus der Umgebung. Das Branding steht bewusst als Laufzeitwert in der Tabelle `settings`, nicht hier."""
 
     model_config = SettingsConfigDict(env_prefix=ENV_PREFIX, env_file=".env", extra="ignore")
 
@@ -193,7 +193,9 @@ class Settings(BaseSettings):
             _LegacyNameReporter(settings_cls, collector),
         )
 
-    env: str = "dev"
+    env: str = "prod"
+    """NODVARD_DECK_ENV: `prod` (Standard) oder `dev`. Nur `dev` schaltet Hilfen für die Entwicklung ein (API-Doku ohne
+    Anmeldung, `api_docs_public`); gesetzt wird es nur in der Entwicklung (`.env` aus `.env.example`, Tests)."""
     log_json: bool = False
 
     data_dir: Path = Path("./data")
@@ -304,10 +306,10 @@ class Settings(BaseSettings):
     sofort mit 413, ohne den Körper zu lesen, auch ohne Anmeldung. Routen mit bewusst großen Uploads (Sicherung, Dateien,
     Logo, Dokumente, Bilder) haben eigene, höhere Grenzen."""
 
-    files_max_upload_bytes: int = 0
-    """NODVARD_DECK_FILES_MAX_UPLOAD_BYTES: größte Datei im Dateibrowser. 0 (Standard) = keine Grenze: Der Upload geht als
-    Strom direkt an die Quelle (SFTP, WebDAV) und landet nie ganz im Speicher; ISO- und VM-Images sind oft größer als 4 GB.
-    Ein Wert über 0 wird am Kopf der Anfrage geprüft, bevor die Quelle das Ziel öffnet."""
+    files_max_upload_bytes: int = 10 * 1024**3
+    """NODVARD_DECK_FILES_MAX_UPLOAD_BYTES: größte Datei im Dateibrowser (Standard 10 GiB, 0 = keine Grenze). Der Upload geht
+    als Strom direkt an die Quelle (SFTP, WebDAV) und landet nie ganz im Speicher; die Grenze wird am Kopf der Anfrage
+    geprüft, bevor die Quelle das Ziel öffnet."""
     # Bei Uploads ohne Länge (chunked) zählt nur die Middleware mit, mindestens bis `max_body_bytes`; die Quelle hat das Ziel
     # beim Abbruch dann schon geöffnet (SFTP schreibt in eine Temp-Datei und lässt das Ziel unberührt).
 
@@ -341,7 +343,7 @@ class Settings(BaseSettings):
     gemerkt (TOFU, core/ssh.py), die Verbindung scheitert mit `HostKeyUnknown`, bis jemand den Fingerabdruck bestätigt hat;
     `false`: still merken. Nicht gesetzt gilt die gespeicherte Einstellung `ssh.confirm_new_host_keys` (neue Installationen
     an, bestehende aus; `services.hosts.host_key_confirmation_required`)."""
-    # Bereits gemerkte Schlüssel sind nie betroffen; "Schlüssel vergessen" verlangt immer eine Bestätigung, egal was hier steht.
+    # Bereits gemerkte Schlüssel sind nie betroffen; "Schlüssel vergessen" verlangt immer Bestätigung.
 
     trusted_proxies: str | None = None
     """NODVARD_DECK_TRUSTED_PROXIES: Adressen oder Netze der Reverse-Proxys, deren `X-Forwarded-For` und `X-Forwarded-Proto`
@@ -412,7 +414,7 @@ def default_timezone(settings: Settings | None = None) -> str:
 
 
 def get_settings() -> Settings:
-    """Gecachte Singleton-Instanz; Tests setzen dafür das Modul-Attribut `_settings` direkt zurück (siehe tests/conftest.py)."""
+    """Gecachte Singleton-Instanz; Tests setzen das Modul-Attribut `_settings` direkt zurück (siehe tests/conftest.py)."""
     global _settings
     if _settings is None:
         _settings = Settings()

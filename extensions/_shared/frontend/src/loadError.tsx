@@ -1,10 +1,8 @@
-/** Ladefehler sichtbar machen statt einer leeren Liste.
- *
- * Vorher wurde aus einer gescheiterten Abfrage oft `[]`, und die Seite zeigte "Noch keine …" oder
- * "Keine …". Das liest sich wie eine Entwarnung, obwohl nur die Abfrage nicht geklappt hat. Hier
- * stehen der Abruf, der bei einem Fehler den Grund vom Server wirft, und die Anzeige dafür mit
- * "Erneut versuchen". Eigene Datei statt `ui.tsx`, damit nur die Bundles neu gebaut werden, die
- * sie benutzen. */
+/**
+ * Ladefehler sichtbar machen statt einer leeren Liste: „Noch keine …“ nach einer gescheiterten Abfrage läse sich wie eine
+ * Entwarnung. Hier stehen der Abruf, der bei einem Fehler den Grund vom Server wirft, und die Anzeige mit „Erneut
+ * versuchen“. Eigene Datei statt `ui.tsx`, damit nur die Bundles neu gebaut werden, die sie benutzen.
+ */
 
 import { authedFetch, errorFromBody } from "./api";
 import { Button } from "./ui";

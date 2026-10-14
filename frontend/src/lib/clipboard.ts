@@ -1,9 +1,7 @@
 /**
- * Text in die Zwischenablage kopieren. `navigator.clipboard` gibt es nur in einem sicheren
- * Kontext (https oder localhost) -- das Dashboard laeuft aber meist auf
- * `http://192.168.x.y:8080`. Dort hilft der alte Weg: ein Textfeld markieren und
- * `document.execCommand("copy")`. Klappt auch das nicht, sagt die Oberflaeche dem Nutzer, er
- * soll den (markierten) Text selbst kopieren.
+ * Text in die Zwischenablage kopieren. `navigator.clipboard` gibt es nur in einem sicheren Kontext (https oder
+ * localhost), das Dashboard läuft aber meist auf `http://192.168.x.y:8080`. Dort hilft der alte Weg: ein Textfeld
+ * markieren und `document.execCommand("copy")`.
  */
 
 export const COPY_FAILED_TEXT = "Bitte den markierten Text kopieren (Strg+C bzw. lange drücken).";
@@ -13,7 +11,7 @@ function copyViaTextarea(text: string): boolean {
   area.value = text;
   area.readOnly = true;
   area.setAttribute("aria-hidden", "true");
-  // Ausserhalb des Bildes, aber nicht `display:none` (dann laesst sich nichts markieren).
+  // Außerhalb des Bildes, aber nicht `display:none` (dann lässt sich nichts markieren).
   area.style.position = "fixed";
   area.style.top = "0";
   area.style.left = "-9999px";

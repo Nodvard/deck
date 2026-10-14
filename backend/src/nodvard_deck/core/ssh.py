@@ -1,5 +1,4 @@
-"""SSH-Schicht des Kerns: gepinnte, gepoolte asyncssh-Verbindungen, die Terminal, Skripte und Remediation gemeinsam
-nutzen."""
+"""SSH-Schicht des Kerns: gepinnte, gepoolte asyncssh-Verbindungen für Terminal, Skripte und Remediation."""
 
 from __future__ import annotations
 
@@ -154,8 +153,7 @@ _RSA_SIGNATURE_ALGS = ("rsa-sha2-512", "rsa-sha2-256", "ssh-rsa")
 
 
 def _preferred_host_key_algs(known: dict[str, str]) -> list[str] | None:
-    """Host-Key-Verfahren für asyncssh: gemerkte Typen zuerst, danach die übrigen; `None`, wenn noch nichts gemerkt
-    ist."""
+    """Host-Key-Verfahren für asyncssh: gemerkte Typen zuerst, danach die übrigen; `None`, wenn noch nichts gemerkt ist."""
     # Der Server nimmt das erste Verfahren der Clientliste, das er kann, und zeigt so bei mehreren Schlüsseln den
     # gemerkten. Die übrigen bleiben erlaubt: zeigt ein Server nur einen anderen Typ, soll das als geänderter
     # Schlüssel gemeldet werden (`_PinningClient`) und nicht als unverständlicher Verschlüsselungsfehler.
@@ -376,8 +374,7 @@ _TARGET_CHANGED_TEXT = (
 
 
 class SshPool:
-    """Ein Verbindungspool je (Host, Zugangsdaten); tote Verbindungen werden bei der nächsten Anfrage erkannt und
-    ersetzt."""
+    """Ein Verbindungspool je (Host, Zugangsdaten); tote Verbindungen werden bei der nächsten Anfrage ersetzt."""
 
     def __init__(self) -> None:
         self._connections: dict[tuple[str, str], asyncssh.SSHClientConnection] = {}
@@ -481,8 +478,7 @@ def get_ssh_pool() -> SshPool:
 
 
 async def reset_ssh_pool() -> None:
-    """Nur für Tests und Shutdown: schließt alle gepoolten Verbindungen; der nächste `get_ssh_pool()` baut einen neuen
-    Pool."""
+    """Nur für Tests und Shutdown: schließt alle Pool-Verbindungen; der nächste `get_ssh_pool()` baut einen neuen Pool."""
     global _pool
     if _pool is not None:
         await _pool.close_all()
@@ -525,8 +521,7 @@ async def open_shell(
 async def open_command_stream(
     conn: asyncssh.SSHClientConnection, command: str
 ) -> AsyncIterator[asyncssh.SSHClientProcess]:
-    """Ein Kommando, dessen Ausgabe laufend gelesen wird (z. B. `tail -f`); `run()` kehrt bei einem endlosen Strom nie
-    zurück."""
+    """Ein Kommando mit laufend gelesener Ausgabe (z. B. `tail -f`); `run()` kehrt bei einem endlosen Strom nie zurück."""
     # Bewusst mit PTY: ohne bekommt ein entferntes `... -f` beim Schließen des Kanals kein Signal und läuft weiter, bis
     # es das nächste Mal schreibt. Mit PTY hängt sshd die Sitzung auf und der Prozess bekommt SIGHUP. Nebenwirkung:
     # stdout und stderr kommen gemischt, Zeilenenden `\r\n`; der Aufrufer normalisiert sie.

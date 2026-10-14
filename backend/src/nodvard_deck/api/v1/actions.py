@@ -157,8 +157,8 @@ async def list_actions(
     status_: str | None = None,
     action_type: str | None = None,
     host_id: str | None = None,
-    limit: int = 100,
-    offset: int = 0,
+    limit: int = Query(100, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
 ) -> list[ActionOut]:
     stmt = select(Action).order_by(Action.created_at.desc())
     if status_ is not None:

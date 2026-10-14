@@ -1,6 +1,6 @@
 /**
- * Assistent, letzter Schritt: Abschluss, Hinweis auf „Erste Schritte“ im Cockpit und der
- * Notfall-Befehl für den Fall, dass man sich ausgesperrt hat (nodvard_deck.admin).
+ * Assistent, letzter Schritt: Abschluss, Hinweis auf „Erste Schritte“ im Cockpit und der Notfall-Befehl für den Fall,
+ * dass man sich ausgesperrt hat (nodvard_deck.admin).
  */
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";

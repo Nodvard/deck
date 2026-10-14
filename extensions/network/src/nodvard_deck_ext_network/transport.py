@@ -38,7 +38,7 @@ _REDIRECT_STEPS = frozenset(
 def came_from_redirect(exc: BaseException) -> bool:
     """Ob `exc` beim Zusammenbauen einer Weiterleitung entstand.
 
-    httpx baut sie auch, ohne ihr zu folgen, und scheitert an einem kaputten `Location`-Header (z. B. ungültiger Punycode)."""
+    httpx baut sie auch ohne ihr zu folgen und scheitert an einem kaputten `Location`-Header (etwa ungültigem Punycode)."""
     # Erkannt an der Stelle im Traceback, ersatzweise am Wort "location". Beides wählt nur zwischen festen Sätzen:
     # der Text der Ausnahme selbst kommt nie in eine Meldung.
     tb = exc.__traceback__
@@ -71,7 +71,7 @@ def _protocol_text(exc: BaseException, service: str) -> str:
 def unusable_exchange_text(exc: BaseException, url: str, service: str) -> str:
     """Fester Satz für `httpx.ProtocolError`, `httpx.InvalidURL` und `ValueError`, nie deren Text.
 
-    h11 zitiert kaputte Zeilen der Antwort und den kaputten Header samt Wert; ein ungültiger Punycode-Name nennt Teile des fremden Namens."""
+    h11 zitiert kaputte Antwortzeilen und den kaputten Header samt Wert, ungültiger Punycode Teile des fremden Namens."""
     if isinstance(exc, httpx.ProtocolError):
         return _protocol_text(exc, service)
     if not own_url_ok(url):

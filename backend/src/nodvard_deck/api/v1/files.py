@@ -23,23 +23,21 @@ from ...models import Host, User
 from ...services import audit as audit_service
 from ...services import jobs as jobs_service
 from ...services.auth import user_has_permission
-from ..body_limit import NO_LIMIT, too_large_message
+from ..body_limit import NO_LIMIT, format_bytes, too_large_message
 from ..deps import CurrentUser, SessionDep, require_permission
 
 logger = logging.getLogger("nodvard_deck.files")
 
 router = APIRouter(tags=["files"])
 
-# Der Kern kennt keine konkrete Quelle (kein SSH, kein WebDAV), nur `FileSourceProvider`/`FileSource`; Explorer, Suche
-# und Transfer zwischen Quellen sind generisch darüber gebaut. `file_sources()` wird bei JEDER Anfrage frisch
-# aufgerufen, weil Hosts jederzeit dazukommen oder wegfallen (jeder Host mit Zugangsdaten ist eine eigene SSH-Quelle).
+# Der Kern kennt keine konkrete Quelle (kein SSH, kein WebDAV), nur `FileSourceProvider`/`FileSource`; `file_sources()`
+# wird bei JEDER Anfrage frisch aufgerufen, weil Hosts jederzeit dazukommen oder wegfallen.
 #
-# `files.read`/`files.write` erlauben nur, den Dateimanager zu benutzen. Nennt eine Quelle zusätzlich
-# `required_permission` (SSH: `hosts.execute`, sie arbeitet mit den Zugangsdaten des Servers), prüft `_resolve_source()`
-# sie gegen den NUTZER, bevor etwas geöffnet wird; `/files/sources` und `/files/search` blenden solche Quellen sonst
-# aus. Protokolliert wird für diese Quellen: Herunterladen, Suchen (je Quelle, ohne Suchbegriff), alle Schreibaktionen
-# und das Kopieren zwischen Quellen (Start und Ergebnis mit `run_id`), nur Quelle und Pfad, nie Inhalte. Auflisten,
-# `stat` und `info` nicht; verweigerte Zugriffe als `files.access`.
+# `files.read`/`files.write` erlauben nur den Dateimanager. Jede Quelle verlangt zusätzlich ihr `required_permission`
+# (SSH: `hosts.execute`, Nextcloud: `files.nextcloud`), das `_resolve_source()` gegen den NUTZER prüft; `/files/sources`
+# und `/files/search` blenden sie sonst aus. Ohne Angabe nur Owner und admin, offene Quellen nennen `files.read`.
+# Protokolliert werden für jede Quelle Herunterladen, Suchen (ohne Begriff), Schreibaktionen und Kopieren zwischen
+# Quellen, nur Quelle und Pfad, nie Inhalte; verweigerte Zugriffe als `files.access`.
 
 # So lange darf jeder Anbieter für `GET /files/places` höchstens brauchen; ein hängender kostet nur seine eigenen Orte.
 PLACES_TIMEOUT_S = 6.0
@@ -114,32 +112,26 @@ async def _all_sources() -> list[FileSource]:
     return sources
 
 
-# Platzhalter für eine unlesbare `required_permission`: `*` hat nur der Owner und die Rolle admin, im Zweifel also zu.
+# Für eine Quelle ohne lesbare `required_permission`: `*` haben nur der Owner und die Rolle admin, im Zweifel also zu.
 _LOCKED_PERMISSION = "*"
 
 
-def _required_permission(source: FileSource) -> str | None:
-    """`required_permission` ist optional (Standard `None`) und KEIN Pflichtmitglied des `FileSource`-Protokolls: ältere
-    Quellen ohne das Attribut laufen unverändert."""
+def _required_permission(source: FileSource) -> str:
+    """Das Recht, das der Nutzer für die Quelle selbst braucht; fehlt die Angabe oder ist sie unlesbar, `*`."""
+    # Kein Pflichtmitglied des `FileSource`-Protokolls: `@runtime_checkable` wiese sonst jede ältere Quelle ab.
     permission = getattr(source, "required_permission", None)
-    if permission is None:
-        return None
     return permission if isinstance(permission, str) and permission else _LOCKED_PERMISSION
 
 
 def _may_use(user: User, source: FileSource) -> bool:
-    permission = _required_permission(source)
-    return permission is None or user_has_permission(user, permission)
+    return user_has_permission(user, _required_permission(source))
 
 
 async def _audit(
     session: AsyncSession, actor_id: str, source: FileSource, action: str, *, outcome: str = "success",
     detail: dict[str, Any] | None = None,
 ) -> None:
-    """Protokolliert Zugriffe auf Quellen mit eigener Berechtigung (Server per SSH); Quellen ohne bleiben
-    unprotokolliert. Nur Quelle und Pfad, nie Dateiinhalte."""
-    if _required_permission(source) is None:
-        return
+    """Protokolliert einen Zugriff auf eine Quelle, nur Quelle und Pfad, nie Dateiinhalte."""
     await audit_service.log(
         session, actor_type="user", actor_id=actor_id, action=action, outcome=outcome,
         target_type="file_source", target_id=source.source_id, detail=detail,
@@ -155,26 +147,26 @@ async def _audited(
     try:
         result = await _call(coro)
     except HTTPException as exc:
-        if _required_permission(source) is not None:
-            await _audit(session, user.id, source, action, outcome="failure", detail={**detail, "status": exc.status_code})
-            await session.commit()
+        await _audit(session, user.id, source, action, outcome="failure", detail={**detail, "status": exc.status_code})
+        await session.commit()
         raise
     await _audit(session, user.id, source, action, detail=detail)
     return result
 
 
 async def _resolve_source(source_id: str, user: User, session: AsyncSession) -> FileSource:
-    """Löst die Quelle auf UND prüft ihre `required_permission` gegen den Nutzer; jeder Endpunkt geht hier durch, bevor
-    er etwas öffnet."""
+    """Löst die Quelle auf und prüft ihre `required_permission` gegen den Nutzer; jeder Endpunkt geht hier durch."""
     for source in await _all_sources():
         if source.source_id != source_id:
             continue
         if not _may_use(user, source):
             await _audit(session, user.id, source, "files.access", outcome="denied", detail={"reason": "permission"})
             await session.commit()
+            permission = _required_permission(source)
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Für diese Quelle brauchst du die Berechtigung '{_required_permission(source)}'.",
+                detail="Diese Quelle dürfen nur Admins benutzen." if permission == _LOCKED_PERMISSION
+                else f"Für diese Quelle brauchst du die Berechtigung '{permission}'.",
             )
         return source
     raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unbekannte Quelle '{source_id}'.")
@@ -370,12 +362,11 @@ async def download_file(
     try:
         stream, first = await _call(_start_stream(source, p, offset), not_found=f"'{path}' nicht gefunden.")
     except HTTPException as exc:
-        if _required_permission(source) is not None:
-            await _audit(
-                session, user.id, source, "files.download", outcome="failure",
-                detail={"path": path, "status": exc.status_code},
-            )
-            await session.commit()
+        await _audit(
+            session, user.id, source, "files.download", outcome="failure",
+            detail={"path": path, "status": exc.status_code},
+        )
+        await session.commit()
         raise
     try:
         await _audit(session, user.id, source, "files.download", detail={"path": path})
@@ -393,6 +384,19 @@ async def download_file(
     )
 
 
+async def _free_bytes(source: FileSource, path: PurePosixPath) -> int | None:
+    """Freier Platz dort, wohin `path` geschrieben würde, falls die Quelle ihn meldet (`free_bytes`, optional)."""
+    method = getattr(source, "free_bytes", None)
+    if method is None:
+        return None
+    try:
+        free = await method(path)
+    except Exception:  # noqa: BLE001 - nicht prüfbar heißt: die Quelle meldet selbst, wenn der Platz nicht reicht
+        logger.info("file_source_free_bytes_failed source_id=%s", source.source_id)
+        return None
+    return free if isinstance(free, int) and not isinstance(free, bool) and free >= 0 else None
+
+
 def _upload_limit() -> int:
     """Grenze für `upload_file`: `files_max_upload_bytes`, 0 heißt keine (der Körper geht als Strom an die Quelle und
     liegt nie ganz im Speicher)."""
@@ -408,12 +412,19 @@ async def upload_file(source_id: str, path: str, request: Request, user: Current
     content_length = request.headers.get("content-length")
     size = int(content_length) if content_length is not None and content_length.isdigit() else None
     # Die Grenze schon HIER prüfen: Die Middleware greift erst beim Lesen des ersten Körperteils, bis dahin kann die
-    # Quelle schon etwas angelegt oder verändert haben (SFTP legt eine Temp-Datei an, eine Quelle ohne Zwischendatei
-    # kürzt die Zieldatei auf 0 Byte). `Connection: close` wie bei der Middleware, sonst liest uvicorn den ungelesenen
-    # Rest (womöglich viele GB) für die nächste Anfrage derselben Verbindung noch ganz ein.
+    # Quelle schon etwas angelegt haben (SFTP: Temp-Datei; ohne Zwischendatei wird das Ziel auf 0 Byte gekürzt).
+    # `Connection: close` wie bei der Middleware, sonst liest uvicorn den Rest (womöglich viele GB) für die nächste
+    # Anfrage noch ein.
     limit = _upload_limit()
     if size is not None and size > limit:
         raise HTTPException(status_code=413, detail=too_large_message(limit), headers={"Connection": "close"})
+    free = await _free_bytes(source, PurePosixPath(path))
+    if size is not None and free is not None and size > free:
+        raise HTTPException(
+            status_code=507,
+            detail=f"Auf dem Ziel ist nicht genug Platz frei ({format_bytes(free)} frei, die Datei hat {format_bytes(size)}).",
+            headers={"Connection": "close"},
+        )
     return await _audited(
         session, user, source, "files.upload", {"path": path},
         source.open_write(PurePosixPath(path), request.stream(), size=size),
@@ -459,12 +470,11 @@ async def search(user: CurrentUser, session: SessionDep, q: str, sources: str | 
         s for s in all_sources
         if (wanted is None or s.source_id in wanted) and s.caps.search and _may_use(user, s)
     ]
-    # Die Suche liest Dateiinhalte auf dem Server: je durchsuchter geschützter Quelle ein Eintrag (ohne Suchbegriff).
-    # Sofort speichern, damit die Datenbank während der oft langen Suche nicht gesperrt bleibt.
-    searched = [s for s in targets if _required_permission(s) is not None]
-    for source in searched:
+    # Die Suche liest Dateiinhalte auf dem Server: je durchsuchter Quelle ein Eintrag (ohne Suchbegriff). Sofort
+    # speichern, damit die Datenbank während der oft langen Suche nicht gesperrt bleibt.
+    for source in targets:
         await _audit(session, user.id, source, "files.search")
-    if searched:
+    if targets:
         await session.commit()
 
     async def _search_one(source: FileSource) -> list[SearchHit]:
@@ -502,10 +512,9 @@ async def _is_same_file(source_from: FileSource, path_from: PurePosixPath, sourc
     """Meinen Quelle und Ziel dieselbe Datei? Gleiche Quelle: gleicher oder gleich aufgelöster Pfad (Link, `..`). Zwei
     Quellen: gleicher aufgelöster Pfad, nicht verschiedener Rechner (`machine`) und gleiche Größe, Zeit, Besitzer,
     Rechte. Im Zweifel nein."""
-    # Ein falsches "gleich" verhindert eine erlaubte Kopie, ein falsches "verschieden" kostet nichts, weil das Ziel erst
-    # fertig geschrieben und dann ersetzt wird. Nicht erkennbar bleibt ein Ordner, der unter zwei Pfaden eingehängt ist:
-    # Verschiebt man dort eine Datei auf ihren eigenen zweiten Pfad, löscht das Entfernen der Quelle die Datei (SFTP
-    # liefert keine Inode-Nummer, an der man es sähe).
+    # Ein falsches "gleich" verhindert eine erlaubte Kopie, ein falsches "verschieden" kostet nichts (das Ziel wird erst
+    # fertig geschrieben, dann ersetzt). Nicht erkennbar: ein unter zwei Pfaden eingehängter Ordner; beim Verschieben
+    # auf den zweiten Pfad löscht das Entfernen der Quelle die Datei (SFTP liefert keine Inode-Nummer).
     same_source = source_from.source_id == source_to.source_id
     if same_source and path_from == path_to:
         return True

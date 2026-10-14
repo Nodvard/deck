@@ -1,4 +1,4 @@
-/** Kopierknopf mit Rueckmeldung („Kopiert“); geht auch ohne sicheren Kontext (lib/clipboard.ts). */
+/** Kopierknopf mit Rückmeldung („Kopiert“); geht auch ohne sicheren Kontext (lib/clipboard.ts). */
 import { Check, Copy } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 

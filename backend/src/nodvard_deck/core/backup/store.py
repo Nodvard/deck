@@ -86,7 +86,7 @@ def resolve_target(raw: str | None, data_dir: Path, *, create: bool = True) -> P
 
 
 def same_storage(a: Path, b: Path) -> bool:
-    """Liegen beide auf demselben Dateisystem? Dann schützt die Sicherung vor Fehlbedienung, aber nicht vor einem Plattendefekt."""
+    """Liegen beide auf demselben Dateisystem? Dann schützt die Sicherung vor Fehlbedienung, nicht vor Plattendefekt."""
     try:
         return os.stat(a).st_dev == os.stat(b).st_dev
     except OSError:
@@ -131,7 +131,7 @@ def _fsync_dir(path: Path) -> None:
 
 
 def write_file(directory: Path, name: str, produce: Callable[[Any], None]) -> tuple[Path, str, int]:
-    """Schreibt atomar `directory/name` (0600) und liefert (Pfad, sha256, Größe); scheitert `produce`, bleibt nichts liegen."""
+    """Schreibt `directory/name` atomar (0600), liefert (Pfad, sha256, Größe); scheitert `produce`, bleibt nichts liegen."""
     # Erst nach `.name.part`, dann umbenennen: Eine halbe Datei trägt nie den echten Namen.
     final = directory / name
     part = directory / f".{name}.part"
@@ -154,7 +154,7 @@ def write_file(directory: Path, name: str, produce: Callable[[Any], None]) -> tu
 
 
 def write_sidecar(path: Path, data: dict[str, Any]) -> None:
-    """Legt neben die Sicherung `<name>.json` mit sha256 und Größe der ganzen Datei, so erkennt man Bitfäule ohne Passwort."""
+    """Legt `<name>.json` mit sha256 und Größe der ganzen Datei neben die Sicherung (erkennt Bitfäule ohne Passwort)."""
     sidecar = path.with_name(path.name + fmt.SIDECAR_SUFFIX)
     tmp = path.with_name(f".{sidecar.name}.part")
     with contextlib.suppress(FileNotFoundError):
@@ -271,7 +271,7 @@ def delete(path: Path) -> None:
     try:
         read_header(path)
     except DamagedBackup:
-        # Eine beschädigte eigene Datei darf man trotz kaputtem Kopf loswerden, solange Name und Prüfsummen-Datei zu uns gehören.
+        # Eine beschädigte eigene Datei darf man trotz kaputtem Kopf loswerden, wenn Name und Prüfsummen-Datei passen.
         if read_sidecar(path) is None:
             raise
     os.unlink(path)

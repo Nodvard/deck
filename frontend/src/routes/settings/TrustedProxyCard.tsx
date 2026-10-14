@@ -1,19 +1,7 @@
 /**
- * Karte „Vertrauenswürdiger Proxy“ (Einstellungen, System): Welchen Reverse-Proxys (Nginx Proxy Manager, Traefik,
- * Caddy) Nodvard Deck glaubt, von welcher Adresse eine Anfrage wirklich kommt und ob sie über HTTPS lief
- * (`system.trusted_proxies`, GET/PUT /settings/{key}; sehen mit `settings.write`, ändern nur der Inhaber).
- *
- * Darüber eine Zeile, wie die eigene Anfrage gerade ankommt (GET /system/connection, Recht `system.read`): direkt oder
- * über einen eingetragenen Proxy. Trägt die Anfrage Angaben eines Proxys (`forwarded_headers`), dessen Adresse noch
- * nicht eingetragen ist, schlägt die Karte genau diese eine Adresse vor („Diese Adresse eintragen“, ungespeichert).
- * Nach dem Speichern fragt sie die Zeile neu ab: dann steht dort die echte Adresse und ggf. https.
- *
- * Ist die Umgebungsvariable NODVARD_DECK_TRUSTED_PROXIES gesetzt (`trusted_proxies_source: "env"`), zeigt die Karte
- * deren Liste nur an.
- *
- * Ein Eintrag, der ein Netz mit mehr als 16 Adressen meint (IPv4 Präfix unter /28, IPv6 unter /124), bekommt schon beim
- * Tippen einen Warnhinweis, auch wenn der Server ihn annimmt (private Netze): Jedes Gerät in einem eingetragenen Netz
- * dürfte Nodvard Deck eine falsche Absenderadresse vorgeben.
+ * Karte „Vertrauenswürdiger Proxy“ (Einstellungen, System): Reverse-Proxys (Nginx Proxy Manager, Traefik, Caddy),
+ * denen Nodvard Deck Absenderadresse und HTTPS glaubt (`system.trusted_proxies`, ändern nur der Owner). Eine Zeile
+ * zeigt, wie die eigene Anfrage ankommt (`GET /system/connection`).
  */
 import { AlertTriangle } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -46,7 +34,10 @@ export function parseEntries(text: string): string[] {
   return text.split(/[\s,]+/).map((part) => part.trim()).filter(Boolean);
 }
 
-/** Ab so vielen Adressen in einem Netz warnt die Karte (IPv4 Präfix unter 28, IPv6 Präfix unter 124). */
+/**
+ * Ab so vielen Adressen in einem Netz warnt die Karte schon beim Tippen (IPv4 Präfix unter 28, IPv6 unter 124), auch
+ * wenn der Server es annimmt: Jedes Gerät darin dürfte Nodvard Deck eine falsche Absenderadresse vorgeben.
+ */
 export const WIDE_NETWORK_ADDRESSES = 16;
 
 /** Präfixlänge eines Eintrags wie `172.18.0.0/16`; `null` bei einer einzelnen Adresse oder einem unlesbaren Eintrag. */
@@ -118,11 +109,14 @@ export function TrustedProxyCard({ settings }: { settings: SettingRow[] }): JSX.
   }, [loadConnection]);
 
   const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
+  // Ist die Umgebungsvariable NODVARD_DECK_TRUSTED_PROXIES gesetzt, zeigt die Karte deren Liste nur an.
   const fromEnv = connection?.trusted_proxies_source === "env";
   const locked = fromEnv || !isOwner;
   const entries = parseEntries(text);
   const dirty = !sameList(entries, saved);
   const peer = connection?.peer ?? null;
+  // Trägt die Anfrage Angaben eines Proxys (`forwarded_headers`), dessen Adresse noch nicht eingetragen ist, schlägt
+  // die Karte genau diese Adresse vor (ungespeichert).
   const suggest = Boolean(connection && peer && connection.forwarded_headers && !connection.via_trusted_proxy && !locked);
   const suggestedAlready = peer !== null && entries.includes(peer);
   const wide = wideNetworks(entries);

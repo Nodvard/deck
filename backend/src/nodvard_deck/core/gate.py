@@ -1,5 +1,4 @@
-"""Das Aktions-Gate: Sperrliste, Anti-Flapping, Autonomie-Entscheidung und Audit für Vorschläge von Extensions und
-Nutzern."""
+"""Aktions-Gate: Sperrliste, Anti-Flapping, Autonomie-Entscheidung und Audit für Vorschläge von Extensions und Nutzern."""
 
 from __future__ import annotations
 
@@ -147,8 +146,7 @@ def _standing_from_row(action: Action) -> StandingApproval | None:
 
 
 def start_execution(action_id: str) -> asyncio.Task[None]:
-    """Startet die Ausführung einer committeten `executing`-Aktion als Hintergrund-Task; läuft schon einer, kommt er
-    zurück."""
+    """Startet eine committete `executing`-Aktion als Hintergrund-Task; läuft schon einer, kommt er zurück."""
     task = _running.get(action_id)
     if task is not None and not task.done():
         return task
@@ -191,8 +189,7 @@ async def shutdown_running(timeout: float = 5.0) -> None:
 
 
 async def _run_action(action_id: str) -> None:
-    """Hintergrund-Task: führt aus und schreibt immer Ergebnis und Audit-Zeile, auch wenn der Executor wirft oder das
-    Laden scheitert."""
+    """Hintergrund-Task: führt aus und schreibt immer Ergebnis und Audit-Zeile, auch wenn Executor oder Laden scheitern."""
     # Status, Ergebnis und, falls das Gate den Grund selbst nennt, der feste Text fürs Protokoll.
     outcome: tuple[ActionStatus, dict[str, Any], str | None] | None = None
     try:

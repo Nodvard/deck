@@ -45,11 +45,9 @@ def _valid_base_url(base_url: str) -> bool:
     )
 
 
-# "Proxmox VE" findet den Empfänger über `ctx.capabilities.query()` (es nennt "backups" in `requires`) und übergibt
-# Adresse, Token-ID und Geheimnis in einem Aufruf; die Erweiterungen importieren einander nicht. Das Geheimnis geht nie
-# über den Ereignis-Bus und nie zurück an den Aufrufer. Eingetragen wird wie im Einstellungsformular: die Verbindung in
-# `settings.connections`, das Geheimnis als `backups-token:<name>` im Tresor. Jede Übernahme steht im Protokoll (nur
-# Name, Adresse und Token-IDs). Angenommen wird nur, was auch von Hand eingetragen werden könnte, und strenger.
+# "Proxmox VE" findet den Empfänger über `ctx.capabilities.query()` und übergibt Adresse, Token-ID und Geheimnis in
+# einem Aufruf (Erweiterungen importieren einander nicht). Das Geheimnis geht nie über den Ereignis-Bus, nie zurück und
+# nie ins Protokoll. Angenommen wird nur, was auch von Hand eingetragen werden könnte, und strenger.
 class ProxmoxConnectionReceiver:
     connection_kind = "proxmox"
 

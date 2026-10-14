@@ -1,11 +1,7 @@
 /**
- * SSH-Zugang eines Servers: anlegen (Schluessel erzeugen, Passwort, eigenen Schluessel
- * einfuegen), den Einrichtungsbefehl zeigen, einen Zugang ersetzen und loeschen.
- *
- * Geheimnisse: Was jemand hier eintippt oder einfuegt (Passwort, privater Schluessel), wird
- * im selben Augenblick aus dem Zustand der Seite geloescht, in dem es abgeschickt wird -- also noch
- * vor der Antwort -- und laeuft nie durch `useMutation` oder einen Query-Key. Der erzeugte
- * Schluessel verlaesst den Tresor nie; die Oberflaeche sieht nur seinen oeffentlichen Teil.
+ * SSH-Zugang eines Servers: anlegen (Schlüssel erzeugen, Passwort, eigenen Schlüssel einfügen), Einrichtungsbefehl
+ * zeigen, Zugang ersetzen und löschen. Was jemand hier eintippt (Passwort, privater Schlüssel), wird beim Abschicken
+ * sofort aus dem State gelöscht und läuft nie durch `useMutation` oder einen Query-Key.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
@@ -49,11 +45,11 @@ function NewAccessForm({
   onCreated: (credential: CredentialOut, notice: string) => void;
   onCancel: () => void;
 }) {
-  // Neue Zugaenge schlagen „nodvard“ vor. Bestehende Zugaenge behalten ihren Benutzer (frueher „lattice“),
-  // und der Standardwert der API bleibt „lattice“: das Formular schickt den Namen immer mit.
+  // Neue Zugänge schlagen „nodvard“ vor. Bestehende behalten ihren Benutzer (oft „lattice“); der Standardwert der API
+  // bleibt „lattice“, darum schickt das Formular den Namen immer mit.
   const [username, setUsername] = useState(mode === "generate" ? DEFAULT_KEY_USER : "");
   const [port, setPort] = useState("22");
-  // Die Eingabe des Geheimnisses: Passwort oder privater Schluessel.
+  // Die Eingabe des Geheimnisses: Passwort oder privater Schlüssel.
   const [secret, setSecret] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<Notice>(null);
@@ -64,12 +60,13 @@ function NewAccessForm({
     setErrors({});
     setNotice(null);
     const portNumber = Number(port);
-    // Das Geheimnis sofort aus dem Zustand nehmen -- es lebt nur noch in dieser einen Anfrage.
+    // Das Geheimnis sofort aus dem Zustand nehmen: es lebt nur noch in dieser einen Anfrage.
     const typed = secret;
     setSecret("");
     setBusy(true);
     try {
       if (mode === "generate") {
+        // Der erzeugte Schlüssel verlässt den Tresor nie, die Oberfläche sieht nur den öffentlichen Teil.
         const out = await api.post<GeneratedKeyOut>(`/hosts/${host.id}/credentials/generate-key`, { username: username.trim(), port: portNumber });
         onCreated(out.credential, "SSH-Schlüssel erzeugt. Führe jetzt den Befehl unten auf dem Server aus.");
       } else {
@@ -220,7 +217,7 @@ function CredentialRow({
       await onChanged();
       onNotice({ kind: "ok", text: out.notice ?? "Der neue Zugang ist jetzt der Standard." });
     } catch (err) {
-      // 409: die Pruefung ist zu alt oder fehlt -- der Text des Servers sagt, was zu tun ist.
+      // 409: die Prüfung ist zu alt oder fehlt: der Text des Servers sagt, was zu tun ist.
       onNotice({ kind: "error", text: err instanceof ApiError ? err.message : String(err) });
     } finally {
       setBusy(null);
@@ -291,7 +288,7 @@ export function AccessPanel({
   // Ohne jeden Zugang und frisch angelegt: gleich das Formular zum Erzeugen zeigen.
   useEffect(() => {
     if (autoOpen && ssh.length === 0) setMode((m) => m ?? "generate");
-    // nur beim ersten Mal -- danach entscheidet die Person
+    // nur beim ersten Mal, danach entscheidet die Person
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [autoOpen]);
 
@@ -339,7 +336,8 @@ export function AccessPanel({
               onChecked={(r) => {
                 const ok = loginOutcome(r) === "ok";
                 setVerified((v) => (ok ? [...new Set([...v, c.id])] : v.filter((x) => x !== c.id)));
-                // Der Hinweis „Zugang gespeichert. Prüfe jetzt die Verbindung.“ ist erledigt, sobald die Anmeldung klappt.
+                // Der Hinweis „Zugang gespeichert. Prüfe jetzt die Verbindung.“ ist erledigt, sobald die Anmeldung
+                // klappt.
                 if (ok) setNotice((n) => (n?.kind === "ok" ? null : n));
               }}
               onChanged={changed}

@@ -64,8 +64,9 @@ REFUSAL_NETWORK = "Netzwerkdienste werden hier nicht neu gestartet – die Verbi
 REFUSAL_DASHBOARD = "Das Dashboard startet sich nicht selbst neu – dabei würde diese Seite mitten in der Aktion wegbrechen."
 REFUSAL_DASHBOARD_HOST = "Auf diesem Server läuft das Dashboard selbst. Ein Neustart von Docker würde auch das Dashboard beenden."
 REFUSAL_UNKNOWN_HOST = (
-    "Konnte nicht prüfen, ob auf diesem Server das Dashboard läuft (Docker-Rechte fehlen oder Docker antwortet nicht) – "
-    "Docker wird deshalb nicht neu gestartet. Tipp: dem Dashboard-Server den Tag „dashboard“ geben."
+    "Konnte nicht prüfen, ob auf diesem Server das Dashboard läuft (das Dashboard-Konto darf Docker dort nicht ohne "
+    "„sudo“ ansprechen, oder Docker antwortet nicht) – Docker wird deshalb nicht neu gestartet. "
+    "Tipp: Läuft hier das Dashboard, gib dem Server den Tag „dashboard“."
 )
 
 NO_ROOT = "@@noroot"
@@ -84,16 +85,14 @@ def _base_name(unit: str) -> str:
 
 
 def validate_unit(value: Any) -> str:
-    """Nur ganz normale Dienst-, Socket- und Timer-Namen; `fullmatch`, damit auch ein angehängter Zeilenumbruch
-    durchfällt."""
+    """Nur normale Dienst-, Socket- und Timer-Namen; `fullmatch`, damit auch ein angehängter Zeilenumbruch durchfällt."""
     if not isinstance(value, str) or UNIT_RE.fullmatch(value) is None:
         raise PayloadError("Ungültiger Dienstname – erlaubt sind nur Namen wie „nginx.service“.")
     return value
 
 
 def deny_reason(unit: str, *, dashboard_host: bool | None) -> str | None:
-    """Warum `unit` nicht neu gestartet wird (deutscher Text), sonst `None`; bei `dashboard_host=None` bleibt Docker
-    gesperrt."""
+    """Grund, warum `unit` nicht neu gestartet wird, sonst `None`; bei `dashboard_host=None` bleibt Docker gesperrt."""
     name = _base_name(unit)
     for rule, text in ((DENY_SSH, REFUSAL_SSH), (DENY_SYSTEM, REFUSAL_SYSTEM), (DENY_NETWORK, REFUSAL_NETWORK), (DENY_DASHBOARD, REFUSAL_DASHBOARD)):
         if _matches(name, rule):
@@ -107,8 +106,7 @@ def deny_reason(unit: str, *, dashboard_host: bool | None) -> str | None:
 
 
 def is_restartable(unit: str, *, dashboard_host: bool | None = False) -> bool:
-    """Darf `unit` grundsätzlich neu gestartet werden? Rein nach Namen, ohne Rückfrage beim Server, für die Knöpfe der
-    Seite."""
+    """Darf `unit` grundsätzlich neu gestartet werden? Nur nach Namen, ohne Rückfrage beim Server (für die Knöpfe)."""
     try:
         validate_unit(unit)
     except PayloadError:
@@ -136,11 +134,9 @@ def validate_payload(payload: Any) -> tuple[str, str]:
 
 
 def as_root(command: str) -> str:
-    """Führt `command` als root aus: direkt, sonst über `sudo -n` (ohne Passwortabfrage); geht beides nicht, bricht es
-    mit NO_ROOT ab."""
-    # Das Dashboard ist auf manchen Servern (z. B. einem Raspberry Pi) nicht als root angemeldet. `sudo -n` fragt nie
-    # nach einem Passwort, das hier niemand eintippen könnte; fehlt das Recht, gibt es NO_ROOT und keinen
-    # Neustart-Versuch.
+    """Führt `command` als root aus, direkt oder über `sudo -n` ohne Passwortabfrage; sonst Abbruch mit NO_ROOT."""
+    # Auf manchen Servern (z. B. einem Raspberry Pi) ist das Dashboard nicht als root angemeldet. `sudo -n` fragt nie
+    # nach einem Passwort, das niemand eintippen könnte; fehlt das Recht, gibt es NO_ROOT und keinen Neustart-Versuch.
     inner = shlex.quote(command)
     return (
         f"if [ \"$(id -u)\" -eq 0 ]; then sh -c {inner}; "
@@ -159,22 +155,19 @@ def own_container_probe(container_id: str) -> str:
     """Läuft auf dem Server ein Container mit der Kennung des Dashboards? Antwort: `@@own`, `@@other` oder `@@unknown`."""
     # Das Dashboard läuft als Docker-Container, dessen Hostname die kurze Container-ID ist. `@@other` gilt nur, wenn
     # Docker antwortet und den Container nicht kennt; ohne Rechte, ohne erreichbaren Dienst oder ohne docker-Programm
-    # heißt es `@@unknown`, denn ein abgestürzter dockerd lässt die Container unter containerd weiterlaufen.
+    # heißt es `@@unknown`, denn ein abgestürzter dockerd lässt die Container unter containerd weiterlaufen. Bewusst
+    # ohne `sudo`-Rückweg: Die Abfrage läuft mit den Rechten des Dashboard-Kontos und nimmt sich keine fremden dazu.
+    # Wer den Server sicher als Dashboard-Server erkennen lassen will, gibt ihm den Tag „dashboard“.
     quoted = shlex.quote(container_id)
     inspect = f"docker inspect --format '{{{{.Id}}}}' {quoted}"
     missing = "*'No such object'*|*'No such container'*|*'No such image, container'*"
-    return (
-        f'o=$({inspect} 2>&1) && echo @@own || case "$o" in {missing}) echo @@other;; '
-        f'*) o=$(sudo -n {inspect} 2>&1) && echo @@own || case "$o" in {missing}) echo @@other;; '
-        f"*) echo @@unknown;; esac;; esac"
-    )
+    return f'o=$({inspect} 2>&1) && echo @@own || case "$o" in {missing}) echo @@other;; *) echo @@unknown;; esac'
 
 
 async def is_dashboard_host(ctx: ExtensionContext, host: Host) -> bool | None:
     """Läuft das Dashboard auf `host`? `True` oder `False`, `None` wenn nicht feststellbar."""
-    # Dieselbe Erkennung steht in Nodvard Shield (`patching.UpdateCenter._is_dashboard_host`). Bewusst doppelt, denn
-    # Erweiterungen importieren einander nicht und ins SDK gehört das nicht; wer eine Stelle ändert, ändert die andere
-    # mit.
+    # Dieselbe Erkennung steht in Nodvard Shield (`patching.UpdateCenter._is_dashboard_host`), bewusst doppelt: Module
+    # importieren einander nicht, und ins SDK gehört das nicht. Wer eine Stelle ändert, ändert die andere mit.
     if any(tag in DASHBOARD_HOST_TAGS for tag in host.tags):
         return True
     own = socket.gethostname().strip()
@@ -215,10 +208,9 @@ def parse_restart_output(stdout: str) -> tuple[int | None, str]:
     return rc, state
 
 
-# `systemctl restart` meldet Erfolg, sobald der Dienst gestartet ist; stürzt er Sekunden später ab, fällt das nur durch
-# erneutes Lesen auf (`systemctl show`, nur lesend, ohne root). Gelesen wird bis zu `CHECK_TIMEOUT_S` lang; ein
-# laufender Dienst gilt erst nach zwei Lesungen im Abstand `CHECK_STABLE_S` ohne neuen Start (`NRestarts`, `MainPID`)
-# als stabil.
+# `systemctl restart` meldet Erfolg, sobald der Dienst gestartet ist; ein Absturz Sekunden später fällt nur beim erneuten
+# Lesen auf (`systemctl show`, ohne root). Gelesen wird bis `CHECK_TIMEOUT_S`; stabil ist ein Dienst erst nach zwei
+# Lesungen im Abstand `CHECK_STABLE_S` ohne neuen Start (`NRestarts`, `MainPID`).
 CHECK_TIMEOUT_S = 45
 CHECK_INTERVAL_S = 3
 CHECK_STABLE_S = 10

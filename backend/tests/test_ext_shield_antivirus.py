@@ -1803,7 +1803,16 @@ def _widget_rows(defender) -> list[dict]:
     return TestClient(app).get("/defender/widgets/protection").json()["data"]
 
 
-CLAM_STATUS = "@@clam\nClamAV 1.4.3/27800/Wed Oct  7 08:23:12 2026\n@@fresh\nactive\n@@lynis\nnone\n@@quarantine\n0\n@@os\ndebian\n@@end\n"
+def _clam_date(days_ago: int = 1) -> str:
+    """Datum der Virensignaturen wie in `clamscan --version` (`Wed Oct  7 08:23:12 2026`), relativ zu heute: Ein festes
+    Datum galt sieben Tage später als veraltet, und die Tests mit diesem Stand wurden an einem bestimmten Tag rot."""
+    from datetime import UTC, datetime, timedelta
+
+    d = datetime.now(UTC) - timedelta(days=days_ago)
+    return f"{d:%a %b} {d.day:2d} {d:%H:%M:%S %Y}"
+
+
+CLAM_STATUS = f"@@clam\nClamAV 1.4.3/27800/{_clam_date()}\n@@fresh\nactive\n@@lynis\nnone\n@@quarantine\n0\n@@os\ndebian\n@@end\n"
 
 
 @pytest.mark.asyncio

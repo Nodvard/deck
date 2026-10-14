@@ -28,21 +28,17 @@ import { SettingsLayout } from "./settings/SettingsLayout";
 import { SystemSettings } from "./settings/SystemSettings";
 
 /**
- * Die Routen als eigener Wert, damit Tests sie mit einem Memory-Router laufen lassen koennen.
- *
- * Fehlerseiten (statt der englischen Entwicklerseite von React Router): ganz aussen faengt
- * `RouteErrorPage fullScreen` alles auf, was schon die Oberflaeche selbst trifft; innerhalb der
- * Oberflaeche (`AppShell`) bleibt bei einem Fehler auf einer Seite das Menue stehen, und die
- * `*`-Route zeigt bei einer unbekannten Adresse „Seite nicht gefunden“. Sie liegt hinter
- * `RequireAuth`: wer nicht angemeldet ist, meldet sich zuerst an und landet dann auf dieser Seite.
+ * Die Routen als eigener Wert, damit Tests sie mit einem Memory-Router laufen lassen können. Ganz außen fängt
+ * `RouteErrorPage fullScreen` Fehler der Oberfläche selbst auf, innerhalb von `AppShell` bleibt bei einem Seitenfehler
+ * das Menü stehen. Die `*`-Route liegt hinter `RequireAuth`: Erst anmelden, dann „Seite nicht gefunden“.
  */
 export const routes: RouteObject[] = [
   {
     errorElement: <RouteErrorPage fullScreen />,
     children: [
       { path: "/login", element: <LoginPage /> },
-      // Erstinbetriebnahme-Assistent -- oeffentlich wie /login, entscheidet selbst
-      // (GET /auth/bootstrap) ob er sich zeigt oder auf /login umleitet.
+      // Erstinbetriebnahme-Assistent: öffentlich wie /login, entscheidet selbst (GET /auth/bootstrap), ob er sich
+      // zeigt oder auf /login umleitet.
       { path: "/setup", element: <SetupPage /> },
       {
         element: <RequireAuth />,
@@ -54,18 +50,18 @@ export const routes: RouteObject[] = [
                 errorElement: <RouteErrorPage />,
                 children: [
                   { path: "/", element: <DashboardPage /> },
-                  // Kern-Seite wie Dashboard -- KEINE PageSpec, der Dateimanager
-                  // kennt keine einzelne Extension namentlich (docs/04 Paragraph 3).
+                  // Kern-Seite wie Dashboard, keine PageSpec: Der Dateimanager kennt keine
+                  // einzelne Extension namentlich.
                   { path: "/files/*", element: <FilesPage /> },
                   { path: "/apps", element: <AppsPage /> },
                   { path: "/actions", element: <ActionsPage /> },
-                  // Konsole: Bildschirm einer VM/eines Containers -- Kern-Seite ohne
-                  // PageSpec (kennt keinen Hypervisor, nur die ConsoleTarget-Capability).
+                  // Konsole: Bildschirm einer VM/eines Containers, Kern-Seite ohne PageSpec (kennt keinen Hypervisor,
+                  // nur die ConsoleTarget-Capability).
                   { path: "/console/:hostId", element: <ConsolePage /> },
-                  // Server-Seite (Plesk-Stil): alles zu EINEM Host -- Werkzeug-Kacheln kommen
-                  // aus GET /hosts/{id}/tools, der Kern kennt keine Extension namentlich.
+                  // Server-Seite (Plesk-Stil): alles zu einem Host; Werkzeug-Kacheln kommen aus GET /hosts/{id}/tools,
+                  // der Kern kennt keine Extension namentlich.
                   { path: "/hosts/:hostId", element: <HostPage /> },
-                  // Terminal-Seite: Host waehlen, echte Sitzung, mehrere Tabs.
+                  // Terminal-Seite: Host wählen, echte Sitzung, mehrere Tabs.
                   { path: "/terminal", element: <TerminalPage /> },
                   // Benachrichtigungs-Center: Meldungen aus api/v1/notifications.py.
                   { path: "/notifications", element: <NotificationsPage /> },
@@ -86,7 +82,7 @@ export const routes: RouteObject[] = [
                       { path: "about", element: <AboutSettings /> },
                     ],
                   },
-                  // PageSpec.path (docs/02-EXTENSION-API.md §5) wird zu /ext/<ext_id><path>.
+                  // PageSpec.path (docs/02-EXTENSION-API.md) wird zu /ext/<ext_id><path>.
                   { path: "/ext/:extId/*", element: <ExtensionPage /> },
                   // Alles andere: freundliche Seite statt einer englischen Fehlermeldung.
                   { path: "*", element: <NotFoundPage /> },

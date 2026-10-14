@@ -1,7 +1,6 @@
 /**
- * Einstellungen -> Server & Zugaenge (`/settings/hosts`): alle Server auf einen Blick, neue
- * anlegen, den SSH-Zugang pro Server einrichten und pruefen. Gedacht fuer das Handy
- * zuerst: Karten statt Tabellen, Knoepfe brechen um.
+ * Einstellungen → Server & Zugänge (`/settings/hosts`): alle Server auf einen Blick, neue anlegen, den SSH-Zugang pro
+ * Server einrichten und prüfen. Gedacht für das Handy zuerst: Karten statt Tabellen, Knöpfe brechen um.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";

@@ -14,32 +14,32 @@ from dataclasses import dataclass, field
 # Die Quarantäne liegt auf dem betroffenen Server selbst.
 QUARANTINE_DIR = "/var/lib/nexus-quarantine"
 
-QUICK_PATHS = ["/tmp", "/var/tmp", "/dev/shm", "/home", "/root"]
+# Die Ordner hier sind Ziele der Scans auf den Servern, keine eigenen Zwischendateien (`nosec B108` für Bandit).
+QUICK_PATHS = ["/tmp", "/var/tmp", "/dev/shm", "/home", "/root"]  # nosec B108
 DEEP_PATHS = ["/"]
-# Der Echtzeit-Wächter scannt in kurzen Abständen die zuletzt geänderten Dateien dieser Ordner; inotify bräuchte auf jedem Server
-# einen Agenten.
-WATCH_PATHS = ["/tmp", "/var/tmp", "/dev/shm", "/home", "/root", "/opt"]
-# Nur für den Wächter (Schnell- und Tiefenscan prüfen /dev/shm weiter): Die IPC-Dateien von pmxcfs/corosync auf Proxmox ändern sich
-# ständig, und clamscan lädt bei jedem Lauf die ganze Datenbank.
-WATCH_EXCLUDED = ["/dev/shm/qb-*"]
+# Der Echtzeit-Wächter scannt in kurzen Abständen die zuletzt geänderten Dateien dieser Ordner; inotify bräuchte auf
+# jedem Server einen Agenten.
+WATCH_PATHS = ["/tmp", "/var/tmp", "/dev/shm", "/home", "/root", "/opt"]  # nosec B108
+# Nur für den Wächter (Schnell- und Tiefenscan prüfen /dev/shm weiter): IPC-Dateien von pmxcfs/corosync (Proxmox) ändern
+# sich ständig, und clamscan lädt bei jedem Lauf die ganze Datenbank.
+WATCH_EXCLUDED = ["/dev/shm/qb-*"]  # nosec B108
 
-# clamdscan meldet eine zwischen `find` und Scan verschwundene Datei mit Code 2 und "ERROR: Can't access file ..." (ClamAV 1.0.5);
-# die übrigen Dateien sind trotzdem geprüft. Erweitertes grep-Muster für die erlaubten Zeilen: genau diese Meldung und Funde.
+# clamdscan meldet eine zwischen `find` und Scan verschwundene Datei mit Code 2 und "ERROR: Can't access file ..." (1.0.5);
+# die übrigen sind trotzdem geprüft. Erweitertes grep-Muster für die erlaubten Zeilen: genau diese Meldung und Funde.
 _CLAMD_SKIP_OK = "^(ERROR|WARNING): Can.t access file | FOUND$"
 
-# Höchstens so viele neue Dateien prüft ein Wächterlauf (schützt die Laufzeit). Den Rest zählt die Shell und meldet ihn als
-# `Skipped files: N`, er wird nie still verworfen.
+# Höchstens so viele neue Dateien prüft ein Wächterlauf (Laufzeit); den Rest meldet die Shell als `Skipped files: N`.
 WATCH_MAX_FILES = 2000
-# `clamscan --file-list` liest je Zeile höchstens 1023 Zeichen (`fgets(buff, 1024, ...)`); ein längerer Pfad zerfiele in Stücke, die auf
-# nicht vorhandene Dateien zeigen. Solche Pfade gehen als Argumente durch (`_ODD_NAME_TEST`).
+# `clamscan --file-list` liest je Zeile höchstens 1023 Zeichen (`fgets(buff, 1024, ...)`); ein längerer Pfad zerfiele in
+# Stücke, die auf nicht vorhandene Dateien zeigen. Solche Pfade gehen als Argumente durch (`_ODD_NAME_TEST`).
 _LONG_PATH_BYTES = 1023
 
 # Tiefenscan: virtuelle und flüchtige Dateisysteme nie durchsuchen.
 _ALWAYS_EXCLUDED = ["/proc", "/sys", "/dev", "/run", QUARANTINE_DIR]
 
-# Rückgabecode-Marke eines Scans: je Lauf eine Zufallsmarke `@@scan-rc-<16 hex>=`. Eine feste Marke ließe sich in einen Dateinamen
-# schreiben (`/tmp/x@@<feste-marke>=0`), die Auswertung schnitte die Ausgabe dort ab, und der Fund verschwände. Gezogen wird die Marke
-# beim Befehlsbau, bei der Auswertung wird dieselbe gebraucht (`build_*_command(..., mark=m)`, `parse_scan_output(..., m)`).
+# Rückgabecode-Marke eines Scans: je Lauf eine Zufallsmarke `@@scan-rc-<16 hex>=`. Eine feste ließe sich in einen Dateinamen
+# schreiben (`/tmp/x@@<marke>=0`), die Auswertung schnitte dort ab und der Fund verschwände. Befehlsbau und Auswertung
+# brauchen dieselbe Marke (`build_*_command(..., mark=m)`, `parse_scan_output(..., m)`).
 _RC_MARK_RE = re.compile(r"@@scan-rc-[0-9a-f]{16}=")
 NO_ROOT = "@@noroot"
 NO_ROOT_MESSAGE = (
@@ -51,7 +51,7 @@ NO_ROOT_MESSAGE = (
 def as_root(command: str, *, required: bool = True) -> str:
     """Führt `command` als root aus: direkt, wenn schon root, sonst über `sudo -n` (ohne Passwortabfrage).
 
-    Geht beides nicht: bei `required` Abbruch mit NO_ROOT, sonst als normaler Benutzer (ein Scan prüft dann nur lesbare Dateien)."""
+    Geht beides nicht: bei `required` Abbruch mit NO_ROOT, sonst als normaler Benutzer (Scan nur lesbarer Dateien)."""
     inner = shlex.quote(command)
     fallback = f"sh -c {inner}" if not required else f"echo '{NO_ROOT}'; exit 126"
     return (
@@ -82,15 +82,13 @@ class ScanResult:
     findings: list[tuple[str, str]] = field(default_factory=list)  # (Pfad, Signatur)
     errors: list[str] = field(default_factory=list)
     error: str | None = None
-    # Anzahl Funde: mindestens die gelesenen Fund-Zeilen, sonst die Zahl aus der ClamAV-Zusammenfassung oder 1, wenn ClamAV mit
-    # Code 1 endet, obwohl keine Fund-Zeile lesbar war.
+    # Anzahl Funde: mindestens die gelesenen Fund-Zeilen, sonst die Zahl der Zusammenfassung oder 1 (Code 1 ohne Fund-Zeile).
     infected: int = 0
-    # Die Fund-Zeilen sind nicht verlässlich (Zeilenumbruch im Dateinamen, Zeilen, die ClamAV nie ausgibt, Zahlen, die nicht
-    # zusammenpassen, Marke fehlt): `findings` kann dann gefälschte Pfade enthalten. Der Defender verschiebt in dem Fall nichts
-    # automatisch (er liefe als root).
+    # Fund-Zeilen nicht verlässlich (Zeilenumbruch im Dateinamen, Zeilen, die ClamAV nie ausgibt, unstimmige Zahlen,
+    # Marke fehlt): `findings` kann gefälschte Pfade enthalten, der Defender (als root) verschiebt dann nichts selbst.
     unreliable: bool = False
-    # Davon der Teil, der die Pfade der Funde betrifft (Zeilenumbruch im Namen, Pfad außerhalb der Wurzeln ...). `unreliable` ist
-    # zusätzlich gesetzt, wenn der Wächter Dateien nicht geprüft hat (`skipped`).
+    # Davon der Teil, der die Pfade betrifft (Zeilenumbruch im Namen, Pfad außerhalb der Wurzeln ...). `unreliable` gilt
+    # zusätzlich, wenn der Wächter Dateien nicht geprüft hat (`skipped`).
     paths_unsure: bool = False
     # So viele neue Dateien hat der Wächter wegen der Obergrenze `WATCH_MAX_FILES` nicht geprüft.
     skipped: int = 0
@@ -105,12 +103,12 @@ def _q(value: str) -> str:
 
 
 def _roots_label(mark: str) -> str:
-    """Anfang der Zeilen mit den aufgelösten Wurzeln: `@@scan-roots-<hex>=` (dieselbe Zufallszahl wie die Marke des Laufs)."""
+    """Anfang der Zeilen mit den aufgelösten Wurzeln: `@@scan-roots-<hex>=` (Zufallszahl der Marke des Laufs)."""
     return "@@scan-roots-" + mark[len("@@scan-rc-"):]
 
 
 def _run_label(mark: str, word: str) -> str:
-    """Eine ganze Zeile, die nur `guard_command` schreibt: `@@scan-<word>-<16 hex>` mit der Zufallszahl der Marke dieses Laufs.
+    """Eine Zeile, die nur `guard_command` schreibt: `@@scan-<word>-<16 hex>` mit der Zufallszahl der Marke des Laufs.
 
     Ein Dateiname kann sie nicht vorwegnehmen (die Zahl ist erst beim Befehlsbau bekannt)."""
     return f"@@scan-{word}-{mark[len('@@scan-rc-'):-1]}"
@@ -120,14 +118,13 @@ def _resolve_roots_command(paths: list[str], mark: str) -> str:
     """Shell-Teil, der als Allererstes je Wurzel eine Zeile `<_roots_label><aufgelöster Pfad>` schreibt.
 
     `parse_scan_output` liest genau diese ersten Zeilen; ein Dateiname kann sie nicht vorwegnehmen."""
-    # ClamAV 1.0 (`clamscan`) und `clamdscan` melden Funde mit dem aufgelösten Pfad (Symlinks ersetzt): Ist `/home` ein Link auf
-    # `/data/home`, käme `/data/home/x: ... FOUND` zurück und passte nie zur Einstellung (`/home`). Darum löst die Shell jede
-    # Wurzel selbst auf (`cd -P` für Ordner, sonst `readlink -f`). Ein Pfad mit Zeilenumbruch oder Wagenrücklauf ergibt eine leere
-    # Zeile, ebenso einer, den beides nicht auflösen kann (fehlt nur das letzte Stück, gibt `readlink -f` den Pfad unverändert
-    # zurück).
+    # clamscan und clamdscan melden Funde mit aufgelöstem Pfad (ist `/home` ein Link auf `/data/home`, passte der Fund nie
+    # zur Einstellung); darum löst die Shell jede Wurzel selbst auf (`cd -P`, sonst `readlink -f`, das bei fehlendem letztem
+    # Stück den Pfad unverändert gibt). Pfade mit Zeilenumbruch/Wagenrücklauf und nicht auflösbare ergeben eine leere Zeile.
     label = _roots_label(mark)
     quoted = " ".join(_q(p) for p in paths)
     return (
+        # `$(...)` verlöre einen Umbruch am Ende, darum NL mit angehängtem `x` bilden und das `x` wieder abschneiden.
         "NL=$(printf '\\nx'); NL=${NL%x}; CR=$(printf '\\r'); "
         f"for P in {quoted}; do "
         'D=$(cd -P -- "$P" 2>/dev/null && pwd -P || readlink -f -- "$P" 2>/dev/null); '
@@ -137,8 +134,23 @@ def _resolve_roots_command(paths: list[str], mark: str) -> str:
 
 
 _ERE_SPECIAL = frozenset(".[]()*+?{}|^$\\")
+
+
 # Nur ein angehängtes `/*` oder `/**` ("der Inhalt dieses Ordners") fällt weg, andere Platzhalter stehen wörtlich.
-_TRAILING_WILDCARD_RE = re.compile(r"(/\*+)+/*$")
+def _strip_trailing_wildcards(folder: str) -> str:
+    """Schneidet wie `(/\\*+)+/*$` am Ende ab, aber in einem Durchgang, also auch bei sehr langen Eingaben schnell."""
+    end = len(folder.rstrip("/"))
+    stripped = False
+    while end and folder[end - 1] == "*":
+        start = end
+        while start and folder[start - 1] == "*":
+            start -= 1
+        if not start or folder[start - 1] != "/":
+            break
+        end, stripped = start - 1, True
+    return folder[:end] if stripped else folder
+
+
 _MAX_EXCLUDE_BYTES = 511
 """ClamAV kürzt den Pfad in `match_regex` auf 512 Bytes; ein längerer Ausnahmepfad träfe nie, einer mit genau 512 Bytes auch
 Nachbarn."""
@@ -154,7 +166,7 @@ def exclude_folder(folder: object) -> str | None:
     if ".." in folder.split("/"):
         return None
     # Vereinfacht wird wie bei `find` (Schlussstrich, `//`, `/./`).
-    folder = _TRAILING_WILDCARD_RE.sub("", folder) or "/"
+    folder = _strip_trailing_wildcards(folder) or "/"
     folder = "/" + posixpath.normpath(folder).lstrip("/")
     # `/` selbst zählt nie, sonst liefe gar nichts.
     return None if folder == "/" else folder
@@ -167,10 +179,9 @@ def scan_exclude_regex(folder: object) -> str | None:
     folder = exclude_folder(folder)
     if folder is None or len(folder.encode("utf-8", "replace")) > _MAX_EXCLUDE_BYTES:
         return None
-    # ClamAV liest den Wert als regulären Ausdruck (POSIX ERE) und sucht ihn im Pfad jedes Ordners, den es betreten will; den
-    # Anker `^` muss der Ausdruck selbst liefern. Darum jedes Sonderzeichen maskieren (`/srv/a+b`, `/srv/(alt)` träfen sonst
-    # andere oder gar keine Ordner) und hinter dem Namen ein `/` oder das Ende verlangen: Sonst nähme `/srv/backup` auch
-    # `/srv/backups-wichtig` aus, `/dev` auch `/devel`.
+    # ClamAV liest den Wert als regulären Ausdruck (POSIX ERE) und sucht ihn im Pfad jedes Ordners; den Anker `^` muss
+    # er selbst liefern. Darum Sonderzeichen maskieren (`/srv/a+b` träfe sonst anderes) und hinter dem Namen `/` oder
+    # das Ende verlangen, sonst nähme `/srv/backup` auch `/srv/backups-wichtig` aus.
     escaped = "".join("\\" + ch if ch in _ERE_SPECIAL else ch for ch in folder)
     return f"^{escaped}(/|$)"
 
@@ -180,7 +191,7 @@ def build_scan_command(
 ) -> str:
     """`clamscan` rekursiv, nur Funde ausgeben (`-i`), mit Zusammenfassung am Ende für die Dateizahl.
 
-    `mark`: die Zufallsmarke dieses Laufs (`new_rc_mark()`), dieselbe geht an `parse_scan_output`; ohne Angabe wird eine gezogen."""
+    `mark`: Zufallsmarke des Laufs (`new_rc_mark()`), dieselbe geht an `parse_scan_output`; sonst wird eine gezogen."""
     mark = _checked_mark(mark)
     excluded = [*_ALWAYS_EXCLUDED, *(exclude or [])]
     parts = ["clamscan", "-r", "-i", "--stdout", "--cross-fs=no" if paths == ["/"] else "",
@@ -193,39 +204,29 @@ def build_scan_command(
     return f"{_resolve_roots_command(paths, mark)}{cmd} 2>&1; echo \"{mark}$?\""
 
 
-# Pfade mit Zeilenumbruch oder Wagenrücklauf (auch in einem Ordnernamen) oder mit 1023 Bytes und mehr dürfen nicht in die
-# `--file-list` des Wächters: Sie kennt nur einen Pfad je Zeile mit höchstens 1023 Zeichen (ein CR am Zeilenende liest ClamAV
-# nicht mit). Ein solcher Name zerfiele in Bruchstücke, ClamAV meldete "Can't access file" (Code 2), die echte Datei bliebe
-# ungeprüft, und der Lauf galt als sauber. Darum trennt `find` sie ab und gibt sie stapelweise als Argumente an einen eigenen
-# `clamscan` (Argumente kennen keine Zeilen und keine Längengrenze). Ein Fund darin gilt nie als eindeutig lesbar (Zeile
-# `Unusual file names: N` am Ende, siehe `parse_scan_output`). Der Lauf ist selten und lädt die Datenbank jedes Mal neu, auch im
-# clamd-Modus: Richtigkeit geht vor Tempo.
-# - NL/CR sind Zeilenumbruch und Wagenrücklauf (`printf '\\nx'` plus Abschneiden des `x`, weil `$(...)` einen Umbruch am Ende
-#   verlöre); X ist die Ausgabe, Y je Stapel "Rückgabecode Dateizahl".
-# - LONG ist ein Muster aus 1023 `?` und einem `*`; `find` läuft dafür mit `LC_ALL=C`, damit ein `?` ein Byte ist und kein
-#   Zeichen.
-# - Die Argumente beginnen immer mit dem absoluten Startpfad von `find`, nie mit `-`.
-# - Braucht GNU find: `-exec ... {} +` innerhalb von `\\( ... \\)` führt die busybox-Variante nicht aus, und schon `-size -50M`
-#   kennt sie nicht ("invalid number"). Auf solchen Systemen prüft der Wächter nie etwas.
+# Pfade mit Zeilenumbruch/Wagenrücklauf oder ab 1023 Bytes dürfen nicht in die `--file-list` (ein Pfad je Zeile,
+# höchstens 1023 Zeichen): Sie zerfielen in Bruchstücke, die echte Datei bliebe ungeprüft. `find` gibt sie stapelweise
+# als Argumente an einen eigenen `clamscan`; ein Fund darin gilt nie als eindeutig lesbar (`Unusual file names: N`).
 _ODD_NAME_LABEL = "Unusual file names"
+# Braucht GNU find: busybox kennt `-exec ... {} +` in `\\( ... \\)` und `-size -50M` nicht (dort prüft der Wächter nie).
 _ODD_NAME_TEST = '\\( -path "*$NL*" -o -path "*$CR*" -o -path "$LONG" \\)'
+# X ist die Ausgabe, Y je Stapel "Rückgabecode Dateizahl". Die Argumente beginnen immer mit dem absoluten Startpfad von
+# `find`, nie mit `-`. Der Lauf ist selten und lädt die Datenbank neu, auch mit clamd: Richtigkeit geht vor Tempo.
 _ODD_NAME_SCAN = (
     "sh -c 'o=$0; r=$1; shift; n=$#; clamscan -i --stdout --no-summary \"$@\" >> \"$o\" 2>&1; "
     "echo \"$? $n\" >> \"$r\"' \"$X\" \"$Y\" {} +"
 )
-# Rückgabecodes der Sonderläufe in den Gesamtcode (R) einrechnen: 127 (nicht installiert) vor 1 (Fund) vor allem anderen; ein Fehler
-# (2, Absturz ...) nur, wenn bisher alles sauber war oder nur Code 2 vorlag.
+# Rückgabecodes der Sonderläufe in den Gesamtcode (R): 127 (nicht installiert) vor 1 (Fund) vor allem anderen; ein
+# Fehler (2, Absturz ...) nur, wenn bisher alles sauber war oder nur Code 2 vorlag.
 _ODD_NAME_MERGE = (
     'T=0; while read -r r n; do T=$((T + ${n:-0})); case "$r" in 0) ;; '
     '1) [ "$R" -eq 127 ] || R=1;; '
     '*) [ "$R" -eq 0 ] || [ "$R" -eq 2 ] && R=$r;; esac; done < "$Y"; '
     f'[ "$T" -eq 0 ] || echo "{_ODD_NAME_LABEL}: $T"; '
 )
-# Die Dateien über der Obergrenze: `awk` schreibt die ersten `WATCH_MAX_FILES` Pfade in die Liste und zählt den Rest in die Datei K (nur
-# die Zahl). `awk` liest alles, damit `find` nie per SIGPIPE abbricht, bevor es die Dateien mit Sondernamen an den Sonderlauf übergibt
-# (`head` plus `wc -l` ginge nicht: `head` liest von einer Pipe blockweise und wirft dabei Zeilen weg, der Rest wäre zu klein gezählt).
-# Vor der Marke schreibt die Shell dann, nur bei einem Rest, `Skipped files: N`: So steht die Zeile hinter allen Dateinamen, und der
-# letzte Treffer gilt.
+# Obergrenze: `awk` schreibt die ersten `WATCH_MAX_FILES` Pfade in die Liste und zählt den Rest in die Datei K; es liest
+# alles, damit `find` nie per SIGPIPE abbricht, bevor es Sondernamen übergibt (`head` wirft beim blockweisen Lesen
+# Zeilen weg). `Skipped files: N` steht hinter allen Dateinamen, der letzte Treffer gilt.
 _SKIPPED_LABEL = "Skipped files"
 _CAP_LIST = (
     'L="$L" K="$K" awk \'NR <= ' + str(WATCH_MAX_FILES) + ' { print > ENVIRON["L"] } '
@@ -244,9 +245,9 @@ def _find_literal(path: str) -> str:
 def _prune_expression(folders: list[str]) -> str:
     """`find`-Ausdruck, der die ausgenommenen Ordner samt Inhalt gar nicht erst betritt (`-prune`), oder leer.
 
-    Die Ordner kommen aus „Ausgenommene Ordner“ (`exclude_paths`), wie beim Scan; welche zählen, regelt `exclude_folder`."""
-    # `find` nennt Pfade mit einfachen Schrägstrichen (`/a//b` oder `/a/./b` griffe sonst nie), darum die Vereinfachung in
-    # `exclude_folder`. Bei einer Wurzel, die selbst eine Verknüpfung ist, vergleicht `find` mit ihrem Namen, nicht mit dem Ziel.
+    Die Ordner kommen wie beim Scan aus „Ausgenommene Ordner“ (`exclude_paths`); `exclude_folder` prüft sie."""
+    # `find` nennt Pfade mit einfachen Schrägstrichen (`/a//b` griffe sonst nie), darum die Vereinfachung in
+    # `exclude_folder`. Ist eine Wurzel selbst ein Link, vergleicht `find` mit ihrem Namen, nicht mit dem Ziel.
     tests: list[str] = []
     for entry in folders:
         folder = exclude_folder(entry)
@@ -263,21 +264,15 @@ def build_watch_command(
 ) -> str:
     """Der kurze Wächter-Lauf: prüft nur Dateien, die in den letzten `minutes` Minuten neu oder geändert wurden.
 
-    `exclude`: find-Muster (Standard `WATCH_EXCLUDED`), `skip_folders`: ausgenommene Ordner, `use_clamd`: über clamd statt clamscan."""
+    `exclude`: find-Muster (Standard `WATCH_EXCLUDED`), `skip_folders`: ausgenommene Ordner, `use_clamd`: clamd."""
     mark = _checked_mark(mark)
     finds = " ".join(_q(p) for p in paths)
     skip = " ".join(f"-not -path {_q(p)}" for p in (WATCH_EXCLUDED if exclude is None else exclude))
     clamscan = 'clamscan -i --stdout --file-list="$L" 2>&1; R=$?'
     if use_clamd:
-        # Antwortet ein clamd (`clamdscan --ping 1`), prüft der Wächter über ihn (`--fdpass`, die Datenbank ist dort schon
-        # geladen), sonst mit clamscan. Die Ausgabe hat das Format für `parse_scan_output`; `Scanned files: N` kommt aus der
-        # Dateiliste, weil clamdscan ohne Zusammenfassung läuft. Nur ein sauberer clamdscan-Lauf zählt: Code 0, oder 1/2 mit
-        # nichts als `_CLAMD_SKIP_OK` in der Ausgabe (eine Datei, die zwischen `find` und Scan verschwand, ist in /tmp und
-        # /dev/shm Alltag, und ein Neustart von clamscan, rund 20 s und 1 GB, wäre genau das, was die Einstellung sparen soll).
-        # clamdscan meldet bei einem Fund Code 1, auch wenn danach Verbindungsfehler kamen. Alles andere (clamd zwischen Ping und
-        # Scan weg, Verbindungsfehler, auch eine leere Ausgabe) wird verworfen und mit clamscan wiederholt: Sonst zählten bei Code
-        # 1 plus Verbindungsfehler die Dateien nach dem Fund ungeprüft als geprüft, und ein misslungener Scan darf nie als
-        # "sauber" durchgehen.
+        # Antwortet clamd (`--ping 1`), prüft der Wächter über ihn (`--fdpass`), sonst mit clamscan. Nur ein sauberer
+        # Lauf zählt: Code 0, oder 1/2 mit nur `_CLAMD_SKIP_OK` (verschwundene Dateien sind Alltag). Alles andere wird
+        # mit clamscan wiederholt: Code 1 kommt auch mit späteren Verbindungsfehlern, die Dateien danach blieben ungeprüft.
         scan = (
             'C=; if clamdscan --ping 1 >/dev/null 2>&1; then '
             'O=$(clamdscan --fdpass --no-summary -i --file-list="$L" 2>&1); R=$?; '
@@ -290,17 +285,15 @@ def build_watch_command(
     else:
         scan = clamscan
     return (
-        # Die Dateiliste darf nicht selbst ein Treffer sein: `mktemp` legt sie ohne TMPDIR (über SSH/sudo nie gesetzt) in /tmp an,
-        # und /tmp wird überwacht, dann liefe clamscan (lädt jedes Mal die ganze Datenbank) bei jedem Lauf. Darum nach /run (als
-        # root beschreibbar, nie überwacht) und die Liste zusätzlich ausschließen (mktemp-Namen enthalten keine Glob-Zeichen).
-        # Vier Dateien: die Liste, die Ausgabe des Sonderlaufs (X), dessen Rückgabecodes (Y) und die Zahl der Dateien über der
-        # Obergrenze (K); keine davon darf `find` selbst finden. Dateien mit Sondernamen: siehe `_ODD_NAME_SCAN`. Als Allererstes
-        # die aufgelösten Wurzeln (`_resolve_roots_command`), noch vor jeder Ausgabe von Dateinamen.
+        # Die Dateiliste darf nicht selbst ein Treffer sein: `mktemp` legt sie ohne TMPDIR (über SSH/sudo nie gesetzt)
+        # im überwachten /tmp an, clamscan liefe bei jedem Lauf. Darum /run (nur root, nie überwacht), und `find`
+        # schließt die vier Dateien (L, X, Y, K) zusätzlich aus.
         _resolve_roots_command(paths, mark)
-        # Beendet das Zeitlimit auf dem Server den Lauf (`guard_command`, erst TERM), bleiben die vier Dateien nicht liegen.
+        # Beendet das Zeitlimit den Lauf (`guard_command`, erst TERM), bleiben die vier Dateien nicht liegen.
         + "trap 'rm -f \"$L\" \"$X\" \"$Y\" \"$K\" 2>/dev/null; exit 143' TERM; "
         "L=$(mktemp -p /run 2>/dev/null || mktemp); X=$(mktemp -p /run 2>/dev/null || mktemp); "
         "Y=$(mktemp -p /run 2>/dev/null || mktemp); K=$(mktemp -p /run 2>/dev/null || mktemp); "
+        # LONG: 1023 `?` und ein `*`; `find` läuft mit `LC_ALL=C`, damit ein `?` ein Byte trifft und kein Zeichen.
         f"LONG=$(printf '%0{_LONG_PATH_BYTES}d' 0 | tr 0 '?'); LONG=\"$LONG*\"; "
         # `-H`: Ein Ordner, der selbst eine Verknüpfung ist (`/home` -> `/data/home`), wird durchsucht, nicht übergangen.
         f"LC_ALL=C find -H {finds} -xdev {_prune_expression(skip_folders or [])}"
@@ -320,32 +313,27 @@ def build_watch_command(
 
 
 # --- Sperre je Server und Zeitlimit auf dem Server ----------------------------------------------------------
-# Jeder clamscan lädt die ganze Datenbank (rund 1 GB). Laufen Wächter und Schnellscan gleichzeitig auf einem Server, kann er hängen
-# bleiben, und beide Läufe enden mit einer Zeitüberschreitung. Darum nimmt jeder Lauf zuerst eine Sperre auf dem Server (`flock` aus
-# util-linux): der Wächter nur, wenn sie frei ist (sonst setzt er aus), ein Scan wartet eine Weile.
-#
-# Wo die Sperrdatei liegt: `flock` öffnet sie mit `O_CREAT` und folgt dabei Verknüpfungen, und eine Sperre lässt sich auch über eine nur
-# lesbare Datei halten. In einem Ordner, den andere beschreiben oder lesen können (`/tmp`, `/run/lock` mit Sticky-Bit), könnte jemand
-# die Datei vorher anlegen, eine Verknüpfung legen, die root dann öffnet, oder die Sperre festhalten und so den Wächter abschalten.
-# Darum liegt sie in einem eigenen Ordner mit Rechten 700, der dem ausführenden Benutzer gehören muss: als root `/run/nodvard-shield`
-# (in `/run` darf nur root anlegen, nach einem Neustart ist er weg), ohne root im Heimatordner. Lässt sich der Ordner nicht anlegen,
-# gehört er jemand anderem oder hat er andere Rechte, läuft der Scan ohne Sperre.
-# Ohne root trägt der Dateiname die Kennung des Rechners (`scan-<Rechnername>-<machine-id>.lock`): Liegt der Heimatordner auf einem
-# Netzlaufwerk (NFS), ist er auf allen Servern derselbe, und Linux reicht `flock` dort an den NFS-Server weiter. Mit einem festen Namen
-# teilten sich alle Server eine Sperre, und der Wächter setzte überall aus, sobald irgendwo ein Scan lief. Beide Teile, weil geklonte
-# VMs oft dieselbe machine-id und frische Installationen oft denselben Rechnernamen haben. Fehlt beides, bleibt `scan--.lock`.
+# Jeder clamscan lädt die ganze Datenbank (rund 1 GB); laufen Wächter und Schnellscan zugleich, kann der Server hängen
+# bleiben. Darum nimmt jeder Lauf zuerst eine Sperre (`flock`): der Wächter nur, wenn sie frei ist, ein Scan wartet.
+
+# `flock` öffnet die Sperrdatei mit `O_CREAT` und folgt Verknüpfungen; in einem für andere beschreibbaren Ordner
+# (`/tmp`) könnte jemand die Datei vorher anlegen, einen Link setzen oder die Sperre festhalten und so den Wächter
+# abschalten. Darum ein eigener Ordner (Rechte 700, gehört dem Benutzer); sonst läuft der Scan ohne Sperre.
 LOCK_DIR_ROOT = "/run/nodvard-shield"
 LOCK_DIR_USER = ".nodvard-shield"
 LOCK_FILE = "scan.lock"
+# Ohne root trägt der Dateiname die Kennung des Rechners: Auf NFS ist der Heimatordner auf allen Servern derselbe (Linux
+# reicht `flock` an den NFS-Server weiter), mit festem Namen setzte der Wächter überall aus, sobald irgendwo ein Scan
+# lief. Beide Teile, weil geklonte VMs oft dieselbe machine-id, frische Installationen denselben Rechnernamen haben.
 _LOCK_FILE_USER = (
     # Jedes Werkzeug mit eigenem `2>/dev/null`: Fehlt eins (sehr kleine Systeme), meldet die Shell sonst "not found", und das
     # landete in der Ausgabe des Scans. Der Name ist dann eben kürzer (`scan--.lock`), die Sperre gilt trotzdem.
     "scan-$(uname -n 2>/dev/null | tr -cd 'A-Za-z0-9._-' 2>/dev/null | cut -c1-64 2>/dev/null)"
     "-$(cat /etc/machine-id 2>/dev/null | tr -cd 0-9a-f 2>/dev/null | cut -c1-32 2>/dev/null).lock"
 )
-# Zeitlimit auf dem Server: Bricht die Verbindung ab oder läuft das Dashboard-Limit ab, läuft der Befehl auf dem Server sonst
-# weiter (und hält die Sperre). `timeout` beendet ihn vorher: TERM nach Limit minus 45 Sekunden, KILL 15 Sekunden später, also 30
-# Sekunden vor dem Limit des Dashboards. So kommt die Meldung der Zeitüberschreitung noch an.
+# Zeitlimit auf dem Server: Bricht die Verbindung ab oder läuft das Dashboard-Limit ab, läuft der Befehl dort sonst
+# weiter (und hält die Sperre). `timeout` beendet ihn vorher: TERM nach Limit minus 45 Sekunden, KILL 15 Sekunden
+# später, also 30 Sekunden vor dem Dashboard-Limit. So kommt die Zeitüberschreitung noch an.
 KILL_AFTER_S = 15
 TIMEOUT_MARGIN_S = 45
 
@@ -361,14 +349,12 @@ def guard_command(
 ) -> str:
     """Führt `command` (dieselbe `mark`) unter der Sperre des Servers und mit Zeitlimit aus.
 
-    Die Ausgabe bleibt gleich, dazu kommt höchstens `@@scan-busy-<hex>` (Sperre belegt) oder `@@scan-timeout-<hex>` (Zeitlimit)."""
+    Ausgabe wie `command`, dazu ggf. `@@scan-busy-<hex>` (Sperre belegt) oder `@@scan-timeout-<hex>` (Zeitlimit)."""
     mark = _checked_mark(mark)
     limit = server_timeout_s(limit_s)
-    # `wait_s=None` (Wächter) gibt sofort auf (`flock -n`), sonst wartet der Lauf bis zu `wait_s` Sekunden (`flock -w`); `command`
-    # läuft dann gar nicht. Das Zeitlimit (Code 124, oder 137 nach KILL) lässt die Marke von `command` fehlen. Ohne `flock` aus
-    # util-linux (BusyBox, NAS) läuft `command` ohne Sperre, ohne `timeout` aus den coreutils (oder eines, das `-k` nicht kennt)
-    # ohne Zeitlimit; keines von beiden lässt den Lauf scheitern. Endet `flock` anders als mit "belegt" (Code 1), z. B. auf einem
-    # Dateisystem ohne Sperren, läuft der Scan ebenfalls ohne Sperre. Die Wartezeit zählt zum Zeitlimit.
+    # `wait_s=None` (Wächter) gibt sofort auf, sonst wartet der Lauf bis `wait_s` (zählt zum Zeitlimit); bei belegter
+    # Sperre läuft `command` gar nicht. Das Zeitlimit (Code 124, 137 nach KILL) lässt die Marke von `command` fehlen.
+    # Ohne `flock` (BusyBox, NAS) oder bei anderem Fehler als "belegt": ohne Sperre; ohne `timeout -k`: ohne Limit.
     take = "flock -n 9" if wait_s is None else f"flock -w {max(1, min(int(wait_s), limit // 2))} 9"
     busy, late = _run_label(mark, "busy"), _run_label(mark, "timeout")
     # `root_dir`: der Ordner der Sperre für root; nur Tests setzen ihn anders als `LOCK_DIR_ROOT`.
@@ -396,15 +382,12 @@ _INFECTED_RE = re.compile(r"^Infected files: ([0-9]+)")
 _ODD_NAMES_RE = re.compile(r"^" + re.escape(_ODD_NAME_LABEL) + r": ([0-9]+)$")
 # Zeile des Befehls mit dem Rest über der Obergrenze des Wächters (`_SKIPPED_REPORT`): ebenfalls nur die Zahl aus der Shell.
 _SKIPPED_RE = re.compile(r"^" + re.escape(_SKIPPED_LABEL) + r": ([0-9]+)$")
-# Meldungen über eine Datei, die ClamAV nicht lesen konnte. Die Formate stammen aus dem Quelltext (clamscan/manager.c,
-# clamdscan/proto.c, ClamAV 0.103 bis 1.4); der Pfad steht roh darin, gebraucht wird er nur, um ihn mit den Wurzeln zu vergleichen:
-# - clamdscan: "ERROR: Can't access file <Pfad>" (0.103 und 1.x, bei --file-list und bei Argumenten);
-# - clamscan, Eintrag der --file-list, den es nicht gibt (der Fall, den ein zerrissener Name auslöst): zuerst "<Pfad>: <Grund>"
-#   (perror auf stderr, z. B. "No such file or directory"), dann "WARNING: <Pfad>: Can't access file", Rückgabecode 2;
-# - clamscan, Datei beim Scan nicht zu öffnen: "WARNING: Can't open file <Pfad>: <Grund>" (Code 2);
-# - clamd (über clamdscan): "<Pfad>: <Grund>. ERROR".
+# Meldungen über eine nicht lesbare Datei (Formate aus dem ClamAV-Quelltext 0.103 bis 1.4, der Pfad steht roh darin).
+# clamdscan: "ERROR: Can't access file <Pfad>"; clamscan: "WARNING: Can't open file <Pfad>: <Grund>" (Code 2).
 _ACCESS_ERROR_RE = re.compile(r"^(?:ERROR|WARNING): Can.t (?:access|open) (?:file|directory):? (?P<path>.+)$")
+# clamscan, Eintrag der --file-list fehlt (zerrissener Name): erst "<Pfad>: <Grund>" (perror), dann diese Zeile, Code 2.
 _ACCESS_WARNING_TAIL_RE = re.compile(r"^WARNING: (?P<path>.+): Can.t access file$")
+# clamd (über clamdscan): "<Pfad>: <Grund>. ERROR".
 _ACCESS_ERROR_TAIL_RE = re.compile(r"^(?P<path>/.*): [^:]*\. ERROR$")
 
 
@@ -413,21 +396,18 @@ def _is_access_message(line: str) -> bool:
     return _ACCESS_ERROR_RE.match(line) is not None or _ACCESS_WARNING_TAIL_RE.match(line) is not None
 
 
-# Meldungen über eine Datei, die es beim Scan nicht mehr gab oder die keine normale Datei mehr war (mit clamscan 1.0.5 und 1.5.4
-# nachgeprüft; Muster wie oben): "WARNING: <Pfad>: Can't access file" nach "<Pfad>: No such file or directory"
-# (`_ACCESS_WARNING_TAIL_RE`), "WARNING: Can't open file <Pfad>: No such file or directory" (verschwand zwischen Prüfung und
-# Öffnen, zählt bei "Total errors" mit) und "WARNING: <Pfad>: Not supported file type" (inzwischen z. B. eine Pipe). "WARNING:
-# <Pfad>: Can't access file" allein sagt nichts über den Grund: Den schreibt clamscan in der Zeile davor (`perror`), und nur "No
-# such file or directory" oder "Not a directory" heißt "verschwunden". "Input/output error" (Platte, Netzlaufwerk), "Permission
-# denied" oder eine fehlende Zeile davor heißen: Die Datei ist noch da und wurde nicht geprüft. Eine Datei ohne Leserecht meldet
-# clamscan dagegen mit "Can't open file <Pfad>: Permission denied", einen nicht lesbaren Ordner mit `-i` gar nicht: dann steht nur
-# "Total errors: N" in der Zusammenfassung.
+# "Verschwunden" (mit clamscan 1.0.5 und 1.5.4 nachgeprüft): "WARNING: <Pfad>: Can't access file" gilt nur so, wenn die
+# Zeile davor (`perror`) "No such file or directory" oder "Not a directory" nennt; "Input/output error", "Permission
+# denied" oder keine Zeile davor heißen: Datei noch da, nicht geprüft.
 _GONE_REASONS = ("No such file or directory", "Not a directory")
+# Zwischen Prüfung und Öffnen verschwunden (zählt bei "Total errors" mit) oder keine normale Datei mehr (Pipe o. Ä.).
 _GONE_OPEN_RE = re.compile(r"^WARNING: Can.t open file (?P<path>.+): (?:No such file or directory|Not a directory)$")
 _UNSUPPORTED_RE = re.compile(r"^WARNING: (?P<path>.+): Not supported file type$")
+# Ohne Leserecht meldet clamscan "Can't open file <Pfad>: Permission denied", einen nicht lesbaren Ordner mit `-i` gar
+# nicht: dann steht nur "Total errors: N" in der Zusammenfassung.
 _TOTAL_ERRORS_RE = re.compile(r"^Total errors: ([0-9]+)$")
-# Die Zusammenfassung von ClamAV (Kopfzeile und alle Zeilen darunter, clamscan 0.103 bis 1.5): nie der Grund eines Fehlers. Bei clamscan
-# ist "End Date:" immer die letzte Zeile und würde sonst als Grund gewählt.
+# Die Zusammenfassung von ClamAV (Kopfzeile und alle Zeilen darunter, clamscan 0.103 bis 1.5): nie der Grund eines
+# Fehlers. Bei clamscan ist "End Date:" immer die letzte Zeile und würde sonst als Grund gewählt.
 _SUMMARY_LINE_RE = re.compile(
     r"^(?:-+ SCAN SUMMARY -+|(?:Known viruses|Engine version|Scanned directories|Scanned files|Infected files|Total errors"
     r"|Not removed|Not moved|Not copied|Data scanned|Data read|Time|Start Date|End Date):.*)$"
@@ -435,7 +415,7 @@ _SUMMARY_LINE_RE = re.compile(
 
 
 def _has_text(line: str) -> bool:
-    """Steht hinter dem ersten Doppelpunkt ein Wort (nicht nur Sternchen wie im Rahmen der Warnung zur alten Datenbank)?"""
+    """Steht hinter dem ersten Doppelpunkt ein Wort (nicht nur Sternchen wie im Rahmen der Alt-Datenbank-Warnung)?"""
     return re.search(r"[A-Za-z]", line.split(":", 1)[-1]) is not None
 
 
@@ -444,31 +424,23 @@ def _failure_reason(
     perror: dict[str, list[str]] | None = None,
 ) -> str:
     """Der Grund für einen gescheiterten Lauf, aus den (nicht leeren) Zeilen der Ausgabe."""
-    # Rangfolge:
-    # 1. die erste Fehlerzeile mit Text (`ERROR:`, `LibClamAV Error`);
-    # 2. die erste Warnung von clamscan (`WARNING:`), die nicht nur eine verschwundene Datei meldet (`gone_lines`). Bei
-    #    "WARNING: <Pfad>: Can't access file" steht der Grund in der Zeile davor (`perror`, je Pfad): dann diese Zeile, etwa
-    #    "<Pfad>: Input/output error";
-    # 3. Fehler laut Zusammenfassung, die keine Meldung erklärt (`unread`, aus "Total errors"): Einen nicht lesbaren Ordner meldet
-    #    clamscan mit `-i` sonst gar nicht;
-    # 4. die erste Warnung über eine verschwundene Datei;
-    # 5. die erste Warnung der Bibliothek mit Text (`LibClamAV Warning`), etwa "Datenbank älter als 7 Tage". Sie steht beim Laden der
-    #    Datenbank vor allen anderen Zeilen und ist fast nie die Ursache, darum erst hier;
-    # 6. die letzte Zeile, die weder zur Zusammenfassung von ClamAV noch zu den eigenen Zeilen des Befehls (`@@...`, Sonderdateien,
-    #    Obergrenze) gehört und keine Warnung ohne Text (nur Sternchen) ist;
-    # 7. ein Satz mit dem Code.
+    # Rangfolge: Fehlerzeile; Warnung von clamscan (außer "verschwunden"); Fehler laut Zusammenfassung; "verschwunden";
+    # Bibliothekswarnung; letzte fremde Zeile; Satz mit dem Code.
     perror = perror or {}
     for line in lines:
         if line.startswith(("ERROR:", "LibClamAV Error")) and _has_text(line):
             return line
     for line in lines:
         if line.startswith("WARNING:") and line not in gone_lines and _has_text(line):
+            # Bei "Can't access file" steht der Grund in der Zeile davor (`perror`).
             tail = _ACCESS_WARNING_TAIL_RE.match(line)
             reasons = [r for r in perror.get(tail.group("path"), []) if r not in _GONE_REASONS] if tail else []
             return f"{tail.group('path')}: {reasons[0]}" if tail and reasons else line
     if unread > 0:
+        # Einen nicht lesbaren Ordner meldet clamscan mit `-i` sonst gar nicht.
         return (f"ClamAV endete mit Code {rc}. Laut Zusammenfassung konnte es {unread} Datei(en) oder Ordner nicht lesen, "
                 "oft fehlen dafür die Rechte.")
+    # Bibliothekswarnungen (etwa "Datenbank älter als 7 Tage") stehen beim Laden vor allem anderen, fast nie die Ursache.
     for prefix in ("WARNING:", "LibClamAV Warning"):
         for line in lines:
             if line.startswith(prefix) and _has_text(line):
@@ -493,7 +465,7 @@ def duration_text(seconds: float) -> str:
 
 
 def timeout_message(limit_s: int | None = None) -> str:
-    """Text, wenn `timeout` auf dem Server den Lauf beendet hat; `limit_s` ist das Zeitlimit des Dashboards für diese Art."""
+    """Text, wenn `timeout` auf dem Server den Lauf beendet hat; `limit_s` ist das Dashboard-Zeitlimit dieser Art."""
     when = f" nach etwa {duration_text(limit_s)}" if limit_s else ""
     return f"Zeitüberschreitung: Der Scan hat zu lange gebraucht und wurde{when} auf dem Server beendet."
 
@@ -506,7 +478,7 @@ CONNECTION_LOST_MESSAGE = "Scan fehlgeschlagen: Die Verbindung zum Server ist ab
 
 
 def _has_label(lines: list[str], mark: str | None, word: str) -> bool:
-    """Steht die Zeile `@@scan-<word>-<hex>` (`guard_command`) dieses Laufs in der Ausgabe? Ohne `mark` zählt jede Zufallszahl."""
+    """Steht die Zeile `@@scan-<word>-<hex>` (`guard_command`) in der Ausgabe? Ohne `mark` zählt jede Zufallszahl."""
     if mark is not None:
         return _run_label(_checked_mark(mark), word) in lines
     return any(re.fullmatch(rf"@@scan-{word}-[0-9a-f]{{16}}", line) for line in lines)
@@ -517,8 +489,8 @@ _ERRNO_REASON_RE = re.compile(r"^[A-Z][a-z][A-Za-z ,'-]*$")
 # Die Meldung der Shell selbst ("sh: 1: clamscan: not found", "bash: line 1: clamscan: command not found").
 _NOT_INSTALLED_RE = re.compile(r"^(?:/(?:usr/)?bin/)?(?:ba|da|a)?sh: (?:(?:line )?[0-9]+: )?clamscan: (?:command )?not found$")
 NOT_INSTALLED_MESSAGE = "ClamAV ist auf diesem Server nicht installiert."
-# Der feste Anfang des Hinweises zur Obergrenze: Daran erkennt der Defender später eine Scan-Zeile, die nur wegen der Obergrenze
-# unvollständig war (die Zahl dahinter wechselt von Lauf zu Lauf).
+# Fester Anfang des Hinweises zur Obergrenze: Daran erkennt der Defender später eine nur deswegen unvollständige
+# Scan-Zeile (die Zahl dahinter wechselt von Lauf zu Lauf).
 SKIPPED_PREFIX = f"Der Wächter hat nur {WATCH_MAX_FILES} von "
 
 
@@ -576,7 +548,7 @@ def _split_resolved_roots(body: str, roots: list[str], mark: str | None) -> tupl
                 return [], body
             path = m.group(1)
         norm = _absolute(path) if path and "\r" not in path else None
-        # Nie `/` als aufgelöste Wurzel, außer die eingetragene ist selbst `/`: Ein Link auf `/` weitete die Prüfung auf alles aus.
+        # Nie `/` als aufgelöste Wurzel, außer sie ist selbst eingetragen: Ein Link auf `/` weitete die Prüfung aus.
         if norm is not None and (norm != "/" or _absolute(root) == "/"):
             resolved.append(norm)
     return resolved, "\n".join(lines[len(roots):])
@@ -587,12 +559,10 @@ def parse_scan_output(
 ) -> ScanResult:
     """Wertet die Ausgabe von `build_scan_command` / `build_watch_command` aus.
 
-    Sie enthält Dateinamen vom gescannten Server, und ClamAV schreibt sie unverändert hin: Ein Name darf die Auswertung nie steuern."""
-    # ClamAV 1.0.5 gibt Zeilenumbruch, Wagenrücklauf, Seitenvorschub und ESC im Namen roh aus (geprüft). Es zählt der letzte
-    # Treffer der Marke am Zeilenanfang: Die echte Marke steht als Allerletztes in der Ausgabe, ein Dateiname mit Marke darin
-    # (oder mit Zeilenumbruch davor) steht immer davor und kann nichts verstecken. Alles nach der Marke fliegt raus, alles davor
-    # wird ausgewertet. Ohne `mark` gilt jede Marke im Format `@@scan-rc-<16 hex>=`, eine feste Marke nie. Fehlt die Marke ganz,
-    # wurde der Lauf nicht ordentlich beendet: Fehler, nie "sauber".
+    Sie enthält Dateinamen vom Server, ClamAV schreibt sie unverändert hin: Ein Name darf die Auswertung nie steuern."""
+    # ClamAV 1.0.5 gibt Zeilenumbruch, Wagenrücklauf, Seitenvorschub und ESC im Namen roh aus. Es zählt der letzte
+    # Treffer der Marke am Zeilenanfang (die echte steht ganz am Ende, ein Dateiname mit Marke davor versteckt nichts);
+    # alles nach ihr fliegt raus. Fehlt die Marke, wurde der Lauf nicht ordentlich beendet: Fehler, nie "sauber".
     pattern = _RC_MARK_RE.pattern if mark is None else re.escape(_checked_mark(mark))
     matches = list(re.finditer(r"^" + pattern + r"([0-9]+)[ \t\r]*$", output, re.MULTILINE))
     rc_match = matches[-1] if matches else None
@@ -602,14 +572,12 @@ def parse_scan_output(
     if rc == 127:
         return ScanResult(status="error", error=NOT_INSTALLED_MESSAGE)
 
+    # `roots`: die gescannten Pfade (ohne Angabe keine Prüfung). Bei Symlinks melden ClamAV und `clamdscan` Funde mit
+    # dem aufgelösten Pfad (`_resolve_roots_command`); es gelten die eingetragene und die aufgelöste Wurzel.
     check_roots: list[str] | None = None
-    # `roots`: die Ordner und Pfade, die der Befehl gescannt hat (ohne Angabe unbekannt, dann keine Prüfung). Sind die Wurzeln
-    # Symlinks (oder liegt einer im Pfad), melden ClamAV 1.0 und `clamdscan` Funde mit dem aufgelösten Pfad; der Befehl schreibt
-    # ihn als erste Zeilen (`_resolve_roots_command`), und für die Prüfung gelten die eingetragene und die aufgelöste Wurzel.
-    # Aufgelöst wird nur die Wurzel selbst: Ein Link innerhalb der Wurzel, der nach `/etc` zeigt, macht einen Fund in `/etc` nicht
-    # sicher. Grenze: Wer den Elternordner einer Wurzel beschreiben darf (z. B. `/home/<name>` für die Wurzel
-    # `/home/<name>/Downloads`), kann sie durch einen Link auf einen anderen Ordner ersetzen (nur nicht `/`); Funde dort gelten
-    # dann als sicher. Das sind aber immer Pfade, die ClamAV selbst aufgelöst und geprüft hat, keine Zeilen aus einem Dateinamen.
+    # Aufgelöst wird nur die Wurzel selbst (ein Link darin nach `/etc` macht einen Fund in `/etc` nicht sicher). Grenze:
+    # Wer den Elternordner einer Wurzel beschreiben darf, kann sie auf einen anderen Ordner (nicht `/`) umlenken; das
+    # sind aber von ClamAV aufgelöste Pfade, keine Zeilen aus einem Dateinamen.
     if roots is not None:
         resolved, body = _split_resolved_roots(body, roots, mark)
         check_roots = [*roots, *resolved]
@@ -632,9 +600,8 @@ def parse_scan_output(
     total_errors = 0
     shell_not_found = False
     nonblank: list[str] = []
-    # Zeilen nur am Zeilenvorschub trennen, nicht mit `str.splitlines()`: Das trennt auch bei Wagenrücklauf, Seitenvorschub,
-    # U+0085, U+2028 und mehr, und eine Fund-Zeile mit so einem Zeichen im Namen fiele auseinander (der Fund würde unsichtbar, der
-    # Lauf "sauber").
+    # Nur am Zeilenvorschub trennen, nicht mit `str.splitlines()` (trennt auch bei CR, Seitenvorschub, U+0085, U+2028
+    # ...): Eine Fund-Zeile mit so einem Zeichen im Namen fiele auseinander (Fund unsichtbar, Lauf "sauber").
     for raw in body.split("\n"):
         line = raw.strip()
         if not line:
@@ -642,14 +609,14 @@ def parse_scan_output(
         nonblank.append(line)
         is_found_line = line.endswith(" FOUND")
         found_lines += int(is_found_line)
-        # Die Regex nur auf Zeilen, die wie ein Fund enden: Auf langen Bruchstücken mit vielen ": " (Dateiname mit Zeilenumbruch) würde
-        # sie sonst quadratisch zurücksetzen und die Auswertung, damit das ganze Dashboard, sekundenlang blockieren.
+        # Die Regex nur auf Zeilen, die wie ein Fund enden: Auf langen Bruchstücken mit vielen ": " (Dateiname mit
+        # Zeilenumbruch) setzte sie sonst quadratisch zurück und blockierte das Dashboard sekundenlang.
         m = _FOUND_RE.match(line) if is_found_line else None
         if m:
             findings.append((m.group("path"), m.group("sig")))
         elif line.startswith("/"):
-            # Mit `-i` schreibt ClamAV einen Pfad nur in Fund-Zeilen. Der Anfang eines Fundes mit Zeilenumbruch im Namen ("/tmp/q")
-            # beginnt immer mit dem Pfad des gescannten Ordners.
+            # Mit `-i` schreibt ClamAV Pfade nur in Fund-Zeilen; der Anfang eines Fundes mit Zeilenumbruch im Namen
+            # ("/tmp/q") beginnt immer mit dem Pfad des gescannten Ordners.
             stray += 1
             shell_not_found = shell_not_found or bool(_NOT_INSTALLED_RE.match(line))
             if line.endswith(" ERROR"):
@@ -699,8 +666,8 @@ def parse_scan_output(
             total_errors = int(summary.group(1))
         else:
             shell_not_found = shell_not_found or bool(_NOT_INSTALLED_RE.match(line))
-    # "Can't access file" heißt nur dann "verschwunden", wenn clamscan es für genau diesen Pfad davor so begründet hat (und nur so).
-    # Jeder andere oder fehlende Grund: Die Datei kann noch da sein und wurde nicht geprüft.
+    # "Can't access file" heißt nur "verschwunden", wenn clamscan es für genau diesen Pfad davor so begründet hat; jeder
+    # andere oder fehlende Grund: Die Datei kann noch da sein und wurde nicht geprüft.
     for line, path in tails:
         if perror.get(path) and all(reason in _GONE_REASONS for reason in perror[path]):
             gone_paths.append(path)
@@ -708,34 +675,29 @@ def parse_scan_output(
         else:
             blocking += 1
 
-    # Endet ClamAV mit Code 1, ist es mindestens ein Fund, auch wenn keine Zeile lesbar war. "Nicht installiert" gilt nur als
-    # ganze Zeile der Shell oder bei Code 127, nie als Teilstück eines Dateinamens.
+    # Code 1 heißt mindestens ein Fund, auch wenn keine Zeile lesbar war. "Nicht installiert" gilt nur als ganze Zeile
+    # der Shell oder bei Code 127, nie als Teilstück eines Dateinamens.
     infected_count = max(len(findings), summary_infected or 0, 1 if rc == 1 else 0)
     if shell_not_found and not infected_count:
         return ScanResult(status="error", error=NOT_INSTALLED_MESSAGE)
-    # Die Zusammenfassung von ClamAV selbst (ohne die Sonderdateien): Nur sie zeigt, dass der Lauf bis zum Ende kam. Die Zahl der
-    # Sonderdateien (`Unusual file names: N`) stammt von der Shell; ihre Fund-Zeilen stehen roh in der Ausgabe und lassen sich
-    # nicht sicher lesen.
+    # Nur die Zusammenfassung von ClamAV selbst (ohne Sonderdateien) zeigt, dass der Lauf bis zum Ende kam; die Zahl der
+    # Sonderdateien (`Unusual file names: N`) stammt von der Shell, ihre Fund-Zeilen stehen roh in der Ausgabe.
     summary_files = files
     if odd_names:
         files = (files or 0) + odd_names
 
-    # Pfade, die nicht zu den gescannten Wurzeln passen, stammen aus einem Dateinamen (oder sind ein Bruchstück davon): Fund und
-    # Lauf sind `unreliable`, und ein Lauf mit Code 2 gilt dann nicht als sauber. Das ist die zweite Absicherung hinter dem
-    # Abgleich mit der Zusammenfassung; im clamd-Modus gibt es keine Zusammenfassung, dort ist es die einzige.
+    # Pfade, die nicht zu den gescannten Wurzeln passen, stammen aus einem Dateinamen (oder einem Bruchstück davon):
+    # Fund und Lauf sind `unreliable`, ein Lauf mit Code 2 gilt nicht als sauber. Zweite Absicherung hinter der
+    # Zusammenfassung; im clamd-Modus ohne Zusammenfassung die einzige.
     foreign = check_roots is not None and (
         any(not _under_roots(path, check_roots) for path, _sig in findings)
         or any(not _under_roots(path, check_roots) for path in access_errors)
     )
     # Nicht alle neuen Dateien geprüft (Obergrenze des Wächters): nie "sauber", nie automatisch verschieben.
     incomplete = skipped_message(skipped) if skipped else None
-    # Code 2 ohne geprüfte Datei ist nur dann ein sauberer Lauf, wenn ClamAV für jede Datei meldet, dass sie verschwunden oder
-    # keine normale Datei mehr ist (beim Wächter Alltag: die Datei in /tmp ist zwischen `find` und Scan weg), die Zahl "Total
-    # errors" dazu passt und keine Meldung eine eingetragene Wurzel selbst betrifft. "WARNING: <Pfad>: Can't access file" zählt
-    # dabei nur mit dem Grund "No such file or directory" (oder "Not a directory") in der Zeile davor für denselben Pfad. Eine
-    # Datei ohne Leserecht oder mit Ein-/Ausgabefehler, ein nicht lesbarer Ordner (mit `-i` nur als "Total errors: N" sichtbar),
-    # eine fehlende Wurzel oder eine nicht ladbare Datenbank (auch dann schreibt clamscan eine Zusammenfassung mit 0 Dateien)
-    # bleiben Fehler. Ohne `roots` lässt sich eine fehlende Wurzel nicht erkennen.
+    # Code 2 ohne geprüfte Datei ist nur sauber, wenn ClamAV für jede Datei meldet, dass sie verschwunden oder keine
+    # normale Datei mehr ist (beim Wächter Alltag), "Total errors" dazu passt und keine Wurzel betroffen ist. Sonst
+    # (fehlende Leserechte oder Wurzel, nicht ladbare Datenbank mit 0 Dateien) ist es ein Fehler.
     root_paths = {_absolute(root) for root in check_roots or []}
     nothing_left = (
         rc == 2 and summary_files == 0 and summary_infected is not None and not odd_names and check_roots is not None
@@ -744,11 +706,9 @@ def parse_scan_output(
     )
 
     if infected_count:
-        # Mit Zeilenumbruch im Dateinamen zerfällt ein Fund in mehrere Zeilen, und die letzte kann wie ein Fund für einen ganz
-        # anderen Pfad aussehen (`/etc/passwd: Sig FOUND`). Solche Läufe sind `unreliable`: eine Zeile mit Pfad am Anfang, die
-        # kein Fund ist, oder eine Zahl von Fund-Zeilen, die nicht zu `Infected files:` passt (die Zusammenfassung steht nach
-        # allen Namen, ihr letzter Treffer ist echt). Ein Fund bleibt trotzdem ein Fund. Ebenso bei Sonderdateien und bei Pfaden
-        # außerhalb der Wurzeln.
+        # Mit Zeilenumbruch im Dateinamen zerfällt ein Fund in mehrere Zeilen, die letzte kann wie ein Fund für einen
+        # anderen Pfad aussehen. `unreliable` sind Läufe mit Pfad am Zeilenanfang ohne Fund, Fund-Zeilen, die nicht zu
+        # `Infected files:` passen, Sonderdateien oder Pfaden außerhalb der Wurzeln; ein Fund bleibt ein Fund.
         paths_unsure = (
             rc is None or stray > 0 or len(findings) != found_lines
             or (summary_infected is not None and summary_infected != found_lines)
@@ -766,21 +726,19 @@ def parse_scan_output(
                               unreliable=True, skipped=skipped)
         return ScanResult(status="clean", files_scanned=files, errors=errors)
     if rc == 2 and (summary_files or nothing_left):
-        # Code 2 heißt hier: ClamAV konnte einzelne Dateien nicht lesen. `files` zählt aber auch die Sonderdateien mit (die Zahl
-        # stammt von der Shell, ihre Läufe haben keine Zusammenfassung) und beweist deshalb nichts: Eine kaputte Datenbank plus
-        # eine Datei mit Zeilenumbruch im Namen sähe sonst aus wie ein Lauf über eine Datei. Darum zählt nur die Zusammenfassung
-        # von ClamAV selbst, und mit Sonderdateien (Code 2 kann dann aus deren Lauf stammen) dürfen außerdem nur Meldungen über
-        # nicht lesbare Dateien vorliegen.
+        # `files` zählt auch die Sonderdateien (Zahl von der Shell) und beweist bei Code 2 nichts: Eine kaputte
+        # Datenbank plus eine Datei mit Zeilenumbruch im Namen sähe sonst nach einem Lauf über eine Datei aus. Darum
+        # zählt nur die ClamAV-Zusammenfassung; mit Sonderdateien nur Meldungen über nicht lesbare Dateien.
         other_errors = [e for e in errors if not _is_access_message(e)]
         if odd_names and other_errors:
             return ScanResult(status="error", files_scanned=files, errors=errors,
                               error=f"Scan fehlgeschlagen: {other_errors[0]}")
         if foreign:
-            # "Kann Datei nicht lesen" für einen Pfad, den dieser Lauf gar nicht gescannt hat: das Bruchstück eines Dateinamens mit
-            # Zeilenumbruch. Dahinter steckt eine Datei, die nie geprüft wurde: nicht "sauber".
+            # "Kann Datei nicht lesen" für einen Pfad, den dieser Lauf nicht gescannt hat: das Bruchstück eines
+            # Dateinamens mit Zeilenumbruch. Dahinter steckt eine Datei, die nie geprüft wurde: nicht "sauber".
             return ScanResult(status="error", files_scanned=files, errors=errors, error=AMBIGUOUS_OUTPUT_MESSAGE)
-        # Einzelne Dateien/Ordner nicht lesbar (meist fehlende Rechte, oder zwischen `find` und Scan verschwunden), der Rest ist sauber.
-        # Die Meldungen bleiben in `errors` sichtbar.
+        # Einzelne Dateien/Ordner nicht lesbar (meist fehlende Rechte, oder zwischen `find` und Scan verschwunden), der
+        # Rest ist sauber; die Meldungen bleiben in `errors` sichtbar.
         if incomplete:
             return ScanResult(status="error", files_scanned=files, errors=errors, error=incomplete,
                               unreliable=True, skipped=skipped)
@@ -799,15 +757,15 @@ def parse_scan_output(
 
 
 STATUS_COMMAND = (
-    # Die Abfrage läuft ohne root. Debian und Raspberry Pi OS legen Lynis nach /usr/sbin, das ein normaler Benutzer (auch per SSH) nicht
-    # im Suchpfad hat: Ohne diese Zeile gälte Lynis nach der Installation weiter als "nicht installiert".
+    # Die Abfrage läuft ohne root. Debian und Raspberry Pi OS legen Lynis nach /usr/sbin, das ein normaler Benutzer
+    # nicht im Suchpfad hat: Ohne diese Zeile gälte Lynis nach der Installation weiter als "nicht installiert".
     "PATH=\"$PATH:/usr/local/sbin:/usr/sbin:/sbin\"; "
     "echo @@clam; (clamscan --version 2>/dev/null || echo none); "
-    # Kein `|| echo unknown`: Bei einem gestoppten Dienst gibt systemctl "inactive" mit rc 3 aus, dahinter stünde sonst noch "unknown",
-    # und "aus" würde nie erkannt.
+    # Kein `|| echo unknown`: Bei einem gestoppten Dienst gibt systemctl "inactive" mit rc 3 aus, dahinter stünde sonst
+    # noch "unknown", und "aus" würde nie erkannt.
     "echo @@fresh; (systemctl is-active clamav-freshclam 2>/dev/null; true); "
-    # `lynis --version` endet sofort; `lynis show version` legt erst den Bericht neu an (und räumt die PID-Datei eines laufenden
-    # Audits weg).
+    # `lynis --version` endet sofort; `lynis show version` legt erst den Bericht neu an (und räumt die PID-Datei eines
+    # laufenden Audits weg).
     "echo @@lynis; (lynis --version 2>/dev/null || echo none); "
     f"echo @@quarantine; (ls -1 {QUARANTINE_DIR} 2>/dev/null | wc -l); "
     "echo @@os; (. /etc/os-release 2>/dev/null && echo \"$ID\"); echo @@end"
@@ -875,24 +833,18 @@ def quarantine_command(path: str, quarantine_name: str) -> str:
     """Verschiebt die Datei in den Tresor, merkt sich die Rechte (Ausgabe) und macht sie unlesbar und unausführbar.
 
     Bricht ab, wenn die Datei nicht (mehr) existiert, ein Link im Weg ist oder die Datei weitere Hardlinks hat."""
-    # Symbolischen Links wird nie gefolgt: `[ -f ]` und `chmod` folgen ihnen, `mv` verschiebt nur den Link; als root träfe `chmod
-    # 000` sonst das Linkziel (z. B. /etc/shadow). Ebenso darf kein Ordner im Pfad inzwischen ein Link sein (sonst wanderte die
-    # echte /etc/shadow in den Tresor). Darum erst in den Ordner wechseln (`cd -P`, danach ändert ein Tausch des Ordners nichts
-    # mehr), dort nur mit dem Dateinamen arbeiten und nach dem `mv` noch einmal prüfen (Tausch zwischen Prüfung und `mv`; im
-    # Tresor, nur für root, kann niemand mehr tauschen). Hardlinks: `chmod` ändert den Inode, und ein Inode kann mehrere Namen
-    # haben. Hängt ein Angreifer im Rennen zwischen Prüfung und `mv` an den Namen der Datei einen Hardlink auf eine Systemdatei
-    # (/etc/shadow, gleiches Dateisystem), landet beim `mv` nur ein weiterer Name dieser Datei im Tresor, und `chmod 000` machte
-    # die Systemdatei unlesbar. Darum muss die Datei im Tresor genau einen Namen haben, sonst gibt es kein `chmod`: Der
-    # Tresor-Name wird wieder entfernt (`rm` löst nur diesen Namen, die Datei bleibt unter ihren anderen) und der Befehl endet mit
-    # Fehler. Die Prüfung vor dem `mv` fängt nur den harmlosen Fall ab (es wird nichts angefasst); entscheidend ist die danach,
-    # denn im Tresor kann nur root noch etwas ändern. Eine Datei mit echten Hardlinks kommt deshalb nie in die Quarantäne (sie
-    # bekommt eine Meldung statt eines stillen Fehlschlags).
+    # Symbolischen Links wird nie gefolgt: als root träfe `chmod 000` sonst das Linkziel (z. B. /etc/shadow); ebenso
+    # darf kein Ordner im Pfad ein Link sein. Darum `cd -P` in den Ordner (ein späterer Tausch ändert nichts), dort nur
+    # mit dem Dateinamen arbeiten und nach dem `mv` erneut prüfen (im Tresor kann nur root tauschen).
     parent, _, name = path.rpartition("/")
     if not path.startswith("/") or name in ("", ".", ".."):
         raise ValueError("Ungültiger Dateipfad.")
     parent = parent or "/"
     here = _q("./" + name)
     target = _q(f"{QUARANTINE_DIR}/{quarantine_name}")
+    # Hardlinks: `chmod` ändert den Inode für alle Namen; ein zwischen Prüfung und `mv` angehängter Hardlink auf eine
+    # Systemdatei machte sie mit `chmod 000` unlesbar. Hat die Datei im Tresor mehr als einen Namen, wird nur der
+    # Tresor-Name entfernt und der Befehl scheitert sichtbar; entscheidend ist die Prüfung nach dem `mv`.
     return (
         f"set -e; cd -P {_q(parent)} 2>/dev/null || {{ echo 'Datei nicht mehr vorhanden'; exit 3; }}; "
         f"[ \"$(pwd -P)\" = {_q(parent)} ] || {{ echo {_q(PATH_LINK_REFUSED)}; exit 5; }}; "
@@ -914,36 +866,18 @@ RESTORE_STAGE_FAILED = ("Im Ursprungsordner ließ sich kein geschützter Zwische
                         "Laufwerk ohne Dateirechte oder in einem schreibgeschützten Ordner) oder er wurde ausgetauscht – "
                         "aus Sicherheitsgründen nicht wiederhergestellt.")
 RESTORE_STUCK = "Die Datei ließ sich weder zurücklegen noch in die Quarantäne zurückholen. Sie liegt nur für root lesbar hier:"
-# Zwischenordner im Ursprungsordner (`mktemp -d`: neu, Rechte 700, gehört root; in einem Ordner mit gesetztem Gruppen-Bit erbt er es und
-# zeigt 2700, das ist derselbe Ordner, nur für root).
+# Zwischenordner im Ursprungsordner (`mktemp -d`: neu, Rechte 700, gehört root). Mit gesetztem Gruppen-Bit erbt er es
+# und zeigt 2700: Das Bit gibt niemandem Zugriff, die Prüfung lässt es zu.
 RESTORE_STAGE_TEMPLATE = "./.nodvard-wiederherstellen.XXXXXX"
 
 
 def restore_command(quarantine_path: str, original_path: str, mode: str | None) -> str:
     """Zurück an den Ursprungsort, wie beim Verschieben nie über einen Ordner, der inzwischen eine Verknüpfung ist.
 
-    Als root, mit Besitzer und Rechten der Datei: Eine untergeschobene Verknüpfung legte sie sonst z. B. in /etc/profile.d ab."""
-    # Der Ursprungsordner gehört oft einem normalen Benutzer. Er kann dort jederzeit `./name` anlegen, auch zwischen jeder Prüfung
-    # und dem `mv`. Liegt die Quarantäne auf einem anderen Dateisystem, ist `mv` ein Kopieren, und wie sicher das ist, hängt vom
-    # Programm ab: GNU legt mit O_EXCL an und setzt Rechte über den offenen Dateideskriptor, BusyBox setzt Rechte und Zeiten über
-    # den Pfad, uutils vor 0.10 (Ubuntu 26.04 ohne Updates) folgt beim Anlegen einer Verknüpfung. Darum zwei Schritte:
-    # 1. Die Datei kommt in einen frischen Zwischenordner im Ursprungsordner (`mktemp -d`, gehört root, Rechte 700). Nach `cd -P`
-    #    hinein wird geprüft, dass es wirklich dieser Ordner ist (Pfad, Besitzer, Rechte); darin kann niemand außer root etwas
-    #    anlegen, das Kopieren ist dort mit jedem `mv` sicher. Hat der Ursprungsordner das Gruppen-Bit gesetzt (setgid, z. B.
-    #    Gruppen-Freigaben, /usr/local/*, /var/mail), erbt der Zwischenordner es, und `stat` meldet 2700 statt 700; auch das gilt
-    #    als in Ordnung (das Bit gibt niemandem Zugriff). Scheitert eine der Prüfungen, wird der leere Zwischenordner wieder
-    #    entfernt (`cd` zurück in den Ursprungsordner, `rmdir`; ein vom Benutzer untergeschobener Ordner mit diesem Namen
-    #    verschwindet, falls leer, eine untergeschobene Verknüpfung bleibt stehen, `rmdir` löst keine auf), damit nicht bei jedem
-    #    Versuch ein neuer liegen bleibt.
-    # 2. Von dort ein Umbenennen im selben Ordner, also auf demselben Dateisystem (`rename`, nie Kopieren): `mv -T -n ./name
-    #    ../name`. `rename` folgt am letzten Pfadteil keiner Verknüpfung, `-T` behandelt das Ziel nie als Ordner, `-n`
-    #    überschreibt nichts. `..` ist der Ursprungsordner: Einen root-Ordner ohne Schreibrecht kann der Benutzer nicht in einen
-    #    anderen Ordner verschieben.
-    # Ältere mv und BusyBox melden bei `-n` Erfolg, auch wenn sie nichts verschoben haben, und manche kennen die Optionen nicht:
-    # Entscheidend ist deshalb immer, ob die Quelle danach weg ist. Klappt Schritt 2 nicht, wandert die Datei zurück in die
-    # Quarantäne (wieder `000`). Die Rechte werden vorher an der Datei in der Quarantäne gesetzt (dort kann niemand tauschen);
-    # `mv` behält sie. Der Ursprungsordner wird nie angelegt (`mkdir -p` folgte Verknüpfungen in Zwischenordnern): Fehlt er,
-    # bricht der Befehl ab.
+    Als root mit Besitzer und Rechten der Datei; ein untergeschobener Link legte sie sonst z. B. in /etc/profile.d ab."""
+    # Der Ursprungsordner gehört oft einem normalen Benutzer, der dort jederzeit `./name` anlegen kann. Auf einem
+    # anderen Dateisystem ist `mv` ein Kopieren, dessen Sicherheit vom Programm abhängt (BusyBox setzt Rechte über den
+    # Pfad, uutils vor 0.10 folgt Verknüpfungen beim Anlegen). Darum zwei Schritte.
     safe_mode = mode if mode and re.fullmatch(r"[0-7]{3,4}", mode) else "644"
     parent, _, name = original_path.rpartition("/")
     if not original_path.startswith("/") or name in ("", ".", ".."):
@@ -952,12 +886,18 @@ def restore_command(quarantine_path: str, original_path: str, mode: str | None) 
     here = _q("./" + name)
     up = _q("../" + name)
     source = _q(quarantine_path)
+    # Schritt 1: Die Datei kommt in einen frischen Zwischenordner im Ursprungsordner (`mktemp -d`); nach `cd -P` hinein
+    # werden Pfad, Besitzer und Rechte geprüft, darin kann außer root niemand etwas anlegen. Scheitert eine Prüfung,
+    # wird der leere Zwischenordner entfernt (`rmdir` löst keine Verknüpfung auf).
     stage = _q("" if parent == "/" else parent) + '/"${T#./}"'
     leave = 'cd .. && rmdir "$T" 2>/dev/null || true'
-    # Nach gescheiterter Prüfung steht die Shell evtl. schon im Zwischenordner (oder, bei einem untergeschobenen Link, ganz woanders):
-    # zurück in den Ursprungsordner, dort nur den eigenen (leeren) Zwischenordner entfernen.
+    # Nach gescheiterter Prüfung steht die Shell evtl. schon im Zwischenordner (oder, bei einem untergeschobenen Link,
+    # ganz woanders): zurück in den Ursprungsordner, dort nur den eigenen (leeren) Zwischenordner entfernen.
     drop = f'cd {_q(parent)} 2>/dev/null && rmdir "$T" 2>/dev/null || true'
     stage_failed = f"{{ {drop}; echo {_q(RESTORE_STAGE_FAILED)}; exit 5; }}"
+    # Schritt 2: Von dort ein Umbenennen im selben Ordner (`rename`, nie Kopieren): `mv -T -n ./name ../name`. `rename`
+    # folgt am letzten Pfadteil keiner Verknüpfung, `-T` behandelt das Ziel nie als Ordner, `-n` überschreibt nichts;
+    # einen root-Ordner ohne Schreibrecht kann der Benutzer nicht umhängen.
     return (
         f"set -e; [ -f {source} ] || {{ echo 'Nicht mehr in der Quarantäne'; exit 3; }}; "
         f"cd -P {_q(parent)} 2>/dev/null || {{ echo {_q(RESTORE_FOLDER_MISSING)}; exit 3; }}; "
@@ -967,6 +907,9 @@ def restore_command(quarantine_path: str, original_path: str, mode: str | None) 
         f"cd -P \"$T\" 2>/dev/null && [ \"$(pwd -P)\" = {stage} ] "
         f"&& case \"$(stat -c %u:%a .)\" in \"$(id -u):700\"|\"$(id -u):2700\") true;; *) false;; esac "
         f"|| {stage_failed}; "
+        # Ältere mv und BusyBox melden bei `-n` Erfolg, auch wenn nichts verschoben wurde: Entscheidend ist, ob die
+        # Quelle danach weg ist; klappt Schritt 2 nicht, geht die Datei zurück in die Quarantäne (wieder `000`). Rechte
+        # vorher dort setzen (`mv` behält sie), den Ursprungsordner nie anlegen (`mkdir -p` folgte Verknüpfungen).
         f"chmod {safe_mode} {source}; mv -T -n {source} {here} 2>/dev/null || true; "
         f"if [ -e {source} ] || [ -L {source} ]; then chmod 000 {source}; {leave}; echo {_q(RESTORE_NOT_MOVED)}; exit 4; fi; "
         f"mv -T -n {here} {up} 2>/dev/null || true; "
@@ -1008,13 +951,9 @@ LYNIS_DETAIL_LIMIT = 200
 
 
 def _clean_lynis(entry: str) -> str:
-    # "AUTH-9286|Configure maximum password age|-|-|" -> "AUTH-9286: Configure maximum password age"
-    # "SSH-7408|Consider hardening SSH configuration|MaxAuthTries (set 6 to 3)|-|"
-    #   -> "SSH-7408: Consider hardening SSH configuration (MaxAuthTries (set 6 to 3))"
-    # Die Angabe im dritten Feld sagt, was genau gemeint ist; ohne sie wären mehrere SSH-Hinweise wortgleich.
-    # Das Format ist "ID|Text|Angabe|Lösung|". Die Angabe kann selbst "|" enthalten (Lynis maskiert das nicht), z. B.
-    # "PermitRootLogin (set YES to (FORCED-COMMANDS-ONLY|NO|PROHIBIT-PASSWORD|WITHOUT-PASSWORD))": dann ist sie alles
-    # zwischen dem Text und der Lösung.
+    # Format "ID|Text|Angabe|Lösung|", z. B. "AUTH-9286|Configure maximum password age|-|-|" -> "AUTH-9286: Configure
+    # maximum password age". Die Angabe (3. Feld) kommt dazu, sonst wären mehrere SSH-Hinweise wortgleich; sie kann
+    # selbst "|" enthalten (Lynis maskiert das nicht), dann ist sie alles zwischen Text und Lösung.
     fields = entry.split("|")
     if len(fields) >= 2 and fields[0] and fields[1] and fields[1] != "-":
         middle = fields[2:-2] if len(fields) >= 5 and fields[-1] == "" else fields[2:3]
@@ -1082,8 +1021,8 @@ INSTALL_COMMANDS = {
         "DEBIAN_FRONTEND=noninteractive apt-get update -q && DEBIAN_FRONTEND=noninteractive apt-get install -y -q unattended-upgrades && "
         "printf 'APT::Periodic::Update-Package-Lists \"1\";\\nAPT::Periodic::Unattended-Upgrade \"1\";\\n' > /etc/apt/apt.conf.d/20auto-upgrades && echo ok"
     ),
-    # Danach bleibt das automatische Signatur-Update eingeschaltet (`enable --now`): Ein nur gestarteter Dienst ist nach dem nächsten
-    # Neustart wieder aus.
+    # Danach bleibt das automatische Signatur-Update eingeschaltet (`enable --now`): Ein nur gestarteter Dienst ist nach
+    # dem nächsten Neustart wieder aus.
     "signatures": (
         "systemctl stop clamav-freshclam 2>/dev/null; freshclam --quiet; R=$?; "
         "systemctl enable --now clamav-freshclam 2>/dev/null; exit $R"

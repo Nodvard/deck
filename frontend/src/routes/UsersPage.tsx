@@ -39,7 +39,7 @@ interface UserRow {
 
 const ROLE_HINTS: Record<string, string> = {
   admin: "Volle Verwaltung inkl. Benutzer und Einstellungen",
-  operator: "Server bedienen, Aktionen bis mittleres Risiko freigeben",
+  operator: "Server bedienen (Befehle ausführen; hat das Dashboard-Konto dort eine sudo-Regel, sind das volle Rechte), Aktionen bis mittleres Risiko freigeben",
   viewer: "Nur ansehen, nichts ändern",
 };
 

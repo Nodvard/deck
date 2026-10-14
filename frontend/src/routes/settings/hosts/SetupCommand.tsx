@@ -1,13 +1,7 @@
 /**
- * Der Einrichtungsbefehl: EIN Befehl, den man auf dem Server einfuegt. Er legt (falls noetig)
- * den Benutzer an, traegt den oeffentlichen Schluessel ein und richtet auf Wunsch die Gruppe
- * `docker` und sudo ohne Passwort ein. Was davon noetig ist, melden die Erweiterungen
- * (`GET /hosts/{id}/requirements`); die Haken sind danach vorbelegt.
- *
- * Zwei Wege: den Befehl selbst einfuegen, oder „Mit Passwort einrichten“ -- dann fuehrt Nodvard Deck genau
- * diesen Befehl mit einem einmaligen Passwort selbst aus (`PasswordSetup`). Die Haken gelten fuer beide.
- *
- * Der Befehl enthaelt nur den OEFFENTLICHEN Schluessel -- der private verlaesst den Tresor nie.
+ * Der Einrichtungsbefehl, den man auf dem Server einfügt: Benutzer anlegen, öffentlichen Schlüssel eintragen (der
+ * private verlässt den Tresor nie), auf Wunsch Gruppe `docker` und sudo ohne Passwort. Die Erweiterungen belegen die
+ * Haken vor. „Mit Passwort einrichten“ führt denselben Befehl selbst aus (`PasswordSetup`).
  */
 import { useMemo, useRef, useState } from "react";
 
@@ -120,8 +114,8 @@ export function SetupCommand({
       ) : (
         <>
           {way === "password" ? (
-            // Bleibt stehen, waehrend der Befehl nach einem Haken neu geladen wird (sonst waeren die Eingaben weg).
-            // Die Haken gelten hier genauso; das Backend baut daraus denselben Befehl wie oben.
+            // Bleibt stehen, während der Befehl nach einem Haken neu geladen wird (sonst wären die Eingaben weg). Die
+            // Haken gelten hier genauso; das Backend baut daraus denselben Befehl wie oben.
             <PasswordSetup
               host={host} credential={credential} sudo={sudo} groups={chosenGroups} ready={ready}
               knownNotes={setup.data?.notes ?? []} onChecked={onChecked}
@@ -157,7 +151,7 @@ export function SetupCommand({
                 <summary className="cursor-pointer text-sm text-white/70">Was macht der Befehl?</summary>
                 <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-white/70">{setup.data.script}</pre>
               </details>
-              {/* „praktisch alles“ und „enger begrenzte sudo-Regel“ stehen schon oben bei den Haken: nicht doppelt zeigen. */}
+              {/* Hinweise zu root/sudo stehen schon oben bei den Haken: nicht doppelt zeigen. */}
               {setup.data.notes.filter((n) => !n.includes("praktisch") && !n.includes("enger begrenzte")).map((n) => (
                 <p key={n} className="text-xs text-white/55">{n}</p>
               ))}

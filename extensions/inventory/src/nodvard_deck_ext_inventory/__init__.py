@@ -763,8 +763,7 @@ class Extension(NodvardExtension):
                     "meta": {},
                 }
 
-        # Mit Berechtigung einhängen: ohne wäre der Router öffentlich (siehe `ApiHandle.include_router()`), und die
-        # Namen wären ohne Login lesbar.
+        # Ohne Berechtigung wäre der Router öffentlich (`ApiHandle.include_router()`), die Namen also ohne Login lesbar.
         ctx.api.include_router(widget_router, permission="inventory.read")
 
         ctx.ui.register_page(
@@ -799,10 +798,9 @@ class Extension(NodvardExtension):
             )
         )
 
-        # Andere Erweiterungen (die Dokumente) fragen nach, ob Gegenstände, auf die sie verweisen, noch da sind: etwa
-        # wenn sie aus waren, während hier etwas gelöscht wurde. Für jede Kennung, die es nicht mehr gibt, kommt
-        # dieselbe Meldung wie beim Löschen. Bewusst nur Kennungen, keine Namen: Ereignisse mit `inventory.` gehen
-        # wie `inventory.item_deleted` an alle Angemeldeten (es gibt kein eigenes Recht für dieses Präfix).
+        # Die Dokumente fragen nach, ob Gegenstände, auf die sie verweisen, noch da sind (etwa nachdem sie aus waren); für
+        # jede fehlende Kennung kommt dieselbe Meldung wie beim Löschen. Nur Kennungen, keine Namen: Ereignisse mit
+        # `inventory.` gehen an alle Angemeldeten (kein eigenes Recht für dieses Präfix).
         async def _on_items_check(event: Event) -> None:
             raw = event.payload.get("item_ids")
             if not isinstance(raw, list):

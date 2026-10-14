@@ -166,9 +166,10 @@ def forget_seen_key(host_id: str) -> None:
 
 
 def consume_seen_key(host: Host, port: int, key_type: str, fingerprint: str) -> bool:
-    """`True` (und der Merkzettel ist weg), wenn `key_type`/`fingerprint` der Schlüssel der letzten Prüfung dieses Servers sind,
-    höchstens 15 Minuten her, bei unveränderter Adresse und unverändertem `port` (Standard-Zugang, sonst `DEFAULT_SSH_PORT`).
-    Ein Merkzettel gilt nur einmal; kein `await` darin, damit Prüfen und Verbrauchen nicht unterbrochen werden."""
+    """`True` (und der Merkzettel ist weg), wenn `key_type`/`fingerprint` der Schlüssel der letzten Prüfung dieses Servers
+    sind, höchstens 15 Minuten her, bei unveränderter Adresse und unverändertem `port` (Standard-Zugang, sonst
+    `DEFAULT_SSH_PORT`)."""
+    # Ein Merkzettel gilt nur einmal; kein `await` darin, damit Prüfen und Verbrauchen nicht unterbrochen werden.
     seen = _seen_keys.get(host.id)
     if seen is None:
         return False
@@ -337,10 +338,9 @@ async def _run(
     else:
         if credential is not None:
             _logins_ok.pop(credential.id, None)
-            # Nur wenn die Anmeldung selbst scheiterte: Ein Server, der gerade nicht antwortet, hat
-            # damit nicht widerrufen, dass sie bisher klappte.
-            # Und nur der Beleg dieses Zugangs: scheitert ein anderer als der Standard (etwa ein neuer, dessen
-            # Einrichtungsbefehl noch nicht gelaufen ist), bleibt der Beleg des funktionierenden stehen.
+            # Nur wenn die Anmeldung selbst scheiterte (ein Server, der nicht antwortet, widerruft nicht, dass sie
+            # bisher klappte), und nur der Beleg dieses Zugangs: Scheitert ein neuer Zugang, dessen Einrichtungsbefehl
+            # noch nicht lief, bleibt der Beleg des funktionierenden stehen.
             if not state.unreachable and not state.key_problem and any(i.id == "login" and i.status == "fail" for i in state.items):
                 hosts_service.clear_login_ok(host, credential.id)
         if state.host_key is not None and state.host_key.status == "changed":

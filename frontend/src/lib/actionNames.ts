@@ -1,8 +1,7 @@
 /**
- * Aktionen mit Namen statt mit Kennungen anzeigen: „Nodvard Shield · Updates einspielen“ statt
- * „shield/<Aktionsart>“. Das Backend liefert beides mit (`ActionOut.ext_name`, `ActionOut.action_label`),
- * solange die Erweiterung installiert und die Aktionsart geladen ist. Fehlt ein Teil (Erweiterung entfernt oder
- * ausgeschaltet, älteres Backend), steht an seiner Stelle die rohe Kennung.
+ * Aktionen mit Namen statt mit Kennungen anzeigen: „Nodvard Shield · Updates einspielen“ statt „shield/<Aktionsart>“.
+ * Das Backend liefert beides mit (`ActionOut.ext_name`, `ActionOut.action_label`), solange die Erweiterung
+ * installiert und die Aktionsart geladen ist; sonst steht die rohe Kennung da.
  */
 export interface ActionNameSource {
   ext_id: string;
@@ -18,13 +17,17 @@ export function actionLabel(a: ActionNameSource): string {
   return a.action_label?.trim() || a.action_type;
 }
 
-/** `ext_id` der Aktionen, die jemand auf der Server-Seite startet (`POST /hosts/{id}/actions/{type}`): Sie kommen
- * von Nodvard Deck selbst, nicht von einer Erweiterung, darum gibt es zu ihnen keinen `ext_name`. */
+/**
+ * `ext_id` der Aktionen, die jemand auf der Server-Seite startet (`POST /hosts/{id}/actions/{type}`): Sie kommen von
+ * Nodvard Deck selbst, nicht von einer Erweiterung, darum gibt es zu ihnen keinen `ext_name`.
+ */
 const CORE_EXT_ID = "core";
 
-/** Erweiterung und Aktion für Listen: „Nodvard Shield · Updates einspielen“. Ist beides unbekannt, bleibt es bei
- * der Schreibweise mit den rohen Kennungen: `shield/<Aktionsart>`. Befehle von der Server-Seite heißen nur
- * nach der Aktion („Shell-Befehl ausführen“), die Kennung `core` ist kein Name. */
+/**
+ * Erweiterung und Aktion für Listen: „Nodvard Shield · Updates einspielen“. Ist beides unbekannt, bleibt es bei den
+ * rohen Kennungen: `shield/<Aktionsart>`. Befehle von der Server-Seite heißen nur nach der Aktion („Shell-Befehl
+ * ausführen“), die Kennung `core` ist kein Name.
+ */
 export function actionTitle(a: ActionNameSource): string {
   const extension = a.ext_name?.trim();
   const label = a.action_label?.trim();

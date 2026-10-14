@@ -1,10 +1,7 @@
 /**
- * Zwei-Faktor einrichten: QR-Code zum Abfotografieren, der Schluessel als Text fuer den Fall, dass
- * das Scannen nicht klappt, und das Feld fuer den ersten Code aus der App. Gemeinsam genutzt von
- * Mein Konto (`TotpCard`) und dem Einrichtungsassistenten. Der QR-Code entsteht im Browser
- * (components/QrCode.tsx), nichts geht an einen fremden Dienst.
- *
- * Die Texte sind bewusst ohne Anrede formuliert (die Oberfläche duzt sonst überall).
+ * Zwei-Faktor einrichten: QR-Code zum Abfotografieren, der Schlüssel als Text für den Fall, dass das Scannen nicht
+ * klappt, und das Feld für den ersten Code. Der QR-Code entsteht im Browser (components/QrCode.tsx), nichts geht an
+ * einen fremden Dienst. Die Texte sind bewusst ohne Anrede formuliert (die Oberfläche duzt sonst überall).
  */
 import { useState } from "react";
 

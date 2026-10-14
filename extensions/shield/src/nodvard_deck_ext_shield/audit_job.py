@@ -120,7 +120,7 @@ def lynis_command(
 
 
 def poll_command(run_id: str, *, base_dir: str = AUDIT_DIR) -> str:
-    """Stand eines Laufs (als root) im Format von `detached.parse_poll`: `@@running`, `@@rc=<n>`, `@@lost` oder `@@unknown`."""
+    """Stand eines Laufs (als root) im Format von `detached.parse_poll`: `@@running`, `@@rc=<n>`, `@@lost`, `@@unknown`."""
     dt.paths(run_id, base_dir, kind=AUDITS)
     d = _checked_path(base_dir)
     alive = dt.running_test(run_id, base_dir, kind=AUDITS)

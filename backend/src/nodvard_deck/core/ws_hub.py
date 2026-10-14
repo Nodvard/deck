@@ -36,8 +36,8 @@ class WsHub:
     def connect(self, socket: _SendsJson, *, user_id: str, permissions: list[str] | None = None) -> int:
         # `permissions` ist ein Schnappschuss aus `services.auth.user_permissions()`, bewusst nicht aus dem JWT-Claim:
         # HTTP leitet Rechte bei jedem Request frisch aus der Datenbank ab, WS soll keine zweite Quelle der Wahrheit
-        # haben. `api/v1/ws.py` frischt ihn alle 30 s auf (`set_permissions`); ein deaktiviertes oder abgemeldetes Konto
-        # verliert die Verbindung ganz.
+        # haben. `api/v1/ws.py` frischt ihn alle 30 s auf (`set_permissions`); deaktivierte oder abgemeldete Konten
+        # verlieren die Verbindung.
         conn_id = self._next_id
         self._next_id += 1
         self._connections[conn_id] = _Connection(socket=socket, user_id=user_id, permissions=list(permissions or []))
@@ -47,8 +47,7 @@ class WsHub:
         self._connections.pop(conn_id, None)
 
     def set_permissions(self, conn_id: int, permissions: list[str]) -> None:
-        """Ersetzt den Berechtigungs-Schnappschuss einer offenen Verbindung (die Rolle des Nutzers hat sich
-        geändert)."""
+        """Ersetzt den Berechtigungs-Schnappschuss einer offenen Verbindung (die Rolle des Nutzers änderte sich)."""
         conn = self._connections.get(conn_id)
         if conn is not None:
             conn.permissions = list(permissions)

@@ -1,8 +1,6 @@
 /**
- * Sicherungen (Einstellungen -> System): Typen zu GET /system/backups und kleine Helfer.
- *
- * Passwoerter laufen NIE ueber react-query (kein Query-Key, kein Mutations-Cache): die Karte
- * ruft `api.put/post/delete` direkt und leert die Felder danach.
+ * Sicherungen (Einstellungen → System): Typen zu GET /system/backups und kleine Helfer. Passwörter laufen nie über
+ * react-query (Query-Key, Mutations-Cache): Die Karte ruft `api.put/post/delete` direkt und leert die Felder danach.
  */
 import { api } from "./api";
 
@@ -49,7 +47,10 @@ export interface BackupOverview {
     name: string | null;
     size: number | null;
     error: string | null;
-    /** Hinweise zu einem Lauf, der trotzdem gelang (z. B. nicht gesicherte Verknüpfungen). Ältere Einträge: fehlt. */
+    /**
+     * Hinweise zu einem Lauf, der trotzdem gelang (z. B. nicht gesicherte Verknüpfungen); bei
+     * älteren Einträgen fehlt das Feld.
+     */
     warnings?: string[];
   } | null;
   running: { kind: string; started_at: string } | null;
@@ -82,8 +83,10 @@ function normalizeDir(dir: string, defaultDir: string): string {
   return trimmed.length > 1 ? trimmed.replace(/\/+$/, "") : trimmed;
 }
 
-/** Änderungen an den Einstellungen, die Sicherungen gefährden und darum das Anmeldepasswort
- *  brauchen (wie `protected_changes` im Backend): weniger behalten, ausschalten, anderer Ordner. */
+/**
+ * Änderungen an den Einstellungen, die Sicherungen gefährden und darum das Anmeldepasswort brauchen (wie
+ * `protected_changes` im Backend): weniger behalten, ausschalten, anderer Ordner.
+ */
 export function protectedConfigChanges(
   old: Pick<BackupConfig, "enabled" | "keep" | "dir">,
   next: { enabled: boolean; keep: number; dir: string },
@@ -96,7 +99,7 @@ export function protectedConfigChanges(
   return reasons;
 }
 
-/** Fehlertext fuer ein neues Passwort mit Wiederholung, `null` = in Ordnung. */
+/** Fehlertext für ein neues Passwort mit Wiederholung, `null` = in Ordnung. */
 export function newPasswordProblem(password: string, repeat: string, min = PASSWORD_MIN_LENGTH): string | null {
   if (password.length < min) return `Mindestens ${min} Zeichen.`;
   if (password !== repeat) return "Die beiden Eingaben stimmen nicht überein.";
@@ -123,8 +126,10 @@ export function formatWhen(iso: string | null | undefined): string {
   return date.toLocaleString("de-DE", { dateStyle: "medium", timeStyle: "short" });
 }
 
-/** Normaler Browser-Download (die Datei landet nie komplett im Speicher der Seite). Als Objekt,
- *  damit Tests es ersetzen koennen. */
+/**
+ * Normaler Browser-Download (die Datei landet nie komplett im Speicher der Seite). Als Objekt,
+ * damit Tests es ersetzen können.
+ */
 export const browserDownload = {
   start(url: string, filename?: string): void {
     const link = document.createElement("a");
@@ -137,7 +142,7 @@ export const browserDownload = {
   },
 };
 
-/** Text der Datei "Wiederherstellungsschluessel speichern". */
+/** Text der Datei "Wiederherstellungsschlüssel speichern". */
 export function recoveryKeyFile(key: KeyResult, productName = "Nodvard Deck"): string {
   return [
     `${productName} – Wiederherstellungsschlüssel für Sicherungen`,

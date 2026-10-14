@@ -1,24 +1,14 @@
 /**
- * Zugriff der Erweiterungsseiten auf die Kern-Shell (docs/02-EXTENSION-API.md §5).
- *
- * Das globale Objekt der Shell heisst `window.__nodvardDeck`, der alte Name `window.__nodvardDeck`
- * gilt weiter (dasselbe Objekt). Seiten und Kit greifen nicht auf einen der Namen zu, sondern
- * ueber `deck()` -- das liest `__nodvardDeck ?? __lattice`. Das ist noetig, weil ein Tab, der vor
- * einem Update geladen wurde, neue Bundles in seinen alten Kern laedt (nur `__lattice`), und
- * weil Fremd-Erweiterungen mit aelterem Kit an einem neuen Kern laufen.
- *
- * Dasselbe gilt fuer die Ereignisse (`nodvard-deck:navigate`, alt `lattice:navigate`): der Kern
- * feuert beide, das Kit hoert auf genau eines (`deckEventName`, siehe location.ts).
- *
- * Keine React-Hooks in dieser Datei (siehe AuthImage.tsx): so aendern sich nur die Bundles, die
- * sie wirklich einbinden.
+ * Zugriff der Erweiterungsseiten auf die Kern-Shell (docs/02-EXTENSION-API.md): `deck()` liest `__nodvardDeck` oder den
+ * alten Namen `__lattice` (dasselbe Objekt), weil ein vor einem Update geöffneter Tab neue Bundles in seinen alten Kern
+ * lädt und Fremd-Erweiterungen mit älterem Kit an einem neuen Kern laufen. Keine React-Hooks hier (siehe AuthImage.tsx).
  */
+// Ereignisse ebenso: Der Kern feuert beide Namen, das Kit hört auf genau einen (`deckEventName`, siehe location.ts).
 export { deck, deckEventName, findDeck } from "../../../../frontend/src/lib/deckGlobal";
 
 /**
- * CSS-Klassen fuer das Ziel eines Sprungs von der Server-Seite (`?host=`). `nodvard-deck-focus` ist
- * der neue Name, `lattice-focus` der alte (Teil des Erweiterungs-Vertrags). Der Kern kennt seit
- * diesem Update beide in EINER Regel (frontend/src/styles/index.css); den alten setzen wir
- * zusaetzlich, damit die Markierung auch in einem Tab mit aelterem Kern (alte CSS) erscheint.
+ * CSS-Klassen für das Ziel eines Sprungs von der Server-Seite (`?host=`): `nodvard-deck-focus` neu, `lattice-focus` alt
+ * (Teil des Erweiterungs-Vertrags). Der Kern kennt beide in einer Regel; den alten setzt das Kit zusätzlich, damit die
+ * Markierung auch in einem Tab mit älterem Kern erscheint.
  */
 export const FOCUS_CLASS = "nodvard-deck-focus lattice-focus";

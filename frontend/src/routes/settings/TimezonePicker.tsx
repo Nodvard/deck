@@ -1,8 +1,7 @@
 /**
- * Zeitzone waehlen: Suche, Liste, Uhrzeit dort und der Vorschlag "Zone dieses Geraets".
- * Gemeinsam genutzt von Einstellungen -> System (`TimeAndLogCard`) und dem Einrichtungsassistenten.
- * Speichert nichts selbst -- der Aufrufer bekommt die Wahl ueber `onChange` und ruft
- * `PUT /settings/system.timezone` auf.
+ * Zeitzone wählen: Suche, Liste, Uhrzeit dort und der Vorschlag „Zone dieses Geräts“. Gemeinsam genutzt von
+ * Einstellungen → System (`TimeAndLogCard`) und dem Einrichtungsassistenten. Speichert nichts selbst: Der Aufrufer
+ * bekommt die Wahl über `onChange` und ruft `PUT /settings/system.timezone` auf.
  */
 import { Search } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -33,10 +32,9 @@ export function timezoneOptions(extra: string[] = []): string[] {
 }
 
 /**
- * Suche ohne Rücksicht auf Groß-/Kleinschreibung, Umlaute und Unterstriche (jedes Suchwort steht am
- * Anfang eines Wortes im Namen): "new york" findet
- * "America/New_York", und auch deutsche Namen gehen ("Wien", "Zürich"/"zuerich", "Großbritannien",
- * "Mitteleuropa", siehe timezoneNames.ts).
+ * Suche ohne Rücksicht auf Groß-/Kleinschreibung, Umlaute und Unterstriche (jedes Suchwort steht am Anfang eines
+ * Wortes im Namen): "new york" findet "America/New_York", auch deutsche Namen gehen ("Wien", "Zürich"/"zuerich",
+ * "Großbritannien", "Mitteleuropa", siehe timezoneNames.ts).
  */
 export function filterTimezones(zones: string[], query: string): string[] {
   const words = foldForSearch(query).split(/\s+/).filter(Boolean);
@@ -67,7 +65,7 @@ function timeIn(zone: string): string | null {
 export function TimezonePicker({
   value, savedZone, onChange,
 }: {
-  /** Aktuell gewaehlte Zone. */
+  /** Aktuell gewählte Zone. */
   value: string;
   /** Zone, die der Server gerade hat; weicht `value` davon ab, steht "nicht gespeichert" da. */
   savedZone: string;
@@ -75,7 +73,7 @@ export function TimezonePicker({
 }): JSX.Element {
   const [query, setQuery] = useState("");
   const zones = useMemo(() => timezoneOptions([savedZone, value]), [savedZone, value]);
-  // Ohne Suche steht die gewaehlte Zone ganz oben, sonst laege sie irgendwo in der langen Liste.
+  // Ohne Suche steht die gewählte Zone ganz oben, sonst läge sie irgendwo in der langen Liste.
   const matches = useMemo(() => {
     return query.trim() ? filterTimezones(zones, query) : orderTimezones(zones, value);
   }, [zones, query, value]);

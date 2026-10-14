@@ -1,6 +1,6 @@
-"""Schutz vor dem Fehlschluss „Hostname = Containername“: die KI schlägt `docker restart <Host>` vor, weil sie den Host für einen Container hält.
+"""Schutz vor dem Fehlschluss „Hostname = Containername“: die KI schlägt `docker restart <Host>` vor.
 
-Nicht im Kern, weil die Wortliste von den Servernamen der Installation abhängt (`scripts/check_core_purity.py` hält solche Listen heraus)."""
+Nicht im Kern: Die Wortliste hängt von den Servernamen der Installation ab (siehe `scripts/check_core_purity.py`)."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ _DOCKER_RESTART_RE = re.compile(r"\bdocker\s+restart\s+([A-Za-z0-9_.-]+)", re.IG
 def looks_like_host_not_container(command: str, *, forbidden_keywords: tuple[str, ...] | None = None) -> str | None:
     """Prüft, ob der Name in `docker restart <name>` wie ein Host-Name aussieht; andere Befehle haben keinen Containernamen.
 
-    Gibt den Namen zurück, wenn er ein verbotenes Schlüsselwort enthält, sonst `None`. Teilstring ohne Wortgrenzen: „pve1“ trifft „pve“, gewollt."""
+    Gibt den Namen bei einem verbotenen Schlüsselwort zurück, sonst `None` (Teilstring: „pve1“ trifft „pve“, gewollt)."""
     match = _DOCKER_RESTART_RE.search(command)
     if match is None:
         return None
@@ -40,13 +40,13 @@ _CONTAINER_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 def is_routine_restart(command: str, host_id: str, batch_targets: set[tuple[str, str]]) -> bool:
     """Ist `command` ein schlichter Neustart eines Containers, der in diesem Batch auf genau diesem Host als Vorfall vorkam?
 
-    Streng: getrimmt exakt `docker restart <name>`, ohne Flags, weitere Argumente und Shell-Zeichen. `batch_targets`: (Host-ID, Containername)-Paare."""
+    Streng: nur exakt `docker restart <name>`, ohne Flags und Shell-Zeichen. `batch_targets`: (Host-ID, Name)-Paare."""
     match = _PLAIN_RESTART_RE.fullmatch(command.strip())
     return match is not None and (host_id, match.group(1)) in batch_targets
 
 
 def plain_restart_name(command: str) -> str | None:
-    """Der Containername, wenn `command` ein schlichter `docker restart <name>` ist (siehe `is_routine_restart`), sonst `None`."""
+    """Der Containername, wenn `command` ein schlichter `docker restart <name>` ist (`is_routine_restart`), sonst `None`."""
     match = _PLAIN_RESTART_RE.fullmatch(command.strip())
     return match.group(1) if match else None
 
@@ -80,7 +80,7 @@ def resolve_restart_target(
     return hosts[0], name
 
 
-# Unsichtbare Zeichen (Richtung, Breite null, Unicode-Tags) schmuggeln sonst unsichtbaren Text ans Modell; Zeilenumbruch und Tab bleiben.
+# Unsichtbare Zeichen (Richtung, Breite null, Unicode-Tags) schmuggeln sonst Text ans Modell; Umbruch und Tab bleiben.
 _CONTROL_CHARS_RE = re.compile(
     r"[\x00-\x08\x0b-\x1f\x7f-\x9f\xad\u2028\u2029\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff"
     r"\U000e0000-\U000e007f]"
@@ -90,7 +90,7 @@ _CONTROL_CHARS_RE = re.compile(
 def sanitize_untrusted(text: str, max_len: int = 2000, *, keep_tail: bool = False) -> str:
     """Fremden Text (Container-Logs, KI-Vorschläge) für Prompt und Anzeige entschärfen: Steuerzeichen raus, Länge begrenzen.
 
-    Überlanger Text behält den Anfang (Marke `[gekürzt]` dahinter), mit `keep_tail=True` das Ende (Marke davor), richtig für Logs."""
+    Überlanger Text behält den Anfang (dahinter `[gekürzt]`), mit `keep_tail=True` das Ende (davor), richtig für Logs."""
     cleaned = _CONTROL_CHARS_RE.sub("", (text or "").replace("\r\n", "\n").replace("\r", "\n"))
     if len(cleaned) > max_len:
         if keep_tail:
@@ -103,7 +103,7 @@ def sanitize_untrusted(text: str, max_len: int = 2000, *, keep_tail: bool = Fals
 def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact: dict | None) -> bool:
     """Darf ein Neustart-Vorschlag für diesen Vorfall MITTEL statt HOCH sein? Streng, im Zweifel HOCH.
 
-    Nur ein echter Absturz laut Beendigungs-Fakten (`watcher.parse_exit_facts`); nie bei manuellem Stopp, pausiert, wieder aufgenommen oder wiederholt."""
+    Nur ein echter Absturz laut `watcher.parse_exit_facts`; nie bei manuellem Stopp, Pause, Wiederaufnahme, Wiederholung."""
     if not is_crash or resumed or attempts > 0 or fact is None:
         return False
     if fact.get("running"):  # läuft inzwischen wieder: der Neustart wäre unnötig
@@ -119,7 +119,7 @@ def restart_risk_eligible(*, is_crash: bool, resumed: bool, attempts: int, fact:
 
 
 class Cause(NamedTuple):
-    """Feste Einordnung eines Container-Vorfalls: kurze Bezeichnung und ein Satz; `key` ist die Art (Schlüssel in `incident_text.CAUSE_TEXTS`)."""
+    """Feste Einordnung eines Vorfalls: Bezeichnung und ein Satz; `key` ist die Art (`incident_text.CAUSE_TEXTS`)."""
 
     label: str
     sentence: str
@@ -143,7 +143,7 @@ _CRASH_SIGNAL_CODES = frozenset({132, 134, 135, 136, 139})
 
 
 def _is_signal(code: int) -> bool:
-    """Exit-Code 128 + Signal; Linux kennt höchstens 64 Signale, 193 bis 255 sind normale Fehlercodes (255 bei `exit(-1)`)."""
+    """Exit-Code 128 + Signal; Linux kennt höchstens 64 Signale, 193 bis 255 sind normale Fehler (255 bei `exit(-1)`)."""
     return 128 < code <= 192
 
 
@@ -158,7 +158,7 @@ def classify_exit_cause(details: dict[str, Any], fact: dict[str, Any] | None) ->
     """Die feste, vom Code ermittelte Einordnung eines Vorfalls; verbindlich, die KI darf sie nicht umdeuten.
 
     Gleiche Grenzen wie `restart_risk_eligible`; „pausiert“ braucht keine Fakten, ohne Fakten ist die Ursache unklar."""
-    # Kleine Modelle deuten sonst Exit-Code 1 als „von außen beendet“ oder beschreiben bei OOMKilled=false einen Speichermangel.
+    # Kleine Modelle deuten sonst Exit-Code 1 als „von außen beendet“ oder sehen bei OOMKilled=false Speichermangel.
     status = str(details.get("status") or "").lower()
     if details.get("state") == "paused" or "(paused)" in status:
         return Cause("pausiert", "Der Container wurde pausiert (docker pause), er ist nicht abgestürzt.", "paused")
@@ -215,7 +215,7 @@ def cause_prompt_line(target: str, host_name: str, cause: Cause) -> str:
 
 
 def cause_notice(causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str:
-    """Die eigene Meldungszeile „Ursache laut System: ...“, unabhängig vom KI-Text; bei mehreren Containern eine Zeile je Container.
+    """Die eigene Meldungszeile „Ursache laut System: ...“, unabhängig vom KI-Text; je Container eine Zeile.
 
     `causes`: (Host-ID, Container) -> (Container, Hostname, Einordnung). Bei genau einem Container ohne dessen Namen."""
     if not causes:
@@ -227,7 +227,7 @@ def cause_notice(causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str:
 
 
 def cause_tag_for_command(command: str, host_id: str, causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str | None:
-    """Kurz-Tag für die Begründung eines Vorschlags: die Einordnung des Containers, den `docker restart <name>` auf diesem Host trifft.
+    """Kurz-Tag für die Begründung eines Vorschlags: die Einordnung des Containers, den `docker restart <name>` trifft.
 
     Für jeden anderen Befehl `None`, die Einordnung darf nie an einem fremden Befehl hängen."""
     name = plain_restart_name(command)
@@ -249,7 +249,7 @@ def format_finished_at(value: Any) -> str:
 
 
 def facts_line(fact: dict[str, Any]) -> str:
-    """Die Fakten aus `docker inspect` als feste Zeile (Exit-Code, OOMKilled, Neustarts, Image, Zeitpunkt), vom Code geschrieben."""
+    """Die Fakten aus `docker inspect` als feste Zeile vom Code (Exit-Code, OOMKilled, Neustarts, Image, Zeitpunkt)."""
     parts = [f"Exit-Code {fact.get('exit_code')}", f"OOMKilled={str(bool(fact.get('oom_killed'))).lower()}"]
     restarts = fact.get("restart_count")
     if isinstance(restarts, int) and not isinstance(restarts, bool):
@@ -263,7 +263,7 @@ def facts_line(fact: dict[str, Any]) -> str:
 
 
 def cause_advice(causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str:
-    """Die festen Sätze „Was heißt das?“ und „Was kannst du tun?“ zu den Einordnungen (`incident_text.CAUSE_TEXTS`), einmal je Art.
+    """Die festen Sätze „Was heißt das?“ und „Was kannst du tun?“ zu den Einordnungen (`incident_text.CAUSE_TEXTS`).
 
     Bei genau einer Art ohne Bezeichnung davor, sonst mit ihr; leer, wenn keine Art Texte hat."""
     kinds: dict[str, tuple[Cause, list[str]]] = {}
@@ -287,7 +287,7 @@ def cause_advice(causes: dict[tuple[str, str], tuple[str, str, Cause]]) -> str:
 def facts_notice(
     causes: dict[tuple[str, str], tuple[str, str, Cause]], fact_map: dict[tuple[str, str], dict[str, Any]]
 ) -> str:
-    """Feste Zeile(n) „Fakten (docker inspect): ...“ für alle Container des Batches mit Fakten; bei genau einem ohne dessen Namen."""
+    """Feste Zeile(n) „Fakten (docker inspect): ...“ für alle Container im Batch mit Fakten; bei genau einem ohne Namen."""
     entries = [(target, host, fact_map[key]) for key, (target, host, _cause) in causes.items() if key in fact_map]
     if not entries:
         return ""
@@ -335,7 +335,7 @@ def drop_contradictions(
 ) -> tuple[str, int]:
     """Entfernt aus dem Modelltext die Sätze, die den Fakten aus `docker inspect` oder sich selbst widersprechen.
 
-    Gibt den bereinigten Text und die Zahl entfernter Sätze zurück; `expected`: Container im Batch, fehlen Fakten, gilt nur der Selbstwiderspruch."""
+    Gibt Text und Zahl entfernter Sätze zurück; `expected`: Container im Batch (fehlen Fakten: nur Selbstwiderspruch)."""
     complete = bool(facts) and len(facts) >= expected
     dropped = 0
     lines_out: list[str] = []

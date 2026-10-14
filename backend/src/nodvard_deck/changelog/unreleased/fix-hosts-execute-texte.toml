@@ -1,0 +1,7 @@
+[[entries]]
+kind = "sicherheit"
+text = "Bei der Prüfung, ob auf einem Server das Dashboard läuft, versucht Nodvard Deck nicht mehr, sich per „sudo“ Docker-Rechte zu holen. Ist das nicht feststellbar, behandelt es den Server vorsichtig wie den Dashboard-Server: Docker lässt sich dort nicht neu starten, und ein automatischer Neustart nach Updates folgt erst nach der Zusammenfassung. Hilfreich ist der Server-Tag „dashboard“ am Rechner, auf dem das Dashboard läuft."
+
+[[entries]]
+kind = "verbessert"
+text = "Bei der Rolle „Bediener“ steht jetzt deutlich dabei, dass sie Befehle auf Servern ausführen darf. Hat das Dashboard-Konto auf einem Server eine sudo-Regel, sind das dort volle Rechte."

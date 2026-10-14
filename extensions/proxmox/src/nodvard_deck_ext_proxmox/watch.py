@@ -32,7 +32,7 @@ _log = logging.getLogger("nodvard_deck.ext.proxmox")
 # Folge gemeldet (bei 5-Minuten-Takt ab 10 Minuten), ein normaler Neustart bleibt still.
 UNREACHABLE_STREAK = 3
 DISK_STREAK = 1
-# Zwei Prüfungen in Folge, damit ein kurzer Spitzenwert (etwa während ein Backup auf einen lokalen Speicher läuft) still bleibt.
+# Zwei Prüfungen in Folge, damit ein kurzer Spitzenwert (etwa ein Backup auf einen lokalen Speicher) still bleibt.
 STORAGE_STREAK = 2
 # Die Temperatur schwankt: erst nach drei Prüfungen in Folge (10 bis 15 Minuten) melden, wieder normal erst
 # `TEMP_HYSTERESIS` Grad unter der Schwelle.
@@ -236,7 +236,7 @@ def _setting_int(raw: Any, default: int, low: int, high: int) -> int:
 
 
 def _skip_names(raw: Any) -> set[str]:
-    """Namen aus `storage_skip` (klein geschrieben): diese Speicher sind ganz ausgenommen, z. B. eine absichtlich volle ISO-Ablage."""
+    """Namen aus `storage_skip` (klein geschrieben), ganz ausgenommen, etwa eine absichtlich volle ISO-Ablage."""
     if not isinstance(raw, list):
         return set()
     return {item.strip().lower() for item in raw if isinstance(item, str) and item.strip()}
@@ -297,7 +297,7 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
         note = f" {ok_note}" if ok_note else ""
         checked += 1
         was_muted = state.muted(key)
-        # Host der stummen Meldung bzw. der ausstehenden Entwarnung, vor observe(), das den Eintrag bei "wieder gut" entfernt.
+        # Host der stummen Meldung oder ausstehenden Entwarnung, vor observe(): Das entfernt den Eintrag bei "wieder gut".
         scope = host_id or state.muted_host(key)
         pending_ok = state.ok_pending(key)
         change = state.observe(key, bad, threshold)
@@ -490,8 +490,8 @@ async def run_watch(ctx: "ExtensionContext") -> dict[str, int]:
                 await check_zfs(conn_name, node_name, node_host_id, pool)
             await check_zfs_gone(conn_name, node_name, node_host_id, {pool["name"] for pool in pools})
         if pools_complete:
-            # Gibt es einen Speicher nicht mehr (oder steht er jetzt auf der Ausnahmeliste), fällt sein Zustand weg, aber nur,
-            # wenn alle Knoten der Verbindung geantwortet haben.
+            # Ein verschwundener (oder jetzt ausgenommener) Speicher verliert seinen Zustand, aber nur, wenn alle Knoten der
+            # Verbindung geantwortet haben.
             for stale in [k for k in state.keys(f"storage:{conn_name}/") if k not in pools_seen]:
                 state.forget(stale)
     state.save()

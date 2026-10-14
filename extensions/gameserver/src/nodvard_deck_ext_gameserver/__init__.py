@@ -39,8 +39,7 @@ _STATUS_LABEL = {"up": "läuft", "down": "gestoppt", "unknown": "unbekannt", "ma
 
 _SERVICE_LABEL = {"running": "läuft", "stopped": "gestoppt", "startpending": "startet", "stoppending": "stoppt", "missing": "kein Dienst"}
 
-# Eigene Aktionstypen `gameserver.*`: Sie steuern per SSH (wie die Statusabfrage über `ctx.exec.run()`) den Spiel-Dienst, nicht die
-# ganze VM.
+# Eigene Aktionstypen `gameserver.*`: Sie steuern per SSH (wie die Statusabfrage) den Spiel-Dienst, nicht die ganze VM.
 ACTIONS: dict[str, tuple[str, Risk]] = {
     "start": ("gameserver.start", Risk.LOW),
     "stop": ("gameserver.stop", Risk.HIGH),
@@ -54,7 +53,7 @@ UNREACHABLE_TTL_S = 60.0
 
 
 class GameServerStatus:
-    """Statusabfrage je Host mit kurzem Zwischenspeicher: Liste, Widget, Detailseite und Wächter teilen sich eine SSH-Abfrage."""
+    """Status je Host mit kurzem Zwischenspeicher: Liste, Widget, Detailseite und Wächter teilen sich eine SSH-Abfrage."""
 
     def __init__(self, ctx: ExtensionContext) -> None:
         self._ctx = ctx
@@ -73,8 +72,7 @@ class GameServerStatus:
         config = config_for(settings, host.id)
         profile = get_profile(config.profile)
         if getattr(host.status, "value", host.status) == "down":
-            # Der Server ist aus: keine SSH-Verbindung versuchen, sie liefe in den Verbindungs-Timeout, und die Seite hinge so
-            # lange auf „Lade …“.
+            # Server aus: Eine SSH-Verbindung liefe in den Timeout, und die Seite hinge so lange auf „Lade …“.
             data = {"profile": profile.id, "running": False, "service_state": "stopped", "error": "Server ist ausgeschaltet."}
             self._cache[host.id] = (time.monotonic(), data)
             return data
@@ -104,8 +102,8 @@ async def _legacy_join_code(ctx: ExtensionContext, host: Any, settings: dict[str
 
 
 class _GameServerActionExecutor:
-    """`gameserver.start/stop/restart/backup`: Der Befehl kommt aus dem Profil des Servers, die alten `start_command`/`stop_command`
-    haben Vorrang, wenn gesetzt."""
+    """`gameserver.start/stop/restart/backup`: Der Befehl kommt aus dem Profil des Servers; gesetzte alte
+    `start_command`/`stop_command` haben Vorrang."""
 
     action_types = frozenset(action_type for action_type, _ in ACTIONS.values())
 
@@ -228,7 +226,7 @@ class Extension(NodvardExtension):
                 "version": data.get("version"),
                 "profile": data.get("profile"),
                 "error": data.get("error"),
-                # Nur die sinnvollen Knöpfe anbieten (kein „Starten“ neben einem laufenden Server); unbekannter Zustand: beide.
+                # Nur sinnvolle Knöpfe (kein „Starten“ neben einem laufenden Server); unbekannter Zustand: beide.
                 "can_start": not running,
                 "can_stop": running or data.get("service_state") == "unknown",
                 "join_code": join_code,
@@ -251,7 +249,7 @@ class Extension(NodvardExtension):
             ]
 
         async def _details(host_id: str, *, fresh: bool, with_log: bool) -> dict[str, Any]:
-            """Alles für die Detailansicht: Zusammenfassung, Profil-Status (Spieler, Welt, Sicherungen, Log) und Konfiguration."""
+            """Detailansicht: Zusammenfassung, Profil-Status (Spieler, Welt, Sicherungen, Log) und Konfiguration."""
             host = await _host_or_404(host_id)
             if fresh:
                 statuses.invalidate(host.id)
@@ -265,15 +263,14 @@ class Extension(NodvardExtension):
         @router.get("/servers/{host_id}")
         async def server_details(host_id: str) -> dict[str, Any]:
             """Details für Leser (`hosts.read`): ohne Server-Log, immer aus dem Zwischenspeicher."""
-            # Das Log enthält Spielernamen und Verbindungsdaten und gibt es nur mit `hosts.execute` (wie die Container-Logs der
-            # Service-Matrix); `fresh` ebenso.
+            # Log (Spielernamen, Verbindungsdaten) und `fresh` nur mit `hosts.execute`, wie die Logs der Service-Matrix.
             return await _details(host_id, fresh=False, with_log=False)
 
         config_router = APIRouter()
 
         @config_router.put("/servers/{host_id}/config")
         async def set_config(host_id: str, payload: _ConfigIn) -> dict[str, Any]:
-            """Profil und Werte je Server (`settings.write`); leere Werte heißen „automatisch erkennen“ und werden nicht gespeichert."""
+            """Profil und Werte je Server (`settings.write`); leer heißt „automatisch erkennen“ (wird nicht gespeichert)."""
             await _host_or_404(host_id)
             if payload.profile not in PROFILES:
                 raise HTTPException(status_code=422, detail=f"Unbekanntes Profil '{payload.profile}'.")
@@ -313,7 +310,7 @@ class Extension(NodvardExtension):
 
         @action_router.get("/servers/{host_id}/details")
         async def server_details_full(host_id: str, fresh: bool = False) -> dict[str, Any]:
-            """Wie `/servers/{host_id}`, aber mit Server-Log und `fresh` (am Cache vorbei, z. B. direkt nach einer Aktion)."""
+            """Wie `/servers/{host_id}`, aber mit Server-Log und `fresh` (am Cache vorbei, etwa nach einer Aktion)."""
             return await _details(host_id, fresh=fresh, with_log=True)
 
         @action_router.post("/servers/{host_id}/start")

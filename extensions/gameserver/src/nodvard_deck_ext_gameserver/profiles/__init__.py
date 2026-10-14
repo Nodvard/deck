@@ -1,6 +1,6 @@
 """Spiel-Profile: Was ein Gameserver kann, ist für jedes Spiel gleich, wie man es auf dem Host abfragt, steckt im Profil.
 
-Ein neues Spiel ist ein neues Modul hier. Die Konfiguration je Server kommt aus `servers.<host_id>` und fällt auf die Profil-Defaults zurück.
+Ein neues Spiel ist ein neues Modul hier; die Werte je Server (`servers.<host_id>`) fallen auf die Profil-Defaults zurück.
 """
 from __future__ import annotations
 

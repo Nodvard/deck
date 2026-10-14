@@ -135,12 +135,10 @@ async def probe_tcp(address: str, port: int, timeout_s: float = CONNECT_TIMEOUT_
 
 
 async def select_targets(session: AsyncSession) -> list[Target]:
-    """Die Server, die dieser Job prüft: aktive ohne `provider_ext_id`, mit Adresse, nicht in Wartung, keine
-    Beispiel-Server."""
+    """Server, die dieser Job prüft: aktiv, ohne `provider_ext_id`, mit Adresse, nicht in Wartung, keine Beispiel-Server."""
     # Ein Modul, das Server einliest, trägt sich in `provider_ext_id` ein und pflegt den Zustand selbst
-    # (`HostProvider.host_status`), so kennt der Kern keine Modul-ID. Auch bei ausgeschaltetem Modul nicht prüfen: Die
-    # Adresse eingelesener Gäste ist oft nur ein Platzhalter (die des Hypervisors), eine TCP-Antwort dort sagt nichts
-    # über den Gast.
+    # (`HostProvider.host_status`). Auch bei ausgeschaltetem Modul nicht prüfen: Die Adresse eingelesener Gäste ist oft
+    # nur ein Platzhalter (die des Hypervisors), eine TCP-Antwort dort sagt nichts über den Gast.
     hosts = (
         await session.execute(
             select(Host).where(Host.enabled.is_(True), Host.provider_ext_id.is_(None)).order_by(Host.name)

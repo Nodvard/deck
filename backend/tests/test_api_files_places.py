@@ -314,11 +314,25 @@ async def test_a_server_without_a_file_source_has_no_places(client, db_session):
 
 
 @pytest.mark.asyncio
-async def test_a_source_without_its_own_permission_counts_for_everyone(client, db_session):
-    """Quellen ohne `required_permission` (ein Fremdanbieter ohne die Angabe) gelten fuer jeden mit `files.read`."""
-    await _owner(client)
+async def test_a_source_without_its_own_permission_counts_only_for_admins(client, db_session):
+    """Quellen ohne `required_permission` (ein Fremdanbieter ohne die Angabe) gelten als geschuetzt: der Viewer
+    bekommt keine Orte, der Owner schon."""
+    owner = await _owner(client)
     host_id = await _host(db_session)
     _provide("fremd", FileSourceProvider, _Sources(_ssh_source(host_id, permission=None)))
+    _provide("x", FilePlaceProvider, _Places([_place("Protokolle", "/var/log")]))
+    viewer = await _user(client, db_session, "gast", role="viewer")
+
+    assert (await _get(client, viewer, host_id)).json() == []
+    assert [p["path"] for p in (await _get(client, owner, host_id)).json()] == ["/var/log"]
+
+
+@pytest.mark.asyncio
+async def test_a_source_open_to_all_file_users_counts_for_everyone(client, db_session):
+    """Nennt eine Quelle ausdruecklich `files.read`, bekommt auch der Viewer ihre Orte."""
+    await _owner(client)
+    host_id = await _host(db_session)
+    _provide("fremd", FileSourceProvider, _Sources(_ssh_source(host_id, permission="files.read")))
     _provide("x", FilePlaceProvider, _Places([_place("Protokolle", "/var/log")]))
     viewer = await _user(client, db_session, "gast", role="viewer")
 

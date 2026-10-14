@@ -1,5 +1,4 @@
-"""Systemzustand eines Linux-Servers in einem SSH-Aufruf: Betriebssystem, Last, RAM, Platten, Dienste, Updates,
-Neustart."""
+"""Systemzustand eines Linux-Servers in einem SSH-Aufruf: Betriebssystem, Last, RAM, Platten, Dienste, Updates, Neustart."""
 
 from __future__ import annotations
 
@@ -178,8 +177,7 @@ def parse_system_info(text: str) -> dict[str, Any]:
 
 
 def apply_thresholds(info: dict[str, Any], disk_percent: float, temp_c: float) -> None:
-    """Trägt die Schwellen der Warnungen in die Anzeige ein: Dateisysteme ab `disk_percent` und Temperatur ab `temp_c`
-    gelb."""
+    """Trägt die Warnschwellen in die Anzeige ein: Dateisysteme ab `disk_percent` und Temperatur ab `temp_c` gelb."""
     for disk in info.get("disks", []):
         if disk["percent"] >= disk_percent and disk["tone"] == "good":
             disk["tone"] = "warn"

@@ -54,7 +54,7 @@ class BootFailure(Exception):
 
 
 def _settle_pre_restore(data_dir, layout: restore.Layout) -> None:
-    """Wurde eine eingespielte Sicherung zurückgenommen, gilt wieder der Migrationsstand der alten Datenbank (`pre_restore`)."""
+    """Wurde eine Sicherung zurückgenommen, gilt wieder der Migrationsstand der alten Datenbank (`pre_restore`)."""
     # Sonst hielte `decide` den Eintrag `running` der Sicherung für den der alten Datenbank und setzte die Kopie der
     # Sicherung ein: die alte Datenbank wäre weg.
     pre = bootstate.read_state(data_dir).get("pre_restore")
@@ -287,8 +287,8 @@ def _running_version(settings: Settings) -> str:
 
 
 def _copy_before_migration(settings: Settings, layout: restore.Layout, live: premigrate.LiveDb, script_heads: set[str], state: dict):
-    """Kopie der Datenbank nach `data/backups/vor-update/` (Platz mindestens 1,2 x Datenbank, drei bleiben, `integrity_check`).
-    Ohne Kopie keine Migration; Notausgang ist `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1`."""
+    """Kopie der Datenbank nach `data/backups/vor-update/` (Platz mindestens 1,2 x Datenbank, drei bleiben,
+    `integrity_check`). Ohne Kopie keine Migration; Notausgang ist `NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP=1`."""
     if settings.skip_pre_migrate_backup:
         _say("ACHTUNG: Die Kopie vor der Migration ist ausgeschaltet (NODVARD_DECK_SKIP_PRE_MIGRATE_BACKUP). Scheitert die Migration, gibt es keinen Rückweg.")
         return None
@@ -328,8 +328,8 @@ def _migrate(settings: Settings, layout: restore.Layout, live: premigrate.LiveDb
         "at": bootstate.now_iso(), "from_version": state.get("app_version"), "to_version": _running_version(settings), "from_heads": live.heads,
         "to_heads": sorted(script_heads), "copy": copy.name if copy else None, "state": "running", "had_data": live.has_data,
     }
-    # Vor der Migration als `running` festhalten: Stirbt der Prozess mitten drin, setzt der nächste Start die Datenbank auf die
-    # Kopie zurück (`decide`).
+    # Vor der Migration als `running` festhalten: Stirbt der Prozess mitten drin, setzt der nächste Start die Datenbank
+    # auf die Kopie zurück (`decide`).
     bootstate.update_state(data_dir, last_migration=migration, started_ok=False)
     try:
         _run_migration()

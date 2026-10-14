@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 # Sichert das komplette /app/data-Volume (SQLite, Master-Key, jwt_secret.key,
-# Extension-Daten, Script-Git-Repo) in eine einzelne tar.gz-Datei.
+# Extension-Daten, Script-Git-Repo) in eine einzelne Datei.
 # Siehe docs/00-DECISIONS.md D-10.
+#
+# Verschluesselung: Ist in Nodvard Deck ein Sicherungsschluessel eingerichtet (Einstellungen -> Sicherung), entsteht
+# eine verschluesselte Sicherung wie aus der Oberflaeche (`nodvard-deck-backup-<Zeit>.ndbak`, `python -m nodvard_deck.admin
+# create-backup` im Hilfscontainer). restore.sh spielt sie ein und fragt dabei das Sicherungspasswort oder den
+# Wiederherstellungsschluessel ab. Ohne Schluessel (oder mit einem Image, das den Befehl noch nicht kennt) bleibt es beim
+# unverschluesselten tar.gz, mit deutlicher WARNUNG: Es enthaelt den Master-Key, wer es hat, entschluesselt den Tresor.
 #
 # Stoppt den Dienst kurz fuer eine garantiert konsistente Kopie -- fuer die in D-02
 # beschriebene Last (eine Handvoll Nutzer, ein paar Dutzend Hosts) ist das einfacher
@@ -54,6 +60,7 @@
 # tar.gz des Datenordners und lassen sich mit restore.sh unveraendert einspielen.
 #
 # Nutzung (aus deploy/):  ./backup.sh [zielverzeichnis]      (auch:  sudo ./backup.sh ~/nodvard-deck-backups)
+# Auf der Standardausgabe steht bei Erfolg die Zeile `Fertig: <Pfad der Sicherung>`.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -198,6 +205,41 @@ case "$check_rc" in
   *) fail "Der Datenordner liess sich nicht pruefen (Docker meldete einen Fehler, siehe oben). Es wurde nichts angehalten." ;;
 esac
 
+# Gibt es einen Sicherungsschluessel? Die Antwort landet kurz in der (noch leeren, privaten) Zwischendatei, die Meldungen
+# von Compose in `key_err`. Ein Image ohne den Befehl (aelter als dieses Skript) kennt `backup-key` nicht: dann tar.gz.
+ENCRYPT=0
+UNENCRYPTED_REASON=""
+key_rc=0
+key_err="$(dk compose -p deploy run -T --rm --no-deps --user 1000:1000 --entrypoint python \
+  nodvard-deck -m nodvard_deck.admin backup-key 2>&1 > "$TMP_FILE" < /dev/null)" || key_rc=$?
+key_line="$(head -n 1 "$TMP_FILE" 2>/dev/null || true)"
+: > "$TMP_FILE"
+case "$key_rc:$key_line" in
+  "0:schluessel "?*)
+    ENCRYPT=1
+    OUT_FILE="nodvard-deck-backup-${TIMESTAMP}.ndbak"
+    echo "Die Sicherung wird verschluesselt (Sicherungsschluessel ${key_line#schluessel })."
+    ;;
+  "0:kein-schluessel")
+    UNENCRYPTED_REASON="In Nodvard Deck ist kein Sicherungsschluessel eingerichtet."
+    ;;
+  *)
+    case "$key_err" in
+      *"invalid choice"*|*"No module named"*)
+        UNENCRYPTED_REASON="Das Image nodvard-deck:latest kennt die verschluesselte Sicherung noch nicht (aeltere Version)."
+        ;;
+      *)
+        key_err="$(printf '%s' "$key_err" | tail -n 3 | tr '\n' ' ')"
+        fail "Ob ein Sicherungsschluessel eingerichtet ist, liess sich nicht feststellen (${key_err:-keine Meldung}). Es wurde nichts angehalten."
+        ;;
+    esac
+    ;;
+esac
+warn_unencrypted() {
+  echo "WARNUNG: Diese Sicherung ist NICHT verschluesselt. ${UNENCRYPTED_REASON} Sie enthaelt den Master-Key: Wer die Datei hat, kann alle gespeicherten Zugangsdaten entschluesseln. Bewahre sie wie ein Passwort auf. Mit einem Sicherungsschluessel (Einstellungen -> Sicherung) verschluesselt backup.sh automatisch." >&2 || true
+}
+[ "$ENCRYPT" = 1 ] || warn_unencrypted
+
 # Lief vor dem Umschalten (oder nach einem Rollback) noch der alte Container `deploy-lattice-1`
 # (Dienst `lattice` vor der Umbenennung), hat er dasselbe Volume offen: ihn ebenfalls stoppen und
 # am Ende wieder starten, sonst wuerde er mitten im Betrieb gesichert bzw. geleert.
@@ -226,7 +268,12 @@ dk compose -p deploy stop nodvard-deck
 
 echo "Sichere /app/data nach ${OUT_DIR}/${OUT_FILE} ..."
 # stdin aus /dev/null: tar liest nichts, und ein offenes stdin soll Compose nicht festhalten.
-if ! dk compose -p deploy run -T --rm --no-deps --user 1000:1000 --entrypoint tar \
+if [ "$ENCRYPT" = 1 ]; then
+  if ! dk compose -p deploy run -T --rm --no-deps --user 1000:1000 --entrypoint python \
+      nodvard-deck -m nodvard_deck.admin create-backup > "$TMP_FILE" < /dev/null; then
+    fail "Das Sichern ist fehlgeschlagen (Docker oder Nodvard Deck meldeten einen Fehler, siehe oben). Die unvollstaendige Datei wurde geloescht."
+  fi
+elif ! dk compose -p deploy run -T --rm --no-deps --user 1000:1000 --entrypoint tar \
     nodvard-deck czf - --exclude=./.restore-neu '--exclude=./.restore-alt*' '--exclude=./.restore-austausch*' \
     -C /app/data . > "$TMP_FILE" < /dev/null; then
   fail "Das Sichern ist fehlgeschlagen (Docker oder tar meldeten einen Fehler, siehe oben). Die unvollstaendige Datei wurde geloescht."
@@ -236,8 +283,14 @@ size=$(( $(wc -c < "$TMP_FILE") ))
 if [ "$size" -lt "$MIN_BYTES" ]; then
   fail "Die Sicherung ist mit ${size} Bytes zu klein, vermutlich ist das Datenvolume leer oder tar hat nichts geliefert. Die Datei wurde geloescht."
 fi
-# Ist es wirklich ein tar.gz? (faengt auch Fremdausgabe auf stdout oder eine abgeschnittene Datei ab)
-if command -v tar >/dev/null 2>&1 && ! tar tzf "$TMP_FILE" >/dev/null 2>&1; then
+# Ist es wirklich ein tar.gz bzw. eine Sicherung von Nodvard Deck? (faengt auch Fremdausgabe auf stdout oder eine
+# abgeschnittene Datei ab; den Inhalt einer verschluesselten Sicherung prueft erst restore.sh mit dem Passwort)
+if [ "$ENCRYPT" = 1 ]; then
+  first_line="$(head -n 1 "$TMP_FILE" 2>/dev/null | head -c 64 || true)"
+  if [ "$first_line" != "NODVARD-DECK-BACKUP/1" ]; then
+    fail "Die erzeugte Datei ist keine Sicherung von Nodvard Deck (Fremdausgabe oder beschaedigt). Sie wurde geloescht."
+  fi
+elif command -v tar >/dev/null 2>&1 && ! tar tzf "$TMP_FILE" >/dev/null 2>&1; then
   fail "Die erzeugte Datei ist kein lesbares tar.gz (beschaedigt oder abgeschnitten). Sie wurde geloescht."
 fi
 
@@ -251,4 +304,5 @@ sync -- "$TMP_FILE" 2>/dev/null || sync 2>/dev/null || true
 mv -fT -- "$TMP_FILE" "${OUT_DIR}/${OUT_FILE}"
 if [ "$DIR_CREATED" = 1 ]; then give_to "$(target_owner)" "$OUT_DIR"; fi
 
+[ "$ENCRYPT" = 1 ] || warn_unencrypted
 echo "Fertig: ${OUT_DIR}/${OUT_FILE}"

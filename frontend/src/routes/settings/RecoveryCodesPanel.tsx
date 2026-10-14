@@ -1,7 +1,7 @@
 /**
- * Zeigt frisch erzeugte Wiederherstellungs-Codes EINMAL an -- der Server speichert nur
- * Hashes und kann sie nie wieder ausgeben. Zum Kopieren und als Textdatei zum Speichern;
- * erst nach "Ich habe die Codes gesichert" verschwindet die Anzeige.
+ * Zeigt frisch erzeugte Wiederherstellungs-Codes einmal an: Der Server speichert nur Hashes und kann sie
+ * nie wieder ausgeben. Zum Kopieren und als Textdatei zum Speichern; erst nach "Ich habe die Codes
+ * gesichert" verschwindet die Anzeige.
  */
 import { Copy, Download } from "lucide-react";
 import { useState } from "react";

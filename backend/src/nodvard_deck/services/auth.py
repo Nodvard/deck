@@ -145,8 +145,7 @@ def _lock_windows(scopes: list[str]) -> dict[str, int]:
     Passwörter und Anmeldungen (Scopes `user`, `ip`) zählen in `WINDOW_SECONDS`."""
     # Die Grenze je Konto für den zweiten Faktor hat zwei Fenster; ist sie dabei, stehen beide immer drin, denn aus den
     # Scopes allein sieht man nicht, welches griff (auch zusammen mit einer anderen Grenze: Beim Anmelden erreichen
-    # (Adresse, Name) und Konto ihre 10 mit demselben Versuch). Das kurze `window_seconds` gilt nur, wenn sie allein
-    # greift.
+    # (Adresse, Name) und Konto ihre 10 mit demselben Versuch). Das kurze `window_seconds` gilt nur bei ihr allein.
     if login_limit.SCOPE_ACCOUNT not in scopes:
         return {"window_seconds": login_limit.WINDOW_SECONDS}
     short = login_limit.ACCOUNT_WINDOW_SECONDS if scopes == [login_limit.SCOPE_ACCOUNT] else login_limit.WINDOW_SECONDS
@@ -353,9 +352,10 @@ async def _recent_code_failures(
 
 async def restore_code_limits(session: AsyncSession, *, now_wall: float | None = None) -> int:
     """Trägt beim Start die Zähler für falsche Zwei-Faktor-Codes aus dem Protokoll ein (gibt deren Zahl zurück)."""
-    # Ohne das finge die Grenze nach jedem Neustart von vorn an: Wer Sitzung und Passwort hat, könnte raten, das
-    # Dashboard neu starten und weiter raten. Es zählt, was im Protokoll steht, nach einer Sicherung also deren Stand;
-    # die Aufbewahrung (mindestens 7 Tage) löscht nichts aus den 24 Stunden.
+    # Ohne das finge die Grenze nach jedem Neustart von vorn an: Wer Sitzung und Passwort hat, könnte raten, neu starten
+    # und weiter raten. Es zählt, was im Protokoll steht (nach einer Sicherung deren Stand); die Aufbewahrung von
+    # mindestens 7 Tagen löscht nichts aus den 24 Stunden.
+    #
     # Bewusst flüchtig bleiben die Zähler je Adresse und Name, je `mfa_token` und die benutzten Codes
     # (`login_limit._totp_steps`): Die Grenze je Konto deckt das Raten des zweiten Faktors ab, egal von wo.
     if now_wall is None:
@@ -400,9 +400,8 @@ async def ensure_builtin_roles(session: AsyncSession) -> dict[str, Role]:
     `owner` ist keine Rolle: Die Owner-Eigenschaft ist `User.is_owner` und umgeht RBAC (docs/03-DATA-MODEL.md §1).
     """
     # Relationship-Attribute eines geflushten Objekts sind in Async-SQLAlchemy weder lesbar noch per `.append()`
-    # beschreibbar, solange sie nicht ausdrücklich geladen wurden (`MissingGreenlet`), auch bei gerade angelegten
-    # Objekten. Darum Kind-Zeilen als eigene Objekte per `session.add()` anlegen und danach `refresh_relationships`
-    # rufen.
+    # beschreibbar, solange sie nicht ausdrücklich geladen wurden (`MissingGreenlet`), auch bei neu angelegten. Darum
+    # Kind-Zeilen per `session.add()` als eigene Objekte anlegen und danach `refresh_relationships` rufen.
     existing = (await session.execute(select(Role))).scalars().all()
     by_name = {r.name: r for r in existing}
     needs_refresh: set[str] = set()
@@ -818,10 +817,9 @@ async def verify_mfa(
 
     # Sechs Ziffern = Authenticator-Code, alles andere = Wiederherstellungs-Code.
     via_recovery = not security.is_totp_code(code)
-    # Die Sperre je Konto gilt nur für die sechsstelligen Codes: Nur die lassen sich mit vielen Adressen durchprobieren.
-    # Wiederherstellungs-Codes (zehn Zeichen aus 32) sind dafür zu lang. So kommt der Besitzer mit einem davon weiter
-    # hinein, während jemand mit seinem Passwort das Konto über falsche Codes sperrt (sonst bis zu 24 Stunden ohne
-    # Ausweg).
+    # Die Sperre je Konto gilt nur für sechsstellige Codes: Nur die lassen sich mit vielen Adressen durchprobieren,
+    # Wiederherstellungs-Codes (zehn Zeichen aus 32) sind dafür zu lang. So kommt der Besitzer mit einem davon hinein,
+    # während jemand mit seinem Passwort das Konto über falsche Codes sperrt (sonst bis zu 24 Stunden ohne Ausweg).
     attempt = _begin_attempt(
         ip or payload.get("ip"),
         normalize_username(user.username),
@@ -1022,8 +1020,7 @@ async def refresh_access_token(
     Ein späterer Einlösungsversuch desselben Werts scheitert, statt ein zweites gültiges Sitzungspaar zu erzeugen."""
     # Vertrag für `refresh_with_candidates`: Hier gibt es keine Erkennung von Wiederverwendung mit Widerruf der ganzen
     # Kette, und ein ungültiger Token löst `InvalidCredentials` aus, bevor etwas geschrieben wurde. Wer das ändert, muss
-    # `refresh_with_candidates` mitändern, sonst beendet ein veralteter Wert in einem der Cookies die Sitzung im
-    # anderen.
+    # `refresh_with_candidates` mitändern (sonst beendet ein veralteter Cookie-Wert die Sitzung im anderen).
     token_hash = security.hash_opaque_token(raw_refresh_token)
     result = await session.execute(
         select(RefreshToken).where(RefreshToken.token_hash == token_hash)
@@ -1146,12 +1143,11 @@ async def _live_session_head(session: AsyncSession, user_id: str, token_id: str)
     """Folgt der Rotationskette (`replaced_by_id`) von einer durch Erneuern widerrufenen Sitzung bis zur lebenden.
 
     Bleibt bei `token_id`, wenn die Zeile fehlt, einem anderen Nutzer gehört, noch gilt oder keinen Nachfolger hat."""
-    # Bekannte Grenze: Die Kette sagt nicht, wer erneuert hat. Der Nachfolger übernimmt Browser, Gerät und IP des
-    # Vorgängers, ein Vergleich dieser Felder unterscheidet also nichts, und das Refresh-Cookie (Pfad `/api/v1/auth`)
-    # kommt beim Passwortwechsel gar nicht an. Hat jemand mit einem abgegriffenen Cookie die Kette weitergedreht, bleibt
-    # dessen Sitzung erhalten, solange der Wechsel noch mit dem alten Zugangs-Token kommt (höchstens
-    # `access_token_ttl_seconds`). Wer eine Übernahme vermutet, meldet sich vor dem Wechsel neu an: Dann zeigt die
-    # `sid` auf eine frische Sitzung, und jede andere Kette endet.
+    # Bekannte Grenze: Die Kette sagt nicht, wer erneuert hat; der Nachfolger übernimmt Browser, Gerät und IP, und das
+    # Refresh-Cookie (Pfad `/api/v1/auth`) kommt beim Passwortwechsel gar nicht an. Hat jemand mit einem abgegriffenen
+    # Cookie die Kette weitergedreht, bleibt dessen Sitzung erhalten, solange der Wechsel noch mit dem alten
+    # Zugangs-Token kommt (höchstens `access_token_ttl_seconds`); wer eine Übernahme vermutet, meldet sich vorher neu an
+    # (die `sid` zeigt dann auf eine frische Sitzung, jede andere Kette endet).
     head = token_id
     for _ in range(20):  # Schutz vor Schleifen in kaputten Daten
         row = await session.get(RefreshToken, head)
@@ -1434,10 +1430,9 @@ async def require_current_totp(
     """Verlangt bei eingeschaltetem Zwei-Faktor für eine empfindliche Aktion (`action`) den aktuellen Code aus der App.
 
     Gibt `None` zurück, wenn Zwei-Faktor aus ist, sonst womit bestätigt wurde (`VIA_TOTP` bzw. `VIA_RECOVERY`)."""
-    # Dieselben Bausteine wie beim Anmelden (`verify_mfa`): `match_totp_step` und `login_limit.claim_success`, ein Code
-    # gilt je Konto nur einmal, auch quer zwischen Anmeldung und Bestätigung. Wirksam gedrosselt wird nur über die
-    # IP-unabhängige Grenze je Konto für den zweiten Faktor, die sich beide teilen: Der Zähler der Passwortabfrage zählt
-    # falsche Codes zwar mit, aber das richtige Passwort davor (`require_current_password`) setzt ihn jedes Mal zurück.
+    # Dieselben Bausteine wie beim Anmelden (`verify_mfa`): Ein Code gilt je Konto nur einmal, auch quer zwischen
+    # Anmeldung und Bestätigung. Gedrosselt wird nur über die IP-unabhängige Grenze je Konto, die sich beide teilen; der
+    # Zähler der Passwortabfrage taugt nicht dafür, das richtige Passwort davor setzt ihn zurück.
     if not two_factor_enabled(user):
         return None
     compact = "".join((code or "").split())
@@ -1447,14 +1442,13 @@ async def require_current_totp(
             or (TOTP_OR_RECOVERY_REQUIRED_MESSAGE if allow_recovery else TOTP_REQUIRED_MESSAGE)
         )
     # Wiederherstellungs-Codes nur mit `allow_recovery` (Passwort ändern, Zwei-Faktor abschalten, neue Codes erzeugen:
-    # Wer das Handy verloren hat, soll das mit einem Code aus seiner Liste können). Ohne `allow_recovery` gilt alles
-    # außer sechs Ziffern als falscher Code, denn die Codes sind für den Notfall beim Anmelden da. Mit ihr ist alles
-    # außer sechs Ziffern ein Wiederherstellungs-Code; für ihn gilt die Grenze je Konto nicht und er zählt nicht darauf
-    # (sonst käme der Besitzer während einer Sperre, die jemand mit seinem Passwort ausgelöst hat, auch damit nicht
-    # weiter). Falsche zählen wie beim Anmelden auf einen eigenen Zähler (`RECOVERY_ATTEMPT_KEY`, je Konto statt je
-    # Adresse), den das richtige Passwort nicht zurücksetzt, und auf den aller Sicherheitsabfragen des Kontos
-    # (`konto:<id>`).
+    # Wer das Handy verloren hat, soll das mit einem Code aus seiner Liste können); sonst gilt alles außer sechs Ziffern
+    # als falscher Code, denn die Codes sind für den Notfall beim Anmelden da.
     via_recovery = allow_recovery and not security.is_totp_code(compact)
+    # Ein Wiederherstellungs-Code zählt nicht auf die Grenze je Konto (sonst käme der Besitzer während einer von
+    # jemandem mit seinem Passwort ausgelösten Sperre auch damit nicht weiter); falsche zählen auf einen eigenen Zähler
+    # (`RECOVERY_ATTEMPT_KEY`, je Konto, vom Passwort nicht zurückgesetzt) und auf den aller Sicherheitsabfragen des
+    # Kontos (`konto:<id>`).
     try:
         attempt = _begin_attempt(
             _account_key(user.id),

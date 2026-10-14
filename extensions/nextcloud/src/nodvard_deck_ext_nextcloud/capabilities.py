@@ -90,6 +90,8 @@ class NextcloudFileSource:
         self.label = "Nextcloud"
         self.icon = "cloud"
         self.caps = FileSourceCaps(write=True, rename=True, remove=True, mkdir=True, search=True, range_read=True)
+        # Die Quelle arbeitet mit dem Nextcloud-Konto aus den Einstellungen: `files.read` allein reicht dafür nicht.
+        self.required_permission = "files.nextcloud"
         self._ctx = ctx
         self._connector = connector
 

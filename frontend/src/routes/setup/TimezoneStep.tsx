@@ -1,7 +1,6 @@
 /**
- * Assistent, Schritt „Zeitzone“: vorbelegt mit der Zone dieses Geräts, gespeichert über die
- * Einstellungen (`PUT /settings/system.timezone`). Die Auswahl ist dieselbe wie unter
- * Einstellungen -> System (`TimezonePicker`).
+ * Assistent, Schritt „Zeitzone“: vorbelegt mit der Zone dieses Geräts, gespeichert über die Einstellungen
+ * (`PUT /settings/system.timezone`). Die Auswahl ist dieselbe wie unter Einstellungen → System (`TimezonePicker`).
  */
 import { useEffect, useState } from "react";
 

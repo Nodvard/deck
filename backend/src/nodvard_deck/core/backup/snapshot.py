@@ -371,12 +371,9 @@ def extract_archive(
 ) -> dict[str, Any]:
     """Packt nach `dest` aus und prüft alles: erlaubte Namen, nur normale Dateien, jede Datei einmal, Prüfsummen,
     Größen und Kopf gegen das Manifest, `integrity_check` der Datenbank. Scheitert etwas, räumt der Aufrufer `dest` weg."""
-    # `limits` (fremde Dateien beim Wiederherstellen) setzt Obergrenzen für Einträge, Einzeldatei und entpackte Gesamtmenge,
-    # gemessen am entpackten Strom; `allow_file` ist dann eine strengere Namens-Erlaubnisliste als `is_safe_member`, mit
-    # `allow_dir` sind auch Ordner erlaubt. `tarfile.data_filter` läuft pro Eintrag zusätzlich als zweite Sicherung;
-    # geschrieben wird jede Datei selbst, nie über `tar.extract`. `skip_entry(name, ist_ordner)` nennt Einträge, die nicht
-    # abgelehnt, sondern nicht geschrieben werden (Namen in `skipped`); ihr Inhalt wird trotzdem gelesen und gegen das
-    # Manifest geprüft, damit die Prüfsummen-Prüfung dieselbe bleibt.
+    # `limits` (fremde Dateien beim Wiederherstellen) begrenzt Einträge, Einzeldatei und entpackte Gesamtmenge am
+    # entpackten Strom; `allow_file` ist dann strenger als `is_safe_member`, `allow_dir` erlaubt Ordner.
+    # `tarfile.data_filter` läuft zusätzlich pro Eintrag; geschrieben wird jede Datei selbst, nie über `tar.extract`.
     seen: dict[str, tuple[str, int]] = {}
     manifest: Any = None
     entries = 0
@@ -400,6 +397,8 @@ def extract_archive(
                 if manifest is not None:
                     raise DamagedBackup("unerwarteter Eintrag im Archiv")  # das Manifest ist der letzte Eintrag
                 is_plain_file = member.type in (tarfile.REGTYPE, tarfile.AREGTYPE)
+                # `skip_entry`: Einträge, die nicht abgelehnt, sondern nicht geschrieben werden (Namen in `skipped`);
+                # ihr Inhalt wird trotzdem gelesen und geprüft, damit die Prüfsummen-Prüfung dieselbe bleibt.
                 skip_it = (
                     skip_entry is not None and (member.isdir() or is_plain_file) and skip_entry(name, member.isdir())
                 )
@@ -416,7 +415,8 @@ def extract_archive(
                     except OSError as exc:
                         if exc.errno == errno.ENOSPC:
                             raise
-                        raise DamagedBackup("unerwarteter Eintrag im Archiv") from exc  # z. B. Ordner nach gleichnamiger Datei
+                        # z. B. Ordner nach gleichnamiger Datei
+                        raise DamagedBackup("unerwarteter Eintrag im Archiv") from exc
                     continue
                 if skip_it:
                     allowed = fmt.is_safe_member(name)

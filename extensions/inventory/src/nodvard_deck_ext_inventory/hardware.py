@@ -12,12 +12,9 @@ _log = logging.getLogger(__name__)
 
 SECTIONS = ("dmi", "virt", "cpu", "mem", "disks", "pci", "missing")
 
-# Ein einziger, nur lesender Befehl, der sammelt, was ohne root lesbar ist:
-# - Hersteller und Modell aus `/sys/class/dmi/id` (Seriennummern gibt der Kernel nur root), beim Raspberry Pi aus
-#   `/proc/device-tree/model`
-# - VM oder Container (`systemd-detect-virt`)
-# - Prozessor (`lscpu`), Arbeitsspeicher gesamt (`/proc/meminfo`; einzelne Riegel bräuchten `dmidecode` als root)
-# - Datenträger (`lsblk`, mit Seriennummer), Grafik- und Netzwerkkarten (`lspci`, falls installiert)
+# Ein einziger, nur lesender Befehl für alles, was ohne root lesbar ist: Seriennummern aus DMI gibt der Kernel nur root,
+# einzelne Speicherriegel bräuchten `dmidecode` als root. Die Seriennummern der Datenträger liefert `lsblk` auch so, beim
+# Raspberry Pi steht das Modell im Gerätebaum (`/proc/device-tree/model`).
 _SCRIPT = (
     "echo @@dmi; for f in sys_vendor product_name product_version board_vendor board_name; do "
     'printf "%s=" "$f"; cat "/sys/class/dmi/id/$f" 2>/dev/null || echo; done; '
@@ -234,10 +231,9 @@ def _system_parts(dmi: dict[str, str | None], virtual: bool) -> list[dict[str, A
     if vendor == "Lenovo" and dmi.get("product_version"):
         product = dmi["product_version"]
     board_vendor, board = _vendor_name(dmi.get("board_vendor")), dmi.get("board_name")
-    # Selbst gebaut: die Firmware des Mainboards füllt das „Gerät“ mit einem Platzhalter (ASUS: "System Product
-    # Name", fällt weg) oder mit dem Boardnamen (Gigabyte "B550 AORUS ELITE V2", MSI "MS-7C37" zu "MAG B550 TOMAHAWK
-    # (MS-7C37)"). Nur bei Herstellern, die Boards einzeln verkaufen, und nie bei einer VM (VirtualBox, Hyper-V
-    # nennen Gerät und Board gleich). Gigabyte BRIX ("GB-B…") ist ein fertiger Mini-PC.
+    # Selbst gebaut: Die Firmware füllt das „Gerät“ mit einem Platzhalter (ASUS "System Product Name", fällt weg) oder dem
+    # Boardnamen, ganz oder als Teil (Gigabyte "B550 AORUS ELITE V2", MSI "MS-7C37" in "MAG B550 TOMAHAWK (MS-7C37)"). Nur
+    # bei Board-Herstellern, nie in VMs (VirtualBox, Hyper-V nennen beide gleich); Gigabyte BRIX ("GB-B…") ist ein Mini-PC.
     maker = board_vendor or vendor
     selfbuilt = bool(board) and not virtual and (
         not product

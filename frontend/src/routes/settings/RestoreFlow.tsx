@@ -1,18 +1,7 @@
 /**
- * Der Ablauf „Sicherung einspielen“ -- derselbe in Einstellungen -> System (Owner, mit Passwort) und im
- * Einrichtungs-Assistenten (ohne Konto, mit Einrichtungscode):
- *
- *   Datei wählen -> hochladen (mit Fortschritt) -> Passwort oder Wiederherstellungsschlüssel -> Zusammenfassung
- *   -> „Einspielen und neu starten“ -> Wartebildschirm (fragt die Gesundheit ab) -> Anmeldung.
- *
- * Passwörter, Schlüssel und der Code stehen nur in lokalem State und werden direkt an `lib/restore.ts`
- * gereicht (nie in einen Query-Cache); nach dem Absenden sind die Felder leer. Nichts davon wird gespeichert.
- *
- * Ist beim Inhaber die Zwei-Faktor-Anmeldung an, verlangt das Vormerken zusätzlich den Code aus der App. Das Feld
- * steht gleich da, wenn die Oberfläche weiß, dass Zwei-Faktor an ist (`useTwoFactorEnabled`), sonst erscheint es,
- * sobald der Server danach fragt (`totp_missing`); das Anmeldepasswort bleibt dann stehen.
- *
- * Ansprache: du, wie überall in Nodvard Deck.
+ * Ablauf „Sicherung einspielen“, derselbe in Einstellungen → System (Owner, Passwort) und im Einrichtungs-Assistenten
+ * (ohne Konto, Einrichtungscode): hochladen, Passwort oder Schlüssel, Zusammenfassung, einspielen, warten, anmelden.
+ * Passwörter, Schlüssel und Code stehen nur im lokalen State und gehen direkt an `lib/restore.ts` (kein Query-Cache).
  */
 import { AlertTriangle, CheckCircle2, FileUp, Loader2, ShieldAlert } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -60,7 +49,7 @@ export interface RestoreFlowProps {
   maxUploadBytes?: number;
   /** Nach dem Neustart: in den Einstellungen zur Anmeldung, im Assistenten je nach Ergebnis. */
   onDone: (outcome: { ok: true } | { ok: false; message: string }) => void;
-  /** Zurueck, ohne etwas zu tun (Assistent: zurueck zum Konto anlegen). */
+  /** Zurück, ohne etwas zu tun (Assistent: zurück zum Konto anlegen). */
   onLeave?: () => void;
 }
 
@@ -86,7 +75,9 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
   const [file, setFile] = useState<File | null>(null);
   const [accountPassword, setAccountPassword] = useState("");
   const [askedForTotp, setAskedForTotp] = useState(false);
-  // Nur beim Inhaber: Im Einrichtungs-Assistenten gibt es noch kein Konto (und keine Anmeldung).
+  // Nur beim Inhaber (im Assistenten gibt es noch kein Konto). Ist Zwei-Faktor an, verlangt das Vormerken auch den Code
+  // aus der App: Das Feld steht gleich da, sonst erscheint es, sobald der Server danach fragt (`totp_missing`); das
+  // Anmeldepasswort bleibt dann stehen.
   const twoFactor = useTwoFactorEnabled(mode === "owner") === true;
   const [totpCode, setTotpCode] = useState("");
   const [secretKind, setSecretKind] = useState<"password" | "recovery_key">("password");
@@ -158,7 +149,7 @@ export function RestoreFlow(props: RestoreFlowProps): JSX.Element {
       if (!alive.current) return;
       const status = (err as { status?: number }).status;
       setNotice({ kind: "error", text: errorText(err) });
-      // 400: falsches Passwort, die Datei bleibt auf dem Server -- noch einmal. Alles andere: neu hochladen.
+      // 400: falsches Passwort, die Datei bleibt auf dem Server: noch einmal. Alles andere: neu hochladen.
       setPhase(status === 400 || status === 507 || status === 409 ? { kind: "secret", staged } : { kind: "idle" });
     }
   }

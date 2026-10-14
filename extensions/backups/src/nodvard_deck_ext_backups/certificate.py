@@ -15,10 +15,9 @@ from pydantic import BaseModel, Field
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
-# Eine Verbindung mit Fingerabdruck spricht nur mit dem Server, der genau dieses Zertifikat zeigt: bei einem
-# anderen scheitert schon der TLS-Handshake, bevor das Token hinausgeht. Das ersetzt den Schalter für
-# selbstsignierte Zertifikate, der jede Prüfung abschaltet und bei eingetragenem Fingerabdruck nicht gilt.
-# Die Logik steht auch in der Proxmox-Erweiterung, weil Erweiterungen einander nicht importieren.
+# Mit Fingerabdruck scheitert bei einem anderen Zertifikat schon der TLS-Handshake, bevor das Token hinausgeht; der
+# Schalter für selbstsignierte Zertifikate (schaltet jede Prüfung ab) gilt dann nicht. Doppelt in der Proxmox-Erweiterung,
+# weil Erweiterungen einander nicht importieren.
 FIELD = "tls_fingerprint_sha256"
 CHANGED_CODE = "certificate_changed"
 INVALID_CODE = "certificate_invalid"

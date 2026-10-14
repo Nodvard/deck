@@ -25,10 +25,9 @@ IN_WINDOW_TITLE = " (im Wartungsfenster)"
 RECOVERED_IN_WINDOW = "Schon im Wartungsfenster wieder erfolgreich (dort nur im Verlauf, ohne Push)."
 RECOVERED_AFTER_WINDOW = "Der Fehlschlag lag im Wartungsfenster (dort nur im Verlauf, ohne Push)."
 
-# "Backup zu alt": Dass eine VM gar nicht mehr gesichert wird (Job gelöscht oder abgeschaltet, Ziel weg, Knoten lange
-# aus), fällt in keinem Fehlschlag auf. Darum meldet der Wächter je VM einmal, wenn die jüngste erfolgreiche Sicherung
-# älter als ihre Frist ist, und einmal Entwarnung. Frist: `backup_max_age_days` oder, wenn der Job der VM seltener
-# läuft (z. B. nur samstags), dessen Abstand aus dem Zeitplan (`schedule.py`), plus `AGE_GRACE_SECONDS`.
+# "Backup zu alt": Wird eine VM gar nicht mehr gesichert (Job weg, Ziel weg, Knoten aus), fällt das in keinem Fehlschlag
+# auf. Frist je VM: `backup_max_age_days` oder der längere Abstand ihres Jobs aus dem Zeitplan (`schedule.py`), plus
+# `AGE_GRACE_SECONDS`; gemeldet wird einmal, Entwarnung einmal.
 AGE_MAX_DAYS_DEFAULT = 3
 AGE_MAX_DAYS_MIN = 2
 AGE_MAX_DAYS_MAX = 60
@@ -142,12 +141,9 @@ def _recovered_notification(job: dict[str, Any], key: str, variant: str) -> Noti
     )
 
 
-# Wartungsfenster: Beide Meldungen tragen die Host-ID der VM. Hat ein Fenster den Fehlschlag stumm geschaltet
-# (`ctx.notify.send()` sagt das), merkt sich der Wächter "stumm gemeldet" und fragt danach nur
-# `ctx.notify.would_suppress()` (kein Verlaufseintrag je Prüfung). Ist das Fenster vorbei und die Störung besteht noch,
-# kommt die Meldung einmal hörbar nach; war sie im Fenster schon wieder weg, kommt nichts nach. Die Entwarnung richtet
-# sich nach dem Fehlschlag: Ein gehörter Alarm schließt immer eine gehörte Entwarnung, aber nicht mitten in der Nacht
-# (docs/02-EXTENSION-API.md §2, "Meldungen und Wartungsfenster").
+# Wartungsfenster: Nach einem stumm geschalteten Fehlschlag fragt der Wächter nur `ctx.notify.would_suppress()` (kein
+# Verlaufseintrag je Prüfung). Besteht die Störung nach dem Fenster noch, kommt die Meldung einmal hörbar nach. Ein
+# gehörter Alarm schließt immer mit einer gehörten Entwarnung, aber nicht mitten in der Nacht (docs/02-EXTENSION-API.md §2).
 async def _step(
     ctx: "ExtensionContext",
     alerted: dict[str, Any],
@@ -380,11 +376,9 @@ async def _check_age(
     inventory_cache: InventoryCache,
 ) -> int:
     """Prüfung "Backup zu alt" für alle VMs. -> Anzahl Meldungen."""
-    # Geprüft werden VMs mit Backup-Job (auch abgeschaltet) und VMs ohne Job, für die noch Sicherungen auf einem
-    # Speicher liegen. VMs ohne Job und ohne Sicherung gehen den Wächter nichts an (die Seite zeigt sie als
-    # "ungeschützt"), ebenso "bewusst ohne Backup" und `backup_age_skip` (VMID, `Verbindung/VMID` oder Name).
-    # Gehört eine VM zu mehreren Jobs, zählt der kürzeste Abstand; abgeschaltete Jobs zählen nicht, bei einem nicht
-    # lesbaren Zeitplan gilt nur die Einstellung.
+    # Geprüft werden VMs mit Backup-Job (auch abgeschaltet) oder mit Sicherungen; nicht "ungeschützte" ohne beides,
+    # "bewusst ohne Backup" und `backup_age_skip` (VMID, `Verbindung/VMID` oder Name). Bei mehreren Jobs zählt der kürzeste
+    # Abstand eines eingeschalteten; ist der Zeitplan nicht lesbar, gilt nur die Einstellung.
     settings = await ctx.settings.get()
     setting_days = _setting_days(settings.get("backup_max_age_days"))
     skip = _skip_names(settings.get("backup_age_skip"))

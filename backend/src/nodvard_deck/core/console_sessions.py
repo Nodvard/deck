@@ -31,11 +31,12 @@ async def _close_quietly(session: Any) -> None:
 
 
 # Anders als beim Terminal (`core/terminal_sessions.py`: Ticket jetzt, Verbindung erst beim WebSocket-Aufbau) öffnet
-# `POST /console/sessions` die Konsole sofort: Das Einmal-Kennwort für die RFB-Authentifizierung entsteht erst beim Öffnen,
-# noVNC braucht es aber, bevor es den WebSocket aufbaut. Käme es erst als Nachricht über den WebSocket, könnte die
-# Server-Begrüßung verloren gehen, weil noVNC sich asynchron an den Socket hängt. Die Session-ID ist wie beim Terminal
-# ein kurzlebiges Einmal-Ticket; nicht abgeholte Sitzungen werden nach `ttl_s` geschlossen, sonst bliebe nach einem
-# abgebrochenen Seitenaufruf eine offene Verbindung zum Hypervisor hängen.
+# `POST /console/sessions` die Konsole sofort: Das Einmal-Kennwort für die RFB-Authentifizierung entsteht erst beim
+# Öffnen, noVNC braucht es aber vor dem WebSocket-Aufbau (als WebSocket-Nachricht ginge die Server-Begrüßung verloren,
+# weil noVNC sich asynchron anhängt).
+#
+# Die Session-ID ist wie beim Terminal ein kurzlebiges Einmal-Ticket; nicht abgeholte Sitzungen werden nach `ttl_s`
+# geschlossen, sonst bliebe nach einem abgebrochenen Seitenaufruf eine Verbindung zum Hypervisor offen.
 class ConsoleSessionStore:
     def __init__(self) -> None:
         self._pending: dict[str, PendingConsole] = {}
@@ -55,7 +56,7 @@ class ConsoleSessionStore:
         return entry
 
     def take(self, session_id: str, *, ttl_s: float) -> PendingConsole | None:
-        """Einmalgebrauch: entfernt den Eintrag unabhängig vom Ergebnis; ein abgelaufener wird geschlossen, nicht ausgeliefert."""
+        """Einmalgebrauch: entfernt den Eintrag in jedem Fall; ein abgelaufener wird geschlossen, nicht ausgeliefert."""
         entry = self._pending.pop(session_id, None)
         if entry is None:
             return None

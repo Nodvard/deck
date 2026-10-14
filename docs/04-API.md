@@ -305,6 +305,7 @@ POST   /secrets      PUT /secrets/{id}/value      DELETE /secrets/{id}
                                        Kontos ist (abschalten nur über DELETE /me/totp, POST /users/{id}/reset-2fa
                                        oder den Notfall-Befehl)
 POST   /secrets/{id}/test            → Verwendbarkeit prüfen, ohne den Wert zu zeigen
+PATCH  /secrets/{id}                 → Beschreibung und Ablaufdatum ändern, nie den Wert
 
 GET    /audit?actor_type=&action=&outcome=&target_type=&target_id=&correlation_id=&since=&until=
                &exclude_action=…&limit=100&offset=0   (limit höchstens 1000)
@@ -374,6 +375,23 @@ ein späteres Häppchen, steht trotzdem ein Eintrag mit dem bisherigen Stand (`o
 `{"count": n, "interrupted": true}`) und der Fehler geht weiter. Ein Versand an die Kanäle, der gerade läuft, wenn seine
 Meldung gelöscht wird, läuft normal zu Ende (nur das Zustellprotokoll entfällt). Außerdem räumt der Kern-Job
 `notifications-retention` jede Nacht auf (Einstellung `notifications.retention_days`, siehe unten).
+
+**Tresor** (`secrets.read` zum Lesen, `secrets.write` zum Ändern): `GET /secrets` liefert neben den Metadaten
+`expires_at` und `used_by[]` (`type`: `extension` | `host` | `login`, weitere möglich; dazu `id`, `name` und
+`last_used_at`, wenn eine Nutzung festgehalten ist). `POST /secrets` nimmt optional `expires_at`. `PATCH /secrets/{id}`
+ändert `description` und `expires_at` (`null` entfernt das Datum, eine Zeit ohne Zone gilt als UTC); den Wert ersetzt
+nur `PUT /secrets/{id}/value`. Der Zwei-Faktor-Schlüssel eines Kontos ergibt `409`, ein unbekannter Eintrag `404`.
+Das Ablaufdatum ist nur eine Angabe: Nach dem Ablauf wird nichts gesperrt.
+
+Der Kern-Job `secret-expiry-reminder` („Erinnerung an ablaufende Zugänge“, täglich 08:07 Uhr in der eingestellten Zone)
+meldet sich zu jedem Eintrag mit `expires_at` höchstens dreimal: 14 Tage vorher (`info`), 3 Tage vorher (`warning`)
+und nach dem Ablauf (`warning`, steht damit auch auf der Startseite). Gezählt werden Kalendertage in der eingestellten
+Zone. Verpasste Stufen holt der Job nicht nach: Wer das Datum erst 2 Tage vorher einträgt, bekommt nur die
+3-Tage-Meldung. Ändert sich `expires_at`, beginnt die Zählung neu. Die Meldung nennt Bezeichnung und Datum, nie den
+Wert, und sagt, wem der Zugang gehört (Modul oder Server). `payload.path` zeigt auf `/settings/extensions/{id}` bzw.
+`/settings/hosts/{id}`, `tags` sind `key` und ab 3 Tagen vorher zusätzlich `warning`. Was schon verschickt ist, steht
+in `secrets.metadata.expiry_notice` (siehe docs/03-DATA-MODEL.md). Eine Pause über „Automatik“ hält wie bei den
+anderen festen Kern-Jobs nur bis zum nächsten Start.
 
 **Server, Zugänge und Gruppen** (`hosts.read` zum Lesen, `hosts.write` zum Ändern; jede Änderung steht im
 Protokoll):

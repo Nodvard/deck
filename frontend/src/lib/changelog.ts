@@ -1,12 +1,7 @@
 /**
- * Änderungsprotokoll: Daten vom Server (GET /app/changelog), die Anzeige-Namen der
- * Arten und die Merkhilfe "schon gesehen?" für die kleine Neu-Markierung neben der
- * Versionsnummer in der Seitenleiste.
- *
- * Gemerkt wird ein Fingerabdruck aus laufender Version und Zahl der noch nicht
- * veröffentlichten Einträge im localStorage dieses Browsers. Der Speicher kann fehlen
- * oder werfen (privates Fenster, gesperrte Website-Daten) -- dann gibt es einfach nie
- * eine Markierung, nichts stürzt ab.
+ * Änderungsprotokoll: Daten vom Server (GET /app/changelog), Anzeige-Namen der Arten und die Merkhilfe "schon gesehen?"
+ * für die Neu-Markierung in der Seitenleiste. Gemerkt wird ein Fingerabdruck in localStorage; fehlt der Speicher oder
+ * wirft er (privates Fenster), gibt es nie eine Markierung, nichts stürzt ab.
  */
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useSyncExternalStore } from "react";
@@ -46,7 +41,7 @@ export const KIND_LABELS: Record<ChangeKind, string> = {
   sicherheit: "Sicherheit",
 };
 
-/** GET /api/v1/app/changelog -- für jeden angemeldeten Nutzer. Ändert sich nur mit einem Update. */
+/** GET /api/v1/app/changelog: für jeden angemeldeten Nutzer. Ändert sich nur mit einem Update. */
 export function useChangelog() {
   return useQuery({
     queryKey: ["changelog"],
@@ -68,14 +63,14 @@ export function formatDate(iso: string): string {
 export function frontendBuildDate(): Date | null {
   if (typeof __BUILD_ID__ === "undefined") return null;
   const ms = parseInt(__BUILD_ID__, 36);
-  // Plausibel = zwischen 2020 und 2100 -- sonst ist es keine Zeit (z. B. eine Kennung von Hand).
+  // Plausibel = zwischen 2020 und 2100, sonst ist es keine Zeit (z. B. eine Kennung von Hand).
   if (!Number.isFinite(ms) || ms < 1_577_836_800_000 || ms > 4_102_444_800_000) return null;
   return new Date(ms);
 }
 
 // --- "Schon gesehen?" -----------------------------------------------------------------
 
-/** Neuer Name; der alte (`lattice.changelogSeen`) wird beim Start uebernommen (lib/legacyStorage.ts). */
+/** Neuer Name; der alte (`lattice.changelogSeen`) wird beim Start übernommen (lib/legacyStorage.ts). */
 export const SEEN_KEY = "nodvard-deck.changelogSeen";
 
 const listeners = new Set<() => void>();
@@ -120,9 +115,8 @@ export function useChangelogSeen(): string | null {
 }
 
 /**
- * Für die Seitenleiste: laufende Version und ob es etwas Ungesehenes gibt. Beim allerersten
- * Besuch (nichts gemerkt) wird der Stand still gemerkt, ohne Markierung -- sonst wäre
- * gleich jede frische Installation "neu".
+ * Für die Seitenleiste: laufende Version und ob es etwas Ungesehenes gibt. Beim allerersten Besuch (nichts gemerkt)
+ * wird der Stand still gemerkt, ohne Markierung: sonst wäre gleich jede frische Installation "neu".
  */
 export function useChangelogNotice(): { version: string | null; isNew: boolean } {
   const { data } = useChangelog();

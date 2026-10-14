@@ -220,8 +220,9 @@ PI_HOST=admin@192.168.1.50 scripts/deploy_pi.sh
 Weitere Werte (`DEPLOY_ROOT`, `CONTAINER`, `HEALTH_TIMEOUT_S`) sind dort ebenfalls
 setzbar; gesetzte Umgebungsvariablen haben Vorrang vor der Datei.
 
-**Eigener DNS-Resolver für den Container.** Der Container nutzt standardmäßig die
-öffentlichen Resolver 1.1.1.1/1.0.0.1. Braucht er einen lokalen Resolver (z. B. einen
+**Eigener DNS-Resolver für den Container.** Ohne Angabe fragt der Container den Resolver
+des Hosts, eine Vorgabe gibt es nicht (früher: Cloudflare 1.1.1.1/1.0.0.1). Wer einen
+öffentlichen Resolver will, trägt ihn genauso ein. Braucht er einen lokalen Resolver (z. B. einen
 Pi-hole, der interne Namen wie `cloud.home.example` auflöst), setzt man
 `NODVARD_DECK_DNS_1` (und optional `NODVARD_DECK_DNS_2`) in `deploy/.env.deploy`. Die
 alten Namen `LATTICE_DNS_1`/`LATTICE_DNS_2` gelten weiter (sind beide gesetzt, gewinnt der
@@ -268,7 +269,8 @@ API-Doku (`/docs`, `/redoc`, `/openapi.json`) auch außerhalb des Entwicklungsmo
 standardmäßig ist sie aus, angemeldete Admins bekommen das Dokument über `GET /api/v1/system/openapi.json`.
 `NODVARD_DECK_MAX_BODY_BYTES` begrenzt die Größe einer Anfrage (Standard 1 MiB, darüber `413`; Uploads wie Sicherung,
 Logo, Dokumente und Bilder haben eigene Grenzen), `NODVARD_DECK_FILES_MAX_UPLOAD_BYTES` die Größe eines Uploads im
-Dateimanager (Standard `0`, keine Grenze).
+Dateimanager (Standard 10 GiB, `0` = keine Grenze; meldet das Ziel zu wenig freien Platz, lehnt der Dateimanager den
+Upload vorab mit `507` ab).
 
 - **Die alten Namen gelten weiter.** Eine vorhandene `.env`, eine eigene Compose-Datei oder
   ein `docker run -e LATTICE_…` laufen unverändert. Beim Start steht einmalig eine Warnung
@@ -325,9 +327,21 @@ Deploy mit dem neuen Namen** noch sichern will, nimmt dafür das `backup.sh` des
 
 ```bash
 cd deploy
-./backup.sh [zielverzeichnis]              # legt nodvard-deck-backup-<timestamp>.tar.gz an
-./restore.sh /pfad/zu/nodvard-deck-backup-*.tar.gz   # auch ältere lattice-backup-*.tar.gz
+./backup.sh [zielverzeichnis]              # nodvard-deck-backup-<timestamp>.ndbak (mit Sicherungsschlüssel) oder .tar.gz
+./restore.sh /pfad/zu/nodvard-deck-backup-*.ndbak     # fragt Sicherungspasswort oder Wiederherstellungsschlüssel ab
+./restore.sh /pfad/zu/nodvard-deck-backup-*.tar.gz    # auch ältere lattice-backup-*.tar.gz
 ```
+
+**Verschlüsselung:** Ist in Nodvard Deck ein Sicherungsschlüssel eingerichtet (Einstellungen → System → Sicherung),
+schreibt `backup.sh` eine verschlüsselte Sicherung wie aus der Oberfläche (`nodvard-deck-backup-<timestamp>.ndbak`,
+erzeugt von `python -m nodvard_deck.admin create-backup` im Hilfscontainer). `restore.sh` merkt sie wie jede `.ndbak`
+zum Einspielen vor und fragt dabei das Sicherungspasswort oder den Wiederherstellungsschlüssel ab. **Ohne Schlüssel**
+(oder mit einem Image, das den Befehl noch nicht kennt) entsteht wie bisher ein `.tar.gz`, und das Skript warnt vor dem
+Anhalten und am Ende deutlich: **Das `.tar.gz` ist nicht verschlüsselt und enthält `master.key`.** Wer die Datei hat,
+kann alle gespeicherten Zugangsdaten entschlüsseln. Bewahre es auf wie ein Passwort (nicht in Cloud-Ordner, Chats oder
+unverschlüsselte Mails), oder richte den Sicherungsschlüssel ein. Lässt sich gar nicht feststellen, ob es einen Schlüssel
+gibt (Datenbank unlesbar), bricht `backup.sh` ab, bevor es etwas anhält. Bei Erfolg steht in der Ausgabe die Zeile
+`Fertig: <Pfad der Sicherung>`.
 
 Läuft noch (oder nach einem Rollback wieder) der alte Container `deploy-lattice-1`, hat er
 dasselbe Volume offen: beide Skripte stoppen ihn dann ebenfalls und starten ihn am Ende wieder.
@@ -346,9 +360,10 @@ Zielordner dem Aufrufer (`SUDO_UID`), als root ohne sudo (etwa aus der root-Cron
 wenn das nicht root ist. Eine `.tar.gz` liest `restore.sh` selbst und reicht sie über die Standardeingabe in den
 Container; eine Datei, die root gehört, geht also mit `sudo`.
 
-**`backup.sh`** prüft vor dem Anhalten, ob das Image `nodvard-deck:latest` da ist und ob sich in den Zielordner
-schreiben lässt. Die Datei entsteht unter einem Zwischennamen (`<name>.partial.<Zufall>`, Rechte 0600) und bekommt
-ihren Namen erst, wenn sie mindestens 1 KiB groß und ein lesbares tar.gz ist; sonst wird sie gelöscht.
+**`backup.sh`** prüft vor dem Anhalten, ob das Image `nodvard-deck:latest` da ist, ob sich in den Zielordner
+schreiben lässt und ob es einen Sicherungsschlüssel gibt. Die Datei entsteht unter einem Zwischennamen
+(`<name>.partial.<Zufall>`, Rechte 0600) und bekommt ihren Namen erst, wenn sie mindestens 1 KiB groß und ein lesbares
+tar.gz bzw. eine Sicherung von Nodvard Deck (Kopfzeile) ist; sonst wird sie gelöscht.
 
 **Sperre:** Beide Skripte (auch `restore.sh` mit `.ndbak`) halten bis zum Ende dieselbe Sperre (`flock` auf
 `deploy/.backup-restore.lock`). Läuft schon eine Sicherung oder ein Einspielen (etwa eine Cron-Sicherung), bricht der

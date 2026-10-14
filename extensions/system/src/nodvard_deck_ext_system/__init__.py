@@ -1,5 +1,4 @@
-"""system-Extension: der Zustand eines Linux-Servers mit SSH-Zugang auf einer Seite (Auslastung, Platten, Dienste,
-Updates)."""
+"""system-Extension: Zustand eines Linux-Servers mit SSH-Zugang auf einer Seite (Auslastung, Platten, Dienste, Updates)."""
 
 from __future__ import annotations
 
@@ -235,8 +234,7 @@ class Extension(NodvardExtension):
 
         @router.get("/hosts/{host_id}/live")
         async def host_live(host_id: str) -> dict:
-            """Task-Manager-Ansicht: Kerne, Takt, Temperaturen, RAM, Platten, Netzwerkkarten, Dateisysteme,
-            Top-Prozesse."""
+            """Task-Manager-Ansicht: Kerne, Takt, Temperaturen, RAM, Platten, Netzwerkkarten, Dateisysteme, Top-Prozesse."""
             host = await ctx.hosts.get(host_id)
             if host is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")

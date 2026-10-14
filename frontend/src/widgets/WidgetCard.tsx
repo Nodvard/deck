@@ -27,10 +27,9 @@ function queryKeyFor(widget: WidgetOut): [string, string, string] {
 }
 
 /**
- * Eine Karte pro Widget: holt `data_endpoint` (docs/02-EXTENSION-API.md §4:
- * `{data, meta}`), haelt sich per `refresh.interval_s` und/oder `refresh.ws_channel`
- * aktuell, und validiert die Form GEGEN DEN VIEW-TYP defensiv -- eine Formabweichung
- * wird als Extension-Fehler angezeigt statt als kaputtes/leeres UI (docs/02 §4).
+ * Eine Karte pro Widget: holt `data_endpoint` (`{data, meta}`, docs/02-EXTENSION-API.md), hält sich per
+ * `refresh.interval_s` und/oder `refresh.ws_channel` aktuell und validiert die Form gegen den View-Typ defensiv: Eine
+ * Abweichung wird als Extension-Fehler angezeigt statt als kaputtes oder leeres UI.
  */
 export function WidgetCard({ widget }: { widget: WidgetOut }) {
   const queryClient = useQueryClient();
@@ -50,8 +49,8 @@ export function WidgetCard({ widget }: { widget: WidgetOut }) {
     void queryClient.invalidateQueries({ queryKey });
   }
 
-  // "Oeffnen" fuehrt zur Seite derselben Extension (die mit der kleinsten nav_order) --
-  // generisch ueber den Seitenkatalog, der Kern kennt keine Extension namentlich.
+  // „Öffnen“ führt zur Seite derselben Extension (die mit der kleinsten nav_order), generisch über den Seitenkatalog,
+  // der Kern kennt keine Extension namentlich.
   const { data: pages } = usePages();
   const page = (pages ?? [])
     .filter((p) => p.ext_id === widget.ext_id && p.show_in_nav !== false)

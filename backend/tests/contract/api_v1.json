@@ -12265,12 +12265,56 @@
     "204": null
    }
   },
+  "PUT /api/v1/settings/autonomy": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "max_risk": {
+       "required": true,
+       "type": "string"
+      },
+      "mode": {
+       "required": true,
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "max_risk": {
+       "type": "string"
+      },
+      "mode": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/settings/{key}": {
    "body": {
     "content_type": "application/json",
     "required": true,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      },
       "value": {
        "required": true,
        "type": "any"

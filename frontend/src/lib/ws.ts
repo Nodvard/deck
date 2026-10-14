@@ -1,14 +1,7 @@
 /**
- * Client fuer den WS-Multiplex-Hub (docs/04-API.md §4, core/ws_hub.py,
- * api/v1/ws.py). EINE Verbindung fuer die ganze App (Multiplex, daher der Name) --
- * Widgets/Seiten abonnieren nur Kanaele, statt je eine eigene Verbindung aufzumachen.
- *
- * Protokoll (Client<->Server, exakt wie backend/src/nodvard_deck/api/v1/ws.py):
- *   -> {type:"auth", token}              <- {type:"auth_ok"} | {type:"auth_error"}
- *   -> {type:"subscribe", channel}       <- {type:"subscribed", channel}
- *   -> {type:"unsubscribe", channel}     <- {type:"subscribed", channel, payload:{subscribed:false}}
- *   <- {type:"ping"}                     -> {type:"pong"}
- *      {type:"event", channel, payload}  (nur an abonnierte + RBAC-berechtigte Verbindungen)
+ * Client für den WS-Multiplex-Hub (docs/04-API.md, core/ws_hub.py, api/v1/ws.py): eine Verbindung für die ganze App,
+ * Widgets und Seiten abonnieren nur Kanäle. Protokoll: `auth` -> `auth_ok`/`auth_error`, `subscribe`/`unsubscribe` ->
+ * `subscribed`, `ping` -> `pong`, `event` nur an abonnierte und berechtigte Verbindungen.
  */
 import { useEffect, useRef } from "react";
 
@@ -116,10 +109,8 @@ class WsMultiplexClient {
         break;
       case "auth_error":
         this.authenticated = false;
-        // Token vermutlich abgelaufen -- ein stiller Refresh (state/auth.ts) plus
-        // Reconnect uebernimmt das Nachziehen; kein manueller Eingriff noetig. Ist der
-        // Server gerade nicht erreichbar, wirft refresh() -- der Takt in
-        // lib/tokenRefresh.ts versucht es dann weiter.
+        // Token vermutlich abgelaufen: Ein stiller Refresh (state/auth.ts) plus Reconnect zieht nach. Ist der Server
+        // gerade nicht erreichbar, wirft refresh(); der Takt in lib/tokenRefresh.ts versucht es dann weiter.
         useAuthStore.getState().refresh().catch(() => {});
         break;
       case "ping":
@@ -156,7 +147,7 @@ class WsMultiplexClient {
 
 export const wsClient = new WsMultiplexClient();
 
-/** Abonniert `channel` fuer die Lebensdauer der Komponente; ruft `onEvent` bei jedem WsHub.publish() auf. */
+/** Abonniert `channel` für die Lebensdauer der Komponente; ruft `onEvent` bei jedem WsHub.publish() auf. */
 export function useWsSubscription(channel: string | null | undefined, onEvent: EventHandler): void {
   const handlerRef = useRef(onEvent);
   handlerRef.current = onEvent;

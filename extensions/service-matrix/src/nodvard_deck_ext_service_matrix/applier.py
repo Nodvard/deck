@@ -416,11 +416,9 @@ class ImageApplier:
             outcome = await self._launch_and_wait(host, run_id, script, app_key, t.project)
             return await self._conclude(host, t, plan.rollback_ref, run_id, app_key, started, outcome, actor=req.proposed_by)
         except asyncio.CancelledError:
-            # Das Dashboard fährt herunter: der Lauf auf dem Host geht weiter (entkoppelt) und wird hier nicht als "fertig"
-            # gemeldet, das Gate markiert die Aktion als unterbrochen. Der Eintrag bleibt, nach dem Neustart macht
-            # `resume_interrupted` weiter. CancelledError kommt auch von der Notbremse des Gates (`asyncio.timeout`,
-            # 60 Minuten): ein dann stehengebliebener Eintrag wird beim nächsten Start als zu alt verworfen
-            # (`RESUME_MAX_AGE_S`).
+            # Das Dashboard fährt herunter: Der Lauf auf dem Host geht entkoppelt weiter, das Gate markiert die Aktion als
+            # unterbrochen, und nach dem Neustart macht `resume_interrupted` weiter. Kam CancelledError von der Notbremse des
+            # Gates (60 Minuten), verwirft der nächste Start den Eintrag als zu alt (`RESUME_MAX_AGE_S`).
             keep_entry = True
             log.warning("image_update_interrupted host=%s container=%s run=%s (laeuft auf dem Host weiter)", host.id, container, run_id)
             raise

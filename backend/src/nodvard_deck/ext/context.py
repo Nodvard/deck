@@ -129,11 +129,11 @@ class ApiHandle:
         """Registriert den Router; montiert wird erst nach setup() (docs/02 §1: setup() macht kein I/O).
 
         Der Zugriff gilt für den ganzen Router: `permission` verlangt Anmeldung und Recht, `public=True` nichts."""
-        # Ohne `permission` und `public` genügt eine gültige Anmeldung; sie ist keine Berechtigung, Routen mit Daten
-        # setzen `permission=`. `public=True` braucht die Manifest-Berechtigung `api.public` und schließt `permission`
-        # aus. Grenze: Der Host prüft nach `setup()` und `on_start()` (`check_routes`) und lehnt WebSocket,
-        # `add_route()` und `mount()` ab. Routen, die später (etwa aus einem Hintergrundtask) an einen montierten Router
-        # kommen, sieht er nicht mehr, sie müssen sich selbst absichern.
+        # Ohne `permission` und `public` genügt eine gültige Anmeldung (keine Berechtigung); Routen mit Daten setzen
+        # `permission=`. `public=True` braucht `api.public` im Manifest und schließt `permission` aus.
+        # Grenze: Der Host prüft nach `setup()` und `on_start()` (`check_routes`) und lehnt WebSocket,
+        # `add_route()` und `mount()` ab; Routen, die später (etwa aus einem Hintergrundtask) an einen montierten Router
+        # kommen, sieht er nicht, sie müssen sich selbst absichern.
         if public and permission is not None:
             from nodvard_sdk.errors import InvalidRegistration
 
@@ -305,17 +305,13 @@ class HostsHandle:
                     await session.flush()
                 else:
                     host.display_name = dh.display_name or host.display_name
-                    # Proxmox kennt die Gast-IP einer VM oder eines LXC nicht; `discover_hosts()` liefert als
-                    # Platzhalter die Adresse der Proxmox-API selbst. Ein unbedingtes Überschreiben setzte bei jedem
-                    # Abgleich eine von Hand korrigierte Gast-IP auf diesen Platzhalter zurück. Bei `kind="node"` ist
-                    # die Adresse die der API und darf sich ändern; eine vom Gast selbst gemeldete Adresse
-                    # (`address_verified`) gilt immer.
+                    # Proxmox kennt die Gast-IP einer VM oder eines LXC nicht und liefert als Platzhalter die Adresse
+                    # der API; ein unbedingtes Überschreiben setzte bei jedem Abgleich eine von Hand korrigierte Gast-IP
+                    # darauf zurück. Eine vom Gast gemeldete Adresse (`address_verified`) gilt immer.
                     if host.kind not in ("vm", "lxc") or dh.address_verified:
                         if host.address != dh.address:
-                            # Wie bei einer Änderung von Hand: Passwörter gehören zum alten Server, eine gepoolte
-                            # Verbindung ginge sonst weiter an die alte Adresse. Bei Gästen (Adresse vom Gast selbst,
-                            # wechselt per DHCP) bleibt ein Passwort, wenn der Server-Schlüssel schon gemerkt ist: Ein
-                            # anderer Server an der neuen Adresse käme nie bis zur Anmeldung.
+                            # Wie bei einer Änderung von Hand; bei Gästen (Adresse vom Gast, wechselt per DHCP) mit
+                            # `spare_pinned`, Gründe in `forget_address_bound_access`.
                             from ..services import hosts as hosts_service
 
                             old_address = host.address
@@ -794,11 +790,11 @@ class NotifyHandle:
             return await notifications_service.would_suppress(session, payload)
 
 
-# Namensräume im Protokoll, die nur der Kern beschreibt, weil er solche Einträge wieder liest: `mfa.failed` und
+# Namensräume im Protokoll, die nur der Kern beschreibt, weil er sie wieder liest: `mfa.failed` und
 # `auth.totp_check_failed` holen beim Start die Sperre nach falschen Zwei-Faktor-Codes zurück (ein gefälschter Eintrag
 # sperrte den Owner bis zu 24 Stunden aus), `login.failed`/`login.locked` bestimmen, welche Namen das Protokoll
-# verbirgt, `system.update.*` hält fest, ob ein Update-Ergebnis schon protokolliert ist, und `user.*` ist die Spur der
-# Kontenverwaltung. `AuditHandle.log()` lehnt diese Namen ab.
+# verbirgt, `system.update.*` hält fest, ob ein Update-Ergebnis schon protokolliert ist, `user.*` ist die Spur der
+# Kontenverwaltung. `AuditHandle.log()` lehnt sie ab.
 CORE_AUDIT_PREFIXES = ("mfa.", "auth.", "login.", "system.", "user.")
 
 
@@ -1019,9 +1015,8 @@ class WebSocketRedirectRefused(ConnectionError):
 def _websocket_connect_class() -> type:
     """`websockets.asyncio.client.connect` ohne Weiterleitungen, lazy geladen wie `websockets` sonst auch."""
     # Die Bibliothek folgt 3xx bis zu zehnmal, prüft aber nur die Start-Adresse gegen `_require_target_allowed`: Ein
-    # Server könnte die Verbindung so auf eine Adresse lenken, die die Erweiterung nicht erreichen dürfte.
-    # `process_redirect()` ist dafür die vorgesehene Stelle; eine zurückgegebene Ausnahme wird statt eines zweiten
-    # Verbindungsaufbaus ausgelöst (die erste Verbindung ist dann schon abgebrochen).
+    # Server könnte so auf eine Adresse umlenken, die die Erweiterung nicht erreichen dürfte. `process_redirect()` ist
+    # dafür die vorgesehene Stelle: Eine zurückgegebene Ausnahme wird statt eines zweiten Verbindungsaufbaus ausgelöst.
     from websockets.asyncio.client import connect
     from websockets.exceptions import InvalidStatus
 
@@ -1054,10 +1049,10 @@ def _pin_digest(value: str) -> bytes:
 def _pinned_sslobject_class(expected: bytes) -> type[ssl.SSLObject]:
     """`ssl.SSLObject`, das nach dem Handshake den Fingerabdruck des Server-Zertifikats mit `expected` vergleicht."""
     # asyncio (`websockets`) und anyio (`httpx`/`httpcore`) bauen ihre TLS-Verbindung über `SSLContext.wrap_bio()`, das
-    # `SSLContext.sslobject_class` liefert (laut Python-Doku für Unterklassen gedacht). Beide rufen `do_handshake()` vor
+    # `SSLContext.sslobject_class` nutzt (laut Python-Doku für Unterklassen gedacht). Beide rufen `do_handshake()` vor
     # dem ersten Anwendungsbyte: Passt das Zertifikat nicht, scheitert der Handshake (`CertificateMismatch`, ein
-    # `ssl.SSLError`) und nichts von der Anfrage verlässt die Maschine. `write()` verweigert zusätzlich alles, solange
-    # kein passendes Zertifikat gesehen wurde, falls eine Schicht je ohne eigenen Handshake-Aufruf schriebe.
+    # `ssl.SSLError`) und nichts von der Anfrage verlässt die Maschine. `write()` verweigert zusätzlich alles ohne
+    # passendes Zertifikat, falls eine Schicht je ohne Handshake schriebe.
 
     class _PinnedSSLObject(ssl.SSLObject):
         _nodvard_pin_ok = False
@@ -1244,8 +1239,8 @@ class HttpHandle:
         # Für Ziele mit selbstsigniertem Zertifikat, an die etwas wirklich Geheimes geht (etwa ein einmal benutztes
         # Administrator-Passwort): Der Vergleich läuft im TLS-Handshake vor dem ersten Byte der Anfrage, bei Abweichung
         # gibt es `CertificateMismatch`. Je Fingerabdruck ein eigener Client, damit keine Pool-Verbindung eines anderen
-        # Fingerabdrucks wiederverwendet wird. Weil die Prüfung über Zertifizierungsstellen entfällt, braucht es wie
-        # `insecure_tls` die Berechtigung `net.outbound.insecure_tls`.
+        # Fingerabdrucks wiederverwendet wird. Ohne Prüfung über Zertifizierungsstellen braucht es wie `insecure_tls` die
+        # Berechtigung `net.outbound.insecure_tls`.
         self._check_pin_use(url, insecure_tls=insecure_tls, schemes=("https",))
         expected = _pin_digest(pinned_sha256)
         self._perm.require("net.outbound.insecure_tls")
@@ -1360,8 +1355,8 @@ class HttpHandle:
         # Konsole mit hoher Auflösung mitten in der Sitzung ab. `compression=None`: RFB-Rahmen sind schon kodiert,
         # permessage-deflate kostet nur CPU. `proxy=None`: Seit websockets 15 nutzt `connect()` sonst `HTTP_PROXY`,
         # `WS_PROXY` und Co., und die Verbindung samt Zugangs-Header ginge an eine Stelle, die die Erweiterung nie
-        # freigegeben bekam (deshalb `websockets>=15` in `backend/pyproject.toml`; ältere Versionen scheiterten mit
-        # `TypeError`). Antwortet der Server beim Handshake mit 3xx, wirft `async with` `WebSocketRedirectRefused`.
+        # freigegeben bekam (deshalb `websockets>=15` in `backend/pyproject.toml`; ältere scheiterten mit `TypeError`).
+        # Antwortet der Server beim Handshake mit 3xx, wirft `async with` `WebSocketRedirectRefused`.
         return _websocket_connect_class()(
             url,
             additional_headers=headers,

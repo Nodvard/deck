@@ -4,10 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-# Die Ausgabe einer Aktion kann beliebige Inhalte vom Server enthalten, ihr Befehl (`payload`) Passwörter oder interne
-# Adressen. Beides sehen nur Nutzer mit diesem Recht (Owner und Admin über `*`); alle anderen bekommen Status, Zeiten,
-# Exitcode, Beteiligte und harmlose Kennungen. `output`, `error` und `detail` eines Ergebnisses bleiben dabei vorhanden,
-# nur leer (`null`, `null`, `{}`), damit Aufrufer (auch die App) nicht an einem fehlenden Feld scheitern.
+# Ausgabe und Befehl (`payload`) einer Aktion können Serverinhalte, Passwörter oder Adressen enthalten und sind nur für
+# Nutzer mit diesem Recht sichtbar (Owner und Admin über `*`). Für alle anderen bleiben `output`, `error` und `detail`
+# als leere Felder (`null`, `null`, `{}`), damit Aufrufer (auch die App) nicht an einem fehlenden Feld scheitern.
 OUTPUT_PERMISSION = "hosts.execute"
 
 # Felder des `payload`, die nur Kennungen oder kurze Namen tragen. Bewusst eine Erlaubnisliste: Payloads sind je
@@ -55,8 +54,7 @@ def audit_result(result: dict[str, Any], *, gate_error: str | None = None) -> di
 
 
 def hide_result(result: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    """Ergebnis ohne Text vom Server; alle Felder bleiben vorhanden (leer). Der zweite Wert sagt, ob etwas weggelassen
-    wurde."""
+    """Ergebnis ohne Text vom Server (alle Felder bleiben, leer); der zweite Wert sagt, ob etwas weggelassen wurde."""
     hidden = False
     out: dict[str, Any] = {}
     for key, value in result.items():
@@ -135,8 +133,7 @@ def visible_payload(payload: dict[str, Any] | None) -> tuple[dict[str, Any], boo
 
 
 def redact_action_event(data: dict[str, Any]) -> dict[str, Any]:
-    """Die Daten eines `action.*`-Ereignisses ohne Befehl, für Empfänger ohne Server-Recht; ohne `payload` bleibt es
-    unverändert."""
+    """Daten eines `action.*`-Ereignisses ohne Befehl, für Empfänger ohne Server-Recht; ohne `payload` unverändert."""
     raw = data.get("payload")
     if not isinstance(raw, dict):
         return data

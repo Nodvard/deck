@@ -31,6 +31,7 @@ from .api import api_v1_router
 from .api.body_limit import BodyLimitMiddleware
 from .api.errors import install_coded_error_handler, install_validation_error_handler
 from .api.proxy_headers import ProxyHeadersMiddleware
+from .api.security_headers import SecurityHeadersMiddleware
 from .config import get_settings
 from .core import bootstate, trusted_proxies
 from .core.demo_seed import DemoBlockedError, seed_demo_data
@@ -353,6 +354,8 @@ def create_app() -> FastAPI:
     install_coded_error_handler(app)
     # Obergrenze fuer die Groesse jeder Anfrage, bevor irgendein Handler sie liest (api/body_limit.py).
     app.add_middleware(BodyLimitMiddleware, max_body_bytes=settings.max_body_bytes)
+    # Sicherheits-Kopfzeilen fuer jede Antwort, auch fuer die 413 der Groessen-Grenze (api/security_headers.py).
+    app.add_middleware(SecurityHeadersMiddleware)
     # Echte Client-Adresse und echtes Schema hinter einem vertrauenswuerdigen Proxy (api/proxy_headers.py). Zuletzt
     # hinzugefuegt = ganz aussen: alles danach (auch die Routen) sieht schon die echte Adresse.
     app.add_middleware(ProxyHeadersMiddleware)

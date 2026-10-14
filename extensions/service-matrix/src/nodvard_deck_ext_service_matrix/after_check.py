@@ -31,12 +31,9 @@ LoopText = Callable[["ia.Snapshot", "ia.Snapshot"], str]
 ONE_RESTART_NOTE = " Dabei gab es einen Neustart (vielleicht war eine Abhängigkeit noch nicht bereit)."
 
 
-# `docker start`/`restart` melden Erfolg, sobald der Prozess läuft; ein Absturz Sekunden später fiele nicht auf. Deshalb
-# liest `wait_settled` den Zustand mehrmals:
-# - Ohne Healthcheck reicht ein einzelnes "running" nicht: ein Absturz-Kreislauf steht zwischen zwei Neustarts kurz
-#   auf "running". Ruhig heißt: zwei Lesungen mindestens `stable_s` auseinander, ohne neuen Start dazwischen
-#   (`StartedAt`, `RestartCount`).
-# - Mit Healthcheck entscheidet "healthy"/"unhealthy"; bleibt er bis zum Ende auf "starting", ist das ein Erfolg mit Hinweis.
+# `docker start`/`restart` melden Erfolg, sobald der Prozess läuft. Ohne Healthcheck heißt ruhig: zwei Lesungen mindestens
+# `stable_s` auseinander ohne neuen Start (`StartedAt`, `RestartCount`), denn ein Absturz-Kreislauf steht kurz auf "running".
+# Mit Healthcheck zählt "healthy"/"unhealthy"; bleibt er bis zum Ende auf "starting", ist das ein Erfolg mit Hinweis.
 async def wait_settled(
     read: Read, judge: Judge, *, timeout_s: float, interval_s: float, stable_s: float,
     restarts_allowed: int = 0, loop_text: LoopText | None = None,

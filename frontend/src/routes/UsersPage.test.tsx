@@ -8,6 +8,7 @@ import { UsersPage, roleLabel } from "./UsersPage";
 
 const ROLES = [
   { id: "role-admin", name: "admin", description: "Eingebaute Rolle 'admin'", is_builtin: true },
+  { id: "role-operator", name: "operator", description: "Eingebaute Rolle 'operator'", is_builtin: true },
   { id: "role-viewer", name: "viewer", description: "Eingebaute Rolle 'viewer'", is_builtin: true },
 ];
 const USERS = [
@@ -104,6 +105,20 @@ describe("UsersPage", () => {
     expect(roleLabel({ name: "operator", is_builtin: true })).toBe("Bediener");
     expect(roleLabel({ name: "operator", is_builtin: false })).toBe("operator");
     expect(roleLabel({ name: "buchhaltung", is_builtin: false })).toBe("buchhaltung");
+  });
+
+  it("sagt beim Bediener deutlich, dass er Befehle auf Servern ausfuehren kann (mit sudo-Regel: volle Rechte)", async () => {
+    vi.stubGlobal("fetch", mockFetch());
+    renderPage();
+    await screen.findByText("owner1");
+    fireEvent.click(screen.getByRole("button", { name: "Neuer Benutzer" }));
+    const operator = screen.getByLabelText("Bediener").closest("label")!;
+    expect(operator.textContent).toContain("Befehle ausführen");
+    expect(operator.textContent).toContain("sudo-Regel");
+    expect(operator.textContent).toContain("volle Rechte");
+    expect(operator.textContent).toContain("Aktionen bis mittleres Risiko freigeben");
+    // Der Betrachter führt nichts aus; sein Text spricht nicht von Befehlen.
+    expect(screen.getByLabelText("Betrachter").closest("label")!.textContent).not.toContain("Befehle");
   });
 
   it("legt einen neuen Nutzer mit Rolle ueber das Formular an", async () => {

@@ -10,10 +10,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
 
-# Warum ein Vermerk auf der Platte: Proxmox stellt weiter her, auch wenn die Aktion vorher endet (Zeitgrenze, keine
-# Antwort, Neustart des Dashboards). Ohne Vermerk bliebe die Kopie mit verbundenen Netzwerkkarten (und je nach
-# Proxmox-Version dem Autostart des Originals) liegen. Er entsteht vor dem Anlegen; der Backup-Wächter richtet offene
-# Kopien nach (`restore.follow_up_open_copies`) und löscht ihn, sobald nichts mehr zu tun ist.
+# Proxmox stellt weiter her, auch wenn die Aktion vorher endet (Zeitgrenze, keine Antwort, Neustart): Ohne Vermerk
+# bliebe die Kopie mit verbundenen Netzwerkkarten (je nach Version mit dem Autostart des Originals) liegen. Er entsteht
+# vor dem Anlegen; der Backup-Wächter richtet offene Kopien nach (`restore.follow_up_open_copies`) und löscht ihn dann.
 FILE_NAME = "restore-pending.json"
 
 ACTIVE: set[str] = set()

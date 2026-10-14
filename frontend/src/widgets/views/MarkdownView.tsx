@@ -4,13 +4,9 @@ import { resolvePath } from "../template";
 import type { MarkdownView as MarkdownViewSpec } from "../types";
 
 /**
- * Ersetzt die vorherige
- * handgerollte Teilmenge (nur Ueberschriften/fett/kursiv/Inline-Code/Links/Absaetze,
- * siehe git-Historie) durch echtes CommonMark+GFM -- Listen, Codebloecke, Zitate,
- * Tabellen. `html: false` (Default) bleibt bewusst so: rohes HTML im Markdown-Text
- * wird escaped statt gerendert, dieselbe XSS-Haltung wie die vorherige
- * escapeHtml-zuerst-Strategie, jetzt vom Parser selbst statt von Hand durchgesetzt.
- * `linkify: true` erkennt nackte URLs zusaetzlich zu `[text](url)`.
+ * Markdown als CommonMark+GFM (Listen, Codeblöcke, Zitate, Tabellen). `html: false` (Default) bleibt bewusst: Rohes HTML
+ * im Markdown-Text wird escaped statt gerendert (XSS-Schutz, vom Parser selbst durchgesetzt). `linkify: true` erkennt
+ * nackte URLs zusätzlich zu `[text](url)`.
  */
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true });
 

@@ -1,13 +1,6 @@
 /**
- * System: Einstellungen, die das ganze Dashboard betreffen. Jede Karte ist eine eigene Datei
- * und bringt ihre Daten selbst mit; weitere kommen unten in `CARDS`
- * dazu, ohne dass sich Seite oder Navigation aendern.
- *
- * Jede Karte nennt ihr Recht: „Sicherung“ und „Updates“ brauchen `system.read` (Aendern nur der Owner
- * bzw. die Schalter der Updates mit `settings.write`),
- * „Zeit & Protokoll“ weiter `settings.write` (liest GET /settings). „Vertrauenswürdiger Proxy“ braucht beide:
- * `settings.write` zum Ansehen (Ändern nur der Owner), `system.read` für die Zeile, wie die Anfrage gerade ankommt. Der Reiter erscheint mit
- * einem der beiden Rechte, gezeigt werden nur die passenden Karten.
+ * System: Einstellungen, die das ganze Dashboard betreffen. Jede Karte ist eine eigene Datei und bringt ihre Daten
+ * selbst mit; weitere kommen unten in `CARDS` dazu, ohne dass sich Seite oder Navigation ändern.
  */
 import { useEffect, useState, type ComponentType } from "react";
 
@@ -31,6 +24,9 @@ export interface SystemCardProps {
   settings: SettingRow[];
 }
 
+// Rechte je Karte: Sicherung, Wiederherstellen und Updates brauchen `system.read` (Ändern nur der Owner, die
+// Update-Schalter mit `settings.write`), Zeit & Protokoll `settings.write`, der vertrauenswürdige Proxy beides. Der
+// Reiter erscheint mit einem der Rechte, gezeigt werden nur die passenden Karten.
 const CARDS: { id: string; permission: string; alsoNeeds?: string; needsSettings: boolean; Component: ComponentType<SystemCardProps> }[] = [
   { id: "backup", permission: "system.read", needsSettings: false, Component: BackupCard },
   { id: "restore", permission: "system.read", needsSettings: false, Component: RestoreCard },

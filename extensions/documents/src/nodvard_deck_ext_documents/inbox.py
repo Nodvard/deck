@@ -184,7 +184,7 @@ async def fetch_inbox(ctx: Any, folder: str, store: StoreDocument) -> InboxResul
             row.path: row
             for row in (await session.execute(select(InboxFile).where(InboxFile.source_id == SOURCE_ID))).scalars()
         }
-    # Neu ist eine Datei, wenn es ihren Pfad in `InboxFile` noch nicht gibt oder sich Größe oder Änderungszeit geändert haben.
+    # Neu ist eine Datei, wenn ihr Pfad in `InboxFile` fehlt oder sich Größe oder Änderungszeit geändert haben.
     new = [
         e for e in candidates
         if e.path not in known

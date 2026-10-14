@@ -12,12 +12,10 @@ from typing import Any
 from urllib.parse import urlsplit
 
 NPM_IMAGE_HINT = "nginx-proxy-manager"
-# Ziel "dieser Rechner": der Server des Proxy Managers nur, wenn er im Host-Netz läuft. Im Bridge-Netz ist es der
-# Proxy Manager selbst.
-LOOPBACK_TARGETS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})
+# Ziel "dieser Rechner": im Host-Netz der Server des Proxy Managers, im Bridge-Netz der Proxy Manager selbst.
+LOOPBACK_TARGETS = frozenset({"localhost", "127.0.0.1", "::1", "0.0.0.0"})  # nosec B104 - Vergleichswert, kein Lauschen
 HOST_TARGETS = frozenset({"host.docker.internal"})
-# Gateways der Docker-Netze (`docker0` ist 172.17.0.1, Compose-Netze folgen ab 172.18.0.1). 172.16.0.1 nicht: das ist
-# öfter ein Router im Heimnetz.
+# Gateways der Docker-Netze (`docker0` 172.17.0.1, Compose ab 172.18.0.1); nicht 172.16.0.1, das ist oft ein Heimnetz-Router.
 _DOCKER_GATEWAY_RE = re.compile(r"^172\.(?:1[7-9]|2\d|3[01])\.0\.1$")
 
 RUNNING = "running"
@@ -210,12 +208,9 @@ def _container_result(host: DockerHost, container: dict[str, Any], *, sure: bool
 def check_proxy_host(
     proxy: dict[str, Any], hosts: dict[str, DockerHost], npm_host: DockerHost | None, suffixes: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    # Reihenfolge: 1. Ziel ist ein Docker-Server (Adresse oder Name): der Container dort, der den Port belegt.
-    # 2. Ziel ist host.docker.internal, ein Docker-Gateway oder localhost: dasselbe auf dem Server des Proxy Managers.
-    # 3. Sonst gilt das Ziel als Containername; Docker löst Namen nur im eigenen Netz auf, also dort suchen.
-    # Mehrere Treffer sind "nicht eindeutig", keiner ist "nicht zugeordnet" (kann ein Dienst außerhalb von Docker sein,
-    # etwa die Proxmox-Oberfläche). Nicht geprüft: Container im Host-Netz (zeigen keine Ports), Netzwerk-Aliase und
-    # zusätzliche Orte (`locations`) eines Proxy-Hosts. An 127.0.0.1 gebundene Ports zählen nicht (von außen unerreichbar).
+    # Das Ziel ist ein Docker-Server, ein Name für den Server des Proxy Managers (localhost, Gateway) oder ein Containername.
+    # Nicht geprüft: Container im Host-Netz (zeigen keine Ports), Netzwerk-Aliase und weitere Orte (`locations`) eines
+    # Proxy-Hosts. An 127.0.0.1 gebundene Ports zählen nicht, weil sie von außen unerreichbar sind.
     target = _norm(proxy.get("forward_host"))
     port = proxy.get("forward_port")
     port = port if isinstance(port, int) and 0 < port <= 65535 else None

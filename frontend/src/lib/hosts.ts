@@ -1,12 +1,6 @@
 /**
- * Server & Zugaenge (Einstellungen -> Server & Zugaenge): Typen der Antworten aus
- * `api/v1/hosts.py`, `host_access.py` und `services/host_check.py`, dazu die Abfragen
- * (react-query) und ein paar kleine Helfer fuer die Anzeige.
- *
- * WICHTIG: Schluessel und Passwoerter, die jemand eintippt oder einfuegt, gehen NIE ueber
- * `useMutation` (dessen Eingabe bliebe im Mutations-Cache liegen) und nie in einen
- * Query-Key -- die Formulare rufen `api.post` direkt auf und leeren das Feld vorher.
- * Die einzige Antwort mit Schluesselbezug ist der OEFFENTLICHE Teil (`public_key`).
+ * Server & Zugänge (Einstellungen → Server & Zugänge): Typen der Antworten aus `api/v1/hosts.py`, `host_access.py` und
+ * `services/host_check.py`, die Abfragen (react-query) und kleine Anzeige-Helfer.
  */
 import { useQueries, useQuery, type QueryClient } from "@tanstack/react-query";
 
@@ -15,6 +9,9 @@ import { hostHealth, type HostCredentialSummary, type HostOut } from "./overview
 
 export type { HostCredentialSummary, HostOut };
 
+// Schlüssel und Passwörter aus Formularen gehen nie über `useMutation` (die Eingabe bliebe im Mutations-Cache) und in
+// keinen Query-Key: Die Formulare rufen `api.post` direkt auf und leeren das Feld vorher. Die einzige Antwort mit
+// Schlüsselbezug ist der öffentliche Teil (`public_key`).
 export type CredentialKind = "ssh_key" | "ssh_password" | "api_token";
 
 export interface CredentialOut {
@@ -28,7 +25,7 @@ export interface CredentialOut {
 }
 
 export interface MakeDefaultOut extends CredentialOut {
-  /** Gesetzt, wenn der alte Zugang geloescht wurde: sein Schluessel steht weiter auf dem Server. */
+  /** Gesetzt, wenn der alte Zugang gelöscht wurde: sein Schlüssel steht weiter auf dem Server. */
   notice: string | null;
 }
 
@@ -129,19 +126,15 @@ export const CREDENTIAL_KIND_LABEL: Record<string, string> = {
   api_token: "Zugriffstoken",
 };
 
-/** Nur SSH-Zugaenge gehoeren auf diese Seite (Zugriffstoken kennt keine Oberflaeche). */
+/** Nur SSH-Zugänge gehören auf diese Seite (Zugriffstoken kennt keine Oberfläche). */
 export function isSshCredential(credential: { kind: string }): boolean {
   return credential.kind === "ssh_key" || credential.kind === "ssh_password";
 }
 
 /**
- * Wie weit der Zugang eines Servers belegt ist -- aus dem Zustand des Servers und, falls die Person
- * gerade „Verbindung pruefen“ gedrueckt hat, aus dessen Ergebnis (`login`). Ein gespeicherter Zugang
- * allein beweist nichts: Bei einem Schluessel kann der Befehl auf dem Server noch fehlen, ein
- * Passwort kann falsch sein. „Erreichbar“ heisst im Kern nur: der SSH-Port nimmt Verbindungen an --
- * das sieht der Erreichbarkeits-Job auch ohne Anmeldung. Gruen wird ein SSH-Zugang deshalb erst mit
- * einer belegten Anmeldung (`login_ok_at`); antwortet der Server, ohne dass sie je geklappt hat,
- * heisst der Zustand `unconfirmed`.
+ * Wie weit der Zugang belegt ist, aus Serverzustand und Ergebnis von „Verbindung prüfen“ (`login`). Ein gespeicherter
+ * Zugang beweist nichts (Befehl fehlt, Passwort falsch), „Erreichbar“ heißt nur: Der SSH-Port nimmt Verbindungen an.
+ * Grün wird ein SSH-Zugang erst mit belegter Anmeldung (`login_ok_at`); antwortet der Server ohne sie: `unconfirmed`.
  */
 export type AccessState = "ok" | "login-failed" | "never-answered" | "no-answer" | "unchecked" | "unconfirmed";
 
@@ -166,14 +159,14 @@ export function neverAnswered(host: Pick<HostOut, "status" | "last_seen_at">): b
   return hostHealth(host.status) !== "online" && !host.last_seen_at;
 }
 
-/** Ergebnis der Anmeldung in einer Verbindungspruefung: `null`, wenn die Pruefung sie gar nicht erreicht hat. */
+/** Ergebnis der Anmeldung in einer Verbindungsprüfung: `null`, wenn die Prüfung sie gar nicht erreicht hat. */
 export function loginOutcome(result: ConnectionCheck): "ok" | "fail" | null {
   const item = result.items.find((i) => i.id === "login");
   if (!item || item.status === "skipped") return null;
   return item.status === "ok" ? "ok" : "fail";
 }
 
-/** „Schluessel · lattice“ -- die kurze Beschriftung eines Zugangs. */
+/** „Schlüssel · lattice“: die kurze Beschriftung eines Zugangs. */
 export function accessLabel(credential: Pick<HostCredentialSummary, "kind" | "username">): string {
   return `${CREDENTIAL_KIND_LABEL[credential.kind] ?? credential.kind} · ${credential.username}`;
 }
@@ -227,7 +220,7 @@ export function useGroupMembers(groupIds: string[]): { members: Record<string, s
   return { members, isLoading: results.some((r) => r.isLoading) };
 }
 
-/** Der Einrichtungsbefehl. Aendert nichts auf dem Server (GET); die Wahl von sudo und Gruppen steht im Key. */
+/** Der Einrichtungsbefehl. Ändert nichts auf dem Server (GET); die Wahl von sudo und Gruppen steht im Key. */
 export function useSetup(hostId: string, credentialId: string, options: { sudo: boolean; groups: string[]; enabled: boolean }) {
   const groups = [...options.groups].sort();
   const query = new URLSearchParams();
@@ -241,19 +234,19 @@ export function useSetup(hostId: string, credentialId: string, options: { sudo: 
   });
 }
 
-/** Nach jeder Aenderung an einem Server: Liste, Einzelansicht, Zugaenge und Schluessel neu laden. */
+/** Nach jeder Änderung an einem Server: Liste, Einzelansicht, Zugänge und Schlüssel neu laden. */
 export function refreshHosts(queryClient: QueryClient): Promise<void> {
   return queryClient.invalidateQueries({ queryKey: ["hosts"] });
 }
 
 // ---------------------------------------------------------------------------
-// Helfer fuer die Anzeige
+// Helfer für die Anzeige
 // ---------------------------------------------------------------------------
 
 /**
- * Die Meldungen des Backends (422) je Feld: `{name: "Kurzname: ...", address: "..."}`. Die deutschen
- * Texte kommen vom Backend (`api/errors.py` schneidet das englische Praefix ab) -- hier wird nur
- * zugeordnet. Bei Listenfeldern (`tags.0`) zaehlt das Feld davor. Alles andere (409, Text): leer.
+ * Die Meldungen des Backends (422) je Feld: `{name: "Kurzname: ...", address: "..."}`. Die deutschen Texte kommen vom
+ * Backend (`api/errors.py` schneidet das englische Präfix ab), hier wird nur zugeordnet. Bei Listenfeldern (`tags.0`)
+ * zählt das Feld davor. Alles andere (409, Text): leer.
  */
 export function fieldErrors(err: unknown): Record<string, string> {
   if (!(err instanceof ApiError) || err.status !== 422) return {};
@@ -272,9 +265,8 @@ export function fieldErrors(err: unknown): Record<string, string> {
 }
 
 /**
- * Geht ein Passwort, das hier eingetippt wird, unverschluesselt durchs Netz? Ja, wenn die Seite ueber `http:`
- * laeuft -- ausser sie ist direkt auf diesem Rechner geoeffnet (localhost, 127.x.x.x, ::1). Hinter einem Proxy
- * mit HTTPS sieht der Browser `https:` und es gibt keinen Hinweis.
+ * Geht ein hier eingetipptes Passwort unverschlüsselt durchs Netz? Ja, wenn die Seite über `http:` läuft, außer sie ist
+ * direkt auf diesem Rechner geöffnet (localhost, 127.x.x.x, ::1). Hinter einem HTTPS-Proxy sieht der Browser `https:`.
  */
 export function sendsInClear(location: Pick<Location, "protocol" | "hostname">): boolean {
   if (location.protocol === "https:") return false;
@@ -282,13 +274,13 @@ export function sendsInClear(location: Pick<Location, "protocol" | "hostname">):
   return !(host === "localhost" || host === "::1" || /^127\.\d+\.\d+\.\d+$/.test(host));
 }
 
-/** Wo der oeffentliche Server-Schluessel dieses Typs auf dem Server liegt (zum Vergleichen des Fingerabdrucks). */
+/** Wo der öffentliche Server-Schlüssel dieses Typs auf dem Server liegt (zum Vergleichen des Fingerabdrucks). */
 export function hostKeyFile(keyType: string): string {
   const kind = keyType.includes("ed25519") ? "ed25519" : keyType.includes("ecdsa") ? "ecdsa" : keyType.includes("rsa") ? "rsa" : "*";
   return `/etc/ssh/ssh_host_${kind}_key.pub`;
 }
 
-/** Kurzfassung eines Pruefergebnisses fuer die Liste: „4 von 5 in Ordnung“. */
+/** Kurzfassung einer Verbindungsprüfung für die Liste: „4 von 5 in Ordnung“. */
 export function checkSummary(result: ConnectionCheck): string {
   if (result.items.some((i) => i.status === "confirm")) return "Server-Schlüssel noch nicht bestätigt";
   const counted = result.items.filter((i) => i.status !== "skipped");
@@ -305,7 +297,7 @@ export interface TextPart {
 // Befehle, die in Hinweisen vorkommen: in „…“ (sudo apt install …) oder der Vergleich des Fingerabdrucks.
 const COMMAND_RE = /„((?:sudo|apt|systemctl|ssh-keygen|usermod|raspi-config)\b[^“]*)“|(ssh-keygen -lf \S+)/g;
 
-/** Zerlegt einen Hinweistext, damit Befehle als `<code>` (mit Kopierknopf) erscheinen koennen. */
+/** Zerlegt einen Hinweistext, damit Befehle als `<code>` (mit Kopierknopf) erscheinen können. */
 export function splitCommands(text: string): TextPart[] {
   const parts: TextPart[] = [];
   let last = 0;
@@ -319,7 +311,7 @@ export function splitCommands(text: string): TextPart[] {
   return parts;
 }
 
-/** `30.09.2026` -- leer bei einem ungueltigen Wert. */
+/** `30.09.2026`, leer bei einem ungültigen Wert. */
 export function formatDate(iso: string): string {
   const date = new Date(iso);
   if (!iso || Number.isNaN(date.getTime())) return "";

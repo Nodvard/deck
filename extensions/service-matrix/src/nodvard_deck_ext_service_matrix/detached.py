@@ -6,11 +6,9 @@ import re
 import shlex
 from dataclasses import dataclass
 
-# Ein `docker compose pull` dauert Minuten, und wenn der Container von Nodvard Deck selbst neu erstellt wird, reißt der
-# SSH-Kanal ab. Der Lauf startet deshalb auf dem Host selbst (`nohup setsid`, ohne Verbindung zu stdin/stdout/stderr des
-# Kanals), sonst endete er mit SIGPIPE. Ausgabe, Rückgabecode und Prozess-ID landen in `<JOB_DIR>/<run_id>.log/.rc/.pid`.
-# Eigene Fassung statt Import aus Shield: Erweiterungen importieren einander nicht; hier ohne root und systemd-run, im
-# Home des SSH-Benutzers.
+# `docker compose pull` dauert Minuten, und erstellt es den Container von Nodvard Deck neu, reißt der SSH-Kanal ab. Der Lauf
+# startet daher auf dem Host (`nohup setsid`, ohne stdin/stdout/stderr des Kanals, sonst SIGPIPE) und schreibt Protokoll,
+# Rückgabecode und PID nach `<JOB_DIR>/<run_id>.log/.rc/.pid`. Eigene Fassung ohne root und systemd-run, nicht aus Shield.
 JOB_DIR_SH = '"$HOME"/.local/state/lattice-image-updates'
 """Eine feste Shell-Angabe (kein Nutzertext): der Ordner der Protokolle im Home des SSH-Benutzers."""
 JOB_DIR_DISPLAY = "~/.local/state/lattice-image-updates"

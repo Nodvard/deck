@@ -55,9 +55,10 @@
 #
 # Nutzung (aus deploy/):  ./restore.sh /pfad/zu/nodvard-deck-backup-20260101-120000.tar.gz   (auch lattice-backup-*.tar.gz)
 #
-# Eine verschluesselte Sicherung aus der Oberflaeche (`*.ndbak`) wird NICHT sofort eingespielt: das Skript
-# laesst sie von `python -m nodvard_deck.admin restore-backup` pruefen und VORMERKEN (Passwort bzw. Wiederherstellungs-
-# schluessel wird abgefragt, es erscheint eine Zusammenfassung) und startet den Dienst auf Wunsch neu. Eingespielt wird
+# Eine verschluesselte Sicherung (`*.ndbak`, aus der Oberflaeche oder von backup.sh mit Sicherungsschluessel) wird NICHT
+# sofort eingespielt: das Skript laesst sie von `python -m nodvard_deck.admin restore-backup` pruefen und VORMERKEN
+# (Passwort bzw. Wiederherstellungsschluessel wird abgefragt, es erscheint eine Zusammenfassung) und startet den Dienst
+# auf Wunsch neu. Eingespielt wird
 # dann beim Start (`nodvard_deck.boot`), mit denselben Pruefungen und demselben Rueckweg wie in der Oberflaeche.
 # Hier braucht der Container die Datei als Pfad (die Standardeingabe gehoert dem Passwort-Dialog, und der
 # braucht ein Terminal). Das Skript legt dafuer eine KOPIE in einem eigenen Ordner mit zufaelligem Namen

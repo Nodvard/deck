@@ -2,10 +2,9 @@ import { authedFetch, errorFromBody, ServerUnavailableError } from "./api";
 import { deck } from "./deck";
 
 /**
- * Genehmigte Aktionen laufen im Hintergrund (core/gate.py). Ist eine
- * Aktion nach etwa 20 s nicht fertig (Update, Installation, langes Skript), antwortet
- * `POST /actions/{id}/approve` mit 202 und Status `executing` -- das ist kein Fehler.
- * Bis die Erweiterungsseiten selbst nachfragen, zeigen sie dafuer diesen Hinweis.
+ * Genehmigte Aktionen laufen im Hintergrund (core/gate.py): Ist eine nach etwa 20 s nicht fertig (Update, Installation,
+ * langes Skript), antwortet `POST /actions/{id}/approve` mit 202 und Status `executing`, das ist kein Fehler. Für diesen
+ * Fall zeigen die Erweiterungsseiten diesen Hinweis.
  */
 export const RUNNING_IN_BACKGROUND = "Läuft im Hintergrund – das Ergebnis steht unter „Aktionen“.";
 
@@ -14,18 +13,14 @@ export function isActionRunning(status: string | null | undefined): boolean {
   return status === "approved" || status === "executing";
 }
 
-/*
- * Der Ablauf "Aktion ausloesen -> wer freigeben darf, gibt selbst
- * frei -> bei 'executing' nachfragen -> Ergebnis" stand in jeder Erweiterungsseite
- * einzeln (mit eigenen Statustexten). Er liegt jetzt hier; die Texte spiegeln
- * frontend/src/lib/actionOutcome.ts des Kerns.
- */
+// Gemeinsamer Ablauf aller Erweiterungsseiten: Aktion auslösen, wer freigeben darf, gibt selbst frei, bei `executing`
+// nachfragen, Ergebnis. Die Texte spiegeln frontend/src/lib/actionOutcome.ts des Kerns.
 /** Abstand zwischen zwei Nachfragen (wie im Kern, lib/actions.ts). */
 export const ACTION_POLL_INTERVAL_MS = 3000;
-/** So lange wird hoechstens nachgefragt (ein Update darf bis zu 45 min dauern). */
+/** So lange wird höchstens nachgefragt (ein Update darf bis zu 45 min dauern). */
 export const ACTION_POLL_MAX_MS = 60 * 60 * 1000;
 
-/** Status einer Aktion (ActionOut.status) auf Deutsch, klein geschrieben fuer Satzmitte. */
+/** Status einer Aktion (ActionOut.status) auf Deutsch, klein geschrieben für Satzmitte. */
 export const ACTION_STATUS_LABEL: Record<string, string> = {
   proposed: "wartet auf Freigabe", approved: "genehmigt", executing: "läuft", succeeded: "abgeschlossen",
   failed: "fehlgeschlagen", denied: "abgelehnt", expired: "abgelaufen", dismissed: "verworfen",
@@ -63,15 +58,15 @@ function nonEmpty(value: string | null | undefined): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
-/** Warum eine Aktion nicht lief: Fehlermeldung der Ausfuehrung bzw. Begruendung der
- * Sperre/Ablehnung. `null` bei allen anderen Zustaenden oder ohne Angabe. */
+/** Warum eine Aktion nicht lief: Fehlermeldung der Ausführung bzw. Begründung der
+ * Sperre/Ablehnung. `null` bei allen anderen Zuständen oder ohne Angabe. */
 export function actionReason(a: ActionState): string | null {
   if (a.status === "failed") return nonEmpty(a.result?.error);
   if (a.status === "denied") return nonEmpty(a.gate_decision?.detail) ?? nonEmpty(a.gate_decision?.user_reason) ?? nonEmpty(a.detail);
   return null;
 }
 
-/** Ergebnis fuer die Anzeige (wie `describeActionOutcome` im Kern). */
+/** Ergebnis für die Anzeige (wie `describeActionOutcome` im Kern). */
 export function describeActionOutcome(a: ActionState): ActionOutcome {
   const reason = actionReason(a);
   switch (a.status) {
@@ -123,10 +118,9 @@ export interface WaitOptions {
 }
 
 /**
- * Fragt `GET /actions/{id}` alle paar Sekunden ab, bis die Aktion fertig ist, und
- * liefert ihren Endstand. Kurze Aussetzer (Neustart, WLAN weg, 5xx) zaehlen nicht als
- * Ergebnis. Nach `maxMs` wird der letzte bekannte Stand geliefert (dann noch laufend),
- * ein 4xx (Aktion weg, keine Rechte) wirft.
+ * Fragt `GET /actions/{id}` alle paar Sekunden ab, bis die Aktion fertig ist, und liefert ihren Endstand. Kurze Aussetzer
+ * (Neustart, WLAN weg, 5xx) zählen nicht; nach `maxMs` kommt der letzte Stand (noch laufend), ein 4xx (Aktion weg, keine
+ * Rechte) wirft.
  */
 export async function waitForAction(
   actionId: string,
@@ -137,9 +131,8 @@ export async function waitForAction(
   let state = last;
   for (;;) {
     await sleep(intervalMs, signal);
-    // Im Hintergrund-Tab pausieren: jede Nachfrage koennte bei 401 das Token erneuern,
-    // und zwei Tabs, die gleichzeitig erneuern, melden sich gegenseitig ab
-    // (lib/tokenRefresh.ts). Beim Zurueckkehren geht es beim naechsten Takt weiter.
+    // Im Hintergrund-Tab pausieren: Jede Nachfrage könnte bei 401 das Token erneuern, und das soll nur der sichtbare
+    // Tab tun (lib/tokenRefresh.ts). Beim Zurückkehren geht es beim nächsten Takt weiter.
     if (typeof document !== "undefined" && document.hidden) {
       if (Date.now() >= deadline) return state;
       continue;
@@ -164,7 +157,7 @@ export async function waitForAction(
 }
 
 export interface RunActionOptions {
-  /** Risikostufe, falls die Antwort der Route keine nennt (Pruefung der Freigabe-Berechtigung). */
+  /** Risikostufe, falls die Antwort der Route keine nennt (Prüfung der Freigabe-Berechtigung). */
   risk?: string;
   /** Nur vorschlagen, nie selbst freigeben. */
   approve?: boolean;
@@ -185,10 +178,9 @@ async function readJson(res: Response): Promise<unknown> {
 }
 
 /**
- * Fuehrt einen schon angelegten Vorschlag zu Ende: gibt ihn -- wenn der Nutzer
- * `actions.approve:<risk>` hat -- selbst frei und fragt bei 'executing' alle 3 s nach,
- * bis die Aktion fertig ist. Fuer Seiten, die den ersten Aufruf selbst machen (z. B.
- * mit Rueckfrage bei knappem Speicher); sonst gleich `runAction`.
+ * Führt einen angelegten Vorschlag zu Ende: gibt ihn mit `actions.approve:<risk>` selbst frei und fragt bei `executing`
+ * alle 3 s nach, bis die Aktion fertig ist. Für Seiten, die den ersten Aufruf selbst machen (z. B. mit Rückfrage bei
+ * knappem Speicher); sonst gleich `runAction`.
  */
 export async function settleAction(proposal: ActionState, options: RunActionOptions = {}): Promise<ActionRun> {
   let action = proposal;
@@ -212,7 +204,7 @@ export async function settleAction(proposal: ActionState, options: RunActionOpti
         signal: options.signal, intervalMs: options.pollIntervalMs, maxMs: options.pollMaxMs,
       });
     } catch (err) {
-      // Seite verlassen: kein Fehler, die Aktion laeuft auf dem Server weiter.
+      // Seite verlassen: kein Fehler, die Aktion läuft auf dem Server weiter.
       if (!(err instanceof DOMException && err.name === "AbortError")) throw err;
       return { tone: "pending", text: RUNNING_IN_BACKGROUND, action, approved };
     }
@@ -222,10 +214,9 @@ export async function settleAction(proposal: ActionState, options: RunActionOpti
 }
 
 /**
- * Loest eine Aktion ueber eine Erweiterungs-Route aus (`POST` legt einen Vorschlag an,
- * ggf. schon mit Ergebnis) und fuehrt sie mit `settleAction` zu Ende. Fehler der
- * Anfragen werfen einen Error mit deutscher Meldung; ein Fehlschlag der Aktion selbst
- * ist ein normales Ergebnis (`tone: "error"`).
+ * Löst eine Aktion über eine Erweiterungs-Route aus (`POST` legt einen Vorschlag an, ggf. schon mit Ergebnis) und führt
+ * sie mit `settleAction` zu Ende. Fehler der Anfragen werfen einen Error mit deutscher Meldung; ein Fehlschlag der Aktion
+ * selbst ist ein normales Ergebnis (`tone: "error"`).
  */
 export async function runAction(path: string, init: RequestInit = {}, options: RunActionOptions = {}): Promise<ActionRun> {
   const res = await authedFetch(path, init);

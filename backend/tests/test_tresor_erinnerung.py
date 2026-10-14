@@ -268,7 +268,7 @@ async def test_an_unusable_zone_counts_in_utc_and_says_so(db_session, monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_a_failing_entry_does_not_stop_the_others_and_is_tried_again(db_session, monkeypatch):
+async def test_a_failing_entry_does_not_stop_the_others_and_is_tried_again(db_session, monkeypatch, caplog):
     broken = await _secret(db_session, "kaputt", expires_at=_day(1))
     await _secret(db_session, "heil", expires_at=_day(1, hour=13))
 
@@ -280,7 +280,11 @@ async def test_a_failing_entry_does_not_stop_the_others_and_is_tried_again(db_se
         return await real(session, **kwargs)
 
     monkeypatch.setattr(notifications_service, "deliver", deliver)
-    assert await secret_expiry.run_check(now=NOW) == {"checked": 2, "sent": 1, "failed": 1}
+    with caplog.at_level("ERROR", logger="nodvard_deck.secret_expiry"):
+        assert await secret_expiry.run_check(now=NOW) == {"checked": 2, "sent": 1, "failed": 1}
+    # Im Protokoll steht nur die Kennung des Eintrags, nie der Inhalt.
+    assert f"secret_expiry_reminder_failed secret_id={broken.id}" in caplog.text
+    assert "tok_geheim" not in caplog.text
     await db_session.refresh(broken)
     assert "expiry_notice" not in broken.secret_metadata
 

@@ -67,9 +67,9 @@ def ensure_dir(data_dir: Path) -> Path:
     return _restore.make_private_dir(boot_dir(data_dir))
 
 
-# `state.json` hält fest, was der Start über die Datenbank weiß (Version, Migrationsstände, `started_ok`, letzte Migration, offener
-# Rückweg, `pre_restore`, Grund des letzten Fehlstarts). Beim Lesen wird alles auf Form und Typ geprüft: Ein halb geschriebener
-# oder von Hand veränderter Stand darf nie zu einem Absturz führen.
+# `state.json` hält fest, was der Start über die Datenbank weiß (Version, Migrationsstände, `started_ok`, letzte
+# Migration, offener Rückweg, `pre_restore`, Grund des letzten Fehlstarts). Beim Lesen wird alles auf Form und Typ
+# geprüft: Ein halb geschriebener oder von Hand veränderter Stand darf nie zu einem Absturz führen.
 
 
 def _str(value: object, limit: int = 200) -> str | None:
@@ -218,10 +218,10 @@ def mark_started_ok(data_dir: Path, *, now: float | None = None) -> bool:
     return True
 
 
-# Die laufende Anwendung (und die Notseite) halten die Sperre, `boot` und `admin restore-backup` prüfen sie. So spielt `boot`
-# nie unter einer laufenden Anwendung ein (z. B. bei einem `compose run` ohne `--entrypoint`), und `admin` räumt keinen
-# laufenden Upload der Anwendung weg. `flock` gilt je geöffneter Datei und endet mit dem Prozess, auch bei einem Absturz. Wo es
-# nicht geht (Windows, Netzlaufwerk ohne `flock`), gibt es eine Sperre ohne Wirkung (`held=False`), nie einen Fehler.
+# Die laufende Anwendung (und die Notseite) halten die Sperre, `boot` und `admin restore-backup` prüfen sie: So spielt
+# `boot` nie unter einer laufenden Anwendung ein (`compose run` ohne `--entrypoint`), und `admin` räumt keinen laufenden
+# Upload weg. `flock` gilt je geöffneter Datei und endet mit dem Prozess, auch bei einem Absturz. Wo es nicht geht (Windows,
+# Netzlaufwerk), gibt es eine Sperre ohne Wirkung (`held=False`), nie einen Fehler.
 class LockHeld(Exception):
     """Ein anderer Prozess hält die Sperre (die laufende Anwendung, ein anderes `boot`)."""
 

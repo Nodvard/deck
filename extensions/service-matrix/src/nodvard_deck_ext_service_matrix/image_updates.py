@@ -47,10 +47,9 @@ Registry wird dadurch nicht gesperrt."""
 TRANSIENT = frozenset({"rate_limit", "network"})
 """Registry-Probleme, die vorbeigehen: dann bleibt die letzte Antwort der Registry stehen (auch bei "Registry neu
 abfragen"), und bis zum Ende der Prüfung wird dieselbe Registry nicht weiter gefragt."""
-# Docker Hub antwortet mit 401/denied auch auf ein Repository, das es nicht gibt, und jedes echte offizielle Image ist
-# öffentlich: bei einem offiziellen Hub-Namen (`is_official_hub_repo`) heißt `auth` darum "selbst gebaut" (etwa per
-# `docker load` aufs Gerät gebracht; mit dem containerd-Image-Speicher hat es dann trotzdem RepoDigests). Bewusst nicht
-# `not_found`: ein entfernter Tag eines echten Images (`nginx:1.27`) heißt "manifest unknown" und bleibt "nicht prüfbar".
+# Docker Hub antwortet auch auf ein nicht vorhandenes Repository mit 401/denied, und jedes offizielle Image ist öffentlich:
+# Bei einem offiziellen Hub-Namen heißt `auth` darum "selbst gebaut" (etwa per `docker load`, mit containerd trotzdem mit
+# RepoDigests). Nicht `not_found`: Ein entfernter Tag eines echten Images heißt "manifest unknown", bleibt "nicht prüfbar".
 SELF_BUILT_HINTS = frozenset({"auth"})
 """Registry-Antworten, die bei einem offiziellen Hub-Namen "selbst gebaut" heißen. `auth` ist nicht vorbeigehend und
 sperrt die Registry darum nicht (nicht in `TRANSIENT`)."""
@@ -98,8 +97,7 @@ def registry_of(repo: str) -> str:
 
 
 def canonical_repo(repo: str) -> str:
-    """Docker Hub in einer Schreibweise (`docker.io/library/nginx` == `nginx`); RepoDigests nennen die Images in ihrer
-    kurzen Form."""
+    """Docker Hub in einer Schreibweise (`docker.io/library/nginx` == `nginx`), wie RepoDigests die Images kurz nennen."""
     first, sep, rest = repo.partition("/")
     if sep and first in _HUB_HOSTS:
         repo = rest
@@ -243,8 +241,7 @@ class RemoteAnswer:
 
 
 def parse_imagetools_digest(text: str) -> str | None:
-    """`docker buildx imagetools inspect <name> --format '{{json .Manifest.Digest}}'`
-    -> `"sha256:..."` (ein JSON-Text)."""
+    """`docker buildx imagetools inspect <name> --format '{{json .Manifest.Digest}}'` -> `"sha256:..."` (ein JSON-Text)."""
     try:
         value = json.loads(text.strip())
     except ValueError:
@@ -488,10 +485,9 @@ class ImageUpdateService:
         except Exception as exc:
             raise HostProblem(f"Nicht erreichbar: {exc}") from exc
 
-    # Ablauf je Host: `docker ps -q` und `docker container inspect` liefern Name, Image-Name (wie angelegt) und die ID des
-    # Images, das der Container wirklich nutzt. Je Image folgt lokal `docker image inspect` (RepoDigests und ID), je
-    # Image-Name bei der Registry `docker buildx imagetools inspect` (liest nur den Manifest-Kopf) oder, wenn buildx fehlt,
-    # `docker manifest inspect -v` (dort zählt die Plattform des Hosts).
+    # Je Host liefern `docker ps -q` und `docker container inspect` Name, Image-Name und die wirklich genutzte Image-ID; je
+    # Image folgt `docker image inspect` (RepoDigests, ID), je Image-Name `docker buildx imagetools inspect` (nur der
+    # Manifest-Kopf) oder ohne buildx `docker manifest inspect -v` (dort zählt die Plattform des Hosts).
     async def _check_locked(self, host: Any, force: bool) -> None:
         now = self._clock()
         previous = self._hosts.get(host.id)

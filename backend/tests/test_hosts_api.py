@@ -520,10 +520,10 @@ async def test_trigger_host_action_under_full_autonomy_executes_immediately(clie
     get_extension_runtime().capabilities.provide("terminal", ActionExecutor, _FakeShellExecutor())
 
     assert (
-        await client.put("/api/v1/settings/autonomy.mode", json={"value": "full"}, headers=_auth_header(token))
+        await client.put("/api/v1/settings/autonomy.mode", json={"value": "full", "current_password": "correct-horse-battery"}, headers=_auth_header(token))
     ).status_code == 200
     assert (
-        await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "low"}, headers=_auth_header(token))
+        await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "low", "current_password": "correct-horse-battery"}, headers=_auth_header(token))
     ).status_code == 200
 
     r = await client.post(
@@ -559,8 +559,8 @@ async def test_trigger_host_action_under_full_autonomy_runs_long_actions_in_back
     _register_shell_exec_spec(default_risk=Risk.LOW)
     executor = _SlowShellExecutor()
     get_extension_runtime().capabilities.provide("terminal", ActionExecutor, executor)
-    await client.put("/api/v1/settings/autonomy.mode", json={"value": "full"}, headers=_auth_header(token))
-    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "low"}, headers=_auth_header(token))
+    await client.put("/api/v1/settings/autonomy.mode", json={"value": "full", "current_password": "correct-horse-battery"}, headers=_auth_header(token))
+    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "low", "current_password": "correct-horse-battery"}, headers=_auth_header(token))
 
     r = await client.post(
         f"/api/v1/hosts/{host['id']}/actions/shell.exec?wait=0",

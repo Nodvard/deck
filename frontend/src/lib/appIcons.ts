@@ -1,11 +1,7 @@
 /**
- * Die feste Symbol-Auswahl fuer eigene App-Kacheln ("+ App hinzufuegen"): lucide-Namen, die das Frontend
- * ohnehin bundelt -- keine frei waehlbaren Bild-Adressen (die haetten den Browser jedes Nutzers beim Anzeigen
- * der Startseite zu einem fremden Server gefuehrt, siehe backend/src/nodvard_deck/services/custom_apps.py).
- *
- * `APP_ICON_NAMES` muss mit `APP_ICONS` im Backend uebereinstimmen (dort prueft die API die Eingabe); ein Test
- * (backend/tests/test_custom_apps_icons.py) haelt beide Listen deckungsgleich. Neue Namen deshalb an BEIDEN
- * Stellen eintragen -- und hier unten Bild und deutsche Bezeichnung.
+ * Die feste Symbol-Auswahl für eigene App-Kacheln: lucide-Namen, die das Frontend ohnehin bundelt, keine frei wählbaren
+ * Bild-Adressen (die führten den Browser beim Anzeigen der Startseite zu einem fremden Server). `APP_ICON_NAMES` muss
+ * mit `APP_ICONS` im Backend übereinstimmen (ein Test prüft das): neue Namen an beiden Stellen eintragen.
  */
 import {
   Activity,
@@ -124,7 +120,7 @@ const APP_ICONS: Record<AppIconName, LucideIcon> = {
   "star": Star,
 };
 
-/** Deutsche Bezeichnung (Hinweis am Symbol und fuer Screenreader). */
+/** Deutsche Bezeichnung (Hinweis am Symbol und für Screenreader). */
 export const APP_ICON_LABELS: Record<AppIconName, string> = {
   "globe": "Globus", "link": "Link", "router": "Router", "network": "Netzwerk", "wifi": "WLAN",
   "shield-check": "Schutzschild", "lock": "Schloss", "key-round": "Schlüssel", "server": "Server",
@@ -143,7 +139,7 @@ export function isAppIconName(value: string | null | undefined): value is AppIco
   return !!value && (APP_ICON_NAMES as readonly string[]).includes(value);
 }
 
-/** Das Bild zu einem Namen aus der Auswahl; `null` fuer alles andere (Emoji, unbekannt, leer). */
+/** Das Bild zu einem Namen aus der Auswahl; `null` für alles andere (Emoji, unbekannt, leer). */
 export function appIconComponent(name: string | null | undefined): LucideIcon | null {
   return isAppIconName(name) ? APP_ICONS[name] : null;
 }

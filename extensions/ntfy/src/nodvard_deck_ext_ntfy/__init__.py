@@ -316,7 +316,8 @@ class _NtfyChannel:
     async def _send_extra(
         self, item: Mapping[str, Any], notification: Notification, dashboard_url: str | None
     ) -> tuple[str, str | None]:
-        """Schickt an einen weiteren Kanal: `("sent", Teilfehler oder None)` oder `("skipped", None)`, sonst `ChannelError`."""
+        """Schickt an einen weiteren Kanal: `("sent", Teilfehler oder None)` oder `("skipped", None)`,
+        sonst `ChannelError`."""
         if below_minimum(notification, item.get("min_severity")):
             return "skipped", None
         name = str(item["name"])
@@ -345,7 +346,7 @@ class _NtfyChannel:
             return {"Authorization": f"Bearer {token}"}
 
     async def _request(self, method: str, url: str, **kwargs: Any) -> Any:
-        """Die Antwort, oder `NtfyError` mit festem Satz, wenn Antwort, Weiterleitung oder eigene Anfrage unbrauchbar sind."""
+        """Die Antwort oder `NtfyError` mit festem Satz, wenn Antwort, Weiterleitung oder eigene Anfrage unbrauchbar sind."""
         problem: str
         try:
             # httpx baut die Weiterleitung auch dann, wenn es ihr nicht folgt, und scheitert dort an einem kaputten
@@ -366,10 +367,8 @@ class _NtfyChannel:
             # eingerichteter Kanal soll nie wie ein gesunder aussehen.
             self._config(settings)
             if is_below_minimum(notification, settings):
-                # Unter der Mindest-Stufe geht keine Anfrage raus. `NotificationSkipped` sagt dem Kern, dass das so
-                # eingestellt ist: Er verbucht „übersprungen“ (weder zugestellt noch Fehler), `raise_on_failure` versucht
-                # nichts erneut, und eine Seite wie das Shield-Briefing behauptet nicht „zugestellt“. Die Meldung steht
-                # trotzdem unter „Meldungen“ im Dashboard.
+                # `NotificationSkipped` statt Fehler: Der Kern verbucht „übersprungen“, versucht nichts erneut, und keine
+                # Seite behauptet „zugestellt“. Unter „Meldungen“ steht die Meldung trotzdem.
                 raise NotificationSkipped("Unter der eingestellten Mindest-Stufe.")
             await self._send_ntfy(settings, notification)
             return
@@ -542,9 +541,8 @@ class Extension(NodvardExtension):
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
         """Ohne weitere Kanäle nur ntfy, sonst ein Eintrag je Kanal (`details`), alle nebeneinander."""
-        # ntfy fragt seinen Server, die weiteren prüfen Token bzw. Schlüssel beim Dienst, ohne eine Nachricht zu senden
-        # (`channels.probe`). Wo der Dienst das nicht erlaubt (Slack, Gotify, Mattermost), steht das im Hinweis (`note`),
-        # und ein Fehler beim letzten Senden zählt mit.
+        # Geprüft wird ohne zu senden (`channels.probe`); wo der Dienst das nicht erlaubt (Slack, Gotify, Mattermost),
+        # steht das in `note`, und ein Fehler beim letzten Senden zählt mit.
         channel = _NtfyChannel(ctx)
         settings = await ctx.settings.get()
         extras = channel_entries(settings)

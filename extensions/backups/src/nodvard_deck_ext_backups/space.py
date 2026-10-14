@@ -64,10 +64,9 @@ async def check_backup_space(connector: ProxmoxBackupConnector, vmids: str | lis
     """-> Warnung (dict mit `message` und den Zahlen), wenn die Gäste zusammen größer sind als der freie Platz
     auf `storage`, sonst None (auch, wenn eine Zahl nicht zu ermitteln war). Mehrere Gäste (Job bearbeiten)
     werden addiert: ein Job-Lauf legt alle Sicherungen nebeneinander ab."""
-    # Ein großer Gast kann den Speicher volllaufen lassen: der Lauf bricht ab, die halbe `.dat` bleibt liegen, und
-    # liegt auf derselben Platte Nodvard Deck selbst, scheitert danach jeder Schreibzugriff im Dashboard. Die
-    # Gastgröße ist eine Obergrenze, daher eine Warnung mit "trotzdem" statt eines Verbots. Fehlt eine der Zahlen
-    # (API-Fehler, fehlende Rechte), wird nicht gewarnt: lieber keine Warnung als eine geratene.
+    # Ein voller Speicher bricht den Lauf ab (die halbe `.dat` bleibt liegen), und liegt Nodvard Deck auf derselben Platte,
+    # scheitert danach jeder Schreibzugriff. Die Gastgröße ist nur eine Obergrenze, daher eine Warnung mit "trotzdem";
+    # fehlt eine Zahl (API-Fehler, Rechte), keine Warnung: lieber keine als eine geratene.
     if not storage:
         return None
     wanted = [str(v) for v in ([vmids] if isinstance(vmids, str) else vmids)]

@@ -97,9 +97,9 @@ async def _guest_names(ctx: "ExtensionContext") -> dict[tuple[str, str], str]:
 async def collect_storage(
     ctx: "ExtensionContext", *, details: bool, merge_connections: bool = False
 ) -> dict[str, Any]:
-    """`details=False` (Widget): nur die Belegung, eine Abfrage je Knoten; `details=True` (Seite): zusätzlich der Inhalt je Pool.
-    Ein geteilter Speicher (NFS ...) steht in der Antwort jedes Knotens, kommt aber nur einmal vor, mit `nodes`: Belegung
-    und Größe sind überall gleich und werden nicht addiert. `merge_connections` gilt auch über Verbindungen hinweg."""
+    """`details=False` (Widget): nur die Belegung, eine Abfrage je Knoten; `details=True` (Seite): auch der Inhalt je Pool.
+    Ein geteilter Speicher (NFS ...) kommt nur einmal vor, mit `nodes`: Belegung und Größe sind überall gleich und werden
+    nicht addiert. `merge_connections` gilt auch über Verbindungen hinweg."""
     pools: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     names = await _guest_names(ctx) if details else {}

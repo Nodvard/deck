@@ -119,13 +119,13 @@ async def _resolve_roles(session: SessionDep, role_ids: list[str]) -> list[Role]
     return list(rows)
 
 
-# Fremde Zugänge und Verwaltungsrechte nur mit Bestätigung des handelnden Admins: sein Passwort (`current_password`)
-# und, wenn er Zwei-Faktor an hat, sein Code aus der App (`totp_code`). Das gilt für ein fremdes Passwort
-# (`PATCH /users/{id}`), das Zurücksetzen fremder Zwei-Faktor-Anmeldung und Rollen, die Konten verwalten dürfen
-# (beim Anlegen und Zuweisen); sonst käme eine gestohlene Admin-Sitzung allein an fremde Konten, auch über ein neues
-# Admin-Konto.
-# Reihenfolge: erst das Passwort (davor verrät keine Antwort etwas über das Ziel), dann das Ziel, zuletzt der Code
-# (eine Ablehnung wegen des Ziels verbraucht ihn nicht). Löschen braucht keine Bestätigung: ein danach neu angelegtes Konto
+# Fremde Zugänge und Verwaltungsrechte nur mit Bestätigung des Admins (`current_password`, bei aktivem Zwei-Faktor auch
+# `totp_code`): fremdes Passwort (`PATCH /users/{id}`), Zurücksetzen fremder Zwei-Faktor-Anmeldung, Rollen mit
+# Konto-Verwaltung (beim Anlegen und Zuweisen). Sonst käme eine gestohlene Admin-Sitzung allein an fremde Konten, auch
+# über ein neues Admin-Konto.
+#
+# Reihenfolge: erst das Passwort (davor verrät keine Antwort etwas über das Ziel), dann das Ziel, zuletzt der Code (eine
+# Ablehnung wegen des Ziels verbraucht ihn nicht). Löschen braucht keine Bestätigung: ein danach neu angelegtes Konto
 # gleichen Namens ist ein neues Konto und bekommt Verwaltungsrechte nur mit Bestätigung.
 ADMIN_PASSWORD_REQUIRED = "Zur Bestätigung brauchst du dein eigenes Passwort (nicht das der anderen Person)."
 ADMIN_PASSWORD_MISSING_CODE = "password_missing"

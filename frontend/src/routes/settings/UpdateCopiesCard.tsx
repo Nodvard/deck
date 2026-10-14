@@ -1,16 +1,7 @@
 /**
- * Karte „Kopien vor Updates“ (Einstellungen, System): die letzten Kopien der Datenbank, die Nodvard Deck vor einer
- * Migration angelegt hat (`GET /system/info`, Feld `pre_update_copies`, Recht `system.read`). Die Kopien selbst nur
- * zeigen -- eingespielt wird eine Kopie beim Start (`nodvard_deck.boot`) oder über die Notseite.
- *
- * Dazu der Rückweg über den Update-Helfer (`previous` in `GET /system/updates/helper`): „Zurück zu <Version>“, solange
- * er gilt (7 Tage nach einem Update), nur für den Owner, mit Passwort und ggf. Code. Hat die laufende Version beim
- * Start die Datenbank umgebaut (`previous.data_revert`), gehen die Daten mit zurück: Dann warnt die Karte mit dem
- * Zeitpunkt, seit dem alles verloren geht, und verlangt das Häkchen (`accept_data_loss`). Ist das unklar
- * (`data_revert: null`), gibt es keinen Knopf, der Server lehnte ihn ohnehin ab.
- *
- * Fehlen Kopien und Rückweg (älterer Server, Abfrage gescheitert), zeigt die Karte gar nichts: die Angaben sind eine
- * Zugabe, kein Grund für eine Fehlermeldung.
+ * Karte „Kopien vor Updates“ (Einstellungen, System): die letzten Datenbank-Kopien vor einer Migration, nur zur Ansicht
+ * (eingespielt wird beim Start oder über die Notseite), und der Rückweg über den Update-Helfer (`previous`; nur Owner,
+ * mit Passwort und ggf. Code, 7 Tage nach einem Update). Fehlen beide, zeigt die Karte nichts.
  */
 import { AlertTriangle, DatabaseBackup, Undo2 } from "lucide-react";
 import { useEffect, useState } from "react";
@@ -35,8 +26,10 @@ interface SystemInfo {
   pre_update_copies?: PreUpdateCopy[];
 }
 
-/** Beschriftung einer Kopie. Bei gleicher Version vorher/nachher war es kein Versionswechsel, sondern ein Umbau der
- * Datenbank (neue Migration ohne neue Versionsnummer); fehlt eine Angabe, steht nichts Erfundenes da. */
+/**
+ * Beschriftung einer Kopie. Bei gleicher Version vorher/nachher war es kein Versionswechsel, sondern ein Umbau der
+ * Datenbank (neue Migration ohne neue Versionsnummer); fehlt eine Angabe, steht nichts Erfundenes da.
+ */
 function versions(copy: PreUpdateCopy): string {
   const from = copy.from_version?.trim() || null;
   const to = copy.to_version?.trim() || null;
@@ -58,6 +51,9 @@ function RollbackSection({ view, previous }: { view: HelperView; previous: Helpe
   const [confirming, setConfirming] = useState(false);
   const since = previous.data_since ? formatUnix(previous.data_since) : null;
   const lost = since ? `Änderungen seit ${since}` : "Änderungen seit dem Update";
+  // `data_revert: true`: Die Daten gehen mit zurück (die Version hat beim Start die Datenbank umgebaut), die
+  // Karte warnt mit dem Zeitpunkt und verlangt das Häkchen (`accept_data_loss`). Unklar (`null`): kein Knopf,
+  // der Server lehnte ihn ohnehin ab.
   const unclear = previous.data_revert === null;
   const canRequest = isOwner && view.ready && !unclear;
   return (

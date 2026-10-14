@@ -365,39 +365,52 @@ async def test_executor_refuses_docker_on_the_dashboard_host_only():
 
 def test_container_probe_quotes_the_id():
     probe = sa.own_container_probe("ab12cd34ef56")
-    assert "docker inspect --format '{{.Id}}' ab12cd34ef56" in probe and "sudo -n docker inspect" in probe
+    assert "docker inspect --format '{{.Id}}' ab12cd34ef56" in probe
+    assert "sudo" not in probe  # kein Rueckweg ueber sudo: die Abfrage laeuft nur mit den Rechten des Dashboard-Kontos
     assert shlex.quote("x; reboot") in sa.own_container_probe("x; reboot")
 
 
-def _run_probe(tmp_path: Path, *, docker: str, sudo: str = "echo 'sudo: a password is required' >&2; exit 1") -> str:
-    """Die Probe in einer echten Shell mit gefaelschtem `docker` und `sudo` auf dem PATH."""
+def _run_probe(tmp_path: Path, *, docker: str) -> tuple[str, bool]:
+    """Die Probe in einer echten Shell mit gefaelschtem `docker` und einem `sudo`, das jeden Aufruf festhaelt.
+
+    Rueckgabe: die Ausgabe der Probe und ob `sudo` aufgerufen wurde."""
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
-    for name, body in (("docker", docker), ("sudo", sudo)):
+    sudo_called = tmp_path / "sudo-called"
+    # Wuerde die Probe `sudo` anfassen, klappte `docker` dort und die Antwort lautete `@@own`.
+    for name, body in (("docker", docker), ("sudo", f"touch {shlex.quote(str(sudo_called))}\necho sha256:abc")):
         (bin_dir / name).write_text(f"#!/bin/sh\n{body}\n")
         (bin_dir / name).chmod(0o755)
     out = subprocess.run(["/bin/sh", "-c", sa.own_container_probe("ab12cd34ef56")], capture_output=True, text=True,
                          env={"PATH": f"{bin_dir}:/usr/bin:/bin"}, timeout=30, check=False)
-    return out.stdout.strip()
+    return out.stdout.strip(), sudo_called.exists()
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
-@pytest.mark.parametrize(("docker", "sudo", "expected"), [
-    ("echo sha256:abc", None, "@@own"),  # laeuft direkt
-    ("echo 'permission denied' >&2; exit 1", "echo sha256:abc", "@@own"),  # nur mit sudo lesbar
-    ("echo 'Error: No such object: ab12cd34ef56' >&2; exit 1", None, "@@other"),  # Docker antwortet: dort nicht
-    ("echo 'permission denied' >&2; exit 1", "echo 'Error: No such object: ab12cd34ef56' >&2; exit 1", "@@other"),
+@pytest.mark.parametrize(("docker", "expected"), [
+    ("echo sha256:abc", "@@own"),  # laeuft direkt
+    ("echo 'Error: No such object: ab12cd34ef56' >&2; exit 1", "@@other"),  # Docker antwortet: dort nicht
+    ("echo 'Error: No such container: ab12cd34ef56' >&2; exit 1", "@@other"),
     # Nicht feststellbar: keine Rechte, Daemon weg (auch mit "no such file" im Text), kein docker-Programm
-    ("echo 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock' >&2; exit 1", None, "@@unknown"),
-    ("echo 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?' >&2; exit 1", None, "@@unknown"),
-    ("echo 'dial unix /var/run/docker.sock: connect: no such file or directory' >&2; exit 1", None, "@@unknown"),
-    ("exit 127", None, "@@unknown"),
+    ("echo 'permission denied while trying to connect to the docker API at unix:///var/run/docker.sock' >&2; exit 1", "@@unknown"),
+    ("echo 'Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?' >&2; exit 1", "@@unknown"),
+    ("echo 'dial unix /var/run/docker.sock: connect: no such file or directory' >&2; exit 1", "@@unknown"),
+    ("exit 127", "@@unknown"),
 ])
-def test_container_probe_tells_another_server_from_not_knowing(tmp_path, docker, sudo, expected):
+def test_container_probe_tells_another_server_from_not_knowing(tmp_path, docker, expected):
     """Jeder Fehlschlag von `docker inspect` (keine Rechte, Daemon abgestuerzt) galt als
     "anderer Server" -- auf dem Server des Dashboards blieb der docker/containerd-Knopf sichtbar. Nur "gibt es nicht" heisst nein."""
-    kwargs = {"sudo": sudo} if sudo is not None else {}
-    assert _run_probe(tmp_path, docker=docker, **kwargs) == expected
+    answer, sudo_called = _run_probe(tmp_path, docker=docker)
+    assert answer == expected
+    assert not sudo_called
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="braucht eine echte POSIX-Shell")
+def test_container_probe_without_docker_rights_says_unknown_and_never_tries_sudo(tmp_path):
+    """Ist Docker nur mit sudo lesbar, bleibt es bei "nicht feststellbar": das Dashboard-Konto holt sich keine Rechte dazu."""
+    answer, sudo_called = _run_probe(tmp_path, docker="echo 'permission denied' >&2; exit 1")
+    assert answer == "@@unknown"
+    assert not sudo_called
 
 
 @pytest.mark.asyncio

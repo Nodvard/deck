@@ -33,13 +33,11 @@ from .errors import (
 
 logger = logging.getLogger("nodvard_deck.restore")
 
-# Ablauf: Upload nach `restore/<id>/upload.ndbak` (Service), Staging (`stage_backup`: entschlüsseln, in einen eigenen Ordner
-# auspacken, alles prüfen), Vormerken (`pending.json`) und Einspielen beim nächsten Start in `boot` vor Migration und
-# Anwendung (`apply_pending`). Die laufende Anwendung hält Datenbank und Schlüssel offen; darum wird erst beim nächsten
-# Start ersetzt. Dabei wandert der aktuelle Stand per `rename` (kein Kopieren) nach `restore/replaced-<Zeit>/`, das Staging
-# an seinen Platz, und ein Journal (`journal.json`) macht das auch nach einem Absturz mittendrin rückgängig. Endgültig ist
-# es erst, wenn `boot` danach auch die Migration geschafft hat (`Applied.commit`); scheitert die, geht der alte Stand zurück.
-# Das Ergebnis steht in `result.json`; die Anwendung schreibt das Audit-Protokoll nach dem Start in die dann gültige Datenbank.
+# Ablauf: Upload (`restore/<id>/upload.ndbak`), Staging (`stage_backup`), Vormerken (`pending.json`), Einspielen beim
+# nächsten Start in `boot` vor Migration und Anwendung (`apply_pending`; die laufende Anwendung hält Datenbank und
+# Schlüssel offen). Der alte Stand wandert per `rename` nach `restore/replaced-<Zeit>/`, ein Journal macht das auch nach
+# einem Absturz rückgängig; endgültig erst nach gelungener Migration (`Applied.commit`), sonst geht alles zurück.
+# Ergebnis in `result.json`; das Audit-Protokoll schreibt die Anwendung erst nach dem Start in die dann gültige Datenbank.
 RESTORE_DIR = "restore"
 UPLOAD_NAME = "upload.ndbak"
 STAGING_NAME = "staging"
@@ -288,17 +286,17 @@ def _scalar(conn: sqlite3.Connection, sql: str) -> Any:
 
 
 def _foreign_schema_object(kind: object, rootpage: object, sql: object) -> str | None:
-    """Was an einem Eintrag in `sqlite_master` nicht von uns stammen kann (Trigger, Ansicht, virtuelle Tabelle), oder `None`."""
-    # SQLite richtet sich beim Laden des Schemas nach dem SQL-Text, nicht nach der Spalte `type`: Mit `writable_schema` lässt
-    # sich ein Trigger als `type='TRIGGER'` (oder jede andere Schreibweise) eintragen, und er läuft später trotzdem. Darum
-    # gelten nur genau `table` und `index`, beide mit echter Seite (`rootpage > 0`; Ansichten, Trigger und virtuelle Tabellen
-    # haben keine), und kein `CREATE VIRTUAL` im Text, auch mit Kommentar dazwischen. Der Text muss Text sein: SQLite liest
-    # das Schema auch aus einem BLOB, und daran ginge die Prüfung sonst vorbei.
+    """Was in einem `sqlite_master`-Eintrag nicht von uns sein kann (Trigger, Ansicht, virtuelle Tabelle), sonst `None`."""
+    # SQLite richtet sich beim Laden des Schemas nach dem SQL-Text, nicht nach der Spalte `type`: Mit `writable_schema`
+    # lässt sich ein Trigger als `type='TRIGGER'` (oder anders geschrieben) eintragen, und er läuft trotzdem. Darum gelten
+    # nur `table` und `index` mit echter Seite (`rootpage > 0`; Ansichten, Trigger und virtuelle Tabellen haben keine).
     if not isinstance(kind, str) or kind not in ("table", "index"):
         lowered = kind.lower() if isinstance(kind, str) else ""
         return {"trigger": "Trigger", "view": "Ansicht"}.get(lowered, "Schema-Eintrag")
     if not isinstance(rootpage, int) or isinstance(rootpage, bool) or rootpage <= 0:
         return "virtuelle Tabelle" if kind == "table" else "Schema-Eintrag"
+    # Der Text muss Text sein (SQLite liest das Schema auch aus einem BLOB) und darf kein `CREATE VIRTUAL` enthalten,
+    # auch nicht mit Kommentar dazwischen.
     if sql is not None and not isinstance(sql, str):
         return "Schema-Eintrag"
     if isinstance(sql, str) and _is_create_virtual(sql):
@@ -307,7 +305,7 @@ def _foreign_schema_object(kind: object, rootpage: object, sql: object) -> str |
 
 
 def _skip_sql_gap(sql: str, i: int) -> int:
-    """Überspringt ab `i` Leerraum und Kommentare (`/* ... */`, `-- ...` bis Zeilenende); ein offener Kommentar reicht bis zum Ende."""
+    """Überspringt ab `i` Leerraum und Kommentare (`/* ... */`, `-- ...` bis Zeilenende); ein offener läuft bis zum Ende."""
     # Ein einfacher Durchlauf statt eines regulären Ausdrucks: Der brauchte bei vielen leeren Kommentaren (`/**/`)
     # exponentiell lange, und der SQL-Text kommt aus einer fremden Sicherung.
     n = len(sql)
@@ -374,7 +372,7 @@ def inspect_db(path: Path) -> DbFacts:
 
 
 def installed_extension_ids(extensions_dir: Path | None) -> set[str] | None:
-    """Kennungen der hier installierten Erweiterungen (Ordnername, Kennung, alte Kennungen); `None`, wenn nicht feststellbar."""
+    """Kennungen der installierten Erweiterungen (Ordnername, Kennung, alte Kennungen); `None`, wenn nicht feststellbar."""
     # Die alten Kennungen (`legacy_ids`, siehe `snapshot.extension_ids`) zählen mit, damit eine Sicherung mit der Zeile einer
     # alten Kennung nicht als "Erweiterung fehlt" gilt.
     if extensions_dir is None or not extensions_dir.is_dir():
@@ -390,7 +388,7 @@ def check_compatible(
     facts: DbFacts, manifest: dict[str, Any], *, known: set[str] | None, installed: set[str] | None, current_version: str
 ) -> None:
     """Passt der Migrationsstand der Datenbank zu diesem Image? Sonst `UnusableBackup` mit Klartext (neuer als dieses
-    Image, oder eine Erweiterung fehlt). Ältere Stände sind in Ordnung: `boot` bringt sie nach dem Einspielen auf den neuen Stand."""
+    Image, oder eine Erweiterung fehlt). Ältere Stände sind in Ordnung: `boot` migriert sie nach dem Einspielen."""
     if not facts.versions:
         raise UnusableBackup("In der Datenbank der Sicherung steht kein Migrationsstand. Sie kann nicht eingespielt werden.")
     declared = manifest.get("db", {}).get("alembic_heads") if isinstance(manifest.get("db"), dict) else None
@@ -534,13 +532,13 @@ def stage_backup(
 ) -> Staged:
     """Entschlüsselt `upload` nach `staging` (ein neuer, eigener Ordner) und prüft alles; bei jedem Fehler
     (falsches Passwort, beschädigte Datei, zu groß, nicht einspielbar) ist `staging` danach gelöscht."""
-    # `read_backup` legt die Dateien schon vor dem Ende der Prüfung ab: Erst nach erfolgreicher Rückkehr darf etwas davon
-    # weiterverwendet werden.
-    # Nichts in der Datei ist vertrauenswürdig. age stellt nur sicher, dass niemand sie verändert hat, nicht wer sie gemacht
-    # hat: Wer den öffentlichen Schlüssel oder das Einmal-Passwort kennt, kann eine gültige Sicherung bauen. Darum Namen nur
-    # aus der Erlaubnisliste, nur normale Dateien und Ordner, Obergrenzen (auch gegen den freien Platz), die Datenbank nur
-    # lesend und ohne vertrauten Schema-Code (`inspect_db`), nur Alembic-Revisionen, die dieses Image kennt, und eine
-    # Zusammenfassung zur Ansicht vor dem Einspielen.
+    # `read_backup` legt die Dateien schon vor dem Ende der Prüfung ab: Erst nach erfolgreicher Rückkehr darf etwas
+    # davon weiterverwendet werden.
+    #
+    # Nichts in der Datei ist vertrauenswürdig: age sichert nur, dass sie niemand verändert hat, nicht wer sie gemacht
+    # hat (wer den öffentlichen Schlüssel oder das Einmal-Passwort kennt, kann eine gültige bauen). Darum Erlaubnisliste
+    # für Namen, nur normale Dateien und Ordner, Obergrenzen (auch gegen den freien Platz), Datenbank nur lesend und
+    # ohne vertrauten Schema-Code (`inspect_db`), nur bekannte Alembic-Revisionen.
     make_private_dir(staging.parent)
     staging.mkdir(mode=0o700)
     try:
@@ -1040,9 +1038,9 @@ def _apply(layout: Layout, pending: dict[str, Any], *, known: set[str] | None, c
         staged = staging / target.staged if target.staged else None
         staged_exists = staged is not None and os.path.lexists(staged)
         had_old = os.path.lexists(target.path)
-        # Auch was es vorher nicht gab, steht im Plan: Der Rückweg räumt es dann weg. Wichtig für `-wal`/`-journal`: Stirbt
-        # die Migration der eingespielten Datenbank mittendrin, bleiben deren Nebendateien liegen, und neben der
-        # zurückgeholten alten Datenbank würde SQLite sie auf diese anwenden (fremde WAL, "heißes" Journal) und sie zerstören.
+        # Auch was es vorher nicht gab, steht im Plan; der Rückweg räumt es weg. Wichtig für `-wal`/`-journal`: Stirbt
+        # die Migration der eingespielten Datenbank mittendrin, bleiben deren Nebendateien liegen, und SQLite wendete
+        # sie neben der zurückgeholten alten Datenbank auf diese an (fremde WAL, "heißes" Journal) und zerstörte sie.
         plan.append({
             "name": target.name, "target": str(target.path), "saved": str(replaced / target.name),
             "staged": str(staged) if staged_exists else None, "had_old": had_old,

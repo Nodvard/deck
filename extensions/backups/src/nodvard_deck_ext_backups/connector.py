@@ -144,7 +144,7 @@ class ProxmoxBackupConnector:
         ) or []
 
     async def guest_resources(self) -> list[dict[str, Any]]:
-        """Alle Gäste der Verbindung (`vmid`, `node`, `pool`, `type`), nötig für Jobs ohne VMID-Liste („alle Gäste“, Pool)."""
+        """Alle Gäste der Verbindung (`vmid`, `node`, `pool`, `type`) für Jobs ohne VMID-Liste („alle Gäste“, Pool)."""
         return await self._request("GET", "/cluster/resources", params={"type": "vm"}) or []
 
     async def guest_config(self, node: str, guest_type: str, vmid: str) -> dict[str, Any]:
@@ -156,10 +156,9 @@ class ProxmoxBackupConnector:
 
     async def list_tasks(self, *, limit: int = 500) -> list[dict[str, Any]]:
         """Backup-Tasks (`vzdump`) aller Knoten; ein nicht erreichbarer Knoten wird übersprungen."""
-        # Nicht `/cluster/tasks`: das ist ein Ringpuffer der letzten ~25 Tasks, in dem Konsolen (vncproxy) und
-        # VM-Starts die vzdump-Einträge verdrängen, ein gesundes Backup stünde dann auf „unbekannt“. Der
-        # Knoten-Endpunkt liest den vollen Index und filtert serverseitig; `source=all`, sonst fehlen laufende
-        # Backups (Standard ist nur das Archiv beendeter Tasks).
+        # Nicht `/cluster/tasks`: ein Ringpuffer der letzten ~25 Tasks, in dem Konsolen und VM-Starts die vzdump-Einträge
+        # verdrängen (ein gesundes Backup stünde dann auf „unbekannt“). Der Knoten-Endpunkt filtert auf dem Server;
+        # `source=all`, sonst fehlen laufende Backups.
         nodes = await self._request("GET", "/nodes") or []
         tasks: list[dict[str, Any]] = []
         for entry in nodes:

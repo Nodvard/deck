@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from nodvard_sdk import (
     Actor,
     ActorType,
@@ -93,9 +93,8 @@ async def _expire_standing(
     actor: Actor | None = None, notify: bool = True,
 ) -> bool:
     """Lässt die Dauerfreigabe erlöschen (Protokollzeile, Eintrag löschen, eine Push-Nachricht). True, wenn es eine gab."""
-    # Fail closed: Ab `block` gilt sie nicht mehr, auch wenn das Protokoll oder das Löschen scheitert; der nächste Lauf
-    # holt es nach, ohne doppelte Zeile oder Push. Gelöscht wird erst nach dem Protokoll, sonst ginge das Erlöschen ohne
-    # Protokoll verloren.
+    # Fail closed: Ab `block` gilt sie nicht mehr, auch wenn Protokoll oder Löschen scheitern; der nächste Lauf holt das ohne
+    # doppelte Zeile oder Push nach. Gelöscht wird erst nach dem Protokoll, sonst fehlte das Erlöschen dort.
     store = _standing_approvals(ctx)
     record = store.get_raw(script_id)
     if record is None:
@@ -162,8 +161,7 @@ async def _expire_standing(
 async def _recheck_standing(
     ctx: ExtensionContext, repo: ScriptRepo, script_id: str, first: StandingRecord, host: SdkHost
 ) -> str | None:
-    """Gilt die Dauerfreigabe vom Laufbeginn noch für `host`? None = ja, sonst der Grund (der Rest läuft dann mit
-    Klick)."""
+    """Gilt die Dauerfreigabe vom Laufbeginn noch für `host`? None = ja, sonst der Grund (der Rest läuft dann mit Klick)."""
     # Vor jedem Server neu geprüft: Ein Lauf auf mehreren Servern dauert, Zurückziehen oder Änderungen müssen sofort
     # wirken.
     current = _standing_approvals(ctx).get(script_id)
@@ -223,7 +221,8 @@ async def _notify_skipped(
 
 
 def _draft_id_for(fp: str) -> str:
-    return f"auto-{hashlib.sha1(fp.encode('utf-8')).hexdigest()[:10]}"
+    # Nur eine kurze, gleichbleibende Kennung, kein Schutz: `usedforsecurity=False`, derselbe Wert wie bisher.
+    return f"auto-{hashlib.sha1(fp.encode('utf-8'), usedforsecurity=False).hexdigest()[:10]}"
 
 
 # Skripte (Audits, Updates, Backups) laufen oft minutenlang; die 60 s Vorgabe von `ctx.exec.run()` ließ z. B. Lynis
@@ -242,8 +241,7 @@ def _secret_names(params_schema: dict[str, dict[str, Any]]) -> list[str]:
 
 
 class _ScriptActionExecutor:
-    """Führt `script.run` über denselben SSH-Weg wie `shell.exec` aus, nur mit eigener Aktionsart (siehe
-    `promotion.py`)."""
+    """Führt `script.run` über denselben SSH-Weg wie `shell.exec` aus, nur mit eigener Aktionsart (siehe `promotion.py`)."""
 
     action_types = frozenset({"script.run"})
 
@@ -471,8 +469,7 @@ async def _resolve_targets(ctx: ExtensionContext, target: dict[str, Any]) -> lis
 async def _runnable_targets(
     ctx: ExtensionContext, target: dict[str, Any]
 ) -> tuple[list[SdkHost], list[tuple[SdkHost, str]]]:
-    """(Ziele, auf denen der Lauf klappen kann; übersprungene mit Grund). Ein gewählter Server ('host') bleibt immer
-    Ziel."""
+    """(Ziele, auf denen der Lauf klappen kann; übersprungene mit Grund). Ein gewählter Server ('host') bleibt immer Ziel."""
     targets = await _resolve_targets(ctx, target)
     if target.get("kind") not in ("all", "group"):
         return targets, []
@@ -504,12 +501,10 @@ async def run_script(
     ctx: ExtensionContext, repo: ScriptRepo, script_id: str, *, param_overrides: dict[str, str], actor: Actor | None = None,
     wait_s: float | None = None, scheduled: bool = False,
 ) -> dict[str, Any]:
-    """Löst Ziele und Parameter auf und schlägt je Zielserver eine `script.run`-Aktion vor (Zeitplan und manueller
-    Lauf)."""
-    # `wait_s` (nur die HTTP-Route) ist ein Zeitbudget für alle Server zusammen, sonst wartete ein Lauf auf fünf Servern
-    # bis zu 5 x 20 s; None wartet jede Aktion ab (geplanter Lauf). `scheduled` (nur der Zeitplan): Mit gültiger
-    # Dauerfreigabe laufen die freigegebenen Ziele ohne Klick, neue Ziele bekommen die normale Freigabe, eine ungültige
-    # Dauerfreigabe erlischt hier.
+    """Löst Ziele und Parameter auf und schlägt je Zielserver eine `script.run`-Aktion vor (Zeitplan und manueller Lauf)."""
+    # `wait_s` (nur HTTP-Route) ist ein Zeitbudget für alle Server zusammen, sonst wartete ein Lauf auf fünf Servern bis zu
+    # 5 x 20 s; None wartet jede Aktion ab. `scheduled` (nur Zeitplan): Mit gültiger Dauerfreigabe laufen freigegebene Ziele
+    # ohne Klick, neue bekommen die normale Freigabe, eine ungültige Dauerfreigabe erlischt hier.
     deadline = None if wait_s is None else time.monotonic() + wait_s
     script = repo.get(script_id)
     if script is None:
@@ -520,9 +515,8 @@ async def run_script(
         # `_on_action_executed()`) bleibt deshalb deaktiviert, bis ihn jemand geprüft hat, auch für Läufe von Hand.
         raise NodvardError(f"Skript '{script_id}' ist deaktiviert.")
 
-    # Geheimnisse kommen nur aus dem Tresor und stehen nie in der Aktion: Der Vorschlag trägt den Befehl mit
-    # Platzhalter, der Executor setzt den echten Wert erst beim Ausführen ein. Ein per Aufruf mitgegebener Wert landete
-    # im Payload.
+    # Geheimnisse stehen nie in der Aktion: Der Vorschlag trägt einen Platzhalter, den echten Wert aus dem Tresor setzt erst
+    # der Executor ein. Ein beim Aufruf mitgegebener Wert landete im Payload.
     secrets = _secret_names(meta.params_schema)
     given = sorted(name for name in secrets if name in param_overrides)
     if given:
@@ -537,9 +531,8 @@ async def run_script(
         for host, reason in skipped_hosts:
             results.append({"host_id": host.id, "host_name": host.name, "skipped": reason})
             skipped[host.id] = (host.name, reason)
-        # Übersprungene Server meldet der Zeitplan nur einmal und dann erst wieder bei einer Änderung, nicht jede Nacht.
-        # Bei Läufen von Hand (`actor`) bleibt der Stand unberührt, sonst bliebe die erste Zeitplan-Meldung aus, sobald
-        # jemand das Skript einmal getestet hat.
+        # Übersprungene Server meldet der Zeitplan einmal und erst bei einer Änderung wieder. Läufe von Hand (`actor`)
+        # lassen den Stand in Ruhe, sonst bliebe nach einem Test die erste Zeitplan-Meldung aus.
         if actor is None:
             notices = _skip_notices(ctx)
             new, previous = notices.update(script_id, {hid: reason for hid, (_n, reason) in skipped.items()})
@@ -865,13 +858,13 @@ class Extension(NodvardExtension):
             return await _out(script)
 
         @router.get("/scripts/{script_id}/history")
-        async def script_history(script_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        async def script_history(script_id: str, limit: int = Query(20, ge=1, le=1000)) -> list[dict[str, Any]]:
             if self._repo.get(script_id) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")
             return self._repo.history(script_id, limit=limit)
 
         @router.get("/scripts/{script_id}/runs")
-        async def script_runs(script_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        async def script_runs(script_id: str, limit: int = Query(20, ge=1, le=1000)) -> list[dict[str, Any]]:
             """Die letzten Läufe mit Ausgabe, Exit-Code, Zielserver und Auslöser."""
             if self._repo.get(script_id) is None:
                 raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekanntes Skript.")

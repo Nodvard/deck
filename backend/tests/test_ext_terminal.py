@@ -268,6 +268,23 @@ async def test_file_source_sftp_roundtrip(local_ssh_server, db_session, tmp_path
     assert info.healthy is True
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="statvfs gibt es unter Windows nicht")
+@pytest.mark.asyncio
+async def test_file_source_reports_the_free_space_of_the_target_folder(local_ssh_server, db_session, tmp_path, settings_bound):
+    import os
+
+    host, sftp_root = await _make_host_with_credential(db_session, settings_bound, local_ssh_server)
+    _runtime, _ctx, extension = await _setup_terminal_extension(
+        tmp_path, settings_bound, ["hosts.read", "hosts.execute"]
+    )
+    source = extension.file_source_for(host.id)
+
+    free = await source.free_bytes(PurePosixPath("ziel.bin"))
+    vfs = os.statvfs(sftp_root)
+    assert isinstance(free, int) and abs(free - vfs.f_bavail * vfs.f_frsize) < 64 * 1024**2
+    assert await source.free_bytes(PurePosixPath("gibt-es-nicht/ziel.bin")) is None
+
+
 @pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows Adminrechte")
 @pytest.mark.asyncio
 async def test_file_source_lists_folder_with_dead_symlink(local_ssh_server, db_session, tmp_path, settings_bound):

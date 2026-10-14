@@ -112,10 +112,9 @@ class ProxmoxConnector:
     async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = f"{self._base_url}/api2/json{path}"
         headers = {**self._auth_header, **kwargs.pop("headers", {})}
-        # Netzwerkfehler (nicht erreichbar, Timeout, DNS) werden hier einheitlich zu `ProxmoxApiError`: Aufrufer fangen nur
-        # diesen und `RuntimeError`, eine rohe httpx-Ausnahme gäbe einen 500. In die Meldung kommt nie der Text der Ausnahme
-        # oder der Antwort (siehe transport.py); geworfen wird erst außerhalb des `except`, sonst hinge die httpx-Ausnahme
-        # (mit Teilen der fremden Antwort im Text) als `__context__` an der Meldung.
+        # Netzwerkfehler werden einheitlich zu `ProxmoxApiError` (Aufrufer fangen nur diesen und `RuntimeError`, eine rohe
+        # httpx-Ausnahme gäbe einen 500). Geworfen wird erst außerhalb des `except`, sonst hinge die httpx-Ausnahme samt
+        # Teilen der fremden Antwort als `__context__` an der Meldung.
         self._refuse_invalid_pin(f"{method} {path}")
         problem: str | None = None
         code: str | None = None

@@ -22,10 +22,9 @@ from .errors import DamagedBackup, NotEnoughSpace, UnusableBackup
 
 logger = logging.getLogger("nodvard_deck.premigrate")
 
-# `boot` legt vor jedem `alembic upgrade` eine Kopie der Datenbank an und migriert nie ohne sie:
-# `<Datenordner>/backups/vor-update/<Zeit>_<von>_<nach>.db` mit einer Begleitdatei `.json`; die drei neuesten bleiben.
-# Nicht Teil der Kopie sind Dateien außerhalb der Datenbank (Erweiterungsdaten, Schlüssel), Migrationen fassen sie nicht an.
-# Eine vollständige Sicherung ist das nicht (dafür gibt es Einstellungen -> System -> Sicherung).
+# `boot` legt vor jedem `alembic upgrade` eine Kopie der Datenbank an (`backups/vor-update/<Zeit>_<von>_<nach>.db`, dazu
+# `.json`) und migriert nie ohne sie. Dateien außerhalb der Datenbank (Erweiterungsdaten, Schlüssel) gehören nicht dazu,
+# Migrationen fassen sie nicht an; eine vollständige Sicherung ist das nicht.
 DIR_PARTS = ("backups", "vor-update")
 KEEP = 3
 # Vorher muss mindestens das 1,2-Fache der Datenbank samt WAL frei sein (die Kopie und etwas Luft für die Migration),
@@ -51,8 +50,8 @@ class NoSpaceForCopy(NotEnoughSpace):
 
 
 class NoSpaceToSetAside(NotEnoughSpace):
-    """Die Datenbank liegt auf einem anderen Laufwerk als der Datenordner und wird zum Beiseitelegen kopiert, dafür fehlt Platz.
-    Das kommt vor dem Journal: Nichts ist verändert, und kein Journal blockiert spätere Starts."""
+    """Die Datenbank liegt auf einem anderen Laufwerk als der Datenordner und wird zum Beiseitelegen kopiert, dafür fehlt
+    Platz. Das kommt vor dem Journal: Nichts ist verändert, und kein Journal blockiert spätere Starts."""
 
     def __init__(self, needed: int, free: int) -> None:
         self.needed = needed
@@ -119,7 +118,7 @@ class LiveDb:
 
 
 def read_live(db_path: Path) -> LiveDb:
-    """Liest die Datenbank der Anwendung, ohne sie zu verändern oder anzulegen; `DamagedBackup`, wenn sie keine SQLite-Datei ist."""
+    """Liest die Datenbank der Anwendung, ohne sie zu ändern oder anzulegen; `DamagedBackup`, falls keine SQLite-Datei."""
     try:
         st = os.lstat(db_path)
     except FileNotFoundError:
@@ -285,15 +284,14 @@ def prune(data_dir: Path, keep: int = KEEP) -> list[str]:
     return removed
 
 
-# Rückweg: Die Kopie ersetzt die Datenbank. Sie wird umbenannt, nicht kopiert: atomar, ohne zusätzlichen Platz, und eine
-# halb kopierte Datenbank kann es nicht geben. Danach ist die Kopie verbraucht, sie ist jetzt die Datenbank. Die
-# Nebendateien (`-wal`, `-shm`, `-journal`) werden weggeräumt oder mit der alten Datenbank beiseite gelegt: SQLite würde
-# eine fremde WAL neben einer anderen Datenbank auf diese anwenden und sie zerstören. Das Journal in `state.json`
-# (`revert`) macht auch einen Absturz mittendrin heilbar (`finish_revert`, `boot` ruft es als Erstes auf).
+# Rückweg: Die Kopie ersetzt die Datenbank per Umbenennen (atomar, ohne Platzbedarf). Nebendateien (`-wal`, `-shm`,
+# `-journal`) werden weggeräumt oder mit der alten Datenbank beiseite gelegt, sonst wendete SQLite eine fremde WAL auf die
+# andere Datenbank an und zerstörte sie. Das Journal in `state.json` macht einen Absturz mittendrin heilbar
+# (`finish_revert`).
 
 
 def _move(src: Path, dst: Path) -> None:
-    """Verschieben ist `rename` (gleiches Dateisystem, atomar); eigene Funktion, damit Tests einen Absturz einbauen können."""
+    """Verschieben ist `rename` (gleiches Dateisystem, atomar); eigene Funktion, damit Tests Abstürze einbauen können."""
     os.rename(src, dst)
 
 
@@ -338,10 +336,10 @@ def check_room_to_set_aside(layout: restore.Layout) -> None:
 
 
 def _clear_revert(data_dir: Path, journal: dict[str, Any]) -> None:
-    """Der Rückweg ist fertig: Journal weg und im selben Schreibvorgang die zugehörige Migration als zurückgesetzt vermerken."""
-    # Getrennt geschrieben stünde sie nach einem Absturz dazwischen noch auf `running` mit einer Kopie, die es nicht mehr gibt
-    # (sie ist jetzt die Datenbank): Jeder weitere Start endete auf der Notseite. Dass die Datenbank wieder der Stand vor dem
-    # Update ist, weiß nur das Journal.
+    """Der Rückweg ist fertig: Journal weg und im selben Schreibvorgang die Migration als zurückgesetzt vermerken."""
+    # Getrennt geschrieben stünde sie nach einem Absturz dazwischen noch auf `running` mit einer Kopie, die es nicht
+    # mehr gibt (sie ist jetzt die Datenbank): Jeder weitere Start endete auf der Notseite. Dass die Datenbank wieder
+    # der Stand vor dem Update ist, weiß nur das Journal.
     state = bootstate.read_state(data_dir)
     state.pop("revert", None)
     migration = state.get("last_migration")
@@ -368,12 +366,12 @@ def _discard_live(layout: restore.Layout, replaced: str | None) -> None:
         for suffix in _SUFFIXES:
             restore.remove_path(Path(db + suffix))
         return
+    # Ein schon vorhandenes Ziel wird nie überschrieben: Der Ordner ist je Journal neu und ein Ziel entsteht nur ganz
+    # (umbenannt, auch die gefsyncte `.part`), ein vorheriger Lauf brach also erst vor dem Löschen der Quelle ab.
     directory = restore.make_private_dir(layout.restore_dir / replaced)
-    # Ein Ziel, das schon da ist, wird nie überschrieben. Der Ordner ist je Journal neu, und ein Ziel entsteht nur ganz
-    # (umbenannt, oder eine gefsyncte `.part` umbenannt): Ein vorheriger Lauf hat diese Datei also schon beiseitegelegt und
-    # brach nur vor dem Löschen der Quelle ab. Liegt die Datenbank schon dort (sie kommt als Letzte), ist das Original
-    # ganz beiseite; was jetzt am Platz liegt, ist die schon eingesetzte Kopie (anderes Laufwerk: `_install` brach vor dem
-    # Löschen der Kopie ab) oder derselbe Inhalt noch einmal. Das wird gelöscht, nie darüber gelegt.
+    # Liegt die Datenbank schon dort (sie kommt als Letzte), ist das Original ganz beiseite; was jetzt am Platz liegt,
+    # ist die schon eingesetzte Kopie (anderes Laufwerk: `_install` brach vor dem Löschen der Kopie ab) oder derselbe
+    # Inhalt noch einmal und wird gelöscht.
     if os.path.lexists(directory / layout.db_path.name):
         for suffix in (*_SUFFIXES[1:], _SUFFIXES[0]):
             restore.remove_path(Path(db + suffix))
@@ -431,10 +429,10 @@ def set_aside(layout: restore.Layout, *, now: float | None = None) -> str:
 
 
 def restore_copy(layout: restore.Layout, name: str, *, keep_discarded: bool, reason: str, now: float | None = None) -> None:
-    """Ersetzt die Datenbank durch die Kopie `name` und prüft sie vorher (`UnusableBackup`: gibt es nicht, `DamagedBackup`: kaputt)."""
-    # Danach schreibt sie das Journal und führt den Rückweg aus (`finish_revert`); scheitert der, bleibt das Journal stehen
-    # und der nächste Start macht weiter. Mit `keep_discarded` landet die verworfene Datenbank in `restore/replaced-<Zeit>/`,
-    # die Oberfläche und `restore.sweep` räumen sie nach 30 Tagen weg.
+    """Ersetzt die Datenbank durch die Kopie `name`, vorher geprüft (`UnusableBackup`: fehlt, `DamagedBackup`: kaputt)."""
+    # Danach schreibt sie das Journal und führt den Rückweg aus (`finish_revert`); scheitert der, bleibt das Journal
+    # stehen und der nächste Start macht weiter. Mit `keep_discarded` landet die verworfene Datenbank in
+    # `restore/replaced-<Zeit>/`, die Oberfläche und `restore.sweep` räumen sie nach 30 Tagen weg.
     now = time.time() if now is None else now
     src = copy_path(layout.data_dir, name)
     if src is None:

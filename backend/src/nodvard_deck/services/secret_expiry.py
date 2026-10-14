@@ -175,14 +175,14 @@ async def run_check(*, now: datetime | None = None) -> dict[str, int]:
             select(Secret.id).where(Secret.expires_at.is_not(None), Secret.expires_at <= horizon).order_by(Secret.expires_at)
         )).scalars().all())
     sent = failed = 0
-    for secret_id in ids:
+    for entry_id in ids:
         try:
             async with session_scope() as session:
-                if await remind_one(session, secret_id, now=now, zone=zone):
+                if await remind_one(session, entry_id, now=now, zone=zone):
                     sent += 1
         except Exception:  # ein Fehler hält die anderen Einträge nicht auf
             failed += 1
-            logger.exception("secret_expiry_reminder_failed secret_id=%s", secret_id)
+            logger.exception("secret_expiry_reminder_failed secret_id=%s", entry_id)
     return {"checked": len(ids), "sent": sent, "failed": failed}
 
 

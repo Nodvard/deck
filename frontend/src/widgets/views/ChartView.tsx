@@ -16,15 +16,9 @@ const HEIGHT = 160;
 const PADDING = 8;
 
 /**
- * Kein Chart-Paket installiert (fuer das Dashboard kamen nur react-grid-layout/radix/
- * zustand/react-query dazu) -- ein winziges handgerolltes SVG deckt line/bar/area ab,
- * ohne eine neue Abhaengigkeit einzufuehren.
- *
- * Y-Achsen-Beschriftung
- * (min/max) und ein Hover-Tooltip (senkrechte Linie + Werte aller Serien am
- * naechsten Index) ergaenzt -- ohne exakte Werte war das Original nur fuer den
- * groben Trend brauchbar, nicht zum Ablesen. Zoom/Legenden-Interaktion bleiben
- * offen, waeren eine Bibliothek wert.
+ * Winziges handgerolltes SVG für line/bar/area statt eines Chart-Pakets, um keine neue Abhängigkeit einzuführen.
+ * Y-Achsen-Beschriftung (min/max) und ein Hover-Tooltip (senkrechte Linie, Werte aller Serien am nächsten Index) machen
+ * exakte Werte ablesbar; Zoom und Legenden-Interaktion fehlen, dafür wäre eine Bibliothek sinnvoll.
  */
 export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }) {
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
@@ -95,9 +89,8 @@ export function ChartView({ view, data }: { view: ChartViewSpec; data: unknown }
             {formatValue(min)}
           </text>
 
-          {/* Hover-Zonen: eine unsichtbare Spalte pro Index statt pro
-              Punkt -- zeigt alle Serien gleichzeitig, treffsicherer als winzige
-              einzelne Hover-Ziele auf duennen Linien. */}
+          {/* Hover-Zonen: eine unsichtbare Spalte pro Index statt pro Punkt, zeigt alle Serien gleichzeitig und ist
+              treffsicherer als winzige Hover-Ziele auf dünnen Linien. */}
           {rows.map((_, idx) => (
             <rect
               key={idx}

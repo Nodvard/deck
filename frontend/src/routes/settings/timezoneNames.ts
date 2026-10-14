@@ -1,9 +1,7 @@
 /**
- * Deutsche Namen für die gängigen Zeitzonen, damit die Suche auch mit „Wien“, „Zürich“ oder
- * „Großbritannien“ etwas findet (die Zonen heißen in der Liste des Browsers englisch:
- * `Europe/Vienna`). Der erste Eintrag ist die Beschriftung in der Liste, die übrigen sind weitere
- * Suchbegriffe (Städte, Länder, die Zeit-Namen wie „Mitteleuropäische Zeit“). Was hier fehlt, bleibt
- * über den englischen Namen auffindbar.
+ * Deutsche Namen für gängige Zeitzonen, damit die Suche auch mit „Wien“ oder „Großbritannien“ etwas findet (der
+ * Browser nennt die Zonen englisch, `Europe/Vienna`). Der erste Eintrag ist die Beschriftung, die übrigen sind
+ * Suchbegriffe (Städte, Länder, Zeitnamen); was fehlt, bleibt über den englischen Namen auffindbar.
  */
 
 const MEZ = "Mitteleuropa, Mitteleuropäische Zeit, MEZ, MESZ, CET";

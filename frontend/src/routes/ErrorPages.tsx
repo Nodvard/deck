@@ -1,12 +1,7 @@
 /**
- * Freundliche Seiten statt der englischen Entwickler-Fehlerseite von React Router
- * ("Unexpected Application Error! 404 Not Found ... Hey developer"):
- *
- * - `NotFoundPage`: unbekannte Adresse (alter Merkzettel, Tippfehler, Link aus einer
- *   Push-Nachricht nach einem Update).
- * - `RouteErrorPage`: ein Fehler beim Aufbauen einer Seite. Innerhalb der Oberflaeche bleibt das
- *   Menue stehen (`fullScreen` = false); ganz aussen, wenn schon die Oberflaeche selbst
- *   scheitert, fuellt die Seite den Bildschirm.
+ * Freundliche Seiten statt der englischen Entwickler-Fehlerseite von React Router: `NotFoundPage` für eine unbekannte
+ * Adresse, `RouteErrorPage` für einen Fehler beim Aufbauen einer Seite. Innerhalb der Oberfläche bleibt das Menü stehen
+ * (`fullScreen` = false), scheitert die Oberfläche selbst, füllt die Seite den Bildschirm.
  */
 import { isRouteErrorResponse, useRouteError } from "react-router-dom";
 
@@ -37,7 +32,7 @@ export function NotFoundPage() {
   );
 }
 
-/** Kurze Beschreibung des Fehlers fuer „Technische Einzelheiten“ (kann englisch sein, ist nur zum Weitergeben). */
+/** Kurze Beschreibung des Fehlers für „Technische Einzelheiten“ (kann englisch sein, ist nur zum Weitergeben). */
 function technicalDetail(error: unknown): string | null {
   if (isRouteErrorResponse(error)) return `${error.status} ${error.statusText}`.trim();
   if (error instanceof Error) return error.message || error.name;

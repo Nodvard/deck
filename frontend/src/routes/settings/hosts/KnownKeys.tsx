@@ -1,8 +1,7 @@
 /**
- * Gemerkte Server-Schluessel: Nodvard Deck merkt sich den Fingerabdruck, den ein Server beim
- * ersten Mal zeigt (je nach Einstellung nach Bestaetigung unter „Verbindung pruefen“), und lehnt
- * danach jeden anderen ab. Nach einer Neuinstallation des Servers muss man den alten bewusst
- * vergessen -- mit Rueckfrage; den neuen Fingerabdruck muss man dann immer bestaetigen.
+ * Gemerkte Server-Schlüssel: Nodvard Deck merkt sich den Fingerabdruck, den ein Server beim ersten Mal zeigt (je nach
+ * Einstellung nach Bestätigung unter „Verbindung prüfen“), und lehnt danach jeden anderen ab. Nach einer
+ * Neuinstallation des Servers muss man den alten bewusst vergessen und den neuen bestätigen.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";

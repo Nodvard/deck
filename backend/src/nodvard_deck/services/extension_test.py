@@ -51,9 +51,8 @@ def scrub(text: str, secrets: list[str] | None = None, *, limit: int = _MAX_TEXT
 # Quellen, deren Ausnahmetexte die fremde Antwort oder die eigene Anfrage zitieren können (siehe `_text_is_foreign`).
 _FOREIGN_TEXT_MODULES = frozenset({"httpx", "httpcore", "h11", "idna", "websockets"})
 # Ausnahmen dieser Bibliotheken gelten immer als fremd (h11 und httpcore zitieren dieselbe Zeile wie der
-# `httpx.RemoteProtocolError` darüber, `websockets` Kopfzeilen und den Schließgrund der Gegenseite). httpx fehlt mit
-# Absicht: Seine Verbindungsfehler tragen nur den Text des Betriebssystems (Zertifikat, Namensauflösung), den die
-# Erkennung braucht; seine fremden Arten stehen einzeln in `_text_is_foreign`.
+# `httpx.RemoteProtocolError` darüber, `websockets` Kopfzeilen und Schließgrund). httpx fehlt mit Absicht: Seine
+# Verbindungsfehler tragen nur den Betriebssystem-Text, den die Erkennung braucht (fremde Arten: `_text_is_foreign`).
 _FOREIGN_CLASS_MODULES = frozenset({"httpcore", "h11", "idna", "websockets"})
 _FOREIGN_TEXT_NAMES = frozenset({"InvalidHandshake", "InvalidURI", "InvalidMessage"})  # websockets
 

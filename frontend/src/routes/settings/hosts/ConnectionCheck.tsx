@@ -1,12 +1,7 @@
 /**
- * „Verbindung pruefen“: ruft `POST /hosts/{id}/check` und zeigt das Ergebnis als Liste in
- * einfachem Deutsch -- erreichbar, Server-Schluessel, Anmeldung, Root-Rechte, was die Erweiterungen
- * brauchen, Betriebssystem.
- *
- * Zwei Sonderfaelle beim Server-Schluessel:
- *  - neu: Fingerabdruck und „Bestaetigen“. Bis dahin ging KEIN Passwort und kein Schluessel an den Server.
- *  - geaendert: deutliche Warnung, bewusst OHNE Bestaetigen-Knopf (Neuinstallation oder jemand
- *    schaltet sich dazwischen). Erst den alten Schluessel vergessen (Karte „Server-Schluessel“).
+ * „Verbindung prüfen“: ruft `POST /hosts/{id}/check` und zeigt das Ergebnis als Liste in einfachem Deutsch (erreichbar,
+ * Server-Schlüssel, Anmeldung, Root-Rechte, was die Erweiterungen brauchen, Betriebssystem). Zwei Sonderfälle beim
+ * Server-Schlüssel: neu (`KeyConfirm`) und geändert (`KeyChanged`).
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, CheckCircle2, HelpCircle, Minus, ShieldAlert, XCircle } from "lucide-react";
@@ -60,7 +55,10 @@ function withoutFingerprint(detail: string, fingerprint: string): string {
   return detail.replace(fingerprint, "").replace(/\s*Fingerabdruck:\s*$/, "").trim();
 }
 
-/** Ein neuer Server-Schluessel: Fingerabdruck, Vergleichsbefehl und „bestaetigen“ (auch fuer „Mit Passwort einrichten“). */
+/**
+ * Ein neuer Server-Schlüssel: Fingerabdruck, Vergleichsbefehl und „bestätigen“ (auch für „Mit Passwort einrichten“).
+ * Bis dahin ging kein Passwort und kein Schlüssel an den Server.
+ */
 export function KeyConfirm({
   item, hostKey, busy, onConfirm,
 }: { item: CheckItem; hostKey: HostKeyInfo | null; busy: boolean; onConfirm: () => void }) {
@@ -82,7 +80,10 @@ export function KeyConfirm({
   );
 }
 
-/** Ein geaenderter Server-Schluessel: deutliche Warnung, bewusst ohne Bestaetigen. */
+/**
+ * Ein geänderter Server-Schlüssel: deutliche Warnung, bewusst ohne Bestätigen (Neuinstallation oder jemand schaltet
+ * sich dazwischen); erst den alten Schlüssel vergessen (Karte „Server-Schlüssel“).
+ */
 export function KeyChanged({ item, hostKey }: { item: CheckItem; hostKey: HostKeyInfo | null }) {
   return (
     <div className="mt-1 rounded-lg border border-red-500/40 bg-red-500/10 p-3" data-testid="key-changed">
@@ -107,8 +108,8 @@ export function KeyChanged({ item, hostKey }: { item: CheckItem; hostKey: HostKe
 }
 
 /**
- * Die Punkte eines Pruefergebnisses mit Symbol, Text und Hinweis. Ohne `onConfirmKey` erscheint bei einem neuen
- * Server-Schluessel kein Bestaetigen-Knopf (z. B. nach „Mit Passwort einrichten“, dort kennt Nodvard Deck den Schluessel schon).
+ * Die Punkte einer Prüfung mit Symbol, Text und Hinweis. Ohne `onConfirmKey` erscheint bei einem neuen Server-Schlüssel
+ * kein Bestätigen-Knopf (z. B. nach „Mit Passwort einrichten“, dort kennt Nodvard Deck den Schlüssel schon).
  */
 export function CheckResultList({
   result, confirming = false, onConfirmKey,
@@ -144,10 +145,10 @@ export function ConnectionCheck({
   hostId, credentialId, buttonLabel = "Verbindung prüfen", onResult,
 }: {
   hostId: string;
-  /** Mit welchem Zugang geprueft wird; ohne Angabe der Standard-Zugang. */
+  /** Mit welchem Zugang geprüft wird; ohne Angabe der Standard-Zugang. */
   credentialId?: string;
   buttonLabel?: string;
-  /** Fuer den Aufrufer: das letzte Ergebnis (z. B. um „Neuen Zugang verwenden“ freizugeben). */
+  /** Für den Aufrufer: das letzte Ergebnis (z. B. um „Neuen Zugang verwenden“ freizugeben). */
   onResult?: (result: CheckResult) => void;
 }) {
   const queryClient = useQueryClient();
@@ -165,7 +166,7 @@ export function ConnectionCheck({
       onResult?.(out);
       await refreshHosts(queryClient);
     } catch (err) {
-      // 429: der Text kommt vom Server („Zu viele Pruefungen. Bitte in N Minuten ...“).
+      // 429: der Text kommt vom Server („Zu viele Prüfungen. Bitte in N Minuten ...“).
       setNotice({ kind: "error", text: err instanceof ApiError ? err.message : String(err) });
     } finally {
       setBusy(false);
@@ -176,8 +177,8 @@ export function ConnectionCheck({
     setConfirming(true);
     setNotice(null);
     try {
-      // Genau der Fingerabdruck, den die Pruefung gerade gezeigt hat (das Backend vergleicht ihn mit seinem Merkzettel).
-      // Mit einem bestimmten Zugang geprueft: ihn mitschicken, gesehen wurde der Schluessel auf seinem Port.
+      // Genau der Fingerabdruck, den die Prüfung gerade gezeigt hat (das Backend vergleicht ihn mit seinem Merkzettel).
+      // Mit einem bestimmten Zugang geprüft: ihn mitschicken, gesehen wurde der Schlüssel auf seinem Port.
       await api.post(`/hosts/${hostId}/known-hosts`, {
         key_type: key.key_type, fingerprint: key.fingerprint, ...(credentialId ? { credential_id: credentialId } : {}),
       });

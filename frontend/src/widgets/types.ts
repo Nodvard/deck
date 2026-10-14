@@ -1,8 +1,7 @@
 /**
- * TypeScript-Spiegel von sdk/python/nodvard_sdk/widgets.py -- Feldnamen und
- * Discriminator-Werte MUESSEN exakt uebereinstimmen, sonst validiert die Flutter-/
- * React-Seite gegen ein anderes Schema als das, was der Kern tatsaechlich validiert
- * (docs/02-EXTENSION-API.md §4: "Kein Widget ohne deklarative Form").
+ * TypeScript-Spiegel von sdk/python/nodvard_sdk/widgets.py: Feldnamen und Discriminator-Werte müssen exakt
+ * übereinstimmen, sonst validiert die Flutter-/React-Seite gegen ein anderes Schema als das, was der Kern tatsächlich
+ * validiert (docs/02-EXTENSION-API.md: „Kein Widget ohne deklarative Form“).
  */
 
 export type Template = string;
@@ -155,8 +154,10 @@ export interface WidgetSpec {
 
 export interface WidgetOut extends WidgetSpec {
   ext_id: string;
-  /** Frühere Kennungen der Erweiterung (nach einer Umbenennung), damit Dashboard-Einträge mit der alten
-   * `ext_id` dem Widget zugeordnet werden können. Fehlt bei einem älteren Backend. */
+  /**
+   * Alte Kennungen der Erweiterung (nach einer Umbenennung), damit Dashboard-Einträge mit der alten `ext_id` dem Widget
+   * zugeordnet werden. Fehlt bei einem älteren Backend.
+   */
   legacy_ext_ids?: string[];
 }
 
@@ -177,14 +178,19 @@ export interface PageSpec {
 
 export interface PageOut extends PageSpec {
   ext_id: string;
-  /** Frühere Kennungen der Erweiterung: Adressen `/ext/<alt>/…` leitet `ExtensionPage` auf `/ext/<ext_id>/…`
-   * um. Fehlt bei einem älteren Backend. */
+  /**
+   * Alte Kennungen der Erweiterung: Adressen `/ext/<alt>/…` leitet `ExtensionPage` auf `/ext/<ext_id>/…` um.
+   * Fehlt bei einem älteren Backend.
+   */
   legacy_ext_ids?: string[];
-  /** Reifegrad des Moduls: `beta` bekommt in Menü und Seitenkopf ein Abzeichen. Fehlt bei einem älteren Backend (= fertig). */
+  /**
+   * Reifegrad des Moduls: `beta` bekommt in Menü und Seitenkopf ein Abzeichen. Fehlt bei
+   * einem älteren Backend (= fertig).
+   */
   stage?: string;
 }
 
-/** docs/02-EXTENSION-API.md §4: GET /api/v1/ext/<id>/<data_endpoint> -> {data, meta}. */
+/** `GET /api/v1/ext/<id>/<data_endpoint>` liefert `{data, meta}` (docs/02-EXTENSION-API.md). */
 export interface WidgetDataResponse<T = unknown> {
   data: T;
   meta: Record<string, unknown>;

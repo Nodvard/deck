@@ -124,8 +124,7 @@ class IncidentQueueRepository:
             return {row.id: row.attempts for row in rows}
 
     async def expire_stale(self, *, max_attempts: int = MAX_ATTEMPTS, max_age_s: float = MAX_AGE_S) -> int:
-        """Beim Start: offene Einträge, die zu alt sind oder ihre Versuche verbraucht haben, als "fehlgeschlagen"
-        markieren."""
+        """Beim Start: offene Einträge, die zu alt sind oder keine Versuche mehr haben, als "fehlgeschlagen" markieren."""
         cutoff = datetime.now(UTC) - timedelta(seconds=max_age_s)
         async with self._ctx.db.session() as session:
             result = await session.execute(

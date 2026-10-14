@@ -1,8 +1,7 @@
 /**
- * Ladefehler sichtbar machen statt eines Leerzustands. Aus einer gescheiterten Abfrage wurde sonst
- * "Noch keine …" oder "nicht gefunden" -- das liest sich wie eine Auskunft, dabei hat nur die Abfrage
- * nicht geklappt. Gegenstueck zu `LoadError` im Erweiterungs-UI-Kit
- * (extensions/_shared/frontend/src/loadError.tsx) -- gleiche Optik und gleicher Wortlaut.
+ * Ladefehler sichtbar machen statt eines Leerzustands: Aus einer gescheiterten Abfrage würde sonst "Noch keine …"
+ * oder "nicht gefunden", das liest sich wie eine Auskunft. Gegenstück zu `LoadError` im Erweiterungs-UI-Kit
+ * (extensions/_shared/frontend/src/loadError.tsx), gleiche Optik und gleicher Wortlaut.
  */
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -13,7 +12,7 @@ export function LoadError({ what, error, onRetry, compact = false }: {
   what: string;
   error: unknown;
   onRetry?: () => void;
-  /** Schmal, ohne Kasten (in einer Karte oder unter einer Ueberschrift). */
+  /** Schmal, ohne Kasten (in einer Karte oder unter einer Überschrift). */
   compact?: boolean;
 }) {
   const text = `${what} ließ sich gerade nicht laden: ${errorMessage(error)}`;

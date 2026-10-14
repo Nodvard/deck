@@ -171,8 +171,8 @@ async def test_the_whole_backdoor_story_is_visible_in_the_audit_log(client):
         "/api/v1/users", json={"username": "hintertuer", "password": PASSWORD, "role_ids": [roles["admin"]], "current_password": PASSWORD}, headers=_h(token)
     )).json()["id"]
     await client.patch(f"/api/v1/users/{user_id}", json={"password": NEW_PASSWORD, "current_password": PASSWORD}, headers=_h(token))
-    await client.put("/api/v1/settings/autonomy.mode", json={"value": "full"}, headers=_h(token))
-    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "critical"}, headers=_h(token))
+    await client.put("/api/v1/settings/autonomy.mode", json={"value": "full", "current_password": PASSWORD}, headers=_h(token))
+    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "critical", "current_password": PASSWORD}, headers=_h(token))
     await client.delete(f"/api/v1/users/{user_id}", headers=_h(token))
 
     actions = [e["action"] for e in (await client.get("/api/v1/audit?limit=100", headers=_h(token))).json()]
@@ -198,7 +198,7 @@ _WINDOW = {"cron": "0 3 * * 0", "duration_minutes": 90, "host_ids": "all"}
 )
 async def test_gate_settings_land_in_the_audit_log_with_old_and_new_value(client, key, old, new):
     token, owner_id = await _owner(client)
-    r = await client.put(f"/api/v1/settings/{key}", json={"value": new}, headers=_h(token))
+    r = await client.put(f"/api/v1/settings/{key}", json={"value": new, "current_password": PASSWORD}, headers=_h(token))
     assert r.status_code == 200, r.text
 
     entries = (await client.get("/api/v1/audit?action=system.settings.changed", headers=_h(token))).json()
@@ -212,8 +212,8 @@ async def test_gate_settings_land_in_the_audit_log_with_old_and_new_value(client
 @pytest.mark.asyncio
 async def test_a_second_change_records_the_previous_stored_value(client):
     token, _ = await _owner(client)
-    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "high"}, headers=_h(token))
-    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "low"}, headers=_h(token))
+    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "high", "current_password": PASSWORD}, headers=_h(token))
+    await client.put("/api/v1/settings/autonomy.max_risk", json={"value": "low", "current_password": PASSWORD}, headers=_h(token))
     entries = (await client.get("/api/v1/audit?action=system.settings.changed", headers=_h(token))).json()
     assert sorted((e["detail"]["old"], e["detail"]["new"]) for e in entries) == [("high", "low"), ("low", "high")]
 

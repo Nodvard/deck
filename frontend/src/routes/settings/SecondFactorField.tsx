@@ -1,11 +1,7 @@
 /**
- * Eingabe für den zweiten Faktor, wenn eine Aktion außer dem Passwort einen Code verlangt.
- *
- * - Mit `allowRecovery` (Zwei-Faktor abschalten, neue Wiederherstellungs-Codes): ein Feld für beides. Sechs Ziffern
- *   sind der Code aus der App, alles andere ein Wiederherstellungs-Code – das erkennt der Server selbst, wie bei der
- *   Anmeldung.
- * - Ohne (Sicherung herunterladen oder einspielen): nur der Code aus der App. Wiederherstellungs-Codes sind für den
- *   Notfall bei der Anmeldung da.
+ * Eingabe für den zweiten Faktor, wenn eine Aktion außer dem Passwort einen Code verlangt. Mit `allowRecovery`: ein
+ * Feld für beides (sechs Ziffern sind der Code aus der App, alles andere ein Wiederherstellungs-Code, das erkennt der
+ * Server selbst). Ohne: nur der Code aus der App, Wiederherstellungs-Codes sind für den Notfall bei der Anmeldung da.
  */
 import { useEffect, useState } from "react";
 
@@ -36,10 +32,9 @@ export function isTotpRejected(err: unknown): boolean {
 }
 
 /**
- * Ist für das angemeldete Konto die Zwei-Faktor-Anmeldung an (`GET /me`, `totp_enabled`)? Dann zeigt die Oberfläche
- * das Code-Feld gleich und nicht erst nach der ersten Rückfrage des Servers. `null`, solange es nicht feststeht (Antwort
- * noch unterwegs, Abfrage gescheitert, `enabled` aus): Dann bleibt die Rückfrage (`totp_missing`) der Weg – sie gilt
- * immer, auch wenn Zwei-Faktor gerade in einem anderen Fenster eingeschaltet wurde.
+ * Ist für das Konto Zwei-Faktor an (`GET /me`, `totp_enabled`)? Dann zeigt die Oberfläche das Code-Feld gleich statt
+ * erst nach der Rückfrage. `null`, solange es nicht feststeht (Antwort unterwegs, Abfrage gescheitert, `enabled`
+ * aus): Dann bleibt die Rückfrage (`totp_missing`) der Weg, sie gilt immer.
  */
 export function useTwoFactorEnabled(enabled = true): boolean | null {
   const [value, setValue] = useState<boolean | null>(null);

@@ -1,14 +1,8 @@
-/** Gemeinsame Server-Auswahl fuer alle Seiten, auf denen man einen Server waehlt (Server-Zustand, Terminal,
- * Dateien, ...). Teil des UI-Kits: Erweiterungen binden sie wie `ui.tsx` ein, Kern-Seiten ueber dieselbe
- * Aufloesung (`frontend/kit.resolve.ts`). Kacheln mit Name, Adresse, Betriebssystem, Status und, wenn die Seite ihn kennt, einem
- * kurzen Zusatz (Auslastung oder wichtigster Befund) -- statt einer Klappliste. Ab `searchFrom` Servern gibt es ein Suchfeld. Der zuletzt
- * gewaehlte Server (je `storageKey` im Browser gemerkt) ist beim naechsten Besuch vorgewaehlt. Ist ein
- * Server gewaehlt, zeigt die Auswahl nur noch ihn in einer Zeile, mit "Server wechseln".
- *
- * Die Seite bleibt Herr ueber die Auswahl (`value`/`onChange`), z. B. ueber `?host=` in der Adresszeile.
- *
- * Mit `actions` wird die Auswahl zum Starter (Terminal-Seite): jede Kachel zeigt ihre Knoepfe, nichts wird
- * gewaehlt oder gemerkt. */
+/**
+ * Gemeinsame Server-Auswahl (Server-Zustand, Terminal, Dateien, ...) für Erweiterungen und Kern-Seiten (dieselbe
+ * Auflösung, `frontend/kit.resolve.ts`): Kacheln statt Klappliste, ab `searchFrom` Servern mit Suche, der zuletzt
+ * gewählte Server (je `storageKey`) vorgewählt. Die Seite bleibt Herr über die Auswahl (`value`/`onChange`).
+ */
 import { type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 import { SearchInput } from "./ui";
@@ -21,8 +15,7 @@ export interface HostTile {
   os?: string | null;
   /** Status aus dem Kern (`up`, `down`, `unknown`, bei VMs `running`/`stopped`). */
   status?: string | null;
-  /** Kurzer Zusatz zum Zustand, z. B. die Auslastung ("CPU 12 %") oder der wichtigste Befund -- wenn die
-   *  Seite ihn kennt. */
+  /** Kurzer Zusatz zum Zustand, wenn die Seite ihn kennt, z. B. die Auslastung ("CPU 12 %") oder der wichtigste Fund. */
   extra?: string | null;
   /** Kurzer Zusatz, z. B. "ohne SSH-Zugang". */
   hint?: string | null;
@@ -31,7 +24,7 @@ export interface HostTile {
 const STORAGE_PREFIX = "nodvard.host-picker.";
 const DEFAULT_SEARCH_FROM = 6;
 
-/** Zuletzt gewaehlter Server dieser Seite -- `null`, wenn keiner gemerkt ist oder der Browser nichts speichert. */
+/** Zuletzt gewählter Server dieser Seite -- `null`, wenn keiner gemerkt ist oder der Browser nichts speichert. */
 export function rememberedHost(storageKey: string): string | null {
   try {
     return window.localStorage.getItem(STORAGE_PREFIX + storageKey);
@@ -102,12 +95,12 @@ export function HostPicker({ hosts, value, onChange, storageKey, label = "Server
   hosts: HostTile[] | null;
   value: string | null;
   onChange: (id: string) => void;
-  /** Unter diesem Schluessel merkt sich der Browser den zuletzt gewaehlten Server (je Seite einer). */
+  /** Unter diesem Schlüssel merkt sich der Browser den zuletzt gewählten Server (je Seite einer). */
   storageKey: string;
   label?: string;
   /** Ab so vielen Servern erscheint das Suchfeld. */
   searchFrom?: number;
-  /** Starter statt Auswahl: Knoepfe je Kachel (z. B. "Terminal öffnen"); kein Waehlen, kein Merken. */
+  /** Starter statt Auswahl: Knöpfe je Kachel (z. B. "Terminal öffnen"); kein Wählen, kein Merken. */
   actions?: (host: HostTile) => ReactNode;
   /** Spalten des Rasters, z. B. "grid-cols-1" in einer schmalen Seitenleiste. */
   gridClass?: string;

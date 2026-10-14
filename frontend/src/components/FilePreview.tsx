@@ -1,20 +1,16 @@
 /**
- * Vorschau einer Datei im Dateimanager (N4): Text und Bilder, direkt auf der Seite -- ohne neuen Endpunkt, über
- * `GET /files/{source}/download` (bei Text nur der Anfang, per `Range`).
- *
- * Bewusst NICHT: HTML, SVG, PDF. Eine fremde Datei darf im Dashboard keinen Code ausführen -- Text steht als reiner
- * Text in `<pre>`, Bilder kommen über `<img>` aus einer Blob-Adresse, deren Typ die Vorschau selbst festlegt (nie den
- * des Servers). SVG fehlt, weil seine Blob-Adresse, in einem neuen Tab geöffnet, Skripte im Dashboard ausführen
- * könnte. Alles andere: „Laden“.
+ * Vorschau einer Datei im Dateimanager (Text und Bilder). Bewusst kein HTML, SVG oder PDF, damit eine fremde Datei im
+ * Dashboard keinen Code ausführt: Text steht als reiner Text in `<pre>`, Bilder kommen aus einer Blob-Adresse mit
+ * selbst festgelegtem Typ (eine SVG-Blob-Adresse könnte in einem neuen Tab Skripte ausführen). Alles andere: „Laden“.
  */
 import { useEffect, useRef, useState } from "react";
 
 import { apiErrorFromResponse, apiFetchResponse } from "../lib/api";
 
-export const TEXT_LIMIT = 256 * 1024;
 /** Mehr liest die Vorschau einer Textdatei nicht (der Rest bleibt für „Laden“). */
-export const IMAGE_LIMIT = 10 * 1024 * 1024;
+export const TEXT_LIMIT = 256 * 1024;
 /** Größere Bilder zeigt die Vorschau nicht (das Laden im Browser würde zäh). */
+export const IMAGE_LIMIT = 10 * 1024 * 1024;
 
 const IMAGE_TYPES: Record<string, string> = {
   png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", bmp: "image/bmp",
@@ -41,7 +37,7 @@ function extension(name: string): string {
   return dot > 0 ? name.slice(dot + 1).toLowerCase() : name.startsWith(".") ? name.slice(1).toLowerCase() : "";
 }
 
-/** Was die Vorschau mit dieser Datei anfangen kann -- oder `null` (dann nur „Laden“). */
+/** Was die Vorschau mit dieser Datei anfangen kann, sonst `null` (dann nur „Laden“). */
 export function previewKind(entry: PreviewEntry): PreviewKind | null {
   const ext = extension(entry.name);
   if (ext in IMAGE_TYPES) return entry.size != null && entry.size > IMAGE_LIMIT ? null : "image";
@@ -51,7 +47,7 @@ export function previewKind(entry: PreviewEntry): PreviewKind | null {
 
 /**
  * Höchstens `limit` Bytes einer Antwort lesen und den Rest abbrechen. Nötig, weil der Server bei `Range` nur den
- * Anfang beachtet und sonst bis zum Ende der Datei schickt -- eine riesige Logdatei käme sonst ganz in den Browser.
+ * Anfang beachtet und sonst bis zum Ende der Datei schickt: eine riesige Logdatei käme sonst ganz in den Browser.
  * `more`: es gab mehr als `limit`.
  */
 export async function readHead(res: Response, limit: number): Promise<{ bytes: Uint8Array; more: boolean }> {
@@ -115,7 +111,8 @@ export function FilePreview({
   useEffect(() => {
     let url: string | null = null;
     let active = true;
-    // Beim Schließen oder Wechsel der Datei den Abruf abbrechen, statt ihn bis zur Grenze im Hintergrund weiterlaufen zu lassen.
+    // Beim Schließen oder Wechsel der Datei den Abruf abbrechen, statt ihn bis zur Grenze im Hintergrund weiterlaufen
+    // zu lassen.
     const controller = new AbortController();
     setState({ kind: "loading" });
     const path = `/files/${encodeURIComponent(sourceId)}/download?path=${encodeURIComponent(entry.path)}`;
@@ -156,7 +153,8 @@ export function FilePreview({
     closeRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape" || e.defaultPrevented) return;
-      // Esc in einem Eingabefeld (z. B. Umbenennen) oder in einem anderen offenen Dialog gilt dem, nicht der Vorschau.
+      // Esc in einem Eingabefeld (z. B. Umbenennen) oder in einem anderen offenen Dialog gilt dem, nicht der
+      // Vorschau.
       const target = e.target instanceof Element ? e.target : null;
       if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
       const others = Array.from(document.querySelectorAll('[role="dialog"], [role="alertdialog"]'))
@@ -167,7 +165,7 @@ export function FilePreview({
     window.addEventListener("keydown", onKey);
     return () => {
       window.removeEventListener("keydown", onKey);
-      // Nur, wenn der Fokus mit der Vorschau verschwunden ist -- nicht, wenn man schon woanders hingeklickt hat.
+      // Nur, wenn der Fokus mit der Vorschau verschwunden ist, nicht wenn man schon woanders hingeklickt hat.
       const lost = !document.activeElement || document.activeElement === document.body;
       if (lost && before?.isConnected) before.focus();
     };

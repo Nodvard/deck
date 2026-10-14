@@ -1,0 +1,7 @@
+[[entries]]
+kind = "sicherheit"
+text = "Die Nextcloud-Dateien im Dateimanager sehen nur noch Admins. Wer nur ansehen oder bedienen darf, kommt nicht mehr an das Nextcloud-Konto."
+
+[[entries]]
+kind = "sicherheit"
+text = "Jeder Zugriff im Dateimanager auf eine Quelle mit Zugangsdaten steht jetzt im Protokoll, auch bei Nextcloud."

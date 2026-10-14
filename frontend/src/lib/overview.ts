@@ -1,7 +1,6 @@
 /**
- * Daten fuer die Startseite: Hosts + Live-Metriken aus dem Kern,
- * Dienste/Backups/Freigaben/Warnungen aus GET /overview (herstellerneutral, siehe
- * backend api/v1/overview.py).
+ * Daten für die Startseite: Hosts und Live-Metriken aus dem Kern, Dienste/Backups/Freigaben/Warnungen aus GET /overview
+ * (herstellerneutral, backend api/v1/overview.py).
  */
 import { useQuery } from "@tanstack/react-query";
 
@@ -24,16 +23,16 @@ export interface HostOut {
   os_family: string;
   kind: string | null;
   tags: string[];
-  /** Markierungen, die eine Erweiterung verwaltet (nicht von Hand aenderbar); Teilmenge von `tags`. */
+  /** Markierungen, die eine Erweiterung verwaltet (nicht von Hand änderbar); Teilmenge von `tags`. */
   managed_tags: string[];
   /** Standard-Zugang, `null` ohne Zugang. */
   credential: HostCredentialSummary | null;
-  /** Fuer Skripte und Nodvard Shield verwenden. */
+  /** Für Skripte und Nodvard Shield verwenden. */
   is_managed: boolean;
   /** Messwerte sammeln. */
   enabled: boolean;
   status: string;
-  /** Wann der Server zuletzt geantwortet hat -- der SSH-Port nimmt Verbindungen an, mehr nicht. */
+  /** Wann der Server zuletzt geantwortet hat: der SSH-Port nimmt Verbindungen an, mehr nicht. */
   last_seen_at: string | null;
   /** Wann sich Nodvard Deck zuletzt wirklich mit dem Standard-Zugang angemeldet hat; `null`: noch nie belegt. */
   login_ok_at?: string | null;
@@ -58,7 +57,7 @@ export interface HostLatestMetrics {
   at: string;
   /** Alter beim Abruf, in Sekunden. */
   age_s: number;
-  /** Aelter als `stale_after_s`: zeigt das Cockpit als „veraltet“. */
+  /** Älter als `stale_after_s`: zeigt das Cockpit als „veraltet“. */
   stale: boolean;
 }
 
@@ -77,14 +76,14 @@ export interface ServiceOut {
   tone: string | null;
   url: string | null;
   image: string | null;
-  /** Platzhalter eines Servers, dessen Container nicht gelesen werden konnten (kein Dienst). Fehlt bei aelteren Servern. */
+  /** Platzhalter für einen Server, dessen Container nicht lesbar waren (kein Dienst). Fehlt bei älteren Servern. */
   unreachable?: boolean;
 }
 
-/** Eine Kachel im Bereich „Apps“ (`GET /overview` -> `apps`): ein erkannter Dienst oder eine eigene App, die jemand
- * von Hand angelegt hat. Felder, die es fuer die andere Art nicht gibt, sind `null`. */
+/** Eine Kachel im Bereich „Apps“ (`GET /overview` -> `apps`): ein erkannter Dienst oder eine von Hand angelegte App.
+ * Felder, die es für die andere Art nicht gibt, sind `null`. */
 export interface AppTileOut {
-  /** Erkannt: wie `ServiceOut.id`. Eigen: die ID aus `/apps` (zum Aendern und Loeschen). */
+  /** Erkannt: wie `ServiceOut.id`. Eigen: die ID aus `/apps` (zum Ändern und Löschen). */
   id: string;
   source: "detected" | "custom";
   name: string;
@@ -106,9 +105,9 @@ export interface AppTileOut {
 export interface OverviewOut {
   services: ServiceOut[];
   services_running: number;
-  /** Namen der Server, deren Container nicht gelesen werden konnten. Fehlt bei aelteren Servern. */
+  /** Namen der Server, deren Container nicht gelesen werden konnten. Fehlt bei älteren Servern. */
   services_unreachable_hosts?: string[];
-  /** Eigene Apps zuerst (nach Position), danach die erkannten Dienste. `services` bleibt davon unberuehrt. */
+  /** Eigene Apps zuerst (nach Position), danach die erkannten Dienste. `services` bleibt davon unberührt. */
   apps: AppTileOut[];
   backups: {
     total: number;
@@ -117,7 +116,7 @@ export interface OverviewOut {
     running: number;
     unknown: number;
     failed_names: string[];
-    /** Verbindungen, die nicht antworten -- zaehlen nicht in `total`. */
+    /** Verbindungen, die nicht antworten: zählen nicht in `total`. */
     unreachable_names: string[];
   } | null;
   pending_actions: number;
@@ -154,7 +153,7 @@ export function useHostMetrics(hostId: string) {
   });
 }
 
-/** Letzte Werte ALLER Server in einer Abfrage, aus dem Verlauf des Kerns -- kein SSH beim Laden des Cockpits. */
+/** Letzte Werte aller Server in einer Abfrage, aus dem Verlauf des Kerns: kein SSH beim Laden des Cockpits. */
 export function useLatestMetrics(enabled = true) {
   return useQuery({
     queryKey: ["hosts", "metrics", "latest"],
@@ -165,7 +164,7 @@ export function useLatestMetrics(enabled = true) {
   });
 }
 
-/** IDs der Hosts, fuer die es eine Terminal-Sitzung gibt (hinterlegte Zugangsdaten);
+/** IDs der Hosts, für die es eine Terminal-Sitzung gibt (hinterlegte Zugangsdaten);
  * das Backend liefert nur die IDs, keine Objekte. */
 export function useTerminalHosts(enabled: boolean) {
   return useQuery({

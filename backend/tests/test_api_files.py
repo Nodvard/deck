@@ -246,19 +246,25 @@ async def test_download_streams_every_chunk_and_closes_the_source(client, db_ses
     assert source.closed is True
 
 
+async def _no_audit(*_args, **_kwargs) -> None:
+    """Ersetzt das Protokoll in Tests, die den Endpunkt ohne Datenbank aufrufen."""
+
+
 @pytest.mark.asyncio
-async def test_download_closes_the_source_even_if_the_body_is_never_read():
+async def test_download_closes_the_source_even_if_the_body_is_never_read(monkeypatch):
     """Der erste Teil ist beim Aufbau der Antwort schon geholt; wird der Koerper nie gelesen (Browser weg, bevor
     der Strom beginnt), schliesst die Nacharbeit der Antwort den Strom, statt ihn bis zur Muellabfuhr offen zu lassen."""
     import types
 
+    from nodvard_deck.api.v1 import files as files_api
     from nodvard_deck.api.v1.files import download_file
 
+    monkeypatch.setattr(files_api, "_audit", _no_audit)
     source = _StreamSource(chunks=[b"hallo ", b"welt"])
     _register(source)
 
     response = await download_file(
-        "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1"), None
+        "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1", is_owner=True), None
     )
 
     assert source.closed is False  # der Strom steht nach dem ersten Teil
@@ -283,23 +289,25 @@ async def test_download_closes_the_source_if_the_audit_entry_fails(monkeypatch):
 
     with pytest.raises(RuntimeError, match="Protokoll nicht beschreibbar"):
         await files_api.download_file(
-            "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1"), None
+            "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1", is_owner=True), None
         )
 
     assert source.closed is True
 
 
 @pytest.mark.asyncio
-async def test_download_closes_the_source_if_the_body_is_abandoned_midway():
+async def test_download_closes_the_source_if_the_body_is_abandoned_midway(monkeypatch):
     """Bricht die Antwort mitten im Strom ab (der Generator wird geschlossen), wird auch der Strom der Quelle geschlossen."""
     import types
 
+    from nodvard_deck.api.v1 import files as files_api
     from nodvard_deck.api.v1.files import download_file
 
+    monkeypatch.setattr(files_api, "_audit", _no_audit)
     source = _StreamSource(chunks=[b"hallo ", b"welt"])
     _register(source)
     response = await download_file(
-        "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1"), None
+        "fake", "/notes.txt", types.SimpleNamespace(headers={}), types.SimpleNamespace(id="u-1", is_owner=True), None
     )
 
     body = response.body_iterator
@@ -569,8 +577,54 @@ async def test_upload_below_the_general_request_limit_but_over_a_smaller_file_li
     assert source.open_write_calls == 0 and source.files["/wichtig.bin"] == b"altes Wissen"
 
 
+class _SmallDiskSource(_TruncatingFileSource):
+    """Meldet über `free_bytes` wenig freien Platz (oder scheitert dabei mit `broken`)."""
+
+    def __init__(self, free: int | None = 1000, *, broken: bool = False) -> None:
+        super().__init__("fake")
+        self.free = free
+        self.broken = broken
+        self.asked: list[str] = []
+
+    async def free_bytes(self, path: PurePosixPath) -> int | None:
+        self.asked.append(str(path))
+        if self.broken:
+            raise OSError("statvfs nicht unterstützt")
+        return self.free
+
+
 @pytest.mark.asyncio
-async def test_upload_without_a_limit_still_reaches_the_source(client, db_session):
+async def test_upload_bigger_than_the_free_space_of_the_target_is_refused_before_it_is_opened(client, db_session):
+    source = _SmallDiskSource(free=1000)
+    source.files["/wichtig.bin"] = b"altes Wissen"
+    _register(source)
+    token = await _bootstrap_owner(client)
+
+    too_big = await client.post("/api/v1/files/fake/upload?path=/wichtig.bin", headers=_auth_header(token), content=b"d" * 2000)
+    assert too_big.status_code == 507, too_big.text
+    assert "nicht genug Platz" in too_big.json()["detail"] and too_big.headers.get("connection") == "close"
+    assert source.open_write_calls == 0 and source.files["/wichtig.bin"] == b"altes Wissen"
+    assert source.asked == ["/wichtig.bin"]
+
+    fits = await client.post("/api/v1/files/fake/upload?path=/klein.bin", headers=_auth_header(token), content=b"d" * 500)
+    assert fits.status_code == 200, fits.text
+    assert source.files["/klein.bin"] == b"d" * 500
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["unbekannt", "kaputt"])
+async def test_upload_goes_through_when_the_target_does_not_know_its_free_space(client, db_session, kind):
+    source = _SmallDiskSource(free=None, broken=kind == "kaputt")
+    _register(source)
+    token = await _bootstrap_owner(client)
+
+    uploaded = await client.post("/api/v1/files/fake/upload?path=/gross.bin", headers=_auth_header(token), content=b"d" * 5000)
+    assert uploaded.status_code == 200, uploaded.text
+    assert source.open_write_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_upload_below_the_default_limit_still_reaches_the_source(client, db_session):
     source = _TruncatingFileSource("fake")
     _register(source)
     token = await _bootstrap_owner(client)

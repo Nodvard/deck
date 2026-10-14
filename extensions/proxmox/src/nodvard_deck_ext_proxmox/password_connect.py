@@ -768,9 +768,9 @@ async def _start(
         run.detail["certificate"] = _CERT_PINNED if pin is not None else _CERT_TRUSTED
         run.detail["fingerprint"] = cert.sha256
         _claim_attempt(actor.id, target.key, cert.sha256)
-        # Immer gepinnt, auch bei einem anerkannten Zertifikat (dann auf das eben streng geprüfte): Zeigt der Server inzwischen
-        # ein anderes, scheitert der Handshake, bevor das Passwort hinausgeht. So läuft der ganze Ablauf über Clients ohne
-        # Cookie-Speicher an genau dieses Zertifikat.
+        # Immer gepinnt, auch bei einem anerkannten Zertifikat (dann auf das eben streng geprüfte): Zeigt der Server
+        # inzwischen ein anderes, scheitert der Handshake, bevor das Passwort hinausgeht. So bleibt der ganze Ablauf über
+        # Clients ohne Cookie-Speicher an genau dieses Zertifikat gebunden.
         api = _Proxmox(ctx, target.base_url, pin or cert.sha256)
         run.sent = True
         status, data = await _send_once(
@@ -1355,10 +1355,9 @@ def old_tokens_of(
     """Tokens von `nodvard@pve` und `nodvard-backup@pve`, die Nodvard Deck angelegt hat (`DECK_TOKEN_PATTERN`) und die
     keine Verbindung mehr benutzt; fremde nie. Konnte Proxmox-Backups nicht gefragt werden, zählen die Tokens von
     `nodvard-backup@pve` nie als alt: sie könnten dort noch stecken."""
-    # Löschen kann Nodvard Deck sie nicht selbst: ein API-Token darf Tokens seines eigenen Benutzers nur mit `User.Modify`
-    # löschen (`userid-param self` gilt für die Token-ID nicht). Mit diesem Recht könnte er aber auch Tokens ohne
-    # Privilegientrennung anlegen oder die eines anderen umstellen und so alle Rechte des Benutzers bekommen, oder den
-    # Benutzer löschen. Darum nur die Liste mit dem `pveum`-Befehl.
+    # Löschen kann Nodvard Deck sie nicht: Ein API-Token braucht dafür `User.Modify` (`userid-param self` gilt nicht für die
+    # Token-ID), und damit könnte er Tokens ohne Privilegientrennung anlegen, andere umstellen (alle Rechte des Benutzers)
+    # oder den Benutzer löschen. Darum nur die Liste mit dem `pveum`-Befehl.
     out: list[dict[str, Any]] = []
     for user in (PVE_USER, BACKUP_USER):
         if user == BACKUP_USER and not backups_asked:

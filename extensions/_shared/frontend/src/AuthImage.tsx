@@ -1,13 +1,9 @@
 /**
- * Bild von einem geschuetzten API-Endpunkt (z. B. Inventar-Fotos). Ein normales
- * `<img src>` kann keinen `Authorization`-Header mitschicken und bekaeme 401 --
- * deshalb per fetch mit Bearer-Token laden und als Blob-URL anzeigen. `src` ist der
- * vollstaendige Pfad (inkl. /api/v1), so wie ihn das Backend ausliefert.
- *
- * Bewusst eine eigene Datei statt in ui.tsx: ui.tsx importiert keine React-Hooks,
- * sonst benennt esbuild die Hooks in JEDEM Extension-Bundle um -- so aendert sich nur
- * das Bundle der Erweiterungen, die AuthImage wirklich benutzen.
+ * Bild von einem geschützten API-Endpunkt (z. B. Inventar-Fotos): Ein `<img src>` kann keinen `Authorization`-Header
+ * schicken und bekäme 401, darum per fetch mit Token laden und als Blob-URL zeigen. `src` ist der volle Pfad (mit /api/v1).
  */
+// Eigene Datei statt ui.tsx: ui.tsx bleibt ohne React-Hooks, sonst benennt esbuild sie in jedem Bundle um. So ändern
+// sich nur die Bundles, die AuthImage benutzen.
 import { useEffect, useState } from "react";
 
 import { authedFetch } from "./api";
@@ -22,7 +18,7 @@ export function AuthImage({ src, alt, className = "" }: { src: string; alt: stri
     let created: string | null = null;
     setObjectUrl(null);
     setFailed(false);
-    // authedFetch haengt /api/v1 selbst an und erneuert bei 401 das Token.
+    // authedFetch hängt /api/v1 selbst an und erneuert bei 401 das Token.
     authedFetch(src.replace(/^\/api\/v1(?=\/)/, ""))
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);

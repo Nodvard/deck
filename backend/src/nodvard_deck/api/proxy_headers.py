@@ -66,9 +66,9 @@ def _parse_hop(entry: str) -> tuple[Address, int] | None:
 
 
 # Von rechts gelesen: Jeder Proxy hängt die Adresse an, von der er die Anfrage bekam. Die erste Adresse, die selbst kein
-# vertrauenswürdiger Proxy ist, ist der Client; was links davon steht, kann der Client selbst geschrieben haben. Ein
-# unlesbarer Eintrag beendet die Suche, es bleibt die zuletzt geprüfte Adresse. Steht ein ganzes Netz in der Liste, gilt
-# jedes Gerät darin als Proxy und wird geglaubt; darum sind Netze begrenzt (`core/trusted_proxies.py`).
+# vertrauenswürdiger Proxy ist, ist der Client (links davon kann der Client geschrieben haben). Ein unlesbarer Eintrag
+# beendet die Suche, es bleibt die zuletzt geprüfte Adresse. Ein ganzes Netz in der Liste ließe jedes Gerät als Proxy
+# gelten, darum sind Netze begrenzt.
 def client_from_chain(entries: list[str], trust: TrustedProxies) -> tuple[str, int] | None:
     """Die Client-Adresse aus `X-Forwarded-For` (Einträge schon getrennt, links zuerst), gesehen von einer
     vertrauenswürdigen Gegenstelle. `None`, wenn kein Eintrag etwas taugt (dann bleibt die Gegenstelle)."""
@@ -84,11 +84,9 @@ def client_from_chain(entries: list[str], trust: TrustedProxies) -> tuple[str, i
     return found
 
 
-# `scope["client"]` und `scope["scheme"]` werden im selben Scope ersetzt (wie bei uvicorns ProxyHeadersMiddleware), damit
-# auch das Zugriffsprotokoll und jede spätere Middleware die echte Adresse sehen. Die von uvicorn taugt hier nicht: Ihre
-# Liste steht beim Start fest, sie nimmt unlesbare Einträge als Client und vergleicht `::ffff:a.b.c.d` nicht mit einem
-# IPv4-Netz. Das Image startet uvicorn darum mit `--no-proxy-headers` (sonst vertraute es vorab still `127.0.0.1`);
-# es entscheidet nur diese Einstellung.
+# Ersetzt `scope["client"]`/`scope["scheme"]` für Protokoll und spätere Middleware. uvicorns ProxyHeadersMiddleware
+# taugt nicht (feste Liste, unlesbare Einträge gelten als Client, `::ffff:a.b.c.d` passt nicht auf IPv4-Netze); das
+# Image startet uvicorn mit `--no-proxy-headers` (sonst vertraute es still `127.0.0.1`).
 def apply_forwarding(scope: Scope, trust: TrustedProxies) -> Forwarding:
     """Wertet die Kopfzeilen für diesen Scope aus (ändert ihn ggf.) und legt `Forwarding` unter `SCOPE_KEY` ab."""
     client = scope.get("client")

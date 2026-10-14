@@ -80,9 +80,8 @@ def _targets_moved(
 def secrets_to_clear(schema: dict[str, Any] | None, old: dict[str, Any], new: dict[str, Any]) -> list[str]:
     """Labels der Geheimnisse, die nach der Änderung nicht mehr stehen bleiben dürfen (ihr Ziel hat sich geändert)."""
     # Ein Geheimnis gehört zu dem Ziel (`x-secret-bound-to`), bei dem es gesetzt wurde; zöge das Ziel um, ginge es sonst
-    # an die neue Adresse. Das gilt für jede Änderung eines gebundenen Feldes, auch leer -> Wert: Ein Geheimnis ohne
-    # Ziel im Tresor gehört zu keinem Server. Neue nimmt der Tresor erst mit gespeichertem Ziel an
-    # (`secret_target_missing`).
+    # an die neue Adresse. Das gilt für jede Änderung eines gebundenen Feldes, auch leer -> Wert (ein Geheimnis ohne
+    # Ziel gehört zu keinem Server): Neue nimmt der Tresor erst mit gespeichertem Ziel an (`secret_target_missing`).
     out: list[str] = []
     for spec in (schema or {}).get("x-secrets") or []:
         bound = _bound_paths(spec)

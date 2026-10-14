@@ -251,10 +251,10 @@ def _announce_loaded(runtime: ExtensionRuntime, records: list[ExtensionRecord]) 
     """Schreibt `Erweiterungen geladen: <Speicher-Kennungen, sortiert, kommagetrennt>` ins Container-Protokoll.
 
     Gemeint ist, was wirklich läuft: eingeschaltet, geladen und `on_start()` ohne Fehler."""
-    # `deploy/pi_switch.sh` vergleicht damit beim Ausliefern alten und neuen Container und schaltet zurück, wenn eine
-    # Kennung fehlt; deshalb schreibt auch jedes Ein- und Ausschalten sie. Die Speicher-Kennung bleibt bei einer
-    # Umbenennung gleich. Kennungen bestehen aus `a-z`, `0-9` und `-`, ein Komma kommt darin nie vor.
-    # `print` statt `logging`: Der Dienst richtet kein Logging ein, eine `log.info`-Zeile erreichte das Protokoll nie.
+    # `deploy/pi_switch.sh` vergleicht damit alten und neuen Container und schaltet zurück, wenn eine Kennung fehlt;
+    # deshalb schreibt auch jedes Ein- und Ausschalten sie. Die Speicher-Kennung bleibt bei Umbenennung gleich,
+    # Kennungen enthalten nie ein Komma. `print` statt `logging`: Der Dienst richtet kein Logging ein, eine
+    # `log.info`-Zeile erreichte das Protokoll nie.
     ids = sorted(
         {
             ext.store_id or ext.manifest.id

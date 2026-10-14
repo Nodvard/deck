@@ -1,11 +1,7 @@
 /**
- * Assistent, Schritt „Zwei-Faktor-Anmeldung“ (freiwillig): QR-Code für die Authenticator-App, Code
- * bestätigen, danach die Wiederherstellungs-Codes (einmalig). Dieselben Endpunkte und Bausteine wie
- * Einstellungen -> Mein Konto (`TotpEnroll`, `RecoveryCodesPanel`).
- *
- * Wer nach einem Neuladen hierher zurückkommt, obwohl Zwei-Faktor schon läuft, sieht das und kann
- * die Wiederherstellungs-Codes später unter „Mein Konto“ neu erzeugen (der Server zeigt sie nur
- * ein einziges Mal).
+ * Assistent, Schritt „Zwei-Faktor-Anmeldung“ (freiwillig): QR-Code für die Authenticator-App, Code bestätigen, danach
+ * die Wiederherstellungs-Codes (einmalig), mit denselben Bausteinen wie Mein Konto (`TotpEnroll`,
+ * `RecoveryCodesPanel`). Läuft Zwei-Faktor schon, lassen sich die Codes später unter „Mein Konto“ neu erzeugen.
  */
 import { ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";

@@ -144,7 +144,7 @@ class _FakeHosts:
 
 
 class _OldSource:
-    """Aeltere Quelle ohne `required_permission` -- muss unveraendert laufen."""
+    """Aeltere Quelle ohne `required_permission`: gilt als geschuetzt, nur Owner und admin."""
 
     source_id = "alt"
     label = "Alte Quelle"
@@ -194,6 +194,14 @@ class _OldSource:
         return SourceInfo(healthy=True)
 
 
+class _OpenSource(_OldSource):
+    """Quelle ohne fremde Zugangsdaten, die ausdruecklich jeder mit Dateizugriff benutzen darf."""
+
+    source_id = "offen"
+    label = "Offene Quelle"
+    required_permission = "files.read"
+
+
 class _Provider:
     def __init__(self, sources: list) -> None:
         self._sources = sources
@@ -220,20 +228,20 @@ def touched() -> list[str]:
 
 
 @pytest.fixture
-def old_source() -> _OldSource:
-    return _OldSource()
+def open_source() -> _OpenSource:
+    return _OpenSource()
 
 
 @pytest.fixture
-def setup_sources(touched, old_source):
-    """Registriert die echte terminal-Quelle (SFTP-Client gespiegelt) und eine alte Quelle."""
+def setup_sources(touched, open_source):
+    """Registriert die echte terminal-Quelle (SFTP-Client gespiegelt) und eine offene Quelle."""
     sys.path.insert(0, str(TERMINAL_SRC))
     from nodvard_deck_ext_terminal import _TerminalFileSourceProvider
 
     ctx = types.SimpleNamespace(hosts=_FakeHosts(), exec=_FakeExec(touched))
     caps = get_extension_runtime().capabilities
     caps.provide("terminal", FileSourceProvider, _TerminalFileSourceProvider(ctx))
-    caps.provide("alt-ext", FileSourceProvider, _Provider([old_source]))
+    caps.provide("offen-ext", FileSourceProvider, _Provider([open_source]))
 
 
 async def _token(client, db_session, username: str, *, role: str | None = None, permissions: tuple[str, ...] = ()):
@@ -287,9 +295,11 @@ async def _user_id(db_session, username: str) -> str:
     return (await db_session.execute(select(User.id).where(User.username == username))).scalar_one()
 
 
-async def _file_entries(db_session) -> dict:
-    """Protokolleintraege der Dateiaktionen, nach Aktion (jede kommt in den Tests nur einmal vor)."""
-    entries = [e for e in await _audit_actions(db_session) if e.action.startswith("files.")]
+async def _file_entries(db_session, source: str) -> dict:
+    """Protokolleintraege der Dateiaktionen einer Quelle, nach Aktion (jede kommt in den Tests nur einmal vor)."""
+    entries = [
+        e for e in await _audit_actions(db_session) if e.action.startswith("files.") and e.target_id == source
+    ]
     by_action = {e.action: e for e in entries}
     assert len(by_action) == len(entries), [e.action for e in entries]
     return by_action
@@ -345,9 +355,9 @@ async def test_viewer_cannot_search_ssh_source(client, db_session, setup_sources
     assert res.status_code == 200
     assert res.json() == []
     assert touched == []
-    # Ohne Quellenangabe: kein Treffer vom Server, die alte Quelle bleibt durchsuchbar.
+    # Ohne Quellenangabe: kein Treffer vom Server, die offene Quelle bleibt durchsuchbar.
     res = await client.get("/api/v1/files/search?q=notes", headers=headers)
-    assert [h["source_id"] for h in res.json()] == ["alt"]
+    assert [h["source_id"] for h in res.json()] == ["offen"]
     assert touched == []
 
 
@@ -357,7 +367,7 @@ async def test_viewer_does_not_see_ssh_sources_but_keeps_the_others(client, db_s
     res = await client.get("/api/v1/files/sources", headers=headers)
     assert res.status_code == 200
     ids = [s["source_id"] for s in res.json()]
-    assert ids == ["alt"]
+    assert ids == ["offen"]
 
 
 @pytest.mark.asyncio
@@ -374,27 +384,27 @@ async def test_files_only_user_cannot_use_ssh_source_for_any_action(client, db_s
     assert [r.status_code for r in checks] == [403] * 5, [r.text for r in checks]
     assert touched == []
     sources = await client.get("/api/v1/files/sources", headers=headers)
-    assert [s["source_id"] for s in sources.json()] == ["alt"]
+    assert [s["source_id"] for s in sources.json()] == ["offen"]
 
 
 @pytest.mark.asyncio
-async def test_transfer_checks_both_sides(client, db_session, setup_sources, touched, old_source):
+async def test_transfer_checks_both_sides(client, db_session, setup_sources, touched, open_source):
     headers = await _files_only(client, db_session)
 
     from_ssh = await client.post(
         "/api/v1/files/transfer",
-        json={"from": {"source": SSH_SOURCE, "path": "/etc/shadow"}, "to": {"source": "alt", "path": "/kopie"}},
+        json={"from": {"source": SSH_SOURCE, "path": "/etc/shadow"}, "to": {"source": "offen", "path": "/kopie"}},
         headers=headers,
     )
     to_ssh = await client.post(
         "/api/v1/files/transfer",
-        json={"from": {"source": "alt", "path": "/notes.txt"}, "to": {"source": SSH_SOURCE, "path": "/root/x"}},
+        json={"from": {"source": "offen", "path": "/notes.txt"}, "to": {"source": SSH_SOURCE, "path": "/root/x"}},
         headers=headers,
     )
     assert from_ssh.status_code == 403, from_ssh.text
     assert to_ssh.status_code == 403, to_ssh.text
     assert touched == []
-    assert "/kopie" not in old_source.files
+    assert "/kopie" not in open_source.files
 
 
 # --- Nutzer mit hosts.execute duerfen weiter ------------------------------------------------------
@@ -402,14 +412,14 @@ async def test_transfer_checks_both_sides(client, db_session, setup_sources, tou
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("who", ["owner", "operator", "admin"])
-async def test_users_with_server_rights_keep_access(client, db_session, setup_sources, touched, old_source, who):
+async def test_users_with_server_rights_keep_access(client, db_session, setup_sources, touched, open_source, who):
     """Wer Befehle auf Servern ausfuehren darf (Owner, Operator, Admin), kann die SSH-Quelle weiter
     ganz benutzen: lesen, schreiben, suchen und zwischen Quellen kopieren."""
     headers = await _owner(client) if who == "owner" else await _token(client, db_session, f"{who}1", role=who)
     base = f"/api/v1/files/{SSH_SOURCE}"
 
     sources = await client.get("/api/v1/files/sources", headers=headers)
-    assert {s["source_id"] for s in sources.json()} == {SSH_SOURCE, "alt"}
+    assert {s["source_id"] for s in sources.json()} == {SSH_SOURCE, "offen"}
 
     info = await client.get(f"{base}/info", headers=headers)
     assert info.status_code == 200, info.text
@@ -443,43 +453,57 @@ async def test_users_with_server_rights_keep_access(client, db_session, setup_so
     # Schliesst der Task der ersten Kopie seine Sitzung, waehrend die zweite Anfrage ihren Lauf
     # anlegt, rollt das den noch nicht gespeicherten Lauf zurueck (im Betrieb hat jede Sitzung
     # ihre eigene Verbindung).
-    for args in (("alt", "/notes.txt", SSH_SOURCE, "/tmp/ziel"), (SSH_SOURCE, "/etc/shadow", "alt", "/kopie")):
+    for args in (("offen", "/notes.txt", SSH_SOURCE, "/tmp/ziel"), (SSH_SOURCE, "/etc/shadow", "offen", "/kopie")):
         res = await _transfer(client, headers, *args)
         assert res.status_code == 200, res.text
         assert (await _wait_for_run(db_session, res.json()["run_id"])).status == "succeeded"
     assert any(t.startswith("rename /tmp/.ziel.nodvard-tmp-") and t.endswith(" /tmp/ziel") for t in touched), touched
-    assert old_source.files["/kopie"] == SSH_FILES["/etc/shadow"]
+    assert open_source.files["/kopie"] == SSH_FILES["/etc/shadow"]
 
 
-# --- Aeltere Quelle ohne Attribut -----------------------------------------------------------------
+# --- Quellen ohne oder mit unlesbarer Angabe ------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_old_source_without_attribute_works_for_viewer(client, db_session, setup_sources, old_source):
-    assert not hasattr(old_source, "required_permission")
+@pytest.mark.parametrize("value", ["fehlt", None, ""])
+async def test_source_without_readable_permission_is_only_for_admins(client, db_session, value):
+    """Ohne Angabe gilt eine Quelle als geschuetzt: Viewer und Operator sehen und oeffnen sie nicht,
+    der Owner schon, und der Zugriff steht im Protokoll."""
+    source = _OldSource()
+    if value != "fehlt":
+        source.required_permission = value
+    else:
+        assert not hasattr(source, "required_permission")
+    get_extension_runtime().capabilities.provide("alt-ext", FileSourceProvider, _Provider([source]))
+    owner = await _owner(client)
+
+    for who in (await _viewer(client, db_session), await _token(client, db_session, "bedienung", role="operator")):
+        sources = await client.get("/api/v1/files/sources", headers=who)
+        assert sources.json() == []
+        res = await client.get("/api/v1/files/alt/download?path=/notes.txt", headers=who)
+        assert res.status_code == 403, res.text
+        assert res.json()["detail"] == "Diese Quelle dürfen nur Admins benutzen."
+
+    download = await client.get("/api/v1/files/alt/download?path=/notes.txt", headers=owner)
+    assert download.status_code == 200
+    assert download.content == b"hallo welt"
+    entries = [(e.action, e.outcome) for e in await _audit_actions(db_session) if e.action.startswith("files.")]
+    assert sorted(entries) == [("files.access", "denied"), ("files.access", "denied"), ("files.download", "success")]
+
+
+@pytest.mark.asyncio
+async def test_open_source_works_for_viewer_and_is_logged(client, db_session, setup_sources, open_source):
+    """Eine Quelle mit `files.read` darf jeder mit Dateizugriff benutzen; protokolliert wird sie trotzdem."""
     headers = await _viewer(client, db_session)
 
-    listing = await client.get("/api/v1/files/alt/list?path=/", headers=headers)
+    listing = await client.get("/api/v1/files/offen/list?path=/", headers=headers)
     assert listing.status_code == 200
-    download = await client.get("/api/v1/files/alt/download?path=/notes.txt", headers=headers)
+    download = await client.get("/api/v1/files/offen/download?path=/notes.txt", headers=headers)
     assert download.status_code == 200
     assert download.content == b"hallo welt"
 
-    # Unprotokolliert wie bisher: kein Eintrag fuer Quellen ohne eigene Berechtigung.
-    assert [e for e in await _audit_actions(db_session) if e.action.startswith("files.")] == []
-
-
-@pytest.mark.asyncio
-async def test_unreadable_required_permission_locks_the_source(client, db_session, old_source):
-    old_source.required_permission = ""
-    get_extension_runtime().capabilities.provide("alt-ext", FileSourceProvider, _Provider([old_source]))
-    owner = await _owner(client)
-    viewer = await _viewer(client, db_session)
-    res = await client.get("/api/v1/files/alt/list?path=/", headers=viewer)
-    assert res.status_code == 403
-
-    res = await client.get("/api/v1/files/alt/list?path=/", headers=owner)
-    assert res.status_code == 200
+    entries = [e for e in await _audit_actions(db_session) if e.action.startswith("files.")]
+    assert [(e.action, e.target_id, e.detail) for e in entries] == [("files.download", "offen", {"path": "/notes.txt"})]
 
 
 # --- Protokoll ------------------------------------------------------------------------------------
@@ -499,13 +523,13 @@ async def test_ssh_source_actions_are_written_to_the_audit_log(client, db_sessio
     await client.post(f"{base}/rename", json={"src": "/tmp/a", "dst": "/tmp/b"}, headers=headers)
     await client.post(f"{base}/remove", json={"path": "/tmp/b"}, headers=headers)
     await client.get(f"/api/v1/files/search?q=suchwort-geheim&sources={SSH_SOURCE}", headers=headers)
-    copy = await _transfer(client, headers, "alt", "/notes.txt", SSH_SOURCE, "/tmp/ziel")
+    copy = await _transfer(client, headers, "offen", "/notes.txt", SSH_SOURCE, "/tmp/ziel")
     assert copy.status_code == 200, copy.text
     # Auf das Ende des Laufs warten (der Abschlusseintrag steht dann schon), damit der
     # Hintergrundtask nicht mehr in die Datenbank schreibt, waehrend der Test aufraeumt.
     assert (await _wait_for_run(db_session, copy.json()["run_id"])).status == "succeeded"
 
-    entries = await _file_entries(db_session)
+    entries = await _file_entries(db_session, SSH_SOURCE)
     assert set(entries) == {
         "files.download", "files.upload", "files.mkdir", "files.rename", "files.remove", "files.search",
         "files.transfer_start", "files.transfer",
@@ -527,19 +551,19 @@ async def test_ssh_source_actions_are_written_to_the_audit_log(client, db_sessio
 
 
 @pytest.mark.asyncio
-async def test_search_is_logged_per_protected_source_without_the_query(client, db_session, setup_sources):
-    """Die Suche liest Dateiinhalte auf dem Server: sie steht im Protokoll, der Suchbegriff nicht.
-    Die alte Quelle ohne eigene Berechtigung bleibt unprotokolliert."""
+async def test_search_is_logged_per_source_without_the_query(client, db_session, setup_sources):
+    """Die Suche liest Dateiinhalte auf dem Server: je durchsuchter Quelle ein Eintrag, der Suchbegriff nicht."""
     headers = await _owner(client)
 
     res = await client.get("/api/v1/files/search?q=passwort-suchwort", headers=headers)
     assert res.status_code == 200
 
     entries = [e for e in await _audit_actions(db_session) if e.action.startswith("files.")]
-    assert [(e.action, e.outcome, e.target_type, e.target_id, e.detail) for e in entries] == [
-        ("files.search", "success", "file_source", SSH_SOURCE, {})
+    assert sorted((e.action, e.outcome, e.target_type, e.target_id, e.detail) for e in entries) == [
+        ("files.search", "success", "file_source", "offen", {}),
+        ("files.search", "success", "file_source", SSH_SOURCE, {}),
     ]
-    assert "suchwort" not in str(entries[0].detail)
+    assert "suchwort" not in str([e.detail for e in entries])
 
 
 @pytest.mark.asyncio
@@ -557,21 +581,26 @@ async def test_transfer_is_logged_at_start_and_at_the_end_with_the_run_id(client
     headers = await _token(client, db_session, "bedienung", role="operator")
     operator_id = await _user_id(db_session, "bedienung")
 
-    res = await _transfer(client, headers, SSH_SOURCE, "/etc/shadow", "alt", "/kopie")
+    res = await _transfer(client, headers, SSH_SOURCE, "/etc/shadow", "offen", "/kopie")
     assert res.status_code == 200, res.text
     run_id = res.json()["run_id"]
     assert (await _wait_for_run(db_session, run_id)).status == "succeeded"
 
-    entries = await _file_entries(db_session)
+    entries = await _file_entries(db_session, SSH_SOURCE)
     assert set(entries) == {"files.transfer_start", "files.transfer"}
     expected = {
-        "run_id": run_id, "from_source": SSH_SOURCE, "from_path": "/etc/shadow", "to_source": "alt", "to_path": "/kopie",
+        "run_id": run_id, "from_source": SSH_SOURCE, "from_path": "/etc/shadow", "to_source": "offen", "to_path": "/kopie",
     }
     assert entries["files.transfer_start"].detail == expected
     assert entries["files.transfer"].detail == {**expected, "bytes": len(SSH_FILES["/etc/shadow"])}
     for entry in entries.values():
         assert (entry.actor_id, entry.outcome, entry.target_id) == (operator_id, "success", SSH_SOURCE)
     assert "geheim" not in str([e.detail for e in entries.values()])
+    # Das Ziel steht genauso im Protokoll, mit derselben `run_id`.
+    target = await _file_entries(db_session, "offen")
+    assert {action: entry.detail["run_id"] for action, entry in target.items()} == {
+        "files.transfer_start": run_id, "files.transfer": run_id,
+    }
 
 
 @pytest.mark.asyncio
@@ -580,12 +609,12 @@ async def test_failed_transfer_is_logged_as_failure(client, db_session, setup_so
     Protokoll -- nicht nur im Lauf."""
     headers = await _owner(client)
 
-    res = await _transfer(client, headers, "alt", "/notes.txt", SSH_SOURCE, BROKEN_PATH)
+    res = await _transfer(client, headers, "offen", "/notes.txt", SSH_SOURCE, BROKEN_PATH)
     assert res.status_code == 200, res.text
     run_id = res.json()["run_id"]
     assert (await _wait_for_run(db_session, run_id)).status == "failed"
 
-    entries = await _file_entries(db_session)
+    entries = await _file_entries(db_session, SSH_SOURCE)
     assert set(entries) == {"files.transfer_start", "files.transfer"}
     assert entries["files.transfer_start"].outcome == "success"
     result = entries["files.transfer"]

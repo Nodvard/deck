@@ -1,5 +1,4 @@
-"""Die Sperrliste des Gates (Standard der Einstellung `security.deny_patterns`); sie darf ergänzt, aber nicht geleert
-werden."""
+"""Die Sperrliste des Gates (Standard von `security.deny_patterns`); sie darf ergänzt, aber nicht geleert werden."""
 
 from __future__ import annotations
 

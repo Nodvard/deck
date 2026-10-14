@@ -75,10 +75,10 @@ async def deliver(
     notification_id = row.id
 
     suppressed = await would_suppress(session, payload)
-    # Vor den Kanälen committen: Der flush hielte sonst die SQLite-Schreibsperre für die ganze Dauer des Push-Aufrufs
-    # (Timeout 5 s), und ein Kanal, der selbst schreibt (Token aus dem Tresor, Audit über eine eigene Verbindung),
-    # scheiterte mit "database is locked", ebenso jeder andere Schreibzugriff. Einziger Aufrufer ist
-    # `NotifyHandle.send()` mit frischer `session_scope()`, der Zwischen-Commit nimmt also nichts Fremdes mit.
+    # Vor den Kanälen committen: Der flush hielte sonst die SQLite-Schreibsperre für die ganze Dauer des Push-Aufrufs,
+    # und ein Kanal, der selbst schreibt (Token aus dem Tresor, Audit über eine eigene Verbindung), scheiterte mit
+    # "database is locked". Einziger Aufrufer ist `NotifyHandle.send()` mit frischer `session_scope()`: der
+    # Zwischen-Commit nimmt nichts Fremdes mit.
     await session.commit()
 
     from ..ext.runtime import get_extension_runtime

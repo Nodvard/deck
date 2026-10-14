@@ -10,10 +10,9 @@ from typing import Any
 # ClamAV aktualisiert mehrmals täglich; eine Woche Spielraum deckt einen kurzen Ausfall oder einen ausgeschalteten Server ab.
 SIGNATURE_STALE_DAYS = 7
 
-# Abzug im Schutzwert, anteilig nach der Zahl aller Server. Veraltete Signaturen kosten höchstens 30 Punkte und damit
-# weniger als der ClamAV-Anteil (40): Ein Server mit alten Signaturen steht nie schlechter da als einer ohne ClamAV, und
-# sind alle betroffen, ist „Gut geschützt“ (ab 80) nicht mehr erreichbar. Ein unbekanntes Alter ist kein Beleg für
-# „veraltet“, meist fehlt nur die Signaturdatei: nur 5 Punkte.
+# Abzug im Schutzwert, anteilig nach Servern. Veraltete Signaturen kosten höchstens 30 Punkte, weniger als der
+# ClamAV-Anteil (40): Ein Server mit alten Signaturen steht nie schlechter da als einer ohne ClamAV, und sind alle
+# betroffen, ist „Gut geschützt“ (ab 80) unerreichbar. Unbekanntes Alter (meist fehlt nur die Datei): 5 Punkte.
 STALE_PENALTY_POINTS = 30
 UNKNOWN_PENALTY_POINTS = 5
 
@@ -113,9 +112,9 @@ def attention_items(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return items
 
 
-# Was der Schutzwert außer dem Virenschutz mitzählt (`posture_penalty`), anteilig nach der Zahl der Server. Gezählt wird nur,
-# was aktuell gelesen wurde: Ohne Prüfung kostet ein Server nichts. Ist die letzte Prüfung gescheitert oder älter als
-# `STALE_AFTER_S`, steht das als Grund ohne Abzug da, damit ein dauerhaft scheiternder Server den Wert nicht still verbessert.
+# Was der Schutzwert außer dem Virenschutz mitzählt (`posture_penalty`), anteilig nach Servern. Gezählt wird nur
+# Aktuelles: Ohne Prüfung kostet ein Server nichts. War die letzte Prüfung gescheitert oder älter als `STALE_AFTER_S`,
+# steht das als Grund ohne Abzug da, damit ein dauerhaft scheiternder Server den Wert nicht still verbessert.
 UPDATES_PENALTY_POINTS = 15
 """Sicherheitsupdates offen."""
 REBOOT_PENALTY_POINTS = 5

@@ -1,7 +1,7 @@
 /**
- * Server loeschen -- gemeinsam fuer die Seite „Server & Zugaenge“ und die Server-Seite. Wer
- * loescht, tippt zur Sicherheit den Kurznamen ein; nur bei exakt demselben Namen geht die
- * Anfrage raus. Gelöscht werden auch SSH-Zugang und gemerkter Server-Schluessel.
+ * Server löschen, gemeinsam für die Seite „Server & Zugänge“ und die Server-Seite. Wer löscht, tippt zur
+ * Sicherheit den Kurznamen ein; nur bei exakt demselben Namen geht die Anfrage raus. Gelöscht werden auch
+ * SSH-Zugang und gemerkter Server-Schlüssel.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -15,8 +15,10 @@ import { Button } from "../ui";
 
 export type DeleteOutcome = { status: "deleted" } | { status: "cancelled" } | { status: "mismatch" } | { status: "error"; text: string };
 
-/** `provider`: das Modul, das den Server eingelesen hat (`hostProvider`). Läuft es, gleicht es weiter ab und der Server
- * kommt wieder; ist es aus, nicht. Ist nichts über das Modul bekannt, gilt der Normalfall. */
+/**
+ * `provider`: das Modul, das den Server eingelesen hat (`hostProvider`). Läuft es, gleicht es weiter ab und der Server
+ * kommt wieder; ist es aus, nicht. Ist nichts über das Modul bekannt, gilt der Normalfall.
+ */
 export function deletePrompt(host: HostOut, provider?: HostProvider): string {
   const extra = !host.provider_ext_id
     ? ""
@@ -38,7 +40,7 @@ export async function deleteHost(host: HostOut, provider?: HostProvider): Promis
     await api.delete(`/hosts/${host.id}`);
     return { status: "deleted" };
   } catch (err) {
-    // z. B. 409 „Auf diesem Server laeuft gerade eine Aktion.“
+    // z. B. 409 „Auf diesem Server läuft gerade eine Aktion.“
     return { status: "error", text: err instanceof ApiError ? err.message : String(err) };
   }
 }
@@ -66,7 +68,7 @@ export function DeleteHostButton({
       } else if (outcome.status === "error") {
         onMessage({ kind: "error", text: outcome.text });
       } else if (outcome.status === "deleted") {
-        // Die Abfragen des geloeschten Servers gar nicht erst neu laden (sie waeren 404).
+        // Die Abfragen des gelöschten Servers gar nicht erst neu laden (sie wären 404).
         queryClient.removeQueries({ queryKey: ["hosts", host.id] });
         await queryClient.invalidateQueries({ queryKey: ["hosts"] });
         await queryClient.invalidateQueries({ queryKey: ["overview"] });

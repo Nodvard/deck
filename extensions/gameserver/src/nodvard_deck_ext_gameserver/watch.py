@@ -7,10 +7,9 @@ from typing import TYPE_CHECKING, Any
 
 from nodvard_sdk import Notification, Severity
 
-# Bei diesen Host-Zuständen wird der Server per SSH abgefragt; nur `down` (oder Wartung) bleibt ungefragt. `unknown` gehört
-# dazu: Ein von Hand angelegter Server (ohne Proxmox) hat nie einen anderen Zustand, solange niemand „Verbindung prüfen“
-# gedrückt hat, und Seite, Widget und Wächter täten für ihn nie etwas. Ist er nicht erreichbar, steht das als `error` in der
-# Antwort (der Wächter meldet dann keinen Ausfall des Dienstes).
+# Bei diesen Zuständen wird per SSH abgefragt, nur `down` (oder Wartung) bleibt ungefragt. `unknown` gehört dazu: Ein von
+# Hand angelegter Server (ohne Proxmox) hat nie einen anderen, solange niemand „Verbindung prüfen“ drückt. Ist er nicht
+# erreichbar, steht das als `error` in der Antwort (der Wächter meldet dann keinen Ausfall des Dienstes).
 LIVE_HOST_STATUSES = frozenset({"up", "unknown"})
 
 if TYPE_CHECKING:
@@ -31,15 +30,11 @@ def _load(path: Path) -> dict[str, Any]:
         return {}
 
 
-# Wartungsfenster: Alle Meldungen tragen die Host-ID. Hat ein Fenster eine Meldung stumm geschaltet (`ctx.notify.send()` sagt
-# das), merkt sich der Wächter „stumm gemeldet“ und fragt danach nur `ctx.notify.would_suppress()` (kein Verlaufseintrag je
-# Prüfung). Ist das Fenster vorbei und der Zustand noch da (Dienst steht, Join-Code gilt noch), kommt die Meldung einmal
-# hörbar nach. Die Entwarnung richtet sich nach dem Ausfall: War er hörbar und fällt nur „läuft wieder“ ins Fenster, kommt sie
-# danach einmal hörbar nach; ein gehörter Alarm bekommt immer eine gehörte Entwarnung. Beim Join-Code wichtig: Er wechselt
-# beim nächtlichen Neustart, also meist mitten im Fenster.
+# Wartungsfenster: Nach einer stummen Meldung fragt der Wächter nur `ctx.notify.would_suppress()` (kein Verlaufseintrag je
+# Prüfung); besteht der Zustand danach noch, kommt sie einmal hörbar nach. Ein gehörter Alarm bekommt immer eine gehörte
+# Entwarnung, notfalls nach dem Fenster; wichtig beim Join-Code, der meist mitten im Fenster wechselt.
 async def _send(ctx: "ExtensionContext", notification: Notification) -> bool:
-    """True, wenn ein Wartungsfenster den Push unterdrückt hat; ältere Kerne liefern kein Ergebnis, dann gilt die Meldung
-    als zugestellt."""
+    """True, wenn ein Wartungsfenster den Push unterdrückt hat; liefert ein älterer Kern nichts, gilt er als zugestellt."""
     result = await ctx.notify.send(notification)
     return getattr(result, "suppressed", False) is True
 
@@ -99,8 +94,7 @@ async def run_gameserver_watch(ctx: "ExtensionContext", statuses: Any) -> dict[s
         code = data.get("join_code")
         if code and data.get("running") and code != entry.get("join_code"):
             muted = False
-            # Beim allerersten Lauf wird der Code nur gemerkt: Sonst käme bei jedem frischen Setup sofort eine Meldung für einen
-            # alten Code.
+            # Beim ersten Lauf nur merken, sonst meldete jedes frische Setup sofort einen alten Code.
             if entry.get("join_code") is not None:
                 muted = await _send(ctx, _join_code_notification(name, host.id, code))
                 sent += 1
@@ -118,8 +112,7 @@ async def run_gameserver_watch(ctx: "ExtensionContext", statuses: Any) -> dict[s
                 if entry.get("down_muted"):
                     body += " Der Ausfall begann im Wartungsfenster (dort nur im Verlauf, ohne Push)."
                 muted = await _send(ctx, _up_notification(name, host.id, body))
-                # Den Ausfall hat man gehört, nur die Entwarnung fiel ins Fenster: nach dem Fenster einmal hörbar nachholen,
-                # damit der Alarm nicht offen bleibt.
+                # Ausfall gehört, Entwarnung im Fenster: danach einmal hörbar nachholen, damit der Alarm nicht offen bleibt.
                 entry["down_ok_pending"] = bool(muted and not entry.get("down_muted"))
                 sent += 1
             elif entry.get("down_ok_pending") and await _window_over(ctx, host.id):

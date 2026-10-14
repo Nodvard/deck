@@ -1,5 +1,4 @@
-"""Zeitplan- und Lauf-Verwaltung: reine DB-Operationen; `core/scheduler.py` verdrahtet sie mit APScheduler und der
-Ausführung."""
+"""Zeitplan- und Lauf-Verwaltung, reine DB-Operationen; `core/scheduler.py` bindet sie an APScheduler und die Ausführung."""
 
 from __future__ import annotations
 
@@ -72,8 +71,7 @@ async def get_job(session: AsyncSession, job_id: str) -> Job | None:
 
 
 async def set_next_run_at(session: AsyncSession, job_id: str, next_run_at: datetime | None) -> None:
-    """Spiegelt den nächsten Termin (APSchedulers `next_run_time` ist die Wahrheit) in `Job.next_run_at`, damit die API
-    ihn zeigt."""
+    """Spiegelt APSchedulers `next_run_time` (maßgeblich) in `Job.next_run_at`, damit die API den nächsten Termin zeigt."""
     # `astimezone(UTC)` ist nötig: APScheduler liefert den Termin in der Zone des Jobs, `UTCDateTime` normalisiert aber
     # nur naive Werte. Ein aware Wert in anderer Zone verlöre beim Speichern den Offset und läse sich als UTC zurück
     # (aus "0:38 Uhr Berlin" würde "0:38 Uhr UTC").

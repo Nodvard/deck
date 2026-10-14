@@ -1,22 +1,7 @@
 /**
- * Karte „Updates“ (Einstellungen, System): ob es eine neuere Version gibt und wie man sie einspielt.
- *
- * - `GET /system/updates` (Recht `system.read`) liefert den letzten bekannten Stand, ohne Anfrage ins Netz.
- * - „Jetzt suchen“: `POST /system/updates/check`, höchstens einmal pro Minute (sonst 429 mit Hinweis).
- * - Schalter „täglich suchen“ und Kanal (`system.update_check.enabled`/`.channel`) nur mit `settings.write`.
- *   Solange gesucht oder gespeichert wird, sind Schalter, Kanal und Knopf gesperrt: Sonst überschriebe die
- *   Antwort der einen Anfrage das Ergebnis der anderen.
- * - Update-Helfer (`GET /system/updates/helper`, lib/updater.ts): sein Zustand (nicht eingerichtet, bereit, nicht
- *   bereit, antwortet nicht) und der Knopf „Jetzt aktualisieren“. Den gibt es nur, wenn alles passt: Helfer bereit,
- *   Update verfügbar, offizielles Image, fertige Version (keine Vorabversion), Version nicht fest eingetragen, das
- *   Tag der Compose-Datei passt zur Version, du bist der Owner (wie im Backend), und du bist nicht gerade per Rückweg
- *   von genau dieser Version gekommen (die sperrt der Helfer 24 Stunden). Sonst steht da, warum nicht, wo das
- *   weiterhilft. Danach Fortschritt und Ergebnis (UpdateHelper.tsx); den Rückweg bietet „Kopien vor Updates“. Bei einem
- *   selbst gebauten Image lädt die Karte nicht ein, den Helfer einzurichten: Er arbeitet nur mit dem offiziellen.
- * - Reiter mit Anleitungen je Umgebung, für alle ohne Helfer (Compose, Portainer …). Vor einem Umbau der Datenbank
- *   legt Nodvard Deck beim Start eine Kopie an (nur bei SQLite, der Standard-Datenbank). `GET /system/info`
- *   (freiwillig, ohne Fehlermeldung) liefert dazu die Datenbank und die Kopien vor Updates; daraus kommt nach einem
- *   Update die Version von vorher für den Rückweg.
+ * Karte „Updates“ (Einstellungen, System): ob es eine neuere Version gibt und wie man sie einspielt. Die Suche läuft
+ * über `/system/updates` (höchstens einmal pro Minute), der Knopf „Jetzt aktualisieren“ über den Update-Helfer
+ * (`applyBlock`), für alle ohne Helfer gibt es Anleitungen je Umgebung.
  */
 import { ArrowUpCircle, CheckCircle2, ExternalLink, Info, RefreshCw, WifiOff } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -66,14 +51,14 @@ interface Guide {
 }
 
 export interface GuideOptions {
-  /** Die Version, die eingespielt werden soll -- nur bei einem echten Update (`available`), sonst `null`
+  /** Die Version, die eingespielt werden soll: nur bei einem echten Update (`available`), sonst `null`
    * (dann steht ein Platzhalter da: nie eine Anleitung zurück auf eine ältere Version). */
   target: string | null;
   /** Die Version von vor dem Update, wenn sie sicher bekannt ist (Kopie vor dem Update hin zur laufenden Version). */
   previous?: string | null;
 }
 
-/** Die Installation mit dem fertigen Image legt die Datei als `compose.yml` ab (docs/11 1.1); Compose findet sie dann selbst. */
+/** Die Installation mit dem fertigen Image legt die Datei als `compose.yml` ab; Compose findet sie dann selbst. */
 const compose = (command: string) => `docker compose ${command}`;
 
 function Cmd({ children }: { children: ReactNode }) {
@@ -232,7 +217,7 @@ function previousVersion(info: SystemInfo | null, current: string): string | nul
 }
 
 /**
- * Gibt es den Knopf „Jetzt aktualisieren“? `{ ok: true }` oder der Grund dagegen -- als Satz nur, wo er weiterhilft
+ * Gibt es den Knopf „Jetzt aktualisieren“? `{ ok: true }` oder der Grund dagegen: als Satz nur, wo er weiterhilft
  * (`why: null`: es gibt nichts zu tun oder die Zeile zum Helfer sagt schon alles).
  */
 export function applyBlock(status: UpdateStatus, view: HelperView | null, isOwner: boolean): { ok: true } | { ok: false; why: string | null } {
@@ -261,7 +246,7 @@ export function applyBlock(status: UpdateStatus, view: HelperView | null, isOwne
   return { ok: true };
 }
 
-/** So lange sperrt der Helfer nach einem Rückweg die verlassene Version (`blocked_version`, policy.BLOCK_AFTER_ROLLBACK_S). */
+/** So lange sperrt der Helfer nach einem Rückweg die verlassene Version (`BLOCK_AFTER_ROLLBACK_S` im Helfer). */
 export const BLOCK_AFTER_ROLLBACK_S = 24 * 3600;
 
 /**
@@ -293,7 +278,7 @@ function HelperSection({ status, sqlite, database }: { status: UpdateStatus; sql
       </div>
     );
   }
-  // Selbst gebautes Image: Der Helfer arbeitet nur mit dem offiziellen, die Karte lädt also nicht ein, ihn einzurichten.
+  // Selbst gebautes Image: Der Helfer arbeitet nur mit dem offiziellen, die Karte lädt nicht ein, ihn einzurichten.
   if (!status.official_image && !view.present && (view.reason ?? "missing") === "missing") return null;
   const block = follow ? ({ ok: false, why: null } as const) : applyBlock(status, view, isOwner);
   const target = status.latest ?? "";
@@ -409,6 +394,8 @@ export function UpdatesCard(): JSX.Element {
   // Ohne Angabe gilt die Standard-Datenbank SQLite; nur bei ihr gibt es die Kopie vor dem Update.
   const sqlite = !info?.database || info.database === "sqlite";
   const nothingFound = !status.latest && !!status.checked_at;
+  // Solange gesucht oder gespeichert wird, sind Schalter, Kanal und Knopf gesperrt: Sonst überschriebe die Antwort der
+  // einen Anfrage das Ergebnis der anderen.
   const locked = busy || saving;
 
   return (

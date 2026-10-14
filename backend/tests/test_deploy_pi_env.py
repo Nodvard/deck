@@ -134,8 +134,8 @@ def test_new_name_wins_when_both_are_set(deploy):
     assert result.returncode == 0, result.stdout + result.stderr
     pairs = _pairs(written)
     assert pairs["NODVARD_DECK_DNS_1"] == pairs["LATTICE_DNS_1"] == "198.51.100.10"
-    # Nicht gesetzter zweiter Resolver: bisheriger Standard, unter beiden Namen.
-    assert pairs["NODVARD_DECK_DNS_2"] == pairs["LATTICE_DNS_2"] == "1.0.0.1"
+    # Nicht gesetzter zweiter Resolver: keine Vorgabe (früher Cloudflare), leer unter beiden Namen.
+    assert pairs["NODVARD_DECK_DNS_2"] == pairs["LATTICE_DNS_2"] == ""
 
 
 def test_old_name_in_env_deploy_file(deploy):
@@ -143,9 +143,9 @@ def test_old_name_in_env_deploy_file(deploy):
     assert result.returncode == 0, result.stdout + result.stderr
     assert _pairs(written) == {
         "NODVARD_DECK_DNS_1": "192.0.2.20",
-        "NODVARD_DECK_DNS_2": "1.0.0.1",
+        "NODVARD_DECK_DNS_2": "",
         "LATTICE_DNS_1": "192.0.2.20",
-        "LATTICE_DNS_2": "1.0.0.1",
+        "LATTICE_DNS_2": "",
     }
 
 

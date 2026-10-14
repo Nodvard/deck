@@ -9,10 +9,9 @@ from typing import Any
 import httpx
 from nodvard_sdk.errors import CertificateMismatch, PermissionDenied
 
-# Der Text einer Ausnahme der HTTP-Schicht oder der Antwort wählt nur zwischen festen Sätzen und steht nie selbst in einer
-# Meldung: h11 und httpx zitieren kaputte Zeilen der Antwort (auch einen `Location`-Header), bei der eigenen Anfrage den
-# Header samt Zugangsdaten, und ein ungültiger Punycode-Name nennt Teile des fremden Namens. Einzige Ausnahme ist der
-# Grund, den Proxmox selbst im JSON nennt (`reason_from`): gekürzt, ohne Steuerzeichen, nie HTML oder Adresse mit Schema.
+# Der Text einer HTTP-Ausnahme oder Antwort wählt nur zwischen festen Sätzen, denn h11 und httpx zitieren kaputte
+# Antwortzeilen und die eigene Anfrage samt Zugangsdaten. Einzige Ausnahme ist der Grund, den Proxmox selbst im JSON
+# nennt (`reason_from`): gekürzt, ohne Steuerzeichen, nie HTML oder Adresse mit Schema.
 SERVICE = "Proxmox"
 MAX_REASON = 200
 

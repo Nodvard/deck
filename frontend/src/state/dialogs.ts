@@ -1,13 +1,7 @@
 /**
- * Ersetzt `window.confirm()`/`window.prompt()` -- echte Radix-Dialoge statt
- * Browser-nativer Blocking-Prompts (dasselbe Muster wie WidgetPickerDialog.tsx).
- * EIN globaler Zustand statt eines Hooks pro Aufrufer: `ActionButton.tsx` sitzt oft mehrfach gleichzeitig in einer Liste (siehe
- * ListView/TableView), ein Hook pro Instanz haette dort N eigene Dialog-Baeume
- * gemountet, obwohl nie mehr als einer gleichzeitig offen sein kann. `confirmDialog()`/
- * `promptDialog()` sind deshalb freie Funktionen (wie `useAuthStore.getState()...`),
- * aufrufbar aus JEDEM Code, nicht nur aus einer Komponente mit einem eigenen Hook --
- * genau EIN `<GlobalDialogs />` (siehe components/GlobalDialogs.tsx) rendert das
- * tatsaechliche Overlay, einmal in AppShell.tsx gemountet.
+ * Ersetzt `window.confirm()`/`window.prompt()` durch Radix-Dialoge. Ein globaler Zustand statt eines Hooks pro
+ * Aufrufer (`ActionButton` sitzt oft mehrfach in einer Liste, nie ist mehr als ein Dialog offen):
+ * `confirmDialog()`/`promptDialog()` sind freie Funktionen, ein `<GlobalDialogs />` in AppShell rendert das Overlay.
  */
 import { create } from "zustand";
 
@@ -45,9 +39,8 @@ export const useDialogsStore = create<DialogsState>((set, get) => ({
 
   requestConfirm: (message, options) =>
     new Promise<boolean>((resolve) => {
-      // Ein evtl. noch offener aelterer Dialog wird stillschweigend als "abgebrochen"
-      // aufgeloest -- zwei gleichzeitig angeforderte Bestaetigungen sind ein
-      // Programmierfehler des Aufrufers, kein Fall, den die UI abfangen muss.
+      // Ein evtl. noch offener älterer Dialog wird stillschweigend als "abgebrochen" aufgelöst: Zwei gleichzeitig
+      // angeforderte Bestätigungen sind ein Programmierfehler des Aufrufers, kein Fall, den die UI abfangen muss.
       get().confirmPending?.resolve(false);
       set({ confirmPending: { message, options, resolve } });
     }),
@@ -69,16 +62,15 @@ export const useDialogsStore = create<DialogsState>((set, get) => ({
   },
 }));
 
-/** Ersatz fuer `window.confirm(message)` -- `await confirmDialog("...")`. */
+/** Ersatz für `window.confirm(message)`: `await confirmDialog("...")`. */
 export function confirmDialog(message: string, options: ConfirmOptions = {}): Promise<boolean> {
   return useDialogsStore.getState().requestConfirm(message, options);
 }
 
-/** Ersatz fuer `window.prompt(message, defaultValue)` -- `await promptDialog("...")`.
- * Gibt `null` bei Abbruch zurueck, sonst den (getrimmten) eingegebenen Text -- ein
- * LEERER Text gilt als Abbruch (`null`), dieselbe Semantik wie `window.prompt()`s
- * eigenes "leer bestaetigt" vs. "Abbrechen" (beide liefern dort einen falsy-artigen
- * Wert, hier vereinheitlicht auf `null`). */
+/**
+ * Ersatz für `window.prompt(message, defaultValue)`. Gibt `null` bei Abbruch zurück, sonst den getrimmten Text; ein
+ * leerer Text gilt als Abbruch (`null`), wie bei `window.prompt()`.
+ */
 export function promptDialog(message: string, defaultValue = ""): Promise<string | null> {
   return useDialogsStore.getState().requestPrompt(message, defaultValue);
 }

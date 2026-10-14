@@ -1,8 +1,7 @@
 /**
- * Icons nach Namen. `PageSpec.icon`/`WidgetSpec.icon` der
- * Extensions sind seit jeher lucide-Namen in kebab-case ("server", "hard-drive") --
- * hier auf die Komponenten abgebildet. Bewusst eine feste Auswahl statt aller ~1500
- * Icons: jedes importierte Icon landet im Bundle. Unbekannte Namen -> neutrales Icon.
+ * Icons nach Namen: `PageSpec.icon`/`WidgetSpec.icon` der Extensions sind lucide-Namen in kebab-case ("server",
+ * "hard-drive"), hier auf die Komponenten abgebildet. Bewusst eine feste Auswahl statt aller ~1500 Icons, weil jedes
+ * importierte Icon im Bundle landet; unbekannte Namen ergeben ein neutrales Icon.
  */
 import {
   Activity,

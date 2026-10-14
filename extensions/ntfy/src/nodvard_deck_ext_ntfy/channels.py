@@ -17,14 +17,11 @@ from urllib.parse import quote, unquote, urlsplit
 import httpx
 from nodvard_sdk import Notification, Severity
 
-# Keine Apprise-Bibliothek: Sie baut eigene Verbindungen und umginge die Zielprüfung, das Weiterleitungsverbot und die
-# Proxy-Regel von `ctx.http`, dazu kämen neue Abhängigkeiten im Image. Die Adressen sind trotzdem wie bei Apprise
-# geschrieben, damit Anleitungen passen; alles andere läuft über eine eigene Apprise-API (`apprise://`, `apprises://`).
+# Keine Apprise-Bibliothek: Sie umginge Zielprüfung, Weiterleitungsverbot und Proxy-Regel von `ctx.http` und brächte neue
+# Abhängigkeiten. Die Adressen folgen trotzdem Apprise, damit Anleitungen passen; der Rest geht über eine eigene Apprise-API.
 #
-# Die Adresse eines Kanals trägt Zugangsdaten (Bot-Token, Webhook-Schlüssel) und liegt deshalb im Tresor
-# (`push-kanal:<name>`), nie in den Einstellungen. Kein Fehlertext nennt sie: Die Sätze sind fest, und der Text einer
-# Ausnahme der HTTP-Schicht wird nie weitergegeben (httpx und h11 zitieren Teile der Anfrage, bei Telegram steckt das
-# Token im Pfad).
+# Eine Adresse trägt Zugangsdaten und liegt deshalb im Tresor (`push-kanal:<name>`). Kein Fehlertext nennt sie: Die Sätze
+# sind fest, der Text einer HTTP-Ausnahme bleibt draußen (httpx und h11 zitieren die Anfrage, bei Telegram mit Token).
 
 SECRET_PREFIX = "push-kanal"
 # Wie `channels[].name` in settings.schema.json; „ntfy“ ist vergeben (der ntfy-Server selbst).
@@ -259,7 +256,7 @@ def _body(notification: Notification, dashboard_url: str | None) -> str:
 
 
 def open_link(notification: Notification, dashboard_url: str | None) -> str | None:
-    """Der Link ins Dashboard (`payload.path`, sonst die Meldungen-Seite), wenn die Adresse des Dashboards eingetragen ist."""
+    """Link ins Dashboard (`payload.path`, sonst die Meldungen-Seite), wenn die Adresse des Dashboards eingetragen ist."""
     if not dashboard_url:
         return None
     path = str((notification.payload or {}).get("path") or "/notifications")
@@ -459,7 +456,7 @@ async def _each(coros: list[Any]) -> tuple[list[Any], list[str]]:
 
 
 async def send_to(http: Any, target: Target, notification: Notification, dashboard_url: str | None) -> str | None:
-    """Schickt die Meldung an alle Empfänger eines Kanals (Chats, Räume) nebeneinander; ein Fehler hält die anderen nicht auf.
+    """Schickt die Meldung nebeneinander an alle Empfänger (Chats, Räume); ein Fehler hält die anderen nicht auf.
 
     `None`, wenn alle sie bekamen; ein Satz, wenn nur ein Teil sie bekam; `ChannelError`, wenn keiner sie bekam."""
     problems: list[str] = []
@@ -497,8 +494,9 @@ async def _telegram_chat_problem(http: Any, token: str, bot_id: int, chat: str) 
 
 
 async def probe(http: Any, target: Target) -> str | None:
-    """Prüft einen Kanal, ohne zu senden (für „Verbindung testen“): `None`, wenn der Dienst Token bzw. Schlüssel und Empfänger
-    bestätigt hat, sonst ein Satz zu dem, was sich so nicht prüfen ließ; `ChannelError`, wenn etwas nicht stimmt."""
+    """Prüft einen Kanal, ohne zu senden (für „Verbindung testen“): `None`, wenn der Dienst Token bzw. Schlüssel
+    und Empfänger bestätigt hat, sonst ein Satz zu dem, was sich so nicht prüfen ließ; `ChannelError`, wenn etwas
+    nicht stimmt."""
     p = target.parts
     if target.kind == "telegram":
         me = await _exchange(http, "telegram", ChannelRequest("GET", f"https://api.telegram.org/bot{p['token']}/getMe"))
@@ -563,7 +561,7 @@ async def probe(http: Any, target: Target) -> str | None:
 
 
 def fingerprint(url: str) -> str:
-    """Kurzer Abdruck einer Kanal-Adresse (nicht umkehrbar): ein gemerkter Fehler gilt nur, solange die Adresse gleich bleibt."""
+    """Kurzer, nicht umkehrbarer Abdruck der Adresse: Ein gemerkter Fehler gilt nur, solange sie gleich bleibt."""
     return hashlib.sha256(url.encode()).hexdigest()[:16]
 
 

@@ -1,10 +1,7 @@
 /**
- * Hinweis für Formulare, in die jemand einmalig ein fremdes Passwort tippt (z. B. „Proxmox mit Passwort verbinden“):
- * Läuft die Seite ohne HTTPS und nicht direkt auf diesem Rechner, geht das Passwort unverschlüsselt bis zu Nodvard
- * Deck. Dieselbe Regel wie beim Einrichten eines Servers mit Passwort im Kern. Keine Sperre, nur ein deutlicher
- * Hinweis -- im eigenen Heimnetz ist das meist in Ordnung.
- *
- * Eigene Datei (nicht ui.tsx), damit nur die Bundles sich ändern, die den Hinweis wirklich einbinden.
+ * Hinweis für Formulare, in die jemand einmalig ein fremdes Passwort tippt (z. B. „Proxmox mit Passwort verbinden“): Ohne
+ * HTTPS und nicht direkt auf diesem Rechner geht es unverschlüsselt bis zu Nodvard Deck. Regel wie im Kern, keine Sperre
+ * (im Heimnetz meist in Ordnung). Eigene Datei, damit sich nur die Bundles ändern, die den Hinweis einbinden.
  */
 import type { ReactNode } from "react";
 

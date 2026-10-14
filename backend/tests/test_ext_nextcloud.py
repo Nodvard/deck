@@ -237,6 +237,51 @@ async def test_nextcloud_appears_as_a_file_source_over_the_real_files_api(client
     assert by_id["nextcloud"]["caps"]["write"] is True
 
 
+async def _role_token(client, db_session, username: str, role: str) -> dict:
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+    from nodvard_deck.services import auth as auth_service
+
+    roles = await auth_service.ensure_builtin_roles(db_session)
+    user = User(username=username, password_hash=security.hash_password(_PASSWORD), is_active=True)
+    user.roles.append(roles[role])
+    db_session.add(user)
+    await db_session.commit()
+    login = await client.post("/api/v1/auth/login", json={"username": username, "password": _PASSWORD})
+    assert login.status_code == 200, login.text
+    return _auth_header(login.json()["access_token"])
+
+
+@pytest.mark.asyncio
+async def test_nextcloud_files_are_only_for_admins_and_every_access_is_logged(
+    client, db_session, test_settings, mock_webdav
+):
+    """Die Quelle arbeitet mit dem Nextcloud-Konto: Viewer und Operator sehen sie nicht und kommen nicht an die
+    Dateien, der Owner schon; Verweigern und Herunterladen stehen im Protokoll."""
+    from nodvard_deck.services import audit as audit_service
+
+    base_url, _state = mock_webdav
+    owner = _auth_header(await _setup_nextcloud(client, db_session, test_settings, base_url))
+
+    for name, role in (("gast", "viewer"), ("bedienung", "operator")):
+        headers = await _role_token(client, db_session, name, role)
+        sources = await client.get("/api/v1/files/sources", headers=headers)
+        assert "nextcloud" not in {s["source_id"] for s in sources.json()}
+        download = await client.get("/api/v1/files/nextcloud/download?path=/docs/notes.txt", headers=headers)
+        assert download.status_code == 403
+        assert "files.nextcloud" in download.json()["detail"]
+        removed = await client.post("/api/v1/files/nextcloud/remove", json={"path": "/docs/notes.txt"}, headers=headers)
+        assert removed.status_code == 403
+
+    download = await client.get("/api/v1/files/nextcloud/download?path=/docs/notes.txt", headers=owner)
+    assert download.content == b"hello world"
+    entries = [
+        (e.action, e.outcome) for e in await audit_service.list_entries(db_session, target_id="nextcloud")
+        if e.action.startswith("files.")
+    ]
+    assert sorted(entries) == sorted([("files.access", "denied")] * 3 + [("files.download", "success")])
+
+
 @pytest.mark.asyncio
 async def test_nextcloud_list_stat_download_over_the_real_files_api(client, db_session, test_settings, mock_webdav):
     base_url, state = mock_webdav

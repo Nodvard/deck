@@ -136,12 +136,12 @@ class FileSource(Protocol):
     Drag & Drop (`open_read(A)` -> `open_write(B)`) und das Info-Panel, ohne zu wissen, was dahinter steckt.
     `open_write` ersetzt das Ziel erst, wenn alles angekommen ist, und schneidet es nie vorab ab."""
 
-    # Optional: `required_permission: str | None` (fehlt = `None`). Nennt eine Quelle hier eine Berechtigung (z. B.
-    # `"hosts.execute"`), zeigt und öffnet der Kern sie nur Nutzern, die diese Berechtigung selbst haben; `files.read`
-    # und `files.write` allein reichen dann nicht. Gedacht für Quellen mit fremden Zugangsdaten (SSH als root), sonst
-    # liest jeder mit `files.read` alles, was der Zugang lesen darf. Kein Pflichtmitglied, weil `@runtime_checkable`
-    # sonst jede ältere Quelle ohne das Attribut abwiese; der Kern liest es per
-    # `getattr(source, "required_permission", None)`.
+    # Optional: `required_permission: str | None`. Der Kern zeigt und öffnet eine Quelle nur Nutzern, die diese
+    # Berechtigung selbst haben (SSH: `"hosts.execute"`, Nextcloud: `"files.nextcloud"`); `files.read` und `files.write`
+    # allein reichen nicht. Fehlt die Angabe (oder ist sie `None`), gilt die Quelle als geschützt: nur Owner und admin.
+    # Eine Quelle ohne fremde Zugangsdaten, die jeder mit Dateizugriff benutzen darf, nennt `"files.read"`. Kein
+    # Pflichtmitglied, weil `@runtime_checkable` sonst jede ältere Quelle ohne das Attribut abwiese; der Kern liest es
+    # per `getattr(source, "required_permission", None)`.
     #
     # Optional: `async file_identity(path) -> dict | None`. Damit erkennt der Kern vor einem Transfer, ob Quelle und
     # Ziel dieselbe Datei sind (Link, `..`-Umweg, zweiter Eintrag für denselben Rechner); sonst würde das Schreiben die
@@ -151,6 +151,10 @@ class FileSource(Protocol):
     # Quellen hinweg sind zwei verschiedene `machine`-Kennungen immer zwei Dateien; bei gleicher oder unbekannter
     # Kennung müssen außer `path` auch alle fünf Werte übereinstimmen (geklonte Rechner teilen oft dieselbe Kennung).
     # Kein Pflichtmitglied; der Kern liest es mit `getattr(source, "file_identity", None)`.
+    #
+    # Optional: `async free_bytes(path) -> int | None`. Freier Platz (in Bytes) dort, wohin `path` geschrieben würde. Damit
+    # lehnt der Kern einen Upload mit bekannter Größe vorab ab (507), statt das Ziel halb vollzuschreiben; `None`, wenn die
+    # Quelle es nicht weiß. Kein Pflichtmitglied; der Kern liest es mit `getattr(source, "free_bytes", None)`.
     #
     # Optional: `host_id: str | None`. Steht die Quelle für einen Server (etwa SFTP auf einen Host), nennt sie hier
     # seine Kennung; der Dateimanager zeigt dann Status und Betriebssystem des Servers neben der Quelle. Kein

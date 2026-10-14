@@ -1,8 +1,7 @@
 /**
- * Fingerabdruck des Zertifikats einer Verbindung (Proxmox VE, Proxmox-Backups): ansehen, mit dem Server vergleichen
- * und merken – auch nach einem Zertifikatswechsel. Spricht `GET`/`POST /ext/<id>/connections/{name}/certificate`
- * (certificate.py der jeweiligen Erweiterung). Gespeichert wird nur, was der Server in diesem Moment zeigt; sonst
- * antwortet das Backend mit 409 und dem aktuellen Wert, den die Ansicht dann zum neuen Vergleich zeigt.
+ * Fingerabdruck des Zertifikats einer Verbindung (Proxmox VE, Proxmox-Backups): ansehen, mit dem Server vergleichen und
+ * merken, auch nach einem Wechsel (`GET`/`POST /ext/<id>/connections/{name}/certificate`). Gespeichert wird nur, was der
+ * Server gerade zeigt; sonst kommt 409 mit dem aktuellen Wert, den die Ansicht zum neuen Vergleich zeigt.
  */
 import { useEffect, useState } from "react";
 

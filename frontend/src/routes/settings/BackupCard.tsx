@@ -1,16 +1,7 @@
 /**
- * Karte „Sicherung“ (Einstellungen, System): Sicherungspasswort, automatische Sicherungen,
- * Liste mit Prüfen/Herunterladen/Löschen, „Jetzt sichern“ und „Sicherung herunterladen“.
- * GET /system/backups (`system.read`); alles Ändernde nur für den Owner, Kritisches zusätzlich
- * mit dem Anmeldepasswort.
- *
- * Passwörter: nur in lokalem State, direkt per `api.*` verschickt und danach geleert --
- * nie in einem Query-Key oder Mutations-Cache (wie HostDetailSettings).
- *
- * Herunterladen verlangt bei eingeschalteter Zwei-Faktor-Anmeldung zusätzlich den Code aus der App: Eine Sicherung
- * enthält auch deren Schlüssel. Das Feld steht gleich da, wenn die Oberfläche weiß, dass Zwei-Faktor an ist
- * (`useTwoFactorEnabled`), sonst erscheint es, sobald der Server danach fragt (`totp_missing`); die eingegebenen
- * Passwörter bleiben dann stehen, damit nur noch der Code fehlt.
+ * Karte „Sicherung“ (Einstellungen, System): Sicherungspasswort, automatische Sicherungen, Liste, Herunterladen. Ändern
+ * darf nur der Owner, Kritisches zusätzlich mit dem Anmeldepasswort. Passwörter bleiben im lokalen State, gehen direkt
+ * per `api.*` raus, nie in einen Query-Key oder Mutations-Cache (wie HostDetailSettings).
  */
 import { AlertTriangle, CheckCircle2, Copy, Download, HardDrive, KeyRound, Loader2, ShieldCheck, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -40,6 +31,8 @@ const RUNNING_POLL_MS = 2000;
 
 export function BackupCard(): JSX.Element {
   const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
+  // Bei Zwei-Faktor verlangt das Herunterladen auch den Code aus der App (eine Sicherung enthält deren Schlüssel). Das
+  // Feld steht gleich da; sonst erscheint es, sobald der Server danach fragt (`totp_missing`).
   const twoFactor = useTwoFactorEnabled(isOwner) === true;
   const [overview, setOverview] = useState<BackupOverview | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);

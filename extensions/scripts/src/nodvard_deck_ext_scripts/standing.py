@@ -19,9 +19,8 @@ _log = logging.getLogger(__name__)
 
 _FINGERPRINT_VERSION = 1
 
-# Der Stand liegt als JSON-Datei im Datenverzeichnis der Extension (keine Tabelle, keine Migration) und bewusst nicht in
-# `meta.json`: Ein Zurücksetzen des Skripts auf eine alte Fassung darf eine erloschene Freigabe nicht wiederbeleben.
-# Ist die Datei nicht lesbar, gilt keine Freigabe (es wird dann wieder geklickt).
+# Eigene JSON-Datei im Datenverzeichnis, bewusst nicht in `meta.json`: Ein Zurücksetzen des Skripts auf eine alte Fassung
+# darf eine erloschene Freigabe nicht wiederbeleben. Ist die Datei nicht lesbar, gilt keine Freigabe.
 
 
 def port_label(port: int | None) -> str:
@@ -40,9 +39,8 @@ def targets_fingerprint(targets: list[SdkHost]) -> str:
 
 def script_fingerprint(meta: ScriptMeta, content: str) -> str:
     """Fingerabdruck der Teile, die bestimmen, was wo wann läuft."""
-    # Name, Beschreibung und „aktiv“ zählen nicht (sie ändern nichts daran; ein pausiertes Skript läuft ohnehin nicht).
-    # Parameter stehen samt Vorgabewerten darin, denn ein geplanter Lauf nutzt genau die. Geheime Werte gehören nicht
-    # hinein, nur die Namen der geheimen Parameter (die Werte liegen im Tresor).
+    # Name, Beschreibung und „aktiv“ zählen nicht (ein pausiertes Skript läuft ohnehin nicht). Parameter zählen samt
+    # Vorgabewerten, denn ein geplanter Lauf nutzt genau die; von geheimen nur die Namen, die Werte liegen im Tresor.
     data = {
         "v": _FINGERPRINT_VERSION,
         "content": content,
@@ -100,10 +98,9 @@ class Evaluation:
 
 def evaluate(record: StandingRecord, meta: ScriptMeta, content: str, targets: list[SdkHost]) -> Evaluation:
     """Prüft bei jedem Lauf, ob die Freigabe noch gilt; ein alter Eintrag mit anderem Fingerabdruck startet nichts."""
-    # Erloschen ist die Freigabe, wenn sich Inhalt, Parameter, Ziel oder Zeitplan des Skripts ändern oder ein
-    # freigegebener Server unter anderem Konto, anderer Adresse oder anderem SSH-Port angesprochen wird (anderes Wo oder
-    # Als wer). Ein neuer Server (Gruppe, „Alle Server“) bekommt die normale Freigabe, die übrigen laufen weiter; ein
-    # weggefallener Server macht sie nicht ungültig, weniger Ziele bedeuten nie mehr Risiko.
+    # Erloschen ist sie, wenn sich Inhalt, Parameter, Ziel oder Zeitplan ändern oder ein freigegebener Server unter anderem
+    # Konto, anderer Adresse oder anderem SSH-Port erreicht wird. Ein neuer Server bekommt die normale Freigabe, die übrigen
+    # laufen weiter; ein weggefallener macht sie nicht ungültig, weniger Ziele bedeuten nie mehr Risiko.
     if record.fingerprint != script_fingerprint(meta, content):
         return Evaluation(valid=False, problem="Das Skript wurde seit der Freigabe geändert.")
     covered: list[SdkHost] = []
@@ -152,9 +149,8 @@ class PendingExpiry:
     notified: bool = False  # Push-Nachricht raus oder nicht gewünscht
 
 
-# {Pfad der Datei: {script_id: PendingExpiry}}, im Speicher, weil die Datei in genau diesem Fall nicht beschreibbar sein
-# kann. Nach einem Neustart ist der Merker weg; der Vergleich beim nächsten Lauf lässt den Eintrag dann erneut
-# erlöschen.
+# {Pfad der Datei: {script_id: PendingExpiry}}, im Speicher, weil die Datei gerade dann nicht beschreibbar sein kann.
+# Nach einem Neustart ist der Merker weg, der Vergleich beim nächsten Lauf lässt den Eintrag erneut erlöschen.
 _BLOCKED: dict[str, dict[str, PendingExpiry]] = {}
 
 
@@ -239,9 +235,8 @@ class StandingApprovals:
         try:
             self._write(state)
         except OSError:
-            # Fail closed: Ließe sich die Datei nicht neu schreiben (z. B. Platte voll), gälte die Freigabe nach einem
-            # Neustart wieder, denn die Sperre (`block`) liegt nur im Speicher. Löschen geht auch bei voller Platte;
-            # dann müssen alle Dauerfreigaben neu erteilt werden.
+            # Fail closed: Sonst gälte die Freigabe nach einem Neustart wieder, die Sperre (`block`) liegt nur im Speicher.
+            # Löschen geht auch bei voller Platte; dann müssen alle Dauerfreigaben neu erteilt werden.
             _log.error(
                 "Dauerfreigaben: Datei nicht beschreibbar -- alle Dauerfreigaben werden geloescht.",
                 exc_info=True,

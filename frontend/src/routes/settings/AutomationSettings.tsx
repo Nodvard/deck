@@ -1,6 +1,6 @@
 /**
- * Automatik & Sicherheit: wie selbststaendig Aktionen ausgefuehrt werden, zusaetzliche
- * gesperrte Befehle und Wartungsfenster (GET/PUT /settings/{key}).
+ * Automatik & Sicherheit: wie selbstständig Aktionen ausgeführt werden (PUT /settings/autonomy, nur der Inhaber),
+ * zusätzliche gesperrte Befehle und Wartungsfenster (GET/PUT /settings/{key}).
  */
 import { Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -8,6 +8,8 @@ import { useCallback, useEffect, useState } from "react";
 import { SchedulePicker } from "../../../../extensions/_shared/frontend/src/SchedulePicker";
 import { LoadError } from "../../components/LoadError";
 import { api } from "../../lib/api";
+import { useAuthStore } from "../../state/auth";
+import { OWNER_ONLY_HINT, OwnerConfirm, type OwnerProof } from "./OwnerConfirm";
 import { Button, Card, Field, NoticeLine, PageHeader, errorText, inputClass, type Notice } from "./ui";
 
 interface MaintenanceWindow {
@@ -83,95 +85,41 @@ async function putSetting(key: string, value: unknown) {
   await api.put(`/settings/${key}`, { value });
 }
 
-interface Autonomy {
-  mode: string;
-  maxRisk: string;
-}
-
-type AutonomyStep = { key: "autonomy.mode" | "autonomy.max_risk"; value: string };
-
 /**
- * Die Selbstständigkeit besteht aus zwei Einstellungen, die der Server einzeln speichert (Modus und
- * Risikostufe). Bricht die Verbindung dazwischen ab, bleibt ein Zwischenstand stehen. Damit der nie mehr
- * erlaubt als der Stand vorher und der Stand nachher, wird zuerst der Schritt geschrieben, der nichts lockert:
- *
- * - auf „Selbstständig handeln“: erst die Risikostufe (der Modus steht noch auf „Nur vorschlagen“, es läuft
- *   also nichts ohne Rückfrage), dann der Modus;
- * - auf „Nur vorschlagen“: erst der Modus (danach läuft nichts mehr ohne Rückfrage), dann die Risikostufe;
- * - bleibt der Modus: nur die Risikostufe.
- *
- * Was sich nicht geändert hat, wird nicht geschrieben.
+ * Selbstständigkeit: Modus und Risikostufe. Ändern darf sie nur der Inhaber, mit Passwort und, wenn Zwei-Faktor an ist,
+ * dem Code aus der App. Gespeichert wird beides in einem Schritt (`PUT /settings/autonomy`), so gibt es keinen
+ * Zwischenstand, und ein Code reicht für beide Werte.
  */
-export function autonomySteps(saved: Autonomy, next: Autonomy): AutonomyStep[] {
-  const mode: AutonomyStep[] = next.mode !== saved.mode ? [{ key: "autonomy.mode", value: next.mode }] : [];
-  const risk: AutonomyStep[] = next.maxRisk !== saved.maxRisk ? [{ key: "autonomy.max_risk", value: next.maxRisk }] : [];
-  const loosening = next.mode === "full" && saved.mode !== "full";
-  return loosening ? [...risk, ...mode] : [...mode, ...risk];
-}
-
-/** Der gespeicherte Stand in Worten, z. B. „Selbstständig handeln, bis Risikostufe Mittel“. */
-function describeAutonomy({ mode, maxRisk }: Autonomy): string {
-  const title = MODES.find((m) => m.value === mode)?.title ?? mode;
-  if (mode !== "full") return title;
-  return `${title}, bis Risikostufe ${RISKS.find((r) => r.value === maxRisk)?.label ?? maxRisk}`;
-}
-
-/** Holt den Stand vom Server; `null`, wenn das nicht klappt. */
-async function loadAutonomy(): Promise<Autonomy | null> {
-  try {
-    const rows = await api.get<{ key: string; value: unknown }[]>("/settings");
-    const byKey = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-    const mode = byKey["autonomy.mode"];
-    const maxRisk = byKey["autonomy.max_risk"];
-    return typeof mode === "string" && typeof maxRisk === "string" ? { mode, maxRisk } : null;
-  } catch {
-    return null;
-  }
-}
-
-function endSentence(text: string): string {
-  return /[.!?]$/.test(text.trim()) ? text.trim() : `${text.trim()}.`;
-}
-
 function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: string; maxRisk: string }) {
+  const isOwner = useAuthStore((s) => Boolean(s.user?.is_owner));
   const [mode, setMode] = useState(initialMode);
   const [maxRisk, setMaxRisk] = useState(initialRisk);
-  const [saved, setSaved] = useState<Autonomy>({ mode: initialMode, maxRisk: initialRisk });
-  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState({ mode: initialMode, maxRisk: initialRisk });
+  const [confirming, setConfirming] = useState(false);
   const [notice, setNotice] = useState<Notice>(null);
   const dirty = mode !== saved.mode || maxRisk !== saved.maxRisk;
+  const locked = !isOwner || confirming;
 
-  async function save() {
-    setBusy(true);
-    setNotice(null);
-    try {
-      for (const step of autonomySteps(saved, { mode, maxRisk })) await putSetting(step.key, step.value);
-      setSaved({ mode, maxRisk });
-      setNotice({ kind: "ok", text: "Gespeichert." });
-    } catch (err) {
-      // Ein Schritt kann schon durch sein: nicht den Entwurf stehen lassen, sondern zeigen, was der Server wirklich hat.
-      const stored = await loadAutonomy();
-      if (stored) {
-        setMode(stored.mode);
-        setMaxRisk(stored.maxRisk);
-        setSaved(stored);
-      }
-      const state = stored
-        ? `Aktuell gespeichert: ${describeAutonomy(stored)}.`
-        : "Ob etwas davon gespeichert wurde, ist unklar. Lade die Seite neu und prüfe die Einstellung.";
-      setNotice({ kind: "error", text: `${endSentence(errorText(err))} ${state}` });
-    } finally {
-      setBusy(false);
-    }
+  async function send(proof: OwnerProof) {
+    await api.put("/settings/autonomy", { mode, max_risk: maxRisk, ...proof });
+  }
+
+  function done() {
+    setSaved({ mode, maxRisk });
+    setConfirming(false);
+    setNotice({ kind: "ok", text: "Gespeichert." });
   }
 
   return (
     <Card
       title="Selbstständigkeit"
       description="Gilt für Aktionen, die von Regeln, Skripten oder Nodvard KI vorgeschlagen werden."
-      footer={<Button variant="primary" busy={busy} disabled={!dirty} onClick={() => void save()}>Speichern</Button>}
+      footer={isOwner && !confirming ? (
+        <Button variant="primary" disabled={!dirty} onClick={() => { setNotice(null); setConfirming(true); }}>Speichern</Button>
+      ) : undefined}
     >
       <NoticeLine notice={notice} />
+      {!isOwner && <p className="mb-3 text-sm text-white/55">{OWNER_ONLY_HINT}</p>}
       <div role="radiogroup" aria-label="Modus" className="grid gap-3 sm:grid-cols-2">
         {MODES.map((m) => (
           <button
@@ -179,8 +127,9 @@ function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: strin
             type="button"
             role="radio"
             aria-checked={mode === m.value}
+            disabled={locked}
             onClick={() => setMode(m.value)}
-            className={`rounded-lg border p-3 text-left transition ${
+            className={`rounded-lg border p-3 text-left transition disabled:cursor-not-allowed ${
               mode === m.value ? "border-[var(--color-accent)] bg-white/[0.06]" : "border-white/10 hover:border-white/25"
             }`}
           >
@@ -199,7 +148,7 @@ function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: strin
             <button
               key={r.value}
               type="button"
-              disabled={mode !== "full"}
+              disabled={mode !== "full" || locked}
               aria-pressed={maxRisk === r.value}
               onClick={() => setMaxRisk(r.value)}
               className={`rounded-lg border px-3 py-2 text-left transition disabled:cursor-not-allowed ${
@@ -212,6 +161,7 @@ function AutonomyCard({ mode: initialMode, maxRisk: initialRisk }: { mode: strin
           ))}
         </div>
       </div>
+      {confirming && <OwnerConfirm send={send} onDone={done} onCancel={() => setConfirming(false)} />}
     </Card>
   );
 }

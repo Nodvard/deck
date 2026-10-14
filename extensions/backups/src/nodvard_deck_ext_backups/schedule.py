@@ -82,10 +82,8 @@ def _date_days(token: str) -> int | None:
 def schedule_gap_days(expression: object) -> int | None:
     """Größter Abstand zwischen zwei Läufen in ganzen Tagen (mindestens 1), `None` wenn der Ausdruck nicht
     eindeutig lesbar ist (es wird nie geraten)."""
-    # Der Wächter für "Backup zu alt" braucht den größten Abstand, sonst kippt jede Sicherung eines seltenen Jobs
-    # zwischen zwei Läufen auf "zu alt". Wochentage: größte Lücke zwischen den gewählten Tagen (`mon..fri` 3,
-    # `sat` 7). Tag im Monat festgelegt (auch mit Wochentagen, z. B. der erste Samstag): 31. `weekly` 7,
-    # `monthly` 31; sonst (täglich oder öfter) 1.
+    # Der größte Abstand, sonst kippt jede Sicherung eines seltenen Jobs zwischen zwei Läufen auf "zu alt". Wochentage:
+    # größte Lücke (`mon..fri` 3, `sat` 7); Tag im Monat, auch mit Wochentagen (der erste Samstag): 31; sonst 1.
     if not isinstance(expression, str):
         return None
     text = expression.strip().lower()

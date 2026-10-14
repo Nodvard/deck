@@ -1,5 +1,5 @@
-"""Neustart des Prozesses auf Wunsch (`POST /system/restart`, nach dem Vormerken einer Wiederherstellung): Der Prozess beendet
-sich, den Neustart übernimmt die Neustart-Regel des Containers."""
+"""Neustart des Prozesses auf Wunsch (`POST /system/restart`, nach dem Vormerken einer Wiederherstellung): Der Prozess
+beendet sich, den Neustart übernimmt die Neustart-Regel des Containers."""
 
 from __future__ import annotations
 
@@ -17,8 +17,8 @@ if TYPE_CHECKING:
 logger = logging.getLogger("nodvard_deck.restart")
 
 # Kein Selbst-Neustart: Der Prozess beendet sich mit 75 (`EX_TEMPFAIL`), und wer ihn gestartet hat, startet ihn neu, im
-# Container die Neustart-Regel (`restart: unless-stopped` in den mitgelieferten Compose-Dateien; `on-failure` greift wegen des
-# Wertes ungleich 0 ebenfalls). Ohne eine solche Regel bleibt der Dienst danach aus, die Oberfläche weist darauf hin.
+# Container die Neustart-Regel (`restart: unless-stopped` in den Compose-Dateien; `on-failure` greift wegen des Wertes
+# ungleich 0 ebenfalls). Ohne solche Regel bleibt der Dienst danach aus, die Oberfläche weist darauf hin.
 EXIT_CODE = 75
 SIGNAL_DELAY_S = 0.7  # damit die Antwort noch rausgeht
 # Auf SIGTERM fährt uvicorn ordentlich herunter (Lifespan-Ende: Planer stoppen, Datenbank schließen); ganz am Ende beendet

@@ -180,8 +180,7 @@ def _repo_parts(image: str) -> list[str] | None:
 
 
 def is_self_image(image: str) -> bool:
-    """Ist `image` das Dashboard selbst (oder sein Update-Helfer)? Nur nach dem Repository-Namen, nie nach Tag oder
-    Registry."""
+    """Ist `image` das Dashboard oder sein Update-Helfer? Nur nach dem Repository-Namen, nie nach Tag oder Registry."""
     parts = _repo_parts(image)
     if parts is None:
         return False
@@ -556,8 +555,7 @@ def _utc_text(iso: str | None) -> str:
 def warnings_for(
     *, image: str, service: str, affected: list[str], stopped: list[str], drift: bool, stale: bool, registry_at: str | None,
 ) -> list[str]:
-    """Die Hinweise unter der Übersicht; die Standard-Warnung vor kurzer Nichterreichbarkeit (`DOWNTIME_TEXT`) zeigt die
-    Seite immer."""
+    """Hinweise unter der Übersicht; die Warnung vor kurzer Nichterreichbarkeit (`DOWNTIME_TEXT`) zeigt die Seite immer."""
     out: list[str] = []
     if is_database_image(image, service):
         out.append(
@@ -614,8 +612,7 @@ VERIFY_FORMAT = (
 
 
 def cmd_verify(t: ComposeTarget, rollback: str | None = None) -> str:
-    """Alle Container des Dienstes + welche Image-ID der Name heute hat (+ die des Sicherungs-Images `rollback`, falls
-    angegeben)."""
+    """Alle Container des Dienstes und die heutige Image-ID des Namens, mit `rollback` auch die des Sicherungs-Images."""
     check_target(t)
     if rollback is not None and not is_valid_ref(rollback):
         raise ValueError(f"Ungültiger Sicherungs-Name: {rollback!r}")

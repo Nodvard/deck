@@ -1,10 +1,7 @@
 /**
- * Eigene App-Kacheln ("+ App hinzufuegen") im Cockpit: Typen, Pruefung des Formulars, Filter und die
- * Schreib-Aufrufe (`/apps`, backend/src/nodvard_deck/api/v1/apps.py). Gelesen werden die Kacheln zusammen mit den
- * erkannten Diensten aus `GET /overview` (Feld `apps`, siehe lib/overview.ts).
- *
- * Die Pruefung hier ist nur Komfort (sofortige, verstaendliche Rueckmeldung): massgeblich ist immer das Backend
- * (`services/custom_apps.py`) -- gleiche Regeln, gleiche Meldungen. Der Server ruft die Adressen nie selbst ab.
+ * Eigene App-Kacheln ("+ App hinzufügen") im Cockpit: Typen, Formularprüfung, Filter und Schreib-Aufrufe (`/apps`);
+ * gelesen werden sie mit den erkannten Diensten aus `GET /overview` (lib/overview.ts). Die Prüfung hier ist nur
+ * Komfort, maßgeblich ist das Backend (`services/custom_apps.py`). Der Server ruft die Adressen nie selbst ab.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -66,8 +63,8 @@ const HOST_WITH_PORT = /^[^:/?#\s]+:\d+(?:[/?#]|$)/;
 /** Sieht nach einem anderen Schema aus (`javascript:`, `data:`, `ftp://`, `mailto:` ...). */
 const OTHER_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 
-/** Ergaenzt `http://`, wenn jemand nur `192.168.2.1` oder `nas.local:5000` tippt. Alles, was nach einem anderen
- * Schema aussieht (`javascript:`, `data:`, `ftp://` ...), bleibt unveraendert -- die Pruefung lehnt es dann ab. */
+/** Ergänzt `http://`, wenn jemand nur `192.168.2.1` oder `nas.local:5000` tippt. Alles, was nach einem anderen
+ * Schema aussieht (`javascript:`, `data:`, `ftp://` ...), bleibt unverändert, die Prüfung lehnt es dann ab. */
 export function normalizeUrl(input: string): string {
   const text = input.trim();
   if (!text || HTTP_START.test(text)) return text;
@@ -88,8 +85,8 @@ const URL_ERRORS = {
 const HOST_NAME = /^[\p{L}\p{N}\p{M}_.-]+$/u;
 const HOST_IPV6 = /^\[[0-9a-fA-F:.]*:[0-9a-fA-F:.]*\]$/;
 
-/** Eine Meldung, wenn die Adresse nicht taugt, sonst `null`. (Erwartet die schon ergaenzte Adresse.) Gleiche Regeln
- * wie `clean_url` im Backend: nur http/https, Rechnername oder IP, kein Benutzer/Passwort, gueltiger Port. */
+/** Eine Meldung, wenn die Adresse nicht taugt, sonst `null` (erwartet die schon ergänzte Adresse). Gleiche Regeln
+ * wie `clean_url` im Backend: nur http/https, Rechnername oder IP, kein Benutzer/Passwort, gültiger Port. */
 export function validateUrl(value: string): string | null {
   const text = value.trim();
   if (!text) return URL_ERRORS.empty;
@@ -109,7 +106,7 @@ export function validateUrl(value: string): string | null {
   return null;
 }
 
-/** Fuer `href`: nur http/https, sonst `undefined` (kein Link). Auch wenn die Daten nicht vom Formular kommen. */
+/** Für `href`: nur http/https, sonst `undefined` (kein Link). Auch wenn die Daten nicht vom Formular kommen. */
 export function safeHref(url: string | null | undefined): string | undefined {
   if (!url || !HTTP_START.test(url.trim())) return undefined;
   try {
@@ -120,7 +117,7 @@ export function safeHref(url: string | null | undefined): string | undefined {
   }
 }
 
-/** `192.168.2.1:8080` aus einer Adresse -- als Untertitel der Kachel. */
+/** `192.168.2.1:8080` aus einer Adresse, als Untertitel der Kachel. */
 export function urlHost(url: string | null | undefined): string {
   if (!url) return "";
   try {
@@ -132,10 +129,10 @@ export function urlHost(url: string | null | undefined): string {
 
 // --- Zeichen (wie `services/custom_apps.py`) ---------------------------------------------------------------------
 
-/** Die Emoji-Bloecke (Mahjong bis „Symbole und Piktogramme, Erweiterung A“). Nur hier gilt ein Zeichen, das der
- * Browser noch nicht kennt, als (neues) Emoji -- ausserhalb waeren es unsichtbare, nicht vergebene Zeichen. */
+/** Die Emoji-Blöcke (Mahjong bis „Symbole und Piktogramme, Erweiterung A“). Nur hier gilt ein Zeichen, das der
+ * Browser noch nicht kennt, als (neues) Emoji, außerhalb wären es unsichtbare, nicht vergebene Zeichen. */
 const inEmojiBlocks = (code: number) => code >= 0x1f000 && code <= 0x1faff;
-/** Fuellzeichen (Hangul-Fueller, Braille-Leerzeichen): Unicode fuehrt sie als Buchstabe/Symbol, sie zeigen aber nichts. */
+/** Füllzeichen (Hangul-Füller, Braille-Leerzeichen): Unicode führt sie als Buchstabe/Symbol, sie zeigen aber nichts. */
 const BLANK_CHARS = new Set([0x115f, 0x1160, 0x3164, 0xffa0, 0x2800]);
 const UNASSIGNED = /^\p{Cn}$/u;
 const UNWANTED = /^[\p{C}\p{Zl}\p{Zp}\p{Zs}]$/u;
@@ -143,8 +140,8 @@ const VISIBLE = /^[\p{L}\p{N}\p{S}\p{P}]$/u;
 
 const isNewEmoji = (ch: string, code: number) => inEmojiBlocks(code) && UNASSIGNED.test(ch);
 
-/** Steuer- und Formatzeichen, Zeilen-/Absatztrenner und alle Leerzeichen ausser dem normalen -- ausgenommen der
- * Zero-Width-Joiner (haelt Emoji-Folgen zusammen) und noch nicht vergebene Zeichen in den Emoji-Bloecken. */
+/** Steuer- und Formatzeichen, Zeilen-/Absatztrenner und alle Leerzeichen außer dem normalen, ausgenommen der
+ * Zero-Width-Joiner (hält Emoji-Folgen zusammen) und noch nicht vergebene Zeichen in den Emoji-Blöcken. */
 function isUnwanted(ch: string): boolean {
   const code = ch.codePointAt(0) ?? 0;
   if (code === 0x200d || ch === " " || isNewEmoji(ch, code)) return false;
@@ -165,7 +162,7 @@ export const hasVisibleCharacter = (text: string): boolean => Array.from(text).s
 const EMOJI_MAX_CODEPOINTS = 12;
 const SYMBOL = /^\p{So}$/u;
 const SKIN_TONE = /^[\u{1F3FB}-\u{1F3FF}]$/u;
-/** Emoji, die Unicode nicht als „Symbol“ fuehrt (Ausrufezeichen-Paar, Info, Pfeile, Welle) -- wie im Backend. */
+/** Emoji, die Unicode nicht als „Symbol“ führt (Ausrufezeichen-Paar, Info, Pfeile, Welle), wie im Backend. */
 const TEXT_STYLE_EMOJI = new Set([0x203c, 0x2049, 0x2139, 0x2194, 0x2195, 0x2196, 0x2197, 0x2198, 0x2199, 0x21a9, 0x21aa, 0x3030, 0x303d]);
 
 function isSymbol(ch: string): boolean {
@@ -190,15 +187,15 @@ export const ICON_ERROR = "Wähle ein Symbol aus der Liste oder gib ein einzelne
 
 // --- Formular ---------------------------------------------------------------------------------------------------
 
-/** Alle Fehler des Formulars auf einmal (leeres Objekt = in Ordnung). Die Adresse wird so geprueft, wie
- * `normalizeUrl` sie speichern wuerde. */
+/** Alle Fehler des Formulars auf einmal (leeres Objekt = in Ordnung). Die Adresse wird so geprüft, wie
+ * `normalizeUrl` sie speichern würde. */
 export function validateAppForm(values: AppFormValues): AppFormErrors {
   const errors: AppFormErrors = {};
   const name = values.name.trim();
   if (!name) errors.name = "Bitte gib einen Namen an.";
   else if (name.length > NAME_MAX) errors.name = `Der Name ist zu lang (höchstens ${NAME_MAX} Zeichen).`;
   else if (hasBadCharacters(name)) errors.name = "Der Name darf keine Zeilenumbrüche oder Steuerzeichen enthalten.";
-  else if (!hasVisibleCharacter(name)) errors.name = "Bitte gib einen Namen an."; // nur Fuell- oder Verbindungszeichen
+  else if (!hasVisibleCharacter(name)) errors.name = "Bitte gib einen Namen an."; // nur Füll- oder Verbindungszeichen
 
   const urlError = validateUrl(normalizeUrl(values.url));
   if (urlError) errors.url = urlError;
@@ -216,7 +213,7 @@ export function validateAppForm(values: AppFormValues): AppFormErrors {
   return errors;
 }
 
-/** Der Koerper fuer POST/PATCH: geprueft, getrimmt, Adresse mit `http://` ergaenzt, Leeres als `null`. */
+/** Der Body für POST/PATCH: geprüft, getrimmt, Adresse mit `http://` ergänzt, Leeres als `null`. */
 export function bodyFromForm(values: AppFormValues) {
   return {
     name: values.name.trim(),
@@ -231,7 +228,7 @@ export function bodyFromForm(values: AppFormValues) {
 
 // --- Anzeige: Gruppen, Filter ----------------------------------------------------------------------------------
 
-/** Auswahl im Gruppen-Filter: alles, eine Gruppe der eigenen Apps, eigene ohne Gruppe oder nur die erkannten Dienste. */
+/** Auswahl im Gruppen-Filter: alles, eine Gruppe eigener Apps, eigene ohne Gruppe oder nur die erkannten Dienste. */
 export type GroupFilter = string;
 export const FILTER_ALL: GroupFilter = "all";
 export const FILTER_UNGROUPED: GroupFilter = "ungrouped";
@@ -244,11 +241,9 @@ export interface GroupChip {
   count: number;
 }
 
-/** Die Knoepfe des Gruppen-Filters. Es gibt sie nur, wenn es eigene Apps gibt (sonst waere nichts zu filtern):
- * „Alle“, jede Gruppe (in der Reihenfolge der eigenen Apps), „Ohne Gruppe“ (nur wenn es auch Gruppen gibt),
- * „Erkannt“ (die automatisch erkannten Dienste, nur wenn die Liste welche zeigt -- erkannte ohne Web-Oberflaeche
- * nur mit `showAll`). Die Anzahl zaehlt, was nach Suchtext uebrig ist; ein Knopf mit 0 bleibt stehen, damit eine
- * gewaehlte Auswahl beim Tippen nicht still auf „Alle“ springt. */
+/** Die Knöpfe des Gruppen-Filters, nur wenn es eigene Apps gibt: „Alle“, jede Gruppe, „Ohne Gruppe“ (nur bei Gruppen)
+ * und „Erkannt“ (nur wenn die Liste erkannte Dienste zeigt, ohne Web-Oberfläche nur mit `showAll`). Die Anzahl zählt,
+ * was nach dem Suchtext übrig ist; ein Knopf mit 0 bleibt, damit die Auswahl beim Tippen nicht auf „Alle“ springt. */
 export function groupChips(apps: AppTileOut[], visible: AppTileOut[], showAll = false): GroupChip[] {
   const custom = apps.filter((a) => a.source === "custom");
   if (custom.length === 0) return [];
@@ -269,14 +264,14 @@ export function groupChips(apps: AppTileOut[], visible: AppTileOut[], showAll = 
   return chips;
 }
 
-/** Alle Gruppen, die es schon gibt (Vorschlaege fuer das Feld „Gruppe“). */
+/** Alle Gruppen, die es schon gibt (Vorschläge für das Feld „Gruppe“). */
 export function existingGroups(apps: AppTileOut[]): string[] {
   const names = new Set<string>();
   for (const app of apps) if (app.source === "custom" && app.group) names.add(app.group);
   return [...names].sort((a, b) => a.localeCompare(b, "de"));
 }
 
-/** Was die Liste zeigt: erkannte Dienste ohne Web-Oberflaeche nur auf Wunsch, eigene Apps immer; dazu Suchtext
+/** Was die Liste zeigt: erkannte Dienste ohne Web-Oberfläche nur auf Wunsch, eigene Apps immer; dazu Suchtext
  * und Gruppen-Filter. Die Reihenfolge der Eingabe bleibt (eigene zuerst, nach Position). */
 export function filterApps(apps: AppTileOut[], opts: { query: string; filter: GroupFilter; showAll: boolean }): AppTileOut[] {
   const q = opts.query.trim().toLowerCase();
@@ -293,7 +288,7 @@ export function filterApps(apps: AppTileOut[], opts: { query: string; filter: Gr
 // --- Schreiben ----------------------------------------------------------------------------------------------------
 
 /** Antwort von `POST`/`PATCH /apps` (`CustomAppOut` im Backend). Die Felder hinter Kennung und Name sind hier
- * optional, damit eine knappe Antwort die Anzeige nicht stoert: fehlt etwas, gilt, was das Formular geschickt hat. */
+ * optional, damit eine knappe Antwort die Anzeige nicht stört: fehlt etwas, gilt, was das Formular geschickt hat. */
 export interface SavedApp {
   id: string;
   name?: string;
@@ -312,7 +307,7 @@ type Change = (apps: AppTileOut[]) => AppTileOut[];
 
 const isCustom = (a: AppTileOut) => a.source === "custom";
 
-/** Reihenfolge wie im Backend (`list_apps`): Position, dann Name (ohne Gross-/Kleinschreibung), dann Kennung. */
+/** Reihenfolge wie im Backend (`list_apps`): Position, dann Name (ohne Groß-/Kleinschreibung), dann Kennung. */
 const byPosition = (a: AppTileOut, b: AppTileOut) =>
   (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.toLowerCase().localeCompare(b.name.toLowerCase()) || a.id.localeCompare(b.id);
 
@@ -329,15 +324,14 @@ function tileFromSaved(id: string, saved: Partial<SavedApp> | null | undefined, 
   };
 }
 
-/** Anlegen, Aendern, Loeschen, Reihenfolge. Das Cockpit zeigt die Aenderung sofort (die Kachel steht, bevor der Server
- * die ganze Uebersicht neu gesammelt hat) und laedt die Uebersicht dann im Hintergrund neu -- der Aufruf wartet
- * nicht darauf: bei einem haengenden Server dauert das bis zu 12 Sekunden, und der Dialog bliebe so lange gesperrt.
+/** Anlegen, Ändern, Löschen, Reihenfolge. Das Cockpit zeigt die Änderung sofort und lädt die Übersicht dann im
+ * Hintergrund neu; der Aufruf wartet nicht darauf (bei hängendem Server bis zu 12 s, der Dialog bliebe gesperrt).
  * Fehler (`ApiError`) gehen an den Aufrufer, der sie anzeigt. */
 export function useAppActions() {
   const queryClient = useQueryClient();
 
   async function show(change: Change) {
-    // Eine schon laufende, aeltere Abfrage darf die Aenderung nicht wieder ueberschreiben.
+    // Eine schon laufende, ältere Abfrage darf die Änderung nicht wieder überschreiben.
     await queryClient.cancelQueries({ queryKey: ["overview"] });
     queryClient.setQueryData<OverviewOut>(["overview"], (old) => {
       if (!old) return old;
@@ -377,7 +371,7 @@ export function useAppActions() {
     },
     reorder: async (ids: string[]) => {
       await api.put("/apps/order", { ids });
-      // Wie `reorder` im Backend: die genannten vorn, die uebrigen dahinter, Positionen neu von 0 an.
+      // Wie `reorder` im Backend: die genannten vorn, die übrigen dahinter, Positionen neu von 0 an.
       await show((apps) => {
         const mine = apps.filter(isCustom).sort(byPosition);
         const named = new Set(ids);
@@ -391,7 +385,7 @@ export function useAppActions() {
   };
 }
 
-// --- Seite „Apps“: Vorschlaege und Ziehen --------------------------------------------------------------------------
+// --- Seite „Apps“: Vorschläge und Ziehen -------------------------------------------------------------------------
 
 /** Ein Vorschlag aus `GET /apps/suggestions`: eine Adresse, die eine Erweiterung schon kennt. */
 export interface AppSuggestionOut {
@@ -408,8 +402,8 @@ export interface AppSuggestionsOut {
   errors?: string[];
 }
 
-/** Vorschlaege nur fuer Nutzer, die Apps anlegen duerfen (`apps.write`). Nach jeder Aenderung an den Apps neu (die
- * uebernommenen fallen dann weg). */
+/** Vorschläge nur für Nutzer, die Apps anlegen dürfen (`apps.write`). Nach jeder Änderung an den Apps neu (die
+ * übernommenen fallen dann weg). */
 export function useAppSuggestions(enabled: boolean) {
   return useQuery({
     queryKey: ["apps", "suggestions"],
@@ -419,7 +413,7 @@ export function useAppSuggestions(enabled: boolean) {
   });
 }
 
-/** Verschiebt `dragged` vor `target` (beide Kennungen in `ids`); unbekannte Kennungen aendern nichts. */
+/** Verschiebt `dragged` vor `target` (beide Kennungen in `ids`); unbekannte Kennungen ändern nichts. */
 export function moveBefore(ids: string[], dragged: string, target: string): string[] {
   if (dragged === target || !ids.includes(dragged) || !ids.includes(target)) return ids;
   const rest = ids.filter((id) => id !== dragged);
@@ -427,7 +421,7 @@ export function moveBefore(ids: string[], dragged: string, target: string): stri
   return rest;
 }
 
-/** Verschiebt `dragged` ans Ende der Apps, die zu `members` gehoeren (Ordner); ohne Mitglieder ans Ende. */
+/** Verschiebt `dragged` ans Ende der Apps, die zu `members` gehören (Ordner); ohne Mitglieder ans Ende. */
 export function moveToEndOf(ids: string[], dragged: string, members: string[]): string[] {
   const rest = ids.filter((id) => id !== dragged);
   const last = Math.max(-1, ...members.filter((m) => m !== dragged).map((m) => rest.indexOf(m)));

@@ -1,17 +1,7 @@
 /**
- * Wiederherstellen einer Sicherung (Einstellungen -> System und Einrichtungs-Assistent):
- * Typen, die Aufrufe der beiden Wege und das Warten auf den Neustart.
- *
- * Zwei Wege, derselbe Ablauf:
- *  - `owner`: `/system/restore/*`, der Owner bestaetigt mit seinem Anmeldepasswort,
- *  - `setup`: `/auth/bootstrap/restore/*`, nur ohne Konto, mit dem Einrichtungscode im Kopf
- *    `X-Setup-Code` bei JEDEM Aufruf.
- *
- * Passwoerter, Schluessel und der Code laufen NIE ueber react-query (kein Query-Key, kein
- * Mutations-Cache): die Aufrufer reichen sie nur als Argument durch und leeren ihre Felder danach.
- *
- * Hochladen ist ein ROHER Strom (`application/octet-stream`, kein Formular), damit der Server die Datei
- * nie ganz im Speicher haelt. `fetch` kennt keinen Upload-Fortschritt, deshalb `XMLHttpRequest`.
+ * Wiederherstellen einer Sicherung (Einstellungen → System und Einrichtungs-Assistent): Typen, Aufrufe, Warten auf den
+ * Neustart. Zwei Wege: `owner` (Anmeldepasswort) und `setup` (nur ohne Konto, Code im Kopf `X-Setup-Code` je Aufruf).
+ * Passwörter, Schlüssel und der Code laufen nie über react-query (Query-Key, Mutations-Cache), nur als Argument.
  */
 import { SERVER_UNAVAILABLE_TEXT, useAuthStore } from "../state/auth";
 import { ApiError, apiFetch, refreshAfterUnauthorized } from "./api";
@@ -37,7 +27,7 @@ export interface StagedRestore {
   size: number | null;
   header: { mode: "passwort" | "schluessel"; created_at: string; app_version: string } | null;
   summary: RestoreSummary | null;
-  /** Sekunden, nach denen der Zwischenstand verfaellt. */
+  /** Sekunden, nach denen der Zwischenstand verfällt. */
   expires_in: number;
 }
 
@@ -80,7 +70,7 @@ export type RestoreAuth = { mode: "owner"; accountPassword: string; totpCode?: s
 
 const OCTET = "application/octet-stream";
 
-/** Kopfzeilen koennen kein Unicode: das Passwort geht prozentkodiert (UTF-8) in `X-Confirm-Password`. */
+/** Kopfzeilen können kein Unicode: das Passwort geht prozentkodiert (UTF-8) in `X-Confirm-Password`. */
 export function confirmHeader(password: string): string {
   return encodeURIComponent(password);
 }
@@ -124,8 +114,8 @@ export interface UploadResponse {
 }
 
 /**
- * Schickt die Datei als rohen Strom mit Fortschritt. Eigenes Objekt, damit Tests es ersetzen koennen
- * (jsdom kennt keinen echten Upload).
+ * Schickt die Datei als rohen Strom (`application/octet-stream`, damit der Server sie nie ganz im Speicher hält) mit
+ * Fortschritt per `XMLHttpRequest`, denn `fetch` kennt keinen. Eigenes Objekt, damit Tests es ersetzen können (jsdom).
  */
 export const uploadTransport = {
   send({ url, file, headers, onProgress, signal }: UploadRequest): Promise<UploadResponse> {
@@ -172,8 +162,8 @@ export async function uploadBackup(
     });
   let res = await send();
   if (res.status === 401 && auth.mode === "owner") {
-    // Der Zugang ist waehrend des Hochladens abgelaufen: einmal still erneuern, dann noch einmal
-    // (dieselbe Erneuerung wie `apiFetch`; antwortet der Server nicht, kommt ein ApiError mit Klartext).
+    // Der Zugang ist während des Hochladens abgelaufen: einmal still erneuern, dann noch einmal (dieselbe Erneuerung
+    // wie `apiFetch`; antwortet der Server nicht, kommt ein ApiError mit Klartext).
     if (await refreshAfterUnauthorized()) res = await send();
   }
   if (res.status < 200 || res.status >= 300) throw new ApiError(res.status, errorMessage(res.status, res.text));
@@ -227,7 +217,7 @@ export interface Health {
   version?: string;
 }
 
-/** Eigenes Objekt, damit Tests Gesundheitsabfrage und Seitenwechsel ersetzen koennen. */
+/** Eigenes Objekt, damit Tests Gesundheitsabfrage und Seitenwechsel ersetzen können. */
 export const restartProbe = {
   async health(): Promise<Health | null> {
     try {
@@ -247,18 +237,13 @@ export const browserNavigation = {
   },
 };
 
-/** Abfragetakt und Zeitlimit; als Objekt, damit Tests sie verkuerzen koennen. */
+/** Abfragetakt und Zeitlimit; als Objekt, damit Tests sie verkürzen können. */
 export const restartTiming = { pollMs: 2000, timeoutMs: 10 * 60 * 1000 };
 
 /**
- * Wartet, bis Nodvard Deck nach dem Neustart wieder antwortet. Erkannt wird der Neustart daran, dass die
- * Abfrage einmal scheitert ODER die Laufzeit (`uptime_s`) kleiner geworden ist als vorher (ein sehr
- * schneller Neustart faellt zwischen zwei Abfragen). Eine Antwort VOR dem Neustart zaehlt nicht.
- * Gibt `true` zurueck, wenn der Dienst wieder da ist, `false` nach dem Zeitlimit.
- *
- * `timeoutMs`: eigenes Zeitlimit (sonst `restartTiming.timeoutMs`). `ready`: eigene Erkennung, fuer Aufrufer, die
- * den Ausfall selbst schon gesehen haben (der Update-Helfer schaltet den Container um): dann zaehlt jede gesunde
- * Antwort, fuer die `ready` zutrifft, auch ohne einen weiteren Ausfall.
+ * Wartet, bis Nodvard Deck nach dem Neustart wieder antwortet (`true`; `false` nach dem Zeitlimit). Der Neustart zeigt
+ * sich an einer gescheiterten Abfrage oder kleinerer Laufzeit (`uptime_s`; ein sehr schneller Neustart fällt zwischen
+ * zwei Abfragen). Eine Antwort vor dem Neustart zählt nicht.
  */
 export async function waitForRestart(
   baselineUptime: number | null,
@@ -278,6 +263,8 @@ export async function waitForRestart(
       sawDown = true;
       continue;
     }
+    // Aufrufer, die den Ausfall selbst schon gesehen haben (Update-Helfer), entscheiden über `ready`: Jede gesunde
+    // Antwort, für die es zutrifft, zählt, auch ohne weiteren Ausfall.
     if (ready) {
       if (health.status === "ok" && ready(health)) return true;
       continue;
@@ -288,7 +275,7 @@ export async function waitForRestart(
   return false;
 }
 
-/** Laufzeit vor dem Neustart (fuer `waitForRestart`); `null`, wenn die Abfrage nicht klappt. */
+/** Laufzeit vor dem Neustart (für `waitForRestart`); `null`, wenn die Abfrage nicht klappt. */
 export async function readUptime(): Promise<number | null> {
   const health = await restartProbe.health();
   return typeof health?.uptime_s === "number" ? health.uptime_s : null;
@@ -305,7 +292,7 @@ export async function bootstrapAfterRestart(): Promise<{ needed: boolean; restor
   }
 }
 
-/** Sekunden als "12 Min." bzw. "45 Sek." fuer die Anzeige. */
+/** Sekunden als "12 Min." bzw. "45 Sek." für die Anzeige. */
 export function formatDuration(seconds: number): string {
   if (seconds >= 120) return `${Math.round(seconds / 60)} Min.`;
   if (seconds >= 60) return "1 Min.";

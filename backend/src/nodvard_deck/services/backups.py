@@ -1,4 +1,4 @@
-"""Sicherungen der Anwendung: Einstellungen, Sicherungsschlüssel, automatischer Job und Download-Tickets (Format und Kryptografie: `core/backup`)."""
+"""Sicherungen: Einstellungen, Schlüssel, automatischer Job, Download-Tickets (Format und Kryptografie: `core/backup`)."""
 
 from __future__ import annotations
 
@@ -33,10 +33,10 @@ from . import settings as settings_service
 
 logger = logging.getLogger("nodvard_deck.backups")
 
-# Globale Einstellungen, über `/settings` nicht erreichbar, weil nur der Owner sie ändern darf:
-# backup.config {enabled, schedule, keep, dir, include_runs}, backup.key {recipient, key_id, kdf, created_at} (nie Passwort
-# oder Schlüssel), backup.last_run {at, ok, trigger, name, size, error, deleted, warnings}; die zufällige `system.instance_id`
-# dieser Installation steht im Manifest.
+# Globale Einstellungen, über `/settings` nicht erreichbar (nur der Owner darf sie ändern):
+# backup.config {enabled, schedule, keep, dir, include_runs}, backup.key {recipient, key_id, kdf, created_at} (nie
+# Passwort oder Schlüssel), backup.last_run {at, ok, trigger, name, size, error, deleted, warnings}. Die zufällige
+# `system.instance_id` steht im Manifest.
 SETTING_CONFIG = "backup.config"
 SETTING_KEY = "backup.key"
 SETTING_LAST_RUN = "backup.last_run"
@@ -342,16 +342,44 @@ def _build_file(
         _check_space(target, db_size + files_size, "im Zielordner")
         store.sweep_parts(target)
         skipped: list[str] = []
-
-        def produce(out: Any) -> None:
-            container.write_backup(
-                out, header=header, sources=sources, tmp_dir=tmp, encrypt=encrypt, build=settings.build,
-                instance_id=instance, jwt_from_env=bool(settings.jwt_secret), extensions_dir=settings.extensions_dir,
-                on_skipped_links=lambda links: skipped.extend(links),
-            )
-
+        produce = _producer(settings, sources=sources, tmp=tmp, header=header, encrypt=encrypt, instance=instance, skipped=skipped)
         path, digest, size = store.write_file(target, name, produce)
         return path, digest, size, skipped
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def _producer(
+    settings: Settings, *, sources: snapshot.Sources, tmp: Path, header: dict[str, Any], encrypt: container.Encryptor,
+    instance: str, skipped: list[str],
+) -> Any:
+    def produce(out: Any) -> None:
+        container.write_backup(
+            out, header=header, sources=sources, tmp_dir=tmp, encrypt=encrypt, build=settings.build,
+            instance_id=instance, jwt_from_env=bool(settings.jwt_secret), extensions_dir=settings.extensions_dir,
+            on_skipped_links=lambda links: skipped.extend(links),
+        )
+
+    return produce
+
+
+def write_backup_stream(
+    settings: Settings, out: Any, *, key: dict[str, Any], include_runs: bool, instance: str
+) -> list[str]:
+    """Schreibt eine Sicherung im Schlüssel-Modus direkt nach `out` (für `deploy/backup.sh`); liefert die nicht
+    mitgesicherten Verknüpfungen. Scheitert etwas, muss der Aufrufer `out` verwerfen."""
+    header = fmt.build_header(
+        created_at=utcnow(), app_version=__version__, mode="schluessel", key_id=key["key_id"], kdf=key["kdf"]
+    )
+    sources = sources_for(settings, include_runs=include_runs)
+    tmp = store.make_private_dir(_work_dir(settings, ".tmp") / uuid.uuid4().hex)
+    try:
+        db_size, _files_size = _estimate(sources)
+        _check_space(tmp, db_size, "im Datenordner")
+        skipped: list[str] = []
+        encrypt = container.encryptor_for_recipient(key["recipient"])
+        _producer(settings, sources=sources, tmp=tmp, header=header, encrypt=encrypt, instance=instance, skipped=skipped)(out)
+        return skipped
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

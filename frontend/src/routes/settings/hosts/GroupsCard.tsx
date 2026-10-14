@@ -1,7 +1,7 @@
 /**
- * Gruppen: Mit einer Gruppe laesst „Skripte“ ein Skript auf mehreren Servern laufen. Hier
- * anlegen, umbenennen und loeschen (die Server darin bleiben erhalten). Wer in welcher Gruppe ist,
- * stellt man auf der Seite des jeweiligen Servers ein.
+ * Gruppen: Mit einer Gruppe lässt „Skripte“ ein Skript auf mehreren Servern laufen. Hier anlegen,
+ * umbenennen und löschen (die Server darin bleiben erhalten). Wer in welcher Gruppe ist, stellt man auf der
+ * Seite des jeweiligen Servers ein.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";

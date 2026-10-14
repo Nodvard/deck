@@ -37,10 +37,9 @@ from .hosts import (
 router = APIRouter(tags=["hosts"])
 log = logging.getLogger("nodvard_deck.host_access")
 
-# Private Schlüssel verlassen den Vault nie: `generate-key` antwortet nur mit dem öffentlichen Teil und dem
-# Fingerabdruck, `setup` leitet den öffentlichen Teil serverseitig ab und verwirft den Klartext. Fehlertexte sind feste
-# Sätze, nie eine weitergereichte Ausnahme, und enthalten kein Schlüsselmaterial. Was ein Server braucht, melden die
-# Extensions über `ctx.ui.register_host_requirement()`; der Kern kennt keine beim Namen.
+# Private Schlüssel verlassen den Vault nie: `generate-key` antwortet nur mit öffentlichem Teil und Fingerabdruck,
+# `setup` leitet den öffentlichen Teil serverseitig ab und verwirft den Klartext. Fehlertexte sind feste Sätze ohne
+# Schlüsselmaterial. Was ein Server braucht, melden Extensions über `ctx.ui.register_host_requirement()`.
 
 # Der Gruppenname kommt von einer Extension und landet später in einem Shell-Befehl, daher nur diese enge Form.
 UNIX_GROUP_RE = GROUP_RE
@@ -123,10 +122,9 @@ async def list_host_requirements(host_id: str, session: SessionDep) -> list[Host
 
 
 class GenerateKeyIn(BaseModel):
-    # Neue Zugänge heißen in der Oberfläche „nodvard“, das Formular schickt den Namen immer mit. Der Standard der API
-    # bleibt bewusst „lattice“: ältere Aufrufer (auch die App) schicken oft keinen Namen, ein anderer Standard änderte
-    # für sie still den Benutzer auf dem Server. Ändern nur nach angekündigter Übergangszeit (docs/04-API.md, Abschnitt
-    # „Kompatibilität“).
+    # Die Oberfläche nennt neue Zugänge „nodvard“ und schickt den Namen immer mit. Der API-Standard bleibt bewusst
+    # „lattice“: ältere Aufrufer (auch die App) schicken oft keinen Namen, ein anderer Standard änderte für sie still
+    # den Benutzer auf dem Server. Ändern nur nach angekündigter Übergangszeit (docs/04-API.md, „Kompatibilität“).
     username: str = "lattice"
     port: int = 22
 
@@ -351,8 +349,7 @@ class SetupWithPasswordOut(BaseModel):
 
 
 async def _audit_check(session: SessionDep, user: User, host_id: str, result: ConnectionCheckOut) -> None:
-    """Protokoll einer Prüfung: nur Kennungen und Ergebnisse, weder Banner noch Fehlerausgaben des Servers noch
-    Geheimnisse."""
+    """Protokoll einer Prüfung: nur Kennungen und Ergebnisse, nie Banner, Server-Fehlertexte oder Geheimnisse."""
     await audit_service.log(
         session, actor_type="user", actor_id=user.id, action="host.connection_checked",
         outcome="success" if result.ok else "failure", target_type="host", target_id=host_id,
@@ -375,12 +372,12 @@ async def credential_setup_with_password(
     """Richtet den Server für diesen Schlüssel-Zugang ein: Nodvard Deck meldet sich EINMAL mit `login_user`/`password`
     an, führt den Befehl von `GET .../setup` aus und prüft mit dem neuen Schlüssel wie `POST /hosts/{id}/check`. Fehler
     als `{detail, code}`: 400 Passwort/sudo, 409 Schlüssel unbestätigt (`host_key`) oder geändert, 429, 502, 504."""
-    # Verlangt `hosts.write` UND `hosts.execute`: der Befehl läuft als root auf dem Server, wie Terminal und Konsole.
-    # Bewusst nicht durchs Aktions-Gate: ein Vorschlag stünde samt Eingaben in `actions.payload`, dort darf das Passwort
-    # nie landen. Der Mensch entscheidet mit dem Absenden, jeder Versuch steht im Protokoll.
-    # Das Passwort geht nur an die gespeicherte Adresse und nur, wenn der Server-Schlüssel schon gemerkt ist (sonst
-    # `host_key_unconfirmed`, Bestätigen mit `POST /hosts/{id}/known-hosts`). Grenzen: je Ziel 5, je Nutzer 10 Versuche
-    # in 10 Minuten, dazu je Nutzer 30 Aufrufe in 5 Minuten.
+    # Verlangt `hosts.write` UND `hosts.execute` (der Befehl läuft als root). Nicht durchs Aktions-Gate: ein Vorschlag
+    # stünde samt Eingaben in `actions.payload`, dort darf das Passwort nie landen; der Mensch entscheidet mit dem
+    # Absenden, jeder Versuch steht im Protokoll.
+    #
+    # Das Passwort geht nur an die gespeicherte Adresse und nur bei schon gemerktem Server-Schlüssel (sonst
+    # `host_key_unconfirmed`). Grenzen: `services/one_time_password.py`.
     prepared = await _prepare_setup(session, settings, host_id, credential_id, sudo=payload.sudo, groups=payload.groups)
     host, credential = prepared.host, prepared.credential
     as_root = payload.login_user == "root"

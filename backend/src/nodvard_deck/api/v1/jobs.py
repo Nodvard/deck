@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from ...core.scheduler import CORE_SCHEDULER_EXT_ID, get_scheduler_service
@@ -18,10 +18,9 @@ from ...services.reachability import JOB_KEY as REACHABILITY_JOB_KEY
 from ...services.update_check import JOB_KEY as UPDATE_CHECK_JOB_KEY
 from ..deps import SessionDep, require_permission
 
-# `jobs.read` liest, `jobs.run` löst aus und bricht ab, `jobs.write` ändert oder löscht den Zeitplan selbst.
-# `jobs.write` hat bewusst nur der Admin (über `"*"`): es ändert den Zeitplan, nicht nur eine Ausführung.
-# Es gibt kein `POST /jobs`: ein Job braucht immer eine Erweiterung (oder den Kern), die ihn mit einem Python-Handler
-# registriert (`ctx.scheduler.register_job()`); ein Job ohne Code dahinter wäre ein Platzhalter ohne Wirkung.
+# `jobs.read` liest, `jobs.run` löst aus und bricht ab, `jobs.write` ändert oder löscht den Zeitplan selbst und hat
+# bewusst nur der Admin (über `"*"`). Es gibt kein `POST /jobs`: ein Job braucht immer eine Erweiterung (oder den Kern),
+# die ihn mit einem Python-Handler registriert (`ctx.scheduler.register_job()`); ohne Code wäre er ein Platzhalter.
 router = APIRouter(tags=["jobs"])
 
 _OWNER_ONLY_CORE_JOBS = frozenset({BACKUP_JOB_KEY})
@@ -182,7 +181,9 @@ async def run_job_now(job_id: str, session: SessionDep) -> RunOut:
 
 
 @router.get("/jobs/{job_id}/runs", dependencies=[Depends(require_permission("jobs.read"))])
-async def list_job_runs(job_id: str, session: SessionDep, limit: int = 100) -> list[RunOut]:
+async def list_job_runs(
+    job_id: str, session: SessionDep, limit: int = Query(100, ge=1, le=1000)
+) -> list[RunOut]:
     rows = await jobs_service.list_runs(session, job_id=job_id, limit=limit)
     return [RunOut.from_model(r) for r in rows]
 

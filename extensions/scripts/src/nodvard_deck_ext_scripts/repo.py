@@ -1,5 +1,4 @@
-"""Git-gestütztes Skript-Repository: Inhalt (`script.sh`) und Metadaten (`meta.json`) liegen je Skript im selben
-Verlauf."""
+"""Git-gestütztes Skript-Repository: Inhalt (`script.sh`) und Metadaten (`meta.json`) liegen je Skript im selben Verlauf."""
 
 from __future__ import annotations
 
@@ -182,13 +181,17 @@ class ScriptRepo:
         _harden(self._root)
 
     def _dir(self, script_id: str) -> Path:
-        """Ordner eines Skripts, immer direkt unter dem Repository; wirft `InvalidScriptId`, wenn die Kennung
-        hinausführt."""
+        """Ordner eines Skripts, immer direkt unter dem Repository; wirft `InvalidScriptId`, wenn die Kennung hinausführt."""
         if not safe_script_id(script_id):
             raise InvalidScriptId(script_id)
-        path = self._root / script_id
-        # Auch ein Link auf einen Nachbarordner im Repository wird abgelehnt.
-        if path.is_symlink() or path.resolve().parent != self._root:
+        root = str(self._root)
+        # realpath und startswith: Diese Form erkennt auch CodeQL als Schutz vor Pfaden aus einer Anfrage.
+        candidate = os.path.realpath(os.path.join(root, script_id))
+        if not candidate.startswith(root + os.sep):
+            raise InvalidScriptId(script_id)
+        path = Path(candidate)
+        # realpath folgt Links: Auch ein Link auf einen anderen Ordner im Repository wird abgelehnt.
+        if path.parent != self._root or path.name != script_id or path.is_symlink():
             raise InvalidScriptId(script_id)
         return path
 

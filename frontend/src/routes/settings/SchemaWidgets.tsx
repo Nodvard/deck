@@ -1,10 +1,7 @@
 /**
- * Auswahl-Widgets fuer das Einstellungs-Formular (siehe SchemaForm.tsx):
- *  - "host" / "host-tag": Server bzw. Markierungen aus der Serverliste (GET /hosts)
- *  - "remote-select": Auswahlliste, die eine Erweiterung selbst liefert (z. B. die
- *    Modelle eines KI-Servers)
- * Jedes Widget hat einen Rueckfall auf ein normales Textfeld, falls die Daten nicht
- * geladen werden koennen -- die Einstellungsseite bleibt so immer benutzbar.
+ * Auswahl-Widgets für das Einstellungs-Formular (SchemaForm.tsx): `host`/`host-tag` (Server bzw. Markierungen aus
+ * `GET /hosts`) und `remote-select` (Auswahlliste, die eine Erweiterung selbst liefert). Jedes Widget fällt auf ein
+ * normales Textfeld zurück, wenn die Daten nicht laden, damit die Einstellungsseite benutzbar bleibt.
  */
 import { RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
@@ -151,9 +148,8 @@ interface RemoteOptions {
 
 /**
  * `x-widget: "remote-select"`: Auswahlliste von `x-options-url` (Pfad unter /api/v1, Antwort
- * `{options: [{value, label}], error}`). Es werden bewusst keine Formularwerte mitgeschickt: die
- * Erweiterung fragt nur das, was gespeichert ist (sonst waere der Endpunkt ein Weg fuer
- * Anfragen an beliebige Adressen). Nach einer neuen Adresse: speichern, dann "Neu laden".
+ * `{options: [{value, label}], error}`). Es werden bewusst keine Formularwerte mitgeschickt, sonst wäre der Endpunkt
+ * ein Weg für Anfragen an beliebige Adressen. Nach einer neuen Adresse: speichern, dann "Neu laden".
  */
 export function RemoteSelect({
   id, url, value, onChange, placeholder, emptyLabel,

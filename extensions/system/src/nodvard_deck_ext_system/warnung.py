@@ -101,8 +101,7 @@ def whole(value: float) -> int:
 def decide(entry: dict[str, Any] | None, value: float, threshold: float, now: float) -> str | None:
     """Was tun bei diesem Messwert? "warn", "remind", "recover" oder None."""
     # Hysterese: Nach einer Warnung gilt das Problem erst als behoben, wenn der Wert mindestens `HYSTERESIS` unter der
-    # Schwelle liegt; ein Wert, der um die Schwelle pendelt, meldet so nicht jedes Mal neu. Ein anhaltendes Problem
-    # erinnert nach `REMIND_S`.
+    # Schwelle liegt; ein pendelnder Wert meldet so nicht jedes Mal neu. Ein anhaltendes Problem erinnert nach `REMIND_S`.
     entry = entry or {}
     if not entry.get("alerting"):
         return "warn" if value >= threshold else None
@@ -211,8 +210,7 @@ async def _send(ctx: "ExtensionContext", notification: Notification) -> bool | N
 
 
 async def _window_over(ctx: "ExtensionContext", host_id: str) -> bool:
-    """Ist das Wartungsfenster für diesen Server vorbei? Im Zweifel ja: lieber einmal zu viel melden als eine Meldung
-    verlieren."""
+    """Ist das Wartungsfenster für diesen Server vorbei? Im Zweifel ja: lieber einmal zu oft melden als eine verlieren."""
     try:
         return await ctx.notify.would_suppress(host_id=host_id) is not True
     except Exception:  # noqa: BLE001
@@ -220,8 +218,7 @@ async def _window_over(ctx: "ExtensionContext", host_id: str) -> bool:
 
 
 async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_id: str, value: float, threshold: int, now: float, build: Any) -> int:
-    """Prüft einen Messwert gegen seinen Zustand und gibt die Zahl gesendeter Meldungen zurück; `build(kind, note)` baut
-    die Meldung."""
+    """Prüft einen Messwert gegen seinen Zustand, liefert die Zahl gesendeter Meldungen; `build(kind, note)` baut sie."""
     # Eine im Wartungsfenster stumm geschaltete Meldung (`muted`) wird nur still vermerkt; ist das Fenster vorbei und
     # das Problem noch da, kommt sie einmal hörbar nach. Eine gehörte Warnung bekommt immer eine gehörte Entwarnung.
     entry = state.get(key)

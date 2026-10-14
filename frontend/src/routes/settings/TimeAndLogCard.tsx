@@ -1,8 +1,7 @@
 /**
- * Karte "Zeit & Protokoll" (Einstellungen, System): Zeitzone fuer Zeitplaene und Wartungsfenster
- * (`system.timezone`), wie lange das Protokoll aufbewahrt wird (`audit.retention_days`), wie lange
- * der Verlauf der Job-Läufe samt Protokolldateien (`jobs.run_retention_days`) und wie lange Meldungen
- * (`notifications.retention_days`). GET/PUT /settings/{key}.
+ * Karte "Zeit & Protokoll" (Einstellungen, System): Zeitzone für Zeitpläne und Wartungsfenster (`system.timezone`),
+ * Aufbewahrung von Protokoll (`audit.retention_days`), Job-Verlauf samt Protokolldateien (`jobs.run_retention_days`)
+ * und Meldungen (`notifications.retention_days`). GET/PUT /settings/{key}.
  */
 import { useMemo, useState } from "react";
 

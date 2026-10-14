@@ -59,8 +59,7 @@ async def run_cert_watch(ctx: ExtensionContext, service: NetworkService, *, now:
             if expired
             else f"Das Zertifikat für {domains} läuft am {when} ab ({cert['days_text']})."
         )
-        # NPM erneuert Let's-Encrypt-Zertifikate normalerweise selbst ~30 Tage vor Ablauf: eine Meldung heißt meist,
-        # dass die Erneuerung klemmt.
+        # NPM erneuert Let's-Encrypt-Zertifikate meist ~30 Tage vor Ablauf selbst; eine Meldung heißt, die Erneuerung klemmt.
         body += " Im Nginx Proxy Manager unter „SSL-Zertifikate“ erneuern, falls das nicht von selbst passiert."
         await ctx.notify.send(Notification(
             title=f"Zertifikat {'abgelaufen' if expired else 'läuft bald ab'}: {cert['name']}",

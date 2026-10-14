@@ -18,6 +18,10 @@ def _time(value: Any) -> str | None:
     return value if value and value != _ZERO_TIME else None
 
 
+# So meldet Docker einen Port, der auf allen Adressen veröffentlicht ist (nur ein Vergleichswert, `nosec B104` für Bandit).
+_ALL_ADDRESSES = frozenset({None, "", "0.0.0.0", "::"})  # nosec B104
+
+
 def _ports(raw_ports: dict[str, Any] | None) -> list[dict[str, Any]]:
     """`{"80/tcp": [{"HostIp": "0.0.0.0", "HostPort": "8080"}, ...]}` -> je Container-Port die veröffentlichten Host-Ports.
 
@@ -26,7 +30,7 @@ def _ports(raw_ports: dict[str, Any] | None) -> list[dict[str, Any]]:
     ports: list[dict[str, Any]] = []
     for container_port, bindings in sorted((raw_ports or {}).items()):
         published = sorted({
-            (b.get("HostPort") if b.get("HostIp") in (None, "", "0.0.0.0", "::") else f"{b.get('HostIp')}:{b.get('HostPort')}")
+            (b.get("HostPort") if b.get("HostIp") in _ALL_ADDRESSES else f"{b.get('HostIp')}:{b.get('HostPort')}")
             for b in (bindings or [])
             if b.get("HostPort")
         })

@@ -1,6 +1,6 @@
 """Einrichtungsbefehl für einen Server: Benutzer anlegen, Schlüssel eintragen, auf Wunsch Gruppen und sudo ohne Passwort.
 
-Reine Funktionen ohne I/O; beim Einrichten mit Passwort führt das Dashboard das Skript selbst aus (`remote_setup_command`)."""
+Reine Funktionen ohne I/O; mit Passwort führt das Dashboard das Skript selbst aus (`remote_setup_command`)."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from dataclasses import dataclass
 import asyncssh
 
 # Der Befehl wird von Hand auf dem Server ausgeführt, deshalb kommt nichts Ungeprüftes ins Skript: Benutzer, Gruppen und
-# öffentlicher Schlüssel werden streng per Zeichenliste geprüft (Fehlermeldungen nennen den Wert nie), ein Wert mit
-# Anführungszeichen, `$`, Backtick, Backslash oder Zeilenumbruch kommt gar nicht erst durch (`_dq`), und das ganze Skript
-# wird für `sh -c` mit `shlex.quote` verpackt. Es enthält kein einfaches Hochkomma, so lässt es sich in `sh -c '...'` einbetten.
+# öffentlicher Schlüssel werden streng per Zeichenliste geprüft (Fehlermeldungen nennen den Wert nie),
+# Anführungszeichen, `$`, Backtick, Backslash und Zeilenumbruch kommen nicht durch (`_dq`), das ganze Skript wird für
+# `sh -c` mit `shlex.quote` verpackt. Es enthält kein einfaches Hochkomma, lässt sich also in `sh -c '...'` einbetten.
 USER_RE = re.compile(r"[a-z_][a-z0-9_-]{0,31}")
 """Benutzer auf dem Server (Linux-Namensregel). Strenger als der Benutzername, den das Dashboard
 für Windows-Zugänge speichern darf: Hier wird er in ein Shell-Skript eingesetzt."""
@@ -157,10 +157,10 @@ def build_setup_script(
                 f'else echo "Hinweis: Gruppe {group} gibt es hier nicht – übersprungen."; fi'
             )
         if sudo:
-            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel lattice-<Benutzer> wird erst nach erfolgreicher
-            # Prüfung der neuen entfernt, und nur, wenn sie Byte für Byte die Regel ist, die dieser Befehl selbst angelegt
-            # hat (`cmp` gegen die neue Datei). Alles andere bleibt stehen (Hinweis). Bei einem Fehler wird nichts entfernt,
-            # und `visudo -c -q` muss am Ende gelten.
+            # Neue Regel: /etc/sudoers.d/nodvard-<Benutzer>. Eine alte Regel lattice-<Benutzer> wird erst nach
+            # erfolgreicher Prüfung der neuen entfernt, und nur, wenn sie Byte für Byte die Regel ist, die dieser Befehl
+            # selbst angelegt hat (`cmp` gegen die neue Datei); alles andere bleibt stehen (Hinweis). `visudo -c -q`
+            # muss am Ende gelten.
             lines.append(
                 'if command -v visudo >/dev/null; then T=$(mktemp); trap "rm -f \\"\\$T\\"" EXIT; N="/etc/sudoers.d/nodvard-$U"; O="/etc/sudoers.d/lattice-$U"; '
                 'echo "$U ALL=(root) NOPASSWD: ALL" > "$T"; '
@@ -246,9 +246,9 @@ def remote_setup_command(script: str, *, as_root: bool, sudo_with_password: bool
     mit `sh -c`, sonst über sudo (mit `sudo_with_password` liest `sudo -S` das Passwort von der Standardeingabe, sonst
     `sudo -n`)."""
     # Das Passwort steht nie in diesem Befehl: Die Befehlszeile ist auf dem Server für alle sichtbar (`ps`) und steht in
-    # Fehlern von asyncssh. Vor dem Skript stehen nur `exec </dev/null` (braucht sudo das Passwort gar nicht, läge es sonst
-    # noch in der Standardeingabe, wo das Skript es lesen könnte) und die Marke `SETUP_STARTED`. `-p ''` unterdrückt die
-    # Eingabeaufforderung. `env LC_ALL=C`: sudo meldet sich auf Englisch, so lässt sich die Meldung einordnen.
+    # asyncssh-Fehlern. Vor dem Skript stehen nur `exec </dev/null` (braucht sudo das Passwort nicht, läge es sonst in
+    # der Standardeingabe, wo das Skript es lesen könnte) und die Marke `SETUP_STARTED`. `-p ''` unterdrückt die
+    # Eingabeaufforderung; `env LC_ALL=C` hält sudos Meldungen englisch, so lassen sie sich einordnen.
     inner = f"exec </dev/null; echo {SETUP_STARTED}\n{script}"
     if as_root:
         return f"sh -c {shlex.quote(inner)}"
@@ -343,7 +343,7 @@ def evaluate_setup_run(
     if not started:
         return SetupRun("setup_failed", "Der Befehl ließ sich auf dem Server nicht starten.", [])
     if not messages:
-        # Das Skript bricht auch ohne eigene Zeile ab (z. B. wenn ein Systembefehl scheitert): dann gibt es unten nichts zu lesen.
+        # Bricht das Skript ohne eigene Zeile ab (z. B. weil ein Systembefehl scheitert), gibt es unten nichts zu lesen.
         return SetupRun(
             "setup_failed",
             (

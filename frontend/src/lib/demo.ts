@@ -1,9 +1,7 @@
 /**
- * Beispieldaten („Mit Beispieldaten ansehen“): Status, Anlegen und Entfernen
- * (`GET /demo`, `POST /demo/seed`, `DELETE /demo`, backend/src/nodvard_deck/api/v1/demo.py).
- *
- * Anlegen und Entfernen brauchen `hosts.write` UND `settings.write` (siehe Begruendung im Backend);
- * den Status sieht, wer Server sehen darf. Ohne Recht zeigt die Oberflaeche keine Knoepfe.
+ * Beispieldaten („Mit Beispieldaten ansehen“): Status, Anlegen und Entfernen (`GET /demo`, `POST /demo/seed`,
+ * `DELETE /demo`, api/v1/demo.py). Anlegen und Entfernen brauchen `hosts.write` und `settings.write` (Begründung im
+ * Backend), den Status sieht, wer Server sehen darf; ohne Recht zeigt die Oberfläche keine Knöpfe.
  */
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
@@ -15,11 +13,11 @@ export interface DemoStatus {
   active: boolean;
   hosts: number;
   notifications: number;
-  /** Beispiel-Apps (eigene Kacheln im Cockpit); fehlt bei einer aelteren Antwort. */
+  /** Beispiel-Apps (eigene Kacheln im Cockpit); fehlt bei einer älteren Antwort. */
   apps?: number;
-  /** Das Dashboard-Layout wurde ersetzt und wird beim Loeschen zurueckgesetzt. */
+  /** Das Dashboard-Layout wurde ersetzt und wird beim Löschen zurückgesetzt. */
   layout_replaced: boolean;
-  /** Beispiel-Server, an denen inzwischen ein Zugang haengt (werden mitgeloescht). */
+  /** Beispiel-Server, an denen inzwischen ein Zugang hängt (werden mitgelöscht). */
   hosts_with_access: string[];
 }
 
@@ -42,7 +40,7 @@ function errorText(err: unknown): string {
   return err instanceof ApiError ? err.message : "Das hat nicht geklappt. Bitte versuch es noch einmal.";
 }
 
-/** Nach dem Anlegen/Loeschen aendert sich fast alles auf dem Bildschirm (Server, Meldungen, Layout). */
+/** Nach dem Anlegen/Löschen ändert sich fast alles auf dem Bildschirm (Server, Meldungen, Layout). */
 function useRefreshEverything() {
   const queryClient = useQueryClient();
   return () => queryClient.invalidateQueries();
@@ -71,7 +69,7 @@ export function useSeedDemo() {
   return { run, busy, error };
 }
 
-/** Der Text der Rueckfrage: nennt, was geloescht wird, und warnt vor dem, was man sonst nicht erwartet. */
+/** Der Text der Rückfrage: nennt, was gelöscht wird, und warnt vor dem, was man sonst nicht erwartet. */
 export function removeQuestion(status: DemoStatus): string {
   const parts = [
     `Alle Beispieldaten werden entfernt (${status.hosts} Beispiel-Server, ${status.notifications} Beispiel-Meldungen${status.apps ? `, ${status.apps} Beispiel-Apps` : ""}). Deine eigenen Daten bleiben unberührt.`,
@@ -88,7 +86,7 @@ export function removeQuestion(status: DemoStatus): string {
   return parts.join(" ");
 }
 
-/** Entfernen mit Rueckfrage: `run(status)` meldet `true`, wenn wirklich geloescht wurde. */
+/** Entfernen mit Rückfrage: `run(status)` meldet `true`, wenn wirklich gelöscht wurde. */
 export function useRemoveDemo() {
   const refresh = useRefreshEverything();
   const [busy, setBusy] = useState(false);

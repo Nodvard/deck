@@ -352,6 +352,23 @@ def test_a_symlink_to_another_script_folder_counts_as_missing(repo: ScriptRepo):
     assert repo.get("echt").content == "echo echt\n"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="symbolische Links brauchen unter Windows eigene Rechte")
+def test_a_link_to_a_deeper_folder_with_the_same_name_or_to_itself_is_rejected(repo: ScriptRepo):
+    """Name und Elternordner des aufgelösten Pfads müssen stimmen, und ein Link auf sich selbst zählt nie als Skript."""
+    repo.save(_meta("echt"), "echo echt\n", commit_message="neu")
+    (repo._root / "echt" / "tief").mkdir()
+    (repo._root / "tief").symlink_to(repo._root / "echt" / "tief", target_is_directory=True)
+    (repo._root / "schleife").symlink_to(repo._root / "schleife")
+
+    for script_id in ("tief", "schleife"):
+        assert repo.get(script_id) is None
+        assert repo.delete(script_id) is False
+        with pytest.raises(InvalidScriptId):
+            repo.save(_meta(script_id), "echo x\n", commit_message="über den Link")
+    assert repo.get("echt").content == "echo echt\n"
+    assert repo.list_ids() == ["echt"]
+
+
 def test_the_route_check_has_the_same_length_limit_as_the_repository():
     """Sonst besteht eine lange Kennung die Pruefung der Route und `save` wirft danach (500 statt 422)."""
     assert _valid_id("a" * MAX_ID_LENGTH)

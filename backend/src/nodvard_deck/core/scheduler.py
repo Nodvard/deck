@@ -24,11 +24,9 @@ logger = logging.getLogger("nodvard_deck.scheduler")
 Handler = Callable[..., Awaitable[Any]]
 
 
-# Bewusst ohne den SQLAlchemy-Jobstore von APScheduler: Der speichert Jobs per Pickle, und ein `JobSpec.handler` ist
-# eine gebundene Methode einer Extension-Instanz, die bei jedem Start neu entsteht, also weder picklebar noch über einen
-# Neustart gültig. Zwei dauerhafte Quellen (dessen Tabelle und `jobs`) könnten außerdem auseinanderlaufen. Nach einem
-# Neustart planen Erweiterungen ihre Jobs in `setup()` über `ctx.scheduler.register_job()` neu ein; nur Kern-Jobs brauchen
-# dafür `register_core_jobs()`.
+# Bewusst ohne den SQLAlchemy-Jobstore von APScheduler: Er speichert Jobs per Pickle, ein `JobSpec.handler` ist aber eine
+# gebundene Methode einer Extension-Instanz, die bei jedem Start neu entsteht; zwei dauerhafte Quellen liefen außerdem
+# auseinander. Erweiterungen planen Jobs nach einem Neustart in `setup()` neu ein, Kern-Jobs über `register_core_jobs()`.
 class SchedulerService:
     def __init__(self) -> None:
         self._scheduler = AsyncIOScheduler()

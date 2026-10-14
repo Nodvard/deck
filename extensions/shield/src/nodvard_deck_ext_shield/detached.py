@@ -79,7 +79,7 @@ def running_test(run_id: str, base_dir: str, *, kind: JobKind = UPDATES) -> str:
 
 
 def wrapper_command(run_id: str, command: str, *, base_dir: str | None = None, kind: JobKind = UPDATES) -> str:
-    """Das, was auf dem Server entkoppelt läuft: pid merken, Befehl mit Ausgabe ins Protokoll, Rückgabecode atomar ablegen."""
+    """Was auf dem Server entkoppelt läuft: pid merken, Befehl mit Ausgabe ins Protokoll, Rückgabecode atomar ablegen."""
     base_dir = kind.base_dir if base_dir is None else base_dir
     _check(run_id, base_dir, kind)
     f = shlex.quote(f"{base_dir}/{run_id}")
@@ -129,9 +129,8 @@ def launch_command(run_id: str, command: str, *, base_dir: str | None = None, sy
 
 
 def poll_command(run_id: str, *, base_dir: str = JOB_DIR) -> str:
-    """Fragt den Stand eines Laufs ab (als root): `@@running` / `@@rc=<n>` / `@@lost` / `@@unknown`, dann `@@tail` mit dem Protokoll-Ende.
-
-    Bei `@@rc` stehen davor unter `@@summary` apt-Zusammenfassung und Fehlerzeilen, die bei langen Läufen nicht mehr im Ende stehen."""
+    """Stand eines Laufs (als root): `@@running` / `@@rc=<n>` / `@@lost` / `@@unknown`, dann `@@tail` mit dem Protokoll-Ende.
+    Bei `@@rc` stehen davor unter `@@summary` apt-Zusammenfassung und Fehlerzeilen, die im Ende langer Läufe fehlen."""
     _check(run_id, base_dir)
     rid = run_id
     d = shlex.quote(base_dir)

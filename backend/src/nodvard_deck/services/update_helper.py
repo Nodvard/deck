@@ -226,10 +226,9 @@ def status_view_sync(settings: Settings, *, now: float | None = None) -> dict[st
     status = read_status(settings, now=current)
     doc = status.doc if status.present else None
     done = finishing(doc)
-    # Solange der Helfer nach dem Commit aufräumt, zeigt `previous` im Status noch den alten Stand: nach einem Update
-    # den Rückweg, den der neue gleich ersetzt (der neue Slot wird erst nach dem Schutz-Tag des alten gespeichert), nach
-    # einem Rückweg den gerade benutzten. Deshalb gibt es dann keinen Rückweg, der neue erscheint, sobald der Helfer
-    # fertig ist.
+    # Solange der Helfer nach dem Commit aufräumt, zeigt `previous` noch den alten Stand: nach einem Update den Rückweg,
+    # den der neue gleich ersetzt (der neue Slot wird erst nach dem Schutz-Tag des alten gespeichert), nach einem Rückweg
+    # den gerade benutzten. Deshalb gibt es dann keinen Rückweg; der neue erscheint, sobald der Helfer fertig ist.
     previous = doc.get("previous") if doc and not _committed(doc) else None
     if previous is not None and previous["until"] <= current:
         previous = None

@@ -1,0 +1,7 @@
+[[entries]]
+kind = "sicherheit"
+text = "Wie selbstständig Nodvard Deck handeln darf und ob neue Server-Schlüssel erst bestätigt werden müssen, ändert jetzt nur noch der Inhaber, mit seinem Passwort und, wenn eingeschaltet, dem Zwei-Faktor-Code."
+
+[[entries]]
+kind = "verbessert"
+text = "Modus und Risikostufe der Selbstständigkeit werden in einem Schritt gespeichert, ein halber Stand kann nicht mehr entstehen."

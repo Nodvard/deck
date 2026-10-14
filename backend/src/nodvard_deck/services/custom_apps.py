@@ -26,10 +26,9 @@ SORT_MAX = 100_000
 MAX_APPS = 200
 """Mehr Kacheln als das braucht kein Homelab; die Obergrenze hält die Startseite und `GET /overview` klein."""
 
-# Symbol: feste Auswahl oder ein Emoji, nie eine Bild-Adresse. Ein frei wählbares Bild führte den Browser jedes Nutzers
-# beim Anzeigen der Startseite zu einem fremden Server (Tracking, wer wann das Dashboard öffnet), und eine
-# `http://`-Bild-Adresse wäre auf einer `https`-Seite ein Mixed-Content-Fehler. Die Namen stammen aus lucide (das Frontend
-# bundelt sie ohnehin, `frontend/src/lib/appIcons.ts`); ein Test hält beide Listen deckungsgleich.
+# Symbol: feste Auswahl oder ein Emoji, nie eine Bild-Adresse: Ein frei wählbares Bild führte den Browser jedes Nutzers
+# beim Anzeigen der Startseite zu einem fremden Server (Tracking) und wäre als `http://`-Adresse auf einer `https`-Seite
+# Mixed Content. Die Namen stammen aus lucide; ein Test hält sie mit `frontend/src/lib/appIcons.ts` deckungsgleich.
 APP_ICONS: tuple[str, ...] = (
     "globe", "link", "router", "network", "wifi", "shield-check", "lock", "key-round", "server", "hard-drive",
     "database", "cloud", "cpu", "monitor", "laptop", "smartphone", "tv", "printer", "camera", "cctv",
@@ -151,13 +150,13 @@ def clean_group(value: str | None) -> str | None:
     return text
 
 
-# Der Server ruft die Adresse nie selbst ab (keine Statusabfrage), sonst könnte jemand über diese Funktion den Server
-# dazu bringen, interne Adressen anzufragen (SSRF). Die Adresse ist nur ein Link, den der Browser der klickenden Person öffnet.
-# Die Prüfung ist streng, weil der Link auf der Startseite aller Nutzer landet: Erlaubt ist nur `http://` und `https://`
-# (`javascript:`, `data:`, `file:` & Co. wären als Link ein Angriff auf den, der klickt). Zugangsdaten in der Adresse
-# (`http://user:pass@...`) werden abgelehnt: Sie stünden für alle lesbar in der Datenbank und täuschen mit
-# `https://google.com@boese.example` ein anderes Ziel vor. Ebenso Leer- und Steuerzeichen und Rückwärts-Schrägstriche
-# (Browser lesen `\` wie `/`).
+# Der Server ruft die Adresse nie selbst ab (keine Statusabfrage), sonst ließe sich über diese Funktion der Server zu
+# Anfragen an interne Adressen bringen (SSRF); die Adresse ist nur ein Link für den Browser der klickenden Person.
+#
+# Streng, weil der Link auf der Startseite aller Nutzer landet: Erlaubt ist nur `http://` und `https://` (`javascript:`,
+# `data:`, `file:` & Co. wären ein Angriff auf den, der klickt). Zugangsdaten in der Adresse (`http://user:pass@...`)
+# werden abgelehnt: Sie stünden für alle lesbar in der Datenbank und täuschen mit `https://google.com@boese.example` ein
+# anderes Ziel vor. Ebenso Leer- und Steuerzeichen und Backslashes (Browser lesen `\` wie `/`).
 def clean_url(value: str) -> str:
     """Nur `http://`/`https://` mit Rechnername oder IP-Adresse; gibt die getrimmte Adresse unverändert zurück."""
     text = value.strip()

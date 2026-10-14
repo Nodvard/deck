@@ -95,11 +95,11 @@ class MetricsStore:
         with db:
             if until > start:
                 db.execute(
-                    f"""INSERT OR REPLACE INTO rollup
-                        SELECT host_id, metric, ts - ts % {ROLLUP_S}, AVG(value), MIN(value), MAX(value), COUNT(*)
-                        FROM raw WHERE ts >= ? AND ts < ?
-                        GROUP BY host_id, metric, ts - ts % {ROLLUP_S}""",
-                    (start - start % ROLLUP_S, until),
+                    """INSERT OR REPLACE INTO rollup
+                        SELECT host_id, metric, ts - ts % :step, AVG(value), MIN(value), MAX(value), COUNT(*)
+                        FROM raw WHERE ts >= :start AND ts < :until
+                        GROUP BY host_id, metric, ts - ts % :step""",
+                    {"step": ROLLUP_S, "start": start - start % ROLLUP_S, "until": until},
                 )
                 db.execute("INSERT OR REPLACE INTO state VALUES ('rolled_until', ?)", (until,))
             db.execute("DELETE FROM raw WHERE ts < ?", (now - raw_retention_s,))

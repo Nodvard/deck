@@ -27,26 +27,24 @@ WATCH_BINARIES = [
     "/usr/bin/ls", "/usr/bin/ps", "/usr/bin/ss", "/usr/bin/top", "/usr/bin/find", "/usr/sbin/cron",
 ]
 
-# Programme, die bei jedem Start neue zufällige Ports wählen; ihre Ports im dynamischen Bereich zählen als ein
-# Eintrag ("udp/dyn/rpc.mountd"). Die Liste ist fest eingebaut, die Einstellung "guard_dynamic_processes" fügt weitere
-# hinzu (ein gespeicherter Wert würde sonst eine später erweiterte Vorgabe überdecken).
-#   - tailscaled: UDP-Port und TCP-Port der Tailscale-Adresse
-#   - rpc.mountd, rpc.statd, rpcbind: NFS-Hilfsdienste (RPC)
-#   - avahi-daemon: mDNS-Antwort-Ports
-#   - dhclient, dhcpcd: DHCP-Client öffnet neben Port 68 zufällige Ports
-#   - chronyd: zufälliger Quell-Port beim Zeitabgleich (acquisitionport)
+# Programme, die bei jedem Start neue zufällige Ports wählen; ihre Ports im dynamischen Bereich zählen als ein Eintrag
+# ("udp/dyn/rpc.mountd"). Fest eingebaut, die Einstellung "guard_dynamic_processes" fügt weitere hinzu (ein
+# gespeicherter Wert würde sonst eine später erweiterte Vorgabe überdecken).
 DEFAULT_DYNAMIC_PROCESSES = [
-    "tailscaled", "rpc.mountd", "rpc.statd", "rpcbind", "avahi-daemon", "dhclient", "dhcpcd", "chronyd",
+    "tailscaled",  # UDP- und TCP-Port der Tailscale-Adresse
+    "rpc.mountd", "rpc.statd", "rpcbind",  # NFS-Hilfsdienste (RPC)
+    "avahi-daemon",  # mDNS-Antwort-Ports
+    "dhclient", "dhcpcd",  # neben Port 68 zufällige Ports
+    "chronyd",  # zufälliger Quell-Port beim Zeitabgleich (acquisitionport)
 ]
 # RPC-Dienste (libtirpc) suchen ihren Port zuerst im reservierten Bereich 600-1023 (bindresvport); auch dort wechselt
 # er bei jedem Start. Feste Ports wie 111 (rpcbind) liegen darunter und bleiben einzeln sichtbar.
 RESERVED_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd", "rpcbind"}
 RESERVED_DYNAMIC_PORT_MIN = 600
 RESERVED_DYNAMIC_PORT_MAX = 1023
-# Den Programmnamen (`comm`) darf sich jedes Programm selbst geben, eine Hintertür kann sich "chronyd" nennen. Für
-# eingebaute Namen gilt die Ausnahme darum nur dort, wo das echte Programm wechselnde Ports öffnet, sonst bleibt der
-# Port einzeln sichtbar und meldet. UDP ist bei allen der Normalfall; TCP nur bei mountd und statd und bei tailscaled
-# nur auf der eigenen Tailscale-Adresse (von außen nicht erreichbar).
+# Den Programmnamen (`comm`) wählt jedes Programm selbst, eine Hintertür kann sich "chronyd" nennen. Darum gilt die
+# Ausnahme nur, wo das echte Programm wechselnde Ports öffnet (sonst bleibt der Port sichtbar): UDP bei allen, TCP nur
+# bei mountd/statd und bei tailscaled auf der eigenen Tailscale-Adresse (von außen nicht erreichbar).
 TCP_DYNAMIC_PROCESSES = {"rpc.mountd", "rpc.statd"}
 TAILSCALE_NETS = (ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48"))
 # Untergrenze des dynamischen Bereichs, falls ip_local_port_range nicht lesbar ist.

@@ -102,10 +102,9 @@ class Rack(Base, IdMixin):
 class ItemImage(Base, IdMixin):
     """Bild eines Gegenstands; die Datei liegt auf der Platte (`images.py`), hier stehen nur Metadaten."""
 
-    # Bewusst keine `relationship()` zu `Item`: das Löschen kaskadiert auf Datenbankebene (`ondelete="CASCADE"`,
-    # `PRAGMA foreign_keys=ON`), die Bilder werden immer per eigener Query geladen (`_images_for()` in `__init__.py`).
-    # `lazy="selectin"` lädt nur bei einer frischen `select()`-Query zuverlässig, nicht nach `session.get()` auf ein
-    # schon gemapptes oder gerade angelegtes Objekt.
+    # Bewusst keine `relationship()` zu `Item`: Gelöscht wird per Kaskade in der Datenbank (`ondelete="CASCADE"`,
+    # `PRAGMA foreign_keys=ON`), geladen immer per eigener Query (`_images_for()`), denn `lazy="selectin"` lädt nach
+    # `session.get()` auf ein schon gemapptes oder neues Objekt nicht zuverlässig.
 
     __tablename__ = "ext_inventory_item_images"
 

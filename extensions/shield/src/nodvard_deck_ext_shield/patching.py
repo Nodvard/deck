@@ -1,6 +1,6 @@
 """Update-Zentrale: Update-Stand je Server prüfen, Updates einspielen (von Hand oder nach Zeitplan) und berichten.
 
-Einspielen läuft entkoppelt vom SSH-Kanal (`detached.py`); nach einem Neustart des Dashboards setzt `resume_interrupted` fort.
+Einspielen läuft entkoppelt vom SSH-Kanal (`detached.py`); nach einem Dashboard-Neustart setzt `resume_interrupted` fort.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ LATE_POLL_INTERVAL_S = 60
 LATE_FOLLOW_S = 2 * 3600 + 15 * 60  # zusammen mit der Wartezeit rund 3 Stunden
 POLL_TIMEOUT_S = 30
 UNKNOWN_GRACE_S = 60  # so lange darf ein gerade gestarteter Lauf noch "unbekannt" sein
-# Nach einem gescheiterten Start muss sich der Server in dieser Zeit wenigstens einmal melden, sonst gilt er als nicht erreichbar.
+# Nach einem gescheiterten Start muss sich der Server in dieser Zeit einmal melden, sonst gilt er als nicht erreichbar.
 REACH_GRACE_S = 3 * 60
 START_FAILED_PREFIX = "Start fehlgeschlagen:"  # steht schon während des Wartens an der Lauf-Zeile (siehe `_resume`)
 RESUME_DELAY_S = 5  # nach dem Start kurz warten, bis Netz und SSH wieder da sind
@@ -64,7 +64,7 @@ REBOOT_PENDING_MAX_S = 30 * 60
 
 
 def _cron_values(field: str, low: int, high: int) -> set[int] | None:
-    """Werte eines Cron-Felds (Minute oder Stunde): `*`, Zahlen, Bereiche, Listen, Schritte (`*/6`, `10-20/5`); ungültig: None."""
+    """Werte eines Cron-Felds (Minute, Stunde): `*`, Zahlen, Bereiche, Listen, Schritte (`*/6`, `10-20/5`), sonst None."""
     values: set[int] = set()
     for part in field.split(","):
         base, slash, step_text = part.partition("/")
@@ -92,7 +92,7 @@ def _cron_values(field: str, low: int, high: int) -> set[int] | None:
 
 
 def last_due(cron: str, now: float, zone: tzinfo) -> float | None:
-    """Der zuletzt fällige Zeitpunkt (Unix-Zeit, nicht nach `now`) eines mindestens täglichen Zeitplans, in der Zone der Zeitpläne.
+    """Der zuletzt fällige Zeitpunkt (Unix-Zeit, nicht nach `now`) eines mindestens täglichen Zeitplans in der Zeitplan-Zone.
 
     Nur Minute und Stunde zählen (Tag, Monat und Wochentag `*`); anderes oder Ungültiges: None."""
     fields = cron.split()
@@ -141,7 +141,7 @@ def _zone(name: object) -> ZoneInfo | None:
 
 
 async def schedule_zone(ctx: ExtensionContext) -> tzinfo:
-    """Die Zone der Zeitpläne: Kern-Einstellung `system.timezone`, sonst wie im Kern `NODVARD_DECK_TIMEZONE`, `TZ`, `Europe/Berlin`."""
+    """Zone der Zeitpläne: `system.timezone`, sonst wie im Kern `NODVARD_DECK_TIMEZONE`, `TZ`, `Europe/Berlin`."""
     try:
         stored = await ctx.settings.core("system.timezone")
     except Exception:  # noqa: BLE001 - ältere Kerne kennen den Zugriff nicht
@@ -230,7 +230,7 @@ class UpdateCenter:
             return result.rowcount or 0
 
     async def resume_interrupted(self) -> int:
-        """Beim Start (als Hintergrund-Aufgabe): entkoppelte Läufe, die beim letzten Beenden noch liefen, weiter abfragen und abschließen."""
+        """Beim Start (Hintergrund-Aufgabe): Läufe, die beim letzten Beenden noch liefen, weiter abfragen und abschließen."""
         async with self._ctx.db.session() as session:
             rows = [
                 (r.id, r.host_id, r.host_name, r.mode, r.trigger, r.started_at, r.remote_id, r.summary)
@@ -298,7 +298,7 @@ class UpdateCenter:
                 self._busy.pop(host_id, None)
 
     async def _settle(self, host: Host, run_id: str, mode: str, trigger: str, result: up.UpgradeResult, output: str) -> None:
-        """Lauf abschließen (`_finish`); hat das Dashboard nur aufgehört zu warten, bleibt der Server belegt (`_follow_late`)."""
+        """Lauf abschließen (`_finish`); wartete das Dashboard nur nicht mehr, bleibt der Server belegt (`_follow_late`)."""
         late = result.timed_out
         try:
             await self._finish(host, run_id, mode, trigger, result, output)
@@ -312,7 +312,7 @@ class UpdateCenter:
                 self._busy.pop(host.id, None)
 
     async def _follow_late(self, host: Host, run_id: str, mode: str, trigger: str) -> None:
-        """Nach der Wartezeit gedrosselt weiter nachfragen; wird der Lauf noch fertig, wird der Eintrag berichtigt und gemeldet."""
+        """Nach der Wartezeit gedrosselt nachfragen; wird der Lauf noch fertig, wird der Eintrag berichtigt und gemeldet."""
         held = True
         try:
             result, output, _rc = await self._wait_detached(
@@ -419,7 +419,9 @@ class UpdateCenter:
         self._catch_up.add_done_callback(done)
 
     async def _last_due(self, settings: dict[str, Any], now: float) -> float | None:
-        """Wann die Tagesprüfung zuletzt fällig war; None, wenn „ausgeblieben“ nichts bedeutet (aus, wöchentlich, unlesbarer Zeitplan)."""
+        """Wann die Tagesprüfung zuletzt fällig war.
+
+        None, wenn „ausgeblieben“ nichts bedeutet (aus, wöchentlich, unlesbarer Zeitplan)."""
         if not overdue_applies(settings):
             return None
         return last_due(str(settings.get("updates_check_cron") or DEFAULT_UPDATE_CRONS["check"]), now, await schedule_zone(self._ctx))
@@ -515,7 +517,7 @@ class UpdateCenter:
     # --- Einspielen --------------------------------------------------------------
 
     async def plan(self, host: Host, mode: str) -> tuple[str, list[str]]:
-        """Paketmanager und (nur für "security") die Sicherheitspakete aus dem zuletzt gespeicherten Stand; ohne Stand wird geprüft.
+        """Paketmanager und (nur für "security") die Sicherheitspakete aus dem gespeicherten Stand; ohne Stand wird geprüft.
 
         Beides landet im Payload der Aktion, der Befehl wird daraus gebaut (`defender_api.ActionCommands`)."""
         st = await load_baseline(self._ctx, host.id, "updates")
@@ -536,9 +538,9 @@ class UpdateCenter:
         return up.upgrade_command(manager, mode, packages)
 
     async def execute(self, host: Host, mode: str, *, command: str, trigger: str) -> tuple[bool, str, str, int | None]:
-        """Führt einen Einspiel-Lauf aus, protokolliert ihn und prüft danach neu: (ok, Zusammenfassung, Ausgabe, Rückgabecode).
+        """Führt einen Einspiel-Lauf aus, protokolliert ihn und prüft neu: (ok, Zusammenfassung, Ausgabe, Rückgabecode).
 
-        Die Zusammenfassung kann eine Zeile vom Server enthalten und gehört nicht in Meldungen (dafür `_execute`, `UpgradeResult.public`)."""
+        Sie kann eine Server-Zeile enthalten und gehört nicht in Meldungen (dafür `_execute`, `UpgradeResult.public`)."""
         result, output, exit_code = await self._execute(host, mode, command=command, trigger=trigger)
         return result.ok, result.summary, output, exit_code
 
@@ -636,7 +638,7 @@ class UpdateCenter:
                              reach_grace_s: float | None = None) -> tuple[up.UpgradeResult, str, int | None]:
         """Fragt alle POLL_INTERVAL_S Sekunden nach, bis der Lauf fertig ist oder `deadline` (time.monotonic) erreicht ist.
 
-        Mit `reach_grace_s` (Start gescheitert) gilt der Server ohne Antwort als nicht erreichbar: `unknown_summary`, ohne `timed_out`."""
+        Mit `reach_grace_s` (Start gescheitert): ohne Antwort nicht erreichbar, also `unknown_summary` statt `timed_out`."""
         from .defender import _describe
 
         command = as_root(dt.poll_command(remote_id))  # ValueError bei ungültiger ID: sofort
@@ -750,9 +752,15 @@ class UpdateCenter:
             hosts = [h for h in hosts if tag in (h.tags or [])]
         # Der Server mit dem Dashboard kommt zuletzt, sein Neustart erst nach der Zusammenfassung: Sonst bräche die
         # Schleife bei einem Neustart mittendrin ab (oder ein Docker-Update beendete den Container), die übrigen
-        # Server bekämen nichts, und die Zusammenfassung käme nie.
-        own_ids = {h.id for h in hosts if await self._is_dashboard_host(h)}
-        hosts = [h for h in hosts if h.id not in own_ids] + [h for h in hosts if h.id in own_ids]
+        # Server bekämen nichts, und die Zusammenfassung käme nie. Als gewöhnlicher Server gilt nur, wo Docker antwortet
+        # und den Container nicht kennt; ist das nicht feststellbar (Docker nur mit sudo erreichbar, kein Docker), behandeln
+        # wir den Server vorsichtshalber genauso. Der Neustart verschiebt sich dann nur, er fällt nicht weg.
+        states = {h.id: await self._is_dashboard_host(h) for h in hosts}
+        own_ids = {hid for hid, state in states.items() if state is not False}
+        sure_ids = {hid for hid, state in states.items() if state is True}
+        # Der sichere Dashboard-Server ganz am Ende, auch hinter den unklaren: Sein Neustart beendet die Schleife.
+        rank = {hid: (hid in own_ids) + (hid in sure_ids) for hid in states}
+        hosts = sorted(hosts, key=lambda h: rank[h.id])
         lines: list[str] = []
         failed = 0
         skipped = 0
@@ -788,7 +796,10 @@ class UpdateCenter:
                     lines.append("  ↳ Neustart nötig, für diesen Server aber ausgeschaltet – bitte selbst neu starten.")
                 elif host.id in own_ids:
                     reboot_last.append(host)
-                    lines.append("  ↳ Neustart folgt nach dieser Meldung (hier läuft das Dashboard).")
+                    lines.append(
+                        "  ↳ Neustart folgt nach dieser Meldung (hier läuft das Dashboard)." if host.id in sure_ids
+                        else "  ↳ Neustart folgt nach dieser Meldung (ob hier das Dashboard läuft, ließ sich nicht prüfen)."
+                    )
                 else:
                     run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
                     lines.append(f"  ↳ Neustart: {run.public}")
@@ -803,26 +814,36 @@ class UpdateCenter:
             run, _out, _rc = await self._execute(host, "reboot", command=up.REBOOT_COMMAND, trigger="schedule")
             failed += 0 if run.ok else 1
             name = host.display_name or host.name
+            here = (
+                "Hier läuft das Dashboard – es ist dabei kurz nicht erreichbar." if host.id in sure_ids
+                else "Ob hier das Dashboard läuft, ließ sich nicht prüfen – wenn ja, ist es dabei kurz nicht erreichbar."
+            )
             await self._ctx.notify.send(Notification(
                 title=f"Automatische Updates: Neustart von {name}",
-                body=f"- {name}: {run.public}\nHier läuft das Dashboard – es ist dabei kurz nicht erreichbar.",
+                body=f"- {name}: {run.public}\n{here}",
                 severity=Severity.INFO if run.ok else Severity.WARNING,
                 payload={"path": f"{SOC_PATH}?tab=updates", "tags": ["package"], **host_scope([host.id])},
             ))
         return {"hosts": len(hosts), "failed": failed}
 
-    async def _is_dashboard_host(self, host: Host) -> bool:
-        """Läuft das Dashboard auf `host`? Nur ein sicheres Ja zählt; „unbekannt“ (keine Rechte, kein Docker) heißt: wie jeder andere."""
+    async def _is_dashboard_host(self, host: Host) -> bool | None:
+        """Läuft das Dashboard auf `host`? `True` oder `False`, `None` wenn nicht feststellbar (keine Docker-Rechte, kein
+        Docker, nicht erreichbar). „Unbekannt“ ist kein Nein: Aufrufer behandeln es vorsichtig wie ein Ja."""
         if any(tag in DASHBOARD_HOST_TAGS for tag in (host.tags or [])):
             return True
         own = socket.gethostname().strip()
         if not _HOSTNAME_RE.fullmatch(own):
-            return False
+            return None
         try:
             res = await self._ctx.exec.run(host, own_container_probe(own), timeout_s=PROBE_TIMEOUT_S)
-        except Exception:  # noqa: BLE001 - nicht erreichbar: dann wie jeder andere Server
+        except Exception:  # noqa: BLE001 - nicht erreichbar heißt: unbekannt, nicht "nein"
+            return None
+        out = res.stdout or ""
+        if "@@own" in out:
+            return True
+        if "@@other" in out:
             return False
-        return "@@own" in (res.stdout or "")
+        return None
 
 
 DEFAULT_UPDATE_CRONS = {"check": "0 6 * * *", "auto": "30 3 * * *"}
@@ -836,15 +857,13 @@ _HOSTNAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}")
 
 def own_container_probe(container_id: str) -> str:
     """`@@own`: auf dem Server läuft ein Container mit unserer Kennung; `@@other`: Docker antwortet, den Container gibt es
-    dort nicht; `@@unknown`: keine Rechte, kein Docker. Nur `@@own` zählt hier."""
+    dort nicht; `@@unknown`: keine Rechte, kein Docker, Docker antwortet nicht. Nur `@@other` heißt „ein anderer Server“."""
+    # Bewusst ohne `sudo`-Rückweg: Die Abfrage läuft mit den Rechten des Dashboard-Kontos und nimmt sich keine fremden
+    # dazu. Wer den Server sicher als Dashboard-Server erkennen lassen will, gibt ihm den Tag „dashboard“.
     quoted = shlex.quote(container_id)
     inspect = f"docker inspect --format '{{{{.Id}}}}' {quoted}"
     missing = "*'No such object'*|*'No such container'*|*'No such image, container'*"
-    return (
-        f'o=$({inspect} 2>&1) && echo @@own || case "$o" in {missing}) echo @@other;; '
-        f'*) o=$(sudo -n {inspect} 2>&1) && echo @@own || case "$o" in {missing}) echo @@other;; '
-        f"*) echo @@unknown;; esac;; esac"
-    )
+    return f'o=$({inspect} 2>&1) && echo @@own || case "$o" in {missing}) echo @@other;; *) echo @@unknown;; esac'
 
 
 def _stamp(ts: float, zone: tzinfo) -> str:
@@ -855,7 +874,7 @@ def _stamp(ts: float, zone: tzinfo) -> str:
 def build_update_report(pairs: list[tuple[Any, dict[str, Any]]], zone: tzinfo = UTC) -> tuple[str, str, str]:
     """Kurzbericht nach der täglichen Prüfung; Stufe "none" = nichts zu melden.
 
-    Ein Server mit fehlgeschlagener Prüfung steht als Fehler da, auch mit gespeichertem älteren Stand (dessen Zahlen zählen nicht)."""
+    Ein Server mit fehlgeschlagener Prüfung steht als Fehler da, auch mit älterem Stand (dessen Zahlen zählen nicht)."""
     lines: list[str] = []
     security = total = reboot = errors = 0
     for host, st in pairs:

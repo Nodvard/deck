@@ -51,8 +51,7 @@ class InvalidEntry(ValueError):
 
 
 def parse_address(text: object) -> Address | None:
-    """Eine einzelne Adresse ohne Präfix und Port (IPv4 in IPv6-Schreibweise als IPv4), sonst `None`, z. B. bei einem
-    Unix-Socket."""
+    """Eine einzelne Adresse ohne Präfix und Port (IPv4 in IPv6-Schreibweise als IPv4), sonst `None` (z. B. Unix-Socket)."""
     if not isinstance(text, str) or not text or len(text) > MAX_ENTRY_CHARS:
         return None
     try:

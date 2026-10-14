@@ -1,9 +1,7 @@
 /**
- * Karte „Wiederherstellen“ (Einstellungen, System): eine Sicherung einspielen. Der Ablauf selbst steht in
- * `RestoreFlow.tsx` (derselbe wie im Einrichtungs-Assistenten). Hier kommen dazu: der Stand vom Server
- * (vorgemerkt? Zwischenstand? letztes Ergebnis?), der alte Stand zum Löschen und die Rechte.
- *
- * Ansehen darf, wer `system.read` hat; einspielen nur der Owner (mit Anmeldepasswort).
+ * Karte „Wiederherstellen“ (Einstellungen, System): eine Sicherung einspielen. Der Ablauf steht in `RestoreFlow.tsx`
+ * (derselbe wie im Einrichtungs-Assistenten), hier kommen der Stand vom Server, der alte Stand zum Löschen und die
+ * Rechte dazu: ansehen mit `system.read`, einspielen nur der Owner (mit Anmeldepasswort).
  */
 import { AlertTriangle, History, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
