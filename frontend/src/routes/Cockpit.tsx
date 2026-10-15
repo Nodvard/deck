@@ -1,18 +1,9 @@
 /**
- * Cockpit: der obere Teil der Startseite, gedacht als zentrale Uebersicht, die andere
- * Werkzeuge im Alltag ueberfluessig macht. Lagebild in einem
- * Satz, Kennzahlen, Infrastruktur mit Live-Auslastung, was Aufmerksamkeit braucht,
- * alle Apps, alle Module. Das frei anordenbare Widget-Raster folgt darunter
- * (DashboardPage.tsx).
- *
- * Herstellerneutral wie der Kern: Hosts/Metriken/Konsole/Terminal kommen aus Kern-
- * Endpunkten, Dienste/Backups aus GET /overview (SDK-Capabilities) -- kein "Proxmox"
- * im Code, nur `kind` (hypervisor/vm/lxc), das der Kern ohnehin kennt.
+ * Cockpit: Übersicht oben auf der Startseite mit Lage, Kennzahlen, Servertabelle, offenen Punkten, Modulen und Apps.
+ * Herstellerneutral: Server und Messwerte kommen aus dem Kern, Dienste und Backups aus `GET /overview`.
  */
 import {
   AlertTriangle,
-  Bell,
-  Boxes,
   CheckCircle2,
   DatabaseBackup,
   Monitor,
@@ -59,21 +50,15 @@ const OFFLINE_TEXT = "Dieses Gerät ist gerade offline. Sobald es wieder Netz ha
 
 const KIND_LABEL: Record<string, string> = { vm: "VM", lxc: "Container", hypervisor: "Knoten", node: "Knoten" };
 
-function greeting(date = new Date()): string {
-  const h = date.getHours();
-  if (h < 5) return "Gute Nacht";
-  if (h < 11) return "Guten Morgen";
-  if (h < 18) return "Guten Tag";
-  return "Guten Abend";
-}
-
-function SectionTitle({ icon, children, right }: { icon: JSX.Element; children: React.ReactNode; right?: React.ReactNode }) {
+function Panel({ title, right, children }: { title: string; right?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="mb-3 flex items-center gap-2">
-      <span className="text-white/60">{icon}</span>
-      <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-white/70">{children}</h2>
-      <div className="ml-auto">{right}</div>
-    </div>
+    <section className="panel overflow-hidden" aria-label={title}>
+      <header className="flex items-center gap-2 border-b border-[var(--color-line)] bg-[var(--color-surface-head)] px-4 py-2.5">
+        <h2 className="text-sm font-semibold">{title}</h2>
+        {right && <div className="ml-auto text-sm">{right}</div>}
+      </header>
+      {children}
+    </section>
   );
 }
 
@@ -88,31 +73,50 @@ function backupSummary(failed: number, unreachable: number, unknown: number): st
 }
 
 function StatCard({
-  to, icon, label, value, sub, tone = "neutral",
-}: { to?: string; icon: JSX.Element; label: string; value: string; sub: string; tone?: "good" | "warn" | "danger" | "neutral" }) {
+  to, label, value, sub, tone = "neutral",
+}: { to?: string; label: string; value: string; sub: string; tone?: "good" | "warn" | "danger" | "neutral" }) {
   const toneClass = { good: "text-emerald-300", warn: "text-amber-300", danger: "text-red-300", neutral: "text-white/55" }[tone];
   const body = (
-    <div className="panel panel-hover h-full p-4" data-testid={`stat-${label}`}>
-      <div className="flex items-center gap-2.5">
-        <span className="accent-soft grid h-8 w-8 place-items-center rounded-lg">{icon}</span>
-        <span className="text-xs font-medium uppercase tracking-wider text-white/60">{label}</span>
-      </div>
-      <p className="mt-3 text-3xl font-semibold tabular-nums tracking-tight">{value}</p>
-      <p className={`mt-0.5 text-xs ${toneClass}`}>{sub}</p>
+    <div className="panel panel-hover h-full px-4 py-3" data-testid={`stat-${label}`}>
+      <p className="text-sm text-white/55">{label}</p>
+      <p className={`mt-1 text-2xl font-semibold tabular-nums ${tone === "neutral" ? "" : toneClass}`}>{value}</p>
+      <p className={`mt-0.5 text-xs ${tone === "neutral" ? "text-white/55" : toneClass}`}>{sub}</p>
     </div>
   );
   return to ? <Link to={to} className="block">{body}</Link> : body;
+}
+
+function loadColor(pct: number): string {
+  return pct >= 90 ? "var(--color-bad)" : pct >= 75 ? "var(--color-warn)" : "var(--color-accent)";
+}
+
+/** Auslastung als schmaler Balken für die Servertabelle; die Zahlen daneben, auf breiten Schirmen auch absolut. */
+function Meter({ value, label, caption, dim = false }: { value: number | null; label: string; caption?: string; dim?: boolean }) {
+  const pct = value == null ? 0 : Math.max(0, Math.min(100, value));
+  return (
+    <span className={`inline-flex items-center gap-2 whitespace-nowrap ${dim ? "opacity-50" : ""}`}>
+      <span
+        role="img"
+        aria-label={`${label} ${value == null ? "unbekannt" : `${Math.round(pct)} %`}`}
+        className="inline-block h-1.5 w-12 flex-none overflow-hidden rounded-full bg-[var(--color-track)]"
+      >
+        <span className="block h-full" style={{ width: `${pct}%`, background: loadColor(pct) }} />
+      </span>
+      <span className="tabular-nums text-white/70">{value == null ? "–" : `${Math.round(pct)} %`}</span>
+      {value != null && caption && <span className="hidden tabular-nums text-white/45 2xl:inline">{caption}</span>}
+    </span>
+  );
 }
 
 export function Ring({ value, label, caption, dim = false }: { value: number | null; label: string; caption?: string; dim?: boolean }) {
   const r = 22;
   const c = 2 * Math.PI * r;
   const pct = value == null ? 0 : Math.max(0, Math.min(100, value));
-  const color = pct >= 90 ? "#f87171" : pct >= 75 ? "#fbbf24" : "var(--color-accent)";
+  const color = loadColor(pct);
   return (
     <div className={`flex min-w-0 flex-col items-center gap-1 ${dim ? "opacity-45" : ""}`}>
       <svg width="58" height="58" viewBox="0 0 58 58" role="img" aria-label={`${label} ${value == null ? "unbekannt" : `${Math.round(pct)} %`}`}>
-        <circle cx="29" cy="29" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="6" />
+        <circle cx="29" cy="29" r={r} fill="none" stroke="var(--color-track)" strokeWidth="6" />
         <circle
           cx="29" cy="29" r={r} fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
           strokeDasharray={`${(pct / 100) * c} ${c}`} transform="rotate(-90 29 29)"
@@ -122,7 +126,7 @@ export function Ring({ value, label, caption, dim = false }: { value: number | n
           {value == null ? "–" : `${Math.round(pct)}%`}
         </text>
       </svg>
-      <span className="text-[10px] uppercase tracking-wider text-white/50">{label}</span>
+      <span className="text-[11px] text-white/50">{label}</span>
       {caption && <span className="break-words text-center text-[10px] tabular-nums leading-tight text-white/45">{caption}</span>}
     </div>
   );
@@ -147,52 +151,58 @@ interface CardData {
   note?: string;
 }
 
-/** Eine Karte fuer Hypervisor-Knoten UND Linux-Server mit Messwerten -- gleiches Aussehen, nur die Quelle
- * der Zahlen unterscheidet sich (Knoten: live vom Anbieter, Server: letzter Wert aus dem Verlauf). */
-function HostCard({ host, data, testId, canTerminal, provider }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean; provider?: HostProvider }) {
+function HostActions({ host, canTerminal, console }: { host: HostOut; canTerminal: boolean; console: boolean }) {
+  const linkClass = "rounded-md p-1.5 text-white/55 hover:bg-white/10 hover:text-white";
+  return (
+    <td className="w-px whitespace-nowrap px-2 text-right">
+      {console && (
+        <Link to={`/console/${host.id}`} className={linkClass} title="Konsole" aria-label={`Konsole ${host.display_name}`}>
+          <Monitor size={15} className="inline" />
+        </Link>
+      )}
+      {canTerminal && (
+        <Link to={`/terminal?host=${encodeURIComponent(host.id)}`} className={linkClass} title="Terminal" aria-label={`Terminal ${host.display_name}`}>
+          <SquareTerminal size={15} className="inline" />
+        </Link>
+      )}
+    </td>
+  );
+}
+
+const ROW = "border-t border-[var(--color-line)] align-middle";
+const CELL = "px-3 py-2.5";
+
+/** Eine Tabellenzeile für Hypervisor-Knoten und Linux-Server mit Messwerten; nur die Quelle der Zahlen unterscheidet sich. */
+function HostRow({ host, data, testId, canTerminal, provider }: { host: HostOut; data: CardData; testId: string; canTerminal: boolean; provider?: HostProvider }) {
   const health = hostHealth(host.status);
   const offline = data.state === "offline";
   const dim = data.state !== "live";
   const uptime = offline ? null : data.uptime_s;
   return (
-    <div className="panel min-w-0 p-4" data-testid={testId} data-state={data.state}>
-      <div className="flex items-start gap-3">
-        <span className="accent-soft grid h-9 w-9 flex-none place-items-center rounded-lg"><Server size={18} /></span>
-        <div className="min-w-0 flex-1">
-          <p className="flex items-center gap-2 font-medium">
-            <span className={`status-dot ${health}`} title={hostStatusText(host)} />
-            <Link to={`/hosts/${host.id}`} className="min-w-0 break-words hover:underline">{host.display_name}</Link>
-            <ProviderBadge provider={provider} testId={`${testId}-provider-off`} />
-          </p>
-          <p className="break-words text-xs text-white/50">
-            {host.address}{uptime ? ` · läuft seit ${formatUptime(uptime)}` : ""}
-          </p>
-        </div>
-        {canTerminal && (
-          <Link
-            to={`/terminal?host=${encodeURIComponent(host.id)}`}
-            className="flex-none rounded-md p-1.5 text-white/55 hover:bg-white/10 hover:text-white"
-            title="Terminal"
-            aria-label={`Terminal ${host.display_name}`}
-          >
-            <SquareTerminal size={15} />
-          </Link>
+    <tr className={ROW} data-testid={testId} data-state={data.state}>
+      <td className={`${CELL} pl-4`}>
+        <span className="flex items-center gap-2">
+          <span className={`status-dot ${health}`} title={hostStatusText(host)} />
+          <Link to={`/hosts/${host.id}`} className="min-w-0 break-words font-medium hover:underline">{host.display_name}</Link>
+          <ProviderBadge provider={provider} testId={`${testId}-provider-off`} />
+        </span>
+        {data.note && (
+          <span className={`mt-0.5 block text-[11px] ${offline ? "text-red-300" : "text-amber-300"}`} data-testid={`${testId}-note`}>
+            {data.note}
+          </span>
         )}
-      </div>
-      <div className="mt-4 flex items-start justify-around gap-2">
-        <Ring value={offline ? null : data.cpu} label="CPU" dim={dim} />
-        <Ring value={offline ? null : data.mem} label="RAM" caption={offline ? undefined : data.memText} dim={dim} />
-        {data.disk !== undefined && <Ring value={offline ? null : data.disk} label="Platte" caption={offline ? undefined : data.diskText} dim={dim} />}
-      </div>
-      {data.note && (
-        <p
-          className={`mt-3 text-[11px] ${offline ? "text-red-300" : "text-amber-300"}`}
-          data-testid={`${testId}-note`}
-        >
-          {data.note}
-        </p>
-      )}
-    </div>
+      </td>
+      <td className={`${CELL} hidden tabular-nums text-white/55 md:table-cell`}>{host.address}</td>
+      <td className={CELL}><Meter value={offline ? null : data.cpu} label="CPU" dim={dim} /></td>
+      <td className={CELL}><Meter value={offline ? null : data.mem} label="RAM" caption={data.memText} dim={dim} /></td>
+      <td className={`${CELL} hidden sm:table-cell`}>
+        {data.disk !== undefined ? <Meter value={offline ? null : data.disk} label="Platte" caption={data.diskText} dim={dim} /> : <span className="text-white/35">–</span>}
+      </td>
+      <td className={`${CELL} hidden whitespace-nowrap tabular-nums text-white/55 lg:table-cell`} data-testid={`${testId}-uptime`}>
+        {uptime ? formatUptime(uptime) : "–"}
+      </td>
+      <HostActions host={host} canTerminal={canTerminal} console={false} />
+    </tr>
   );
 }
 
@@ -203,7 +213,7 @@ function NodeCard({ host, canTerminal, provider }: { host: HostOut; canTerminal:
   const memPct = v.mem_total_bytes ? (100 * (v.mem_used_bytes ?? 0)) / v.mem_total_bytes : null;
   const offline = hostHealth(host.status) === "problem";
   return (
-    <HostCard
+    <HostRow
       host={host}
       testId={`node-${host.id}`}
       canTerminal={canTerminal}
@@ -226,7 +236,7 @@ function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host
   const offline = hostHealth(host.status) === "problem";
   const stale = latest.stale || unconfirmed;
   return (
-    <HostCard
+    <HostRow
       host={host}
       testId={`server-${host.id}`}
       canTerminal={canTerminal}
@@ -247,35 +257,30 @@ function ServerCard({ host, latest, unconfirmed, canTerminal, provider }: { host
   );
 }
 
+/** Server ohne Messwerte: dieselbe Zeile, die Auslastung bleibt leer, dafür steht der Grund unter dem Namen. */
 function MachineRow({ host, canTerminal, hint, provider }: { host: HostOut; canTerminal: boolean; hint?: string | null; provider?: HostProvider }) {
   const health = hostHealth(host.status);
+  const empty = <span className="text-white/35">–</span>;
   return (
-    <div className="panel flex items-center gap-3 px-3 py-2.5" data-testid={`machine-${host.id}`}>
-      <span className={`status-dot ${health}`} title={hostStatusText(host)} />
-      <div className="min-w-0 flex-1">
-        <Link to={`/hosts/${host.id}`} className="block break-words text-sm font-medium hover:underline">{host.display_name}</Link>
-        <p className="break-words text-[11px] text-white/45">
-          {KIND_LABEL[host.kind ?? ""] ?? "Server"} · {host.address}
-        </p>
-        {provider?.problem && <p className="mt-1"><ProviderBadge provider={provider} testId={`machine-${host.id}-provider-off`} /></p>}
-        {hint && <p className="break-words text-[11px] text-white/40" data-testid={`machine-${host.id}-hint`}>{hint}</p>}
-      </div>
-      {hasConsole(host) && health === "online" && (
-        <Link to={`/console/${host.id}`} className="rounded-md p-1.5 text-white/55 hover:bg-white/10 hover:text-white" title="Konsole" aria-label={`Konsole ${host.display_name}`}>
-          <Monitor size={15} />
-        </Link>
-      )}
-      {canTerminal && (
-        <Link
-          to={`/terminal?host=${encodeURIComponent(host.id)}`}
-          className="rounded-md p-1.5 text-white/55 hover:bg-white/10 hover:text-white"
-          title="Terminal"
-          aria-label={`Terminal ${host.display_name}`}
-        >
-          <SquareTerminal size={15} />
-        </Link>
-      )}
-    </div>
+    <tr className={ROW} data-testid={`machine-${host.id}`}>
+      <td className={`${CELL} pl-4`}>
+        <span className="flex items-center gap-2">
+          <span className={`status-dot ${health}`} title={hostStatusText(host)} />
+          <Link to={`/hosts/${host.id}`} className="min-w-0 break-words font-medium hover:underline">{host.display_name}</Link>
+          {provider?.problem && <ProviderBadge provider={provider} testId={`machine-${host.id}-provider-off`} />}
+        </span>
+        {hint && <span className="mt-0.5 block text-[11px] text-white/45" data-testid={`machine-${host.id}-hint`}>{hint}</span>}
+      </td>
+      <td className={`${CELL} hidden whitespace-nowrap text-white/55 md:table-cell`}>
+        <span className="tabular-nums">{host.address}</span>
+        <span className="text-white/40"> · {KIND_LABEL[host.kind ?? ""] ?? "Server"}</span>
+      </td>
+      <td className={CELL}>{empty}</td>
+      <td className={CELL}>{empty}</td>
+      <td className={`${CELL} hidden sm:table-cell`}>{empty}</td>
+      <td className={`${CELL} hidden lg:table-cell`}>{empty}</td>
+      <HostActions host={host} canTerminal={canTerminal} console={hasConsole(host) && health === "online"} />
+    </tr>
   );
 }
 
@@ -295,7 +300,6 @@ function metricsHint(host: HostOut, systemModuleOn: boolean | null): string | nu
 }
 
 export function Cockpit() {
-  const user = useAuthStore((s) => s.user);
   const canReadHosts = useAuthStore((s) => s.hasPermission("hosts.read"));
   const canExecute = useAuthStore((s) => s.hasPermission("hosts.execute"));
   const canWriteHosts = useAuthStore((s) => s.hasPermission("hosts.write"));
@@ -348,7 +352,6 @@ export function Cockpit() {
   const apps = overview?.apps ?? [];
 
   const quickPages = (pages ?? []).filter((p) => p.show_in_nav !== false).sort((a, b) => a.nav_order - b.nav_order);
-  const firstName = (user?.display_name ?? user?.username ?? "").split(" ")[0];
   const loading = canReadHosts && (hostsLoading || overviewLoading);
   // Ohne einen einzigen Server gibt es nichts, was "rund laufen" koennte -- stattdessen zeigt das
   // Cockpit, was als Naechstes zu tun ist.
@@ -372,18 +375,10 @@ export function Cockpit() {
 
   return (
     <section className="relative isolate" aria-label="Cockpit">
-      <div className="nodvard-deck-glow pointer-events-none absolute inset-x-0 top-0 -z-10 h-96" />
-      <div className="nodvard-deck-grid pointer-events-none absolute inset-x-0 top-0 -z-10 h-96" />
-
-      <div className="px-4 pb-2 pt-6 sm:px-6 sm:pt-8">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-white/45">
-          {new Date().toLocaleDateString("de-DE", { weekday: "long", day: "numeric", month: "long" })}
-        </p>
-        <h1 className="mt-1 text-3xl font-semibold tracking-tight">
-          {greeting()}{firstName ? `, ${firstName}` : ""}
-        </h1>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 pt-5 sm:px-6 sm:pt-6">
+        <h1 className="text-xl font-semibold">Übersicht</h1>
         {canReadHosts && (
-          <p className="mt-2 flex items-center gap-2 text-sm text-white/70" data-testid="cockpit-status">
+          <p className="flex min-w-0 items-center gap-2 text-sm text-white/60" data-testid="cockpit-status">
             {loading ? (
               <span className="opacity-60">Lagebild wird geladen …</span>
             ) : hostsFailed ? (
@@ -425,6 +420,11 @@ export function Cockpit() {
             )}
           </p>
         )}
+        {canWriteHosts && !noHosts && (
+          <div className="ml-auto">
+            <ButtonLink to={NEW_HOST_TARGET} small>Server hinzufügen</ButtonLink>
+          </div>
+        )}
       </div>
 
       {canReadHosts && !loading && loadFailure != null && (
@@ -440,9 +440,9 @@ export function Cockpit() {
       <FirstStepsCard />
 
       {canReadHosts && (
-        <div className="grid grid-cols-2 gap-3 px-4 pt-5 sm:px-6 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid grid-cols-2 gap-3 px-4 pt-4 sm:px-6 md:grid-cols-3 xl:grid-cols-5">
           <StatCard
-            icon={<Server size={16} />} label="Server" value={loading ? "…" : hostsFailed ? "–" : noHosts ? "0" : `${online}/${allHosts.length}`}
+            label="Server" value={loading ? "…" : hostsFailed ? "–" : noHosts ? "0" : `${online}/${allHosts.length}`}
             sub={
               hostsFailed ? unavailable
                 : problemHosts.length ? `${problemHosts.length} nicht erreichbar`
@@ -453,7 +453,7 @@ export function Cockpit() {
             tone={hostsFailed ? "warn" : problemHosts.length ? "danger" : noHosts || unknownHosts.length ? "neutral" : "good"}
           />
           <StatCard
-            icon={<Boxes size={16} />} label="Dienste"
+            label="Dienste"
             value={overview ? (services.length === 0 ? "–" : `${overview.services_running}/${services.length}`) : overviewFailed ? "–" : "…"}
             sub={
               overviewFailed ? unavailable
@@ -470,49 +470,70 @@ export function Cockpit() {
           />
           {(backups || loading) && (
             <StatCard
-              icon={<DatabaseBackup size={16} />} label="Backups"
+              label="Backups"
               value={backups ? (backups.total === 0 && backupsUnreachable.length > 0 ? "–" : `${backups.ok}/${backups.total}`) : "…"}
               sub={backups ? backupSummary(backups.failed, backupsUnreachable.length, backups.unknown) : ""}
               tone={backups?.failed ? "danger" : backupsUnreachable.length || backups?.unknown ? "warn" : "good"}
             />
           )}
           <StatCard
-            to="/notifications" icon={<Bell size={16} />} label="Meldungen" value={overview ? String(overview.unread_notifications) : overviewFailed ? "–" : "…"}
+            to="/notifications" label="Meldungen" value={overview ? String(overview.unread_notifications) : overviewFailed ? "–" : "…"}
             sub={overviewFailed ? unavailable : "ungelesen"} tone={overviewFailed || attention.length ? "warn" : "neutral"}
           />
           <StatCard
-            to="/actions" icon={<ShieldCheck size={16} />} label="Freigaben" value={overview ? String(overview.pending_actions) : overviewFailed ? "–" : "…"}
+            to="/actions" label="Freigaben" value={overview ? String(overview.pending_actions) : overviewFailed ? "–" : "…"}
             sub={overviewFailed ? unavailable : overview?.pending_actions ? "warten auf dich" : "nichts offen"}
             tone={overviewFailed || overview?.pending_actions ? "warn" : "neutral"}
           />
         </div>
       )}
 
-      <div className="grid gap-6 px-4 pt-8 sm:px-6 xl:grid-cols-3">
+      <div className="grid gap-4 px-4 pt-4 sm:px-6 xl:grid-cols-3">
         {canReadHosts && (
-          <div className="xl:col-span-2">
-            <SectionTitle icon={<Server size={15} />}>Infrastruktur</SectionTitle>
-            {nodes.length + servers.length > 0 && (
-              <div className="mb-3 grid gap-3 sm:grid-cols-2 2xl:grid-cols-3" data-testid="host-cards">
-                {nodes.map((node) => <NodeCard key={node.id} host={node} canTerminal={terminalIds.has(node.id)} provider={hostProvider(node, extensions)} />)}
-                {servers.map((host) => (
-                  <ServerCard
-                    key={host.id}
-                    host={host}
-                    latest={latest!.hosts[host.id]}
-                    unconfirmed={latestError}
-                    canTerminal={terminalIds.has(host.id)}
-                    provider={hostProvider(host, extensions)}
-                  />
-                ))}
+          <div className="min-w-0 xl:col-span-2">
+            {!noHosts && (
+            <Panel title="Server" right={allHosts.length > 0 ? <span className="text-white/50">{allHosts.length}</span> : undefined}>
+            {(nodes.length + servers.length > 0 || (!latestLoading && machines.length > 0)) && (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-white/50">
+                      <th className="px-3 py-2 pl-4 font-medium">Name</th>
+                      <th className="hidden px-3 py-2 font-medium md:table-cell">Adresse</th>
+                      <th className="px-3 py-2 font-medium">CPU</th>
+                      <th className="px-3 py-2 font-medium">RAM</th>
+                      <th className="hidden px-3 py-2 font-medium sm:table-cell">Platte</th>
+                      <th className="hidden px-3 py-2 font-medium lg:table-cell">Läuft seit</th>
+                      <th className="px-2 py-2"><span className="sr-only">Aktionen</span></th>
+                    </tr>
+                  </thead>
+                  {nodes.length + servers.length > 0 && (
+                    <tbody data-testid="host-cards">
+                      {nodes.map((node) => <NodeCard key={node.id} host={node} canTerminal={terminalIds.has(node.id)} provider={hostProvider(node, extensions)} />)}
+                      {servers.map((host) => (
+                        <ServerCard
+                          key={host.id}
+                          host={host}
+                          latest={latest!.hosts[host.id]}
+                          unconfirmed={latestError}
+                          canTerminal={terminalIds.has(host.id)}
+                          provider={hostProvider(host, extensions)}
+                        />
+                      ))}
+                    </tbody>
+                  )}
+                  {!latestLoading && machines.length > 0 && (
+                    <tbody>
+                      {machines.map((host) => (
+                        <MachineRow key={host.id} host={host} canTerminal={terminalIds.has(host.id)} hint={metricsHint(host, systemModuleOn)} provider={hostProvider(host, extensions)} />
+                      ))}
+                    </tbody>
+                  )}
+                </table>
               </div>
             )}
-            {!latestLoading && (
-              <div className="grid gap-2 sm:grid-cols-2 2xl:grid-cols-3">
-                {machines.map((host) => (
-                  <MachineRow key={host.id} host={host} canTerminal={terminalIds.has(host.id)} hint={metricsHint(host, systemModuleOn)} provider={hostProvider(host, extensions)} />
-                ))}
-              </div>
+            {loading && <p className="px-4 py-3 text-sm text-white/50">Lade Server …</p>}
+            </Panel>
             )}
             {noHosts && (
               <EmptyState
@@ -537,11 +558,10 @@ export function Cockpit() {
           </div>
         )}
 
-        <div className="flex flex-col gap-6">
+        <div className="flex min-w-0 flex-col gap-4">
           {canReadHosts && (
-            <div>
-              <SectionTitle icon={<AlertTriangle size={15} />}>Braucht Aufmerksamkeit</SectionTitle>
-              <div className="panel divide-y divide-white/[0.06]" data-testid="attention">
+            <Panel title="Braucht Aufmerksamkeit">
+              <div className="divide-y divide-[var(--color-line)]" data-testid="attention">
                 {!loading && (hostsFailed || overviewFailed) && (
                   <p className="p-4 text-sm text-white/60" data-testid="attention-unknown">
                     {issues === 0
@@ -555,7 +575,7 @@ export function Cockpit() {
                   </p>
                 ) : (
                   <p className="flex items-center gap-2 p-4 text-sm text-white/60">
-                    <CheckCircle2 size={16} className="text-emerald-400" /> Nichts offen – genieß die Ruhe.
+                    <CheckCircle2 size={16} className="text-emerald-400" /> Nichts offen.
                   </p>
                 ))}
                 {problemHosts.map((h) => (
@@ -597,29 +617,28 @@ export function Cockpit() {
                   <p key={e} className="px-4 py-2 text-[11px] text-white/45">Teilweise nicht abrufbar: {e}</p>
                 ))}
               </div>
-            </div>
+            </Panel>
           )}
 
-          <div>
-            <SectionTitle icon={<Icon name="layout-grid" size={15} />}>Module</SectionTitle>
-            <div className="grid grid-cols-3 gap-2" data-testid="modules">
+          <Panel title="Module">
+            <div className="grid grid-cols-2 gap-0.5 p-2" data-testid="modules">
               {[
                 { to: "/files", icon: "folder-open", title: "Dateien" },
                 ...(canExecute ? [{ to: "/terminal", icon: "terminal", title: "Terminal" }] : []),
                 ...quickPages.map((p) => ({ to: `/ext/${p.ext_id}${p.path}`, icon: p.icon ?? "box", title: p.title })),
               ].map((m) => (
-                <Link key={m.to} to={m.to} className="panel panel-hover flex flex-col items-center gap-1.5 px-2 py-3 text-center">
-                  <span className="accent-soft grid h-9 w-9 place-items-center rounded-lg"><Icon name={m.icon} size={17} /></span>
-                  <span className="w-full break-words text-xs">{m.title}</span>
+                <Link key={m.to} to={m.to} className="flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-white/[0.06]">
+                  <Icon name={m.icon} size={15} className="flex-none text-[var(--color-accent-text)]" />
+                  <span className="min-w-0 break-words">{m.title}</span>
                 </Link>
               ))}
             </div>
-          </div>
+          </Panel>
         </div>
       </div>
 
       {canReadHosts && overview && (apps.length > 0 || canWriteApps) && (
-        <div className="px-4 pt-8 sm:px-6">
+        <div className="px-4 pb-6 pt-6 sm:px-6">
           <AppsSection apps={apps} hosts={allHosts} canWrite={canWriteApps} />
         </div>
       )}

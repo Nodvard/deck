@@ -24,18 +24,34 @@ interface PendingPrompt {
   resolve: (value: string | null) => void;
 }
 
+/** Passwort und, wenn Zwei-Faktor an ist, der Code aus der App; so wie die API sie im Body erwartet. */
+export interface IdentityConfirmation {
+  current_password: string;
+  totp_code?: string;
+}
+
+interface PendingIdentity {
+  message: string;
+  twoFactor: boolean;
+  resolve: (value: IdentityConfirmation | null) => void;
+}
+
 interface DialogsState {
   confirmPending: PendingConfirm | null;
   promptPending: PendingPrompt | null;
+  identityPending: PendingIdentity | null;
   requestConfirm: (message: string, options: ConfirmOptions) => Promise<boolean>;
   requestPrompt: (message: string, defaultValue: string) => Promise<string | null>;
+  requestIdentity: (message: string, twoFactor: boolean) => Promise<IdentityConfirmation | null>;
   settleConfirm: (value: boolean) => void;
   settlePrompt: (value: string | null) => void;
+  settleIdentity: (value: IdentityConfirmation | null) => void;
 }
 
 export const useDialogsStore = create<DialogsState>((set, get) => ({
   confirmPending: null,
   promptPending: null,
+  identityPending: null,
 
   requestConfirm: (message, options) =>
     new Promise<boolean>((resolve) => {
@@ -51,6 +67,12 @@ export const useDialogsStore = create<DialogsState>((set, get) => ({
       set({ promptPending: { message, defaultValue, resolve } });
     }),
 
+  requestIdentity: (message, twoFactor) =>
+    new Promise<IdentityConfirmation | null>((resolve) => {
+      get().identityPending?.resolve(null);
+      set({ identityPending: { message, twoFactor, resolve } });
+    }),
+
   settleConfirm: (value) => {
     get().confirmPending?.resolve(value);
     set({ confirmPending: null });
@@ -59,6 +81,11 @@ export const useDialogsStore = create<DialogsState>((set, get) => ({
   settlePrompt: (value) => {
     get().promptPending?.resolve(value);
     set({ promptPending: null });
+  },
+
+  settleIdentity: (value) => {
+    get().identityPending?.resolve(value);
+    set({ identityPending: null });
   },
 }));
 
@@ -73,4 +100,12 @@ export function confirmDialog(message: string, options: ConfirmOptions = {}): Pr
  */
 export function promptDialog(message: string, defaultValue = ""): Promise<string | null> {
   return useDialogsStore.getState().requestPrompt(message, defaultValue);
+}
+
+/**
+ * Fragt das eigene Passwort und, mit `twoFactor`, den Code aus der App ab, etwa bevor gespeicherte Zugangsdaten ersetzt
+ * oder gelöscht werden. `null` bei Abbruch. Die Werte gehen nur in den nächsten Aufruf, gemerkt wird nichts.
+ */
+export function confirmIdentity(message: string, twoFactor = false): Promise<IdentityConfirmation | null> {
+  return useDialogsStore.getState().requestIdentity(message, twoFactor);
 }

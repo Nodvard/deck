@@ -1,0 +1,7 @@
+[[entries]]
+kind = "neu"
+text = "Nodvard Deck liest je Docker-Server die Images, Volumes und Netze aus, mit Größe und den Containern, die sie nutzen."
+
+[[entries]]
+kind = "neu"
+text = "Was kein Container mehr nutzt, lässt sich nach einer Freigabe löschen. Ein Netz, an dem noch ein Container hängt, auch ein gestoppter, bleibt stehen."

@@ -96,7 +96,9 @@ say "Ziel erreichbar?"
 
 if [ "$BUILD" = 1 ]; then
   say "Image fuer linux/arm64 auf dem PC bauen ($LOCAL_TAG)"
-  docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t "$LOCAL_TAG" --load . \
+  # --pull: Basis-Images (python, node) jedes Mal frisch holen. Sonst bleibt die einmal geladene Fassung im Cache
+  # liegen, und ihre Sicherheitsluecken (z. B. in libcurl) landen bei jedem Deploy wieder im Image.
+  docker buildx build --pull --platform linux/arm64 -f deploy/Dockerfile -t "$LOCAL_TAG" --load . \
     || fail "Build fehlgeschlagen."
 else
   docker image inspect "$LOCAL_TAG" >/dev/null 2>&1 || fail "Kein lokales Image $LOCAL_TAG; ohne --no-build aufrufen."

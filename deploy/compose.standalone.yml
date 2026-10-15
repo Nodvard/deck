@@ -8,6 +8,8 @@
 # Aktualisieren: docker compose pull && docker compose up -d
 # (Unter anderem Dateinamen gespeichert? Dann ueberall -f <datei> ergaenzen.)
 # Anderer Port: Umgebungsvariable NODVARD_DECK_PORT setzen (z. B. in einer Datei .env neben dieser Datei).
+# Portainer: Stacks -> Add stack, entweder "Repository" (URL https://github.com/nodvard/deck, Compose path
+#   deploy/compose.standalone.yml) oder "Web editor" mit dem INHALT dieser Datei, nicht mit den Befehlen oben.
 
 # Fester Projektname: Der Ordnername bestimmt sonst den Namen des Datenspeichers.
 name: nodvard-deck

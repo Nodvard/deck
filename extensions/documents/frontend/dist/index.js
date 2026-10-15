@@ -172,7 +172,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -444,7 +444,7 @@ function InboxPanel({ status, onFetched }) {
         " Nextcloud-Ordner ",
         status.folder ?? ""
       ] }),
-      /* @__PURE__ */ jsx3("div", { role: "status", className: last && !last.ok ? "text-red-300" : "text-zinc-400", children: line }),
+      /* @__PURE__ */ jsx3("div", { role: "status", className: last && !last.ok ? "text-red-300" : "text-white/55", children: line }),
       error && /* @__PURE__ */ jsx3("div", { role: "alert", className: "text-red-300", children: error })
     ] }),
     status.folder && status.nextcloud_ready && /* @__PURE__ */ jsxs3(Button, { onClick: () => void fetchNow(), disabled: busy, children: [
@@ -764,7 +764,7 @@ function DocumentsPage() {
                   ] })
                 ] }),
                 isExpanded && /* @__PURE__ */ jsxs3("div", { className: "ml-10 mt-3 space-y-3 rounded-lg border border-white/[0.06] bg-black/15 p-4 text-sm", children: [
-                  preview?.id === doc.id && /* @__PURE__ */ jsx3("div", { "data-testid": `preview-${doc.id}`, children: preview.type.startsWith("image/") ? /* @__PURE__ */ jsx3("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : /* @__PURE__ */ jsx3("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-white" }) }),
+                  preview?.id === doc.id && /* @__PURE__ */ jsx3("div", { "data-testid": `preview-${doc.id}`, children: preview.type.startsWith("image/") ? /* @__PURE__ */ jsx3("img", { src: preview.url, alt: doc.original_filename, className: "max-h-[70vh] rounded-lg border border-white/10" }) : /* @__PURE__ */ jsx3("iframe", { src: preview.url, title: doc.original_filename, className: "h-[70vh] w-full rounded-lg border border-white/10 bg-[#fff]" }) }),
                   doc.ocr_error && /* @__PURE__ */ jsxs3("p", { className: "text-amber-300", children: [
                     "Texterkennung: ",
                     doc.ocr_error

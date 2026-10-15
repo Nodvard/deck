@@ -1,0 +1,26 @@
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "title": "Adresse",
+      "description": "z. B. http://192.168.2.2 oder https://pi.hole (ohne /admin). Unterstützt wird Pi-hole ab Version 6."
+    },
+    "tls_insecure_skip_verify": {
+      "type": "boolean",
+      "default": false,
+      "title": "Selbstsigniertes Zertifikat erlauben",
+      "description": "Nur im eigenen Netz aktivieren. Nötig, wenn Pi-hole über https mit seinem eigenen Zertifikat erreichbar ist."
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "network-pihole-password",
+      "x-secret-bound-to": [
+        "url"
+      ],
+      "title": "Passwort oder App-Passwort",
+      "description": "Am besten ein App-Passwort: in Pi-hole unter Einstellungen → Web-Oberfläche / API → „App-Passwort konfigurieren“. Das funktioniert auch mit Zwei-Faktor-Anmeldung."
+    }
+  ]
+}

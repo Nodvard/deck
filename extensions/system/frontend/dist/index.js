@@ -1,5 +1,5 @@
 // src/SystemPage.tsx
-import { useCallback as useCallback2, useEffect as useEffect6, useMemo as useMemo3, useRef as useRef4, useState as useState5 } from "react";
+import { useCallback as useCallback3, useEffect as useEffect7, useMemo as useMemo3, useRef as useRef4, useState as useState6 } from "react";
 
 // ../../../frontend/src/lib/deckGlobal.ts
 var EVENT_PREFIX = "nodvard-deck:";
@@ -289,7 +289,7 @@ function Icon({ name, size = 16, className = "" }) {
   );
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -327,6 +327,12 @@ function SearchInput({ value, onChange, placeholder, label }) {
   return /* @__PURE__ */ jsxs("span", { className: "relative block min-w-[14rem] flex-1", children: [
     /* @__PURE__ */ jsx(Icon, { name: "search", size: 15, className: "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-white/35" }),
     /* @__PURE__ */ jsx("input", { "aria-label": label, value, placeholder, onChange: (e) => onChange(e.target.value), className: `${inputClass} pl-9` })
+  ] });
+}
+function Field({ label, children, className = "" }) {
+  return /* @__PURE__ */ jsxs("label", { className: `block text-sm ${className}`, children: [
+    /* @__PURE__ */ jsx("span", { className: "mb-1.5 block text-white/70", children: label }),
+    children
   ] });
 }
 
@@ -574,8 +580,108 @@ function formatUptime(seconds) {
 }
 
 // src/LiveView.tsx
-import { useEffect as useEffect5, useRef as useRef3, useState as useState4 } from "react";
-import { Fragment as Fragment3, jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+import { useEffect as useEffect6, useRef as useRef3, useState as useState5 } from "react";
+
+// src/TempLimit.tsx
+import { useCallback as useCallback2, useEffect as useEffect5, useState as useState4 } from "react";
+import { jsx as jsx5, jsxs as jsxs4 } from "react/jsx-runtime";
+var TEMP_LIMIT_MIN = 40;
+var TEMP_LIMIT_MAX = 110;
+function parseLimit(text) {
+  const trimmed = text.trim();
+  if (!/^\d{1,3}$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return value >= TEMP_LIMIT_MIN && value <= TEMP_LIMIT_MAX ? value : null;
+}
+function draftOf(limit) {
+  return limit.own_c === null ? "" : String(limit.own_c);
+}
+function TempLimit({ hostId, onChanged }) {
+  const [limit, setLimit] = useState4(null);
+  const [loadError, setLoadError] = useState4(null);
+  const [draft, setDraft] = useState4("");
+  const [busy, setBusy] = useState4(false);
+  const [message, setMessage] = useState4(null);
+  const canChange = deck().hasPermission("settings.write");
+  const url = `/ext/system/hosts/${encodeURIComponent(hostId)}/temp-limit`;
+  const load = useCallback2((isCurrent = () => true) => {
+    setLoadError(null);
+    fetchJson(url).then((out) => {
+      if (!isCurrent()) return;
+      setLimit(out);
+      setDraft(draftOf(out));
+    }).catch((err) => {
+      if (isCurrent()) setLoadError(errorMessage(err));
+    });
+  }, [url]);
+  useEffect5(() => {
+    let current = true;
+    setLimit(null);
+    setMessage(null);
+    load(() => current);
+    return () => {
+      current = false;
+    };
+  }, [load]);
+  async function save(ownC) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const out = await fetchJson(url, { method: "PUT", body: JSON.stringify({ own_c: ownC }) });
+      setLimit(out);
+      setDraft(draftOf(out));
+      setMessage({
+        kind: "ok",
+        text: out.own_c === null ? `Gespeichert. Dieser Server warnt wieder ab ${out.global_c} \xB0C, wie alle anderen.` : `Gespeichert. Dieser Server warnt jetzt ab ${out.own_c} \xB0C.`
+      });
+      onChanged?.();
+    } catch (err) {
+      setMessage({ kind: "error", text: errorMessage(err) });
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (loadError !== null) return /* @__PURE__ */ jsx5(LoadError, { compact: true, what: "Die Temperaturgrenze", error: loadError, onRetry: () => load() });
+  if (limit === null) return /* @__PURE__ */ jsx5("p", { className: "text-sm opacity-60", children: "Lade die Temperaturgrenze \u2026" });
+  const typed = parseLimit(draft);
+  const invalid = draft.trim() !== "" && typed === null;
+  return /* @__PURE__ */ jsxs4("div", { className: "text-sm", "data-testid": "temp-limit", children: [
+    /* @__PURE__ */ jsx5("p", { "data-testid": "temp-limit-current", children: limit.own_c !== null ? `Dieser Server warnt ab ${limit.effective_c} \xB0C (eigene Grenze). F\xFCr die anderen Server gilt ${limit.global_c} \xB0C.` : `Dieser Server warnt ab ${limit.effective_c} \xB0C (die Grenze f\xFCr alle Server).` }),
+    /* @__PURE__ */ jsx5("p", { className: "mt-1 text-xs opacity-60", children: "Die Meldung kommt erst, wenn die Temperatur bei zwei Pr\xFCfungen hintereinander dar\xFCber liegt." }),
+    message && /* @__PURE__ */ jsx5("div", { className: "mt-2", children: /* @__PURE__ */ jsx5(Notice, { kind: message.kind, text: message.text, onClose: () => setMessage(null) }) }),
+    canChange ? /* @__PURE__ */ jsxs4("div", { className: "mt-2 flex flex-wrap items-end gap-2", children: [
+      /* @__PURE__ */ jsx5(Field, { label: "Warnen ab (\xB0C)", className: "w-32", children: /* @__PURE__ */ jsx5(
+        "input",
+        {
+          type: "number",
+          inputMode: "numeric",
+          min: TEMP_LIMIT_MIN,
+          max: TEMP_LIMIT_MAX,
+          step: 1,
+          value: draft,
+          placeholder: String(limit.global_c),
+          disabled: busy,
+          "aria-invalid": invalid,
+          "aria-describedby": invalid ? "temp-limit-hint" : void 0,
+          onChange: (e) => setDraft(e.target.value),
+          className: inputClass
+        }
+      ) }),
+      /* @__PURE__ */ jsx5(Button, { variant: "primary", disabled: busy || typed === null || typed === limit.own_c, onClick: () => void save(typed), children: busy ? "Speichert \u2026" : "Speichern" }),
+      limit.own_c !== null && /* @__PURE__ */ jsx5(Button, { disabled: busy, onClick: () => void save(null), children: "Allgemeine Grenze nutzen" }),
+      invalid && /* @__PURE__ */ jsxs4("p", { id: "temp-limit-hint", role: "alert", className: "basis-full text-xs text-red-300", children: [
+        "Bitte eine ganze Zahl von ",
+        TEMP_LIMIT_MIN,
+        " bis ",
+        TEMP_LIMIT_MAX,
+        " eingeben."
+      ] })
+    ] }) : /* @__PURE__ */ jsx5("p", { className: "mt-1 text-xs opacity-60", children: "\xC4ndern d\xFCrfen nur Benutzer, die Einstellungen \xE4ndern d\xFCrfen." })
+  ] });
+}
+
+// src/LiveView.tsx
+import { Fragment as Fragment3, jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
 var POLL_MS = 3e3;
 var HISTORY = 60;
 var BLUE = "#3987e5";
@@ -594,29 +700,29 @@ function Spark({ values, max, color = BLUE }) {
   const top = max ?? Math.max(1, ...values) * 1.15;
   const offset = HISTORY - values.length;
   const shifted = values.map((v, i) => `${(i + offset) / Math.max(1, HISTORY - 1) * w},${h - Math.min(v, top) / top * h}`);
-  return /* @__PURE__ */ jsxs4("svg", { viewBox: `0 0 ${w} ${h}`, preserveAspectRatio: "none", className: "mt-1 h-9 w-full", "aria-hidden": "true", children: [
-    /* @__PURE__ */ jsx5("line", { x1: 0, x2: w, y1: h - 0.5, y2: h - 0.5, stroke: "rgba(255,255,255,0.1)" }),
-    shifted.length > 1 && /* @__PURE__ */ jsxs4(Fragment3, { children: [
-      /* @__PURE__ */ jsx5("polygon", { points: `${shifted[0].split(",")[0]},${h} ${shifted.join(" ")} ${w},${h}`, fill: color, opacity: 0.15 }),
-      /* @__PURE__ */ jsx5("polyline", { points: shifted.join(" "), fill: "none", stroke: color, strokeWidth: 1.5, vectorEffect: "non-scaling-stroke" })
+  return /* @__PURE__ */ jsxs5("svg", { viewBox: `0 0 ${w} ${h}`, preserveAspectRatio: "none", className: "mt-1 h-9 w-full", "aria-hidden": "true", children: [
+    /* @__PURE__ */ jsx6("line", { x1: 0, x2: w, y1: h - 0.5, y2: h - 0.5, stroke: "var(--color-line-strong)" }),
+    shifted.length > 1 && /* @__PURE__ */ jsxs5(Fragment3, { children: [
+      /* @__PURE__ */ jsx6("polygon", { points: `${shifted[0].split(",")[0]},${h} ${shifted.join(" ")} ${w},${h}`, fill: color, opacity: 0.15 }),
+      /* @__PURE__ */ jsx6("polyline", { points: shifted.join(" "), fill: "none", stroke: color, strokeWidth: 1.5, vectorEffect: "non-scaling-stroke" })
     ] })
   ] });
 }
 function Tile({ label, value, sub, spark }) {
-  return /* @__PURE__ */ jsxs4("div", { className: "panel p-3", children: [
-    /* @__PURE__ */ jsx5("p", { className: "text-[11px] uppercase tracking-wider opacity-50", children: label }),
-    /* @__PURE__ */ jsx5("p", { className: "text-xl font-semibold tabular-nums", children: value }),
-    sub && /* @__PURE__ */ jsx5("p", { className: "truncate text-[11px] opacity-60", children: sub }),
+  return /* @__PURE__ */ jsxs5("div", { className: "panel p-3", children: [
+    /* @__PURE__ */ jsx6("p", { className: "text-xs opacity-50", children: label }),
+    /* @__PURE__ */ jsx6("p", { className: "text-xl font-semibold tabular-nums", children: value }),
+    sub && /* @__PURE__ */ jsx6("p", { className: "truncate text-[11px] opacity-60", children: sub }),
     spark
   ] });
 }
 function Meter({ percent }) {
-  return /* @__PURE__ */ jsx5("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx5("div", { className: "h-full rounded", style: { width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor(percent) } }) });
+  return /* @__PURE__ */ jsx6("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx6("div", { className: "h-full rounded", style: { width: `${Math.min(100, Math.max(0, percent))}%`, background: barColor(percent) } }) });
 }
 function Section({ title, children, extra }) {
-  return /* @__PURE__ */ jsxs4("section", { className: "panel p-4", children: [
-    /* @__PURE__ */ jsxs4("div", { className: "mb-2 flex items-center gap-2", children: [
-      /* @__PURE__ */ jsx5("h3", { className: "text-xs font-semibold uppercase tracking-wider opacity-70", children: title }),
+  return /* @__PURE__ */ jsxs5("section", { className: "panel p-4", children: [
+    /* @__PURE__ */ jsxs5("div", { className: "mb-2 flex items-center gap-2", children: [
+      /* @__PURE__ */ jsx6("h3", { className: "text-xs font-semibold opacity-70", children: title }),
       extra
     ] }),
     children
@@ -629,20 +735,20 @@ function push(list, value) {
   return next.length > HISTORY ? next.slice(next.length - HISTORY) : next;
 }
 function LiveView({ hostId, fetchLive }) {
-  const [data, setData] = useState4(null);
-  const [error, setError] = useState4(null);
-  const [paused, setPaused] = useState4(false);
-  const [updatedAt, setUpdatedAt] = useState4(null);
-  const [history, setHistory] = useState4(EMPTY_HISTORY);
-  const [procSort, setProcSort] = useState4("cpu");
-  const [showVirtual, setShowVirtual] = useState4(false);
+  const [data, setData] = useState5(null);
+  const [error, setError] = useState5(null);
+  const [paused, setPaused] = useState5(false);
+  const [updatedAt, setUpdatedAt] = useState5(null);
+  const [history, setHistory] = useState5(EMPTY_HISTORY);
+  const [procSort, setProcSort] = useState5("cpu");
+  const [showVirtual, setShowVirtual] = useState5(false);
   const busy = useRef3(false);
-  useEffect5(() => {
+  useEffect6(() => {
     setData(null);
     setError(null);
     setHistory(EMPTY_HISTORY);
   }, [hostId]);
-  useEffect5(() => {
+  useEffect6(() => {
     if (paused) return;
     let cancelled = false;
     async function tick() {
@@ -676,21 +782,21 @@ function LiveView({ hostId, fetchLive }) {
       clearInterval(timer);
     };
   }, [hostId, paused, fetchLive]);
-  const controls = /* @__PURE__ */ jsxs4("div", { className: "mb-3 flex flex-wrap items-center gap-3 text-xs", children: [
-    /* @__PURE__ */ jsx5("button", { type: "button", onClick: () => setPaused((p) => !p), className: "rounded bg-white/10 px-2 py-1 hover:bg-white/20", children: paused ? "Fortsetzen" : "Pausieren" }),
-    /* @__PURE__ */ jsxs4("span", { className: "opacity-50", children: [
+  const controls = /* @__PURE__ */ jsxs5("div", { className: "mb-3 flex flex-wrap items-center gap-3 text-xs", children: [
+    /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => setPaused((p) => !p), className: "rounded bg-white/10 px-2 py-1 hover:bg-white/20", children: paused ? "Fortsetzen" : "Pausieren" }),
+    /* @__PURE__ */ jsxs5("span", { className: "opacity-50", children: [
       paused ? "angehalten" : "aktualisiert alle 3 s",
       updatedAt ? ` \xB7 Stand ${updatedAt.toLocaleTimeString()}` : ""
     ] }),
-    error && /* @__PURE__ */ jsxs4("span", { className: "text-red-400", children: [
+    error && /* @__PURE__ */ jsxs5("span", { className: "text-red-400", children: [
       "Fehler: ",
       error
     ] })
   ] });
   if (!data) {
-    return /* @__PURE__ */ jsxs4("div", { "data-testid": "live-view", children: [
+    return /* @__PURE__ */ jsxs5("div", { "data-testid": "live-view", children: [
       controls,
-      !error && /* @__PURE__ */ jsx5("p", { className: "text-sm opacity-60", children: "Messe \u2026 (die Raten brauchen eine Sekunde Messzeit)" })
+      !error && /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-60", children: "Messe \u2026 (die Raten brauchen eine Sekunde Messzeit)" })
     ] });
   }
   const { cpu, memory } = data;
@@ -702,25 +808,25 @@ function LiveView({ hostId, fetchLive }) {
   const hottest = data.temperatures.length ? Math.max(...data.temperatures.map((t) => t.celsius)) : null;
   const procs = [...data.processes].sort((a, b) => procSort === "cpu" ? b.cpu_percent - a.cpu_percent || b.mem_bytes - a.mem_bytes : b.mem_bytes - a.mem_bytes);
   const freqs = cpu.per_core.map((c) => c.freq_mhz).filter((f) => f != null);
-  return /* @__PURE__ */ jsxs4("div", { className: "space-y-4", "data-testid": "live-view", children: [
+  return /* @__PURE__ */ jsxs5("div", { className: "space-y-4", "data-testid": "live-view", children: [
     controls,
-    data.throttled && data.throttled.flags.length > 0 && /* @__PURE__ */ jsxs4("p", { className: "panel px-3 py-2 text-sm text-amber-300", "data-testid": "throttled", children: [
+    data.throttled && data.throttled.flags.length > 0 && /* @__PURE__ */ jsxs5("p", { className: "panel px-3 py-2 text-sm text-amber-300", "data-testid": "throttled", children: [
       "Raspberry Pi meldet: ",
       data.throttled.flags.join(", "),
       " (",
       data.throttled.raw,
       ") \u2013 meist ein zu schwaches Netzteil oder Hitze."
     ] }),
-    /* @__PURE__ */ jsxs4("div", { className: "grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
-      /* @__PURE__ */ jsx5(Tile, { label: "CPU", value: pct(cpu.total?.percent), sub: freqs.length ? `${Math.max(...freqs)} MHz \xB7 ${cpu.cores} Kerne` : `${cpu.cores} Kerne`, spark: /* @__PURE__ */ jsx5(Spark, { values: history.cpu, max: 100 }) }),
-      /* @__PURE__ */ jsx5(Tile, { label: "Arbeitsspeicher", value: memory ? pct(100 * memory.used / memory.total) : "\u2013", sub: memory ? `${formatBytes(memory.used)} von ${formatBytes(memory.total)}` : void 0, spark: /* @__PURE__ */ jsx5(Spark, { values: history.mem, max: 100 }) }),
-      /* @__PURE__ */ jsx5(Tile, { label: "Datentr\xE4ger aktiv", value: pct(diskBusy), sub: data.disks.map((d) => d.name).join(", ") || "keine", spark: /* @__PURE__ */ jsx5(Spark, { values: history.disk, max: 100 }) }),
-      /* @__PURE__ */ jsx5(Tile, { label: "Netzwerk", value: rate(netIn + netOut), sub: `\u2193 ${rate(netIn)} \xB7 \u2191 ${rate(netOut)}`, spark: /* @__PURE__ */ jsx5(Spark, { values: history.netIn, color: BLUE }) }),
-      /* @__PURE__ */ jsx5(Tile, { label: "Temperatur", value: hottest != null ? `${hottest.toFixed(1)} \xB0C` : "\u2013", sub: hottest != null ? "h\xF6chster Sensor" : "keine Sensoren", spark: /* @__PURE__ */ jsx5(Spark, { values: history.temp, color: ORANGE }) })
+    /* @__PURE__ */ jsxs5("div", { className: "grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
+      /* @__PURE__ */ jsx6(Tile, { label: "CPU", value: pct(cpu.total?.percent), sub: freqs.length ? `${Math.max(...freqs)} MHz \xB7 ${cpu.cores} Kerne` : `${cpu.cores} Kerne`, spark: /* @__PURE__ */ jsx6(Spark, { values: history.cpu, max: 100 }) }),
+      /* @__PURE__ */ jsx6(Tile, { label: "Arbeitsspeicher", value: memory ? pct(100 * memory.used / memory.total) : "\u2013", sub: memory ? `${formatBytes(memory.used)} von ${formatBytes(memory.total)}` : void 0, spark: /* @__PURE__ */ jsx6(Spark, { values: history.mem, max: 100 }) }),
+      /* @__PURE__ */ jsx6(Tile, { label: "Datentr\xE4ger aktiv", value: pct(diskBusy), sub: data.disks.map((d) => d.name).join(", ") || "keine", spark: /* @__PURE__ */ jsx6(Spark, { values: history.disk, max: 100 }) }),
+      /* @__PURE__ */ jsx6(Tile, { label: "Netzwerk", value: rate(netIn + netOut), sub: `\u2193 ${rate(netIn)} \xB7 \u2191 ${rate(netOut)}`, spark: /* @__PURE__ */ jsx6(Spark, { values: history.netIn, color: BLUE }) }),
+      /* @__PURE__ */ jsx6(Tile, { label: "Temperatur", value: hottest != null ? `${hottest.toFixed(1)} \xB0C` : "\u2013", sub: hottest != null ? "h\xF6chster Sensor" : "keine Sensoren", spark: /* @__PURE__ */ jsx6(Spark, { values: history.temp, color: ORANGE }) })
     ] }),
-    /* @__PURE__ */ jsxs4("div", { className: "grid gap-4 xl:grid-cols-2", children: [
-      /* @__PURE__ */ jsxs4(Section, { title: "Prozessor", extra: /* @__PURE__ */ jsx5("span", { className: "text-[11px] opacity-50", children: cpu.model ?? "" }), children: [
-        cpu.total && /* @__PURE__ */ jsxs4("p", { className: "mb-3 text-xs opacity-80", "data-testid": "cpu-breakdown", children: [
+    /* @__PURE__ */ jsxs5("div", { className: "grid gap-4 xl:grid-cols-2", children: [
+      /* @__PURE__ */ jsxs5(Section, { title: "Prozessor", extra: /* @__PURE__ */ jsx6("span", { className: "text-[11px] opacity-50", children: cpu.model ?? "" }), children: [
+        cpu.total && /* @__PURE__ */ jsxs5("p", { className: "mb-3 text-xs opacity-80", "data-testid": "cpu-breakdown", children: [
           "Benutzer ",
           pct(cpu.total.user),
           " \xB7 System ",
@@ -733,149 +839,152 @@ function LiveView({ hostId, fetchLive }) {
           " \xB7 l\xE4uft seit ",
           formatUptime(data.uptime_s)
         ] }),
-        /* @__PURE__ */ jsx5("div", { className: "grid grid-cols-2 gap-2 sm:grid-cols-4", "data-testid": "cores", children: cpu.per_core.map((core) => /* @__PURE__ */ jsxs4("div", { className: "rounded-lg bg-white/[0.04] p-2", children: [
-          /* @__PURE__ */ jsxs4("div", { className: "flex items-baseline justify-between text-[11px]", children: [
-            /* @__PURE__ */ jsxs4("span", { className: "opacity-60", children: [
+        /* @__PURE__ */ jsx6("div", { className: "grid grid-cols-2 gap-2 sm:grid-cols-4", "data-testid": "cores", children: cpu.per_core.map((core) => /* @__PURE__ */ jsxs5("div", { className: "rounded-lg bg-white/[0.04] p-2", children: [
+          /* @__PURE__ */ jsxs5("div", { className: "flex items-baseline justify-between text-[11px]", children: [
+            /* @__PURE__ */ jsxs5("span", { className: "opacity-60", children: [
               "Kern ",
               core.id
             ] }),
-            /* @__PURE__ */ jsx5("span", { className: "font-semibold tabular-nums", children: pct(core.percent) })
+            /* @__PURE__ */ jsx6("span", { className: "font-semibold tabular-nums", children: pct(core.percent) })
           ] }),
-          /* @__PURE__ */ jsx5(Meter, { percent: core.percent ?? 0 }),
-          core.freq_mhz != null && /* @__PURE__ */ jsxs4("p", { className: "mt-1 text-[10px] tabular-nums opacity-50", children: [
+          /* @__PURE__ */ jsx6(Meter, { percent: core.percent ?? 0 }),
+          core.freq_mhz != null && /* @__PURE__ */ jsxs5("p", { className: "mt-1 text-[10px] tabular-nums opacity-50", children: [
             core.freq_mhz,
             " MHz"
           ] })
         ] }, core.id)) })
       ] }),
-      /* @__PURE__ */ jsx5(Section, { title: "Arbeitsspeicher", children: memory ? /* @__PURE__ */ jsxs4(Fragment3, { children: [
-        /* @__PURE__ */ jsxs4("div", { className: "mb-2 flex h-3 w-full overflow-hidden rounded bg-white/10", "data-testid": "mem-bar", "aria-label": "Aufteilung des Arbeitsspeichers", children: [
-          /* @__PURE__ */ jsx5("div", { style: { width: `${100 * memory.used / memory.total}%`, background: BLUE }, title: "belegt" }),
-          /* @__PURE__ */ jsx5("div", { style: { width: `${100 * (memory.cached ?? 0) / memory.total}%`, background: "#199e70" }, title: "Cache" }),
-          /* @__PURE__ */ jsx5("div", { style: { width: `${100 * (memory.buffers ?? 0) / memory.total}%`, background: "#c98500" }, title: "Puffer" })
+      /* @__PURE__ */ jsx6(Section, { title: "Arbeitsspeicher", children: memory ? /* @__PURE__ */ jsxs5(Fragment3, { children: [
+        /* @__PURE__ */ jsxs5("div", { className: "mb-2 flex h-3 w-full overflow-hidden rounded bg-white/10", "data-testid": "mem-bar", "aria-label": "Aufteilung des Arbeitsspeichers", children: [
+          /* @__PURE__ */ jsx6("div", { style: { width: `${100 * memory.used / memory.total}%`, background: BLUE }, title: "belegt" }),
+          /* @__PURE__ */ jsx6("div", { style: { width: `${100 * (memory.cached ?? 0) / memory.total}%`, background: "#199e70" }, title: "Cache" }),
+          /* @__PURE__ */ jsx6("div", { style: { width: `${100 * (memory.buffers ?? 0) / memory.total}%`, background: "#c98500" }, title: "Puffer" })
         ] }),
-        /* @__PURE__ */ jsxs4("dl", { className: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3", children: [
-          /* @__PURE__ */ jsxs4("div", { children: [
-            /* @__PURE__ */ jsxs4("dt", { className: "opacity-50", children: [
-              /* @__PURE__ */ jsx5("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: BLUE } }),
+        /* @__PURE__ */ jsxs5("dl", { className: "grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-3", children: [
+          /* @__PURE__ */ jsxs5("div", { children: [
+            /* @__PURE__ */ jsxs5("dt", { className: "opacity-50", children: [
+              /* @__PURE__ */ jsx6("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: BLUE } }),
               "belegt"
             ] }),
-            /* @__PURE__ */ jsx5("dd", { className: "tabular-nums", children: formatBytes(memory.used) })
+            /* @__PURE__ */ jsx6("dd", { className: "tabular-nums", children: formatBytes(memory.used) })
           ] }),
-          /* @__PURE__ */ jsxs4("div", { children: [
-            /* @__PURE__ */ jsxs4("dt", { className: "opacity-50", children: [
-              /* @__PURE__ */ jsx5("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: "#199e70" } }),
+          /* @__PURE__ */ jsxs5("div", { children: [
+            /* @__PURE__ */ jsxs5("dt", { className: "opacity-50", children: [
+              /* @__PURE__ */ jsx6("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: "#199e70" } }),
               "Cache"
             ] }),
-            /* @__PURE__ */ jsx5("dd", { className: "tabular-nums", children: formatBytes(memory.cached) })
+            /* @__PURE__ */ jsx6("dd", { className: "tabular-nums", children: formatBytes(memory.cached) })
           ] }),
-          /* @__PURE__ */ jsxs4("div", { children: [
-            /* @__PURE__ */ jsxs4("dt", { className: "opacity-50", children: [
-              /* @__PURE__ */ jsx5("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: "#c98500" } }),
+          /* @__PURE__ */ jsxs5("div", { children: [
+            /* @__PURE__ */ jsxs5("dt", { className: "opacity-50", children: [
+              /* @__PURE__ */ jsx6("span", { className: "mr-1 inline-block h-2 w-2 rounded-sm", style: { background: "#c98500" } }),
               "Puffer"
             ] }),
-            /* @__PURE__ */ jsx5("dd", { className: "tabular-nums", children: formatBytes(memory.buffers) })
+            /* @__PURE__ */ jsx6("dd", { className: "tabular-nums", children: formatBytes(memory.buffers) })
           ] }),
-          /* @__PURE__ */ jsxs4("div", { children: [
-            /* @__PURE__ */ jsx5("dt", { className: "opacity-50", children: "verf\xFCgbar" }),
-            /* @__PURE__ */ jsx5("dd", { className: "tabular-nums", children: formatBytes(memory.available) })
+          /* @__PURE__ */ jsxs5("div", { children: [
+            /* @__PURE__ */ jsx6("dt", { className: "opacity-50", children: "verf\xFCgbar" }),
+            /* @__PURE__ */ jsx6("dd", { className: "tabular-nums", children: formatBytes(memory.available) })
           ] }),
-          /* @__PURE__ */ jsxs4("div", { children: [
-            /* @__PURE__ */ jsx5("dt", { className: "opacity-50", children: "gemeinsam" }),
-            /* @__PURE__ */ jsx5("dd", { className: "tabular-nums", children: formatBytes(memory.shared) })
+          /* @__PURE__ */ jsxs5("div", { children: [
+            /* @__PURE__ */ jsx6("dt", { className: "opacity-50", children: "gemeinsam" }),
+            /* @__PURE__ */ jsx6("dd", { className: "tabular-nums", children: formatBytes(memory.shared) })
           ] }),
-          /* @__PURE__ */ jsxs4("div", { children: [
-            /* @__PURE__ */ jsx5("dt", { className: "opacity-50", children: "gesamt" }),
-            /* @__PURE__ */ jsx5("dd", { className: "tabular-nums", children: formatBytes(memory.total) })
+          /* @__PURE__ */ jsxs5("div", { children: [
+            /* @__PURE__ */ jsx6("dt", { className: "opacity-50", children: "gesamt" }),
+            /* @__PURE__ */ jsx6("dd", { className: "tabular-nums", children: formatBytes(memory.total) })
           ] })
         ] }),
-        memory.swap_total ? /* @__PURE__ */ jsxs4("div", { className: "mt-3 text-xs", children: [
-          /* @__PURE__ */ jsxs4("div", { className: "mb-1 flex justify-between", children: [
-            /* @__PURE__ */ jsx5("span", { className: "opacity-60", children: "Swap" }),
-            /* @__PURE__ */ jsxs4("span", { className: "tabular-nums", children: [
+        memory.swap_total ? /* @__PURE__ */ jsxs5("div", { className: "mt-3 text-xs", children: [
+          /* @__PURE__ */ jsxs5("div", { className: "mb-1 flex justify-between", children: [
+            /* @__PURE__ */ jsx6("span", { className: "opacity-60", children: "Swap" }),
+            /* @__PURE__ */ jsxs5("span", { className: "tabular-nums", children: [
               formatBytes(memory.swap_used),
               " von ",
               formatBytes(memory.swap_total)
             ] })
           ] }),
-          /* @__PURE__ */ jsx5(Meter, { percent: 100 * (memory.swap_used ?? 0) / memory.swap_total })
-        ] }) : /* @__PURE__ */ jsx5("p", { className: "mt-3 text-xs opacity-50", children: "Kein Swap eingerichtet." })
-      ] }) : /* @__PURE__ */ jsx5("p", { className: "text-sm opacity-50", children: "Keine Angaben." }) }),
-      /* @__PURE__ */ jsx5(Section, { title: "Sensoren", children: data.temperatures.length === 0 && data.fans.length === 0 ? /* @__PURE__ */ jsx5("p", { className: "text-sm opacity-50", children: "Dieser Server meldet keine Sensoren (bei VMs normal)." }) : /* @__PURE__ */ jsx5("table", { className: "w-full text-sm", "data-testid": "sensors", children: /* @__PURE__ */ jsxs4("tbody", { className: "divide-y divide-white/5", children: [
-        data.temperatures.map((t) => /* @__PURE__ */ jsxs4("tr", { children: [
-          /* @__PURE__ */ jsx5("td", { className: "py-1 opacity-70", children: t.label }),
-          /* @__PURE__ */ jsx5("td", { className: "py-1 text-xs opacity-40", children: t.source }),
-          /* @__PURE__ */ jsxs4("td", { className: `py-1 text-right font-semibold tabular-nums ${tempTone(t.celsius)}`, children: [
-            t.celsius.toFixed(1),
-            " \xB0C"
-          ] })
-        ] }, `${t.source}-${t.label}`)),
-        data.fans.map((f) => /* @__PURE__ */ jsxs4("tr", { children: [
-          /* @__PURE__ */ jsx5("td", { className: "py-1 opacity-70", children: f.label }),
-          /* @__PURE__ */ jsx5("td", { className: "py-1 text-xs opacity-40", children: "L\xFCfter" }),
-          /* @__PURE__ */ jsxs4("td", { className: "py-1 text-right font-semibold tabular-nums", children: [
-            f.rpm,
-            " U/min"
-          ] })
-        ] }, f.label))
-      ] }) }) }),
-      /* @__PURE__ */ jsx5(Section, { title: "Datentr\xE4ger", children: data.disks.length === 0 ? /* @__PURE__ */ jsx5("p", { className: "text-sm opacity-50", children: "Keine physischen Datentr\xE4ger erkannt." }) : /* @__PURE__ */ jsxs4("table", { className: "w-full text-sm", "data-testid": "live-disks", children: [
-        /* @__PURE__ */ jsx5("thead", { children: /* @__PURE__ */ jsxs4("tr", { className: "text-left text-[11px] uppercase opacity-50", children: [
-          /* @__PURE__ */ jsx5("th", { className: "py-1 font-normal", children: "Ger\xE4t" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "Lesen" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "Schreiben" }),
-          /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "IOPS l/s" }),
-          /* @__PURE__ */ jsx5("th", { className: "w-28 py-1 pl-3 font-normal", children: "Aktiv" })
+          /* @__PURE__ */ jsx6(Meter, { percent: 100 * (memory.swap_used ?? 0) / memory.swap_total })
+        ] }) : /* @__PURE__ */ jsx6("p", { className: "mt-3 text-xs opacity-50", children: "Kein Swap eingerichtet." })
+      ] }) : /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-50", children: "Keine Angaben." }) }),
+      /* @__PURE__ */ jsxs5(Section, { title: "Sensoren", children: [
+        data.temperatures.length === 0 && data.fans.length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-50", children: "Dieser Server meldet keine Sensoren (bei VMs normal)." }) : /* @__PURE__ */ jsx6("table", { className: "w-full text-sm", "data-testid": "sensors", children: /* @__PURE__ */ jsxs5("tbody", { className: "divide-y divide-white/5", children: [
+          data.temperatures.map((t) => /* @__PURE__ */ jsxs5("tr", { children: [
+            /* @__PURE__ */ jsx6("td", { className: "py-1 opacity-70", children: t.label }),
+            /* @__PURE__ */ jsx6("td", { className: "py-1 text-xs opacity-40", children: t.source }),
+            /* @__PURE__ */ jsxs5("td", { className: `py-1 text-right font-semibold tabular-nums ${tempTone(t.celsius)}`, children: [
+              t.celsius.toFixed(1),
+              " \xB0C"
+            ] })
+          ] }, `${t.source}-${t.label}`)),
+          data.fans.map((f) => /* @__PURE__ */ jsxs5("tr", { children: [
+            /* @__PURE__ */ jsx6("td", { className: "py-1 opacity-70", children: f.label }),
+            /* @__PURE__ */ jsx6("td", { className: "py-1 text-xs opacity-40", children: "L\xFCfter" }),
+            /* @__PURE__ */ jsxs5("td", { className: "py-1 text-right font-semibold tabular-nums", children: [
+              f.rpm,
+              " U/min"
+            ] })
+          ] }, f.label))
         ] }) }),
-        /* @__PURE__ */ jsx5("tbody", { className: "divide-y divide-white/5", children: data.disks.map((d) => /* @__PURE__ */ jsxs4("tr", { children: [
-          /* @__PURE__ */ jsx5("td", { className: "py-1 font-mono text-xs", children: d.name }),
-          /* @__PURE__ */ jsx5("td", { className: "py-1 text-right tabular-nums", children: rate(d.read_bps) }),
-          /* @__PURE__ */ jsx5("td", { className: "py-1 text-right tabular-nums", children: rate(d.write_bps) }),
-          /* @__PURE__ */ jsxs4("td", { className: "py-1 text-right tabular-nums", children: [
+        data.temperatures.length > 0 && /* @__PURE__ */ jsx6("div", { className: "mt-3 border-t border-white/5 pt-3", children: /* @__PURE__ */ jsx6(TempLimit, { hostId }) })
+      ] }),
+      /* @__PURE__ */ jsx6(Section, { title: "Datentr\xE4ger", children: data.disks.length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-50", children: "Keine physischen Datentr\xE4ger erkannt." }) : /* @__PURE__ */ jsxs5("table", { className: "w-full text-sm", "data-testid": "live-disks", children: [
+        /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs5("tr", { className: "text-left text-xs opacity-50", children: [
+          /* @__PURE__ */ jsx6("th", { className: "py-1 font-normal", children: "Ger\xE4t" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "Lesen" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "Schreiben" }),
+          /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "IOPS l/s" }),
+          /* @__PURE__ */ jsx6("th", { className: "w-28 py-1 pl-3 font-normal", children: "Aktiv" })
+        ] }) }),
+        /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: data.disks.map((d) => /* @__PURE__ */ jsxs5("tr", { children: [
+          /* @__PURE__ */ jsx6("td", { className: "py-1 font-mono text-xs", children: d.name }),
+          /* @__PURE__ */ jsx6("td", { className: "py-1 text-right tabular-nums", children: rate(d.read_bps) }),
+          /* @__PURE__ */ jsx6("td", { className: "py-1 text-right tabular-nums", children: rate(d.write_bps) }),
+          /* @__PURE__ */ jsxs5("td", { className: "py-1 text-right tabular-nums", children: [
             d.read_iops.toFixed(0),
             " / ",
             d.write_iops.toFixed(0)
           ] }),
-          /* @__PURE__ */ jsx5("td", { className: "py-1 pl-3", children: /* @__PURE__ */ jsxs4("div", { className: "flex items-center gap-2", children: [
-            /* @__PURE__ */ jsx5(Meter, { percent: d.busy_percent }),
-            /* @__PURE__ */ jsx5("span", { className: "w-14 whitespace-nowrap text-right text-xs tabular-nums", children: pct(d.busy_percent) })
+          /* @__PURE__ */ jsx6("td", { className: "py-1 pl-3", children: /* @__PURE__ */ jsxs5("div", { className: "flex items-center gap-2", children: [
+            /* @__PURE__ */ jsx6(Meter, { percent: d.busy_percent }),
+            /* @__PURE__ */ jsx6("span", { className: "w-14 whitespace-nowrap text-right text-xs tabular-nums", children: pct(d.busy_percent) })
           ] }) })
         ] }, d.name)) })
       ] }) })
     ] }),
-    /* @__PURE__ */ jsx5(
+    /* @__PURE__ */ jsx6(
       Section,
       {
         title: "Netzwerk",
-        extra: data.network.some((n) => n.virtual) ? /* @__PURE__ */ jsxs4("label", { className: "ml-auto flex items-center gap-1 text-[11px] opacity-70", children: [
-          /* @__PURE__ */ jsx5("input", { type: "checkbox", checked: showVirtual, onChange: (e) => setShowVirtual(e.target.checked) }),
+        extra: data.network.some((n) => n.virtual) ? /* @__PURE__ */ jsxs5("label", { className: "ml-auto flex items-center gap-1 text-[11px] opacity-70", children: [
+          /* @__PURE__ */ jsx6("input", { type: "checkbox", checked: showVirtual, onChange: (e) => setShowVirtual(e.target.checked) }),
           " virtuelle Schnittstellen zeigen"
         ] }) : void 0,
-        children: /* @__PURE__ */ jsxs4("table", { className: "w-full text-sm", "data-testid": "live-network", children: [
-          /* @__PURE__ */ jsx5("thead", { children: /* @__PURE__ */ jsxs4("tr", { className: "text-left text-[11px] uppercase opacity-50", children: [
-            /* @__PURE__ */ jsx5("th", { className: "py-1 font-normal", children: "Schnittstelle" }),
-            /* @__PURE__ */ jsx5("th", { className: "py-1 font-normal", children: "Status" }),
-            /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "Empfangen" }),
-            /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "Gesendet" }),
-            /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "Gesamt \u2193 / \u2191" }),
-            /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", title: "\xDCbertragungsfehler / vom System verworfene Pakete", children: "Fehler / verworfen" })
+        children: /* @__PURE__ */ jsxs5("table", { className: "w-full text-sm", "data-testid": "live-network", children: [
+          /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs5("tr", { className: "text-left text-xs opacity-50", children: [
+            /* @__PURE__ */ jsx6("th", { className: "py-1 font-normal", children: "Schnittstelle" }),
+            /* @__PURE__ */ jsx6("th", { className: "py-1 font-normal", children: "Status" }),
+            /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "Empfangen" }),
+            /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "Gesendet" }),
+            /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "Gesamt \u2193 / \u2191" }),
+            /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", title: "\xDCbertragungsfehler / vom System verworfene Pakete", children: "Fehler / verworfen" })
           ] }) }),
-          /* @__PURE__ */ jsx5("tbody", { className: "divide-y divide-white/5", children: nics.map((n) => /* @__PURE__ */ jsxs4("tr", { className: n.virtual ? "opacity-60" : "", children: [
-            /* @__PURE__ */ jsx5("td", { className: "py-1 font-mono text-xs", children: n.name }),
-            /* @__PURE__ */ jsxs4("td", { className: "py-1 text-xs", children: [
+          /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: nics.map((n) => /* @__PURE__ */ jsxs5("tr", { className: n.virtual ? "opacity-60" : "", children: [
+            /* @__PURE__ */ jsx6("td", { className: "py-1 font-mono text-xs", children: n.name }),
+            /* @__PURE__ */ jsxs5("td", { className: "py-1 text-xs", children: [
               n.state === "up" ? "verbunden" : n.state ?? "?",
               n.speed_mbps ? ` \xB7 ${n.speed_mbps >= 1e3 ? `${n.speed_mbps / 1e3} Gbit/s` : `${n.speed_mbps} Mbit/s`}` : ""
             ] }),
-            /* @__PURE__ */ jsx5("td", { className: "py-1 text-right tabular-nums", children: rate(n.rx_bps) }),
-            /* @__PURE__ */ jsx5("td", { className: "py-1 text-right tabular-nums", children: rate(n.tx_bps) }),
-            /* @__PURE__ */ jsxs4("td", { className: "py-1 text-right text-xs tabular-nums opacity-70", children: [
+            /* @__PURE__ */ jsx6("td", { className: "py-1 text-right tabular-nums", children: rate(n.rx_bps) }),
+            /* @__PURE__ */ jsx6("td", { className: "py-1 text-right tabular-nums", children: rate(n.tx_bps) }),
+            /* @__PURE__ */ jsxs5("td", { className: "py-1 text-right text-xs tabular-nums opacity-70", children: [
               formatBytes(n.rx_total),
               " / ",
               formatBytes(n.tx_total)
             ] }),
-            /* @__PURE__ */ jsxs4("td", { className: "py-1 text-right text-xs tabular-nums", children: [
-              /* @__PURE__ */ jsx5("span", { className: n.errors > 0 ? "text-amber-300" : "opacity-50", children: n.errors }),
-              /* @__PURE__ */ jsxs4("span", { className: "opacity-40", children: [
+            /* @__PURE__ */ jsxs5("td", { className: "py-1 text-right text-xs tabular-nums", children: [
+              /* @__PURE__ */ jsx6("span", { className: n.errors > 0 ? "text-amber-300" : "opacity-50", children: n.errors }),
+              /* @__PURE__ */ jsxs5("span", { className: "opacity-40", children: [
                 " / ",
                 n.drops
               ] })
@@ -884,15 +993,15 @@ function LiveView({ hostId, fetchLive }) {
         ] })
       }
     ),
-    /* @__PURE__ */ jsx5(Section, { title: "Dateisysteme", children: /* @__PURE__ */ jsx5("table", { className: "w-full text-sm", "data-testid": "live-filesystems", children: /* @__PURE__ */ jsx5("tbody", { className: "divide-y divide-white/5", children: data.filesystems.map((f) => /* @__PURE__ */ jsxs4("tr", { children: [
-      /* @__PURE__ */ jsx5("td", { className: "py-1 font-mono text-xs", children: f.mount }),
-      /* @__PURE__ */ jsxs4("td", { className: "py-1 text-xs opacity-50", children: [
+    /* @__PURE__ */ jsx6(Section, { title: "Dateisysteme", children: /* @__PURE__ */ jsx6("table", { className: "w-full text-sm", "data-testid": "live-filesystems", children: /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: data.filesystems.map((f) => /* @__PURE__ */ jsxs5("tr", { children: [
+      /* @__PURE__ */ jsx6("td", { className: "py-1 font-mono text-xs", children: f.mount }),
+      /* @__PURE__ */ jsxs5("td", { className: "py-1 text-xs opacity-50", children: [
         f.device,
         " \xB7 ",
         f.fstype
       ] }),
-      /* @__PURE__ */ jsx5("td", { className: "w-48 py-1", children: /* @__PURE__ */ jsx5(Meter, { percent: f.percent }) }),
-      /* @__PURE__ */ jsxs4("td", { className: "py-1 pl-3 text-right text-xs tabular-nums", children: [
+      /* @__PURE__ */ jsx6("td", { className: "w-48 py-1", children: /* @__PURE__ */ jsx6(Meter, { percent: f.percent }) }),
+      /* @__PURE__ */ jsxs5("td", { className: "py-1 pl-3 text-right text-xs tabular-nums", children: [
         formatBytes(f.used),
         " / ",
         formatBytes(f.size),
@@ -901,35 +1010,35 @@ function LiveView({ hostId, fetchLive }) {
         " %)"
       ] })
     ] }, `${f.device}-${f.mount}`)) }) }) }),
-    /* @__PURE__ */ jsxs4(
+    /* @__PURE__ */ jsxs5(
       Section,
       {
         title: `Prozesse (${data.process_count})`,
-        extra: /* @__PURE__ */ jsxs4("div", { className: "ml-auto flex gap-1 text-[11px]", role: "group", "aria-label": "Sortierung", children: [
-          /* @__PURE__ */ jsx5("button", { type: "button", "aria-pressed": procSort === "cpu", onClick: () => setProcSort("cpu"), className: `rounded px-2 py-0.5 ${procSort === "cpu" ? "bg-white/15" : "opacity-60 hover:opacity-100"}`, children: "nach CPU" }),
-          /* @__PURE__ */ jsx5("button", { type: "button", "aria-pressed": procSort === "mem", onClick: () => setProcSort("mem"), className: `rounded px-2 py-0.5 ${procSort === "mem" ? "bg-white/15" : "opacity-60 hover:opacity-100"}`, children: "nach RAM" })
+        extra: /* @__PURE__ */ jsxs5("div", { className: "ml-auto flex gap-1 text-[11px]", role: "group", "aria-label": "Sortierung", children: [
+          /* @__PURE__ */ jsx6("button", { type: "button", "aria-pressed": procSort === "cpu", onClick: () => setProcSort("cpu"), className: `rounded px-2 py-0.5 ${procSort === "cpu" ? "bg-white/15" : "opacity-60 hover:opacity-100"}`, children: "nach CPU" }),
+          /* @__PURE__ */ jsx6("button", { type: "button", "aria-pressed": procSort === "mem", onClick: () => setProcSort("mem"), className: `rounded px-2 py-0.5 ${procSort === "mem" ? "bg-white/15" : "opacity-60 hover:opacity-100"}`, children: "nach RAM" })
         ] }),
         children: [
-          /* @__PURE__ */ jsxs4("table", { className: "w-full text-sm", "data-testid": "processes", children: [
-            /* @__PURE__ */ jsx5("thead", { children: /* @__PURE__ */ jsxs4("tr", { className: "text-left text-[11px] uppercase opacity-50", children: [
-              /* @__PURE__ */ jsx5("th", { className: "py-1 font-normal", children: "PID" }),
-              /* @__PURE__ */ jsx5("th", { className: "py-1 font-normal", children: "Name" }),
-              /* @__PURE__ */ jsx5("th", { className: "py-1 font-normal", children: "Benutzer" }),
-              /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "CPU" }),
-              /* @__PURE__ */ jsx5("th", { className: "py-1 text-right font-normal", children: "RAM" })
+          /* @__PURE__ */ jsxs5("table", { className: "w-full text-sm", "data-testid": "processes", children: [
+            /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs5("tr", { className: "text-left text-xs opacity-50", children: [
+              /* @__PURE__ */ jsx6("th", { className: "py-1 font-normal", children: "PID" }),
+              /* @__PURE__ */ jsx6("th", { className: "py-1 font-normal", children: "Name" }),
+              /* @__PURE__ */ jsx6("th", { className: "py-1 font-normal", children: "Benutzer" }),
+              /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "CPU" }),
+              /* @__PURE__ */ jsx6("th", { className: "py-1 text-right font-normal", children: "RAM" })
             ] }) }),
-            /* @__PURE__ */ jsx5("tbody", { className: "divide-y divide-white/5", children: procs.slice(0, 15).map((p) => /* @__PURE__ */ jsxs4("tr", { children: [
-              /* @__PURE__ */ jsx5("td", { className: "py-1 font-mono text-xs opacity-60", children: p.pid }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1", children: p.name }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1 text-xs opacity-60", children: p.user ?? "?" }),
-              /* @__PURE__ */ jsxs4("td", { className: "py-1 text-right tabular-nums", children: [
+            /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: procs.slice(0, 15).map((p) => /* @__PURE__ */ jsxs5("tr", { children: [
+              /* @__PURE__ */ jsx6("td", { className: "py-1 font-mono text-xs opacity-60", children: p.pid }),
+              /* @__PURE__ */ jsx6("td", { className: "py-1", children: p.name }),
+              /* @__PURE__ */ jsx6("td", { className: "py-1 text-xs opacity-60", children: p.user ?? "?" }),
+              /* @__PURE__ */ jsxs5("td", { className: "py-1 text-right tabular-nums", children: [
                 p.cpu_percent.toFixed(1),
                 " %"
               ] }),
-              /* @__PURE__ */ jsx5("td", { className: "py-1 text-right tabular-nums", children: formatBytes(p.mem_bytes) })
+              /* @__PURE__ */ jsx6("td", { className: "py-1 text-right tabular-nums", children: formatBytes(p.mem_bytes) })
             ] }, p.pid)) })
           ] }),
-          /* @__PURE__ */ jsxs4("p", { className: "mt-2 text-[11px] opacity-40", children: [
+          /* @__PURE__ */ jsxs5("p", { className: "mt-2 text-[11px] opacity-40", children: [
             "CPU wie im Task-Manager: Anteil an allen ",
             cpu.cores,
             " Kernen, gemessen \xFCber ",
@@ -943,7 +1052,7 @@ function LiveView({ hostId, fetchLive }) {
 }
 
 // src/SystemPage.tsx
-import { jsx as jsx6, jsxs as jsxs5 } from "react/jsx-runtime";
+import { jsx as jsx7, jsxs as jsxs6 } from "react/jsx-runtime";
 function tileState(row) {
   if (!row) return { extra: null, hint: null };
   const load = [
@@ -956,29 +1065,29 @@ function tileState(row) {
 var TONE_TEXT = { good: "text-emerald-300", warn: "text-amber-300", danger: "text-red-300" };
 var TONE_BAR = { good: "bg-emerald-400/70", warn: "bg-amber-400/80", danger: "bg-red-400/80" };
 function Bar({ percent, tone }) {
-  return /* @__PURE__ */ jsx6("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx6("div", { className: `h-full ${TONE_BAR[tone] ?? TONE_BAR.good}`, style: { width: `${Math.min(100, Math.max(0, percent))}%` } }) });
+  return /* @__PURE__ */ jsx7("div", { className: "h-1.5 w-full overflow-hidden rounded bg-white/10", children: /* @__PURE__ */ jsx7("div", { className: `h-full ${TONE_BAR[tone] ?? TONE_BAR.good}`, style: { width: `${Math.min(100, Math.max(0, percent))}%` } }) });
 }
 function Stat({ label, value, sub, tone }) {
-  return /* @__PURE__ */ jsxs5("div", { className: "panel p-3", children: [
-    /* @__PURE__ */ jsx6("p", { className: "text-[11px] uppercase tracking-wider opacity-50", children: label }),
-    /* @__PURE__ */ jsx6("p", { className: `text-lg font-semibold tabular-nums ${tone && tone !== "good" ? TONE_TEXT[tone] ?? "" : ""}`, children: value }),
-    sub && /* @__PURE__ */ jsx6("p", { className: "text-xs opacity-60", children: sub })
+  return /* @__PURE__ */ jsxs6("div", { className: "panel p-3", children: [
+    /* @__PURE__ */ jsx7("p", { className: "text-xs opacity-50", children: label }),
+    /* @__PURE__ */ jsx7("p", { className: `text-lg font-semibold tabular-nums ${tone && tone !== "good" ? TONE_TEXT[tone] ?? "" : ""}`, children: value }),
+    sub && /* @__PURE__ */ jsx7("p", { className: "text-xs opacity-60", children: sub })
   ] });
 }
 function UnitRow({ unit, tone, canRestart, busy, onRestart }) {
-  return /* @__PURE__ */ jsxs5("li", { className: "flex items-center justify-between gap-2 py-0.5", children: [
-    /* @__PURE__ */ jsx6("span", { className: `break-words ${tone ?? ""}`, children: unit }),
-    canRestart && /* @__PURE__ */ jsx6(Button, { small: true, ariaLabel: `${unit} neu starten`, disabled: busy !== null, onClick: () => onRestart(unit), children: busy === unit ? "Startet neu \u2026" : "Neu starten" })
+  return /* @__PURE__ */ jsxs6("li", { className: "flex items-center justify-between gap-2 py-0.5", children: [
+    /* @__PURE__ */ jsx7("span", { className: `break-words ${tone ?? ""}`, children: unit }),
+    canRestart && /* @__PURE__ */ jsx7(Button, { small: true, ariaLabel: `${unit} neu starten`, disabled: busy !== null, onClick: () => onRestart(unit), children: busy === unit ? "Startet neu \u2026" : "Neu starten" })
   ] });
 }
-function InfoView({ info, canRestart, busyUnit, onRestart }) {
+function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged }) {
   const memUsed = info.mem_total != null && info.mem_available != null ? info.mem_total - info.mem_available : null;
   const memPct = memUsed != null && info.mem_total ? 100 * memUsed / info.mem_total : null;
   const swapPct = info.swap_total ? 100 * (info.swap_used ?? 0) / info.swap_total : null;
   const security = (info.updates ?? []).filter((u) => u.security).length;
   const restartable = new Set(info.restartable_units ?? []);
-  return /* @__PURE__ */ jsxs5("div", { "data-testid": "system-info", children: [
-    /* @__PURE__ */ jsxs5("p", { className: "mb-4 text-sm opacity-70", children: [
+  return /* @__PURE__ */ jsxs6("div", { "data-testid": "system-info", children: [
+    /* @__PURE__ */ jsxs6("p", { className: "mb-4 text-sm opacity-70", children: [
       info.os ?? "Linux",
       " \xB7 Kernel ",
       info.kernel ?? "?",
@@ -987,63 +1096,64 @@ function InfoView({ info, canRestart, busyUnit, onRestart }) {
       " \xB7 Hostname ",
       info.hostname ?? "?"
     ] }),
-    info.findings.length > 0 ? /* @__PURE__ */ jsx6("ul", { className: "panel mb-4 divide-y divide-white/5 text-sm", "data-testid": "findings", children: info.findings.map((f) => /* @__PURE__ */ jsx6("li", { className: `px-3 py-2 ${TONE_TEXT[f.tone] ?? ""}`, children: f.text }, f.text)) }) : /* @__PURE__ */ jsx6("p", { className: "panel mb-4 px-3 py-2 text-sm text-emerald-300", "data-testid": "findings", children: "Alles in Ordnung \u2013 nichts braucht Aufmerksamkeit." }),
-    /* @__PURE__ */ jsxs5("div", { className: "mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
-      /* @__PURE__ */ jsx6(Stat, { label: "L\xE4uft seit", value: formatUptime(info.uptime_s) }),
-      /* @__PURE__ */ jsx6(Stat, { label: "CPU", value: info.cpu_percent != null ? `${info.cpu_percent.toFixed(0)} %` : "?", sub: `${info.cpus ?? "?"} Kerne \xB7 Last ${info.load.map((l) => l.toFixed(2)).join(" / ")}` }),
-      /* @__PURE__ */ jsx6(Stat, { label: "RAM", value: memPct != null ? `${memPct.toFixed(0)} %` : "?", sub: `${formatBytes(memUsed)} von ${formatBytes(info.mem_total)}` }),
-      /* @__PURE__ */ jsx6(Stat, { label: "Swap", value: swapPct != null ? `${swapPct.toFixed(0)} %` : "keiner", sub: info.swap_total ? `${formatBytes(info.swap_used)} von ${formatBytes(info.swap_total)}` : void 0 }),
-      /* @__PURE__ */ jsx6(Stat, { label: "Temperatur", value: info.temperature_c != null ? `${info.temperature_c.toFixed(0)} \xB0C` : "\u2013", tone: info.temperature_tone })
+    info.findings.length > 0 ? /* @__PURE__ */ jsx7("ul", { className: "panel mb-4 divide-y divide-white/5 text-sm", "data-testid": "findings", children: info.findings.map((f) => /* @__PURE__ */ jsx7("li", { className: `px-3 py-2 ${TONE_TEXT[f.tone] ?? ""}`, children: f.text }, f.text)) }) : /* @__PURE__ */ jsx7("p", { className: "panel mb-4 px-3 py-2 text-sm text-emerald-300", "data-testid": "findings", children: "Alles in Ordnung \u2013 nichts braucht Aufmerksamkeit." }),
+    /* @__PURE__ */ jsxs6("div", { className: "mb-6 grid grid-cols-2 gap-3 lg:grid-cols-5", children: [
+      /* @__PURE__ */ jsx7(Stat, { label: "L\xE4uft seit", value: formatUptime(info.uptime_s) }),
+      /* @__PURE__ */ jsx7(Stat, { label: "CPU", value: info.cpu_percent != null ? `${info.cpu_percent.toFixed(0)} %` : "?", sub: `${info.cpus ?? "?"} Kerne \xB7 Last ${info.load.map((l) => l.toFixed(2)).join(" / ")}` }),
+      /* @__PURE__ */ jsx7(Stat, { label: "RAM", value: memPct != null ? `${memPct.toFixed(0)} %` : "?", sub: `${formatBytes(memUsed)} von ${formatBytes(info.mem_total)}` }),
+      /* @__PURE__ */ jsx7(Stat, { label: "Swap", value: swapPct != null ? `${swapPct.toFixed(0)} %` : "keiner", sub: info.swap_total ? `${formatBytes(info.swap_used)} von ${formatBytes(info.swap_total)}` : void 0 }),
+      /* @__PURE__ */ jsx7(Stat, { label: "Temperatur", value: info.temperature_c != null ? `${info.temperature_c.toFixed(0)} \xB0C` : "\u2013", tone: info.temperature_tone })
     ] }),
-    /* @__PURE__ */ jsx6("h3", { className: "mb-2 text-sm font-semibold uppercase tracking-wider opacity-70", children: "Dateisysteme" }),
-    /* @__PURE__ */ jsxs5("table", { className: "mb-6 w-full text-sm", "data-testid": "disks", children: [
-      /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs5("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
-        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Einh\xE4ngepunkt" }),
-        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Ger\xE4t" }),
-        /* @__PURE__ */ jsx6("th", { className: "py-1 w-1/3", children: "Belegung" }),
-        /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Frei" })
+    info.temperature_c != null && /* @__PURE__ */ jsx7("div", { className: "panel mb-6 p-3", children: /* @__PURE__ */ jsx7(TempLimit, { hostId: info.host.id, onChanged: onTempLimitChanged }) }),
+    /* @__PURE__ */ jsx7("h3", { className: "mb-2 text-sm font-semibold opacity-70", children: "Dateisysteme" }),
+    /* @__PURE__ */ jsxs6("table", { className: "mb-6 w-full text-sm", "data-testid": "disks", children: [
+      /* @__PURE__ */ jsx7("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
+        /* @__PURE__ */ jsx7("th", { className: "py-1", children: "Einh\xE4ngepunkt" }),
+        /* @__PURE__ */ jsx7("th", { className: "py-1", children: "Ger\xE4t" }),
+        /* @__PURE__ */ jsx7("th", { className: "py-1 w-1/3", children: "Belegung" }),
+        /* @__PURE__ */ jsx7("th", { className: "py-1", children: "Frei" })
       ] }) }),
-      /* @__PURE__ */ jsx6("tbody", { className: "divide-y divide-white/5", children: info.disks.map((d) => /* @__PURE__ */ jsxs5("tr", { children: [
-        /* @__PURE__ */ jsx6("td", { className: "py-1.5 break-words", children: d.mount }),
-        /* @__PURE__ */ jsxs5("td", { className: "py-1.5 break-words opacity-70", children: [
+      /* @__PURE__ */ jsx7("tbody", { className: "divide-y divide-white/5", children: info.disks.map((d) => /* @__PURE__ */ jsxs6("tr", { children: [
+        /* @__PURE__ */ jsx7("td", { className: "py-1.5 break-words", children: d.mount }),
+        /* @__PURE__ */ jsxs6("td", { className: "py-1.5 break-words opacity-70", children: [
           d.device,
           " \xB7 ",
           d.fstype
         ] }),
-        /* @__PURE__ */ jsxs5("td", { className: "py-1.5 pr-4", children: [
-          /* @__PURE__ */ jsxs5("div", { className: `mb-0.5 text-xs ${TONE_TEXT[d.tone] ?? ""}`, children: [
+        /* @__PURE__ */ jsxs6("td", { className: "py-1.5 pr-4", children: [
+          /* @__PURE__ */ jsxs6("div", { className: `mb-0.5 text-xs ${TONE_TEXT[d.tone] ?? ""}`, children: [
             d.percent.toFixed(0),
             " % von ",
             formatBytes(d.size)
           ] }),
-          /* @__PURE__ */ jsx6(Bar, { percent: d.percent, tone: d.tone })
+          /* @__PURE__ */ jsx7(Bar, { percent: d.percent, tone: d.tone })
         ] }),
-        /* @__PURE__ */ jsx6("td", { className: "py-1.5 whitespace-nowrap opacity-80", children: formatBytes(d.available) })
+        /* @__PURE__ */ jsx7("td", { className: "py-1.5 whitespace-nowrap opacity-80", children: formatBytes(d.available) })
       ] }, `${d.device}${d.mount}`)) })
     ] }),
-    /* @__PURE__ */ jsxs5("div", { className: "grid gap-6 lg:grid-cols-2", children: [
-      /* @__PURE__ */ jsxs5("div", { children: [
-        /* @__PURE__ */ jsx6("h3", { className: "mb-2 text-sm font-semibold uppercase tracking-wider opacity-70", children: "Dienste" }),
-        info.failed_units.length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-70", children: "Keine fehlgeschlagenen systemd-Dienste." }) : /* @__PURE__ */ jsx6("ul", { className: "text-sm", "data-testid": "failed-units", children: info.failed_units.map((u) => /* @__PURE__ */ jsx6(UnitRow, { unit: u, tone: "text-red-300", canRestart: canRestart && restartable.has(u), busy: busyUnit, onRestart }, u)) }),
-        (info.running_units?.length ?? 0) > 0 && /* @__PURE__ */ jsxs5("details", { className: "mt-3", "data-testid": "running-units", children: [
-          /* @__PURE__ */ jsxs5("summary", { className: "cursor-pointer text-sm", children: [
+    /* @__PURE__ */ jsxs6("div", { className: "grid gap-6 lg:grid-cols-2", children: [
+      /* @__PURE__ */ jsxs6("div", { children: [
+        /* @__PURE__ */ jsx7("h3", { className: "mb-2 text-sm font-semibold opacity-70", children: "Dienste" }),
+        info.failed_units.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-70", children: "Keine fehlgeschlagenen systemd-Dienste." }) : /* @__PURE__ */ jsx7("ul", { className: "text-sm", "data-testid": "failed-units", children: info.failed_units.map((u) => /* @__PURE__ */ jsx7(UnitRow, { unit: u, tone: "text-red-300", canRestart: canRestart && restartable.has(u), busy: busyUnit, onRestart }, u)) }),
+        (info.running_units?.length ?? 0) > 0 && /* @__PURE__ */ jsxs6("details", { className: "mt-3", "data-testid": "running-units", children: [
+          /* @__PURE__ */ jsxs6("summary", { className: "cursor-pointer text-sm", children: [
             info.running_units?.length,
             " laufende Dienste"
           ] }),
-          /* @__PURE__ */ jsx6("ul", { className: "mt-1 max-h-72 overflow-y-auto text-xs opacity-90", children: info.running_units?.map((u) => /* @__PURE__ */ jsx6(UnitRow, { unit: u, canRestart: canRestart && restartable.has(u), busy: busyUnit, onRestart }, u)) })
+          /* @__PURE__ */ jsx7("ul", { className: "mt-1 max-h-72 overflow-y-auto text-xs opacity-90", children: info.running_units?.map((u) => /* @__PURE__ */ jsx7(UnitRow, { unit: u, canRestart: canRestart && restartable.has(u), busy: busyUnit, onRestart }, u)) })
         ] })
       ] }),
-      /* @__PURE__ */ jsxs5("div", { children: [
-        /* @__PURE__ */ jsx6("h3", { className: "mb-2 text-sm font-semibold uppercase tracking-wider opacity-70", children: "Updates" }),
-        info.updates == null ? /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-70", children: "Paketverwaltung nicht unterst\xFCtzt (nur apt)." }) : info.updates.length === 0 ? /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-70", children: "Auf dem neuesten Stand (laut letzter Paketlisten-Aktualisierung)." }) : /* @__PURE__ */ jsxs5("details", { "data-testid": "updates", children: [
-          /* @__PURE__ */ jsxs5("summary", { className: "cursor-pointer text-sm", children: [
+      /* @__PURE__ */ jsxs6("div", { children: [
+        /* @__PURE__ */ jsx7("h3", { className: "mb-2 text-sm font-semibold opacity-70", children: "Updates" }),
+        info.updates == null ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-70", children: "Paketverwaltung nicht unterst\xFCtzt (nur apt)." }) : info.updates.length === 0 ? /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-70", children: "Auf dem neuesten Stand (laut letzter Paketlisten-Aktualisierung)." }) : /* @__PURE__ */ jsxs6("details", { "data-testid": "updates", children: [
+          /* @__PURE__ */ jsxs6("summary", { className: "cursor-pointer text-sm", children: [
             info.updates.length,
             " Update(s) ausstehend",
             security ? `, davon ${security} Sicherheits-Update(s)` : ""
           ] }),
-          /* @__PURE__ */ jsx6("ul", { className: "mt-1 columns-2 text-xs opacity-80", children: info.updates.map((u) => /* @__PURE__ */ jsx6("li", { className: `break-words ${u.security ? "text-amber-300" : ""}`, children: u.package }, u.package)) })
+          /* @__PURE__ */ jsx7("ul", { className: "mt-1 columns-2 text-xs opacity-80", children: info.updates.map((u) => /* @__PURE__ */ jsx7("li", { className: `break-words ${u.security ? "text-amber-300" : ""}`, children: u.package }, u.package)) })
         ] }),
-        info.reboot_required && /* @__PURE__ */ jsx6("p", { className: "mt-2 text-sm text-amber-300", children: "Neustart n\xF6tig, damit installierte Updates greifen." })
+        info.reboot_required && /* @__PURE__ */ jsx7("p", { className: "mt-2 text-sm text-amber-300", children: "Neustart n\xF6tig, damit installierte Updates greifen." })
       ] })
     ] })
   ] });
@@ -1051,15 +1161,15 @@ function InfoView({ info, canRestart, busyUnit, onRestart }) {
 function SystemPage() {
   const [urlParams, updateUrl] = useUrlParams();
   const hostId = urlParams.get("host") || null;
-  const [hosts, setHosts] = useState5(null);
-  const [hostsError, setHostsError] = useState5(null);
-  const [health, setHealth] = useState5({});
-  const [info, setInfo] = useState5(null);
-  const [error, setError] = useState5(null);
-  const [loading, setLoading] = useState5(false);
-  const [tab, setTab] = useState5("live");
-  const [busy, setBusy] = useState5(null);
-  const [message, setMessage] = useState5(null);
+  const [hosts, setHosts] = useState6(null);
+  const [hostsError, setHostsError] = useState6(null);
+  const [health, setHealth] = useState6({});
+  const [info, setInfo] = useState6(null);
+  const [error, setError] = useState6(null);
+  const [loading, setLoading] = useState6(false);
+  const [tab, setTab] = useState6("live");
+  const [busy, setBusy] = useState6(null);
+  const [message, setMessage] = useState6(null);
   const unmountSignal = useUnmountSignal();
   const canRestart = deck().hasPermission("hosts.execute");
   const hostIdRef = useRef4(hostId);
@@ -1067,13 +1177,13 @@ function SystemPage() {
   hostIdRef.current = hostId;
   tabRef.current = tab;
   const busyUnit = busy && busy.hostId === hostId ? busy.unit : null;
-  const fetchLive = useCallback2(async (id) => {
+  const fetchLive = useCallback3(async (id) => {
     const res = await authedFetch(`/ext/system/hosts/${id}/live`);
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(errorFromBody(body, res.status));
     return body;
   }, []);
-  const loadHosts = useCallback2(() => {
+  const loadHosts = useCallback3(() => {
     setHosts(null);
     setHostsError(null);
     fetchJson("/hosts").then((list) => setHosts(list.filter((h) => h.os_family === "linux"))).catch((err) => {
@@ -1081,13 +1191,13 @@ function SystemPage() {
       setHostsError(errorMessage(err));
     });
   }, []);
-  useEffect6(() => {
+  useEffect7(() => {
     loadHosts();
     authedFetch("/ext/system/widgets/health").then((res) => res.ok ? res.json() : null).then((body) => {
       if (body && Array.isArray(body.data)) setHealth(Object.fromEntries(body.data.map((r) => [r.host_id, r])));
     }).catch(() => void 0);
   }, [loadHosts]);
-  const load = useCallback2(async (id) => {
+  const load = useCallback3(async (id) => {
     setLoading(true);
     setError(null);
     try {
@@ -1104,7 +1214,7 @@ function SystemPage() {
       setLoading(false);
     }
   }, []);
-  useEffect6(() => {
+  useEffect7(() => {
     setInfo(null);
     if (hostId && tab === "info") void load(hostId);
   }, [hostId, tab, load]);
@@ -1121,7 +1231,7 @@ function SystemPage() {
     })),
     [hosts, health]
   );
-  useEffect6(() => {
+  useEffect7(() => {
     setMessage(null);
   }, [hostId]);
   async function restartUnit(unit) {
@@ -1154,13 +1264,13 @@ function SystemPage() {
       if (hostIdRef.current === hostId && tabRef.current === "info") void load(hostId);
     }
   }
-  return /* @__PURE__ */ jsxs5("div", { className: "p-4 sm:p-6", children: [
-    /* @__PURE__ */ jsxs5("div", { className: "mb-4 flex flex-wrap items-center gap-3", children: [
-      /* @__PURE__ */ jsxs5("h2", { className: "text-2xl font-semibold tracking-tight", children: [
+  return /* @__PURE__ */ jsxs6("div", { className: "p-4 sm:p-6", children: [
+    /* @__PURE__ */ jsxs6("div", { className: "mb-4 flex flex-wrap items-center gap-3", children: [
+      /* @__PURE__ */ jsxs6("h2", { className: "text-2xl font-semibold tracking-tight", children: [
         "Server-Zustand",
         hostName ? `: ${hostName}` : ""
       ] }),
-      hostId && /* @__PURE__ */ jsx6("div", { className: "flex overflow-hidden rounded-lg border border-white/10 text-xs", role: "tablist", "aria-label": "Ansicht", children: [["live", "Live"], ["info", "Zustand & Updates"]].map(([key, label]) => /* @__PURE__ */ jsx6(
+      hostId && /* @__PURE__ */ jsx7("div", { className: "flex overflow-hidden rounded-lg border border-white/10 text-xs", role: "tablist", "aria-label": "Ansicht", children: [["live", "Live"], ["info", "Zustand & Updates"]].map(([key, label]) => /* @__PURE__ */ jsx7(
         "button",
         {
           type: "button",
@@ -1172,28 +1282,28 @@ function SystemPage() {
         },
         key
       )) }),
-      hostId && tab === "info" && /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => void load(hostId), disabled: loading, className: "rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 disabled:opacity-40", children: loading ? "Frage ab \u2026" : "Aktualisieren" })
+      hostId && tab === "info" && /* @__PURE__ */ jsx7("button", { type: "button", onClick: () => void load(hostId), disabled: loading, className: "rounded bg-white/10 px-2 py-1 text-xs hover:bg-white/20 disabled:opacity-40", children: loading ? "Frage ab \u2026" : "Aktualisieren" })
     ] }),
-    hostsError && /* @__PURE__ */ jsx6(LoadError, { what: "Die Server-Liste", error: hostsError, onRetry: loadHosts }),
-    !hostId && hosts !== null && hosts.length > 0 && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-sm opacity-60", children: "Einen Linux-Server w\xE4hlen \u2013 oder auf dessen Server-Seite die Kachel \u201EServer-Zustand\u201C \xF6ffnen." }),
-    (hosts === null || hosts.length > 0) && /* @__PURE__ */ jsx6("div", { className: "mb-4", children: /* @__PURE__ */ jsx6(HostPicker, { hosts: tiles, value: hostId, onChange: (id) => updateUrl({ host: id }), storageKey: "system" }) }),
-    !hostId && hosts !== null && hosts.length === 0 && !hostsError && /* @__PURE__ */ jsx6(
+    hostsError && /* @__PURE__ */ jsx7(LoadError, { what: "Die Server-Liste", error: hostsError, onRetry: loadHosts }),
+    !hostId && hosts !== null && hosts.length > 0 && /* @__PURE__ */ jsx7("p", { className: "mb-2 text-sm opacity-60", children: "Einen Linux-Server w\xE4hlen \u2013 oder auf dessen Server-Seite die Kachel \u201EServer-Zustand\u201C \xF6ffnen." }),
+    (hosts === null || hosts.length > 0) && /* @__PURE__ */ jsx7("div", { className: "mb-4", children: /* @__PURE__ */ jsx7(HostPicker, { hosts: tiles, value: hostId, onChange: (id) => updateUrl({ host: id }), storageKey: "system" }) }),
+    !hostId && hosts !== null && hosts.length === 0 && !hostsError && /* @__PURE__ */ jsx7(
       EmptyState,
       {
         icon: "eye",
         title: "Noch kein Linux-Server",
         text: "Lege unter Server & Zug\xE4nge einen Linux-Server mit SSH-Zugang an. Dann siehst du hier seine Auslastung, Dienste und Updates.",
-        action: /* @__PURE__ */ jsx6(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" })
+        action: /* @__PURE__ */ jsx7(SettingsLink, { to: "/settings/hosts", permission: "hosts.write", children: "Server & Zug\xE4nge \xF6ffnen" })
       }
     ),
-    hostId && tab === "live" && /* @__PURE__ */ jsx6(LiveView, { hostId, fetchLive }),
-    tab === "info" && error && /* @__PURE__ */ jsxs5("p", { className: "text-sm text-red-400", children: [
+    hostId && tab === "live" && /* @__PURE__ */ jsx7(LiveView, { hostId, fetchLive }),
+    tab === "info" && error && /* @__PURE__ */ jsxs6("p", { className: "text-sm text-red-400", children: [
       "Fehler: ",
       error
     ] }),
-    hostId && tab === "info" && loading && !info && /* @__PURE__ */ jsx6("p", { className: "text-sm opacity-60", children: "Frage den Server ab \u2026 (dauert gut eine Sekunde, die CPU-Last wird \xFCber 1 s gemessen)" }),
-    tab === "info" && message && /* @__PURE__ */ jsx6(Notice, { kind: message.kind, text: message.text, onClose: () => setMessage(null) }),
-    tab === "info" && info && /* @__PURE__ */ jsx6(InfoView, { info, canRestart, busyUnit, onRestart: (u) => void restartUnit(u) })
+    hostId && tab === "info" && loading && !info && /* @__PURE__ */ jsx7("p", { className: "text-sm opacity-60", children: "Frage den Server ab \u2026 (dauert gut eine Sekunde, die CPU-Last wird \xFCber 1 s gemessen)" }),
+    tab === "info" && message && /* @__PURE__ */ jsx7(Notice, { kind: message.kind, text: message.text, onClose: () => setMessage(null) }),
+    tab === "info" && info && /* @__PURE__ */ jsx7(InfoView, { info, canRestart, busyUnit, onRestart: (u) => void restartUnit(u), onTempLimitChanged: () => void load(info.host.id) })
   ] });
 }
 export {

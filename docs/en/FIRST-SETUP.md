@@ -25,10 +25,15 @@ Deck still has a gap, the guide says so. Without the web interface (using only t
 
 ### 1.1 Installation without the repo
 
-If you only have Docker and do not know the repository, you need a single file: download
-[`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml) as `compose.yml` into an empty folder and start
-it there. The ready-made image comes from the GitHub Container Registry (`ghcr.io/nodvard/deck`, for x86
-machines and the Raspberry Pi); nothing is built:
+If you only have Docker and do not know the repository, you need a single file:
+[`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml). The ready-made image comes from the
+GitHub Container Registry (`ghcr.io/nodvard/deck`, for x86 machines and the Raspberry Pi); nothing is built.
+Pick one way and expand it:
+
+<details>
+<summary><b>Docker Compose in a terminal</b></summary>
+
+Download the file as `compose.yml` into an empty folder and start it there:
 
 ```bash
 mkdir ~/nodvard-deck && cd ~/nodvard-deck
@@ -36,31 +41,125 @@ curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/de
 docker compose up -d
 ```
 
+On Windows these are commands for a Linux shell (also WSL or Git Bash); in PowerShell, write `curl.exe`
+instead of `curl` and run the commands one by one.
+
 To check it afterwards, on the same machine:
 
 ```bash
 curl -s http://localhost:8080/api/v1/health      # expected: "status":"ok"
 ```
 
+- **Open:** `http://<address-of-the-machine>:8080`, e.g. **http://192.168.1.10:8080**.
+- **Port already in use?** (message "port is already allocated" or "address already in use"): put a file
+  `.env` with the line `NODVARD_DECK_PORT=8081` next to `compose.yml` and run `docker compose up -d` again.
+  The address is then `…:8081`, also for the check above.
+- **Setup code:** `docker compose logs nodvard-deck | grep -A1 Einrichtungscode` in the same folder (more
+  in [section 2](#2-setup-wizard-setup)). The log line is in German and starts with "Einrichtungscode".
+- **Updating:** in the same folder, `docker compose pull && docker compose up -d`. Your data is kept.
+
+</details>
+
+<details>
+<summary><b>Portainer, way 1: from the repository</b></summary>
+
+1. **Stacks → Add stack**, name e.g. `nodvard-deck` (lowercase letters, digits, `-` and `_` only).
+2. Choose **Repository** as the build method and enter:
+   - **Repository URL:** `https://github.com/nodvard/deck`
+   - **Repository reference:** `refs/heads/main`
+   - **Compose path:** `deploy/compose.standalone.yml`
+
+   You do not need to log in; the repository is public.
+3. **Deploy the stack**.
+
+- **Open:** `http://<address-of-the-machine>:8080`. As a check,
+  `http://<address-of-the-machine>:8080/api/v1/health` shows `"status":"ok"` in the browser.
+- **Port already in use?** Under **Environment variables**, add the variable `NODVARD_DECK_PORT` with e.g.
+  `8081`: for a new stack before "Deploy the stack", for an existing one followed by a redeploy
+  ("Pull and redeploy"). The address is then `…:8081`.
+- **Setup code:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general
+  `<stack-name>-nodvard-deck-1`) → **Logs**; the line starts with "Einrichtungscode".
+- **Updating:** in the stack, **Pull and redeploy** with **Re-pull image** switched on. You can optionally
+  switch on Portainer's automatic updates ("Automatic updates", in newer versions "GitOps updates"): they
+  pick up changes to the Compose file in the repository on their own. A new version of Nodvard Deck,
+  however, is a new image and not a change to the file; you get it with "Pull and redeploy".
+
+</details>
+
+<details>
+<summary><b>Portainer, way 2: web editor</b></summary>
+
+1. Open the file [`deploy/compose.standalone.yml`](../../deploy/compose.standalone.yml)
+   ([as plain text](https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml))
+   and copy its **entire content**. It starts with `# Nodvard Deck ohne das Repository installieren` and
+   contains `services:` further down.
+2. **Stacks → Add stack**, name e.g. `nodvard-deck`, choose **Web editor** as the build method, paste the
+   content, **Deploy the stack**.
+
+Do **not** paste the three commands from the terminal way (`mkdir …`, `curl …`, `docker compose up -d`).
+They are shell commands, not a Compose file; Portainer then reports "top-level object must be a mapping".
+
+- **Open:** `http://<address-of-the-machine>:8080`. As a check,
+  `http://<address-of-the-machine>:8080/api/v1/health` shows `"status":"ok"` in the browser.
+- **Port already in use?** Under **Environment variables**, add the variable `NODVARD_DECK_PORT` with e.g.
+  `8081`: for a new stack before "Deploy the stack", for an existing one followed by "Update the stack".
+  The address is then `…:8081`.
+- **Setup code:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general
+  `<stack-name>-nodvard-deck-1`) → **Logs**; the line starts with "Einrichtungscode".
+- **Updating:** open the stack → **Editor** → **Update the stack** with **Re-pull image and redeploy**
+  switched on. You do not need to change anything in the editor for that.
+
+</details>
+
+<details>
+<summary><b>Raspberry Pi</b></summary>
+
+- A Raspberry Pi 4 or 5 with 4 GB RAM and a **64-bit system** (`uname -m` shows `aarch64`); the image is
+  available for `linux/arm64`. When idle, Nodvard Deck needs about 100 MB of memory; the image is just
+  under 400 MB. Docker with Docker Compose has to be installed.
+- An SD card can die: do not keep backups only on the Pi ([section 10](#10-back-up-the-dashboard-itself));
+  a USB SSD lasts longer than an SD card.
+- If Portainer runs on the Pi, the two Portainer ways above work the same.
+
+```bash
+mkdir ~/nodvard-deck && cd ~/nodvard-deck
+curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
+sudo docker compose up -d
+curl -s http://localhost:8080/api/v1/health      # expected: "status":"ok"
+```
+
+If your user is in the `docker` group, leave out `sudo`. The first start takes a while because the image
+has to be downloaded first.
+
+- **Open:** `http://<address-of-the-pi>:8080`
+- **Port already in use?** Put a file `.env` with the line `NODVARD_DECK_PORT=8081` next to `compose.yml`
+  and run `sudo docker compose up -d` again. The address is then `…:8081`.
+- **Setup code:** `sudo docker compose logs nodvard-deck | grep -A1 Einrichtungscode` in the same folder.
+- **Updating:** in the same folder, `sudo docker compose pull && sudo docker compose up -d`. Your data is
+  kept.
+
+</details>
+
 The database is created or updated automatically when the container starts; there is nothing to do for
-that. Then open `http://<address-of-the-machine>:8080` in your browser, e.g. **http://192.168.1.10:8080**
-(for a different port, use the variable `NODVARD_DECK_PORT`). The data lives in its own Docker storage
-(volume `nodvard-deck-data`). If you would rather use a folder on the NAS (`./daten:/app/data`), you do not
-need to set any permissions: when it starts, the container sets the ownership of that folder itself. Afterwards
-only the user with the number 1000 and root can read it (if the storage supports permissions); backup tools or
-file managers that run as another user need `sudo` for it. To update (in the same folder): `docker compose pull && docker compose up -d`.
+that. The data lives in its own Docker storage (volume `nodvard-deck-data`). If you would rather use a
+folder on the NAS (`./daten:/app/data`), you do not need to set any permissions: when it starts, the
+container sets the ownership of that folder itself. Afterwards only the user with the number 1000 and root
+can read it (if the storage supports permissions); backup tools or file managers that run as another user
+need `sudo` for it.
 The setup code (next section) is shown by the wizard together with instructions on where to find it
 (command line, Docker Desktop, Portainer, Synology, Unraid). The log line is in German and starts with
 "Einrichtungscode" (setup code).
 
 **All further commands in this guide** (setup code, log, emergency commands, restore) are run in the
 folder that contains `compose.yml`, so here after `cd ~/nodvard-deck`. The examples use `sudo docker …`;
-if your user is in the `docker` group (or you use Docker Desktop), leave out `sudo`.
+if your user is in the `docker` group (or you use Docker Desktop), leave out `sudo`. **With Portainer**
+there is no such folder: you find the log and the restart for the container in Portainer, and you enter
+commands such as the emergency commands in its console ([section 12](#12-locked-out-emergency-commands)).
 
 ### 1.2 Building from the repository (developers)
 
 If you clone the repository and build the image yourself, you start it in the repository's `deploy/`
-folder (`docker compose up -d --build`). Building, delivering to a Raspberry Pi (`scripts/deploy_pi.sh`),
+folder (`docker compose build --pull && docker compose up -d`; `--pull` fetches fresh base images). Building, delivering to a Raspberry Pi (`scripts/deploy_pi.sh`),
 the fallback route and rollback are covered in [deploy/README.md](../../deploy/README.md) (German). The check
 afterwards is the same as above (`curl -s http://localhost:8080/api/v1/health`).
 
@@ -141,7 +240,7 @@ first, then the common ones (Berlin, Vienna, Zurich …); known zones show their
 
 All bundled modules as tiles with a switch (except the sample module "Hello World" for developers, which only appears
 under Settings → Extensions), sorted by topic: first "For your servers" („Für deine Server“)
-(Server status („Server-Zustand“), Terminal, Service matrix, Proxmox VE …), then security, tools, connections to other services.
+(Server status („Server-Zustand“), Terminal, Docker, Proxmox VE …), then security, tools, connections to other services.
 One click on the tile or the switch turns a module on or off. No module is mandatory ("Skip"). Modules that
 still need details afterwards (address, credentials, token) carry the note "Needs details afterwards"
 („Braucht danach noch Angaben“); you enter these details **only after the wizard** under Settings →
@@ -164,8 +263,16 @@ gesichert“). "Skip" sets nothing up; you can do it later under Settings → My
 
 Product name („Produktname“), subtitle („Untertitel“: the small line under the name; the same text is the app's name on
 the phone's home screen, so keep it short), accent color („Akzentfarbe“) →
-"Save" („Speichern“), or "Skip". The logo and the remaining colors are available later under
-Settings → Appearance („Einstellungen → Aussehen“).
+"Save" („Speichern“), or "Skip". The logo, the favicon and the theme („Klassisch hell“, „Schlicht dunkel“,
+„Profi dunkel“, „Bisher“) are available later under Settings → Display („Einstellungen → Darstellung“). Logo and
+favicon are **uploaded** there; Nodvard Deck does not load images from other sites. If an older setup pointed to
+another site, the „Marke“ card shows a notice until you upload the image or remove it.
+There, admins (permission `branding.write`) can also add **custom CSS** for everyone („Eigenes CSS“), ideally by
+overriding theme variables, e.g. `:root { --radius: 0px; }`. Embedded images (`data:`) and paths on Nodvard Deck itself
+are allowed, `@import` and other sites are not. **Escape hatch:** if the custom CSS makes the interface unusable, add
+`?ohne-css=1` to the address (e.g. `http://deck:8080/settings/appearance?ohne-css=1`). The tab then loads without the
+custom CSS, also after clicking on; the „Eigenes CSS“ card says so and has a button „Wieder einschalten“ (turn back
+on). Everyone else keeps the CSS until you fix and save it.
 
 **Step 6 of 6 — Done** („Fertig“)
 
@@ -279,14 +386,14 @@ switch on the right; "Configure" („Konfigurieren“) opens the extension's set
 „Einrichtung nötig“ – means that details are still missing or that the last connection test failed). If you open
 the page of a module that is switched off (for example via a bookmark), it says so, and **"Switch on"** („Einschalten“)
 switches it on right there (without the privilege for that, it says that an administrator can switch it on). A good
-start for almost any home network: Terminal, Server status, Nodvard Shield and Push notifications, plus Service matrix if
+start for almost any home network: Terminal, Server status, Nodvard Shield and Push notifications, plus the Docker module if
 Docker runs on a server, and Game servers if a game server runs there. **You only need Proxmox VE and Proxmox-Backups if
 you use Proxmox** – otherwise leave them off (see [4.1](#41-without-proxmox)). The rest as needed.
 
-**"Beta":** Game servers and Network carry a "Beta" badge (in the settings, in the wizard, in the menu and above the
+**"Beta":** Game servers, Network, Pi-hole, Nginx Proxy Manager and Uptime Kuma carry a "Beta" badge (in the settings, in the wizard, in the menu and above the
 module's page). They work, but are not yet as thoroughly tested as the rest. Feedback helps.
 
-**Address check (Network):** On the "Network" page each proxy host of Nginx Proxy Manager shows which Docker container
+**Address check (Nginx Proxy Manager):** On the "Nginx Proxy Manager" page each proxy host shows which Docker container
 it leads to and whether it runs, e.g. „Führt zum Container immich_server auf docker – der ist gestoppt.“ (leads to the
 container immich_server on docker, which is stopped). If it is stopped, the button „Container starten“ starts it through
 the approval (for users with `hosts.execute`). The mapping uses the server address with port (also for stopped
@@ -294,7 +401,7 @@ containers; ports bound only to `127.0.0.1` do not count), `host.docker.internal
 itself runs on (`localhost` only if it runs in host network mode, otherwise that is Nginx Proxy Manager itself), and the
 container name or Compose service.
 Names only count on the server of Nginx Proxy Manager (Docker resolves them only in its own network); if that server is
-unknown, the result says „vermutlich“ (probably), without red and without a button. The Service Matrix must be switched
+unknown, the result says „vermutlich“ (probably), without red and without a button. The Docker module must be switched
 on for this, it knows the containers. A target that matches no container (e.g. the Proxmox web UI) is shown in grey and
 is not an error. Not detected: containers in host network mode (they show no ports), network aliases and additional
 locations of a proxy host.
@@ -344,10 +451,10 @@ different then:
   without a measurement the server becomes a plain row again. A server that is "unreachable" does not show old values
   as current. Servers without measurements (Windows, no SSH login, Server status module off, measurements turned off for the
   server) stay a single row, with a note on why where that fits.
-- **Docker containers:** Service matrix, for servers with the tag `docker`. There you start, stop and delete
+- **Docker containers:** Docker module, for servers with the tag `docker`. There you start, stop and delete
   containers (only stopped ones are deleted; volumes and the image stay), read their logs live, open a shell in the
   container with "Console" („Konsole“) and apply newer images ("Apply" – „Einspielen“, only for Docker Compose
-  services). If the new version crashes on start, the service matrix usually goes back to the old one by itself –
+  services). If the new version crashes on start, the Docker module usually goes back to the old one by itself –
   never for databases and other data stores; can be switched off under "Configure" („Bei Fehlstart automatisch zurück“).
   After "Start", "Restart" and "Restart stack" Deck checks for up to a minute whether the containers really
   run and keep running (without a healthcheck: twice, 15 seconds apart, without a new start). If a container crashes
@@ -355,10 +462,10 @@ different then:
   containers that ran before count. A single restart (for example because a dependency was not ready yet) and an end
   with exit code 0 (containers for one-off tasks) do not count as failures, they are only mentioned; "unhealthy" only
   counts if it stays that way until the end.
-- **Apps in the cockpit without the Service matrix:** In the "Apps" area you create your own tiles with **+ Add app**
+- **Apps in the cockpit without the Docker module:** In the "Apps" area you create your own tiles with **+ Add app**
   („+ App hinzufügen“) – name, address (`http://192.168.1.1`), icon (from a selection or an emoji), color, group and,
   if you like, the server it belongs to. That way routers, the NAS interface or Pi-hole also appear in the cockpit,
-  without code and without container detection; detected containers appear alongside when the Service matrix is
+  without code and without container detection; detected containers appear alongside when the Docker module is
   running. Via the menu (⋮) on the tile you edit, move or delete it, and at the top you filter by group. The owner
   and administrators may create and change them (privilege `apps.write`); everyone who can see servers can see them.
   Nodvard Deck never calls the addresses itself (so it shows no "running/not running"), allows only `http://` and
@@ -419,7 +526,7 @@ setup command already expanded. **"Check the connection"** („Verbindung prüfe
 confirmed: the server merely answering is not enough.
 Only steps for which you have the privilege are shown. The card disappears by itself when everything is done; with
 **"Hide"** („Ausblenden“) you remove it earlier (applies to your account on every device). Empty pages (Terminal,
-Files, server page, Service matrix, Game servers, Proxmox) now also say what is missing and offer the button for the
+Files, server page, Docker, Game servers, Proxmox) now also say what is missing and offer the button for the
 next step.
 
 ## 5. Servers and SSH access
@@ -435,7 +542,7 @@ the phone and is visible only to users with the privilege `hosts.write` (owner a
   automatically" („Automatisch eingelesen“).
 - Everything else – above all the **machine Nodvard Deck runs on** (e.g. a Raspberry Pi), if it is not
   a Proxmox guest – you create by hand.
-- Terminal, Server status, Service matrix, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
+- Terminal, Server status, Docker, Nodvard Shield, Game servers and Scripts need an **SSH login** (user + key or
   password) for every server. Nodvard Deck stores it encrypted; the private key never leaves the vault and is
   never displayed anywhere.
 
@@ -458,7 +565,7 @@ have created a real server, the button is gone; you can still delete the sample 
    („Adresse“) (IP or host name, without `http://` and without a port, e.g. `192.168.1.30`).
 4. **Operating system** („Betriebssystem“): Linux or Windows. For Windows servers there is no setup command and no
    privilege check.
-5. **Tags** („Markierungen“) (comma-separated): `docker` if Docker runs there – the Service matrix (setting "Server
+5. **Tags** („Markierungen“) (comma-separated): `docker` if Docker runs there – the Docker module (setting "Server
    tag" – „Server-Markierung“) and the AI container watch of Nodvard Shield ("Monitored servers" – „Überwachte Server“)
    take exactly the servers with this tag. Game servers appear only with the tag `gameserver`. Tags can be changed at
    any time, also for Proxmox VMs (the ones set by Proxmox stay; they cannot be changed).
@@ -562,7 +669,7 @@ what does not – with a hint on what to do:
 3. **Login** – does the server accept the key or the password?
 4. **Root rights** – does `sudo` work without a password? (Only a hint, not an error: the lean variant without root
    rights is allowed.)
-5. **What extensions need** – e.g. Docker without sudo for the Service matrix.
+5. **What extensions need** – e.g. Docker without sudo for the Docker module.
 6. **Operating system** – e.g. "Debian 12 · aarch64 · Raspberry Pi 4 Model B".
 
 **The server key (fingerprint):** Every SSH server has a fingerprint of its own.
@@ -674,7 +781,7 @@ a password (Nodvard Deck then runs the same command).
   - **Server status:** restart services (systemd). Afterwards Deck checks for up to 45 seconds whether the service runs and
     keeps running (twice, 10 seconds apart, without a new start; the check needs no root). If it fails right away or
     keeps restarting, the action counts as failed and says so.
-- **"Add to the docker group"** („Zur Gruppe docker hinzufügen“) – needed for the Service matrix and the AI container
+- **"Add to the docker group"** („Zur Gruppe docker hinzufügen“) – needed for the Docker module and the AI container
   watch of Nodvard Shield; they call `docker` without sudo. The group is only entered if it exists on the server.
 
 Without either tick box you get the **lean variant**: its own user, key only, no root rights. That is enough for
@@ -689,10 +796,16 @@ stays in place and you get a hint. If `sudo` is not
 installed at all, the command says so (as root `apt install sudo`; on Proxmox best log in as `root` right away).
 
 **This is practically root – and the page tells you so too:** Anyone who is in the `docker` group or may use sudo
-without a password can do practically anything on the server. A more narrowly limited sudo rule does not work with
-Nodvard Deck: it starts every root command as `sudo -n sh -c '…'`, and anyone who may start `sh` as root may do
-anything. The security comes instead from the fact that **only** this one user gets the rights, can log in **only with
-the key**, and the key is stored encrypted in Nodvard Deck.
+without a password can do practically anything on the server. A more narrowly limited sudo rule alone is not yet enough
+for Nodvard Deck: it still starts some root commands as `sudo -n sh -c '…'`, and anyone who may start `sh` as root may
+do anything. The security comes instead from the fact that **only** this one user gets the rights, can log in **only
+with the key**, and the key is stored encrypted in Nodvard Deck.
+
+**Helper scripts:** With the "root rights" tick box the command also puts the modules' helper scripts (Nodvard Shield
+and Server status) into `/usr/local/lib/nodvard-deck` and allows each one with its own narrow sudo rule. The modules
+already use them, but only if the script on the server is byte for byte the one that ships with Nodvard Deck;
+otherwise they use the full rule. "Verbindung prüfen" (check connection) shows for each script whether it matches.
+After an update that brings a new script it says "Veraltet" (outdated): then run the setup command once more.
 
 **Proxmox nodes:** There, Nodvard Deck is easiest to log in directly as `root` (enter user `root` when generating).
 Then it needs neither sudo nor tick boxes. The key ends up in `/root/.ssh/authorized_keys`, which on Proxmox is a link
@@ -825,7 +938,7 @@ Settings → **Automation & security** („Einstellungen → Automatik & Sicherh
   like `⟦U+202E⟧`. "Approve selected" („Ausgewählte freigeben“) shows all commands in full in its confirmation, but
   leaves out actions with high or critical risk; you confirm those one by one.
 - **Triggered by you:** If you click a button such as "Delete permanently" („Endgültig löschen“, Nodvard Shield) or
-  "Restart" („Neustart“, Service matrix) yourself and you have the approval right for the action's risk, confirming the
+  "Restart" („Neustart“, Docker) yourself and you have the approval right for the action's risk, confirming the
   dialog already is the approval: the action runs right away. It still appears under "Actions" and in the log, just not
   under "Waiting for confirmation" („Wartet auf Bestätigung“) but under "All" („Alle“), "Succeeded" or "Failed".
   Without that right it waits under "Waiting for confirmation" for someone who has it. Exceptions: "Propose all
@@ -889,6 +1002,14 @@ a confirmation lists the servers first. Servers with an open update proposal or 
 skipped. You then approve under "Actions" („Aktionen“), together with "Approve selected" („Ausgewählte
 freigeben“); proposals with high risk (with "Proxmox: all updates as dist-upgrade") one by one. If autonomy is set to
 "Act autonomously" („Selbstständig handeln“), the proposals start without asking up to the configured risk level.
+
+**Updates on the server that runs Nodvard Deck:** if the updates include a package that restarts Docker (`docker-ce`,
+`docker.io`, `containerd` and similar), the check also looks whether Nodvard Deck runs there. The confirmation before
+applying then says so: Nodvard Deck is briefly unreachable afterwards and reloads on its own. Applying continues on the
+server even if Nodvard Deck restarts meanwhile. The page remembers the run and shows its result once it is done, also
+after a reload. Under "Actions" („Aktionen“) the action then shows as "interrupted by restart"; what really happened is
+in the update center's history and in the push message. While Nodvard Deck is unreachable, the tab says so and retries
+on its own every few seconds.
 
 ## 10. Back up the dashboard itself
 
@@ -1190,7 +1311,7 @@ abrufbar: …" (not available)) – the error message usually gives the reason:
   connections", „Verbindungen verwalten“), switch it to
   "disabled" („deaktiviert“); then no notifications come either.
 
-**"… leitet auf eine andere Adresse um"** (… redirects to another address; network with Pi-hole or Nginx Proxy Manager,
+**"… leitet auf eine andere Adresse um"** (… redirects to another address; Pi-hole, Nginx Proxy Manager,
 ntfy, Nextcloud): instead of an answer, the server sent a redirect (HTTP 301, 302, 303, 307 or 308). Nodvard Deck never
 follows it, because otherwise a password or token would go to an address nobody entered, and it does not name the target
 address either. Usually the settings have `http://` instead of `https://` (or the other way round), or a proxy in front

@@ -3,6 +3,8 @@ beim Anbieter, Verdichtung, Aufbewahrung, Sammler und API."""
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from nodvard_deck.core.metrics_history import ROLLUP_S, MetricsCollector, MetricsStore, reset_metrics_collector
@@ -59,6 +61,40 @@ def test_many_points_are_downsampled_to_a_readable_count(tmp_path):
     data = store.query("h1", "24h", now, interval_s=30, raw_retention_s=48 * 3600)
     assert len(data["timestamps"]) <= 720
     assert data["step_s"] == 120
+
+
+def test_store_takes_concurrent_calls_from_many_threads(tmp_path):
+    """Sammler (ein Thread je Host), Oberfläche (liest) und Verdichtung treffen in wechselnden Threads auf dieselbe
+    Datei; jeder Aufruf muss ohne sqlite-Fehler durchgehen und nichts darf verloren gehen."""
+    store = MetricsStore(tmp_path / "m.db")  # bewusst noch ohne Verbindung: auch das erste Öffnen läuft nebenläufig
+    n_threads, per_thread = 8, 40
+    now = T0 + ROLLUP_S + 1
+    start = threading.Barrier(n_threads)
+    errors: list[str] = []
+
+    def work(i: int) -> None:
+        start.wait(timeout=10)
+        for k in range(per_thread):
+            try:
+                store.insert(f"h{i}", T0 + k, {"cpu_percent": float(k), "mem_used_bytes": 2.0})
+                if k % 8 == 0:
+                    store.latest([f"h{i}"], now, max_age_s=3600)
+                    store.query(f"h{i}", "1h", now, interval_s=30, raw_retention_s=48 * 3600)
+                    store.maintain(now, raw_retention_s=48 * 3600, rollup_retention_s=35 * 86400)
+            except Exception as exc:  # noqa: BLE001 - gesammelt, damit der Test alle Fehlerarten zeigt
+                errors.append(f"{type(exc).__name__}: {exc}")
+
+    threads = [threading.Thread(target=work, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+    assert not any(t.is_alive() for t in threads), "ein Thread hängt (Sperre nie freigegeben?)"
+
+    assert sorted(set(errors)) == []
+    assert store._db().execute("SELECT COUNT(*) FROM raw").fetchone()[0] == n_threads * per_thread * 2
+    assert store.latest(["h3"], now, max_age_s=3600)["h3"]["cpu_percent"] == (T0 + per_thread - 1, per_thread - 1.0)
+    store.close()
 
 
 class _SshLike:

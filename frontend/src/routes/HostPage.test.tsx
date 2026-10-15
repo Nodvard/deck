@@ -83,7 +83,7 @@ describe("HostPage (Server-Seite, Plesk-Stil)", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Markierungen bearbeiten" }));
     const input = screen.getByLabelText("Markierungen");
     expect(input).toHaveValue("gameserver, windows");
-    expect(screen.getByText(/docker \(Service-Matrix\), gameserver \(Gameserver\)/)).toBeInTheDocument();
+    expect(screen.getByText(/docker \(Docker\), gameserver \(Gameserver\)/)).toBeInTheDocument();
     fireEvent.change(input, { target: { value: "Gameserver, docker" } });
     fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
     await waitFor(() => expect(calls.some((c) => c.method === "PATCH")).toBe(true));

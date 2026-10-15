@@ -1,0 +1,24 @@
+[extension]
+id          = "docker"
+legacy_ids  = ["service-matrix"]
+name        = "Docker"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen, neu starten und gestoppt löschen. Auf Wunsch zeigt das Modul, für welche Container es neuere Images gibt – und spielt sie bei Compose-Diensten auf Knopfdruck ein."
+icon        = "layout-grid"
+category    = "servers"
+sort_order  = 30
+entrypoint  = "nodvard_deck_ext_docker:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "hosts.read",
+  "hosts.execute",
+  "schedule.register",
+  "notify.send",
+  "audit.write",
+]
+
+[settings]
+schema = "settings.schema.json"

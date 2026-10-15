@@ -31,6 +31,19 @@ beforeEach(() => {
 });
 
 describe("LoginPage", () => {
+  it("zeigt nur ein Logo vom eigenen Server, bei einer alten fremden Adresse den Anfangsbuchstaben", () => {
+    const branding = useBrandingStore.getState().branding!;
+    useBrandingStore.setState({ branding: { ...branding, logo_url: "/api/v1/branding/logo" } });
+    const own = renderLogin();
+    expect(own.container.querySelector("img")?.getAttribute("src")).toBe("/api/v1/branding/logo");
+    own.unmount();
+
+    useBrandingStore.setState({ branding: { ...branding, logo_url: "https://cdn.example.org/logo.png" } });
+    const foreign = renderLogin();
+    expect(foreign.container.querySelector("img")).toBeNull();
+    expect(screen.getAllByText("H").length).toBeGreaterThan(0);
+  });
+
   it("zeigt Produktname, Untertitel und Support-Link aus dem Branding", () => {
     renderLogin();
     expect(screen.getByText("Willkommen zurück bei Mein Homelab.")).toBeInTheDocument();

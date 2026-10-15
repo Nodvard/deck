@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
+import threading
 import time
 from collections.abc import Iterable
 from pathlib import Path
@@ -42,39 +43,44 @@ def _step_for(range_s: int, native_s: int) -> int:
 
 
 class MetricsStore:
-    """Dünne, synchrone sqlite3-Schicht; alle Aufrufe laufen über `asyncio.to_thread`."""
+    """Dünne, synchrone sqlite3-Schicht; alle Aufrufe laufen über `asyncio.to_thread`, also in wechselnden Threads
+    gleichzeitig (Sammler schreibt, Oberfläche liest). Die eine Verbindung verträgt das nicht (`InterfaceError: bad
+    parameter or other API misuse`), deshalb läuft jeder Zugriff darauf unter `_lock`."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
         self._conn: sqlite3.Connection | None = None
+        self._lock = threading.RLock()
 
     def _db(self) -> sqlite3.Connection:
-        if self._conn is None:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(self._path, check_same_thread=False, timeout=10)
-            conn.execute("PRAGMA journal_mode=WAL")
-            conn.execute("PRAGMA synchronous=NORMAL")
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS raw (
-                    host_id TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL, value REAL NOT NULL,
-                    PRIMARY KEY (host_id, metric, ts)
-                ) WITHOUT ROWID;
-                CREATE TABLE IF NOT EXISTS rollup (
-                    host_id TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL,
-                    avg REAL NOT NULL, min REAL NOT NULL, max REAL NOT NULL, n INTEGER NOT NULL,
-                    PRIMARY KEY (host_id, metric, ts)
-                ) WITHOUT ROWID;
-                CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
-                """
-            )
-            self._conn = conn
-        return self._conn
+        with self._lock:
+            if self._conn is None:
+                self._path.parent.mkdir(parents=True, exist_ok=True)
+                conn = sqlite3.connect(self._path, check_same_thread=False, timeout=10)
+                conn.execute("PRAGMA journal_mode=WAL")
+                conn.execute("PRAGMA synchronous=NORMAL")
+                conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS raw (
+                        host_id TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL, value REAL NOT NULL,
+                        PRIMARY KEY (host_id, metric, ts)
+                    ) WITHOUT ROWID;
+                    CREATE TABLE IF NOT EXISTS rollup (
+                        host_id TEXT NOT NULL, metric TEXT NOT NULL, ts INTEGER NOT NULL,
+                        avg REAL NOT NULL, min REAL NOT NULL, max REAL NOT NULL, n INTEGER NOT NULL,
+                        PRIMARY KEY (host_id, metric, ts)
+                    ) WITHOUT ROWID;
+                    CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value INTEGER NOT NULL);
+                    """
+                )
+                self._conn = conn
+            return self._conn
 
     def close(self) -> None:
-        if self._conn is not None:
-            self._conn.close()
-            self._conn = None
+        with self._lock:
+            if self._conn is not None:
+                self._conn.close()
+                self._conn = None
 
     # -- schreiben ---------------------------------------------------------------
 
@@ -82,28 +88,30 @@ class MetricsStore:
         rows = [(host_id, k, ts, float(v)) for k, v in values.items() if isinstance(v, (int, float))]
         if not rows:
             return
-        db = self._db()
-        with db:
-            db.executemany("INSERT OR REPLACE INTO raw VALUES (?, ?, ?, ?)", rows)
+        with self._lock:
+            db = self._db()
+            with db:
+                db.executemany("INSERT OR REPLACE INTO raw VALUES (?, ?, ?, ?)", rows)
 
     def maintain(self, now: int, *, raw_retention_s: int, rollup_retention_s: int) -> None:
         """Verdichtet abgeschlossene 5-Minuten-Fenster und löscht Altes."""
-        db = self._db()
-        done = db.execute("SELECT value FROM state WHERE key = 'rolled_until'").fetchone()
-        start = done[0] if done else 0
-        until = now - now % ROLLUP_S
-        with db:
-            if until > start:
-                db.execute(
-                    """INSERT OR REPLACE INTO rollup
-                        SELECT host_id, metric, ts - ts % :step, AVG(value), MIN(value), MAX(value), COUNT(*)
-                        FROM raw WHERE ts >= :start AND ts < :until
-                        GROUP BY host_id, metric, ts - ts % :step""",
-                    {"step": ROLLUP_S, "start": start - start % ROLLUP_S, "until": until},
-                )
-                db.execute("INSERT OR REPLACE INTO state VALUES ('rolled_until', ?)", (until,))
-            db.execute("DELETE FROM raw WHERE ts < ?", (now - raw_retention_s,))
-            db.execute("DELETE FROM rollup WHERE ts < ?", (now - rollup_retention_s,))
+        with self._lock:
+            db = self._db()
+            done = db.execute("SELECT value FROM state WHERE key = 'rolled_until'").fetchone()
+            start = done[0] if done else 0
+            until = now - now % ROLLUP_S
+            with db:
+                if until > start:
+                    db.execute(
+                        """INSERT OR REPLACE INTO rollup
+                            SELECT host_id, metric, ts - ts % :step, AVG(value), MIN(value), MAX(value), COUNT(*)
+                            FROM raw WHERE ts >= :start AND ts < :until
+                            GROUP BY host_id, metric, ts - ts % :step""",
+                        {"step": ROLLUP_S, "start": start - start % ROLLUP_S, "until": until},
+                    )
+                    db.execute("INSERT OR REPLACE INTO state VALUES ('rolled_until', ?)", (until,))
+                db.execute("DELETE FROM raw WHERE ts < ?", (now - raw_retention_s,))
+                db.execute("DELETE FROM rollup WHERE ts < ?", (now - rollup_retention_s,))
 
     # -- lesen -------------------------------------------------------------------
 
@@ -113,18 +121,19 @@ class MetricsStore:
         """Letzter Rohwert je (Host, Metrik) innerhalb von `max_age_s`: `{host_id: {metrik: (ts, wert)}}`; Hosts ohne
         Wert fehlen. Je Paar ein Sprung auf den Primärschlüssel (rückwärts, ein Treffer): Ein Bereichsscan über `ts`
         läse die ganze Tabelle, denn `ts` steht im Schlüssel hinten."""
-        db = self._db()
         since = now - max_age_s
         names = tuple(metrics)
         found: dict[str, dict[str, tuple[int, float]]] = {}
-        for host_id in host_ids:
-            for metric in names:
-                row = db.execute(
-                    "SELECT ts, value FROM raw WHERE host_id = ? AND metric = ? AND ts >= ? ORDER BY ts DESC LIMIT 1",
-                    (host_id, metric, since),
-                ).fetchone()
-                if row is not None:
-                    found.setdefault(host_id, {})[metric] = (int(row[0]), float(row[1]))
+        with self._lock:
+            db = self._db()
+            for host_id in host_ids:
+                for metric in names:
+                    row = db.execute(
+                        "SELECT ts, value FROM raw WHERE host_id = ? AND metric = ? AND ts >= ? ORDER BY ts DESC LIMIT 1",
+                        (host_id, metric, since),
+                    ).fetchone()
+                    if row is not None:
+                        found.setdefault(host_id, {})[metric] = (int(row[0]), float(row[1]))
         return found
 
     def query(self, host_id: str, range_name: str, now: int, *, interval_s: int, raw_retention_s: int) -> dict[str, Any]:
@@ -132,19 +141,20 @@ class MetricsStore:
         since = now - range_s
         use_raw = range_s <= raw_retention_s
         step = _step_for(range_s, interval_s if use_raw else ROLLUP_S)
-        db = self._db()
-        if use_raw:
-            rows = db.execute(
-                "SELECT metric, ts - ts % ?, AVG(value), MAX(value) FROM raw WHERE host_id = ? AND ts >= ? "
-                "GROUP BY metric, ts - ts % ?",
-                (step, host_id, since, step),
-            ).fetchall()
-        else:
-            rows = db.execute(
-                "SELECT metric, ts - ts % ?, SUM(avg * n) / SUM(n), MAX(max) FROM rollup WHERE host_id = ? AND ts >= ? "
-                "GROUP BY metric, ts - ts % ?",
-                (step, host_id, since, step),
-            ).fetchall()
+        with self._lock:
+            db = self._db()
+            if use_raw:
+                rows = db.execute(
+                    "SELECT metric, ts - ts % ?, AVG(value), MAX(value) FROM raw WHERE host_id = ? AND ts >= ? "
+                    "GROUP BY metric, ts - ts % ?",
+                    (step, host_id, since, step),
+                ).fetchall()
+            else:
+                rows = db.execute(
+                    "SELECT metric, ts - ts % ?, SUM(avg * n) / SUM(n), MAX(max) FROM rollup WHERE host_id = ? AND ts >= ? "
+                    "GROUP BY metric, ts - ts % ?",
+                    (step, host_id, since, step),
+                ).fetchall()
         return columnar(((m, ts, avg, mx) for m, ts, avg, mx in rows), step=step, since=since, now=now)
 
 

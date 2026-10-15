@@ -195,7 +195,7 @@ export function SchedulePicker({
             aria-pressed={s.mode === m.id}
             onClick={() => update({ mode: m.id })}
             className={`flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition ${
-              s.mode === m.id ? "bg-[var(--color-accent)] text-white shadow" : "text-white/60 hover:bg-white/[0.06] hover:text-white"
+              s.mode === m.id ? "bg-[var(--color-accent)] text-on-accent shadow" : "text-white/60 hover:bg-white/[0.06] hover:text-white"
             }`}
           >
             {m.label}
@@ -245,7 +245,7 @@ export function SchedulePicker({
                       update({ days: days.length ? days : [d] });
                     }}
                     className={`h-9 w-9 rounded-full text-xs font-semibold transition ${
-                      on ? "accent-gradient text-white shadow" : "bg-white/[0.06] text-white/55 hover:bg-white/[0.12] hover:text-white"
+                      on ? "accent-gradient text-on-accent shadow" : "bg-white/[0.06] text-white/55 hover:bg-white/[0.12] hover:text-white"
                     }`}
                   >
                     {DAY_SHORT[d]}

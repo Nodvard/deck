@@ -1,0 +1,78 @@
+{
+  "Items": [
+    {
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "IsFolder": false,
+      "MediaType": "Video",
+      "LocationType": "FileSystem",
+      "Name": "Der zweite Beispielfilm",
+      "Id": "0f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "DateCreated": "2026-10-11T18:22:31.0000000Z",
+      "RunTimeTicks": 63000000000,
+      "ProductionYear": 2024,
+      "Type": "Movie"
+    },
+    {
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "IsFolder": false,
+      "MediaType": "Video",
+      "LocationType": "FileSystem",
+      "Name": "Der Besuch",
+      "Id": "1e2d3c4b5a6978877665544332211009",
+      "DateCreated": "2026-10-10T07:05:00.0000000Z",
+      "RunTimeTicks": 27000000000,
+      "IndexNumber": 5,
+      "ParentIndexNumber": 2,
+      "Type": "Episode",
+      "SeriesName": "Die Beispielserie",
+      "SeriesId": "aabbccddeeff00112233445566778899",
+      "SeasonName": "Staffel 2"
+    },
+    {
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "IsFolder": false,
+      "MediaType": "Video",
+      "LocationType": "FileSystem",
+      "Name": "Die Abreise",
+      "Id": "2f3e4d5c6b7a89988776655443322110",
+      "DateCreated": "2026-10-10T07:04:12.0000000Z",
+      "RunTimeTicks": 26400000000,
+      "IndexNumber": 4,
+      "ParentIndexNumber": 2,
+      "Type": "Episode",
+      "SeriesName": "Die Beispielserie",
+      "SeriesId": "aabbccddeeff00112233445566778899",
+      "SeasonName": "Staffel 2"
+    },
+    {
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "IsFolder": false,
+      "MediaType": "Video",
+      "LocationType": "FileSystem",
+      "Name": "Pilot",
+      "Id": "3a4b5c6d7e8f90a1b2c3d4e5f6071829",
+      "DateCreated": "2026-10-03T21:30:45.0000000Z",
+      "RunTimeTicks": 30000000000,
+      "IndexNumber": 1,
+      "ParentIndexNumber": 1,
+      "Type": "Episode",
+      "SeriesName": "Eine andere Serie",
+      "SeriesId": "bbccddeeff00112233445566778899aa",
+      "SeasonName": "Staffel 1"
+    },
+    {
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "IsFolder": false,
+      "MediaType": "Video",
+      "LocationType": "FileSystem",
+      "Name": "Ein alter Beispielfilm",
+      "Id": "4b5c6d7e8f90a1b2c3d4e5f607182930",
+      "DateCreated": "2026-09-28T10:11:12.0000000Z",
+      "RunTimeTicks": 58800000000,
+      "ProductionYear": 1987,
+      "Type": "Movie"
+    }
+  ],
+  "TotalRecordCount": 5,
+  "StartIndex": 0
+}

@@ -32,7 +32,12 @@ from ...version import __version__
 from ..deps import CurrentUser, OwnerUser, SessionDep, SettingsDep, require_permission
 from ..proxy_headers import SCOPE_KEY as FORWARDING_SCOPE_KEY
 from ..proxy_headers import Forwarding
-from .auth import TotpMissing, confirm_current_password, confirm_current_totp
+from .auth import (
+    TotpMissing,
+    confirm_current_password,
+    confirm_current_totp,
+    confirm_password_and_code,
+)
 from .restore_common import (
     RestoreInspectIn,
     RestoreScheduleIn,
@@ -109,12 +114,9 @@ async def _confirm_with_code(
     ersetzt. `None` heißt bestätigt; ein fehlender Code kommt als fertige 403-Antwort (`totp_missing`) zurück."""
     # Eine Sicherung enthält auch den Zwei-Faktor-Schlüssel: Wer sie nur mit dem Passwort bekäme, könnte beliebig
     # viele gültige Codes erzeugen.
-    await _confirm(request, session, user, payload.current_password, action)
-    try:
-        await confirm_current_totp(request, session, settings, user, payload.totp_code, action)
-    except TotpMissing as exc:
-        return exc.response()
-    return None
+    return await confirm_password_and_code(
+        request, session, settings, user, payload.current_password, payload.totp_code, action,
+    )
 
 
 def _http_error(exc: Exception) -> HTTPException:

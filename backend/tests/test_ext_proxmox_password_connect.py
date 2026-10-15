@@ -1634,6 +1634,7 @@ async def test_a_foreign_secret_under_the_given_name_stops_before_the_password(c
     assert r.status_code == 409, r.text
     assert r.json()["code"] == "secret_foreign"
     assert "„proxmox-token:pve9“" in r.json()["detail"] and "DELETE /api/v1/secrets/{id}" in r.json()["detail"]
+    assert "mit deinem Passwort" in r.json()["detail"]
     assert fake_pve["state"]["requests"] == []
     assert "proxmox-token:pve9" in await _secret_labels(client, token)
 
@@ -1702,7 +1703,7 @@ async def test_connection_routes_leave_a_foreign_secret_alone_and_say_so(client,
         json={"name": "pve8", "base_url": "https://192.168.2.18:8006", "token_id": "x@pve!z"}, headers=_h(token),
     )
     assert added.status_code == 409, added.text
-    assert "DELETE /api/v1/secrets/{id}" in added.json()["detail"]
+    assert "DELETE /api/v1/secrets/{id} mit current_password" in added.json()["detail"]
     assert await stored() == [conn]
     # Entfernen: die Verbindung ist weg, das fremde Geheimnis bleibt.
     removed = await client.delete(f"/api/v1/ext/{ext_id}/connections/pve9", headers=_h(token))

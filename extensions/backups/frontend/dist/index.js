@@ -68,6 +68,17 @@ async function renewToken() {
   }
   return shell.refreshAccessToken ? shell.refreshAccessToken().catch(() => null) : null;
 }
+async function authedFetchConfirmed(path, build) {
+  const first = await authedFetch(path, build());
+  if (first.status !== 403) return first;
+  const body = await first.clone().json().catch(() => null);
+  const ask = deck().confirmIdentity;
+  if (body?.code !== "confirm_required" || !ask) return first;
+  const message = typeof body.detail === "string" ? body.detail : "Bitte zur Best\xE4tigung das aktuelle Passwort eingeben.";
+  const confirmation = await ask(message, body.two_factor === true);
+  if (!confirmation) return null;
+  return authedFetch(path, build(confirmation));
+}
 function bodyDetail(body) {
   const b = typeof body === "object" && body !== null ? body : {};
   if (typeof b.detail === "string" && b.detail) return b.detail;
@@ -285,7 +296,7 @@ function Icon({ name, size = 16, className = "" }) {
   );
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -1149,10 +1160,11 @@ function ConnectionsPanel() {
     setPending(`token:${name}`);
     setMessage(null);
     try {
-      const res = await authedFetch(`/extensions/backups/secrets`, {
+      const res = await authedFetchConfirmed(`/extensions/backups/secrets`, (confirmation) => ({
         method: "PUT",
-        body: JSON.stringify({ label: `backups-token:${name}`, value })
-      });
+        body: JSON.stringify({ label: `backups-token:${name}`, value, ...confirmation })
+      }));
+      if (res === null) return;
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
@@ -1215,7 +1227,7 @@ function ConnectionsPanel() {
       message && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs opacity-80", children: message }),
       connections && connections.length === 0 && /* @__PURE__ */ jsx6("p", { className: "mb-2 text-xs opacity-60", children: "Noch keine Verbindung konfiguriert." }),
       connections && connections.length > 0 && /* @__PURE__ */ jsxs6("table", { className: "mb-3 w-full text-xs", children: [
-        /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left uppercase opacity-60", children: [
+        /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left opacity-60", children: [
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Name" }),
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Adresse" }),
           /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Zertifikat" }),
@@ -1325,7 +1337,7 @@ function ConnectionsPanel() {
           /* @__PURE__ */ jsx6("input", { type: "checkbox", checked: newTlsInsecure, onChange: (e) => setNewTlsInsecure(e.target.checked) }),
           "Zertifikat nicht pr\xFCfen (veraltet)"
         ] }),
-        /* @__PURE__ */ jsx6("button", { type: "submit", disabled: pending === "add", className: "px-2 py-1 disabled:opacity-40 accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium", children: "Anlegen" }),
+        /* @__PURE__ */ jsx6("button", { type: "submit", disabled: pending === "add", className: "px-2 py-1 disabled:opacity-40 accent-gradient text-on-accent rounded-lg hover:bg-accent-strong font-medium", children: "Anlegen" }),
         /* @__PURE__ */ jsx6("button", { type: "button", onClick: () => setShowAddForm(false), className: "px-2 py-1 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition", children: "Abbrechen" })
       ] })
     ] })
@@ -1570,7 +1582,7 @@ function BackupsPage() {
       visibleJobs?.length === 0 && /* @__PURE__ */ jsx6("span", { className: "text-amber-300", children: "Kein Backup-Job erfasst diesen Server \u2013 siehe \u201EOhne Backup\u201C oben." })
     ] }),
     visibleJobs && visibleJobs.length > 0 && /* @__PURE__ */ jsxs6("table", { className: "w-full text-sm", children: [
-      /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left text-xs uppercase opacity-60", children: [
+      /* @__PURE__ */ jsx6("thead", { children: /* @__PURE__ */ jsxs6("tr", { className: "border-b border-white/10 text-left text-xs opacity-60", children: [
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "VM" }),
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Storage" }),
         /* @__PURE__ */ jsx6("th", { className: "py-1", children: "Zeitplan" }),

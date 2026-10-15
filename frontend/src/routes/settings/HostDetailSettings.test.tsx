@@ -17,7 +17,7 @@ const ONE_LINER = "S=; [ \"$(id -u)\" = 0 ] || S=sudo; $S sh -c 'set -e; U=latti
 
 const REQUIREMENTS = [
   { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne", order: 50 },
-  { ext_id: "service-matrix", id: "docker-group", label: "Docker ohne sudo (Service-Matrix)", check_command: "docker ps -q", ok_text: "", fail_hint: "", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
+  { ext_id: "docker", id: "docker-group", label: "Docker ohne sudo (Container-Verwaltung)", check_command: "docker ps -q", ok_text: "", fail_hint: "", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
 ];
 
 function setupFixture(call: Call) {
@@ -117,14 +117,14 @@ describe("Server-Detail: SSH-Schlüssel erzeugen und Einzeiler kopieren", () => 
     fireEvent.click(within(panel).getByRole("button", { name: "Schlüssel erzeugen" }));
 
     const area = await screen.findByLabelText("Einrichtungsbefehl");
-    // Vorbelegt: root-Rechte (Nodvard Shield verlangt sie) und die Gruppe docker (Service-Matrix).
+    // Vorbelegt: root-Rechte (Nodvard Shield verlangt sie) und die Gruppe docker (Docker).
     await waitFor(() => expect(area).toHaveValue(`${ONE_LINER} #sudo #docker`));
     expect(calls.find((c) => c.path === "/hosts/h1/credentials/generate-key")?.body).toEqual({ username: "nodvard", port: 22 });
     const setupCall = calls.filter((c) => c.path === "/hosts/h1/credentials/c1/setup").at(-1);
     expect(setupCall?.query).toBe("sudo=true&groups=docker");
     expect(screen.getByText(/Das ist praktisch root/)).toBeInTheDocument();
     expect(screen.getByText(/nötig für: Updates einspielen, Quarantäne/)).toBeInTheDocument();
-    expect(screen.getByText(/nötig für: Docker ohne sudo \(Service-Matrix\)/)).toBeInTheDocument();
+    expect(screen.getByText(/nötig für: Docker ohne sudo \(Container-Verwaltung\)/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: "Kopieren" }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith(`${ONE_LINER} #sudo #docker`));
@@ -220,6 +220,24 @@ describe("Server-Detail: Einrichtungsbefehl-Kasten ohne doppelte Sätze", () => 
     await screen.findByLabelText("Einrichtungsbefehl");
     const link = within(screen.getByTestId("setup-guide")).getByRole("link", { name: /Root-Rechte ohne Passwort und Gruppe docker/ });
     expect(link).toHaveAttribute("href", "https://github.com/nodvard/deck/blob/main/docs/11-ERST-EINRICHTUNG.md#6-root-rechte-ohne-passwort-und-gruppe-docker");
+  });
+
+  it("die mitgebrachten Hilfsskripte stehen lesbar unter „Was macht der Befehl?“", async () => {
+    const helper = {
+      ext_id: "shield", module: "Nodvard Shield", path: "/usr/local/lib/nodvard-deck/shield-root", version: 1,
+      sha256: "a".repeat(64), text: "#!/bin/sh\nHELPER_VERSION=1\n",
+    };
+    mockHostsApi(routes({
+      "GET /hosts/h1/credentials": [credentialFixture()],
+      "GET /hosts/h1/credentials/c1/setup": (call: Call) => ({ ...setupFixture(call), helpers: [helper] }),
+    }));
+    renderDetail();
+    fireEvent.click(await screen.findByRole("button", { name: "Einrichtungsbefehl zeigen" }));
+    await screen.findByLabelText("Einrichtungsbefehl");
+    const [shown] = screen.getAllByTestId("setup-helper");
+    expect(shown.textContent).toContain("Hilfsskript für Nodvard Shield (Version 1), kommt nach /usr/local/lib/nodvard-deck/shield-root");
+    expect(shown.textContent).toContain(`sha256 ${"a".repeat(64)}`);
+    expect(shown.textContent).toContain("HELPER_VERSION=1");
   });
 
   it("ohne root-Rechte entfällt der Satz ganz (er gilt nur dafür)", async () => {

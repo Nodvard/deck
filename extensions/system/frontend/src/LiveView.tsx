@@ -9,6 +9,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import { formatBytes, formatUptime } from "./format";
+import { TempLimit } from "./TempLimit";
 
 export interface LiveData {
   complete: boolean;
@@ -63,7 +64,7 @@ function Spark({ values, max, color = BLUE }: { values: number[]; max?: number; 
   const shifted = values.map((v, i) => `${((i + offset) / Math.max(1, HISTORY - 1)) * w},${h - (Math.min(v, top) / top) * h}`);
   return (
     <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" className="mt-1 h-9 w-full" aria-hidden="true">
-      <line x1={0} x2={w} y1={h - 0.5} y2={h - 0.5} stroke="rgba(255,255,255,0.1)" />
+      <line x1={0} x2={w} y1={h - 0.5} y2={h - 0.5} stroke="var(--color-line-strong)" />
       {shifted.length > 1 && (
         <>
           <polygon points={`${shifted[0].split(",")[0]},${h} ${shifted.join(" ")} ${w},${h}`} fill={color} opacity={0.15} />
@@ -77,7 +78,7 @@ function Spark({ values, max, color = BLUE }: { values: number[]; max?: number; 
 function Tile({ label, value, sub, spark }: { label: string; value: string; sub?: string; spark?: JSX.Element }): JSX.Element {
   return (
     <div className="panel p-3">
-      <p className="text-[11px] uppercase tracking-wider opacity-50">{label}</p>
+      <p className="text-xs opacity-50">{label}</p>
       <p className="text-xl font-semibold tabular-nums">{value}</p>
       {sub && <p className="truncate text-[11px] opacity-60">{sub}</p>}
       {spark}
@@ -97,7 +98,7 @@ function Section({ title, children, extra }: { title: string; children: React.Re
   return (
     <section className="panel p-4">
       <div className="mb-2 flex items-center gap-2">
-        <h3 className="text-xs font-semibold uppercase tracking-wider opacity-70">{title}</h3>
+        <h3 className="text-xs font-semibold opacity-70">{title}</h3>
         {extra}
       </div>
       {children}
@@ -289,6 +290,9 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
               </tbody>
             </table>
           )}
+          {data.temperatures.length > 0 && (
+            <div className="mt-3 border-t border-white/5 pt-3"><TempLimit hostId={hostId} /></div>
+          )}
         </Section>
 
         <Section title="Datenträger">
@@ -297,7 +301,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
           ) : (
             <table className="w-full text-sm" data-testid="live-disks">
               <thead>
-                <tr className="text-left text-[11px] uppercase opacity-50">
+                <tr className="text-left text-xs opacity-50">
                   <th className="py-1 font-normal">Gerät</th>
                   <th className="py-1 text-right font-normal">Lesen</th>
                   <th className="py-1 text-right font-normal">Schreiben</th>
@@ -333,7 +337,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
       >
         <table className="w-full text-sm" data-testid="live-network">
           <thead>
-            <tr className="text-left text-[11px] uppercase opacity-50">
+            <tr className="text-left text-xs opacity-50">
               <th className="py-1 font-normal">Schnittstelle</th>
               <th className="py-1 font-normal">Status</th>
               <th className="py-1 text-right font-normal">Empfangen</th>
@@ -386,7 +390,7 @@ export function LiveView({ hostId, fetchLive }: { hostId: string; fetchLive: (id
       >
         <table className="w-full text-sm" data-testid="processes">
           <thead>
-            <tr className="text-left text-[11px] uppercase opacity-50">
+            <tr className="text-left text-xs opacity-50">
               <th className="py-1 font-normal">PID</th>
               <th className="py-1 font-normal">Name</th>
               <th className="py-1 font-normal">Benutzer</th>

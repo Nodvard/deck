@@ -194,6 +194,7 @@ def test_routes_with_bigger_uploads_declare_their_limits():
     assert declared(auth.bootstrap_restore_upload) == settings.restore_max_upload_bytes
     assert declared(files.upload_file) == settings.files_max_upload_bytes == 10 * 1024**3  # Standard: 10 GiB
     assert declared(branding.upload_logo) == MAX_LOGO_BYTES
+    assert not hasattr(branding.upload_favicon, MAX_BODY_ATTR)  # 512 KB liegt unter der allgemeinen Grenze
     assert not hasattr(auth.login, MAX_BODY_ATTR)
 
 
@@ -206,7 +207,7 @@ async def test_logo_between_general_and_own_limit_is_accepted_and_above_is_413(c
     headers = {"Authorization": f"Bearer {login.json()['access_token']}", "Content-Type": "image/png"}
 
     assert MAX_LOGO_BYTES > LIMIT
-    ok = await client.post("/api/v1/branding/logo", content=b"\x00" * (LIMIT + 1000), headers=headers)
+    ok = await client.post("/api/v1/branding/logo", content=b"\x89PNG\r\n\x1a\n" + b"\x00" * (LIMIT + 1000), headers=headers)
     assert ok.status_code == 200, ok.text
     too_big = await client.post("/api/v1/branding/logo", content=b"\x00" * (MAX_LOGO_BYTES + 1), headers=headers)
     assert too_big.status_code == 413

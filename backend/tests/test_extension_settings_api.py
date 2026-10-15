@@ -53,7 +53,7 @@ async def test_settings_roundtrip_keeps_internal_keys(client, db_session, demo_e
     assert r.json()["secrets"] == []
 
     values = {"connections": [{"name": "pve2", "base_url": "https://pve:8006", "verify": False}], "interval_s": 30, "unknown": 1}
-    r = await client.put("/api/v1/extensions/demo/settings", json={"values": values}, headers=headers)
+    r = await client.put("/api/v1/extensions/demo/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["values"] == {"internal": [1], "connections": values["connections"], "interval_s": 30}
@@ -72,7 +72,7 @@ async def test_settings_are_type_checked(client, db_session, demo_extension):
         {"interval_s": True},
     ]
     for values in bad:
-        r = await client.put("/api/v1/extensions/demo/settings", json={"values": values}, headers=headers)
+        r = await client.put("/api/v1/extensions/demo/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
         assert r.status_code == 422, (values, r.text)
 
 
@@ -85,10 +85,10 @@ async def test_secret_set_and_replace_only_for_known_labels(client, db_session, 
     await db_session.flush()
     headers = await _owner(client)
 
-    foreign = await client.put("/api/v1/extensions/demo/secrets", json={"label": "proxmox-token:pve2", "value": "x"}, headers=headers)
+    foreign = await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "proxmox-token:pve2", "value": "x"}, headers=headers)
     assert foreign.status_code == 422
     for value in ("geheim-1", "geheim-2"):
-        r = await client.put("/api/v1/extensions/demo/secrets", json={"label": "demo-token:pve2", "value": value}, headers=headers)
+        r = await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "demo-token:pve2", "value": value}, headers=headers)
         assert r.status_code == 204, r.text
     r = await client.get("/api/v1/extensions/demo/settings", headers=headers)
     assert r.json()["secrets"][0]["is_set"] is True
@@ -119,19 +119,19 @@ async def test_pattern_is_checked_with_german_message(client, db_session):
         db_session.add(ExtensionRecord(id="pat", version="1", api_version="0.1.0", state="disabled"))
         await db_session.flush()
         headers = await _owner(client)
-        bad = await client.put("/api/v1/extensions/pat/settings", json={"values": {"url": "ftp://x"}}, headers=headers)
+        bad = await client.put("/api/v1/extensions/pat/settings", json={"current_password": "correct-horse-battery", "values": {"url": "ftp://x"}}, headers=headers)
         assert bad.status_code == 422
         assert bad.json()["detail"] == "„Einstellungen.url“: Die Adresse muss mit http:// oder https:// beginnen."
-        generic = await client.put("/api/v1/extensions/pat/settings", json={"values": {"code": "ABC"}}, headers=headers)
+        generic = await client.put("/api/v1/extensions/pat/settings", json={"current_password": "correct-horse-battery", "values": {"code": "ABC"}}, headers=headers)
         assert generic.status_code == 422 and "Das Format stimmt nicht." in generic.json()["detail"]
-        item = await client.put("/api/v1/extensions/pat/settings", json={"values": {"words": ["ok", "NO"]}}, headers=headers)
+        item = await client.put("/api/v1/extensions/pat/settings", json={"current_password": "correct-horse-battery", "values": {"words": ["ok", "NO"]}}, headers=headers)
         assert item.status_code == 422 and "[2]" in item.json()["detail"]
         good = await client.put(
             "/api/v1/extensions/pat/settings",
-            json={"values": {"url": "https://nas:8006", "code": "abc", "broken": "egal", "words": ["ok"]}}, headers=headers,
+            json={"current_password": "correct-horse-battery", "values": {"url": "https://nas:8006", "code": "abc", "broken": "egal", "words": ["ok"]}}, headers=headers,
         )
         assert good.status_code == 200, good.text
-        empty = await client.put("/api/v1/extensions/pat/settings", json={"values": {"url": ""}}, headers=headers)
+        empty = await client.put("/api/v1/extensions/pat/settings", json={"current_password": "correct-horse-battery", "values": {"url": ""}}, headers=headers)
         assert empty.status_code == 200  # leer = nicht gesetzt, kein Musterfehler
     finally:
         runtime.discovered.pop("pat", None)
@@ -158,7 +158,7 @@ async def test_pattern_behaves_like_javascript_for_trailing_newline_and_length(c
         headers = await _owner(client)
 
         async def put(values):
-            return await client.put("/api/v1/extensions/nl/settings", json={"values": values}, headers=headers)
+            return await client.put("/api/v1/extensions/nl/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
 
         assert (await put({"url": "https://x\n"})).status_code == 422
         assert (await put({"either": "a\n"})).status_code == 422
@@ -206,7 +206,7 @@ def bound_extension():
 
 async def _set_secrets(client, headers, *labels):
     for label in labels:
-        r = await client.put("/api/v1/extensions/bound/secrets", json={"label": label, "value": "geheim-" + label}, headers=headers)
+        r = await client.put("/api/v1/extensions/bound/secrets", json={"current_password": "correct-horse-battery", "label": label, "value": "geheim-" + label}, headers=headers)
         assert r.status_code == 204, r.text
 
 
@@ -228,7 +228,7 @@ async def test_put_keeps_hidden_and_unsent_values(client, db_session, bound_exte
 
     r = await client.put(
         "/api/v1/extensions/bound/settings",
-        json={"values": {"topic": "neu", "servers": {}}},  # `servers` ist eine alte Kopie
+        json={"current_password": "correct-horse-battery", "values": {"topic": "neu", "servers": {}}},  # `servers` ist eine alte Kopie
         headers=headers,
     )
     assert r.status_code == 200, r.text
@@ -245,12 +245,12 @@ async def test_put_null_removes_a_value_and_required_is_checked_after_merging(cl
     await db_session.flush()
     headers = await _owner(client)
 
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"topic": None}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"topic": None}}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["values"] == {"server_url": "https://a.example"}
 
     # Pflichtfeld mit Standardwert: Entfernen ist erlaubt (der Standard gilt wieder).
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"server_url": None}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": None}}, headers=headers)
     assert r.status_code == 200, r.text
     assert "server_url" not in r.json()["values"]
 
@@ -260,7 +260,7 @@ async def test_pattern_is_still_checked_for_changed_values(client, db_session, b
     db_session.add(ExtensionRecord(id="bound", version="1", api_version="0.1.0", state="disabled", settings={}))
     await db_session.flush()
     headers = await _owner(client)
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"server_url": "ftp://x"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "ftp://x"}}, headers=headers)
     assert r.status_code == 422, r.text
 
 
@@ -279,7 +279,7 @@ async def test_changing_a_bound_target_clears_its_secret_and_audits_it(client, d
 
     # Nur ein Schluss-Schrägstrich dazu: dasselbe Ziel, nichts wird gelöscht.
     r = await client.put(
-        "/api/v1/extensions/bound/settings", json={"values": {"server_url": "https://a.example/", "topic": "x"}}, headers=headers,
+        "/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "https://a.example/", "topic": "x"}}, headers=headers,
     )
     assert r.status_code == 200, r.text
     assert r.json()["secrets_cleared"] == []
@@ -287,7 +287,7 @@ async def test_changing_a_bound_target_clears_its_secret_and_audits_it(client, d
 
     r = await client.put(
         "/api/v1/extensions/bound/settings",
-        json={"values": {
+        json={"current_password": "correct-horse-battery", "values": {
             "server_url": "https://angreifer.example",
             "connections": [{"name": "pve1", "base_url": "https://pve1:8006"}, {"name": "pve2", "base_url": "https://angreifer:8006"}],
         }},
@@ -303,7 +303,7 @@ async def test_changing_a_bound_target_clears_its_secret_and_audits_it(client, d
     # Zweiter Pfad (`pihole.url`) und ein entfernter Eintrag.
     r = await client.put(
         "/api/v1/extensions/bound/settings",
-        json={"values": {"pihole": {"url": "http://anderer"}, "connections": [{"name": "pve2", "base_url": "https://angreifer:8006"}]}},
+        json={"current_password": "correct-horse-battery", "values": {"pihole": {"url": "http://anderer"}, "connections": [{"name": "pve2", "base_url": "https://angreifer:8006"}]}},
         headers=headers,
     )
     assert sorted(r.json()["secrets_cleared"]) == ["bound-item:pve1", "bound-pw"]
@@ -324,9 +324,9 @@ async def test_default_address_counts_as_the_bound_target(client, db_session, bo
     headers = await _owner(client)
     await _set_secrets(client, headers, "bound-token")
 
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"server_url": "https://standard.example"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "https://standard.example"}}, headers=headers)
     assert r.json()["secrets_cleared"] == []
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"server_url": "https://x.example"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "https://x.example"}}, headers=headers)
     assert r.json()["secrets_cleared"] == ["bound-token"]
 
 
@@ -342,7 +342,7 @@ async def test_secret_needs_a_saved_target_first(client, db_session, bound_exten
     headers = await _owner(client)
 
     async def put_secret(label: str):
-        return await client.put("/api/v1/extensions/bound/secrets", json={"label": label, "value": "geheim"}, headers=headers)
+        return await client.put("/api/v1/extensions/bound/secrets", json={"current_password": "correct-horse-battery", "label": label, "value": "geheim"}, headers=headers)
 
     refused = await put_secret("bound-pw")
     assert refused.status_code == 409, refused.text
@@ -354,10 +354,10 @@ async def test_secret_needs_a_saved_target_first(client, db_session, bound_exten
     assert (await _secret_state(client, headers))["bound-pw"] is False
 
     # Nach dem Speichern der Adresse geht es, ein Leerzeichen allein ist keine.
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"pihole": {"url": "  "}}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"pihole": {"url": "  "}}}, headers=headers)
     assert r.status_code == 200, r.text
     assert (await put_secret("bound-pw")).status_code == 409
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"pihole": {"url": "http://pi.hole"}}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"pihole": {"url": "http://pi.hole"}}}, headers=headers)
     assert r.json()["secrets_cleared"] == []
     assert (await put_secret("bound-pw")).status_code == 204
     assert (await _secret_state(client, headers))["bound-pw"] is True
@@ -377,7 +377,7 @@ async def test_first_address_removes_a_secret_that_lies_in_the_vault_without_a_t
     headers = await _owner(client)
     assert (await _secret_state(client, headers))["bound-pw"] is True
 
-    r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"pihole": {"url": "http://fremd"}}}, headers=headers)
+    r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"pihole": {"url": "http://fremd"}}}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["secrets_cleared"] == ["bound-pw"]
     assert (await _secret_state(client, headers))["bound-pw"] is False
@@ -401,24 +401,24 @@ async def test_secret_bound_to_several_fields_is_removed_when_any_of_them_change
         await db_session.flush()
         headers = await _owner(client)
         base = "/api/v1/extensions/multi"
-        assert (await client.put(f"{base}/secrets", json={"label": "multi-key", "value": "k"}, headers=headers)).status_code == 204
+        assert (await client.put(f"{base}/secrets", json={"current_password": "correct-horse-battery", "label": "multi-key", "value": "k"}, headers=headers)).status_code == 204
 
         # Ein Feld, das nichts mit dem Ziel zu tun hat: der Schluessel bleibt.
-        r = await client.put(f"{base}/settings", json={"values": {"model": "llama"}}, headers=headers)
+        r = await client.put(f"{base}/settings", json={"current_password": "correct-horse-battery", "values": {"model": "llama"}}, headers=headers)
         assert r.json()["secrets_cleared"] == []
 
         # Der Ersatzserver wird neu eingetragen (leer -> Wert): der Schluessel ist weg.
-        r = await client.put(f"{base}/settings", json={"values": {"failover_url": "http://eigener-server:11434"}}, headers=headers)
+        r = await client.put(f"{base}/settings", json={"current_password": "correct-horse-battery", "values": {"failover_url": "http://eigener-server:11434"}}, headers=headers)
         assert r.status_code == 200, r.text
         assert r.json()["secrets_cleared"] == ["multi-key"]
         assert [s["is_set"] for s in r.json()["secrets"]] == [False]
 
         # Dasselbe, wenn nur der Hauptserver wechselt, und beim Leeren eines Felds.
-        assert (await client.put(f"{base}/secrets", json={"label": "multi-key", "value": "k"}, headers=headers)).status_code == 204
-        r = await client.put(f"{base}/settings", json={"values": {"failover_url": None}}, headers=headers)
+        assert (await client.put(f"{base}/secrets", json={"current_password": "correct-horse-battery", "label": "multi-key", "value": "k"}, headers=headers)).status_code == 204
+        r = await client.put(f"{base}/settings", json={"current_password": "correct-horse-battery", "values": {"failover_url": None}}, headers=headers)
         assert r.json()["secrets_cleared"] == ["multi-key"]
-        assert (await client.put(f"{base}/secrets", json={"label": "multi-key", "value": "k"}, headers=headers)).status_code == 204
-        r = await client.put(f"{base}/settings", json={"values": {"url": "http://anderer:11434"}}, headers=headers)
+        assert (await client.put(f"{base}/secrets", json={"current_password": "correct-horse-battery", "label": "multi-key", "value": "k"}, headers=headers)).status_code == 204
+        r = await client.put(f"{base}/settings", json={"current_password": "correct-horse-battery", "values": {"url": "http://anderer:11434"}}, headers=headers)
         assert r.json()["secrets_cleared"] == ["multi-key"]
     finally:
         runtime.discovered.pop("multi", None)
@@ -435,7 +435,7 @@ async def test_other_spellings_of_the_same_address_keep_the_secret(client, db_se
     headers = await _owner(client)
 
     async def put_url(url: str):
-        r = await client.put("/api/v1/extensions/bound/settings", json={"values": {"pihole": {"url": url}}}, headers=headers)
+        r = await client.put("/api/v1/extensions/bound/settings", json={"current_password": "correct-horse-battery", "values": {"pihole": {"url": url}}}, headers=headers)
         assert r.status_code == 200, r.text
         return r.json()["secrets_cleared"]
 
@@ -486,7 +486,7 @@ async def test_an_invalid_schedule_is_refused_and_nothing_is_stored(client, db_s
     await db_session.flush()
     headers = await _owner(client)
 
-    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": bad, "note": "neu"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/sched/settings", json={"current_password": "correct-horse-battery", "values": {"scan_cron": bad, "note": "neu"}}, headers=headers)
     assert r.status_code == 422, r.text
     detail = r.json()["detail"]
     assert detail.startswith("„Scan-Zeitplan“: Der Zeitplan „") and "ist ungültig" in detail
@@ -501,7 +501,7 @@ async def test_a_schedule_field_without_title_names_the_field_in_the_message(cli
     db_session.add(ExtensionRecord(id="sched", version="1", api_version="0.1.0", state="disabled", settings={}))
     await db_session.flush()
     headers = await _owner(client)
-    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"other_cron": "@weekly"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/sched/settings", json={"current_password": "correct-horse-battery", "values": {"other_cron": "@weekly"}}, headers=headers)
     assert r.status_code == 422
     assert "other_cron" in r.json()["detail"]
 
@@ -513,13 +513,13 @@ async def test_valid_schedules_empty_and_null_still_save(client, db_session, sch
     headers = await _owner(client)
 
     for good in ("30 4 * * *", "0 3 * * 0", "0 3 * * 7", "0 3 * * mon-fri", "*/15 * * * *", "0 6 1 * *"):
-        r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": good}}, headers=headers)
+        r = await client.put("/api/v1/extensions/sched/settings", json={"current_password": "correct-horse-battery", "values": {"scan_cron": good}}, headers=headers)
         assert r.status_code == 200, (good, r.text)
         assert r.json()["values"]["scan_cron"] == good
     # leer = nicht gesetzt (die Erweiterung nimmt ihren Standard), null entfernt den Wert
-    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": ""}}, headers=headers)
+    r = await client.put("/api/v1/extensions/sched/settings", json={"current_password": "correct-horse-battery", "values": {"scan_cron": ""}}, headers=headers)
     assert r.status_code == 200, r.text
-    r = await client.put("/api/v1/extensions/sched/settings", json={"values": {"scan_cron": None}}, headers=headers)
+    r = await client.put("/api/v1/extensions/sched/settings", json={"current_password": "correct-horse-battery", "values": {"scan_cron": None}}, headers=headers)
     assert r.status_code == 200, r.text
     assert "scan_cron" not in r.json()["values"]
 
@@ -527,7 +527,7 @@ async def test_valid_schedules_empty_and_null_still_save(client, db_session, sch
 @pytest.mark.asyncio
 async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client, db_session):
     """Gegen die echten Schemas: jede der sechs Shield-Einstellungen mit Zeitplan und die der
-    Service-Matrix lehnt einen ungueltigen Wert ab."""
+    Docker-Modul lehnt einen ungueltigen Wert ab."""
     import json
     from pathlib import Path
 
@@ -536,7 +536,7 @@ async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client,
     headers = await _owner(client)
     found = 0
     try:
-        for ext_id in ("shield", "service-matrix"):
+        for ext_id in ("shield", "docker"):
             schema = json.loads((root / ext_id / "settings.schema.json").read_text(encoding="utf-8"))
             runtime.discovered[ext_id] = SimpleNamespace(manifest=SimpleNamespace(settings_schema=schema), ok=True)
             db_session.add(ExtensionRecord(id=ext_id, version="1", api_version="0.1.0", state="disabled", settings={}))
@@ -545,14 +545,14 @@ async def test_every_schedule_field_of_the_shipped_extensions_is_checked(client,
                 if spec.get("x-widget") != "schedule":
                     continue
                 found += 1
-                bad = await client.put(f"/api/v1/extensions/{ext_id}/settings", json={"values": {key: "@daily"}}, headers=headers)
+                bad = await client.put(f"/api/v1/extensions/{ext_id}/settings", json={"current_password": "correct-horse-battery", "values": {key: "@daily"}}, headers=headers)
                 assert bad.status_code == 422, (ext_id, key, bad.text)
-                good = await client.put(f"/api/v1/extensions/{ext_id}/settings", json={"values": {key: "0 4 * * *"}}, headers=headers)
+                good = await client.put(f"/api/v1/extensions/{ext_id}/settings", json={"current_password": "correct-horse-battery", "values": {key: "0 4 * * *"}}, headers=headers)
                 assert good.status_code == 200, (ext_id, key, good.text)
     finally:
         runtime.discovered.pop("shield", None)
-        runtime.discovered.pop("service-matrix", None)
-    assert found == 7  # sechs bei Shield, eine bei der Service-Matrix
+        runtime.discovered.pop("docker", None)
+    assert found == 7  # sechs bei Shield, eine beim Docker-Modul
 
 
 NUMBER_SCHEMA = {
@@ -592,7 +592,7 @@ async def test_a_number_outside_its_bounds_is_refused_and_nothing_is_stored(clie
     await db_session.flush()
     headers = await _owner(client)
 
-    r = await client.put("/api/v1/extensions/zahl/settings", json={"values": {"interval": bad, "note": "neu"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/zahl/settings", json={"current_password": "correct-horse-battery", "values": {"interval": bad, "note": "neu"}}, headers=headers)
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == f"„Prüfabstand“: Erlaubt sind Werte von 2 bis 59. Eingetragen ist {bad}."
     stored = (await client.get("/api/v1/extensions/zahl/settings", headers=headers)).json()["values"]
@@ -606,9 +606,9 @@ async def test_number_bounds_are_inclusive_and_empty_still_means_default(client,
     headers = await _owner(client)
     for values in ({"interval": 2}, {"interval": 59}, {"ratio": 0.5}, {"ratio": 10}, {"threshold": 3},
                    {"threshold": 10**6}, {"free": -12.5}, {"limits": [1, 5]}):
-        r = await client.put("/api/v1/extensions/zahl/settings", json={"values": values}, headers=headers)
+        r = await client.put("/api/v1/extensions/zahl/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
         assert r.status_code == 200, (values, r.text)
-    r = await client.put("/api/v1/extensions/zahl/settings", json={"values": {"interval": None}}, headers=headers)
+    r = await client.put("/api/v1/extensions/zahl/settings", json={"current_password": "correct-horse-battery", "values": {"interval": None}}, headers=headers)
     assert r.status_code == 200, r.text
     assert "interval" not in r.json()["values"]
 
@@ -623,7 +623,7 @@ async def test_the_message_names_the_field_and_the_allowed_range(client, db_sess
     db_session.add(ExtensionRecord(id="zahl", version="1", api_version="0.1.0", state="disabled", settings={}))
     await db_session.flush()
     headers = await _owner(client)
-    r = await client.put("/api/v1/extensions/zahl/settings", json={"values": values}, headers=headers)
+    r = await client.put("/api/v1/extensions/zahl/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
     assert r.status_code == 422, r.text
     assert r.json()["detail"] == detail
 
@@ -694,10 +694,10 @@ async def test_an_enum_message_names_the_field_by_its_title(client, db_session):
         db_session.add(ExtensionRecord(id="wahl", version="1", api_version="0.1.0", state="disabled", settings={}))
         await db_session.flush()
         headers = await _owner(client)
-        bad = await client.put("/api/v1/extensions/wahl/settings", json={"values": {"step": 7}}, headers=headers)
+        bad = await client.put("/api/v1/extensions/wahl/settings", json={"current_password": "correct-horse-battery", "values": {"step": 7}}, headers=headers)
         assert bad.status_code == 422
         assert bad.json()["detail"] == "„Abstand“ muss einer dieser Werte sein: 5, 10."
-        good = await client.put("/api/v1/extensions/wahl/settings", json={"values": {"step": 10}}, headers=headers)
+        good = await client.put("/api/v1/extensions/wahl/settings", json={"current_password": "correct-horse-battery", "values": {"step": 10}}, headers=headers)
         assert good.status_code == 200, good.text
     finally:
         runtime.discovered.pop("wahl", None)
@@ -726,9 +726,9 @@ async def test_the_additions_x_generate_and_x_qr_url_do_not_get_in_the_way_of_sa
         read = await client.get("/api/v1/extensions/zufall/settings", headers=headers)
         assert read.json()["schema"]["x-qr-url"] == "/ext/zufall/subscribe-link"
         assert read.json()["schema"]["properties"]["topic"]["x-generate"]["prefix"] == "nodvard-"
-        good = await client.put("/api/v1/extensions/zufall/settings", json={"values": {"topic": "nodvard-k3j9x0a8s7d6f5g4h3j2"}}, headers=headers)
+        good = await client.put("/api/v1/extensions/zufall/settings", json={"current_password": "correct-horse-battery", "values": {"topic": "nodvard-k3j9x0a8s7d6f5g4h3j2"}}, headers=headers)
         assert good.status_code == 200, good.text
-        bad = await client.put("/api/v1/extensions/zufall/settings", json={"values": {"topic": "Nodvard Gross"}}, headers=headers)
+        bad = await client.put("/api/v1/extensions/zufall/settings", json={"current_password": "correct-horse-battery", "values": {"topic": "Nodvard Gross"}}, headers=headers)
         assert bad.status_code == 422
     finally:
         runtime.discovered.pop("zufall", None)
@@ -772,3 +772,85 @@ def test_every_generated_field_and_qr_address_of_the_shipped_extensions_is_usabl
             qr.append(ext_id)
             assert schema["x-qr-url"].startswith(f"/ext/{ext_id}/"), ext_id
     assert generated == ["ntfy.topic"] and qr == ["ntfy"]
+
+
+async def _plain(db_session, test_settings, label: str) -> str | None:
+    from sqlalchemy import select
+
+    from nodvard_deck.core import vault
+    from nodvard_deck.models import Secret
+
+    await db_session.commit()
+    row = (await db_session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
+    return None if row is None else await vault.read_secret_plaintext(db_session, vault.load_keyring(test_settings), row.id)
+
+
+@pytest.mark.asyncio
+async def test_stored_secrets_are_replaced_or_removed_only_with_the_password(client, db_session, test_settings, bound_extension):
+    """Dieselbe Hürde wie auf der Seite Tresor: Mit der Sitzung allein ersetzt oder löscht niemand ein gespeichertes
+    Geheimnis über die Moduleinstellungen. Die Erstanlage bleibt ohne Passwort."""
+    db_session.add(ExtensionRecord(
+        id="bound", version="1", api_version="0.1.0", state="disabled", settings={"server_url": "https://a.example"},
+    ))
+    await db_session.flush()
+    headers = await _owner(client)
+    base = "/api/v1/extensions/bound"
+    for label in ("free-token", "bound-token"):
+        r = await client.put(f"{base}/secrets", json={"label": label, "value": "erst"}, headers=headers)
+        assert r.status_code == 204, r.text
+
+    for extra in ({}, {"current_password": ""}):
+        r = await client.put(f"{base}/secrets", json={"label": "free-token", "value": "fremd", **extra}, headers=headers)
+        assert r.status_code == 403, r.text
+        assert r.json()["code"] == "confirm_required" and r.json()["two_factor"] is False
+    r = await client.put(f"{base}/secrets", json={"label": "free-token", "value": "fremd", "current_password": "falsch"}, headers=headers)
+    assert r.status_code == 400
+    r = await client.delete(f"{base}/secrets", params={"label": "free-token"}, headers=headers)
+    assert r.status_code == 403 and r.json()["code"] == "confirm_required"
+    r = await client.request("DELETE", f"{base}/secrets", params={"label": "free-token"}, json={"current_password": "falsch"}, headers=headers)
+    assert r.status_code == 400
+    r = await client.put(f"{base}/settings", json={"values": {"server_url": "https://b.example"}}, headers=headers)
+    assert r.status_code == 403 and r.json()["code"] == "confirm_required"
+    assert (await client.get(f"{base}/settings", headers=headers)).json()["values"]["server_url"] == "https://a.example"
+    assert await _plain(db_session, test_settings, "free-token") == "erst"
+    assert await _plain(db_session, test_settings, "bound-token") == "erst"
+
+    pw = {"current_password": "correct-horse-battery"}
+    r = await client.put(f"{base}/secrets", json={"label": "free-token", "value": "neu", **pw}, headers=headers)
+    assert r.status_code == 204, r.text
+    assert await _plain(db_session, test_settings, "free-token") == "neu"
+    r = await client.put(f"{base}/settings", json={"values": {"server_url": "https://b.example"}, **pw}, headers=headers)
+    assert r.status_code == 200 and r.json()["secrets_cleared"] == ["bound-token"], r.text
+    r = await client.request("DELETE", f"{base}/secrets", params={"label": "free-token"}, json=pw, headers=headers)
+    assert r.status_code == 204, r.text
+    assert await _plain(db_session, test_settings, "free-token") is None
+    # Ohne gespeichertes Geheimnis braucht es nichts: ein neues Ziel ohne Token, ein leeres Löschen.
+    r = await client.put(f"{base}/settings", json={"values": {"server_url": "https://c.example"}}, headers=headers)
+    assert r.status_code == 200 and r.json()["secrets_cleared"] == []
+    assert (await client.delete(f"{base}/secrets", params={"label": "free-token"}, headers=headers)).status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_with_two_factor_the_module_settings_ask_for_the_code_too(client, db_session, test_settings, bound_extension):
+    import pyotp
+    from totp_helpers import setup_confirm_code
+
+    db_session.add(ExtensionRecord(id="bound", version="1", api_version="0.1.0", state="disabled", settings={}))
+    await db_session.flush()
+    headers = await _owner(client)
+    setup = await client.post("/api/v1/me/totp/setup", json={"current_password": "correct-horse-battery"}, headers=headers)
+    secret = setup.json()["secret"]
+    confirmed = await client.post("/api/v1/me/totp/confirm", json={"code": setup_confirm_code(secret)}, headers=headers)
+    assert confirmed.status_code == 200, confirmed.text
+    base = "/api/v1/extensions/bound"
+    assert (await client.put(f"{base}/secrets", json={"label": "free-token", "value": "erst"}, headers=headers)).status_code == 204
+
+    r = await client.put(f"{base}/secrets", json={"label": "free-token", "value": "fremd"}, headers=headers)
+    assert (r.status_code, r.json()["code"], r.json()["two_factor"]) == (403, "confirm_required", True)
+    body = {"label": "free-token", "value": "fremd", "current_password": "correct-horse-battery"}
+    r = await client.put(f"{base}/secrets", json=body, headers=headers)
+    assert (r.status_code, r.json()["code"]) == (403, "totp_missing")
+    assert await _plain(db_session, test_settings, "free-token") == "erst"
+    r = await client.put(f"{base}/secrets", json={**body, "totp_code": pyotp.TOTP(secret).now()}, headers=headers)
+    assert r.status_code == 204, r.text
+    assert await _plain(db_session, test_settings, "free-token") == "fremd"

@@ -52,7 +52,7 @@ _log = logging.getLogger(LOGGER)
 
 def detect_command() -> str:
     # Als root, wenn das geht (ohne Passwortabfrage); als normaler Benutzer fehlt meist die Nextcloud.
-    return av.as_root(DETECT_SCRIPT, required=False)
+    return av.via_helper(["detect-templates"], DETECT_SCRIPT, version=av.HELPER_READ_VERSION, required=False)
 
 
 def clean_path(raw: str) -> str | None:

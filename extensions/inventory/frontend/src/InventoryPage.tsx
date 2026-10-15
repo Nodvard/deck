@@ -261,7 +261,7 @@ function TaxonomyPanel({
     value: string, setValue: (v: string) => void, placeholder: string, what: string,
   ) => (
     <div>
-      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-white/45"><Icon name={icon} size={13} /> {title}</p>
+      <p className="mb-2 flex items-center gap-1.5 text-xs font-medium text-white/45"><Icon name={icon} size={13} /> {title}</p>
       <div className="mb-3 flex flex-wrap gap-1.5">
         {entries.map((e) => (
           <span key={e.id} className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.04] py-1 pl-2.5 pr-1.5 text-sm">

@@ -606,11 +606,11 @@ async def _configure(
     values: dict[str, Any] = {"base_url": url, "username": USER}
     if insecure:
         values["tls_insecure_skip_verify"] = True
-    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"values": values}, headers=headers)
+    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": values}, headers=headers)
     assert saved.status_code == 200, saved.text
     for label, value in (("nextcloud-app-password", password), ("nextcloud-serverinfo-token", token)):
         if value is not None:
-            res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": label, "value": value}, headers=headers)
+            res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": label, "value": value}, headers=headers)
             assert res.status_code == 204, res.text
 
 
@@ -668,7 +668,7 @@ async def test_address_without_any_credentials_is_not_configured(client, db_sess
     assert fake.requests == []
 
     # Ein nachgetragenes App-Passwort gilt sofort, auch innerhalb der 20 Sekunden des Zwischenspeichers.
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": "nextcloud-app-password", "value": PASSWORD}, headers=headers)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-app-password", "value": PASSWORD}, headers=headers)
     assert res.status_code == 204
     assert (await _serverinfo(client, headers))["state"] == "ok"
 
@@ -752,7 +752,7 @@ async def test_wrong_credentials_say_what_to_do(client, db_session, test_setting
     ]
 
     # Mit dem richtigen Token geht es sofort, obwohl die abgelehnte Anmeldung sonst gemerkt bleibt.
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": "nextcloud-serverinfo-token", "value": TOKEN}, headers=headers)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-serverinfo-token", "value": TOKEN}, headers=headers)
     assert res.status_code == 204
     assert (await _serverinfo(client, headers))["state"] == "ok", "ein neu eingetragenes Token gilt sofort"
 
@@ -830,7 +830,7 @@ async def test_tls_exception_is_used_only_when_asked_for(client, db_session, tes
 
     await _configure(client, headers, insecure=True)
     assert (await _serverinfo(client, headers))["state"] == "ok"
-    assert len(fake.insecure_requests) == 1, "mit der Einstellung geht die Abfrage ueber den Client ohne Zertifikatspruefung"
+    assert len(fake.insecure_requests) == 1, "mit der Einstellung geht die Abfrage über den Client ohne Zertifikatsprüfung"
 
 
 @pytest.mark.asyncio
@@ -863,7 +863,7 @@ async def test_results_are_cached_for_twenty_seconds_and_refresh_skips_the_cache
     assert (await client.get(f"{API}/widgets/status", headers=headers)).status_code == 200
     assert await _serverinfo(client, headers) == first
     assert len(fake.requests) == 1, "Seite und Kachel fragen die Nextcloud nur einmal"
-    assert reads == ["nextcloud-serverinfo-token"], "das Geheimnis wird nur fuer eine echte Abfrage geholt"
+    assert reads == ["nextcloud-serverinfo-token"], "das Geheimnis wird nur für eine echte Abfrage geholt"
 
     await _serverinfo(client, headers, "?refresh=true")
     assert len(fake.requests) == 2, "der Knopf Aktualisieren umgeht den Zwischenspeicher"
@@ -877,7 +877,7 @@ async def test_results_are_cached_for_twenty_seconds_and_refresh_skips_the_cache
     assert len(fake.requests) == 3, "nach 20 Sekunden wird neu gefragt"
 
     # Geänderte Einstellungen gelten sofort.
-    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"values": {"username": "bob"}}, headers=headers)
+    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"username": "bob"}}, headers=headers)
     assert saved.status_code == 200, saved.text
     await _serverinfo(client, headers)
     assert len(fake.requests) == 4
@@ -911,7 +911,7 @@ async def test_testing_the_connection_makes_the_tile_ask_again(client, db_sessio
     headers, _ = await _enable(client, db_session, test_settings)
     await _configure(client, headers, password="falsch-falsch")
     assert (await _serverinfo(client, headers))["state"] == "auth_failed"
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": "nextcloud-app-password", "value": PASSWORD}, headers=headers)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-app-password", "value": PASSWORD}, headers=headers)
     assert res.status_code == 204
     assert (await _serverinfo(client, headers))["state"] == "auth_failed", "noch aus dem Zwischenspeicher"
 
@@ -926,7 +926,7 @@ async def test_changing_the_address_removes_both_secrets_so_they_never_go_to_a_n
     await _configure(client, headers, token=TOKEN)
     assert (await _serverinfo(client, headers))["state"] == "ok"
     saved = await client.put(
-        f"/api/v1/extensions/{EXT}/settings", json={"values": {"base_url": "https://angreifer.example.com"}}, headers=headers
+        f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"base_url": "https://angreifer.example.com"}}, headers=headers
     )
     assert saved.status_code == 200, saved.text
     assert sorted(saved.json()["secrets_cleared"]) == ["nextcloud-app-password", "nextcloud-serverinfo-token"]
@@ -1018,10 +1018,10 @@ async def test_settings_page_offers_the_optional_token(client, db_session, test_
     assert (token["title"], token["optional"], token["is_set"]) == ("Token für Server-Info (optional)", True, False)
     assert "occ config:app:set serverinfo token" in token["description"]
     # Ohne gespeicherte Adresse nimmt der Tresor das Token nicht an (es gehört zu einem Ziel).
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": "nextcloud-serverinfo-token", "value": TOKEN}, headers=headers)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-serverinfo-token", "value": TOKEN}, headers=headers)
     assert res.status_code == 409
     # Und ein fremdes Geheimnis geht nicht.
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": "nextcloud-etwas-anderes", "value": TOKEN}, headers=headers)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "nextcloud-etwas-anderes", "value": TOKEN}, headers=headers)
     assert res.status_code == 422
 
 

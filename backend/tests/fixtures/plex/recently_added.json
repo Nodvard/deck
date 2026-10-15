@@ -1,0 +1,79 @@
+{
+  "MediaContainer": {
+    "size": 5,
+    "allowSync": false,
+    "identifier": "com.plexapp.plugins.library",
+    "mediaTagPrefix": "/system/bundle/media/flags/",
+    "mediaTagVersion": 1759000000,
+    "mixedParents": true,
+    "Metadata": [
+      {
+        "librarySectionID": "1",
+        "librarySectionTitle": "Filme",
+        "ratingKey": "1100",
+        "key": "/library/metadata/1100",
+        "type": "movie",
+        "title": "Der zweite Beispielfilm",
+        "year": 2024,
+        "addedAt": 1791742951,
+        "duration": 6300000
+      },
+      {
+        "librarySectionID": "2",
+        "librarySectionTitle": "Serien",
+        "ratingKey": "1010",
+        "key": "/library/metadata/1010",
+        "type": "episode",
+        "title": "Der Besuch",
+        "grandparentTitle": "Die Beispielserie",
+        "parentTitle": "Staffel 2",
+        "parentIndex": 2,
+        "index": 5,
+        "year": 2026,
+        "addedAt": 1791615900,
+        "duration": 2700000
+      },
+      {
+        "librarySectionID": "2",
+        "librarySectionTitle": "Serien",
+        "ratingKey": "1009",
+        "key": "/library/metadata/1009",
+        "type": "episode",
+        "title": "Die Abreise",
+        "grandparentTitle": "Die Beispielserie",
+        "parentTitle": "Staffel 2",
+        "parentIndex": 2,
+        "index": 4,
+        "year": 2026,
+        "addedAt": 1791011100,
+        "duration": 2700000
+      },
+      {
+        "librarySectionID": "2",
+        "librarySectionTitle": "Serien",
+        "ratingKey": "1200",
+        "key": "/library/metadata/1200",
+        "type": "episode",
+        "title": "Pilot",
+        "grandparentTitle": "Eine andere Serie",
+        "parentTitle": "Staffel 1",
+        "parentIndex": 1,
+        "index": 1,
+        "year": 2025,
+        "addedAt": 1790798400,
+        "duration": 3000000
+      },
+      {
+        "librarySectionID": "1",
+        "librarySectionTitle": "Filme",
+        "ratingKey": "1300",
+        "key": "/library/metadata/1300",
+        "type": "movie",
+        "title": "Ein alter Beispielfilm",
+        "year": 1987,
+        "addedAt": 1789983000,
+        "duration": 5400000
+      }
+    ]
+  }
+}

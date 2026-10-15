@@ -1,0 +1,381 @@
+[
+  {
+    "entity_id": "update.home_assistant_core_update",
+    "state": "on",
+    "attributes": {
+      "auto_update": false,
+      "display_precision": 0,
+      "installed_version": "2026.10.1",
+      "in_progress": false,
+      "latest_version": "2026.10.2",
+      "release_summary": null,
+      "release_url": "https://github.com/home-assistant/core/releases/tag/2026.10.2",
+      "skipped_version": null,
+      "title": "Home Assistant Core",
+      "update_percentage": null,
+      "entity_picture": "https://brands.home-assistant.io/homeassistant/icon.png",
+      "friendly_name": "Home Assistant Core Update",
+      "supported_features": 23
+    },
+    "last_changed": "2026-10-12T07:01:07.123456+00:00",
+    "last_reported": "2026-10-12T07:01:07.123456+00:00",
+    "last_updated": "2026-10-12T07:01:07.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000001",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "update.mosquitto_broker_update",
+    "state": "on",
+    "attributes": {
+      "auto_update": false,
+      "display_precision": 0,
+      "installed_version": "6.5.0",
+      "in_progress": false,
+      "latest_version": "6.5.1",
+      "release_summary": "Kleine Fehlerkorrekturen.",
+      "release_url": "https://example.com/mosquitto/6.5.1",
+      "skipped_version": null,
+      "title": "Mosquitto broker",
+      "update_percentage": null,
+      "friendly_name": "Mosquitto broker Update",
+      "supported_features": 25
+    },
+    "last_changed": "2026-10-12T07:02:14.123456+00:00",
+    "last_reported": "2026-10-12T07:02:14.123456+00:00",
+    "last_updated": "2026-10-12T07:02:14.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000002",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "update.home_assistant_operating_system_update",
+    "state": "off",
+    "attributes": {
+      "auto_update": false,
+      "display_precision": 0,
+      "installed_version": "16.2",
+      "in_progress": false,
+      "latest_version": "16.2",
+      "release_summary": null,
+      "release_url": "https://github.com/home-assistant/operating-system/releases/tag/16.2",
+      "skipped_version": null,
+      "title": "Home Assistant Operating System",
+      "update_percentage": null,
+      "friendly_name": "Home Assistant Operating System Update",
+      "supported_features": 23
+    },
+    "last_changed": "2026-10-12T07:03:21.123456+00:00",
+    "last_reported": "2026-10-12T07:03:21.123456+00:00",
+    "last_updated": "2026-10-12T07:03:21.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000003",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "update.studio_code_server_update",
+    "state": "off",
+    "attributes": {
+      "auto_update": true,
+      "display_precision": 0,
+      "installed_version": "5.19.0",
+      "in_progress": false,
+      "latest_version": "5.19.1",
+      "release_summary": null,
+      "release_url": null,
+      "skipped_version": "5.19.1",
+      "title": "Studio Code Server",
+      "update_percentage": null,
+      "friendly_name": "Studio Code Server Update",
+      "supported_features": 25
+    },
+    "last_changed": "2026-10-12T07:04:28.123456+00:00",
+    "last_reported": "2026-10-12T07:04:28.123456+00:00",
+    "last_updated": "2026-10-12T07:04:28.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000004",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "update.wled_firmware",
+    "state": "unavailable",
+    "attributes": {
+      "friendly_name": "WLED Regal Firmware",
+      "supported_features": 21
+    },
+    "last_changed": "2026-10-12T07:05:35.123456+00:00",
+    "last_reported": "2026-10-12T07:05:35.123456+00:00",
+    "last_updated": "2026-10-12T07:05:35.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000005",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.wohnzimmer_temperatur",
+    "state": "21.5",
+    "attributes": {
+      "state_class": "measurement",
+      "unit_of_measurement": "°C",
+      "device_class": "temperature",
+      "friendly_name": "Wohnzimmer Temperatur"
+    },
+    "last_changed": "2026-10-12T07:06:42.123456+00:00",
+    "last_reported": "2026-10-12T07:06:42.123456+00:00",
+    "last_updated": "2026-10-12T07:06:42.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000006",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.keller_luftfeuchtigkeit",
+    "state": "58",
+    "attributes": {
+      "state_class": "measurement",
+      "unit_of_measurement": "%",
+      "device_class": "humidity",
+      "friendly_name": "Keller Luftfeuchtigkeit"
+    },
+    "last_changed": "2026-10-12T07:07:49.123456+00:00",
+    "last_reported": "2026-10-12T07:07:49.123456+00:00",
+    "last_updated": "2026-10-12T07:07:49.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000007",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.strom_leistung",
+    "state": "412",
+    "attributes": {
+      "state_class": "measurement",
+      "unit_of_measurement": "W",
+      "device_class": "power",
+      "friendly_name": "Strom Leistung"
+    },
+    "last_changed": "2026-10-12T07:08:56.123456+00:00",
+    "last_reported": "2026-10-12T07:08:56.123456+00:00",
+    "last_updated": "2026-10-12T07:08:56.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000008",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.balkon_temperatur",
+    "state": "unavailable",
+    "attributes": {
+      "unit_of_measurement": "°C",
+      "device_class": "temperature",
+      "friendly_name": "Balkon Temperatur"
+    },
+    "last_changed": "2026-10-12T07:09:03.123456+00:00",
+    "last_reported": "2026-10-12T07:09:03.123456+00:00",
+    "last_updated": "2026-10-12T07:09:03.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000009",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.nas_cpu_auslastung",
+    "state": "unknown",
+    "attributes": {
+      "unit_of_measurement": "%",
+      "friendly_name": "NAS CPU Auslastung"
+    },
+    "last_changed": "2026-10-12T07:10:10.123456+00:00",
+    "last_reported": "2026-10-12T07:10:10.123456+00:00",
+    "last_updated": "2026-10-12T07:10:10.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000010",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.waschmaschine_status",
+    "state": "unknown",
+    "attributes": {
+      "friendly_name": "Waschmaschine Status"
+    },
+    "last_changed": "2026-10-12T07:11:17.123456+00:00",
+    "last_reported": "2026-10-12T07:11:17.123456+00:00",
+    "last_updated": "2026-10-12T07:11:17.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000011",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sensor.sonne_naechster_aufgang",
+    "state": "2026-10-13T05:51:12+00:00",
+    "attributes": {
+      "device_class": "timestamp",
+      "friendly_name": "Sonne Nächster Aufgang"
+    },
+    "last_changed": "2026-10-12T07:12:24.123456+00:00",
+    "last_reported": "2026-10-12T07:12:24.123456+00:00",
+    "last_updated": "2026-10-12T07:12:24.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000012",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "light.flur",
+    "state": "on",
+    "attributes": {
+      "min_color_temp_kelvin": 2000,
+      "max_color_temp_kelvin": 6535,
+      "supported_color_modes": [
+        "color_temp"
+      ],
+      "color_mode": "color_temp",
+      "brightness": 180,
+      "friendly_name": "Flur",
+      "supported_features": 0
+    },
+    "last_changed": "2026-10-12T07:13:31.123456+00:00",
+    "last_reported": "2026-10-12T07:13:31.123456+00:00",
+    "last_updated": "2026-10-12T07:13:31.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000013",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "light.garten_lampe",
+    "state": "unavailable",
+    "attributes": {
+      "friendly_name": "Garten Lampe"
+    },
+    "last_changed": "2026-10-12T07:14:38.123456+00:00",
+    "last_reported": "2026-10-12T07:14:38.123456+00:00",
+    "last_updated": "2026-10-12T07:14:38.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000014",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "switch.steckdose_kaffee",
+    "state": "off",
+    "attributes": {
+      "friendly_name": "Steckdose Kaffee"
+    },
+    "last_changed": "2026-10-12T07:15:45.123456+00:00",
+    "last_reported": "2026-10-12T07:15:45.123456+00:00",
+    "last_updated": "2026-10-12T07:15:45.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000015",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "binary_sensor.haustuer",
+    "state": "off",
+    "attributes": {
+      "device_class": "door",
+      "friendly_name": "Haustür"
+    },
+    "last_changed": "2026-10-12T07:16:52.123456+00:00",
+    "last_reported": "2026-10-12T07:16:52.123456+00:00",
+    "last_updated": "2026-10-12T07:16:52.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000016",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "media_player.fernseher",
+    "state": "unavailable",
+    "attributes": {
+      "friendly_name": "Fernseher"
+    },
+    "last_changed": "2026-10-12T07:17:59.123456+00:00",
+    "last_reported": "2026-10-12T07:17:59.123456+00:00",
+    "last_updated": "2026-10-12T07:17:59.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000017",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "automation.licht_abends",
+    "state": "on",
+    "attributes": {
+      "id": "1700000000000",
+      "last_triggered": "2026-10-11T17:30:00+00:00",
+      "mode": "single",
+      "current": 0,
+      "friendly_name": "Licht abends"
+    },
+    "last_changed": "2026-10-12T07:18:06.123456+00:00",
+    "last_reported": "2026-10-12T07:18:06.123456+00:00",
+    "last_updated": "2026-10-12T07:18:06.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000018",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "person.max_mustermann",
+    "state": "home",
+    "attributes": {
+      "editable": true,
+      "id": "max_mustermann",
+      "device_trackers": [],
+      "friendly_name": "Max Mustermann"
+    },
+    "last_changed": "2026-10-12T07:19:13.123456+00:00",
+    "last_reported": "2026-10-12T07:19:13.123456+00:00",
+    "last_updated": "2026-10-12T07:19:13.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000019",
+      "parent_id": null,
+      "user_id": null
+    }
+  },
+  {
+    "entity_id": "sun.sun",
+    "state": "below_horizon",
+    "attributes": {
+      "next_dawn": "2026-10-13T05:20:00+00:00",
+      "elevation": -35.2,
+      "azimuth": 12.3,
+      "rising": false,
+      "friendly_name": "Sun"
+    },
+    "last_changed": "2026-10-12T07:20:20.123456+00:00",
+    "last_reported": "2026-10-12T07:20:20.123456+00:00",
+    "last_updated": "2026-10-12T07:20:20.123456+00:00",
+    "context": {
+      "id": "01JA0000000000000000000020",
+      "parent_id": null,
+      "user_id": null
+    }
+  }
+]

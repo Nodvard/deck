@@ -300,7 +300,7 @@ def _req(unit="nginx.service", host_id="h1", host_ref="h1", **extra) -> ActionRe
 async def test_executor_builds_the_exact_command_and_reports_the_state():
     ctx = _Ctx()
     result = await sa.SystemActionExecutor(ctx).execute(_req())
-    assert ctx.commands[0] == sa.as_root(sa.restart_command("nginx.service"))
+    assert ctx.commands[0] == sa.restart_as_root("nginx.service")
     assert ctx.commands[1:] == [sa.state_command("nginx.service")] * 2, "zwei ruhige Lesungen"
     assert result.success is True
     assert result.output == "nginx.service auf Raspberry Pi neu gestartet – Prüfung danach: läuft stabil."
@@ -428,6 +428,11 @@ async def test_executor_reports_failures_honestly():
     ctx = _Ctx()
     ctx.replies = [SimpleNamespace(exit_code=126, stdout="@@noroot\n", stderr="", duration_ms=1)]
     assert (await sa.SystemActionExecutor(ctx).execute(_req())).error == sa.NO_ROOT_MESSAGE
+    # Liegt ein unpassendes Hilfsskript da, verlangt die Meldung, den Server neu einzurichten.
+    ctx = _Ctx()
+    ctx.replies = [SimpleNamespace(exit_code=126, stdout="@@noroot\n@@noroot-helper\n", stderr="", duration_ms=1)]
+    error = (await sa.SystemActionExecutor(ctx).execute(_req())).error
+    assert error == sa.NO_ROOT_HELPER_MESSAGE and "neu einrichten" in error
 
     ctx = _Ctx()
     ctx.replies = [SimpleNamespace(exit_code=5, stdout="@@rc=5\ninactive\n", stderr="Failed to restart nginx.service: Unit not found.\n", duration_ms=1)]
@@ -578,7 +583,7 @@ async def test_restart_goes_through_the_gate_and_reaches_the_server(client, db_s
     assert done["status"] == "succeeded", done
     assert done["result"]["output"].endswith("neu gestartet – Prüfung danach: läuft stabil.")
     assert done["payload"] == {"host_id": host["id"], "unit": "nginx.service"}
-    assert commands == [sa.as_root(sa.restart_command("nginx.service"))] + [sa.state_command("nginx.service")] * 2
+    assert commands == [sa.restart_as_root("nginx.service")] + [sa.state_command("nginx.service")] * 2
 
     row = (await db_session.execute(select(Action))).scalars().one()
     assert row.action_type == "system.service_restart" and row.host_id == host["id"]

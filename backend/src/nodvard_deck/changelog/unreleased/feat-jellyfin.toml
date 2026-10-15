@@ -1,0 +1,3 @@
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Jellyfin“ (Beta): zeigt auf einer Seite und in einer Kachel, wer gerade was schaut und ob dabei umgerechnet wird, wie viele Filme und Serien es gibt und was zuletzt hinzugekommen ist. Das Modul liest nur und ändert in Jellyfin nichts."

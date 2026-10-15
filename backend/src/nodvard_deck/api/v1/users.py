@@ -256,6 +256,8 @@ async def create_user(
     user.roles = roles
     session.add(user)
     await session.flush()
+    # Ein neues Konto kennt das alte Aussehen nicht: kein Hinweis „Deck hat ein neues Aussehen.“.
+    await settings_service.set_user(session, user.id, settings_service.DESIGN_NOTICE_KEY, True)
     await _audit_user(
         session, current_user, "user.created", user,
         {"username": user.username, "roles": sorted(r.name for r in roles)},

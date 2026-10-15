@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from httpx import AsyncClient
 
@@ -37,6 +40,19 @@ async def test_app_manifest_default_is_nodvard_deck(client: AsyncClient) -> None
     assert manifest["name"] == "Nodvard Deck"
     assert manifest["short_name"] == "Nodvard Deck"
     assert (await client.get("/api/v1/app/icon-192.png")).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_app_manifest_colors_come_from_the_default_theme(client: AsyncClient) -> None:
+    """Startbild und Statusleiste der App im Hintergrund des Standard-Themes, nicht im alten Dunkelblau aus dem
+    Branding; der Wert muss zu `:root` in `index.css` passen."""
+    css = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "styles" / "index.css").read_text(encoding="utf-8")
+    root = css[css.index(":root {") :]
+    match = re.search(r"--color-background:\s*(#[0-9a-fA-F]{6});", root[: root.index("}")])
+    assert match is not None
+    manifest = (await client.get("/api/v1/app/manifest.webmanifest")).json()
+    assert manifest["background_color"] == match.group(1)
+    assert manifest["theme_color"] == match.group(1)
 
 
 @pytest.mark.asyncio

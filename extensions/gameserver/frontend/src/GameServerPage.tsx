@@ -102,7 +102,7 @@ function size(bytes: number): string {
 function Stat({ label, value, sub }: { label: string; value: React.ReactNode; sub?: string }) {
   return (
     <div className="panel p-4">
-      <p className="text-[11px] font-medium uppercase tracking-wider text-white/50">{label}</p>
+      <p className="text-xs font-medium text-white/50">{label}</p>
       <div className="mt-1.5 text-2xl font-semibold tabular-nums">{value}</div>
       {sub && <p className="mt-0.5 text-xs text-white/50">{sub}</p>}
     </div>
@@ -185,7 +185,7 @@ function SettingsPanel({ server, profiles, profilesError, onRetryProfiles, onSav
       </div>
       {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
       <div className="mt-3 flex justify-end">
-        <button type="button" disabled={saving} onClick={() => void save()} className="accent-gradient rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+        <button type="button" disabled={saving} onClick={() => void save()} className="accent-gradient rounded-lg px-3 py-1.5 text-sm font-medium text-on-accent disabled:opacity-50">
           {saving ? "Speichere …" : "Speichern"}
         </button>
       </div>
@@ -232,7 +232,7 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
   return (
     <section id={`host-${server.host_id}`} className="mb-8 scroll-mt-4" data-testid={`server-${server.host_id}`}>
       <div className="flex flex-wrap items-center gap-3">
-        <span className="accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-white shadow-lg shadow-black/40">
+        <span className="accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-on-accent">
           {server.name.slice(0, 1).toUpperCase()}
         </span>
         <div className="min-w-0">
@@ -241,7 +241,7 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
         </div>
         <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${TONE[server.tone] ?? TONE.neutral}`}>{server.service_label}</span>
         <div className="ml-auto flex flex-wrap gap-2">
-          {canExecute && server.can_start && button("start", "accent-gradient text-white")}
+          {canExecute && server.can_start && button("start", "accent-gradient text-on-accent")}
           {canExecute && server.running && button("restart", "bg-white/10 hover:bg-white/20")}
           {canExecute && server.running && button("backup", "bg-white/10 hover:bg-white/20")}
           {canExecute && server.can_stop && button("stop", "bg-red-500/20 text-red-200 hover:bg-red-500/30")}
@@ -326,14 +326,14 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
         </div>
         <div className="panel p-4">
           <p className="mb-2 text-sm font-semibold">Sicherungen</p>
-          <p className="mb-1 text-[11px] uppercase tracking-wider text-white/45">Eigene</p>
+          <p className="mb-1 text-xs text-white/45">Eigene</p>
           {(d.backups ?? []).length === 0 && <p className="mb-2 text-sm text-white/50">Noch keine – „Welt sichern“ legt eine an.</p>}
           <ul className="mb-3">
             {(d.backups ?? []).map((b) => (
               <li key={b.name} className="flex justify-between py-1 text-sm"><span className="font-mono text-xs">{b.name}</span><span className="text-white/50">{size(b.size)}</span></li>
             ))}
           </ul>
-          <p className="mb-1 text-[11px] uppercase tracking-wider text-white/45">Automatisch (vom Spiel)</p>
+          <p className="mb-1 text-xs text-white/45">Automatisch (vom Spiel)</p>
           <ul>
             {(d.auto_backups ?? []).map((b) => (
               <li key={b.name} className="flex justify-between py-1 text-sm"><span>{ago(b.age_s)}</span><span className="text-white/50">{size(b.size)}</span></li>

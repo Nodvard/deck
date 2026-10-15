@@ -1,0 +1,68 @@
+{
+  "type": "object",
+  "properties": {
+    "connections": {
+      "type": "array",
+      "title": "Home Assistant",
+      "description": "Die Home-Assistant-Installationen, deren Zustand angezeigt wird. Meist genügt eine. Nodvard Deck liest nur und ändert in Home Assistant nichts.",
+      "x-item-title": "Home Assistant",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „zuhause“ oder „ferienhaus“. Nach dem Einrichten nicht mehr ändern.",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich – keine Leerzeichen."
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Adresse",
+            "description": "Adresse von Home Assistant, z. B. http://192.168.2.20:8123",
+            "pattern": "^https?://\\S+$",
+            "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+          },
+          "entities": {
+            "type": "array",
+            "title": "Angezeigte Werte (optional)",
+            "description": "Kennungen von Entitäten, deren Zustand auf der Seite und in der Kachel erscheinen soll, z. B. sensor.wohnzimmer_temperatur. Du findest die Kennung in Home Assistant unter Einstellungen → Geräte & Dienste → Entitäten. Höchstens 30.",
+            "maxItems": 30,
+            "items": {
+              "type": "string",
+              "pattern": "^[a-z_]+\\.[a-z0-9_]+$",
+              "x-pattern-message": "So wie in Home Assistant: Kleinbuchstaben, Zahlen und Unterstriche, mit einem Punkt dazwischen, z. B. sensor.wohnzimmer_temperatur."
+            }
+          },
+          "tls_fingerprint_sha256": {
+            "type": "string",
+            "title": "Fingerabdruck des Zertifikats (SHA-256)",
+            "description": "Nur bei https:// mit einem selbst erstellten Zertifikat. Nodvard Deck spricht dann nur mit dem Server, der genau dieses Zertifikat zeigt. Steht er hier, braucht es „Selbstsigniertes Zertifikat erlauben“ nicht. Du bekommst ihn z. B. im Browser aus den Zertifikatsdetails der Seite von Home Assistant.",
+            "pattern": "^\\s*([0-9A-Fa-f]{2}[:\\t -]?){31}[0-9A-Fa-f]{2}\\s*$|^\\s*$",
+            "x-pattern-message": "64 Zeichen aus 0–9 und A–F, gern mit Doppelpunkten (z. B. AB:CD:…)."
+          },
+          "tls_insecure_skip_verify": {
+            "type": "boolean",
+            "default": false,
+            "title": "Selbstsigniertes Zertifikat erlauben",
+            "description": "Nur im eigenen Netz aktivieren. Schaltet jede Prüfung des Zertifikats ab; besser ist der Fingerabdruck oben. Gilt nicht, solange ein Fingerabdruck eingetragen ist.",
+            "x-advanced": true
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ]
+      }
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "home-assistant-token:{name}",
+      "x-secret-bound-to": ["base_url"],
+      "per_item": "connections",
+      "title": "Zugangs-Token (Long-Lived)",
+      "description": "In Home Assistant unten auf deinem Profil unter Sicherheit → „Langlebige Zugangs-Token“ → „Token erstellen“ anlegen und hier einfügen; es wird nur einmal angezeigt. Lege am besten einen eigenen Benutzer ohne Admin-Rechte dafür an und erstelle das Token dort: Das Dashboard liest nur, mehr Rechte braucht es nicht."
+    }
+  ]
+}

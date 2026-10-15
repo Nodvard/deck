@@ -17,6 +17,7 @@ from . import antivirus as av
 from . import audit_job as aj
 from . import detached as dt
 from . import protection
+from . import realtime as rt
 from .history import occurrences_of
 from .hostscope import host_scope
 from .ids import EXT_ID, LOGGER, SOC_PATH
@@ -29,7 +30,7 @@ from .models import (
     ScanRecord,
     SecurityEventRecord,
 )
-from .patching import load_baselines, save_baseline
+from .patching import load_baseline, load_baselines, save_baseline
 from .steps import minute_step
 
 if TYPE_CHECKING:
@@ -52,7 +53,9 @@ AUDIT_RESUME_DELAY_S = 5  # nach dem Start des Dashboards kurz warten, bis Netz 
 # Neustart. Ist der Lauf fertig, steht das Ergebnis in `AuditRecord` (gleiche ID) und die Zeile ist weg.
 AUDIT_STATE_KIND = "audit_run"
 _AUDIT_ID_RE = re.compile(r"^audit_[0-9a-f]{16}$")
-QUARANTINE_TIMEOUT = 60
+# Das Hilfsskript prüft die Datei vorher selbst; ohne clamd lädt clamscan dafür die ganze Datenbank (auf einem
+# kleinen Rechner gut eine Minute).
+QUARANTINE_TIMEOUT = 300
 MAX_PARALLEL = 3
 # So lange wartet ein Scan (nicht der Wächter) auf die Sperre des Servers (`av.guard_command`): etwas länger, als ein
 # Wächter-Lauf höchstens dauert.
@@ -83,6 +86,20 @@ UNRELIABLE_NOTE = (
     "Zeilenumbruch im Dateinamen). Bitte vor dem Verschieben auf dem Server nachsehen."
 )
 
+REALTIME_LOG_BROKEN = "Das Protokoll des Echtzeit-Wächters kam nicht vollständig zurück."
+REALTIME_UNCHECKED = (
+    "clamd konnte den Fund aus dem Protokoll des Echtzeit-Wächters nicht noch einmal prüfen. Es wurde nichts "
+    "automatisch verschoben – bitte auf dem Server nachsehen."
+)
+REALTIME_UNREADABLE = (
+    "Im Protokoll des Echtzeit-Wächters stehen {count} Fund-Zeile(n), die Nodvard Deck nicht lesen kann. Bitte auf dem "
+    "Server in /var/log/clamav/nodvard-onaccess.log nachsehen."
+)
+REALTIME_OUTSIDE = (
+    "Der Echtzeit-Wächter meldet einen Fund außerhalb der eingestellten Ordner oder in einer Ausnahme. Es wurde nichts "
+    "automatisch verschoben – bitte auf dem Server nachsehen."
+)
+
 KIND_LABEL = {"quick": "Schnellscan", "deep": "Tiefenscan", "watch": "Echtzeit-Wächter", "custom": "Scan"}
 # Die "großen" Scans: je Server läuft höchstens einer davon, und der Wächter wartet, bis er fertig ist
 # (jeder clamscan lädt die ganze Datenbank, ~1 GB RAM).
@@ -106,6 +123,8 @@ def watch_interval_min(settings: dict[str, Any]) -> int:
 
 def _unreliable_hint(parsed: av.ScanResult) -> str:
     """Hinweistext zu einem Lauf ohne automatische Quarantäne: unleserliche Pfade, ungeprüfte Dateien oder beides."""
+    if parsed.hint:
+        return parsed.hint
     if not parsed.skipped:
         return UNRELIABLE_HINT
     if not parsed.paths_unsure:
@@ -193,6 +212,7 @@ class Defender:
         self._ctx = ctx
         self._running: set[tuple[str, str]] = set()  # (host_id, kind), kein doppelter Lauf
         self._status_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._readiness_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         # Seit wann der Wächter je Server wegen der belegten Sperre aussetzt; im Speicher, da er keine Zeile hinterlässt.
         self._watch_busy_since: dict[str, datetime] = {}
         # Laufende (oder wartende) Audits je Server, derselbe Stand wie in der Baselines-Tabelle (`AUDIT_STATE_KIND`).
@@ -322,24 +342,111 @@ class Defender:
 
     async def _run_scan(self, host: Host, scan_id: str, kind: str, paths: list[str]) -> None:
         settings = await self._settings()
+        minutes = 0
+        collected = await self._collect_realtime(host, settings) if kind == "watch" else None
+        if collected is not None:
+            parsed, output = collected
+        else:
+            parsed, output, minutes = await self._scan_on_host(host, scan_id, kind, paths, settings)
+        await self._record_scan(host, scan_id, kind, parsed, output, minutes, settings)
+
+    async def _collect_realtime(self, host: Host, settings: dict[str, Any]) -> tuple[av.ScanResult, str] | None:
+        """Holt neue Funde aus dem Protokoll des Echtzeit-Wächters und prüft jeden noch einmal über clamd.
+
+        `None`, wenn der Wächter dort nicht in Echtzeit läuft: Dann prüft dieser Lauf wie bisher im Minuten-Takt."""
+        if not ((await load_baseline(self._ctx, host.id, rt.STATE_KIND)) or {}).get("enabled"):
+            return None
+        line = ((await load_baseline(self._ctx, host.id, rt.POSITION_KIND)) or {}).get("line")
+        if isinstance(line, bool) or not isinstance(line, int) or not 0 <= line <= rt.MAX_LINE:
+            line = 0
+        command = av.via_helper(["realtime-log", str(line)], rt.log_command(line), version=av.HELPER_REALTIME_LOG_VERSION)
+        try:
+            res = await self._ctx.exec.run(host, command, timeout_s=STATUS_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001 - wie bei einem Scan: der Fehler steht sichtbar am Lauf
+            return av.ScanResult(status="error", error=_describe(exc, timeout_s=STATUS_TIMEOUT)), ""
+        stdout = res.stdout or ""
+        if av.NO_ROOT in stdout:
+            return av.ScanResult(status="error", error=av.NO_ROOT_MESSAGE), ""
+        chunk = rt.parse_log(stdout)
+        if chunk is None:
+            return av.ScanResult(status="error", error=REALTIME_LOG_BROKEN), stdout[-4000:]
+        if not chunk.active and not chunk.lines:
+            # clamonacc läuft nicht (etwa nach einem Absturz), und das Protokoll ist abgeholt: Minuten-Takt wie bisher.
+            _log.warning("shield_realtime_inactive host=%s", host.id)
+            return None
+        candidates = rt.found_lines(chunk.lines)
+        confirmed = await self._confirm_realtime(host, [path for path, _ in candidates]) if candidates else {}
+        if confirmed is None:
+            # Ohne Gegenprüfung bleibt jeder Fund aus dem Protokoll stehen, aber nur mit Notiz und ohne Quarantäne.
+            findings, hint = candidates, REALTIME_UNCHECKED
+        else:
+            findings = [(path, confirmed[path]) for path, _ in candidates if path in confirmed]
+            watch, exclude = settings.get("watch_paths") or av.WATCH_PATHS, settings.get("exclude_paths") or []
+            hint = REALTIME_OUTSIDE if any(rt.outside_watch(path, watch, exclude) for path, _ in findings) else None
+        await save_baseline(self._ctx, host.id, rt.POSITION_KIND, {"line": chunk.end})
+        unsure = hint is not None
+        unreadable = rt.unreadable_found(chunk.lines)
+        parsed = av.ScanResult(
+            status="infected" if findings else ("error" if unreadable else "clean"), findings=findings,
+            infected=len(findings), unreliable=unsure, paths_unsure=unsure, hint=hint,
+            error=REALTIME_UNREADABLE.format(count=unreadable) if unreadable else None,
+        )
+        checked = "nicht gegengeprüft" if confirmed is None else f"{len(findings)} bestätigt"
+        summary = f"Protokoll des Echtzeit-Wächters, Zeilen {chunk.start + 1} bis {chunk.end}: "
+        summary += f"{len(candidates)} Fund-Zeile(n), {checked}"
+        return parsed, "\n".join([summary, *chunk.lines[-50:]])
+
+    async def _confirm_realtime(self, host: Host, paths: list[str]) -> dict[str, str] | None:
+        """Prüft die Pfade aus dem Protokoll noch einmal; nur was clamd jetzt wieder findet, gilt als Fund.
+
+        Ein Dateiname mit Zeilenumbruch kann im Protokoll einen Fund für eine fremde, saubere Datei vortäuschen; die
+        Gegenprüfung findet dort nichts. `None`, wenn clamd nicht prüfen konnte."""
+        confirmed: dict[str, str] = {}
+        for i in range(0, len(paths), rt.CONFIRM_BATCH):
+            batch = paths[i:i + rt.CONFIRM_BATCH]
+            command = av.via_helper(["realtime-confirm", *batch], rt.confirm_command(batch),
+                                    version=av.HELPER_REALTIME_LOG_VERSION)
+            try:
+                res = await self._ctx.exec.run(host, command, timeout_s=SCAN_TIMEOUTS["watch"])
+            except Exception:  # noqa: BLE001 - dann gilt der Fund als nicht gegengeprüft
+                _log.warning("shield_realtime_confirm_failed host=%s", host.id, exc_info=True)
+                return None
+            found = rt.parse_confirm(res.stdout or "", batch)
+            if found is None:
+                return None
+            confirmed.update(found)
+        return confirmed
+
+    async def _scan_on_host(
+        self, host: Host, scan_id: str, kind: str, paths: list[str], settings: dict[str, Any],
+    ) -> tuple[av.ScanResult, str, int]:
+        """Der Scan oder Minuten-Lauf des Wächters auf dem Server; zurück: Ergebnis, Ausgabe, Fenster in Minuten."""
         max_mb = max_filesize_mb(settings)
         limit = SCAN_TIMEOUTS.get(kind, 3600)
         # Zufallsmarke je Lauf, im Befehl und bei der Auswertung dieselbe; ein Dateiname kann sie nicht erraten.
         mark = av.new_rc_mark()
         minutes = 0
+        exclude = settings.get("exclude_paths") or []
         if kind == "watch":
             minutes = await self._watch_minutes(host.id, scan_id, watch_interval_min(settings))
             # Einstellung "Wächter über clamdscan" (Standard aus): nur der Wächter, die anderen Scans bleiben bei clamscan.
-            command = av.build_watch_command(paths, minutes=minutes, max_filesize_mb=max_mb,
-                                             use_clamd=bool(settings.get("watch_use_clamdscan", False)), mark=mark,
-                                             skip_folders=settings.get("exclude_paths") or [])
+            use_clamd = bool(settings.get("watch_use_clamdscan", False))
+            command = av.build_watch_command(paths, minutes=minutes, max_filesize_mb=max_mb, use_clamd=use_clamd,
+                                             mark=mark, skip_folders=exclude)
+            args = av.watch_helper_args(paths, minutes=minutes, max_filesize_mb=max_mb, use_clamd=use_clamd, mark=mark,
+                                        skip_folders=exclude, limit_s=limit)
         else:
-            command = av.build_scan_command(paths, max_filesize_mb=max_mb, exclude=settings.get("exclude_paths") or [],
-                                            mark=mark)
+            command = av.build_scan_command(paths, max_filesize_mb=max_mb, exclude=exclude, mark=mark)
+            args = av.scan_helper_args(paths, max_filesize_mb=max_mb, exclude=exclude, mark=mark, limit_s=limit,
+                                       wait_s=SCAN_LOCK_WAIT_S)
         # Nie zwei Läufe zugleich auf einem Server (auch nicht aus einem zweiten Dashboard oder einem Lauf, der einen
         # Neustart überdauert hat): Der Wächter setzt aus, ein Scan wartet. Dazu ein Zeitlimit auf dem Server selbst.
         command = av.guard_command(command, mark=mark, limit_s=limit, wait_s=None if kind == "watch" else SCAN_LOCK_WAIT_S)
-        command = av.as_root(command, required=False)
+        # Das Hilfsskript bekommt dieselben Angaben und baut denselben Lauf (`scan`/`watch`), sonst der alte Weg.
+        if args is None:
+            command = av.as_root(command, required=False)
+        else:
+            command = av.via_helper(args, command, version=av.HELPER_SCAN_VERSION, required=False)
         try:
             result = await self._ctx.exec.run(host, command, timeout_s=limit)
             output = (result.stdout or "") + (result.stderr or "")
@@ -350,7 +457,13 @@ class Defender:
         except Exception as exc:  # noqa: BLE001 - jeder Fehler landet sichtbar am Scan
             output = ""
             parsed = av.ScanResult(status="error", error=_describe(exc, timeout_s=limit))
+        return parsed, output, minutes
 
+    async def _record_scan(
+        self, host: Host, scan_id: str, kind: str, parsed: av.ScanResult, output: str, minutes: int,
+        settings: dict[str, Any],
+    ) -> None:
+        """Schreibt das Ergebnis an den Scan, legt Funde an, verschiebt sie (wenn erlaubt) und meldet sie."""
         if kind == "watch" and parsed.busy:
             busy_since = self._watch_busy_since.setdefault(host.id, _now())
             too_long = minutes >= WATCH_MAX_WINDOW_MIN or _now() - busy_since >= timedelta(minutes=WATCH_MAX_WINDOW_MIN)
@@ -396,7 +509,7 @@ class Defender:
                 if existing is not None:
                     existing.scan_id = scan_id
                     if parsed.paths_unsure and not existing.note:
-                        existing.note = UNRELIABLE_NOTE
+                        existing.note = parsed.hint or UNRELIABLE_NOTE
                     finding_ids.append(existing.id)
                     continue
                 # Vom Menschen entschieden (ignoriert oder nach Freigabe wiederhergestellt): Dieselbe Datei mit derselben
@@ -416,7 +529,7 @@ class Defender:
                 session.add(FindingRecord(
                     id=fid, scan_id=scan_id, host_id=host.id, host_name=host.display_name or host.name, path=path,
                     signature=sig[:255], status="detected", detected_at=_now(),
-                    note=UNRELIABLE_NOTE if parsed.paths_unsure else None,
+                    note=(parsed.hint or UNRELIABLE_NOTE) if parsed.paths_unsure else None,
                 ))
                 finding_ids.append(fid)
 
@@ -482,13 +595,15 @@ class Defender:
             return False, "Server nicht mehr bekannt."
         qname = av.quarantine_name(finding.id, finding.path)
         try:
-            result = await self._ctx.exec.run(
-                host, av.as_root(av.quarantine_command(finding.path, qname)), timeout_s=QUARANTINE_TIMEOUT,
+            command = av.via_helper(
+                av.quarantine_args(finding.path, qname), av.quarantine_command(finding.path, qname),
+                version=av.HELPER_QUARANTINE_VERSION,
             )
+            result = await self._ctx.exec.run(host, command, timeout_s=QUARANTINE_TIMEOUT)
             ok = result.exit_code == 0
-            message = (result.stdout or result.stderr or "").strip()
+            message = av.helper_text(result.stdout or result.stderr or "").strip()
             if av.NO_ROOT in message:
-                message = av.NO_ROOT_MESSAGE
+                message = av.no_root_message(result.stdout)
         except Exception as exc:  # noqa: BLE001
             ok, message = False, _describe(exc, timeout_s=QUARANTINE_TIMEOUT)
         async with self._ctx.db.session() as session:
@@ -701,7 +816,7 @@ class Defender:
             self._release_audit(host.id, state)
 
     async def _launch_audit(self, host: Host, run_id: str, started_ts: float) -> av.LynisResult:
-        launch = av.as_root(dt.launch_command(run_id, aj.lynis_command(run_id, limit_s=AUDIT_LIMIT_S), kind=aj.AUDITS))
+        launch = aj.launch_as_root(run_id, limit_s=AUDIT_LIMIT_S)
         unknown = aj.NOT_STARTED_MESSAGE
         reach_grace_s = None
         try:
@@ -714,7 +829,7 @@ class Defender:
         else:
             out = (res.stdout or "") + (res.stderr or "")
             if av.NO_ROOT in out:
-                return av.LynisResult(status="error", error=av.NO_ROOT_MESSAGE)
+                return av.LynisResult(status="error", error=av.no_root_message(out))
             info = dt.parse_launch(out)
             if not info.started and info.method is None:  # schon der Ordner scheiterte: nichts gestartet
                 lines = [ln for ln in out.strip().splitlines() if not ln.startswith("@@")]
@@ -726,12 +841,12 @@ class Defender:
     async def _poll_audit(self, host: Host, run_id: str) -> dt.Poll | av.LynisResult | None:
         """Eine Abfrage: der Stand (`dt.Poll`), ein den Lauf beendender Fehler (keine root-Rechte) oder None ohne Antwort."""
         try:
-            res = await self._ctx.exec.run(host, av.as_root(aj.poll_command(run_id)), timeout_s=AUDIT_POLL_TIMEOUT_S)
+            res = await self._ctx.exec.run(host, aj.poll_as_root(run_id), timeout_s=AUDIT_POLL_TIMEOUT_S)
         except Exception:  # noqa: BLE001 - Verbindung weg: weiter nachfragen
             return None
         out = (res.stdout or "") + (res.stderr or "")
         if av.NO_ROOT in out:
-            return av.LynisResult(status="error", error=av.NO_ROOT_MESSAGE)
+            return av.LynisResult(status="error", error=av.no_root_message(out))
         poll = dt.parse_poll(out)
         return None if poll.state == "noreply" else poll
 
@@ -766,12 +881,12 @@ class Defender:
     async def _stop_audit(self, host: Host, run_id: str) -> av.LynisResult:
         """Beendet einen Lauf über der Obergrenze auf dem Server (Lynis samt Unterprozessen, `audit_job.stop_command`)."""
         try:
-            res = await self._ctx.exec.run(host, av.as_root(aj.stop_command(run_id)), timeout_s=AUDIT_STOP_TIMEOUT_S)
+            res = await self._ctx.exec.run(host, aj.stop_as_root(run_id), timeout_s=AUDIT_STOP_TIMEOUT_S)
         except Exception as exc:  # noqa: BLE001
             return av.LynisResult(status="error", error=aj.unreachable_at_limit_message(_describe(exc), AUDIT_LIMIT_S))
         out = (res.stdout or "") + (res.stderr or "")
         if av.NO_ROOT in out:
-            return av.LynisResult(status="error", error=av.NO_ROOT_MESSAGE)
+            return av.LynisResult(status="error", error=av.no_root_message(out))
         words = out.split()
         if "@@stopped" in words:
             _log.warning("shield_audit_stopped_at_limit host=%s run_id=%s", host.id, run_id)
@@ -843,6 +958,24 @@ class Defender:
             data = {"reachable": False, "error": _describe(exc, timeout_s=STATUS_TIMEOUT), "clamav_installed": False,
                     "lynis_installed": False}
         self._status_cache[host.id] = (_now().timestamp(), data)
+        return data
+
+    def forget_readiness(self, host_id: str) -> None:
+        """Verwirft die gemerkte Eignung für Echtzeit, etwa nachdem der Wächter umgestellt wurde."""
+        self._readiness_cache.pop(host_id, None)
+
+    async def realtime_readiness(self, host: Host, *, refresh: bool = False) -> dict[str, Any]:
+        """Ob der Viren-Wächter auf dem Server in Echtzeit laufen könnte; liest nur, zehn Minuten gemerkt."""
+        cached = self._readiness_cache.get(host.id)
+        if cached and not refresh and cached[0] > _now().timestamp() - 600:
+            return cached[1]
+        try:
+            res = await self._ctx.exec.run(host, rt.READINESS_COMMAND, timeout_s=STATUS_TIMEOUT)
+            data = {"reachable": True, **rt.readiness_dict(rt.parse_readiness(res.stdout or ""))}
+        except Exception as exc:  # noqa: BLE001
+            data = {"reachable": False, "possible": False, "error": _describe(exc, timeout_s=STATUS_TIMEOUT),
+                    "reasons": ["Server nicht erreichbar."], "notes": []}
+        self._readiness_cache[host.id] = (_now().timestamp(), data)
         return data
 
     async def overview(self, *, refresh: bool = False) -> dict[str, Any]:

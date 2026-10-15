@@ -1,0 +1,3 @@
+[[entries]]
+kind = "verbessert"
+text = "Die Anleitung zur Installation zeigt jetzt jeden Weg einzeln zum Aufklappen: über die Befehlszeile, mit Portainer (zwei Wege) und auf dem Raspberry Pi, jeweils mit Port, Einrichtungscode und Aktualisieren."

@@ -10,7 +10,8 @@ from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 import asyncssh
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from nodvard_sdk import Actor, ActionRequest, GateOutcome, HostProvider, Risk
 from pydantic import BaseModel, Field, ValidationInfo, field_validator
 from sqlalchemy import select
@@ -29,6 +30,8 @@ from ...services.actor_labels import load_user_labels, raw_actor
 from ...services.auth import user_has_permission
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
 from .actions import ActionOut, action_out, mark_running
+from .auth import confirm_stored_secret_change
+from .secrets import SecretConfirm
 
 router = APIRouter(tags=["hosts"])
 logger = logging.getLogger("nodvard_deck.hosts")
@@ -226,6 +229,9 @@ class HostUpdate(BaseModel):
     is_managed: bool | None = None
     tags: list[str] | None = None
     """Setzt die MANUELLEN Markierungen exakt auf diese Liste; von Erweiterungen verwaltete bleiben unberührt."""
+    current_password: str = Field(default="", max_length=1024)
+    """Nur nötig, wenn eine neue Adresse gespeicherte SSH-Passwörter löscht (sonst 403 `confirm_required`)."""
+    totp_code: str = Field(default="", max_length=64)
 
     @field_validator("address")
     @classmethod
@@ -418,15 +424,27 @@ def _manual_tags(host: Host) -> list[str]:
     return sorted(t.tag for t in host.tags if t.managed_by_ext_id is None)
 
 
-@router.patch("/hosts/{host_id}")
-async def patch_host(host_id: str, payload: HostUpdate, session: SessionDep, user: WriteUser) -> HostOut:
-    fields = payload.model_dump(exclude_unset=True)
+@router.patch("/hosts/{host_id}", response_model=HostOut)
+async def patch_host(
+    host_id: str, payload: HostUpdate, request: Request, session: SessionDep, settings: SettingsDep, user: WriteUser,
+) -> HostOut | JSONResponse:
+    fields = payload.model_dump(exclude_unset=True, exclude={"current_password", "totp_code"})
     before = await session.get(Host, host_id)
     if before is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     old = {key: getattr(before, key) for key in ("display_name", "address", "os_family", "kind", "enabled", "is_managed")}
     old["tags"] = _manual_tags(before)
     password_credentials = {c.id for c in before.credentials if c.kind == "ssh_password"}
+    if password_credentials and fields.get("address") is not None and fields["address"] != before.address:
+        # Eine neue Adresse löscht die gespeicherten SSH-Passwörter (`forget_address_bound_access`): wie jedes Löschen
+        # gespeicherter Zugangsdaten nur mit Passwort und gegebenenfalls Code.
+        refused = await confirm_stored_secret_change(
+            request, session, settings, user, payload.current_password, payload.totp_code, "tresor_loeschen",
+            "Mit der neuen Adresse werden die gespeicherten SSH-Passwörter dieses Servers gelöscht. Bitte das aktuelle "
+            "Passwort eingeben.",
+        )
+        if refused is not None:
+            return refused
     host = await hosts_service.update_host(session, host_id, **fields)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
@@ -442,11 +460,28 @@ async def patch_host(host_id: str, payload: HostUpdate, session: SessionDep, use
     return HostOut.from_model(host)
 
 
-@router.delete("/hosts/{host_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_host(host_id: str, session: SessionDep, user: WriteUser) -> None:
+@router.delete("/hosts/{host_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_host(
+    host_id: str,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    user: WriteUser,
+    payload: Annotated[SecretConfirm | None, Body()] = None,
+) -> JSONResponse | None:
+    """Löscht den Server samt Zugängen und deren Geheimnissen; hat er gespeicherte Zugänge, nur mit Passwort und
+    gegebenenfalls Code im Body (403 `confirm_required`), wie das Löschen eines einzelnen Zugangs."""
     host = await session.get(Host, host_id)
     if host is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+    if host.credentials:
+        confirm = payload or SecretConfirm()
+        refused = await confirm_stored_secret_change(
+            request, session, settings, user, confirm.current_password, confirm.totp_code, "tresor_loeschen",
+            "Mit dem Server werden auch seine gespeicherten Zugänge gelöscht. Bitte das aktuelle Passwort eingeben.",
+        )
+        if refused is not None:
+            return refused
     detail = {"name": host.name, "address": host.address, "provider_ext_id": host.provider_ext_id}
     try:
         deleted = await hosts_service.delete_host(session, host_id)
@@ -455,6 +490,7 @@ async def delete_host(host_id: str, session: SessionDep, user: WriteUser) -> Non
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
     await _audit(session, user, "host.deleted", target_id=host_id, detail=detail)
+    return None
 
 
 class KnownHostKeyOut(BaseModel):
@@ -842,11 +878,28 @@ async def create_credential(
     return CredentialOut.from_model(credential)
 
 
-@router.delete("/hosts/{host_id}/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_credential(host_id: str, credential_id: str, session: SessionDep, user: WriteUser) -> None:
+@router.delete("/hosts/{host_id}/credentials/{credential_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_credential(
+    host_id: str,
+    credential_id: str,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    user: WriteUser,
+    payload: Annotated[SecretConfirm | None, Body()] = None,
+) -> JSONResponse | None:
+    """Löscht einen Zugang samt Geheimnis; wie „Löschen“ auf der Seite Tresor nur mit Passwort und gegebenenfalls Code
+    im Body (403 `confirm_required`)."""
     credential = await session.get(HostCredential, credential_id)
     if credential is None or credential.host_id != host_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Zugangsdaten.")
+    confirm = payload or SecretConfirm()
+    refused = await confirm_stored_secret_change(
+        request, session, settings, user, confirm.current_password, confirm.totp_code, "tresor_loeschen",
+        "Zum Löschen dieses Zugangs bitte das aktuelle Passwort eingeben.",
+    )
+    if refused is not None:
+        return refused
     detail = {
         "credential_id": credential.id, "kind": credential.kind, "username": credential.username,
         "port": credential.port,
@@ -854,6 +907,7 @@ async def delete_credential(host_id: str, credential_id: str, session: SessionDe
     if not await hosts_service.delete_credential(session, host_id, credential_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannte Zugangsdaten.")
     await _audit(session, user, "host.credential_deleted", target_id=host_id, detail=detail)
+    return None
 
 
 @router.delete("/hosts/{host_id}/known-hosts/{key_type}", status_code=status.HTTP_204_NO_CONTENT)

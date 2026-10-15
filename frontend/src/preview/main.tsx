@@ -35,6 +35,7 @@ import { migrateLegacyStorage } from "../lib/legacyStorage";
 import { browserNavigation, restartProbe, uploadTransport } from "../lib/restore";
 import { AFTER_SUCCESS_PATH, updaterTiming } from "../lib/updater";
 import { useAuthStore } from "../state/auth";
+import { applyTheme, isTheme } from "../lib/theme";
 import { useBrandingStore } from "../state/branding";
 import "../styles/index.css";
 import { applyOhneProxmox, HELPER_SCENARIOS, PREVIEW_DOWN, previewHealth, previewHelperReload, previewState, respond, RESTORE_ID, type HelperScenario } from "./fixtures";
@@ -110,7 +111,7 @@ if (scenario === "new" || scenario === "changed" || scenario === "error") previe
 if (scenario === "empty") previewState.noHosts = true;
 // ?scenario=demo: frische Installation, auf der die Beispieldaten schon angelegt sind.
 if (scenario === "demo") { previewState.noHosts = true; previewState.demo = true; }
-// ?scenario=ohne-proxmox (Server-Zustand, Service-Matrix & Co. an) bzw. ohne-proxmox-min (nur Terminal/Dateien):
+// ?scenario=ohne-proxmox (Server-Zustand, Docker & Co. an) bzw. ohne-proxmox-min (nur Terminal/Dateien):
 // von Hand angelegte Server mit SSH-Zugang, Proxmox VE und Proxmox-Backups aus.
 if (scenario === "ohne-proxmox" || scenario === "ohne-proxmox-min" || scenario === "ohne-proxmox-viele") {
   applyOhneProxmox(scenario === "ohne-proxmox-min", scenario === "ohne-proxmox-viele");
@@ -128,6 +129,14 @@ if (scenario?.startsWith("helfer-") && (HELPER_SCENARIOS as readonly string[]).i
   // „helfer-frist“: die Frist der Anzeige auf ein paar Sekunden verkürzt, damit die Zeitüberschreitung gleich zu sehen ist.
   if (previewState.helper === "frist") updaterTiming.timeoutMs = 4000;
 }
+// ?theme=classic|simple|pro|original: Theme der Vorschau (wie unter Einstellungen, Darstellung gewählt).
+const previewTheme = new URLSearchParams(window.location.search).get("theme");
+if (isTheme(previewTheme)) {
+  previewState.theme = previewTheme;
+  applyTheme(previewTheme);
+}
+// ?scenario=neues-aussehen: Hinweis „Deck hat ein neues Aussehen.“ wie für ein Konto von vor dem Update.
+if (scenario === "neues-aussehen") previewState.designNoticeDismissed = false;
 // ?path=/setup: Einrichtungsassistent mit frischer Installation.
 if (previewPath === "/setup") previewState.setup = true;
 
@@ -142,7 +151,7 @@ if (previewPath !== "/login" && previewPath !== "/setup") useAuthStore.setState(
 /** Extension-Seiten direkt aus ihren Quellen (vite.preview.config.ts erlaubt den Zugriff). */
 const EXTENSION_PAGES = import.meta.glob("../../../extensions/*/frontend/src/*Page.tsx");
 const PAGE_BY_EXT: Record<string, string> = {
-  gameserver: "GameServerPage", system: "SystemPage", proxmox: "ProxmoxNodePage", backups: "BackupsPage", "service-matrix": "ServiceMatrixPage",
+  gameserver: "GameServerPage", system: "SystemPage", proxmox: "ProxmoxNodePage", backups: "BackupsPage", docker: "ContainersPage",
   shield: "SocPage", scripts: "ScriptsPage", documents: "DocumentsPage", inventory: "InventoryPage",
 };
 

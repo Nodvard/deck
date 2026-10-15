@@ -144,7 +144,7 @@ def test_the_shield_rule_has_the_documented_form():
         "from nodvard_deck_ext_shield.ids import EXT_ID",
         'module = importlib.import_module("nodvard_deck_ext_hello_world")',
         'PREFIX = "nodvard_deck_ext_"',
-        'sys.modules["nodvard_deck_ext_network.npm"]',
+        'sys.modules["nodvard_deck_ext_npm.client"]',
     ],
 )
 def test_the_core_does_not_import_or_name_an_extension_package(tmp_path, source):

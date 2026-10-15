@@ -20,8 +20,9 @@ def foreign_secret_text(label: str) -> str:
     """Satz für ein Geheimnis unter dem Label einer Verbindung, das nicht von dieser Erweiterung stammt."""
     return (
         f"Im Tresor liegt schon ein Geheimnis „{label}“, das nicht von Proxmox-Backups stammt (etwa von Hand angelegt). "
-        "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst über "
-        "die Tresor-Schnittstelle (DELETE /api/v1/secrets/{id})."
+        "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst unter "
+        "Einstellungen → Tresor, mit deinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App (API: "
+        "DELETE /api/v1/secrets/{id} mit current_password)."
     )
 
 

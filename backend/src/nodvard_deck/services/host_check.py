@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import shlex
 import socket
 import time
 from collections.abc import Sequence
@@ -22,6 +24,7 @@ from ..config import Settings
 from ..core import rate_limit, ssh
 from ..core.vault import VaultError
 from ..db import utcnow
+from ..ext.root_helpers import RootHelperFile
 from ..models import Host, HostCredential
 from . import hosts as hosts_service
 
@@ -48,8 +51,10 @@ _SSH_KINDS = ("ssh_key", "ssh_password")
 
 OS_COMMAND = (
     "cat /etc/os-release 2>/dev/null; echo @@arch; uname -m; echo @@model; "
-    "cat /proc/device-tree/model 2>/dev/null"
+    "cat /proc/device-tree/model 2>/dev/null; true"
 )
+"""Alle drei Angaben sind freiwillig (einen Gerätebaum hat nur ein Raspberry Pi). Das abschließende `true` hält den
+Exit-Code bei 0, denn `_step_os` wertet nur Exit 0 aus und `cat` allein endet auf x86 mit 1."""
 SUDO_COMMAND = "env LC_ALL=C sudo -n true"
 """`LC_ALL=C`: sudo meldet sonst in der Sprache des Servers („ein Passwort ist notwendig“) und
 die Meldung ließe sich nicht einordnen. `env` statt `LC_ALL=C sudo ...`, damit es in jeder
@@ -250,6 +255,8 @@ class _State:
         self.login_ok = False
         self.unreachable = False
         self.key_problem = False
+        self.sudo_full: bool | None = None
+        """`sudo -n true` klappte (volle Regel); `None`: nicht geprüft oder keine Antwort."""
 
     def add(self, id_: str, label: str, status: str, detail: str = "", hint: str = "") -> None:
         self.items.append(CheckItem(id=id_, label=label, status=status, detail=detail, hint=hint))  # type: ignore[arg-type]
@@ -279,10 +286,11 @@ async def run_check(
     requirements: Sequence[tuple[str, HostRequirementSpec]] = (),
     *,
     user_id: str,
+    helpers: Sequence[RootHelperFile] = (),
 ) -> ConnectionCheckOut:
-    """Prüft `host` mit `credential` (`None`: nur Erreichbarkeit und Server-Schlüssel); `requirements` kommen von den
-    Erweiterungen. `CheckRefused`, wenn für diesen Server schon geprüft wird, der Nutzer zu oft geprüft hat oder der Pi
-    mit Prüfungen ausgelastet ist."""
+    """Prüft `host` mit `credential` (`None`: nur Erreichbarkeit und Server-Schlüssel); `requirements` und `helpers`
+    (ihre Hilfsskripte für root-Befehle) kommen von den Erweiterungen. `CheckRefused`, wenn für diesen Server schon
+    geprüft wird, der Nutzer zu oft geprüft hat oder der Pi mit Prüfungen ausgelastet ist."""
     if host.id in _busy:
         raise CheckRefused("Für diesen Server läuft gerade schon eine Prüfung.")
     _busy.add(host.id)  # kein await zwischen Abfrage und Eintrag
@@ -298,7 +306,7 @@ async def run_check(
                 "Es laufen gerade schon mehrere Prüfungen. Bitte in einem Moment erneut versuchen.", 10
             ) from None
         try:
-            return await _run(session, settings, host, credential, requirements)
+            return await _run(session, settings, host, credential, requirements, helpers)
         finally:
             semaphore.release()
     finally:
@@ -311,11 +319,12 @@ async def _run(
     host: Host,
     credential: HostCredential | None,
     requirements: Sequence[tuple[str, HostRequirementSpec]],
+    helpers: Sequence[RootHelperFile] = (),
 ) -> ConnectionCheckOut:
     state = _State()
     try:
         async with asyncio.timeout(OVERALL_TIMEOUT_S):
-            await _probe(state, session, settings, host, credential, requirements)
+            await _probe(state, session, settings, host, credential, requirements, helpers)
     except TimeoutError:
         state.add(
             "timeout", "Prüfung", "fail", f"Die Prüfung hat zu lange gedauert (über {int(OVERALL_TIMEOUT_S)} Sekunden).",
@@ -365,6 +374,7 @@ async def _probe(
     host: Host,
     credential: HostCredential | None,
     requirements: Sequence[tuple[str, HostRequirementSpec]],
+    helpers: Sequence[RootHelperFile] = (),
 ) -> None:
     port = credential.port if credential is not None else DEFAULT_SSH_PORT
     if not await _step_reachable(state, host.address, port):
@@ -388,8 +398,11 @@ async def _probe(
         for ext_id, spec in requirements:
             if spec.check_command:
                 state.add(f"req:{ext_id}:{spec.id}", spec.label, "skipped", "Wird bei Windows-Servern nicht geprüft.")
+        for helper in helpers:
+            state.add(_helper_id(helper), _helper_label(helper), "skipped", "Wird bei Windows-Servern nicht geprüft.")
         return
     await _step_root(state, conn, user, requirements)
+    await _step_helpers(state, conn, user, helpers)
     await _step_requirements(state, conn, user, requirements)
     await _step_os(state, conn)
 
@@ -619,6 +632,7 @@ async def _step_root(
         return
     code, out, err = result
     text = f"{out}\n{err}".lower()
+    state.sudo_full = code == 0
     if code == 0:
         state.add("root", label, "ok", "sudo ohne Passwort klappt.")
     elif "password is required" in text or "a terminal is required" in text:
@@ -637,6 +651,157 @@ async def _step_root(
         state.add(
             "root", label, "warn", "sudo ohne Passwort klappt nicht.",
             "Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen.",
+        )
+
+
+# 4b --------------------------------------------------------------------------
+# Hilfsskripte der Module. Ein Modul ruft sein Skript nur auf, wenn es Byte für Byte das mitgelieferte ist (sha256), sonst
+# nimmt es die volle sudo-Regel. `ok` heißt: genau dieses Skript, und nur root kann es ändern. Fehlt es, steht `skipped`
+# da. Ein veraltetes oder neueres Skript und eines, das andere ändern können, ist eine Warnung, ein verändertes Skript
+# (gleiche Version, anderer Inhalt) ein Fehler. Die Abfrage führt das Skript nie aus, auch nicht für die Version.
+
+_HELPER_TAG = "@@nd-"
+_VERSION_RE = re.compile(r"[0-9]{1,4}")
+_SHA_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _helper_id(helper: RootHelperFile) -> str:
+    return f"helper:{helper.ext_id}"
+
+
+def _helper_label(helper: RootHelperFile) -> str:
+    return f"Hilfsskript für {helper.ext_name}"
+
+
+def helper_check_command(helpers: Sequence[RootHelperFile]) -> str:
+    """Ein lesender Befehl für alle Hilfsskripte, als der angemeldete Benutzer: je Skript die Zeile `HELPER_VERSION=<n>`
+    aus dem Text (das Skript läuft dafür nicht, ein verändertes soll nirgends ausgeführt werden), sha256 und ob es selbst
+    und jeder Ordner bis `/` root gehört und weder der Benutzer noch andere dort schreiben können; am Ende die eigenen
+    sudo-Regeln (`sudo -n -l` führt nichts aus). In `sh -c`, falls die Login-Shell des Benutzers keine POSIX-Shell ist."""
+    paths = " ".join(shlex.quote(h.install_path) for h in helpers)
+    return "sh -c " + shlex.quote(
+        f'for p in {paths}; do echo "{_HELPER_TAG}path $p"; if [ -f "$p" ] && [ ! -L "$p" ]; then '
+        f'echo "{_HELPER_TAG}version $(sed -n "s/^HELPER_VERSION=//p" "$p" 2>/dev/null | head -n 1)"; '
+        f'echo "{_HELPER_TAG}sha $(sha256sum "$p" 2>/dev/null | cut -d" " -f1)"; '
+        'q="$p"; s=ok; while :; do if [ -L "$q" ] || [ -w "$q" ] || [ "$(stat -c %u "$q" 2>/dev/null)" != 0 ]; then s=bad; fi; '
+        'case "$(stat -c %a "$q" 2>/dev/null)" in *[2367]) s=bad;; esac; [ "$q" = / ] && break; q=$(dirname "$q"); done; '
+        f'echo "{_HELPER_TAG}owner $s"; else echo "{_HELPER_TAG}missing"; fi; done; '
+        f'echo "{_HELPER_TAG}sudo"; env LC_ALL=C sudo -n -l 2>/dev/null'
+    )
+
+
+@dataclass
+class _HelperSeen:
+    present: bool = False
+    version: int | None = None
+    sha256: str | None = None
+    owner_ok: bool = False
+    tight_rule: bool = False
+
+
+def parse_helper_check(out: str, helpers: Sequence[RootHelperFile]) -> dict[str, _HelperSeen]:
+    """Die Antwort auf `helper_check_command`, je Ort auf dem Server. Was nicht genau ins Muster passt, zählt nicht."""
+    seen: dict[str, _HelperSeen] = {}
+    expected = {h.install_path for h in helpers}
+    current: _HelperSeen | None = None
+    sudo_lines: list[str] | None = None
+    for raw in out.splitlines():
+        line = raw.strip()
+        if sudo_lines is not None:
+            sudo_lines.append(line)
+            continue
+        if not line.startswith(_HELPER_TAG):
+            continue
+        tag, _, value = line[len(_HELPER_TAG):].partition(" ")
+        if tag == "path":
+            current = seen.setdefault(value, _HelperSeen()) if value in expected else None
+        elif tag == "sudo":
+            sudo_lines = []
+        elif current is None:
+            continue
+        elif tag == "version":
+            current.present = True
+            current.version = int(value) if _VERSION_RE.fullmatch(value) else None
+        elif tag == "sha":
+            current.sha256 = value if _SHA_RE.fullmatch(value) else None
+        elif tag == "owner":
+            current.owner_ok = value == "ok"
+    for path, item in seen.items():
+        item.tight_rule = any(path in line and "NOPASSWD" in line for line in sudo_lines or [])
+    return seen
+
+
+async def _step_helpers(
+    state: _State, conn: asyncssh.SSHClientConnection, user: str, helpers: Sequence[RootHelperFile]
+) -> None:
+    if not helpers:
+        return
+    if user == "root":
+        for helper in helpers:
+            state.add(_helper_id(helper), _helper_label(helper), "skipped", "Angemeldet als root – kein Hilfsskript nötig.")
+        return
+    result = await _run_command(conn, helper_check_command(helpers))
+    seen = parse_helper_check(result[1], helpers) if result is not None else {}
+    for helper in helpers:
+        _add_helper_item(state, helper, seen.get(helper.install_path))
+
+
+_RERUN_HINT = "Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen."
+
+
+def _add_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen | None) -> None:
+    id_, label = _helper_id(helper), _helper_label(helper)
+    if seen is None:
+        state.add(id_, label, "skipped", "Keine verwertbare Antwort auf die Abfrage.")
+        return
+    if not seen.present:
+        state.add(
+            id_, label, "skipped", "Noch nicht auf dem Server. Bis dahin nutzt Nodvard Deck für dieses Modul die volle sudo-Regel.",
+            "Kommt mit dem Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ auf den Server.",
+        )
+        return
+    if not seen.owner_ok:
+        state.add(
+            id_, label, "warn",
+            "Liegt auf dem Server, aber nicht nur root kann es ändern (Datei oder ein Ordner darüber). Wer es ändern kann, "
+            "kommt über seine sudo-Regel an root.",
+            _RERUN_HINT,
+        )
+        return
+    if seen.sha256 != helper.sha256:
+        _add_foreign_helper_item(state, helper, seen)
+        return
+    rule = (
+        " Eigene sudo-Regel vorhanden." if seen.tight_rule
+        else " Noch ohne eigene sudo-Regel, die volle Regel deckt es ab." if state.sudo_full
+        else " sudo erlaubt es noch nicht." if state.sudo_full is False
+        else ""
+    )
+    state.add(id_, label, "ok", f"Version {helper.version}, nur root kann es ändern.{rule}")
+
+
+def _add_foreign_helper_item(state: _State, helper: RootHelperFile, seen: _HelperSeen) -> None:
+    """Ein Skript, das nicht das mitgelieferte ist: Das Modul ruft es nicht auf (siehe oben), bis der Server neu
+    eingerichtet ist. Gleiche Version mit anderem Inhalt hat niemand von Nodvard Deck so ausgeliefert, das ist ein Fehler."""
+    id_, label = _helper_id(helper), _helper_label(helper)
+    unused = " Nodvard Deck ruft es nicht auf."
+    if seen.sha256 is None:
+        state.add(id_, label, "warn", f"Die Prüfsumme lässt sich auf dem Server nicht bilden (sha256sum).{unused}")
+    elif seen.version is None:
+        state.add(id_, label, "fail", f"Die Version lässt sich nicht lesen, der Inhalt ist unbekannt.{unused}", _RERUN_HINT)
+    elif seen.version == helper.version:
+        state.add(id_, label, "fail", f"Version {seen.version}, aber mit anderem Inhalt als hier.{unused}", _RERUN_HINT)
+    elif seen.version < helper.version:
+        state.add(
+            id_, label, "warn",
+            f"Veraltet: Version {seen.version} auf dem Server, dieses Dashboard bringt Version {helper.version} mit.{unused}",
+            _RERUN_HINT,
+        )
+    else:
+        state.add(
+            id_, label, "warn",
+            f"Version {seen.version} auf dem Server ist neuer als die dieses Dashboards ({helper.version}).{unused}",
+            _RERUN_HINT,
         )
 
 

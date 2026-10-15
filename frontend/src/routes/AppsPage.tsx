@@ -39,7 +39,7 @@ const UNGROUPED = "";
 const UNGROUPED_LABEL = "Ohne Ordner";
 
 const BUTTON =
-  "inline-flex flex-none items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium accent-gradient text-white shadow-md shadow-black/30 transition hover:brightness-110";
+  "inline-flex flex-none items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium accent-gradient text-on-accent transition hover:bg-accent-strong";
 const GRID = "grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4";
 
 interface Folder {
@@ -261,7 +261,7 @@ export function AppsPage() {
                 type="button"
                 aria-expanded={isOpen}
                 onClick={() => toggle(folder.key)}
-                className="flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.12em] text-white/70 hover:text-white"
+                className="flex items-center gap-2 text-sm font-semibold hover:text-white"
               >
                 <FolderClosed size={15} aria-hidden /> {folder.label}
                 <span className="tabular-nums font-normal normal-case tracking-normal text-white/40">{folder.apps.length}</span>
@@ -291,7 +291,7 @@ export function AppsPage() {
 
       {shownDetected.length > 0 && (
         <section aria-label="Erkannte Dienste" data-testid="detected">
-          <h2 className="mb-2 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Erkannte Dienste</h2>
+          <h2 className="mb-2 text-sm font-semibold">Erkannte Dienste</h2>
           <div className={GRID}>
             {shownDetected.map((tile) => (
               <AppTile
@@ -305,7 +305,7 @@ export function AppsPage() {
 
       {canWrite && (
         <section aria-label="Vorschläge" data-testid="suggestions">
-          <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">
+          <h2 className="mb-1 flex items-center gap-2 text-sm font-semibold">
             <Sparkles size={15} aria-hidden /> Vorschläge
           </h2>
           <p className="mb-2 text-xs text-white/45">

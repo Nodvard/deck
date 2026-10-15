@@ -4,12 +4,16 @@ Reine Funktionen ohne I/O; mit Passwort führt das Dashboard das Skript selbst a
 
 from __future__ import annotations
 
+import base64
 import re
 import shlex
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 
 import asyncssh
+from nodvard_sdk import ROOT_HELPER_DIR
+
+from ..ext.root_helpers import RootHelperFile
 
 # Der Befehl wird von Hand auf dem Server ausgeführt, deshalb kommt nichts Ungeprüftes ins Skript: Benutzer, Gruppen und
 # öffentlicher Schlüssel werden streng per Zeichenliste geprüft (Fehlermeldungen nennen den Wert nie),
@@ -30,6 +34,13 @@ _USER_ERROR = "Benutzer auf dem Server: nur Kleinbuchstaben, Ziffern, _ und - (h
 _GROUP_ERROR = "Ungültiger Gruppenname."
 _KEY_ERROR = "Der öffentliche Schlüssel hat kein gültiges Format."
 _FORBIDDEN_IN_DOUBLE_QUOTES = set("\"'$`\\!")
+
+
+_HELPER_ID_RE = re.compile(r"[a-z][a-z0-9-]{1,63}")
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+_HELPER_DIR_RE = re.compile(r"/[A-Za-z0-9_./-]{1,200}")
+MAX_ONE_LINER = 100_000
+"""Obergrenze für den ganzen Befehl. Er geht als ein Argument an `sh -c`, Linux erlaubt 128 KiB je Argument."""
 
 
 class SetupError(ValueError):
@@ -91,12 +102,77 @@ def derive_public_key(private_key: str, *, comment: str) -> PublicKeyInfo:
     return PublicKeyInfo(public_key=_check_public_key(f"{alg} {blob} {comment}"), fingerprint=fingerprint)
 
 
+def helper_sudoers_file(ext_id: str) -> str:
+    """Die sudoers-Datei, die einem Benutzer nur das Hilfsskript eines Moduls erlaubt (im Skript, `$U` = Benutzer).
+    Unterstriche statt Bindestriche: Kennungen haben keinen `_`, so stößt der Name nie mit `nodvard-<Benutzer>` eines
+    anderen Benutzers zusammen. sudo liest Dateien mit `.` oder `~` im Namen nicht, beides kommt nicht vor."""
+    return f"/etc/sudoers.d/nodvard_{ext_id}_$U"
+
+
+def _helper_lines(helpers: Sequence[RootHelperFile], helper_dir: str) -> list[str]:
+    """Hilfsskripte der Module samt je einer sudo-Regel nur für dieses Skript, neben der vollen Regel. Was hier
+    scheitert, gibt einen Hinweis und lässt die übrige Einrichtung laufen: Ohne passendes Skript nimmt ein Modul die
+    volle Regel.
+
+    Der Text reist base64-kodiert mit und wird auf dem Server gegen seine sha256 geprüft. Die Regel kommt nur dazu, wenn
+    das Skript und jeder Ordner bis `/` root gehören und weder andere noch der Benutzer selbst dort schreiben können
+    (`W`): Sonst könnte er das Skript tauschen und wäre über die Regel root."""
+    if not _HELPER_DIR_RE.fullmatch(helper_dir) or "//" in helper_dir or "/./" in helper_dir or "/../" in helper_dir:
+        raise SetupError("Ungültiger Ordner für die Hilfsskripte.")
+    seen: set[str] = set()
+    for helper in helpers:
+        if (
+            not _HELPER_ID_RE.fullmatch(helper.ext_id) or helper.ext_id in seen
+            or not _SHA256_RE.fullmatch(helper.sha256) or not 1 <= helper.version <= 9999
+        ):
+            raise SetupError("Ungültiges Hilfsskript.")
+        seen.add(helper.ext_id)
+    lines = [
+        f'D="{_dq(helper_dir)}"; HX=',
+        # W: kein Link, gehört root, der Benutzer kann nicht schreiben (als er selbst gefragt, so zählen auch ACLs), andere
+        # auch nicht; schreibt die Gruppe, darf der Benutzer nicht in ihr sein.
+        (
+            'W() { [ ! -L "$1" ] && [ "$(stat -c %u "$1" 2>/dev/null)" = 0 ] || return 1; ! R test -w "$1" 2>/dev/null || return 1; '
+            'M=$(stat -c %a "$1" 2>/dev/null) || return 1; '
+            'case "$M" in *[2367]) return 1;; *[2367]?) case " $(id -Gn "$U" 2>/dev/null) " in *" $(stat -c %G "$1" 2>/dev/null) "*) return 1;; esac;; esac; return 0; }'
+        ),
+        'WD() { P="$1"; while :; do W "$P" || return 1; [ "$P" = / ] && return 0; P=$(dirname "$P"); done; }',
+        (
+            'HS() { Y=$(mktemp) || return 1; if printf %s "$3" | base64 -d > "$Y" 2>/dev/null && [ "$(sha256sum "$Y" | cut -d" " -f1)" = "$2" ] '
+            '&& install -m 0755 -o root -g root "$Y" "$D/$1" && W "$D/$1"; then rm -f "$Y"; return 0; fi; rm -f "$Y"; return 1; }'
+        ),
+        (
+            'HR() { Z=$(mktemp) || return 1; echo "$U ALL=(root) NOPASSWD: $D/$1" > "$Z"; '
+            'if visudo -c -q -f "$Z" && install -m 0440 -o root -g root "$Z" "$2"; then rm -f "$Z"; visudo -c -q && return 0; rm -f "$2"; return 1; fi; '
+            'rm -f "$Z"; return 1; }'
+        ),
+        (
+            'if ! command -v visudo >/dev/null; then HX=1; '
+            'elif ! command -v base64 >/dev/null || ! command -v sha256sum >/dev/null || ! command -v stat >/dev/null; then '
+            'echo "Hinweis: base64, sha256sum oder stat fehlt hier, die Hilfsskripte wurden übersprungen."; HX=1; '
+            'elif ! WD "$(dirname "$D")" || [ -L "$D" ] || ! install -d -m 0755 -o root -g root "$D" || ! W "$D"; then '
+            'echo "Hinweis: Der Ordner $D oder einer darüber gehört nicht root oder ist für andere beschreibbar, '
+            'die Hilfsskripte wurden übersprungen."; HX=1; fi'
+        ),
+    ]
+    for helper in sorted(helpers, key=lambda h: h.ext_id):
+        name = f"{helper.ext_id}-root"
+        blob = base64.b64encode(helper.text.encode("ascii")).decode("ascii")
+        lines.append(
+            f'if [ -z "$HX" ]; then if HS {name} {helper.sha256} "{blob}" && HR {name} "{helper_sudoers_file(helper.ext_id)}"; '
+            f'then echo "Hilfsskript {name} (Version {helper.version}) eingerichtet, mit eigener sudo-Regel."; '
+            f'else echo "Hinweis: Das Hilfsskript {name} wurde nicht eingerichtet."; fi; fi'
+        )
+    return lines
+
+
 def build_setup_script(
-    user: str, public_key: str, *, groups: Iterable[str] = (), sudo: bool = False
+    user: str, public_key: str, *, groups: Iterable[str] = (), sudo: bool = False,
+    helpers: Sequence[RootHelperFile] = (), helper_dir: str = ROOT_HELPER_DIR,
 ) -> tuple[str, str]:
     """`(skript, einzeiler)`: `skript` zum Lesen (eine Anweisung je Zeile), `einzeiler` zum Einfügen (als root direkt, sonst
-    über `sudo`, als ein Argument für `sh -c`). `groups` und `sudo` gelten nur für Benutzer außer root; ein ungültiger
-    Wert ergibt `SetupError`."""
+    über `sudo`, als ein Argument für `sh -c`). `groups`, `sudo` und `helpers` gelten nur für Benutzer außer root,
+    `helpers` nur zusammen mit `sudo` (`helper_dir` ändern nur Tests); ein ungültiger Wert ergibt `SetupError`."""
     user = _check_user(user)
     key = _check_public_key(public_key)
     wanted: list[str] = []
@@ -176,17 +252,21 @@ def build_setup_script(
                 'else echo "FEHLER: visudo hat die sudo-Regel abgelehnt, sie wurde nicht eingetragen."; F=1; fi; '
                 'else echo "Hinweis: sudo ist nicht installiert (als root: apt install sudo)."; fi'
             )
+    if sudo and not is_root and helpers:
+        lines += _helper_lines(helpers, helper_dir)
     if sudo and not is_root:
         lines.append('[ -z "$F" ] || { echo "Nicht alles hat geklappt – bitte die Meldungen oben lesen."; exit 1; }')
     lines.append('echo "Fertig. Jetzt im Dashboard „Verbindung prüfen“ drücken."')
 
     script = "\n".join(lines)
     one_liner = f'S=; [ "$(id -u)" = 0 ] || S=sudo; $S sh -c {shlex.quote("; ".join(lines))}'
+    if len(one_liner) > MAX_ONE_LINER:
+        raise SetupError("Der Einrichtungsbefehl wäre zu lang.")
     return script, one_liner
 
 
-def setup_notes(user: str, *, groups: Iterable[str], sudo: bool) -> list[str]:
-    """Hinweise zum Befehl, in einfachem Deutsch."""
+def setup_notes(user: str, *, groups: Iterable[str], sudo: bool, helpers: Sequence[str] = ()) -> list[str]:
+    """Hinweise zum Befehl, in einfachem Deutsch. `helpers`: Namen der Hilfsskripte, die der Befehl mitbringt."""
     notes = [
         "Der Schlüssel gilt nur zum Anmelden und für Befehle (restrict,pty): kein Weiterleiten von "
         "Ports, kein Agent. Terminal, Dateien und Live-Protokolle funktionieren weiter."
@@ -212,9 +292,16 @@ def setup_notes(user: str, *, groups: Iterable[str], sudo: bool) -> list[str]:
         notes.append(f"Wer {' oder '.join(who)}, kann auf dem Server praktisch alles.")
     if sudo:
         notes.append(
-            "Eine enger begrenzte sudo-Regel funktioniert mit Nodvard Deck nicht, weil es root-Befehle über "
-            "„sudo sh -c“ startet. Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich "
+            "Eine enger begrenzte sudo-Regel allein reicht Nodvard Deck noch nicht: Einige root-Befehle startet es "
+            "weiter über „sudo sh -c“. Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich "
             "nur mit dem Schlüssel anmelden."
+        )
+    if sudo and helpers:
+        notes.append(
+            f"Der Befehl legt außerdem die Hilfsskripte {', '.join(helpers)} nach /usr/local/lib/nodvard-deck "
+            "und erlaubt jedes mit einer eigenen sudo-Regel nur für sich. Die Module nutzen sie schon, solange das "
+            "Skript auf dem Server genau das mitgelieferte ist; sonst nehmen sie die volle Regel. Später reichen die "
+            "Skripte statt der vollen Regel."
         )
     if groups:
         notes.append(
@@ -233,7 +320,7 @@ SETUP_STARTED = "@@nodvard-setup-started"
 Start der Shell) gescheitert, nicht das Skript."""
 
 _MESSAGE_PREFIXES = (
-    "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt",
+    "Benutzer ", "Zur Gruppe ", "Hinweis:", "FEHLER:", "Die alte sudo-Regel", "Nicht alles hat geklappt", "Hilfsskript ",
 )
 """Zeilen, die das Skript selbst ausgibt (`echo` in `build_setup_script`). Nur sie gehen an die Oberfläche;
 `Fertig. ...` nicht, denn danach prüft das Dashboard die Verbindung selbst."""

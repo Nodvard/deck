@@ -1,0 +1,93 @@
+{
+  "MediaContainer": {
+    "size": 3,
+    "allowSync": false,
+    "title1": "Plex Library",
+    "Directory": [
+      {
+        "allowSync": true,
+        "art": "/:/resources/movie-fanart.jpg",
+        "composite": "/library/sections/1/composite/1759079052",
+        "filters": true,
+        "refreshing": false,
+        "thumb": "/:/resources/movie.png",
+        "key": "1",
+        "type": "movie",
+        "title": "Filme",
+        "agent": "tv.plex.agents.movie",
+        "scanner": "Plex Movie",
+        "language": "de-DE",
+        "uuid": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e10",
+        "updatedAt": 1791742951,
+        "createdAt": 1736071200,
+        "scannedAt": 1791784800,
+        "content": true,
+        "directory": true,
+        "contentChangedAt": 58213,
+        "hidden": 0,
+        "Location": [
+          {
+            "id": 1,
+            "path": "/media/filme"
+          }
+        ]
+      },
+      {
+        "allowSync": true,
+        "art": "/:/resources/show-fanart.jpg",
+        "composite": "/library/sections/2/composite/1759079052",
+        "filters": true,
+        "refreshing": false,
+        "thumb": "/:/resources/show.png",
+        "key": "2",
+        "type": "show",
+        "title": "Serien",
+        "agent": "tv.plex.agents.series",
+        "scanner": "Plex TV Series",
+        "language": "de-DE",
+        "uuid": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e20",
+        "updatedAt": 1791742951,
+        "createdAt": 1736071200,
+        "scannedAt": 1791784800,
+        "content": true,
+        "directory": true,
+        "contentChangedAt": 58213,
+        "hidden": 0,
+        "Location": [
+          {
+            "id": 2,
+            "path": "/media/serien"
+          }
+        ]
+      },
+      {
+        "allowSync": true,
+        "art": "/:/resources/artist-fanart.jpg",
+        "composite": "/library/sections/3/composite/1759079052",
+        "filters": true,
+        "refreshing": false,
+        "thumb": "/:/resources/artist.png",
+        "key": "3",
+        "type": "artist",
+        "title": "Musik",
+        "agent": "tv.plex.agents.music",
+        "scanner": "Plex Music",
+        "language": "de-DE",
+        "uuid": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e30",
+        "updatedAt": 1791742951,
+        "createdAt": 1736071200,
+        "scannedAt": 1791784800,
+        "content": true,
+        "directory": true,
+        "contentChangedAt": 58213,
+        "hidden": 0,
+        "Location": [
+          {
+            "id": 3,
+            "path": "/media/musik"
+          }
+        ]
+      }
+    ]
+  }
+}

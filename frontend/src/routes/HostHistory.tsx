@@ -148,7 +148,7 @@ export function HostHistory({ hostId, host, canCheck = false }: {
   return (
     <section className="mt-6" data-testid="host-history">
       <div className="mb-3 flex flex-wrap items-center gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Verlauf</h2>
+        <h2 className="text-sm font-semibold">Verlauf</h2>
         <div className="flex overflow-hidden rounded-lg border border-white/10" role="group" aria-label="Zeitraum">
           {RANGES.map((r) => (
             <button

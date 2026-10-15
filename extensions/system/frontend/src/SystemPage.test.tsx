@@ -52,10 +52,20 @@ const LIVE: LiveData = {
   throttled: { raw: "0x50000", flags: ["Unterspannung (seit Start)", "gedrosselt (seit Start)"] },
 };
 
+/** Antwort auf `GET` und `PUT …/temp-limit` (allgemeine Grenze 75 °C), für alle Mocks, die sonst Unbekanntes ablehnen. */
+function tempLimitAnswer(url: string, init?: RequestInit): Response | null {
+  const match = /\/ext\/system\/hosts\/([^/]+)\/temp-limit$/.exec(url);
+  if (!match) return null;
+  const own = init?.method === "PUT" ? (JSON.parse(String(init.body)) as { own_c: number | null }).own_c : null;
+  return new Response(JSON.stringify({ host_id: match[1], own_c: own, global_c: 75, effective_c: own ?? 75 }), { status: 200 });
+}
+
 function mockFetch(calls: string[], infoStatus = 200, info: SystemInfo = INFO) {
-  return vi.fn(async (input: RequestInfo | URL) => {
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     calls.push(url);
+    const limit = tempLimitAnswer(url, init);
+    if (limit) return limit;
     if (url.endsWith("/api/v1/hosts")) {
       return new Response(JSON.stringify([
         { id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up" },
@@ -117,6 +127,72 @@ describe("SystemPage", () => {
       render(<SystemPage />);
       fireEvent.click(await screen.findByRole("tab", { name: "Zustand & Updates" }));
       expect((await screen.findByText("44 °C")).className).not.toContain("text-amber-300");
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
+  it("Zustand & Updates: Temperaturgrenze einstellen, danach wird der Zustand neu geladen", async () => {
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    try {
+      const calls: string[] = [];
+      const puts: unknown[] = [];
+      const base = mockFetch(calls);
+      vi.stubGlobal("fetch", vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "PUT") puts.push(JSON.parse(String(init.body)));
+        return base(input, init);
+      }));
+      render(<SystemPage />);
+      fireEvent.click(await screen.findByRole("tab", { name: "Zustand & Updates" }));
+      const limit = await screen.findByTestId("temp-limit");
+      expect(limit.textContent).toContain("Dieser Server warnt ab 75 °C");
+      expect(calls.filter((c) => c.includes("/info")).length).toBe(1);
+      fireEvent.change(within(limit).getByLabelText("Warnen ab (°C)"), { target: { value: "90" } });
+      fireEvent.click(within(limit).getByRole("button", { name: "Speichern" }));
+      await within(limit).findByText("Gespeichert. Dieser Server warnt jetzt ab 90 °C.");
+      expect(puts).toEqual([{ own_c: 90 }]);
+      await waitFor(() => expect(calls.filter((c) => c.includes("/info")).length).toBe(2));
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
+  it("Zustand & Updates: ohne Temperaturwert keine Grenze zum Einstellen", async () => {
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    try {
+      const calls: string[] = [];
+      vi.stubGlobal("fetch", mockFetch(calls, 200, { ...INFO, temperature_c: null }));
+      render(<SystemPage />);
+      const tab = await screen.findByRole("tab", { name: "Zustand & Updates" });
+      await screen.findByTestId("temp-limit"); // die Live-Ansicht hat Sensoren
+      const asked = calls.filter((c) => c.endsWith("/temp-limit")).length;
+      fireEvent.click(tab);
+      await screen.findByTestId("system-info");
+      expect(screen.queryByTestId("temp-limit")).toBeNull();
+      expect(calls.filter((c) => c.endsWith("/temp-limit")).length).toBe(asked);
+    } finally {
+      window.history.replaceState({}, "", "/");
+    }
+  });
+
+  it("Live-Ansicht: die Grenze steht bei den Sensoren, ohne Sensoren nicht", async () => {
+    window.history.replaceState({}, "", "/ext/system/system?host=h-pi");
+    try {
+      vi.stubGlobal("fetch", mockFetch([]));
+      render(<SystemPage />);
+      const sensors = (await screen.findByTestId("sensors")).closest("section") as HTMLElement;
+      expect((await within(sensors).findByTestId("temp-limit")).textContent).toContain("Dieser Server warnt ab 75 °C");
+      cleanup();
+      const bare: LiveData = { ...LIVE, temperatures: [] };
+      const calls: string[] = [];
+      const base = mockFetch(calls);
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => (
+        String(input).includes("/live") ? new Response(JSON.stringify(bare), { status: 200 }) : base(input, init)
+      )));
+      render(<SystemPage />);
+      await screen.findByText(/Dieser Server meldet keine Sensoren/);
+      expect(screen.queryByTestId("temp-limit")).toBeNull();
+      expect(calls.some((c) => c.endsWith("/temp-limit"))).toBe(false);
     } finally {
       window.history.replaceState({}, "", "/");
     }
@@ -265,6 +341,8 @@ describe("Dienst neu starten", () => {
       const url = typeof input === "string" ? input : input.toString();
       const method = init?.method ?? "GET";
       calls.push({ url, method, body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined });
+      const limit = tempLimitAnswer(url, init);
+      if (limit) return limit;
       if (url.endsWith("/api/v1/hosts")) {
         return new Response(JSON.stringify([{ id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up" }]), { status: 200 });
       }
@@ -416,6 +494,8 @@ describe("Dienst neu starten", () => {
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : input.toString();
       const method = init?.method ?? "GET";
+      const limit = tempLimitAnswer(url, init);
+      if (limit) return limit;
       if (url.endsWith("/api/v1/hosts")) {
         return new Response(JSON.stringify([
           { id: "h-pi", display_name: "Raspberry Pi", address: "192.168.1.72", os_family: "linux", status: "up" },

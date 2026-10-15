@@ -1,0 +1,3 @@
+[[entries]]
+kind = "neu"
+text = "Eigenes CSS für Admins unter Einstellungen → Darstellung: gilt für alle, lädt nichts von fremden Adressen, und mit ?ohne-css=1 öffnet sich die Seite ohne, falls etwas schiefgeht."

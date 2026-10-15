@@ -198,8 +198,9 @@ _ERRORS: dict[str, tuple[int, str]] = {
     "secret_foreign": (
         409,
         ("Im Tresor liegt schon ein Geheimnis „{name}“, das nicht von Proxmox VE stammt (etwa von Hand angelegt). "
-         "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst über "
-         "die Tresor-Schnittstelle (DELETE /api/v1/secrets/{id}). In Nodvard Deck wurde nichts gespeichert."),
+         "Nodvard Deck ändert und löscht es nicht – nimm einen anderen Kurznamen oder lösch das Geheimnis selbst unter "
+         "Einstellungen → Tresor, mit deinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App (API: "
+         "DELETE /api/v1/secrets/{id} mit current_password). In Nodvard Deck wurde nichts gespeichert."),
     ),
     "connection_failed": (502, "Die Verbindung zu Proxmox ist fehlgeschlagen. Bitte versuche es noch einmal."),
 }
@@ -1319,8 +1320,9 @@ def _foreign_backup_secret_note(label: Any) -> str:
     shown = label if isinstance(label, str) and BACKUP_LABEL.fullmatch(label) else "backups-token:…"
     return (
         f"Für Proxmox-Backups liegt im Tresor schon ein Geheimnis „{shown}“, das nicht von Proxmox-Backups stammt (etwa "
-        "von Hand angelegt) – dort hat Nodvard Deck deshalb nichts gespeichert. Lösch es selbst über die "
-        "Tresor-Schnittstelle (DELETE /api/v1/secrets/{id}) oder nimm einen anderen Kurznamen."
+        "von Hand angelegt) – dort hat Nodvard Deck deshalb nichts gespeichert. Lösch es selbst unter Einstellungen → "
+        "Tresor, mit deinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App (API: DELETE "
+        "/api/v1/secrets/{id} mit current_password), oder nimm einen anderen Kurznamen."
     )
 
 

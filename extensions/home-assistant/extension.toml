@@ -1,0 +1,23 @@
+[extension]
+id          = "home-assistant"
+name        = "Home Assistant"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zeigt, was in deinem Home Assistant los ist: Version, bereitstehende Updates, nicht verfügbare Geräte und ausgewählte Werte wie Temperaturen. Vorerst nur lesend."
+icon        = "layout-grid"
+category    = "servers"
+sort_order  = 80
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_home_assistant:Extension"
+frontend    = "frontend/dist/index.js"
+
+# Vorerst nur lesend: kein Zugriff auf Server, keine Aktionen, nichts zum Freigeben.
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:home-assistant-*",
+]
+
+[settings]
+schema = "settings.schema.json"

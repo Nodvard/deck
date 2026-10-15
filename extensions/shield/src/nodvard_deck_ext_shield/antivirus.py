@@ -5,11 +5,16 @@ Ausführen, Speichern und Melden steht in `defender.py`.
 
 from __future__ import annotations
 
+import hashlib
 import posixpath
 import re
 import secrets
 import shlex
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from nodvard_sdk import root_helper_path
 
 # Die Quarantäne liegt auf dem betroffenen Server selbst.
 QUARANTINE_DIR = "/var/lib/nexus-quarantine"
@@ -42,6 +47,8 @@ _ALWAYS_EXCLUDED = ["/proc", "/sys", "/dev", "/run", QUARANTINE_DIR]
 # brauchen dieselbe Marke (`build_*_command(..., mark=m)`, `parse_scan_output(..., m)`).
 _RC_MARK_RE = re.compile(r"@@scan-rc-[0-9a-f]{16}=")
 NO_ROOT = "@@noroot"
+NO_ROOT_HELPER = "@@noroot-helper"
+"""Zusätzlich zu NO_ROOT: Auf dem Server liegt ein Hilfsskript, das nicht das mitgelieferte ist (`no_root_message`)."""
 NO_ROOT_MESSAGE = (
     "Keine root-Rechte: Das Dashboard ist auf diesem Server nicht als root angemeldet und "
     "darf sudo nicht ohne Passwort nutzen."
@@ -58,6 +65,118 @@ def as_root(command: str, *, required: bool = True) -> str:
         f"if [ \"$(id -u)\" -eq 0 ]; then sh -c {inner}; "
         f"elif sudo -n true 2>/dev/null; then sudo -n sh -c {inner}; "
         f"else {fallback}; fi"
+    )
+
+
+HELPER = root_helper_path("shield")
+"""Das Hilfsskript dieses Moduls auf dem Server (`root-helper/shield-root.sh`, eingerichtet vom Einrichtungsbefehl)."""
+HELPER_FILE = Path(__file__).resolve().parents[2] / "root-helper" / "shield-root.sh"
+"""Das mitgelieferte Skript, genau die Datei, die der Einrichtungsbefehl auf die Server legt."""
+
+
+def _bundled_helper(path: Path) -> tuple[int, str] | None:
+    """Version (`HELPER_VERSION=<n>`) und sha256 des mitgelieferten Skripts, `None` ohne lesbare Datei oder Version."""
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return None
+    match = re.search(rb"^HELPER_VERSION=([0-9]{1,4})$", raw, re.MULTILINE)
+    return (int(match.group(1)), hashlib.sha256(raw).hexdigest()) if match else None
+
+
+HELPER_BUNDLED = _bundled_helper(HELPER_FILE)
+HELPER_READ_VERSION = 2
+"""Ab dieser Version kennt das Hilfsskript `guard`, `detect-templates` und `refresh-packages`."""
+HELPER_ACTION_VERSION = 3
+"""Ab dieser Version kennt das Hilfsskript `quarantine`, `restore`, `delete`, `ban`/`unban` und `install`."""
+HELPER_UPDATE_VERSION = 4
+"""Ab dieser Version kennt das Hilfsskript `reboot`, `upgrade-start` und `upgrade-poll`."""
+HELPER_AUDIT_VERSION = 5
+"""Ab dieser Version kennt das Hilfsskript `audit-start`, `audit-poll` und `audit-stop`."""
+HELPER_SCAN_VERSION = 6
+"""Ab dieser Version kennt das Hilfsskript `scan` und `watch`."""
+HELPER_QUARANTINE_VERSION = 8
+"""Ab dieser Version verschiebt das Hilfsskript nur, was ClamAV selbst findet (zuerst am Ort, dann im Prüfordner), und
+legt nur an den Ort zurück, den es dabei hinterlegt hat (`restore <name>`). Version 7 tat das schon, verlor aber bei zwei
+gleichzeitigen Aufrufen mit demselben Namen die Herkunft und setzte die Falle erst nach dem Verschieben."""
+HELPER_REALTIME_VERSION = 11
+"""Ab dieser Version kennt das Hilfsskript `realtime-on` und `realtime-off` und meldet „an“ erst, wenn clamonacc nach dem
+Start weiterläuft."""
+HELPER_REALTIME_LOG_VERSION = 12
+"""Ab dieser Version kennt das Hilfsskript `realtime-log` und `realtime-confirm`."""
+
+REALTIME_NO_PACKAGE = "Auf dem Server fehlt das Paket clamav-daemon."
+REALTIME_NO_SYSTEMD = "Ohne systemd lässt sich Echtzeit nicht einrichten."
+REALTIME_NOT_STARTED = "clamonacc startet nicht:"
+
+
+def helper_matches() -> str | None:
+    """Shell-Bedingung „das Hilfsskript liegt auf dem Server und ist Byte für Byte das mitgelieferte“ (sha256, gelesen
+    als der angemeldete Benutzer, ohne das Skript auszuführen). Erst danach ruft das Modul es auf, auch für `version`:
+    Ein verändertes oder veraltetes Skript läuft nie. `None`, wenn das mitgelieferte Skript fehlt."""
+    if HELPER_BUNDLED is None:
+        return None
+    helper = shlex.quote(HELPER)
+    return f"[ -x {helper} ] && [ \"$(sha256sum < {helper} 2>/dev/null)\" = \"{HELPER_BUNDLED[1]}  -\" ]"
+
+
+def _no_root(required: bool, inner: str, matches: str) -> str:
+    """Letzter Zweig ohne root: als normaler Benutzer oder NO_ROOT; liegt ein Hilfsskript da, das nicht das mitgelieferte
+    ist, dazu `@@noroot-helper <Version aus seinem Text>` für `no_root_message`."""
+    if not required:
+        return f"sh -c {inner}"
+    helper = shlex.quote(HELPER)
+    return (
+        f"echo '{NO_ROOT}'; if [ -e {helper} ] && ! {{ {matches}; }}; then "
+        f"echo \"{NO_ROOT_HELPER} $(sed -n 's/^HELPER_VERSION=//p' {helper} 2>/dev/null | head -n 1)\"; fi; exit 126"
+    )
+
+
+def via_helper(args: Sequence[str], command: str, *, version: int, required: bool = True) -> str:
+    """Wie `as_root(command, required=...)`, aber ohne root-Anmeldung zuerst über das Hilfsskript: Ist es genau das
+    mitgelieferte (`helper_matches`) und kann das mindestens `version`, läuft `sudo -n <skript> <args>`, das dasselbe
+    ausgibt wie `command`. Sonst geht es auf dem alten Weg weiter (`sudo -n sh -c`, dann je nach `required` NO_ROOT oder
+    als normaler Benutzer)."""
+    matches = helper_matches()
+    if matches is None or HELPER_BUNDLED is None or HELPER_BUNDLED[0] < version:
+        return as_root(command, required=required)
+    helper = shlex.quote(HELPER)
+    inner = shlex.quote(command)
+    call = " ".join(shlex.quote(a) for a in args)
+    # Zuerst die Prüfsumme, die der angemeldete Benutzer selbst liest: Ohne passendes Skript kein sudo-Aufruf (jeder
+    # landet im Protokoll, ohne sudo-Recht sogar als Mail an root). `version` prüft danach, ob sudo das Skript erlaubt;
+    # ohne Recht ist die Ausgabe leer, der Vergleich scheitert, und es geht auf dem alten Weg weiter.
+    return (
+        f"if [ \"$(id -u)\" -eq 0 ]; then sh -c {inner}; "
+        f"elif {matches} && [ \"$(sudo -n {helper} version 2>/dev/null)\" -ge {version} ] 2>/dev/null; then "
+        f"sudo -n {helper} {call}; "
+        f"elif sudo -n true 2>/dev/null; then sudo -n sh -c {inner}; "
+        f"else {_no_root(required, inner, matches)}; fi"
+    )
+
+
+_NO_ROOT_HELPER_RE = re.compile(rf"^{NO_ROOT_HELPER}(?: (.*))?$", re.MULTILINE)
+
+
+def no_root_message(output: str | None) -> str:
+    """Die Meldung zu NO_ROOT: Liegt ein Hilfsskript auf dem Server, das nicht das mitgelieferte ist, sagt sie das und
+    verlangt „neu einrichten“. Sonst `NO_ROOT_MESSAGE`."""
+    match = _NO_ROOT_HELPER_RE.search(output or "")
+    if match is None or HELPER_BUNDLED is None:
+        return NO_ROOT_MESSAGE
+    # Die Zahl kommt aus dem Text des Skripts auf dem Server: nur eine schlichte Zahl zählt.
+    text, bundled = (match.group(1) or "").strip(), HELPER_BUNDLED[0]
+    found = text if re.fullmatch(r"[0-9]{1,4}", text) else None
+    if found is not None and int(found) < bundled:
+        what = f"veraltet (Version {int(found)}, dieses Dashboard bringt Version {bundled} mit)"
+    elif found is not None and int(found) == bundled:
+        what = f"verändert (Version {bundled}, aber mit anderem Inhalt)"
+    else:
+        what = "verändert oder neuer als dieses Dashboard"
+    return (
+        f"Das Hilfsskript auf diesem Server ist {what}, darum ruft Nodvard Deck es nicht auf, und ohne das Skript "
+        "erlaubt sudo hier nichts. Bitte den Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ "
+        "erneut ausführen."
     )
 
 
@@ -96,6 +215,8 @@ class ScanResult:
     busy: bool = False
     # `timeout` auf dem Server hat den Lauf beendet (`guard_command`).
     timed_out: bool = False
+    # Eigener Hinweis für Lauf und Funde, wenn nichts automatisch verschoben wird (statt des allgemeinen zu `unreliable`).
+    hint: str | None = None
 
 
 def _q(value: str) -> str:
@@ -372,6 +493,44 @@ def guard_command(
         f'$T sh -c "$P"{_q(command)} 9>>"${{F:-/dev/null}}"; R=$?; '
         f'if [ -n "$T" ] && {{ [ "$R" -eq 124 ] || [ "$R" -eq 137 ]; }}; then echo "{late}"; fi'
     )
+
+
+_HELPER_MAX_NUMBER = 999_999
+"""Größte Zahl, die das Hilfsskript bei `scan` und `watch` annimmt (sechs Stellen)."""
+
+
+def _helper_scan_ok(paths: list[str], mark: str | None, numbers: tuple[int, ...]) -> bool:
+    """Passen die Angaben zu dem, was `shield-root scan`/`watch` annimmt? Sonst bleibt es beim alten Weg."""
+    return (
+        bool(paths) and all(isinstance(p, str) and p.startswith("/") and "\x00" not in p for p in paths)
+        and isinstance(mark, str) and _RC_MARK_RE.fullmatch(mark) is not None
+        and all(1 <= n <= _HELPER_MAX_NUMBER for n in numbers)
+    )
+
+
+def scan_helper_args(
+    paths: list[str], *, max_filesize_mb: int, exclude: list[str] | None, mark: str, limit_s: int, wait_s: int,
+) -> list[str] | None:
+    """Derselbe Lauf wie `guard_command(build_scan_command(...), ...)` mit denselben Angaben als Aufruf von
+    `shield-root scan` (ab Version 6), oder `None`. Die Ausnahmen gehen fertig als Ausdrücke für `--exclude-dir` mit."""
+    numbers = (int(limit_s), int(wait_s), int(max_filesize_mb))
+    if not _helper_scan_ok(paths, mark, numbers):
+        return None
+    regexes = [r for r in (scan_exclude_regex(p) for p in [*_ALWAYS_EXCLUDED, *(exclude or [])]) if r]
+    return ["scan", mark, *map(str, numbers), *regexes, "--", *paths]
+
+
+def watch_helper_args(
+    paths: list[str], *, minutes: int, max_filesize_mb: int, use_clamd: bool, mark: str,
+    skip_folders: list[str] | None, limit_s: int,
+) -> list[str] | None:
+    """Derselbe Lauf wie `guard_command(build_watch_command(...), ...)` (mit dem Standard für `exclude`) als Aufruf
+    von `shield-root watch` (ab Version 6), oder `None`. Die Ordner gehen fertig als Muster für `find -path` mit."""
+    numbers = (int(limit_s), int(minutes), int(max_filesize_mb))
+    if not _helper_scan_ok(paths, mark, numbers):
+        return None
+    skips = [_find_literal(f) for f in (exclude_folder(e) for e in (skip_folders or [])) if f is not None]
+    return ["watch", mark, *map(str, numbers), "1" if use_clamd else "0", *skips, "--", *paths]
 
 
 _FOUND_RE = re.compile(r"^(?P<path>/.*): (?P<sig>.+) FOUND$")
@@ -829,6 +988,33 @@ HARDLINK_SWAPPED = ("Die Datei wurde während der Quarantäne gegen einen weiter
                     "(Hardlink) ausgetauscht – der Name wurde entfernt, ihre Rechte wurden nicht verändert.")
 
 
+ORIGIN_DIR_NAME = ".herkunft"
+"""Unterordner der Quarantäne mit Rechten und Ursprungsort je Datei (erste Zeile die Rechte, dann der Pfad)."""
+CHECK_DIR_NAME = ".pruefen"
+"""Unterordner der Quarantäne, in dem das Hilfsskript eine Datei vor dem Verschieben mit ClamAV prüft (nur root)."""
+QUARANTINE_DIR_UNSAFE = ("Der Ordner der Quarantäne auf dem Server ist eine Verknüpfung, gehört nicht root oder ist für "
+                         "andere offen (nicht 700) – aus Sicherheitsgründen nichts verschoben. Bitte "
+                         f"{QUARANTINE_DIR} und seine Unterordner auf dem Server prüfen.")
+
+
+def _quarantine_dirs_command(*dirs: str) -> str:
+    """sh: legt fehlende Ordner der Quarantäne mit 700 an (nie `mkdir -p`) und bricht ab, wenn einer eine Verknüpfung
+    ist, nicht dem Aufrufer gehört oder andere Rechte als 700 hat (wie `qdir_safe anlegen` im Hilfsskript)."""
+    return (
+        f"S=0; for d in {' '.join(_q(d) for d in dirs)}; do "
+        "if [ ! -e \"$d\" ] && [ ! -L \"$d\" ]; then mkdir -m 700 \"$d\" 2>/dev/null || { S=1; break; }; fi; "
+        "if [ ! -d \"$d\" ] || [ -L \"$d\" ]; then S=1; break; fi; "
+        "case \"$(stat -c %u:%a \"$d\" 2>/dev/null)\" in \"$(id -u):700\"|\"$(id -u):2700\") ;; *) S=1; break;; esac; "
+        f"done; [ \"$S\" = 0 ] || {{ echo {_q(QUARANTINE_DIR_UNSAFE)}; exit 5; }}; "
+    )
+
+
+def origin_record(quarantine_path: str) -> str:
+    """Wo Rechte und Ursprungsort der Datei `quarantine_path` liegen (neben ihr, im Unterordner `.herkunft`)."""
+    folder, _, name = quarantine_path.rpartition("/")
+    return f"{folder}/{ORIGIN_DIR_NAME}/{name}"
+
+
 def quarantine_command(path: str, quarantine_name: str) -> str:
     """Verschiebt die Datei in den Tresor, merkt sich die Rechte (Ausgabe) und macht sie unlesbar und unausführbar.
 
@@ -842,19 +1028,23 @@ def quarantine_command(path: str, quarantine_name: str) -> str:
     parent = parent or "/"
     here = _q("./" + name)
     target = _q(f"{QUARANTINE_DIR}/{quarantine_name}")
+    origin = _q(origin_record(f"{QUARANTINE_DIR}/{quarantine_name}"))
     # Hardlinks: `chmod` ändert den Inode für alle Namen; ein zwischen Prüfung und `mv` angehängter Hardlink auf eine
     # Systemdatei machte sie mit `chmod 000` unlesbar. Hat die Datei im Tresor mehr als einen Namen, wird nur der
     # Tresor-Name entfernt und der Befehl scheitert sichtbar; entscheidend ist die Prüfung nach dem `mv`.
     return (
-        f"set -e; cd -P {_q(parent)} 2>/dev/null || {{ echo 'Datei nicht mehr vorhanden'; exit 3; }}; "
+        f"set -e; umask 077; cd -P {_q(parent)} 2>/dev/null || {{ echo 'Datei nicht mehr vorhanden'; exit 3; }}; "
         f"[ \"$(pwd -P)\" = {_q(parent)} ] || {{ echo {_q(PATH_LINK_REFUSED)}; exit 5; }}; "
         f"[ -L {here} ] && {{ echo {_q(SYMLINK_REFUSED)}; exit 5; }}; "
         f"[ -f {here} ] || {{ echo 'Datei nicht mehr vorhanden'; exit 3; }}; "
         f"[ \"$(stat -c %h {here})\" = 1 ] || {{ echo {_q(HARDLINK_REFUSED)}; exit 5; }}; "
-        f"mkdir -p {QUARANTINE_DIR}; chmod 700 {QUARANTINE_DIR}; "
-        f"M=$(stat -c %a {here}); mv -f {here} {target}; "
-        f"if [ -L {target} ]; then rm -f {target}; echo {_q(SYMLINK_SWAPPED)}; exit 5; fi; "
-        f"if [ \"$(stat -c %h {target})\" != 1 ]; then rm -f {target}; echo {_q(HARDLINK_SWAPPED)}; exit 5; fi; "
+        # Dieselben Ordner wie beim Hilfsskript (dort prüft ClamAV im Prüfordner), mit denselben Bedingungen.
+        + _quarantine_dirs_command(QUARANTINE_DIR, f"{QUARANTINE_DIR}/{ORIGIN_DIR_NAME}", f"{QUARANTINE_DIR}/{CHECK_DIR_NAME}")
+        # Rechte und Ursprung kommen vor dem Verschieben in die Ablage: Das Hilfsskript legt später nur dorthin zurück.
+        + f"M=$(stat -c %a {here}); printf '%s\\n%s\\n' \"$M\" {_q(path)} > {origin}; "
+        f"mv -f {here} {target} || {{ rm -f {origin}; exit 1; }}; "
+        f"if [ -L {target} ]; then rm -f {target} {origin}; echo {_q(SYMLINK_SWAPPED)}; exit 5; fi; "
+        f"if [ \"$(stat -c %h {target})\" != 1 ]; then rm -f {target} {origin}; echo {_q(HARDLINK_SWAPPED)}; exit 5; fi; "
         f"chmod 000 {target}; echo \"@@mode=$M\""
     )
 
@@ -866,6 +1056,17 @@ RESTORE_STAGE_FAILED = ("Im Ursprungsordner ließ sich kein geschützter Zwische
                         "Laufwerk ohne Dateirechte oder in einem schreibgeschützten Ordner) oder er wurde ausgetauscht – "
                         "aus Sicherheitsgründen nicht wiederhergestellt.")
 RESTORE_STUCK = "Die Datei ließ sich weder zurücklegen noch in die Quarantäne zurückholen. Sie liegt nur für root lesbar hier:"
+RESTORE_NO_ORIGIN = ("Für diese Datei ist auf dem Server kein Ursprungsort hinterlegt (sie kam vor diesem Update in die "
+                     "Quarantäne). Das Hilfsskript legt nur an hinterlegte Orte zurück; bitte auf dem Server von Hand "
+                     "zurücklegen oder die Datei löschen.")
+QUARANTINE_NOT_FOUND = "ClamAV findet beim erneuten Prüfen nichts in der Datei – sie bleibt, wo sie ist."
+QUARANTINE_UNCHECKED = ("Die Datei ließ sich vor dem Verschieben nicht noch einmal prüfen (ClamAV fehlt oder antwortet "
+                        "nicht) – sie bleibt, wo sie ist.")
+QUARANTINE_CHECK_BUSY = ("Im Prüfordner der Quarantäne liegt noch eine Datei mit diesem Namen von einem abgebrochenen "
+                         f"Lauf – nichts verschoben. Bitte auf dem Server unter {QUARANTINE_DIR}/{CHECK_DIR_NAME} nachsehen.")
+QUARANTINE_KEPT = ("Die Datei kam nicht in die Quarantäne und ließ sich auch nicht an ihren Ort zurücklegen (dort liegt "
+                   "inzwischen etwas anderes, oder sie wurde während des Verschiebens ausgetauscht). Sie liegt nur für "
+                   "root zugänglich hier:")
 # Zwischenordner im Ursprungsordner (`mktemp -d`: neu, Rechte 700, gehört root). Mit gesetztem Gruppen-Bit erbt er es
 # und zeigt 2700: Das Bit gibt niemandem Zugriff, die Prüfung lässt es zu.
 RESTORE_STAGE_TEMPLATE = "./.nodvard-wiederherstellen.XXXXXX"
@@ -886,6 +1087,7 @@ def restore_command(quarantine_path: str, original_path: str, mode: str | None) 
     here = _q("./" + name)
     up = _q("../" + name)
     source = _q(quarantine_path)
+    origin = _q(origin_record(quarantine_path))
     # Schritt 1: Die Datei kommt in einen frischen Zwischenordner im Ursprungsordner (`mktemp -d`); nach `cd -P` hinein
     # werden Pfad, Besitzer und Rechte geprüft, darin kann außer root niemand etwas anlegen. Scheitert eine Prüfung,
     # wird der leere Zwischenordner entfernt (`rmdir` löst keine Verknüpfung auf).
@@ -916,14 +1118,86 @@ def restore_command(quarantine_path: str, original_path: str, mode: str | None) 
         f"if [ -e {here} ] || [ -L {here} ]; then mv -T -n {here} {source} 2>/dev/null || true; "
         f"if [ -f {source} ]; then chmod 000 {source}; {leave}; echo {_q(RESTORE_TARGET_TAKEN)}; exit 4; fi; "
         f"echo {_q(RESTORE_STUCK)} \"$(pwd -P)\"; exit 4; fi; "
-        f"{leave}; echo ok"
+        f"{leave}; rm -f {origin}; echo ok"
     )
 
 
 def delete_command(quarantine_path: str) -> str:
     if not quarantine_path.startswith(QUARANTINE_DIR + "/") or ".." in quarantine_path:
         raise ValueError("Nur Dateien aus der Quarantäne dürfen gelöscht werden.")
-    return f"rm -f {_q(quarantine_path)}; echo ok"
+    return f"rm -f {_q(quarantine_path)} {_q(origin_record(quarantine_path))}; echo ok"
+
+
+# Das Hilfsskript ist reines ASCII und gibt statt eines Satzes `@@msg=<kennung>` aus (bei `restore_stuck` mit dem Ort
+# dahinter); `helper_text` setzt denselben Satz ein, den der eigene Befehl des Moduls ausgibt.
+HELPER_MESSAGES = {
+    "gone": "Datei nicht mehr vorhanden",
+    "path_link": PATH_LINK_REFUSED,
+    "symlink": SYMLINK_REFUSED,
+    "hardlink": HARDLINK_REFUSED,
+    "symlink_swapped": SYMLINK_SWAPPED,
+    "hardlink_swapped": HARDLINK_SWAPPED,
+    "not_in_quarantine": "Nicht mehr in der Quarantäne",
+    "restore_folder_missing": RESTORE_FOLDER_MISSING,
+    "restore_link": RESTORE_LINK_REFUSED,
+    "restore_occupied": "Am Ursprungsort liegt inzwischen eine andere Datei",
+    "restore_stage_failed": RESTORE_STAGE_FAILED,
+    "restore_not_moved": RESTORE_NOT_MOVED,
+    "restore_target_taken": RESTORE_TARGET_TAKEN,
+    "restore_stuck": RESTORE_STUCK,
+    "restore_no_origin": RESTORE_NO_ORIGIN,
+    "quarantine_not_found": QUARANTINE_NOT_FOUND,
+    "quarantine_unchecked": QUARANTINE_UNCHECKED,
+    "quarantine_dir_unsafe": QUARANTINE_DIR_UNSAFE,
+    "quarantine_check_busy": QUARANTINE_CHECK_BUSY,
+    "quarantine_kept": QUARANTINE_KEPT,
+    "only_apt": "Nur für Debian/Ubuntu (apt)",
+    "realtime_no_package": REALTIME_NO_PACKAGE,
+    "realtime_no_systemd": REALTIME_NO_SYSTEMD,
+    "realtime_not_started": REALTIME_NOT_STARTED,
+}
+_HELPER_MSG_RE = re.compile(r"^@@msg=([a-z_]+)(?: (.*))?$")
+
+
+def helper_text(output: str) -> str:
+    """Die Ausgabe des Hilfsskripts mit den Sätzen des Moduls statt `@@msg=<kennung>`; andere Zeilen bleiben."""
+    lines = []
+    for line in output.split("\n"):
+        match = _HELPER_MSG_RE.match(line)
+        text = HELPER_MESSAGES.get(match.group(1)) if match else None
+        if text is None:
+            lines.append(line)
+        else:
+            lines.append(text if match.group(2) is None else f"{text} {match.group(2)}")
+    return "\n".join(lines)
+
+
+def _quarantine_name_of(quarantine_path: str) -> str | None:
+    """Der Name in der Quarantäne, wenn der Pfad dort direkt liegt und der Name nur sichere Zeichen hat, sonst `None`."""
+    prefix = QUARANTINE_DIR + "/"
+    name = quarantine_path[len(prefix):] if quarantine_path.startswith(prefix) else ""
+    return name if re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]*", name) else None
+
+
+def quarantine_args(path: str, quarantine_name: str) -> list[str]:
+    """Aufruf des Hilfsskripts für dasselbe wie `quarantine_command` (prüft die Angaben wie dort)."""
+    quarantine_command(path, quarantine_name)
+    return ["quarantine", path, quarantine_name]
+
+
+def restore_args(quarantine_path: str, original_path: str, mode: str | None) -> list[str] | None:
+    """Aufruf des Hilfsskripts für dasselbe wie `restore_command`; `None`, wenn es dafür nicht taugt (dann der alte Weg).
+    Ort und Rechte nimmt das Skript aus der eigenen Ablage, nicht aus dem Aufruf."""
+    restore_command(quarantine_path, original_path, mode)
+    name = _quarantine_name_of(quarantine_path)
+    return None if name is None else ["restore", name]
+
+
+def delete_args(quarantine_path: str) -> list[str] | None:
+    """Aufruf des Hilfsskripts für dasselbe wie `delete_command`; `None`, wenn es dafür nicht taugt."""
+    delete_command(quarantine_path)
+    name = _quarantine_name_of(quarantine_path)
+    return None if name is None else ["delete", name]
 
 
 def parse_mode(output: str) -> str | None:
@@ -971,7 +1245,7 @@ def _clean_lynis(entry: str) -> str:
 
 def parse_lynis(output: str) -> LynisResult:
     if NO_ROOT in output:
-        return LynisResult(status="error", error=NO_ROOT_MESSAGE)
+        return LynisResult(status="error", error=no_root_message(output))
     if "@@nolynis" in output:
         return LynisResult(status="error", error="Lynis ist auf diesem Server nicht installiert.")
     warnings, suggestions, index = [], [], None

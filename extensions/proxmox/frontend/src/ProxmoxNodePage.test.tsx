@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { navigateTo } from "../../../_shared/frontend/src/testShell";
 
-import { ProxmoxNodePage } from "./ProxmoxNodePage";
+import { ProxmoxNodePage, shieldUpdatesHref } from "./ProxmoxNodePage";
 
 /**
  * `window.__lattice` wird im Produktivbetrieb von frontend/src/main.tsx gesetzt
@@ -584,6 +584,7 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
         return new Response(JSON.stringify({ lines: ["starting VM 100", "TASK OK"] }), { status: 200 });
       }
       if (url.endsWith("/ext/proxmox/connections")) return new Response("[]", { status: 200 });
+      if (url.endsWith("/hosts/h-node/tools")) return new Response("[]", { status: 200 });
       if (url.includes("/metrics")) return new Response(JSON.stringify(METRICS), { status: 200 });
       if (url.includes("/ext/proxmox/nodes/h-node/health")) {
         return new Response(JSON.stringify({
@@ -900,6 +901,80 @@ describe("ProxmoxNodePage ConnectionsPanel", () => {
     expect(within(pve2).getByText("Pakete anzeigen (2)")).toBeInTheDocument();
     // pve1 gehoert zu einer anderen Verbindung ohne Hosts auf dieser Seite.
     expect(screen.queryByTestId("updates-pve1")).toBeNull();
+  });
+
+  describe("Updates: „In Shield einspielen“ je Knoten", () => {
+    const SHIELD_TOOL = { ext_id: "shield", id: "security", title: "Sicherheit", category: "monitoring", order: 50, href: "/ext/shield/soc?host=h-node" };
+    const SYSTEM_TOOL = { ext_id: "system", id: "system", title: "Server-Zustand", category: "monitoring", order: 50, href: "/ext/system/system?host=h-node" };
+
+    function withTools(tools: Response | (() => Response), calls: { url: string; method: string }[], counts?: number) {
+      const base = richFetch(calls);
+      return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/hosts/h-node/tools")) {
+          calls.push({ url, method: init?.method ?? "GET" });
+          return typeof tools === "function" ? tools() : tools.clone();
+        }
+        if (counts !== undefined && url.endsWith("/ext/proxmox/updates")) {
+          return new Response(JSON.stringify({
+            nodes: [{ connection: "pve2", node: "pve2", error: null, count: counts, badge: "aktuell", tone: "good", summary: "Auf dem neuesten Stand", packages: [] }],
+            errors: [],
+          }), { status: 200 });
+        }
+        return base(input, init);
+      });
+    }
+
+    it("mit Shield: Link zur Update-Zentrale dieses Knotens, Adresse vom Kern, gefragt erst beim Öffnen des Reiters", async () => {
+      const calls: { url: string; method: string }[] = [];
+      vi.stubGlobal("fetch", withTools(new Response(JSON.stringify([SYSTEM_TOOL, SHIELD_TOOL]), { status: 200 }), calls));
+      render(<ProxmoxNodePage />);
+      await screen.findByTestId("updates-pve2");
+      expect(calls.some((c) => c.url.endsWith("/tools"))).toBe(false);
+
+      fireEvent.click(screen.getByRole("tab", { name: /^Updates/ }));
+      const link = await screen.findByRole("link", { name: "In Shield einspielen" });
+      expect(link).toHaveAttribute("href", "/ext/shield/soc?host=h-node&tab=updates");
+      expect(within(screen.getByTestId("updates-pve2")).getByTestId("updates-shield-pve2")).toBe(link);
+      expect(calls.filter((c) => c.url.endsWith("/hosts/h-node/tools"))).toHaveLength(1);
+    });
+
+    it.each([
+      ["Shield aus oder kein Recht (der Kern bietet das Werkzeug nicht an)", () => new Response(JSON.stringify([SYSTEM_TOOL]), { status: 200 })],
+      ["Kern antwortet mit Fehler", () => new Response(JSON.stringify({ detail: "kaputt" }), { status: 500 })],
+    ])("kein Link: %s", async (_label, tools) => {
+      const calls: { url: string; method: string }[] = [];
+      vi.stubGlobal("fetch", withTools(tools, calls));
+      render(<ProxmoxNodePage />);
+      await screen.findByTestId("updates-pve2");
+      fireEvent.click(screen.getByRole("tab", { name: /^Updates/ }));
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith("/hosts/h-node/tools"))).toBe(true));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByRole("link", { name: "In Shield einspielen" })).toBeNull();
+      expect(screen.getByTestId("updates-pve2").textContent).toContain("2 Updates");
+    });
+
+    it("kein Link, wenn auf dem Knoten nichts wartet", async () => {
+      const calls: { url: string; method: string }[] = [];
+      vi.stubGlobal("fetch", withTools(new Response(JSON.stringify([SHIELD_TOOL]), { status: 200 }), calls, 0));
+      render(<ProxmoxNodePage />);
+      await screen.findByTestId("updates-pve2");
+      fireEvent.click(screen.getByRole("tab", { name: /^Updates/ }));
+      await waitFor(() => expect(calls.some((c) => c.url.endsWith("/hosts/h-node/tools"))).toBe(true));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(screen.queryByRole("link", { name: "In Shield einspielen" })).toBeNull();
+    });
+
+    it("shieldUpdatesHref: nur das Werkzeug von Shield, nur Adressen in Deck, Reiter immer „Updates“", () => {
+      expect(shieldUpdatesHref([SHIELD_TOOL])).toBe("/ext/shield/soc?host=h-node&tab=updates");
+      expect(shieldUpdatesHref([{ ...SHIELD_TOOL, href: "/ext/shield/soc?tab=guard&host=h-node" }])).toBe("/ext/shield/soc?tab=updates&host=h-node");
+      expect(shieldUpdatesHref([])).toBeNull();
+      expect(shieldUpdatesHref([SYSTEM_TOOL])).toBeNull();
+      expect(shieldUpdatesHref([{ ...SHIELD_TOOL, id: "andere" }])).toBeNull();
+      expect(shieldUpdatesHref([{ ...SHIELD_TOOL, ext_id: "anderes-modul" }])).toBeNull();
+      expect(shieldUpdatesHref([{ ...SHIELD_TOOL, href: "https://example.com/soc" }])).toBeNull();
+      expect(shieldUpdatesHref([{ ...SHIELD_TOOL, href: "//example.com/soc" }])).toBeNull();
+    });
   });
 
   it("Updates: überfälliger oder fehlgeschlagener Prüflauf von Proxmox steht mit Grund da, ein frischer nicht", async () => {

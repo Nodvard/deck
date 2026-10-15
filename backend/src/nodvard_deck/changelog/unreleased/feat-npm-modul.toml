@@ -1,0 +1,7 @@
+[[entries]]
+kind = "neu"
+text = "Nginx Proxy Manager ist jetzt ein eigenes Modul mit eigener Seite, samt Zertifikaten, Adress-Check und Kachel."
+
+[[entries]]
+kind = "verbessert"
+text = "Wer den Nginx Proxy Manager bisher im Modul „Netzwerk“ eingerichtet hatte, findet nach dem Update alles im neuen Modul wieder: Adresse, Passwort, Kachel und offene Vorschläge. „Netzwerk“ zeigt nur noch, wo Pi-hole und Nginx Proxy Manager jetzt zu finden sind."

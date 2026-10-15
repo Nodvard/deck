@@ -204,7 +204,7 @@ describe("NotificationBell", () => {
     rows = [];
     renderBell(0);
     fireEvent.click(bell());
-    expect((await screen.findByTestId("bell-empty")).textContent).toContain("Alles ruhig");
+    expect((await screen.findByTestId("bell-empty")).textContent).toContain("Keine neuen Meldungen");
     expect(screen.getByTestId("bell-empty").textContent).toContain("Keine neuen Meldungen");
   });
 

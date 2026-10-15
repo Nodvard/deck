@@ -65,7 +65,7 @@ schema = "settings.schema.json"
 ```
 
 **Paketname (`entrypoint`):** Die Python-Pakete der mitgelieferten Erweiterungen heißen
-`nodvard_deck_ext_<id>` (Bindestriche der ID werden zu `_`, aus `service-matrix` wird `nodvard_deck_ext_service_matrix`) und
+`nodvard_deck_ext_<id>` (Bindestriche der ID werden zu `_`, aus `hello-world` wird `nodvard_deck_ext_hello_world`) und
 liegen unter `extensions/<id>/src/`. Das ist die Konvention für neue Erweiterungen, der Kern
 erzwingt sie nicht: Er importiert genau das Modul, das `entrypoint` nennt, und liest das Manifest
 bei jedem Start frisch von der Platte. **Erweiterungen von Dritten mit der alten Konvention
@@ -195,6 +195,54 @@ geladen.“ Was in der Rückweg-Zeit unter der alten Kennung eingestellt wurde (
   Server anlegen, können noch nicht umbenannt werden (legacy_ids zusammen mit hosts.write).“); die Erweiterung wird nicht
   geladen, der Grund steht im Protokoll und in der Zeile der Erweiterung. Alle anderen Berechtigungen gehen.
 - `GET /jobs?ext_id=` filtert nach der Speicher-Kennung, `GET /capabilities` nennt nur die neue Kennung.
+
+### Teil eines anderen Moduls übernehmen: `adopts`
+
+Zieht ein Teil von einem Modul in ein eigenes (so ist Pi-hole aus „Netzwerk“ zum Modul `pihole` geworden), nennt das neue
+Modul die Quelle in `[[extension.adopts]]`:
+
+```toml
+[[extension.adopts]]
+from     = "network"                            # Kennung des Moduls, das den Teil bisher hatte
+settings = "pihole"                             # dieser Abschnitt seiner Einstellungen wird zu den eigenen
+widgets  = { pihole = "status" }                # Kacheln im Cockpit: alte Kennung = eigene
+routes   = { "/pihole" = "/summary" }           # alte Adresse unter /api/v1/ext/network = eigene Route
+secrets  = ["network-pihole-password"]          # Tresor-Einträge, die zu eigenen werden
+```
+
+Außer `from` ist alles optional; ein unbekannter Schlüssel ist ein Fehler im Manifest.
+
+**Wann übernommen wird:** einmal, beim allerersten Entdecken des neuen Moduls, und nur aus einer Zeile, die es schon vor
+diesem Start gab. Bei einer frischen Installation sind beide Module einfach neu. Die Zeile der Quelle bleibt unverändert,
+ein Rückweg aufs alte Image findet sie, wie sie war. Das Protokoll hält `extension.adopted` fest (`from`, `settings`,
+`enabled`, `widgets`, `secrets`, `extra_permissions`).
+- **Einstellungen:** der Abschnitt `settings` der Quelle, als Kopie.
+- **Ein/Aus:** eingeschaltet, wenn die Quelle an war, der Abschnitt wirklich ausgefüllt ist (nicht nur Vorgaben) **und**
+  die Quelle schon alle Rechte des neuen Moduls hatte (ihre `granted_permissions`). Sonst bleibt es aus, bis es jemand
+  bewusst einschaltet; fehlende Rechte stehen in `extra_permissions` und im Log. Das Ein/Aus gilt in beiden Fällen als
+  gewählt, `enable_on` schaltet das Modul also nicht von selbst ein.
+- **Kacheln:** in jedem Cockpit an derselben Stelle, mit Größe und Sichtbarkeit. Steht die neue Kachel schon da, kommt
+  keine zweite dazu.
+- **Tresor:** Einträge, die der Quelle gehören und die das neue Modul über `secrets.read:` lesen darf, gehören danach dem
+  neuen Modul.
+- **Alte Adressen (`routes`):** Solange das neue Modul an ist, antworten `/api/v1/ext/<from>/<alt>` wie die eigene Route
+  (dieselbe Anmeldeprüfung, dieselben Rechte, im OpenAPI-Schema als veraltet markiert). Bedient die geladene Quelle eine
+  alte Adresse noch selbst, bleibt sie bei der Quelle (Log: „… bedient … selbst, keine Weiterleitung.“). Eine alte
+  Adresse ohne passende eigene Route meldet das Log beim Einschalten.
+
+**Nur unter mitgelieferten Modulen:** Übernommen wird nur, wenn das neue Modul **und** die Quelle mitgeliefert sind
+(`source = "bundled"`, aus dem Ordner `extensions/`). Ein nachinstalliertes Paket (pip) mit `adopts` übernimmt nichts
+und hängt sich unter keine fremde Adresse. Im Log steht dann „Erweiterung '…' (pip) übernimmt nichts von '…': nur
+mitgelieferte Module übernehmen voneinander.“
+
+**Jede Kennung nur einmal:** Gibt es eine Kennung doppelt (etwa ein Paket mit der Kennung eines mitgelieferten Moduls),
+gilt der erste Fund, und der Ordner `extensions/` wird vor den Paketen durchsucht. Jeder weitere Fund wird nicht
+geladen, im Log steht „Erweiterung '…' (pip, …) wird nicht geladen: Die Kennung gibt es schon (bundled, …).“ So kann
+ein Paket ein mitgeliefertes Modul nicht samt Einstellungen, Rechten und Übernahme ersetzen. In `adopts.routes` sind `.`
+und `..` als Abschnitt nicht erlaubt.
+
+Die alten Adressen bleiben in allen 1.x erhalten (als veraltet markiert) und fallen frühestens mit 2.0 weg
+([04 §7](04-API.md#7-kompatibilität)).
 
 ### Einstellungs-Schema: `settings.schema.json` und die `x-*`-Zusätze
 
@@ -426,16 +474,16 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 |---|---|---|
 | `HostProvider` | proxmox, docker, statisches Inventar | die Host-Liste, Node-Seite, Start/Stop-Aktionen |
 | `TerminalTarget` | terminal (SSH), künftig serielle Shells | das Web-Terminal |
-| `ScopedTerminalTarget` | service-matrix (`scope = "container"`, `docker exec`) | eine Shell **in** etwas auf einem Server, im selben Web-Terminal (`POST /terminal/sessions` mit `scope`/`ref`, [04 §4](04-API.md#4-websocket)); `ref` prüft der Anbieter selbst. Dafür nimmt `ctx.exec.open_shell(host, cols=, rows=, command=)` ein Kommando, das mit PTY statt der Login-Shell läuft, geprüft gegen dieselbe Sperrliste wie `run()` |
+| `ScopedTerminalTarget` | docker (`scope = "container"`, `docker exec`) | eine Shell **in** etwas auf einem Server, im selben Web-Terminal (`POST /terminal/sessions` mit `scope`/`ref`, [04 §4](04-API.md#4-websocket)); `ref` prüft der Anbieter selbst. Dafür nimmt `ctx.exec.open_shell(host, cols=, rows=, command=)` ein Kommando, das mit PTY statt der Login-Shell läuft, geprüft gegen dieselbe Sperrliste wie `run()` |
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | die grafische Konsole (`/console/:hostId`, noVNC) |
 | `FileSource` | files-sftp, nextcloud, truenas, syncthing | den **einen** Dateimanager mit Seitenleiste |
-| `FilePlaceProvider` | service-matrix, proxmox, system | „Wichtige Orte“ eines Servers im Dateimanager |
-| `AppSuggestionProvider` | network (Nginx Proxy Manager) | Vorschläge für App-Kacheln auf der Seite „Apps“ (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, nur vorhandenes Wissen; der Kern prüft, entdoppelt und lässt Bestehendes weg |
+| `FilePlaceProvider` | docker, proxmox, system | „Wichtige Orte“ eines Servers im Dateimanager |
+| `AppSuggestionProvider` | npm (Nginx Proxy Manager) | Vorschläge für App-Kacheln auf der Seite „Apps“ (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, nur vorhandenes Wissen; der Kern prüft, entdoppelt und lässt Bestehendes weg |
 | `ActionExecutor` | terminal (SSH-Exec), proxmox (API-Aktionen) | die Ausführung hinter dem Gate |
 | `AIProvider` | shield (Ollama), künftig andere | Chat, Diagnose, Zusammenfassungen |
 | `NotificationChannel` | ntfy, E-Mail, Webhook | das Notification-Center |
 | `MetricsProvider` | proxmox, docker, node-exporter | Kacheln und Verlaufsgrafiken |
-| `ServiceCatalog` | service-matrix (Docker-API) | den App-Launcher |
+| `ServiceCatalog` | docker (Docker-API) | den App-Launcher |
 | `BackupProvider` | backups (Proxmox-Jobs, restic …) | das Backup-Center |
 | `SearchProvider` | beliebig | die globale Suche |
 | `ConnectionReceiver` | backups (Art `proxmox`) | nichts – nur zwischen Erweiterungen: proxmox legt beim Verbinden mit Passwort gleich einen Zugang für backups an |
@@ -658,7 +706,7 @@ ctx.ui.register_widget(WidgetSpec(
 **View-Typen** (endliche Menge; React und Flutter implementieren beide alle):
 
 `StatView` · `ListView` · `TableView` · `ChartView` (line/bar/area) · `StatusGridView`
-(die Service-Matrix-Kacheln) · `GaugeView` · `MarkdownView` · `ActionsView` (reine
+(die Container-Kacheln des Moduls Docker) · `GaugeView` · `MarkdownView` · `ActionsView` (reine
 Knopfleiste) · `LogView` (monospace, auto-scroll)
 
 **Template-Ausdrücke** sind absichtlich winzig und ohne Logik: `{{ feld.pfad }}` plus
@@ -744,8 +792,8 @@ ctx.ui.register_host_tool(HostToolSpec(
 Alle gesetzten Bedingungen müssen zutreffen. `GET /hosts/{id}/tools` liefert die
 passenden Kacheln sortiert nach Bereich, `order`, Titel. Dieselbe `id` erneut zu
 registrieren **ersetzt** das Werkzeug — so kann eine Extension es in
-`on_settings_changed` mit neuen Bedingungen melden (Beispiel: service-matrix, deren
-Docker-Tag einstellbar ist).
+`on_settings_changed` mit neuen Bedingungen melden (Beispiel: docker, dessen
+Server-Markierung einstellbar ist).
 
 ### Was eine Extension auf einem Server braucht (`register_host_requirement`)
 
@@ -757,7 +805,7 @@ Kern bietet es im Einrichtungsbefehl an und prüft es bei „Verbindung prüfen"
 ```python
 ctx.ui.register_host_requirement(HostRequirementSpec(
     id="docker-group",
-    label="Docker ohne sudo (Service-Matrix)",
+    label="Docker ohne sudo (Container-Verwaltung)",
     check_command="docker ps -q",         # nur lesend; Exit 0 = ok, 127 = nicht installiert
     ok_text="Docker lässt sich ohne sudo benutzen.",
     fail_hint="Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}",
@@ -808,7 +856,7 @@ in der Query, und „Filter entfernen“ nimmt nur diesen einen Wert heraus. Ein
 Übersicht, kein Server-Filter), auch wenn der Router diese Adresse schon für aktuell hielt.
 
 **Alle mitgelieferten Seiten, die ihre Query lesen, nutzen den Hook:** Nodvard Shield (`?tab=`,
-`?host=`), Proxmox-Backups und Skripte (`?host=`), Service-Matrix (`?host=`, `?logs=`), Server-Zustand
+`?host=`), Proxmox-Backups und Skripte (`?host=`), Docker (`?host=`, `?logs=`), Server-Zustand
 (`?host=`, auch die Server-Auswahl schreibt es), Gameserver (`?host=`: nach vorn, hinscrollen)
 und der Proxmox-Knoten (`?host=`, `&tasks=1`: markieren, aufklappen, Verlauf filtern,
 hinscrollen). Eine neue Seite, die ihre Query nur einmal beim Mount liest

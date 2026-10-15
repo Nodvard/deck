@@ -1379,12 +1379,17 @@ async def test_without_root_or_without_a_started_run_nothing_is_polled():
     ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
     assert (ok, summary) == (False, NO_ROOT_MESSAGE) and not _polls(ctx)
 
+    # Nur die enge Regel und ein altes Hilfsskript: kein „keine root-Rechte“, sondern „neu einrichten“.
+    ctx.launch_reply = f"{NO_ROOT}\n@@noroot-helper 3\n"
+    ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
+    assert not ok and summary.startswith("Das Hilfsskript auf diesem Server ist veraltet (Version 3,") and not _polls(ctx)
+
     ctx.launch_reply = "@@launch\nmkdir: cannot create directory '/var/lib/nexus-updates': Read-only file system\n@@nopid\n"
     ok, summary, _out, _rc = await center.execute(ctx._host, "all", command=up.upgrade_command("apt", "all"), trigger="manual")
     assert not ok and summary == ("Update-Lauf konnte nicht gestartet werden: mkdir: cannot create directory "
                                   "'/var/lib/nexus-updates': Read-only file system")
     assert not _polls(ctx)
-    assert [r.status for r in await _runs(ctx)] == ["error", "error"]
+    assert [r.status for r in await _runs(ctx)] == ["error", "error", "error"]
     await engine.dispose()
 
 
@@ -2007,3 +2012,86 @@ def test_the_container_probe_quotes_the_id_and_only_a_hit_counts():
 
     cmd = own_container_probe("abc123; rm -rf /")
     assert "'abc123; rm -rf /'" in cmd and "@@own" in cmd and "@@other" in cmd and "@@unknown" in cmd
+
+
+def test_docker_packages_names_only_what_restarts_the_docker_service():
+    from nodvard_deck_ext_shield import updates as up
+
+    packages = [
+        {"name": "docker-ce", "security": True}, {"name": "docker-ce-cli", "security": True},
+        {"name": "containerd.io", "security": False}, {"name": "runc", "security": True},
+        {"name": "docker-compose-plugin", "security": False}, {"name": "openssl", "security": True},
+        {"name": "docker-ce", "security": True}, "kaputt", {"security": True},
+    ]
+    assert up.docker_packages(packages) == {"all": ["containerd.io", "docker-ce"], "security": ["docker-ce"]}
+    assert up.docker_packages([]) == {"all": [], "security": []}
+
+
+DOCKER_STATUS = APT_STATUS.replace(
+    "@@security\n",
+    "docker-ce/bookworm-security 5:27.3.1-1~debian.12~bookworm amd64 [upgradable from: 5:27.3.0-1~debian.12~bookworm]\n"
+    "containerd.io/bookworm 1.7.22-1 amd64 [upgradable from: 1.7.21-1]\n@@security\n",
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("probe", "deck_host"), [("@@own\n", True), ("@@other\n", False), ("@@unknown\n", None), ("", None)])
+async def test_the_check_notes_docker_packages_and_whether_deck_runs_on_that_server(probe, deck_host):
+    """Vor dem Einspielen soll die Seite sagen können: Hier läuft Nodvard Deck, nach dem Update ist es kurz weg. Das weiß
+    die Prüfung, und sie fragt nur nach, wenn überhaupt ein Docker-Paket wartet."""
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    ctx._host = ctx._host.model_copy(update={"tags": []})
+    status = {"text": APT_STATUS}
+
+    async def run(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        if "docker inspect" in command:
+            return SimpleNamespace(exit_code=0, stdout=probe, stderr="", duration_ms=1)
+        if "@@pm" in command:
+            return SimpleNamespace(exit_code=0, stdout=status["text"], stderr="", duration_ms=5)
+        return SimpleNamespace(exit_code=0, stdout="", stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=run)
+    center = UpdateCenter(ctx, Defender(ctx))
+
+    plain = await center.check_host(ctx._host)
+    assert "docker_packages" not in plain and "deck_host" not in plain
+    assert not any("docker inspect" in c for c in ctx.commands)
+
+    status["text"] = DOCKER_STATUS
+    st = await center.check_host(ctx._host)
+    assert st["docker_packages"] == {"all": ["containerd.io", "docker-ce"], "security": ["docker-ce"]}
+    assert st["deck_host"] is deck_host
+    assert sum("docker inspect" in c for c in ctx.commands) == 1
+    # Die Seite liest es aus der Übersicht.
+    row = (await center.overview())["hosts"][0]
+    assert (row["status"]["docker_packages"]["all"], row["status"]["deck_host"]) == (["containerd.io", "docker-ce"], deck_host)
+
+    # Nach dem Einspielen ist nichts mehr offen: Die Angaben fallen weg.
+    status["text"] = APT_STATUS
+    assert "docker_packages" not in await center.check_host(ctx._host)
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_server_marked_as_dashboard_host_needs_no_probe():
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.patching import UpdateCenter
+
+    engine, sm = await _engine()
+    ctx = _Ctx(sm)
+    ctx._host = ctx._host.model_copy(update={"tags": ["dashboard"]})
+
+    async def run(host, command, timeout_s=60):
+        ctx.commands.append(command)
+        return SimpleNamespace(exit_code=0, stdout=DOCKER_STATUS if "@@pm" in command else "", stderr="", duration_ms=5)
+
+    ctx.exec = SimpleNamespace(run=run)
+    st = await UpdateCenter(ctx, Defender(ctx)).check_host(ctx._host)
+    assert st["deck_host"] is True
+    assert not any("docker inspect" in c for c in ctx.commands)
+    await engine.dispose()

@@ -82,7 +82,7 @@ export function Card({ title, description, actions, children, className = "", pa
 }
 
 const BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 import time
 from datetime import datetime
@@ -56,7 +57,7 @@ from .remediation import (
     restart_risk_eligible,
     sanitize_untrusted,
 )
-from .ollama import OllamaConnectorType, OllamaProvider
+from .ollama import NO_AI_TEXT, OllamaConnectorType, OllamaProvider
 from .parsing import ParsedActionKind, parse_ai_response, strip_decision_block
 from .prompts import MAX_INSPECT_TEXT_CHARS, MAX_LOG_CHARS, SYSTEM_PROMPT, build_chat_prompt, build_incident_prompt
 from .watch_templates import build_routers as build_template_routers
@@ -322,10 +323,15 @@ class Extension(NodvardExtension):
             """Optionales Ollama-Token (z. B. für einen Reverse-Proxy mit Auth), im Tresor wie bei ntfy und proxmox."""
             from .ollama import _TOKEN_LABEL
 
+            # Nur Erstanlage; ersetzen und entfernen laufen über die Moduleinstellungen des Kerns, mit Passwort.
             if await ctx.secrets.exists(_TOKEN_LABEL):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Ein Token existiert bereits -- zuerst über DELETE /api/v1/secrets/{id} entfernen.",
+                    detail=(
+                        "Ein Token existiert bereits. Ersetzen oder entfernen unter Einstellungen → Erweiterungen → "
+                        "Nodvard Shield (API: PUT oder DELETE /api/v1/extensions/shield/secrets, "
+                        f"Bezeichnung {_TOKEN_LABEL})."
+                    ),
                 )
             await ctx.secrets.create(label=_TOKEN_LABEL, kind="generic", value=payload.value)
 
@@ -956,7 +962,8 @@ class Extension(NodvardExtension):
             )
 
         resumed = sum(1 for i in batch if i.resumed)
-        notify_body = ai_summary
+        # Der Hinweis, dass Nodvard KI nicht eingerichtet ist, steht nur am Vorfall, nicht in jeder Meldung aufs Handy.
+        notify_body = re.sub(r"\n{3,}", "\n\n", ai_summary.replace(NO_AI_TEXT, "")).strip()
         failed_restarts = [i for i in batch if isinstance(i.details.get("after_restart"), (int, float))]
         if failed_restarts:
             notes = [

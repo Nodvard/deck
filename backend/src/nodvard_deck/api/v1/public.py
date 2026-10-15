@@ -8,6 +8,7 @@ Struktur (welche Extensions aktiviert sind, welche View-Typen existieren), nie D
 
 from __future__ import annotations
 
+import hashlib
 import io
 import time
 from functools import lru_cache
@@ -34,7 +35,16 @@ _VIEW_CLASSES = (
     MarkdownView, ActionsView, LogView,
 )
 
-from ...branding import LOGO_CONTENT_TYPES, UNTRUSTED_FILE_HEADERS, Branding, find_logo_file, load_branding
+from ...branding import (
+    DEFAULT_THEME_BACKGROUND,
+    LOGO_CONTENT_TYPES,
+    UNTRUSTED_FILE_HEADERS,
+    Branding,
+    find_favicon_file,
+    find_logo_file,
+    load_branding,
+)
+from ...custom_css import load_custom_css, servable_css
 from ...ext.runtime import get_extension_runtime
 from ...version import __version__
 from ..deps import SessionDep, SettingsDep
@@ -57,6 +67,19 @@ async def get_branding(session: SessionDep) -> Branding:
     return await load_branding(session)
 
 
+@router.get("/branding/custom.css", response_class=Response)
+async def get_custom_css_file(request: Request, session: SessionDep) -> Response:
+    """Öffentlich wie `GET /branding`: auch die Anmeldeseite trägt das eigene CSS der Admins. Ein gespeicherter Wert,
+    der die Prüfung nicht besteht, wird nicht ausgeliefert. Mit ETag: Der Browser fragt bei jedem Laden nach
+    (`no-cache`) und bekommt 304, solange sich nichts geändert hat."""
+    css = servable_css(await load_custom_css(session))
+    etag = '"' + hashlib.sha256(css.encode("utf-8")).hexdigest()[:32] + '"'
+    headers = {"Cache-Control": "no-cache", "X-Content-Type-Options": "nosniff", "ETag": etag}
+    if etag in [tag.strip() for tag in request.headers.get("if-none-match", "").split(",")]:
+        return Response(status_code=304, headers=headers)
+    return Response(css, media_type="text/css; charset=utf-8", headers=headers)
+
+
 _EXT_TO_CONTENT_TYPE = {ext: content_type for content_type, ext in LOGO_CONTENT_TYPES.items()}
 
 
@@ -68,6 +91,19 @@ async def get_branding_logo(settings: SettingsDep) -> FileResponse:
     if path is None:
         raise HTTPException(status_code=404, detail="Kein Logo hinterlegt.")
     content_type = _EXT_TO_CONTENT_TYPE.get(path.suffix.removeprefix("."), "application/octet-stream")
+    return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store", **UNTRUSTED_FILE_HEADERS})
+
+
+_FAVICON_MEDIA_TYPES = {"png": "image/png", "svg": "image/svg+xml", "ico": "image/x-icon"}
+
+
+@router.get("/branding/favicon")
+async def get_branding_favicon(settings: SettingsDep) -> FileResponse:
+    """Oeffentlich wie das Logo: Das Symbol im Browser-Tab steht schon auf der Anmeldeseite."""
+    path = find_favicon_file(settings.data_dir)
+    if path is None:
+        raise HTTPException(status_code=404, detail="Kein Favicon hinterlegt.")
+    content_type = _FAVICON_MEDIA_TYPES.get(path.suffix.removeprefix("."), "application/octet-stream")
     return FileResponse(path, media_type=content_type, headers={"Cache-Control": "no-store", **UNTRUSTED_FILE_HEADERS})
 
 
@@ -97,8 +133,8 @@ async def app_manifest(session: SessionDep) -> JSONResponse:
         "scope": "/",
         "display": "standalone",
         "orientation": "any",
-        "background_color": b.colors.background,
-        "theme_color": b.colors.background,
+        "background_color": DEFAULT_THEME_BACKGROUND,
+        "theme_color": DEFAULT_THEME_BACKGROUND,
         "icons": icons,
         "shortcuts": [
             {"name": "Meldungen", "url": "/notifications"},

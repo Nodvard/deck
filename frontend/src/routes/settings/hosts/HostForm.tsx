@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState, type FormEvent } from "react";
 
 import { api, ApiError } from "../../../lib/api";
+import { CANCELLED, withConfirmation } from "../../../lib/confirmation";
 import { fieldErrors, refreshHosts, type HostOut } from "../../../lib/hosts";
 import { Badge, Button, NoticeLine, Toggle, inputClass, type Notice } from "../ui";
 import { FormField } from "./FormField";
@@ -88,7 +89,10 @@ export function HostForm({
           setNotice({ kind: "ok", text: "Nichts geändert." });
           return;
         }
-        saved = await api.patch<HostOut>(`/hosts/${host.id}`, changes);
+        // Eine neue Adresse löscht gespeicherte SSH-Passwörter: dann fragt der Server nach Passwort und Code.
+        const patched = await withConfirmation((confirmation) => api.patch<HostOut>(`/hosts/${host.id}`, { ...changes, ...confirmation }));
+        if (patched === CANCELLED) return;
+        saved = patched;
         setNotice({ kind: "ok", text: "Gespeichert." });
       }
       await refreshHosts(queryClient);
@@ -143,7 +147,7 @@ export function HostForm({
         <FormField
           className="sm:col-span-2"
           label="Markierungen"
-          hint="Mit Komma trennen. docker = Service-Matrix und Container-Wache nehmen den Server; gameserver = erscheint bei Gameserver."
+          hint="Mit Komma trennen. docker = Docker und Container-Wache nehmen den Server; gameserver = erscheint bei Gameserver."
           error={errors.tags}
         >
           {(p) => <input {...p} className={inputClass} value={tagsText} onChange={(e) => setTagsText(e.target.value)} autoCapitalize="none" placeholder="docker, gameserver" />}

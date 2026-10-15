@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Any
 from nodvard_sdk import Notification, Severity
 from sqlalchemy import func, select
 
+from . import antivirus as av
 from . import intrusion as ix
-from .antivirus import as_root
 from .hostscope import host_scope
 from .ids import EXT_ID, SOC_PATH
 from .models import SecurityEventRecord
@@ -33,6 +33,23 @@ EVENT_LABEL = {
     "file_changed": "Datei geändert",
     "fail2ban_down": "Fail2ban läuft nicht",
 }
+
+
+def guard_as_root(watch_files: list[str] | None) -> str:
+    """Die Abfrage für Einbruchschutz und Datei-Wächter, als root, wenn das geht: über das Hilfsskript, sonst wie bisher."""
+    return av.via_helper(
+        ix.guard_args(watch_files), ix.guard_command(watch_files), version=av.HELPER_READ_VERSION, required=False
+    )
+
+
+# Titel, die ihre Art nicht selbst nennen; alle anderen fangen schon damit an („Neuer offener Port: …“).
+_TITLE_WITHOUT_KIND = frozenset({"bruteforce"})
+
+
+def event_line(kind: str, title: str) -> str:
+    """Ein Ereignis als Zeile einer Meldung: die Art nur davor, wenn der Titel sie nicht schon nennt (sonst stünde dort
+    „Neuer offener Port: Neuer offener Port: …“)."""
+    return f"{EVENT_LABEL.get(kind, kind)}: {title}" if kind in _TITLE_WITHOUT_KIND else title
 
 
 def guard_interval_min(settings: dict[str, Any]) -> int:
@@ -74,7 +91,7 @@ class Guard:
             settings = await self._settings()
             files = settings.get("guard_watch_files") or ix.DEFAULT_WATCH_FILES
             try:
-                res = await self._ctx.exec.run(host, as_root(ix.guard_command(files), required=False), timeout_s=GUARD_TIMEOUT)
+                res = await self._ctx.exec.run(host, guard_as_root(files), timeout_s=GUARD_TIMEOUT)
                 snap = ix.parse_guard(res.stdout or "", settings.get("guard_dynamic_processes"))
             except Exception as exc:  # noqa: BLE001
                 await save_baseline(self._ctx, host.id, "guard", {"error": _describe(exc), "checked_at": _now().timestamp()})
@@ -267,7 +284,7 @@ class Guard:
             return
         name = host.display_name or host.name
         title = events[0]["title"] if len(events) == 1 else f"{len(events)} Sicherheitsereignisse auf {name}"
-        body = "\n".join(f"- {EVENT_LABEL.get(e['kind'], e['kind'])}: {e['title']}" for e in events)
+        body = "\n".join(f"- {event_line(e['kind'], e['title'])}" for e in events)
         payload: dict[str, Any] = {"path": f"{SOC_PATH}?tab=guard&host={host.id}"}
         if worst != "critical":
             # Wartungsfenster stellen nur Warnungen stumm (z. B. neue Ports nach einem Dienst-Neustart);
@@ -374,7 +391,7 @@ class Guard:
             return {}
         settings = await self._settings()
         try:
-            res = await self._ctx.exec.run(host, as_root(ix.guard_command(settings.get("guard_watch_files") or None), required=False),
+            res = await self._ctx.exec.run(host, guard_as_root(settings.get("guard_watch_files") or None),
                                            timeout_s=GUARD_TIMEOUT)
         except Exception:  # noqa: BLE001
             return {}

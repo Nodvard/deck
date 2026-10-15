@@ -1,7 +1,7 @@
 """GET /overview -- Cockpit-Uebersicht der Startseite.
 
 Beweist die Herstellerneutralitaet: die Dienste/Backups kommen hier aus Test-
-Implementierungen der SDK-Capabilities, nicht aus service-matrix/backups."""
+Implementierungen der SDK-Capabilities, nicht aus docker/backups."""
 
 from __future__ import annotations
 

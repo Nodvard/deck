@@ -1,0 +1,61 @@
+{
+  "allowlist_external_dirs": [
+    "/media",
+    "/config/www"
+  ],
+  "allowlist_external_urls": [],
+  "components": [
+    "api",
+    "automation",
+    "backup",
+    "binary_sensor",
+    "config",
+    "default_config",
+    "history",
+    "http",
+    "light",
+    "logbook",
+    "mqtt",
+    "person",
+    "sensor",
+    "sun",
+    "switch",
+    "update",
+    "websocket_api"
+  ],
+  "config_dir": "/config",
+  "config_source": "storage",
+  "country": "DE",
+  "currency": "EUR",
+  "debug": false,
+  "elevation": 0,
+  "external_url": "https://ha.example.com",
+  "internal_url": "http://203.0.113.10:8123",
+  "language": "de",
+  "latitude": 0.0,
+  "location_name": "Zuhause",
+  "longitude": 0.0,
+  "radius": 100,
+  "recovery_mode": false,
+  "safe_mode": false,
+  "state": "RUNNING",
+  "time_zone": "Europe/Berlin",
+  "unit_system": {
+    "length": "km",
+    "accumulated_precipitation": "mm",
+    "area": "m²",
+    "mass": "g",
+    "pressure": "Pa",
+    "temperature": "°C",
+    "volume": "L",
+    "wind_speed": "m/s"
+  },
+  "version": "2026.10.1",
+  "logging": {
+    "log_file_disabled_reason": null
+  },
+  "whitelist_external_dirs": [
+    "/media",
+    "/config/www"
+  ]
+}

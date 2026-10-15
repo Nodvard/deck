@@ -328,7 +328,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                     )}
 
                     <section>
-                      <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">SSH – letzte 24 Stunden</p>
+                      <p className="mb-1.5 text-xs text-white/40">SSH – letzte 24 Stunden</p>
                       <p className="mb-2">
                         <span className={v.failed_24h ? "text-amber-300" : "text-emerald-300"}>{v.failed_24h} Fehlversuch{v.failed_24h === 1 ? "" : "e"}</span>
                         <span className="text-white/50"> von {v.attacker_count} Adresse{v.attacker_count === 1 ? "" : "n"}</span>
@@ -360,7 +360,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
 
                     {v.ssh_findings === null && (
                       <section data-testid={`sshd-${h.host_id}`}>
-                        <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">SSH-Einstellungen</p>
+                        <p className="mb-1.5 text-xs text-white/40">SSH-Einstellungen</p>
                         <p className="text-xs text-white/50">
                           {v.is_root
                             ? "SSH-Einstellungen konnten nicht gelesen werden."
@@ -370,7 +370,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                     )}
                     {v.ssh_findings && (
                       <section data-testid={`sshd-${h.host_id}`}>
-                        <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">SSH-Einstellungen{v.ssh_port ? ` · Port ${v.ssh_port}` : ""}</p>
+                        <p className="mb-1.5 text-xs text-white/40">SSH-Einstellungen{v.ssh_port ? ` · Port ${v.ssh_port}` : ""}</p>
                         {v.ssh_findings.length === 0 ? (
                           <p className="text-xs text-emerald-300/80">Sicher eingestellt – nur Schlüssel, kein root mit Passwort.</p>
                         ) : (
@@ -389,7 +389,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
 
                     {v.logins.length > 0 && (
                       <section>
-                        <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">Letzte Anmeldungen</p>
+                        <p className="mb-1.5 text-xs text-white/40">Letzte Anmeldungen</p>
                         <ul className="space-y-0.5 text-xs">
                           {v.logins.slice(0, 5).map((l, i) => (
                             <li key={`${l.ip}-${i}`}><span className="font-mono">{l.user}@{l.ip}</span> <span className="text-white/45">· {l.method === "publickey" ? "Schlüssel" : l.method === "password" ? "Passwort" : l.method} · {l.ts ? when(l.ts) : "–"}</span></li>
@@ -399,7 +399,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                     )}
 
                     <section>
-                      <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">Offene Ports ({v.ports.length})</p>
+                      <p className="mb-1.5 text-xs text-white/40">Offene Ports ({v.ports.length})</p>
                       <div className="flex flex-wrap gap-1.5">
                         {v.ports.map((p) => (
                           <span
@@ -415,7 +415,7 @@ export function GuardTab({ canManage }: { canManage: boolean }) {
                     </section>
 
                     <section>
-                      <p className="mb-1.5 text-xs uppercase tracking-wider text-white/40">Datei-Wächter</p>
+                      <p className="mb-1.5 text-xs text-white/40">Datei-Wächter</p>
                       {v.files_pending.length === 0 ? (
                         <p className="text-xs text-emerald-300/80">{v.files_watched} Dateien überwacht – keine offenen Änderungen.</p>
                       ) : (

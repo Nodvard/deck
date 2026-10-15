@@ -96,7 +96,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -1032,7 +1032,7 @@ function GuardTab({ canManage }) {
             v && !v.error && /* @__PURE__ */ jsxs4("div", { className: "space-y-4 text-sm", children: [
               (!v.is_root || !v.ssh_log_found) && /* @__PURE__ */ jsx5("p", { className: "rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-200", children: !v.is_root ? "Ohne root-Rechte sind SSH-Protokoll, Fail2ban und Programmnamen der Ports nur eingeschr\xE4nkt lesbar. Zuf\xE4llige UDP-Ports ohne Programmnamen z\xE4hlen dann zusammen als ein Eintrag \u2013 ein neues Programm darunter f\xE4llt nicht auf." : "Kein SSH-Protokoll gefunden (journald/auth.log)." }),
               /* @__PURE__ */ jsxs4("section", { children: [
-                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: "SSH \u2013 letzte 24 Stunden" }),
+                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs text-white/40", children: "SSH \u2013 letzte 24 Stunden" }),
                 /* @__PURE__ */ jsxs4("p", { className: "mb-2", children: [
                   /* @__PURE__ */ jsxs4("span", { className: v.failed_24h ? "text-amber-300" : "text-emerald-300", children: [
                     v.failed_24h,
@@ -1066,11 +1066,11 @@ function GuardTab({ canManage }) {
                 canManage && f2b === "none" && /* @__PURE__ */ jsx5("div", { className: "mt-2", children: /* @__PURE__ */ jsx5(Button, { small: true, onClick: () => void installFail2ban(h), children: "Fail2ban installieren" }) })
               ] }),
               v.ssh_findings === null && /* @__PURE__ */ jsxs4("section", { "data-testid": `sshd-${h.host_id}`, children: [
-                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: "SSH-Einstellungen" }),
+                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs text-white/40", children: "SSH-Einstellungen" }),
                 /* @__PURE__ */ jsx5("p", { className: "text-xs text-white/50", children: v.is_root ? "SSH-Einstellungen konnten nicht gelesen werden." : "SSH-Einstellungen nicht lesbar \u2013 daf\xFCr braucht Nodvard Deck root oder sudo ohne Passwort." })
               ] }),
               v.ssh_findings && /* @__PURE__ */ jsxs4("section", { "data-testid": `sshd-${h.host_id}`, children: [
-                /* @__PURE__ */ jsxs4("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: [
+                /* @__PURE__ */ jsxs4("p", { className: "mb-1.5 text-xs text-white/40", children: [
                   "SSH-Einstellungen",
                   v.ssh_port ? ` \xB7 Port ${v.ssh_port}` : ""
                 ] }),
@@ -1084,7 +1084,7 @@ function GuardTab({ canManage }) {
                 ] }, f.key)) })
               ] }),
               v.logins.length > 0 && /* @__PURE__ */ jsxs4("section", { children: [
-                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: "Letzte Anmeldungen" }),
+                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs text-white/40", children: "Letzte Anmeldungen" }),
                 /* @__PURE__ */ jsx5("ul", { className: "space-y-0.5 text-xs", children: v.logins.slice(0, 5).map((l, i) => /* @__PURE__ */ jsxs4("li", { children: [
                   /* @__PURE__ */ jsxs4("span", { className: "font-mono", children: [
                     l.user,
@@ -1101,7 +1101,7 @@ function GuardTab({ canManage }) {
                 ] }, `${l.ip}-${i}`)) })
               ] }),
               /* @__PURE__ */ jsxs4("section", { children: [
-                /* @__PURE__ */ jsxs4("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: [
+                /* @__PURE__ */ jsxs4("p", { className: "mb-1.5 text-xs text-white/40", children: [
                   "Offene Ports (",
                   v.ports.length,
                   ")"
@@ -1124,7 +1124,7 @@ function GuardTab({ canManage }) {
                 ] })
               ] }),
               /* @__PURE__ */ jsxs4("section", { children: [
-                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs uppercase tracking-wider text-white/40", children: "Datei-W\xE4chter" }),
+                /* @__PURE__ */ jsx5("p", { className: "mb-1.5 text-xs text-white/40", children: "Datei-W\xE4chter" }),
                 v.files_pending.length === 0 ? /* @__PURE__ */ jsxs4("p", { className: "text-xs text-emerald-300/80", children: [
                   v.files_watched,
                   " Dateien \xFCberwacht \u2013 keine offenen \xC4nderungen."
@@ -1257,6 +1257,47 @@ import { Fragment as Fragment4, jsx as jsx7, jsxs as jsxs6 } from "react/jsx-run
 var ACTIONS_PATH = "/actions";
 var SINGLE_APPROVAL_RISKS = ["high", "critical"];
 var reasonText = (r) => (r ?? "").replace(/\.$/, "");
+var RETRY_MS = 5e3;
+var FOLLOW_KEY = "nodvard-shield-updates-follow";
+var FOLLOW_START_MS = 10 * 60 * 1e3;
+var FOLLOW_MAX_MS = 3 * 3600 * 1e3;
+function readFollows() {
+  try {
+    const raw = JSON.parse(window.sessionStorage.getItem(FOLLOW_KEY) ?? "{}");
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out = {};
+    for (const [id, f] of Object.entries(raw)) {
+      if (f && typeof f.host_name === "string" && typeof f.since === "number" && (f.prev_run === null || typeof f.prev_run === "string")) {
+        out[id] = { host_name: f.host_name, prev_run: f.prev_run, since: f.since };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+function writeFollows(follows) {
+  try {
+    if (Object.keys(follows).length) window.sessionStorage.setItem(FOLLOW_KEY, JSON.stringify(follows));
+    else window.sessionStorage.removeItem(FOLLOW_KEY);
+  } catch {
+  }
+}
+function without(record, keys) {
+  const next = { ...record };
+  for (const k of keys) delete next[k];
+  return next;
+}
+function runNotice(name, run) {
+  return run.status === "ok" ? { kind: "ok", text: `${name}: ${run.summary ?? "Erledigt."}` } : { kind: "error", text: `${name}: Fehlgeschlagen: ${run.summary ?? "unbekannter Fehler"}` };
+}
+var RESUMED_TEXT = "Nodvard Deck wurde zwischendurch neu gestartet. Das Einspielen l\xE4uft auf dem Server weiter, das Ergebnis erscheint hier.";
+function deckRestartHint(st, mode) {
+  const names = mode === "security" ? st?.docker_packages?.security : mode === "all" ? st?.docker_packages?.all : void 0;
+  if (!names?.length || st?.deck_host === false) return "";
+  const which = names.length === 1 ? `ist das Docker-Paket ${names[0]}` : `sind die Docker-Pakete ${names.join(", ")}`;
+  return st?.deck_host ? ` Dabei ${which}, und hier l\xE4uft Nodvard Deck: Es ist danach kurz nicht erreichbar und l\xE4dt von selbst neu.` : ` Dabei ${which}. L\xE4uft hier Nodvard Deck, ist es danach kurz nicht erreichbar und l\xE4dt von selbst neu.`;
+}
 var RUN_STATUS = {
   running: { label: "l\xE4uft", tone: "info" },
   ok: { label: "erfolgreich", tone: "good" },
@@ -1293,21 +1334,49 @@ function UpdatesTab({ canManage }) {
   const [proposing, setProposing] = useState6(null);
   const [proposed, setProposed] = useState6(null);
   const onlyHost = useContext2(HostFilter);
+  const [follows, setFollows] = useState6(readFollows);
+  const [unreachable, setUnreachable] = useState6(0);
   const load = useCallback4(() => {
     call(`${API}/updates`).then((d) => {
       setData(d);
       setError(null);
-    }).catch((err) => setError(err instanceof Error ? err.message : String(err)));
+      setUnreachable(0);
+    }).catch((err) => {
+      if (err instanceof ServerUnavailableError) setUnreachable((n) => n + 1);
+      else setError(err instanceof Error ? err.message : String(err));
+    });
   }, []);
   useEffect6(() => {
     load();
   }, [load]);
-  const busy = Object.keys(pending).length > 0 || !!data?.hosts.some((h) => h.checking || h.busy);
+  useEffect6(() => {
+    if (!unreachable) return;
+    const t = setTimeout(load, RETRY_MS);
+    return () => clearTimeout(t);
+  }, [unreachable, load]);
+  useEffect6(() => writeFollows(follows), [follows]);
+  const busy = Object.keys(pending).length > 0 || Object.keys(follows).length > 0 || !!data?.hosts.some((h) => h.checking || h.busy);
   useEffect6(() => {
     if (!busy) return;
     const t = setInterval(load, 4e3);
     return () => clearInterval(t);
   }, [busy, load]);
+  useEffect6(() => {
+    if (!data) return;
+    const now = Date.now();
+    const done = [];
+    for (const [hostId, f] of Object.entries(follows)) {
+      if (pending[hostId]) continue;
+      const run = data.hosts.find((h) => h.host_id === hostId)?.last_run;
+      if (run && run.id !== f.prev_run) {
+        if (run.status !== "running") {
+          setNotice(runNotice(f.host_name, run));
+          done.push(hostId);
+        } else if (now - f.since > FOLLOW_MAX_MS) done.push(hostId);
+      } else if (now - f.since > FOLLOW_START_MS) done.push(hostId);
+    }
+    if (done.length) setFollows((fs) => without(fs, done));
+  }, [data, follows, pending]);
   async function checkAll(hostIds = "all") {
     setNotice(null);
     try {
@@ -1357,8 +1426,8 @@ function UpdatesTab({ canManage }) {
     const st = h.status;
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
     const questions = {
-      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf \u201E${h.host_name}\u201C jetzt einspielen?`,
-      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}`,
+      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf \u201E${h.host_name}\u201C jetzt einspielen?${deckRestartHint(st, "security")}`,
+      all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf \u201E${h.host_name}\u201C jetzt einspielen? Das kann einige Minuten dauern.${distUpgrade ? " Ist es ein Proxmox-Server, l\xE4uft dabei \u201Eapt-get dist-upgrade\u201C \u2013 das kann Pakete entfernen oder ersetzen." : ""}${deckRestartHint(st, "all")}`,
       cleanup: `Auf \u201E${h.host_name}\u201C nicht mehr ben\xF6tigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `\u201E${h.host_name}\u201C jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar \u2013 alle Dienste darauf auch.`
     };
@@ -1367,10 +1436,27 @@ function UpdatesTab({ canManage }) {
     if (!ok) return;
     setPending((p) => ({ ...p, [h.host_id]: mode }));
     setNotice({ kind: "ok", text: mode === "reboot" ? `Neustart von ${h.host_name} wird ausgel\xF6st \u2026` : `${h.host_name}: l\xE4uft \u2013 du kannst die Seite offen lassen oder weiterarbeiten.` });
+    const prevRun = h.last_run?.id ?? null;
+    if (mode !== "reboot") setFollows((fs) => ({ ...fs, [h.host_id]: { host_name: h.host_name, prev_run: prevRun, since: Date.now() } }));
     try {
       const text = await proposeAndApprove(`${API}/hosts/${h.host_id}/upgrade`, { mode }, mode === "reboot" ? "high" : "medium", unmountSignal());
-      setNotice({ kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${h.host_name}: ${text}` });
+      let notice2 = { kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${h.host_name}: ${text}` };
+      let keepFollowing = false;
+      if (mode !== "reboot" && text !== "Erledigt.") {
+        const fresh = await call(`${API}/updates`).catch(() => null);
+        if (fresh) setData(fresh);
+        const run = fresh?.hosts.find((x) => x.host_id === h.host_id)?.last_run;
+        if (run && run.id !== prevRun) {
+          if (run.status === "running") {
+            notice2 = { kind: "ok", text: `${h.host_name}: ${RESUMED_TEXT}` };
+            keepFollowing = true;
+          } else notice2 = runNotice(h.host_name, run);
+        }
+      }
+      if (!keepFollowing) setFollows((fs) => without(fs, [h.host_id]));
+      setNotice(notice2);
     } catch (err) {
+      if (!(err instanceof ServerUnavailableError)) setFollows((fs) => without(fs, [h.host_id]));
       setNotice({ kind: "error", text: `${h.host_name}: ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       setPending((p) => {
@@ -1397,14 +1483,16 @@ function UpdatesTab({ canManage }) {
   }
   const hosts = useForHost(data?.hosts ?? []);
   const runs = useForHost(data?.runs ?? []);
+  const offline = unreachable > 0 && /* @__PURE__ */ jsx7("div", { "data-testid": "updates-offline", children: /* @__PURE__ */ jsx7(Notice, { text: "Nodvard Deck ist gerade nicht erreichbar, zum Beispiel weil es nach einem Update neu startet. Die Seite versucht es in ein paar Sekunden selbst wieder." }) });
   if (error) return /* @__PURE__ */ jsx7(Notice, { text: `Fehler: ${error}` });
-  if (!data) return /* @__PURE__ */ jsx7("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
+  if (!data) return offline || /* @__PURE__ */ jsx7("p", { className: "text-sm text-white/50", children: "Lade \u2026" });
   const { summary: sm, config: c } = data;
   const unsupported = data.hosts.filter((h) => h.status?.unsupported).length;
   if (hosts.length === 0) {
     return /* @__PURE__ */ jsx7(EmptyState, { icon: "package", title: "Keine Server", text: "Sobald Linux-Server mit SSH-Zugang angelegt sind, zeigt die Update-Zentrale hier ihre anstehenden Updates.", action: /* @__PURE__ */ jsx7(ServerSetupLink, { className: "text-sm" }) });
   }
   return /* @__PURE__ */ jsxs6(Fragment4, { children: [
+    offline,
     notice && /* @__PURE__ */ jsx7(Notice, { text: notice.text, kind: notice.kind, onClose: () => setNotice(null) }),
     /* @__PURE__ */ jsxs6("div", { className: "mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4", children: [
       /* @__PURE__ */ jsx7(
@@ -1523,7 +1611,7 @@ function UpdatesTab({ canManage }) {
           " anzeigen"
         ] }),
         isOpen && st && /* @__PURE__ */ jsx7("div", { className: "mt-2 max-h-80 overflow-auto rounded-lg border border-white/[0.06]", children: /* @__PURE__ */ jsxs6("table", { className: "w-full text-left text-xs", children: [
-          /* @__PURE__ */ jsx7("thead", { className: "sticky top-0 bg-[#15171c] text-white/45", children: /* @__PURE__ */ jsxs6("tr", { children: [
+          /* @__PURE__ */ jsx7("thead", { className: "sticky top-0 bg-[var(--color-surface-head)] text-white/45", children: /* @__PURE__ */ jsxs6("tr", { children: [
             /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5 font-medium", children: "Paket" }),
             /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5 font-medium", children: "installiert" }),
             /* @__PURE__ */ jsx7("th", { className: "px-3 py-1.5 font-medium", children: "neu" }),
@@ -1834,7 +1922,7 @@ function HardeningCell({ host: h }) {
           " Warn."
         ] })
       ] }),
-      /* @__PURE__ */ jsx9("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx9("div", { className: "h-1.5 rounded-full", style: { width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "#34d399" : "#fbbf24" } }) })
+      /* @__PURE__ */ jsx9("div", { className: "mt-1 h-1.5 rounded-full bg-white/10", children: /* @__PURE__ */ jsx9("div", { className: "h-1.5 rounded-full", style: { width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "rgb(var(--emerald-400))" : "rgb(var(--amber-400))" } }) })
     ] }),
     failed && /* @__PURE__ */ jsxs8("p", { className: `${shown ? "mt-1 " : ""}text-xs text-amber-300`, title: failed.error ?? void 0, "data-testid": "audit-failed", children: [
       "Letztes Audit fehlgeschlagen (",
@@ -1908,11 +1996,11 @@ function briefingNotice(r) {
 function ScoreRing({ score, reasons = [] }) {
   const r = 42;
   const c = 2 * Math.PI * r;
-  const tone = score >= 80 ? "#34d399" : score >= 50 ? "#fbbf24" : "#f87171";
+  const tone = score >= 80 ? "rgb(var(--emerald-400))" : score >= 50 ? "rgb(var(--amber-400))" : "rgb(var(--red-400))";
   const label = score >= 80 ? "Gut gesch\xFCtzt" : score >= 50 ? "Verbesserungsbedarf" : "Handlungsbedarf";
   return /* @__PURE__ */ jsxs8("div", { className: "flex min-w-0 flex-wrap items-center gap-5", children: [
     /* @__PURE__ */ jsxs8("svg", { width: "104", height: "104", viewBox: "0 0 104 104", role: "img", "aria-label": `Schutzwert ${score} von 100`, className: "flex-none", children: [
-      /* @__PURE__ */ jsx9("circle", { cx: "52", cy: "52", r, fill: "none", stroke: "rgba(255,255,255,0.08)", strokeWidth: "9" }),
+      /* @__PURE__ */ jsx9("circle", { cx: "52", cy: "52", r, fill: "none", stroke: "var(--color-track)", strokeWidth: "9" }),
       /* @__PURE__ */ jsx9(
         "circle",
         {
@@ -1930,7 +2018,7 @@ function ScoreRing({ score, reasons = [] }) {
       /* @__PURE__ */ jsx9("text", { x: "52", y: "58", textAnchor: "middle", className: "fill-white text-[22px] font-semibold", children: score })
     ] }),
     /* @__PURE__ */ jsxs8("div", { className: "min-w-0 flex-1 basis-48", children: [
-      /* @__PURE__ */ jsx9("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
+      /* @__PURE__ */ jsx9("p", { className: "text-xs text-white/45", children: "Schutzwert" }),
       /* @__PURE__ */ jsx9("p", { className: "text-lg font-semibold", style: { color: tone }, children: label }),
       /* @__PURE__ */ jsx9("p", { className: "mt-1 max-w-[16rem] text-xs text-white/45", children: "Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde, wie sicher die Server eingestellt sind (H\xE4rtung), offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse." }),
       reasons.length > 0 && /* @__PURE__ */ jsx9("ul", { className: "mt-2 max-w-[20rem] space-y-0.5 text-xs text-amber-200/80", "data-testid": "score-reasons", "aria-label": "Was den Schutzwert senkt", children: reasons.map((r2) => /* @__PURE__ */ jsxs8("li", { children: [
@@ -2101,9 +2189,9 @@ function SocPage() {
             className: `-mb-px whitespace-nowrap border-b-2 px-3.5 py-2 text-sm transition ${tab === t.id ? "border-[var(--color-accent)] text-white" : "border-transparent text-white/55 hover:text-white"}`,
             children: [
               t.label,
-              t.id === "quarantine" && overview && overview.summary.open_threats > 0 && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", children: overview.summary.open_threats }),
-              t.id === "updates" && !!side.updates?.security && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", title: "Sicherheitsupdates", children: side.updates.security }),
-              t.id === "guard" && !!side.guard?.open_events && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white", title: "offene Ereignisse", children: side.guard.open_events })
+              t.id === "quarantine" && overview && overview.summary.open_threats > 0 && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-on-accent", children: overview.summary.open_threats }),
+              t.id === "updates" && !!side.updates?.security && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-on-accent", title: "Sicherheitsupdates", children: side.updates.security }),
+              t.id === "guard" && !!side.guard?.open_events && /* @__PURE__ */ jsx9("span", { className: "ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-on-accent", title: "offene Ereignisse", children: side.guard.open_events })
             ]
           },
           t.id
@@ -2258,7 +2346,7 @@ function OverviewTab({
     ] }),
     /* @__PURE__ */ jsxs8("div", { className: "mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]", children: [
       noServers ? /* @__PURE__ */ jsxs8("div", { className: "panel px-6 py-4", "data-testid": "no-servers", children: [
-        /* @__PURE__ */ jsx9("p", { className: "text-xs uppercase tracking-wider text-white/45", children: "Schutzwert" }),
+        /* @__PURE__ */ jsx9("p", { className: "text-xs text-white/45", children: "Schutzwert" }),
         (s.hosts_known ?? 0) > 0 ? /* @__PURE__ */ jsxs8(Fragment5, { children: [
           /* @__PURE__ */ jsx9("p", { className: "text-lg font-semibold", children: "Noch kein Server pr\xFCfbar \u2013 nichts zu bewerten" }),
           /* @__PURE__ */ jsxs8("p", { className: "mt-1 max-w-xs text-xs text-white/55", children: [
@@ -2346,7 +2434,7 @@ function OverviewTab({
       deck().hasPermission("hosts.write") ? /* @__PURE__ */ jsx9("a", { href: "/settings/hosts", className: "underline underline-offset-2 hover:text-white", children: "Einstellungen \u2192 Server & Zug\xE4nge" }) : "Einstellungen \u2192 Server & Zug\xE4nge",
       "."
     ] }) : /* @__PURE__ */ jsx9("div", { className: "overflow-x-auto", children: /* @__PURE__ */ jsxs8("table", { className: "w-full text-left text-sm", children: [
-      /* @__PURE__ */ jsx9("thead", { className: "text-xs uppercase tracking-wider text-white/40", children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/[0.06]", children: [
+      /* @__PURE__ */ jsx9("thead", { className: "text-xs text-white/40", children: /* @__PURE__ */ jsxs8("tr", { className: "border-b border-white/[0.06]", children: [
         /* @__PURE__ */ jsx9("th", { className: "px-5 py-2.5 font-medium", children: "Server" }),
         /* @__PURE__ */ jsx9("th", { className: "px-3 py-2.5 font-medium", title: "ClamAV ist der Virenscanner auf dem Server", children: "Virenschutz" }),
         /* @__PURE__ */ jsx9("th", { className: "px-3 py-2.5 font-medium", children: "Letzter Scan" }),
@@ -2692,7 +2780,7 @@ function HardeningTab({ canManage, hosts, onAudit }) {
           ] }),
           a.error && /* @__PURE__ */ jsx9("p", { className: "mt-1 break-words text-xs text-white/50", children: a.error })
         ] }) : /* @__PURE__ */ jsxs8(Fragment5, { children: [
-          /* @__PURE__ */ jsxs8("p", { className: "mb-2 text-xs uppercase tracking-wider text-white/40", children: [
+          /* @__PURE__ */ jsxs8("p", { className: "mb-2 text-xs text-white/40", children: [
             "Warnungen (",
             a.warnings.length,
             ")"

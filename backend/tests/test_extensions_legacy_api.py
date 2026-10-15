@@ -312,7 +312,10 @@ async def test_core_addresses_resolve_the_old_id_to_the_same_row(client, db_sess
     keys = (await db_session.execute(select(Setting.key).where(Setting.key.like("extension.test.%")))).scalars().all()
     assert keys == ["extension.test.old-ext"]
 
-    r = await client.delete("/api/v1/extensions/old-ext/secrets", headers=headers, params={"label": "renamed-token"})
+    r = await client.request(
+        "DELETE", "/api/v1/extensions/old-ext/secrets", headers=headers, params={"label": "renamed-token"},
+        json={"current_password": "correct-horse-battery"},
+    )
     assert r.status_code == 204, r.text
     assert (await db_session.execute(select(Secret).where(Secret.label == "renamed-token"))).scalar_one_or_none() is None
 

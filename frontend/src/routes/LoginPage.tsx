@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 
 import { GuideLink } from "../components/GuideLink";
-import { copyrightLine } from "../lib/branding";
+import { copyrightLine, localImageUrl } from "../lib/branding";
 import { useAuthStore } from "../state/auth";
 import { useBrandingStore } from "../state/branding";
 
@@ -105,19 +105,17 @@ export function LoginPage() {
     setError(null);
   }
 
-  const logo = branding?.logo_url ? (
-    <img src={branding.logo_url} alt="" className="h-11 w-11 rounded-xl object-contain" />
+  const logoUrl = localImageUrl(branding?.logo_url);
+  const logo = logoUrl ? (
+    <img src={logoUrl} alt="" className="h-11 w-11 rounded-xl object-contain" />
   ) : (
-    <span className="accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-white shadow-lg shadow-black/40">
+    <span className="accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-on-accent">
       {(branding?.short_name || productName).slice(0, 1).toUpperCase()}
     </span>
   );
 
   return (
-    <div className="relative isolate flex min-h-screen bg-[var(--color-background)] text-white">
-      <div className="nodvard-deck-glow pointer-events-none absolute inset-0 -z-10" />
-      <div className="nodvard-deck-grid pointer-events-none absolute inset-0 -z-10" />
-
+    <div className="app-backdrop relative isolate flex min-h-screen bg-[var(--color-background)] text-white">
       {/* Linke Haelfte: Produkt (ab Desktop-Breite) */}
       <aside className="hidden flex-1 flex-col justify-between border-r border-white/[0.06] p-12 lg:flex">
         <div className="flex items-center gap-3">
@@ -358,7 +356,7 @@ function SubmitButton({ pending, label }: { pending: boolean; label: string }) {
     <button
       type="submit"
       disabled={pending}
-      className="accent-gradient flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-white shadow-lg shadow-black/30 transition hover:brightness-110 disabled:opacity-60"
+      className="accent-gradient flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-semibold text-on-accent transition hover:bg-accent-strong disabled:opacity-60"
     >
       {pending && <Loader2 size={16} className="animate-spin" />}
       {pending ? "Bitte warten …" : label}

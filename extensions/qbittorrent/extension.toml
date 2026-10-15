@@ -1,0 +1,23 @@
+[extension]
+id          = "qbittorrent"
+name        = "qBittorrent"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zeigt, was in deinem qBittorrent los ist: Geschwindigkeit, Verbindungsstatus, aktive Torrents, Anzahl je Zustand und freien Platz. Vorerst nur lesend."
+icon        = "hard-drive"
+category    = "servers"
+sort_order  = 110
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_qbittorrent:Extension"
+frontend    = "frontend/dist/index.js"
+
+# Nur lesend: kein Zugriff auf Server, keine Aktionen, nichts zum Freigeben.
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:qbittorrent-*",
+]
+
+[settings]
+schema = "settings.schema.json"

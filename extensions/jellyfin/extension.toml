@@ -1,0 +1,23 @@
+[extension]
+id          = "jellyfin"
+name        = "Jellyfin"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zeigt, was auf deinem Jellyfin-Server los ist: laufende Wiedergaben mit Benutzer und Gerät, ob transkodiert wird, die Zahl der Filme und Serien und was zuletzt hinzugekommen ist. Vorerst nur lesend."
+icon        = "monitor"
+category    = "servers"
+sort_order  = 90
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_jellyfin:Extension"
+frontend    = "frontend/dist/index.js"
+
+# Nur lesend: kein Zugriff auf Server, keine Aktionen, nichts zum Freigeben.
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:jellyfin-*",
+]
+
+[settings]
+schema = "settings.schema.json"

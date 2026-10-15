@@ -105,8 +105,9 @@ class Extension(NodvardExtension):
         self._service.clear()
 
     async def health(self, ctx: ExtensionContext) -> HealthReport:
+        # „Verbindung testen“ fragt jetzt nach, nicht den Stand von vor ein paar Minuten.
         try:
-            data = await self._service.overview()
+            data = await self._service.overview(refresh=True)
         except Exception as exc:  # noqa: BLE001 - Health darf nie werfen
             return HealthReport(healthy=False, message=f"Uptime Kuma ließ sich nicht abfragen ({type(exc).__name__}).")
         if not data.connections:

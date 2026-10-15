@@ -44,6 +44,8 @@ def test_a_secret_of_someone_else_is_a_conflict_not_a_missing_permission():
     assert foreign.status_code == 409
     assert foreign.json()["detail"].startswith("Das Geheimnis „demo-token:pve9“ gehört nicht der Erweiterung „demo“.")
     assert "DELETE /api/v1/secrets/{id}" in foreign.json()["detail"]
+    # Löschen geht nur mit Passwort; das sagt der Text gleich mit.
+    assert "Einstellungen → Tresor, mit deinem Passwort" in foreign.json()["detail"]
     assert "fehlt eine Berechtigung" not in foreign.text
     login = client.get("/api/v1/test-login")
     assert login.status_code == 409

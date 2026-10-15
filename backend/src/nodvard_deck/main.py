@@ -64,6 +64,18 @@ STARTED_OK_RETRY_S = 60.0
 """Scheitert das Festhalten von `started_ok`, wird es in diesem Abstand wiederholt, bis es klappt."""
 
 
+SPA_CSP = (
+    "style-src 'self' 'unsafe-inline'; font-src 'self' data:; object-src 'none'; base-uri 'self'; form-action 'self'"
+)
+"""Stile und Schriften nur vom eigenen Server, auch wenn im eigenen CSS der Admins doch eine fremde Adresse stünde;
+keine Plugins, kein fremdes `<base>`, Formulare nur an Deck selbst."""
+
+SPA_CSP_REPORT_ONLY = "img-src 'self' data: blob:"
+"""Bilder nur vom eigenen Server (`blob:` für Vorschauen, Inventar-Fotos und Dokumente), vorerst nur gemeldet: Der Browser
+schreibt einen Verstoß in die Konsole, lädt das Bild aber noch. Logo und Favicon nimmt `PUT /branding` schon nur noch als
+eigenen Pfad oder `data:image/…` an. Bleibt die Konsole im Alltag still, wandert die Angabe in `SPA_CSP`."""
+
+
 class _SpaStaticFiles(StaticFiles):
     """Nachtrag (beim Testen der
     neuen /settings-Route gefunden): `StaticFiles(html=True)` liefert `index.html`
@@ -99,6 +111,9 @@ class _SpaStaticFiles(StaticFiles):
             response = await super().get_response("index.html", scope)
             path = "index.html"
         response.headers["Cache-Control"] = _cache_policy_for(path)
+        if response.headers.get("content-type", "").startswith("text/html"):
+            response.headers["Content-Security-Policy"] = SPA_CSP
+            response.headers["Content-Security-Policy-Report-Only"] = SPA_CSP_REPORT_ONLY
         return response
 
 
@@ -377,8 +392,9 @@ def create_app() -> FastAPI:
             "Erweiterung %s: fremdes Geheimnis nicht angefasst (%s)", exc.ext_id, exc.label,
         )
         detail = str(exc) if exc.login_secret else (
-            f"{exc} Es bleibt unverändert. Wurde es von Hand angelegt, lösch es selbst über die Tresor-Schnittstelle "
-            "(DELETE /api/v1/secrets/{id}) – oder nimm einen anderen Namen."
+            f"{exc} Es bleibt unverändert. Wurde es von Hand angelegt, lösch es selbst unter Einstellungen → Tresor, mit "
+            "deinem Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App (API: DELETE /api/v1/secrets/{id} mit "
+            "current_password) – oder nimm einen anderen Namen."
         )
         return JSONResponse(status_code=409, content={"detail": detail})
 

@@ -1,0 +1,37 @@
+[extension]
+id          = "npm"
+name        = "Nginx Proxy Manager"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Nginx Proxy Manager auf einen Blick: Proxy-Hosts mit Ziel, ablaufende Zertifikate und der Adress-Check zu den Docker-Containern. Proxy-Hosts ein- oder ausschalten – über die Freigabe."
+icon        = "globe"
+category    = "servers"
+sort_order  = 72
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_npm:Extension"
+frontend    = "frontend/dist/index.js"
+# Nur lesend, für den Adress-Check: die Container aus dem Modul Docker (`ServiceCatalog`).
+requires    = ["docker"]
+
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "hosts.execute",
+  # Gespeicherte Namen bleiben, auch dieser aus „Netzwerk“.
+  "secrets.read:network-npm-password",
+  "schedule.register",
+  "notify.send",
+]
+
+# Übernimmt beim ersten Start den NPM-Teil von „Netzwerk“: Einstellungen, Ein/Aus, Kachel, Passwort im Tresor und die
+# alten Adressen (veraltet, bis mindestens 2.0).
+[[extension.adopts]]
+from = "network"
+settings = "npm"
+widgets = { certificates = "certificates" }
+routes = { "/npm" = "/summary", "/npm/address-check" = "/address-check", "/widgets/certificates" = "/widgets/certificates", "/npm/hosts/{host_id}/enable" = "/hosts/{host_id}/enable", "/npm/hosts/{host_id}/disable" = "/hosts/{host_id}/disable" }
+secrets = ["network-npm-password"]
+
+[settings]
+schema = "settings.schema.json"

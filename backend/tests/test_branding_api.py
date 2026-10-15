@@ -22,7 +22,7 @@ def _auth_header(token: str) -> dict:
 _PAYLOAD = {
     "product_name": "Kaeufer GmbH Dashboard",
     "short_name": "KaeuferGmbH",
-    "logo_url": "https://example.invalid/logo.svg",
+    "logo_url": "/api/v1/branding/logo",
     "favicon_url": None,
     "login_subtitle": "Betriebszentrale",
     "support_url": None,
@@ -345,3 +345,265 @@ async def test_stored_unsafe_support_url_does_not_crash_and_is_not_shown(client,
     r = await client.get("/api/v1/branding")
     assert r.status_code == 200, r.text
     assert r.json()["support_url"] is None
+
+
+# --- Favicon und Bildadressen (CSP `img-src 'self' data: blob:`) ---------------------------------------------------
+
+_TINY_ICO = bytes.fromhex("0000010001001010000001002000") + b"\x00" * 26
+"""Nur der Kopf einer ICO-Datei: Der Server prüft den Content-Type und die ersten Bytes, nicht das ganze Bild."""
+
+
+async def _store_branding_value(db_session, field: str, value: str) -> None:
+    from nodvard_deck.branding import SETTINGS_KEY_PREFIX
+    from nodvard_deck.db import utcnow
+    from nodvard_deck.models import Setting
+
+    db_session.add(Setting(
+        key=f"{SETTINGS_KEY_PREFIX}{field}", scope="global", user_id="", value=value,
+        updated_at=utcnow(), updated_by_user_id=None,
+    ))
+    await db_session.flush()
+
+
+@pytest.mark.asyncio
+async def test_unauthenticated_favicon_upload_is_rejected(client):
+    r = await client.post("/api/v1/branding/favicon", content=_TINY_PNG, headers={"Content-Type": "image/png"})
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_favicon_upload_and_public_retrieval(client, test_settings):
+    token = await _bootstrap_owner(client)
+    assert (await client.get("/api/v1/branding/favicon")).status_code == 404
+
+    r = await client.post(
+        "/api/v1/branding/favicon", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["favicon_url"] == "/api/v1/branding/favicon"
+    assert (await client.get("/api/v1/branding")).json()["favicon_url"] == "/api/v1/branding/favicon"
+
+    favicon = await client.get("/api/v1/branding/favicon")
+    assert favicon.status_code == 200
+    assert favicon.headers["content-type"] == "image/png"
+    assert favicon.content == _TINY_PNG
+    assert "sandbox" in favicon.headers["content-security-policy"]
+    assert favicon.headers["x-content-type-options"] == "nosniff"
+
+    # Logo und Favicon liegen nebeneinander, ein Favicon-Upload räumt das Logo nicht weg.
+    await client.post("/api/v1/branding/logo", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"})
+    from nodvard_deck.branding import logo_dir
+
+    assert sorted(p.name for p in logo_dir(test_settings.data_dir).iterdir()) == ["favicon.png", "logo.png"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("content_type", ["image/x-icon", "image/vnd.microsoft.icon"])
+async def test_favicon_upload_accepts_ico_and_replaces_the_previous_file(client, test_settings, content_type):
+    token = await _bootstrap_owner(client)
+    await client.post(
+        "/api/v1/branding/favicon", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"},
+    )
+    r = await client.post(
+        "/api/v1/branding/favicon", content=_TINY_ICO, headers={**_auth_header(token), "Content-Type": content_type},
+    )
+    assert r.status_code == 200, r.text
+    from nodvard_deck.branding import logo_dir
+
+    assert [p.name for p in logo_dir(test_settings.data_dir).glob("favicon.*")] == ["favicon.ico"]
+    favicon = await client.get("/api/v1/branding/favicon")
+    assert favicon.headers["content-type"] == "image/x-icon"
+    assert favicon.content == _TINY_ICO
+
+
+@pytest.mark.asyncio
+async def test_favicon_upload_checks_type_size_and_svg(client, test_settings):
+    from nodvard_deck.branding import MAX_FAVICON_BYTES, find_favicon_file
+
+    token = await _bootstrap_owner(client)
+    jpeg = await client.post(
+        "/api/v1/branding/favicon", content=b"\xff\xd8", headers={**_auth_header(token), "Content-Type": "image/jpeg"},
+    )
+    assert jpeg.status_code == 415
+    too_big = await client.post(
+        "/api/v1/branding/favicon", content=b"\x00" * (MAX_FAVICON_BYTES + 1),
+        headers={**_auth_header(token), "Content-Type": "image/png"},
+    )
+    assert too_big.status_code == 413
+    assert "Favicon zu groß" in too_big.json()["detail"]
+    svg = await client.post(
+        "/api/v1/branding/favicon", content=_SKRIPT_SVG, headers={**_auth_header(token), "Content-Type": "image/svg+xml"},
+    )
+    assert svg.status_code == 422
+    assert "SVG-Favicon abgelehnt" in svg.json()["detail"]
+    assert find_favicon_file(test_settings.data_dir) is None
+    harmless = await client.post(
+        "/api/v1/branding/favicon", content=_HARMLOSES_SVG, headers={**_auth_header(token), "Content-Type": "image/svg+xml"},
+    )
+    assert harmless.status_code == 200, harmless.text
+
+
+@pytest.mark.asyncio
+async def test_favicon_upload_needs_branding_write(client, db_session):
+    from nodvard_deck.core import security
+    from nodvard_deck.models import User
+    from nodvard_deck.services import auth as auth_service
+
+    await _bootstrap_owner(client)
+    roles = await auth_service.ensure_builtin_roles(db_session)
+    user = User(username="viewer1", password_hash=security.hash_password("whatever123"), is_active=True)
+    user.roles.append(roles["viewer"])
+    db_session.add(user)
+    await db_session.flush()
+    token = (await client.post("/api/v1/auth/login", json={"username": "viewer1", "password": "whatever123"})).json()["access_token"]
+
+    r = await client.post(
+        "/api/v1/branding/favicon", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"},
+    )
+    assert r.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["logo_url", "favicon_url"])
+@pytest.mark.parametrize("url", [
+    "https://example.org/favicon.png", "http://intern.lan/logo.svg", "//example.org/x.png", "/\\example.org/x.png",
+    "example.org/x.png", "javascript:alert(1)", "data:text/html,<b>x</b>", "/bild mit leerzeichen.png",
+    "/bild\t.png", "data:image/png;base64,AA\n==",
+])
+async def test_put_branding_rejects_images_from_elsewhere(client, field, url):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/branding", json={**_PAYLOAD, field: url}, headers=_auth_header(token))
+    assert r.status_code == 422, r.text
+    assert "fremde Adressen" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field", ["logo_url", "favicon_url"])
+@pytest.mark.parametrize("url", [
+    "/api/v1/branding/favicon", "/static/symbol.png?v=2", "data:image/png;base64,iVBORw0KGgo=",
+    "DATA:IMAGE/svg+xml;base64,PHN2Zy8+",
+])
+async def test_put_branding_accepts_own_paths_and_embedded_images(client, field, url):
+    token = await _bootstrap_owner(client)
+    r = await client.put("/api/v1/branding", json={**_PAYLOAD, field: url}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    assert r.json()[field] == url
+
+
+@pytest.mark.asyncio
+async def test_put_branding_empty_image_address_means_none(client):
+    token = await _bootstrap_owner(client)
+    r = await client.put(
+        "/api/v1/branding", json={**_PAYLOAD, "logo_url": " ", "favicon_url": ""}, headers=_auth_header(token),
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["logo_url"] is None and r.json()["favicon_url"] is None
+
+
+@pytest.mark.asyncio
+async def test_a_stored_foreign_favicon_stays_until_someone_replaces_it(client, db_session):
+    """Von vor der Regel: Der alte Wert bleibt gespeichert und blockiert das Speichern der anderen Felder nicht.
+    Eine andere fremde Adresse geht aber nicht, und Entfernen geht immer."""
+    old = "https://cdn.example.org/favicon.png"
+    await _store_branding_value(db_session, "favicon_url", old)
+    token = await _bootstrap_owner(client)
+    assert (await client.get("/api/v1/branding")).json()["favicon_url"] == old
+
+    keep = await client.put(
+        "/api/v1/branding", json={**_PAYLOAD, "product_name": "Neu", "favicon_url": old}, headers=_auth_header(token),
+    )
+    assert keep.status_code == 200, keep.text
+    assert keep.json()["product_name"] == "Neu" and keep.json()["favicon_url"] == old
+
+    other = await client.put(
+        "/api/v1/branding", json={**_PAYLOAD, "favicon_url": "https://cdn.example.org/neu.png"}, headers=_auth_header(token),
+    )
+    assert other.status_code == 422
+
+    removed = await client.put("/api/v1/branding", json={**_PAYLOAD, "favicon_url": None}, headers=_auth_header(token))
+    assert removed.status_code == 200
+    assert removed.json()["favicon_url"] is None
+    again = await client.put("/api/v1/branding", json={**_PAYLOAD, "favicon_url": old}, headers=_auth_header(token))
+    assert again.status_code == 422
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+async def test_an_empty_upload_is_refused_and_nothing_is_stored(client, test_settings, kind):
+    from nodvard_deck.branding import logo_dir
+
+    token = await _bootstrap_owner(client)
+    r = await client.post(f"/api/v1/branding/{kind}", content=b"", headers={**_auth_header(token), "Content-Type": "image/png"})
+    assert r.status_code == 422
+    assert "leer" in r.json()["detail"]
+    assert not list(logo_dir(test_settings.data_dir).glob(f"{kind}.*"))
+    assert (await client.get("/api/v1/branding")).json()[f"{kind}_url"] is None
+
+
+_TINY_JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 16
+_TINY_WEBP = b"RIFF" + (12).to_bytes(4, "little") + b"WEBPVP8 " + b"\x00" * 8
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("kind", "content_type", "content"), [
+    ("logo", "image/png", _TINY_JPEG),
+    ("logo", "image/jpeg", _TINY_PNG),
+    ("logo", "image/webp", b"RIFF\x00\x00\x00\x00WAVE"),
+    ("logo", "image/png", b"<html><script>alert(1)</script></html>"),
+    ("favicon", "image/x-icon", _TINY_PNG),
+    ("favicon", "image/png", _TINY_ICO),
+])
+async def test_an_upload_whose_first_bytes_do_not_fit_the_type_is_refused(client, test_settings, kind, content_type, content):
+    """Sonst läge etwas anderes unter `logo.png` und ginge mit `image/png` an jeden Browser."""
+    from nodvard_deck.branding import logo_dir
+
+    token = await _bootstrap_owner(client)
+    r = await client.post(f"/api/v1/branding/{kind}", content=content, headers={**_auth_header(token), "Content-Type": content_type})
+    assert r.status_code == 422
+    assert "passt nicht zum Typ" in r.json()["detail"]
+    assert not list(logo_dir(test_settings.data_dir).glob(f"{kind}.*"))
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("content_type", "content"), [("image/jpeg", _TINY_JPEG), ("image/webp", _TINY_WEBP)])
+async def test_jpeg_and_webp_logos_with_their_own_header_are_accepted(client, content_type, content):
+    token = await _bootstrap_owner(client)
+    r = await client.post("/api/v1/branding/logo", content=content, headers={**_auth_header(token), "Content-Type": content_type})
+    assert r.status_code == 200, r.text
+    assert (await client.get("/api/v1/branding/logo")).content == content
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["logo", "favicon"])
+async def test_removing_the_image_deletes_the_uploaded_file(client, test_settings, kind):
+    """„Entfernen“ setzt die Adresse auf null; die Datei war sonst weiter öffentlich unter `GET /branding/<art>` zu
+    holen. Ein anderes Feld zu speichern lässt sie dagegen stehen."""
+    from nodvard_deck.branding import logo_dir
+
+    token = await _bootstrap_owner(client)
+    up = await client.post(f"/api/v1/branding/{kind}", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"})
+    assert up.status_code == 200, up.text
+    current = up.json()
+
+    kept = await client.put("/api/v1/branding", json={**current, "product_name": "Anders"}, headers=_auth_header(token))
+    assert kept.status_code == 200, kept.text
+    assert (await client.get(f"/api/v1/branding/{kind}")).status_code == 200
+
+    removed = await client.put("/api/v1/branding", json={**current, f"{kind}_url": None}, headers=_auth_header(token))
+    assert removed.status_code == 200, removed.text
+    assert removed.json()[f"{kind}_url"] is None
+    assert not list(logo_dir(test_settings.data_dir).glob(f"{kind}.*"))
+    assert (await client.get(f"/api/v1/branding/{kind}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_an_embedded_logo_instead_of_the_upload_also_deletes_the_file(client, test_settings):
+    from nodvard_deck.branding import logo_dir
+
+    token = await _bootstrap_owner(client)
+    up = await client.post("/api/v1/branding/logo", content=_TINY_PNG, headers={**_auth_header(token), "Content-Type": "image/png"})
+    embedded = "data:image/png;base64,iVBORw0KGgo="
+    r = await client.put("/api/v1/branding", json={**up.json(), "logo_url": embedded}, headers=_auth_header(token))
+    assert r.status_code == 200, r.text
+    assert r.json()["logo_url"] == embedded
+    assert not list(logo_dir(test_settings.data_dir).glob("logo.*"))

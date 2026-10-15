@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { SEEN_KEY } from "../lib/changelog";
 import { getDeckTimezone, setDeckTimezone } from "../lib/deckTimezone";
+import { applyTheme } from "../lib/theme";
 import { previewState, respond } from "../preview/fixtures";
 import { useWsSubscription } from "../lib/ws";
 import { useAuthStore } from "../state/auth";
@@ -236,6 +237,44 @@ describe("AppShell: Zeitzone des Dashboards", () => {
     renderShell(500);
     await screen.findByText("Startseite");
     expect(getDeckTimezone()).toBeNull();
+  });
+});
+
+describe("AppShell: Theme des Kontos", () => {
+  afterEach(() => {
+    applyTheme("simple");
+    vi.unstubAllGlobals();
+  });
+
+  it("ein Rest vom vorigen Konto im Zwischenspeicher setzt kein Theme, erst die frische Antwort", async () => {
+    let answer: (theme: string) => void = () => {};
+    const fresh = new Promise<string>((resolve) => (answer = resolve));
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input).replace(/^https?:\/\/[^/]+/, "");
+      if (path === "/api/v1/me/preferences") return new Response(JSON.stringify({ first_steps_dismissed: false, theme: await fresh }), { status: 200 });
+      return new Response(JSON.stringify(respond(path, init?.method ?? "GET") ?? {}), { status: 200 });
+    }));
+    applyTheme("simple");
+    useAuthStore.setState({
+      accessToken: "tok",
+      user: { id: "u2", username: "anna", display_name: "Anna", email: null, is_owner: false, locale: "de", permissions: ["hosts.read"] },
+      status: "authenticated",
+      mfaToken: null,
+    });
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    // Das vorige Konto im selben Tab hatte „Klassisch hell“.
+    client.setQueryData(["me", "preferences"], { first_steps_dismissed: false, theme: "classic" });
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/"]}>
+          <Routes><Route element={<AppShell />}><Route path="/" element={<p>Startseite</p>} /></Route></Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    await screen.findByText("Startseite");
+    expect(document.documentElement.dataset.theme).toBe("simple");
+    answer("pro");
+    await waitFor(() => expect(document.documentElement.dataset.theme).toBe("pro"));
   });
 });
 

@@ -3,6 +3,7 @@ deploy/*.sh text eol=lf
 deploy/Dockerfile text eol=lf
 .githooks/pre-commit text eol=lf
 scripts/*.sh text eol=lf
+extensions/*/root-helper/*.sh text eol=lf
 THIRD_PARTY_LICENSES text eol=lf
 LICENSE text eol=lf
 scripts/embedded_licenses/*.txt text eol=lf

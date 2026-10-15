@@ -222,7 +222,7 @@ function InboxPanel({ status, onFetched }: { status: InboxStatus; onFetched: () 
     <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-white/[0.06] px-4 py-3 text-sm">
       <div className="min-w-0">
         <div className="font-medium"><Icon name="folder" size={14} /> Nextcloud-Ordner {status.folder ?? ""}</div>
-        <div role="status" className={last && !last.ok ? "text-red-300" : "text-zinc-400"}>{line}</div>
+        <div role="status" className={last && !last.ok ? "text-red-300" : "text-white/55"}>{line}</div>
         {error && <div role="alert" className="text-red-300">{error}</div>}
       </div>
       {status.folder && status.nextcloud_ready && (
@@ -543,7 +543,7 @@ export function DocumentsPage(): JSX.Element {
                           {preview.type.startsWith("image/") ? (
                             <img src={preview.url} alt={doc.original_filename} className="max-h-[70vh] rounded-lg border border-white/10" />
                           ) : (
-                            <iframe src={preview.url} title={doc.original_filename} className="h-[70vh] w-full rounded-lg border border-white/10 bg-white" />
+                            <iframe src={preview.url} title={doc.original_filename} className="h-[70vh] w-full rounded-lg border border-white/10 bg-[#fff]" />
                           )}
                         </div>
                       )}

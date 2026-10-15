@@ -32,7 +32,7 @@ function asService(tile: AppTileOut) {
 }
 
 const ADD_BUTTON =
-  "inline-flex flex-none items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium accent-gradient text-white shadow-md shadow-black/30 transition hover:brightness-110";
+  "inline-flex flex-none items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium accent-gradient text-on-accent transition hover:bg-accent-strong";
 
 export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hosts: HostOut[]; canWrite: boolean }) {
   const actions = useAppActions();
@@ -136,7 +136,7 @@ export function AppsSection({ apps, hosts, canWrite }: { apps: AppTileOut[]; hos
     <div ref={section} data-testid="apps-section">
       <div className="mb-3 flex items-center gap-2">
         <span className="text-white/60"><Boxes size={15} /></span>
-        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Apps</h2>
+        <h2 className="text-sm font-semibold">Apps</h2>
         <div className="ml-auto">{apps.length > 0 && addButton}</div>
       </div>
 

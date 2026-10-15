@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { api, ApiError } from "../../../lib/api";
+import { CANCELLED, withConfirmation } from "../../../lib/confirmation";
 import {
   CREDENTIAL_KIND_LABEL, fieldErrors, formatDate, isSshCredential, loginOutcome, refreshHosts,
   type ConnectionCheck as CheckResult, type CredentialOut, type GeneratedKeyOut, type HostOut, type MakeDefaultOut,
@@ -197,7 +198,9 @@ function CredentialRow({
     setBusy("delete");
     onNotice(null);
     try {
-      await api.delete(`/hosts/${host.id}/credentials/${credential.id}`);
+      // Der Zugang samt Geheimnis verschwindet: wie auf der Seite Tresor nur mit Passwort und gegebenenfalls Code.
+      const done = await withConfirmation((confirmation) => api.delete(`/hosts/${host.id}/credentials/${credential.id}`, confirmation));
+      if (done === CANCELLED) return;
       await onChanged();
       onNotice({ kind: "ok", text: "SSH-Zugang gelöscht." });
     } catch (err) {
@@ -213,7 +216,11 @@ function CredentialRow({
     setBusy("default");
     onNotice(null);
     try {
-      const out = await api.post<MakeDefaultOut>(`/hosts/${host.id}/credentials/${credential.id}/make-default`, { delete_previous: true });
+      // Der bisherige Zugang verschwindet samt Geheimnis: nur mit Passwort und gegebenenfalls Code.
+      const out = await withConfirmation((confirmation) =>
+        api.post<MakeDefaultOut>(`/hosts/${host.id}/credentials/${credential.id}/make-default`, { delete_previous: true, ...confirmation }),
+      );
+      if (out === CANCELLED) return;
       await onChanged();
       onNotice({ kind: "ok", text: out.notice ?? "Der neue Zugang ist jetzt der Standard." });
     } catch (err) {

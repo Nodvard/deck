@@ -2,33 +2,212 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Themes: „simple“ (Schlicht dunkel) ist der Standard, `data-theme` am <html> wählt ein anderes. */
 :root {
-  /*
-   * Fallback-Werte fuer den Sekundenbruchteil vor dem ersten erfolgreichen
-   * GET /api/v1/branding (src/lib/branding.ts::applyBranding ueberschreibt sie
-   * anschliessend). Identisch mit backend/src/nodvard_deck/branding.py::BrandingColors --
-   * bewusst dieselben Zahlen an zwei Stellen, nicht importiert: Backend-Python und
-   * Frontend-CSS teilen sich keine Build-Pipeline.
-   */
-  --color-accent: #0ea5e9;
-  --color-accent-strong: #0369a1;
+  color-scheme: dark;
+  --color-background: #1a1b1e;
+  --color-surface: #25262b;
+  --color-surface-head: #25262b;
+  --color-text: #e8e9eb;
+  --color-muted: #909296;
+  --color-line: #2f3036;
+  --color-line-strong: #3c3d44;
+  --color-side: #1f2023;
+  --color-side-text: #c1c2c5;
+  --color-side-active: #2c2e33;
+  --color-side-active-text: #ffffff;
+  --color-accent: #4c6ef5;
+  --color-accent-strong: #3b5bdb;
+  --color-accent-text: #748ffc;
+  --color-ok: #40c057;
+  --color-warn: #fab005;
+  --color-bad: #fa5252;
+  --color-track: #373a40;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  /* Für Tailwind als RGB-Tripel: „white“ ist die Schrift, „black“ die Gegenfarbe. */
+  --ink: 232 233 235;
+  --paper: 0 0 0;
+  /* Statusfarben in der Tailwind-Standardpalette; das helle Theme dunkelt sie ab. */
+  --red-100: 254 226 226;
+  --red-200: 254 202 202;
+  --red-300: 252 165 165;
+  --red-400: 248 113 113;
+  --red-500: 239 68 68;
+  --red-950: 69 10 10;
+  --amber-50: 255 251 235;
+  --amber-100: 254 243 199;
+  --amber-200: 253 230 138;
+  --amber-300: 252 211 77;
+  --amber-400: 251 191 36;
+  --amber-500: 245 158 11;
+  --emerald-100: 209 250 229;
+  --emerald-200: 167 243 208;
+  --emerald-300: 110 231 183;
+  --emerald-400: 52 211 153;
+  --emerald-500: 16 185 129;
+  --sky-200: 186 230 253;
+  --sky-300: 125 211 252;
+  --sky-400: 56 189 248;
+  --sky-500: 14 165 233;
+  /* Flächen-Effekte: im Standard flach. Nur „Bisher“ (`original`) setzt hier Verlauf, Schatten, Leuchten und Linien. */
+  --surface-image: none;
+  --surface-shadow: none;
+  --surface-hover-border: var(--color-line-strong);
+  --surface-hover-shadow: none;
+  --surface-hover-transform: none;
+  --accent-image: none;
+  --accent-hover-filter: none;
+  --status-ok-ring: none;
+  --status-bad-ring: none;
+  --nav-active-image: none;
+  --nav-active-bar: none;
+  --backdrop-image: none;
+  --backdrop-size: auto;
+  --backdrop-repeat: repeat;
+}
+
+:root[data-theme="classic"] {
+  color-scheme: light;
+  --color-background: #eef0f3;
+  --color-surface: #ffffff;
+  --color-surface-head: #f7f8fa;
+  --color-text: #1f2329;
+  --color-muted: #646c76;
+  --color-line: #dfe3e8;
+  --color-line-strong: #c9ced6;
+  --color-side: #ffffff;
+  --color-side-text: #33393f;
+  --color-side-active: #e7effa;
+  --color-side-active-text: #1d5fbf;
+  --color-accent: #2f6fd1;
+  --color-accent-strong: #2459ab;
+  --color-accent-text: #2f6fd1;
+  --color-ok: #2e8b57;
+  --color-warn: #c77700;
+  --color-bad: #c62828;
+  --color-track: #e6e9ee;
+  --radius-sm: 3px;
+  --radius: 4px;
+  --radius-lg: 6px;
+  --ink: 31 35 41;
+  --paper: 255 255 255;
+  /* Auf Weiß wären die hellen Töne unlesbar: je Stufe der dunkle Gegenpart. */
+  --red-100: 127 29 29;
+  --red-200: 153 27 27;
+  --red-300: 185 28 28;
+  --red-400: 220 38 38;
+  --red-500: 220 38 38;
+  --red-950: 254 226 226;
+  --amber-50: 120 53 15;
+  --amber-100: 120 53 15;
+  --amber-200: 146 64 14;
+  --amber-300: 180 83 9;
+  --amber-400: 217 119 6;
+  --amber-500: 217 119 6;
+  --emerald-100: 6 78 59;
+  --emerald-200: 6 95 70;
+  --emerald-300: 4 120 87;
+  --emerald-400: 5 150 105;
+  --emerald-500: 5 150 105;
+  --sky-200: 7 89 133;
+  --sky-300: 3 105 161;
+  --sky-400: 2 132 199;
+  --sky-500: 2 132 199;
+}
+
+:root[data-theme="pro"] {
+  color-scheme: dark;
+  --color-background: #111217;
+  --color-surface: #181b1f;
+  --color-surface-head: #181b1f;
+  --color-text: #ccccdc;
+  --color-muted: #8e8e9e;
+  --color-line: #25282e;
+  --color-line-strong: #34373e;
+  --color-side: #181b1f;
+  --color-side-text: #ccccdc;
+  --color-side-active: #22252b;
+  --color-side-active-text: #ffffff;
+  --color-accent: #f5732a;
+  --color-accent-strong: #d95f1a;
+  --color-accent-text: #f5a35a;
+  --color-ok: #73bf69;
+  --color-warn: #f2cc0c;
+  --color-bad: #f2495c;
+  --color-track: #25282e;
+  --radius-sm: 2px;
+  --radius: 2px;
+  --radius-lg: 3px;
+  --ink: 216 217 224;
+  --paper: 0 0 0;
+}
+
+/* „Bisher“: das Aussehen bis 0.8 (dunkelblau, Verläufe, Leuchten und feine Linien oben), nur über Variablen. */
+:root[data-theme="original"] {
+  color-scheme: dark;
   --color-background: #0b1220;
   --color-surface: #111a2b;
+  --color-surface-head: #142034;
   --color-text: #e6ebf5;
+  --color-muted: rgb(230 235 245 / 0.55);
+  --color-line: rgb(255 255 255 / 0.07);
+  --color-line-strong: rgb(255 255 255 / 0.14);
+  --color-side: #091020;
+  --color-side-text: rgb(255 255 255 / 0.7);
+  --color-side-active: transparent;
+  --color-side-active-text: #ffffff;
+  --color-accent: #0ea5e9;
+  --color-accent-strong: #0369a1;
+  --color-accent-text: color-mix(in srgb, #0ea5e9 80%, white);
+  --color-ok: #34d399;
+  --color-warn: #fbbf24;
+  --color-bad: #f87171;
+  --color-track: rgb(255 255 255 / 0.08);
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+  --ink: 255 255 255;
+  --paper: 0 0 0;
+  --surface-image: linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 92%, white 3%), var(--color-surface));
+  --surface-shadow: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 12px 32px -18px rgb(0 0 0 / 0.7);
+  --surface-hover-border: color-mix(in srgb, var(--color-accent) 45%, transparent);
+  --surface-hover-shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 16px 36px -18px color-mix(in srgb, var(--color-accent) 45%, black);
+  --surface-hover-transform: translateY(-1px);
+  --accent-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
+  /* Der Verlauf deckt `hover:bg-accent-strong` ab; bis 0.8 hellten die Knöpfe beim Darüberfahren um 10 % auf. */
+  --accent-hover-filter: brightness(1.1);
+  /* Ring um die Status-Punkte wie bis 0.8 (ohne das frühere Pulsieren). */
+  --status-ok-ring: 0 0 0 3px color-mix(in srgb, var(--color-ok) 15%, transparent);
+  --status-bad-ring: 0 0 0 3px color-mix(in srgb, var(--color-bad) 18%, transparent);
+  --nav-active-image: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 85%);
+  --nav-active-bar: inset 2px 0 0 var(--color-accent);
+  /* Oben zwei weiche Lichter in der Akzentfarbe, darunter feine Linien im 32-px-Raster, die nach unten in die
+     Hintergrundfarbe auslaufen (die dritte Ebene deckt sie ab 24rem ab). */
+  --backdrop-image:
+    radial-gradient(900px 420px at 0% -20%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 65%),
+    radial-gradient(700px 380px at 100% -30%, color-mix(in srgb, var(--color-accent-strong) 20%, transparent), transparent 60%),
+    linear-gradient(to bottom, transparent 6rem, var(--color-background) 24rem),
+    linear-gradient(to right, rgb(255 255 255 / 0.045) 1px, transparent 1px),
+    linear-gradient(to bottom, rgb(255 255 255 / 0.045) 1px, transparent 1px);
+  --backdrop-size: 100% 24rem, 100% 24rem, 100% 100%, 32px 32px, 32px 32px;
+  --backdrop-repeat: no-repeat, no-repeat, no-repeat, repeat, repeat;
 }
 
 body {
   background-color: var(--color-background);
   color: var(--color-text);
 }
+/* Hintergrund oben im Inhaltsbereich (scrollt mit); ohne die Variablen (alle Themes außer „Bisher“) leer. */
+.app-backdrop {
+  background-image: var(--backdrop-image);
+  background-size: var(--backdrop-size);
+  background-repeat: var(--backdrop-repeat);
+  background-attachment: local;
+}
 
-/*
- * MarkdownView.tsx rendert
- * seit dem Umstieg auf markdown-it echte Listen/Codebloecke/Zitate/Tabellen -- ohne
- * das Tailwind-Typography-Plugin (nicht installiert) braeuchten die sonst gar keine
- * Gestaltung. Bewusst eine kleine, handgeschriebene Regelmenge statt einer neuen
- * Abhaengigkeit, dieselbe Zurueckhaltung wie ChartView.tsx's handgerolltes SVG.
- */
+/* Markdown ohne das Typography-Plugin: eine kleine, handgeschriebene Regelmenge statt einer neuen Abhängigkeit. */
 .md-content :where(h3, h4, h5) {
   margin: 0.6em 0 0.3em;
   font-weight: 600;
@@ -53,7 +232,7 @@ body {
   opacity: 0.85;
 }
 .md-content code {
-  background: rgba(255, 255, 255, 0.1);
+  background: rgb(var(--ink) / 0.1);
   border-radius: 0.25em;
   padding: 0.1em 0.35em;
   font-size: 0.9em;
@@ -61,8 +240,8 @@ body {
 .md-content pre {
   margin: 0.4em 0;
   padding: 0.6em 0.75em;
-  border-radius: 0.375em;
-  background: var(--color-surface);
+  border-radius: var(--radius-sm);
+  background: var(--color-background);
   overflow-x: auto;
 }
 .md-content pre code {
@@ -75,67 +254,48 @@ body {
   font-size: 0.9em;
 }
 .md-content :where(th, td) {
-  border: 1px solid rgba(255, 255, 255, 0.15);
+  border: 1px solid var(--color-line);
   padding: 0.3em 0.6em;
   text-align: left;
 }
 .md-content th {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-head);
 }
 
-/*
- * Startseite: eigene Bildsprache -- ein feines Gitter, das nach unten
- * ausblendet, dazu ein weiches Leuchten in der Akzentfarbe.
- * Alles ueber die Branding-Variablen, damit ein anderes Branding (D-03) sofort durchgreift.
- */
-.nodvard-deck-glow {
-  background-image:
-    radial-gradient(900px 420px at 0% -20%, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 65%),
-    radial-gradient(700px 380px at 100% -30%, color-mix(in srgb, var(--color-accent-strong) 20%, transparent), transparent 60%);
-}
-.nodvard-deck-grid {
-  background-image:
-    linear-gradient(to right, rgba(255, 255, 255, 0.045) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.045) 1px, transparent 1px);
-  background-size: 32px 32px;
-  -webkit-mask-image: radial-gradient(ellipse 80% 100% at 20% 0%, black 25%, transparent 80%);
-  mask-image: radial-gradient(ellipse 80% 100% at 20% 0%, black 25%, transparent 80%);
-}
 .panel {
-  background: linear-gradient(180deg, color-mix(in srgb, var(--color-surface) 92%, white 3%), var(--color-surface));
-  border: 1px solid rgba(255, 255, 255, 0.07);
-  border-radius: 0.9rem;
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.7);
+  background-color: var(--color-surface);
+  background-image: var(--surface-image);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius);
+  box-shadow: var(--surface-shadow);
 }
 .panel-hover {
   transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .panel-hover:hover {
-  transform: translateY(-1px);
-  border-color: color-mix(in srgb, var(--color-accent) 45%, transparent);
-  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 16px 36px -18px color-mix(in srgb, var(--color-accent) 45%, black);
+  border-color: var(--surface-hover-border);
+  box-shadow: var(--surface-hover-shadow);
+  transform: var(--surface-hover-transform);
 }
+/* Fläche in der Akzentfarbe (in „Bisher“ mit Verlauf); der Name bleibt, weil Module ihn setzen. */
 .accent-gradient {
-  background-image: linear-gradient(135deg, var(--color-accent), var(--color-accent-strong));
+  background-color: var(--color-accent);
+  background-image: var(--accent-image);
 }
-/* Die aufgeklappte Liste nativer Auswahlfelder ist im Browser-Standard hellgrau auf weiss
-   und kaum lesbar -- betrifft jedes <select> in Kern und Extensions. */
-select {
-  color-scheme: dark;
+/* Nur Knöpfe und Links: In „Bisher“ hellt der Filter sie auf, sonst ist er `none` und `hover:bg-accent-strong` wirkt. */
+:is(button, a, [role="button"]).accent-gradient:not(:disabled):hover {
+  filter: var(--accent-hover-filter);
 }
 select option {
-  background-color: #0f172a;
-  color: #e2e8f0;
+  background-color: var(--color-surface);
+  color: var(--color-text);
 }
 .accent-soft {
-  background-color: color-mix(in srgb, var(--color-accent) 16%, transparent);
-  color: color-mix(in srgb, var(--color-accent) 80%, white);
+  background-color: color-mix(in srgb, var(--color-accent) 14%, transparent);
+  color: var(--color-accent-text);
 }
-/* Ziel eines Sprungs von der Server-Seite (`?host=`): Extensions markieren damit die
-   Zeile/Karte des Hosts, von dem der Nutzer kommt. Outline statt Rahmen, damit sich
-   die Tabellen-Geometrie nicht verschiebt.
-   `lattice-focus` ist der alte Name und Teil des Erweiterungs-Vertrags (docs/02-EXTENSION-API.md):
-   Bundles, die ihn noch setzen, bleiben markiert. Beide stehen bewusst in EINER Regel. */
+/* Ziel eines Sprungs von der Server-Seite (`?host=`). Outline statt Rahmen, damit sich die Tabelle nicht verschiebt.
+   `lattice-focus` ist der alte Name und Teil des Erweiterungs-Vertrags; beide stehen bewusst in EINER Regel. */
 .nodvard-deck-focus,
 .lattice-focus {
   background-color: color-mix(in srgb, var(--color-accent) 9%, transparent);
@@ -143,8 +303,10 @@ select option {
   outline-offset: -1px;
 }
 .nav-active {
-  background: linear-gradient(90deg, color-mix(in srgb, var(--color-accent) 22%, transparent), transparent 85%);
-  box-shadow: inset 2px 0 0 var(--color-accent);
+  background-color: var(--color-side-active);
+  background-image: var(--nav-active-image);
+  box-shadow: var(--nav-active-bar);
+  color: var(--color-side-active-text);
 }
 .status-dot {
   display: inline-block;
@@ -153,14 +315,10 @@ select option {
   border-radius: 9999px;
   flex: none;
 }
-.status-dot.online { background: #34d399; box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15); }
-.status-dot.problem { background: #f87171; box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.18); }
-.status-dot.stopped { background: rgba(255, 255, 255, 0.3); }
-.status-dot.unknown { background: #fbbf24; }
-@media (prefers-reduced-motion: no-preference) {
-  .status-dot.problem { animation: nodvard-deck-pulse 1.6s ease-in-out infinite; }
-}
-/* Glocken-Fenster: sanft einblenden (Deckkraft + leichtes Hochskalieren, 120 ms). */
+.status-dot.online { background: var(--color-ok); box-shadow: var(--status-ok-ring); }
+.status-dot.problem { background: var(--color-bad); box-shadow: var(--status-bad-ring); }
+.status-dot.stopped { background: rgb(var(--ink) / 0.3); }
+.status-dot.unknown { background: var(--color-warn); }
 @media (prefers-reduced-motion: no-preference) {
   .bell-popover { animation: bell-pop 120ms ease-out; transform-origin: top right; }
 }
@@ -168,12 +326,8 @@ select option {
 @keyframes bell-pop {
   from { opacity: 0; transform: scale(0.97); }
 }
-@keyframes nodvard-deck-pulse {
-  50% { box-shadow: 0 0 0 6px rgba(248, 113, 113, 0.05); }
-}
 
-/* Widgets: Karten scrollen notfalls noch, aber ohne sichtbaren Balken -- dafuer
-   blendet der Inhalt unten weich aus, statt hart abgeschnitten zu wirken. */
+/* Widgets scrollen notfalls, ohne sichtbaren Balken; der Inhalt blendet unten weich aus. */
 .widget-body {
   scrollbar-width: none;
   -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 18px), transparent);
@@ -183,14 +337,12 @@ select option {
   display: none;
 }
 
-/* Chrome faerbt automatisch ausgefuellte Felder hellblau -- auf dem dunklen
-   Anmeldeformular wirkte das wie ein Fremdkoerper. */
+/* Chrome färbt automatisch ausgefüllte Felder hellblau, das passt zu keinem Theme. */
 input:-webkit-autofill,
 input:-webkit-autofill:hover,
 input:-webkit-autofill:focus {
-  -webkit-text-fill-color: #fff;
-  caret-color: #fff;
-  -webkit-box-shadow: 0 0 0 1000px rgb(0 0 0 / 0.3) inset;
-  box-shadow: 0 0 0 1000px color-mix(in srgb, var(--color-surface) 80%, black) inset;
+  -webkit-text-fill-color: var(--color-text);
+  caret-color: var(--color-text);
+  box-shadow: 0 0 0 1000px var(--color-surface) inset;
   transition: background-color 9999s ease-out 0s;
 }

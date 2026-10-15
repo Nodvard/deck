@@ -1,5 +1,5 @@
 /**
- * Cockpit „Infrastruktur“: Auslastungs-Karten für Linux-Server.
+ * Cockpit, Servertabelle: Auslastung der Linux-Server.
  * Die Werte kommen in EINER Abfrage (`GET /hosts/metrics/latest`) aus dem Verlauf des Kerns, nie per SSH.
  * Daten aus dem Vorschau-Szenario „ohne Proxmox“; eigene Datei, weil das Szenario die Testdaten umstellt.
  */
@@ -66,7 +66,7 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(within(nas).getByRole("img", { name: "Platte 78 %" })).toBeInTheDocument();
     expect(nas.textContent).toContain("717 MB / 3.9 GB");
     expect(nas.textContent).toContain("1.5 TB / 2.0 TB");
-    expect(nas.textContent).toContain("läuft seit 62 T");
+    expect(screen.getByTestId("server-m-nas-uptime").textContent).toMatch(/^62 T/);
     expect(nas).toHaveAttribute("data-state", "live");
     expect(screen.queryByTestId("server-m-nas-note")).toBeNull();
     expect(within(nas).getByRole("link", { name: "NAS" })).toHaveAttribute("href", "/hosts/m-nas");
@@ -107,7 +107,7 @@ describe("Cockpit: Auslastung der Linux-Server", () => {
     expect(within(nas).getByRole("img", { name: "RAM unbekannt" })).toBeInTheDocument();
     expect(within(nas).getByRole("img", { name: "Platte unbekannt" })).toBeInTheDocument();
     expect(nas.textContent).not.toContain("GB");
-    expect(nas.textContent).not.toContain("läuft seit");
+    expect(screen.getByTestId("server-m-nas-uptime").textContent).toBe("–");
     expect(screen.getByTestId("server-m-nas-note").textContent).toContain("nicht erreichbar");
     expect(screen.getByTestId("attention").textContent).toContain("NAS ist nicht erreichbar");
   });

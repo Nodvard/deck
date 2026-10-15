@@ -1,0 +1,12 @@
+{
+  "clients": [
+    {"ip": "192.0.2.44", "name": "fernseher.lan", "count": 5896},
+    {"ip": "192.0.2.12", "name": "", "count": 4120},
+    {"ip": "2001:db8::17", "name": "laptop.lan", "count": 3311},
+    {"ip": "127.0.0.1", "name": "localhost", "count": 1567},
+    {"ip": "192.0.2.80", "name": "handy.lan", "count": 702}
+  ],
+  "total_queries": 29160,
+  "blocked_queries": 6379,
+  "took": 0.003
+}

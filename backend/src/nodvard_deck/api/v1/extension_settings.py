@@ -7,7 +7,8 @@ import math
 import re
 from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -19,7 +20,9 @@ from ...models import ExtensionRecord, Secret
 from ...services import audit as audit_service
 from ...services import extension_setup, extension_test
 from ..deps import CurrentUser, SessionDep, SettingsDep, require_permission
+from .auth import confirm_stored_secret_change
 from .extensions import resolve_extension
+from .secrets import SecretConfirm
 
 router = APIRouter(
     prefix="/extensions",
@@ -49,11 +52,13 @@ class ExtensionSettingsOut(BaseModel):
     model_config = {"populate_by_name": True}
 
 
-class ExtensionSettingsIn(BaseModel):
+class ExtensionSettingsIn(SecretConfirm):
+    """Werte; Passwort und Code nur, wenn die Änderung hinterlegte Zugangsdaten löscht (sonst 403 `confirm_required`)."""
+
     values: dict[str, Any]
 
 
-class SecretIn(BaseModel):
+class SecretIn(SecretConfirm):
     label: str
     value: str = Field(min_length=1, max_length=4096)
 
@@ -277,8 +282,9 @@ async def get_extension_settings(ext_id: str, session: SessionDep) -> ExtensionS
 
 @router.put("/{ext_id}/settings", response_model=ExtensionSettingsOut, response_model_by_alias=True)
 async def put_extension_settings(
-    ext_id: str, payload: ExtensionSettingsIn, session: SessionDep, user: CurrentUser
-) -> ExtensionSettingsOut:
+    ext_id: str, payload: ExtensionSettingsIn, request: Request, session: SessionDep, settings: SettingsDep,
+    user: CurrentUser,
+) -> ExtensionSettingsOut | JSONResponse:
     ext_id, record = await _record(session, ext_id, change=True)
     schema = schema_for(ext_id)
     if not schema or not schema.get("properties"):
@@ -306,12 +312,24 @@ async def put_extension_settings(
 
     # Ein Geheimnis gehört zu seinem Ziel: wer die Adresse ändert, gibt es neu ein.
     # Gemeldet (Antwort und Protokoll) wird nur, was wirklich im Tresor lag.
-    cleared = []
+    stored_rows = []
     for label in extension_setup.secrets_to_clear(schema, stored, merged):
         row = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
         if row is not None:
-            await vault.delete_secret(session, row.id)
-            cleared.append(label)
+            stored_rows.append(row)
+    if stored_rows:
+        # Löscht gespeicherte Zugangsdaten wie „Löschen“ auf der Seite Tresor, also mit derselben Bestätigung.
+        refused = await confirm_stored_secret_change(
+            request, session, settings, user, payload.current_password, payload.totp_code, "tresor_loeschen",
+            "Mit dieser Änderung werden hinterlegte Zugangsdaten gelöscht. Bitte zur Bestätigung das aktuelle "
+            "Passwort eingeben.",
+        )
+        if refused is not None:
+            return refused
+    cleared = []
+    for row in stored_rows:
+        cleared.append(row.label)
+        await vault.delete_secret(session, row.id)
     if cleared:
         await session.flush()
 
@@ -334,10 +352,12 @@ async def put_extension_settings(
     return await _settings_out(session, ext_id, merged, cleared)
 
 
-@router.put("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT)
+@router.put("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 async def put_extension_secret(
-    ext_id: str, payload: SecretIn, session: SessionDep, settings: SettingsDep, user: CurrentUser
-) -> None:
+    ext_id: str, payload: SecretIn, request: Request, session: SessionDep, settings: SettingsDep, user: CurrentUser
+) -> JSONResponse | None:
+    """Hinterlegt ein Geheimnis der Erweiterung; ein schon gespeichertes ersetzt es nur mit Passwort und
+    gegebenenfalls Code (403 `confirm_required`, sonst wie `PUT /secrets/{id}/value`)."""
     ext_id, record = await _record(session, ext_id, change=True)
     schema = schema_for(ext_id)
     values = dict(record.settings or {})
@@ -355,6 +375,12 @@ async def put_extension_secret(
     keyring = vault.load_keyring(settings)
     existing = (await session.execute(select(Secret).where(Secret.label == payload.label))).scalar_one_or_none()
     if existing is not None:
+        refused = await confirm_stored_secret_change(
+            request, session, settings, user, payload.current_password, payload.totp_code, "tresor_ersetzen",
+            "Hier sind schon Zugangsdaten hinterlegt. Zum Ersetzen bitte das aktuelle Passwort eingeben.",
+        )
+        if refused is not None:
+            return refused
         await vault.replace_secret_value(session, keyring, existing.id, payload.value)
     else:
         await vault.create_secret(
@@ -366,18 +392,34 @@ async def put_extension_secret(
         session, actor_type="user", actor_id=user.id, action="extension.secret_set", outcome="success",
         target_type="extension", target_id=ext_id, detail={"label": payload.label, "replaced": existing is not None},
     )
+    return None
 
 
-@router.delete("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_extension_secret(ext_id: str, label: str, session: SessionDep, user: CurrentUser) -> None:
-    """Entfernt ein Geheimnis der Erweiterung (nur Labels aus `x-secrets`). Idempotent: ein nicht gesetztes
-    Geheimnis ist kein Fehler."""
+@router.delete("/{ext_id}/secrets", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+async def delete_extension_secret(
+    ext_id: str,
+    label: str,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    user: CurrentUser,
+    payload: Annotated[SecretConfirm | None, Body()] = None,
+) -> JSONResponse | None:
+    """Entfernt ein Geheimnis der Erweiterung (nur Labels aus `x-secrets`), ein gespeichertes nur mit Passwort und
+    gegebenenfalls Code im Body (403 `confirm_required`). Idempotent: ein nicht gesetztes Geheimnis ist kein Fehler."""
     ext_id, record = await _record(session, ext_id, change=True)
     allowed = {s["label"] for s in _secret_slots_spec(schema_for(ext_id), dict(record.settings or {}))}
     if label not in allowed:
         raise HTTPException(status_code=422, detail="Dieses Geheimnis gehört nicht zu dieser Erweiterung.")
     existing = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
     if existing is not None:
+        confirm = payload or SecretConfirm()
+        refused = await confirm_stored_secret_change(
+            request, session, settings, user, confirm.current_password, confirm.totp_code, "tresor_loeschen",
+            "Zum Entfernen der hinterlegten Zugangsdaten bitte das aktuelle Passwort eingeben.",
+        )
+        if refused is not None:
+            return refused
         await vault.delete_secret(session, existing.id)
         await session.flush()
     await extension_setup.clear_last_test(session, ext_id)
@@ -385,6 +427,7 @@ async def delete_extension_secret(ext_id: str, label: str, session: SessionDep, 
         session, actor_type="user", actor_id=user.id, action="extension.secret_removed", outcome="success",
         target_type="extension", target_id=ext_id, detail={"label": label, "existed": existing is not None},
     )
+    return None
 
 
 async def _known_secret_values(session, settings, ext_id: str, values: dict[str, Any]) -> list[str]:  # noqa: ANN001

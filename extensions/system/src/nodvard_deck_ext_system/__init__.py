@@ -6,8 +6,9 @@ import asyncio
 import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from nodvard_sdk import (
+    Actor,
     Badge,
     ExtensionContext,
     FilePlace,
@@ -22,6 +23,7 @@ from nodvard_sdk import (
     Refresh,
     WidgetSpec,
 )
+from pydantic import BaseModel, ConfigDict, Field
 
 from .actions import (
     ACTION_SPECS,
@@ -33,7 +35,17 @@ from .actions import (
 )
 from .live import LIVE_SCRIPT, metrics_from_live, parse_live
 from .sysinfo import SCRIPT, apply_thresholds, parse_system_info, summary_findings
-from .warnung import DEFAULT_DISK_PERCENT, DEFAULT_INTERVAL_MIN, DEFAULT_TEMP_C, run_warnungen
+from .warnung import (
+    DEFAULT_DISK_PERCENT,
+    DEFAULT_INTERVAL_MIN,
+    TEMP_LIMIT_MAX,
+    TEMP_LIMIT_MIN,
+    global_temp_limit,
+    own_temp_limit,
+    own_temp_limits,
+    run_warnungen,
+    temp_limit,
+)
 
 # Das Lesende läuft über `ctx.exec.run()` und braucht deshalb `hosts.execute`; schreibend ist nur „Dienst neu starten“
 # (`actions.py`), als Vorschlag ans Aktions-Gate.
@@ -183,9 +195,23 @@ class _WarnJobSpec:
         return await run_warnungen(self._ctx)
 
 
-def _thresholds(settings: dict[str, Any]) -> tuple[int, int]:
-    """(Plattenschwelle %, Temperaturschwelle °C), dieselben Werte wie bei den Warnungen."""
-    return int(settings.get("warn_disk_percent") or DEFAULT_DISK_PERCENT), int(settings.get("warn_temp_c") or DEFAULT_TEMP_C)
+def _thresholds(settings: dict[str, Any], host_id: str) -> tuple[int, int]:
+    """(Plattenschwelle %, Temperaturschwelle °C dieses Servers), dieselben Werte wie bei den Warnungen."""
+    return int(settings.get("warn_disk_percent") or DEFAULT_DISK_PERCENT), temp_limit(settings, host_id)
+
+
+def _temp_limit_out(settings: dict[str, Any], host_id: str) -> dict[str, Any]:
+    return {
+        "host_id": host_id, "own_c": own_temp_limit(settings, host_id),
+        "global_c": global_temp_limit(settings), "effective_c": temp_limit(settings, host_id),
+    }
+
+
+class _TempLimitIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # Pflichtfeld: nur ein ausdrückliches `null` nimmt die eigene Grenze heraus (dann gilt `warn_temp_c`).
+    own_c: int | None = Field(..., ge=TEMP_LIMIT_MIN, le=TEMP_LIMIT_MAX, strict=True)
 
 
 class Extension(NodvardExtension):
@@ -213,7 +239,7 @@ class Extension(NodvardExtension):
             if "@@os" not in result.stdout:
                 return widget_row(host, None, "Abfrage fehlgeschlagen")
             info = parse_system_info(result.stdout)
-            apply_thresholds(info, *_thresholds(await ctx.settings.get()))
+            apply_thresholds(info, *_thresholds(await ctx.settings.get(), host.id))
             info["findings"] = summary_findings(info)
             return widget_row(host, info, None)
 
@@ -261,7 +287,9 @@ class Extension(NodvardExtension):
                 detail = result.stderr.strip() or f"Exit-Code {result.exit_code}"
                 raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Abfrage fehlgeschlagen: {detail}")
             info = parse_system_info(result.stdout)
-            apply_thresholds(info, *_thresholds(await ctx.settings.get()))
+            settings = await ctx.settings.get()
+            apply_thresholds(info, *_thresholds(settings, host.id))
+            info["temp_warn_own_c"] = own_temp_limit(settings, host.id)
             info["findings"] = summary_findings(info)
             units = list(dict.fromkeys([*info["failed_units"], *info["running_units"]]))
             # Docker und containerd nur anbieten, wo dort nicht das Dashboard läuft (wie die Route, aber schon vor dem
@@ -273,6 +301,54 @@ class Extension(NodvardExtension):
 
         router.include_router(build_action_router(ctx))
         ctx.api.include_router(router, permission="hosts.execute")
+
+        # Eigene Temperaturgrenze je Server (`warn_temp_by_host`, im Formular versteckt): lesen mit `hosts.read`,
+        # ändern wie die übrigen Einstellungen mit `settings.write`.
+        limit_read = APIRouter()
+        limit_write = APIRouter()
+
+        async def _known_host(host_id: str) -> Any:
+            host = await ctx.hosts.get(host_id)
+            if host is None:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Host.")
+            return host
+
+        @limit_read.get("/hosts/{host_id}/temp-limit")
+        async def get_temp_limit(host_id: str) -> dict[str, Any]:
+            """Ab welcher Temperatur dieser Server warnt: eigene Grenze (`own_c`, sonst null), allgemeine, gültige."""
+            host = await _known_host(host_id)
+            return _temp_limit_out(await ctx.settings.get(), host.id)
+
+        @limit_write.put("/hosts/{host_id}/temp-limit")
+        async def set_temp_limit(
+            host_id: str, payload: _TempLimitIn, actor: Actor = Depends(ctx.api.current_actor),  # noqa: B008
+        ) -> dict[str, Any]:
+            """Setzt die eigene Grenze dieses Servers; `own_c: null` nimmt sie heraus (dann gilt die allgemeine)."""
+            host = await _known_host(host_id)
+            settings = await ctx.settings.get()
+            before = own_temp_limit(settings, host.id)
+            known = {h.id for h in await ctx.hosts.list()}
+            # Grenzen gelöschter Server fallen beim nächsten Speichern mit heraus.
+            by_host = {k: v for k, v in own_temp_limits(settings).items() if k in known and k != host.id}
+            if payload.own_c is not None:
+                by_host[host.id] = payload.own_c
+            await ctx.settings.set({**settings, "warn_temp_by_host": by_host})
+            out = _temp_limit_out(await ctx.settings.get(), host.id)
+            if out["own_c"] != before:
+                await _audit_temp_limit(host.id, before, out, actor)
+            return out
+
+        async def _audit_temp_limit(host_id: str, before: int | None, out: dict[str, Any], actor: Actor) -> None:
+            try:
+                await ctx.audit.log(
+                    action="ext_system.temp_limit_changed", outcome="success", target_type="host", target_id=host_id,
+                    detail={"own_c_before": before, "own_c": out["own_c"], "effective_c": out["effective_c"]}, actor=actor,
+                )
+            except Exception:  # noqa: BLE001 - die gespeicherte Grenze gilt auch ohne Protokollzeile
+                ctx.logger.warning("Protokolleintrag zur Temperaturgrenze von %s fehlgeschlagen", host_id, exc_info=True)
+
+        ctx.api.include_router(limit_read, permission="hosts.read")
+        ctx.api.include_router(limit_write, permission="settings.write")
 
         ctx.ui.register_page(
             PageSpec(

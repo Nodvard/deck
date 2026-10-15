@@ -1,0 +1,7 @@
+{
+  "domains": [
+    {"domain": "werbung.example.com", "unicode": "werbung.example.com", "type": "deny", "kind": "exact", "comment": "Über Nodvard Deck eingetragen", "groups": [0], "enabled": true, "id": 299, "date_added": 1791187200, "date_modified": 1791187200}
+  ],
+  "processed": {"success": [{"item": "werbung.example.com"}], "errors": []},
+  "took": 0.0003
+}

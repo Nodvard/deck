@@ -8,23 +8,29 @@ from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
 
-from .antivirus import as_root
+from .antivirus import HELPER_READ_VERSION, via_helper
 from .detached import KEPT_BACK_MARK
 
 _SECURITY_RE = re.compile(r"security", re.I)
 _PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9+._:~-]*$")
 
 
+REFRESH_COMMAND = (
+    "if command -v apt-get >/dev/null 2>&1; then apt-get update -qq 2>&1 | grep -E '^(E|Err|W):' | head -n 20; "
+    "elif command -v dnf >/dev/null 2>&1; then dnf -q makecache 2>&1 | tail -n 5; "
+    "elif command -v apk >/dev/null 2>&1; then apk update -q 2>&1 | tail -n 5; fi"
+)
+"""Paketlisten neu laden (braucht root); das Hilfsskript macht dasselbe mit `refresh-packages`."""
+
+
 def status_command(*, refresh: bool) -> str:
     """Befehl, der den Update-Stand liest; mit `refresh` lädt er vorher die Paketlisten neu (braucht root)."""
     refresh_part = ""
     if refresh:
-        inner = (
-            "if command -v apt-get >/dev/null 2>&1; then apt-get update -qq 2>&1 | grep -E '^(E|Err|W):' | head -n 20; "
-            "elif command -v dnf >/dev/null 2>&1; then dnf -q makecache 2>&1 | tail -n 5; "
-            "elif command -v apk >/dev/null 2>&1; then apk update -q 2>&1 | tail -n 5; fi"
+        refresh_part = (
+            f"echo @@refresh; "
+            f"{via_helper(['refresh-packages'], REFRESH_COMMAND, version=HELPER_READ_VERSION, required=False)}; "
         )
-        refresh_part = f"echo @@refresh; {as_root(inner, required=False)}; "
     return (
         "echo @@pm; if command -v apt-get >/dev/null 2>&1; then echo apt; "
         "elif command -v dnf >/dev/null 2>&1; then echo dnf; elif command -v apk >/dev/null 2>&1; then echo apk; else echo none; fi; "
@@ -269,6 +275,20 @@ def upgrade_command(manager: str, mode: str, security_packages: list[str] | None
     raise ValueError(f"Nicht unterstützt: {manager}/{mode}")
 
 
+def upgrade_args(manager: str, mode: str, security_packages: list[str] | None = None, *,
+                 dist_upgrade: bool = False) -> list[str] | None:
+    """Derselbe Lauf wie `upgrade_command` als Angaben für `shield-root upgrade-start <lauf-id> ...` (ab Version 4):
+    Paketmanager, Art, `dist` oder `plain` und bei apt und "security" die Paketnamen. ValueError wie dort.
+
+    `None`, wenn ein Name nur dank `$` vor einem Zeilenumbruch durch den Filter kommt: Das Skript lehnte ihn ab, also
+    bleibt es dann beim alten Weg."""
+    upgrade_command(manager, mode, security_packages, dist_upgrade=dist_upgrade)
+    names = [n for n in (security_packages or []) if _PKG_NAME_RE.match(n)] if (manager, mode) == ("apt", "security") else []
+    if not all(_PKG_NAME_RE.fullmatch(n) for n in names):
+        return None
+    return [manager, mode, "dist" if dist_upgrade and (manager, mode) == ("apt", "all") else "plain", *names]
+
+
 # Eine Minute Vorlauf: die SSH-Sitzung kann sauber antworten, bevor der Server weg ist.
 REBOOT_COMMAND = (
     "if command -v shutdown >/dev/null 2>&1; then shutdown -r +1 'Neustart durch Nodvard Deck nach Updates' 2>&1; "
@@ -357,3 +377,17 @@ def parse_upgrade_output(output: str, exit_code: int | None) -> UpgradeResult:
         ok=ok, upgraded=upgraded, removed=removed, reboot_required=reboot, summary=summary[:300], public_summary=public,
         kept_back=kept,
     )
+
+
+# Pakete, deren Update den Docker-Dienst (oder containerd darunter) neu startet: Die Container auf dem Server starten
+# dann neu, auch Nodvard Deck, wenn es dort läuft. `docker-ce-cli`, Plugins und `runc` starten nichts neu.
+_DOCKER_SERVICE_PACKAGES = frozenset({"docker.io", "docker-ce", "docker-engine", "moby-engine", "containerd", "containerd.io", "moby-containerd"})
+
+
+def docker_packages(packages: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """Docker-Pakete unter den offenen Updates: alle und nur die Sicherheitsupdates (je sortiert, ohne Doppelte)."""
+    hits = [p for p in packages if isinstance(p, dict) and p.get("name") in _DOCKER_SERVICE_PACKAGES]
+    return {
+        "all": sorted({str(p["name"]) for p in hits}),
+        "security": sorted({str(p["name"]) for p in hits if p.get("security")}),
+    }

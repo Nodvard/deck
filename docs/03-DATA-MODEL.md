@@ -135,7 +135,7 @@ wird beim ersten Verbinden nur dann automatisch gemerkt, wenn keine Bestätigung
 
 `secret_usages(secret_id, consumer_type, consumer_id, first_used_at, last_used_at)` — je Verwender eine Zeile, geschrieben
 von `vault_use`. Feste Bindungen (Besitzer-Modul, Server-Zugang, Zwei-Faktor) stehen nicht dort, sie werden beim Lesen
-abgeleitet (`used_by` in `GET /secrets`).
+abgeleitet (`used_by` in `GET /secrets`, nur die festen Bindungen zusätzlich in `bound`).
 
 **Invarianten, die im Code erzwungen werden:**
 1. Kein API-Endpunkt gibt `ciphertext` oder Klartext zurück. Nie. Auch nicht für `owner`.

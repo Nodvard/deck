@@ -9,7 +9,11 @@ unbestätigtem Schlüssel geht keine Anmeldung** (`ssh_server_stats["begin_auth"
 from __future__ import annotations
 
 import asyncio
+import platform
+import shutil
 import socket
+import subprocess
+import sys
 from datetime import datetime
 
 import asyncssh
@@ -26,6 +30,10 @@ PIN = "/api/v1/hosts/{}/known-hosts"
 GENERATE = "/api/v1/hosts/{}/credentials/generate-key"
 CREDENTIALS = "/api/v1/hosts/{}/credentials"
 SUDO = host_check.SUDO_COMMAND
+
+needs_sh = pytest.mark.skipif(
+    sys.platform == "win32" or shutil.which("sh") is None, reason="braucht eine echte POSIX-Shell (der Befehl läuft lokal)"
+)
 
 
 async def _bootstrap_owner(client, username="owner1", password="correct-horse-battery"):
@@ -261,7 +269,7 @@ async def test_pin_expires_after_15_minutes_and_after_an_address_change(client, 
     monkeypatch.setattr(host_check, "_now", lambda: now)
 
     await _check(client, token, host["id"])  # wieder gemerkt
-    assert (await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost"}, headers=_auth(token))).status_code == 200
+    assert (await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost", "current_password": "correct-horse-battery"}, headers=_auth(token))).status_code == 200
     r = await client.post(PIN.format(host["id"]), json=body, headers=_auth(token))
     assert r.status_code == 409, "der Schlüssel gehörte zur alten Adresse"
     assert await _known_rows(db_session) == []
@@ -535,7 +543,7 @@ async def test_login_proof_is_bound_to_credential_and_address(client, db_session
     assert (await _host_out(client, token, host["id"]))["login_ok_at"] is not None
 
     # Neue Adresse: der Beleg gehörte zur alten und zählt nicht mehr.
-    r = await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost"}, headers=_auth(token))
+    r = await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost", "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     assert (await _host_out(client, token, host["id"]))["login_ok_at"] is None
 
@@ -1106,7 +1114,7 @@ async def test_delete_previous_needs_a_fresh_successful_check_of_the_new_credent
     host, old, new, new_fp = await _two_keys(client, token, port)
 
     # Noch nie geprüft: abgelehnt, nichts gelöscht, nichts umgestellt.
-    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 409, r.text
     assert r.json()["detail"].startswith("Bitte zuerst „Verbindung prüfen“")
     assert "10 Minuten" in r.json()["detail"]
@@ -1118,14 +1126,14 @@ async def test_delete_previous_needs_a_fresh_successful_check_of_the_new_credent
     await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"], credential_id=new["id"]))
     failed = await _check(client, token, host["id"], credential_id=new["id"])
     assert _statuses(failed)["login"] == "fail"
-    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 409
 
     # Eingetragen und erfolgreich geprüft: geht. Ohne `delete_previous` ging es auch vorher.
     authorized.append(new_fp)
     ok = await _check(client, token, host["id"], credential_id=new["id"])
     assert _statuses(ok)["login"] == "ok"
-    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     assert await _creds(client, token, host["id"]) == {new["id"]}
     assert r.json()["notice"] and "authorized_keys" in r.json()["notice"]
@@ -1142,7 +1150,7 @@ async def test_delete_previous_check_of_another_credential_does_not_count(client
     await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
     # Geprüft wird der Standard (= der ALTE Zugang): das sagt nichts über den neuen.
     assert _statuses(await _check(client, token, host["id"]))["login"] == "ok"
-    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 409
     assert await _creds(client, token, host["id"]) == {old["id"], new["id"]}
 
@@ -1158,11 +1166,11 @@ async def test_delete_previous_check_goes_stale_and_dies_with_an_address_change(
 
     now = host_check._now()
     monkeypatch.setattr(host_check, "_now", lambda: now + host_check.LOGIN_FRESH_S + 1)
-    assert (await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))).status_code == 409, "zu alt"
+    assert (await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))).status_code == 409, "zu alt"
     monkeypatch.setattr(host_check, "_now", lambda: now + host_check.LOGIN_FRESH_S - 1)
     await _check(client, token, host["id"], credential_id=new["id"])  # frisch (Zeitpunkt bleibt im Fenster)
-    assert (await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost"}, headers=_auth(token))).status_code == 200
-    assert (await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))).status_code == 409, "Adresse geändert"
+    assert (await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "localhost", "current_password": "correct-horse-battery"}, headers=_auth(token))).status_code == 200
+    assert (await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))).status_code == 409, "Adresse geändert"
     assert await _creds(client, token, host["id"]) == {old["id"], new["id"]}
 
 
@@ -1179,6 +1187,41 @@ async def test_make_default_without_delete_previous_needs_no_check(client, local
 # ---------------------------------------------------------------------------
 # Bausteine
 # ---------------------------------------------------------------------------
+
+
+def _run_os_probe_like_an_x86_server(tmp_path) -> tuple[int, str, str]:
+    """Der echte OS-Befehl in einer echten Shell, aber ohne Gerätebaum (wie auf jedem x86-Server).
+
+    Der Pfad wird auf eine Datei umgeleitet, die es nicht gibt; so läuft der Test auch auf einem Raspberry Pi gleich."""
+    command = host_check.OS_COMMAND.replace("/proc/device-tree/model", str(tmp_path / "kein-geraetebaum"))
+    assert command != host_check.OS_COMMAND
+    done = subprocess.run(["sh", "-c", command], capture_output=True, text=True, timeout=10, check=False)
+    return done.returncode, done.stdout, done.stderr
+
+
+@needs_sh
+def test_os_command_succeeds_on_a_server_without_device_tree(tmp_path):
+    code, out, _ = _run_os_probe_like_an_x86_server(tmp_path)
+    assert code == 0, "ohne Gerätebaum darf der Befehl nicht mit Exit 1 enden"
+    assert out.rstrip("\n").endswith("@@model")
+    assert host_check.parse_os(out).arch == platform.machine()
+
+
+@pytest.mark.asyncio
+@needs_sh
+async def test_check_recognises_the_os_of_an_x86_server(client, local_ssh_server, fake_probe, pool, tmp_path):
+    _, port, *_ = local_ssh_server
+    fake_probe[host_check.OS_COMMAND] = _run_os_probe_like_an_x86_server(tmp_path)
+    token = await _bootstrap_owner(client)
+    host = await _make_host(client, token)
+    await _add_password(client, token, host["id"], port)
+    await _pin_seen_key(client, token, host["id"], await _check(client, token, host["id"]))
+
+    r = await _check(client, token, host["id"])
+    assert r.status_code == 200, r.text
+    assert _statuses(r)["os"] == "ok"
+    body = r.json()
+    assert body["os"]["arch"] == platform.machine() and body["os"]["model"] is None
 
 
 def test_parse_os_variants():

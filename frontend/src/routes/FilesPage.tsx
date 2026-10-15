@@ -568,7 +568,7 @@ export function FilesPage(): JSX.Element {
         </ul>
         {places.length > 0 && (
           <div className="mt-4" data-testid="files-places">
-            <h3 className="mb-1 px-2 text-[11px] font-semibold uppercase tracking-wider opacity-60">Wichtige Orte</h3>
+            <h3 className="mb-1 px-2 text-xs font-semibold opacity-60">Wichtige Orte</h3>
             <ul className="text-sm">
               {places.map((place) => (
                 <li key={place.path}>
@@ -698,7 +698,7 @@ export function FilesPage(): JSX.Element {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+                <tr className="border-b border-white/10 text-left text-xs opacity-60">
                   <th className="py-1 w-1/2">Name</th>
                   <th className="py-1 whitespace-nowrap">Größe</th>
                   <th className="py-1 whitespace-nowrap">Geändert</th>

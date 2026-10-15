@@ -110,9 +110,9 @@ async def test_only_people_who_may_create_apps_see_suggestions(client, db_sessio
     assert (await client.get("/api/v1/apps/suggestions", headers=_auth(writer))).status_code == 200
 
 
-def test_npm_proxy_hosts_become_suggestions():
-    sys.path.insert(0, str(REPO_EXTENSIONS_DIR / "network" / "src"))
-    from nodvard_deck_ext_network.suggestions import suggestions_from_hosts
+def test_npm_proxy_hosts_become_suggestions(monkeypatch):
+    monkeypatch.syspath_prepend(str(REPO_EXTENSIONS_DIR / "npm" / "src"))
+    from nodvard_deck_ext_npm.suggestions import suggestions_from_hosts
 
     rows = suggestions_from_hosts([
         {"enabled": True, "domains": ["Cloud.Example.org", "nc.example.org"], "certificate_id": 3},
@@ -126,6 +126,8 @@ def test_npm_proxy_hosts_become_suggestions():
         ("cloud.example.org", "https://cloud.example.org", "Nginx Proxy Manager"),
         ("intern.example.org", "http://intern.example.org", "Nginx Proxy Manager"),
     ]
+    for name in [n for n in sys.modules if n.startswith("nodvard_deck_ext_npm")]:
+        del sys.modules[name]
 
 
 @pytest.mark.parametrize(

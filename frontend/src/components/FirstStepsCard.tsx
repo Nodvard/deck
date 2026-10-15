@@ -24,7 +24,7 @@ import { ButtonLink } from "./EmptyState";
 import { GuideLink } from "./GuideLink";
 
 const stepButton =
-  "inline-flex flex-none items-center justify-center rounded-lg px-2.5 py-1 text-xs font-medium transition accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110";
+  "inline-flex flex-none items-center justify-center rounded-lg px-2.5 py-1 text-xs font-medium transition accent-gradient text-on-accent hover:bg-accent-strong";
 
 function StepRow({ step }: { step: FirstStep }) {
   return (
@@ -104,7 +104,7 @@ export function FirstStepsCard() {
   async function dismiss() {
     setSaving(true);
     // Sofort ausblenden; scheitert das Speichern, kommt die Karte beim naechsten Laden eben wieder.
-    queryClient.setQueryData<Preferences>(["me", "preferences"], { first_steps_dismissed: true });
+    queryClient.setQueryData<Preferences>(["me", "preferences"], (old) => ({ ...old, first_steps_dismissed: true }));
     try {
       await api.patch<Preferences>("/me/preferences", { first_steps_dismissed: true });
     } catch {
@@ -117,7 +117,7 @@ export function FirstStepsCard() {
   return (
     <section className="panel mx-4 mt-5 p-4 sm:mx-6 sm:p-5" aria-labelledby="first-steps-title" data-testid="first-steps">
       <div className="flex items-start justify-between gap-3">
-        <h2 id="first-steps-title" className="text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Erste Schritte</h2>
+        <h2 id="first-steps-title" className="text-sm font-semibold">Erste Schritte</h2>
         <button
           type="button"
           onClick={() => void dismiss()}

@@ -1,0 +1,11 @@
+  [i] Upgrading gravity database from version 18 to 19
+  [i] Neutrino emissions detected...
+[K  [✓] Pulling blocklist source list into range
+
+  [i] Target: https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+  [i] Status: Pending...[K  [✓] Status: Retrieval successful
+  [i] Imported 104642 domains
+
+  [i] Number of gravity domains: 104642 (104642 unique domains)
+  [i] Number of exact denied domains: 1
+  [✓] Done.

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { refreshAccessToken, refreshAccessTokenResult } from "../../../../frontend/src/lib/extensionToken";
 import { SERVER_UNAVAILABLE_TEXT as CORE_SERVER_UNAVAILABLE_TEXT, useAuthStore } from "../../../../frontend/src/state/auth";
 
-import { authedFetch, errorFromBody, errorText, SERVER_UNAVAILABLE_TEXT, ServerUnavailableError } from "./api";
+import { authedFetch, authedFetchConfirmed, errorFromBody, errorText, SERVER_UNAVAILABLE_TEXT, ServerUnavailableError } from "./api";
 import { formatBytes } from "./format";
 
 let token: string | null;
@@ -355,5 +355,40 @@ describe("formatBytes", () => {
     expect(formatBytes(0, { fixed: true })).toBe("0 B");
     expect(formatBytes(2 * 1024 ** 3, { fixed: true })).toBe("2.0 GB");
     expect(formatBytes(45 * 1024 ** 3, { fixed: true })).toBe("45.0 GB");
+  });
+});
+
+describe("authedFetchConfirmed", () => {
+  const confirmRequired = () => new Response(JSON.stringify({ detail: "Bitte Passwort.", code: "confirm_required", two_factor: true }), { status: 403 });
+  const bodies = (mock: ReturnType<typeof vi.fn>) => mock.mock.calls.map((call) => JSON.parse(String((call[1] as RequestInit).body)));
+
+  it("fragt bei 403 confirm_required über den Kern nach und schickt den Aufruf mit Passwort und Code noch einmal", async () => {
+    const fetchMock = vi.fn(async (_url: string, init: RequestInit) => (String(init.body).includes("current_password") ? new Response(null, { status: 204 }) : confirmRequired()));
+    vi.stubGlobal("fetch", fetchMock);
+    const ask = vi.fn().mockResolvedValue({ current_password: "pw", totp_code: "123456" });
+    window.__lattice.confirmIdentity = ask;
+    const res = await authedFetchConfirmed("/extensions/proxmox/secrets", (c) => ({ method: "PUT", body: JSON.stringify({ label: "x", ...c }) }));
+    expect(res?.status).toBe(204);
+    expect(ask).toHaveBeenCalledWith("Bitte Passwort.", true);
+    expect(bodies(fetchMock)).toEqual([{ label: "x" }, { label: "x", current_password: "pw", totp_code: "123456" }]);
+  });
+
+  it("abgebrochen: null und kein zweiter Aufruf", async () => {
+    const fetchMock = vi.fn(async () => confirmRequired());
+    vi.stubGlobal("fetch", fetchMock);
+    window.__lattice.confirmIdentity = vi.fn().mockResolvedValue(null);
+    expect(await authedFetchConfirmed("/x", () => ({ method: "PUT", body: "{}" }))).toBeNull();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("älterer Kern ohne Dialog oder ein anderes 403: die Antwort kommt unverändert zurück", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => confirmRequired()));
+    const res = await authedFetchConfirmed("/x", () => ({ method: "PUT", body: "{}" }));
+    expect(res?.status).toBe(403);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ detail: "Keine Berechtigung." }), { status: 403 })));
+    window.__lattice.confirmIdentity = vi.fn();
+    const other = await authedFetchConfirmed("/x", () => ({ method: "PUT", body: "{}" }));
+    expect(other?.status).toBe(403);
+    expect(window.__lattice.confirmIdentity).not.toHaveBeenCalled();
   });
 });

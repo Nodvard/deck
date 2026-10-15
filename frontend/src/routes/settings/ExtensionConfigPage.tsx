@@ -10,6 +10,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { GuideLink } from "../../components/GuideLink";
 import { Icon } from "../../components/Icon";
 import { api } from "../../lib/api";
+import { CANCELLED, withConfirmation } from "../../lib/confirmation";
 import { EXTENSION_GUIDE } from "../../lib/docs";
 import { sameTarget } from "../../lib/targetAddress";
 import { confirmDialog } from "../../state/dialogs";
@@ -214,10 +215,12 @@ export function ExtensionConfigPage(): JSX.Element {
     setBusy(true);
     setNotice(null);
     try {
-      const d = await api.put<ExtSettings>(`/extensions/${extId}/settings`, {
-        values: changedValues(data?.schema ?? null, data?.values ?? {}, values),
-      });
-      if (!stillOpen(extId)) return;
+      const changed = changedValues(data?.schema ?? null, data?.values ?? {}, values);
+      // Löscht die Änderung hinterlegte Zugangsdaten, fragt der Server nach Passwort und gegebenenfalls Code.
+      const d = await withConfirmation((confirmation) =>
+        api.put<ExtSettings>(`/extensions/${extId}/settings`, { values: changed, ...confirmation }),
+      );
+      if (!stillOpen(extId) || d === CANCELLED) return;
       setData(d);
       setValues(d.values);
       setSaves((n) => n + 1);
@@ -447,7 +450,11 @@ function SecretRow({ extId, slot, lockedHint, onChanged }: { extId: string; slot
     setBusy("save");
     setNotice(null);
     try {
-      await api.put(`/extensions/${extId}/secrets`, { label: slot.label, value });
+      // Ein gespeicherter Wert wird nur mit Passwort und gegebenenfalls Code ersetzt (wie auf der Seite Tresor).
+      const done = await withConfirmation((confirmation) =>
+        api.put(`/extensions/${extId}/secrets`, { label: slot.label, value, ...confirmation }),
+      );
+      if (done === CANCELLED) return;
       setValue("");
       setEditing(false);
       onChanged(slot.label, true);
@@ -468,7 +475,10 @@ function SecretRow({ extId, slot, lockedHint, onChanged }: { extId: string; slot
     setBusy("remove");
     setNotice(null);
     try {
-      await api.delete(`/extensions/${extId}/secrets?label=${encodeURIComponent(slot.label)}`);
+      const done = await withConfirmation((confirmation) =>
+        api.delete(`/extensions/${extId}/secrets?label=${encodeURIComponent(slot.label)}`, confirmation),
+      );
+      if (done === CANCELLED) return;
       setValue("");
       setEditing(true);
       onChanged(slot.label, false);

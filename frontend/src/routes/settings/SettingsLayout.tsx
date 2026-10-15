@@ -2,7 +2,7 @@
  * Einstellungen mit Seitennavigation. Jeder Bereich ist eine eigene Unterseite
  * (/settings/<bereich>); Bereiche ohne passende Berechtigung werden nicht angezeigt.
  */
-import { BookOpen, Blocks, Bot, ExternalLink, HardDrive, History, Info, Palette, Server, UserCircle, Users } from "lucide-react";
+import { BookOpen, Blocks, Bot, ExternalLink, HardDrive, History, Info, KeyRound, Palette, Server, UserCircle, Users } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { NavLink, Navigate, Outlet, useLocation } from "react-router-dom";
 
@@ -20,9 +20,10 @@ interface Section {
 
 export const SECTIONS: Section[] = [
   { path: "account", label: "Mein Konto", description: "Profil, Passwort, Zwei-Faktor", icon: UserCircle },
-  { path: "appearance", label: "Aussehen", description: "Logo, Farben, Anmeldeseite", icon: Palette, permission: "branding.write" },
+  { path: "appearance", label: "Darstellung", description: "Theme, Logo, Akzentfarbe", icon: Palette },
   { path: "users", label: "Benutzer", description: "Konten und Rollen", icon: Users, permission: "users.read" },
   { path: "hosts", label: "Server & Zugänge", description: "Server anlegen, SSH-Zugang, Prüfung", icon: Server, permission: "hosts.write" },
+  { path: "vault", label: "Tresor", description: "Passwörter, Schlüssel, Tokens", icon: KeyRound, permission: "secrets.read" },
   { path: "automation", label: "Automatik & Sicherheit", description: "Freigaben, Sperrliste, Wartung", icon: Bot, permission: "settings.write" },
   // `system.read` zeigt die Sicherung, `settings.write` die Karte „Zeit & Protokoll“ -- eines reicht für den Reiter.
   { path: "system", label: "System", description: "Sicherung, Zeit, Protokoll", icon: HardDrive, permission: ["system.read", "settings.write"] },
@@ -54,7 +55,7 @@ export function SettingsLayout(): JSX.Element {
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 p-4 sm:p-6 lg:flex-row">
       <nav aria-label="Einstellungen" className="lg:w-60 lg:flex-none">
-        <h1 className="mb-3 px-2 text-xs font-semibold uppercase tracking-wider text-white/40">Einstellungen</h1>
+        <h1 className="mb-3 px-2 text-xs font-semibold text-white/40">Einstellungen</h1>
         <ul className="flex gap-1 overflow-x-auto lg:flex-col">
           {sections.map(({ path, label, description, icon: Icon }) => (
             <li key={path}>

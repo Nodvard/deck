@@ -217,6 +217,38 @@ async def confirm_current_totp(
         raise TotpRejected(str(exc), exc.code) from exc
 
 
+async def confirm_password_and_code(
+    request: Request, session, settings: Settings, user, password: str, code: str, action: str,
+) -> JSONResponse | None:
+    """Passwort und, wenn Zwei-Faktor an ist, der Code aus der App; `None` heißt bestätigt. Ohne Passwort 403, ein
+    fehlender Code kommt als fertige 403-Antwort (`totp_missing`) zurück, Falsches wie bei den beiden Teilen."""
+    if not password:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Bitte zur Bestätigung das aktuelle Passwort eingeben.")
+    await confirm_current_password(request, session, user, password, action)
+    try:
+        await confirm_current_totp(request, session, settings, user, code, action)
+    except TotpMissing as exc:
+        return exc.response()
+    return None
+
+
+CONFIRM_REQUIRED = "confirm_required"
+
+
+async def confirm_stored_secret_change(
+    request: Request, session, settings: Settings, user, password: str, code: str, action: str, detail: str,
+) -> JSONResponse | None:
+    """Für jeden Weg, der ein schon gespeichertes Geheimnis ersetzt oder löscht (Tresor-Seite, Moduleinstellungen,
+    Server-Zugang): ohne Passwort 403 `confirm_required` mit `two_factor`, damit die Oberfläche nachfragen und neu
+    senden kann; sonst wie `confirm_password_and_code`. `None` heißt bestätigt."""
+    if not password:
+        return JSONResponse(
+            {"detail": detail, "code": CONFIRM_REQUIRED, "two_factor": auth_service.two_factor_enabled(user)},
+            status_code=status.HTTP_403_FORBIDDEN,
+        )
+    return await confirm_password_and_code(request, session, settings, user, password, code, action)
+
+
 @router.get("/bootstrap")
 async def bootstrap_status(session: SessionDep, settings: SettingsDep) -> dict:
     """Ob die Erstinbetriebnahme noch offen ist (`needed`), ohne Anmeldung erreichbar; ohne Konto zusätzlich `restore`

@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Das Lynis-Audit wird über das eigene Hilfsprogramm des Moduls gestartet, abgefragt und bei Überlänge beendet, wenn es auf dem Server eingerichtet ist. Ein Audit, das schon vorher lief, wird normal zu Ende verfolgt. Ohne Hilfsprogramm bleibt alles wie bisher."

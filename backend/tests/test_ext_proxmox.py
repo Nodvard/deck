@@ -1463,6 +1463,10 @@ async def test_token_ersetzen_ueber_einstellungs_endpunkt(client, db_session, te
     assert second.status_code == 409, second.text
 
     body = {"label": "proxmox-token:pve1", "value": "zweit-geheim"}
+    # Ein gespeichertes Token ersetzt der Kern nur mit dem Passwort (wie auf der Seite Tresor).
+    refused = await client.put("/api/v1/extensions/proxmox/secrets", json=body, headers=headers)
+    assert refused.status_code == 403 and refused.json()["code"] == "confirm_required", refused.text
+    body["current_password"] = "correct-horse-battery"
     replaced = await client.put("/api/v1/extensions/proxmox/secrets", json=body, headers=headers)
     assert replaced.status_code == 204, replaced.text
     listed = await client.get("/api/v1/ext/proxmox/connections", headers=headers)

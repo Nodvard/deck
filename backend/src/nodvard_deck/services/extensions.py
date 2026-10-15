@@ -6,14 +6,16 @@ Jede Phase fängt ihre eigenen Fehler und setzt `state=error`; `enable_extension
 from __future__ import annotations
 
 import contextlib
+import copy
 import importlib
 import logging
+import re
 import sys
 from collections.abc import Iterable
 from pathlib import Path
 
 from fastapi import APIRouter, FastAPI
-from nodvard_sdk import ExtensionManifest, is_compatible
+from nodvard_sdk import AdoptSpec, ExtensionManifest, is_compatible
 from nodvard_sdk.version import API_VERSION as SDK_API_VERSION
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,12 +24,14 @@ from starlette.routing import BaseRoute
 from nodvard_sdk.types import Event
 
 from ..config import Settings
+from ..core import rbac
 from ..core.events import get_event_bus
 from ..db import utcnow
 from ..ext.context import build_context
 from ..ext.discovery import DiscoveredExtension, discover_all, resolve_legacy
+from ..ext.root_helpers import read_root_helper
 from ..ext.runtime import ExtensionRuntime, LoadedExtension, get_extension_runtime
-from ..models import ExtensionRecord, Setting
+from ..models import DashboardLayout, ExtensionRecord, Secret, Setting
 from . import audit as audit_service
 from . import settings as settings_service
 
@@ -152,11 +156,124 @@ async def auto_enable_for(
 
 
 def _stored_manifest(manifest: ExtensionManifest) -> dict:
-    """Das Manifest, wie es in der Registry-Zeile steht; eine leere `legacy_ids`-Liste bleibt weg."""
-    data = manifest.model_dump(mode="json")
-    if not data.get("legacy_ids"):
-        data.pop("legacy_ids", None)
+    """Das Manifest, wie es in der Registry-Zeile steht; leere `legacy_ids`- und `adopts`-Listen und ein fehlendes
+    `root_helper` bleiben weg, damit die Zeilen der übrigen Module unverändert bleiben.
+
+    Mit den Schlüsseln aus `extension.toml` (`adopts[].from`, nicht `from_`)."""
+    data = manifest.model_dump(mode="json", by_alias=True)
+    for key in ("legacy_ids", "adopts"):
+        if not data.get(key):
+            data.pop(key, None)
+    if data.get("root_helper") is None:
+        data.pop("root_helper", None)
     return data
+
+
+def _configured(section: dict, schema: dict | None) -> bool:
+    """Steht in einem Abschnitt der Einstellungen etwas Eingetragenes, nicht nur leere Felder und Vorgaben aus `schema`?"""
+    properties = (schema or {}).get("properties") or {}
+    defaults = {key: spec["default"] for key, spec in properties.items() if isinstance(spec, dict) and "default" in spec}
+    return any(
+        value not in (None, "", False, [], {}) and (key not in defaults or value != defaults[key])
+        for key, value in section.items()
+    )
+
+
+async def _adopt_widgets(session: AsyncSession, source: str, target: str, widgets: dict[str, str]) -> int:
+    """Hängt die Kacheln `widgets` (alt -> neu) von `source` in allen Cockpit-Layouts an `target` um, mit Ort, Größe und
+    `config`; steht die neue Kachel schon da, fällt die alte weg. Zurück: die Zahl der umgehängten Kacheln."""
+    if not widgets:
+        return 0
+    moved = 0
+    for layout in (await session.execute(select(DashboardLayout))).scalars():
+        items = list(layout.items or [])
+        present = {(i.get("ext_id"), i.get("widget_id")) for i in items if isinstance(i, dict)}
+        changed = False
+        out = []
+        for item in items:
+            if isinstance(item, dict) and item.get("ext_id") == source and item.get("widget_id") in widgets:
+                changed = True
+                key = (target, widgets[item["widget_id"]])
+                if key in present:
+                    continue
+                present.add(key)
+                item = {**item, "ext_id": target, "widget_id": key[1]}
+                moved += 1
+            out.append(item)
+        if changed:
+            layout.items = out
+    return moved
+
+
+async def _adopt_secrets(session: AsyncSession, manifest: ExtensionManifest, source: str, labels: list[str]) -> int:
+    """Macht die Tresor-Einträge `labels` von `source` zu eigenen, soweit das Modul sie lesen darf. Zurück: ihre Zahl."""
+    moved = 0
+    for label in labels:
+        if not rbac.has_permission(manifest.permissions, f"secrets.read:{label}"):
+            log.warning("Erweiterung '%s' darf '%s' nicht lesen und übernimmt den Eintrag nicht.", manifest.id, label)
+            continue
+        secret = (await session.execute(select(Secret).where(Secret.label == label))).scalar_one_or_none()
+        if secret is not None and secret.owner_ext_id == source:
+            secret.owner_ext_id = manifest.id
+            moved += 1
+    return moved
+
+
+def _uncovered(permissions: Iterable[str], granted: Iterable[str] | None) -> list[str]:
+    """Die Rechte aus `permissions`, die `granted` nicht deckt (leer: alle gedeckt)."""
+    have = list(granted or [])
+    return [p for p in permissions if not rbac.has_permission(have, p)]
+
+
+async def _adopt(
+    session: AsyncSession, d: DiscoveredExtension, record: ExtensionRecord, existing: set[str], sources: dict[str, str],
+) -> bool:
+    """Übernimmt beim ersten Entdecken, was andere Module abgeben (`adopts`), aber nur aus Zeilen von vor diesem Start
+    (`existing`). Zurück: ob etwas übernommen wurde; dann gilt das Ein/Aus als bewusst gewählt.
+
+    Nur unter mitgelieferten Modulen (`source == "bundled"` beim übernehmenden Fund und bei der Quelle, `sources`: die
+    Funde dieses Starts, sonst die gespeicherte Zeile): Ein nachinstalliertes Paket bekommt so nie Einstellungen, Kacheln
+    oder Tresor-Einträge eines anderen Moduls. Eingeschaltet wird nur, wenn die Quelle alle Rechte des neuen Moduls
+    hatte."""
+    manifest = d.manifest
+    assert manifest is not None  # nur für gültige Funde
+    adopted = False
+    for spec in manifest.adopts:
+        source = await session.get(ExtensionRecord, spec.from_) if spec.from_ in existing else None
+        if source is None:
+            continue
+        if d.source != "bundled" or sources.get(d.id) != "bundled" or sources.get(source.id, source.source) != "bundled":
+            log.warning(
+                "Erweiterung '%s' (%s) übernimmt nichts von '%s': nur mitgelieferte Module übernehmen voneinander.",
+                record.id, d.source, spec.from_,
+            )
+            continue
+        adopted = True
+        section = (source.settings or {}).get(spec.settings) if spec.settings else None
+        took_settings = isinstance(section, dict) and bool(section)
+        if took_settings:
+            record.settings = {**(record.settings or {}), **copy.deepcopy(section)}
+        # Eingeschaltet nur, wo der Teil wirklich in Gebrauch war.
+        configured = _configured(section, manifest.settings_schema) if isinstance(section, dict) else spec.settings is None
+        # Mehr Rechte, als die Quelle hatte, gibt es nur durch bewusstes Einschalten.
+        extra = _uncovered(manifest.permissions, source.granted_permissions)
+        enabled = source.state == "enabled" and configured and not extra
+        if extra and source.state == "enabled" and configured:
+            log.warning("Erweiterung '%s' bleibt aus: '%s' hatte diese Rechte nicht: %s", record.id, spec.from_, extra)
+        if enabled:
+            record.state = "enabled"
+        widgets = await _adopt_widgets(session, spec.from_, record.id, spec.widgets)
+        secrets = await _adopt_secrets(session, manifest, spec.from_, spec.secrets)
+        log.info("Erweiterung '%s' übernimmt einen Teil von '%s'.", record.id, spec.from_)
+        await audit_service.log(
+            session, actor_type="system", actor_id="system", action="extension.adopted", outcome="success",
+            target_type="extension", target_id=record.id,
+            detail={
+                "from": spec.from_, "settings": took_settings, "enabled": enabled, "widgets": widgets, "secrets": secrets,
+                "extra_permissions": extra,
+            },
+        )
+    return adopted
 
 
 async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> ExtensionRecord | None:
@@ -181,15 +298,40 @@ async def _find_record(session: AsyncSession, d: DiscoveredExtension) -> Extensi
     return chosen
 
 
+def _without_twins(found: list[DiscoveredExtension]) -> list[DiscoveredExtension]:
+    """Jede Kennung nur einmal: Es gilt der erste Fund (der Ordner der mitgelieferten Module kommt vor den Paketen), jeder
+    weitere mit derselben Kennung wird verworfen. Sonst ersetzte ein nachinstalliertes Paket ein mitgeliefertes Modul
+    samt Zeile, Einstellungen, Rechten und dem, was es beim ersten Entdecken übernimmt (`adopts`).
+
+    Ein Paket mit kaputtem Manifest trägt den Distributionsnamen statt einer Kennung und belegt nichts."""
+    taken: dict[str, DiscoveredExtension] = {}
+    kept: list[DiscoveredExtension] = []
+    for d in found:
+        first = taken.get(d.id)
+        if first is not None:
+            log.warning(
+                "Erweiterung '%s' (%s, %s) wird nicht geladen: Die Kennung gibt es schon (%s, %s).",
+                d.id, d.source, d.source_path, first.source, first.source_path,
+            )
+            continue
+        if d.ok or d.source == "bundled":
+            taken[d.id] = d
+        kept.append(d)
+    return kept
+
+
 async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[str, DiscoveredExtension]:
     """Scannt, legt Zeilen für neue Funde an (`state=disabled`, aktiviert wird bewusst) und merkt sich das Ergebnis.
 
     Bei Umbenennungen gilt die Zeile der alten Kennung weiter; nichts wird kopiert, ein Rückweg findet sie wieder."""
-    resolution = resolve_legacy(discover_all(settings.extensions_dir))
+    resolution = resolve_legacy(_without_twins(discover_all(settings.extensions_dir)))
     for refused in resolution.refused:
         log.warning("Erweiterung '%s' wird nicht geladen: %s", refused.id, refused.error)
     by_id: dict[str, DiscoveredExtension] = {}
     store_ids: dict[str, str] = {}
+    # Zeilen vor diesem Start: nur aus ihnen übernimmt ein neues Modul etwas (`adopts`).
+    existing = set((await session.execute(select(ExtensionRecord.id))).scalars())
+    sources = {d.id: d.source for d in resolution.found if d.ok}
     for d in resolution.found:
         if not d.ok:
             continue
@@ -197,18 +339,20 @@ async def discover_and_sync(session: AsyncSession, settings: Settings) -> dict[s
         by_id[d.id] = d
         record = await _find_record(session, d)
         if record is None:
-            session.add(
-                ExtensionRecord(
-                    id=d.manifest.id,
-                    version=d.manifest.version,
-                    api_version=d.manifest.api_version,
-                    state="disabled",
-                    source=d.source,
-                    manifest=_stored_manifest(d.manifest),
-                )
+            record = ExtensionRecord(
+                id=d.manifest.id,
+                version=d.manifest.version,
+                api_version=d.manifest.api_version,
+                state="disabled",
+                source=d.source,
+                manifest=_stored_manifest(d.manifest),
+                settings={},
             )
-            # Neu entdeckt und noch nie angefasst (siehe UNTOUCHED_KEY_PREFIX).
-            await settings_service.set_global(session, UNTOUCHED_KEY_PREFIX + d.id, True)
+            session.add(record)
+            # Neu entdeckt und noch nie angefasst (siehe UNTOUCHED_KEY_PREFIX), außer es übernimmt den Teil eines
+            # anderen Moduls (`adopts`): Dessen Ein/Aus war schon eine Wahl.
+            if not await _adopt(session, d, record, existing, sources):
+                await settings_service.set_global(session, UNTOUCHED_KEY_PREFIX + d.id, True)
             store_ids[d.id] = d.id
         else:
             record.version = d.manifest.version
@@ -356,6 +500,9 @@ async def _enable_extension(
         if src_dir.is_dir() and str(src_dir) not in sys.path:
             sys.path.insert(0, str(src_dir))
 
+    # Vor dem Import und ohne Code des Moduls: Der Text läuft später als root auf den Servern.
+    root_helper = read_root_helper(discovered)
+
     module_name, _, class_name = manifest.entrypoint.partition(":")
     try:
         module = importlib.import_module(module_name)
@@ -368,7 +515,8 @@ async def _enable_extension(
         return
 
     loaded = LoadedExtension(
-        manifest=manifest, instance=instance, ctx=None, granted_permissions=granted, store_id=record.id
+        manifest=manifest, instance=instance, ctx=None, granted_permissions=granted, store_id=record.id,
+        root_helper=root_helper,
     )
     ctx = build_context(runtime, loaded, manifest, granted, _data_dir(settings, manifest, record.id), settings)
     loaded.ctx = ctx
@@ -393,8 +541,12 @@ async def _enable_extension(
         return
 
     if loaded.router is not None:
-        # Unter der heutigen Kennung und jeder alten; `mounted_routes` lässt das Ausschalten alle entfernen.
-        loaded.mounted_routes = _mount_routes(app, runtime, manifest.id, loaded.router)
+        # Unter der heutigen Kennung, jeder alten und den übernommenen Adressen anderer Module (`adopts.routes`);
+        # `mounted_routes` lässt das Ausschalten alle entfernen.
+        adopts = [spec for spec in manifest.adopts if await _may_alias(session, runtime, discovered, spec.from_)]
+        loaded.mounted_routes = _mount_routes(
+            app, runtime, manifest.id, loaded.router, adopts=adopts, included=ctx.api.included,
+        )
 
     await session.commit()
     start_error: Exception | None = None
@@ -439,14 +591,85 @@ async def _enable_extension(
     await get_event_bus().publish(Event(name="extension.enabled", payload={"ext_id": ext_id}))
 
 
-def _mount_routes(app: FastAPI, runtime: ExtensionRuntime, ext_id: str, router: APIRouter) -> list[BaseRoute]:
-    """Hängt den Router unter der heutigen und jeder alten Kennung ein (alte als veraltet markiert, gleiche Routen).
+async def _may_alias(session: AsyncSession, runtime: ExtensionRuntime, d: DiscoveredExtension, source_id: str) -> bool:
+    """Alte Adressen eines anderen Moduls (`adopts.routes`) nur unter mitgelieferten Modulen, wie bei `_adopt`."""
+    if d.source != "bundled":
+        return False
+    found = runtime.discovered.get(source_id)
+    if found is not None:
+        return found.source == "bundled"
+    record = await session.get(ExtensionRecord, source_id)
+    return record is not None and record.source == "bundled"
 
-    Wirft ein Einhängen, werden die schon eingehängten Routen wieder entfernt, sonst blieben sie verwaist stehen."""
-    # `mount_router` fügt immer an derselben Stelle ein, Späteres steht also davor: erst die alten Kennungen rückwärts,
-    # die heutige zuletzt, damit die heutige vorn steht (`url_for`, OpenAPI) und die alten wie im Manifest folgen.
+
+def _path_shape(path: str) -> str:
+    """Pfad ohne Namen der Platzhalter: `/a/{id}` und `/a/{host_id}` treffen dieselben Adressen."""
+    return re.sub(r"\{[^}]*\}", "{}", path)
+
+
+def _served_by(runtime: ExtensionRuntime, ext_id: str) -> set[str]:
+    """Die Pfade (unter `/api/v1/ext/<ext_id>`), die die geladene Erweiterung `ext_id` selbst bedient."""
+    from fastapi.routing import APIRoute
+
+    loaded = runtime.loaded.get(ext_id)
+    if loaded is None or loaded.ctx is None:
+        return set()
+    return {
+        _path_shape(prefix + route.path)
+        for router, prefix, _deps in loaded.ctx.api.included
+        for route in getattr(router, "routes", [])
+        if isinstance(route, APIRoute)
+    }
+
+
+def _adopted_router(included: Iterable[tuple[APIRouter, str, list]], routes: dict[str, str]) -> tuple[APIRouter, list[str]]:
+    """Die eigenen Routen unter den alten Adressen aus `adopts.routes`, mit der Zugriffsprüfung ihres Routers, und die
+    alten Adressen ohne passende eigene Route."""
+    from fastapi.routing import APIRoute
+
+    out = APIRouter()
+    found: set[str] = set()
+    for router, prefix, dependencies in included:
+        part = APIRouter()
+        for route in getattr(router, "routes", []):
+            if not isinstance(route, APIRoute):
+                continue  # Unter-Router und anderes: keine Weiterleitung
+            for old, new in routes.items():
+                if prefix + route.path == new:
+                    # Eine Kopie mit der alten Adresse; FastAPI baut die Route beim Einhängen daraus neu auf.
+                    clone = copy.copy(route)
+                    clone.path = old
+                    part.routes.append(clone)
+                    found.add(old)
+        if part.routes:
+            out.include_router(part, dependencies=dependencies)
+    return out, [old for old in routes if old not in found]
+
+
+def _mount_routes(
+    app: FastAPI, runtime: ExtensionRuntime, ext_id: str, router: APIRouter, *,
+    adopts: Iterable[AdoptSpec] = (), included: Iterable[tuple[APIRouter, str, list]] = (),
+) -> list[BaseRoute]:
+    """Hängt den Router unter der heutigen Kennung ein, als veraltet auch unter jeder alten und unter den Adressen aus
+    `adopts.routes`; wirft ein Einhängen, kommen die schon eingehängten Routen wieder heraus."""
+    # `mount_router` fügt immer an derselben Stelle ein, Späteres steht also davor: erst die übernommenen und die alten
+    # Kennungen rückwärts, die heutige zuletzt, damit die heutige vorn steht (`url_for`, OpenAPI).
     legacy_routes: list[BaseRoute] = []
+    included = list(included)
     try:
+        for spec in reversed(list(adopts)):
+            # Was die geladene Quelle selbst bedient, bleibt bei ihr: keine Weiterleitung davor.
+            served = _served_by(runtime, spec.from_)
+            routes = {old: new for old, new in spec.routes.items() if _path_shape(old) not in served}
+            for skipped in [old for old in spec.routes if old not in routes]:
+                log.warning("Erweiterung '%s': '%s' bedient %r selbst, keine Weiterleitung.", ext_id, spec.from_, skipped)
+            if not routes:
+                continue
+            alias, missing = _adopted_router(included, routes)
+            for old in missing:
+                log.warning("Erweiterung '%s': zu adopts.routes %r gibt es keine eigene Route.", ext_id, old)
+            if alias.routes:
+                legacy_routes += runtime.mount_router(app, spec.from_, alias, deprecated=True)
         for old in reversed(runtime.legacy_ids_of(ext_id)):
             legacy_routes += runtime.mount_router(app, old, router, deprecated=True)
         current = runtime.mount_router(app, ext_id, router)

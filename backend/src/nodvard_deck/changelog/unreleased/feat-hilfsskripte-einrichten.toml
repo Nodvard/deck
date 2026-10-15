@@ -1,0 +1,7 @@
+[[entries]]
+kind = "verbessert"
+text = "Server einrichten mit „Root-Rechte ohne Passwort“ legt jetzt auch die Hilfsprogramme von Nodvard Shield und Server-Zustand auf den Server, jedes mit einer eigenen, engen sudo-Regel. Das ist die Vorbereitung dafür, dass das Dashboard später ohne volle Administratorrechte auskommt."
+
+[[entries]]
+kind = "neu"
+text = "„Verbindung prüfen“ zeigt je Modul, ob sein Hilfsprogramm auf dem Server liegt, ob es aktuell ist und ob nur der Administrator es ändern kann."

@@ -299,7 +299,7 @@ function Icon({ name, size: size2 = 16, className = "" }) {
   );
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -458,7 +458,7 @@ function size(bytes) {
 }
 function Stat({ label, value, sub }) {
   return /* @__PURE__ */ jsxs3("div", { className: "panel p-4", children: [
-    /* @__PURE__ */ jsx4("p", { className: "text-[11px] font-medium uppercase tracking-wider text-white/50", children: label }),
+    /* @__PURE__ */ jsx4("p", { className: "text-xs font-medium text-white/50", children: label }),
     /* @__PURE__ */ jsx4("div", { className: "mt-1.5 text-2xl font-semibold tabular-nums", children: value }),
     sub && /* @__PURE__ */ jsx4("p", { className: "mt-0.5 text-xs text-white/50", children: sub })
   ] });
@@ -527,7 +527,7 @@ function SettingsPanel({ server, profiles, profilesError, onRetryProfiles, onSav
       /* @__PURE__ */ jsx4("span", { className: "mt-1 block text-[11px] text-white/40", children: field.help })
     ] }, field.key)) }),
     error && /* @__PURE__ */ jsx4("p", { className: "mt-2 text-sm text-red-400", children: error }),
-    /* @__PURE__ */ jsx4("div", { className: "mt-3 flex justify-end", children: /* @__PURE__ */ jsx4("button", { type: "button", disabled: saving, onClick: () => void save(), className: "accent-gradient rounded-lg px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50", children: saving ? "Speichere \u2026" : "Speichern" }) })
+    /* @__PURE__ */ jsx4("div", { className: "mt-3 flex justify-end", children: /* @__PURE__ */ jsx4("button", { type: "button", disabled: saving, onClick: () => void save(), className: "accent-gradient rounded-lg px-3 py-1.5 text-sm font-medium text-on-accent disabled:opacity-50", children: saving ? "Speichere \u2026" : "Speichern" }) })
   ] });
 }
 function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction, pending, reload }) {
@@ -560,7 +560,7 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
   );
   return /* @__PURE__ */ jsxs3("section", { id: `host-${server.host_id}`, className: "mb-8 scroll-mt-4", "data-testid": `server-${server.host_id}`, children: [
     /* @__PURE__ */ jsxs3("div", { className: "flex flex-wrap items-center gap-3", children: [
-      /* @__PURE__ */ jsx4("span", { className: "accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-white shadow-lg shadow-black/40", children: server.name.slice(0, 1).toUpperCase() }),
+      /* @__PURE__ */ jsx4("span", { className: "accent-gradient grid h-11 w-11 place-items-center rounded-xl text-lg font-bold text-on-accent", children: server.name.slice(0, 1).toUpperCase() }),
       /* @__PURE__ */ jsxs3("div", { className: "min-w-0", children: [
         /* @__PURE__ */ jsx4("h3", { className: "text-lg font-semibold leading-tight", children: server.name }),
         /* @__PURE__ */ jsxs3("p", { className: "text-xs text-white/50", children: [
@@ -570,7 +570,7 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
       ] }),
       /* @__PURE__ */ jsx4("span", { className: `rounded-full border px-2.5 py-0.5 text-xs font-medium ${TONE[server.tone] ?? TONE.neutral}`, children: server.service_label }),
       /* @__PURE__ */ jsxs3("div", { className: "ml-auto flex flex-wrap gap-2", children: [
-        canExecute && server.can_start && button("start", "accent-gradient text-white"),
+        canExecute && server.can_start && button("start", "accent-gradient text-on-accent"),
         canExecute && server.running && button("restart", "bg-white/10 hover:bg-white/20"),
         canExecute && server.running && button("backup", "bg-white/10 hover:bg-white/20"),
         canExecute && server.can_stop && button("stop", "bg-red-500/20 text-red-200 hover:bg-red-500/30"),
@@ -647,13 +647,13 @@ function ServerCard({ server, profiles, profilesError, onRetryProfiles, onAction
       ] }),
       /* @__PURE__ */ jsxs3("div", { className: "panel p-4", children: [
         /* @__PURE__ */ jsx4("p", { className: "mb-2 text-sm font-semibold", children: "Sicherungen" }),
-        /* @__PURE__ */ jsx4("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Eigene" }),
+        /* @__PURE__ */ jsx4("p", { className: "mb-1 text-xs text-white/45", children: "Eigene" }),
         (d.backups ?? []).length === 0 && /* @__PURE__ */ jsx4("p", { className: "mb-2 text-sm text-white/50", children: "Noch keine \u2013 \u201EWelt sichern\u201C legt eine an." }),
         /* @__PURE__ */ jsx4("ul", { className: "mb-3", children: (d.backups ?? []).map((b) => /* @__PURE__ */ jsxs3("li", { className: "flex justify-between py-1 text-sm", children: [
           /* @__PURE__ */ jsx4("span", { className: "font-mono text-xs", children: b.name }),
           /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: size(b.size) })
         ] }, b.name)) }),
-        /* @__PURE__ */ jsx4("p", { className: "mb-1 text-[11px] uppercase tracking-wider text-white/45", children: "Automatisch (vom Spiel)" }),
+        /* @__PURE__ */ jsx4("p", { className: "mb-1 text-xs text-white/45", children: "Automatisch (vom Spiel)" }),
         /* @__PURE__ */ jsx4("ul", { children: (d.auto_backups ?? []).map((b) => /* @__PURE__ */ jsxs3("li", { className: "flex justify-between py-1 text-sm", children: [
           /* @__PURE__ */ jsx4("span", { children: ago(b.age_s) }),
           /* @__PURE__ */ jsx4("span", { className: "text-white/50", children: size(b.size) })

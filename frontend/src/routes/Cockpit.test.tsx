@@ -56,10 +56,10 @@ beforeEach(() => {
 });
 
 describe("Cockpit", () => {
-  it("Lagebild: Begrüßung, was Aufmerksamkeit braucht, Kennzahlen", async () => {
+  it("Lagebild: sachliche Überschrift ohne Begrüßung, was Aufmerksamkeit braucht, Kennzahlen", async () => {
     vi.stubGlobal("fetch", mockFetch());
     renderCockpit();
-    expect(screen.getByRole("heading", { level: 1 }).textContent).toMatch(/, Nico$/);
+    expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("Übersicht");
     await waitFor(() => expect(screen.getByTestId("cockpit-status").textContent).toContain("2 Dinge brauchen deine Aufmerksamkeit"));
     expect(screen.getByTestId("stat-Server").textContent).toContain("9/9");
     expect(screen.getByTestId("stat-Dienste").textContent).toContain("13/14");
@@ -77,7 +77,7 @@ describe("Cockpit", () => {
     const pve2 = await screen.findByTestId("node-n-pve2");
     await waitFor(() => expect(within(pve2).getByRole("img", { name: "CPU 14 %" })).toBeInTheDocument());
     expect(within(pve2).getByRole("img", { name: "RAM 83 %" })).toBeInTheDocument();
-    expect(pve2.textContent).toContain("läuft seit 10 h 38 min");
+    expect(screen.getByTestId("node-n-pve2-uptime").textContent).toBe("10 h 38 min");
 
     // Name fuehrt auf die Server-Seite (Plesk-Stil) -- Knoten wie Maschinen.
     expect(within(pve2).getByRole("link", { name: "pve2" })).toHaveAttribute("href", "/hosts/n-pve2");

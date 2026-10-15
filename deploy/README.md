@@ -53,7 +53,7 @@ zusammen: `user: "1000:1000"` und `group_add: [...]`; der Datenordner muss dann 
 
 ```bash
 # Aus dem Repository-Root:
-docker buildx build -f deploy/Dockerfile \
+docker buildx build --pull -f deploy/Dockerfile \
   --platform linux/amd64,linux/arm64 \
   -t nodvard-deck:latest \
   --load .    # --load fuer eine einzelne lokale Architektur; fuer beide zugleich
@@ -64,8 +64,11 @@ docker buildx build -f deploy/Dockerfile \
 Für einen einzelnen Zielrechner reicht ein normaler Build ohne `buildx`:
 
 ```bash
-docker build -f deploy/Dockerfile -t nodvard-deck:latest .
+docker build --pull -f deploy/Dockerfile -t nodvard-deck:latest .
 ```
+
+`--pull` holt die Basis-Images (`python`, `node`) jedes Mal frisch. Ohne bleibt die einmal geladene Fassung im
+Build-Cache liegen, und Sicherheitskorrekturen darin kommen nie im Image an.
 
 Laufzeitdaten gelangen nicht ins Image: `.dockerignore` schließt in jedem Unterordner (z. B. ein `backend/data/` nach
 einem Start aus `backend/`) Datenordner `data/`, Datenbanken (`*.db`, `*.sqlite`), Sicherungen (`*.ndbak`), Schlüssel
@@ -105,7 +108,8 @@ scripts/deploy_pi.sh
 
 Was das Skript tut:
 
-1. `docker buildx build --platform linux/arm64 -f deploy/Dockerfile -t nodvard-deck:pi-<sha> --load .`
+1. `docker buildx build --pull --platform linux/arm64 -f deploy/Dockerfile -t nodvard-deck:pi-<sha> --load .`
+   (`--pull`: Basis-Images frisch holen, siehe „Bauen“).
    Die Frontend-Stufe läuft dank `FROM --platform=$BUILDPLATFORM` nativ, nur die
    Python-Stufe wird für arm64 gebaut (alle Wheels vorhanden, ~2 Min beim ersten Mal).
 2. `deploy/` (compose, entrypoint) per `git archive` auf den Pi kopieren.
@@ -239,9 +243,10 @@ belastet ihn stark):
 # Vor dem Auspacken den alten Ordner extensions/ löschen: sonst bleibt z. B. extensions/nexus-soc neben
 # extensions/shield liegen, und Nodvard Deck startet wegen doppelter Migrationen nicht.
 git archive -o /tmp/nodvard-deck.tar HEAD && scp /tmp/nodvard-deck.tar "$PI_HOST":~/nodvard-deck.tar
+# Erst bauen (mit frisch geholten Basis-Images), dann umschalten: Das alte Dashboard läuft während des Baus weiter.
 ssh "$PI_HOST" 'rm -rf ~/lattice-deploy-test/extensions && tar -xf ~/nodvard-deck.tar -C ~/lattice-deploy-test \
-  && cd ~/lattice-deploy-test/deploy \
-  && { docker stop deploy-lattice-1 2>/dev/null || true; } && docker compose -p deploy up -d --build'
+  && cd ~/lattice-deploy-test/deploy && docker compose -p deploy build --pull \
+  && { docker stop deploy-lattice-1 2>/dev/null || true; } && docker compose -p deploy up -d --no-build'
 # danach bis zu 4 Min: curl -s localhost:8080/api/v1/health  ->  "status":"ok"
 # und: curl -s localhost:8080/api/v1/auth/bootstrap  ->  {"needed":false}  (sonst: Daten fehlen!)
 # Klappt es: docker rm deploy-lattice-1   (der alte Container, nur noch Altlast)
@@ -483,6 +488,19 @@ vorgemerkte Wiederherstellung einspielen, **Kopie der Datenbank anlegen, wenn ei
     lässt sich in 0.6.x einspielen, das alte Image warnt aber „Diese Erweiterungen aus der Sicherung gibt es hier nicht: shield …“ und zeigt die Einstellungen von
     Shield nicht; nach dem
     Update auf 0.7 sind sie wieder da.
+- **Zurück von 0.9 auf 0.8 (das Modul Docker heißt technisch seit 0.9 `docker` statt `service-matrix`):** Dafür bringt 0.9 keine
+  Migration, der Rückweg braucht also keine Kopie und keine Notseite.
+  * **Bestehende Installation** (schon vor 0.9 eingerichtet): Docker nutzt weiter die gespeicherte Zeile `service-matrix`. Nach dem
+    Rückweg ist alles da: Einstellungen, eigene Kachel-Adressen, der Zeitplan der Image-Prüfung und laufende Image-Updates. Nur
+    Meldungen, die unter 0.9 entstanden sind, verlinken auf `/ext/docker/matrix`; diese Seite kennt das alte Image nicht. Ein
+    erneutes Update auf 0.9 geht ohne Verlust.
+  * **Neu mit 0.9 eingerichtet** (Zeile `docker`): Das alte Image kennt diese Kennung nicht und zeigt Docker unter Einstellungen →
+    Erweiterungen als „Fehler“, dazu legt es eine ausgeschaltete Zeile `service-matrix` ohne Einstellungen an; Docker ist im alten
+    Image also aus. Nach dem erneuten Update auf 0.9 läuft es wieder mit seinen Einstellungen, ohne Einschalten von Hand. Was in
+    der Zeit mit dem alten Image unter `service-matrix` eingestellt wurde, kommt nicht mit.
+  * **Sicherungen:** Eine Sicherung aus 0.8 lässt sich in 0.9 einspielen. Eine Sicherung aus einer mit 0.9 neu eingerichteten
+    Installation lässt sich in 0.8 einspielen, das alte Image warnt aber „Diese Erweiterungen aus der Sicherung gibt es hier nicht:
+    docker …“; nach dem Update auf 0.9 sind die Einstellungen wieder da.
 - **Sperre:** Die laufende Anwendung hält `/app/data/.boot/app.lock`. Ein zweiter Container mit demselben Datenordner (z. B. `docker compose run nodvard-deck …` neben dem laufenden Dienst)
   ändert deshalb nichts: `boot` beendet sich mit Code 75. Für Wartungsbefehle lieber `docker compose exec`, oder `run --entrypoint …` bei gestoppter Anwendung (so machen es `backup.sh` und `restore.sh`).
 - **Healthcheck:** `--start-period` ist **300 s** (Image und beide Compose-Dateien), damit eine lange Migration samt Kopie nicht als „unhealthy“ gilt.
@@ -571,7 +589,7 @@ es als `python -I -m nodvard_deck_updater --selftest`).
 **Helfer aktualisieren** (nicht, während er gerade ein Update macht): `docker compose pull updater && docker compose up -d updater`
 (Synology: per SSH im Projektordner, mit `sudo` davor). Willst du genau festlegen, welcher Helfer läuft, häng den Digest
 an: `image: ghcr.io/nodvard/deck-updater:1@sha256:…` (Wert: `docker buildx imagetools inspect ghcr.io/nodvard/deck-updater:1`,
-Zeile „Digest“). Dann wechselt er nur, wenn du den Wert änderst. Die Service-Matrix bietet für das Helfer-Image kein
+Zeile „Digest“). Dann wechselt er nur, wenn du den Wert änderst. Das Modul Docker bietet für das Helfer-Image kein
 „Einspielen“ an.
 
 **Helfer ausschalten oder entfernen**

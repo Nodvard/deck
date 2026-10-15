@@ -437,7 +437,7 @@ async def _fake_docker(process) -> None:  # noqa: ANN001
     if parts[1:3] == ["image", "inspect"]:  # --format FORMAT ziel
         import json as _json
 
-        await _out(_json.dumps({"repo_digests": ["nginx@" + FAKE_DOCKER["local_digest"]], "id": parts[-1]}) + "\n")
+        await _out(_json.dumps({"RepoDigests": ["nginx@" + FAKE_DOCKER["local_digest"]], "Id": parts[-1]}) + "\n")
         return
     if parts[1:4] == ["buildx", "imagetools", "inspect"]:
         import json as _json

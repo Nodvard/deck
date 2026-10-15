@@ -556,11 +556,11 @@ def test_a_shield_finding_makes_the_script_fail_with_a_hint(monkeypatch, capsys)
     assert "`lattice` ist (wieder)" not in out, "nur der Teil mit dem Fund wird ausgegeben"
 
 
-def test_the_script_reports_both_rules_when_it_is_clean(monkeypatch, capsys):
+def test_the_script_reports_every_rule_when_it_is_clean(monkeypatch, capsys):
     monkeypatch.setattr(guard, "find_violations", list)
     assert guard.main([]) == 0
     out = capsys.readouterr().out
-    assert out.count("OK:") == 2 and "lattice" in out and "Shield" in out
+    assert out.count("OK:") == 3 and "lattice" in out and "Shield" in out and "service-matrix" in out
 
 
 # --------------------------------------------------------------------------- Regel 3: die Positivliste
@@ -632,3 +632,78 @@ def test_shield_exemptions_are_only_what_the_rule_names():
         "scripts/check_core_purity.py",
         "backend/tests/test_no_visible_nexus.py",
     )
+
+
+# --------------------------------------------------------------------------- Regel 4: die alte Docker-Kennung
+
+
+def docker_kinds(text: str, rel: str) -> list[str]:
+    return [f.rule for f in guard.check_docker_text(rel, text)]
+
+
+def test_the_repository_does_not_use_the_old_docker_package_or_addresses():
+    findings = [f for f in guard.find_violations() if f.rule.startswith("docker-")]
+    assert not findings, "\n" + "\n".join(f"  {f}" for f in findings)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "from nodvard_deck_ext_service_matrix import capabilities",
+        'entrypoint = "nodvard_deck_ext_service_matrix:Extension"',
+        'monkeypatch.setattr("nodvard_deck_ext_service_matrix.applier.POLL_INTERVAL_S", 0)',
+    ],
+)
+def test_the_old_docker_package_is_found_everywhere(line):
+    for rel in (
+        "extensions/docker/src/nodvard_deck_ext_docker/__init__.py",
+        "backend/tests/test_ext_docker.py",
+        "backend/tests/test_docker_legacy_ids.py",
+        "extensions/docker/extension.toml",
+    ):
+        assert docker_kinds(line, rel) == ["docker-paket"], (line, rel)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'fetchJson("/ext/service-matrix/widgets/matrix")',
+        'await client.put("/api/v1/extensions/service-matrix/settings", json={})',
+        '<SettingsLink to="/settings/extensions/service-matrix">',
+        'payload={"path": f"/ext/service-matrix/matrix?host={host.id}"}',
+    ],
+)
+def test_the_old_docker_addresses_stand_only_in_alias_tests(line):
+    for rel in (
+        "extensions/docker/frontend/src/ContainersPage.tsx",
+        "extensions/docker/src/nodvard_deck_ext_docker/applier.py",
+        "backend/tests/test_ext_docker.py",
+        "frontend/src/routes/Cockpit.tsx",
+    ):
+        assert docker_kinds(line, rel) == ["docker-adresse"], (line, rel)
+    for rel in ("backend/tests/test_docker_legacy_ids.py", "extensions/docker/frontend/src/ContainersPageLegacy.test.tsx"):
+        assert docker_kinds(line, rel) == [], (line, rel)
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        'action="service_matrix.tile_url"',
+        'ExtensionRecord(id="service-matrix")',
+        'requires    = ["service-matrix"]',
+        'legacy_ids  = ["service-matrix"]',
+        'x = "/ext/service-matrix-neu/x"',
+    ],
+)
+def test_stored_docker_names_stay_allowed(line):
+    assert docker_kinds(line, "extensions/docker/src/nodvard_deck_ext_docker/__init__.py") == []
+
+
+def test_a_docker_finding_makes_the_script_fail_with_a_hint(monkeypatch, capsys):
+    finding = guard.Finding("extensions/x/src/ext.py", 3, "docker-paket", "import nodvard_deck_ext_service_matrix")
+    monkeypatch.setattr(guard, "find_violations", lambda: [finding])
+    assert guard.main([]) == 1
+    out = capsys.readouterr().out
+    assert "Docker-Moduls" in out and "extensions/x/src/ext.py:3: [docker-paket]" in out
+    assert "`lattice` ist (wieder)" not in out and "Nodvard Shield" not in out
+

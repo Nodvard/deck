@@ -67,7 +67,7 @@ schema = "settings.schema.json"
 ```
 
 **Package name (`entrypoint`):** The Python packages of the bundled extensions are called
-`nodvard_deck_ext_<id>` (hyphens in the ID become `_`, so `service-matrix` becomes `nodvard_deck_ext_service_matrix`) and live
+`nodvard_deck_ext_<id>` (hyphens in the ID become `_`, so `hello-world` becomes `nodvard_deck_ext_hello_world`) and live
 under `extensions/<id>/src/`. This is the convention for new extensions; the core does not enforce
 it. It imports exactly the module named in `entrypoint` and reads the manifest fresh from disk on
 every start. **Third-party extensions that follow the old convention `lattice_ext_<id>` (or use any
@@ -196,6 +196,54 @@ under the old ID during the way-back period (settings, schedules) does not come 
   nicht umbenannt werden (legacy_ids zusammen mit hosts.write)."); the extension is not loaded, and the reason is in
   the log and in the extension's row. All other permissions work.
 - `GET /jobs?ext_id=` filters by the storage ID, `GET /capabilities` only names the new ID.
+
+### Taking over part of another module: `adopts`
+
+When a part moves from one module into its own (this is how Pi-hole moved out of "Network" into the module `pihole`),
+the new module names the source in `[[extension.adopts]]`:
+
+```toml
+[[extension.adopts]]
+from     = "network"                            # ID of the module that had the part so far
+settings = "pihole"                             # this section of its settings becomes the module's own
+widgets  = { pihole = "status" }                # tiles on the dashboard: old ID = own ID
+routes   = { "/pihole" = "/summary" }           # old address below /api/v1/ext/network = own route
+secrets  = ["network-pihole-password"]          # vault entries that become the module's own
+```
+
+Everything except `from` is optional; an unknown key is an error in the manifest.
+
+**When the takeover happens:** once, when the new module is discovered for the very first time, and only from a row
+that already existed before this start. On a fresh installation both modules are simply new. The source's row stays
+unchanged, so a way back to the old image finds it as it was. The audit log records `extension.adopted` (`from`,
+`settings`, `enabled`, `widgets`, `secrets`, `extra_permissions`).
+- **Settings:** the source's `settings` section, as a copy.
+- **On/off:** switched on if the source was on, the section is really filled in (not just defaults) **and** the source
+  already had all permissions of the new module (its `granted_permissions`). Otherwise it stays off until someone
+  switches it on on purpose; missing permissions are listed in `extra_permissions` and in the log. Either way the on/off
+  state counts as chosen, so `enable_on` does not switch the module on by itself.
+- **Tiles:** on every dashboard in the same place, with size and visibility. If the new tile is already there, no second
+  one is added.
+- **Vault:** entries owned by the source that the new module may read via `secrets.read:` belong to the new module
+  afterwards.
+- **Old addresses (`routes`):** while the new module is on, `/api/v1/ext/<from>/<old>` answers like the module's own
+  route (same login check, same permissions, marked deprecated in the OpenAPI schema). If the loaded source still serves
+  an old address itself, it stays with the source (log: "… bedient … selbst, keine Weiterleitung."). An old address
+  without a matching own route is reported in the log when the module is switched on.
+
+**Only between bundled modules:** the takeover happens only if the new module **and** the source are bundled
+(`source = "bundled"`, from the `extensions/` folder). A package installed later (pip) with `adopts` takes over nothing
+and does not hook into another module's addresses. The log then says "Erweiterung '…' (pip) übernimmt nichts von '…': nur
+mitgelieferte Module übernehmen voneinander."
+
+**Each id only once:** if an id turns up twice (say, a package with the id of a bundled module), the first find counts,
+and the `extensions/` folder is searched before the packages. Any further find is not loaded; the log says
+"Erweiterung '…' (pip, …) wird nicht geladen: Die Kennung gibt es schon (bundled, …)." So a package cannot replace a
+bundled module along with its settings, permissions and takeover. In `adopts.routes`, `.` and `..` are not allowed as a
+part of the address.
+
+The old addresses remain in all 1.x releases (marked deprecated) and go away with 2.0 at the earliest
+([API, section 7](../04-API.md#7-kompatibilität), in German).
 
 ### Settings schema: `settings.schema.json` and the `x-*` additions
 
@@ -428,13 +476,13 @@ ctx.capabilities.provide(ProxmoxHostProvider(ctx))
 | `TerminalTarget` | terminal (SSH), serial/container shells in the future | the web terminal |
 | `ConsoleTarget` | proxmox (vncproxy/vncwebsocket) | the graphical console (`/console/:hostId`, noVNC) |
 | `FileSource` | files-sftp, nextcloud, truenas, syncthing | the **one** file manager with sidebar |
-| `FilePlaceProvider` | service-matrix, proxmox, system | "Important places" of a server in the file manager |
-| `AppSuggestionProvider` | network (Nginx Proxy Manager) | Suggestions for app tiles on the "Apps" page (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, only knowledge the extension already has; the core checks, de-duplicates and drops existing ones |
+| `FilePlaceProvider` | docker, proxmox, system | "Important places" of a server in the file manager |
+| `AppSuggestionProvider` | npm (Nginx Proxy Manager) | Suggestions for app tiles on the "Apps" page (`GET /apps/suggestions`): `app_suggestions()` → `[AppSuggestion(name, url, source, host?)]`, only knowledge the extension already has; the core checks, de-duplicates and drops existing ones |
 | `ActionExecutor` | terminal (SSH exec), proxmox (API actions) | execution behind the gate |
 | `AIProvider` | shield (Ollama), others in the future | chat, diagnosis, summaries |
 | `NotificationChannel` | ntfy, email, webhook | the notification center |
 | `MetricsProvider` | proxmox, docker, node-exporter | tiles and history charts |
-| `ServiceCatalog` | service-matrix (Docker API) | the app launcher |
+| `ServiceCatalog` | docker (Docker API) | the app launcher |
 | `BackupProvider` | backups (Proxmox jobs, restic …) | the backup center |
 | `SearchProvider` | any | the global search |
 | `ConnectionReceiver` | backups (kind `proxmox`) | nothing – only between extensions: when connecting with a password, proxmox also creates an access for backups |
@@ -659,7 +707,7 @@ ctx.ui.register_widget(WidgetSpec(
 **View types** (a finite set; React and Flutter both implement all of them):
 
 `StatView` · `ListView` · `TableView` · `ChartView` (line/bar/area) · `StatusGridView`
-(the service matrix tiles) · `GaugeView` · `MarkdownView` · `ActionsView` (a plain
+(the container tiles of the Docker module) · `GaugeView` · `MarkdownView` · `ActionsView` (a plain
 button bar) · `LogView` (monospace, auto-scroll)
 
 **Template expressions** are deliberately tiny and free of logic: `{{ field.path }}` plus
@@ -746,7 +794,7 @@ ctx.ui.register_host_tool(HostToolSpec(
 All conditions that are set must match. `GET /hosts/{id}/tools` returns the matching
 tiles sorted by category, `order`, title. Registering the same `id` again **replaces** the
 tool — so an extension can re-declare it in `on_settings_changed` with new conditions
-(example: service-matrix, whose Docker tag is configurable).
+(example: docker, whose server tag is configurable).
 
 ### What an extension needs on a server (`register_host_requirement`)
 
@@ -758,7 +806,7 @@ it at "Check connection" („Verbindung prüfen“):
 ```python
 ctx.ui.register_host_requirement(HostRequirementSpec(
     id="docker-group",
-    label="Docker ohne sudo (Service-Matrix)",        # "Docker without sudo (service matrix)"
+    label="Docker ohne sudo (Container-Verwaltung)",  # "Docker without sudo (container management)"
     check_command="docker ps -q",         # read-only; exit 0 = ok, 127 = not installed
     ok_text="Docker lässt sich ohne sudo benutzen.",   # "Docker can be used without sudo."
     fail_hint="Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}",   # "Add the user to the docker group: …"
@@ -809,8 +857,8 @@ without a query (menu item) to the page that is already open resets it to its in
 considered this address current.
 
 **All bundled pages that read their query use the hook:** Nodvard Shield (`?tab=`,
-`?host=`); Proxmox-Backups (`?host=`); Scripts („Skripte“, `?host=`); Service Matrix
-(„Service-Matrix“, `?host=`, `?logs=`); Server status (`?host=`, the server picker writes it too);
+`?host=`); Proxmox-Backups (`?host=`); Scripts („Skripte“, `?host=`); Docker
+(`?host=`, `?logs=`); Server status (`?host=`, the server picker writes it too);
 Game servers („Gameserver“, `?host=`: bring to the front, scroll to it); and the Proxmox
 node page (`?host=`, `&tasks=1`: highlight, expand, filter the history, scroll to it). A new
 page that reads its query only once at mount (`new URLSearchParams(window.location.search)`),

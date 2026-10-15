@@ -7,6 +7,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { api, ApiError } from "../../../lib/api";
+import { CANCELLED, withConfirmation } from "../../../lib/confirmation";
 import { useExtensions } from "../../../lib/firstSteps";
 import { hostProvider, providerDeleteNote, type HostProvider } from "../../../lib/hostProvider";
 import type { HostOut } from "../../../lib/hosts";
@@ -37,7 +38,9 @@ export async function deleteHost(host: HostOut, provider?: HostProvider): Promis
   if (typed === null) return { status: "cancelled" };
   if (typed !== host.name) return { status: "mismatch" };
   try {
-    await api.delete(`/hosts/${host.id}`);
+    // Mit dem Server verschwinden seine gespeicherten Zugänge: hat er welche, fragt der Server nach Passwort und Code.
+    const done = await withConfirmation((confirmation) => api.delete(`/hosts/${host.id}`, confirmation));
+    if (done === CANCELLED) return { status: "cancelled" };
     return { status: "deleted" };
   } catch (err) {
     // z. B. 409 „Auf diesem Server läuft gerade eine Aktion.“

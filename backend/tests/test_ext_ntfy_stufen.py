@@ -335,7 +335,12 @@ async def test_the_subscribe_link_route_serves_the_saved_settings_and_needs_the_
     assert "tk_geheimes-token-4711" not in answer.text
 
     # Gerechnet wird aus dem GESPEICHERTEN Stand: eine neue Adresse gilt erst nach dem Speichern.
-    await client.put("/api/v1/extensions/ntfy/settings", json={"values": {"server_url": "https://ntfy.example.org"}}, headers=owner)
+    # Die neue Adresse löscht das gespeicherte Zugriffstoken: nur mit Passwort.
+    moved = await client.put(
+        "/api/v1/extensions/ntfy/settings",
+        json={"current_password": "correct-horse-battery", "values": {"server_url": "https://ntfy.example.org"}}, headers=owner,
+    )
+    assert moved.status_code == 200, moved.text
     assert (await client.get(route, headers=owner)).json()["url"] == f"ntfy://ntfy.example.org/nodvard-abc123?{NAME}"
 
     assert (await client.get(route)).status_code == 401

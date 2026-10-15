@@ -22,7 +22,7 @@
 ┌────────────────────▼─────────────────────────────────────────┐
 │  EXTENSIONS — alles Infrastruktur-Spezifische                │
 │  proxmox · shield · terminal · files · scripts ·             │
-│  service-matrix · backups · gameserver · …                   │
+│  docker · backups · gameserver · …                           │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -223,9 +223,12 @@ GET /api/v1/branding      (ohne Auth — die Login-Seite braucht es)
 ```
 
 Das Frontend schreibt die Farben beim Start in CSS-Custom-Properties auf `:root`.
-Kein Rebuild, kein Neustart, keine Umgebungsvariable. Logos liegen als Upload im
-Daten-Volume. Ein SVG-Logo wird beim Hochladen geprüft (keine Skripte, keine Verweise
-aus der Datei hinaus), jedes hochgeladene Logo wird mit einer Sandbox-CSP ausgeliefert;
+Kein Rebuild, kein Neustart, keine Umgebungsvariable. Logo und Favicon liegen als Upload im
+Daten-Volume (`branding/`); andere Adressen nimmt `PUT /branding` dafür nur als eigenen Pfad oder
+`data:image/…` an. Die App-Seite soll Bilder nur vom eigenen Server laden (`img-src 'self' data: blob:`); vorerst
+meldet der Browser andere Bilder nur (`Content-Security-Policy-Report-Only`), gesperrt wird später.
+Ein SVG wird beim Hochladen geprüft (keine Skripte, keine Verweise aus der Datei hinaus), jedes
+hochgeladene Bild wird mit einer Sandbox-CSP ausgeliefert;
 der Support-Link nimmt nur `http:`, `https:` und `mailto:` an ([04-API](04-API.md)).
 
 Im Code gilt: **kein Literal für Produktname oder Farbe** außerhalb von
@@ -261,7 +264,8 @@ gelten viele alte Namen **parallel** weiter; einige bleiben **bewusst** ganz ste
 `scripts/check_legacy_names.py` (läuft als Test) sorgt dafür, dass kein alter Name neu eingeführt
 wird. Er hat zwei Positivlisten, beide mit Begründung je Eintrag: `KEPT_NAMES` für „Lattice“ und
 `KEPT_SHIELD` für die alte Kennung von Nodvard Shield (dort nennt jeder Eintrag zusätzlich die Dateien, in denen er
-gilt; ein Test prüft, dass jede Angabe noch gebraucht wird). Diese beiden Listen sind maßgeblich.
+gilt; ein Test prüft, dass jede Angabe noch gebraucht wird). Diese beiden Listen sind maßgeblich. Für die alte Kennung
+des Moduls Docker braucht es keine Liste: Regel 4 verbietet nur das alte Paket und die alten Adressen.
 
 **Umbenannt – der alte Name funktioniert weiter (Übergang):**
 
@@ -322,3 +326,33 @@ Gespeichertes wird weder kopiert noch umbenannt, ein Rückweg aufs alte Image fi
 | Rechte `soc.read` und `soc.manage` | Können in eigenen Rollen stehen; die Rechteprüfung kennt keinen Alias |
 | Ordner auf den Servern: `/var/lib/nexus-quarantine` (Quarantäne), `/var/lib/nexus-updates` (laufende Updates) | Die Pfade stehen in gespeicherten Funden, und laufende Updates werden über den Ordner fortgesetzt |
 | Alte Einträge in Protokoll, Meldungen, Läufen und Aktionen | Verlauf, wird nicht umgeschrieben |
+
+### Docker: `service-matrix` → `docker` (seit 0.9)
+
+Das Modul **Docker** (bis 0.8 „Service-Matrix“) hatte die technische Kennung `service-matrix`. Seit 0.9 heißt es
+`docker`, im Manifest steht `legacy_ids = ["service-matrix"]`, genau wie bei Nodvard Shield. Es gibt **keine Migration**
+(das Modul hat keine Tabellen); auf bestehenden Installationen findet ein Rückweg aufs alte Image alles unverändert vor
+([deploy/README](../deploy/README.md)).
+
+**Umbenannt – der alte Name funktioniert weiter (Übergang, in allen 1.x):**
+
+| Neu | Alt | Wie der alte weiterlebt |
+|---|---|---|
+| Kennung `docker` (`extension.toml`) | `service-matrix` | `legacy_ids`. Bei bestehenden Installationen bleibt `service-matrix` die **Speicher-Kennung**: Einstellungen samt eigener Kachel-Adressen, der Zeitplan der Image-Prüfung und der Datenordner `data/ext/service-matrix/` (laufende Image-Updates) hängen weiter an ihr. Neue Installationen legen `docker` an |
+| Ordner `extensions/docker/`, Paket `nodvard_deck_ext_docker` | `extensions/service-matrix/`, `nodvard_deck_ext_service_matrix` | Kein Alias (Erweiterungen importieren einander nicht) |
+| Adressen `/api/v1/ext/docker/…` | `/api/v1/ext/service-matrix/…` | Dieselben Routen hängen zusätzlich unter der alten Adresse, gleiche Anmeldeprüfung, im OpenAPI-Schema `deprecated` ([04 §7](04-API.md#7-kompatibilität)) |
+| Kern-Adressen `/api/v1/extensions/docker/…` | `/api/v1/extensions/service-matrix/…` | Die alte Kennung wird aufgelöst, Antworten nennen in `id` die neue |
+| Seiten `/ext/docker/matrix`, `/settings/extensions/docker` | `/ext/service-matrix/matrix`, `/settings/extensions/service-matrix` | Die Oberfläche leitet weiter (Abfrage und Anker bleiben). Gespeicherte Links in Meldungen und Lesezeichen gehen so weiter |
+| Dashboard-Kachel „Container“ unter `docker` | Eintrag unter `service-matrix` | Behält Platz, Größe und Sichtbarkeit (`legacy_ext_ids`) |
+| Komponente `ContainersPage` im Bundle | `ServiceMatrixPage` | Zweiter Export, für Tabs, die während des Updates offen sind |
+| `requires = ["docker"]` in anderen Modulen | `requires = ["service-matrix"]` | Der Kern löst die alte Kennung auf; das Modul Netzwerk nutzt noch die alte |
+| Logger `nodvard_deck.ext.docker`, Links in neuen Meldungen (`/ext/docker/matrix`) | `…service-matrix…` | Alte Meldungen behalten ihren Link, er funktioniert weiter |
+
+**Bleiben bewusst:**
+
+| Name | Warum |
+|---|---|
+| Speicher-Kennung `service-matrix` bestehender Installationen samt Datenordner | Darin liegen Einstellungen und laufende Updates; das alte Image findet sie nach einem Rückweg unverändert |
+| Protokoll-Namen `service_matrix.tile_url` und `service_matrix.image_update` | Gespeicherte Einträge und Filter hängen daran; die Oberfläche zeigt bei beiden einen Namen |
+| Aktionsarten `container.*` und `docker.*` | Offene Vorschläge und Freigaben tragen sie; sie hießen nie nach dem Modul |
+| Alte Einträge in Protokoll, Meldungen und Aktionen | Verlauf, wird nicht umgeschrieben |

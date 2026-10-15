@@ -117,6 +117,16 @@
   "lattice_sdk.ActorType": {
    "art": "klasse"
   },
+  "lattice_sdk.AdoptSpec": {
+   "art": "klasse",
+   "params": {
+    "from_": true,
+    "routes": false,
+    "secrets": false,
+    "settings": false,
+    "widgets": false
+   }
+  },
   "lattice_sdk.AppSuggestion": {
    "art": "klasse",
    "params": {
@@ -311,6 +321,7 @@
   "lattice_sdk.ExtensionManifest": {
    "art": "klasse",
    "params": {
+    "adopts": false,
     "api_version": true,
     "author": false,
     "category": false,
@@ -324,6 +335,7 @@
     "name": true,
     "permissions": false,
     "requires": false,
+    "root_helper": false,
     "settings_schema": false,
     "sort_order": false,
     "source": false,
@@ -728,6 +740,9 @@
   "lattice_sdk.REQUEST_WAIT_S": {
    "art": "konstante"
   },
+  "lattice_sdk.ROOT_HELPER_DIR": {
+   "art": "konstante"
+  },
   "lattice_sdk.Refresh": {
    "art": "klasse",
    "params": {
@@ -737,6 +752,13 @@
   },
   "lattice_sdk.Risk": {
    "art": "klasse"
+  },
+  "lattice_sdk.RootHelperSpec": {
+   "art": "klasse",
+   "params": {
+    "file": true,
+    "version": true
+   }
   },
   "lattice_sdk.ScopedTerminalTarget": {
    "art": "klasse",
@@ -1690,9 +1712,20 @@
     "path": true
    }
   },
+  "lattice_sdk.manifest.AdoptSpec": {
+   "art": "klasse",
+   "params": {
+    "from_": true,
+    "routes": false,
+    "secrets": false,
+    "settings": false,
+    "widgets": false
+   }
+  },
   "lattice_sdk.manifest.ExtensionManifest": {
    "art": "klasse",
    "params": {
+    "adopts": false,
     "api_version": true,
     "author": false,
     "category": false,
@@ -1706,6 +1739,7 @@
     "name": true,
     "permissions": false,
     "requires": false,
+    "root_helper": false,
     "settings_schema": false,
     "sort_order": false,
     "source": false,
@@ -1725,16 +1759,41 @@
   "lattice_sdk.manifest.KNOWN_STAGES": {
    "art": "konstante"
   },
+  "lattice_sdk.manifest.ROOT_HELPER_DIR": {
+   "art": "konstante"
+  },
+  "lattice_sdk.manifest.ROOT_HELPER_MAX_VERSION": {
+   "art": "konstante"
+  },
+  "lattice_sdk.manifest.RootHelperSpec": {
+   "art": "klasse",
+   "params": {
+    "file": true,
+    "version": true
+   }
+  },
   "lattice_sdk.manifest.load_manifest": {
    "art": "funktion",
    "params": {
     "path": true
    }
   },
+  "lattice_sdk.manifest.root_helper_path": {
+   "art": "funktion",
+   "params": {
+    "ext_id": true
+   }
+  },
   "lattice_sdk.max_body_bytes": {
    "art": "funktion",
    "params": {
     "limit": true
+   }
+  },
+  "lattice_sdk.root_helper_path": {
+   "art": "funktion",
+   "params": {
+    "ext_id": true
    }
   },
   "lattice_sdk.same_target": {
@@ -2298,6 +2357,16 @@
   "nodvard_sdk.ActorType": {
    "art": "klasse"
   },
+  "nodvard_sdk.AdoptSpec": {
+   "art": "klasse",
+   "params": {
+    "from_": true,
+    "routes": false,
+    "secrets": false,
+    "settings": false,
+    "widgets": false
+   }
+  },
   "nodvard_sdk.AppSuggestion": {
    "art": "klasse",
    "params": {
@@ -2492,6 +2561,7 @@
   "nodvard_sdk.ExtensionManifest": {
    "art": "klasse",
    "params": {
+    "adopts": false,
     "api_version": true,
     "author": false,
     "category": false,
@@ -2505,6 +2575,7 @@
     "name": true,
     "permissions": false,
     "requires": false,
+    "root_helper": false,
     "settings_schema": false,
     "sort_order": false,
     "source": false,
@@ -2909,6 +2980,9 @@
   "nodvard_sdk.REQUEST_WAIT_S": {
    "art": "konstante"
   },
+  "nodvard_sdk.ROOT_HELPER_DIR": {
+   "art": "konstante"
+  },
   "nodvard_sdk.Refresh": {
    "art": "klasse",
    "params": {
@@ -2918,6 +2992,13 @@
   },
   "nodvard_sdk.Risk": {
    "art": "klasse"
+  },
+  "nodvard_sdk.RootHelperSpec": {
+   "art": "klasse",
+   "params": {
+    "file": true,
+    "version": true
+   }
   },
   "nodvard_sdk.ScopedTerminalTarget": {
    "art": "klasse",
@@ -3871,9 +3952,20 @@
     "path": true
    }
   },
+  "nodvard_sdk.manifest.AdoptSpec": {
+   "art": "klasse",
+   "params": {
+    "from_": true,
+    "routes": false,
+    "secrets": false,
+    "settings": false,
+    "widgets": false
+   }
+  },
   "nodvard_sdk.manifest.ExtensionManifest": {
    "art": "klasse",
    "params": {
+    "adopts": false,
     "api_version": true,
     "author": false,
     "category": false,
@@ -3887,6 +3979,7 @@
     "name": true,
     "permissions": false,
     "requires": false,
+    "root_helper": false,
     "settings_schema": false,
     "sort_order": false,
     "source": false,
@@ -3906,16 +3999,41 @@
   "nodvard_sdk.manifest.KNOWN_STAGES": {
    "art": "konstante"
   },
+  "nodvard_sdk.manifest.ROOT_HELPER_DIR": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.manifest.ROOT_HELPER_MAX_VERSION": {
+   "art": "konstante"
+  },
+  "nodvard_sdk.manifest.RootHelperSpec": {
+   "art": "klasse",
+   "params": {
+    "file": true,
+    "version": true
+   }
+  },
   "nodvard_sdk.manifest.load_manifest": {
    "art": "funktion",
    "params": {
     "path": true
    }
   },
+  "nodvard_sdk.manifest.root_helper_path": {
+   "art": "funktion",
+   "params": {
+    "ext_id": true
+   }
+  },
   "nodvard_sdk.max_body_bytes": {
    "art": "funktion",
    "params": {
     "limit": true
+   }
+  },
+  "nodvard_sdk.root_helper_path": {
+   "art": "funktion",
+   "params": {
+    "ext_id": true
    }
   },
   "nodvard_sdk.same_target": {

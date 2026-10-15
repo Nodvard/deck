@@ -65,14 +65,16 @@ class Extension(NodvardExtension):
 
         @router.post("/token", status_code=status.HTTP_204_NO_CONTENT)
         async def set_password(payload: _PasswordIn) -> None:
-            """Wie proxmoxs `/token` (WP-8): das App-Passwort liegt im Vault, nie in
-            den (Klartext-)Einstellungen. Kein Rotationspfad in dieser Runde -- ein
-            bestehendes Passwort muss erst ueber `DELETE /api/v1/secrets/{id}`
-            entfernt werden."""
+            """Wie `/token` bei Proxmox: das App-Passwort liegt im Tresor, nie in den Einstellungen. Nur Erstanlage;
+            ersetzen und entfernen laufen über die Moduleinstellungen des Kerns (`/api/v1/extensions/nextcloud/secrets`)."""
             if await ctx.secrets.exists(PASSWORD_LABEL):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Ein App-Passwort existiert bereits -- zuerst über DELETE /api/v1/secrets/{id} entfernen.",
+                    detail=(
+                        "Ein App-Passwort existiert bereits. Ersetzen oder entfernen unter Einstellungen → Erweiterungen "
+                        "→ Nextcloud (API: PUT oder DELETE /api/v1/extensions/nextcloud/secrets, "
+                        f"Bezeichnung {PASSWORD_LABEL})."
+                    ),
                 )
             await ctx.secrets.create(label=PASSWORD_LABEL, kind="generic", value=payload.value)
 

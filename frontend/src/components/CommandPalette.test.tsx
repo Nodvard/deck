@@ -143,8 +143,8 @@ describe("CommandPalette", () => {
     const names = (await screen.findAllByRole("option")).map((o) => o.textContent);
     expect(names).not.toContain("Terminal");
     expect(names.filter((n) => n?.startsWith("Einstellungen:"))).toEqual([
-      "Einstellungen: Mein Konto", "Einstellungen: Protokoll",
-      "Einstellungen: Über Nodvard Deck", // ohne Berechtigung für jeden da
+      "Einstellungen: Mein Konto", "Einstellungen: Darstellung", "Einstellungen: Protokoll",
+      "Einstellungen: Über Nodvard Deck", // Konto, Darstellung und „Über“ ohne Berechtigung für jeden da
     ]);
     expect(names).toContain("Meldungen");
     fireEvent.change(input, { target: { value: "ssh" } });

@@ -92,7 +92,7 @@ export function SetupCommand({
           )}
           {sudo && (
             <p className="text-xs text-white/45" data-testid="setup-sudo-note">
-              Eine enger begrenzte sudo-Regel funktioniert mit Nodvard Deck nicht, weil es root-Befehle über „sudo sh -c“ startet.
+              Eine enger begrenzte sudo-Regel allein reicht Nodvard Deck noch nicht: Einige root-Befehle startet es weiter über „sudo sh -c“.
               Darum bekommt nur dieser eine Benutzer die Rechte, und er kann sich nur mit dem Schlüssel anmelden.
             </p>
           )}
@@ -150,6 +150,15 @@ export function SetupCommand({
               <details className="rounded-lg border border-white/[0.08] px-3 py-2">
                 <summary className="cursor-pointer text-sm text-white/70">Was macht der Befehl?</summary>
                 <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-white/70">{setup.data.script}</pre>
+                {(setup.data.helpers ?? []).map((h) => (
+                  <details key={h.ext_id} className="mt-2" data-testid="setup-helper">
+                    <summary className="cursor-pointer text-xs text-white/60">
+                      Hilfsskript für {h.module} (Version {h.version}), kommt nach {h.path}
+                    </summary>
+                    <p className="mt-1 break-all font-mono text-[11px] text-white/45">sha256 {h.sha256}</p>
+                    <pre className="mt-1 max-h-72 overflow-auto whitespace-pre-wrap break-all font-mono text-[11px] text-white/70">{h.text}</pre>
+                  </details>
+                ))}
               </details>
               {/* Hinweise zu root/sudo stehen schon oben bei den Haken: nicht doppelt zeigen. */}
               {setup.data.notes.filter((n) => !n.includes("praktisch") && !n.includes("enger begrenzte")).map((n) => (

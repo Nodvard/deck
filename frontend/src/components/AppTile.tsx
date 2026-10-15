@@ -18,14 +18,14 @@ function initials(name: string): string {
   return name.replace(/[^\p{L}\p{N}]/gu, "").slice(0, 2) || "?";
 }
 
-const AVATAR = "grid h-10 w-10 flex-none place-items-center rounded-xl text-sm font-bold uppercase text-white shadow-md shadow-black/30";
+const AVATAR = "grid h-10 w-10 flex-none place-items-center rounded-lg text-sm font-bold uppercase text-on-accent";
 
 export function AppTile({ service }: { service: ServiceOut }) {
   const hue = hueFor(service.name);
   const running = service.state === "running";
   const inner = (
     <>
-      <span className={AVATAR} style={{ background: `linear-gradient(135deg, hsl(${hue} 70% 52%), hsl(${(hue + 40) % 360} 70% 38%))` }}>
+      <span className={AVATAR} style={{ background: `hsl(${hue} 55% 45%)` }}>
         {service.name.replace(/[^a-z0-9]/gi, "").slice(0, 2) || "?"}
       </span>
       <span className="min-w-0 flex-1">
@@ -53,10 +53,9 @@ export function AppTile({ service }: { service: ServiceOut }) {
 /** Farbe der Kachel: die gewaehlte (nur ein echter `#rrggbb`-Wert kommt in den Stil) oder eine nach dem Namen. */
 function avatarBackground(app: Pick<AppTileOut, "name" | "color">): string {
   if (app.color && /^#[0-9a-f]{6}$/i.test(app.color)) {
-    return `linear-gradient(135deg, ${app.color}, color-mix(in srgb, ${app.color} 55%, black))`;
+    return app.color;
   }
-  const hue = hueFor(app.name);
-  return `linear-gradient(135deg, hsl(${hue} 70% 52%), hsl(${(hue + 40) % 360} 70% 38%))`;
+  return `hsl(${hueFor(app.name)} 55% 45%)`;
 }
 
 export function AppAvatar({ app }: { app: Pick<AppTileOut, "name" | "icon" | "color"> }) {

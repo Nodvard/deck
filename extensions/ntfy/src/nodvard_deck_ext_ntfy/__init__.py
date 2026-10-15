@@ -512,11 +512,15 @@ class Extension(NodvardExtension):
         @router.post("/token", status_code=status.HTTP_204_NO_CONTENT)
         async def set_token(payload: _TokenIn) -> None:
             """Legt das optionale Zugriffstoken im Tresor ab."""
-            # `ctx.secrets` kennt keine Rotation: Ein gesetztes Token muss erst über `DELETE /api/v1/secrets/{id}` weg.
+            # Nur Erstanlage; ersetzen und entfernen laufen über die Moduleinstellungen des Kerns, mit Passwort.
             if await ctx.secrets.exists(_TOKEN_LABEL):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail="Ein Token existiert bereits -- zuerst über DELETE /api/v1/secrets/{id} entfernen.",
+                    detail=(
+                        "Ein Token existiert bereits. Ersetzen oder entfernen unter Einstellungen → Erweiterungen → "
+                        "Push-Nachrichten (API: PUT oder DELETE /api/v1/extensions/ntfy/secrets, "
+                        f"Bezeichnung {_TOKEN_LABEL})."
+                    ),
                 )
             await ctx.secrets.create(label=_TOKEN_LABEL, kind="generic", value=payload.value)
 

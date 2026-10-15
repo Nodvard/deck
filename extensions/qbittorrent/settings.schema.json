@@ -1,0 +1,62 @@
+{
+  "type": "object",
+  "properties": {
+    "connections": {
+      "type": "array",
+      "title": "qBittorrent",
+      "description": "Die qBittorrent-Programme, deren Zustand angezeigt wird. Meist genügt eines. Nodvard Deck liest nur und ändert in qBittorrent nichts.",
+      "x-item-title": "qBittorrent",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „nas“ oder „seedbox“. Nach dem Einrichten nicht mehr ändern.",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich – keine Leerzeichen."
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Adresse",
+            "description": "Adresse der Weboberfläche von qBittorrent, z. B. http://qbt.example.com:8080 (Vorgabe von qBittorrent ist Port 8080).",
+            "pattern": "^https?://\\S+$",
+            "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+          },
+          "username": {
+            "type": "string",
+            "title": "Benutzername",
+            "description": "Der Benutzername der Weboberfläche (Vorgabe von qBittorrent: admin). Leer lassen, wenn qBittorrent dem Netz des Dashboards ohne Anmeldung vertraut."
+          },
+          "tls_fingerprint_sha256": {
+            "type": "string",
+            "title": "Fingerabdruck des Zertifikats (SHA-256)",
+            "description": "Nur bei https:// mit einem selbst erstellten Zertifikat. Nodvard Deck spricht dann nur mit dem Server, der genau dieses Zertifikat zeigt. Steht er hier, braucht es „Selbstsigniertes Zertifikat erlauben“ nicht. Du bekommst ihn z. B. im Browser aus den Zertifikatsdetails der Seite von qBittorrent.",
+            "pattern": "^\\s*([0-9A-Fa-f]{2}[:\\t -]?){31}[0-9A-Fa-f]{2}\\s*$|^\\s*$",
+            "x-pattern-message": "64 Zeichen aus 0–9 und A–F, gern mit Doppelpunkten (z. B. AB:CD:…)."
+          },
+          "tls_insecure_skip_verify": {
+            "type": "boolean",
+            "default": false,
+            "title": "Selbstsigniertes Zertifikat erlauben",
+            "description": "Nur im eigenen Netz aktivieren. Schaltet jede Prüfung des Zertifikats ab; besser ist der Fingerabdruck oben. Gilt nicht, solange ein Fingerabdruck eingetragen ist.",
+            "x-advanced": true
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ]
+      }
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "qbittorrent-password:{name}",
+      "x-secret-bound-to": ["base_url"],
+      "per_item": "connections",
+      "title": "Passwort",
+      "description": "Das Passwort der Weboberfläche von qBittorrent. Leer lassen, wenn qBittorrent dem Netz des Dashboards ohne Anmeldung vertraut (Optionen → WebUI → „Authentifizierung für Clients im Subnetz überspringen“). Ein falsches Passwort zählt als Fehlversuch: qBittorrent sperrt die Adresse nach mehreren davon (Vorgabe: fünf) für eine Weile. Darum fragt Nodvard Deck nach einem abgelehnten Passwort 30 Minuten lang nicht erneut."
+    }
+  ]
+}

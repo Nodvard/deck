@@ -40,6 +40,7 @@ const ACTION_LABELS: Record<string, string> = {
   "mfa.failed": "Zwei-Faktor-Code falsch",
   "mfa.recovery_used": "Wiederherstellungs-Code benutzt",
   "auth.password_change": "Passwort geändert",
+  "branding.custom_css.saved": "Eigenes CSS gespeichert",
   "auth.recovery_codes_generated": "Wiederherstellungs-Codes erzeugt",
   "auth.2fa_disabled": "Zwei-Faktor abgeschaltet",
   "auth.password_check_failed": "Passwortabfrage fehlgeschlagen",
@@ -65,6 +66,7 @@ const ACTION_LABELS: Record<string, string> = {
   "scripts.standing_approval.expired": "Dauerfreigabe erloschen",
   "backups.restore_copy": "Gast aus Sicherung als Kopie wiederhergestellt",
   "service_matrix.image_update": "Container-Image aktualisiert",
+  "ext_system.temp_limit_changed": "Temperaturgrenze eines Servers geändert",
   "hello.started": "Hello World gestartet",
   "exec.denied": "Befehl gesperrt",
   "console.open": "Konsole geöffnet",
@@ -80,6 +82,10 @@ const ACTION_LABELS: Record<string, string> = {
   "files.transfer_start": "Kopieren gestartet",
   "files.transfer": "Datei kopiert",
   "secret.used": "Zugangsdaten verwendet",
+  "secret.created": "Eintrag im Tresor angelegt",
+  "secret.replaced": "Wert im Tresor ersetzt",
+  "secret.updated": "Eintrag im Tresor geändert",
+  "secret.deleted": "Eintrag im Tresor gelöscht",
   "system.settings.changed": "Systemeinstellung geändert",
   "system.backup.created": "Sicherung erstellt",
   "system.backup.failed": "Sicherung fehlgeschlagen",
@@ -120,6 +126,7 @@ const ACTION_LABELS: Record<string, string> = {
   "extension.enabled": "Erweiterung eingeschaltet",
   "extension.disabled": "Erweiterung ausgeschaltet",
   "extension.auto_enabled": "Erweiterung automatisch eingeschaltet",
+  "extension.adopted": "Erweiterung übernimmt Einstellungen eines anderen Moduls",
   "proxmox.connect_with_password": "Proxmox mit Passwort verbinden",
   "backups.connection_received": "Proxmox-Backups: Zugang übernommen",
   "proxmox.certificate_confirmed": "Proxmox: Fingerabdruck des Zertifikats bestätigt",
@@ -155,7 +162,7 @@ const ACTION_LABELS: Record<string, string> = {
   "shield.proposal_rejected": "Vorschlag von Nodvard KI abgelehnt",
   "shield.watch_path_added": "Ordner zum Echtzeit-Wächter hinzugefügt",
   "inventory.hardware_scan": "Inventar: Teile vom Server ausgelesen",
-  "service_matrix.tile_url": "Service-Matrix: eigene Kachel-Adresse gespeichert",
+  "service_matrix.tile_url": "Docker: eigene Kachel-Adresse gespeichert",
   "app.created": "App angelegt",
   "app.updated": "App geändert",
   "app.deleted": "App gelöscht",
@@ -343,7 +350,7 @@ export function AuditSettings(): JSX.Element {
 
       <div className="panel overflow-x-auto">
         <table className="w-full text-left text-sm">
-          <thead className="border-b border-white/[0.06] text-xs uppercase tracking-wider text-white/40">
+          <thead className="border-b border-white/[0.06] text-xs text-white/40">
             <tr>
               <th className="w-6 px-3 py-2.5" />
               <th className="px-3 py-2.5 font-medium">Zeitpunkt</th>

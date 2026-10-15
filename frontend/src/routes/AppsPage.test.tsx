@@ -31,7 +31,7 @@ const APPS: AppTileOut[] = [
 const SUGGESTIONS = {
   suggestions: [
     { name: "cloud.example.org", url: "https://cloud.example.org", source: "Nginx Proxy Manager", host: null },
-    { name: "uptime", url: "http://10.0.0.5:3001", source: "Service-Matrix", host: "docker" },
+    { name: "uptime", url: "http://10.0.0.5:3001", source: "Docker", host: "docker" },
   ],
   errors: ["Vorschläge von „Netzwerk“ ließen sich gerade nicht lesen."],
 };

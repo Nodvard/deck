@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Die Suche nach Image-Updates schickt die Namen selbst gebauter Images nicht mehr an fremde Server wie Docker Hub, sofern Docker weiß, woher ein Image stammt."

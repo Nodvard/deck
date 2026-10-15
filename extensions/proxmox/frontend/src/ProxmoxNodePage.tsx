@@ -35,7 +35,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent, KeyboardEvent, ReactNode } from "react";
 
 import { ACTION_STATUS_LABEL, type ActionState, isActionRunning, runAction, RUNNING_IN_BACKGROUND } from "../../../_shared/frontend/src/actions";
-import { authedFetch, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
+import { authedFetch, authedFetchConfirmed, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
 import { formatBytes as formatSize } from "../../../_shared/frontend/src/format";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
@@ -305,21 +305,46 @@ const BADGE_TONE: Record<string, string> = {
   neutral: "bg-white/10 opacity-70",
 };
 
+/** Ein Werkzeug des Servers aus `GET /hosts/{id}/tools` (Kern), nur die Felder, die hier zählen. */
+interface HostTool {
+  ext_id: string;
+  id: string;
+  href: string;
+}
+
 /**
- * Paket-Updates je Knoten -- rein lesend. Installieren bleibt bewusst beim Nutzer
- * (Proxmox-Shell oder Terminal von Nodvard Deck); hier steht nur, WAS wartet und ob danach ein
- * Neustart faellig ist.
+ * Der Weg zu den Updates dieses Servers in Nodvard Shield, oder null. Die Adresse kommt vom Kern (Werkzeug „Sicherheit“
+ * von Shield); fehlt es, ist Shield aus oder dem Nutzer fehlt das Recht, und es gibt keinen Link.
  */
-function UpdatesSection({ nodes }: { nodes: NodeUpdates[] }): JSX.Element {
+export function shieldUpdatesHref(tools: HostTool[]): string | null {
+  const tool = tools.find((t) => t.ext_id === "shield" && t.id === "security");
+  if (!tool || !tool.href.startsWith("/") || tool.href.startsWith("//")) return null;
+  const url = new URL(tool.href, "http://deck.invalid");
+  url.searchParams.set("tab", "updates");
+  return url.pathname + url.search;
+}
+
+/**
+ * Paket-Updates je Knoten -- hier steht nur, WAS wartet und ob danach ein Neustart fällig ist. Eingespielt wird in
+ * Nodvard Shield (Link je Knoten, wenn Shield an ist) oder in der Proxmox-Oberfläche.
+ */
+function UpdatesSection({ nodes, shieldHref }: { nodes: NodeUpdates[]; shieldHref?: (n: NodeUpdates) => string | undefined }): JSX.Element {
   return (
     <div>
       <ul className="space-y-2">
-        {nodes.map((n) => (
+        {nodes.map((n) => {
+          const href = !n.error && (n.count ?? 0) > 0 ? shieldHref?.(n) : undefined;
+          return (
           <li key={n.node} className="text-sm" data-testid={`updates-${n.node}`}>
             <div className="flex flex-wrap items-center gap-2">
               <span className="font-medium">{n.node}</span>
               <span className={`rounded px-1.5 py-0.5 text-xs ${BADGE_TONE[n.tone] ?? BADGE_TONE.neutral}`}>{n.badge}</span>
               <span className="opacity-80">{n.summary}</span>
+              {href && (
+                <a href={href} className="ml-auto text-xs underline underline-offset-2 hover:text-white" data-testid={`updates-shield-${n.node}`}>
+                  In Shield einspielen
+                </a>
+              )}
             </div>
             {!n.error && (
               <p className="text-xs opacity-60">
@@ -357,7 +382,8 @@ function UpdatesSection({ nodes }: { nodes: NodeUpdates[] }): JSX.Element {
               </details>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );
@@ -406,7 +432,7 @@ function StorageSection({ pools, focusNode = null }: { pools: StoragePool[]; foc
     <div>
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+          <tr className="border-b border-white/10 text-left text-xs opacity-60">
             <th className="py-1 w-1/5">Pool</th>
             <th className="py-1">Inhalt</th>
             <th className="py-1 w-1/3">Belegung</th>
@@ -537,7 +563,7 @@ function TasksTable({ tasks }: { tasks: TaskOut[] }): JSX.Element {
     <div className="overflow-x-auto">
     <table className="w-full min-w-[32rem] text-xs">
       <thead>
-        <tr className="border-b border-white/10 text-left uppercase opacity-60">
+        <tr className="border-b border-white/10 text-left opacity-60">
           <th className="py-1">Zeit</th>
           <th className="py-1">Aufgabe</th>
           <th className="py-1">Benutzer</th>
@@ -1204,9 +1230,11 @@ function ConnectionsPanel({
     try {
       // Legt an ODER ersetzt. Der alte Weg (`POST /ext/proxmox/connections/{name}/token`) legt nur
       // an und meldete beim zweiten Mal 409.
-      const res = await authedFetch(`/extensions/proxmox/secrets`, {
-        method: "PUT", body: JSON.stringify({ label: `proxmox-token:${name}`, value }),
-      });
+      // Ein gespeichertes Token ersetzt der Kern nur mit Passwort und gegebenenfalls Code (Dialog des Kerns).
+      const res = await authedFetchConfirmed(`/extensions/proxmox/secrets`, (confirmation) => ({
+        method: "PUT", body: JSON.stringify({ label: `proxmox-token:${name}`, value, ...confirmation }),
+      }));
+      if (res === null) return;
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
@@ -1272,7 +1300,7 @@ function ConnectionsPanel({
         {connections && connections.length > 0 && (
           <table className="mb-3 w-full text-xs">
             <thead>
-              <tr className="border-b border-white/10 text-left uppercase opacity-60">
+              <tr className="border-b border-white/10 text-left opacity-60">
                 <th className="py-1 w-1/6">Name</th>
                 <th className="py-1 w-1/3">Adresse</th>
                 <th className="py-1 whitespace-nowrap">Zertifikat</th>
@@ -1353,7 +1381,7 @@ function ConnectionsPanel({
               <button
                 type="button"
                 onClick={onConnectWithPassword}
-                className="px-2 py-1 text-xs accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium"
+                className="px-2 py-1 text-xs accent-gradient text-on-accent rounded-lg hover:bg-accent-strong font-medium"
               >
                 Mit Passwort verbinden
               </button>
@@ -1391,7 +1419,7 @@ function ConnectionsPanel({
               <input type="checkbox" checked={newTlsInsecure} onChange={(e) => setNewTlsInsecure(e.target.checked)} />
               Zertifikat nicht prüfen (veraltet)
             </label>
-            <button type="submit" disabled={pending === "add"} className="px-2 py-1 disabled:opacity-40 accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium">
+            <button type="submit" disabled={pending === "add"} className="px-2 py-1 disabled:opacity-40 accent-gradient text-on-accent rounded-lg hover:bg-accent-strong font-medium">
               Anlegen
             </button>
             <button type="button" onClick={() => setShowAddForm(false)} className="px-2 py-1 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
@@ -1535,6 +1563,28 @@ export function ProxmoxNodePage(): JSX.Element {
     scrollToElement(tab === "tasks" ? `tasks-${connection}` : tab === "storage" ? `storage-${connection}` : `host-${target.id}`);
   }, [hosts, tasks, storage, focusHost, tab, visits]);
 
+  // „In Shield einspielen“ je Knoten: erst beim Öffnen des Reiters „Updates“ fragt die Seite den Kern nach den Werkzeugen
+  // jedes Knotens. Ohne Antwort (Fehler, Shield aus, kein Recht) gibt es einfach keinen Link.
+  const [shieldLinks, setShieldLinks] = useState<Record<string, string>>({});
+  const nodeIds = (hosts ?? []).filter((h) => h.kind === "hypervisor" || h.kind === "node").map((h) => h.id).join(",");
+  useEffect(() => {
+    if (tab !== "updates" || !nodeIds) return;
+    let cancelled = false;
+    void Promise.all(nodeIds.split(",").map(async (id) => {
+      try {
+        return [id, shieldUpdatesHref(await fetchJson<HostTool[]>(`/hosts/${encodeURIComponent(id)}/tools`))] as const;
+      } catch {
+        return [id, null] as const;
+      }
+    })).then((pairs) => {
+      if (cancelled) return;
+      setShieldLinks(Object.fromEntries(pairs.filter((p): p is readonly [string, string] => p[1] !== null)));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, nodeIds]);
+
   async function trigger(
     hostId: string,
     hostLabel: string,
@@ -1617,6 +1667,13 @@ export function ProxmoxNodePage(): JSX.Element {
   const storageFocus = tab === "storage" && focusHost ? (hosts ?? []).find((h) => h.id === focusHost) : undefined;
   const storageRef = storageFocus ? parseProviderRef(storageFocus.provider_ref) : null;
 
+  const shieldHrefFor = (u: NodeUpdates) => {
+    const node = nodes.find((h) => {
+      const ref = parseProviderRef(h.provider_ref);
+      return ref.connection === u.connection && ref.node === u.node;
+    });
+    return node ? shieldLinks[node.id] : undefined;
+  };
   const nodeUpdates = (node: HostOut) => {
     const ref = parseProviderRef(node.provider_ref);
     return updates?.find((u) => u.connection === ref.connection && u.node === ref.node);
@@ -1688,7 +1745,7 @@ export function ProxmoxNodePage(): JSX.Element {
           <TabPanel id="guests" active={tab}>
             {connections.map((connection) => (
               <section key={connection} className="mb-6">
-                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                <h3 className="mb-2 text-sm font-medium opacity-60">{connection}</h3>
 
                 {nodes
                   .filter((n) => parseProviderRef(n.provider_ref).connection === connection)
@@ -1701,7 +1758,7 @@ export function ProxmoxNodePage(): JSX.Element {
 
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+                    <tr className="border-b border-white/10 text-left text-xs opacity-60">
                       <th className="py-1 w-6" />
                       <th className="py-1 sm:w-1/2">Name</th>
                       <th className="hidden py-1 whitespace-nowrap sm:table-cell sm:w-28">Status</th>
@@ -1835,7 +1892,7 @@ export function ProxmoxNodePage(): JSX.Element {
             {!storage && !storageLoadError && <p className="text-sm opacity-60">Lade Speicher …</p>}
             {connections.map((connection) => (
               <section key={connection} id={`storage-${connection}`} className="mb-6">
-                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                <h3 className="mb-2 text-sm font-medium opacity-60">{connection}</h3>
                 {storage && !storage.some((p) => p.connection === connection) && !storageErrors.some((e) => e.connection === connection) && (
                   <p className="text-xs opacity-60">Keine Speicher gefunden.</p>
                 )}
@@ -1861,9 +1918,9 @@ export function ProxmoxNodePage(): JSX.Element {
             )}
             {connections.map((connection) => (
               <section key={connection} className="mb-6">
-                <h3 className="mb-2 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                <h3 className="mb-2 text-sm font-medium opacity-60">{connection}</h3>
                 {updates && updates.some((u) => u.connection === connection) && (
-                  <UpdatesSection nodes={updates.filter((u) => u.connection === connection)} />
+                  <UpdatesSection nodes={updates.filter((u) => u.connection === connection)} shieldHref={shieldHrefFor} />
                 )}
                 {updates && !updates.some((u) => u.connection === connection) && !updatesErrors.some((e) => e.connection === connection) && (
                   <p className="text-xs opacity-60">Keine Knoten gefunden.</p>
@@ -1899,7 +1956,7 @@ export function ProxmoxNodePage(): JSX.Element {
               const list = tasksFor(connection);
               return (
                 <section key={connection} id={`tasks-${connection}`} className="mb-6">
-                  <h3 className="mb-1 text-sm font-medium uppercase tracking-wide opacity-60">{connection}</h3>
+                  <h3 className="mb-1 text-sm font-medium opacity-60">{connection}</h3>
                   {list.length > 0 && (
                     <p className="mb-1 text-xs opacity-60" data-testid={`tasks-count-${connection}`}>
                       {list.length === 1 ? "1 Aufgabe" : `${list.length} Aufgaben`}

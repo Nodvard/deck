@@ -53,8 +53,19 @@ DEFAULT_DYNAMIC_PORT_MIN = 32768
 _SAFE_GLOB_RE = re.compile(r"^/[A-Za-z0-9_./*@+-]+$")
 
 
+def guard_files(watch_files: list[str] | None = None) -> list[str]:
+    """Die überwachten Dateien, streng auf Pfadzeichen und `*` gefiltert. `fullmatch`: `$` ließe einen Zeilenumbruch am
+    Ende durch, und der Befehl bräche dann mit einem Syntaxfehler ab."""
+    return [f for f in (watch_files or DEFAULT_WATCH_FILES) if _SAFE_GLOB_RE.fullmatch(f) and ".." not in f]
+
+
+def guard_args(watch_files: list[str] | None = None) -> list[str]:
+    """Aufruf des Hilfsskripts für dieselbe Abfrage wie `guard_command` (`shield-root guard <dateien> -- <programme>`)."""
+    return ["guard", *guard_files(watch_files), "--", *WATCH_BINARIES]
+
+
 def guard_command(watch_files: list[str] | None = None) -> str:
-    files = [f for f in (watch_files or DEFAULT_WATCH_FILES) if _SAFE_GLOB_RE.match(f) and ".." not in f]
+    files = guard_files(watch_files)
     # Die Shell löst die Globs auf, deshalb nicht gequotet; vorher streng auf Pfadzeichen und `*` gefiltert.
     file_list = " ".join(files)
     bin_list = " ".join(shlex.quote(b) for b in WATCH_BINARIES)
@@ -520,6 +531,12 @@ def file_entry_dict(e: FileEntry) -> dict[str, Any]:
 
 
 _JAIL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
+
+
+def ban_args(ip: str, jail: str = "sshd", *, unban: bool = False) -> list[str]:
+    """Aufruf des Hilfsskripts für dasselbe wie `ban_command` (prüft die Angaben wie dort)."""
+    ban_command(ip, jail, unban=unban)
+    return ["unban" if unban else "ban", ip, jail]
 
 
 def ban_command(ip: str, jail: str = "sshd", *, unban: bool = False) -> str:

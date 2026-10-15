@@ -1,0 +1,237 @@
+[
+  {
+    "PlayState": {
+      "PositionTicks": 18000000000,
+      "CanSeek": true,
+      "IsPaused": false,
+      "IsMuted": false,
+      "VolumeLevel": 70,
+      "AudioStreamIndex": 1,
+      "SubtitleStreamIndex": -1,
+      "MediaSourceId": "5d4c3b2a1f0e4d6c9b8a7f6e5d4c3b2a",
+      "PlayMethod": "DirectPlay",
+      "RepeatMode": "RepeatNone",
+      "PlaybackOrder": "Default"
+    },
+    "AdditionalUsers": [],
+    "Capabilities": {
+      "PlayableMediaTypes": [
+        "Audio",
+        "Video"
+      ],
+      "SupportedCommands": [
+        "MoveUp",
+        "MoveDown",
+        "Select",
+        "Back",
+        "ToggleFullscreen",
+        "SetVolume",
+        "Mute",
+        "Unmute"
+      ],
+      "SupportsMediaControl": true,
+      "SupportsPersistentIdentifier": false
+    },
+    "PlayableMediaTypes": [
+      "Audio",
+      "Video"
+    ],
+    "LastPlaybackCheckIn": "2026-10-12T20:14:55.0000000Z",
+    "IsActive": true,
+    "SupportsMediaControl": true,
+    "SupportsRemoteControl": true,
+    "HasCustomDeviceName": false,
+    "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+    "SupportedCommands": [
+      "MoveUp",
+      "MoveDown",
+      "Select",
+      "Back",
+      "ToggleFullscreen",
+      "SetVolume",
+      "Mute",
+      "Unmute"
+    ],
+    "RemoteEndPoint": "203.0.113.45",
+    "Id": "b1946ac92492d2347c6235b4d2611184",
+    "UserId": "3c4d5e6f708192a3b4c5d6e7f8091a2b",
+    "UserName": "anna",
+    "Client": "Jellyfin Web",
+    "LastActivityDate": "2026-10-12T20:14:55.0000000Z",
+    "DeviceName": "Firefox",
+    "DeviceType": "Desktop",
+    "NowPlayingItem": {
+      "Name": "Der Beispielfilm",
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "Id": "5d4c3b2a1f0e4d6c9b8a7f6e5d4c3b2a",
+      "DateCreated": "2026-09-02T19:41:07.0000000Z",
+      "Container": "mkv",
+      "RunTimeTicks": 72000000000,
+      "ProductionYear": 2019,
+      "IsFolder": false,
+      "Type": "Movie",
+      "MediaType": "Video",
+      "Width": 1920,
+      "Height": 800
+    },
+    "DeviceId": "TW96aWxsYS81LjAgKFgxMTsgTGludXggeDg2XzY0KQ==",
+    "ApplicationVersion": "10.10.7"
+  },
+  {
+    "PlayState": {
+      "PositionTicks": 9000000000,
+      "CanSeek": true,
+      "IsPaused": true,
+      "IsMuted": false,
+      "VolumeLevel": 55,
+      "AudioStreamIndex": 1,
+      "SubtitleStreamIndex": 3,
+      "MediaSourceId": "1e2d3c4b5a6978877665544332211009",
+      "PlayMethod": "Transcode",
+      "RepeatMode": "RepeatNone",
+      "PlaybackOrder": "Default"
+    },
+    "AdditionalUsers": [],
+    "Capabilities": {
+      "PlayableMediaTypes": [
+        "Audio",
+        "Video"
+      ],
+      "SupportedCommands": [
+        "MoveUp",
+        "MoveDown",
+        "Select",
+        "Back",
+        "ToggleFullscreen",
+        "SetVolume",
+        "Mute",
+        "Unmute"
+      ],
+      "SupportsMediaControl": true,
+      "SupportsPersistentIdentifier": false
+    },
+    "PlayableMediaTypes": [
+      "Audio",
+      "Video"
+    ],
+    "LastPlaybackCheckIn": "2026-10-12T20:14:40.0000000Z",
+    "IsActive": true,
+    "SupportsMediaControl": true,
+    "SupportsRemoteControl": true,
+    "HasCustomDeviceName": false,
+    "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+    "SupportedCommands": [
+      "MoveUp",
+      "MoveDown",
+      "Select",
+      "Back",
+      "ToggleFullscreen",
+      "SetVolume",
+      "Mute",
+      "Unmute"
+    ],
+    "RemoteEndPoint": "203.0.113.46",
+    "Id": "6f5902ac237024bdd0c176cb93063dc4",
+    "UserId": "7a8b9c0d1e2f30415263748596a7b8c9",
+    "UserName": "ben",
+    "Client": "Jellyfin Android TV",
+    "LastActivityDate": "2026-10-12T20:14:40.0000000Z",
+    "LastPausedDate": "2026-10-12T20:12:01.0000000Z",
+    "DeviceName": "Wohnzimmer-TV",
+    "DeviceType": "Tv",
+    "NowPlayingItem": {
+      "Name": "Der Besuch",
+      "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+      "Id": "1e2d3c4b5a6978877665544332211009",
+      "RunTimeTicks": 27000000000,
+      "IndexNumber": 5,
+      "ParentIndexNumber": 2,
+      "IsFolder": false,
+      "Type": "Episode",
+      "SeriesName": "Die Beispielserie",
+      "SeriesId": "aabbccddeeff00112233445566778899",
+      "SeasonId": "99887766554433221100ffeeddccbbaa",
+      "SeasonName": "Staffel 2",
+      "MediaType": "Video",
+      "Width": 1920,
+      "Height": 1080
+    },
+    "DeviceId": "c0ffee00c0ffee00c0ffee00c0ffee00",
+    "ApplicationVersion": "0.18.3",
+    "TranscodingInfo": {
+      "AudioCodec": "aac",
+      "VideoCodec": "h264",
+      "Container": "mkv",
+      "IsVideoDirect": false,
+      "IsAudioDirect": true,
+      "Bitrate": 6200000,
+      "Framerate": 23.976,
+      "CompletionPercentage": 35.4,
+      "Width": 1920,
+      "Height": 1080,
+      "AudioChannels": 2,
+      "HardwareAccelerationType": "vaapi",
+      "TranscodeReasons": [
+        "VideoCodecNotSupported"
+      ]
+    }
+  },
+  {
+    "PlayState": {
+      "CanSeek": false,
+      "IsPaused": false,
+      "IsMuted": false,
+      "RepeatMode": "RepeatNone",
+      "PlaybackOrder": "Default"
+    },
+    "AdditionalUsers": [],
+    "Capabilities": {
+      "PlayableMediaTypes": [
+        "Audio",
+        "Video"
+      ],
+      "SupportedCommands": [
+        "MoveUp",
+        "MoveDown",
+        "Select",
+        "Back",
+        "ToggleFullscreen",
+        "SetVolume",
+        "Mute",
+        "Unmute"
+      ],
+      "SupportsMediaControl": true,
+      "SupportsPersistentIdentifier": false
+    },
+    "PlayableMediaTypes": [
+      "Audio",
+      "Video"
+    ],
+    "LastPlaybackCheckIn": "0001-01-01T00:00:00.0000000Z",
+    "IsActive": false,
+    "SupportsMediaControl": false,
+    "SupportsRemoteControl": false,
+    "HasCustomDeviceName": false,
+    "ServerId": "9f2c6a1e4b7d4c3a8e5f0d1b2a3c4d5e",
+    "SupportedCommands": [
+      "MoveUp",
+      "MoveDown",
+      "Select",
+      "Back",
+      "ToggleFullscreen",
+      "SetVolume",
+      "Mute",
+      "Unmute"
+    ],
+    "RemoteEndPoint": "203.0.113.47",
+    "Id": "e4da3b7fbbce2345d7772b0674a318d5",
+    "UserId": "3c4d5e6f708192a3b4c5d6e7f8091a2b",
+    "UserName": "anna",
+    "Client": "Jellyfin Android",
+    "LastActivityDate": "2026-10-12T19:02:11.0000000Z",
+    "DeviceName": "Annas Handy",
+    "DeviceType": "Mobile",
+    "DeviceId": "deadbeefdeadbeefdeadbeefdeadbeef",
+    "ApplicationVersion": "2.6.1"
+  }
+]

@@ -1,13 +1,9 @@
 /**
- * Branding zur Laufzeit -- docs/01-ARCHITECTURE.md §6.
- *
- * Name, Logo und Farben sind ein Konfigurationswert, kein Build-Artefakt: die Werte
- * kommen aus `GET /api/v1/branding` und werden in CSS-Custom-Properties auf `:root`
- * geschrieben. Kein Rebuild, kein Neustart, keine Umgebungsvariable -- ein Kaeufer des
- * generischen Kerns aendert sein Branding in den Einstellungen.
- *
- * Feldnamen und -typen spiegeln exakt backend/src/nodvard_deck/branding.py::Branding.
+ * Branding zur Laufzeit aus `GET /api/v1/branding`: Name, Logo und eine eigene Akzentfarbe, ohne Neubau des Frontends.
+ * Die Feldnamen spiegeln `backend/src/nodvard_deck/branding.py::Branding`.
  */
+
+import { syncThemeColor } from "./theme";
 
 export interface BrandingColors {
   accent: string;
@@ -27,13 +23,49 @@ export interface Branding {
   colors: BrandingColors;
 }
 
-const CSS_VAR_BY_COLOR_KEY: Record<keyof BrandingColors, string> = {
-  accent: "--color-accent",
-  accent_strong: "--color-accent-strong",
-  background: "--color-background",
-  surface: "--color-surface",
-  text: "--color-text",
-};
+/** Werkseinstellung der Akzentfarbe: steht sie im Branding, gilt die Farbe des Themes. */
+export const DEFAULT_ACCENT = "#0ea5e9";
+
+const ACCENT_VARS = ["--color-accent", "--color-accent-strong", "--color-accent-text"];
+
+/** Werte der Akzent-Variablen für eine eigene Farbe; die kräftige Stufe (Hover, Gedrückt) ist 15 % dunkler. */
+export function accentVars(accent: string): Record<string, string> {
+  return {
+    "--color-accent": accent,
+    "--color-accent-strong": `color-mix(in srgb, ${accent} 85%, black)`,
+    "--color-accent-text": accent,
+  };
+}
+
+/** Eine eigene Akzentfarbe aus dem Branding, sonst `null`; Hintergrund, Flächen und Text kommen vom Theme. */
+export function brandAccent(branding: Branding): string | null {
+  const accent = branding.colors.accent.trim().toLowerCase();
+  return accent && accent !== DEFAULT_ACCENT ? accent : null;
+}
+
+// Wie `is_local_image_url` im Backend (`branding.py`): Logo und Favicon nur von diesem Server oder als `data:image/…`
+// (die CSP meldet andere Bilder, `img-src 'self' data: blob:`, und soll sie später sperren). Ein alter Wert mit fremder
+// Adresse bleibt gespeichert, wird aber nicht mehr eingesetzt.
+const OWN_PATH = /^\/[A-Za-z0-9._~!$&'()*+,;=:@%\/?#-]*$/;
+
+/** Die Adresse, wenn das Bild von diesem Server oder als `data:image/…` kommt, sonst `null`. */
+export function localImageUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  for (const ch of url) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (code < 0x21 || code === 0x7f) return null;
+  }
+  if (url.slice(0, 5).toLowerCase() === "data:") return url.slice(5, 11).toLowerCase() === "image/" ? url : null;
+  return OWN_PATH.test(url) && !url.startsWith("//") ? url : null;
+}
+
+const DEFAULT_FAVICON = "/favicon.ico";
+let faviconStamp = 0;
+
+/** Nach einem Upload: Das Favicon hat dieselbe Adresse wie vorher, der Browser lädt es nur mit neuer Adresse neu. */
+export function markFaviconChanged(now: number = Date.now()): void {
+  faviconStamp = now;
+}
 
 export async function fetchBranding(): Promise<Branding> {
   const res = await fetch("/api/v1/branding");
@@ -43,26 +75,26 @@ export async function fetchBranding(): Promise<Branding> {
   return (await res.json()) as Branding;
 }
 
-/**
- * Schreibt Branding in DOM/CSS. Wird einmal beim Start aufgerufen (siehe AppShell.tsx) --
- * spaeter (WP-Settings) erneut nach `PUT /api/v1/branding`, ohne Reload.
- */
+/** Schreibt Branding in DOM/CSS, beim Start und nach jedem Speichern, ohne Neuladen. */
 export function applyBranding(branding: Branding): void {
   const root = document.documentElement;
-  for (const [key, cssVar] of Object.entries(CSS_VAR_BY_COLOR_KEY) as [
-    keyof BrandingColors,
-    string,
-  ][]) {
-    root.style.setProperty(cssVar, branding.colors[key]);
+  const accent = brandAccent(branding);
+  const values = accent ? accentVars(accent) : {};
+  for (const name of ACCENT_VARS) {
+    if (accent) root.style.setProperty(name, values[name]);
+    else root.style.removeProperty(name);
   }
 
   document.title = branding.product_name;
-  // Statusleiste der Handy-App in der Hintergrundfarbe des Brandings.
-  document.querySelector('meta[name="theme-color"]')?.setAttribute("content", branding.colors.background);
+  syncThemeColor();
 
-  if (branding.favicon_url) {
-    const link = document.getElementById("favicon-link") as HTMLLinkElement | null;
-    if (link) link.href = branding.favicon_url;
+  const link = document.getElementById("favicon-link") as HTMLLinkElement | null;
+  if (link) {
+    const favicon = localImageUrl(branding.favicon_url);
+    const href = favicon && faviconStamp && !favicon.startsWith("data:") && !favicon.includes("?")
+      ? `${favicon}?v=${faviconStamp}`
+      : favicon ?? DEFAULT_FAVICON;
+    if (link.getAttribute("href") !== href) link.setAttribute("href", href);
   }
 }
 

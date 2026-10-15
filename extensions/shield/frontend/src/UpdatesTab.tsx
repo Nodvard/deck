@@ -6,6 +6,7 @@
 import { useCallback, useContext, useEffect, useState } from "react";
 
 import { Badge, Button, Card, EmptyState, Icon, Notice, Stat, type Tone } from "../../../_shared/frontend/src/ui";
+import { ServerUnavailableError } from "../../../_shared/frontend/src/api";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { describeSchedule } from "../../../_shared/frontend/src/SchedulePicker";
 import { API, ago, call, count, HostFilter, proposeAndApprove, useForHost, when } from "./api";
@@ -41,6 +42,10 @@ interface UpdateState {
   attempted_at?: number | null;
   /** Neustart ausgeloest -- die naechste erfolgreiche Pruefung ersetzt den Stand und entfernt das Feld. */
   reboot_pending_since?: number;
+  /** Offene Updates, die den Docker-Dienst neu starten (fehlt, wenn keine dabei sind). */
+  docker_packages?: { all: string[]; security: string[] };
+  /** Läuft Nodvard Deck auf diesem Server? null: ließ sich nicht prüfen (nur gesetzt, wenn Docker-Pakete warten). */
+  deck_host?: boolean | null;
 }
 
 export interface UpdateRun {
@@ -105,6 +110,75 @@ const SINGLE_APPROVAL_RISKS = ["high", "critical"];
 
 const reasonText = (r?: string) => (r ?? "").replace(/\.$/, "");
 
+/** Nach einem Ausfall (Nodvard Deck startet etwa nach einem Docker-Update neu) versucht es der Reiter nach dieser Pause
+ *  selbst wieder. */
+export const RETRY_MS = 5000;
+
+/** Läufe, deren Ergebnis die Seite noch zeigen will, auch über ein Neuladen hinweg: Startet Nodvard Deck beim Einspielen
+ *  auf seinem eigenen Server neu, endet die Aktion als „unterbrochen“, der Lauf auf dem Server geht aber weiter. */
+export const FOLLOW_KEY = "nodvard-shield-updates-follow";
+/** Erscheint in dieser Zeit kein neuer Lauf (die Aktion wartet etwa auf Freigabe), gibt die Seite das Folgen auf. */
+const FOLLOW_START_MS = 10 * 60 * 1000;
+/** Länger wartet auch Nodvard Shield nicht auf einen Lauf (Wartezeit und spätes Nachfragen zusammen). */
+const FOLLOW_MAX_MS = 3 * 3600 * 1000;
+
+interface Follow {
+  host_name: string;
+  /** Letzter Lauf vor dem Einspielen: Jeder andere ist der neue. */
+  prev_run: string | null;
+  since: number;
+}
+
+function readFollows(): Record<string, Follow> {
+  try {
+    const raw = JSON.parse(window.sessionStorage.getItem(FOLLOW_KEY) ?? "{}") as unknown;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+    const out: Record<string, Follow> = {};
+    for (const [id, f] of Object.entries(raw as Record<string, Partial<Follow>>)) {
+      if (f && typeof f.host_name === "string" && typeof f.since === "number" && (f.prev_run === null || typeof f.prev_run === "string")) {
+        out[id] = { host_name: f.host_name, prev_run: f.prev_run, since: f.since };
+      }
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeFollows(follows: Record<string, Follow>): void {
+  try {
+    if (Object.keys(follows).length) window.sessionStorage.setItem(FOLLOW_KEY, JSON.stringify(follows));
+    else window.sessionStorage.removeItem(FOLLOW_KEY);
+  } catch {
+    // Ohne Speicher (privates Fenster) folgt die Seite nur, solange sie offen bleibt.
+  }
+}
+
+function without<T>(record: Record<string, T>, keys: string[]): Record<string, T> {
+  const next = { ...record };
+  for (const k of keys) delete next[k];
+  return next;
+}
+
+/** Ergebnis eines Laufs als Hinweis: maßgeblich ist der Lauf auf dem Server, nicht die (vielleicht unterbrochene) Aktion. */
+function runNotice(name: string, run: UpdateRun): { kind: "ok" | "error"; text: string } {
+  return run.status === "ok"
+    ? { kind: "ok", text: `${name}: ${run.summary ?? "Erledigt."}` }
+    : { kind: "error", text: `${name}: Fehlgeschlagen: ${run.summary ?? "unbekannter Fehler"}` };
+}
+
+const RESUMED_TEXT = "Nodvard Deck wurde zwischendurch neu gestartet. Das Einspielen läuft auf dem Server weiter, das Ergebnis erscheint hier.";
+
+/** Satz für die Rückfrage, wenn das Einspielen Docker neu startet und hier (vielleicht) Nodvard Deck läuft. */
+export function deckRestartHint(st: UpdateState | null | undefined, mode: string): string {
+  const names = mode === "security" ? st?.docker_packages?.security : mode === "all" ? st?.docker_packages?.all : undefined;
+  if (!names?.length || st?.deck_host === false) return "";
+  const which = names.length === 1 ? `ist das Docker-Paket ${names[0]}` : `sind die Docker-Pakete ${names.join(", ")}`;
+  return st?.deck_host
+    ? ` Dabei ${which}, und hier läuft Nodvard Deck: Es ist danach kurz nicht erreichbar und lädt von selbst neu.`
+    : ` Dabei ${which}. Läuft hier Nodvard Deck, ist es danach kurz nicht erreichbar und lädt von selbst neu.`;
+}
+
 const RUN_STATUS: Record<string, { label: string; tone: Tone }> = {
   running: { label: "läuft", tone: "info" },
   ok: { label: "erfolgreich", tone: "good" },
@@ -146,20 +220,52 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
   const [proposed, setProposed] = useState<ProposeAllResult | null>(null);
   // Ein einzelner Server (Server-Seite, `?host=`): dort gibt es nur dessen eigene Knöpfe, keine Sammel-Knöpfe.
   const onlyHost = useContext(HostFilter);
+  const [follows, setFollows] = useState<Record<string, Follow>>(readFollows);
+  // Fehlversuche in Folge, weil Nodvard Deck nicht antwortet (0: erreichbar).
+  const [unreachable, setUnreachable] = useState(0);
 
   const load = useCallback(() => {
     call<UpdatesOverview>(`${API}/updates`)
-      .then((d) => { setData(d); setError(null); })
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .then((d) => { setData(d); setError(null); setUnreachable(0); })
+      .catch((err: unknown) => {
+        if (err instanceof ServerUnavailableError) setUnreachable((n) => n + 1);
+        else setError(err instanceof Error ? err.message : String(err));
+      });
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  const busy = Object.keys(pending).length > 0 || !!data?.hosts.some((h) => h.checking || h.busy);
+  // Nicht erreichbar: nach einer kurzen Pause selbst noch einmal, bis es wieder klappt.
+  useEffect(() => {
+    if (!unreachable) return;
+    const t = setTimeout(load, RETRY_MS);
+    return () => clearTimeout(t);
+  }, [unreachable, load]);
+  useEffect(() => writeFollows(follows), [follows]);
+  const busy = Object.keys(pending).length > 0 || Object.keys(follows).length > 0 || !!data?.hosts.some((h) => h.checking || h.busy);
   useEffect(() => {
     if (!busy) return;
     const t = setInterval(load, 4000);
     return () => clearInterval(t);
   }, [busy, load]);
+
+  // Läufe, denen die Seite folgt (nicht die, die `apply` gerade selbst abwartet): Ist der neue Lauf fertig, steht sein
+  // Ergebnis da. Kommt keiner oder dauert es zu lange, hört die Seite auf zu folgen.
+  useEffect(() => {
+    if (!data) return;
+    const now = Date.now();
+    const done: string[] = [];
+    for (const [hostId, f] of Object.entries(follows)) {
+      if (pending[hostId]) continue;
+      const run = data.hosts.find((h) => h.host_id === hostId)?.last_run;
+      if (run && run.id !== f.prev_run) {
+        if (run.status !== "running") {
+          setNotice(runNotice(f.host_name, run));
+          done.push(hostId);
+        } else if (now - f.since > FOLLOW_MAX_MS) done.push(hostId);
+      } else if (now - f.since > FOLLOW_START_MS) done.push(hostId);
+    }
+    if (done.length) setFollows((fs) => without(fs, done));
+  }, [data, follows, pending]);
 
   async function checkAll(hostIds: string[] | "all" = "all") {
     setNotice(null);
@@ -224,10 +330,10 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
     // Pakete entfernen und gilt als "hoch". Ob der Server Proxmox ist, weiss erst der Befehl selbst.
     const distUpgrade = mode === "all" && st?.manager === "apt" && !!data?.config.proxmox_dist_upgrade;
     const questions: Record<Mode, string> = {
-      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?`,
+      security: `${count(st?.security_count ?? 0, "Sicherheitsupdate", "Sicherheitsupdates")} auf „${h.host_name}“ jetzt einspielen?${deckRestartHint(st, "security")}`,
       all: `${(st?.count ?? 0) === 1 ? "Das Update" : `Alle ${st?.count ?? 0} Updates`} auf „${h.host_name}“ jetzt einspielen? Das kann einige Minuten dauern.${
         distUpgrade ? " Ist es ein Proxmox-Server, läuft dabei „apt-get dist-upgrade“ – das kann Pakete entfernen oder ersetzen." : ""
-      }`,
+      }${deckRestartHint(st, "all")}`,
       cleanup: `Auf „${h.host_name}“ nicht mehr benötigte Pakete und alte Kernel entfernen und den Paket-Cache leeren?`,
       reboot: `„${h.host_name}“ jetzt neu starten? Der Server ist dann ein paar Minuten nicht erreichbar – alle Dienste darauf auch.`,
     };
@@ -236,10 +342,28 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
     if (!ok) return;
     setPending((p) => ({ ...p, [h.host_id]: mode }));
     setNotice({ kind: "ok", text: mode === "reboot" ? `Neustart von ${h.host_name} wird ausgelöst …` : `${h.host_name}: läuft – du kannst die Seite offen lassen oder weiterarbeiten.` });
+    const prevRun = h.last_run?.id ?? null;
+    if (mode !== "reboot") setFollows((fs) => ({ ...fs, [h.host_id]: { host_name: h.host_name, prev_run: prevRun, since: Date.now() } }));
     try {
       const text = await proposeAndApprove(`${API}/hosts/${h.host_id}/upgrade`, { mode }, mode === "reboot" ? "high" : "medium", unmountSignal());
-      setNotice({ kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${h.host_name}: ${text}` });
+      let notice: { kind: "ok" | "error"; text: string } = { kind: text.startsWith("Fehlgeschlagen") ? "error" : "ok", text: `${h.host_name}: ${text}` };
+      let keepFollowing = false;
+      if (mode !== "reboot" && text !== "Erledigt.") {
+        // Endet die Aktion anders als „erledigt“ (etwa „durch Neustart unterbrochen“), zählt der Lauf auf dem Server.
+        const fresh = await call<UpdatesOverview>(`${API}/updates`).catch(() => null);
+        if (fresh) setData(fresh);
+        const run = fresh?.hosts.find((x) => x.host_id === h.host_id)?.last_run;
+        if (run && run.id !== prevRun) {
+          if (run.status === "running") {
+            notice = { kind: "ok", text: `${h.host_name}: ${RESUMED_TEXT}` };
+            keepFollowing = true;
+          } else notice = runNotice(h.host_name, run);
+        }
+      }
+      if (!keepFollowing) setFollows((fs) => without(fs, [h.host_id]));
+      setNotice(notice);
     } catch (err) {
+      if (!(err instanceof ServerUnavailableError)) setFollows((fs) => without(fs, [h.host_id]));
       setNotice({ kind: "error", text: `${h.host_name}: ${err instanceof Error ? err.message : String(err)}` });
     } finally {
       setPending((p) => {
@@ -268,8 +392,13 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
 
   const hosts = useForHost(data?.hosts ?? []);
   const runs = useForHost(data?.runs ?? []);
+  const offline = unreachable > 0 && (
+    <div data-testid="updates-offline">
+      <Notice text="Nodvard Deck ist gerade nicht erreichbar, zum Beispiel weil es nach einem Update neu startet. Die Seite versucht es in ein paar Sekunden selbst wieder." />
+    </div>
+  );
   if (error) return <Notice text={`Fehler: ${error}`} />;
-  if (!data) return <p className="text-sm text-white/50">Lade …</p>;
+  if (!data) return offline || <p className="text-sm text-white/50">Lade …</p>;
   const { summary: sm, config: c } = data;
   const unsupported = data.hosts.filter((h) => h.status?.unsupported).length;
 
@@ -279,6 +408,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
 
   return (
     <>
+      {offline}
       {notice && <Notice text={notice.text} kind={notice.kind} onClose={() => setNotice(null)} />}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -390,7 +520,7 @@ export function UpdatesTab({ canManage }: { canManage: boolean }) {
               {isOpen && st && (
                 <div className="mt-2 max-h-80 overflow-auto rounded-lg border border-white/[0.06]">
                   <table className="w-full text-left text-xs">
-                    <thead className="sticky top-0 bg-[#15171c] text-white/45">
+                    <thead className="sticky top-0 bg-[var(--color-surface-head)] text-white/45">
                       <tr><th className="px-3 py-1.5 font-medium">Paket</th><th className="px-3 py-1.5 font-medium">installiert</th><th className="px-3 py-1.5 font-medium">neu</th><th className="px-3 py-1.5" /></tr>
                     </thead>
                     <tbody className="divide-y divide-white/[0.04]">

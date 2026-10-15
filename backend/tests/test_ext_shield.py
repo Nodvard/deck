@@ -1248,8 +1248,11 @@ async def test_without_any_ai_server_nothing_looks_broken(client, db_session, te
     await loaded.instance._process_batch(loaded.ctx, loaded.instance._store.take_batch())
     assert len(channel.received) == 1
     body = channel.received[0].body
-    assert "Nodvard KI ist nicht eingerichtet" in body and "KI nicht erreichbar" not in body
-    assert NO_AI_TEXT.split(" – ")[0] in body
+    # Der Hinweis „nicht eingerichtet“ steht am Vorfall, nicht in jeder Meldung aufs Handy.
+    assert "Nodvard KI ist nicht eingerichtet" not in body and "KI nicht erreichbar" not in body
+    assert body.startswith("Ursache laut System") and body == body.strip() and "\n\n\n" not in body
+    incidents = (await client.get("/api/v1/ext/shield/incidents", headers=_auth_header(token))).json()
+    assert NO_AI_TEXT in str(incidents)
 
 
 @pytest.mark.asyncio

@@ -58,7 +58,15 @@ from .errors import (
 )
 from .extension import NodvardExtension
 from .http import max_body_bytes, sha256_fingerprint
-from .manifest import KNOWN_PERMISSIONS, ExtensionManifest, load_manifest
+from .manifest import (
+    KNOWN_PERMISSIONS,
+    ROOT_HELPER_DIR,
+    AdoptSpec,
+    ExtensionManifest,
+    RootHelperSpec,
+    load_manifest,
+    root_helper_path,
+)
 from .types import (
     Actor,
     ActorType,
@@ -113,8 +121,12 @@ __all__ = [
     "NodvardExtension",
     "LatticeExtension",  # veraltet: dasselbe Objekt wie NodvardExtension (Alias mit DeprecationWarning)
     "ExtensionContext",
+    "AdoptSpec",
     "ExtensionManifest",
     "load_manifest",
+    "RootHelperSpec",
+    "ROOT_HELPER_DIR",
+    "root_helper_path",
     "same_target",
     "KNOWN_PERMISSIONS",
     "max_body_bytes",

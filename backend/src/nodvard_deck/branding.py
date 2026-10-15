@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .custom_css import is_local_url
+
 SETTINGS_KEY_PREFIX = "branding."
 
 LOGO_CONTENT_TYPES = {
@@ -21,6 +23,33 @@ Die Datei liegt unter `<data_dir>/branding/` (`POST /branding/logo`) und wird ö
 weil die Login-Seite sie vor jeder Anmeldung braucht."""
 
 MAX_LOGO_BYTES = 2 * 1024 * 1024
+LOGO_PATH = "/api/v1/branding/logo"
+
+FAVICON_CONTENT_TYPES = {
+    "image/png": "png", "image/svg+xml": "svg", "image/x-icon": "ico", "image/vnd.microsoft.icon": "ico",
+}
+"""Erlaubte Favicon-Typen (`POST /branding/favicon`), ausgeliefert über `GET /branding/favicon` wie das Logo."""
+
+MAX_FAVICON_BYTES = 512 * 1024
+FAVICON_PATH = "/api/v1/branding/favicon"
+
+_SIGNATURES: dict[str, tuple[bytes, ...]] = {
+    "png": (b"\x89PNG\r\n\x1a\n",),
+    "jpg": (b"\xff\xd8\xff",),
+    "ico": (b"\x00\x00\x01\x00",),
+}
+"""Die ersten Bytes je Endung. WebP prüft `image_matches_type` eigens (`RIFF`, vier Bytes Länge, `WEBP`), SVG die
+SVG-Prüfung."""
+
+
+def image_matches_type(content: bytes, extension: str) -> bool:
+    """Passt der Anfang der Datei zur Endung, die der Content-Type vorgibt? Sonst läge unter `logo.png` etwas anderes,
+    das der Browser mit `image/png` ausgeliefert bekäme."""
+    if extension == "svg":
+        return True
+    if extension == "webp":
+        return content[:4] == b"RIFF" and content[8:12] == b"WEBP"
+    return any(content.startswith(signature) for signature in _SIGNATURES.get(extension, ()))
 
 UNTRUSTED_FILE_HEADERS = {
     "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; sandbox",
@@ -48,28 +77,65 @@ def clean_support_url(value: str | None) -> str | None:
     return text
 
 
+def is_local_image_url(value: str) -> bool:
+    """Logo und Favicon: nur ein Bild von diesem Server oder `data:image/…`. Die App-Seite soll Bilder nur von dort
+    laden (`img-src 'self' data: blob:`, vorerst als `main.SPA_CSP_REPORT_ONLY` nur gemeldet)."""
+    return is_local_url(value) and (value[:5].lower() != "data:" or value[5:11].lower() == "image/")
+
+
 def logo_dir(data_dir: Path) -> Path:
     return data_dir / "branding"
+
+
+def _find_file(data_dir: Path, stem: str) -> Path | None:
+    d = logo_dir(data_dir)
+    if not d.is_dir():
+        return None
+    matches = sorted(d.glob(f"{stem}.*"))
+    return matches[0] if matches else None
+
+
+def _save_file(data_dir: Path, stem: str, content: bytes, extension: str) -> Path:
+    d = logo_dir(data_dir)
+    d.mkdir(parents=True, exist_ok=True)
+    for old in d.glob(f"{stem}.*"):
+        old.unlink()
+    path = d / f"{stem}.{extension}"
+    path.write_bytes(content)
+    return path
 
 
 def find_logo_file(data_dir: Path) -> Path | None:
     """Das aktuelle Logo. Es gibt nur eines: `save_logo_file` entfernt vor jedem Upload alle vorhandenen `logo.*`,
     damit nie mehrere Endungen nebeneinander liegen."""
-    d = logo_dir(data_dir)
-    if not d.is_dir():
-        return None
-    matches = sorted(d.glob("logo.*"))
-    return matches[0] if matches else None
+    return _find_file(data_dir, "logo")
 
 
 def save_logo_file(data_dir: Path, content: bytes, extension: str) -> Path:
+    return _save_file(data_dir, "logo", content, extension)
+
+
+def find_favicon_file(data_dir: Path) -> Path | None:
+    """Das aktuelle Favicon, im selben Ordner wie das Logo (und damit in jeder Sicherung)."""
+    return _find_file(data_dir, "favicon")
+
+
+def save_favicon_file(data_dir: Path, content: bytes, extension: str) -> Path:
+    return _save_file(data_dir, "favicon", content, extension)
+
+
+def remove_image_file(data_dir: Path, stem: str) -> None:
+    """Entfernt `logo.*` bzw. `favicon.*`: Zeigt das Branding nicht mehr auf die hochgeladene Datei, soll sie auch nicht
+    mehr öffentlich unter `GET /branding/logo` bzw. `/favicon` abrufbar sein."""
     d = logo_dir(data_dir)
-    d.mkdir(parents=True, exist_ok=True)
-    for old in d.glob("logo.*"):
-        old.unlink()
-    path = d / f"logo.{extension}"
-    path.write_bytes(content)
-    return path
+    if d.is_dir():
+        for old in d.glob(f"{stem}.*"):
+            old.unlink(missing_ok=True)
+
+
+# Hintergrund des Standard-Themes „Schlicht dunkel“ (`frontend/src/styles/index.css`, `:root`). Das Web-App-Manifest
+# gilt für alle Konten, darum das Standard-Theme; die Seite stellt die Statusleiste danach auf das Theme des Kontos um.
+DEFAULT_THEME_BACKGROUND = "#1a1b1e"
 
 
 class BrandingColors(BaseModel):

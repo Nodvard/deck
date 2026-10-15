@@ -1,6 +1,6 @@
 """Shell IN etwas auf einem Host (`ScopedTerminalTarget`, z. B. ein Container): `POST /terminal/sessions` mit
 `scope` und `ref`, dieselbe WS-Bruecke, Protokoll mit `scope`/`ref`. Der Anbieter ist hier ein Test-Double; den
-echten (service-matrix, `docker exec`) pruefen test_ext_service_matrix_shell.py und die Kette ueber SSH."""
+echten (Docker-Modul, `docker exec`) pruefen test_ext_docker_shell.py und die Kette ueber SSH."""
 
 from __future__ import annotations
 

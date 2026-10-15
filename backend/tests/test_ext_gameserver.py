@@ -310,8 +310,8 @@ async def test_no_join_code_when_host_is_down(client, db_session, test_settings)
 async def test_gameserver_page_is_registered_after_enabling(client, db_session, test_settings):
     """gameserver hatte bisher NUR ein Dashboard-
     Widget, keine eigene Seite -- `GET /pages` muss nach dem Aktivieren die neue
-    GameServerPage zeigen, wie es fuer service-matrix bereits bewiesen ist
-    (test_ext_service_matrix.py)."""
+    GameServerPage zeigen, wie es fuer das Docker-Modul bereits bewiesen ist
+    (test_ext_docker.py)."""
     token = await _bootstrap_owner(client)
     test_settings.extensions_dir = REPO_EXTENSIONS_DIR
     await extensions_service.discover_and_sync(db_session, test_settings)

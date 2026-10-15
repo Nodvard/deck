@@ -1,0 +1,7 @@
+[[entries]]
+kind = "neu"
+text = "Wenn ein Teil eines Moduls in ein eigenes Modul umzieht, nimmt das neue Modul beim ersten Start die Einstellungen, den Ein/Aus-Zustand, die Kacheln im Cockpit und die Zugangsdaten im Tresor mit. Die alten Adressen der Schnittstelle funktionieren weiter."
+
+[[entries]]
+kind = "sicherheit"
+text = "Das gilt nur zwischen mitgelieferten Modulen, nie für nachinstallierte Pakete. Eingeschaltet wird das neue Modul nur, wenn das alte schon alle seine Rechte hatte."

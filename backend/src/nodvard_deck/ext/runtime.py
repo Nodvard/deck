@@ -16,6 +16,8 @@ from nodvard_sdk import ExtensionManifest, HostRequirementSpec, HostToolSpec, Pa
 from nodvard_sdk.actions import ActionSpec
 from starlette.routing import BaseRoute
 
+from .root_helpers import RootHelperFile
+
 logger = logging.getLogger("nodvard_deck.ext")
 
 
@@ -212,6 +214,9 @@ class LoadedExtension:
     settings_schema: dict[str, Any] | None = None
     store_id: str | None = None
     """`id` der Registry-Zeile für Einstellungen und Zeitpläne; nach einer Umbenennung ggf. die alte Kennung."""
+    root_helper: RootHelperFile | None = None
+    """Das geprüfte Hilfsskript für root-Befehle (`root_helper` im Manifest), beim Einschalten aus der Datei gelesen,
+    ohne Code des Moduls; `None`, wenn das Modul keins mitbringt oder die Datei nicht in Ordnung ist."""
 
     def __post_init__(self) -> None:
         if not self.store_id:

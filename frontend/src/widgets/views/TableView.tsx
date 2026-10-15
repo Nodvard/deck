@@ -19,7 +19,7 @@ export function TableView({ view, data, extId, onAction }: { view: TableViewSpec
     <div className="overflow-x-auto">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-white/10 text-xs uppercase opacity-60">
+          <tr className="border-b border-white/10 text-xs opacity-60">
             {view.columns.map((col) => (
               <th key={col.field} className={`px-2 py-1 font-medium ${ALIGN_CLASS[col.align]}`} style={col.width ? { width: col.width } : undefined}>
                 {col.label}

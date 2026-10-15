@@ -193,12 +193,16 @@ class Extension(NodvardExtension):
         @router.post("/connections/{name}/token", status_code=status.HTTP_204_NO_CONTENT)
         async def set_token(name: str, payload: _TokenIn) -> None:
             """Legt das Token im Tresor ab, nie in den Einstellungen; ein Geheimnis je Verbindung."""
-            # Kein Austausch: ein vorhandenes Token muss erst gelöscht werden.
+            # Nur Erstanlage. Ersetzen und Entfernen laufen über die Moduleinstellungen des Kerns, mit Passwort.
             label = f"{TOKEN_LABEL}:{name}"
             if await ctx.secrets.exists(label):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Ein Token für '{name}' existiert bereits -- zuerst über DELETE /api/v1/secrets/{{id}} entfernen.",
+                    detail=(
+                        f"Ein Token für '{name}' existiert bereits. Ersetzen oder entfernen unter Einstellungen → "
+                        f"Erweiterungen → Proxmox VE (API: PUT oder DELETE /api/v1/extensions/proxmox/secrets, "
+                        f"Bezeichnung {label})."
+                    ),
                 )
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 

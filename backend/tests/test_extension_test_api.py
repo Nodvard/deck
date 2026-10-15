@@ -255,7 +255,7 @@ async def test_test_timeout(client, db_session, demo, monkeypatch):
 async def test_test_never_leaks_secrets(client, db_session, demo):
     await _record(db_session)
     headers = await _owner(client)
-    assert (await client.put("/api/v1/extensions/demo/secrets", json={"label": "demo-pw", "value": SECRET}, headers=headers)).status_code == 204
+    assert (await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "demo-pw", "value": SECRET}, headers=headers)).status_code == 204
     leaky = f"seltsamer Fehler bei Anmeldung mit {SECRET} und Authorization: Bearer {SECRET}"
     _load(demo, FakeExt(report=HealthReport(healthy=False, message=leaky, details={"a": {"healthy": False, "error": leaky}})))
     r = await client.post("/api/v1/extensions/demo/test", headers=headers)
@@ -377,8 +377,8 @@ async def test_needs_setup_lists_missing_fields_and_secrets(client, db_session, 
     assert "Zugangsdaten fehlen: Passwort." in row["setup_reasons"]
     assert not any("Zusatzschlüssel" in r for r in row["setup_reasons"])  # optional
 
-    await client.put("/api/v1/extensions/demo/settings", json={"values": {"base_url": "https://x", "topic": "t"}}, headers=headers)
-    await client.put("/api/v1/extensions/demo/secrets", json={"label": "demo-pw", "value": SECRET}, headers=headers)
+    await client.put("/api/v1/extensions/demo/settings", json={"current_password": "correct-horse-battery", "values": {"base_url": "https://x", "topic": "t"}}, headers=headers)
+    await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "demo-pw", "value": SECRET}, headers=headers)
     row = (await client.get("/api/v1/extensions/demo", headers=headers)).json()
     assert row["setup_reasons"] == [] and row["needs_setup"] is False
 
@@ -395,7 +395,7 @@ async def test_needs_setup_after_failed_test_and_cleared_on_change(client, db_se
     await _record(db_session)
     await _owner(client)
     headers = await _owner_headers(client)
-    await client.put("/api/v1/extensions/demo/secrets", json={"label": "demo-pw", "value": SECRET}, headers=headers)
+    await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "demo-pw", "value": SECRET}, headers=headers)
     _load(demo, FakeExt(report=HealthReport(healthy=False, message="HTTP 401")))
     await client.post("/api/v1/extensions/demo/test", headers=headers)
     row = (await client.get("/api/v1/extensions/demo", headers=headers)).json()
@@ -404,7 +404,7 @@ async def test_needs_setup_after_failed_test_and_cleared_on_change(client, db_se
     assert row["setup_reasons"][-1].startswith("Der letzte Verbindungstest ist fehlgeschlagen: Zugangsdaten abgelehnt")
 
     # Zugangsdaten geaendert -> alter Fehlschlag ist hinfaellig
-    await client.put("/api/v1/extensions/demo/secrets", json={"label": "demo-pw", "value": SECRET + "x"}, headers=headers)
+    await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "demo-pw", "value": SECRET + "x"}, headers=headers)
     row = (await client.get("/api/v1/extensions/demo", headers=headers)).json()
     assert row["needs_setup"] is False and row["last_test"] is None
 
@@ -441,11 +441,16 @@ async def test_needs_setup_checks_required_fields_inside_list_items(db_session):
 async def test_secret_can_be_removed_and_is_audited(client, db_session, demo):
     await _record(db_session)
     headers = await _owner(client)
-    await client.put("/api/v1/extensions/demo/secrets", json={"label": "demo-pw", "value": SECRET}, headers=headers)
+    await client.put("/api/v1/extensions/demo/secrets", json={"current_password": "correct-horse-battery", "label": "demo-pw", "value": SECRET}, headers=headers)
     slots = (await client.get("/api/v1/extensions/demo/settings", headers=headers)).json()["secrets"]
     assert [(s["label"], s["is_set"], s["optional"]) for s in slots] == [("demo-pw", True, False), ("demo-opt", False, True)]
 
     r = await client.delete("/api/v1/extensions/demo/secrets", params={"label": "demo-pw"}, headers=headers)
+    assert r.status_code == 403 and r.json()["code"] == "confirm_required", "ein gespeichertes nur mit Passwort"
+    r = await client.request(
+        "DELETE", "/api/v1/extensions/demo/secrets", params={"label": "demo-pw"}, headers=headers,
+        json={"current_password": "correct-horse-battery"},
+    )
     assert r.status_code == 204, r.text
     slots = (await client.get("/api/v1/extensions/demo/settings", headers=headers)).json()["secrets"]
     assert slots[0]["is_set"] is False

@@ -4,24 +4,12 @@ name        = "Netzwerk"
 version     = "0.1.0"
 api_version = "0.1.0"
 author      = "Nodvard"
-description = "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blockierung, Proxy-Hosts und ablaufende Zertifikate. Blockierung pausieren und Proxy-Hosts ein- oder ausschalten – über die Freigabe."
+description = "Wegweiser: Pi-hole und Nginx Proxy Manager sind jetzt eigene Module. Dieses Modul kann ausgeschaltet bleiben."
 icon        = "activity"
 category    = "servers"
 sort_order  = 70
 stage       = "beta"
 entrypoint  = "nodvard_deck_ext_network:Extension"
 frontend    = "frontend/dist/index.js"
-# Nur lesend, fuer den Adress-Check: die Docker-Container der Service-Matrix (`ServiceCatalog`).
-requires    = ["service-matrix"]
 
-permissions = [
-  "net.outbound",
-  "net.outbound.insecure_tls",
-  "hosts.execute",
-  "secrets.read:network-*",
-  "schedule.register",
-  "notify.send",
-]
-
-[settings]
-schema = "settings.schema.json"
+permissions = []

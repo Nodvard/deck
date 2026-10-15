@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 
 import { HostFilter } from "./api";
-import { UpdatesTab, type ProposeAllResult, type UpdatesOverview } from "./UpdatesTab";
+import { deckRestartHint, FOLLOW_KEY, RETRY_MS, UpdatesTab, type ProposeAllResult, type UpdateRun, type UpdatesOverview } from "./UpdatesTab";
 
 const now = Date.now() / 1000;
 
@@ -61,6 +61,8 @@ function mockFetch(calls: Call[]) {
 
 let confirmDialog: Mock<(message: string) => Promise<boolean>>;
 beforeEach(() => {
+  // Gemerkte Läufe (Folgen über ein Neuladen hinweg) dürfen nicht in den nächsten Test wandern.
+  window.sessionStorage.clear();
   confirmDialog = vi.fn<(message: string) => Promise<boolean>>().mockResolvedValue(true);
   window.__lattice = {
     React: undefined as never, ReactDOM: undefined as never, ReactJsxRuntime: undefined as never,
@@ -689,6 +691,139 @@ describe("Zwei Wege, Updates automatisch einzuspielen", () => {
       expect(await screen.findByText(/Tipp: Der Server kann Sicherheitsupdates/)).toBeInTheDocument();
       expect(screen.getAllByRole("button", { name: "Einrichten" })).toHaveLength(1);
       unmount();
+    }
+  });
+});
+
+
+describe("Updates auf dem Server, auf dem Nodvard Deck läuft", () => {
+  const DOCKER = { all: ["containerd.io", "docker-ce"], security: ["docker-ce"] };
+  const pi = DATA.hosts[0];
+
+  function withPi(status: Partial<NonNullable<typeof pi.status>>, last_run: UpdateRun | null = null): UpdatesOverview {
+    return { ...DATA, hosts: [{ ...pi, status: { ...pi.status!, ...status }, last_run }, DATA.hosts[1]] };
+  }
+
+  const run = (status: string, summary: string | null = null): UpdateRun => ({
+    id: "r9", host_id: "h-pi", host_name: "Raspberry Pi", mode: "security", mode_label: "Sicherheitsupdates", trigger: "manual",
+    status, upgraded: 2, summary, output_tail: null, started_at: now, finished_at: status === "running" ? null : now + 60,
+  });
+
+  it("deckRestartHint: nur mit Docker-Paketen in dieser Art, und nicht auf einem anderen Server", () => {
+    expect(deckRestartHint({ ...pi.status!, docker_packages: DOCKER, deck_host: true }, "all"))
+      .toBe(" Dabei sind die Docker-Pakete containerd.io, docker-ce, und hier läuft Nodvard Deck: Es ist danach kurz nicht erreichbar und lädt von selbst neu.");
+    expect(deckRestartHint({ ...pi.status!, docker_packages: DOCKER, deck_host: true }, "security"))
+      .toBe(" Dabei ist das Docker-Paket docker-ce, und hier läuft Nodvard Deck: Es ist danach kurz nicht erreichbar und lädt von selbst neu.");
+    expect(deckRestartHint({ ...pi.status!, docker_packages: DOCKER, deck_host: null }, "all"))
+      .toBe(" Dabei sind die Docker-Pakete containerd.io, docker-ce. Läuft hier Nodvard Deck, ist es danach kurz nicht erreichbar und lädt von selbst neu.");
+    expect(deckRestartHint({ ...pi.status!, docker_packages: DOCKER, deck_host: false }, "all")).toBe("");
+    expect(deckRestartHint({ ...pi.status!, docker_packages: { all: ["containerd.io"], security: [] }, deck_host: true }, "security")).toBe("");
+    expect(deckRestartHint({ ...pi.status!, docker_packages: DOCKER, deck_host: true }, "cleanup")).toBe("");
+    expect(deckRestartHint(pi.status, "all")).toBe("");
+  });
+
+  it("die Rückfrage vor dem Einspielen sagt, dass Nodvard Deck kurz weg ist", async () => {
+    const base = mockFetch([]);
+    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input.toString();
+      if (url.endsWith("/defender/updates")) return new Response(JSON.stringify(withPi({ docker_packages: DOCKER, deck_host: true })), { status: 200 });
+      return base(input, init);
+    }));
+    render(<UpdatesTab canManage />);
+    const row = within(await screen.findByTestId("updates-h-pi"));
+    fireEvent.click(row.getByRole("button", { name: "Sicherheitsupdates einspielen" }));
+    await waitFor(() => expect(confirmDialog).toHaveBeenCalled());
+    expect(confirmDialog.mock.calls[0][0]).toContain("Dabei ist das Docker-Paket docker-ce, und hier läuft Nodvard Deck: Es ist danach kurz nicht erreichbar und lädt von selbst neu.");
+  });
+
+  it("endet die Aktion durch den Neustart von Nodvard Deck, folgt die Seite dem Lauf und zeigt sein Ergebnis", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let overview = withPi({});
+      const base = mockFetch([]);
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === "string" ? input : input.toString();
+        if (url.endsWith("/defender/updates")) return new Response(JSON.stringify(overview), { status: 200 });
+        if (url.endsWith("/actions/a1/approve")) return new Response(JSON.stringify({ status: "executing", result: null }), { status: 202 });
+        if (url.endsWith("/actions/a1")) {
+          // Nach dem Neustart: Der Kern hat die Aktion als unterbrochen beendet, Shield hat den Lauf wieder aufgenommen.
+          overview = withPi({}, run("running"));
+          return new Response(JSON.stringify({
+            id: "a1", status: "failed", result: { error: "Durch Neustart unterbrochen – Ausgang unbekannt, bitte auf dem Server prüfen." },
+          }), { status: 200 });
+        }
+        return base(input, init);
+      }));
+      render(<UpdatesTab canManage />);
+      fireEvent.click(within(await screen.findByTestId("updates-h-pi")).getByRole("button", { name: "Sicherheitsupdates einspielen" }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(3000); });
+      await waitFor(() => expect(screen.getByText(/Raspberry Pi: Nodvard Deck wurde zwischendurch neu gestartet/)).toBeInTheDocument());
+      expect(screen.queryByText(/Durch Neustart unterbrochen/)).not.toBeInTheDocument();
+      expect(JSON.parse(window.sessionStorage.getItem(FOLLOW_KEY) ?? "{}")).toHaveProperty("h-pi");
+
+      overview = withPi({}, run("ok", "2 Paket(e) aktualisiert"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      await waitFor(() => expect(screen.getByText("Raspberry Pi: 2 Paket(e) aktualisiert")).toBeInTheDocument());
+      expect(window.sessionStorage.getItem(FOLLOW_KEY)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("nach dem Neuladen der Seite folgt sie dem gemerkten Lauf weiter, ein Fehler steht als Fehler da", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      window.sessionStorage.setItem(FOLLOW_KEY, JSON.stringify({ "h-pi": { host_name: "Raspberry Pi", prev_run: null, since: Date.now() } }));
+      let overview = withPi({}, run("running"));
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify(overview), { status: 200 })));
+      render(<UpdatesTab canManage />);
+      await screen.findByTestId("updates-h-pi");
+      expect(screen.queryByText(/Raspberry Pi: Fehlgeschlagen/)).not.toBeInTheDocument();
+
+      overview = withPi({}, run("error", "E: Sub-process /usr/bin/dpkg returned an error code (1)"));
+      await act(async () => { await vi.advanceTimersByTimeAsync(4000); });
+      const alert = await screen.findByText("Raspberry Pi: Fehlgeschlagen: E: Sub-process /usr/bin/dpkg returned an error code (1)");
+      expect(alert.closest("[role=alert]")).not.toBeNull();
+      expect(window.sessionStorage.getItem(FOLLOW_KEY)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ein gemerkter Lauf, zu dem nach 10 Minuten nichts kam, wird vergessen", async () => {
+    window.sessionStorage.setItem(FOLLOW_KEY, JSON.stringify({ "h-pi": { host_name: "Raspberry Pi", prev_run: null, since: Date.now() - 11 * 60 * 1000 } }));
+    vi.stubGlobal("fetch", mockFetch([]));
+    render(<UpdatesTab canManage />);
+    await screen.findByTestId("updates-h-pi");
+    await waitFor(() => expect(window.sessionStorage.getItem(FOLLOW_KEY)).toBeNull());
+  });
+
+  it("ist Nodvard Deck nicht erreichbar, sagt der Reiter das und versucht es nach kurzer Pause selbst wieder", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let down = true;
+      const calls: Call[] = [];
+      const base = mockFetch(calls);
+      vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (down) throw new TypeError("Failed to fetch");
+        return base(input, init);
+      }));
+      render(<UpdatesTab canManage />);
+      expect(await screen.findByTestId("updates-offline")).toHaveTextContent("versucht es in ein paar Sekunden selbst wieder");
+      expect(screen.queryByText(/^Fehler:/)).not.toBeInTheDocument();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(RETRY_MS); });
+      expect(screen.getByTestId("updates-offline")).toBeInTheDocument();  // immer noch weg: weiter versuchen
+      down = false;
+      await act(async () => { await vi.advanceTimersByTimeAsync(RETRY_MS); });
+      await screen.findByTestId("updates-h-pi");
+      expect(screen.queryByTestId("updates-offline")).not.toBeInTheDocument();
+      // Wieder da: kein weiteres Nachfragen ohne Grund.
+      const before = calls.length;
+      await act(async () => { await vi.advanceTimersByTimeAsync(RETRY_MS * 3); });
+      expect(calls.length).toBe(before);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

@@ -1,0 +1,21 @@
+[extension]
+id          = "vaultwarden"
+name        = "Vaultwarden"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Dein Passwort-Manager auf einen Blick: Läuft Vaultwarden, welche Version, ist es über HTTPS erreichbar und können sich Fremde registrieren? Die Bitwarden-Apps verbinden sich direkt mit Vaultwarden; Nodvard Deck sieht nie ein Passwort."
+icon        = "key-round"
+category    = "security"
+sort_order  = 30
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_vaultwarden:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+]
+
+[settings]
+schema = "settings.schema.json"

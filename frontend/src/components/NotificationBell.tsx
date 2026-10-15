@@ -151,7 +151,7 @@ export function NotificationBell({ unread }: { unread: number }) {
       >
         <Bell size={18} />
         {unread > 0 && (
-          <span aria-hidden className="accent-gradient absolute -right-0.5 -top-0.5 min-w-[1.1rem] rounded-full px-1 text-center text-[10px] font-semibold leading-[1.1rem] text-white">
+          <span aria-hidden className="accent-gradient absolute -right-0.5 -top-0.5 min-w-[1.1rem] rounded-full px-1 text-center text-[10px] font-semibold leading-[1.1rem] text-on-accent">
             {unread > 99 ? "99+" : unread}
           </span>
         )}
@@ -188,12 +188,9 @@ export function NotificationBell({ unread }: { unread: number }) {
               <p className="px-4 py-6 text-center text-sm text-red-300">Die Meldungen ließen sich nicht laden.</p>
             )}
             {data && items.length === 0 && (
-              <div className="flex flex-col items-center gap-2 px-4 py-9 text-center" data-testid="bell-empty">
-                <span className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 text-emerald-300">
-                  <BellOff size={18} />
-                </span>
-                <p className="text-sm font-medium">Alles ruhig</p>
-                <p className="text-xs text-white/50">Keine neuen Meldungen – hier erscheint, was deine Server zu sagen haben.</p>
+              <div className="flex flex-col items-center gap-2 px-4 py-9 text-center text-white/55" data-testid="bell-empty">
+                <BellOff size={18} />
+                <p className="text-sm">Keine neuen Meldungen.</p>
               </div>
             )}
             {items.length > 0 && (

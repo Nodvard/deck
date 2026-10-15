@@ -18,7 +18,7 @@ import { renderTemplate } from "../template";
 import type { WidgetAction } from "../types";
 
 const STYLE_CLASS: Record<WidgetAction["style"], string> = {
-  primary: "accent-gradient text-white",
+  primary: "accent-gradient text-on-accent",
   secondary: "bg-white/10 text-current hover:bg-white/15",
   danger: "bg-red-500/20 text-red-200 hover:bg-red-500/30",
 };

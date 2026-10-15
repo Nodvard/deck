@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Quarantäne, Wiederherstellen, Löschen aus der Quarantäne, Fail2ban-Sperren und das Installieren der Werkzeuge laufen über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Bereits freigegebene Aktionen bleiben gültig, ohne Hilfsprogramm bleibt alles wie bisher."

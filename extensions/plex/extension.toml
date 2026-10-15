@@ -1,0 +1,23 @@
+[extension]
+id          = "plex"
+name        = "Plex"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zeigt, was auf deinem Plex-Server los ist: laufende Wiedergaben mit Benutzer und Gerät, ob umgerechnet wird, die Bibliotheken mit ihrer Größe und was zuletzt hinzugekommen ist. Spricht nur mit deinem Server im Heimnetz, nie mit plex.tv. Vorerst nur lesend."
+icon        = "monitor"
+category    = "servers"
+sort_order  = 100
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_plex:Extension"
+frontend    = "frontend/dist/index.js"
+
+# Nur lesend: kein Zugriff auf Server, keine Aktionen, nichts zum Freigeben.
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:plex-*",
+]
+
+[settings]
+schema = "settings.schema.json"

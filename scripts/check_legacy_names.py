@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Waechter fuer die Umbenennungen Lattice -> Nodvard Deck und `nexus-soc` -> `shield`: die alten Namen kommen nicht zurueck.
+"""Waechter fuer die Umbenennungen Lattice -> Nodvard Deck, `nexus-soc` -> `shield` und `service-matrix` -> `docker`.
 
 Das Projekt hiess `lattice` (Python-Pakete `lattice` und `lattice_sdk`). Seit der Umbenennung heissen sie
 `nodvard_deck` und `nodvard_sdk`; die alten Namen leben nur noch als winzige Alias-Pakete (`backend/src/lattice/`,
@@ -40,6 +40,12 @@ Dateien, in denen er gilt (`where`); ein Test sorgt dafuer, dass jede dieser Ang
 `api_v1.json` und `alembic_revisions.json`, der eingefrorene Migrationsordner `extensions/shield/migrations/` (eine
 ausgelieferte Revision aendert sich nie) sowie die Waechter selbst und ihre Tests. Der Produktname in Grossschreibung
 (Fliesstext) gehoert zu `backend/tests/test_no_visible_nexus.py`.
+
+**Regel 4 (alte Docker-Kennung):** Das Docker-Modul hieß bis 0.8 `service-matrix`. Das alte Paket
+`nodvard_deck_ext_service_matrix` steht nirgends, die alten Adressen `/ext/service-matrix` und `/extensions/service-matrix` nur in
+Alias-Tests (gemeint sind Adressen mit `/` davor). Gespeicherte Namen (Speicher-Kennung, Protokoll-Namen `service_matrix.*`)
+bleiben ohne Positivliste erlaubt.
+Nicht geprüft wird dasselbe wie bei Regel 3.
 
 Der Waechter laeuft als pytest-Test (`backend/tests/test_legacy_names.py`), also mit `pytest backend/tests` und in der CI.
 """
@@ -214,9 +220,9 @@ KEPT_NAMES: tuple[Kept, ...] = (
        "Der alte Container `deploy-lattice-1`, die alten Image-Tags `lattice:latest`/`lattice:previous` (gestoppt bzw. "
        "gesichert, bis der Aufraeum-Schritt sie entfernt) und der Zielordner `~/lattice-deploy-test` (`DEPLOY_ROOT`) bleiben."),
     _k("Alter Image-Name", r"/lattice\b(?![\w.-])|\blattice\b(?=/)",
-       "Der alte Image-Name `lattice` (`nico/lattice`, `docker.io/library/lattice`): die Service-Matrix erkennt das Dashboard "
+       "Der alte Image-Name `lattice` (`nico/lattice`, `docker.io/library/lattice`): das Docker-Modul erkennt das Dashboard "
        "unter dem alten und dem neuen Namen und bekommt dafuer Beispielwerte in den Tests.",
-       paths=r"service[-_]matrix"),
+       paths=r"^extensions/docker/|test_ext_docker"),
     _k("Einzelnes Wort als Wert", r"(?<![\w.])lattice(?![\w@:-]|\.\w|/\w)",
        "Das einzelne Wort `lattice` als Wert: Linux-/SSH-Benutzer, Host-Markierung (Tag), alter Image-Name, Beispielname in "
        "Tests, API-Wert `source: \"lattice\"` (dokumentierter Altwert, bleibt) und Suchwort. Imports faengt Regel 1 vorher ab."),
@@ -321,6 +327,8 @@ KEPT_SHIELD: tuple[Kept, ...] = (
         "volle Pfad steht in `ext_nexus_soc_findings.quarantine_path`, die Loesch-Pruefung und die Wiederaufnahme laufender Updates "
         "haengen am Ordner: ein Umzug gaebe falsche \"geloescht\"-Faelle und abgebrochene Laeufe.",
         [*_f("extensions/shield/src/nodvard_deck_ext_shield/antivirus.py", "extensions/shield/src/nodvard_deck_ext_shield/detached.py",
+             # Das Hilfsskript arbeitet in denselben Ordnern wie die Befehle des Moduls.
+             "extensions/shield/root-helper/shield-root.sh",
              "backend/tests/test_shield_legacy_ids.py", "extensions/shield/frontend/src/SocPage.test.tsx",
              # Testdaten der Design-Vorschau: ein Fund in Quarantäne zeigt den echten Ordner auf dem Server.
              "frontend/src/preview/fixtures.ts"),
@@ -363,6 +371,12 @@ KEPT_SHIELD: tuple[Kept, ...] = (
         "er ist von der oeffentlichen Ausgabe ausgenommen. Der Test der Ausgabe legt in seinem Wegwerf-Repository Dateien darin an.",
         [*_f("backend/tests/test_export_public.py")]),
 )
+
+
+# --------------------------------------------------------------------------- Regel 4 (alte Docker-Kennung)
+
+DOCKER_PACKAGE_RE = re.compile(r"nodvard_deck_ext_service_matrix")
+DOCKER_ADDRESS_RE = re.compile(r"/(?:ext|extensions)/service-matrix(?![\w-])")
 
 
 # --------------------------------------------------------------------------- Dateien einsammeln
@@ -466,8 +480,19 @@ def check_shield_text(rel: str, text: str) -> list[Finding]:
     return findings
 
 
+def check_docker_text(rel: str, text: str) -> list[Finding]:
+    """Regel 4 für eine Datei: das alte Paket nirgends, die alten Adressen nur in Alias-Tests."""
+    findings: list[Finding] = []
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        if DOCKER_PACKAGE_RE.search(line):
+            findings.append(Finding(rel, lineno, "docker-paket", line))
+        elif DOCKER_ADDRESS_RE.search(line) and not LEGACY_TEST_RE.search(rel):
+            findings.append(Finding(rel, lineno, "docker-adresse", line))
+    return findings
+
+
 def find_violations(root: Path = REPO_ROOT, files: list[str] | None = None) -> list[Finding]:
-    """Alle Verstoesse gegen Regel 1 und 2 (`lattice`) und Regel 3 (alte Shield-Kennung)."""
+    """Alle Verstoesse gegen Regel 1 und 2 (`lattice`), Regel 3 (alte Shield-Kennung) und Regel 4 (alte Docker-Kennung)."""
     out: list[Finding] = []
     for rel in files if files is not None else tracked_files(root):
         check_lattice, check_shield = not is_exempt(rel), not is_shield_exempt(rel)
@@ -480,6 +505,7 @@ def find_violations(root: Path = REPO_ROOT, files: list[str] | None = None) -> l
             out += check_text(rel, text)
         if check_shield:
             out += check_shield_text(rel, text)
+            out += check_docker_text(rel, text)  # dieselben Ausnahmen wie Regel 3
     return out
 
 
@@ -520,11 +546,13 @@ def main(argv: list[str] | None = None) -> int:
         for item in kept:
             print(f"{item.path}:{item.line}: [{item.kept}] {item.text.strip()[:160]}")
         print(f"\n{len(kept)} erlaubte Vorkommen.\n")
-    lattice_findings = [f for f in findings if not f.rule.startswith("shield-")]
+    lattice_findings = [f for f in findings if not f.rule.startswith(("shield-", "docker-"))]
     shield_findings = [f for f in findings if f.rule.startswith("shield-")]
+    docker_findings = [f for f in findings if f.rule.startswith("docker-")]
     if not findings:
         print("OK: Der alte Name `lattice` kommt ausserhalb der Alias-Pakete und der Positivliste nicht vor.")
         print("OK: Die alte Shield-Kennung `nexus-soc` kommt ausserhalb der Positivliste und der Alias-Tests nicht vor.")
+        print("OK: Das alte Paket und die alten Adressen der Docker-Kennung `service-matrix` kommen außerhalb der Alias-Tests nicht vor.")
         return 0
 
     if lattice_findings:
@@ -545,6 +573,14 @@ def main(argv: list[str] | None = None) -> int:
             "die Kennung steht in `ids.py` bzw. `ids.ts`. Alte Adressen gehoeren nur in Alias-Tests (Dateiname mit \"legacy\"). "
             "Gehoert der Name wirklich zu den bewusst belassenen (Tabellen, Aktionsarten, Geheimnis-Label, Server-Ordner), "
             "gehoert er mit Begruendung und Dateiliste in KEPT_SHIELD in scripts/check_legacy_names.py."
+        )
+    if docker_findings:
+        print("Die alte Kennung des Docker-Moduls (`service-matrix`) ist (wieder) im Code:\n")
+        for item in docker_findings:
+            print(f"  {item}")
+        print(
+            f"\n{len(docker_findings)} Fund(e). Das Modul heißt `docker` (Ordner `extensions/docker`, Paket `nodvard_deck_ext_docker`). "
+            "Alte Adressen gehören nur in Alias-Tests (Dateiname mit \"legacy\")."
         )
     return 1
 

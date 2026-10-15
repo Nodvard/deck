@@ -688,7 +688,7 @@ function ActionsContent({ search }: { search?: string }): JSX.Element {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+              <tr className="border-b border-white/10 text-left text-xs opacity-60">
                 <th className="w-8 py-1">
                   <span className="sr-only">Auswahl</span>
                 </th>

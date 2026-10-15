@@ -340,7 +340,10 @@ async def test_deleting_the_host_removes_the_marker(client, db_session, local_ss
     host = await _host_with_password(client, token, port)
     await hosts_service.require_host_key_confirmation(db_session, host["id"])
     await db_session.commit()
-    assert (await client.delete(f"/api/v1/hosts/{host['id']}", headers=_auth(token))).status_code == 204
+    deleted = await client.request(
+        "DELETE", f"/api/v1/hosts/{host['id']}", json={"current_password": "correct-horse-battery"}, headers=_auth(token),
+    )
+    assert deleted.status_code == 204, deleted.text
     db_session.expire_all()
     assert await db_session.get(Setting, (hosts_service.HOST_KEY_CONFIRM_REQUIRED, "host", host["id"])) is None
 

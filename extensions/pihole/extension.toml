@@ -1,0 +1,33 @@
+[extension]
+id          = "pihole"
+name        = "Pi-hole"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Pi-hole auf einen Blick: Anfragen, Anteil blockiert, Blockierung, aktivste Geräte und Stand der Sperrlisten. Blockierung pausieren, Listen aktualisieren und Domains erlauben oder sperren – über die Freigabe."
+icon        = "shield-check"
+category    = "servers"
+sort_order  = 71
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_pihole:Extension"
+frontend    = "frontend/dist/index.js"
+
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "hosts.execute",
+  # Gespeicherte Namen bleiben, auch dieser aus „Netzwerk“.
+  "secrets.read:network-pihole-password",
+]
+
+# Übernimmt beim ersten Start den Pi-hole-Teil von „Netzwerk“: Einstellungen, Ein/Aus, Kachel, Passwort im Tresor und
+# die alten Adressen (veraltet, bis mindestens 2.0).
+[[extension.adopts]]
+from = "network"
+settings = "pihole"
+widgets = { pihole = "status" }
+routes = { "/pihole" = "/summary", "/widgets/pihole" = "/widgets/status", "/pihole/pause" = "/pause", "/pihole/resume" = "/resume" }
+secrets = ["network-pihole-password"]
+
+[settings]
+schema = "settings.schema.json"

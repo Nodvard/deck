@@ -1,0 +1,3 @@
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Home Assistant“ (Beta): zeigt auf einer Seite und in einer Kachel die Version, bereitstehende Updates, nicht verfügbare Geräte und ausgewählte Werte wie Temperaturen. Das Modul liest nur und ändert in Home Assistant nichts."

@@ -59,6 +59,13 @@ GET  /api/v1/branding/logo       → das hochgeladene Logo (404, wenn keins da i
                                    `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; sandbox`
                                    und `X-Content-Type-Options: nosniff`: Wer die Adresse direkt öffnet, bekommt kein
                                    Skript ausgeführt; als `<img>` eingebunden ändert sich nichts.
+GET  /api/v1/branding/favicon    → das hochgeladene Favicon (404, wenn keins da ist), mit denselben Kopfzeilen wie
+                                   das Logo; `image/png`, `image/svg+xml` oder `image/x-icon`.
+GET  /api/v1/branding/custom.css → das eigene CSS der Admins als `text/css` (leer, wenn keins da ist), mit
+                                   `Cache-Control: no-cache`, `nosniff` und `ETag`; mit passendem `If-None-Match`
+                                   kommt 304 ohne Inhalt. Öffentlich, weil auch die Anmeldeseite es trägt. Ein
+                                   gespeicherter Wert, der die Prüfung nicht besteht, wird nicht ausgeliefert (leere
+                                   Antwort); geprüft wird je Wert nur einmal.
 POST /api/v1/auth/login          → {username, password}
                                    → 200 {access_token, expires_in, refresh_token?, user}
                                    → 202 {mfa_required: true, mfa_token}
@@ -180,6 +187,14 @@ GET    /me                          PATCH /me            POST /me/password
                                        (`totp`/`recovery_code`, nur bei Zwei-Faktor); mit Wiederherstellungs-Code
                                        zusätzlich `mfa.recovery_used` ({remaining, aktion: "passwort_aendern"}) und
                                        eine Meldung wie bei DELETE /me/totp.
+GET    /me/preferences              PATCH /me/preferences
+                                     → {first_steps_dismissed, theme, design_notice_dismissed}, je Benutzer und auf jedem
+                                       Gerät gleich. `theme`: `classic` (Klassisch hell), `simple` (Schlicht dunkel,
+                                       Standard), `pro` (Profi dunkel), `original` (Bisher, das Aussehen bis 0.8); ein
+                                       unbekannter gespeicherter Wert liefert `simple`. `design_notice_dismissed`: der
+                                       Hinweis „Deck hat ein neues Aussehen.“ ist erledigt; neue Konten haben ihn gleich
+                                       als erledigt, Konten von vor dem Update sehen ihn einmal. PATCH ändert nur die
+                                       mitgeschickten Felder, falsche Werte 422.
 GET    /me/sessions                 DELETE /me/sessions/{id}
 GET    /me/tokens                   POST /me/tokens      DELETE /me/tokens/{id}
 POST   /me/totp/setup               POST /me/totp/confirm   DELETE /me/totp
@@ -284,14 +299,18 @@ GET    /permissions                  → Katalog inkl. der von Extensions beiges
 
 GET    /hosts?tag=&group=&status=   POST /hosts
 GET/PATCH/DELETE /hosts/{id}         → Server sind Kern-Daten (hosts.read / hosts.write)
+                                     → PATCH mit neuer `address` und DELETE: `current_password`, `totp_code` im Body,
+                                       wenn dabei gespeicherte Zugänge wegfallen (siehe „Tresor“)
 GET    /hosts/{id}/status
 GET    /hosts/{id}/actions           → welche Aktionen Extensions hier anbieten
 POST   /hosts/{id}/actions/{action}  → geht durch das Gate, liefert ggf. 202 „proposed"
 GET    /hosts/{id}/credentials       POST /hosts/{id}/credentials   DELETE /hosts/{id}/credentials/{cid}
+                                     → DELETE …/credentials/{cid} nur mit Bestätigung im Body (siehe „Tresor“)
 POST   /hosts/{id}/credentials/generate-key           → SSH-Schlüssel erzeugen (privater Teil nur im Tresor)
 GET    /hosts/{id}/credentials/{cid}/setup            → Einrichtungsbefehl für den Server
 POST   /hosts/{id}/credentials/{cid}/setup-with-password → Server mit einem einmaligen Passwort einrichten (hosts.write + hosts.execute)
-POST   /hosts/{id}/credentials/{cid}/make-default     → Standard-Zugang umstellen
+POST   /hosts/{id}/credentials/{cid}/make-default     → Standard-Zugang umstellen (mit `delete_previous` und
+                                                        Bestätigung im Body, siehe „Tresor“)
 GET    /hosts/{id}/requirements      → was Erweiterungen auf dem Server brauchen
 POST   /hosts/{id}/check             → Verbindung prüfen (erreichbar, Server-Schlüssel, Anmeldung, Root, Erweiterungen, OS)
 GET    /hosts/{id}/known-hosts       POST /hosts/{id}/known-hosts (Schlüssel bestätigen)
@@ -301,9 +320,14 @@ POST/DELETE /host-groups/{id}/members/{host_id}
 
 GET    /secrets                      → NUR Metadaten. Nie Werte.
 POST   /secrets      PUT /secrets/{id}/value      DELETE /secrets/{id}
+                                     → PUT …/value `{value, current_password, totp_code}`, DELETE mit Body
+                                       `{current_password, totp_code}`: Bestätigung wie unter „Tresor“ beschrieben
                                      → PUT …/value und DELETE: 409, wenn das Secret der Zwei-Faktor-Schlüssel eines
                                        Kontos ist (abschalten nur über DELETE /me/totp, POST /users/{id}/reset-2fa
                                        oder den Notfall-Befehl)
+                                     → DELETE: 409 `secret_in_use` mit `used_by[]`, solange der Eintrag fest gebunden ist
+                                       (Besitzer-Modul oder Server-Zugang; dort austauschen oder entfernen). Eine nur
+                                       festgehaltene Nutzung (`last_used_at`) ist ein Hinweis und sperrt nicht
 POST   /secrets/{id}/test            → Verwendbarkeit prüfen, ohne den Wert zu zeigen
 PATCH  /secrets/{id}                 → Beschreibung und Ablaufdatum ändern, nie den Wert
 
@@ -321,14 +345,39 @@ GET    /audit/export                 → NDJSON-Stream
                                        Das Antwortformat bleibt gleich.
 
 GET    /settings     PUT /settings/{key}
-GET    /branding     PUT /branding   POST /branding/logo
+GET    /branding     PUT /branding   POST /branding/logo   POST /branding/favicon
+GET    /branding/custom-css         PUT /branding/custom-css
+                                     → `branding.write`; Body und Antwort `{css}`. PUT prüft vor dem Speichern
+                                       (sonst 422 mit einem deutschen Satz, nichts gespeichert): höchstens 64 KB
+                                       (UTF-8), kein Nullzeichen, kein `@import`, kein `<!--` oder `-->`, keine
+                                       Funktionen, die Zeichenketten als Adresse laden (`image()`, `image-set()`,
+                                       `cross-fade()`, `src()`, auch mit Herstellerpräfix). Ziel jeder `url()` nur
+                                       `data:` oder ein Pfad auf diesem Server (`/…` aus
+                                       `[A-Za-z0-9._~!$&'()*+,;=:@%/?#-]`, nicht `//`); Leer- und
+                                       Steuerzeichen im Ziel werden abgelehnt, auch als Escape, nicht umgeschrieben.
+                                       Gelesen wird wie im Browser (CSS Syntax Level 3): Zeilenenden werden
+                                       vereinheitlicht, Kommentare, Zeichenketten, Escapes und `url()` in einem
+                                       Durchgang ausgewertet; eine Zeichenkette mit Zeilenumbruch oder ein offenes
+                                       `url()` gilt als Fehler. Protokoll `branding.custom_css.saved` mit `bytes`.
                                      → PUT: `support_url` braucht das Schema `http:`, `https:` oder `mailto:`
                                        (Groß-/Kleinschreibung egal, dahinter nicht leer) und keine Leer- oder
                                        Steuerzeichen mittendrin, sonst 422. Leerraum am Rand fällt weg, leer = kein
                                        Link (`null`). Ein früher gespeicherter ungültiger Wert kommt in
                                        `GET /branding` als `null` zurück.
+                                     → PUT: `logo_url` und `favicon_url` nur als Pfad auf diesem Server (dieselbe
+                                       Regel wie bei `url()` im eigenen CSS) oder `data:image/…`, sonst 422; leer =
+                                       `null`. Grund: Die App-Seite soll Bilder nur von dort laden (`img-src 'self'
+                                       data: blob:`, vorerst als `Content-Security-Policy-Report-Only`, also nur
+                                       gemeldet). Ein früher gespeicherter fremder Wert bleibt gespeichert und darf
+                                       unverändert mitgeschickt werden, damit andere Felder speicherbar bleiben; die
+                                       Oberfläche setzt ihn nicht ein und zeigt einen Hinweis zum Hochladen. Zeigt
+                                       `logo_url` bzw. `favicon_url` danach nicht mehr auf die hochgeladene Datei
+                                       („Entfernen“, `data:` oder ein anderer Pfad), wird sie gelöscht; `GET
+                                       /branding/logo` bzw. `/favicon` antwortet dann 404.
                                      → POST /branding/logo: roher Body, `Content-Type` `image/png`, `image/jpeg`,
                                        `image/svg+xml` oder `image/webp` (sonst 415), höchstens 2 MB (sonst 413).
+                                       Eine leere Datei oder ein Dateianfang, der nicht zum Typ passt (PNG, JPEG,
+                                       WebP, ICO an ihren ersten Bytes), ergibt 422, gespeichert wird nichts.
                                        Ein SVG wird vor dem Speichern geprüft (Erlaubnisliste): keine Skripte,
                                        Ereignis-Attribute (`on…`), Animationen, `<foreignObject>` oder
                                        Verarbeitungsanweisungen (`<?xml-stylesheet …?>`), keine DOCTYPE-Angabe mit
@@ -336,6 +385,11 @@ GET    /branding     PUT /branding   POST /branding/logo
                                        Inkscape/Illustrator), Verweise (`href`, `url(…)`) nur auf Teile derselben
                                        Datei oder eingebettete PNG-/JPEG-/GIF-/WebP-Bilder (`data:…;base64,…`).
                                        Sonst, auch bei einer kaputten Datei, 422 „SVG-Logo abgelehnt: …“.
+                                     → POST /branding/favicon: wie das Logo, aber `image/png`, `image/svg+xml`,
+                                       `image/x-icon` oder `image/vnd.microsoft.icon` (sonst 415), höchstens 512 KB
+                                       (sonst 413), SVG mit derselben Prüfung („SVG-Favicon abgelehnt: …“). Setzt
+                                       `favicon_url` auf `/api/v1/branding/favicon`. Liegt neben dem Logo unter
+                                       `branding/` und ist damit in jeder Sicherung.
 
 GET    /extensions                   GET /extensions/{id}
 POST   /extensions/{id}/enable       POST /extensions/{id}/disable
@@ -344,8 +398,13 @@ POST   /extensions/{id}/reload       DELETE /extensions/{id}
 GET    /extensions/{id}/frontend/index.js     → ESM-Bundle
 GET    /extensions/{id}/settings     → {schema, values, secrets: [{label, title, description, item, is_set, optional}], secrets_cleared}
 PUT    /extensions/{id}/secrets      → Geheimnis eines `x-secrets`-Labels setzen/ersetzen (nie lesen); `409`, solange keines
-                                       der Felder aus `x-secret-bound-to` einen gespeicherten Wert oder `default` hat
-DELETE /extensions/{id}/secrets?label=…  → Geheimnis entfernen (idempotent, 204)
+                                       der Felder aus `x-secret-bound-to` einen gespeicherten Wert oder `default` hat.
+                                       Ein schon gespeichertes nur mit `current_password`/`totp_code` im Body
+DELETE /extensions/{id}/secrets?label=…  → Geheimnis entfernen (idempotent, 204); ein gespeichertes nur mit Body
+                                       `{current_password, totp_code}`
+                                     → PUT /extensions/{id}/settings: löscht die Änderung gespeicherte Zugangsdaten (neue
+                                       Adresse, siehe `secrets_cleared`), gehören `current_password`/`totp_code` neben
+                                       `values` in den Body
 POST   /extensions/{id}/test         → Verbindung prüfen, Body optional {"mode": "connection"|"message"}
 
 GET    /connectors                   POST /connectors
@@ -378,10 +437,41 @@ Meldung gelöscht wird, läuft normal zu Ende (nur das Zustellprotokoll entfäll
 
 **Tresor** (`secrets.read` zum Lesen, `secrets.write` zum Ändern): `GET /secrets` liefert neben den Metadaten
 `expires_at` und `used_by[]` (`type`: `extension` | `host` | `login`, weitere möglich; dazu `id`, `name` und
-`last_used_at`, wenn eine Nutzung festgehalten ist). `POST /secrets` nimmt optional `expires_at`. `PATCH /secrets/{id}`
+`last_used_at`, wenn eine Nutzung festgehalten ist). `bound[]` (gleicher Aufbau, auch bei `PATCH`) enthält davon nur die
+festen Bindungen (Besitzer-Modul, Server-Zugang, Zwei-Faktor): Solange es nicht leer ist, lehnt `DELETE` ab. Wer einen
+Eintrag nur gelesen hat, steht allein in `used_by[]`. `POST /secrets` nimmt optional `expires_at`. `PATCH /secrets/{id}`
 ändert `description` und `expires_at` (`null` entfernt das Datum, eine Zeit ohne Zone gilt als UTC); den Wert ersetzt
 nur `PUT /secrets/{id}/value`. Der Zwei-Faktor-Schlüssel eines Kontos ergibt `409`, ein unbekannter Eintrag `404`.
 Das Ablaufdatum ist nur eine Angabe: Nach dem Ablauf wird nichts gesperrt.
+
+Ersetzen oder Löschen eines **schon gespeicherten** Geheimnisses verlangt dieselbe Bestätigung auf diesen Wegen:
+`PUT /secrets/{id}/value`, `DELETE /secrets/{id}`, `PUT`/`DELETE /extensions/{id}/secrets`, `PUT /extensions/{id}/settings`
+(wenn die Änderung gespeicherte Zugangsdaten löscht), `DELETE /hosts/{id}/credentials/{cid}`, `DELETE /hosts/{id}`
+(wenn der Server gespeicherte Zugänge hat), `PATCH /hosts/{id}` mit neuer `address` (wenn dabei gespeicherte
+SSH-Passwörter wegfallen) und `POST /hosts/{id}/credentials/{cid}/make-default` mit `delete_previous` (wenn ein
+bisheriger Zugang wegfällt). Im Body stehen `current_password` und, wenn Zwei-Faktor an ist, `totp_code` (Code aus der
+App). Antworten:
+
+- `403` mit `code: "confirm_required"` und `two_factor` (bool), wenn das Passwort fehlt. Nichts ist geändert; die
+  Oberfläche fragt Passwort und gegebenenfalls Code ab und schickt den Aufruf noch einmal.
+- `400` bei falschem Passwort, `403` `totp_missing` ohne Code, `400` `totp_wrong`/`totp_used` bei falschem oder schon
+  benutztem Code, `429` mit `Retry-After` nach zu vielen Fehlversuchen (dieselbe Drosselung wie beim Anmelden).
+- Eine Erstanlage (noch nichts gespeichert) braucht keine Bestätigung, `PATCH /secrets/{id}` (Beschreibung, Ablauf) auch
+  nicht.
+- **Ausnahme:** „Mit Passwort verbinden“ in Proxmox VE und das Weiterreichen an Proxmox-Backups ersetzen das
+  API-Token der eigenen Verbindung ohne diese Rückfrage. Dafür braucht es das Passwort des Proxmox-Servers, Deck legt
+  dort ein neues Token an, und das alte bleibt in Proxmox gültig, bis man es dort löscht (siehe
+  [10-PROXMOX-TOKEN.md](10-PROXMOX-TOKEN.md)). Eine zweite Rückfrage mitten im Verbinden wäre nur Hürde ohne Schutz.
+
+Gelöscht wird im Tresor nur, was nicht mehr fest gebunden ist (Besitzer-Modul, Server-Zugang, Zwei-Faktor): Sonst
+`409` mit `code: "secret_in_use"` und `used_by[]`. Dass ein Modul einen Eintrag einmal gelesen hat, sperrt nicht. Die
+Geheimnisse, die ein Modul selbst anlegt, gehören immer zu diesem Modul; sie ersetzt oder entfernt man über die
+Moduleinstellungen (`/extensions/{id}/secrets`). Im Protokoll stehen `secret.created`, `secret.replaced`,
+`secret.updated` und `secret.deleted` (Bezeichnung und geänderte Felder, nie ein Wert).
+
+**Verhaltensänderung für ältere Clients** (etwa eine ältere Android-App): Wer bisher ein gespeichertes Geheimnis über
+die Moduleinstellungen oder einen Server-Zugang ersetzt oder gelöscht hat, bekommt jetzt `403 confirm_required`, bis
+er Passwort (und Code) mitschickt. Lesen und Erstanlage ändern sich nicht.
 
 Der Kern-Job `secret-expiry-reminder` („Erinnerung an ablaufende Zugänge“, täglich 08:07 Uhr in der eingestellten Zone)
 meldet sich zu jedem Eintrag mit `expires_at` höchstens dreimal: 14 Tage vorher (`info`), 3 Tage vorher (`warning`)
@@ -400,6 +490,9 @@ Protokoll):
   geschrieben und muss `[a-z0-9][a-z0-9_-]{0,63}` entsprechen; die Adresse ist eine IP-Adresse (nicht `0.0.0.0`/`::`,
   keine Multicast-Adresse) oder ein Rechnername nach RFC 1123 – ohne Schema, `user@`, Pfad oder Port (ein einzelner Punkt am Ende wird entfernt); `tags` folgen
   den Markierungsregeln (höchstens 20). Ungültig → `422` mit deutscher Meldung. Der Kurzname lässt sich nicht ändern.
+  `PATCH` nimmt zusätzlich `current_password` und `totp_code` (Code aus der App, wenn Zwei-Faktor an ist). Nötig sind
+  sie nur, wenn eine neue `address` gespeicherte SSH-Passwörter des Servers löscht; fehlt dann das Passwort, kommt
+  `403 confirm_required` und nichts ist geändert (Antworten wie unter „Tresor“).
 - `HostOut` enthält außerdem `credential` (der Standard-Zugang als `{id, kind, username, port}` oder `null`,
   nie ein Geheimnis), `managed_tags` (die von einer Erweiterung verwalteten Markierungen, Teilmenge von `tags`) und
   `login_ok_at`: wann sich Nodvard Deck mit dem aktuellen Standard-Zugang an dieser Adresse und diesem Port
@@ -411,8 +504,10 @@ Protokoll):
   Standard-Zugang abgelehnt bzw. einen anderen Server-Schlüssel gezeigt hat oder seit einer neuen Adresse oder einem
   neuen Standard-Zugang, jeweils bis zur nächsten gelungenen Anmeldung (Ausnahme: `make-default` nach frischer
   Prüfung, siehe unten).
-- `DELETE /hosts/{id}` löscht auch die gespeicherten Zugangsdaten samt ihren Geheimnissen im Tresor und schließt offene
-  SSH-Verbindungen. Läuft gerade eine Aktion auf dem Server (`executing`) → `409`.
+- `DELETE /hosts/{id}` `{current_password, totp_code}` löscht auch die gespeicherten Zugangsdaten samt ihren
+  Geheimnissen im Tresor und schließt offene SSH-Verbindungen. Hat der Server gespeicherte Zugänge, sind Passwort und,
+  wenn Zwei-Faktor an ist, der Code im Body nötig (sonst `403 confirm_required`, Antworten wie unter „Tresor“); ohne
+  Zugänge darf der Body fehlen. Läuft gerade eine Aktion auf dem Server (`executing`) → `409`.
 - `GET /hosts/{id}/metrics` (`hosts.read`) fragt die aktuellen Messwerte beim `MetricsProvider` des Servers ab →
   `{values, sampled_at}` (unbekannter Server oder kein Provider: `404`). Scheitert die Abfrage an der Verbindung
   (SSH-Fehler wie Server nicht erreichbar, Anmeldung abgelehnt oder Schlüssel nicht bestätigt, `HostUnreachable`,
@@ -509,8 +604,11 @@ Protokoll):
   Erfolg zusätzlich `check_ok` und `made_default`; nie das Passwort), dazu `host.connection_checked` für die Prüfung
   und `host.credential_made_default`, wenn der Zugang Standard wurde. Eine Sperre (`rate_limited`) steht je Nutzer
   nur einmal im Zeitfenster im Protokoll; Fehler vor dem Lauf (`403`, `404`, `422`) gar nicht.
-- `POST /hosts/{id}/credentials/{cid}/make-default` `{delete_previous = false}` (`hosts.write`; Body darf fehlen) macht
-  den Zugang zum Standard. Mit `delete_previous` werden der bisherige Standard und sein Geheimnis in derselben
+- `POST /hosts/{id}/credentials/{cid}/make-default` `{delete_previous = false, current_password, totp_code}`
+  (`hosts.write`; Body darf fehlen) macht den Zugang zum Standard. `current_password` und, wenn Zwei-Faktor an ist,
+  `totp_code` braucht es nur, wenn mit `delete_previous` wirklich ein bisheriger Zugang gelöscht wird (sonst
+  `403 confirm_required`, Antworten wie unter „Tresor“; geprüft erst nach der Prüfung unten, ein `409` verbraucht also
+  keinen Code). Mit `delete_previous` werden der bisherige Standard und sein Geheimnis in derselben
   Transaktion gelöscht und seine offenen SSH-Verbindungen sofort geschlossen; ohne `delete_previous` werden die
   Verbindungen nur ausgemustert (laufende Terminals laufen weiter, neue nehmen den neuen Standard). **`delete_previous`
   geht nur nach einer frischen, erfolgreichen Prüfung des NEUEN Zugangs:** `POST /hosts/{id}/check` mit dessen
@@ -1273,29 +1371,33 @@ den Fehler am besten beschreibt, auf 300 Zeichen gekürzt, sonst der Status; `nu
 selben Job) oder `unknown` (keine Erklärung bekannt, es bleibt `detail`). `404`: `job_ref` ungültig oder kein
 fehlgeschlagener Lauf gefunden; `409`: Verbindung nicht (mehr) eingetragen oder Proxmox nicht lesbar.
 
-### Adress-Check für Proxy-Hosts (Erweiterung `network`)
+### Adress-Check für Proxy-Hosts (Erweiterung `npm`)
 
 ```
-GET /ext/network/npm/address-check   → 200 {state, message, checks[], problems}   Recht: hosts.read
+GET /ext/npm/address-check   → 200 {state, message, checks[], problems}   Recht: hosts.read
+GET /ext/npm/summary         → 200 Stand des Nginx Proxy Managers (hosts[], Zertifikate)   Recht: hosts.read
 ```
+
+Bis 0.8 gehörte das zum Modul „Netzwerk“. Die alten Adressen `GET /ext/network/npm/address-check` und
+`GET /ext/network/npm` antworten weiter gleich (veraltet, siehe §7), solange das Modul `npm` an ist.
 
 Zu welchem Docker-Container führt das Ziel jedes Proxy-Hosts im Nginx Proxy Manager, und läuft er? Die Route liest nur, hat
 keine Parameter und antwortet immer mit `200`: Zustände wie „nicht eingerichtet“ stehen in `state`, nie als Fehlerstatus.
-Die Container kommen aus der Service-Matrix (Fähigkeit `ServiceCatalog`), die dafür jeden Docker-Server per SSH fragt.
+Die Container kommen aus dem Modul Docker (Fähigkeit `ServiceCatalog`), das dafür jeden Docker-Server per SSH fragt.
 
 | `state` | Bedeutung |
 |---|---|
 | `ok` | geprüft; `checks` hat je Proxy-Host einen Eintrag. `message` ist `null` – außer wenn kein Server als Docker-Server markiert ist: dann steht dort ein Satz, und alle Einträge sind `unknown` |
 | `not_configured` | Nginx Proxy Manager ist nicht (vollständig) eingetragen; `message` sagt, was fehlt |
-| `no_catalog` | die Service-Matrix ist ausgeschaltet oder nicht geladen, es gibt keinen Check |
+| `no_catalog` | das Modul Docker ist ausgeschaltet oder nicht geladen, es gibt keinen Check |
 | `unreachable`, `auth_failed` | der Nginx Proxy Manager antwortet nicht bzw. lehnt die Anmeldung ab |
-| `docker_unreadable` | die Service-Matrix lieferte gar keine Container-Liste (Fehler oder Zeitlimit); `message` nennt die Gründe. Sind einzelne oder alle Docker-Server nicht erreichbar, liefert die Service-Matrix dafür Platzhalter: dann bleibt es bei `ok` mit `unreachable`-Einträgen. Das Lesen darf je Anbieter der Container-Liste höchstens 45 Sekunden dauern, danach steht dort „Zeitüberschreitung nach 45 s“. Gelingt es nur teilweise, wird mit dem Gelesenen geprüft |
+| `docker_unreadable` | das Modul Docker lieferte gar keine Container-Liste (Fehler oder Zeitlimit); `message` nennt die Gründe. Sind einzelne oder alle Docker-Server nicht erreichbar, liefert das Modul Docker dafür Platzhalter: dann bleibt es bei `ok` mit `unreachable`-Einträgen. Das Lesen darf je Anbieter der Container-Liste höchstens 45 Sekunden dauern, danach steht dort „Zeitüberschreitung nach 45 s“. Gelingt es nur teilweise, wird mit dem Gelesenen geprüft |
 
 Außer bei `ok` ist `checks` leer und `problems` `0`. Ein Eintrag von `checks[]` hat:
 
 | Feld | Bedeutung |
 |---|---|
-| `proxy_id` | ID des Proxy-Hosts (`hosts[].id` in `GET /ext/network/npm`) |
+| `proxy_id` | ID des Proxy-Hosts (`hosts[].id` in `GET /ext/npm/summary`) |
 | `status` | mit Container: sein Zustand (`running`, `stopped`, `restarting`, `paused`, `removing`; ein anderer Docker-Zustand steht wörtlich da, `unknown`, wenn er fehlt). Ohne Container: `unknown` (kein Ziel, kein Docker-Ziel oder nichts gefunden), `ambiguous` (mehrere Container passen) oder `unreachable` (der Server war nicht erreichbar, nicht geprüft) |
 | `tone` | `good` (läuft), `bad` (Container gestoppt), `warn` (startet ständig neu, ist angehalten, wird entfernt oder hat einen anderen Zustand; auch: Server nicht erreichbar), sonst `neutral` |
 | `text` | fertiger deutscher Satz |
@@ -1380,6 +1482,40 @@ Zugriffstoken oder ein anderes Geheimnis. Die Antwort ist immer `200`; lässt si
   fehlen noch, die Adresse ist ungültig (etwa weder `http` noch `https`), oder es sind nur weitere Kanäle eingerichtet (Telegram,
   Discord usw.) und ntfy selbst nicht – der QR-Code gehört zu ntfy.
 
+### Eigene Temperaturgrenze je Server (Erweiterung `system`)
+
+```
+GET /ext/system/hosts/{host_id}/temp-limit   → 200 {host_id, own_c, global_c, effective_c}   Recht: hosts.read
+PUT /ext/system/hosts/{host_id}/temp-limit   {own_c}  → 200 wie GET                          Recht: settings.write
+```
+
+Die Erweiterung `system` heißt in der Oberfläche „Server-Zustand“. Sie warnt, wenn ein Server zu heiß wird, ab der Grenze
+`warn_temp_c` aus ihren Einstellungen (Vorgabe 75 °C). Läuft ein Server immer wärmer (etwa ein Proxmox-Rechner unter
+nächtlicher Last), bekommt er hier eine eigene Grenze; die übrigen Server bleiben bei der allgemeinen.
+
+- `own_c`: die eigene Grenze in °C (ganze Zahl von 40 bis 110) oder `null`. Im PUT ist das Feld Pflicht: Nur ein
+  ausdrückliches `null` nimmt die Grenze heraus, dann gilt wieder `global_c`. Fehlt das Feld (`{}`), steht ein unbekanntes
+  Feld im Body (etwa ein Tippfehler im Namen), ist der Typ ein anderer (Text, Kommazahl, `true`) oder der Wert
+  außerhalb der Spanne, gibt es `422` und nichts wird geändert.
+- `global_c`: die allgemeine Grenze `warn_temp_c`, `effective_c`: die Grenze, die für diesen Server gerade gilt.
+- Unbekannter Server: `404`. Beim Speichern fallen Grenzen gelöschter Server mit heraus.
+
+Gespeichert wird in der Einstellung `warn_temp_by_host` (Host-ID → °C). Sie ist im Formular versteckt (`x-hidden`), ein
+Speichern dort lässt sie unverändert. Dieselbe Grenze gilt für die Meldung („Warnung ab 90 °C, eigene Grenze dieses
+Servers“) und für die Farbe der Temperatur auf der Seite; `GET /ext/system/hosts/{host_id}/info` liefert dazu
+`temp_warn_c` (gültige Grenze) und `temp_warn_own_c` (eigene oder `null`). Eine Temperatur meldet erst die zweite Prüfung in
+Folge über der Grenze, eine einzelne Spitze bleibt still; ändert sich die Grenze zwischen zwei Prüfungen, beginnt die
+Zählung neu.
+
+Jede Änderung der eigenen Grenze steht im Protokoll als `ext_system.temp_limit_changed` (Ziel: der Server, Ersteller: der
+angemeldete Benutzer, `detail`: `own_c_before`, `own_c`, `effective_c`). Ein PUT mit dem schon gespeicherten Wert schreibt
+nichts. Die Erweiterung braucht dafür `audit.write`; fehlt die Berechtigung oder scheitert der Eintrag, wird die Grenze
+trotzdem gespeichert und eine Warnung ins Container-Protokoll geschrieben.
+
+Auf der Seite „Server-Zustand“ stellt man die Grenze bei den Temperaturen ein (Live-Ansicht, Bereich „Sensoren“, und
+„Zustand & Updates“): Feld „Warnen ab (°C)“, „Speichern“ und „Allgemeine Grenze nutzen“ (schickt `null`). Wer
+`settings.write` nicht hat, sieht nur die geltende Grenze.
+
 ### Dashboard und Widgets
 
 ```
@@ -1407,7 +1543,7 @@ GET    /apps/suggestions             → {suggestions: [{name, url, source, host
 ```
 
 `GET /apps/suggestions` (ergänzt) sammelt Vorschläge für neue Kacheln (Seite „Apps“): von jeder Erweiterung mit
-`AppSuggestionProvider` (z. B. Netzwerk: eingeschaltete Proxy-Hosts des Nginx Proxy Manager, `https://`, wenn ein
+`AppSuggestionProvider` (z. B. Nginx Proxy Manager: eingeschaltete Proxy-Hosts, `https://`, wenn ein
 Zertifikat dran ist) und aus erkannten Diensten (`ServiceCatalog`) mit Adresse, die gerade laufen (`source` ist dann
 der Name der Erweiterung). Jeder Vorschlag wird wie eine von Hand angelegte App geprüft (Name auf 60 Zeichen gekürzt;
 unbrauchbare Adressen fallen still weg); Adressen, die es als App schon gibt (gleiche Adresse, Groß-/Kleinschreibung
@@ -1653,10 +1789,10 @@ selbst, etwa `{"scope": "container", "ref": "nginx"}`. `scope` hat die Form `^[a
 mit Buchstabe oder Ziffer und enthält sonst nur `A–Z a–z 0–9 _ . : @ -` (höchstens 255 Zeichen, sonst `422`). Bietet
 kein Modul dafür eine Shell an (`ScopedTerminalTarget` mit diesem `scope`, das `ref` öffnen kann), antwortet der Server
 mit `404`; fällt der Anbieter bis zum Verbinden weg, endet der Socket mit `4501` (nie eine Shell auf dem Server
-selbst). Die Seite öffnet so einen Tab direkt über `/terminal?host=<id>&scope=…&ref=…` (z. B. „Konsole“ in der
-Service-Matrix). `terminal.open` und `terminal.close` tragen dann `scope` und `ref` in `detail`. Ein halber oder
-ungültiger Link öffnet auf der Seite gar nichts (nie ersatzweise die Shell des Servers). Die Container-Konsole der
-Service-Matrix hängt nur am Recht `hosts.execute`, gilt also auch, wenn das Modul „Terminal“ aus ist, läuft im
+selbst). Die Seite öffnet so einen Tab direkt über `/terminal?host=<id>&scope=…&ref=…` (z. B. „Konsole“ auf der
+Docker-Seite). `terminal.open` und `terminal.close` tragen dann `scope` und `ref` in `detail`. Ein halber oder
+ungültiger Link öffnet auf der Seite gar nichts (nie ersatzweise die Shell des Servers). Die Container-Konsole des
+Moduls Docker hängt nur am Recht `hosts.execute`, gilt also auch, wenn das Modul „Terminal“ aus ist, läuft im
 Container als dessen Standard-Benutzer (oft root) und öffnet sich nie im Container von Nodvard Deck selbst.
 Scheitert das Öffnen, kommt vor dem Close-Frame `{"type":"error","message":…}`. `message` nennt den Grund
 und ist nie leer, bei Netzfehlern ein deutscher Satz („Server antwortet nicht (Zeitüberschreitung bei …). Ist er
@@ -1791,6 +1927,15 @@ den App-Code, wenn der Admin Zwei-Faktor an hat. Im Vertrag ist das Feld optiona
 z. B. eine ältere Android-App, bekommen `403` mit `code: "totp_missing"` und können diese Aktionen erst nach einem Update
 ausführen; beim Passwort ändern erklärt das `detail` selbst, dass die App zuerst zu aktualisieren ist. Fehler beim Code
 tragen zusätzlich `code` (`totp_wrong`, `totp_used`), auch bei Update und Rückweg.
+Ebenso brauchen alle Wege, die ein schon gespeichertes Geheimnis ersetzen oder löschen, `current_password` und bei
+Zwei-Faktor `totp_code`: `PUT /secrets/{id}/value`, `DELETE /secrets/{id}`, `PUT`/`DELETE /extensions/{id}/secrets`,
+`PUT /extensions/{id}/settings` (wenn die Änderung Zugangsdaten löscht), `DELETE /hosts/{id}/credentials/{cid}`,
+`DELETE /hosts/{id}` (wenn der Server Zugänge hat), `PATCH /hosts/{id}` mit neuer Adresse (wenn SSH-Passwörter
+wegfallen) und `make-default` mit `delete_previous`. Ohne Passwort kommt `403` mit `code: "confirm_required"` (siehe
+„Tresor“ in §3); die Erstanlage bleibt ohne, ebenso „Mit Passwort verbinden“ in Proxmox (Ausnahme in §3).
+Ebenso nimmt `PUT /branding` für `logo_url` und `favicon_url` keine fremde Adresse mehr an (`422`), weil die Seite
+Bilder nur noch vom eigenen Server laden soll; ein schon gespeicherter Wert darf unverändert bleiben, und für das Favicon
+gibt es dafür `POST /branding/favicon` (siehe §3).
 Und bei Erweiterungen: `ctx.http` folgt keiner Weiterleitung mehr, auch nicht mit `follow_redirects=True`, und
 `ctx.audit.log()` schreibt keine Kern-Einträge (`mfa.*`, `auth.*`, `login.*`, `system.*`, `user.*`); beides in
 [02 §2](02-EXTENSION-API.md#2-der-extensioncontext).
@@ -1818,11 +1963,35 @@ eigener Kopf in der Antwort), sondern dieselben Routen unter einer zweiten Adres
   `GET /jobs?ext_id=` filtert nach der Speicher-Kennung (bei Nodvard Shield auf bestehenden Installationen
   `nexus-soc`), `GET /capabilities` nennt nur die neue Kennung.
 
+**Übernommene Teile (`adopts.routes`).** Zieht ein Teil in ein eigenes Modul
+([02 §1](02-EXTENSION-API.md#teil-eines-anderen-moduls-übernehmen-adopts)), gelten seine alten Adressen
+`/api/v1/ext/<quelle>/<alt>` weiter, solange das neue Modul an ist: dieselben Routen des neuen Moduls unter einer zweiten
+Adresse, mit derselben Anmeldeprüfung und denselben Rechten, im OpenAPI-Schema `deprecated`. Auch sie bleiben in allen
+1.x erhalten und fallen frühestens mit 2.0 weg. Bedient die Quelle eine Adresse noch selbst, antwortet weiter die Quelle.
+Das gilt nur unter mitgelieferten Modulen; ein nachinstalliertes Paket bekommt keine fremden Adressen.
+
+**Pi-hole** ist seit diesem Stand ein eigenes Modul `pihole` (Beta, vorher Teil von `network`). Neu sind
+`GET /api/v1/ext/pihole/summary`, `GET …/widgets/status` und `POST …/pause`, `…/resume`, `…/gravity`, `…/domains`.
+Veraltet und weiter beantwortet (solange `pihole` an ist): `GET /api/v1/ext/network/pihole`,
+`GET /api/v1/ext/network/widgets/pihole`, `POST /api/v1/ext/network/pihole/pause` und `…/pihole/resume`.
+
+**Nginx Proxy Manager** ist ebenso ein eigenes Modul `npm` (Beta). Neu sind `GET /api/v1/ext/npm/summary`,
+`GET …/address-check`, `GET …/widgets/certificates` und `POST …/hosts/{host_id}/enable` bzw. `…/disable`. Veraltet und
+weiter beantwortet (solange `npm` an ist): `GET /api/v1/ext/network/npm`, `GET /api/v1/ext/network/npm/address-check`,
+`GET /api/v1/ext/network/widgets/certificates` und `POST /api/v1/ext/network/npm/hosts/{host_id}/enable` bzw. `…/disable`.
+„Netzwerk“ selbst ist nur noch ein Wegweiser ohne eigene Adressen.
+
 **Nodvard Shield** heißt seit 0.7 `shield` (früher `nexus-soc`). Veraltet sind damit `/api/v1/ext/nexus-soc/**` (alle
 Routen der Erweiterung, heute 34 Pfade, jeder auch unter `/api/v1/ext/shield/…`) und `/api/v1/extensions/nexus-soc/**`.
 Beide antworten wie die neuen. Neue Einträge im Protokoll heißen `shield.*`, ältere `nexus_soc.*` bleiben stehen; ein
 Filter `GET /audit?action=shield.…` findet die älteren nicht. Die Aktionsarten bleiben `nexus_soc.*`
 ([01 „Alte und neue Namen“](01-ARCHITECTURE.md#alte-und-neue-namen)).
+
+**Docker** heißt seit 0.9 `docker` (früher `service-matrix`). Veraltet sind damit `/api/v1/ext/service-matrix/**` (alle
+Routen der Erweiterung, jede auch unter `/api/v1/ext/docker/…`) und `/api/v1/extensions/service-matrix/**`, beide in allen
+1.x. Sie antworten wie die neuen. Die Protokoll-Namen bleiben `service_matrix.tile_url` und `service_matrix.image_update`,
+die Aktionsarten `container.*` und `docker.*`. Auf bestehenden Installationen filtert
+`GET /jobs?ext_id=service-matrix` den Zeitplan der Image-Prüfung ([01 „Alte und neue Namen“](01-ARCHITECTURE.md#alte-und-neue-namen)).
 
 **Automatischer Schutz:** `backend/tests/contract/api_v1.json` ist ein eingecheckter
 Schnappschuss des Vertrags (je Pfad und Methode: Parameter, Body-Felder mit Pflicht-Kennzeichen

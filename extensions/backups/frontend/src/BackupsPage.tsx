@@ -20,7 +20,7 @@ import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 
 import { ACTION_STATUS_LABEL, isActionRunning, RUNNING_IN_BACKGROUND, settleAction } from "../../../_shared/frontend/src/actions";
-import { authedFetch, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
+import { authedFetch, authedFetchConfirmed, errorFromBody, errorText } from "../../../_shared/frontend/src/api";
 import { CertificateStatus, ConnectionCertificate } from "../../../_shared/frontend/src/certificate";
 import { useUnmountSignal } from "../../../_shared/frontend/src/lifecycle";
 import { errorMessage, fetchJson, LoadError } from "../../../_shared/frontend/src/loadError";
@@ -442,9 +442,11 @@ function ConnectionsPanel(): JSX.Element {
     try {
       // Legt an ODER ersetzt. Der alte Weg (`POST /ext/backups/connections/{name}/token`) legt nur
       // an und meldete beim zweiten Mal 409.
-      const res = await authedFetch(`/extensions/backups/secrets`, {
-        method: "PUT", body: JSON.stringify({ label: `backups-token:${name}`, value }),
-      });
+      // Ein gespeichertes Token ersetzt der Kern nur mit Passwort und gegebenenfalls Code (Dialog des Kerns).
+      const res = await authedFetchConfirmed(`/extensions/backups/secrets`, (confirmation) => ({
+        method: "PUT", body: JSON.stringify({ label: `backups-token:${name}`, value, ...confirmation }),
+      }));
+      if (res === null) return;
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(errorFromBody(body, res.status));
@@ -512,7 +514,7 @@ function ConnectionsPanel(): JSX.Element {
         {connections && connections.length > 0 && (
           <table className="mb-3 w-full text-xs">
             <thead>
-              <tr className="border-b border-white/10 text-left uppercase opacity-60">
+              <tr className="border-b border-white/10 text-left opacity-60">
                 <th className="py-1">Name</th>
                 <th className="py-1">Adresse</th>
                 <th className="py-1">Zertifikat</th>
@@ -611,7 +613,7 @@ function ConnectionsPanel(): JSX.Element {
               <input type="checkbox" checked={newTlsInsecure} onChange={(e) => setNewTlsInsecure(e.target.checked)} />
               Zertifikat nicht prüfen (veraltet)
             </label>
-            <button type="submit" disabled={pending === "add"} className="px-2 py-1 disabled:opacity-40 accent-gradient text-white rounded-lg shadow-md shadow-black/30 hover:brightness-110 font-medium">
+            <button type="submit" disabled={pending === "add"} className="px-2 py-1 disabled:opacity-40 accent-gradient text-on-accent rounded-lg hover:bg-accent-strong font-medium">
               Anlegen
             </button>
             <button type="button" onClick={() => setShowAddForm(false)} className="px-2 py-1 border border-white/10 bg-white/[0.06] hover:bg-white/[0.12] rounded-lg transition">
@@ -905,7 +907,7 @@ export function BackupsPage(): JSX.Element {
       {visibleJobs && visibleJobs.length > 0 && (
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+            <tr className="border-b border-white/10 text-left text-xs opacity-60">
               <th className="py-1">VM</th>
               <th className="py-1">Storage</th>
               <th className="py-1">Zeitplan</th>

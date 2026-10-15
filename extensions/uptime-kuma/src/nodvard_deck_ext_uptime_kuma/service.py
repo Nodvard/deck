@@ -118,7 +118,7 @@ class UptimeKumaService:
             async with self._ctx.vault_use(handle) as value:
                 key = str(value or "").strip()
         except Exception as exc:  # noqa: BLE001 - nie den Text der Ausnahme weitergeben
-            logger.warning("Uptime Kuma %s: API-Schluessel nicht lesbar (%s)", name, type(exc).__name__)
+            logger.warning("Uptime Kuma %s: API-Schlüssel nicht lesbar (%s)", name, type(exc).__name__)
             raise KumaError(
                 f"Der API-Schlüssel für {name} ließ sich nicht aus dem Tresor lesen. Bitte unter Einstellungen → "
                 "Erweiterungen → Uptime Kuma neu eintragen."

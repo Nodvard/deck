@@ -51,4 +51,38 @@ describe("MarkdownView", () => {
     expect(link).toHaveAttribute("rel", "noreferrer");
     expect(link).toHaveAttribute("href", "https://pve.home.example");
   });
+
+  it("lädt ein Bild von einer fremden Adresse nicht, sondern zeigt einen Link", () => {
+    const { container } = render(
+      <MarkdownView view={VIEW} data={{ content: "![Grafana](https://grafana.example/render/a.png)" }} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    const link = container.querySelector("a");
+    expect(link).toHaveTextContent("Bild: Grafana");
+    expect(link).toHaveAttribute("href", "https://grafana.example/render/a.png");
+    expect(link).toHaveAttribute("rel", "noreferrer");
+  });
+
+  it("zeigt Bilder von diesem Server und eingebettete Bilder wie bisher", () => {
+    const { container } = render(
+      <MarkdownView
+        view={VIEW}
+        data={{ content: "![Logo](/api/v1/branding/logo) ![Punkt](data:image/png;base64,iVBORw0KGgo=)" }}
+      />,
+    );
+    const images = Array.from(container.querySelectorAll("img"));
+    expect(images.map((img) => img.getAttribute("src"))).toEqual([
+      "/api/v1/branding/logo",
+      "data:image/png;base64,iVBORw0KGgo=",
+    ]);
+    expect(images[0]).toHaveAttribute("alt", "Logo");
+  });
+
+  it("macht aus einer Adresse ohne Schema und aus //fremd kein Bild", () => {
+    const { container } = render(
+      <MarkdownView view={VIEW} data={{ content: "![a](//fremd.example/a.png) ![b](fremd.png)" }} />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(Array.from(container.querySelectorAll("a")).map((a) => a.textContent)).toEqual(["Bild: a", "Bild: b"]);
+  });
 });

@@ -8,6 +8,7 @@ from typing import Annotated, Any
 
 import asyncssh
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi.responses import JSONResponse
 from nodvard_sdk import HostRequirementSpec
 from pydantic import BaseModel, Field, SecretStr, field_validator
 from sqlalchemy import select
@@ -15,6 +16,7 @@ from sqlalchemy import select
 from ...config import Settings
 from ...core import rate_limit, vault
 from ...core.vault import VaultError
+from ...ext.root_helpers import RootHelperFile
 from ...ext.runtime import get_extension_runtime
 from ...models import Host, HostCredential, KnownHostKey, User
 from ...services import audit as audit_service
@@ -25,6 +27,7 @@ from ...services.host_check import ConnectionCheckOut
 from ...services.host_setup import GROUP_RE, SetupError
 from ..deps import SessionDep, SettingsDep, require_permission
 from ..errors import CodedHTTPException
+from .auth import confirm_stored_secret_change
 from .hosts import (
     CredentialOut,
     KnownHostKeyOut,
@@ -93,6 +96,19 @@ def matching_requirements(host: Host) -> list[tuple[str, HostRequirementSpec]]:
         found.append((ext_id, spec))
     found.sort(key=lambda item: (item[1].order, item[1].label, item[0], item[1].id))
     return found
+
+
+def root_helpers_for(host: Host) -> list[RootHelperFile]:
+    """Die Hilfsskripte der eingeschalteten Erweiterungen, die auf diesem Server root brauchen (`needs_root` in einer
+    passenden Anforderung) und eines mitbringen, nach Kennung sortiert. Nur sie kommen per Einrichtungsbefehl auf den
+    Server, und nur nach ihnen fragt „Verbindung prüfen“."""
+    loaded = get_extension_runtime().loaded
+    found: dict[str, RootHelperFile] = {}
+    for ext_id, spec in matching_requirements(host):
+        ext = loaded.get(ext_id)
+        if spec.needs_root and ext is not None and ext.root_helper is not None:
+            found[ext_id] = ext.root_helper
+    return [found[ext_id] for ext_id in sorted(found)]
 
 
 def valid_group(name: str | None, ext_id: str | None = None) -> str | None:
@@ -183,6 +199,24 @@ async def generate_key(
     )
 
 
+class SetupHelperOut(BaseModel):
+    ext_id: str
+    module: str
+    """Anzeigename der Erweiterung."""
+    path: str
+    """Ort auf dem Server, z. B. `/usr/local/lib/nodvard-deck/shield-root`."""
+    version: int
+    sha256: str
+    text: str
+
+    @classmethod
+    def from_file(cls, helper: RootHelperFile) -> SetupHelperOut:
+        return cls(
+            ext_id=helper.ext_id, module=helper.ext_name, path=helper.install_path, version=helper.version,
+            sha256=helper.sha256, text=helper.text,
+        )
+
+
 class SetupOut(BaseModel):
     username: str
     public_key: str
@@ -196,6 +230,8 @@ class SetupOut(BaseModel):
     """Die Gruppen, die der Befehl wirklich einträgt (nur solche, die Erweiterungen verlangen)."""
     sudo: bool
     """Ob der Befehl root ohne Passwort einrichtet (nie für `root` selbst)."""
+    helpers: list[SetupHelperOut] = Field(default_factory=list)
+    """Die Hilfsskripte, die der Befehl mitbringt (nur mit `sudo`), samt Text: Im Befehl stehen sie base64-kodiert."""
 
 
 def _split_groups(raw: list[str] | None) -> list[str]:
@@ -214,6 +250,7 @@ class _PreparedSetup:
     one_liner: str
     groups: list[str]
     sudo: bool
+    helpers: list[RootHelperFile]
 
 
 async def _prepare_setup(
@@ -252,6 +289,7 @@ async def _prepare_setup(
     if is_root:
         wanted = []
     use_sudo = sudo and not is_root
+    helpers = root_helpers_for(host) if use_sudo else []
 
     try:
         private_key = await vault.read_secret_plaintext(session, vault.load_keyring(settings), credential.secret_id)
@@ -259,13 +297,21 @@ async def _prepare_setup(
         info = host_setup.derive_public_key(private_key, comment=host_setup.key_comment(host.name))
         del private_key
         script, one_liner = host_setup.build_setup_script(
-            credential.username, info.public_key, groups=wanted, sudo=use_sudo
+            credential.username, info.public_key, groups=wanted, sudo=use_sudo, helpers=helpers
         )
     except (SetupError, VaultError) as exc:
         detail = str(exc) if isinstance(exc, SetupError) else "Der gespeicherte Schlüssel lässt sich nicht lesen."
         raise HTTPException(status_code=422, detail=detail) from None
     return _PreparedSetup(
-        host=host, credential=credential, info=info, script=script, one_liner=one_liner, groups=wanted, sudo=use_sudo
+        host=host, credential=credential, info=info, script=script, one_liner=one_liner, groups=wanted, sudo=use_sudo,
+        helpers=helpers,
+    )
+
+
+def _notes(prepared: _PreparedSetup) -> list[str]:
+    return host_setup.setup_notes(
+        prepared.credential.username, groups=prepared.groups, sudo=prepared.sudo,
+        helpers=[f"{h.ext_id}-root" for h in prepared.helpers],
     )
 
 
@@ -286,9 +332,8 @@ async def credential_setup(
     username = prepared.credential.username
     return SetupOut(
         username=username, public_key=prepared.info.public_key, fingerprint=prepared.info.fingerprint,
-        one_liner=prepared.one_liner, script=prepared.script,
-        notes=host_setup.setup_notes(username, groups=prepared.groups, sudo=prepared.sudo), groups=prepared.groups,
-        sudo=prepared.sudo,
+        one_liner=prepared.one_liner, script=prepared.script, notes=_notes(prepared), groups=prepared.groups,
+        sudo=prepared.sudo, helpers=[SetupHelperOut.from_file(h) for h in prepared.helpers],
     )
 
 
@@ -386,6 +431,7 @@ async def credential_setup_with_password(
     detail: dict[str, Any] = {
         "credential_id": credential.id, "username": credential.username, "login_user": payload.login_user,
         "sudo": prepared.sudo, "groups": prepared.groups,
+        "helpers": {h.ext_id: h.version for h in prepared.helpers},
     }
 
     async def refuse(
@@ -424,11 +470,12 @@ async def credential_setup_with_password(
         status_code = 400 if run.outcome == "sudo_failed" else 502
         raise await refuse(run.outcome, run.reason, status_code, messages=run.messages) from None
 
-    notes = host_setup.setup_notes(credential.username, groups=prepared.groups, sudo=prepared.sudo)
+    notes = _notes(prepared)
     check: ConnectionCheckOut | None
     try:
         check = await host_check.run_check(
-            session, settings, host, credential, list(matching_requirements(host)), user_id=user.id
+            session, settings, host, credential, list(matching_requirements(host)), user_id=user.id,
+            helpers=root_helpers_for(host),
         )
     except host_check.CheckRefused:
         check = None
@@ -465,16 +512,25 @@ class MakeDefaultOut(CredentialOut):
 
 class MakeDefaultIn(BaseModel):
     delete_previous: bool = False
-    """Den bisherigen Standard-Zugang samt Geheimnis gleich mitlöschen."""
+    """Den bisherigen Standard-Zugang samt Geheimnis gleich mitlöschen (nur mit `current_password`, siehe unten)."""
+    current_password: str = Field(default="", max_length=1024)
+    totp_code: str = Field(default="", max_length=64)
 
 
-@router.post("/hosts/{host_id}/credentials/{credential_id}/make-default")
+@router.post("/hosts/{host_id}/credentials/{credential_id}/make-default", response_model=MakeDefaultOut)
 async def make_default(
-    host_id: str, credential_id: str, session: SessionDep, user: WriteUser, payload: MakeDefaultIn | None = None
-) -> MakeDefaultOut:
+    host_id: str,
+    credential_id: str,
+    request: Request,
+    session: SessionDep,
+    settings: SettingsDep,
+    user: WriteUser,
+    payload: MakeDefaultIn | None = None,
+) -> MakeDefaultOut | JSONResponse:
     """Stellt den Standard-Zugang um (Schlüsselwechsel: neuen Zugang anlegen, prüfen, dann umstellen). Mit
     `delete_previous` verschwindet der alte Standard samt Geheimnis (409, solange der neue nicht kürzlich erfolgreich
-    geprüft wurde); sein öffentlicher Schlüssel bleibt in authorized_keys auf dem Server (steht in `notice`)."""
+    geprüft wurde; wie jedes Löschen gespeicherter Zugangsdaten nur mit Passwort und gegebenenfalls Code, sonst 403
+    `confirm_required`); sein öffentlicher Schlüssel bleibt in authorized_keys auf dem Server (steht in `notice`)."""
     host = await _load_host(session, host_id)
     target = await session.get(HostCredential, credential_id)
     if target is None or target.host_id != host_id:
@@ -494,6 +550,15 @@ async def make_default(
                 "ohne dass der neue sicher funktioniert."
             ),
         )
+    if delete_previous and previous_id is not None:
+        # Erst nach der Prüfung oben: ein verbrauchter Code bei einem 409 hülfe niemandem.
+        confirm = payload or MakeDefaultIn()
+        refused = await confirm_stored_secret_change(
+            request, session, settings, user, confirm.current_password, confirm.totp_code, "tresor_loeschen",
+            "Der bisherige Zugang wird samt Geheimnis gelöscht. Bitte das aktuelle Passwort eingeben.",
+        )
+        if refused is not None:
+            return refused
     previous_info = (
         {"credential_id": previous.id, "kind": previous.kind, "username": previous.username, "port": previous.port}
         if previous is not None and previous_id is not None else None
@@ -562,7 +627,7 @@ async def check_connection(
     try:
         result = await host_check.run_check(
             session, settings, host, credential, [(e, spec) for e, spec in matching_requirements(host)],
-            user_id=user.id,
+            user_id=user.id, helpers=root_helpers_for(host),
         )
     except host_check.CheckRefused as exc:
         headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None

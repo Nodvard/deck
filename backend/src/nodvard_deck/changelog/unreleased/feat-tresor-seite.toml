@@ -1,0 +1,7 @@
+[[entries]]
+kind = "neu"
+text = "Neue Seite „Tresor“ in den Einstellungen: alle gespeicherten Passwörter, Schlüssel und Tokens mit Ablaufdatum und der Angabe, welches Modul oder welcher Server sie benutzt. Einträge lassen sich dort anlegen, ersetzen und löschen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Gespeicherte Zugangsdaten ersetzen oder löschen geht jetzt überall nur mit dem eigenen Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App: auf der Seite Tresor, in den Moduleinstellungen (auch wenn eine neue Adresse alte Zugangsdaten löscht), beim SSH-Zugang eines Servers, beim Löschen eines Servers mit Zugängen und wenn eine neue Server-Adresse gespeicherte SSH-Passwörter löscht. Neu Eintragen geht weiter ohne. Im Tresor wird nur gelöscht, was kein Modul und kein Server mehr fest benutzt, und jede Änderung steht im Protokoll."

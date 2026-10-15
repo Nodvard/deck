@@ -1,19 +1,23 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { LogOut, Menu, Search, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { BetaBadge, isBeta } from "../components/BetaBadge";
 import { CommandPalette, useCommandPaletteHotkey } from "../components/CommandPalette";
 import { DemoBanner } from "../components/DemoBanner";
+import { DesignNotice } from "../components/DesignNotice";
 import { GlobalDialogs } from "../components/GlobalDialogs";
 import { Icon } from "../components/Icon";
 import { NotificationBell } from "../components/NotificationBell";
 import { useUnreadNotifications } from "./NotificationsPage";
 import { api } from "../lib/api";
+import { localImageUrl } from "../lib/branding";
 import { useCapabilities, usePages } from "../lib/catalog";
 import { useChangelogNotice } from "../lib/changelog";
 import { setDeckTimezone } from "../lib/deckTimezone";
+import { usePreferences } from "../lib/firstSteps";
+import { applyTheme, currentTheme, isTheme } from "../lib/theme";
 import { useProactiveTokenRefresh } from "../lib/tokenRefresh";
 import { useWsSubscription, wsClient } from "../lib/ws";
 import { useAuthStore } from "../state/auth";
@@ -56,7 +60,7 @@ function NavItem({ to, icon, label, end, badge, beta }: { to: string; icon: stri
       <span className="flex-1 truncate">{label}</span>
       {beta && <BetaBadge className="text-[10px] leading-none" spoken={false} />}
       {badge !== undefined && badge > 0 && (
-        <span className="accent-gradient rounded-full px-1.5 text-[10px] font-semibold text-white" aria-label={`${badge} ungelesen`}>
+        <span className="accent-gradient rounded-full px-1.5 text-[10px] font-semibold text-on-accent" aria-label={`${badge} ungelesen`}>
           {badge > 99 ? "99+" : badge}
         </span>
       )}
@@ -96,6 +100,17 @@ export function AppShell() {
   // öffnet das Änderungsprotokoll, "Neu" erscheint, solange man den Stand noch nicht kennt.
   const { version: appVersion, isNew: changelogIsNew } = useChangelogNotice();
   const queryClient = useQueryClient();
+  // Das Theme des Kontos gilt auf jedem Gerät; bis die Antwort da ist, bleibt das im Browser gemerkte.
+  // Nur einmal je Sitzung: danach bestimmt die Wahl unter „Darstellung“. Erst eine Antwort von nach dem Anmelden
+  // zählt, ein Rest im Zwischenspeicher könnte noch vom vorigen Konto im selben Tab stammen.
+  const preferences = usePreferences();
+  const savedTheme = preferences.isFetchedAfterMount ? preferences.data?.theme : undefined;
+  const accountThemeApplied = useRef(false);
+  useEffect(() => {
+    if (accountThemeApplied.current || savedTheme === undefined) return;
+    accountThemeApplied.current = true;
+    if (isTheme(savedTheme) && savedTheme !== currentTheme()) applyTheme(savedTheme);
+  }, [savedTheme]);
   const [paletteOpen, setPaletteOpen] = useState(false);
   useCommandPaletteHotkey(setPaletteOpen);
 
@@ -152,6 +167,7 @@ export function AppShell() {
 
   const sections = groupPagesBySection(pages ?? []);
   const productName = branding?.product_name ?? "Nodvard Deck";
+  const logoUrl = localImageUrl(branding?.logo_url);
   // Ein leerer Anzeigename ("") liesse Kreis und Namen leer -- deshalb || statt ??.
   const userName = user?.display_name || user?.username || "";
   const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -159,11 +175,11 @@ export function AppShell() {
   return (
     <div className="flex h-screen bg-[var(--color-background)] text-[var(--color-text)]">
       {menuOpen && (
-        <div className="fixed inset-0 z-30 bg-black/60 backdrop-blur-sm lg:hidden" onClick={() => setMenuOpen(false)} aria-hidden="true" data-testid="menu-backdrop" />
+        <div className="fixed inset-0 z-30 bg-scrim/60 backdrop-blur-sm lg:hidden" onClick={() => setMenuOpen(false)} aria-hidden="true" data-testid="menu-backdrop" />
       )}
       <aside
         id="hauptmenue"
-        className={`fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] flex-none flex-col border-r border-white/[0.06] bg-[var(--color-background)] shadow-2xl shadow-black/60 transition-transform duration-200 lg:static lg:z-auto lg:w-60 lg:translate-x-0 lg:bg-black/20 lg:shadow-none ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-72 max-w-[85vw] flex-none flex-col border-r border-[var(--color-line)] bg-[var(--color-side)] shadow-2xl shadow-scrim/60 transition-transform duration-200 lg:static lg:z-auto lg:w-60 lg:translate-x-0 lg:shadow-none ${
           menuOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
@@ -176,10 +192,10 @@ export function AppShell() {
           <X size={18} />
         </button>
         <Link to="/" className="flex items-center gap-3 pb-4 pl-4 pr-12 pt-5 lg:pr-4">
-          {branding?.logo_url ? (
-            <img src={branding.logo_url} alt="" className="h-9 w-9 rounded-xl object-contain" />
+          {logoUrl ? (
+            <img src={logoUrl} alt="" className="h-9 w-9 rounded-xl object-contain" />
           ) : (
-            <span className="accent-gradient grid h-9 w-9 place-items-center rounded-xl text-base font-bold text-white shadow-lg shadow-black/40">
+            <span className="accent-gradient grid h-9 w-9 place-items-center rounded-xl text-base font-bold text-on-accent">
               {productName.slice(0, 1).toUpperCase()}
             </span>
           )}
@@ -189,7 +205,7 @@ export function AppShell() {
           </span>
         </Link>
         {capabilities?.feature_flags.demo_mode && (
-          <span className="mx-4 mb-2 inline-block w-fit rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300">
+          <span className="mx-4 mb-2 inline-block w-fit rounded bg-amber-500/20 px-1.5 py-0.5 text-xs font-medium text-amber-300">
             Demo-Modus
           </span>
         )}
@@ -204,7 +220,7 @@ export function AppShell() {
           </div>
           {[...sections.entries()].map(([section, sectionPages]) => (
             <div key={section || "_"}>
-              {section && <p className="mb-1.5 px-2.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-white/40">{section}</p>}
+              {section && <p className="mb-1.5 px-2.5 text-xs font-semibold text-white/40">{section}</p>}
               <div className="flex flex-col gap-0.5">
                 {sectionPages.map((page) => (
                   <NavItem key={`${page.ext_id}:${page.id}`} to={`/ext/${page.ext_id}${page.path}`} icon={page.icon ?? "box"} label={page.title} beta={isBeta(page.stage)} />
@@ -240,7 +256,7 @@ export function AppShell() {
               {changelogIsNew && (
                 <>
                   {" "}
-                  <span data-testid="changelog-neu" className="accent-gradient rounded-full px-1.5 text-[10px] font-semibold text-white">
+                  <span data-testid="changelog-neu" className="accent-gradient rounded-full px-1.5 text-[10px] font-semibold text-on-accent">
                     Neu
                   </span>
                 </>
@@ -279,7 +295,8 @@ export function AppShell() {
           </div>
         </header>
         <DemoBanner />
-        <main className="min-h-0 flex-1 overflow-auto">
+        <DesignNotice />
+        <main className="app-backdrop min-h-0 flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>

@@ -45,7 +45,7 @@ body:
     id: extension
     attributes:
       label: Affected extension
-      placeholder: e.g. Proxmox VE, Service Matrix, core
+      placeholder: e.g. Proxmox VE, Docker, core
   - type: textarea
     id: logs
     attributes:

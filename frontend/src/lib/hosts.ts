@@ -35,6 +35,18 @@ export interface GeneratedKeyOut {
   fingerprint: string;
 }
 
+/** Ein Hilfsskript, das der Einrichtungsbefehl mitbringt (im Befehl steht es base64-kodiert). */
+export interface SetupHelper {
+  ext_id: string;
+  /** Anzeigename der Erweiterung. */
+  module: string;
+  /** Ort auf dem Server. */
+  path: string;
+  version: number;
+  sha256: string;
+  text: string;
+}
+
 export interface SetupOut {
   username: string;
   public_key: string;
@@ -44,6 +56,8 @@ export interface SetupOut {
   notes: string[];
   groups: string[];
   sudo: boolean;
+  /** Fehlt bei älteren Servern. */
+  helpers?: SetupHelper[];
 }
 
 /** Antwort von `POST /hosts/{id}/credentials/{cid}/setup-with-password`. */

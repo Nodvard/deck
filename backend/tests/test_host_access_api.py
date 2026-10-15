@@ -364,7 +364,7 @@ def _setup_url(host_id: str, credential_id: str) -> str:
 
 async def _docker_host_with_key(client, token, name="docker", **gen) -> tuple[dict, dict]:
     get_extension_runtime().ui.register_host_requirement("fake-a", HostRequirementSpec(
-        id="docker-group", label="Docker ohne sudo (Service-Matrix)", unix_group="docker", tags=["docker"],
+        id="docker-group", label="Docker ohne sudo (Container-Verwaltung)", unix_group="docker", tags=["docker"],
     ))
     get_extension_runtime().ui.register_host_requirement("fake-a", HostRequirementSpec(
         id="root", label="Root-Rechte", needs_root=True, root_reason="Updates einspielen",
@@ -388,7 +388,8 @@ async def test_setup_returns_one_liner_script_and_the_derived_public_key(client,
     r = await client.get(_setup_url(host["id"], cid), params={"sudo": "true", "groups": "docker"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     body = r.json()
-    assert set(body) == {"username", "public_key", "fingerprint", "one_liner", "script", "notes", "groups", "sudo"}
+    assert set(body) == {"username", "public_key", "fingerprint", "one_liner", "script", "notes", "groups", "sudo", "helpers"}
+    assert body["helpers"] == [], "ohne eingeschaltete Erweiterung mit Hilfsskript bringt der Befehl keins mit"
     assert body["public_key"] == gen["public_key"] and body["fingerprint"] == gen["fingerprint"]
     assert (body["username"], body["groups"], body["sudo"]) == ("lattice", ["docker"], True)
     assert body["one_liner"].startswith('S=; [ "$(id -u)" = 0 ] || S=sudo; $S sh -c ')
@@ -628,7 +629,9 @@ async def test_make_default_with_delete_previous_removes_the_old_credential_and_
     pool.retired.clear()
     await _mark_login_ok(db_session, host, new)  # `delete_previous` verlangt eine frische, erfolgreiche Pruefung
 
-    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    refused = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    assert refused.status_code == 403 and refused.json()["code"] == "confirm_required", "der alte Zugang fiele weg"
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     notice = r.json()["notice"]
     assert "authorized_keys" in notice and "bleibt" in notice and "entfernen" in notice
@@ -653,7 +656,7 @@ async def test_make_default_on_the_current_default_changes_nothing(client, db_se
     # Body darf ganz fehlen.
     r = await client.post(_default_url(host["id"], old["id"]), headers=_auth(token))
     assert r.status_code == 200 and r.json()["is_default"] is True
-    r = await client.post(_default_url(host["id"], old["id"]), json={"delete_previous": True}, headers=_auth(token))
+    r = await client.post(_default_url(host["id"], old["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 200
     ids = {c["id"] for c in (await client.get(f"/api/v1/hosts/{host['id']}/credentials", headers=_auth(token))).json()}
     assert ids == {old["id"], new["id"]}, "delete_previous loescht nichts, wenn der Zugang schon Standard ist"
@@ -673,7 +676,7 @@ async def test_make_default_notice_for_a_password_credential_does_not_talk_about
     assert (old["is_default"], new["is_default"]) == (True, False)
     await _mark_login_ok(db_session, host, new)
 
-    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True}, headers=_auth(token))
+    r = await client.post(_default_url(host["id"], new["id"]), json={"delete_previous": True, "current_password": "correct-horse-battery"}, headers=_auth(token))
     assert r.status_code == 200, r.text
     notice = r.json()["notice"]
     assert notice and "gelöscht" in notice

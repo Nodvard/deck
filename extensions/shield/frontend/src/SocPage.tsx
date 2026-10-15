@@ -319,7 +319,7 @@ function HardeningCell({ host: h }: { host: HostRow }) {
         <div className="w-28">
           <div className="flex justify-between text-xs"><span>{shown.hardening_index}</span><span className="text-white/40">{shown.warnings} Warn.</span></div>
           <div className="mt-1 h-1.5 rounded-full bg-white/10">
-            <div className="h-1.5 rounded-full" style={{ width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "#34d399" : "#fbbf24" }} />
+            <div className="h-1.5 rounded-full" style={{ width: `${shown.hardening_index}%`, background: shown.hardening_index >= 70 ? "rgb(var(--emerald-400))" : "rgb(var(--amber-400))" }} />
           </div>
         </div>
       )}
@@ -422,12 +422,12 @@ function briefingNotice(r: BriefingResult): PageNotice {
 function ScoreRing({ score, reasons = [] }: { score: number; reasons?: string[] }) {
   const r = 42;
   const c = 2 * Math.PI * r;
-  const tone = score >= 80 ? "#34d399" : score >= 50 ? "#fbbf24" : "#f87171";
+  const tone = score >= 80 ? "rgb(var(--emerald-400))" : score >= 50 ? "rgb(var(--amber-400))" : "rgb(var(--red-400))";
   const label = score >= 80 ? "Gut geschützt" : score >= 50 ? "Verbesserungsbedarf" : "Handlungsbedarf";
   return (
     <div className="flex min-w-0 flex-wrap items-center gap-5">
       <svg width="104" height="104" viewBox="0 0 104 104" role="img" aria-label={`Schutzwert ${score} von 100`} className="flex-none">
-        <circle cx="52" cy="52" r={r} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="9" />
+        <circle cx="52" cy="52" r={r} fill="none" stroke="var(--color-track)" strokeWidth="9" />
         <circle
           cx="52" cy="52" r={r} fill="none" stroke={tone} strokeWidth="9" strokeLinecap="round"
           strokeDasharray={`${(c * score) / 100} ${c}`} transform="rotate(-90 52 52)"
@@ -435,7 +435,7 @@ function ScoreRing({ score, reasons = [] }: { score: number; reasons?: string[] 
         <text x="52" y="58" textAnchor="middle" className="fill-white text-[22px] font-semibold">{score}</text>
       </svg>
       <div className="min-w-0 flex-1 basis-48">
-        <p className="text-xs uppercase tracking-wider text-white/45">Schutzwert</p>
+        <p className="text-xs text-white/45">Schutzwert</p>
         <p className="text-lg font-semibold" style={{ color: tone }}>{label}</p>
         <p className="mt-1 max-w-[16rem] text-xs text-white/45">Berechnet aus: Virenscanner installiert (ClamAV), aktuelle Signaturen und Scans, offene Funde, wie sicher die Server eingestellt sind (Härtung), offene Sicherheitsupdates, Fail2ban, SSH-Einstellungen und offene Sicherheitsereignisse.</p>
         {reasons.length > 0 && (
@@ -622,13 +622,13 @@ export function SocPage(): JSX.Element {
           >
             {t.label}
             {t.id === "quarantine" && overview && overview.summary.open_threats > 0 && (
-              <span className="ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white">{overview.summary.open_threats}</span>
+              <span className="ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-on-accent">{overview.summary.open_threats}</span>
             )}
             {t.id === "updates" && !!side.updates?.security && (
-              <span className="ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white" title="Sicherheitsupdates">{side.updates.security}</span>
+              <span className="ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-on-accent" title="Sicherheitsupdates">{side.updates.security}</span>
             )}
             {t.id === "guard" && !!side.guard?.open_events && (
-              <span className="ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-white" title="offene Ereignisse">{side.guard.open_events}</span>
+              <span className="ml-1.5 rounded-full bg-red-500/80 px-1.5 text-[10px] text-on-accent" title="offene Ereignisse">{side.guard.open_events}</span>
             )}
           </button>
         ))}
@@ -791,7 +791,7 @@ function OverviewTab({
       <div className="mb-5 grid grid-cols-1 gap-4 lg:grid-cols-[auto_1fr]">
         {noServers ? (
           <div className="panel px-6 py-4" data-testid="no-servers">
-            <p className="text-xs uppercase tracking-wider text-white/45">Schutzwert</p>
+            <p className="text-xs text-white/45">Schutzwert</p>
             {(s.hosts_known ?? 0) > 0 ? (
               <>
                 <p className="text-lg font-semibold">Noch kein Server prüfbar – nichts zu bewerten</p>
@@ -899,7 +899,7 @@ function OverviewTab({
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-xs uppercase tracking-wider text-white/40">
+              <thead className="text-xs text-white/40">
                 <tr className="border-b border-white/[0.06]">
                   <th className="px-5 py-2.5 font-medium">Server</th>
                   <th className="px-3 py-2.5 font-medium" title="ClamAV ist der Virenscanner auf dem Server">Virenschutz</th>
@@ -1246,7 +1246,7 @@ function HardeningTab({ canManage, hosts, onAudit }: { canManage: boolean; hosts
             </>
           ) : (
             <>
-              <p className="mb-2 text-xs uppercase tracking-wider text-white/40">Warnungen ({a.warnings.length})</p>
+              <p className="mb-2 text-xs text-white/40">Warnungen ({a.warnings.length})</p>
               {a.warnings.length === 0 ? <p className="mb-3 text-sm text-emerald-300">Keine Warnungen.</p> : (
                 <ul className="mb-3 space-y-1 text-sm">{a.warnings.map((w, i) => <LynisFinding key={`${i}:${w}`} entry={w} help={a.help} tone="warning" />)}</ul>
               )}

@@ -26,6 +26,7 @@ import { HostDetailSettings } from "./settings/HostDetailSettings";
 import { HostsSettings } from "./settings/HostsSettings";
 import { SettingsLayout } from "./settings/SettingsLayout";
 import { SystemSettings } from "./settings/SystemSettings";
+import { VaultSettings } from "./settings/VaultSettings";
 
 /**
  * Die Routen als eigener Wert, damit Tests sie mit einem Memory-Router laufen lassen können. Ganz außen fängt
@@ -78,6 +79,7 @@ export const routes: RouteObject[] = [
                       { path: "system", element: <SystemSettings /> },
                       { path: "extensions", element: <ExtensionsSettings /> },
                       { path: "extensions/:extId", element: <ExtensionConfigPage /> },
+                      { path: "vault", element: <VaultSettings /> },
                       { path: "audit", element: <AuditSettings /> },
                       { path: "about", element: <AboutSettings /> },
                     ],

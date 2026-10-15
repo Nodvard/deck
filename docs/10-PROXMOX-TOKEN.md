@@ -132,9 +132,11 @@ Gut zu wissen:
   `backups-token:<Kurzname>` ab. Liegt dort unter dem Namen schon ein Geheimnis, das nicht von der Erweiterung stammt
   (etwa von Hand über die Tresor-Schnittstelle angelegt), ändert und löscht Nodvard Deck es nie: Das Verbinden bricht
   vor dem Passwort ab (bei einem selbst gewählten Kurznamen) bzw. bevor etwas gespeichert ist, und die Meldung sagt,
-  was zu tun ist – einen anderen Kurznamen nehmen oder das Geheimnis selbst löschen (`DELETE /api/v1/secrets/{id}`).
+  was zu tun ist – einen anderen Kurznamen nehmen oder das Geheimnis selbst löschen: unter Einstellungen → Tresor, mit
+  dem eigenen Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App (API: `DELETE /api/v1/secrets/{id}` mit
+  `current_password` und gegebenenfalls `totp_code`).
 
-**Alte Tokens.** Jedes Verbinden mit Passwort legt neue Tokens an, die alten bleiben stehen. Welche Tokens von
+**Alte Tokens.** Jedes Verbinden mit Passwort legt neue Tokens an, die alten bleiben stehen. Das Token in Nodvard Deck ersetzt das Verbinden deshalb ohne Rückfrage nach dem Deck-Passwort (die einzige Ausnahme dieser Art, siehe [04-API.md](04-API.md) §3, „Tresor“): Es braucht das Passwort des Proxmox-Servers, und das alte Token bleibt in Proxmox gültig. Welche Tokens von
 Nodvard Deck (`deck…`) keine Verbindung mehr benutzt, zeigt die Proxmox-Seite im Reiter „Verbindungen“ →
 „Alte Tokens“ (auch gleich nach dem Verbinden), mit dem Befehl zum Löschen, z. B.
 `pveum user token remove nodvard@pve deck-2` bzw. `pveum user token remove nodvard-backup@pve deck`. Andere Tokens

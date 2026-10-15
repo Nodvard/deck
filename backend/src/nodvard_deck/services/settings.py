@@ -13,6 +13,10 @@ from ..models import Setting
 _GLOBAL_SCOPE = "global"
 _NO_USER = ""
 
+DESIGN_NOTICE_KEY = "ui.design_notice_dismissed"
+"""Je Benutzer: Hinweis „Deck hat ein neues Aussehen.“ erledigt. Neue Konten bekommen ihn gleich als erledigt, sie
+kennen das alte Aussehen nicht; wer es schon vor dem Update gab, hat den Wert nicht und sieht den Hinweis einmal."""
+
 
 async def get_global(session: AsyncSession, key: str, default: Any = None) -> Any:
     result = await session.execute(

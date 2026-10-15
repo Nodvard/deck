@@ -87,6 +87,28 @@ async function renewToken(): Promise<string | null> {
   return shell.refreshAccessToken ? shell.refreshAccessToken().catch(() => null) : null;
 }
 
+/** Passwort und gegebenenfalls Code aus dem Bestätigungs-Dialog des Kerns, so wie die API sie im Body erwartet. */
+export type IdentityConfirmation = { current_password: string; totp_code?: string };
+
+/**
+ * Wie `authedFetch` für Aufrufe, die gespeicherte Zugangsdaten ersetzen oder löschen können: Antwortet der Kern mit 403
+ * `confirm_required`, fragt sein Dialog Passwort und gegebenenfalls Code ab, und `build` baut den Aufruf damit noch einmal.
+ * `null` heißt abgebrochen. Ein älterer Kern ohne `confirmIdentity` bekommt die 403-Antwort unverändert zurück.
+ */
+export async function authedFetchConfirmed(
+  path: string, build: (confirmation?: IdentityConfirmation) => RequestInit,
+): Promise<Response | null> {
+  const first = await authedFetch(path, build());
+  if (first.status !== 403) return first;
+  const body = (await first.clone().json().catch(() => null)) as { code?: unknown; detail?: unknown; two_factor?: unknown } | null;
+  const ask = deck().confirmIdentity;
+  if (body?.code !== "confirm_required" || !ask) return first;
+  const message = typeof body.detail === "string" ? body.detail : "Bitte zur Bestätigung das aktuelle Passwort eingeben.";
+  const confirmation = await ask(message, body.two_factor === true);
+  if (!confirmation) return null;
+  return authedFetch(path, build(confirmation));
+}
+
 /** Lesbarer Grund aus dem Body einer Fehlerantwort, sonst `null`. */
 function bodyDetail(body: unknown): string | null {
   const b = (typeof body === "object" && body !== null ? body : {}) as {

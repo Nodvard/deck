@@ -1,0 +1,5 @@
+{
+  "domains": [],
+  "processed": {"success": [], "errors": [{"item": "werbung.example.com", "error": "UNIQUE constraint failed: domainlist.domain, domainlist.type"}]},
+  "took": 0.0002
+}

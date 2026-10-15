@@ -1,0 +1,22 @@
+{
+  "version": "2024.6.2",
+  "gitHash": "a1b2c3d4",
+  "server": {
+    "name": "Vaultwarden",
+    "url": "https://github.com/dani-garcia/vaultwarden"
+  },
+  "settings": {
+    "disableUserRegistration": true
+  },
+  "environment": {
+    "vault": "https://vault.example.org",
+    "api": "https://vault.example.org/api",
+    "identity": "https://vault.example.org/identity",
+    "notifications": "https://vault.example.org/notifications",
+    "sso": ""
+  },
+  "featureStates": {
+    "unauth-ui-refresh": true
+  },
+  "object": "config"
+}

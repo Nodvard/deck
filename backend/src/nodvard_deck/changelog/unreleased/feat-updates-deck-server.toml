@@ -1,0 +1,7 @@
+[[entries]]
+kind = "verbessert"
+text = "Sind Docker-Pakete unter den Updates des Servers, auf dem Nodvard Deck läuft, sagt die Rückfrage vor dem Einspielen, dass Nodvard Deck danach kurz nicht erreichbar ist."
+
+[[entries]]
+kind = "verbessert"
+text = "Startet Nodvard Deck beim Einspielen neu, zeigt die Update-Zentrale danach das echte Ergebnis statt „unterbrochen“ und versucht es bei einem kurzen Ausfall selbst wieder."

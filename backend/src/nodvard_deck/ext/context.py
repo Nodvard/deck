@@ -88,6 +88,8 @@ class ApiHandle:
         self._guarded: list[Any] = []
         # Adress-Präfixe mit `public=True`, die der Kern beim Einschalten ins Protokoll schreibt.
         self.public_prefixes: list[str] = []
+        # Jeder eingehängte Router mit Präfix und Zugriffsprüfung, für die alten Adressen aus `adopts.routes`.
+        self.included: list[tuple[Any, str, list[Any]]] = []
 
     def check_routes(self) -> None:
         """Wirft `InvalidRegistration`, wenn ein geschützter Router eine Route ohne Anmeldeprüfung hat."""
@@ -174,6 +176,7 @@ class ApiHandle:
             self._guarded.append(router)
             self.check_routes()
         self._loaded.router.include_router(router, prefix=prefix, tags=tags, dependencies=dependencies)
+        self.included.append((router, prefix, dependencies))
 
 
 def _unguarded_routes(router: Any) -> list[str]:

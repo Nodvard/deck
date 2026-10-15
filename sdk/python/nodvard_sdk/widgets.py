@@ -143,7 +143,7 @@ class ChartView(BaseModel):
 
 
 class StatusGridView(BaseModel):
-    """Die Service-Matrix-Kacheln."""
+    """Kacheln mit Status, etwa je Container."""
 
     kind: Literal["status_grid"] = "status_grid"
     tile_title: Template

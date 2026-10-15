@@ -16,6 +16,7 @@ import { Button, EmptyState, Notice } from "../../../_shared/frontend/src/ui";
 import { deck } from "../../../_shared/frontend/src/deck";
 import { formatBytes, formatUptime } from "./format";
 import { type LiveData, LiveView } from "./LiveView";
+import { TempLimit } from "./TempLimit";
 
 interface HostOut {
   id: string;
@@ -92,7 +93,7 @@ function Bar({ percent, tone }: { percent: number; tone: string }): JSX.Element 
 function Stat({ label, value, sub, tone }: { label: string; value: string; sub?: string; tone?: string }): JSX.Element {
   return (
     <div className="panel p-3">
-      <p className="text-[11px] uppercase tracking-wider opacity-50">{label}</p>
+      <p className="text-xs opacity-50">{label}</p>
       <p className={`text-lg font-semibold tabular-nums ${tone && tone !== "good" ? TONE_TEXT[tone] ?? "" : ""}`}>{value}</p>
       {sub && <p className="text-xs opacity-60">{sub}</p>}
     </div>
@@ -121,11 +122,13 @@ function UnitRow({ unit, tone, canRestart, busy, onRestart }: {
   );
 }
 
-function InfoView({ info, canRestart, busyUnit, onRestart }: {
+function InfoView({ info, canRestart, busyUnit, onRestart, onTempLimitChanged }: {
   info: SystemInfo;
   canRestart: boolean;
   busyUnit: string | null;
   onRestart: (unit: string) => void;
+  /** Nach einer neuen Temperaturgrenze: die Farbe der Temperatur hängt von ihr ab. */
+  onTempLimitChanged: () => void;
 }): JSX.Element {
   const memUsed = info.mem_total != null && info.mem_available != null ? info.mem_total - info.mem_available : null;
   const memPct = memUsed != null && info.mem_total ? (100 * memUsed) / info.mem_total : null;
@@ -156,11 +159,14 @@ function InfoView({ info, canRestart, busyUnit, onRestart }: {
         <Stat label="Swap" value={swapPct != null ? `${swapPct.toFixed(0)} %` : "keiner"} sub={info.swap_total ? `${formatBytes(info.swap_used)} von ${formatBytes(info.swap_total)}` : undefined} />
         <Stat label="Temperatur" value={info.temperature_c != null ? `${info.temperature_c.toFixed(0)} °C` : "–"} tone={info.temperature_tone} />
       </div>
+      {info.temperature_c != null && (
+        <div className="panel mb-6 p-3"><TempLimit hostId={info.host.id} onChanged={onTempLimitChanged} /></div>
+      )}
 
-      <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider opacity-70">Dateisysteme</h3>
+      <h3 className="mb-2 text-sm font-semibold opacity-70">Dateisysteme</h3>
       <table className="mb-6 w-full text-sm" data-testid="disks">
         <thead>
-          <tr className="border-b border-white/10 text-left text-xs uppercase opacity-60">
+          <tr className="border-b border-white/10 text-left text-xs opacity-60">
             <th className="py-1">Einhängepunkt</th><th className="py-1">Gerät</th><th className="py-1 w-1/3">Belegung</th><th className="py-1">Frei</th>
           </tr>
         </thead>
@@ -181,7 +187,7 @@ function InfoView({ info, canRestart, busyUnit, onRestart }: {
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider opacity-70">Dienste</h3>
+          <h3 className="mb-2 text-sm font-semibold opacity-70">Dienste</h3>
           {info.failed_units.length === 0 ? (
             <p className="text-sm opacity-70">Keine fehlgeschlagenen systemd-Dienste.</p>
           ) : (
@@ -199,7 +205,7 @@ function InfoView({ info, canRestart, busyUnit, onRestart }: {
           )}
         </div>
         <div>
-          <h3 className="mb-2 text-sm font-semibold uppercase tracking-wider opacity-70">Updates</h3>
+          <h3 className="mb-2 text-sm font-semibold opacity-70">Updates</h3>
           {info.updates == null ? (
             <p className="text-sm opacity-70">Paketverwaltung nicht unterstützt (nur apt).</p>
           ) : info.updates.length === 0 ? (
@@ -388,7 +394,7 @@ export function SystemPage(): JSX.Element {
       {tab === "info" && error && <p className="text-sm text-red-400">Fehler: {error}</p>}
       {hostId && tab === "info" && loading && !info && <p className="text-sm opacity-60">Frage den Server ab … (dauert gut eine Sekunde, die CPU-Last wird über 1 s gemessen)</p>}
       {tab === "info" && message && <Notice kind={message.kind} text={message.text} onClose={() => setMessage(null)} />}
-      {tab === "info" && info && <InfoView info={info} canRestart={canRestart} busyUnit={busyUnit} onRestart={(u) => void restartUnit(u)} />}
+      {tab === "info" && info && <InfoView info={info} canRestart={canRestart} busyUnit={busyUnit} onRestart={(u) => void restartUnit(u)} onTempLimitChanged={() => void load(info.host.id)} />}
     </div>
   );
 }

@@ -13,7 +13,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from nodvard_deck.main import _SpaStaticFiles
+from nodvard_deck.main import SPA_CSP, SPA_CSP_REPORT_ONLY, _SpaStaticFiles
 
 
 @pytest.fixture
@@ -91,3 +91,20 @@ def test_an_unknown_api_path_is_an_honest_404_not_the_app(spa_client: TestClient
 
     # Eine Client-Route, die nur mit "api" BEGINNT, bleibt eine Client-Route.
     assert spa_client.get("/apis-uebersicht").status_code == 200
+
+
+def test_html_gets_a_csp_for_styles_and_fonts_and_reports_images_assets_do_not(spa_client: TestClient):
+    for path in ("/", "/settings/appearance"):
+        headers = spa_client.get(path).headers
+        assert headers["content-security-policy"] == SPA_CSP
+        directives = {part.strip() for part in SPA_CSP.split(";")}
+        for directive in (
+            "style-src 'self' 'unsafe-inline'", "font-src 'self' data:", "object-src 'none'", "base-uri 'self'",
+            "form-action 'self'",
+        ):
+            assert directive in directives, directive
+        # Bilder vorerst nur gemeldet, nicht gesperrt.
+        assert "img-src" not in SPA_CSP
+        assert headers["content-security-policy-report-only"] == SPA_CSP_REPORT_ONLY == "img-src 'self' data: blob:"
+    asset = spa_client.get("/assets/app.js").headers
+    assert "content-security-policy" not in asset and "content-security-policy-report-only" not in asset

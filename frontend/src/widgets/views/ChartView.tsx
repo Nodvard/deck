@@ -5,9 +5,9 @@ import type { ChartView as ChartViewSpec, Tone } from "../types";
 
 const TONE_STROKE: Record<Tone, string> = {
   neutral: "#9ca3af",
-  good: "#34d399",
-  warn: "#fbbf24",
-  danger: "#f87171",
+  good: "rgb(var(--emerald-400))",
+  warn: "rgb(var(--amber-400))",
+  danger: "rgb(var(--red-400))",
   accent: "var(--color-accent)",
 };
 

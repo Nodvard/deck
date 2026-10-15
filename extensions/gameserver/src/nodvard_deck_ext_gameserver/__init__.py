@@ -263,7 +263,7 @@ class Extension(NodvardExtension):
         @router.get("/servers/{host_id}")
         async def server_details(host_id: str) -> dict[str, Any]:
             """Details für Leser (`hosts.read`): ohne Server-Log, immer aus dem Zwischenspeicher."""
-            # Log (Spielernamen, Verbindungsdaten) und `fresh` nur mit `hosts.execute`, wie die Logs der Service-Matrix.
+            # Log (Spielernamen, Verbindungsdaten) und `fresh` nur mit `hosts.execute`, wie die Container-Logs im Modul Docker.
             return await _details(host_id, fresh=False, with_log=False)
 
         config_router = APIRouter()

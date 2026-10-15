@@ -256,6 +256,54 @@ describe("Zugangsdaten in der Verbindungskarte", () => {
     expect(within(pw).queryByLabelText("Passwort")).toBeNull();
   });
 
+  it("ein gespeichertes Geheimnis ersetzt der Kern erst mit dem Passwort aus dem Dialog", async () => {
+    const confirmRequired = () => new Response(
+      JSON.stringify({ detail: "Hier sind schon Zugangsdaten hinterlegt. Zum Ersetzen bitte das aktuelle Passwort eingeben.", code: "confirm_required", two_factor: true }),
+      { status: 403 },
+    );
+    const calls = mockApi({
+      "GET /extensions/demo": () => ext(),
+      "GET /extensions/demo/settings": () => settings({ pw: true }),
+      "PUT /extensions/demo/secrets": (body) => ((body as { current_password?: string }).current_password ? undefined : confirmRequired()),
+    });
+    renderConfig();
+    const pw = await screen.findByTestId("secret-pw");
+    fireEvent.click(within(pw).getByRole("button", { name: "Ersetzen" }));
+    fireEvent.change(within(pw).getByLabelText("Passwort"), { target: { value: "neu-geheim" } });
+    fireEvent.click(within(pw).getByRole("button", { name: "Ersetzen" }));
+    const dialog = await screen.findByTestId("identity-dialog");
+    expect(dialog).toHaveTextContent("Zum Ersetzen bitte das aktuelle Passwort eingeben.");
+    const confirm = within(dialog).getByRole("button", { name: "Bestätigen" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Aktuelles Passwort"), { target: { value: "mein-passwort" } });
+    expect(confirm).toBeDisabled(); // mit Zwei-Faktor fehlt noch der Code
+    fireEvent.change(within(dialog).getByLabelText("Code aus der Authenticator-App"), { target: { value: "123456" } });
+    fireEvent.click(confirm);
+    await within(pw).findByText("Ersetzt.");
+    expect(calls.filter((c) => c.method === "PUT").map((c) => c.body)).toEqual([
+      { label: "pw", value: "neu-geheim" },
+      { label: "pw", value: "neu-geheim", current_password: "mein-passwort", totp_code: "123456" },
+    ]);
+  });
+
+  it("bricht man den Passwort-Dialog ab, bleibt das alte Geheimnis", async () => {
+    const calls = mockApi({
+      "GET /extensions/demo": () => ext(),
+      "GET /extensions/demo/settings": () => settings({ pw: true }),
+      "PUT /extensions/demo/secrets": () => new Response(JSON.stringify({ detail: "Passwort?", code: "confirm_required", two_factor: false }), { status: 403 }),
+    });
+    renderConfig();
+    const pw = await screen.findByTestId("secret-pw");
+    fireEvent.click(within(pw).getByRole("button", { name: "Ersetzen" }));
+    fireEvent.change(within(pw).getByLabelText("Passwort"), { target: { value: "neu-geheim" } });
+    fireEvent.click(within(pw).getByRole("button", { name: "Ersetzen" }));
+    const dialog = await screen.findByTestId("identity-dialog");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Abbrechen" }));
+    await waitFor(() => expect(screen.queryByTestId("identity-dialog")).toBeNull());
+    expect(calls.filter((c) => c.method === "PUT")).toHaveLength(1);
+    expect(within(pw).queryByText("Ersetzt.")).toBeNull();
+  });
+
   it("entfernt ein Geheimnis erst nach Rückfrage", async () => {
     const calls = mockApi({
       "GET /extensions/demo": () => ext(),

@@ -1,0 +1,59 @@
+{
+  "1": {
+    "MediaContainer": {
+      "size": 0,
+      "totalSize": 482,
+      "offset": 0,
+      "allowSync": true,
+      "art": "/:/resources/movie-fanart.jpg",
+      "identifier": "com.plexapp.plugins.library",
+      "librarySectionID": 1,
+      "librarySectionTitle": "Filme",
+      "librarySectionUUID": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e10",
+      "mediaTagPrefix": "/system/bundle/media/flags/",
+      "mediaTagVersion": 1759000000,
+      "thumb": "/:/resources/movie.png",
+      "title1": "Filme",
+      "viewGroup": "movie",
+      "viewMode": 65592
+    }
+  },
+  "2": {
+    "MediaContainer": {
+      "size": 0,
+      "totalSize": 37,
+      "offset": 0,
+      "allowSync": true,
+      "art": "/:/resources/show-fanart.jpg",
+      "identifier": "com.plexapp.plugins.library",
+      "librarySectionID": 2,
+      "librarySectionTitle": "Serien",
+      "librarySectionUUID": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e20",
+      "mediaTagPrefix": "/system/bundle/media/flags/",
+      "mediaTagVersion": 1759000000,
+      "thumb": "/:/resources/show.png",
+      "title1": "Serien",
+      "viewGroup": "show",
+      "viewMode": 65592
+    }
+  },
+  "3": {
+    "MediaContainer": {
+      "size": 0,
+      "totalSize": 164,
+      "offset": 0,
+      "allowSync": true,
+      "art": "/:/resources/artist-fanart.jpg",
+      "identifier": "com.plexapp.plugins.library",
+      "librarySectionID": 3,
+      "librarySectionTitle": "Musik",
+      "librarySectionUUID": "6f1c2d3e-4a5b-4c6d-8e7f-0a1b2c3d4e30",
+      "mediaTagPrefix": "/system/bundle/media/flags/",
+      "mediaTagVersion": 1759000000,
+      "thumb": "/:/resources/artist.png",
+      "title1": "Musik",
+      "viewGroup": "artist",
+      "viewMode": 65592
+    }
+  }
+}

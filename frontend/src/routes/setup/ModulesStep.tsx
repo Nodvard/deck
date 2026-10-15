@@ -108,7 +108,7 @@ export function ModulesStep({ onBack, onNext }: { onBack: () => void; onNext: ()
         <div className="space-y-5">
           {groups.map((group) => (
             <section key={group.id} aria-label={group.title}>
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-white/45">{group.title}</h2>
+              <h2 className="text-xs font-semibold text-white/45">{group.title}</h2>
               <ul className="mt-2 grid gap-2 sm:grid-cols-2">
                 {group.rows.map((ext) => {
                   const enabled = ext.state === "enabled";

@@ -1,0 +1,38 @@
+{
+  "OperatingSystemDisplayName": "",
+  "PackageName": "docker",
+  "HasPendingRestart": false,
+  "IsShuttingDown": false,
+  "SupportsLibraryMonitor": true,
+  "WebSocketPortNumber": 8096,
+  "CompletedInstallations": [],
+  "CanSelfRestart": true,
+  "CanLaunchWebBrowser": false,
+  "ProgramDataPath": "/config",
+  "WebPath": "/usr/share/jellyfin/web",
+  "ItemsByNamePath": "/config/metadata",
+  "CachePath": "/cache",
+  "LogPath": "/config/log",
+  "InternalMetadataPath": "/config/metadata",
+  "TranscodingTempPath": "/config/transcodes",
+  "CastReceiverApplications": [
+    {
+      "Id": "F007D354",
+      "Name": "Stable"
+    },
+    {
+      "Id": "6F511C87",
+      "Name": "Unstable"
+    }
+  ],
+  "HasUpdateAvailable": false,
+  "EncoderLocation": "System",
+  "SystemArchitecture": "X64",
+  "LocalAddress": "http://203.0.113.20:8096",
+  "ServerName": "Heimkino",
+  "Version": "10.10.7",
+  "ProductName": "Jellyfin Server",
+  "OperatingSystem": "",
+  "Id": "0a1b2c3d4e5f60718293a4b5c6d7e8f9",
+  "StartupWizardCompleted": true
+}

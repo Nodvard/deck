@@ -217,7 +217,7 @@ export function DashboardPage() {
       <Cockpit />
       <div id="dashboard-widgets" className="scroll-mt-4 px-4 pt-10 sm:px-6">
       <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Widgets</h2>
+        <h2 className="text-sm font-semibold">Widgets</h2>
         {!widgetsLoading && !layoutLoading && layout && (
           <div className="ml-auto">
             <WidgetPickerDialog widgets={widgets ?? []} items={items} onChange={handlePickerChange} open={pickerOpen} onOpenChange={setPickerOpen} />
@@ -259,7 +259,7 @@ export function DashboardPage() {
                   <button
                     type="button"
                     onClick={() => setPickerOpen(true)}
-                    className="accent-gradient inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-white shadow-md shadow-black/30 transition hover:brightness-110"
+                    className="accent-gradient inline-flex items-center justify-center rounded-lg px-3 py-1.5 text-sm font-medium text-on-accent transition hover:bg-accent-strong"
                   >
                     Widgets auswählen
                   </button>

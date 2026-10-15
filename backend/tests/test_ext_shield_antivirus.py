@@ -2185,6 +2185,37 @@ async def test_only_the_watch_reads_the_clamdscan_setting(setting, clamd):
     await engine.dispose()
 
 
+@pytest.mark.asyncio
+async def test_scans_and_the_watch_ask_the_helper_first_with_the_same_settings():
+    """Ohne root-Anmeldung zuerst `shield-root scan`/`watch` (ab Version 6) mit denselben Angaben wie der alte Befehl."""
+    from nodvard_deck_ext_shield.defender import SCAN_LOCK_WAIT_S, SCAN_TIMEOUTS, Defender
+    from nodvard_deck_ext_shield.models import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    ctx = _FakeCtx(async_sessionmaker(engine, expire_on_commit=False), {})
+    settings = {"exclude_paths": ["/srv/a+b"], "watch_use_clamdscan": True, "max_filesize_mb": 70}
+    ctx._settings = lambda: _async_value(settings)
+    ctx.settings = SimpleNamespace(get=ctx._settings)
+    defender = Defender(ctx)
+    for kind in ("quick", "watch"):
+        assert len(await defender.start_scans([ctx._host], kind, paths=None, trigger="manual")) == 1
+        await _wait_idle(defender, ctx._host.id, kind)
+    quick_cmd, watch_cmd = ctx.commands
+    mark = MARK_RE.findall(quick_cmd)[0]
+    limit = SCAN_TIMEOUTS["quick"]
+    old = av.guard_command(av.build_scan_command(av.QUICK_PATHS, max_filesize_mb=70, exclude=["/srv/a+b"], mark=mark),
+                           mark=mark, limit_s=limit, wait_s=SCAN_LOCK_WAIT_S)
+    args = av.scan_helper_args(av.QUICK_PATHS, max_filesize_mb=70, exclude=["/srv/a+b"], mark=mark, limit_s=limit,
+                               wait_s=SCAN_LOCK_WAIT_S)
+    assert quick_cmd == av.via_helper(args, old, version=av.HELPER_SCAN_VERSION, required=False)
+    mark = MARK_RE.findall(watch_cmd)[0]
+    assert f"sudo -n {av.HELPER} watch {mark} {SCAN_TIMEOUTS['watch']} " in watch_cmd
+    assert f" 70 1 /srv/a+b -- {' '.join(av.WATCH_PATHS)}; " in watch_cmd
+    await engine.dispose()
+
+
 async def _async_value(value):
     return value
 

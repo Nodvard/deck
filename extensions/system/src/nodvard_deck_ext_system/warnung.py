@@ -28,6 +28,12 @@ DEFAULT_TEMP_C = 75
 DEFAULT_INTERVAL_MIN = 10
 HYSTERESIS = 5  # Prozentpunkte bzw. Grad, die der Wert wieder darunter liegen muss
 REMIND_S = 24 * 3600
+# Eine Temperatur meldet erst die zweite Messung in Folge über der Grenze, eine kurze Spitze (Backup, Update) bleibt
+# still. Die Messung davor zählt nur, wenn sie höchstens `CONFIRM_WITHIN_S` zurückliegt (größter Prüfabstand 30 Min,
+# dazwischen darf der Server einmal nicht antworten).
+TEMP_CONFIRM = 2
+CONFIRM_WITHIN_S = 2 * 3600
+TEMP_LIMIT_MIN, TEMP_LIMIT_MAX = 40, 110  # wie `warn_temp_c` im Schema
 _PARALLEL_HOSTS = 6  # Server, die gleichzeitig abgefragt werden
 
 # Netzlaufwerke (nfs, cifs, sshfs) fehlen mit Absicht: Ein hängendes Laufwerk würde `df` und damit die ganze Prüfung
@@ -98,18 +104,58 @@ def whole(value: float) -> int:
     return int(value + 0.5)
 
 
-def decide(entry: dict[str, Any] | None, value: float, threshold: float, now: float) -> str | None:
-    """Was tun bei diesem Messwert? "warn", "remind", "recover" oder None."""
+def decide(entry: dict[str, Any] | None, value: float, threshold: float, now: float, *, confirm: int = 1) -> str | None:
+    """Was tun bei diesem Messwert? "warn", "remind", "recover", "wait" (über der Grenze, aber noch nicht `confirm`
+    Messungen in Folge) oder None."""
     # Hysterese: Nach einer Warnung gilt das Problem erst als behoben, wenn der Wert mindestens `HYSTERESIS` unter der
     # Schwelle liegt; ein pendelnder Wert meldet so nicht jedes Mal neu. Ein anhaltendes Problem erinnert nach `REMIND_S`.
     entry = entry or {}
     if not entry.get("alerting"):
-        return "warn" if value >= threshold else None
+        if value < threshold:
+            return None
+        return "warn" if _above_in_a_row(entry, threshold, now) + 1 >= confirm else "wait"
     if value <= threshold - HYSTERESIS:
         return "recover"
     if value >= threshold and now - float(entry.get("last_sent") or 0) >= REMIND_S:
         return "remind"
     return None
+
+
+def _above_in_a_row(entry: dict[str, Any], threshold: float, now: float) -> int:
+    """Wie viele Messungen direkt davor schon über dieser Grenze lagen (0, wenn die letzte zu lange her ist)."""
+    above = entry.get("above")
+    if not isinstance(above, int) or isinstance(above, bool) or above < 0:
+        return 0
+    # Wurde gegen eine andere Grenze gezählt, beginnt die Zählung neu.
+    if entry.get("above_limit") != threshold:
+        return 0
+    return above if now - float(entry.get("above_at") or 0) <= CONFIRM_WITHIN_S else 0
+
+
+def own_temp_limits(settings: dict[str, Any]) -> dict[str, int]:
+    """Die eigenen Temperaturgrenzen je Server (`warn_temp_by_host`, Host-ID -> °C); Unbrauchbares fällt weg."""
+    by_host = settings.get("warn_temp_by_host")
+    if not isinstance(by_host, dict):
+        return {}
+    return {
+        k: v for k, v in by_host.items()
+        if isinstance(k, str) and isinstance(v, int) and not isinstance(v, bool) and TEMP_LIMIT_MIN <= v <= TEMP_LIMIT_MAX
+    }
+
+
+def own_temp_limit(settings: dict[str, Any], host_id: str) -> int | None:
+    """Die eigene Temperaturgrenze dieses Servers oder None, dann gilt `warn_temp_c`."""
+    return own_temp_limits(settings).get(host_id)
+
+
+def global_temp_limit(settings: dict[str, Any]) -> int:
+    return int(settings.get("warn_temp_c") or DEFAULT_TEMP_C)
+
+
+def temp_limit(settings: dict[str, Any], host_id: str) -> int:
+    """Die Grenze, ab der dieser Server warnt: seine eigene, sonst die allgemeine."""
+    own = own_temp_limit(settings, host_id)
+    return own if own is not None else global_temp_limit(settings)
 
 
 # ---------------------------------------------------------------------------
@@ -146,16 +192,19 @@ def disk_notification(kind: str, name: str, host_id: str, disk: dict[str, Any], 
     )
 
 
-def temp_notification(kind: str, name: str, host_id: str, temp: dict[str, Any], threshold: int, *, several: bool, note: str = "") -> Notification:
+def temp_notification(
+    kind: str, name: str, host_id: str, temp: dict[str, Any], threshold: int, *, several: bool, note: str = "", own: bool = False,
+) -> Notification:
     degrees = whole(temp["celsius"])
     where = f" ({temp['label']})" if several else ""
+    limit = f"Warnung ab {threshold} °C" + (", eigene Grenze dieses Servers" if own else "")
     if kind == "recover":
         title = f"{name} wieder im grünen Bereich: {degrees} °C{where}"
-        body = f"Die Temperatur ist wieder auf {degrees} °C gesunken (Warnung ab {threshold} °C)."
+        body = f"Die Temperatur ist wieder auf {degrees} °C gesunken ({limit})."
         severity = Severity.INFO
     else:
         title = f"{name} ist heiß: {degrees} °C{where}"
-        body = f"Sensor {temp['label']}: {degrees} °C. Warnung ab {threshold} °C. Lüfter, Staub und Belüftung prüfen."
+        body = f"Sensor {temp['label']}: {degrees} °C. {limit}. Lüfter, Staub und Belüftung prüfen."
         severity = Severity.WARNING
     return Notification(
         title=title, body=f"{body}\n{note}" if note else body, severity=severity,
@@ -217,13 +266,21 @@ async def _window_over(ctx: "ExtensionContext", host_id: str) -> bool:
         return True
 
 
-async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_id: str, value: float, threshold: int, now: float, build: Any) -> int:
+async def _step(
+    ctx: "ExtensionContext", state: dict[str, Any], key: str, host_id: str, value: float, threshold: int, now: float, build: Any,
+    *, confirm: int = 1,
+) -> int:
     """Prüft einen Messwert gegen seinen Zustand, liefert die Zahl gesendeter Meldungen; `build(kind, note)` baut sie."""
     # Eine im Wartungsfenster stumm geschaltete Meldung (`muted`) wird nur still vermerkt; ist das Fenster vorbei und
     # das Problem noch da, kommt sie einmal hörbar nach. Eine gehörte Warnung bekommt immer eine gehörte Entwarnung.
     entry = state.get(key)
-    action = decide(entry, value, threshold, now)
+    action = decide(entry, value, threshold, now, confirm=confirm)
     sent = 0
+    if action == "wait":
+        # Über der Grenze, aber noch nicht oft genug in Folge: nur mitzählen.
+        counted = _above_in_a_row(entry or {}, threshold, now)
+        state[key] = {**(entry or {}), "above": counted + 1, "above_at": now, "above_limit": threshold, "value": value}
+        return 0
     if action in ("warn", "remind"):
         muted = await _send(ctx, build("warn", "Die Warnung besteht weiterhin (Erinnerung nach 24 Stunden)." if action == "remind" else ""))
         if muted is None:
@@ -242,6 +299,10 @@ async def _step(ctx: "ExtensionContext", state: dict[str, Any], key: str, host_i
     if entry is None:
         return 0
     entry["value"] = value
+    if not entry.get("alerting"):
+        # Unter der Grenze: die Zählung von vorn (`decide` liefert ohne Warnung über der Grenze nie None).
+        for stale in ("above", "above_at", "above_limit"):
+            entry.pop(stale, None)
     if entry.get("alerting") and value >= threshold and entry.get("muted") and await _window_over(ctx, host_id):
         # Im Fenster nur still gemeldet, Fenster vorbei, Problem besteht noch: einmal hörbar.
         muted = await _send(ctx, build("warn", "Das begann im Wartungsfenster (dort nur im Verlauf, ohne Push) und hält noch an."))
@@ -277,7 +338,6 @@ async def run_warnungen(ctx: "ExtensionContext") -> dict[str, int]:
     disk_on = settings.get("warn_disk_enabled", True) is not False
     temp_on = settings.get("warn_temp_enabled", True) is not False
     disk_limit = int(settings.get("warn_disk_percent") or DEFAULT_DISK_PERCENT)
-    temp_limit = int(settings.get("warn_temp_c") or DEFAULT_TEMP_C)
     if not (disk_on or temp_on):
         return {"checked": 0, "unreachable": 0, "notified": 0}
 
@@ -312,10 +372,13 @@ async def run_warnungen(ctx: "ExtensionContext") -> dict[str, int]:
                 )
         if temp_on:
             several = len(reading["temps"]) > 1
+            limit, own = temp_limit(settings, host.id), own_temp_limit(settings, host.id) is not None
             for temp in reading["temps"]:
                 sent += await _step(
-                    ctx, state, f"{host.id}|temp|{temp['sensor']}", host.id, whole(temp["celsius"]), temp_limit, now,
-                    lambda kind, note, t=temp: temp_notification(kind, name, host.id, t, temp_limit, several=several, note=note),
+                    ctx, state, f"{host.id}|temp|{temp['sensor']}", host.id, whole(temp["celsius"]), limit, now,
+                    lambda kind, note, t=temp, limit=limit, own=own: temp_notification(
+                        kind, name, host.id, t, limit, several=several, note=note, own=own),
+                    confirm=TEMP_CONFIRM,
                 )
     try:
         _save(path, state)

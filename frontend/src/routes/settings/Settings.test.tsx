@@ -74,7 +74,7 @@ describe("Einstellungen", () => {
     expect(nav.getByText("Mein Konto")).toBeInTheDocument();
     expect(nav.getByText("Protokoll")).toBeInTheDocument();
     expect(nav.queryByText("Benutzer")).not.toBeInTheDocument();
-    expect(nav.queryByText("Aussehen")).not.toBeInTheDocument();
+    expect(nav.getByText("Darstellung")).toBeInTheDocument();
     expect(nav.queryByText("System")).not.toBeInTheDocument();
   });
 
@@ -514,6 +514,77 @@ describe("Einstellungen", () => {
     expect(screen.getByTestId("disable-2fa")).toBeInTheDocument();
   });
 
+  it("Darstellung: Theme wählen gilt sofort und wird im Konto gespeichert", async () => {
+    let patchBody: unknown = null;
+    mockApi({ "PATCH /me/preferences": (_m, body) => { patchBody = body; return { first_steps_dismissed: false, ...(body as object) }; } });
+    render(<AppearanceSettings />);
+    expect(screen.getByRole("radio", { name: /Schlicht dunkel/ })).toHaveAttribute("aria-checked", "true");
+    fireEvent.click(screen.getByRole("radio", { name: /Klassisch hell/ }));
+    expect(document.documentElement.dataset.theme).toBe("classic");
+    await waitFor(() => expect(patchBody).toEqual({ theme: "classic" }));
+    expect(screen.getByRole("radio", { name: /Klassisch hell/ })).toHaveAttribute("aria-checked", "true");
+    delete document.documentElement.dataset.theme;
+  });
+
+  it("Darstellung: ohne Branding-Recht nur das Theme", () => {
+    setUser(["audit.read"]);
+    mockApi({});
+    render(<AppearanceSettings />);
+    expect(screen.getByRole("radiogroup", { name: "Theme" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Branding" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Speichern" })).toBeNull();
+  });
+
+  it("Darstellung: eigenes CSS lädt erst beim Öffnen, speichert und zeigt die Ablehnung des Servers", async () => {
+    let stored = ":root { --color-accent: #e11d48; }";
+    const calls = mockApi({
+      "GET /branding/custom-css": () => ({ css: stored }),
+      "PUT /branding/custom-css": (_m, body) => {
+        const css = (body as { css: string }).css;
+        if (css.includes("@import")) throw new Error("„@import“ ist im eigenen CSS nicht erlaubt.");
+        stored = css;
+        return { css };
+      },
+    });
+    render(<AppearanceSettings />);
+    expect(calls.filter((c) => c.path === "/branding/custom-css")).toHaveLength(0);
+    fireEvent.click(screen.getByRole("button", { name: "Bearbeiten" }));
+    const editor = await screen.findByLabelText("Eigenes CSS");
+    expect(editor).toHaveValue(stored);
+
+    fireEvent.change(editor, { target: { value: ".panel { border-radius: 0; }" } });
+    fireEvent.click(within(editor.closest("section")!).getByRole("button", { name: "Speichern" }));
+    await screen.findByText(/das eigene CSS gilt jetzt für alle/);
+    expect(stored).toBe(".panel { border-radius: 0; }");
+    expect(document.getElementById("custom-css")?.getAttribute("href")).toMatch(/^\/api\/v1\/branding\/custom\.css\?v=\d+$/);
+
+    fireEvent.change(editor, { target: { value: "@import 'https://example.com/a.css';" } });
+    fireEvent.click(within(editor.closest("section")!).getByRole("button", { name: "Speichern" }));
+    expect(await screen.findByText(/@import/, { selector: "p, span, div" })).toBeInTheDocument();
+    document.getElementById("custom-css")?.remove();
+  });
+
+  it("Darstellung: zeigt, wenn das eigene CSS in diesem Tab über den Notausgang aus ist, und schaltet es wieder ein", () => {
+    window.history.replaceState(null, "", "/settings/appearance?ohne-css=1");
+    mockApi({});
+    render(<AppearanceSettings />);
+    expect(screen.getByRole("status")).toHaveTextContent(/In diesem Tab ist das eigene CSS abgeschaltet/);
+    fireEvent.click(screen.getByRole("button", { name: "Wieder einschalten" }));
+    expect(screen.queryByText(/In diesem Tab ist das eigene CSS abgeschaltet/)).toBeNull();
+    expect(window.location.search).toBe("");
+    expect(document.getElementById("custom-css")).not.toBeNull();
+    document.getElementById("custom-css")?.remove();
+    window.sessionStorage.clear();
+    window.history.replaceState(null, "", "/");
+  });
+
+  it("Darstellung: eigenes CSS nur mit Branding-Recht", () => {
+    setUser(["audit.read"]);
+    mockApi({});
+    render(<AppearanceSettings />);
+    expect(screen.queryByText("Eigenes CSS")).toBeNull();
+  });
+
   it("Aussehen: Logo-Upload, falscher Bildtyp und Speichern aller Felder", async () => {
     let putBody: Record<string, unknown> | null = null;
     const calls = mockApi({
@@ -541,6 +612,49 @@ describe("Einstellungen", () => {
       product_name: "Muster GmbH", support_url: "mailto:it@muster.de", logo_url: "/api/v1/branding/logo",
       colors: { accent: "#e11d48", accent_strong: "#7c3aed" },
     });
+  });
+
+  it("Aussehen: Favicon hochladen statt Adresse eintragen, .ico ohne Typ geht auch", async () => {
+    const calls = mockApi({
+      "POST /branding/favicon": () => ({ ...BRANDING, favicon_url: "/api/v1/branding/favicon" }),
+    });
+    render(<AppearanceSettings />);
+    expect(screen.queryByPlaceholderText("https://…/favicon.png")).toBeNull();
+    expect(screen.getByText("kein eigenes Favicon")).toBeInTheDocument();
+
+    const input = screen.getByLabelText("Favicon-Datei") as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [new File(["GIF89a"], "x.gif", { type: "image/gif" })] } });
+    await screen.findByText(/Nicht unterstützter Bildtyp: image\/gif/);
+    expect(calls).toHaveLength(0);
+
+    fireEvent.change(input, { target: { files: [new File(["\0\0\x01\0"], "favicon.ico", { type: "" })] } });
+    await screen.findByText("Favicon hochgeladen.");
+    expect(calls).toHaveLength(1);
+    expect(useBrandingStore.getState().branding?.favicon_url).toBe("/api/v1/branding/favicon");
+    expect(screen.getByAltText("Aktuelles Favicon").getAttribute("src")).toMatch(/^\/api\/v1\/branding\/favicon\?v=\d+$/);
+    expect(screen.getByRole("button", { name: /Entfernen/ })).toBeInTheDocument();
+  });
+
+  it("Aussehen: alte fremde Adressen für Logo und Favicon zeigen einen Hinweis statt eines kaputten Bildes", async () => {
+    let putBody: Record<string, unknown> | null = null;
+    useBrandingStore.setState({
+      branding: { ...BRANDING, logo_url: "https://cdn.example.org/logo.png", favicon_url: "https://cdn.example.org/favicon.png" },
+      loaded: true,
+    });
+    mockApi({ "PUT /branding": (_m, body) => { putBody = body as Record<string, unknown>; return body; } });
+    render(<AppearanceSettings />);
+    expect(screen.queryByAltText("Aktuelles Logo")).toBeNull();
+    expect(screen.queryByAltText("Aktuelles Favicon")).toBeNull();
+    // Die alte Adresse steht im Hinweis, damit man das Bild dort holen und hochladen kann.
+    const hints = screen.getAllByRole("status").map((el) => el.textContent ?? "");
+    expect(hints).toContainEqual(expect.stringMatching(/^Das Logo liegt auf einer fremden Adresse \(https:\/\/cdn\.example\.org\/logo\.png\)/));
+    expect(hints).toContainEqual(expect.stringMatching(/^Das Favicon liegt auf einer fremden Adresse \(https:\/\/cdn\.example\.org\/favicon\.png\)/));
+
+    // Andere Felder lassen sich trotzdem speichern, der alte Wert geht unverändert mit.
+    fireEvent.change(screen.getByDisplayValue("Alt-Name"), { target: { value: "Neu" } });
+    fireEvent.click(screen.getByRole("button", { name: "Speichern" }));
+    await screen.findByText("Gespeichert.");
+    expect(putBody).toMatchObject({ product_name: "Neu", favicon_url: "https://cdn.example.org/favicon.png" });
   });
 
   it("Aussehen: die kleine Zeile unter dem Namen heißt „Untertitel“, nicht „Kurzname“ (so heißt bei Servern die feste Kennung)", () => {
@@ -1034,6 +1148,7 @@ describe("Protokoll", () => {
       ["host.setup_with_password", "Server mit Passwort einrichten"],
       ["extension.enabled", "Erweiterung eingeschaltet"], ["extension.disabled", "Erweiterung ausgeschaltet"],
       ["extension.auto_enabled", "Erweiterung automatisch eingeschaltet"],
+      ["extension.adopted", "Erweiterung übernimmt Einstellungen eines anderen Moduls"],
       ["proxmox.connect_with_password", "Proxmox mit Passwort verbinden"],
       ["backups.connection_received", "Proxmox-Backups: Zugang übernommen"],
       ["proxmox.certificate_confirmed", "Proxmox: Fingerabdruck des Zertifikats bestätigt"],

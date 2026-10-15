@@ -9,7 +9,7 @@ const page = (ext_id: string, id: string, path: string, title: string, icon: str
 const PAGES = [
   page("proxmox", "nodes", "/nodes", "Proxmox", "server", "Infrastruktur", 10),
   page("backups", "backups", "/backups", "Proxmox-Backups", "database-backup", "Infrastruktur", 20),
-  page("service-matrix", "matrix", "/matrix", "Service-Matrix", "layout-grid", "Infrastruktur", 30),
+  page("docker", "matrix", "/matrix", "Docker", "layout-grid", "Infrastruktur", 30),
   { ...page("gameserver", "servers", "/gameservers", "Gameserver", "gamepad-2", "Infrastruktur", 40), stage: "beta" },
   page("shield", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
   page("scripts", "scripts", "/scripts", "Skripte", "terminal-square", "Automatisierung", 20),
@@ -89,7 +89,7 @@ function hostTools(id: string) {
     tools.push({ ext_id: "system", id: "system", title: "Server-Zustand", description: "Live wie im Task-Manager: Kerne, Temperaturen, Platten, Netz, Prozesse", icon: "cpu", category: "monitoring", href: `/ext/system/system?host=${id}`, order: 50 });
   }
   if ((h.tags as string[]).includes("docker") && !previewState.ohneProxmoxMin) {
-    tools.push({ ext_id: "service-matrix", id: "containers", title: "Container", description: "Docker-Container starten, stoppen, Live-Logs", icon: "layout-grid", category: "services", href: `/ext/service-matrix/matrix?host=${id}`, order: 100 });
+    tools.push({ ext_id: "docker", id: "containers", title: "Container", description: "Docker-Container starten, stoppen, Live-Logs", icon: "layout-grid", category: "services", href: `/ext/docker/matrix?host=${id}`, order: 100 });
   }
   return tools;
 }
@@ -223,7 +223,7 @@ const WIDGETS = [
     kind: "list", empty_text: "Keine offenen Vorfälle", max_items: null,
     item: listItem("{{ title }}", "{{ host }}", { text: "{{ status_label }}", tone: "{{ tone }}" }),
   }),
-  w("service-matrix", "matrix", "Service-Matrix", "layout-grid", "widgets/matrix", {
+  w("docker", "matrix", "Container", "layout-grid", "widgets/matrix", {
     kind: "status_grid", tile_title: "{{ name }}", tile_subtitle: "{{ host }}", tile_tone: "{{ tone }}", tile_link: null,
   }),
 ];
@@ -262,7 +262,7 @@ const WIDGET_DATA: Record<string, unknown> = {
   "/ext/shield/widgets/incidents": [
     { title: "Container 'clamav' beendet (Exit 137)", host: "docker", status_label: "Vorschlag", tone: "warn" },
   ],
-  "/ext/service-matrix/widgets/matrix": OVERVIEW.services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
+  "/ext/docker/widgets/matrix": OVERVIEW.services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
 };
 
 const GAMESERVER = {
@@ -473,7 +473,7 @@ export const previewState: {
   restore: "" | "uploaded" | "ready" | "pending" | "result" | "replaced";
   /** `?scenario=ohne-proxmox`: nur von Hand angelegte Server mit SSH-Zugang, Proxmox VE und Proxmox-Backups aus. */
   ohneProxmox: boolean;
-  /** `?scenario=ohne-proxmox-min`: wie oben, aber auch Server-Zustand, Service-Matrix & Co. aus (nur Terminal/Dateien). */
+  /** `?scenario=ohne-proxmox-min`: wie oben, aber auch Server-Zustand, Docker & Co. aus (nur Terminal/Dateien). */
   ohneProxmoxMin: boolean;
   /** `?scenario=keine-apps`: Server da, aber weder erkannte Dienste noch eigene Apps (kein Modul fuer Container) -- der Leerzustand von „Apps“. */
   noApps: boolean;
@@ -481,7 +481,13 @@ export const previewState: {
   customApps: PreviewApp[] | null;
   /** Update-Helfer (Einstellungen -> System): `?scenario=helfer-<zustand>`, siehe `HELPER_SCENARIOS`; leer = kein Helfer erwähnt (wie bisher). */
   helper: HelperScenario | "";
-} = { scenario: "ok", noHosts: false, start: false, firstStepsDismissed: false, setup: false, demo: false, restore: "", ohneProxmox: false, ohneProxmoxMin: false, noApps: false, customApps: null, helper: "" };
+  /** `?theme=classic|simple|pro|original`: Theme der Vorschau. */
+  theme: string;
+  /** Eigenes CSS unter Einstellungen, Darstellung (nur in der Vorschau gespeichert, nicht angewendet). */
+  customCss: string;
+  /** `?scenario=neues-aussehen`: false = Hinweis „Deck hat ein neues Aussehen.“ noch offen. */
+  designNoticeDismissed: boolean;
+} = { scenario: "ok", noHosts: false, start: false, firstStepsDismissed: false, setup: false, demo: false, restore: "", ohneProxmox: false, ohneProxmoxMin: false, noApps: false, customApps: null, helper: "", theme: "simple", customCss: "", designNoticeDismissed: true };
 
 /** Eine eigene App, wie `GET /apps` sie liefert (ohne die Zeitstempel). */
 interface PreviewApp {
@@ -492,7 +498,7 @@ const previewApp = (id: string, name: string, url: string, icon: string | null, 
   id, name, url, icon, color: extra.color ?? null, group, open_in_new_tab: extra.tab ?? true, host_id: extra.host_id ?? null, sort_order: 0,
 });
 
-/** Ausgangsstand eigener Apps: ein typisches Homelab, das keine Service-Matrix fuer Router und Co. hat. */
+/** Ausgangsstand eigener Apps: ein typisches Homelab, das kein Docker-Modul fuer Router und Co. hat. */
 function initialCustomApps(): PreviewApp[] {
   if (previewState.noHosts || previewState.noApps) return [];
   return [
@@ -598,18 +604,18 @@ const SETUP_MODULES = [
   {"id": "gameserver", "name": "Gameserver", "description": "Gameserver starten und stoppen und den aktuellen Beitritts-Code anzeigen (z. B. Valheim). Server werden über eine Markierung (Tag) erkannt.", "icon": "gamepad-2", "category": "servers", "sort_order": 60, "stage": "beta"},
   {"id": "hello-world", "name": "Hello World", "description": "Beispiel-Erweiterung für Nodvard Deck, gedacht für Entwickler. Zeigt, wie eigene Seiten, Kacheln und Aufgaben eingebunden werden – im Alltag nicht nötig.", "icon": "sparkles", "category": "example", "sort_order": 10},
   {"id": "inventory", "name": "Inventar", "description": "Inventar für Geräte und Gegenstände: Standorte, Kategorien, Kaufpreis, Garantie mit Ablaufwarnung, Fotos und CSV-Export.", "icon": "package", "category": "tools", "sort_order": 30},
-  {"id": "network", "name": "Netzwerk", "description": "Pi-hole und Nginx Proxy Manager auf einen Blick: Anfragen und Blockierung, Proxy-Hosts und ablaufende Zertifikate. Blockierung pausieren und Proxy-Hosts ein- oder ausschalten – über die Freigabe.", "icon": "activity", "category": "servers", "sort_order": 70, "stage": "beta"},
+  {"id": "network", "name": "Netzwerk", "description": "Wegweiser: Pi-hole und Nginx Proxy Manager sind jetzt eigene Module. Dieses Modul kann ausgeschaltet bleiben.", "icon": "activity", "category": "servers", "sort_order": 70, "stage": "beta"},
   {"id": "nextcloud", "name": "Nextcloud", "description": "Bindet deine Nextcloud in den Dateimanager von Nodvard Deck ein: Dateien ansehen, hoch- und herunterladen und zwischen Servern kopieren.", "icon": "cloud", "category": "connections", "sort_order": 20},
   {"id": "shield", "name": "Nodvard Shield", "description": "Virenschutz für alle Server: ClamAV-Scans mit Zeitplan, Echtzeit-Wächter, Quarantäne, Lynis-Härtungsaudits – dazu die KI-Container-Wache (Nodvard KI), die abgestürzte Docker-Container erkennt und Lösungen vorschlägt.", "icon": "shield-alert", "category": "security", "sort_order": 10},
   {"id": "ntfy", "name": "ntfy-Benachrichtigungen", "description": "Schickt Meldungen von Nodvard Deck als Push-Nachricht aufs Handy über ntfy (ntfy.sh oder eigener Server).", "icon": "bell", "category": "connections", "sort_order": 10},
   {"id": "proxmox", "name": "Proxmox VE", "description": "Liest deine Proxmox-Server mit allen VMs und Containern in Nodvard Deck ein: Auslastung, Start/Stopp/Neustart, Snapshots, Konsole und Speicher-Übersicht.", "icon": "server", "category": "servers", "sort_order": 40},
   {"id": "scripts", "name": "Skripte", "description": "Eigene Skripte zentral verwalten, versionieren und auf einem, mehreren oder allen Servern ausführen – sofort oder nach Zeitplan.", "icon": "terminal-square", "category": "tools", "sort_order": 10},
-  {"id": "service-matrix", "name": "Service-Matrix", "description": "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen und neu starten. Auf Wunsch zeigt sie, für welche Container es neuere Images gibt – und spielt sie bei Compose-Diensten auf Knopfdruck ein.", "icon": "layout-grid", "category": "servers", "sort_order": 30},
+  {"id": "docker", "name": "Docker", "description": "Findet Docker-Container auf markierten Servern und zeigt sie als Kacheln mit Status. Container lassen sich starten, stoppen und neu starten. Auf Wunsch zeigt das Modul, für welche Container es neuere Images gibt – und spielt sie bei Compose-Diensten auf Knopfdruck ein.", "icon": "layout-grid", "category": "servers", "sort_order": 30},
   {"id": "system", "name": "Server-Zustand", "description": "Zustand eines Linux-Servers auf einer Seite: Auslastung live und im Verlauf, Temperaturen, Speicherplatz, Dienste (mit Neustart über die Freigabe), Updates und Prozesse.", "icon": "cpu", "category": "servers", "sort_order": 10},
   {"id": "terminal", "name": "Terminal", "description": "Web-Terminal und Dateizugriff per SSH direkt im Browser, mit mehreren Sitzungen gleichzeitig.", "icon": "terminal", "category": "servers", "sort_order": 20},
 ];
 /** Module, die nach dem Einschalten noch Angaben brauchen (wie im echten Backend: Pflichtfelder fehlen). */
-const SETUP_NEEDS_SETUP = new Set(["backups", "network", "nextcloud", "shield", "ntfy", "proxmox", "service-matrix"]);
+const SETUP_NEEDS_SETUP = new Set(["backups", "network", "nextcloud", "shield", "ntfy", "proxmox", "docker"]);
 const setupState = { enabled: new Set<string>(), totp: false, timezone: "UTC" };
 
 /** Antworten des Assistenten, der nach dem Konto Module, Zeitzone und Zwei-Faktor anfasst. */
@@ -665,7 +671,7 @@ const EMPTY_OVERVIEW = {
 /** Gruppe und Reihenfolge der Module in den Listen (wie im Manifest: `category`, `sort_order`). */
 const MODULE_META: Record<string, { category: string; sort_order: number; stage?: string }> = {
   system: { category: "servers", sort_order: 10 }, terminal: { category: "servers", sort_order: 20 },
-  "service-matrix": { category: "servers", sort_order: 30 }, proxmox: { category: "servers", sort_order: 40 },
+  docker: { category: "servers", sort_order: 30 }, proxmox: { category: "servers", sort_order: 40 },
   backups: { category: "servers", sort_order: 50 }, gameserver: { category: "servers", sort_order: 60, stage: "beta" },
   shield: { category: "security", sort_order: 10 },
   scripts: { category: "tools", sort_order: 10 }, documents: { category: "tools", sort_order: 20 }, inventory: { category: "tools", sort_order: 30 },
@@ -677,7 +683,7 @@ const NTFY = { id: "ntfy", name: "ntfy-Benachrichtigungen", description: "Push-N
 const REQUIREMENTS = [
   { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen, Quarantäne, Härtungs-Audit, Fail2ban", order: 50 },
   { ext_id: "system", id: "root", label: "Root-Rechte (Server-Zustand)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Dienste neu starten", order: 60 },
-  { ext_id: "service-matrix", id: "docker-group", label: "Docker ohne sudo (Service-Matrix)", check_command: "docker ps -q", ok_text: "Docker ist erreichbar.", fail_hint: "Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
+  { ext_id: "docker", id: "docker-group", label: "Docker ohne sudo (Container-Verwaltung)", check_command: "docker ps -q", ok_text: "Docker ist erreichbar.", fail_hint: "Benutzer zur Gruppe docker hinzufügen: sudo usermod -aG docker {user}", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
 ];
 
 function hostRequirements(id: string) {
@@ -757,7 +763,7 @@ function checkResult(hostId: string) {
       { id: "host_key", label: "Server-Schlüssel", status: "ok", detail: "Bekannt (ssh-ed25519).", hint: "" },
       { id: "login", label: `Anmeldung als ${user}`, status: "ok", detail: "Mit Schlüssel angemeldet.", hint: "" },
       { id: "root", label: "Root-Rechte (für Updates einspielen, Quarantäne, Dienste neu starten)", status: "warn", detail: "sudo verlangt ein Passwort.", hint: "Einrichtungsbefehl mit „Root-Rechte ohne Passwort“ erneut ausführen." },
-      { id: "req:service-matrix:docker-group", label: "Docker ohne sudo (Service-Matrix)", status: "ok", detail: "Docker ist erreichbar.", hint: "" },
+      { id: "req:docker:docker-group", label: "Docker ohne sudo (Container-Verwaltung)", status: "ok", detail: "Docker ist erreichbar.", hint: "" },
       { id: "os", label: "Betriebssystem", status: "ok", detail: "Debian GNU/Linux 12 (bookworm) · aarch64 · Raspberry Pi 4 Model B Rev 1.4", hint: "" },
     ],
   };
@@ -983,7 +989,7 @@ export const RESTORE_ID = "c0ffee00c0ffee00c0ffee00c0ffee00";
 const RESTORE_SUMMARY = {
   created_at: "2026-09-30T00:30:41Z", app_version: "0.5.0", instance_id: "9d41c7a2e0b84f6aa1d3b5c8e7f20416", mode: "passwort", owner_name: "admin",
   users: 3, hosts: 11,
-  extensions: ["proxmox", "backups", "system", "terminal", "service-matrix", "shield", "ntfy"].map((id) => ({ id, version: "0.5.0" })),
+  extensions: ["proxmox", "backups", "system", "terminal", "docker", "shield", "ntfy"].map((id) => ({ id, version: "0.5.0" })),
   includes: { runs: false, branding: true, jwt_secret: true },
   warnings: [
     "Die Sicherung stammt aus Version 0.4.2, installiert ist 0.5.0. Beim Start werden die Daten auf den neuen Stand gebracht.",
@@ -1175,7 +1181,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p === "/ext/gameserver/servers") return previewState.noHosts ? [] : [GAMESERVER];
   if (previewState.noHosts && p.startsWith("/hosts?tag=")) return [];
   if (previewState.noHosts && p === "/ext/proxmox/connections") return [];
-  if (previewState.noHosts && p.startsWith("/ext/service-matrix/widgets/matrix")) return { data: [], meta: {} };
+  if (previewState.noHosts && p.startsWith("/ext/docker/widgets/matrix")) return { data: [], meta: {} };
   if (p.startsWith("/ext/gameserver/servers/")) return GAMESERVER;
   if (p === "/ext/gameserver/profiles") {
     return [{ id: "valheim-windows", label: "Valheim (Windows-Dienst)", fields: [
@@ -1429,7 +1435,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
   if (p === "/extensions" && previewState.ohneProxmox) return ohneProxmoxExtensions();
   if (p === "/extensions") return [
     ...PAGES.map((pg) => ({
-      id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "shield", "gameserver", "service-matrix"].includes(pg.ext_id),
+      id: pg.ext_id, version: "1.0.0", api_version: "0.1.0", source: "bundled", bundled: true, display_version: "0.6.0", has_settings: ["proxmox", "backups", "shield", "gameserver", "docker"].includes(pg.ext_id),
       state: previewState.noHosts ? "disabled" : pg.ext_id === "shield" ? "disabled" : pg.ext_id === "gameserver" ? "error" : "enabled",
       name: pg.title, description: `Modul ${pg.title}`, icon: pg.icon, granted_permissions: [], ...MODULE_META[pg.ext_id],
       last_error: !previewState.noHosts && pg.ext_id === "gameserver" ? "on_start() fehlgeschlagen: Verbindung zu game-win abgelehnt" : null,
@@ -1442,9 +1448,20 @@ export function respond(path: string, method: string, body?: unknown): unknown {
       setup_reasons: previewState.start ? ["„ntfy-Server“ ist noch nicht ausgefüllt."] : [],
     },
   ];
+  if (p === "/branding/custom-css") {
+    if (method === "PUT") previewState.customCss = (body as { css: string }).css;
+    return { css: previewState.customCss };
+  }
   if (p === "/me/preferences") {
-    if (method === "PATCH") previewState.firstStepsDismissed = (body as { first_steps_dismissed?: boolean }).first_steps_dismissed ?? previewState.firstStepsDismissed;
-    return { first_steps_dismissed: previewState.firstStepsDismissed };
+    const patch = (method === "PATCH" ? body : {}) as { first_steps_dismissed?: boolean; theme?: string; design_notice_dismissed?: boolean };
+    previewState.firstStepsDismissed = patch.first_steps_dismissed ?? previewState.firstStepsDismissed;
+    previewState.theme = patch.theme ?? previewState.theme;
+    previewState.designNoticeDismissed = patch.design_notice_dismissed ?? previewState.designNoticeDismissed;
+    return {
+      first_steps_dismissed: previewState.firstStepsDismissed,
+      theme: previewState.theme,
+      design_notice_dismissed: previewState.designNoticeDismissed,
+    };
   }
   if (p.startsWith("/audit")) return [
     { id: "a1", ts: "2026-09-25T20:15:00Z", actor_type: "user", actor_id: "u1", action: "login.succeeded", target_type: null, target_id: null, outcome: "success", reason: null, detail: {}, correlation_id: null, ip: "192.168.2.77", user_agent: "Chrome" },
@@ -1456,7 +1473,7 @@ export function respond(path: string, method: string, body?: unknown): unknown {
     return {
       product_name: "Nodvard Deck", short_name: "Nodvard Deck", logo_url: null, favicon_url: null,
       login_subtitle: null, support_url: null,
-      colors: { accent: "#e11d48", accent_strong: "#7c3aed", background: "#0b0f17", surface: "#121826", text: "#e5e7eb" },
+      colors: { accent: "#0ea5e9", accent_strong: "#0369a1", background: "#0b1220", surface: "#111a2b", text: "#e6ebf5" },
     };
   }
   if (p === "/pages") return previewState.noHosts ? [] : PAGES;
@@ -1516,7 +1533,7 @@ const SHIELD_SCHEMA = {"type": "object", "properties": {"ollama_url": {"type": "
 // Vier von Hand angelegte Server mit SSH-Zugang (Raspberry Pi, Debian-VM, NAS, Spiele-PC), die
 // Module Proxmox VE und Proxmox-Backups sind aus. Die Server haben nie „Verbindung prüfen“ erlebt, ausser
 // dem Pi -- so sieht es aus, solange nichts den Zustand von Hand angelegter Server nachführt.
-// Bei `-min` sind auch Server-Zustand, Service-Matrix, Nodvard Shield & Co. aus (nur Terminal/Dateien laufen).
+// Bei `-min` sind auch Server-Zustand, Docker, Nodvard Shield & Co. aus (nur Terminal/Dateien laufen).
 // ---------------------------------------------------------------------------
 
 const KEY_PW: PreviewCredential = { kind: "ssh_password", username: "admin", port: 22 };
@@ -1569,7 +1586,7 @@ function ohneProxmoxExtensions() {
   return [
     row("terminal", "Terminal", "terminal", "enabled"),
     row("system", "Server-Zustand", "cpu", on),
-    row("service-matrix", "Service-Matrix", "layout-grid", on, true),
+    row("docker", "Docker", "layout-grid", on, true),
     row("proxmox", "Proxmox VE", "server", "disabled", true),
     row("backups", "Proxmox-Backups", "database-backup", "disabled", true),
     row("gameserver", "Gameserver", "gamepad-2", "disabled", true),
@@ -1601,7 +1618,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
   PAGES.splice(0, PAGES.length,
     ...(on ? [
       page("system", "system", "/system", "Server-Zustand", "cpu", "Infrastruktur", 10),
-      page("service-matrix", "matrix", "/matrix", "Service-Matrix", "layout-grid", "Infrastruktur", 30),
+      page("docker", "matrix", "/matrix", "Docker", "layout-grid", "Infrastruktur", 30),
       page("shield", "soc", "/soc", "Nodvard Shield", "shield-alert", "Sicherheit", 20),
       page("scripts", "scripts", "/scripts", "Skripte", "terminal-square", "Automatisierung", 20),
     ] : []),
@@ -1625,7 +1642,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
       kind: "list", empty_text: "Keine Linux-Server mit SSH-Zugang", max_items: null,
       item: listItem("{{ name }}", "{{ summary }}", { text: "{{ badge }}", tone: "{{ tone }}" }),
     }),
-    w("service-matrix", "matrix", "Service-Matrix", "layout-grid", "widgets/matrix", {
+    w("docker", "matrix", "Container", "layout-grid", "widgets/matrix", {
       kind: "status_grid", tile_title: "{{ name }}", tile_subtitle: "{{ host }}", tile_tone: "{{ tone }}", tile_link: null,
     }),
     w("shield", "incidents", "Vorfälle", "shield-alert", "widgets/incidents", {
@@ -1641,7 +1658,7 @@ export function applyOhneProxmox(min: boolean, many = false): void {
       { name: "Debian-VM", summary: "Debian 12 · CPU 2 % · RAM 31 % · Platte 52 %", badge: "gut", tone: "good" },
       { name: "NAS", summary: "Debian 12 · CPU 1 % · RAM 18 % · Platte 78 %", badge: "gut", tone: "good" },
     ],
-    "/ext/service-matrix/widgets/matrix": services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
+    "/ext/docker/widgets/matrix": services.map((sv) => ({ name: sv.name, host: sv.host, tone: sv.tone })),
     "/ext/shield/widgets/incidents": [],
   });
   for (const key of Object.keys(LATEST)) delete LATEST[key];

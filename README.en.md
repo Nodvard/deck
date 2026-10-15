@@ -45,16 +45,23 @@ first, so nothing happens on your machines by accident.
 |---|---|
 | Proxmox VE (Proxmox only) | Nodes, VMs and containers: start/stop, console in the browser, snapshots, hardware settings, storage, updates, disk health |
 | Proxmox-Backups (Proxmox only) | All Proxmox backups at a glance, create and edit backup jobs, warnings for missing or failed backups |
-| Service Matrix | Docker containers on your servers: start/stop, live logs, details, storage cleanup, compose stacks, image update check |
+| Docker | Docker containers on your servers: start/stop, live logs, details, storage cleanup, compose stacks, image update check |
 | Server status („Server-Zustand“) | Linux servers over SSH: OS, load, disks, failed services, pending updates |
 | Nodvard Shield | Security: antivirus (ClamAV), hardening audits (Lynis), update center, intrusion detection, file integrity monitoring, AI container watch |
-| Network (beta) | Pi-hole and Nginx Proxy Manager: statistics, pause blocking, proxy hosts and certificate expiry |
+| Pi-hole (beta) | Statistics, pause and resume blocking, reload block lists, block or allow domains |
+| Nginx Proxy Manager (beta) | Switch proxy hosts on and off, certificate expiry, address check against the containers |
+| Network (beta) | Only a signpost to Pi-hole and Nginx Proxy Manager now; can stay switched off |
 | Game servers (beta) | Start/stop game servers and show the current join code (e.g. Valheim) |
 | Scripts | Versioned script repository, run on one or many servers, scheduled – optionally without a click, as long as nothing changes |
 | Documents | Document archive with OCR and full-text search |
 | Inventory | Devices and items with purchase data and warranty reminders |
-| Nextcloud | Nextcloud as a source in the file manager |
+| Nextcloud | Nextcloud as a source in the file manager, plus a tile with version, updates, free space, active users and load |
 | ntfy | Push notifications to your phone |
+| Uptime Kuma (beta) | State of all monitors, availability over the last 24 hours, recent outages and expiring certificates (read-only) |
+| Home Assistant (beta) | Version, pending updates, unavailable devices and selected values such as temperatures (read-only) |
+| Jellyfin (beta) | Current playback with user and device, whether it transcodes, library sizes and recently added media (read-only) |
+| Plex (beta) | Current playback with user and device, library sizes and recently added media; talks only to your own server, never to plex.tv (read-only) |
+| qBittorrent (beta) | Speed, active torrents, count per state and free space (read-only) |
 
 "Beta" means: the extension works, but is not yet as thoroughly tested as the rest. Feedback helps.
 
@@ -69,7 +76,13 @@ see [docs/en/EXTENSION-API.md](docs/en/EXTENSION-API.md).
 **Note:** The user interface is currently in German only; an English interface is planned.
 
 **Requirements:** Docker with Docker Compose. Nodvard Deck runs fine on a Raspberry Pi 4/5
-(arm64) as well as on any x86-64 machine.
+(arm64) as well as on any x86-64 machine. Nothing is built: the ready-made image comes from the
+GitHub Container Registry (`ghcr.io/nodvard/deck`).
+
+Pick one way and expand it:
+
+<details>
+<summary><b>Docker Compose in a terminal</b></summary>
 
 ```bash
 mkdir ~/nodvard-deck && cd ~/nodvard-deck
@@ -80,17 +93,97 @@ docker compose up -d
 **Windows:** the commands are for a Linux shell (also WSL or Git Bash). In PowerShell, write
 `curl.exe` instead of `curl` and run the commands one by one.
 
-Then open `http://<your-server>:8080` and follow the setup assistant. The setup code is
-shown in the container log (`docker compose logs nodvard-deck` in the same folder, or
-"Logs" in Portainer, Docker Desktop, Synology or Unraid); the log line is in German and
-starts with "Einrichtungscode". Everything else – servers, SSH
-access, modules, backups – is set up in the web interface.
+- **Open:** `http://<your-server>:8080`
+- **Port already in use?** (message "port is already allocated" or "address already in use"): put a file
+  `.env` with the line `NODVARD_DECK_PORT=8081` next to `compose.yml` and run `docker compose up -d` again.
+  The address is then `http://<your-server>:8081`.
+- **Setup code:** `docker compose logs nodvard-deck` in the same folder; the log line is in German and
+  starts with "Einrichtungscode".
+- **Updating:** in the same folder, `docker compose pull && docker compose up -d`. Your data is kept.
 
-With **Portainer** or a similar tool: paste the content of
-[deploy/compose.standalone.yml](deploy/compose.standalone.yml) as a new stack and deploy it.
+</details>
 
-**Updating:** in the same folder, `docker compose pull && docker compose up -d`
-(or, in Portainer, update the stack with "Re-pull image and redeploy"). Your data is kept.
+<details>
+<summary><b>Portainer, way 1: from the repository</b></summary>
+
+1. **Stacks → Add stack**, name e.g. `nodvard-deck` (lowercase letters, digits, `-` and `_` only).
+2. Choose **Repository** as the build method and enter:
+   - **Repository URL:** `https://github.com/nodvard/deck`
+   - **Repository reference:** `refs/heads/main`
+   - **Compose path:** `deploy/compose.standalone.yml`
+
+   You do not need to log in; the repository is public.
+3. **Deploy the stack**.
+
+- **Open:** `http://<your-server>:8080`
+- **Port already in use?** Under **Environment variables**, add the variable `NODVARD_DECK_PORT` with e.g.
+  `8081`: for a new stack before "Deploy the stack", for an existing one followed by a redeploy
+  ("Pull and redeploy"). The address is then `http://<your-server>:8081`.
+- **Setup code:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general
+  `<stack-name>-nodvard-deck-1`) → **Logs**; the line is in German and starts with "Einrichtungscode".
+- **Updating:** in the stack, **Pull and redeploy** with **Re-pull image** switched on. You can optionally
+  switch on Portainer's automatic updates ("Automatic updates", in newer versions "GitOps updates"): they
+  pick up changes to the Compose file in the repository on their own. A new version of Nodvard Deck,
+  however, is a new image and not a change to the file; you get it with "Pull and redeploy".
+
+</details>
+
+<details>
+<summary><b>Portainer, way 2: web editor</b></summary>
+
+1. Open the file [deploy/compose.standalone.yml](deploy/compose.standalone.yml)
+   ([as plain text](https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml))
+   and copy its **entire content**. It starts with `# Nodvard Deck ohne das Repository installieren` and
+   contains `services:` further down.
+2. **Stacks → Add stack**, name e.g. `nodvard-deck`, choose **Web editor** as the build method, paste the
+   content, **Deploy the stack**.
+
+Do **not** paste the three commands from the terminal way (`mkdir …`, `curl …`, `docker compose up -d`).
+They are shell commands, not a Compose file; Portainer then reports "top-level object must be a mapping".
+
+- **Open:** `http://<your-server>:8080`
+- **Port already in use?** Under **Environment variables**, add the variable `NODVARD_DECK_PORT` with e.g.
+  `8081`: for a new stack before "Deploy the stack", for an existing one followed by "Update the stack".
+  The address is then `http://<your-server>:8081`.
+- **Setup code:** **Containers** → `nodvard-deck-nodvard-deck-1` (in general
+  `<stack-name>-nodvard-deck-1`) → **Logs**; the line is in German and starts with "Einrichtungscode".
+- **Updating:** open the stack → **Editor** → **Update the stack** with **Re-pull image and redeploy**
+  switched on. You do not need to change anything in the editor for that.
+
+</details>
+
+<details>
+<summary><b>Raspberry Pi</b></summary>
+
+- A Raspberry Pi 4 or 5 with 4 GB RAM and a **64-bit system** (`uname -m` shows `aarch64`); the image is
+  available for `linux/arm64`. When idle, Nodvard Deck needs about 100 MB of memory; the image is just
+  under 400 MB. Docker with Docker Compose has to be installed.
+- An SD card can die: do not keep backups only on the Pi
+  ([section 10 of the guide](docs/en/FIRST-SETUP.md#10-back-up-the-dashboard-itself)); a USB SSD lasts
+  longer than an SD card.
+- If Portainer runs on the Pi, the two Portainer ways above work the same.
+
+```bash
+mkdir ~/nodvard-deck && cd ~/nodvard-deck
+curl -fsSL -o compose.yml https://raw.githubusercontent.com/nodvard/deck/main/deploy/compose.standalone.yml
+sudo docker compose up -d
+```
+
+If your user is in the `docker` group, leave out `sudo`. The first start takes a while because the image
+has to be downloaded first.
+
+- **Open:** `http://<address-of-the-pi>:8080`
+- **Port already in use?** Put a file `.env` with the line `NODVARD_DECK_PORT=8081` next to `compose.yml`
+  and run `sudo docker compose up -d` again. The address is then `http://<address-of-the-pi>:8081`.
+- **Setup code:** `sudo docker compose logs nodvard-deck` in the same folder; the log line is in German and
+  starts with "Einrichtungscode".
+- **Updating:** in the same folder, `sudo docker compose pull && sudo docker compose up -d`. Your data is
+  kept.
+
+</details>
+
+Then follow the setup assistant in the browser. Everything else – servers, SSH access, modules,
+backups – is set up in the web interface.
 
 The full step-by-step guide (setup code, SSH access, Proxmox token, push notifications,
 backups of Nodvard Deck itself, emergency commands) is in

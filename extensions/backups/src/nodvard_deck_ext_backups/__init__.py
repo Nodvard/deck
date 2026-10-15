@@ -229,7 +229,11 @@ class Extension(NodvardExtension):
             if await ctx.secrets.exists(label):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Ein Token für '{name}' existiert bereits -- zuerst über DELETE /api/v1/secrets/{{id}} entfernen.",
+                    detail=(
+                        f"Ein Token für '{name}' existiert bereits. Ersetzen oder entfernen unter Einstellungen → "
+                        f"Erweiterungen → Proxmox-Backups (API: PUT oder DELETE /api/v1/extensions/backups/secrets, "
+                        f"Bezeichnung {label})."
+                    ),
                 )
             await ctx.secrets.create(label=label, kind="generic", value=payload.value)
 

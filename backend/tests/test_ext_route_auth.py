@@ -44,11 +44,11 @@ ROUTES = [
     ("POST", "/api/v1/ext/backups/jobs/x/retry"),
     ("GET", "/api/v1/ext/proxmox/widgets/overview"),
     ("GET", "/api/v1/ext/proxmox/widgets/node-load"),
-    ("GET", "/api/v1/ext/service-matrix/widgets/matrix"),
-    ("GET", "/api/v1/ext/service-matrix/containers/h/web/logs"),
-    ("GET", "/api/v1/ext/service-matrix/image-updates"),
-    ("POST", "/api/v1/ext/service-matrix/image-updates/check"),
-    ("PUT", "/api/v1/ext/service-matrix/containers/h/web/url"),
+    ("GET", "/api/v1/ext/docker/widgets/matrix"),
+    ("GET", "/api/v1/ext/docker/containers/h/web/logs"),
+    ("GET", "/api/v1/ext/docker/image-updates"),
+    ("POST", "/api/v1/ext/docker/image-updates/check"),
+    ("PUT", "/api/v1/ext/docker/containers/h/web/url"),
     ("GET", "/api/v1/ext/documents/widgets/untagged"),
     ("GET", "/api/v1/ext/inventory/widgets/warranty"),
 ]
@@ -61,7 +61,7 @@ async def test_extension_routes_reject_anonymous_requests(client, db_session, te
     await client.post("/api/v1/auth/bootstrap", json={"username": "owner1", "password": "correct-horse-battery", "setup_code": "TEST-CODE-2345"})
     login = await client.post("/api/v1/auth/login", json={"username": "owner1", "password": "correct-horse-battery"})
     headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
-    for ext_id in ("proxmox", "gameserver", "backups", "service-matrix", "documents", "inventory"):
+    for ext_id in ("proxmox", "gameserver", "backups", "docker", "documents", "inventory"):
         enabled = await client.post(f"/api/v1/extensions/{ext_id}/enable", headers=headers)
         assert enabled.status_code == 200, (ext_id, enabled.text)
 
@@ -108,6 +108,7 @@ async def test_no_bundled_extension_route_is_reachable_without_login(client, db_
         app.openapi_schema = None
 
     checked: list[tuple[str, str, str]] = []
+    deprecated: list[tuple[str, str, str]] = []
     for path, operations in paths.items():
         if not path.startswith("/api/v1/ext/"):
             continue
@@ -115,6 +116,8 @@ async def test_no_bundled_extension_route_is_reachable_without_login(client, db_
         url = re.sub(r"\{[^}]+\}", "x", path)
         for method in sorted(m.upper() for m in operations if m.upper() in _HTTP_METHODS):
             checked.append((ext_id, method, "/" + rest))
+            if operations[method.lower()].get("deprecated"):
+                deprecated.append((ext_id, method, "/" + rest))
             if (ext_id, method, "/" + rest) in DECLARED_PUBLIC_ROUTES:
                 continue
             response = await client.request(method, url)
@@ -135,12 +138,12 @@ async def test_no_bundled_extension_route_is_reachable_without_login(client, db_
             seen += 1
             if not isinstance(route, APIRoute) or not route.include_in_schema:
                 invisible.append((ext_id, f"{type(route).__name__} {getattr(route, 'path', '?')}"))
-    # Eine umbenannte Erweiterung (`legacy_ids`) ist zusaetzlich unter ihren alten Adressen eingehaengt: dieselben Routen
-    # als veraltete Pfade im Schema. Sie stehen oben in `checked` (und antworten dort mit 401), die Routenobjekte der
-    # Erweiterung gibt es aber nur einmal.
+    # Alte Adressen (einer umbenannten Erweiterung über `legacy_ids`, eines übernommenen Teils über `adopts.routes`) sind
+    # dieselben Routen noch einmal als veraltete Pfade im Schema. Sie stehen oben in `checked` (und antworten dort mit
+    # 401), die Routenobjekte der Erweiterung gibt es aber nur einmal.
     old_addresses = get_extension_runtime().legacy_owner
     assert {ext for ext, _, _ in checked} & set(old_addresses), "die alten Adressen von Shield sind mit geprueft"
-    assert seen >= len([entry for entry in checked if entry[0] not in old_addresses])
+    assert seen >= len(set(checked) - set(deprecated))
     assert invisible == []
 
 

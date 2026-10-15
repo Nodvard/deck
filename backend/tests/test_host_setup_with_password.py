@@ -373,7 +373,7 @@ async def test_made_default_only_when_the_host_has_no_default(client, db_session
     assert (await db_session.get(HostCredential, second["credential"]["id"])).is_default is False
 
     # Ohne Standard (der alte ist geloescht): wie make-default.
-    assert (await client.delete(f"/api/v1/hosts/{host['id']}/credentials/{first['credential']['id']}", headers=_auth(token))).status_code == 204
+    assert (await client.request("DELETE",f"/api/v1/hosts/{host['id']}/credentials/{first['credential']['id']}", json={"current_password": "correct-horse-battery"}, headers=_auth(token))).status_code == 204
     r = await _setup(client, token, host, second)
     assert r.status_code == 200, r.text
     assert r.json()["made_default"] is True

@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Logo und Favicon kommen nur noch vom eigenen Server. Das Favicon lässt sich jetzt wie das Logo hochladen; stand früher eine fremde Adresse drin, zeigt die Darstellung einen Hinweis."

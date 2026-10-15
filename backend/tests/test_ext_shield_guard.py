@@ -880,3 +880,40 @@ def test_sections_split_only_at_newline(sep):
     sections = ix._sections(out)
     assert "ssh" not in sections
     assert any(":22" in line for line in sections["ports"])
+
+
+@pytest.mark.asyncio
+async def test_a_push_names_the_kind_of_each_event_only_once():
+    """Bisher stand vor jedem Titel noch einmal die Art: „Neuer offener Port: Neuer offener Port: …“, „Datei geändert:
+    Wichtige Datei geändert: …“. Jetzt nur dort, wo der Titel sie nicht selbst nennt. Alle Arten in einer Meldung."""
+    from nodvard_deck_ext_shield.defender import Defender
+    from nodvard_deck_ext_shield.guard import EVENT_LABEL, Guard
+
+    base_ports = 'tcp LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=1,fd=3))'
+    accepted = "1758800100.1 pve2 sshd[1]: Accepted publickey for root from 192.168.1.20 port 1 ssh2"
+    first = _output(ports=base_ports, files=f"{SHA_A} 644 root 1 10 - /etc/passwd", ssh=accepted)
+    second = _output(
+        f2b="stopped",
+        ports=base_ports + '\ntcp LISTEN 0 128 0.0.0.0:4444 0.0.0.0:* users:(("nc",pid=66,fd=3))',
+        files=f"{SHA_B} 644 root 2 11 - /etc/passwd",
+        ssh="\n".join([
+            accepted,
+            "1758800200.1 pve2 sshd[2]: Accepted password for root from 45.66.77.88 port 2 ssh2",
+            *(f"175880020{n}.1 pve2 sshd[{n}]: Failed password for root from 203.0.113.9 port {n} ssh2" for n in (3, 4, 5)),
+        ]),
+    )
+    engine, sm = await _engine()
+    ctx = _Ctx(sm, [first, second])
+    guard = Guard(ctx, Defender(ctx))
+    await guard.inspect(ctx._host)
+    await guard.inspect(ctx._host)
+
+    assert {e["kind"] for e in await guard.list_events()} == set(EVENT_LABEL), "jede Art kommt vor"
+    assert sorted(ctx.notes[0].body.splitlines()) == [
+        "- Angriff auf SSH: 3 fehlgeschlagene SSH-Anmeldungen von 1 Adresse(n)",
+        "- Anmeldung von neuer Adresse: root@45.66.77.88",
+        "- Fail2ban ist installiert, läuft aber nicht",
+        "- Neuer offener Port: 4444/tcp (nc)",
+        "- Wichtige Datei geändert: /etc/passwd",
+    ]
+    await engine.dispose()

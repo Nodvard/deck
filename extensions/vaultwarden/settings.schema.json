@@ -1,0 +1,16 @@
+{
+  "type": "object",
+  "properties": {
+    "url": {
+      "type": "string",
+      "title": "Adresse",
+      "description": "Die Adresse, unter der deine Bitwarden-Apps Vaultwarden erreichen, z. B. https://vault.example.org oder http://192.168.2.20:8222."
+    },
+    "tls_insecure_skip_verify": {
+      "type": "boolean",
+      "default": false,
+      "title": "Selbstsigniertes Zertifikat erlauben",
+      "description": "Nur im eigenen Netz aktivieren. Nötig, wenn Vaultwarden über https mit einem eigenen Zertifikat erreichbar ist."
+    }
+  }
+}

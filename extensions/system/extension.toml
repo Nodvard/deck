@@ -10,12 +10,15 @@ category    = "servers"
 sort_order  = 10
 entrypoint  = "nodvard_deck_ext_system:Extension"
 frontend    = "frontend/dist/index.js"
+# Hilfsskript für root-Befehle (inline, nicht als eigener Abschnitt; Regeln in nodvard_sdk.RootHelperSpec).
+root_helper = { file = "root-helper/system-root.sh", version = 2 }
 
 permissions = [
   "hosts.read",
   "hosts.execute",
   "notify.send",
   "schedule.register",
+  "audit.write",
 ]
 
 [settings]

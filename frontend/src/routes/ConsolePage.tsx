@@ -115,7 +115,7 @@ function TypeTextDialog({ open, onOpenChange, rfb }: { open: boolean; onOpenChan
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 bg-scrim/60" />
         <Dialog.Content className="fixed left-1/2 top-1/2 w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-1 text-lg font-semibold">Text senden</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-70">
@@ -313,7 +313,7 @@ export function ConsolePage() {
         </div>
       </div>
       {message && <p className="mb-2 text-sm text-red-400">{message}</p>}
-      <div ref={screenRef} className="min-h-0 flex-1 overflow-auto rounded border border-white/10 bg-black" data-testid="console-screen" />
+      <div ref={screenRef} className="min-h-0 flex-1 overflow-auto rounded border border-white/10 bg-[#000]" data-testid="console-screen" />
       <TypeTextDialog open={typeOpen} onOpenChange={setTypeOpen} rfb={rfbRef.current} />
     </div>
   );

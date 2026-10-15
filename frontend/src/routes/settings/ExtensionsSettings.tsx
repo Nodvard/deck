@@ -115,7 +115,7 @@ export function ExtensionsSettings(): JSX.Element {
         <div className="space-y-6">
           {groupModules(rows).map((group) => (
             <section key={group.id} aria-label={group.title} data-testid={`ext-group-${group.id}`}>
-              <h2 className="text-xs font-semibold uppercase tracking-wide text-white/45">{group.title}</h2>
+              <h2 className="text-xs font-semibold text-white/45">{group.title}</h2>
               {group.hint && <p className="mt-0.5 text-xs text-white/40">{group.hint}</p>}
               <ul className="panel mt-2 divide-y divide-white/[0.06]">
                 {group.rows.map((ext) => {
@@ -150,7 +150,7 @@ export function ExtensionsSettings(): JSX.Element {
                         <Link
                           to={`/settings/extensions/${ext.id}`}
                           className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-medium ${
-                            ext.needs_setup ? "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110" : "border border-white/10 bg-white/[0.06] hover:bg-white/[0.12]"
+                            ext.needs_setup ? "accent-gradient text-on-accent hover:bg-accent-strong" : "border border-white/10 bg-white/[0.06] hover:bg-white/[0.12]"
                           }`}
                         >
                           <Settings2 size={14} /> {ext.needs_setup ? "Jetzt einrichten" : "Konfigurieren"}

@@ -118,7 +118,7 @@ export function FolderPickerDialog({
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 bg-scrim/60" />
         <Dialog.Content className="fixed left-1/2 top-1/2 flex max-h-[85vh] w-[calc(100%-2rem)] max-w-2xl -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-white/10 bg-[var(--color-surface)] p-4 shadow-xl">
           <Dialog.Title className="mb-1 text-lg font-semibold">Zielordner wählen</Dialog.Title>
           <Dialog.Description className="mb-3 text-sm opacity-70">

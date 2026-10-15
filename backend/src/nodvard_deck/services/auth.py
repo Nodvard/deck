@@ -582,6 +582,8 @@ async def bootstrap_owner(session: AsyncSession, *, username: str, password: str
     # Bestehende Installationen haben den Wert nicht und behalten das alte Verhalten; die Umgebungsvariable übersteuert
     # beides.
     await settings_service.set_global(session, "ssh.confirm_new_host_keys", True, updated_by_user_id=user.id)
+    # Wer mit dem neuen Aussehen anfängt, braucht den Hinweis darauf nicht.
+    await settings_service.set_user(session, user.id, settings_service.DESIGN_NOTICE_KEY, True)
     return user
 
 

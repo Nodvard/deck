@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal, get_args
+
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
@@ -119,19 +121,36 @@ async def update_me(payload: MeUpdate, user: CurrentUser, session: SessionDep) -
 
 
 FIRST_STEPS_KEY = "ui.first_steps_dismissed"
+THEME_KEY = "ui.theme"
+DESIGN_NOTICE_KEY = settings_service.DESIGN_NOTICE_KEY
+Theme = Literal["classic", "simple", "pro", "original"]
+DEFAULT_THEME: Theme = "simple"
 
 
 class PreferencesOut(BaseModel):
     first_steps_dismissed: bool = False
     """„Erste Schritte“ im Cockpit ausgeblendet; gilt für den Benutzer auf jedem Gerät."""
+    theme: Theme = DEFAULT_THEME
+    """Gewähltes Theme der Oberfläche: Klassisch hell, Schlicht dunkel (Standard), Profi dunkel oder Bisher (das
+    Aussehen bis 0.8)."""
+    design_notice_dismissed: bool = False
+    """Hinweis „Deck hat ein neues Aussehen.“ weggeklickt; er erscheint je Benutzer nur einmal, auf jedem Gerät."""
 
 
 class PreferencesUpdate(BaseModel):
     first_steps_dismissed: bool | None = None
+    theme: Theme | None = None
+    design_notice_dismissed: bool | None = None
 
 
 async def _preferences(session: SessionDep, user_id: str) -> PreferencesOut:
-    return PreferencesOut(first_steps_dismissed=bool(await settings_service.get_user(session, user_id, FIRST_STEPS_KEY, False)))
+    theme = await settings_service.get_user(session, user_id, THEME_KEY, DEFAULT_THEME)
+    return PreferencesOut(
+        first_steps_dismissed=bool(await settings_service.get_user(session, user_id, FIRST_STEPS_KEY, False)),
+        # Ein Wert, den es nicht mehr gibt, fällt auf den Standard zurück statt die Antwort zu sprengen.
+        theme=theme if theme in get_args(Theme) else DEFAULT_THEME,
+        design_notice_dismissed=bool(await settings_service.get_user(session, user_id, DESIGN_NOTICE_KEY, False)),
+    )
 
 
 @router.get("/preferences")
@@ -143,6 +162,10 @@ async def get_preferences(user: CurrentUser, session: SessionDep) -> Preferences
 async def update_preferences(payload: PreferencesUpdate, user: CurrentUser, session: SessionDep) -> PreferencesOut:
     if payload.first_steps_dismissed is not None:
         await settings_service.set_user(session, user.id, FIRST_STEPS_KEY, payload.first_steps_dismissed)
+    if payload.theme is not None:
+        await settings_service.set_user(session, user.id, THEME_KEY, payload.theme)
+    if payload.design_notice_dismissed is not None:
+        await settings_service.set_user(session, user.id, DESIGN_NOTICE_KEY, payload.design_notice_dismissed)
     return await _preferences(session, user.id)
 
 

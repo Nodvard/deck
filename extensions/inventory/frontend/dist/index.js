@@ -175,7 +175,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"
@@ -861,7 +861,7 @@ function TaxonomyPanel({
     onChanged();
   }
   const column = (title, icon, entries, kind, value, setValue, placeholder, what) => /* @__PURE__ */ jsxs4("div", { children: [
-    /* @__PURE__ */ jsxs4("p", { className: "mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wider text-white/45", children: [
+    /* @__PURE__ */ jsxs4("p", { className: "mb-2 flex items-center gap-1.5 text-xs font-medium text-white/45", children: [
       /* @__PURE__ */ jsx5(Icon, { name: icon, size: 13 }),
       " ",
       title

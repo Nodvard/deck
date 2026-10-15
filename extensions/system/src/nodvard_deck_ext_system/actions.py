@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import pathlib
 import re
 import shlex
 import socket
@@ -11,7 +13,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Path, status
-from nodvard_sdk import ActionResult, Actor, DryRunReport, Risk
+from nodvard_sdk import ActionResult, Actor, DryRunReport, Risk, root_helper_path
 from nodvard_sdk.actions import REQUEST_WAIT_S, ActionRequest, ActionSpec
 from pydantic import BaseModel
 
@@ -142,6 +144,54 @@ def as_root(command: str) -> str:
         f"if [ \"$(id -u)\" -eq 0 ]; then sh -c {inner}; "
         f"elif sudo -n true 2>/dev/null; then sudo -n sh -c {inner}; "
         f"else echo '{NO_ROOT}'; exit 126; fi"
+    )
+
+
+HELPER = root_helper_path("system")
+"""Das Hilfsskript dieses Moduls auf dem Server (`root-helper/system-root.sh`, eingerichtet vom Einrichtungsbefehl)."""
+HELPER_RESTART_VERSION = 2
+"""Ab dieser Version kennt das Hilfsskript `service-restart`."""
+NO_ROOT_HELPER = "@@noroot-helper"
+"""Zusätzlich zu NO_ROOT: Auf dem Server liegt ein Hilfsskript, das nicht das mitgelieferte ist."""
+NO_ROOT_HELPER_MESSAGE = (
+    "Das Hilfsskript auf diesem Server ist veraltet oder verändert, darum ruft Nodvard Deck es nicht auf, und ohne "
+    "das Skript erlaubt sudo hier nichts. Bitte den Server neu einrichten: Einrichtungsbefehl mit „Root-Rechte ohne "
+    "Passwort“ erneut ausführen."
+)
+
+
+def _bundled_sha256(path: pathlib.Path) -> str | None:
+    """sha256 des mitgelieferten Skripts, genau der Datei, die der Einrichtungsbefehl auf die Server legt."""
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+HELPER_SHA256 = _bundled_sha256(pathlib.Path(__file__).resolve().parents[2] / "root-helper" / "system-root.sh")
+
+
+def restart_as_root(unit: str) -> str:
+    """Neustart als root. Als root angemeldet direkt; sonst zuerst über das Hilfsskript (`sudo -n <skript>
+    service-restart <dienst>`), wenn es Byte für Byte das mitgelieferte ist (sha256) und sudo es erlaubt; sonst wie
+    bisher (`as_root`). Die Ausgabe ist in jedem Fall die von `restart_command`."""
+    unit = validate_unit(unit)
+    if HELPER_SHA256 is None:
+        return as_root(restart_command(unit))
+    helper = shlex.quote(HELPER)
+    inner = shlex.quote(restart_command(unit))
+    # Zuerst die Prüfsumme, die der angemeldete Benutzer selbst liest, ohne das Skript auszuführen: Ein verändertes oder
+    # veraltetes Skript läuft nie, und ohne passendes Skript gibt es keinen sudo-Aufruf (jeder landet im Protokoll, ohne
+    # sudo-Recht sogar als Mail an root). `version` prüft danach, ob sudo das Skript erlaubt; ohne Recht ist die Ausgabe
+    # leer, der Vergleich scheitert, und es geht auf dem alten Weg weiter. Liegt ein unpassendes Skript da und sudo
+    # erlaubt sonst nichts, sagt NO_ROOT_HELPER das.
+    matches = f"[ -x {helper} ] && [ \"$(sha256sum < {helper} 2>/dev/null)\" = \"{HELPER_SHA256}  -\" ]"
+    return (
+        f"if [ \"$(id -u)\" -eq 0 ]; then sh -c {inner}; "
+        f"elif {matches} && [ \"$(sudo -n {helper} version 2>/dev/null)\" -ge {HELPER_RESTART_VERSION} ] 2>/dev/null; then "
+        f"sudo -n {helper} service-restart {shlex.quote(unit)}; "
+        f"elif sudo -n true 2>/dev/null; then sudo -n sh -c {inner}; "
+        f"else echo '{NO_ROOT}'; if [ -e {helper} ] && ! {{ {matches}; }}; then echo '{NO_ROOT_HELPER}'; fi; exit 126; fi"
     )
 
 
@@ -377,10 +427,13 @@ class SystemActionExecutor:
         except PayloadError as exc:
             return ActionResult(success=False, error=str(exc))
         where = host_name(host)
-        # Ohne root oder sudo meldet `as_root` NO_ROOT, dann wird nichts ausgeführt.
-        result = await self._ctx.exec.run(host, as_root(restart_command(unit)), timeout_s=90)
+        # Ohne root, Hilfsskript oder sudo meldet `restart_as_root` NO_ROOT, dann wird nichts ausgeführt.
+        result = await self._ctx.exec.run(host, restart_as_root(unit), timeout_s=90)
         if NO_ROOT in (result.stdout or ""):
-            return ActionResult(success=False, exit_code=result.exit_code, error=NO_ROOT_MESSAGE)
+            stale = NO_ROOT_HELPER in (result.stdout or "")
+            return ActionResult(
+                success=False, exit_code=result.exit_code, error=NO_ROOT_HELPER_MESSAGE if stale else NO_ROOT_MESSAGE
+            )
         rc, state = parse_restart_output(result.stdout)
         detail = {"host_id": host.id, "unit": unit, "state": state or None}
         if rc != 0:

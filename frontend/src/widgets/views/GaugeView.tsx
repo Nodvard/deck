@@ -7,7 +7,7 @@ export function GaugeView({ view, data }: { view: GaugeViewSpec; data: unknown }
   const max = view.max_field ? Number(resolvePath(data, view.max_field) ?? view.max_value) : view.max_value;
   const ratio = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
   const circumference = 2 * Math.PI * 40;
-  const color = ratio >= 0.9 ? "#f87171" : ratio >= 0.75 ? "#fbbf24" : "var(--color-accent)";
+  const color = ratio >= 0.9 ? "rgb(var(--red-400))" : ratio >= 0.75 ? "rgb(var(--amber-400))" : "var(--color-accent)";
   const shown = Number.isInteger(value) ? String(value) : value.toFixed(1);
 
   return (

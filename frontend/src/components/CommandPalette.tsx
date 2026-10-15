@@ -45,6 +45,7 @@ const SETTINGS_KEYWORDS: Record<string, string> = {
   appearance: "settings branding logo farben design anmeldeseite",
   users: "settings nutzer rollen benutzerverwaltung accounts",
   hosts: "settings server hinzufügen zugang zugänge ssh schlüssel rechner hosts raspberry nas verbindung prüfen",
+  vault: "settings tresor passwörter passwort schlüssel token zugangsdaten secrets ablauf",
   automation: "settings autonomie freigabe sperrliste wartung",
   extensions: "settings module extensions plugins",
   audit: "settings audit log verlauf",
@@ -179,7 +180,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60 backdrop-blur-sm" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-scrim/60 backdrop-blur-sm" />
         <Dialog.Content
           className="panel fixed left-1/2 top-[12vh] z-50 w-[calc(100%-2rem)] max-w-xl -translate-x-1/2 overflow-hidden p-0"
           aria-describedby={undefined}
@@ -205,7 +206,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               lastGroup = item.group;
               return (
                 <div key={item.id}>
-                  {header && <p className="px-3 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider opacity-50">{header}</p>}
+                  {header && <p className="px-3 pb-1 pt-2 text-xs font-semibold opacity-50">{header}</p>}
                   <button
                     type="button"
                     role="option"

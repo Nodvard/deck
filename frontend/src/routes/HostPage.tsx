@@ -232,7 +232,7 @@ function ActionControl({ hostId, spec, onStart, onDone }: { hostId: string; spec
               />
             </label>
           ))}
-          <button type="submit" disabled={busy} className="accent-gradient rounded-md px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50">
+          <button type="submit" disabled={busy} className="accent-gradient rounded-md px-2.5 py-1 text-xs font-medium text-on-accent disabled:opacity-50">
             {busy ? "…" : "Ausführen"}
           </button>
         </form>
@@ -337,7 +337,7 @@ function TagEditor({ hostId, tags, managed, onSaved }: { hostId: string; tags: s
         className="w-full rounded-lg bg-white/10 px-3 py-1.5 text-xs outline-none focus:ring-1 focus:ring-white/30"
       />
       <p className="text-[11px] text-white/45">
-        Mit Komma trennen, z. B. docker (Service-Matrix), gameserver (Gameserver). Markierungen von Erweiterungen bleiben erhalten
+        Mit Komma trennen, z. B. docker (Docker), gameserver (Gameserver). Markierungen von Erweiterungen bleiben erhalten
         {managed.length > 0 ? ` (${managed.join(", ")}) und lassen sich nicht ändern` : ""}.
       </p>
       {error && <p className="text-[11px] text-red-400">{error}</p>}
@@ -448,9 +448,8 @@ function HostView({ hostId }: { hostId: string }) {
       </Link>
 
       <div className="panel relative isolate overflow-hidden p-5">
-        <div className="nodvard-deck-glow pointer-events-none absolute inset-0 -z-10 opacity-70" />
         <div className="flex flex-wrap items-center gap-4">
-          <span className="accent-gradient grid h-12 w-12 place-items-center rounded-xl text-white shadow-lg shadow-black/40">
+          <span className="accent-gradient grid h-12 w-12 place-items-center rounded-xl text-on-accent">
             {hasConsole(h) ? <Monitor size={22} /> : <Server size={22} />}
           </span>
           <div className="min-w-0">
@@ -553,7 +552,7 @@ function HostView({ hostId }: { hostId: string }) {
 
       <HostHistory hostId={h.id} host={h} canCheck={canWriteHosts} />
 
-      <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Werkzeuge &amp; Einstellungen</h2>
+      <h2 className="mb-3 mt-8 text-sm font-semibold">Werkzeuge &amp; Einstellungen</h2>
       {tools.isError && !tools.data && (
         <div className="mb-4">
           <LoadError what="Die Liste der Werkzeuge" error={tools.error} onRetry={() => void tools.refetch()} />
@@ -575,7 +574,7 @@ function HostView({ hostId }: { hostId: string }) {
       <div className="grid gap-6 lg:grid-cols-2" data-testid="host-tools">
         {grouped.map((group) => (
           <div key={group.category}>
-            <p className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-white/45">{CATEGORY_LABEL[group.category] ?? group.category}</p>
+            <p className="mb-2 text-xs font-semibold text-white/45">{CATEGORY_LABEL[group.category] ?? group.category}</p>
             <div className="grid gap-2 sm:grid-cols-2">
               {group.items.map((item) => (
                 <Link key={item.key} to={item.href} className="panel panel-hover flex items-start gap-3 p-3">
@@ -593,7 +592,7 @@ function HostView({ hostId }: { hostId: string }) {
 
       {services.length > 0 && (
         <>
-          <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Dienste auf diesem Server</h2>
+          <h2 className="mb-3 mt-8 text-sm font-semibold">Dienste auf diesem Server</h2>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4" data-testid="host-services">
             {services.map((s) => <AppTile key={s.id} service={s} />)}
           </div>
@@ -602,7 +601,7 @@ function HostView({ hostId }: { hostId: string }) {
 
       {hostNotes.length > 0 && (
         <>
-          <h2 className="mb-3 mt-8 text-sm font-semibold uppercase tracking-[0.12em] text-white/70">Meldungen</h2>
+          <h2 className="mb-3 mt-8 text-sm font-semibold">Meldungen</h2>
           <ul className="panel divide-y divide-white/[0.06]" data-testid="host-notifications">
             {hostNotes.map((n) => (
               <li key={n.id} className="flex items-center gap-3 px-4 py-2.5 text-sm">

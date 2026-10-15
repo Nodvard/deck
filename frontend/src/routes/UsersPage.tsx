@@ -311,7 +311,7 @@ export function UsersPage(): JSX.Element {
           return (
             <li key={user.id} data-testid={`user-${user.id}`} className="px-5 py-4">
               <div className="flex flex-wrap items-center gap-4">
-                <span className={`grid h-10 w-10 flex-none place-items-center rounded-full text-sm font-semibold ${user.is_active ? "accent-gradient text-white" : "bg-white/10 text-white/50"}`}>
+                <span className={`grid h-10 w-10 flex-none place-items-center rounded-full text-sm font-semibold ${user.is_active ? "accent-gradient text-on-accent" : "bg-white/10 text-white/50"}`}>
                   {name.slice(0, 2).toUpperCase()}
                 </span>
                 <div className="min-w-0 flex-1">

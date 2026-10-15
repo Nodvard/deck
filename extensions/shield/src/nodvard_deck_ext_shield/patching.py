@@ -21,7 +21,13 @@ from sqlalchemy import select, update
 
 from . import detached as dt
 from . import updates as up
-from .antivirus import NO_ROOT, NO_ROOT_MESSAGE, as_root
+from .antivirus import (
+    HELPER_UPDATE_VERSION,
+    NO_ROOT,
+    as_root,
+    no_root_message,
+    via_helper,
+)
 from .hostscope import host_scope
 from .ids import EXT_ID, LOGGER, SOC_PATH
 from .models import BaselineRecord, UpdateRunRecord
@@ -202,6 +208,38 @@ async def load_baseline(ctx: ExtensionContext, host_id: str, kind: str) -> dict[
         return dict(row.data or {}) if row else None
 
 
+def reboot_as_root(command: str) -> str:
+    """Der Neustart als root: über das Hilfsskript (`reboot`, ab Version 4), wenn es der feste `REBOOT_COMMAND` ist."""
+    if command != up.REBOOT_COMMAND:
+        return as_root(command)
+    return via_helper(["reboot"], command, version=HELPER_UPDATE_VERSION)
+
+
+def _plan_matches(plan: list[str], command: str) -> bool:
+    try:
+        manager, mode, dist, *packages = plan
+        return dist in ("dist", "plain") and up.upgrade_command(manager, mode, packages, dist_upgrade=dist == "dist") == command
+    except ValueError:
+        return False
+
+
+def launch_as_root(run_id: str, command: str, plan: list[str] | None) -> str:
+    """Start eines Einspiel-Laufs als root (`detached.launch_command`). Über das Hilfsskript (`upgrade-start`, ab
+    Version 4) nur, wenn `plan` (`updates.upgrade_args`) genau `command` beschreibt: Freigegeben wurde der Befehl, das
+    Skript baut ihn aus dem Plan selbst nach."""
+    launch = dt.launch_command(run_id, command)  # ValueError bei ungültiger Lauf-ID
+    if plan is None or not _plan_matches(plan, command):
+        return as_root(launch)
+    return via_helper(["upgrade-start", run_id, *plan], launch, version=HELPER_UPDATE_VERSION)
+
+
+def poll_as_root(run_id: str) -> str:
+    """Abfrage eines Laufs als root (`detached.poll_command`), über das Hilfsskript (`upgrade-poll`, ab Version 4).
+
+    Das Skript liest dieselben Dateien, egal auf welchem Weg der Lauf gestartet wurde."""
+    return via_helper(["upgrade-poll", run_id], dt.poll_command(run_id), version=HELPER_UPDATE_VERSION)
+
+
 class UpdateCenter:
     def __init__(self, ctx: ExtensionContext, defender: Defender) -> None:
         self._ctx = ctx
@@ -368,6 +406,12 @@ class UpdateCenter:
                 if (since and status.reboot_required and now - since < REBOOT_PENDING_MAX_S
                         and status.uptime_s is not None and status.uptime_s > now - since):
                     data["reboot_pending_since"] = since
+                # Docker-Pakete dabei: Läuft hier Nodvard Deck, ist es nach dem Einspielen kurz weg (Hinweis vor dem
+                # Einspielen). Nur dann wird nachgesehen, das kostet eine zweite kurze Abfrage.
+                docker = up.docker_packages(data.get("packages") or [])
+                if docker["all"]:
+                    data["docker_packages"] = docker
+                    data["deck_host"] = await self._is_dashboard_host(host)
             await save_baseline(self._ctx, host.id, "updates", data)
             return data
         finally:
@@ -537,14 +581,17 @@ class UpdateCenter:
         manager, packages = await self.plan(host, mode)
         return up.upgrade_command(manager, mode, packages)
 
-    async def execute(self, host: Host, mode: str, *, command: str, trigger: str) -> tuple[bool, str, str, int | None]:
+    async def execute(self, host: Host, mode: str, *, command: str, trigger: str,
+                      plan: list[str] | None = None) -> tuple[bool, str, str, int | None]:
         """Führt einen Einspiel-Lauf aus, protokolliert ihn und prüft neu: (ok, Zusammenfassung, Ausgabe, Rückgabecode).
 
-        Sie kann eine Server-Zeile enthalten und gehört nicht in Meldungen (dafür `_execute`, `UpgradeResult.public`)."""
-        result, output, exit_code = await self._execute(host, mode, command=command, trigger=trigger)
+        Sie kann eine Server-Zeile enthalten und gehört nicht in Meldungen (dafür `_execute`, `UpgradeResult.public`).
+        `plan`: derselbe Lauf als `updates.upgrade_args`, für das Hilfsskript (siehe `launch_as_root`)."""
+        result, output, exit_code = await self._execute(host, mode, command=command, trigger=trigger, plan=plan)
         return result.ok, result.summary, output, exit_code
 
-    async def _execute(self, host: Host, mode: str, *, command: str, trigger: str) -> tuple[up.UpgradeResult, str, int | None]:
+    async def _execute(self, host: Host, mode: str, *, command: str, trigger: str,
+                       plan: list[str] | None = None) -> tuple[up.UpgradeResult, str, int | None]:
         """Wie `execute`, mit dem ganzen Ergebnis statt der Zusammenfassung.
 
         Updates laufen entkoppelt (`_run_detached`), nur der kurze Neustart (`shutdown -r +1`) läuft direkt im SSH-Kanal."""
@@ -568,13 +615,13 @@ class UpdateCenter:
                                                 remote_id=run_id if detached else None))
                 await self._ctx.ws.broadcast("defender", {"update_run": run_id, "status": "running"})
                 if detached:
-                    result, output, exit_code = await self._run_detached(host, run_id, command)
+                    result, output, exit_code = await self._run_detached(host, run_id, command, plan)
                 else:
-                    res = await self._ctx.exec.run(host, as_root(command), timeout_s=60)
+                    res = await self._ctx.exec.run(host, reboot_as_root(command), timeout_s=60)
                     output = (res.stdout or "") + (res.stderr or "")
                     exit_code = res.exit_code
                     if NO_ROOT in output:
-                        result = up.UpgradeResult(ok=False, summary=NO_ROOT_MESSAGE)
+                        result = up.UpgradeResult(ok=False, summary=no_root_message(output))
                     else:
                         if exit_code == 0:
                             result = up.UpgradeResult(ok=True, summary="Neustart in einer Minute.")
@@ -592,11 +639,12 @@ class UpdateCenter:
         await self._settle(host, run_id, mode, trigger, result, output)
         return result, output, exit_code
 
-    async def _run_detached(self, host: Host, run_id: str, command: str) -> tuple[up.UpgradeResult, str, int | None]:
+    async def _run_detached(self, host: Host, run_id: str, command: str,
+                            plan: list[str] | None = None) -> tuple[up.UpgradeResult, str, int | None]:
         """Startet den Lauf entkoppelt auf dem Server und wartet per kurzen Abfragen auf das Ergebnis (`detached.py`)."""
         from .defender import _describe
 
-        launch = as_root(dt.launch_command(run_id, command))
+        launch = launch_as_root(run_id, command, plan)
         unknown = "Der Update-Lauf wurde auf dem Server nicht gefunden – er ist wohl nicht gestartet."
         reach_grace_s = None  # nur nach einem gescheiterten Start begrenzt (siehe unten)
         try:
@@ -617,7 +665,7 @@ class UpdateCenter:
         else:
             out = (res.stdout or "") + (res.stderr or "")
             if NO_ROOT in out:
-                return up.UpgradeResult(ok=False, summary=NO_ROOT_MESSAGE), out, res.exit_code
+                return up.UpgradeResult(ok=False, summary=no_root_message(out)), out, res.exit_code
             info = dt.parse_launch(out)
             if not info.started:
                 if info.method is None:  # schon der Ordner scheiterte (oder gar keine Antwort): nichts gestartet
@@ -641,7 +689,7 @@ class UpdateCenter:
         Mit `reach_grace_s` (Start gescheitert): ohne Antwort nicht erreichbar, also `unknown_summary` statt `timed_out`."""
         from .defender import _describe
 
-        command = as_root(dt.poll_command(remote_id))  # ValueError bei ungültiger ID: sofort
+        command = poll_as_root(remote_id)  # ValueError bei ungültiger ID: sofort
         unknown_until = time.monotonic() + unknown_grace_s
         reach_until = None if reach_grace_s is None else time.monotonic() + reach_grace_s
         reached = False
@@ -656,7 +704,7 @@ class UpdateCenter:
             else:
                 out = (res.stdout or "") + (res.stderr or "")
                 if NO_ROOT in out:
-                    return up.UpgradeResult(ok=False, summary=NO_ROOT_MESSAGE), out, res.exit_code
+                    return up.UpgradeResult(ok=False, summary=no_root_message(out)), out, res.exit_code
                 poll = dt.parse_poll(out)
                 if poll.state == "noreply":
                     # Kanal mitten im Aufruf verloren (leere Ausgabe): wie ein Verbindungsfehler,
@@ -780,12 +828,14 @@ class UpdateCenter:
                 try:
                     # Automatische Läufe nehmen nie dist-upgrade: das darf Pakete ersetzen oder entfernen
                     # und gehört nur in eine Aktion, die jemand freigibt.
-                    command = up.upgrade_command(st["manager"], mode, [p["name"] for p in st.get("packages", []) if p.get("security")])
+                    security = [p["name"] for p in st.get("packages", []) if p.get("security")]
+                    command = up.upgrade_command(st["manager"], mode, security)
+                    plan = up.upgrade_args(st["manager"], mode, security)
                 except ValueError as exc:
                     lines.append(f"- {name}: {exc}")
                     continue
                 # Die Meldung nennt nur `public`: eine Zeile vom Server steht nicht in der Push-Nachricht.
-                run, _out, _rc = await self._execute(host, mode, command=command, trigger="schedule")
+                run, _out, _rc = await self._execute(host, mode, command=command, trigger="schedule", plan=plan)
                 failed += 0 if run.ok else 1
                 lines.append(f"- {name}: {run.public}" if run.ok else f"- {name}: FEHLGESCHLAGEN – {run.public}")
                 st = await load_baseline(self._ctx, host.id, "updates") or st

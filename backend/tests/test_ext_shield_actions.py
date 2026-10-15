@@ -80,12 +80,14 @@ class _Updates:
         self.security = ["libssl3", "openssl"]
         self.manager = "apt"
         self.runs: list[tuple[str, str]] = []
+        self.plans: list[list[str] | None] = []
 
     async def plan(self, host, mode):
         return self.manager, list(self.security) if mode == "security" else []
 
-    async def execute(self, host, mode, *, command, trigger):
+    async def execute(self, host, mode, *, command, trigger, plan=None):
         self.runs.append((mode, command))
+        self.plans.append(plan)
         return True, "fertig", "", 0
 
 
@@ -143,12 +145,15 @@ async def test_ban_and_unban_click_builds_the_same_command_and_runs_it(soc):
     assert want == "fail2ban-client set sshd unbanip 203.0.113.9"
     res = await soc.executor.execute(req)
     assert res.success, res.error
-    assert soc.ctx.commands == [av.as_root(want)]
+    # Gespeichert und verglichen wird der Befehl selbst; beim Ausführen zuerst über das Hilfsskript, sonst wie bisher.
+    assert soc.ctx.commands == [av.via_helper(["unban", "203.0.113.9", "sshd"], want, version=av.HELPER_ACTION_VERSION)]
 
     req = await _click(soc, "/defender/hosts/h1/ban", {"ip": "2001:db8::1"})
     assert req.payload["command"] == ix.ban_command("2001:db8::1", "sshd", unban=False)
     assert (await soc.executor.execute(req)).success
-    assert soc.ctx.commands[-1] == av.as_root(req.payload["command"])
+    assert soc.ctx.commands[-1] == av.via_helper(
+        ["ban", "2001:db8::1", "sshd"], req.payload["command"], version=av.HELPER_ACTION_VERSION
+    )
 
 
 @pytest.mark.asyncio
@@ -156,7 +161,9 @@ async def test_install_click_uses_the_package_key(soc):
     req = await _click(soc, "/defender/hosts/h1/install", {"package": "lynis"})
     assert req.payload == {"package": "lynis", "command": av.INSTALL_COMMANDS["lynis"]}
     assert (await soc.executor.execute(req)).success
-    assert soc.ctx.commands == [av.as_root(av.INSTALL_COMMANDS["lynis"])]
+    assert soc.ctx.commands == [
+        av.via_helper(["install", "lynis"], av.INSTALL_COMMANDS["lynis"], version=av.HELPER_ACTION_VERSION)
+    ]
     sig = await _click(soc, "/defender/hosts/h1/install", {"package": "signatures"})
     assert sig.risk == Risk.LOW and sig.payload["command"] == av.INSTALL_COMMANDS["signatures"]
 
@@ -180,6 +187,7 @@ async def test_upgrade_and_reboot_clicks_build_the_same_command(soc):
     assert req.payload == {"mode": "security", "manager": "apt", "packages": ["libssl3", "openssl"], "command": want}
     assert (await soc.executor.execute(req)).success
     assert soc.updates.runs == [("security", want)]
+    assert soc.updates.plans == [["apt", "security", "plain", "libssl3", "openssl"]], "derselbe Lauf fuer das Hilfsskript"
 
     full = await _click(soc, "/defender/hosts/h1/upgrade", {"mode": "all"})
     assert full.payload["command"] == up.upgrade_command("apt", "all") and full.payload["packages"] == []
@@ -188,7 +196,7 @@ async def test_upgrade_and_reboot_clicks_build_the_same_command(soc):
     assert reboot.action_type == "nexus_soc.reboot" and reboot.risk == Risk.HIGH
     assert reboot.payload == {"command": up.REBOOT_COMMAND}
     assert (await soc.executor.execute(reboot)).success
-    assert soc.updates.runs[-1] == ("reboot", up.REBOOT_COMMAND)
+    assert soc.updates.runs[-1] == ("reboot", up.REBOOT_COMMAND) and soc.updates.plans[-1] is None
 
     soc.updates.security = []
     r = await soc.client.post("/defender/hosts/h1/upgrade", json={"mode": "security"})
@@ -215,7 +223,7 @@ async def test_dist_upgrade_is_part_of_the_plan_so_proposal_and_execution_match(
     # unveraendert (er steht im Payload), und der Executor fuehrt genau den gezeigten Befehl aus.
     soc.ctx.settings_value = {}
     assert (await soc.executor.execute(req)).success
-    assert soc.updates.runs == [("all", want)]
+    assert soc.updates.runs == [("all", want)] and soc.updates.plans == [["apt", "all", "dist"]]
 
     # Umgekehrt: erst ohne Einstellung vorgeschlagen, dann eingeschaltet -> bleibt beim alten Befehl.
     old = await _click(soc, "/defender/hosts/h1/upgrade", {"mode": "all"})
@@ -289,12 +297,41 @@ async def test_restore_and_delete_clicks_come_from_the_finding_row(soc):
     assert delete.payload == {"finding_id": "f1", "command": av.delete_command(QP)}
 
     assert (await soc.executor.execute(req)).success
-    assert soc.ctx.commands == [av.as_root(want)]
+    name = QP.rsplit("/", 1)[1]
+    assert soc.ctx.commands == [
+        av.via_helper(["restore", name], want, version=av.HELPER_QUARANTINE_VERSION)
+    ]
     assert (await soc.defender.finding("f1"))["status"] == "restored"
     # Danach liegt nichts mehr in der Quarantaene -- auch der alte Loesch-Vorschlag laeuft nicht.
     again = await soc.executor.execute(delete)
     assert not again.success and "Quarantäne" in again.error
     assert len(soc.ctx.commands) == 1
+
+
+@pytest.mark.asyncio
+async def test_quarantine_and_delete_reach_only_a_helper_that_checks_itself(soc):
+    """Erst ab Version 8 prüft das Hilfsskript eine Datei vor der Quarantäne selbst und legt nur an den hinterlegten Ort
+    zurück (Version 7 tat das auch, verlor aber bei zwei gleichzeitigen Aufrufen die Herkunft). Ein älteres Skript auf
+    dem Server bekommt Quarantäne, Wiederherstellen und Löschen darum nicht mehr (dann der alte Weg über root bzw.
+    `sudo -n sh -c`)."""
+    from nodvard_deck_ext_shield.models import FindingRecord
+
+    assert av.HELPER_QUARANTINE_VERSION == 8 > av.HELPER_ACTION_VERSION
+    delete = await _click(soc, "/defender/findings/f1/delete")
+    assert (await soc.executor.execute(delete)).success
+    name = QP.rsplit("/", 1)[1]
+    assert soc.ctx.commands == [av.via_helper(["delete", name], av.delete_command(QP), version=av.HELPER_QUARANTINE_VERSION)]
+
+    async with soc.ctx._session() as s:
+        s.add(FindingRecord(id="f3", host_id="h1", host_name="pi", path="/srv/upload/evil.sh", signature="EICAR",
+                            status="detected", detected_at=datetime.now(timezone.utc)))
+    await soc.defender.quarantine("f3", actor=None)
+    qname = av.quarantine_name("f3", "/srv/upload/evil.sh")
+    assert soc.ctx.commands[1:] == [av.via_helper(
+        av.quarantine_args("/srv/upload/evil.sh", qname), av.quarantine_command("/srv/upload/evil.sh", qname),
+        version=av.HELPER_QUARANTINE_VERSION,
+    )]
+    assert f"-ge {av.HELPER_QUARANTINE_VERSION} ]" in soc.ctx.commands[1]
 
 
 # --- Eingeschleuste Befehle laufen nie ----------------------------------------------

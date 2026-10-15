@@ -49,7 +49,7 @@ describe("main.tsx: Vertrag mit den Erweiterungs-Bundles", () => {
     await import("./main");
     expect(Object.keys(window.__nodvardDeck).sort()).toEqual(
       [
-        "React", "ReactDOM", "ReactJsxRuntime", "confirmDialog", "getAccessToken", "hasPermission",
+        "React", "ReactDOM", "ReactJsxRuntime", "confirmDialog", "confirmIdentity", "getAccessToken", "hasPermission",
         "promptDialog", "refreshAccessToken", "refreshAccessTokenResult",
       ].sort(),
     );

@@ -140,7 +140,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
 
   return (
     <div className="panel min-w-0 p-4" data-testid={`chart-${title}`}>
-      <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-white/60">{title}</p>
+      <p className="mb-2 text-xs font-semibold text-white/60">{title}</p>
       <div ref={wrapRef} className="relative w-full min-w-0 overflow-hidden">
         {!hasData ? (
           <p className="py-10 text-center text-xs text-white/40">Noch keine Messwerte in diesem Zeitraum.</p>
@@ -148,7 +148,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
           <svg width={width} height={height} onPointerMove={onMove} onPointerLeave={() => setHover(null)} role="img" aria-label={title} className="block touch-none select-none">
             {ticks.map((t) => (
               <g key={t}>
-                <line x1={PAD.left} x2={width - PAD.right} y1={y(t)} y2={y(t)} stroke="rgba(255,255,255,0.07)" />
+                <line x1={PAD.left} x2={width - PAD.right} y1={y(t)} y2={y(t)} stroke="var(--color-line)" />
                 <text x={PAD.left - 6} y={y(t) + 3} textAnchor="end" className="fill-white/45 text-[10px] tabular-nums">{format(t)}</text>
               </g>
             ))}
@@ -161,10 +161,10 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
             {paths.map((p) => <path key={p.key} d={p.line} fill="none" stroke={p.color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />)}
             {hover !== null && (
               <g>
-                <line x1={hoverX} x2={hoverX} y1={PAD.top} y2={PAD.top + plotH} stroke="rgba(255,255,255,0.35)" />
+                <line x1={hoverX} x2={hoverX} y1={PAD.top} y2={PAD.top + plotH} stroke="rgb(var(--ink) / 0.35)" />
                 {series.map((s) => {
                   const v = s.values[hover];
-                  return v === null ? null : <circle key={s.key} cx={hoverX} cy={y(v)} r={4} fill={s.color} stroke="#0b0f17" strokeWidth={2} />;
+                  return v === null ? null : <circle key={s.key} cx={hoverX} cy={y(v)} r={4} fill={s.color} stroke="var(--color-surface)" strokeWidth={2} />;
                 })}
               </g>
             )}
@@ -172,7 +172,7 @@ export function TimeSeriesChart({ title, timestamps, series, format, yMax, heigh
         )}
         {hover !== null && hasData && (
           <div
-            className="pointer-events-none absolute top-1 z-10 min-w-[150px] rounded-lg border border-white/10 bg-[#0b0f17]/95 px-3 py-2 text-xs shadow-xl"
+            className="pointer-events-none absolute top-1 z-10 min-w-[150px] rounded-lg border border-[var(--color-line-strong)] bg-[var(--color-surface)] px-3 py-2 text-xs shadow-xl"
             style={{ left: hoverX > width / 2 ? hoverX - 170 : hoverX + 12 }}
             role="tooltip"
           >

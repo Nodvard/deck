@@ -6,10 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from sqlalchemy import select
-
 from nodvard_deck.models import ExtensionRecord, Secret
 from nodvard_deck.services import extensions as extensions_service
+from sqlalchemy import select
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
 _TOKEN_ID = "root@pam!deck"
@@ -38,18 +37,18 @@ async def _has_secret(db_session, label: str) -> bool:
 async def test_ntfy_token_is_removed_when_server_url_changes(client, db_session, test_settings):
     headers = await _owner_with(client, db_session, test_settings, "ntfy")
     r = await client.put(
-        "/api/v1/extensions/ntfy/settings", json={"values": {"server_url": "https://ntfy.example", "topic": "deck"}}, headers=headers,
+        "/api/v1/extensions/ntfy/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "https://ntfy.example", "topic": "deck"}}, headers=headers,
     )
     assert r.status_code == 200, r.text
-    assert (await client.put("/api/v1/extensions/ntfy/secrets", json={"label": "ntfy-token", "value": "tk_geheim"}, headers=headers)).status_code == 204
+    assert (await client.put("/api/v1/extensions/ntfy/secrets", json={"current_password": "correct-horse-battery", "label": "ntfy-token", "value": "tk_geheim"}, headers=headers)).status_code == 204
     assert await _has_secret(db_session, "ntfy-token")
 
     # Anderes Feld: Token bleibt.
-    r = await client.put("/api/v1/extensions/ntfy/settings", json={"values": {"topic": "anders"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/ntfy/settings", json={"current_password": "correct-horse-battery", "values": {"topic": "anders"}}, headers=headers)
     assert r.status_code == 200, r.text
     assert await _has_secret(db_session, "ntfy-token")
 
-    r = await client.put("/api/v1/extensions/ntfy/settings", json={"values": {"server_url": "http://angreifer:8000"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/ntfy/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "http://angreifer:8000"}}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["secrets_cleared"] == ["ntfy-token"]
     assert [s["is_set"] for s in r.json()["secrets"]] == [False]
@@ -61,7 +60,7 @@ async def test_ntfy_token_is_removed_when_server_url_changes(client, db_session,
     assert "tk_geheim" not in audit.text
 
     # Ohne Token meldet eine weitere neue Adresse nichts als „gelöscht“.
-    r = await client.put("/api/v1/extensions/ntfy/settings", json={"values": {"server_url": "https://ntfy2.example"}}, headers=headers)
+    r = await client.put("/api/v1/extensions/ntfy/settings", json={"current_password": "correct-horse-battery", "values": {"server_url": "https://ntfy2.example"}}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["secrets_cleared"] == []
 
@@ -73,13 +72,18 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
 
     expected = {
         "nextcloud": {"nextcloud-app-password": ["base_url"], "nextcloud-serverinfo-token": ["base_url"]},
-        "network": {"network-pihole-password": ["pihole.url"], "network-npm-password": ["npm.url"]},
+        "npm": {"network-npm-password": ["url"]},
+        "pihole": {"network-pihole-password": ["url"]},
         "shield": {"nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"]},
         "backups": {"backups-token:{name}": ["base_url"]},
         "proxmox": {"proxmox-token:{name}": ["base_url"]},
         # Die Adresse eines weiteren Kanals ist selbst das Ziel: nichts, woran das Geheimnis haengen muesste.
         "ntfy": {"ntfy-token": ["server_url"], "push-kanal:{name}": None},
         "uptime-kuma": {"uptime-kuma-key:{name}": ["base_url"]},
+        "home-assistant": {"home-assistant-token:{name}": ["base_url"]},
+        "jellyfin": {"jellyfin-key:{name}": ["base_url"]},
+        "plex": {"plex-token:{name}": ["base_url"]},
+        "qbittorrent": {"qbittorrent-password:{name}": ["base_url"]},
     }
     for ext_id, labels in expected.items():
         schema = json.loads((REPO_EXTENSIONS_DIR / ext_id / "settings.schema.json").read_text(encoding="utf-8"))
@@ -147,7 +151,7 @@ async def test_new_connection_does_not_inherit_a_leftover_token(client, db_sessi
     current = (await client.get(f"/api/v1/extensions/{ext_id}/settings", headers=headers)).json()["values"]["connections"]
     r = await client.put(
         f"/api/v1/extensions/{ext_id}/settings",
-        json={"values": {"connections": [*current, {"name": "pve8", "base_url": "https://angreifer:8006", "token_id": _TOKEN_ID}]}},
+        json={"current_password": "correct-horse-battery", "values": {"connections": [*current, {"name": "pve8", "base_url": "https://angreifer:8006", "token_id": _TOKEN_ID}]}},
         headers=headers,
     )
     assert r.status_code == 200, r.text
@@ -160,13 +164,13 @@ async def test_removing_a_connection_in_the_settings_form_removes_its_token(clie
     headers = await _owner_with(client, db_session, test_settings, "proxmox")
     r = await client.put(
         "/api/v1/extensions/proxmox/settings",
-        json={"values": {"connections": [{"name": "pve1", "base_url": "https://192.168.2.10:8006", "token_id": _TOKEN_ID}]}},
+        json={"current_password": "correct-horse-battery", "values": {"connections": [{"name": "pve1", "base_url": "https://192.168.2.10:8006", "token_id": _TOKEN_ID}]}},
         headers=headers,
     )
     assert r.status_code == 200, r.text
-    await client.put("/api/v1/extensions/proxmox/secrets", json={"label": "proxmox-token:pve1", "value": "tok"}, headers=headers)
+    await client.put("/api/v1/extensions/proxmox/secrets", json={"current_password": "correct-horse-battery", "label": "proxmox-token:pve1", "value": "tok"}, headers=headers)
     assert await _has_secret(db_session, "proxmox-token:pve1")
-    r = await client.put("/api/v1/extensions/proxmox/settings", json={"values": {"connections": []}}, headers=headers)
+    r = await client.put("/api/v1/extensions/proxmox/settings", json={"current_password": "correct-horse-battery", "values": {"connections": []}}, headers=headers)
     assert r.status_code == 200, r.text
     assert r.json()["secrets_cleared"] == ["proxmox-token:pve1"]
     assert not await _has_secret(db_session, "proxmox-token:pve1")
@@ -182,7 +186,7 @@ async def test_gameserver_profiles_survive_the_settings_page(client, db_session,
     # Alte Kopie der Profile plus eine harmlose Änderung -- wie ein veralteter zweiter Tab.
     r = await client.put(
         "/api/v1/extensions/gameserver/settings",
-        json={"values": {"host_tag": "spiele", "servers": {"h1": {"profile": "x", "service_name": "a'b"}}}},
+        json={"current_password": "correct-horse-battery", "values": {"host_tag": "spiele", "servers": {"h1": {"profile": "x", "service_name": "a'b"}}}},
         headers=headers,
     )
     assert r.status_code == 200, r.text
@@ -199,15 +203,15 @@ async def test_shield_key_goes_with_both_ai_servers(client, db_session, test_set
     label = "nexus-soc-ollama-key"
     base = "/api/v1/extensions/shield"
 
-    early = await client.put(f"{base}/secrets", json={"label": label, "value": "key-geheim"}, headers=headers)
+    early = await client.put(f"{base}/secrets", json={"current_password": "correct-horse-battery", "label": label, "value": "key-geheim"}, headers=headers)
     assert early.status_code == 409, early.text
 
-    saved = await client.put(f"{base}/settings", json={"values": {"ollama_url": "http://192.168.2.42:11434"}}, headers=headers)
+    saved = await client.put(f"{base}/settings", json={"current_password": "correct-horse-battery", "values": {"ollama_url": "http://192.168.2.42:11434"}}, headers=headers)
     assert saved.status_code == 200, saved.text
-    assert (await client.put(f"{base}/secrets", json={"label": label, "value": "key-geheim"}, headers=headers)).status_code == 204
+    assert (await client.put(f"{base}/secrets", json={"current_password": "correct-horse-battery", "label": label, "value": "key-geheim"}, headers=headers)).status_code == 204
     assert await _has_secret(db_session, label)
 
-    failover = await client.put(f"{base}/settings", json={"values": {"ollama_failover_url": "http://eigener-server:11434"}}, headers=headers)
+    failover = await client.put(f"{base}/settings", json={"current_password": "correct-horse-battery", "values": {"ollama_failover_url": "http://eigener-server:11434"}}, headers=headers)
     assert failover.status_code == 200, failover.text
     assert failover.json()["secrets_cleared"] == [label]
     assert not await _has_secret(db_session, label)

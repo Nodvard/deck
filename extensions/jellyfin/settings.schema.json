@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "properties": {
+    "connections": {
+      "type": "array",
+      "title": "Jellyfin",
+      "description": "Die Jellyfin-Server, deren Zustand angezeigt wird. Meist genügt einer. Nodvard Deck liest nur und ändert in Jellyfin nichts.",
+      "x-item-title": "Jellyfin",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „heimkino“ oder „wohnzimmer“. Nach dem Einrichten nicht mehr ändern.",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich – keine Leerzeichen."
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Adresse",
+            "description": "Adresse von Jellyfin, z. B. http://jellyfin.example.com:8096 (Jellyfin nutzt meist Port 8096 für http und 8920 für https).",
+            "pattern": "^https?://\\S+$",
+            "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+          },
+          "tls_fingerprint_sha256": {
+            "type": "string",
+            "title": "Fingerabdruck des Zertifikats (SHA-256)",
+            "description": "Nur bei https:// mit einem selbst erstellten Zertifikat. Nodvard Deck spricht dann nur mit dem Server, der genau dieses Zertifikat zeigt. Steht er hier, braucht es „Selbstsigniertes Zertifikat erlauben“ nicht. Du bekommst ihn z. B. im Browser aus den Zertifikatsdetails der Seite von Jellyfin.",
+            "pattern": "^\\s*([0-9A-Fa-f]{2}[:\\t -]?){31}[0-9A-Fa-f]{2}\\s*$|^\\s*$",
+            "x-pattern-message": "64 Zeichen aus 0–9 und A–F, gern mit Doppelpunkten (z. B. AB:CD:…)."
+          },
+          "tls_insecure_skip_verify": {
+            "type": "boolean",
+            "default": false,
+            "title": "Selbstsigniertes Zertifikat erlauben",
+            "description": "Nur im eigenen Netz aktivieren. Schaltet jede Prüfung des Zertifikats ab; besser ist der Fingerabdruck oben. Gilt nicht, solange ein Fingerabdruck eingetragen ist.",
+            "x-advanced": true
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ]
+      }
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "jellyfin-key:{name}",
+      "x-secret-bound-to": ["base_url"],
+      "per_item": "connections",
+      "title": "API-Schlüssel",
+      "description": "In Jellyfin unter Dashboard → API-Schlüssel mit „+“ einen neuen Schlüssel anlegen (Name z. B. „Nodvard Deck“) und hier einfügen. Jellyfin kann Schlüssel nicht auf „nur lesen“ beschränken: Jeder Schlüssel hat Verwaltungsrechte. Nodvard Deck benutzt ihn ausschließlich zum Lesen; lösche den Schlüssel in Jellyfin, wenn du das Modul nicht mehr brauchst."
+    }
+  ]
+}

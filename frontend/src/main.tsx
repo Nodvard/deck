@@ -5,19 +5,25 @@ import * as ReactDOMClient from "react-dom/client";
 import * as ReactJsxRuntime from "react/jsx-runtime";
 import { RouterProvider } from "react-router-dom";
 
+import { clearQueriesOnAccountChange } from "./lib/accountCache";
 import { installChunkReload } from "./lib/chunkLoad";
 import { installDeckGlobal } from "./lib/deckGlobal";
 import { refreshAccessToken, refreshAccessTokenResult } from "./lib/extensionToken";
 import { migrateLegacyStorage } from "./lib/legacyStorage";
+import { loadCustomCss } from "./lib/customCss";
+import { applyTheme, storedTheme } from "./lib/theme";
 import { router } from "./routes/router";
 import { useAuthStore } from "./state/auth";
 import { useBrandingStore } from "./state/branding";
-import { confirmDialog, promptDialog } from "./state/dialogs";
+import { confirmDialog, confirmIdentity, promptDialog } from "./state/dialogs";
 import "./styles/index.css";
 
 // Gemerkte Einstellungen dieses Browsers unter ihren neuen Namen uebernehmen, BEVOR irgendetwas
 // rendert und sie liest (lib/legacyStorage.ts). Wirft nie.
 migrateLegacyStorage();
+// Vor dem ersten Rendern, damit die Seite nicht kurz im falschen Theme aufblitzt.
+applyTheme(storedTheme());
+loadCustomCss();
 
 // Import-Map-Shim (docs/02-EXTENSION-API.md §5): EINE React-Instanz fuer das
 // Kern-Bundle UND jedes per `import()` nachgeladene Extension-Bundle -- die Shims
@@ -57,6 +63,8 @@ installDeckGlobal({
   // statt eine zweite Dialog-Implementierung zu bauen.
   confirmDialog,
   promptDialog,
+  // Passwort und Code, wenn ein Aufruf gespeicherte Zugangsdaten ersetzt oder löscht (403 `confirm_required`).
+  confirmIdentity,
   // Extension-Seiten loesen Aktionen ueber POST /hosts/{id}/actions/{type} aus, was
   // bei autonomy.mode=propose (Default) immer NUR einen Vorschlag anlegt
   // (status=proposed) -- die Freigabe ist ein zweiter, separater Aufruf
@@ -75,6 +83,7 @@ installChunkReload();
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },
 });
+clearQueriesOnAccountChange(queryClient);
 
 // Vor dem ersten Render angestossen (nicht awaitet -- GET /branding ist unauth. und
 // schnell, ein Render mit den eingebauten CSS-Defaults fuer einen Frame ist kein

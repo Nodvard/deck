@@ -58,7 +58,7 @@ export function Button({
   className?: string;
 }) {
   const styles = {
-    primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+    primary: "accent-gradient text-on-accent hover:bg-accent-strong",
     secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
     danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
     ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white",
@@ -139,7 +139,7 @@ export function Toggle({ checked, onChange, label, disabled }: { checked: boolea
       onClick={() => onChange(!checked)}
       className={`relative h-5 w-9 flex-none rounded-full transition disabled:opacity-50 ${checked ? "bg-[var(--color-accent)]" : "bg-white/15"}`}
     >
-      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-all ${checked ? "left-[18px]" : "left-0.5"}`} />
+      <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-on-accent shadow transition-all ${checked ? "left-[18px]" : "left-0.5"}`} />
     </button>
   );
 }

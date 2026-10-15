@@ -32,6 +32,10 @@ export interface ExtensionInfo {
 
 export interface Preferences {
   first_steps_dismissed: boolean;
+  /** Fehlt bei einem älteren Server. */
+  theme?: string;
+  /** Hinweis „Deck hat ein neues Aussehen.“ erledigt; fehlt bei einem älteren Server (dann kein Hinweis). */
+  design_notice_dismissed?: boolean;
 }
 
 export function useExtensions(enabled = true) {

@@ -13,7 +13,7 @@
       "minimum": 50,
       "maximum": 99,
       "title": "Warnung ab Plattenbelegung (%)",
-      "description": "Ab dieser Belegung kommt die Meldung, z. B. „Speicher fast voll: /var auf ki-server bei 91 %“. Wichtig etwa für die VM mit den großen KI-Modellen."
+      "description": "Ab dieser Belegung kommt die Meldung, z. B. „Speicher fast voll: /var auf server1 bei 91 %“. Wichtig etwa für Server, deren Platte sich schnell füllt (Datenbanken, Downloads, Sicherungen)."
     },
     "warn_temp_enabled": {
       "type": "boolean",
@@ -27,7 +27,18 @@
       "minimum": 40,
       "maximum": 110,
       "title": "Warnung ab Temperatur (°C)",
-      "description": "Ab dieser Temperatur kommt die Meldung, z. B. „Raspberry Pi ist heiß: 78 °C“."
+      "description": "Ab dieser Temperatur kommt die Meldung, z. B. „Raspberry Pi ist heiß: 78 °C“. Gemeldet wird erst die zweite Messung in Folge über der Grenze, eine kurze Spitze bleibt still."
+    },
+    "warn_temp_by_host": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 40,
+        "maximum": 110
+      },
+      "title": "Eigene Temperaturgrenze je Server",
+      "description": "Je Server (Schlüssel: Host-ID) eine eigene Grenze in °C, z. B. für einen Server, der unter Last immer wärmer läuft. Fehlt ein Server, gilt die Grenze oben. Pflege über die API (PUT /ext/system/hosts/{host_id}/temp-limit).",
+      "x-hidden": true
     },
     "warn_interval_min": {
       "type": "integer",

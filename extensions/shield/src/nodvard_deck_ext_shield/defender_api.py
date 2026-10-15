@@ -13,11 +13,23 @@ from pydantic import BaseModel, Field
 
 from . import antivirus as av
 from . import updates as up
-from .defender import DEFAULT_CRONS, Defender, _describe, watch_interval_min
+from .defender import DEFAULT_CRONS, Defender, _describe, max_filesize_mb, watch_interval_min
 from . import intrusion as ix
+from . import realtime as rt
 from .guard import Guard, guard_interval_min
-from .ids import ACTION_BAN, ACTION_DELETE, ACTION_INSTALL, ACTION_REBOOT, ACTION_RESTORE, ACTION_UPGRADE, EXT_ID, LOGGER, SOC_PATH
-from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter
+from .ids import (
+    ACTION_BAN,
+    ACTION_DELETE,
+    ACTION_INSTALL,
+    ACTION_REALTIME,
+    ACTION_REBOOT,
+    ACTION_RESTORE,
+    ACTION_UPGRADE,
+    EXT_ID,
+    LOGGER,
+    SOC_PATH,
+)
+from .patching import DEFAULT_UPDATE_CRONS, UpdateCenter, load_baselines, save_baseline
 
 if TYPE_CHECKING:
     from nodvard_sdk import ExtensionContext
@@ -133,6 +145,7 @@ _REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     ACTION_REBOOT: (),
     ACTION_RESTORE: ("finding_id",),
     ACTION_DELETE: ("finding_id",),
+    ACTION_REALTIME: ("enable", "watch", "exclude", "max_mb"),
 }
 
 
@@ -167,6 +180,11 @@ class ActionCommands:
             return av.INSTALL_COMMANDS[package]
         if action_type == ACTION_REBOOT:
             return up.REBOOT_COMMAND
+        if action_type == ACTION_REALTIME:
+            enable, watch, exclude, max_mb = _realtime_fields(payload)
+            if not enable:
+                return rt.disable_command()
+            return rt.enable_command(watch, exclude, max_filesize_mb=max_mb)
         if action_type == ACTION_UPGRADE:
             mode, manager, packages = payload["mode"], payload["manager"], payload["packages"]
             if mode not in ("all", "security", "cleanup"):
@@ -193,12 +211,44 @@ class ActionCommands:
             return av.restore_command(row.quarantine_path, row.path, row.original_mode)
         return av.delete_command(row.quarantine_path)
 
+    async def helper_args(self, action_type: str, host: Any, payload: dict[str, Any]) -> list[str] | None:
+        """Derselbe Auftrag als Aufruf des Hilfsskripts, oder `None` (dann läuft der Befehl aus `build` wie bisher).
+        Erst beim Ausführen gefragt: `payload.command` und damit freigegebene Aktionen bleiben unverändert."""
+        if action_type == ACTION_BAN:
+            return ix.ban_args(payload["ip"], payload["jail"], unban=payload["unban"])
+        if action_type == ACTION_INSTALL:
+            return ["install", payload["package"]]
+        if action_type == ACTION_REALTIME:
+            enable, watch, exclude, max_mb = _realtime_fields(payload)
+            return rt.helper_args(enable, watch, exclude, max_filesize_mb=max_mb)
+        if action_type in (ACTION_RESTORE, ACTION_DELETE):
+            row = await self._defender.finding_record(payload["finding_id"])
+            if row is None or not row.quarantine_path:
+                return None
+            if action_type == ACTION_RESTORE:
+                return av.restore_args(row.quarantine_path, row.path, row.original_mode)
+            return av.delete_args(row.quarantine_path)
+        return None
+
+
+def _realtime_fields(payload: dict[str, Any]) -> tuple[bool, list[str], list[str], int]:
+    """Die Angaben zum Umstellen des Wächters; ValueError, wenn eine nicht stimmt (wie bei allen Feldern in `build`)."""
+    enable, watch, exclude, max_mb = payload["enable"], payload["watch"], payload["exclude"], payload["max_mb"]
+    if not isinstance(enable, bool):
+        raise ValueError("Ungültige Angabe zum Einschalten.")  # noqa: TRY004 - Route und Executor fangen ValueError
+    for folders in (watch, exclude):
+        if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
+            raise ValueError("Ungültige Ordnerliste.")
+    if isinstance(max_mb, bool) or not isinstance(max_mb, int) or not 1 <= max_mb <= rt.MAX_FILESIZE_MB:
+        raise ValueError("Ungültige Dateigröße.")
+    return enable, watch, exclude, max_mb
+
 
 class DefenderExecutor:
     """Führt die Aktionen aus, die nicht automatisch laufen dürfen: durchs Gate mit Freigabe, Sperrliste und Audit."""
 
     action_types = frozenset({
-        ACTION_RESTORE, ACTION_DELETE, ACTION_INSTALL, ACTION_UPGRADE, ACTION_REBOOT, ACTION_BAN,
+        ACTION_RESTORE, ACTION_DELETE, ACTION_INSTALL, ACTION_UPGRADE, ACTION_REBOOT, ACTION_BAN, ACTION_REALTIME,
     })
 
     def __init__(self, ctx: ExtensionContext, defender: Defender, updates: UpdateCenter | None = None) -> None:
@@ -223,22 +273,49 @@ class DefenderExecutor:
             if self._updates is None:
                 return ActionResult(success=False, error="Die Update-Zentrale ist nicht aktiv.")
             mode = "reboot" if req.action_type == ACTION_REBOOT else str(req.payload["mode"])
-            ok, summary, output, exit_code = await self._updates.execute(host, mode, command=command, trigger="manual")
+            # `build` hat die Angaben schon geprüft. Der Plan ist derselbe Lauf für das Hilfsskript (`upgrade_args`).
+            plan = None if req.action_type == ACTION_REBOOT else up.upgrade_args(
+                req.payload["manager"], mode, req.payload["packages"], dist_upgrade=req.payload.get("dist_upgrade", False),
+            )
+            ok, summary, output, exit_code = await self._updates.execute(host, mode, command=command, trigger="manual", plan=plan)
             return ActionResult(success=ok, exit_code=exit_code, output=output[-20000:] or summary, error=None if ok else summary)
-        timeout = 30 * 60 if req.action_type == ACTION_INSTALL else 120
-        result = await self._ctx.exec.run(host, av.as_root(command), timeout_s=timeout)
+        timeout = {ACTION_INSTALL: 30 * 60, ACTION_REALTIME: 5 * 60}.get(req.action_type, 120)
+        # `build` hat die Angaben schon geprüft; das Hilfsskript bekommt dieselben, sonst bleibt es beim alten Weg.
+        args = await self._commands.helper_args(req.action_type, host, req.payload)
+        version = {
+            ACTION_REALTIME: av.HELPER_REALTIME_VERSION,
+            ACTION_RESTORE: av.HELPER_QUARANTINE_VERSION,
+            ACTION_DELETE: av.HELPER_QUARANTINE_VERSION,
+        }.get(req.action_type, av.HELPER_ACTION_VERSION)
+        wrapped = av.via_helper(args, command, version=version) if args else av.as_root(command)
+        result = await self._ctx.exec.run(host, wrapped, timeout_s=timeout)
+        stdout = av.helper_text(result.stdout) if result.stdout is not None else None
         ok = result.exit_code == 0
         if req.action_type == ACTION_INSTALL:
             # Sonst bote die Seite mit dem gemerkten Stand (bis 10 Minuten) das gerade Installierte erneut an.
             self._defender.forget_status(host.id)
-        if av.NO_ROOT in (result.stdout or ""):
-            return ActionResult(success=False, exit_code=result.exit_code, error=av.NO_ROOT_MESSAGE)
+        if req.action_type == ACTION_REALTIME:
+            # Auch nach einem Fehlschlag: clamd kann schon laufen, die gemerkte Eignung stimmt dann nicht mehr.
+            self._defender.forget_readiness(host.id)
+        if av.NO_ROOT in (stdout or ""):
+            return ActionResult(success=False, exit_code=result.exit_code, error=av.no_root_message(stdout))
+        if req.action_type == ACTION_REALTIME:
+            return await self._finish_realtime(host.id, req.payload["enable"], result, stdout or "")
         if req.action_type in (ACTION_RESTORE, ACTION_DELETE):
             action = "restore" if req.action_type == ACTION_RESTORE else "delete"
-            await self._defender.apply_action_result(req.payload["finding_id"], action, ok, (result.stdout or "") + (result.stderr or ""))
+            await self._defender.apply_action_result(req.payload["finding_id"], action, ok, (stdout or "") + (result.stderr or ""))
         return ActionResult(
-            success=ok, exit_code=result.exit_code, output=result.stdout, error=result.stderr or None, duration_ms=result.duration_ms,
+            success=ok, exit_code=result.exit_code, output=stdout, error=result.stderr or None, duration_ms=result.duration_ms,
         )
+
+    async def _finish_realtime(self, host_id: str, enable: bool, result: Any, stdout: str) -> ActionResult:
+        """Gemerkt wird der neue Stand nur, wenn der Server die Marke des Umstellens gemeldet hat."""
+        ok = result.exit_code == 0 and rt.switched(stdout, enable)
+        if ok:
+            await save_baseline(self._ctx, host_id, rt.STATE_KIND, {"enabled": enable, "changed_at": datetime.now(UTC).isoformat()})
+        # Die Sätze des Befehls (etwa das fehlende Paket) stehen auf stdout, nicht auf stderr.
+        error = None if ok else (result.stderr or stdout).strip()[-2000:] or "Das Umstellen ist fehlgeschlagen."
+        return ActionResult(success=ok, exit_code=result.exit_code, output=stdout, error=error, duration_ms=result.duration_ms)
 
     async def dry_run(self, req: ActionRequest) -> DryRunReport | None:
         return DryRunReport(would_change=True, summary=req.reason or "Virenschutz-Aktion")
@@ -259,6 +336,8 @@ ACTION_SPECS = [
     ActionSpec(action_type=ACTION_REBOOT, label="Server neu starten", default_risk=Risk.HIGH,
                permissions=["hosts.execute"], host_bound=False, command_field="command"),
     ActionSpec(action_type=ACTION_BAN, label="IP-Adresse per Fail2ban sperren/entsperren", default_risk=Risk.LOW,
+               permissions=["hosts.execute"], host_bound=False, command_field="command"),
+    ActionSpec(action_type=ACTION_REALTIME, label="Viren-Wächter: Echtzeit ein- oder ausschalten", default_risk=Risk.MEDIUM,
                permissions=["hosts.execute"], host_bound=False, command_field="command"),
 ]
 
@@ -281,6 +360,10 @@ class _BanIn(BaseModel):
     ip: str
     jail: str = "sshd"
     unban: bool = False
+
+
+class _RealtimeIn(BaseModel):
+    enable: bool
 
 
 class _UpgradeIn(BaseModel):
@@ -424,6 +507,18 @@ def build_routers(
     @read.get("/overview")
     async def overview(refresh: bool = False) -> dict:
         return await defender.overview(refresh=refresh)
+
+    @read.get("/realtime/readiness")
+    async def realtime_readiness(refresh: bool = False) -> dict:
+        """Je Server: Könnte der Viren-Wächter dort in Echtzeit laufen, und läuft er schon so? Nur eine Abfrage."""
+        hosts = await defender.target_hosts()
+        rows = await asyncio.gather(*(defender.realtime_readiness(h, refresh=refresh) for h in hosts))
+        states = await load_baselines(ctx, rt.STATE_KIND)
+        return {"hosts": [
+            {"host_id": h.id, "host_name": h.display_name or h.name, **row,
+             "realtime_on": bool(states.get(h.id, {}).get("enabled", False))}
+            for h, row in zip(hosts, rows, strict=True)
+        ]}
 
     @read.get("/widgets/protection")
     async def protection_widget() -> dict:
@@ -736,6 +831,32 @@ def build_routers(
         return await _propose(host, ACTION_DELETE, {"finding_id": finding_id},
                               f"Endgültig löschen: {f['path']} ({f['signature']})", actor, Risk.MEDIUM,
                               error_status=status.HTTP_409_CONFLICT)
+
+    @manage.post("/realtime/{host_id}")
+    async def realtime_switch(host_id: str, payload: _RealtimeIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:
+        """Schlägt vor, den Wächter auf dem Server in Echtzeit laufen zu lassen oder zurück auf den Minuten-Takt."""
+        host = await ctx.hosts.get(host_id)
+        if host is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unbekannter Server.")
+        name = host.display_name or host.name
+        if payload.enable:
+            ready = await defender.realtime_readiness(host, refresh=True)
+            if not ready.get("possible"):
+                raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=" ".join(ready.get("reasons") or []))
+            if not ready.get("clamd_installed"):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"{av.REALTIME_NO_PACKAGE} Bitte zuerst installieren; Nodvard Deck installiert es nicht selbst.",
+                )
+        settings = await ctx.settings.get()
+        fields = {
+            "enable": payload.enable,
+            "watch": settings.get("watch_paths") or av.WATCH_PATHS,
+            "exclude": settings.get("exclude_paths") or [],
+            "max_mb": max_filesize_mb(settings),
+        }
+        reason = f"Viren-Wächter auf {name} in Echtzeit" if payload.enable else f"Viren-Wächter auf {name} zurück auf Intervall"
+        return await _propose(host, ACTION_REALTIME, fields, reason, actor, Risk.MEDIUM)
 
     @manage.post("/hosts/{host_id}/install")
     async def install(host_id: str, payload: _InstallIn, actor: Actor = Depends(ctx.api.current_actor)) -> dict:

@@ -122,7 +122,7 @@ export function AppDialog({
   return (
     <Dialog.Root open={open} onOpenChange={(next) => { if (!busy) onOpenChange(next); }}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-40 bg-black/60" />
+        <Dialog.Overlay className="fixed inset-0 z-40 bg-scrim/60" />
         <Dialog.Content
           onCloseAutoFocus={onCloseAutoFocus}
           className="fixed left-1/2 top-1/2 z-50 flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 -translate-y-1/2 flex-col rounded-lg border border-white/10 bg-[var(--color-surface)] shadow-xl"

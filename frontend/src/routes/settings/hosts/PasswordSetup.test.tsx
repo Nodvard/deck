@@ -23,7 +23,7 @@ const SETUP_URL = "POST /hosts/h1/credentials/c1/setup-with-password";
 
 const REQUIREMENTS = [
   { ext_id: "shield", id: "root", label: "Root-Rechte (Nodvard Shield)", check_command: null, ok_text: "", fail_hint: "", unix_group: null, needs_root: true, root_reason: "Updates einspielen", order: 50 },
-  { ext_id: "service-matrix", id: "docker-group", label: "Docker ohne sudo (Service-Matrix)", check_command: "docker ps -q", ok_text: "", fail_hint: "", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
+  { ext_id: "docker", id: "docker-group", label: "Docker ohne sudo (Container-Verwaltung)", check_command: "docker ps -q", ok_text: "", fail_hint: "", unix_group: "docker", needs_root: false, root_reason: null, order: 100 },
 ];
 
 function setupFixture(call: Call) {
@@ -139,7 +139,7 @@ describe("Mit Passwort einrichten: Formular", () => {
     await waitFor(() => expect(within(form).getByLabelText("Passwort dieses Kontos")).toHaveValue(""));
     expect(within(form).getByRole("button", { name: /Richte ein/ })).toBeDisabled();
     const sent = calls.find((c) => `${c.method} ${c.path}` === SETUP_URL);
-    // Vorbelegt: root-Rechte (Nodvard Shield) und die Gruppe docker (Service-Matrix) -- wie beim Befehl.
+    // Vorbelegt: root-Rechte (Nodvard Shield) und die Gruppe docker (Docker), wie beim Befehl.
     expect(sent?.body).toEqual({ login_user: "root", password: SECRET, sudo: true, groups: ["docker"], sudo_password_same: true });
     expect(sent?.query).toBe("");
 

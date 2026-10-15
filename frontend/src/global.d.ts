@@ -38,6 +38,9 @@ declare global {
     refreshAccessTokenResult?: () => Promise<NodvardDeckTokenRefreshResult>;
     confirmDialog: (message: string, options?: { title?: string; danger?: boolean; confirmLabel?: string; cancelLabel?: string }) => Promise<boolean>;
     promptDialog: (message: string, defaultValue?: string) => Promise<string | null>;
+    /** Fragt das eigene Passwort und, mit `twoFactor`, den Code aus der App ab (`null` bei Abbruch), etwa wenn der Kern
+     * mit 403 `confirm_required` antwortet. Optional: ältere Kerne kennen es nicht. */
+    confirmIdentity?: (message: string, twoFactor?: boolean) => Promise<{ current_password: string; totp_code?: string } | null>;
     hasPermission: (permission: string) => boolean;
     /** Setzt die Kern-Shell, solange eine Erweiterungsseite offen ist: Sie meldet dann jede Navigation, auch
      * Zurück/Vor, als `nodvard-deck:navigate` und `lattice:navigate` (routes/ExtensionPage.tsx), und die Seite hört

@@ -1,5 +1,5 @@
 """Die Anbieter der "Wichtigen Orte" (`FilePlaceProvider`) in den Erweiterungen: Docker-Projektordner
-(service-matrix), Sicherungsordner eines Proxmox-Knotens (proxmox), Protokolle (system).
+(docker), Sicherungsordner eines Proxmox-Knotens (proxmox), Protokolle (system).
 
 Jeder Anbieter wird mit genau den Daten gefuettert, die seine Erweiterung ohnehin hat (die Ausgabe von
 `docker ps`, die Speicherliste eines Knotens, der Host-Eintrag) -- sie stellen keine eigenen Fragen an den Server.
@@ -15,14 +15,14 @@ from pathlib import Path
 import pytest
 
 REPO_EXTENSIONS_DIR = Path(__file__).resolve().parents[2] / "extensions"
-for _ext in ("service-matrix", "proxmox", "system"):
+for _ext in ("docker", "proxmox", "system"):
     sys.path.insert(0, str(REPO_EXTENSIONS_DIR / _ext / "src"))
 
 import nodvard_deck_ext_proxmox.places as proxmox_places  # noqa: E402
-import nodvard_deck_ext_service_matrix.capabilities as matrix_caps  # noqa: E402
+import nodvard_deck_ext_docker.capabilities as matrix_caps  # noqa: E402
 from nodvard_deck_ext_proxmox.places import ProxmoxFilePlaces, backup_folder, backup_places  # noqa: E402
-from nodvard_deck_ext_service_matrix.capabilities import DockerServiceCatalog, parse_compose_dirs  # noqa: E402
-from nodvard_deck_ext_service_matrix.places import DockerFilePlaces  # noqa: E402
+from nodvard_deck_ext_docker.capabilities import DockerServiceCatalog, parse_compose_dirs  # noqa: E402
+from nodvard_deck_ext_docker.places import DockerFilePlaces  # noqa: E402
 from nodvard_deck_ext_system import SystemFilePlaces  # noqa: E402
 from nodvard_sdk import FilePlace  # noqa: E402
 from nodvard_sdk.capabilities import FilePlaceProvider  # noqa: E402
@@ -85,17 +85,17 @@ def _ctx(*hosts, outputs: dict | None = None, settings: dict | None = None, ext_
 
 
 def _ps(name: str, project: str = "", folder: str | None = "", ports: str = "") -> str:
-    """Eine Zeile von `docker ps -a --format <_PS_FORMAT>`; `folder=None` = das alte Format mit sieben Feldern."""
+    """Eine Zeile von `commands.ps_all()`; `folder=None` = das alte Format mit sieben Feldern."""
     line = f"0123456789ab|{name}|running|Up|img:latest|{project}|{ports}"
     return line if folder is None else f"{line}|{folder}"
 
 
-# --- service-matrix: Projektordner der Compose-Projekte --------------------------------------------------------
+# --- docker: Projektordner der Compose-Projekte --------------------------------------------------------
 
 
 def test_the_docker_ps_format_asks_for_the_project_folder_in_the_same_call():
-    assert 'com.docker.compose.project.working_dir' in matrix_caps._PS_FORMAT
-    assert matrix_caps._PS_FORMAT.count("|") == 7  # acht Felder, der Ordner steht ganz hinten
+    assert 'com.docker.compose.project.working_dir' in matrix_caps.commands.PS_FORMAT
+    assert matrix_caps.commands.PS_FORMAT.count("|") == 7  # acht Felder, der Ordner steht ganz hinten
 
 
 def test_compose_dirs_are_read_from_the_eighth_field():
@@ -172,7 +172,7 @@ async def test_without_a_remembered_state_the_places_read_the_same_docker_ps_onc
     assert [p.path for p in first] == [p.path for p in second] == ["/srv/shop"]
     assert len(ctx.exec.commands) == 1  # der zweite Aufruf nimmt den gemerkten Stand
     command = ctx.exec.commands[0][1]
-    assert command == f"docker ps -a --format {matrix_caps._PS_FORMAT}"  # derselbe Befehl wie in der Service-Liste
+    assert command == matrix_caps.commands.ps_all()  # derselbe Befehl wie in der Service-Liste
 
     monkeypatch.setattr(matrix_caps, "COMPOSE_DIRS_TTL_S", 0.0)
     await provider.places_for_host("h1")

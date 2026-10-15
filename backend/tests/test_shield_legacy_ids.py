@@ -236,7 +236,7 @@ async def test_an_installation_of_0_6_keeps_its_settings_jobs_findings_and_propo
 
     runtime = get_extension_runtime()
     loaded = runtime.loaded["shield"]
-    assert loaded.store_id == "nexus-soc" and runtime.legacy_owner == {"nexus-soc": "shield"}
+    assert loaded.store_id == "nexus-soc" and runtime.legacy_owner["nexus-soc"] == "shield"
     await _assert_same_state(db_session, state, expected_settings=SETTINGS_OF_0_6)
     assert await loaded.ctx.settings.get() == SETTINGS_OF_0_6
     # Der Zeitplan hat die Einstellung uebernommen (Zeile des Jobs bleibt, nur der Plan wird nachgezogen).
@@ -267,15 +267,15 @@ async def test_an_installation_of_0_6_keeps_its_settings_jobs_findings_and_propo
     assert (shown["ext_name"], shown["action_label"]) == ("Nodvard Shield", "System-Updates einspielen")
     calls: list[tuple] = []
 
-    async def fake_execute(host, mode, *, command, trigger):
-        calls.append((host.id, mode, command, trigger))
+    async def fake_execute(host, mode, *, command, trigger, plan=None):
+        calls.append((host.id, mode, command, trigger, plan))
         return True, "Updates eingespielt", "fertig\n", 0
 
     monkeypatch.setattr(loaded.instance._updates, "execute", fake_execute)
     approved = await client.post(f"/api/v1/actions/{state['proposal']}/approve", headers=headers)
     assert approved.status_code == 200, approved.text
     assert approved.json()["status"] == "succeeded"
-    assert calls == [(host_id, "all", _upgrade_command(), "manual")]
+    assert calls == [(host_id, "all", _upgrade_command(), "manual", ["apt", "all", "plain"])]
 
     # Ein zweiter Start ist derselbe Stand.
     await _stop_process(db_session)

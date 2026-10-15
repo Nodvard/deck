@@ -437,12 +437,12 @@ def _connection(name="kuma", *, slug="heim", insecure=False, url=BASE) -> dict:
 
 
 async def _configure(client, headers, *connections: dict, key: str | None = KEY) -> None:
-    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"values": {"connections": list(connections)}}, headers=headers)
+    saved = await client.put(f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"connections": list(connections)}}, headers=headers)
     assert saved.status_code == 200, saved.text
     if key is not None:
         for connection in connections:
             res = await client.put(
-                f"/api/v1/extensions/{EXT}/secrets", json={"label": f"uptime-kuma-key:{connection['name']}", "value": key}, headers=headers,
+                f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": f"uptime-kuma-key:{connection['name']}", "value": key}, headers=headers,
             )
             assert res.status_code == 204, res.text
 
@@ -524,7 +524,7 @@ async def test_connection_without_key_and_status_page_is_not_configured(client, 
     assert fake.requests == []
 
     # Ein nachgetragener Schlüssel gilt sofort, auch innerhalb der 20 Sekunden des Zwischenspeichers.
-    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"label": "uptime-kuma-key:kuma", "value": KEY}, headers=headers)
+    res = await client.put(f"/api/v1/extensions/{EXT}/secrets", json={"current_password": "correct-horse-battery", "label": "uptime-kuma-key:kuma", "value": KEY}, headers=headers)
     assert res.status_code == 204
     assert _only(await _overview(client, headers))["state"] == "ok"
 
@@ -881,7 +881,7 @@ async def test_results_are_cached_for_a_short_time_and_the_key_is_read_only_when
 
     await _overview(client, headers)
     saved = await client.put(
-        f"/api/v1/extensions/{EXT}/settings", json={"values": {"connections": [_connection(slug="")]}}, headers=headers,
+        f"/api/v1/extensions/{EXT}/settings", json={"current_password": "correct-horse-battery", "values": {"connections": [_connection(slug="")]}}, headers=headers,
     )
     assert saved.status_code == 200, saved.text
     assert not saved.json().get("secrets_cleared"), "dieselbe Adresse: der Schlüssel bleibt"
@@ -896,7 +896,7 @@ async def test_changing_the_address_removes_the_key_so_it_never_goes_to_a_new_ta
     assert _only(await _overview(client, headers))["state"] == "ok"
     saved = await client.put(
         f"/api/v1/extensions/{EXT}/settings",
-        json={"values": {"connections": [_connection(slug="", url="http://angreifer.test:3001")]}}, headers=headers,
+        json={"current_password": "correct-horse-battery", "values": {"connections": [_connection(slug="", url="http://angreifer.test:3001")]}}, headers=headers,
     )
     assert saved.status_code == 200, saved.text
     assert saved.json()["secrets_cleared"] == ["uptime-kuma-key:kuma"]
@@ -931,6 +931,20 @@ async def test_health_is_fine_when_every_connection_answers(client, db_session, 
     loaded = get_extension_runtime().loaded[EXT]
     health = await loaded.instance.health(loaded.ctx)
     assert health.healthy is True and health.message == "kuma: in Ordnung"
+
+
+@pytest.mark.asyncio
+async def test_health_asks_again_instead_of_using_the_cache(client, db_session, test_settings):
+    """„Verbindung testen“ zeigt den Stand von jetzt: fällt Kuma nach dem letzten Abruf aus, meldet der Test das."""
+    headers, fake = await _enable(client, db_session, test_settings)
+    await _configure(client, headers, _connection())
+    assert _only(await _overview(client, headers))["state"] == "ok"
+    asked = len(fake.requests)
+    fake.error = httpx.ConnectError("Verbindung abgelehnt")
+    loaded = get_extension_runtime().loaded[EXT]
+    health = await loaded.instance.health(loaded.ctx)
+    assert len(fake.requests) > asked, "der Test fragt Uptime Kuma neu"
+    assert health.healthy is False
 
 
 @pytest.mark.asyncio

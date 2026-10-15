@@ -38,6 +38,15 @@ ROOT = Path(__file__).resolve().parents[2]
 SWITCH = ROOT / "deploy" / "pi_switch.sh"
 DEPLOY = ROOT / "scripts" / "deploy_pi.sh"
 
+# `sync` ohne Ziel tut nichts; mit Dateien endet es wie das echte mit 1, sobald eine davon fehlt (Optionen zählen nicht).
+SYNC_STUB = """#!/bin/sh
+for f in "$@"; do
+  case "$f" in -*) continue ;; esac
+  if [ ! -e "$f" ]; then echo "sync: error opening '$f': No such file or directory" >&2; exit 1; fi
+done
+exit 0
+"""
+
 needs_bash = pytest.mark.skipif(
     sys.platform == "win32" or shutil.which("bash") is None,
     reason="braucht eine echte POSIX-Shell (und Python-Skripte als docker-/curl-Attrappe im PATH)",
@@ -560,6 +569,11 @@ class Machine:
         self.bin.mkdir()
         _executable(self.bin / "docker", DOCKER_STUB.replace("__PYTHON__", sys.executable))
         _executable(self.bin / "curl", CURL_STUB.replace("__PYTHON__", sys.executable))
+        # Ein echtes `sync` ohne Ziel (Austausch-Schritt von restore.sh) wartet, bis alle Dateisysteme geschrieben sind.
+        # In der vollen Test-Suite schreiben gleichzeitig viele andere Tests, dann dauert das so lange, dass Läufe an ihre
+        # 60-Sekunden-Grenze stoßen. Ob und wann die Skripte `sync` aufrufen, prüfen eigene Tests über `_wrap`. Wie das
+        # echte `sync` scheitert die Attrappe an einer Datei, die es nicht gibt (`mark` in restore.sh ruft `sync <datei>`).
+        _executable(self.bin / "sync", SYNC_STUB)
         self.state_file = tmp_path / "docker-state.json"
         self.set(images={}, containers={})
 
@@ -593,6 +607,21 @@ class Machine:
 @pytest.fixture
 def machine(tmp_path: Path) -> Machine:
     return Machine(tmp_path)
+
+
+@needs_bash
+def test_the_scripts_never_reach_the_real_sync_in_these_tests(machine):
+    """Siehe `Machine.__init__`: ein `sync` ohne Ziel haengt unter Last, darum findet jedes Skript zuerst die Attrappe.
+    Unter Windows fände `shutil.which` das `sync.EXE` von Git Bash statt der Attrappe, darum nur mit echter Shell."""
+    assert shutil.which("sync", path=machine.env()["PATH"]) == str(machine.bin / "sync")
+    assert subprocess.run(["sync"], env=machine.env(), timeout=5, check=False).returncode == 0
+    there = machine.tmp / "da.txt"
+    there.write_text("x", encoding="utf-8")
+    assert subprocess.run(["sync", str(there)], env=machine.env(), timeout=5, check=False).returncode == 0
+    missing = subprocess.run(["sync", "-f", str(machine.tmp / "fehlt.txt")], env=machine.env(), capture_output=True, text=True,
+                             timeout=5, check=False)
+    assert missing.returncode == 1
+    assert "fehlt.txt" in missing.stderr
 
 
 def _running(image: str = OLD, **extra) -> dict:
@@ -1383,12 +1412,18 @@ def backup_env(machine, tmp_path):
 
 
 def _wrap(machine: Machine, name: str, body: str) -> None:
-    """Attrappe fuer ein Werkzeug im PATH: `body` (Bash) laeuft zuerst, sonst wird das echte Programm aufgerufen."""
+    """Attrappe fuer ein Werkzeug im PATH: `body` (Bash) laeuft zuerst, sonst wird das echte Programm aufgerufen. Hat die
+    Maschine schon eine eigene Attrappe (`sync`), laeuft danach diese statt des echten Programms."""
     import shlex
 
-    real = shutil.which(name)
-    assert real, name
-    _executable(machine.bin / name, f'#!/usr/bin/env bash\n{body}\nexec {shlex.quote(real)} "$@"\n')
+    stub = machine.bin / name
+    if stub.exists():
+        real = str(machine.bin / f".{name}-innen")
+        stub.rename(real)
+    else:
+        real = shutil.which(name)
+        assert real, name
+    _executable(stub, f'#!/usr/bin/env bash\n{body}\nexec {shlex.quote(real)} "$@"\n')
 
 
 def _fake_uid(machine: Machine) -> None:

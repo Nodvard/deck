@@ -153,6 +153,26 @@ def stop_command(run_id: str, *, base_dir: str = AUDIT_DIR) -> str:
     )
 
 
+def launch_as_root(run_id: str, *, limit_s: int = LIMIT_S) -> str:
+    """Start eines Audits als root (`detached.launch_command` mit `lynis_command`). Über das Hilfsskript
+    (`audit-start`, ab Version 5) nur mit der festen Obergrenze `LIMIT_S`, die das Skript kennt."""
+    launch = dt.launch_command(run_id, lynis_command(run_id, limit_s=limit_s), kind=AUDITS)
+    if limit_s != LIMIT_S:
+        return av.as_root(launch)
+    return av.via_helper(["audit-start", run_id], launch, version=av.HELPER_AUDIT_VERSION)
+
+
+def poll_as_root(run_id: str) -> str:
+    """`poll_command` als root, über das Hilfsskript (`audit-poll`, ab Version 5). Es liest dieselben Dateien, egal auf
+    welchem Weg das Audit gestartet wurde."""
+    return av.via_helper(["audit-poll", run_id], poll_command(run_id), version=av.HELPER_AUDIT_VERSION)
+
+
+def stop_as_root(run_id: str) -> str:
+    """`stop_command` als root, über das Hilfsskript (`audit-stop`, ab Version 5)."""
+    return av.via_helper(["audit-stop", run_id], stop_command(run_id), version=av.HELPER_AUDIT_VERSION)
+
+
 def parse_result(output: str) -> av.LynisResult:
     """Auswertung des Protokolls eines fertigen Laufs (`lynis_command`)."""
     lines = [ln.strip() for ln in output.splitlines()]

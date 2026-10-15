@@ -1,0 +1,3 @@
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield prüft je Server, ob der Viren-Wächter dort später in Echtzeit laufen könnte (genug Arbeitsspeicher, kein Container, Rechte). Eingeschaltet wird dabei noch nichts."

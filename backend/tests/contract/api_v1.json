@@ -230,6 +230,21 @@
    }
   },
   "DELETE /api/v1/extensions/{ext_id}/secrets": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      }
+     },
+     "type": "null|object"
+    }
+   },
    "params": {
     "path:ext_id": {
      "required": true,
@@ -271,6 +286,21 @@
    }
   },
   "DELETE /api/v1/hosts/{host_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      }
+     },
+     "type": "null|object"
+    }
+   },
    "params": {
     "path:host_id": {
      "required": true,
@@ -282,6 +312,21 @@
    }
   },
   "DELETE /api/v1/hosts/{host_id}/credentials/{credential_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      }
+     },
+     "type": "null|object"
+    }
+   },
    "params": {
     "path:credential_id": {
      "required": true,
@@ -355,6 +400,21 @@
    }
   },
   "DELETE /api/v1/secrets/{secret_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": false,
+    "schema": {
+     "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      }
+     },
+     "type": "null|object"
+    }
+   },
    "params": {
     "path:secret_id": {
      "required": true,
@@ -978,6 +1038,30 @@
     }
    }
   },
+  "GET /api/v1/branding/custom-css": {
+   "responses": {
+    "200": {
+     "fields": {
+      "css": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/branding/custom.css": {
+   "responses": {
+    "200": null
+   }
+  },
+  "GET /api/v1/branding/favicon": {
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
   "GET /api/v1/branding/logo": {
    "responses": {
     "200": {
@@ -1291,6 +1375,143 @@
    }
   },
   "GET /api/v1/ext/backups/widgets/summary": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/containers/{host_id}/{container}/image-update/plan": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/containers/{host_id}/{container}/inspect": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/containers/{host_id}/{container}/logs": {
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    },
+    "query:follow": {
+     "type": "boolean"
+    },
+    "query:tail": {
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "any"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/docker": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/images": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/networks": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/hosts/{host_id}/volumes": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/image-updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/stats": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/docker/widgets/matrix": {
    "responses": {
     "200": {
      "type": "object"
@@ -1617,6 +1838,144 @@
    }
   },
   "GET /api/v1/ext/hello-world/widgets/hello": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/home-assistant/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "connections": {
+       "items": {
+        "fields": {
+         "counts": {
+          "fields": {
+           "total": {
+            "type": "integer"
+           },
+           "unavailable": {
+            "type": "integer"
+           },
+           "unknown": {
+            "type": "integer"
+           },
+           "updates": {
+            "type": "integer"
+           }
+          },
+          "type": "null|object"
+         },
+         "entities": {
+          "items": {
+           "fields": {
+            "entity_id": {
+             "type": "string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "state": {
+             "type": "null|string"
+            },
+            "status": {
+             "type": "string"
+            },
+            "unit": {
+             "type": "null|string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "location_name": {
+          "type": "null|string"
+         },
+         "message": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "state": {
+          "type": "string"
+         },
+         "unavailable": {
+          "items": {
+           "fields": {
+            "entity_id": {
+             "type": "string"
+            },
+            "name": {
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "updates": {
+          "items": {
+           "fields": {
+            "entity_id": {
+             "type": "string"
+            },
+            "installed_version": {
+             "type": "null|string"
+            },
+            "latest_version": {
+             "type": "null|string"
+            },
+            "name": {
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "url": {
+          "type": "null|string"
+         },
+         "version": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "summary": {
+       "fields": {
+        "connections": {
+         "type": "integer"
+        },
+        "unavailable": {
+         "type": "integer"
+        },
+        "unknown": {
+         "type": "integer"
+        },
+        "updates": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/home-assistant/widgets/status": {
    "responses": {
     "200": {
      "type": "object"
@@ -1998,6 +2357,187 @@
     }
    }
   },
+  "GET /api/v1/ext/jellyfin/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "connections": {
+       "items": {
+        "fields": {
+         "counts": {
+          "fields": {
+           "albums": {
+            "type": "integer|null"
+           },
+           "books": {
+            "type": "integer|null"
+           },
+           "box_sets": {
+            "type": "integer|null"
+           },
+           "episodes": {
+            "type": "integer|null"
+           },
+           "movies": {
+            "type": "integer|null"
+           },
+           "music_videos": {
+            "type": "integer|null"
+           },
+           "series": {
+            "type": "integer|null"
+           },
+           "songs": {
+            "type": "integer|null"
+           }
+          },
+          "type": "null|object"
+         },
+         "latest": {
+          "items": {
+           "fields": {
+            "added_at": {
+             "type": "null|string"
+            },
+            "artist": {
+             "type": "null|string"
+            },
+            "episode": {
+             "type": "integer|null"
+            },
+            "kind": {
+             "type": "string"
+            },
+            "season": {
+             "type": "integer|null"
+            },
+            "series": {
+             "type": "null|string"
+            },
+            "title": {
+             "type": "string"
+            },
+            "year": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "message": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "playback_count": {
+          "type": "integer|null"
+         },
+         "playbacks": {
+          "items": {
+           "fields": {
+            "artist": {
+             "type": "null|string"
+            },
+            "client": {
+             "type": "null|string"
+            },
+            "device": {
+             "type": "null|string"
+            },
+            "episode": {
+             "type": "integer|null"
+            },
+            "kind": {
+             "type": "string"
+            },
+            "paused": {
+             "type": "boolean"
+            },
+            "play_method": {
+             "type": "null|string"
+            },
+            "progress_percent": {
+             "type": "integer|null"
+            },
+            "season": {
+             "type": "integer|null"
+            },
+            "series": {
+             "type": "null|string"
+            },
+            "title": {
+             "type": "string"
+            },
+            "transcoding": {
+             "type": "boolean"
+            },
+            "user": {
+             "type": "null|string"
+            },
+            "year": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "problems": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "server_name": {
+          "type": "null|string"
+         },
+         "state": {
+          "type": "string"
+         },
+         "url": {
+          "type": "null|string"
+         },
+         "version": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "summary": {
+       "fields": {
+        "connections": {
+         "type": "integer"
+        },
+        "playing": {
+         "type": "integer"
+        },
+        "transcoding": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/jellyfin/widgets/status": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/network/npm": {
    "responses": {
     "200": {
@@ -2209,6 +2749,18 @@
     }
    }
   },
+  "GET /api/v1/ext/nexus-soc/defender/realtime/readiness": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/nexus-soc/defender/scans": {
    "params": {
     "query:host": {
@@ -2337,6 +2889,27 @@
     }
    }
   },
+  "GET /api/v1/ext/npm/address-check": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/npm/summary": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/npm/widgets/certificates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/ntfy/subscribe-link": {
    "responses": {
     "200": {
@@ -2351,6 +2924,192 @@
        "type": "null|string"
       }
      },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/pihole/summary": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/pihole/widgets/status": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/plex/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "connections": {
+       "items": {
+        "fields": {
+         "latest": {
+          "items": {
+           "fields": {
+            "added_at": {
+             "type": "null|string"
+            },
+            "artist": {
+             "type": "null|string"
+            },
+            "episode": {
+             "type": "integer|null"
+            },
+            "kind": {
+             "type": "string"
+            },
+            "season": {
+             "type": "integer|null"
+            },
+            "series": {
+             "type": "null|string"
+            },
+            "title": {
+             "type": "string"
+            },
+            "year": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "libraries": {
+          "items": {
+           "fields": {
+            "count": {
+             "type": "integer|null"
+            },
+            "kind": {
+             "type": "string"
+            },
+            "scanning": {
+             "type": "boolean"
+            },
+            "title": {
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "message": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "playback_count": {
+          "type": "integer|null"
+         },
+         "playbacks": {
+          "items": {
+           "fields": {
+            "artist": {
+             "type": "null|string"
+            },
+            "client": {
+             "type": "null|string"
+            },
+            "device": {
+             "type": "null|string"
+            },
+            "episode": {
+             "type": "integer|null"
+            },
+            "kind": {
+             "type": "string"
+            },
+            "paused": {
+             "type": "boolean"
+            },
+            "play_method": {
+             "type": "null|string"
+            },
+            "progress_percent": {
+             "type": "integer|null"
+            },
+            "season": {
+             "type": "integer|null"
+            },
+            "series": {
+             "type": "null|string"
+            },
+            "title": {
+             "type": "string"
+            },
+            "transcoding": {
+             "type": "boolean"
+            },
+            "user": {
+             "type": "null|string"
+            },
+            "year": {
+             "type": "integer|null"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "problems": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "server_name": {
+          "type": "null|string"
+         },
+         "state": {
+          "type": "string"
+         },
+         "url": {
+          "type": "null|string"
+         },
+         "version": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "summary": {
+       "fields": {
+        "connections": {
+         "type": "integer"
+        },
+        "playing": {
+         "type": "integer"
+        },
+        "transcoding": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/plex/widgets/status": {
+   "responses": {
+    "200": {
      "type": "object"
     }
    }
@@ -2538,6 +3297,166 @@
    }
   },
   "GET /api/v1/ext/proxmox/widgets/updates": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/qbittorrent/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "connections": {
+       "items": {
+        "fields": {
+         "active": {
+          "items": {
+           "fields": {
+            "download_speed": {
+             "type": "integer"
+            },
+            "eta_seconds": {
+             "type": "integer|null"
+            },
+            "name": {
+             "type": "string"
+            },
+            "progress_percent": {
+             "type": "integer"
+            },
+            "size": {
+             "type": "integer|null"
+            },
+            "state": {
+             "type": "string"
+            },
+            "upload_speed": {
+             "type": "integer"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array|null"
+         },
+         "active_more": {
+          "type": "boolean"
+         },
+         "api_version": {
+          "type": "null|string"
+         },
+         "counts": {
+          "fields": {
+           "downloading": {
+            "type": "integer"
+           },
+           "error": {
+            "type": "integer"
+           },
+           "other": {
+            "type": "integer"
+           },
+           "paused": {
+            "type": "integer"
+           },
+           "seeding": {
+            "type": "integer"
+           },
+           "total": {
+            "type": "integer"
+           }
+          },
+          "type": "null|object"
+         },
+         "free_space": {
+          "type": "integer|null"
+         },
+         "message": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "notes": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "problems": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "state": {
+          "type": "string"
+         },
+         "transfer": {
+          "fields": {
+           "alt_limits": {
+            "type": "boolean|null"
+           },
+           "connection": {
+            "type": "string"
+           },
+           "download_limit": {
+            "type": "integer|null"
+           },
+           "download_speed": {
+            "type": "integer"
+           },
+           "limited": {
+            "type": "boolean"
+           },
+           "upload_limit": {
+            "type": "integer|null"
+           },
+           "upload_speed": {
+            "type": "integer"
+           }
+          },
+          "type": "null|object"
+         },
+         "url": {
+          "type": "null|string"
+         },
+         "version": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "summary": {
+       "fields": {
+        "active": {
+         "type": "integer"
+        },
+        "connections": {
+         "type": "integer"
+        },
+        "download_speed": {
+         "type": "integer"
+        },
+        "upload_speed": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/qbittorrent/widgets/status": {
    "responses": {
     "200": {
      "type": "object"
@@ -2877,7 +3796,53 @@
     }
    }
   },
+  "GET /api/v1/ext/service-matrix/hosts": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/service-matrix/hosts/{host_id}/docker": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/images": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/networks": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/service-matrix/hosts/{host_id}/volumes": {
    "params": {
     "path:host_id": {
      "required": true,
@@ -2975,6 +3940,18 @@
    }
   },
   "GET /api/v1/ext/shield/defender/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/shield/defender/realtime/readiness": {
    "params": {
     "query:refresh": {
      "type": "boolean"
@@ -3140,6 +4117,19 @@
     }
    }
   },
+  "GET /api/v1/ext/system/hosts/{host_id}/temp-limit": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/system/widgets/health": {
    "responses": {
     "200": {
@@ -3274,6 +4264,20 @@
    }
   },
   "GET /api/v1/ext/uptime-kuma/widgets/status": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/vaultwarden/summary": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/vaultwarden/widgets/status": {
    "responses": {
     "200": {
      "type": "object"
@@ -4120,6 +5124,32 @@
        },
        "type": "array"
       },
+      "helpers": {
+       "items": {
+        "fields": {
+         "ext_id": {
+          "type": "string"
+         },
+         "module": {
+          "type": "string"
+         },
+         "path": {
+          "type": "string"
+         },
+         "sha256": {
+          "type": "string"
+         },
+         "text": {
+          "type": "string"
+         },
+         "version": {
+          "type": "integer"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
       "notes": {
        "items": {
         "type": "string"
@@ -4567,8 +5597,20 @@
    "responses": {
     "200": {
      "fields": {
+      "design_notice_dismissed": {
+       "type": "boolean"
+      },
       "first_steps_dismissed": {
        "type": "boolean"
+      },
+      "theme": {
+       "enum": [
+        "classic",
+        "original",
+        "pro",
+        "simple"
+       ],
+       "type": "string"
       }
      },
      "type": "object"
@@ -5002,6 +6044,26 @@
     "200": {
      "items": {
       "fields": {
+       "bound": {
+        "items": {
+         "fields": {
+          "id": {
+           "type": "string"
+          },
+          "last_used_at": {
+           "type": "null|string"
+          },
+          "name": {
+           "type": "string"
+          },
+          "type": {
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
        "created_at": {
         "type": "string"
        },
@@ -6113,6 +7175,9 @@
       "address": {
        "type": "null|string"
       },
+      "current_password": {
+       "type": "string"
+      },
       "display_name": {
        "type": "null|string"
       },
@@ -6133,6 +7198,9 @@
         "type": "string"
        },
        "type": "array|null"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "object"
@@ -6355,8 +7423,20 @@
     "required": true,
     "schema": {
      "fields": {
+      "design_notice_dismissed": {
+       "type": "boolean|null"
+      },
       "first_steps_dismissed": {
        "type": "boolean|null"
+      },
+      "theme": {
+       "enum": [
+        "classic",
+        "original",
+        "pro",
+        "simple"
+       ],
+       "type": "null|string"
       }
      },
      "type": "object"
@@ -6365,8 +7445,20 @@
    "responses": {
     "200": {
      "fields": {
+      "design_notice_dismissed": {
+       "type": "boolean"
+      },
       "first_steps_dismissed": {
        "type": "boolean"
+      },
+      "theme": {
+       "enum": [
+        "classic",
+        "original",
+        "pro",
+        "simple"
+       ],
+       "type": "string"
       }
      },
      "type": "object"
@@ -6398,6 +7490,26 @@
    "responses": {
     "200": {
      "fields": {
+      "bound": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "last_used_at": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "type": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
       "created_at": {
        "type": "string"
       },
@@ -7122,6 +8234,53 @@
     }
    }
   },
+  "POST /api/v1/branding/favicon": {
+   "responses": {
+    "200": {
+     "fields": {
+      "colors": {
+       "fields": {
+        "accent": {
+         "type": "string"
+        },
+        "accent_strong": {
+         "type": "string"
+        },
+        "background": {
+         "type": "string"
+        },
+        "surface": {
+         "type": "string"
+        },
+        "text": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "favicon_url": {
+       "type": "null|string"
+      },
+      "login_subtitle": {
+       "type": "null|string"
+      },
+      "logo_url": {
+       "type": "null|string"
+      },
+      "product_name": {
+       "type": "string"
+      },
+      "short_name": {
+       "type": "string"
+      },
+      "support_url": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/branding/logo": {
    "responses": {
     "200": {
@@ -7447,6 +8606,51 @@
    "responses": {
     "200": {
      "type": "any"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/containers/{host_id}/{container}/image-update": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "plan_id": {
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/docker/image-updates/check": {
+   "params": {
+    "query:force": {
+     "type": "boolean"
+    },
+    "query:host_id": {
+     "type": "null|string"
+    }
+   },
+   "responses": {
+    "202": {
+     "type": "object"
     }
    }
   },
@@ -8431,6 +9635,32 @@
     }
    }
   },
+  "POST /api/v1/ext/nexus-soc/defender/realtime/{host_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "enable": {
+       "required": true,
+       "type": "boolean"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/nexus-soc/defender/scans": {
    "body": {
     "content_type": "application/json",
@@ -8615,6 +9845,32 @@
     "204": null
    }
   },
+  "POST /api/v1/ext/npm/hosts/{host_id}/disable": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/npm/hosts/{host_id}/enable": {
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "integer"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "POST /api/v1/ext/ntfy/token": {
    "body": {
     "content_type": "application/json",
@@ -8631,6 +9887,68 @@
    },
    "responses": {
     "204": null
+   }
+  },
+  "POST /api/v1/ext/pihole/domains": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "domain": {
+       "required": true,
+       "type": "string"
+      },
+      "list": {
+       "enum": [
+        "allow",
+        "deny"
+       ],
+       "required": true,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/pihole/gravity": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/pihole/pause": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "minutes": {
+       "required": true,
+       "type": "integer"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/pihole/resume": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
    }
   },
   "POST /api/v1/ext/proxmox/connect": {
@@ -9269,6 +10587,32 @@
        ],
        "required": true,
        "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "POST /api/v1/ext/shield/defender/realtime/{host_id}": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "enable": {
+       "required": true,
+       "type": "boolean"
       }
      },
      "type": "object"
@@ -10467,8 +11811,14 @@
     "required": false,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
       "delete_previous": {
        "type": "boolean"
+      },
+      "totp_code": {
+       "type": "string"
       }
      },
      "type": "null|object"
@@ -10958,6 +12308,26 @@
    "responses": {
     "201": {
      "fields": {
+      "bound": {
+       "items": {
+        "fields": {
+         "id": {
+          "type": "string"
+         },
+         "last_used_at": {
+          "type": "null|string"
+         },
+         "name": {
+          "type": "string"
+         },
+         "type": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
       "created_at": {
        "type": "string"
       },
@@ -11670,6 +13040,30 @@
     }
    }
   },
+  "PUT /api/v1/branding/custom-css": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "css": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "css": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/dashboard/layouts/{layout_id}": {
    "body": {
     "content_type": "application/json",
@@ -11812,6 +13206,36 @@
    },
    "responses": {
     "204": null
+   }
+  },
+  "PUT /api/v1/ext/docker/containers/{host_id}/{container}/url": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "url": {
+       "required": true,
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:container": {
+     "required": true,
+     "type": "string"
+    },
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
    }
   },
   "PUT /api/v1/ext/gameserver/servers/{host_id}/config": {
@@ -12381,14 +13805,46 @@
     }
    }
   },
+  "PUT /api/v1/ext/system/hosts/{host_id}/temp-limit": {
+   "body": {
+    "content_type": "application/json",
+    "required": true,
+    "schema": {
+     "fields": {
+      "own_c": {
+       "required": true,
+       "type": "integer|null"
+      }
+     },
+     "type": "object"
+    }
+   },
+   "params": {
+    "path:host_id": {
+     "required": true,
+     "type": "string"
+    }
+   },
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "PUT /api/v1/extensions/{ext_id}/secrets": {
    "body": {
     "content_type": "application/json",
     "required": true,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
       "label": {
        "required": true,
+       "type": "string"
+      },
+      "totp_code": {
        "type": "string"
       },
       "value": {
@@ -12415,6 +13871,12 @@
     "required": true,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      },
       "values": {
        "required": true,
        "type": "object"
@@ -12481,6 +13943,12 @@
     "required": true,
     "schema": {
      "fields": {
+      "current_password": {
+       "type": "string"
+      },
+      "totp_code": {
+       "type": "string"
+      },
       "value": {
        "required": true,
        "type": "string"

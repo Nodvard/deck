@@ -914,6 +914,8 @@ async def test_extension_without_legacy_ids_behaves_exactly_as_before(tmp_path, 
         await db_session.commit()
         expected_manifest = load_manifest(ext_dir / "extension.toml").model_dump(mode="json")
         expected_manifest.pop("legacy_ids")
+        expected_manifest.pop("root_helper")
+        expected_manifest.pop("adopts")  # wie `legacy_ids`: eine leere Liste wird nicht gespeichert
         assert (await _stored(db_session, "plain-ext"))["manifest"] == expected_manifest
         assert await _setting_keys(db_session) == ["extension.untouched.plain-ext"]
 
@@ -938,17 +940,16 @@ async def test_extension_without_legacy_ids_behaves_exactly_as_before(tmp_path, 
 
 
 @pytest.mark.asyncio
-async def test_only_shield_uses_legacy_ids_among_the_bundled_extensions(db_session, test_settings):
-    """Alle mitgelieferten Erweiterungen ausser Nodvard Shield (bis 0.6 `nexus-soc`): Speicher-Kennung = Kennung, kein
-    `legacy_ids` in den Zeilen. Shield nennt seine alte Kennung; auf einer neuen Installation liegt seine Zeile unter
-    `shield` (die Zeile `nexus-soc` einer bestehenden Installation deckt `test_shield_legacy_ids.py` ab)."""
+async def test_only_shield_and_docker_use_legacy_ids_among_the_bundled_extensions(db_session, test_settings):
+    """Nur Shield (früher `nexus-soc`) und Docker (früher `service-matrix`) nennen alte Kennungen; auf einer neuen
+    Installation gilt für alle: Speicher-Kennung = Kennung."""
     settings = test_settings.model_copy(update={"extensions_dir": REPO_EXTENSIONS_DIR})
     found = await extensions_service.discover_and_sync(db_session, settings)
     await db_session.commit()
 
     runtime = get_extension_runtime()
-    assert found and runtime.legacy_owner == {"nexus-soc": "shield"}
+    assert found and runtime.legacy_owner == {"nexus-soc": "shield", "service-matrix": "docker"}
     assert runtime.store_ids == {ext_id: ext_id for ext_id in found}
     rows = (await db_session.execute(select(ExtensionRecord))).scalars().all()
     assert sorted(r.id for r in rows) == sorted(found)
-    assert [r.id for r in rows if "legacy_ids" in (r.manifest or {})] == ["shield"]
+    assert sorted(r.id for r in rows if "legacy_ids" in (r.manifest or {})) == ["docker", "shield"]

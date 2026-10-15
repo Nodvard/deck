@@ -197,7 +197,7 @@ function SchedulePicker({
         type: "button",
         "aria-pressed": s.mode === m.id,
         onClick: () => update({ mode: m.id }),
-        className: `flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition ${s.mode === m.id ? "bg-[var(--color-accent)] text-white shadow" : "text-white/60 hover:bg-white/[0.06] hover:text-white"}`,
+        className: `flex-1 whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition ${s.mode === m.id ? "bg-[var(--color-accent)] text-on-accent shadow" : "text-white/60 hover:bg-white/[0.06] hover:text-white"}`,
         children: m.label
       },
       m.id
@@ -238,7 +238,7 @@ function SchedulePicker({
               const days = on ? s.days.filter((x) => x !== d) : [...s.days, d];
               update({ days: days.length ? days : [d] });
             },
-            className: `h-9 w-9 rounded-full text-xs font-semibold transition ${on ? "accent-gradient text-white shadow" : "bg-white/[0.06] text-white/55 hover:bg-white/[0.12] hover:text-white"}`,
+            className: `h-9 w-9 rounded-full text-xs font-semibold transition ${on ? "accent-gradient text-on-accent shadow" : "bg-white/[0.06] text-white/55 hover:bg-white/[0.12] hover:text-white"}`,
             children: DAY_SHORT[d]
           },
           d
@@ -520,7 +520,7 @@ function Card({ title, description, actions, children, className = "", padded = 
   ] });
 }
 var BUTTON_STYLES = {
-  primary: "accent-gradient text-white shadow-md shadow-black/30 hover:brightness-110",
+  primary: "accent-gradient text-on-accent hover:bg-accent-strong",
   secondary: "border border-white/10 bg-white/[0.06] text-white hover:bg-white/[0.12]",
   danger: "border border-red-500/40 bg-red-500/15 text-red-200 hover:bg-red-500/25",
   ghost: "text-white/60 hover:bg-white/[0.06] hover:text-white"

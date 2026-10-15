@@ -112,8 +112,15 @@ async def test_credential_lifecycle_never_exposes_value(client):
     assert "GEHEIM-WERT" not in listed.text
     assert len(listed.json()) == 1
 
-    deleted = await client.delete(
-        f"/api/v1/hosts/{host['id']}/credentials/{created.json()['id']}", headers=_auth_header(token)
+    url = f"/api/v1/hosts/{host['id']}/credentials/{created.json()['id']}"
+    # Wie „Löschen“ auf der Seite Tresor: ohne Passwort bleibt der Zugang, mit falschem auch.
+    refused = await client.delete(url, headers=_auth_header(token))
+    assert refused.status_code == 403 and refused.json()["code"] == "confirm_required"
+    wrong = await client.request("DELETE", url, json={"current_password": "falsch"}, headers=_auth_header(token))
+    assert wrong.status_code == 400
+    assert len((await client.get(f"/api/v1/hosts/{host['id']}/credentials", headers=_auth_header(token))).json()) == 1
+    deleted = await client.request(
+        "DELETE", url, json={"current_password": "correct-horse-battery"}, headers=_auth_header(token),
     )
     assert deleted.status_code == 204
 
@@ -707,7 +714,14 @@ async def test_delete_host_removes_its_secrets(client, db_session):
     count = select(func.count()).select_from(Secret).where(Secret.label.like("host-cred:%"))
     assert (await db_session.execute(count)).scalar_one() == 1
 
-    assert (await client.delete(f"/api/v1/hosts/{host['id']}", headers=_auth_header(token))).status_code == 204
+    # Die Zugänge fallen mit weg: ohne Passwort nur die Rückfrage, nichts gelöscht.
+    refused = await client.delete(f"/api/v1/hosts/{host['id']}", headers=_auth_header(token))
+    assert refused.status_code == 403 and refused.json()["code"] == "confirm_required", refused.text
+    assert (await client.get(f"/api/v1/hosts/{host['id']}", headers=_auth_header(token))).status_code == 200
+    deleted = await client.request(
+        "DELETE", f"/api/v1/hosts/{host['id']}", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token),
+    )
+    assert deleted.status_code == 204, deleted.text
     assert (await db_session.execute(count)).scalar_one() == 0
 
 
@@ -1100,9 +1114,9 @@ async def test_credential_and_known_key_changes_are_audited_without_secrets(clie
         json={"kind": "ssh_password", "username": "root", "port": 22, "secret_value": "GEHEIM-WERT"},
         headers=_auth_header(token),
     )
-    await client.delete(f"/api/v1/hosts/{host_id}/credentials/{cid}", headers=_auth_header(token))
+    await client.request("DELETE",f"/api/v1/hosts/{host_id}/credentials/{cid}", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))
     # Unbekannter Zugang: 404 und kein Protokolleintrag.
-    assert (await client.delete(f"/api/v1/hosts/{host_id}/credentials/gibt-es-nicht", headers=_auth_header(token))).status_code == 404
+    assert (await client.request("DELETE",f"/api/v1/hosts/{host_id}/credentials/gibt-es-nicht", json={"current_password": "correct-horse-battery"}, headers=_auth_header(token))).status_code == 404
     db_session.add(KnownHostKey(host_id=host_id, key_type="ssh-ed25519", fingerprint="SHA256:abc"))
     await db_session.commit()
     assert (await client.delete(f"/api/v1/hosts/{host_id}/known-hosts/ssh-ed25519", headers=_auth_header(token))).status_code == 204
@@ -1202,7 +1216,7 @@ async def test_host_out_carries_the_default_credential_summary(client):
         )
     ).json()
     assert (await client.get(f"/api/v1/hosts/{host_id}", headers=headers)).json()["credential"]["id"] == third["id"]
-    await client.delete(f"/api/v1/hosts/{host_id}/credentials/{third['id']}", headers=headers)
+    await client.request("DELETE",f"/api/v1/hosts/{host_id}/credentials/{third['id']}", json={"current_password": "correct-horse-battery"}, headers=headers)
     assert (await client.get(f"/api/v1/hosts/{host_id}", headers=headers)).json()["credential"] is None
     assert second["id"]
 
@@ -1366,7 +1380,13 @@ async def test_new_address_removes_stored_ssh_password_but_keeps_key(client, db_
     kinds = (await db_session.execute(select(HostCredential.kind).where(HostCredential.host_id == host["id"]))).scalars().all()
     assert sorted(kinds) == ["ssh_key", "ssh_password"]
 
-    moved = await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "192.168.2.51"}, headers=headers)
+    # Die neue Adresse löscht das gespeicherte Passwort: ohne Bestätigung nur die Rückfrage, nichts geändert.
+    refused = await client.patch(f"/api/v1/hosts/{host['id']}", json={"address": "192.168.2.51"}, headers=headers)
+    assert refused.status_code == 403 and refused.json()["code"] == "confirm_required", refused.text
+    assert (await client.get(f"/api/v1/hosts/{host['id']}", headers=headers)).json()["address"] == "192.168.2.50"
+    moved = await client.patch(
+        f"/api/v1/hosts/{host['id']}", json={"address": "192.168.2.51", "current_password": "correct-horse-battery"}, headers=headers,
+    )
     assert moved.status_code == 200, moved.text
     kinds = (await db_session.execute(select(HostCredential.kind).where(HostCredential.host_id == host["id"]))).scalars().all()
     assert kinds == ["ssh_key"]
