@@ -1,0 +1,48 @@
+{
+  "config": {
+    "slug": "heim",
+    "title": "Heimnetz"
+  },
+  "incident": null,
+  "publicGroupList": [
+    {
+      "id": 1,
+      "name": "Dienste",
+      "weight": 1,
+      "monitorList": [
+        {
+          "id": 1,
+          "name": "Nextcloud",
+          "sendUrl": 0,
+          "type": "http"
+        },
+        {
+          "id": 2,
+          "name": "Wiki",
+          "sendUrl": 0,
+          "type": "keyword"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Netz",
+      "weight": 2,
+      "monitorList": [
+        {
+          "id": 3,
+          "name": "Router",
+          "sendUrl": 0,
+          "type": "ping"
+        },
+        {
+          "id": 4,
+          "name": "NAS",
+          "sendUrl": 0,
+          "type": "port"
+        }
+      ]
+    }
+  ],
+  "maintenanceList": []
+}

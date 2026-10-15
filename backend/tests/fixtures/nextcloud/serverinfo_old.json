@@ -1,0 +1,50 @@
+{
+  "ocs": {
+    "meta": {"status": "ok", "statuscode": 200, "message": "OK"},
+    "data": {
+      "nextcloud": {
+        "system": {
+          "version": "26.0.13.1",
+          "theme": "",
+          "enable_avatars": "yes",
+          "enable_previews": "yes",
+          "memcache.local": "\\OC\\Memcache\\APCu",
+          "memcache.distributed": "none",
+          "filelocking.enabled": "yes",
+          "memcache.locking": "none",
+          "debug": "no",
+          "freespace": 21474836480,
+          "cpuload": [0.2, 0.31, 0.4],
+          "mem_total": 3995648,
+          "mem_free": 3891200,
+          "swap_total": 0,
+          "swap_free": 0,
+          "apps": {"num_installed": 41, "num_updates_available": 0, "app_updates": []}
+        },
+        "storage": {
+          "num_users": 2,
+          "num_files": 1450,
+          "num_storages": 3,
+          "num_storages_local": 0,
+          "num_storages_home": 2,
+          "num_storages_other": 1
+        },
+        "shares": {
+          "num_shares": 0,
+          "num_shares_user": 0,
+          "num_shares_groups": 0,
+          "num_shares_link": 0,
+          "num_shares_link_no_password": 0,
+          "num_fed_shares_sent": 0,
+          "num_fed_shares_received": 0
+        }
+      },
+      "server": {
+        "webserver": "Apache/2.4.57 (Debian)",
+        "php": {"version": "8.1.27", "memory_limit": 536870912, "max_execution_time": 3600, "upload_max_filesize": 536870912},
+        "database": {"type": "sqlite3", "version": "3.40.1", "size": 4194304}
+      },
+      "activeUsers": {"last5minutes": 0, "last1hour": 1, "last24hours": 2}
+    }
+  }
+}

@@ -30,6 +30,13 @@
       "x-secret-bound-to": ["base_url"],
       "title": "App-Passwort",
       "description": "In Nextcloud unter Einstellungen → Sicherheit → „Neues App-Passwort erstellen“."
+    },
+    {
+      "label": "nextcloud-serverinfo-token",
+      "x-secret-bound-to": ["base_url"],
+      "optional": true,
+      "title": "Token für Server-Info (optional)",
+      "description": "Nur für die Kachel mit den Kennzahlen. Ohne Token braucht die Kachel das App-Passwort eines Admin-Kontos. Das Token erlaubt nur, diese Kennzahlen zu lesen, keine Dateien und keine Einstellungen. Einrichten: auf dem Nextcloud-Server „php occ config:app:set serverinfo token --value=ZUFALLSWERT“ ausführen (bei Docker im Container als Benutzer www-data) und denselben Wert hier eintragen."
     }
   ]
 }

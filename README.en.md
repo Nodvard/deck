@@ -6,7 +6,7 @@
 
 Self-hosted · Extensible · White-label ready
 
-[Deutsch](README.md) · [Documentation](docs/README.md) · [Getting started](#getting-started) · [Feedback](CONTRIBUTING.md)
+[Deutsch](README.md) · [Documentation](docs/README.md) · [Getting started](#getting-started) · [Discord](https://discord.gg/gTTs7qMabt) · [Feedback](CONTRIBUTING.md)
 
 ![License: PolyForm Noncommercial 1.0.0](https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-blue)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB)
@@ -136,7 +136,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for notes on building and checking it you
 
 Nodvard Deck is free for personal and other noncommercial use, and its source code is
 available to read. The best way to help is to report bugs and share ideas – see
-[CONTRIBUTING.md](CONTRIBUTING.md). The project does not accept code contributions from outside.
+[CONTRIBUTING.md](CONTRIBUTING.md). Questions, ideas and chat: join the [Discord](https://discord.gg/gTTs7qMabt)
+(mostly German, English is welcome in #english). The project does not accept code contributions from outside.
 Nodvard Deck is a private, noncommercial project.
 
 ## Security

@@ -1,0 +1,3 @@
+[[entries]]
+kind = "sicherheit"
+text = "Die Kennung einer Proxmox-Sicherung wird jetzt zuerst auf ihre Länge geprüft und lässt sich auch mit sehr langen, präparierten Eingaben nicht mehr ausbremsen."

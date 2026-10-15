@@ -1,0 +1,41 @@
+# HELP app_version The service version by package.json
+# TYPE app_version gauge
+app_version{version="1.23.13",major="1",minor="23",patch="13"} 1
+
+# HELP monitor_cert_days_remaining The number of days remaining until the certificate expires
+# TYPE monitor_cert_days_remaining gauge
+monitor_cert_days_remaining{monitor_name="Nextcloud",monitor_type="http",monitor_url="https://cloud.example.com/",monitor_hostname="null",monitor_port="null"} 62
+monitor_cert_days_remaining{monitor_name="Wiki",monitor_type="keyword",monitor_url="https://wiki.example.com/",monitor_hostname="null",monitor_port="null"} 9
+monitor_cert_days_remaining{monitor_name="Intern",monitor_type="http",monitor_url="https://admin:geheim@intern.example.com:8443/status?token=abc123",monitor_hostname="null",monitor_port="null"} NaN
+
+# HELP monitor_cert_is_valid Is the certificate still valid? (1 = Yes, 0= No)
+# TYPE monitor_cert_is_valid gauge
+monitor_cert_is_valid{monitor_name="Nextcloud",monitor_type="http",monitor_url="https://cloud.example.com/",monitor_hostname="null",monitor_port="null"} 1
+monitor_cert_is_valid{monitor_name="Wiki",monitor_type="keyword",monitor_url="https://wiki.example.com/",monitor_hostname="null",monitor_port="null"} 1
+monitor_cert_is_valid{monitor_name="Intern",monitor_type="http",monitor_url="https://admin:geheim@intern.example.com:8443/status?token=abc123",monitor_hostname="null",monitor_port="null"} 0
+
+# HELP monitor_response_time Monitor Response Time (ms)
+# TYPE monitor_response_time gauge
+monitor_response_time{monitor_name="Nextcloud",monitor_type="http",monitor_url="https://cloud.example.com/",monitor_hostname="null",monitor_port="null"} 123
+monitor_response_time{monitor_name="Wiki",monitor_type="keyword",monitor_url="https://wiki.example.com/",monitor_hostname="null",monitor_port="null"} 45
+monitor_response_time{monitor_name="Router",monitor_type="ping",monitor_url="null",monitor_hostname="198.51.100.1",monitor_port="null"} -1
+monitor_response_time{monitor_name="NAS",monitor_type="port",monitor_url="null",monitor_hostname="198.51.100.20",monitor_port="5000"} NaN
+monitor_response_time{monitor_name="Backup \"Nacht\" \\ Job",monitor_type="push",monitor_url="null",monitor_hostname="null",monitor_port="null"} NaN
+monitor_response_time{monitor_name="Intern",monitor_type="http",monitor_url="https://admin:geheim@intern.example.com:8443/status?token=abc123",monitor_hostname="null",monitor_port="null"} 8
+
+# HELP monitor_status Monitor Status (1 = UP, 0= DOWN, 2= PENDING, 3= MAINTENANCE)
+# TYPE monitor_status gauge
+monitor_status{monitor_name="Nextcloud",monitor_type="http",monitor_url="https://cloud.example.com/",monitor_hostname="null",monitor_port="null"} 1
+monitor_status{monitor_name="Wiki",monitor_type="keyword",monitor_url="https://wiki.example.com/",monitor_hostname="null",monitor_port="null"} 1
+monitor_status{monitor_name="Router",monitor_type="ping",monitor_url="null",monitor_hostname="198.51.100.1",monitor_port="null"} 0
+monitor_status{monitor_name="NAS",monitor_type="port",monitor_url="null",monitor_hostname="198.51.100.20",monitor_port="5000"} 2
+monitor_status{monitor_name="Backup \"Nacht\" \\ Job",monitor_type="push",monitor_url="null",monitor_hostname="null",monitor_port="null"} 3
+monitor_status{monitor_name="Intern",monitor_type="http",monitor_url="https://admin:geheim@intern.example.com:8443/status?token=abc123",monitor_hostname="null",monitor_port="null"} 1
+
+# HELP process_cpu_user_seconds_total Total user CPU time spent in seconds.
+# TYPE process_cpu_user_seconds_total counter
+process_cpu_user_seconds_total 41.2
+
+# HELP nodejs_version_info Node.js version info.
+# TYPE nodejs_version_info gauge
+nodejs_version_info{version="v18.20.4",major="18",minor="20",patch="4"} 1

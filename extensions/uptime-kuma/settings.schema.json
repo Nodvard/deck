@@ -1,0 +1,57 @@
+{
+  "type": "object",
+  "properties": {
+    "connections": {
+      "type": "array",
+      "title": "Uptime Kuma",
+      "description": "Die Uptime-Kuma-Installationen, deren Zustand angezeigt wird. Meist genügt eine. Nodvard Deck liest nur und ändert in Uptime Kuma nichts.",
+      "x-item-title": "Uptime Kuma",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Kurzname",
+            "description": "Eindeutig und ohne Leerzeichen, z. B. „kuma“ oder „kuma-keller“. Nach dem Einrichten nicht mehr ändern.",
+            "pattern": "^[A-Za-z0-9_.-]+$",
+            "x-pattern-message": "Nur Buchstaben, Zahlen, Punkt, Bindestrich und Unterstrich – keine Leerzeichen."
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Adresse",
+            "description": "Adresse von Uptime Kuma, z. B. http://192.168.2.10:3001",
+            "pattern": "^https?://\\S+$",
+            "x-pattern-message": "Die Adresse muss mit http:// oder https:// beginnen und darf keine Leerzeichen enthalten."
+          },
+          "status_page_slug": {
+            "type": "string",
+            "title": "Status-Seite (optional)",
+            "description": "Kurzname einer Status-Seite in Uptime Kuma, also der Teil nach /status/ in der Adresse der Seite. Damit zeigt Nodvard Deck zusätzlich die Verfügbarkeit der letzten 24 Stunden und die letzten Ausfälle. Nur Monitore, die auf dieser Status-Seite stehen, werden dabei berücksichtigt.",
+            "pattern": "^[a-z0-9-]*$",
+            "x-pattern-message": "Nur Kleinbuchstaben, Zahlen und Bindestriche, so wie in der Adresse der Status-Seite."
+          },
+          "tls_insecure_skip_verify": {
+            "type": "boolean",
+            "default": false,
+            "title": "Selbstsigniertes Zertifikat erlauben",
+            "description": "Nur im eigenen Netz aktivieren. Nötig, wenn Uptime Kuma über https mit einem selbst erstellten Zertifikat erreichbar ist.",
+            "x-advanced": true
+          }
+        },
+        "required": [
+          "name",
+          "base_url"
+        ]
+      }
+    }
+  },
+  "x-secrets": [
+    {
+      "label": "uptime-kuma-key:{name}",
+      "x-secret-bound-to": ["base_url"],
+      "per_item": "connections",
+      "title": "API-Schlüssel",
+      "description": "In Uptime Kuma unter Einstellungen → API-Schlüssel anlegen. Damit liest das Dashboard den Zustand aller Monitore."
+    }
+  ]
+}

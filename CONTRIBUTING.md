@@ -9,7 +9,9 @@ very welcome.
   how you run it (Docker on Pi / x86) and the steps to reproduce.
 - **Ideas and features:** open an issue using the *Feature request* template.
 - **Documentation:** if something is unclear or wrong, open an issue and say where.
-- **Security issues:** never in public issues — see [SECURITY.md](SECURITY.md).
+- **Questions and chat:** the [Discord](https://discord.gg/gTTs7qMabt) has a help forum (mostly German, English is
+  welcome in #english).
+- **Security issues:** never in public issues or on Discord — see [SECURITY.md](SECURITY.md).
 
 ## Code contributions
 

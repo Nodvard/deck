@@ -1,0 +1,70 @@
+{
+  "ocs": {
+    "meta": {"status": "ok", "statuscode": 200, "message": "OK"},
+    "data": {
+      "nextcloud": {
+        "system": {
+          "version": "31.0.7.1",
+          "theme": "",
+          "enable_avatars": "yes",
+          "enable_previews": "yes",
+          "memcache.local": "\\OC\\Memcache\\APCu",
+          "memcache.distributed": "\\OC\\Memcache\\Redis",
+          "filelocking.enabled": "yes",
+          "memcache.locking": "\\OC\\Memcache\\Redis",
+          "debug": "no",
+          "freespace": 48472944640,
+          "cpuload": [0.85, 1.04, 1.17],
+          "cpunum": 4,
+          "mem_total": 8183664,
+          "mem_free": 5877156,
+          "swap_total": 2097152,
+          "swap_free": 2097152,
+          "apps": {
+            "num_installed": 53,
+            "num_updates_available": 2,
+            "app_updates": {"files_antivirus": "6.0.1", "richdocuments": "8.5.3"}
+          },
+          "update": {"lastupdatedat": 1791792000, "available": true, "available_version": "31.0.9.1"}
+        },
+        "storage": {
+          "num_users": 7,
+          "num_disabled_users": 1,
+          "num_files": 708860,
+          "num_storages": 125,
+          "num_storages_local": 7,
+          "num_storages_home": 7,
+          "num_storages_other": 111,
+          "size_appdata_storage": 1048576000,
+          "num_files_appdata": 5400
+        },
+        "shares": {
+          "num_shares": 3,
+          "num_shares_user": 1,
+          "num_shares_groups": 0,
+          "num_shares_link": 2,
+          "num_shares_link_no_password": 0,
+          "num_fed_shares_sent": 0,
+          "num_fed_shares_received": 0,
+          "permissions_4_1": 1
+        }
+      },
+      "server": {
+        "webserver": "Apache/2.4.62 (Debian)",
+        "php": {"version": "8.3.14", "memory_limit": 536870912, "max_execution_time": 3600, "upload_max_filesize": 536870912, "opcache_revalidate_freq": 60},
+        "fpm": false,
+        "database": {"type": "mysql", "version": "10.11.9", "size": 331382784}
+      },
+      "activeUsers": {
+        "last5minutes": 2,
+        "last1hour": 4,
+        "last24hours": 5,
+        "last7days": 6,
+        "last1month": 7,
+        "last3months": 7,
+        "last6months": 7,
+        "lastyear": 7
+      }
+    }
+  }
+}

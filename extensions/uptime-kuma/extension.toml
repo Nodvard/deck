@@ -1,0 +1,23 @@
+[extension]
+id          = "uptime-kuma"
+name        = "Uptime Kuma"
+version     = "0.1.0"
+api_version = "0.1.0"
+author      = "Nodvard"
+description = "Zeigt, welche Dienste laut Uptime Kuma laufen oder ausgefallen sind: Zustand aller Monitore, Verfügbarkeit der letzten 24 Stunden, letzte Ausfälle und ablaufende Zertifikate. Nur lesend."
+icon        = "activity"
+category    = "servers"
+sort_order  = 75
+stage       = "beta"
+entrypoint  = "nodvard_deck_ext_uptime_kuma:Extension"
+frontend    = "frontend/dist/index.js"
+
+# Nur lesend: kein Zugriff auf Server, keine Aktionen, nichts zum Freigeben.
+permissions = [
+  "net.outbound",
+  "net.outbound.insecure_tls",
+  "secrets.read:uptime-kuma-*",
+]
+
+[settings]
+schema = "settings.schema.json"

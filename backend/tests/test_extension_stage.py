@@ -67,9 +67,9 @@ def test_unknown_stage_in_a_manifest_still_loads_as_beta(tmp_path):
     assert found["gesund"].manifest.stage == "beta"
 
 
-def test_bundled_extensions_have_a_known_stage_and_only_gameserver_and_network_are_beta():
+def test_bundled_extensions_have_a_known_stage_and_only_gameserver_network_and_uptime_kuma_are_beta():
     manifests = {m.id: m for m in (load_manifest(p) for p in sorted(REPO_EXTENSIONS_DIR.glob("*/extension.toml")))}
-    assert {i for i, m in manifests.items() if m.stage == "beta"} == {"gameserver", "network"}
+    assert {i for i, m in manifests.items() if m.stage == "beta"} == {"gameserver", "network", "uptime-kuma"}
 
 
 def test_backups_module_is_called_proxmox_backups_but_keeps_its_id():

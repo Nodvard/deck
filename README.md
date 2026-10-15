@@ -6,7 +6,7 @@
 
 Selbst gehostet · Erweiterbar · White-Label-fähig
 
-[English](README.en.md) · [Dokumentation](docs/README.md) · [Loslegen](#loslegen) · [Feedback](CONTRIBUTING.md)
+[English](README.en.md) · [Dokumentation](docs/README.md) · [Loslegen](#loslegen) · [Discord](https://discord.gg/gTTs7qMabt) · [Feedback](CONTRIBUTING.md)
 
 </div>
 
@@ -131,7 +131,8 @@ Hinweise zum Selbstbauen und Prüfen: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Für private und andere nicht-kommerzielle Zwecke ist Nodvard Deck kostenlos, der Quellcode ist
 einsehbar. Am meisten hilft es, wenn du Fehler meldest und Ideen einbringst – siehe
-[CONTRIBUTING.md](CONTRIBUTING.md). Code-Beiträge von außen nimmt das Projekt nicht an. Nodvard Deck ist
+[CONTRIBUTING.md](CONTRIBUTING.md). Fragen, Ideen und Austausch gibt es im [Discord](https://discord.gg/gTTs7qMabt).
+Code-Beiträge von außen nimmt das Projekt nicht an. Nodvard Deck ist
 ein privates, nicht-kommerzielles Projekt.
 
 ## Sicherheit

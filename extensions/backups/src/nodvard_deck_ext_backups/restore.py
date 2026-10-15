@@ -81,7 +81,13 @@ _STORAGE_RE = re.compile(r"[A-Za-z][A-Za-z0-9_.-]*[A-Za-z0-9]")
 _VMID_RE = re.compile(r"[1-9][0-9]{2,8}")
 _DNS_LABEL = r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?"
 _NAME_RE = re.compile(rf"(?:{_DNS_LABEL}\.)*{_DNS_LABEL}")
-_VOLID_RE = re.compile(r"[A-Za-z](?:[A-Za-z0-9]|[_.-]+[A-Za-z0-9])+:[A-Za-z0-9_.:/+-]{1,240}")
+# Speicher wie bei Proxmox (pve-storage-id: mindestens zwei Zeichen, am Ende Buchstabe oder Ziffer), dann der Pfad.
+# Jede Kennung passt auf genau eine Weise, und `\A` lässt den Ausdruck nur am Anfang ansetzen, auch mit `search`.
+_VOLID_RE = re.compile(
+    r"\A[A-Za-z](?:[A-Za-z0-9]+(?:[_.-]+[A-Za-z0-9]+)*|(?:[_.-]+[A-Za-z0-9]+)+):[A-Za-z0-9_.:/+-]{1,240}"
+)
+VOLID_MAX_LENGTH = 400
+"""Längere Kennungen werden vor dem Ausdruck abgelehnt; Speichernamen von Proxmox sind weit kürzer."""
 _NET_RE = re.compile(r"net\d+")
 _IPCONFIG_RE = re.compile(r"ipconfig\d+")
 _LXC_MP_RE = re.compile(r"mp\d+")
@@ -187,7 +193,8 @@ def _text(values: dict[str, Any], key: str) -> str:
 
 
 def check_volid(volid: Any) -> str:  # noqa: ANN401 - kommt als Text von der Seite oder aus dem Gate
-    if not isinstance(volid, str) or not _VOLID_RE.fullmatch(volid) or ".." in volid:
+    if (not isinstance(volid, str) or len(volid) > VOLID_MAX_LENGTH or not _VOLID_RE.fullmatch(volid)
+            or ".." in volid):
         raise RestoreError("Diese Sicherung lässt sich nicht zuordnen (ungültige Kennung).", INVALID)
     return volid
 

@@ -56,3 +56,19 @@ def test_long_inputs_stay_fast(av, backup_restore):
     assert backup_restore._VOLID_RE.fullmatch("a" + "-" * 100_000) is None
     assert backup_restore._VOLID_RE.fullmatch("a" * 100_000) is None
     assert time.monotonic() - start < 1
+
+
+def test_volid_regex_stays_fast_even_when_searched(backup_restore):
+    start = time.monotonic()
+    assert backup_restore._VOLID_RE.search("a" * 20_000) is None
+    assert backup_restore._VOLID_RE.search("a-" * 10_000) is None
+    assert time.monotonic() - start < 1
+
+
+def test_volid_length_is_checked_before_the_regex(backup_restore):
+    longest = "s" * (backup_restore.VOLID_MAX_LENGTH - 241) + ":" + "b" * 240
+    assert backup_restore.check_volid(longest) == longest
+    with pytest.raises(backup_restore.RestoreError):
+        backup_restore.check_volid("s" + longest)
+    for volid in ("local:backup/vzdump-lxc-101-2026_10_01-03_00_00.tar.zst", "nas-2.backup_01:backup/x.vma.zst"):
+        assert backup_restore.check_volid(volid) == volid

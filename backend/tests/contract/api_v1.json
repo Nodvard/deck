@@ -2033,6 +2033,107 @@
     }
    }
   },
+  "GET /api/v1/ext/nextcloud/serverinfo": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "active_users": {
+       "fields": {
+        "last_24_hours": {
+         "type": "integer|null"
+        },
+        "last_5_minutes": {
+         "type": "integer|null"
+        },
+        "last_hour": {
+         "type": "integer|null"
+        }
+       },
+       "type": "object"
+      },
+      "auth": {
+       "type": "null|string"
+      },
+      "load": {
+       "fields": {
+        "cpu_cores": {
+         "type": "integer|null"
+        },
+        "load_1": {
+         "type": "null|number"
+        },
+        "load_15": {
+         "type": "null|number"
+        },
+        "load_5": {
+         "type": "null|number"
+        },
+        "memory_available_bytes": {
+         "type": "integer|null"
+        },
+        "memory_total_bytes": {
+         "type": "integer|null"
+        }
+       },
+       "type": "object"
+      },
+      "message": {
+       "type": "null|string"
+      },
+      "state": {
+       "type": "string"
+      },
+      "storage": {
+       "fields": {
+        "files": {
+         "type": "integer|null"
+        },
+        "free_bytes": {
+         "type": "integer|null"
+        },
+        "users": {
+         "type": "integer|null"
+        }
+       },
+       "type": "object"
+      },
+      "updates": {
+       "fields": {
+        "app_updates": {
+         "type": "integer|null"
+        },
+        "core_available": {
+         "type": "boolean|null"
+        },
+        "core_checked_at": {
+         "type": "null|string"
+        },
+        "core_version": {
+         "type": "null|string"
+        }
+       },
+       "type": "object"
+      },
+      "version": {
+       "type": "null|string"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/nextcloud/widgets/status": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
   "GET /api/v1/ext/nexus-soc/ai/models": {
    "params": {
     "query:which": {
@@ -3040,6 +3141,139 @@
    }
   },
   "GET /api/v1/ext/system/widgets/health": {
+   "responses": {
+    "200": {
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/uptime-kuma/overview": {
+   "params": {
+    "query:refresh": {
+     "type": "boolean"
+    }
+   },
+   "responses": {
+    "200": {
+     "fields": {
+      "connections": {
+       "items": {
+        "fields": {
+         "message": {
+          "type": "null|string"
+         },
+         "monitors": {
+          "items": {
+           "fields": {
+            "cert_days_left": {
+             "type": "integer|null"
+            },
+            "cert_valid": {
+             "type": "boolean|null"
+            },
+            "name": {
+             "type": "string"
+            },
+            "response_ms": {
+             "type": "integer|null"
+            },
+            "status": {
+             "type": "string"
+            },
+            "type": {
+             "type": "null|string"
+            },
+            "uptime_24h": {
+             "type": "null|number"
+            },
+            "url": {
+             "type": "null|string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "name": {
+          "type": "string"
+         },
+         "outages": {
+          "items": {
+           "fields": {
+            "message": {
+             "type": "string"
+            },
+            "monitor": {
+             "type": "string"
+            },
+            "time": {
+             "type": "null|string"
+            }
+           },
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "state": {
+          "type": "string"
+         },
+         "status_page": {
+          "type": "boolean"
+         },
+         "summary": {
+          "fields": {
+           "down": {
+            "type": "integer"
+           },
+           "maintenance": {
+            "type": "integer"
+           },
+           "pending": {
+            "type": "integer"
+           },
+           "total": {
+            "type": "integer"
+           },
+           "up": {
+            "type": "integer"
+           }
+          },
+          "type": "null|object"
+         },
+         "url": {
+          "type": "null|string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "summary": {
+       "fields": {
+        "down": {
+         "type": "integer"
+        },
+        "maintenance": {
+         "type": "integer"
+        },
+        "pending": {
+         "type": "integer"
+        },
+        "total": {
+         "type": "integer"
+        },
+        "up": {
+         "type": "integer"
+        }
+       },
+       "type": "object"
+      }
+     },
+     "type": "object"
+    }
+   }
+  },
+  "GET /api/v1/ext/uptime-kuma/widgets/status": {
    "responses": {
     "200": {
      "type": "object"

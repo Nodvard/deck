@@ -72,13 +72,14 @@ async def test_other_extensions_bind_their_secrets_to_the_address(test_settings)
     import json
 
     expected = {
-        "nextcloud": {"nextcloud-app-password": ["base_url"]},
+        "nextcloud": {"nextcloud-app-password": ["base_url"], "nextcloud-serverinfo-token": ["base_url"]},
         "network": {"network-pihole-password": ["pihole.url"], "network-npm-password": ["npm.url"]},
         "shield": {"nexus-soc-ollama-key": ["ollama_url", "ollama_failover_url"]},
         "backups": {"backups-token:{name}": ["base_url"]},
         "proxmox": {"proxmox-token:{name}": ["base_url"]},
         # Die Adresse eines weiteren Kanals ist selbst das Ziel: nichts, woran das Geheimnis haengen muesste.
         "ntfy": {"ntfy-token": ["server_url"], "push-kanal:{name}": None},
+        "uptime-kuma": {"uptime-kuma-key:{name}": ["base_url"]},
     }
     for ext_id, labels in expected.items():
         schema = json.loads((REPO_EXTENSIONS_DIR / ext_id / "settings.schema.json").read_text(encoding="utf-8"))

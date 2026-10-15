@@ -1,0 +1,10 @@
+{
+  "ocs": {
+    "meta": {
+      "status": "failure",
+      "statuscode": 998,
+      "message": "Invalid query, please check the syntax. API specifications are here: http://www.freedesktop.org/wiki/Specifications/open-collaboration-services.\n"
+    },
+    "data": []
+  }
+}

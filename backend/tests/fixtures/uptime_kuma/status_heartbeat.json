@@ -1,0 +1,78 @@
+{
+  "heartbeatList": {
+    "1": [
+      {
+        "status": 1,
+        "time": "2026-10-12 08:00:00.000",
+        "msg": "",
+        "ping": 120
+      },
+      {
+        "status": 1,
+        "time": "2026-10-12 08:01:00.000",
+        "msg": "",
+        "ping": 118
+      }
+    ],
+    "2": [
+      {
+        "status": 1,
+        "time": "2026-10-12 08:00:00.000",
+        "msg": "",
+        "ping": 40
+      },
+      {
+        "status": 0,
+        "time": "2026-10-12 08:01:00.000",
+        "msg": "Keyword nicht gefunden",
+        "ping": null
+      },
+      {
+        "status": 1,
+        "time": "2026-10-12 08:02:00.000",
+        "msg": "",
+        "ping": 44
+      }
+    ],
+    "3": [
+      {
+        "status": 1,
+        "time": "2026-10-12 07:58:00.000",
+        "msg": "",
+        "ping": 3
+      },
+      {
+        "status": 0,
+        "time": "2026-10-12 07:59:00.000",
+        "msg": "Request timeout",
+        "ping": null
+      },
+      {
+        "status": 0,
+        "time": "2026-10-12 08:00:00.000",
+        "msg": "Request timeout",
+        "ping": null
+      },
+      {
+        "status": 0,
+        "time": "2026-10-12 08:01:00.000",
+        "msg": "Request timeout",
+        "ping": null
+      }
+    ],
+    "4": [
+      {
+        "status": 2,
+        "time": "2026-10-12 08:00:00.000",
+        "msg": "",
+        "ping": null
+      }
+    ]
+  },
+  "uptimeList": {
+    "1_24": 1,
+    "2_24": 0.99931,
+    "3_24": 0.9412,
+    "4_24": 0.5
+  }
+}

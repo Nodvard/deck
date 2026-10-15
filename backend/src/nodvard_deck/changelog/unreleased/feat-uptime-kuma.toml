@@ -1,0 +1,7 @@
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Uptime Kuma“ (Beta): zeigt auf einer Seite und in einer Kachel, welche Dienste laufen oder ausgefallen sind, wie schnell sie antworten und wann ihr Zertifikat abläuft. Das Modul liest nur und ändert in Uptime Kuma nichts."
+
+[[entries]]
+kind = "neu"
+text = "Uptime Kuma: Trägst du zusätzlich den Kurznamen einer Status-Seite ein, zeigt Nodvard Deck auch die Verfügbarkeit der letzten 24 Stunden und die letzten Ausfälle."
