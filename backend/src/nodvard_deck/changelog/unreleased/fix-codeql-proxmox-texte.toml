@@ -1,3 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Die Proxmox-Kachel „Datenträger“ zeigt bei einem Fehler statt der rohen Meldung einen festen Hinweis, wo der Grund steht."

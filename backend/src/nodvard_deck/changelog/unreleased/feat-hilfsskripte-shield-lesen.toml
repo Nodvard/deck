@@ -1,7 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Nodvard Shield: Einbruchschutz, Datei-Wächter, die Suche nach Upload-Ordnern und das Neuladen der Paketlisten laufen über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Ohne Hilfsprogramm bleibt alles wie bisher."
-
-[[entries]]
-kind = "behoben"
-text = "Nodvard Shield: Ein Eintrag mit Zeilenumbruch in „Überwachte Dateien“ hat die Prüfung von Einbruchschutz und Datei-Wächter nicht mehr komplett lahmgelegt; solche Einträge werden jetzt übersprungen."

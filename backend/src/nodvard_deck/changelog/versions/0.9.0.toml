@@ -1,0 +1,307 @@
+version = "0.9.0"
+date = "2026-10-16"
+title = "Neues Aussehen, Docker als eigenes Modul, Tresor und neue Integrationen"
+
+[[entries]]
+kind = "verbessert"
+text = "Die Übersicht ist sachlicher: die Server stehen in einer Tabelle mit Auslastungsbalken, die Begrüßung und die Großbuchstaben-Überschriften sind weg."
+
+[[entries]]
+kind = "sicherheit"
+text = "Logo und Favicon kommen nur noch vom eigenen Server. Das Favicon lässt sich jetzt wie das Logo hochladen; stand früher eine fremde Adresse drin, zeigt die Darstellung einen Hinweis."
+
+[[entries]]
+kind = "neu"
+text = "Eigenes CSS für Admins unter Einstellungen → Darstellung: gilt für alle, lädt nichts von fremden Adressen, und mit ?ohne-css=1 öffnet sich die Seite ohne, falls etwas schiefgeht."
+
+[[entries]]
+kind = "verbessert"
+text = "Überschriften ohne Großbuchstaben und Knöpfe ohne Schatten auf allen Kern-Seiten; die Seitenleiste folgt dem gewählten Theme."
+
+[[entries]]
+kind = "verbessert"
+text = "Auch die Seiten der Module (Shield, Proxmox, Backups, Service-Matrix, Server-Zustand und weitere) zeigen Überschriften ohne Großbuchstaben und Knöpfe ohne Schatten."
+
+[[entries]]
+kind = "neu"
+text = "Viertes Theme „Bisher“: das Aussehen bis 0.8, dunkelblau mit Verlauf, Leuchten und Gitter im Hintergrund. Wählbar unter Einstellungen → Darstellung."
+
+[[entries]]
+kind = "neu"
+text = "Nach dem Update fragt Deck einmal, ob du das neue Aussehen behalten oder zum bisherigen wechseln möchtest. Die Antwort gilt für dein Konto auf jedem Gerät."
+
+[[entries]]
+kind = "neu"
+text = "Drei Themes zur Wahl: Klassisch hell, Schlicht dunkel (Standard) und Profi dunkel. Jeder Nutzer wählt sein Theme unter Einstellungen → Darstellung, es gilt auf jedem Gerät."
+
+[[entries]]
+kind = "verbessert"
+text = "Ruhigere Oberfläche: keine Farbverläufe, kein Leuchten und kein Gitter im Hintergrund mehr. Das Branding legt nur noch Name, Logo und auf Wunsch eine eigene Akzentfarbe fest."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Anleitung zur Installation zeigt jetzt jeden Weg einzeln zum Aufklappen: über die Befehlszeile, mit Portainer (zwei Wege) und auf dem Raspberry Pi, jeweils mit Port, Einrichtungscode und Aktualisieren."
+
+[[entries]]
+kind = "neu"
+text = "Die Docker-Seite zeigt je Server Images, Volumes und Netze in eigenen Reitern; was nichts mehr nutzt, lässt sich dort nach einer Rückfrage löschen."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Deck liest je Docker-Server die Images, Volumes und Netze aus, mit Größe und den Containern, die sie nutzen."
+
+[[entries]]
+kind = "neu"
+text = "Was kein Container mehr nutzt, lässt sich nach einer Freigabe löschen. Ein Netz, an dem noch ein Container hängt, auch ein gestoppter, bleibt stehen."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Service-Matrix heißt jetzt „Docker“ und ihre Kachel im Cockpit „Container“; Einstellungen, Zeitplan, eigene Kachel-Adressen, offene Freigaben und alte Links bleiben erhalten."
+
+[[entries]]
+kind = "verbessert"
+text = "Server einrichten mit „Root-Rechte ohne Passwort“ legt jetzt auch die Hilfsprogramme von Nodvard Shield und Server-Zustand auf den Server, jedes mit einer eigenen, engen sudo-Regel. Das ist die Vorbereitung dafür, dass das Dashboard später ohne volle Administratorrechte auskommt."
+
+[[entries]]
+kind = "neu"
+text = "„Verbindung prüfen“ zeigt je Modul, ob sein Hilfsprogramm auf dem Server liegt, ob es aktuell ist und ob nur der Administrator es ändern kann."
+
+[[entries]]
+kind = "verbessert"
+text = "Vorbereitung für engere Rechte auf den Servern: Nodvard Shield und Server-Zustand bringen je ein eigenes kleines Hilfsprogramm für Befehle mit Administratorrechten mit. Auf die Server kommt es erst mit einem der nächsten Updates, bis dahin ändert sich nichts."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Quarantäne, Wiederherstellen, Löschen aus der Quarantäne, Fail2ban-Sperren und das Installieren der Werkzeuge laufen über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Bereits freigegebene Aktionen bleiben gültig, ohne Hilfsprogramm bleibt alles wie bisher."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Einbruchschutz, Datei-Wächter, die Suche nach Upload-Ordnern und das Neuladen der Paketlisten laufen über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Ohne Hilfsprogramm bleibt alles wie bisher."
+
+[[entries]]
+kind = "behoben"
+text = "Nodvard Shield: Ein Eintrag mit Zeilenumbruch in „Überwachte Dateien“ hat die Prüfung von Einbruchschutz und Datei-Wächter nicht mehr komplett lahmgelegt; solche Einträge werden jetzt übersprungen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Das Lynis-Audit wird über das eigene Hilfsprogramm des Moduls gestartet, abgefragt und bei Überlänge beendet, wenn es auf dem Server eingerichtet ist. Ein Audit, das schon vorher lief, wird normal zu Ende verfolgt. Ohne Hilfsprogramm bleibt alles wie bisher."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Virenscans und der Wächter laufen über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Ausnahmen, Sperre und Zeitlimit gelten wie bisher. Ohne Hilfsprogramm bleibt alles wie bisher."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield: Updates einspielen, Aufräumen, der Neustart nach Updates und die Abfrage laufender Updates gehen über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Bereits freigegebene Updates und Läufe, die schon vorher gestartet wurden, laufen normal weiter. Ohne Hilfsprogramm bleibt alles wie bisher."
+
+[[entries]]
+kind = "sicherheit"
+text = "Server-Zustand: Einen Dienst neu starten geht jetzt über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Das Hilfsprogramm prüft den Dienstnamen und die Sperrliste noch einmal selbst. Ohne Hilfsprogramm bleibt alles wie bisher."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Home Assistant“ (Beta): zeigt auf einer Seite und in einer Kachel die Version, bereitstehende Updates, nicht verfügbare Geräte und ausgewählte Werte wie Temperaturen. Das Modul liest nur und ändert in Home Assistant nichts."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Jellyfin“ (Beta): zeigt auf einer Seite und in einer Kachel, wer gerade was schaut und ob dabei umgerechnet wird, wie viele Filme und Serien es gibt und was zuletzt hinzugekommen ist. Das Modul liest nur und ändert in Jellyfin nichts."
+
+[[entries]]
+kind = "neu"
+text = "Neue Kachel „Nextcloud“: zeigt Version, ob ein Update bereitsteht, freien Speicher, Dateien, Konten, aktive Nutzer und die Last deiner Nextcloud. Dafür trägst du in den Einstellungen das App-Passwort eines Admin-Kontos ein oder ein eigenes Token für „Server-Info“."
+
+[[entries]]
+kind = "neu"
+text = "Nginx Proxy Manager ist jetzt ein eigenes Modul mit eigener Seite, samt Zertifikaten, Adress-Check und Kachel."
+
+[[entries]]
+kind = "verbessert"
+text = "Wer den Nginx Proxy Manager bisher im Modul „Netzwerk“ eingerichtet hatte, findet nach dem Update alles im neuen Modul wieder: Adresse, Passwort, Kachel und offene Vorschläge. „Netzwerk“ zeigt nur noch, wo Pi-hole und Nginx Proxy Manager jetzt zu finden sind."
+
+[[entries]]
+kind = "neu"
+text = "Pi-hole ist jetzt ein eigenes Modul mit eigener Seite. Neu dazu: die aktivsten Geräte, Sperrlisten aktualisieren und eine Domain erlauben oder sperren, jeweils über die Freigabe."
+
+[[entries]]
+kind = "verbessert"
+text = "Wer Pi-hole bisher im Modul „Netzwerk“ eingerichtet hatte, findet nach dem Update alles im neuen Modul wieder: Adresse, Passwort, Kachel und offene Vorschläge."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Plex“ (Beta): zeigt auf einer Seite und in einer Kachel, wer gerade was schaut und ob dabei umgerechnet wird, wie groß die Bibliotheken sind und was zuletzt hinzugekommen ist. Das Modul liest nur, ändert in Plex nichts und spricht nur mit deinem eigenen Server im Heimnetz."
+
+[[entries]]
+kind = "neu"
+text = "Auf der Proxmox-Seite führt im Reiter Updates ein Link „In Shield einspielen“ direkt zu den Updates dieses Knotens in Nodvard Shield. Er erscheint nur, wenn Shield eingeschaltet ist."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul „qBittorrent“ (Beta): zeigt auf einer Seite und in einer Kachel, wie schnell geladen wird, welche Torrents gerade aktiv sind, wie viele laden, verteilen oder pausiert sind und wie viel Platz noch frei ist. Das Modul liest nur und ändert in qBittorrent nichts."
+
+[[entries]]
+kind = "neu"
+text = "Tresor: Hat ein gespeicherter Zugang (etwa ein Token) ein Ablaufdatum, erinnert das Dashboard 14 und 3 Tage vorher daran. Ist er abgelaufen, gibt es eine Warnung, die auch auf der Startseite steht."
+
+[[entries]]
+kind = "neu"
+text = "Neue Seite „Tresor“ in den Einstellungen: alle gespeicherten Passwörter, Schlüssel und Tokens mit Ablaufdatum und der Angabe, welches Modul oder welcher Server sie benutzt. Einträge lassen sich dort anlegen, ersetzen und löschen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Gespeicherte Zugangsdaten ersetzen oder löschen geht jetzt überall nur mit dem eigenen Passwort und, wenn Zwei-Faktor an ist, dem Code aus der App: auf der Seite Tresor, in den Moduleinstellungen (auch wenn eine neue Adresse alte Zugangsdaten löscht), beim SSH-Zugang eines Servers, beim Löschen eines Servers mit Zugängen und wenn eine neue Server-Adresse gespeicherte SSH-Passwörter löscht. Neu Eintragen geht weiter ohne. Im Tresor wird nur gelöscht, was kein Modul und kein Server mehr fest benutzt, und jede Änderung steht im Protokoll."
+
+[[entries]]
+kind = "neu"
+text = "Wenn ein Teil eines Moduls in ein eigenes Modul umzieht, nimmt das neue Modul beim ersten Start die Einstellungen, den Ein/Aus-Zustand, die Kacheln im Cockpit und die Zugangsdaten im Tresor mit. Die alten Adressen der Schnittstelle funktionieren weiter."
+
+[[entries]]
+kind = "sicherheit"
+text = "Das gilt nur zwischen mitgelieferten Modulen, nie für nachinstallierte Pakete. Eingeschaltet wird das neue Modul nur, wenn das alte schon alle seine Rechte hatte."
+
+[[entries]]
+kind = "verbessert"
+text = "Sind Docker-Pakete unter den Updates des Servers, auf dem Nodvard Deck läuft, sagt die Rückfrage vor dem Einspielen, dass Nodvard Deck danach kurz nicht erreichbar ist."
+
+[[entries]]
+kind = "verbessert"
+text = "Startet Nodvard Deck beim Einspielen neu, zeigt die Update-Zentrale danach das echte Ergebnis statt „unterbrochen“ und versucht es bei einem kurzen Ausfall selbst wieder."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul „Uptime Kuma“ (Beta): zeigt auf einer Seite und in einer Kachel, welche Dienste laufen oder ausgefallen sind, wie schnell sie antworten und wann ihr Zertifikat abläuft. Das Modul liest nur und ändert in Uptime Kuma nichts."
+
+[[entries]]
+kind = "neu"
+text = "Uptime Kuma: Trägst du zusätzlich den Kurznamen einer Status-Seite ein, zeigt Nodvard Deck auch die Verfügbarkeit der letzten 24 Stunden und die letzten Ausfälle."
+
+[[entries]]
+kind = "neu"
+text = "Neues Modul Vaultwarden (Beta) für deinen Passwort-Manager: zeigt, ob er läuft, welche Version, ob er über HTTPS erreichbar ist und ob sich Fremde registrieren können, dazu eine Kachel und eine Anleitung für die Bitwarden-Apps."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield kann den Viren-Wächter je Server über die Freigabe auf Echtzeit stellen und wieder zurück, wenn der Server dafür geeignet ist und das Paket clamav-daemon hat. Noch ohne Knopf in der Oberfläche."
+
+[[entries]]
+kind = "neu"
+text = "Läuft der Viren-Wächter auf einem Server in Echtzeit, holt Nodvard Shield die Funde aus seinem Protokoll ab, prüft jede Datei noch einmal und behandelt sie wie bisher: Meldung und, wenn eingestellt, Quarantäne."
+
+[[entries]]
+kind = "neu"
+text = "Nodvard Shield prüft je Server, ob der Viren-Wächter dort später in Echtzeit laufen könnte (genug Arbeitsspeicher, kein Container, Rechte). Eingeschaltet wird dabei noch nichts."
+
+[[entries]]
+kind = "sicherheit"
+text = "Wie selbstständig Nodvard Deck handeln darf und ob neue Server-Schlüssel erst bestätigt werden müssen, ändert jetzt nur noch der Inhaber, mit seinem Passwort und, wenn eingeschaltet, dem Zwei-Faktor-Code."
+
+[[entries]]
+kind = "verbessert"
+text = "Modus und Risikostufe der Selbstständigkeit werden in einem Schritt gespeichert, ein halber Stand kann nicht mehr entstehen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Sicherung mit dem Skript auf dem Server ist jetzt verschlüsselt, wenn in den Einstellungen ein Sicherungsschlüssel eingerichtet ist. Ohne Schlüssel warnt das Skript deutlich, dass die Datei alle Zugangsdaten enthält."
+
+[[entries]]
+kind = "sicherheit"
+text = "Kleine Härtungen nach einer Sicherheitsprüfung: Die Notseite ist ohne ausdrückliche Angabe nur noch vom Server selbst aus erreichbar."
+
+[[entries]]
+kind = "sicherheit"
+text = "Bilder von fremden Adressen in Markdown-Kacheln erscheinen als Link, statt geladen zu werden. Ein entferntes Logo oder Favicon ist danach auch nicht mehr unter seiner Adresse abrufbar, und ein Upload muss wirklich ein Bild des angegebenen Typs sein."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Proxmox-Kachel „Datenträger“ zeigt bei einem Fehler statt der rohen Meldung einen festen Hinweis, wo der Grund steht."
+
+[[entries]]
+kind = "sicherheit"
+text = "Zwei Eingabeprüfungen (Ordner beim Virenschutz, Kennungen von Proxmox-Sicherungen) lassen sich mit sehr langen, präparierten Eingaben nicht mehr ausbremsen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Kennung einer Proxmox-Sicherung wird jetzt zuerst auf ihre Länge geprüft und lässt sich auch mit sehr langen, präparierten Eingaben nicht mehr ausbremsen."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Suche nach Image-Updates schickt die Namen selbst gebauter Images nicht mehr an fremde Server wie Docker Hub, sofern Docker weiß, woher ein Image stammt."
+
+[[entries]]
+kind = "verbessert"
+text = "Eigenes CSS: Auch die alten HTML-Zeichen „<!--“ und „-->“ werden abgelehnt, und die Datei wird nur noch neu geprüft, wenn sie sich geändert hat."
+
+[[entries]]
+kind = "sicherheit"
+text = "Listen wie Meldungen, Aktionen oder Verläufe liefern pro Abruf höchstens 1000 Einträge, sehr große Abfragen werden abgelehnt."
+
+[[entries]]
+kind = "verbessert"
+text = "Uploads im Dateimanager sind standardmäßig auf 10 GB begrenzt. Hat der Zielserver zu wenig freien Platz, kommt sofort eine verständliche Meldung statt eines halben Uploads."
+
+[[entries]]
+kind = "sicherheit"
+text = "Das Hilfsskript von Nodvard Shield verschiebt nur noch Dateien in die Quarantäne, in denen ClamAV selbst einen Fund meldet, und legt sie nur an ihren ursprünglichen Ort zurück."
+
+[[entries]]
+kind = "sicherheit"
+text = "Geprüft wird die Datei in einem Ordner, an den nur root kommt; so lässt sie sich während der Prüfung nicht mehr austauschen. Ordner der Quarantäne, die nicht root allein gehören, nimmt Shield nicht mehr an."
+
+[[entries]]
+kind = "sicherheit"
+text = "Nodvard Shield und Server-Zustand rufen ein Hilfsskript nur noch auf, wenn es genau das mitgelieferte ist. Ein verändertes Skript zeigt „Verbindung prüfen“ als Fehler, ein veraltetes als Warnung, und statt „Keine root-Rechte“ steht dann da, dass der Server neu eingerichtet werden muss."
+
+[[entries]]
+kind = "sicherheit"
+text = "Bei der Prüfung, ob auf einem Server das Dashboard läuft, versucht Nodvard Deck nicht mehr, sich per „sudo“ Docker-Rechte zu holen. Ist das nicht feststellbar, behandelt es den Server vorsichtig wie den Dashboard-Server: Docker lässt sich dort nicht neu starten, und ein automatischer Neustart nach Updates folgt erst nach der Zusammenfassung. Hilfreich ist der Server-Tag „dashboard“ am Rechner, auf dem das Dashboard läuft."
+
+[[entries]]
+kind = "verbessert"
+text = "Bei der Rolle „Bediener“ steht jetzt deutlich dabei, dass sie Befehle auf Servern ausführen darf. Hat das Dashboard-Konto auf einem Server eine sudo-Regel, sind das dort volle Rechte."
+
+[[entries]]
+kind = "behoben"
+text = "Meldungen von Nodvard Shield nennen die Art eines Ereignisses nur noch einmal, statt etwa „Neuer offener Port: Neuer offener Port: …“."
+
+[[entries]]
+kind = "verbessert"
+text = "Die Container-Wache schreibt den Hinweis, dass Nodvard KI nicht eingerichtet ist, nicht mehr in jede Meldung aufs Handy; er steht weiter beim Vorfall."
+
+[[entries]]
+kind = "behoben"
+text = "Der Verlauf von CPU, Arbeitsspeicher und Co. wird auch bei mehreren Servern zuverlässig gespeichert; vorher konnten einzelne Messungen mit einem Datenbankfehler im Protokoll verloren gehen."
+
+[[entries]]
+kind = "behoben"
+text = "Uptime Kuma: „Verbindung testen“ fragt jetzt wirklich nach und zeigt nicht den Stand vom letzten Abruf."
+
+[[entries]]
+kind = "sicherheit"
+text = "Die Nextcloud-Dateien im Dateimanager sehen nur noch Admins. Wer nur ansehen oder bedienen darf, kommt nicht mehr an das Nextcloud-Konto."
+
+[[entries]]
+kind = "sicherheit"
+text = "Jeder Zugriff im Dateimanager auf eine Quelle mit Zugangsdaten steht jetzt im Protokoll, auch bei Nextcloud."
+
+[[entries]]
+kind = "behoben"
+text = "Bei „Verbindung prüfen“ wird das Betriebssystem jetzt auch auf normalen Servern (nicht nur auf dem Raspberry Pi) erkannt statt „Nicht erkannt“."
+
+[[entries]]
+kind = "sicherheit"
+text = "Fremde Webseiten können Nodvard Deck nicht mehr unsichtbar einbetten, und beim Klick auf einen Link nach draußen erfährt die andere Seite nicht, welche Deck-Seite offen war."
+
+[[entries]]
+kind = "verbessert"
+text = "Eine Temperatur-Warnung kommt erst, wenn ein Server zwei Prüfungen hintereinander zu heiß ist. Eine kurze Spitze bleibt still."
+
+[[entries]]
+kind = "neu"
+text = "Ein Server, der immer wärmer läuft, bekommt auf der Seite Server-Zustand eine eigene Temperaturgrenze. Die anderen Server warnen weiter ab der allgemeinen Grenze. Jede Änderung steht im Protokoll."
+
+[[entries]]
+kind = "sicherheit"
+text = "Ohne eigene Angabe läuft Nodvard Deck jetzt immer im normalen Betriebsmodus, der Entwicklungsmodus muss ausdrücklich eingeschaltet werden."
+
+[[entries]]
+kind = "verbessert"
+text = "Der Container nutzt ohne eigene Einstellung den Namensdienst des Rechners und schickt Anfragen nicht mehr ungefragt an einen öffentlichen Dienst. Eigene Werte gelten wie bisher."

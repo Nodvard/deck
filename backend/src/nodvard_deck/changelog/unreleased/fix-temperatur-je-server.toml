@@ -1,7 +1,0 @@
-[[entries]]
-kind = "verbessert"
-text = "Eine Temperatur-Warnung kommt erst, wenn ein Server zwei Prüfungen hintereinander zu heiß ist. Eine kurze Spitze bleibt still."
-
-[[entries]]
-kind = "neu"
-text = "Ein Server, der immer wärmer läuft, bekommt auf der Seite Server-Zustand eine eigene Temperaturgrenze. Die anderen Server warnen weiter ab der allgemeinen Grenze. Jede Änderung steht im Protokoll."

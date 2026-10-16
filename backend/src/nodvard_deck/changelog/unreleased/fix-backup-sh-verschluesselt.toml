@@ -1,3 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Die Sicherung mit dem Skript auf dem Server ist jetzt verschlüsselt, wenn in den Einstellungen ein Sicherungsschlüssel eingerichtet ist. Ohne Schlüssel warnt das Skript deutlich, dass die Datei alle Zugangsdaten enthält."

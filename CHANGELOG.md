@@ -10,6 +10,49 @@ shown inside Nodvard Deck under *Settings → About Nodvard Deck*. This file is 
 
 ## [Unreleased]
 
+## [0.9.0] – 2026-10-16
+
+A new look, Docker as its own module, a vault page and new integrations.
+
+- **New:** a calmer look with three themes (classic light, plain dark as the default, pro dark) and a
+  fourth one, "Bisher", with the look up to 0.8. After the update Nodvard Deck asks once whether you
+  want to keep the new look; the choice applies to your account on every device. Admins can add
+  their own CSS under *Settings → Appearance*.
+- **New:** Docker is a module of its own (formerly "Service Matrix"). Per server it shows images,
+  volumes and networks with their size and the containers using them; anything unused can be
+  removed after approval.
+- **New:** Pi-hole and Nginx Proxy Manager are modules of their own with their own pages. Settings,
+  tiles, credentials and open suggestions move over by themselves. Pi-hole adds the most active
+  clients, updating block lists and allowing or blocking a domain.
+- **New:** read-only beta modules for Home Assistant, Jellyfin, Plex, qBittorrent, Uptime Kuma and
+  Vaultwarden, each with a page and a tile, plus a Nextcloud tile with version, updates, storage
+  and load.
+- **New:** a "Vault" page under Settings lists all stored passwords, keys and tokens with their
+  expiry date and what uses them, with reminders 14 and 3 days before a token expires.
+- **New:** Nodvard Shield checks whether a server is suited for real-time virus scanning and can
+  switch it on after approval (no button in the interface yet). A server that always runs warmer
+  can get its own temperature limit.
+- **Security:** Nodvard Shield and Server status bring their own small helper, each with a narrow
+  sudo rule. Quarantine, updates, scans, audits and service restarts use it once it is installed on
+  the server, and it is only called if it is exactly the shipped version. Replacing or deleting
+  stored credentials needs your password and, with two-factor login on, the code. Only the owner
+  can change how independently Nodvard Deck acts. Logo and favicon only come from Nodvard Deck
+  itself, and images from other addresses in Markdown tiles show as links. Nextcloud files in the
+  file manager are for admins only, and every access is logged. Other sites can no longer embed
+  Nodvard Deck, and outgoing links no longer reveal which page was open. Image update checks no
+  longer send the names of self-built images to Docker Hub. Lists return at most 1000 entries per
+  request, the emergency page is local-only by default, and the backup script on the server
+  encrypts when a backup key is set.
+- **Improved:** the overview shows the servers in a table with load bars. The installation guide has
+  one expandable section per way: command line, Portainer and Raspberry Pi. After Nodvard Deck
+  restarts during an update, the update center shows the real result. File manager uploads are
+  limited to 10 GB, with a clear message when the target is full. A temperature warning needs two
+  hot readings in a row. Without its own setting, the container uses the host's name server.
+- **Fixed:** a line break in "Watched files" no longer stops intrusion detection and the file
+  watcher. Shield messages no longer repeat the event type. The metric history is stored reliably
+  with several servers. "Test connection" in Uptime Kuma really asks again. The operating system is
+  detected on regular servers too, not only on the Raspberry Pi.
+
 ## [0.8.0] – 2026-10-12
 
 Proxmox in one step, an Apps page, the inventory as a homelab builder, and security updates.

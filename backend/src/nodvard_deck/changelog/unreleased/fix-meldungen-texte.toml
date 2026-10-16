@@ -1,7 +1,0 @@
-[[entries]]
-kind = "behoben"
-text = "Meldungen von Nodvard Shield nennen die Art eines Ereignisses nur noch einmal, statt etwa „Neuer offener Port: Neuer offener Port: …“."
-
-[[entries]]
-kind = "verbessert"
-text = "Die Container-Wache schreibt den Hinweis, dass Nodvard KI nicht eingerichtet ist, nicht mehr in jede Meldung aufs Handy; er steht weiter beim Vorfall."

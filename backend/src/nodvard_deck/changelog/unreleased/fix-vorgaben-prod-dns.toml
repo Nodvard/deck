@@ -1,7 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Ohne eigene Angabe läuft Nodvard Deck jetzt immer im normalen Betriebsmodus, der Entwicklungsmodus muss ausdrücklich eingeschaltet werden."
-
-[[entries]]
-kind = "verbessert"
-text = "Der Container nutzt ohne eigene Einstellung den Namensdienst des Rechners und schickt Anfragen nicht mehr ungefragt an einen öffentlichen Dienst. Eigene Werte gelten wie bisher."

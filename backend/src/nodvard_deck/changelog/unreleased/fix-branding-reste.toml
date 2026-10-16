@@ -1,3 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Bilder von fremden Adressen in Markdown-Kacheln erscheinen als Link, statt geladen zu werden. Ein entferntes Logo oder Favicon ist danach auch nicht mehr unter seiner Adresse abrufbar, und ein Upload muss wirklich ein Bild des angegebenen Typs sein."

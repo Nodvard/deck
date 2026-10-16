@@ -1,7 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Listen wie Meldungen, Aktionen oder Verläufe liefern pro Abruf höchstens 1000 Einträge, sehr große Abfragen werden abgelehnt."
-
-[[entries]]
-kind = "verbessert"
-text = "Uploads im Dateimanager sind standardmäßig auf 10 GB begrenzt. Hat der Zielserver zu wenig freien Platz, kommt sofort eine verständliche Meldung statt eines halben Uploads."

@@ -1,7 +1,0 @@
-[[entries]]
-kind = "neu"
-text = "Pi-hole ist jetzt ein eigenes Modul mit eigener Seite. Neu dazu: die aktivsten Geräte, Sperrlisten aktualisieren und eine Domain erlauben oder sperren, jeweils über die Freigabe."
-
-[[entries]]
-kind = "verbessert"
-text = "Wer Pi-hole bisher im Modul „Netzwerk“ eingerichtet hatte, findet nach dem Update alles im neuen Modul wieder: Adresse, Passwort, Kachel und offene Vorschläge."

@@ -1,3 +1,0 @@
-[[entries]]
-kind = "sicherheit"
-text = "Server-Zustand: Einen Dienst neu starten geht jetzt über das eigene Hilfsprogramm des Moduls, wenn es auf dem Server eingerichtet ist. Das Hilfsprogramm prüft den Dienstnamen und die Sperrliste noch einmal selbst. Ohne Hilfsprogramm bleibt alles wie bisher."

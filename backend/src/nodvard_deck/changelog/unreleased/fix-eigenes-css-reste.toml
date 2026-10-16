@@ -1,3 +1,0 @@
-[[entries]]
-kind = "verbessert"
-text = "Eigenes CSS: Auch die alten HTML-Zeichen „<!--“ und „-->“ werden abgelehnt, und die Datei wird nur noch neu geprüft, wenn sie sich geändert hat."

@@ -1,3 +1,0 @@
-[[entries]]
-kind = "behoben"
-text = "Bei „Verbindung prüfen“ wird das Betriebssystem jetzt auch auf normalen Servern (nicht nur auf dem Raspberry Pi) erkannt statt „Nicht erkannt“."

@@ -1,3 +1,0 @@
-[[entries]]
-kind = "behoben"
-text = "Der Verlauf von CPU, Arbeitsspeicher und Co. wird auch bei mehreren Servern zuverlässig gespeichert; vorher konnten einzelne Messungen mit einem Datenbankfehler im Protokoll verloren gehen."
